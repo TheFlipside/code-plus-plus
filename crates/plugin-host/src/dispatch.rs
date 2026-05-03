@@ -39,6 +39,14 @@ const WM_USER: u32 = 0x0400;
 /// our header (or against Notepad++'s) hit the same numeric range.
 pub const NPPMSG: u32 = WM_USER + 1000;
 
+/// Width of the NPPM_* numeric range the dispatcher claims. The
+/// compat header currently tops out at NPPMSG+102; +200 gives
+/// headroom for v3 additions before this guard needs revisiting.
+/// Exposed publicly so wnd_proc pre-filters use the same bound as
+/// the dispatcher's internal range check — keeping the two in sync
+/// is otherwise a footgun when the bound is bumped.
+pub const NPPMSG_RANGE: u32 = 200;
+
 // --- v1 NPPM_* set ---------------------------------------------------
 
 pub const NPPM_GETCURRENTSCINTILLA: u32 = NPPMSG + 4;
@@ -281,10 +289,10 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 ) -> Option<isize> {
     // Stay inside a generous NPPM_* range; out-of-range falls back to
     // the default wnd_proc so non-plugin WM_USER+N messages from the
-    // host's own UI continue to dispatch normally. The compat header
-    // currently tops out at NPPMSG+102; +200 is generous headroom for
-    // v3 additions before this guard needs revisiting.
-    if !(NPPMSG..NPPMSG + 200).contains(&msg) {
+    // host's own UI continue to dispatch normally. See `NPPMSG_RANGE`
+    // for the bound's rationale and the wnd_proc pre-filter that
+    // shares the same constant.
+    if !(NPPMSG..NPPMSG + NPPMSG_RANGE).contains(&msg) {
         return None;
     }
 

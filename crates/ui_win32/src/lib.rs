@@ -24,12 +24,13 @@ use std::sync::Arc;
 
 use codepp_core::{Encoding, Eol};
 use codepp_editor::EditorHandle;
+use codepp_plugin_host::{NPPMSG, NPPMSG_RANGE};
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, SCI_EMPTYUNDOBUFFER, SCI_GETCURRENTPOS,
     SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETLENGTH, SCI_GETTEXT, SCI_GOTOPOS,
     SCI_SETSAVEPOINT, SCI_SETTEXT,
 };
-use codepp_shell::{PendingDialog, Shell, UiPlatform};
+use codepp_shell::{HostHandles, PendingDialog, Shell, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
@@ -41,8 +42,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetClientRect, GetMessageW, GetWindowLongPtrW, LoadCursorW, MessageBoxW, MoveWindow,
     PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW, ShowWindow,
-    TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW, IDYES,
-    MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_POPUP, MF_STRING, MSG, SW_SHOW,
+    TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, HMENU, IDC_ARROW,
+    IDYES, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_POPUP, MF_STRING, MSG, SW_SHOW,
     WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY, WM_DROPFILES, WM_NCCREATE, WM_SETFOCUS,
     WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
@@ -67,6 +68,15 @@ const STATUSBAR_CLASS: PCWSTR = w!("msctls_statusbar32");
 struct WindowState {
     scintilla_hwnd: HWND,
     status_hwnd: HWND,
+    /// HMENU for the main menu bar — the parent of File/Edit/.../Plugins.
+    /// Plugins query this via `NPPM_GETMENUHANDLE(NPPMAINMENU)` to
+    /// install accelerator-bound items at the top level.
+    main_menu: HMENU,
+    /// HMENU for the per-plugin submenu under "Plugins". Plugins query
+    /// this via `NPPM_GETMENUHANDLE(NPPPLUGINMENU)` to add their menu
+    /// items. Empty until milestone 5 wires lazy-load + getFuncsArray
+    /// integration; populated then.
+    plugin_menu: HMENU,
     editor: EditorHandle,
     shell: Shell,
 }
@@ -82,6 +92,22 @@ impl WindowState {
             editor: self.editor,
         };
         (&mut self.shell, ui)
+    }
+
+    /// Build the per-call `HostHandles` the plugin dispatcher consumes.
+    /// Centralized so the route in `WM_USER+1000..` and any future
+    /// notification call site share one definition of "what the host's
+    /// handles are right now." `HWND` and `HMENU` in windows-rs 0.62
+    /// are both `pub struct(pub *mut c_void)`, so `.0` already has
+    /// the `Hwnd = *mut c_void` shape the plugin-host crate expects.
+    fn host_handles(&self, npp_hwnd: HWND) -> HostHandles {
+        HostHandles {
+            npp_hwnd: npp_hwnd.0,
+            scintilla_main: self.scintilla_hwnd.0,
+            scintilla_secondary: core::ptr::null_mut(),
+            plugin_menu: self.plugin_menu.0,
+            main_menu: self.main_menu.0,
+        }
     }
 }
 
@@ -284,6 +310,15 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         AppendMenuW(file_menu, MF_STRING, ID_FILE_EXIT as usize, w!("E&xit"))?;
         AppendMenuW(menubar, MF_POPUP, file_menu.0 as usize, w!("&File"))?;
 
+        // Plugins submenu placeholder. Empty until milestone 5 wires
+        // the lazy-load + getFuncsArray flow that populates it. The
+        // HMENU exists from startup so plugins that query
+        // `NPPM_GETMENUHANDLE(NPPPLUGINMENU)` get a real handle to
+        // append into rather than NULL — the submenu just shows up
+        // empty in the UI until a plugin contributes items.
+        let plugin_menu = CreateMenu()?;
+        AppendMenuW(menubar, MF_POPUP, plugin_menu.0 as usize, w!("&Plugins"))?;
+
         // Create the main window without children first; we attach
         // them after the Shell is built and stashed in GWLP_USERDATA.
         let main_hwnd = CreateWindowExW(
@@ -384,14 +419,33 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             );
         }) as Arc<dyn Fn() + Send + Sync>;
 
-        let shell = Shell::new(wake)
+        let mut shell = Shell::new(wake)
             .map_err(|e| windows::core::Error::new(E_FAIL, format!("shell init: {e}")))?;
+
+        // Plugin discovery: enumerate `*.dll` candidates in the user's
+        // plugins directory. **No DLL is mapped here** (DESIGN.md
+        // §6.4 mandates lazy load); each candidate stays in the
+        // `Pending` state until first menu touch. A non-existent
+        // plugins directory is the first-run case and is not an
+        // error — `discover_plugins` returns 0 silently.
+        if let Some(dir) = codepp_platform::plugins_dir() {
+            match shell.discover_plugins(&dir) {
+                Ok(count) => {
+                    tracing::info!(plugins_dir = ?dir, count = count, "plugin candidates discovered");
+                }
+                Err(e) => {
+                    tracing::warn!(plugins_dir = ?dir, error = %e, "plugin discovery failed");
+                }
+            }
+        }
 
         // Heap-allocate the WindowState and stash its pointer in
         // GWLP_USERDATA. The Box is reclaimed in WM_DESTROY.
         let state = Box::new(WindowState {
             scintilla_hwnd,
             status_hwnd,
+            main_menu: menubar,
+            plugin_menu,
             editor,
             shell,
         });
@@ -561,6 +615,18 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // text/cursor through the editor while it still
                 // exists — once we PostQuitMessage the message pump
                 // unwinds and the Scintilla window is destroyed.
+                //
+                // **Deferred (milestone 5):** fire `NPPN_SHUTDOWN` to
+                // every loaded plugin before reclaiming the
+                // WindowState. Outbound notify is held back until the
+                // re-entrance design pass that pairs with the
+                // example-hello plugin — a plugin's `beNotified` can
+                // synchronously `SendMessage(NPPM_*)` back into our
+                // wnd_proc, materializing a second `&mut WindowState`
+                // from the same raw pointer. Inbound NPPM_* dispatch
+                // (this commit) is safe because no foreign code runs
+                // while we hold the borrow; outbound notify breaks
+                // that invariant and needs separate hardening.
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let (shell, mut ui) = state.split();
                     if let Err(e) = shell.save_session(&mut ui) {
@@ -573,8 +639,49 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 if raw != 0 {
                     let _ = Box::from_raw(raw as *mut WindowState);
                 }
+                // TODO(milestone-5): fire NPPN_SHUTDOWN here once the
+                // re-entrance design pass lands (see WM_DESTROY block
+                // comment above).
                 PostQuitMessage(0);
                 LRESULT(0)
+            }
+            // Plugin host inbound dispatch. Plugins call
+            // `SendMessage(npp_hwnd, NPPM_*, …)`; the dispatcher
+            // (`plugin_host::dispatch_nppm`) handles every v1 message
+            // and returns `Some(LRESULT)`. Out-of-range messages
+            // return `None` and we fall through to the default
+            // handler.
+            //
+            // The range guard here matches the dispatcher's own
+            // (NPPMSG..NPPMSG+200). Pre-filtering at the wnd_proc
+            // layer keeps `dispatch_plugin_message` (and the
+            // `state_from_hwnd` traversal it requires) off the hot
+            // path for every non-plugin WM_USER message.
+            m if (NPPMSG..NPPMSG + NPPMSG_RANGE).contains(&m) => {
+                if let Some(state) = state_from_hwnd(hwnd) {
+                    let handles = state.host_handles(hwnd);
+                    let (shell, mut ui) = state.split();
+                    // SAFETY: `(msg, wparam, lparam)` are forwarded
+                    // verbatim from a real Win32 wnd_proc dispatch;
+                    // `handles` describes the same window. The
+                    // plugin sending the message is bound by the
+                    // documented NPPM_* ABI in the compat headers.
+                    // No nested `unsafe` block needed — the entire
+                    // wnd_proc body runs inside one already.
+                    let routed =
+                        shell.dispatch_plugin_message(&mut ui, handles, m, wparam.0, lparam.0);
+                    match routed {
+                        Some(lr) => LRESULT(lr),
+                        None => DefWindowProcW(hwnd, msg, wparam, lparam),
+                    }
+                } else {
+                    // No state yet (early WM_NCCREATE territory); fall
+                    // through to default. Plugins shouldn't be
+                    // sending NPPM_* this early — they receive
+                    // `npp_hwnd` from `setInfo`, which only runs
+                    // once the WindowState exists.
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }

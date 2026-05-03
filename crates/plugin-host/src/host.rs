@@ -210,9 +210,15 @@ impl PluginHost {
     /// where symlink creation is unprivileged) will need to validate
     /// resolved paths stay within `dir` or use `O_NOFOLLOW`.
     pub fn discover(&mut self, dir: &Path) -> std::io::Result<usize> {
-        if !dir.exists() {
-            return Ok(0);
-        }
+        // No `exists()` pre-check: a separate stat-then-open opens a
+        // TOCTOU window where an attacker who can swap `dir` for a
+        // symlink between the check and the `read_dir` call could
+        // redirect enumeration into a directory of their choosing,
+        // with the recorded paths later fed to `LoadLibraryW` at
+        // first-touch load. `discover_walk` already treats a
+        // missing-directory `read_dir` failure as "no entries"
+        // (matching the first-run case), so the redundant pre-check
+        // adds the race without buying anything.
         let mut found = 0usize;
         self.discover_walk(dir, 0, 2, &mut found)?;
         Ok(found)

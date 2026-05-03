@@ -18,6 +18,8 @@ name = "codepp_ui_win32"
 codepp-core          = { workspace = true }
 codepp-shell         = { workspace = true }
 codepp-editor        = { workspace = true }
+codepp-plugin-host   = { workspace = true }
+codepp-platform      = { workspace = true }
 codepp-scintilla-sys = { workspace = true }
 tracing              = { workspace = true }
 windows = { version = "0.62", features = [
