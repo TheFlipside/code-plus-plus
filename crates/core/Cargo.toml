@@ -15,5 +15,10 @@ workspace = true
 name = "codepp_core"
 
 [dependencies]
-encoding_rs = { workspace = true }
-serde       = { workspace = true }
+crossbeam-channel = { workspace = true }
+encoding_rs       = { workspace = true }
+serde             = { workspace = true }
+tracing           = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

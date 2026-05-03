@@ -6,6 +6,10 @@
 
 pub mod encoding;
 pub mod eol;
+pub mod file;
 
 pub use encoding::{Encoding, EncodingError};
 pub use eol::Eol;
+pub use file::{
+    LoadError, LoadErrorKind, LoadResult, LoadedFile, Loader, LoaderShutdown, RequestId,
+};
