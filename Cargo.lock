@@ -71,6 +71,7 @@ dependencies = [
  "notify",
  "tempfile",
  "tracing",
+ "windows",
 ]
 
 [[package]]
@@ -80,6 +81,8 @@ dependencies = [
  "codepp-core",
  "codepp-editor",
  "codepp-platform",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

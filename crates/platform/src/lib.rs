@@ -6,7 +6,9 @@
 //! DESIGN.md §2.2.
 
 pub mod config;
+pub mod dynlib;
 pub mod watch;
 
 pub use config::{config_dir, config_xml_path, plugins_dir, session_xml_path};
+pub use dynlib::{has_plugin_extension, DynLib, PLUGIN_EXTENSION};
 pub use watch::{FileChange, FileWatcher};

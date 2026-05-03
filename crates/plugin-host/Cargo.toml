@@ -15,6 +15,10 @@ workspace = true
 name = "codepp_plugin_host"
 
 [dependencies]
-codepp-core = { workspace = true }
-codepp-editor = { workspace = true }
+codepp-core     = { workspace = true }
+codepp-editor   = { workspace = true }
 codepp-platform = { workspace = true }
+tracing         = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
