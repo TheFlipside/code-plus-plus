@@ -17,4 +17,4 @@ workspace = true
 name = "codepp_scintilla_sys"
 
 [build-dependencies]
-# `cc` will be added in Phase 1 when build.rs starts compiling vendored sources.
+cc = "1.2"
