@@ -29,8 +29,8 @@ use codepp_core::{Encoding, Eol, LoadResult, RequestId, Session};
 use codepp_platform::watch::{FileChange, FileWatcher};
 #[cfg(target_os = "windows")]
 use codepp_plugin_host::{
-    dispatch_nppm, notify_all, HostServices, Hwnd, Notification, PluginHost, NPPMAINMENU,
-    NPPPLUGINMENU,
+    dispatch_nppm, notify_all, FuncItem, HostServices, Hwnd, Notification, NppData, PluginCmd,
+    PluginHost, NPPMAINMENU, NPPPLUGINMENU,
 };
 
 /// Stable nonzero buffer id for the active buffer in the Phase 3
@@ -240,6 +240,65 @@ impl Shell {
     #[cfg(target_os = "windows")]
     pub fn notify_plugins(&self, notification: Notification, npp_hwnd: Hwnd) {
         notify_all(&self.plugins, &notification, npp_hwnd);
+    }
+
+    /// Load every plugin currently in the `Pending` state. Called by
+    /// the UI on first menu-popup open (lazy-load — DESIGN.md §6.4).
+    /// Already-loaded plugins are skipped; failed plugins are recorded
+    /// on the `PluginInfo` and surface to the UI via [`Self::plugin_load_outcomes`].
+    ///
+    /// `npp_data` is the `NppData` struct each plugin's `setInfo`
+    /// receives. The same struct is passed to every plugin loaded by
+    /// this call.
+    #[cfg(target_os = "windows")]
+    pub fn ensure_plugins_loaded(&mut self, npp_data: NppData) {
+        let pending: Vec<usize> = self
+            .plugins
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| !p.is_loaded() && p.failed_reason().is_none())
+            .map(|(i, _)| i)
+            .collect();
+        for idx in pending {
+            if let Err(e) = self.plugins.load(idx, npp_data) {
+                tracing::warn!(idx = idx, error = %e, "plugin load failed");
+            }
+        }
+    }
+
+    /// Iterate the (display name, FuncItem array) pairs of every
+    /// loaded plugin. The UI uses this to populate the per-plugin
+    /// submenu after [`Self::ensure_plugins_loaded`].
+    ///
+    /// Plugins with zero FuncItems are skipped — they're loaded but
+    /// contribute no menu items (typically `beNotified`-only plugins).
+    #[cfg(target_os = "windows")]
+    pub fn loaded_plugin_funcs(&self) -> impl Iterator<Item = (String, &[FuncItem])> {
+        self.plugins
+            .iter()
+            .filter(|p| p.is_loaded())
+            .filter_map(|p| {
+                let funcs = p.func_items()?;
+                if funcs.is_empty() {
+                    None
+                } else {
+                    Some((p.display_label(), funcs))
+                }
+            })
+    }
+
+    /// Find the plugin callback registered for menu-command id
+    /// `cmd_id`. Returns the bare `PluginCmd` function pointer so
+    /// the caller can invoke it after dropping any `&mut Shell`
+    /// borrow — invoking the callback while a borrow is alive
+    /// would be aliasing UB if the plugin synchronously
+    /// `SendMessage`s an `NPPM_*` back into our wnd_proc.
+    ///
+    /// The returned pointer is valid as long as the plugin's DLL
+    /// stays loaded (i.e. for the lifetime of `self`).
+    #[cfg(target_os = "windows")]
+    pub fn lookup_plugin_command(&self, cmd_id: i32) -> Option<PluginCmd> {
+        self.plugins.lookup_cmd(cmd_id)
     }
 
     /// Route a wnd_proc-received NPPM_* message into the plugin

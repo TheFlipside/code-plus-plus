@@ -64,6 +64,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "codepp-example-hello"
+version = "0.1.0"
+dependencies = [
+ "codepp-plugin-host",
+]
+
+[[package]]
 name = "codepp-platform"
 version = "0.1.0"
 dependencies = [

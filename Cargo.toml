@@ -6,7 +6,7 @@
 
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = ["crates/*", "plugins/example-hello"]
 default-members = ["crates/app"]
 
 [workspace.package]

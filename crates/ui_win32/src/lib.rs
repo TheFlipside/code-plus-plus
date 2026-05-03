@@ -20,11 +20,12 @@
 
 use core::ffi::c_void;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use codepp_core::{Encoding, Eol};
 use codepp_editor::EditorHandle;
-use codepp_plugin_host::{NPPMSG, NPPMSG_RANGE};
+use codepp_plugin_host::{NppData, NPPMSG, NPPMSG_RANGE, PLUGIN_CMD_ID_BASE};
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, SCI_EMPTYUNDOBUFFER, SCI_GETCURRENTPOS,
     SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETLENGTH, SCI_GETTEXT, SCI_GOTOPOS,
@@ -40,12 +41,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetClientRect, GetMessageW, GetWindowLongPtrW, LoadCursorW, MessageBoxW, MoveWindow,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW, ShowWindow,
-    TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, HMENU, IDC_ARROW,
-    IDYES, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_POPUP, MF_STRING, MSG, SW_SHOW,
-    WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY, WM_DROPFILES, WM_NCCREATE, WM_SETFOCUS,
-    WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    DrawMenuBar, GetClientRect, GetMessageW, GetWindowLongPtrW, LoadCursorW, MessageBoxW,
+    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW,
+    ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, HMENU,
+    IDC_ARROW, IDYES, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_POPUP, MF_STRING, MSG,
+    SW_SHOW, WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP,
+    WM_NCCREATE, WM_SETFOCUS, WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
 const ID_FILE_SAVE: u16 = 1000;
@@ -74,9 +75,14 @@ struct WindowState {
     main_menu: HMENU,
     /// HMENU for the per-plugin submenu under "Plugins". Plugins query
     /// this via `NPPM_GETMENUHANDLE(NPPPLUGINMENU)` to add their menu
-    /// items. Empty until milestone 5 wires lazy-load + getFuncsArray
-    /// integration; populated then.
+    /// items. Populated lazily on the first `WM_INITMENUPOPUP` for
+    /// this submenu (DESIGN.md §6.4 lazy-load contract).
     plugin_menu: HMENU,
+    /// Set once the lazy-load + menu-population dance has run for
+    /// `plugin_menu`. Subsequent `WM_INITMENUPOPUP` for the same
+    /// menu skip the work; we never reload plugins after the first
+    /// touch, even if the user re-opens the menu.
+    plugins_menu_initialized: bool,
     editor: EditorHandle,
     shell: Shell,
 }
@@ -204,6 +210,64 @@ impl UiPlatform for Win32Ui {
     // GWLP_USERDATA-borrowed WindowState. Modal dialogs are deferred
     // — `Shell::drain` returns `Vec<PendingDialog>` that the wnd_proc
     // shows after the borrow is dropped (see `WM_APP_WAKE`).
+}
+
+/// Append loaded-plugin FuncItems onto the per-plugin submenu after
+/// a successful lazy-load round. Each plugin gets its own popup
+/// submenu under the top-level "Plugins" entry, with the plugin's
+/// own getName output as the label.
+///
+/// # Safety
+///
+/// Caller must invoke this on the UI thread that owns `plugin_menu`.
+/// `CreateMenu`/`AppendMenuW` do not re-enter our wnd_proc.
+unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
+    for (plugin_name, funcs) in shell.loaded_plugin_funcs() {
+        // One popup submenu per plugin so users see "Plugins → MyPlugin
+        // → Item". Matches Notepad++'s layout.
+        // SAFETY: CreateMenu just allocates a new HMENU; no aliasing
+        // concerns.
+        let submenu = match unsafe { CreateMenu() } {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(plugin = %plugin_name, error = %e, "CreateMenu failed");
+                continue;
+            }
+        };
+        for func in funcs {
+            // FuncItem.item_name is a fixed-length null-terminated UTF-16
+            // array; pass its pointer directly to AppendMenuW.
+            let label = PCWSTR(func.item_name.as_ptr());
+            // `cmd_id` is i32 (signed) but AppendMenuW expects usize.
+            // Plugin cmd_ids are always positive (assigned from
+            // PLUGIN_CMD_ID_BASE = 50000), so the cast is value-preserving.
+            let id = func.cmd_id as usize;
+            // SAFETY: `submenu` is the HMENU we just created; `label`
+            // points into a static null-terminated wide string the
+            // plugin owns for its lifetime.
+            if let Err(e) = unsafe { AppendMenuW(submenu, MF_STRING, id, label) } {
+                tracing::warn!(plugin = %plugin_name, error = %e, "AppendMenuW (item) failed");
+            }
+        }
+        // Attach the submenu to the parent "Plugins" popup.
+        let plugin_label_w: Vec<u16> = plugin_name
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        // SAFETY: `plugin_menu` is the parent HMENU passed in;
+        // `plugin_label_w` is a local wide string that lives for the
+        // duration of this call (AppendMenuW copies the label).
+        if let Err(e) = unsafe {
+            AppendMenuW(
+                plugin_menu,
+                MF_POPUP,
+                submenu.0 as usize,
+                PCWSTR(plugin_label_w.as_ptr()),
+            )
+        } {
+            tracing::warn!(plugin = %plugin_name, error = %e, "AppendMenuW (popup) failed");
+        }
+    }
 }
 
 /// Write `text` into status-bar part `part_index`. Centralizes the
@@ -446,6 +510,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             status_hwnd,
             main_menu: menubar,
             plugin_menu,
+            plugins_menu_initialized: false,
             editor,
             shell,
         });
@@ -564,8 +629,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 LRESULT(0)
             }
             WM_COMMAND => {
-                let cmd = (wparam.0 & 0xFFFF) as u16;
-                match cmd {
+                let cmd_u16 = (wparam.0 & 0xFFFF) as u16;
+                let cmd_i32 = cmd_u16 as i32;
+                match cmd_u16 {
                     ID_FILE_SAVE => {
                         // Save inside the borrow; if it fails, capture
                         // the error message and show the dialog AFTER
@@ -592,9 +658,133 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     ID_FILE_EXIT => {
                         let _ = DestroyWindow(hwnd);
                     }
-                    _ => {}
+                    _ => {
+                        // Plugin menu-command dispatch. Plugin cmd-ids
+                        // start at PLUGIN_CMD_ID_BASE (50000) — well
+                        // above any host built-in. Look up the
+                        // callback through the borrow, **then drop
+                        // the borrow before invoking**: a plugin's
+                        // PluginCmd is allowed to SendMessage(NPPM_*)
+                        // back into our wnd_proc, which would
+                        // re-enter and materialize a second
+                        // &mut WindowState from the same raw pointer
+                        // (aliasing UB). Splitting into a lookup
+                        // phase and an invoke phase keeps the
+                        // re-entrant call sound.
+                        if cmd_i32 >= PLUGIN_CMD_ID_BASE {
+                            let p_func = if let Some(state) = state_from_hwnd(hwnd) {
+                                state.shell.lookup_plugin_command(cmd_i32)
+                            } else {
+                                None
+                            };
+                            // Borrow on `state` ends here.
+                            if let Some(f) = p_func {
+                                // SAFETY: `f` is the C ABI fn ptr the
+                                // plugin handed us in FuncItem.p_func.
+                                // The plugin's DLL stays loaded for as
+                                // long as Shell holds it; the pointer
+                                // is valid. catch_unwind so a Rust-
+                                // authored plugin's panic doesn't
+                                // unwind across the C ABI. The
+                                // PluginCallGuard arms the re-entrance
+                                // flag in case the plugin
+                                // SendMessages NPPM_* back; defense
+                                // in depth even though NLL has
+                                // already dropped the lookup borrow.
+                                let _guard = PluginCallGuard::enter();
+                                let _ =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f()));
+                            }
+                        }
+                    }
                 }
                 LRESULT(0)
+            }
+            WM_INITMENUPOPUP => {
+                // First-touch plugin load. wparam carries the HMENU
+                // of the popup about to be shown; lparam packs (item
+                // index, is_window_menu_flag). We compare the HMENU
+                // against our `plugin_menu` and, if it matches and we
+                // haven't yet loaded, load every Pending plugin and
+                // append their FuncItems as menu entries.
+                //
+                // The lookup phase holds `state`; the load phase has
+                // to drop the borrow first because plugin `setInfo`
+                // can synchronously SendMessage(NPPM_*) back into
+                // wnd_proc (re-entrance). We therefore: (1) decide
+                // whether work is needed under the borrow, (2) drop
+                // the borrow, (3) reacquire and run the load, (4)
+                // populate the menu under a fresh borrow.
+                let popup_hmenu_value = wparam.0;
+                let needs_init = if let Some(state) = state_from_hwnd(hwnd) {
+                    !state.plugins_menu_initialized
+                        && popup_hmenu_value == state.plugin_menu.0 as usize
+                } else {
+                    false
+                };
+                if needs_init {
+                    // Build NppData under a brief borrow.
+                    let npp_data = if let Some(state) = state_from_hwnd(hwnd) {
+                        NppData {
+                            npp_handle: hwnd.0,
+                            scintilla_main_handle: state.scintilla_hwnd.0,
+                            scintilla_second_handle: core::ptr::null_mut(),
+                        }
+                    } else {
+                        // Should be unreachable given the needs_init
+                        // path above, but stay defensive.
+                        return LRESULT(0);
+                    };
+                    // Mark the menu as initialized **before** running
+                    // any plugin code so a nested WM_INITMENUPOPUP
+                    // (from any path that re-enters wnd_proc during
+                    // load) sees `needs_init == false` and skips
+                    // re-running the load. We pay the cost of a
+                    // possibly-empty submenu in the rare error case
+                    // where load fails entirely — preferable to
+                    // double-loading the same plugin.
+                    if let Some(state) = state_from_hwnd(hwnd) {
+                        state.plugins_menu_initialized = true;
+                    }
+                    // Trigger lazy load. The PluginCallGuard arms the
+                    // PLUGIN_CALL_ACTIVE flag for the duration of the
+                    // call so any re-entrant `state_from_hwnd` from a
+                    // plugin's `setInfo` returns None — preventing
+                    // the second `&mut WindowState` materialization
+                    // that would otherwise alias with our outer
+                    // borrow. The guard's Drop clears the flag even
+                    // on panic.
+                    //
+                    // The whole call is wrapped in `catch_unwind` so
+                    // a host-internal panic (allocation failure,
+                    // tracing-subscriber misbehaviour) doesn't
+                    // unwind across the `extern "system"` wnd_proc
+                    // frame — that's UB. Plugin entry-points are
+                    // already individually `catch_unwind`-wrapped
+                    // inside `load_inner`; this outer guard catches
+                    // panics in our own bookkeeping.
+                    if let Some(state) = state_from_hwnd(hwnd) {
+                        let _guard = PluginCallGuard::enter();
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            state.shell.ensure_plugins_loaded(npp_data);
+                        }));
+                        // _guard drops here, clearing the flag.
+                    }
+                    // Populate the menu from loaded plugins. We rebuild
+                    // the FuncItem list inside a borrow, then call
+                    // AppendMenuW for each entry; AppendMenuW does
+                    // not re-enter our wnd_proc, so the borrow can
+                    // span the population.
+                    if let Some(state) = state_from_hwnd(hwnd) {
+                        populate_plugin_menu(state.plugin_menu, &state.shell);
+                        // Force the menu bar to redraw so the user
+                        // sees the populated submenu on this very
+                        // open (without a redraw, the items only
+                        // appear after the popup re-displays).
+                        let _ = DrawMenuBar(hwnd);
+                    }
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
             }
             WM_SIZE => {
                 let width = (lparam.0 & 0xFFFF) as i32;
@@ -688,11 +878,59 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
     }
 }
 
+/// Set while a plugin entry-point call is in flight from this UI
+/// thread. The flag protects [`state_from_hwnd`] against Win32's
+/// re-entrant SendMessage: a plugin's `setInfo` (or any synchronous
+/// plugin callback) can `SendMessage(npp_handle, NPPM_*, ...)` back
+/// into our wnd_proc on the same call stack. Without the flag, the
+/// re-entrant wnd_proc would materialize a second `&mut WindowState`
+/// from the same raw pointer while the outer borrow was still live —
+/// aliasing UB. With the flag, the inner `state_from_hwnd` returns
+/// `None` and the inner wnd_proc handles the message with no host
+/// state (the dispatcher returns 0, which plugins read as "feature
+/// unavailable" — same fallback Notepad++ produces when its own
+/// state is mid-mutation).
+///
+/// Win32 dispatches messages serially on the owning thread, so a
+/// process-wide static is sufficient — there's no second thread that
+/// could reasonably observe a different value.
+static PLUGIN_CALL_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// RAII guard that flips [`PLUGIN_CALL_ACTIVE`] on for the duration
+/// of a plugin call. Drop unconditionally clears the flag, including
+/// on panic — so a Rust-authored plugin that panics doesn't leave
+/// the host wedged with a permanently-set guard.
+struct PluginCallGuard;
+
+impl PluginCallGuard {
+    fn enter() -> Self {
+        PLUGIN_CALL_ACTIVE.store(true, Ordering::Release);
+        Self
+    }
+}
+
+impl Drop for PluginCallGuard {
+    fn drop(&mut self) {
+        PLUGIN_CALL_ACTIVE.store(false, Ordering::Release);
+    }
+}
+
 /// SAFETY: the returned reference borrows from the `Box<WindowState>`
 /// stashed in `GWLP_USERDATA`. wnd_proc invocations are serialized
 /// per-window (Win32 dispatches one at a time on the owning thread),
-/// so concurrent mutable aliasing across messages cannot occur.
+/// so concurrent mutable aliasing across messages cannot occur — but
+/// see [`PLUGIN_CALL_ACTIVE`] for re-entrant SendMessage from inside
+/// plugin code, which IS a path that can produce nested wnd_proc
+/// calls on the same stack. The flag check refuses the inner
+/// borrow when one is already in flight.
 unsafe fn state_from_hwnd<'a>(hwnd: HWND) -> Option<&'a mut WindowState> {
+    if PLUGIN_CALL_ACTIVE.load(Ordering::Acquire) {
+        // Re-entered while a plugin callback is on the stack.
+        // Returning None here is what makes the outer borrow safe:
+        // the inner wnd_proc never materializes a second
+        // &mut WindowState from the raw pointer.
+        return None;
+    }
     let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
     if raw == 0 {
         None

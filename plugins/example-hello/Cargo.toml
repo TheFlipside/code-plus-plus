@@ -1,0 +1,26 @@
+[package]
+name = "codepp-example-hello"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "In-tree sample Notepad++-compatible plugin: inserts 'Hello from plugin' into the active buffer."
+
+[lints]
+workspace = true
+
+[lib]
+# `cdylib` produces a regular Win32 DLL (`.dll`) on Windows that the
+# Code++ plugin host loads via `LoadLibraryW`. The output filename
+# uses `name`, not the package name, so the host sees `example_hello.dll`
+# rather than `codepp-example-hello.dll`. On non-Windows platforms the
+# crate compiles to an empty `cdylib` (the entry-point module is gated
+# behind `#[cfg(target_os = "windows")]`); Phase 5 ports the plugin
+# host to `dlopen`/`dlsym` and the same source compiles to `.so`/`.dylib`.
+crate-type = ["cdylib"]
+name = "example_hello"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+codepp-plugin-host = { workspace = true }

@@ -173,11 +173,31 @@ struct LoadedPlugin {
     name: String,
 }
 
+/// First menu-command id assigned to a plugin's FuncItem. The
+/// numeric range starts well above any plausible host-built-in id
+/// (Code++'s File menu uses 1000-series ids; Notepad++'s `IDM_BASE`
+/// is 40000) so plugin cmds never collide with the host's `WM_COMMAND`
+/// handlers in either ABI.
+pub const PLUGIN_CMD_ID_BASE: i32 = 50_000;
+
 /// Top-level plugin registry. Owned by the shell; UI crates poke it
 /// through `Shell` to enumerate, load, dispatch.
-#[derive(Default)]
 pub struct PluginHost {
     plugins: Vec<PluginInfo>,
+    /// Next menu-command id to hand out at the next successful load.
+    /// Monotonically increasing; never reused so that a plugin which
+    /// fails to load cannot leak its allocated cmds onto a later
+    /// plugin's items.
+    next_cmd_id: i32,
+}
+
+impl Default for PluginHost {
+    fn default() -> Self {
+        Self {
+            plugins: Vec::new(),
+            next_cmd_id: PLUGIN_CMD_ID_BASE,
+        }
+    }
 }
 
 impl PluginHost {
@@ -285,9 +305,14 @@ impl PluginHost {
         let path = plugin.path.clone();
         let _span = tracing::info_span!("plugin_load", path = %path.display()).entered();
 
-        let result = load_inner(&path, npp_data);
+        let cmd_id_base = self.next_cmd_id;
+        let result = load_inner(&path, npp_data, cmd_id_base);
         match result {
             Ok(loaded) => {
+                // Reserve the assigned ids — never reused, even if a
+                // later plugin fails to load and never publishes its
+                // FuncItems.
+                self.next_cmd_id = self.next_cmd_id.saturating_add(loaded.funcs.len() as i32);
                 plugin.name = Some(loaded.name.clone());
                 plugin.state = PluginState::Loaded(loaded);
                 Ok(())
@@ -298,12 +323,33 @@ impl PluginHost {
             }
         }
     }
+
+    /// Find the FuncItem matching `cmd_id` across all loaded plugins
+    /// and return its callback. The callback is a plain C function
+    /// pointer; the caller must invoke it from the UI thread (parity
+    /// with Notepad++) and may want to wrap the call in
+    /// `catch_unwind` to keep panics from unwinding across the FFI.
+    pub fn lookup_cmd(&self, cmd_id: i32) -> Option<crate::ffi::PluginCmd> {
+        for plugin in &self.plugins {
+            if let Some(funcs) = plugin.func_items() {
+                for f in funcs {
+                    if f.cmd_id == cmd_id {
+                        return f.p_func;
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 /// Resolve the six entry points and run the initial setInfo +
 /// getFuncsArray dance. Returns a fully-populated `LoadedPlugin` on
-/// success.
-fn load_inner(path: &Path, npp_data: NppData) -> Result<LoadedPlugin, String> {
+/// success. `cmd_id_base` is the first menu-command id assigned to
+/// the plugin's FuncItems — incremented by one per item, written
+/// back through the plugin's pointer so the plugin's own copy of
+/// `_cmdID` matches the value the host installs in the menu.
+fn load_inner(path: &Path, npp_data: NppData, cmd_id_base: i32) -> Result<LoadedPlugin, String> {
     let lib = DynLib::load(path)?;
 
     // SAFETY: each resolve call casts the GetProcAddress result to
@@ -409,16 +455,27 @@ fn load_inner(path: &Path, npp_data: NppData) -> Result<LoadedPlugin, String> {
     }
 
     // Copy the FuncItem array out of the plugin's address space into
-    // our own Vec. FuncItem is `Copy` so each element is bitwise-
-    // duplicated; the plugin retains ownership of the original
-    // memory and any `p_sh_key` accelerator pointers it allocated.
+    // our own Vec, assigning each entry a host-allocated `cmd_id`
+    // and writing that id back through the plugin's pointer so the
+    // plugin's own copy of `_cmdID` matches what the host installs
+    // in the menu (the ABI contract from PluginInterface.h). The
+    // plugin retains ownership of its FuncItem memory and the
+    // `p_sh_key` accelerator pointers; we copy by value.
     // SAFETY: raw is non-null and points to `count` valid FuncItem
-    // values (per the plugin's contract). We read each element by
-    // value.
+    // values (per the plugin's contract). We read and write each
+    // element. Plugins that store FuncItems in read-only memory
+    // (e.g. as a const initializer in the .rdata section) cause an
+    // access violation at the write — Notepad++ has the same
+    // requirement, so this matches the public ABI.
     let funcs = unsafe {
         let count = count as usize;
         let mut out = Vec::with_capacity(count);
         for i in 0..count {
+            let id = cmd_id_base.saturating_add(i as i32);
+            // Write the id back through the plugin's pointer first,
+            // then read the (now-updated) entry by value into our
+            // Vec — guarantees our copy and the plugin's copy agree.
+            (*raw.add(i)).cmd_id = id;
             out.push(*raw.add(i));
         }
         out
