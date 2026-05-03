@@ -1,0 +1,18 @@
+[package]
+name = "codepp-editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Safe Rust wrapper over Scintilla; owns the direct-call function pointer."
+
+[lints]
+workspace = true
+
+[lib]
+name = "codepp_editor"
+
+[dependencies]
+codepp-scintilla-sys = { path = "../scintilla-sys" }

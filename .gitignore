@@ -1,1 +1,15 @@
 **/.claude/settings.local.json
+
+# Rust / Cargo
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+Thumbs.db
+.DS_Store

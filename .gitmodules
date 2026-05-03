@@ -1,0 +1,6 @@
+[submodule "crates/scintilla-sys/vendor/scintilla"]
+	path = crates/scintilla-sys/vendor/scintilla
+	url = https://github.com/mirror/scintilla.git
+[submodule "crates/scintilla-sys/vendor/lexilla"]
+	path = crates/scintilla-sys/vendor/lexilla
+	url = https://github.com/ScintillaOrg/lexilla.git

@@ -1,0 +1,20 @@
+[package]
+name = "codepp-plugin-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Notepad++-compatible plugin host: NPPM/NPPN dispatcher, lifecycle, lazy DLL loading."
+
+[lints]
+workspace = true
+
+[lib]
+name = "codepp_plugin_host"
+
+[dependencies]
+codepp-core = { path = "../core" }
+codepp-editor = { path = "../editor" }
+codepp-platform = { path = "../platform" }

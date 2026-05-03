@@ -1,0 +1,35 @@
+# Code++ workspace.
+#
+# Crate names are prefixed `codepp-` to avoid colliding with std (`core`)
+# and to make external references unambiguous. Directory names follow
+# DESIGN.md §3 (`crates/core`, `crates/editor`, ...).
+
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+default-members = ["crates/app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Max Fiedler and Code++ contributors"]
+repository = "https://github.com/maxf1988/code-plus-plus"
+rust-version = "1.95"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.dev]
+# Faster incremental builds during development; release profile carries the perf budget.
+opt-level = 0
+debug = "line-tables-only"

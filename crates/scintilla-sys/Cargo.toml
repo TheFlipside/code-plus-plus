@@ -1,0 +1,20 @@
+[package]
+name = "codepp-scintilla-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Custom FFI to vendored Scintilla 5.x and Lexilla 5.x. Not the crates.io scintilla-sys."
+build = "build.rs"
+links = "scintilla"
+
+[lints]
+workspace = true
+
+[lib]
+name = "codepp_scintilla_sys"
+
+[build-dependencies]
+# `cc` will be added in Phase 1 when build.rs starts compiling vendored sources.

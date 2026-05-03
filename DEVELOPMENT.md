@@ -199,6 +199,18 @@ cargo build --workspace
 
 ### Update vendored Scintilla / Lexilla
 
+**Source provenance.** Lexilla's canonical git source is
+`https://github.com/ScintillaOrg/lexilla.git` — the official mirror maintained
+by the Scintilla project. Scintilla itself does **not** have an official git
+mirror; its canonical source is on SourceForge using Mercurial, which cannot
+be a git submodule. We therefore use `https://github.com/mirror/scintilla.git`,
+a community Mercurial-to-git auto-bridge that has tracked Scintilla releases
+for years. The submodule is pinned to a specific commit SHA, which protects
+against history rewrites at our pinned point. **Whenever the Scintilla
+submodule is bumped, verify the new commit's tree against the upstream tarball
+from <https://www.scintilla.org/ScintillaDownload.html>** — diff the source
+tree and reject the bump if there is any unexpected divergence.
+
 The submodules pin specific Scintilla and Lexilla release tags. To bump:
 
 ```sh

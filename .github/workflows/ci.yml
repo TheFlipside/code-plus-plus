@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least-privilege: workflows only need to read repo contents.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# TODO(security): pin third-party actions to commit SHAs (cargo-deny-action,
+# checkout, cache) before this repo goes public. Tracked as a follow-up to
+# the Phase 0 review.
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Linux GTK dev packages are added in Phase 5 alongside the ui_gtk crate.
+      # Phase 0 has no GTK consumer, so we don't install them yet.
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: cargo build
+        run: cargo build --workspace --all-targets
+
+      - name: cargo test (core)
+        run: cargo test -p codepp-core --all-targets
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

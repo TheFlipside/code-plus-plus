@@ -1,0 +1,21 @@
+[package]
+name = "codepp-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Glue layer: owns Session, EditorHandles, plugin host. Defines the UiPlatform trait."
+
+[lints]
+workspace = true
+
+[lib]
+name = "codepp_shell"
+
+[dependencies]
+codepp-core = { path = "../core" }
+codepp-editor = { path = "../editor" }
+codepp-plugin-host = { path = "../plugin-host" }
+codepp-platform = { path = "../platform" }

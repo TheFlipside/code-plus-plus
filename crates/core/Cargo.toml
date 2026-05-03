@@ -1,0 +1,15 @@
+[package]
+name = "codepp-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Headless core: session, file I/O, encoding, EOL, settings."
+
+[lints]
+workspace = true
+
+[lib]
+name = "codepp_core"

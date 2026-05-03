@@ -1,0 +1,15 @@
+[package]
+name = "codepp-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "OS-specific utilities: config paths, dynamic library loading, file watching."
+
+[lints]
+workspace = true
+
+[lib]
+name = "codepp_platform"

@@ -1,0 +1,19 @@
+[package]
+name = "codepp-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Code++ binary; selects a UI backend at compile time."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "codepp"
+path = "src/main.rs"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+codepp-ui-win32 = { path = "../ui_win32" }
