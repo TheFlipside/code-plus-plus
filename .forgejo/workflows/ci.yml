@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least-privilege: workflows only need to read repo contents.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Runs on the project's self-hosted Forgejo runners. The three runners are
+# labelled `windows`, `linux`, and `macos`; `runs-on` matches by label.
+#
+# Hardening notes (these were deliberate decisions, not omissions):
+#   - The single external action (`actions/checkout`) is pinned to a commit
+#     SHA, not a floating tag. On self-hosted hardware a tag-move supply-chain
+#     attack would persist between runs and have access to the host
+#     filesystem; SHA-pinning closes that window. To bump, look up the new
+#     SHA via `git ls-remote https://github.com/actions/checkout.git
+#     'refs/tags/v4*'` and update the comment alongside.
+#   - There is intentionally no `actions/cache` step. On persistent self-
+#     hosted runners the cache action's `restore-keys` prefix fallback is a
+#     cross-PR poisoning vector: a malicious PR could plant a cache entry
+#     that a later PR restores. The runners' on-disk `target/` and
+#     `~/.cargo` already act as a natural cache between runs; that's enough.
+#   - `cargo-deny` is installed via `cargo install --locked` rather than via
+#     `EmbarkStudios/cargo-deny-action`, so we don't depend on the Forgejo
+#     instance having an external-action proxy configured.
+
+jobs:
+  build:
+    name: build (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows, linux, macos]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout (pinned to actions/checkout v4.3.1)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          submodules: recursive
+
+      - name: cargo build
+        run: cargo build --workspace --all-targets
+
+      - name: cargo test (core)
+        run: cargo test -p codepp-core --all-targets
+
+  lint:
+    name: lint
+    runs-on: linux
+    steps:
+      - name: Checkout (pinned to actions/checkout v4.3.1)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          submodules: recursive
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  deny:
+    name: cargo-deny
+    runs-on: linux
+    steps:
+      - name: Checkout (pinned to actions/checkout v4.3.1)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          submodules: false
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny
+      - name: cargo deny check
+        run: cargo deny check

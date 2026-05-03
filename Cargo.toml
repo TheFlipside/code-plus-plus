@@ -14,7 +14,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Max Fiedler and Code++ contributors"]
-repository = "https://github.com/maxf1988/code-plus-plus"
+repository = "https://git.fiedler.live/tux/code-plus-plus"
 rust-version = "1.95"
 
 [workspace.lints.rust]

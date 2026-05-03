@@ -18,7 +18,7 @@ Independent of OS, every contributor needs:
 Once those are present, the cross-platform bring-up is identical:
 
 ```sh
-git clone --recurse-submodules <repo-url> code-plus-plus
+git clone --recurse-submodules https://git.fiedler.live/tux/code-plus-plus.git
 cd code-plus-plus
 cargo build --workspace
 cargo run -p app

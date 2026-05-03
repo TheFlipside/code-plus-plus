@@ -61,11 +61,13 @@ For setup instructions on Windows, Linux, and macOS, see [DEVELOPMENT.md](DEVELO
 The short version, once your toolchain is in place:
 
 ```sh
-git clone --recurse-submodules <repo-url> code-plus-plus
+git clone --recurse-submodules https://git.fiedler.live/tux/code-plus-plus.git
 cd code-plus-plus
 cargo build --workspace
-cargo run -p app
+cargo run -p codepp-app
 ```
+
+The canonical repository is hosted on Forgejo at <https://git.fiedler.live/tux/code-plus-plus>. A read-only mirror is pushed to GitHub.
 
 ---
 

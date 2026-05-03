@@ -357,10 +357,16 @@ If a future feature breaks any of these, it must either be feature-gated (off by
 
 ### 9.3 CI
 
-- GitHub Actions matrix: `{windows-latest, ubuntu-latest, macos-latest} × {stable}`.
-- Required jobs: `cargo fmt --check`, `cargo clippy -D warnings`, `cargo build --workspace`, `cargo test --workspace`.
-- Windows job additionally runs the Notepad++ plugin compatibility smoke test from Phase 3 onward.
-- Phase boundary: tag the commit (`phase-1-complete`, etc.) only after CI is green and the phase demo is recorded.
+- **Hosting:** the canonical repository is on Forgejo at <https://git.fiedler.live/tux/code-plus-plus>. A read-only mirror is pushed to GitHub. CI runs on Forgejo Actions only; the GitHub mirror has no workflow.
+- **Runners:** three self-hosted Forgejo runners with labels `windows`, `linux`, and `macos`. The build job's matrix maps `runs-on: ${{ matrix.runner }}` directly to those labels. Lint and `cargo-deny` jobs run on the `linux` runner.
+- **Required jobs:** `cargo build --workspace --all-targets` on each runner, `cargo test -p codepp-core` on each runner, `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo deny check`.
+- **Windows job** additionally runs the Notepad++ plugin compatibility smoke test from Phase 3 onward.
+- **Permissions:** workflows declare `permissions: contents: read` at the workflow level.
+- **Hardening for self-hosted runners** (these are deliberate decisions enforced from Phase 0 onward, not deferrable):
+  - `actions/checkout` is pinned to a commit SHA, never a floating tag. A tag-move supply-chain attack on persistent self-hosted hardware has durable impact (host-disk access, credential exfiltration, pivot to the local network), so SHA-pinning is mandatory. The bump procedure (`git ls-remote ... | update SHA + comment`) lives next to the pin in the workflow file.
+  - `actions/cache` is **not used.** Persistent on-disk `target/` and `~/.cargo` provide the natural caching; the cache action's `restore-keys` prefix fallback is a cross-PR poisoning vector.
+  - `cargo-deny` is installed via `cargo install --locked cargo-deny`, not via `EmbarkStudios/cargo-deny-action`. Removes the dependency on the Forgejo instance's external-action proxy and one more SHA to track.
+- **Phase boundary:** tag the commit (`phase-0-complete`, `phase-1-complete`, ...) only after CI is green on all three runners and the phase demo is recorded.
 
 ---
 
