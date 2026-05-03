@@ -16,7 +16,9 @@
 //! The UI thread's wake handler drains both channels and applies each
 //! item to the shell.
 
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
