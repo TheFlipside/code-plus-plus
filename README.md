@@ -79,7 +79,9 @@ cargo run -p app
 
 ## License
 
-To be decided before the first public release. Notepad++ is GPL-2.0; Scintilla is HPND. Code++'s license will be chosen with both upstreams' compatibility in mind.
+Code++ is licensed under the **MIT License**. See [LICENSE](LICENSE) for the full text and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the notices required by upstream components (Scintilla and Lexilla under HPND, plus bundled Rust crates).
+
+The Notepad++ plugin compatibility layer under `plugins/nppcompat-headers/` is an **independent clean-room reimplementation** of the public ABI — message numbers, struct layouts, behavior contracts. No source has been copied from Notepad++; the ABI itself is not copyrightable.
 
 ---
 

@@ -1,0 +1,27 @@
+/*
+ * <filename>.h — <one-line description>
+ *
+ * Part of Code++ (https://github.com/...).
+ *
+ * This header is an independent reimplementation of the Notepad++ plugin
+ * ABI. No source has been copied from Notepad++ or its plugin SDK. The
+ * ABI surface defined here — message numbers, struct layouts, function
+ * signatures, and behavior contracts — is not protected by copyright;
+ * the original header source is, and is therefore not used.
+ *
+ * Code++ is licensed under the MIT License. See LICENSE at the
+ * repository root for the full text.
+ *
+ * Copyright (c) 2026 Max Fiedler and Code++ contributors.
+ */
+
+#ifndef CODEPP_NPPCOMPAT_<HEADER_NAME>_H
+#define CODEPP_NPPCOMPAT_<HEADER_NAME>_H
+
+/* ABI definitions go here. Do not paste from Notepad++ headers — write
+ * each declaration from scratch using only the public message number,
+ * the documented behavior, and the on-the-wire struct layout. If a
+ * declaration cannot be written without referencing the upstream source
+ * verbatim, stop and ask. */
+
+#endif /* CODEPP_NPPCOMPAT_<HEADER_NAME>_H */

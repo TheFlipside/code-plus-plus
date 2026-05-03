@@ -1,0 +1,50 @@
+# cargo-deny configuration for Code++.
+#
+# Run via: cargo deny check
+# CI runs `cargo deny check licenses` and `cargo deny check bans` and fails
+# the build if any dependency uses a license outside the allow list below,
+# or violates the version/wildcard hygiene rules.
+#
+# Code++ itself is MIT-licensed. We accept dependencies under common
+# permissive licenses only. Copyleft licenses (GPL-*, LGPL-*, MPL-*, AGPL-*)
+# are denied by omission — adding such a dependency requires removing or
+# replacing it, not adding an exception here.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+]
+
+# Per-crate exceptions go here only with a justification comment and an
+# upstream-tracking link. Default to refusing exceptions; a non-allowlisted
+# license is almost always a signal to find a different crate.
+exceptions = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

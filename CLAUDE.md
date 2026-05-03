@@ -50,6 +50,8 @@ These are not derivable from the code. Read DESIGN.md for the rationale; these a
 - **Static linking only.** Scintilla, Lexilla, and CRT are statically linked into the `code++` binary. No shipped `scintilla.dll`. Plugin DLLs are the only dynamic loads.
 - **Plugins load lazily.** Zero `LoadLibrary`/`dlopen` calls happen at startup; verified by trace log.
 - **Pre-commit gate (binding).** Before every commit, run `/review` and `/security-audit` and address all findings — fix them, or get explicit user sign-off to defer with a tracked follow-up. No commit ships with unresolved findings from either skill. This applies to every commit, including small ones; the FFI surface and plugin host make "obviously safe" the wrong default.
+- **Dependency licenses.** Code++ is MIT (see [LICENSE](LICENSE)). Cargo dependencies must use a license from the allowlist in `deny.toml` (MIT, Apache-2.0, BSD-2/3-Clause, ISC, Zlib, 0BSD, CC0-1.0, Unicode-DFS-2016, Unicode-3.0). Copyleft (GPL/LGPL/MPL/AGPL) is denied by omission — find a different crate, never add an exception. `cargo deny check` runs in CI and is also expected before any commit that touches `Cargo.toml`/`Cargo.lock`.
+- **No code from Notepad++.** The plugin compat headers under `plugins/nppcompat-headers/` are clean-room reimplementations of the public ABI. Pasting source from Notepad++ headers is a license-violation bug; revert and rewrite. Every header in that directory must start with the provenance notice in `plugins/nppcompat-headers/HEADER_TEMPLATE.txt`.
 
 ## Skills Available
 
