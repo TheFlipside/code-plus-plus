@@ -187,14 +187,8 @@ fn show_reload_dialog(main_hwnd: HWND, path: &Path) -> bool {
         path.display()
     ));
     let title = w!("Code++: file changed externally");
-    let response = unsafe {
-        MessageBoxW(
-            Some(main_hwnd),
-            &prompt,
-            title,
-            MB_YESNO | MB_ICONQUESTION,
-        )
-    };
+    let response =
+        unsafe { MessageBoxW(Some(main_hwnd), &prompt, title, MB_YESNO | MB_ICONQUESTION) };
     response == IDYES
 }
 
@@ -204,12 +198,7 @@ fn show_error_dialog(main_hwnd: HWND, title: &str, message: &str) {
     let title_w = HSTRING::from(title);
     let msg_w = HSTRING::from(message);
     unsafe {
-        MessageBoxW(
-            Some(main_hwnd),
-            &msg_w,
-            &title_w,
-            MB_OK | MB_ICONWARNING,
-        );
+        MessageBoxW(Some(main_hwnd), &msg_w, &title_w, MB_OK | MB_ICONWARNING);
     }
 }
 
