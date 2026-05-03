@@ -97,15 +97,20 @@ dependencies = [
  "codepp-editor",
  "codepp-platform",
  "codepp-plugin-host",
+ "crossbeam-channel",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]
 name = "codepp-ui-win32"
 version = "0.1.0"
 dependencies = [
+ "codepp-core",
  "codepp-editor",
  "codepp-scintilla-sys",
  "codepp-shell",
+ "tracing",
  "windows",
 ]
 

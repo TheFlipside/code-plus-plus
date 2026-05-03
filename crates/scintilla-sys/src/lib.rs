@@ -64,6 +64,17 @@ pub const SCI_UNDO: u32 = 2176;
 pub const SCI_REDO: u32 = 2011;
 pub const SCI_CANUNDO: u32 = 2174;
 pub const SCI_CANREDO: u32 = 2016;
+pub const SCI_EMPTYUNDOBUFFER: u32 = 2175;
+
+// Caret / cursor position
+pub const SCI_GETCURRENTPOS: u32 = 2008;
+pub const SCI_GOTOPOS: u32 = 2025;
+
+// Modified state — Scintilla tracks "save point" internally; calling
+// SCI_SETSAVEPOINT after a successful save resets the modified flag so
+// the title bar doesn't keep its asterisk.
+pub const SCI_SETSAVEPOINT: u32 = 2014;
+pub const SCI_GETMODIFY: u32 = 2159;
 
 // Selection
 pub const SCI_SELECTALL: u32 = 2013;

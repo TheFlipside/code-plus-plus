@@ -1,11 +1,15 @@
 //! Code++ entry point. Selects the UI backend at compile time.
 //!
-//! Phase 0: Windows backend opens an empty window; other platforms compile
-//! and exit with an unsupported-platform message.
+//! Optional CLI argument: a single path to open at startup. Same effect
+//! as drag-and-dropping that file onto the window — exercises the
+//! identical Loader → wake → drain → Scintilla pipeline. Useful for
+//! Phase 2 demo verification scripts that can't simulate cross-process
+//! drag-drop (HGLOBAL is per-process).
 
 #[cfg(target_os = "windows")]
 fn main() -> std::process::ExitCode {
-    match codepp_ui_win32::run() {
+    let initial_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
+    match codepp_ui_win32::run(initial_path) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("Code++: fatal error: {err}");

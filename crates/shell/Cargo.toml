@@ -15,7 +15,12 @@ workspace = true
 name = "codepp_shell"
 
 [dependencies]
-codepp-core = { workspace = true }
-codepp-editor = { workspace = true }
+codepp-core        = { workspace = true }
+codepp-editor      = { workspace = true }
 codepp-plugin-host = { workspace = true }
-codepp-platform = { workspace = true }
+codepp-platform    = { workspace = true }
+crossbeam-channel  = { workspace = true }
+# tempfile is a runtime dep (used by save_current_to_disk's atomic
+# write), not just a test fixture.
+tempfile = { workspace = true }
+tracing  = { workspace = true }
