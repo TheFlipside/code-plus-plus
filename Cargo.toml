@@ -30,23 +30,23 @@ all = { level = "warn", priority = -1 }
 # version, update both `[workspace.package].version` and the version
 # field of each entry below.
 [workspace.dependencies]
-codepp-core          = { version = "0.1.0", path = "crates/core" }
-codepp-editor        = { version = "0.1.0", path = "crates/editor" }
-codepp-platform      = { version = "0.1.0", path = "crates/platform" }
-codepp-plugin-host   = { version = "0.1.0", path = "crates/plugin-host" }
+codepp-core = { version = "0.1.0", path = "crates/core" }
+codepp-editor = { version = "0.1.0", path = "crates/editor" }
+codepp-platform = { version = "0.1.0", path = "crates/platform" }
+codepp-plugin-host = { version = "0.1.0", path = "crates/plugin-host" }
 codepp-scintilla-sys = { version = "0.1.0", path = "crates/scintilla-sys" }
-codepp-shell         = { version = "0.1.0", path = "crates/shell" }
-codepp-ui-win32      = { version = "0.1.0", path = "crates/ui_win32" }
+codepp-shell = { version = "0.1.0", path = "crates/shell" }
+codepp-ui-win32 = { version = "0.1.0", path = "crates/ui_win32" }
 
 # External dependencies — pin every version here so cargo-deny's wildcard
 # check stays satisfied workspace-wide.
 crossbeam-channel = "0.5"
-encoding_rs       = "0.8"
-notify            = "8"
-quick-xml         = { version = "0.39", features = ["serialize"] }
-serde             = { version = "1", features = ["derive"] }
-tempfile          = "3"
-tracing           = "0.1"
+encoding_rs = "0.8"
+notify = "8"
+quick-xml = { version = "0.39", features = ["serialize"] }
+serde = { version = "1", features = ["derive"] }
+tempfile = "3"
+tracing = "0.1"
 
 [profile.release]
 lto = "thin"

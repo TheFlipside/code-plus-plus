@@ -13,3 +13,11 @@ workspace = true
 
 [lib]
 name = "codepp_platform"
+
+[dependencies]
+crossbeam-channel = { workspace = true }
+notify            = { workspace = true }
+tracing           = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
