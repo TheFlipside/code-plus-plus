@@ -92,6 +92,14 @@ pub fn plugins_dir() -> Option<PathBuf> {
     config_dir().map(|d| d.join("plugins"))
 }
 
+/// Per-plugin data directory: `config_dir/plugins/config/`. This is the
+/// path returned to plugins via `NPPM_GETPLUGINSCONFIGDIR` — plugins
+/// store user-specific data files here (matches the Notepad++ layout
+/// so existing plugins find their settings without modification).
+pub fn plugins_config_dir() -> Option<PathBuf> {
+    plugins_dir().map(|d| d.join("config"))
+}
+
 /// Path to `config.xml` under [`config_dir`]. Phase 4 wires this in
 /// for user settings; Phase 2 only references it for the path layout.
 pub fn config_xml_path() -> Option<PathBuf> {

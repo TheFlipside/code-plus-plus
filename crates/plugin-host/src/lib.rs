@@ -16,12 +16,14 @@ pub mod host;
 
 #[cfg(target_os = "windows")]
 pub use ffi::{
-    BeNotifiedFn, FuncItem, GetFuncsArrayFn, GetNameFn, IsUnicodeFn, MessageProcFn, NppData,
+    BeNotifiedFn, FuncItem, GetFuncsArrayFn, GetNameFn, Hwnd, IsUnicodeFn, MessageProcFn, NppData,
     PluginCmd, SCNotification, SciNotifyHeader, SetInfoFn, ShortcutKey, MENU_TITLE_LENGTH,
 };
 
 #[cfg(target_os = "windows")]
-pub use dispatch::{dispatch_nppm, notify_all, HostServices, Notification};
+pub use dispatch::{
+    dispatch_nppm, notify_all, HostServices, Notification, NPPMAINMENU, NPPMSG, NPPPLUGINMENU,
+};
 
 #[cfg(target_os = "windows")]
 pub use host::{PluginHost, PluginInfo};

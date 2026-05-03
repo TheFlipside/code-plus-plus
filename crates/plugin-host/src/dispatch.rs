@@ -371,9 +371,14 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             } else {
                 // SAFETY: plugin promises lparam is a valid wide path
                 // it owns for the duration of this call.
-                Some(PathBuf::from(unsafe {
-                    wide_ptr_to_string(lparam as *const u16)
-                }))
+                let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
+                if decoded.is_empty() {
+                    // Bad surrogates → empty; treat as "no path
+                    // supplied" rather than reloading the empty path.
+                    None
+                } else {
+                    Some(PathBuf::from(decoded))
+                }
             };
             services.reload_file(path);
             1
@@ -384,8 +389,11 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 0
             } else {
                 // SAFETY: plugin promises lparam is a valid wide path.
-                let path = PathBuf::from(unsafe { wide_ptr_to_string(lparam as *const u16) });
-                if services.switch_to_file(path) {
+                let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
+                if decoded.is_empty() {
+                    return Some(0);
+                }
+                if services.switch_to_file(PathBuf::from(decoded)) {
                     1
                 } else {
                     0
@@ -479,8 +487,11 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 0
             } else {
                 // SAFETY: plugin promises lparam is a valid wide path.
-                let path = PathBuf::from(unsafe { wide_ptr_to_string(lparam as *const u16) });
-                services.open_file(path);
+                let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
+                if decoded.is_empty() {
+                    return Some(0);
+                }
+                services.open_file(PathBuf::from(decoded));
                 1
             }
         }
@@ -499,6 +510,13 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 /// `String`. Bounded to `MAX_PATH_TCHARS` units to keep a missing
 /// terminator from running off into arbitrary memory; truncation is
 /// preferable to a buffer over-read.
+///
+/// Returns the empty string if the wide payload contains unpaired
+/// surrogates: `from_utf16_lossy` would silently substitute U+FFFD
+/// for each bad surrogate, which on a path-typed payload would
+/// reroute the open to a *different* valid path that shares the
+/// non-surrogate prefix. Empty-string return makes the caller's
+/// error path hit (it null-checks the result before forwarding).
 ///
 /// # Safety
 ///
@@ -522,7 +540,19 @@ unsafe fn wide_ptr_to_string(mut p: *const u16) -> String {
             count += 1;
         }
     }
-    String::from_utf16_lossy(&units)
+    let s = String::from_utf16_lossy(&units);
+    if s.contains('\u{FFFD}') {
+        // Reject rather than mangle: a path with a substituted
+        // U+FFFD might resolve to a different file than the plugin
+        // intended, and the dispatcher routes path-typed payloads
+        // straight into open_file/reload_file/switch_to_file.
+        tracing::warn!(
+            len = units.len(),
+            "plugin-supplied wide string contained invalid surrogates; rejecting",
+        );
+        return String::new();
+    }
+    s
 }
 
 /// Write `path` as a null-terminated wide string into the buffer at

@@ -153,22 +153,23 @@ impl UiPlatform for Win32Ui {
             eol.label(),
             byte_len
         );
-        // Null-terminated UTF-16 buffer — Vec<u16> over HSTRING so the
-        // layout is unambiguous; HSTRING has its own refcounted header.
-        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-        // SB_SETTEXTW = 0x040B (wide variant; 0x0401 is the ANSI
-        // SB_SETTEXTA, which the SendMessageW call would mismatch).
-        // wparam packs `(part_index | drawing_type << 8)`; we use
-        // part 0, drawing type 0 (default sunken inner edge).
-        const SB_SETTEXTW: u32 = 0x040B;
-        unsafe {
-            SendMessageW(
-                self.status_hwnd,
-                SB_SETTEXTW,
-                Some(WPARAM(0)),
-                Some(LPARAM(wide.as_ptr() as isize)),
-            );
-        }
+        write_status_part(self.status_hwnd, 0, &text);
+    }
+
+    fn set_plugin_status(&mut self, section: usize, text: &str) {
+        // NPPM_SETSTATUSBAR sections: 0 = doc info, 1 = type, 2 =
+        // encoding, etc. The Phase 3 status bar is single-part, so
+        // we collapse all plugin-supplied sections onto part 0; the
+        // next `update_status` call repaints the standard fields.
+        //
+        // **Known limitation:** a plugin that calls NPPM_SETSTATUSBAR
+        // twice with different sections sees only the last write
+        // until milestone 6's multi-part status bar lands. Plugins
+        // that depend on per-section persistence will visibly
+        // misbehave; this is a documented surface deviation, not a
+        // bug to file.
+        let _ = section;
+        write_status_part(self.status_hwnd, 0, text);
     }
 
     // confirm_reload and show_error were intentionally removed from
@@ -177,6 +178,42 @@ impl UiPlatform for Win32Ui {
     // GWLP_USERDATA-borrowed WindowState. Modal dialogs are deferred
     // — `Shell::drain` returns `Vec<PendingDialog>` that the wnd_proc
     // shows after the borrow is dropped (see `WM_APP_WAKE`).
+}
+
+/// Write `text` into status-bar part `part_index`. Centralizes the
+/// SB_SETTEXTW idiom so the regular status updates (encoding/EOL/size)
+/// and the plugin-driven `NPPM_SETSTATUSBAR` overrides share one
+/// implementation — the only thing that varies is the source string.
+fn write_status_part(status_hwnd: HWND, part_index: usize, text: &str) {
+    // Strip embedded NUL characters before building the wide buffer.
+    // SB_SETTEXTW reads up to the first U+0000 unit; an embedded NUL
+    // in plugin-supplied text would silently truncate the visible
+    // string mid-glyph. Stripping puts the visible/encoded length in
+    // sync so any future multi-part status logic that compares
+    // `vec.len()` with what the control consumed stays consistent.
+    let cleaned: String;
+    let payload = if text.contains('\0') {
+        cleaned = text.replace('\0', "");
+        cleaned.as_str()
+    } else {
+        text
+    };
+    // Null-terminated UTF-16 buffer — Vec<u16> over HSTRING so the
+    // layout is unambiguous; HSTRING has its own refcounted header.
+    let wide: Vec<u16> = payload.encode_utf16().chain(std::iter::once(0)).collect();
+    // SB_SETTEXTW = 0x040B (wide variant; 0x0401 is the ANSI
+    // SB_SETTEXTA, which the SendMessageW call would mismatch).
+    // wparam packs `(part_index | drawing_type << 8)`; drawing type 0
+    // gives the default sunken inner edge.
+    const SB_SETTEXTW: u32 = 0x040B;
+    unsafe {
+        SendMessageW(
+            status_hwnd,
+            SB_SETTEXTW,
+            Some(WPARAM(part_index)),
+            Some(LPARAM(wide.as_ptr() as isize)),
+        );
+    }
 }
 
 /// Show a "file changed externally — reload?" dialog. Standalone so
