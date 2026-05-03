@@ -66,6 +66,93 @@ pub struct FuncItem {
 /// Plugin's per-menu-item callback. Plain `extern "C"` no-arg, no-return.
 pub type PluginCmd = unsafe extern "C" fn();
 
+/// Mirror of `Sci_NotifyHeader` from Scintilla.h. ABI-compatible with
+/// Win32 `NMHDR`: a `void*` window handle, a pointer-sized identifier,
+/// and a 32-bit code that carries the `NPPN_*` or `SCN_*` discriminant.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SciNotifyHeader {
+    pub hwnd_from: Hwnd,
+    pub id_from: usize,
+    pub code: u32,
+}
+
+impl Default for SciNotifyHeader {
+    fn default() -> Self {
+        Self {
+            hwnd_from: core::ptr::null_mut(),
+            id_from: 0,
+            code: 0,
+        }
+    }
+}
+
+/// Mirror of `SCNotification` from Scintilla.h. **Must** stay
+/// `#[repr(C)]` and field-for-field identical to the upstream
+/// definition: plugins read this struct in their `beNotified` body
+/// using the public `SCNotification` layout, so any field reorder
+/// here parses as garbage on the plugin side.
+///
+/// `Sci_Position` is `ptrdiff_t` upstream — `isize` in Rust. `sptr_t`
+/// is `intptr_t` (also `isize`); `uptr_t` is `uintptr_t` (`usize`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SCNotification {
+    pub nmhdr: SciNotifyHeader,
+    pub position: isize,
+    pub ch: i32,
+    pub modifiers: i32,
+    pub modification_type: i32,
+    pub text: *const u8,
+    pub length: isize,
+    pub lines_added: isize,
+    pub message: i32,
+    pub w_param: usize,
+    pub l_param: isize,
+    pub line: isize,
+    pub fold_level_now: i32,
+    pub fold_level_prev: i32,
+    pub margin: i32,
+    pub list_type: i32,
+    pub x: i32,
+    pub y: i32,
+    pub token: i32,
+    pub annotation_lines_added: isize,
+    pub updated: i32,
+    pub list_completion_method: i32,
+    pub character_source: i32,
+}
+
+impl Default for SCNotification {
+    fn default() -> Self {
+        Self {
+            nmhdr: SciNotifyHeader::default(),
+            position: 0,
+            ch: 0,
+            modifiers: 0,
+            modification_type: 0,
+            text: core::ptr::null(),
+            length: 0,
+            lines_added: 0,
+            message: 0,
+            w_param: 0,
+            l_param: 0,
+            line: 0,
+            fold_level_now: 0,
+            fold_level_prev: 0,
+            margin: 0,
+            list_type: 0,
+            x: 0,
+            y: 0,
+            token: 0,
+            annotation_lines_added: 0,
+            updated: 0,
+            list_completion_method: 0,
+            character_source: 0,
+        }
+    }
+}
+
 // --- Six entry points exported by every plugin DLL -------------------
 
 /// `setInfo(NppData)`
@@ -81,7 +168,7 @@ pub type GetNameFn = unsafe extern "C" fn() -> *const u16;
 pub type GetFuncsArrayFn = unsafe extern "C" fn(*mut i32) -> *mut FuncItem;
 
 /// `beNotified(SCNotification*)`. Notification dispatch.
-pub type BeNotifiedFn = unsafe extern "C" fn(*const c_void);
+pub type BeNotifiedFn = unsafe extern "C" fn(*const SCNotification);
 
 /// `messageProc(UINT, WPARAM, LPARAM) -> LRESULT`. Host-to-plugin
 /// custom messages.

@@ -372,6 +372,19 @@ fn load_inner(path: &Path, npp_data: NppData) -> Result<LoadedPlugin, String> {
         unsafe { get_funcs_array(&mut count as *mut i32) }
     }))
     .map_err(|_| "plugin panicked in getFuncsArray".to_string())?;
+    // Cap implausible counts. A malicious or broken plugin returning
+    // i32::MAX would cause `Vec::with_capacity` to request ~17 GB and
+    // abort the host process — a denial-of-service against a
+    // first-touch plugin load. No real Notepad++ plugin contributes
+    // hundreds of menu items, let alone a thousand; the cap is
+    // generous-but-finite to bound the blast radius without rejecting
+    // any legitimate plugin.
+    const MAX_FUNCITEMS: i32 = 1024;
+    if count > MAX_FUNCITEMS {
+        return Err(format!(
+            "getFuncsArray returned implausible count {count}; cap is {MAX_FUNCITEMS}"
+        ));
+    }
     if raw.is_null() || count <= 0 {
         // Allow plugins that contribute no menu items — they may
         // still be useful via beNotified-only lifecycles.

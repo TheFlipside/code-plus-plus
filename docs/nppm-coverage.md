@@ -21,6 +21,17 @@ Phase tags reflect when each message is targeted for ✅:
 - **v2** — Phase 4, find-in-files / lexer / encoding messages.
 - **v3** — Phase 5, the long tail.
 
+## Status as of Phase 3 milestone 3 (dispatcher landing)
+
+The NPPM_*/NPPN_* dispatcher (`crates/plugin-host/src/dispatch.rs`)
+is now in place: `dispatch_nppm` handles every v1 message below
+against the `HostServices` trait, and `notify_all` synthesizes
+`SCNotification` and broadcasts to every loaded plugin. **Rows
+remain ⚫ until end-to-end-exercised by a real plugin DLL** in
+`tools/npp-plugin-test/` per the legend; promotion to ✅ happens
+once `shell` implements `HostServices` (milestone 4) and
+`plugins/example-hello` exercises each call (milestone 5).
+
 ## NPPM_* (host-control)
 
 | Message | Status | Phase | Notes |
@@ -63,6 +74,8 @@ Phase tags reflect when each message is targeted for ✅:
 | `NPPM_MENUCOMMAND` | ⚫ | v1 | |
 | `NPPM_TRIGGERTABBARCONTEXTMENU` | ⚫ | v3 | |
 | `NPPM_GETNPPVERSION` | ⚫ | v1 | Returns Code++'s version range-compatible with Notepad++ for plugin gating. |
+| `NPPM_GETNPPDIRECTORY` | ⚫ | v1 | DESIGN.md §6.3 v1; not yet in compat header — add alongside `HostServices::program_dir`. |
+| `NPPM_GETNPPFULLFILEPATH` | ⚫ | v1 | DESIGN.md §6.3 v1; not yet in compat header — add alongside `HostServices::program_path`. |
 | `NPPM_HIDETABBAR` / `ISTABBARHIDDEN` | ⚫ | v2 | |
 | `NPPM_GETPOSFROMBUFFERID` / `GETBUFFERIDFROMPOS` | ⚫ | v1 | |
 | `NPPM_GETFULLPATHFROMBUFFERID` | ⚫ | v1 | |
