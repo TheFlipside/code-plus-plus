@@ -38,6 +38,15 @@ codepp-scintilla-sys = { version = "0.1.0", path = "crates/scintilla-sys" }
 codepp-shell         = { version = "0.1.0", path = "crates/shell" }
 codepp-ui-win32      = { version = "0.1.0", path = "crates/ui_win32" }
 
+# External dependencies — pin every version here so cargo-deny's wildcard
+# check stays satisfied workspace-wide.
+crossbeam-channel = "0.5"
+encoding_rs       = "0.8"
+notify            = "7"
+quick-xml         = { version = "0.36", features = ["serialize"] }
+serde             = { version = "1", features = ["derive"] }
+tracing           = "0.1"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

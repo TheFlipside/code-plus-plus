@@ -13,3 +13,7 @@ workspace = true
 
 [lib]
 name = "codepp_core"
+
+[dependencies]
+encoding_rs = { workspace = true }
+serde       = { workspace = true }
