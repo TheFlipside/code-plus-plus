@@ -23,6 +23,21 @@ unsafe_op_in_unsafe_fn = "deny"
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 
+# Internal crates declared centrally so cargo-deny's wildcard check is
+# satisfied (path-only deps without an explicit `version` are treated as
+# `*` by the bans check). Each per-crate manifest pulls these via
+# `dep = { workspace = true }`. When bumping the workspace package
+# version, update both `[workspace.package].version` and the version
+# field of each entry below.
+[workspace.dependencies]
+codepp-core          = { version = "0.1.0", path = "crates/core" }
+codepp-editor        = { version = "0.1.0", path = "crates/editor" }
+codepp-platform      = { version = "0.1.0", path = "crates/platform" }
+codepp-plugin-host   = { version = "0.1.0", path = "crates/plugin-host" }
+codepp-scintilla-sys = { version = "0.1.0", path = "crates/scintilla-sys" }
+codepp-shell         = { version = "0.1.0", path = "crates/shell" }
+codepp-ui-win32      = { version = "0.1.0", path = "crates/ui_win32" }
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

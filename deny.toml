@@ -17,6 +17,12 @@ no-default-features = false
 [licenses]
 version = 2
 confidence-threshold = 0.93
+# The allowlist below intentionally enumerates every license we accept,
+# even ones no current dependency uses. As the dep tree grows we want
+# the policy to already cover them, not to scramble at PR time. Silence
+# cargo-deny's "unmatched license allowance" warning so the noise does
+# not drown out real findings.
+unused-allowed-license = "allow"
 allow = [
     "MIT",
     "Apache-2.0",

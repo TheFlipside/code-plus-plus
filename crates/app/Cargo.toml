@@ -16,4 +16,4 @@ name = "codepp"
 path = "src/main.rs"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-codepp-ui-win32 = { path = "../ui_win32" }
+codepp-ui-win32 = { workspace = true }

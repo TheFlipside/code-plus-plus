@@ -15,7 +15,7 @@ workspace = true
 name = "codepp_ui_win32"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-codepp-shell = { path = "../shell" }
+codepp-shell = { workspace = true }
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

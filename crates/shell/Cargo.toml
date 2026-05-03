@@ -15,7 +15,7 @@ workspace = true
 name = "codepp_shell"
 
 [dependencies]
-codepp-core = { path = "../core" }
-codepp-editor = { path = "../editor" }
-codepp-plugin-host = { path = "../plugin-host" }
-codepp-platform = { path = "../platform" }
+codepp-core = { workspace = true }
+codepp-editor = { workspace = true }
+codepp-plugin-host = { workspace = true }
+codepp-platform = { workspace = true }
