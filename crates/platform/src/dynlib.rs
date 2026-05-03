@@ -10,12 +10,13 @@
 //! callers from invoking a function pointer after the library is
 //! unloaded.
 
-use std::ffi::{CString, OsStr};
+use std::ffi::OsStr;
 use std::path::Path;
 
 #[cfg(target_os = "windows")]
 mod imp {
     use super::*;
+    use std::ffi::CString;
     use windows::core::HSTRING;
     use windows::Win32::Foundation::{FreeLibrary, HMODULE};
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
@@ -183,20 +184,28 @@ mod tests {
 
     #[test]
     fn extension_classifier() {
-        let dll = PathBuf::from("foo.dll");
-        let upper = PathBuf::from("foo.DLL");
-        let txt = PathBuf::from("foo.txt");
-        let none = PathBuf::from("foo");
-        let nested = PathBuf::from("path/to/sub.dll");
+        // Cross-platform negative cases first.
+        assert!(!has_plugin_extension(&PathBuf::from("foo.txt")));
+        assert!(!has_plugin_extension(&PathBuf::from("foo")));
 
+        // Per-OS positive cases — each platform's PLUGIN_EXTENSION
+        // is different (`dll` / `so` / `dylib`).
         #[cfg(target_os = "windows")]
         {
-            assert!(has_plugin_extension(&dll));
-            assert!(has_plugin_extension(&upper));
-            assert!(has_plugin_extension(&nested));
+            assert!(has_plugin_extension(&PathBuf::from("foo.dll")));
+            assert!(has_plugin_extension(&PathBuf::from("foo.DLL")));
+            assert!(has_plugin_extension(&PathBuf::from("path/to/sub.dll")));
         }
-        assert!(!has_plugin_extension(&txt));
-        assert!(!has_plugin_extension(&none));
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            assert!(has_plugin_extension(&PathBuf::from("foo.so")));
+            assert!(has_plugin_extension(&PathBuf::from("foo.SO")));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert!(has_plugin_extension(&PathBuf::from("foo.dylib")));
+            assert!(has_plugin_extension(&PathBuf::from("foo.DYLIB")));
+        }
     }
 
     #[cfg(target_os = "windows")]
