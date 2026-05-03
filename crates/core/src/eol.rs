@@ -8,7 +8,12 @@
 use serde::{Deserialize, Serialize};
 
 /// End-of-line style for a buffer.
+///
+/// Serialized as the human-readable [`label`](Self::label) string
+/// (`"LF"` / `"CRLF"` / `"CR"` / `"Mixed"`) so `session.xml` is
+/// readable. An unrecognised label deserializes to the default (`Lf`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "String", from = "String")]
 pub enum Eol {
     /// `\n` only — Unix, modern Linux, modern macOS.
     #[default]
@@ -35,7 +40,7 @@ impl Eol {
         }
     }
 
-    /// Human-readable label for the status bar.
+    /// Human-readable label for the status bar and `session.xml`.
     pub const fn label(self) -> &'static str {
         match self {
             Eol::Lf => "LF",
@@ -43,6 +48,35 @@ impl Eol {
             Eol::Cr => "CR",
             Eol::Mixed => "Mixed",
         }
+    }
+
+    /// Inverse of [`label`](Self::label). Unknown values default to
+    /// `Lf` so a hand-edited session.xml doesn't crash the editor.
+    /// A warning is logged via `tracing` so a corrupted session is
+    /// diagnosable from the log.
+    pub fn from_label(s: &str) -> Eol {
+        match s {
+            "LF" => Eol::Lf,
+            "CRLF" => Eol::CrLf,
+            "CR" => Eol::Cr,
+            "Mixed" => Eol::Mixed,
+            other => {
+                tracing::warn!(label = %other, "unknown EOL label; defaulting to LF");
+                Eol::Lf
+            }
+        }
+    }
+}
+
+impl From<Eol> for String {
+    fn from(e: Eol) -> Self {
+        e.label().to_owned()
+    }
+}
+
+impl From<String> for Eol {
+    fn from(s: String) -> Self {
+        Eol::from_label(&s)
     }
 }
 

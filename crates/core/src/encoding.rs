@@ -15,7 +15,13 @@ use serde::{Deserialize, Serialize};
 /// The encoding of a buffer. Held alongside the decoded text so that
 /// saving without explicit conversion writes the same bytes the file
 /// arrived in.
+///
+/// Serialized as the human-readable [`label`](Self::label) string so
+/// `session.xml` round-trips read like
+/// `encoding="UTF-8"` / `encoding="windows-1252"`, never as serde's
+/// default tagged-enum representation.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "String", from = "String")]
 pub enum Encoding {
     /// UTF-8, with no BOM.
     #[default]
@@ -36,7 +42,7 @@ pub enum Encoding {
 }
 
 impl Encoding {
-    /// Human-readable label for the status bar.
+    /// Human-readable label for the status bar and `session.xml`.
     pub fn label(&self) -> &str {
         match self {
             Encoding::Utf8 => "UTF-8",
@@ -46,6 +52,43 @@ impl Encoding {
             Encoding::Utf16Le => "UTF-16 LE",
             Encoding::Utf16Be => "UTF-16 BE",
             Encoding::Other(s) => s,
+        }
+    }
+
+    /// Inverse of [`label`](Self::label). Unknown labels fall through
+    /// to `Other`, preserving whatever the input was — so a hand-edited
+    /// `session.xml` with an unrecognised encoding name doesn't crash
+    /// the editor.
+    pub fn from_label(s: &str) -> Encoding {
+        match s {
+            "UTF-8" => Encoding::Utf8,
+            "UTF-8 BOM" => Encoding::Utf8Bom,
+            "UTF-16 LE" => Encoding::Utf16Le,
+            "UTF-16 LE BOM" => Encoding::Utf16LeBom,
+            "UTF-16 BE" => Encoding::Utf16Be,
+            "UTF-16 BE BOM" => Encoding::Utf16BeBom,
+            other => Encoding::Other(other.to_owned()),
+        }
+    }
+}
+
+impl From<Encoding> for String {
+    fn from(e: Encoding) -> Self {
+        e.label().to_owned()
+    }
+}
+
+impl From<String> for Encoding {
+    fn from(s: String) -> Self {
+        // Avoid an extra allocation when `Other` will own the string.
+        match s.as_str() {
+            "UTF-8" => Encoding::Utf8,
+            "UTF-8 BOM" => Encoding::Utf8Bom,
+            "UTF-16 LE" => Encoding::Utf16Le,
+            "UTF-16 LE BOM" => Encoding::Utf16LeBom,
+            "UTF-16 BE" => Encoding::Utf16Be,
+            "UTF-16 BE BOM" => Encoding::Utf16BeBom,
+            _ => Encoding::Other(s),
         }
     }
 }

@@ -14,11 +14,15 @@ workspace = true
 [lib]
 name = "codepp_core"
 
+# tracing is used in lib code (not just tests); workspace inheritance
+# below already covers it.
+
 [dependencies]
 crossbeam-channel = { workspace = true }
 encoding_rs       = { workspace = true }
+quick-xml         = { workspace = true }
 serde             = { workspace = true }
-tracing           = { workspace = true }
-
-[dev-dependencies]
+# tempfile is a runtime dep (used by session::save_to_xml's atomic write)
+# *and* a test fixture, so it's not [dev-dependencies] only.
 tempfile = { workspace = true }
+tracing  = { workspace = true }
