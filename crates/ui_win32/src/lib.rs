@@ -53,8 +53,7 @@ use windows::Win32::UI::Controls::{
     WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SetFocus, VK_0, VK_A, VK_C, VK_F, VK_G, VK_H, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_V, VK_W,
-    VK_X, VK_Y, VK_Z,
+    SetFocus, VK_0, VK_F, VK_G, VK_H, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
 };
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -2102,17 +2101,26 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // `TranslateMessage`/`DispatchMessageW`, posting a WM_COMMAND
         // to the main window without depending on focus.
         //
-        // The table covers commands the menu actually exposes today:
+        // **Scintilla-native shortcuts are deliberately absent.**
+        // Scintilla's own keyboard table already binds Ctrl+X / C /
+        // V / Z / Y / A to its built-in cut/copy/paste/undo/redo/
+        // selectall implementations. If we register them as
+        // accelerators, TranslateAcceleratorW intercepts the
+        // keypress before Scintilla sees it and hands the work back
+        // through a WM_COMMAND round-trip — same end result on the
+        // happy path, but it's a duplicate code path that surfaces
+        // odd glitches under heavy keyboard activity (the
+        // user-observed "Ctrl+V sometimes doesn't paste, second
+        // attempt works" was traced to this duplication). The menu
+        // items still display the shortcut hint (`\tCtrl+X`) and
+        // mouse clicks on them fire WM_COMMAND → editor.send(SCI_*),
+        // so menu and keyboard each have a single, well-defined
+        // path that doesn't fight with the other.
+        //
+        // The table covers only the commands Scintilla doesn't
+        // already bind natively:
         //   - File: Save (Ctrl+S), Close (Ctrl+W).
-        //   - Edit: Undo / Redo / Cut / Copy / Paste / Select All.
-        //     Scintilla also handles these natively via its own
-        //     keyboard table when focused; routing through here
-        //     keeps the menu items "fire on shortcut" parity even
-        //     if Scintilla's table changes upstream.
-        //   - Search: Find / Replace / Find-in-Files / Goto Line —
-        //     entries with disabled menu items still receive
-        //     WM_COMMAND, so the dispatcher's default arm logs and
-        //     no-ops until m3 wires the real handlers.
+        //   - Search: Find / Replace / Find-in-Files / Goto Line.
         //   - View: Zoom In / Zoom Out / Restore Zoom.
         let ctrl = ACCEL_VIRT_FLAGS(FCONTROL.0 | FVIRTKEY.0);
         let ctrl_shift = ACCEL_VIRT_FLAGS(FCONTROL.0 | FSHIFT.0 | FVIRTKEY.0);
@@ -2127,37 +2135,6 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                 fVirt: ctrl,
                 key: VK_W.0,
                 cmd: ID_FILE_CLOSE,
-            },
-            // Edit
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_Z.0,
-                cmd: ID_EDIT_UNDO,
-            },
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_Y.0,
-                cmd: ID_EDIT_REDO,
-            },
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_X.0,
-                cmd: ID_EDIT_CUT,
-            },
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_C.0,
-                cmd: ID_EDIT_COPY,
-            },
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_V.0,
-                cmd: ID_EDIT_PASTE,
-            },
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_A.0,
-                cmd: ID_EDIT_SELECTALL,
             },
             // Search
             ACCEL {
