@@ -118,9 +118,59 @@ pub const SCI_GETZOOM: u32 = 2374;
 pub const SCI_SETSCROLLWIDTH: u32 = 2274;
 pub const SCI_SETSCROLLWIDTHTRACKING: u32 = 2516;
 
+// Search & replace — Phase 4 m3. Two parallel APIs:
+//   1. Anchor-based: SCI_SEARCHANCHOR + SCI_SEARCHNEXT/PREV walks
+//      the buffer relative to the current selection. Matches the
+//      caret to the found text on a hit; returns -1 on miss. The
+//      simplest API for "Find / Find Next" with a single query.
+//   2. Target-range: SCI_SETTARGETRANGE + SCI_SEARCHINTARGET +
+//      SCI_REPLACETARGET drive a stateful "search window" that
+//      Replace All iterates without touching the user's selection.
+//      Required for Replace All semantics; SCI_SEARCHNEXT can't
+//      replace because it leaves the match selected (the next
+//      replace would clobber the user's new selection).
+pub const SCI_SETSEARCHFLAGS: u32 = 2198;
+pub const SCI_SEARCHANCHOR: u32 = 2366;
+pub const SCI_SEARCHNEXT: u32 = 2367;
+pub const SCI_SEARCHPREV: u32 = 2368;
+pub const SCI_SETTARGETSTART: u32 = 2190;
+pub const SCI_SETTARGETEND: u32 = 2192;
+pub const SCI_SETTARGETRANGE: u32 = 2686;
+pub const SCI_GETTARGETSTART: u32 = 2191;
+pub const SCI_GETTARGETEND: u32 = 2193;
+pub const SCI_SEARCHINTARGET: u32 = 2197;
+pub const SCI_REPLACETARGET: u32 = 2194;
+
+// SCFIND_* search flag bits, OR'd into the wparam of
+// SCI_SETSEARCHFLAGS. The numeric layout is the public ABI plugins
+// use too — don't reshuffle.
+pub const SCFIND_NONE: u32 = 0x0;
+pub const SCFIND_WHOLEWORD: u32 = 0x2;
+pub const SCFIND_MATCHCASE: u32 = 0x4;
+pub const SCFIND_WORDSTART: u32 = 0x00100000;
+pub const SCFIND_REGEXP: u32 = 0x00200000;
+pub const SCFIND_CXX11REGEX: u32 = 0x00800000;
+
+// Undo grouping. Wrap a batch of edits (e.g. Replace All) between
+// `SCI_BEGINUNDOACTION` and `SCI_ENDUNDOACTION` and the user can
+// Ctrl+Z the whole batch as one step rather than one undo per
+// individual edit.
+pub const SCI_BEGINUNDOACTION: u32 = 2078;
+pub const SCI_ENDUNDOACTION: u32 = 2079;
+
 // Notification codes delivered via WM_NOTIFY's NMHDR.code. Each
 // `SCN_*` is paired with the SCNotification fields the Scintilla
 // docs document for that code.
+//
+// Note: `SCN_MODIFIED` (notification, sent *from* Scintilla) and
+// `SCI_GETCURRENTPOS` (message, sent *to* Scintilla) are both
+// numerically `2008`. Verified against the upstream
+// `vendor/scintilla/include/Scintilla.h`. The collision is benign
+// because the two value spaces are disjoint at the call site —
+// `SCN_*` is only ever read from `NMHDR.code` in WM_NOTIFY, and
+// `SCI_*` is only ever written as the `msg` argument of
+// `EditorHandle::send`. A future refactor that ever crosses those
+// channels would need to disambiguate by source HWND first.
 pub const SCN_MODIFIED: u32 = 2008;
 
 // `SCNotification.modificationType` flags for SCN_MODIFIED. The

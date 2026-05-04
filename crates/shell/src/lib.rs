@@ -117,6 +117,45 @@ pub trait UiPlatform {
     /// after a fresh load and on tab-switch so the right colours
     /// follow the user's tab moves.
     fn apply_lang(&mut self, lang: LangType);
+
+    // --- Search / replace -----------------------------------------
+    //
+    // The four trait methods below are unconditionally part of the
+    // UiPlatform contract — every platform backend (current Win32,
+    // future GTK and Cocoa from Phase 5) must implement them. The
+    // matching `Shell::find_next` / `replace_*` driver methods are
+    // currently `#[cfg(target_os = "windows")]` because their
+    // backing infrastructure (the `last_search` field, the plugin
+    // dispatcher) is also Windows-only until Phase 5. When the
+    // Linux/macOS UI crates land, those `#[cfg]` gates come off
+    // alongside the rest of the host plumbing — the trait methods
+    // here don't need to change.
+
+    /// Search the active editor forward for `query` under `flags`.
+    /// On a hit, Scintilla moves the selection to the match (also
+    /// repositions the caret to the match end). Returns the match's
+    /// byte offset, or `None` on miss. Phase 4 m3 implementations
+    /// route through `EditorHandle::search_anchor` +
+    /// `search_next`; Phase 5 backends do the equivalent.
+    fn search_next(&mut self, query: &str, flags: SearchFlags) -> Option<u64>;
+
+    /// Same as [`Self::search_next`] but walks backward from the
+    /// current selection.
+    fn search_prev(&mut self, query: &str, flags: SearchFlags) -> Option<u64>;
+
+    /// Replace the currently-selected text with `replacement` if
+    /// and only if the selection matches `query` under `flags`.
+    /// Returns true if a replacement happened. The match-check
+    /// guards against the case where the user reselected
+    /// arbitrary text after a Find — Scintilla itself doesn't
+    /// gate on that.
+    fn replace_current(&mut self, query: &str, replacement: &str, flags: SearchFlags) -> bool;
+
+    /// Replace every occurrence of `query` with `replacement` in
+    /// the active buffer. All replaces are wrapped in one
+    /// Scintilla undo group so the user can Ctrl+Z the entire
+    /// Replace All in a single step. Returns the count.
+    fn replace_all(&mut self, query: &str, replacement: &str, flags: SearchFlags) -> usize;
 }
 
 /// A modal dialog request the UI must show after `Shell::drain`
@@ -313,6 +352,45 @@ pub struct Shell {
     /// have already called `wake` by the time something appears here.
     load_rx: Receiver<LoadResult>,
     change_rx: Receiver<FileChange>,
+    /// Last query + flags used by `find_next` / Find Replace dialog.
+    /// Stored so F3 / Shift+F3 (and the dialog's Find Next button)
+    /// can repeat the search without the user re-entering anything.
+    /// `None` until the user issues their first search.
+    #[cfg(target_os = "windows")]
+    last_search: Option<(String, SearchFlags)>,
+}
+
+/// Search-option bitset matching Scintilla's `SCFIND_*` flags. Held
+/// as a Rust newtype so the public API doesn't bind callers to
+/// `scintilla-sys` symbols. Phase 4 m3 covers case sensitivity,
+/// whole-word matching, and POSIX/CXX11 regex; m4 (find-in-files)
+/// reuses the same flag set against per-file searches.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SearchFlags(pub u32);
+
+impl SearchFlags {
+    /// `SCFIND_NONE` — case-insensitive plain-text search.
+    pub const NONE: SearchFlags = SearchFlags(0);
+    /// `SCFIND_MATCHCASE` — `Foo` and `foo` are different.
+    pub const MATCH_CASE: SearchFlags = SearchFlags(0x4);
+    /// `SCFIND_WHOLEWORD` — `foo` does not match inside `foobar`.
+    pub const WHOLE_WORD: SearchFlags = SearchFlags(0x2);
+    /// `SCFIND_REGEXP | SCFIND_CXX11REGEX` — interpret the query
+    /// as a C++11 regex. Without `CXX11REGEX`, Scintilla falls
+    /// back to its older POSIX engine, which is missing common
+    /// shorthands (`\d`, `\w`, lookarounds).
+    pub const REGEX: SearchFlags = SearchFlags(0x00200000 | 0x00800000);
+
+    /// OR two flag sets. Caller-friendly bit-combine without
+    /// exposing the underlying u32.
+    pub const fn union(self, other: SearchFlags) -> SearchFlags {
+        SearchFlags(self.0 | other.0)
+    }
+
+    /// Raw bits, ready for `SCI_SETSEARCHFLAGS`'s wparam.
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
 }
 
 impl Shell {
@@ -351,6 +429,8 @@ impl Shell {
             file_watcher,
             load_rx: load_rx_outer,
             change_rx: fc_rx_outer,
+            #[cfg(target_os = "windows")]
+            last_search: None,
         })
     }
 
@@ -1006,6 +1086,96 @@ impl Shell {
         Ok(())
     }
 
+    /// Search the active editor forward for `query` under `flags`
+    /// and activate the match (Scintilla moves the selection to
+    /// it). Returns the byte offset of the match, or `None` on
+    /// miss. Stores the query + flags as the "last search" so
+    /// subsequent `find_next_repeat` / `find_prev_repeat` calls
+    /// can reuse them for keyboard-driven Find Next without the
+    /// user re-entering anything. The dialog calls this on its
+    /// initial Find click; the menu's Find Next / Find Previous
+    /// (and their F3 / Shift+F3 shortcuts in m3b) reuse the
+    /// stored state.
+    ///
+    /// **Misses still record the query.** This matches Notepad++:
+    /// after a "not found" hit, F3 re-issues the same search,
+    /// which lets the user re-tap F3 once they've expanded the
+    /// search target rather than re-typing the query. Callers
+    /// that want different semantics should clear `last_search`
+    /// themselves on a `None` return.
+    #[cfg(target_os = "windows")]
+    pub fn find_next<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        query: &str,
+        flags: SearchFlags,
+    ) -> Option<u64> {
+        if query.is_empty() || self.active_tab.is_none() {
+            return None;
+        }
+        self.last_search = Some((query.to_string(), flags));
+        ui.search_next(query, flags)
+    }
+
+    /// Repeat the last `find_next` with its stored query and flags.
+    /// Returns `None` if no search has been issued yet, or if the
+    /// query missed.
+    #[cfg(target_os = "windows")]
+    pub fn find_next_repeat<U: UiPlatform>(&mut self, ui: &mut U) -> Option<u64> {
+        let (query, flags) = self.last_search.clone()?;
+        ui.search_next(&query, flags)
+    }
+
+    /// Repeat the last `find_next` going backward.
+    #[cfg(target_os = "windows")]
+    pub fn find_prev_repeat<U: UiPlatform>(&mut self, ui: &mut U) -> Option<u64> {
+        let (query, flags) = self.last_search.clone()?;
+        ui.search_prev(&query, flags)
+    }
+
+    /// Replace the current selection with `replacement` if and only
+    /// if the selection text matches `query` under `flags`. The
+    /// dialog calls this for its "Replace" button: the user has
+    /// just done a Find which left the match selected; clicking
+    /// Replace substitutes that match, then the dialog typically
+    /// fires another Find Next. The match-check guards against
+    /// replacing arbitrary text the user dragged a selection over
+    /// after the find — Scintilla doesn't gate on that itself.
+    /// Returns true if a replacement happened.
+    #[cfg(target_os = "windows")]
+    pub fn replace_current<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        query: &str,
+        replacement: &str,
+        flags: SearchFlags,
+    ) -> bool {
+        if query.is_empty() || self.active_tab.is_none() {
+            return false;
+        }
+        ui.replace_current(query, replacement, flags)
+    }
+
+    /// Replace every match of `query` with `replacement` in the
+    /// active buffer. Returns the count of replacements performed.
+    /// All replaces happen inside one Scintilla undo group so the
+    /// user can Ctrl+Z the entire Replace-All in a single step.
+    /// Empty `query` is a no-op (returns 0) — Scintilla would
+    /// otherwise spin in an infinite loop on an empty match.
+    #[cfg(target_os = "windows")]
+    pub fn replace_all<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        query: &str,
+        replacement: &str,
+        flags: SearchFlags,
+    ) -> usize {
+        if query.is_empty() || self.active_tab.is_none() {
+            return 0;
+        }
+        ui.replace_all(query, replacement, flags)
+    }
+
     /// Persist the open-tab list to `session.xml` at the configured
     /// path. Called on clean shutdown. The active tab's cursor is
     /// pulled live from the editor so the next launch restores the
@@ -1418,6 +1588,8 @@ mod tests {
         /// distinct value.
         next_fake_doc: isize,
         apply_lang_calls: Vec<LangType>,
+        search_calls: Vec<(String, SearchFlags, String)>,
+        replace_calls: Vec<(String, String, SearchFlags, String)>,
     }
 
     impl UiPlatform for FakeUi {
@@ -1457,6 +1629,50 @@ mod tests {
         }
         fn apply_lang(&mut self, lang: LangType) {
             self.apply_lang_calls.push(lang);
+        }
+        fn search_next(&mut self, query: &str, flags: SearchFlags) -> Option<u64> {
+            // Naive in-test substring search over the fake buffer.
+            // Records the call so tests can assert on it.
+            self.search_calls
+                .push((query.to_string(), flags, "next".to_string()));
+            self.buffer_text.find(query).map(|pos| pos as u64)
+        }
+        fn search_prev(&mut self, query: &str, flags: SearchFlags) -> Option<u64> {
+            self.search_calls
+                .push((query.to_string(), flags, "prev".to_string()));
+            self.buffer_text.rfind(query).map(|pos| pos as u64)
+        }
+        fn replace_current(&mut self, query: &str, replacement: &str, flags: SearchFlags) -> bool {
+            self.replace_calls.push((
+                query.to_string(),
+                replacement.to_string(),
+                flags,
+                "current".to_string(),
+            ));
+            // Replace the first occurrence in the fake buffer to
+            // approximate what Scintilla does on the real path.
+            if let Some(pos) = self.buffer_text.find(query) {
+                self.buffer_text
+                    .replace_range(pos..pos + query.len(), replacement);
+                true
+            } else {
+                false
+            }
+        }
+        fn replace_all(&mut self, query: &str, replacement: &str, flags: SearchFlags) -> usize {
+            // No empty-query guard here — `Shell::replace_all`
+            // gates that before reaching the platform impl, so a
+            // duplicate guard in the test fake would obscure which
+            // layer is responsible.
+            self.replace_calls.push((
+                query.to_string(),
+                replacement.to_string(),
+                flags,
+                "all".to_string(),
+            ));
+            let count = self.buffer_text.matches(query).count();
+            self.buffer_text = self.buffer_text.replace(query, replacement);
+            count
         }
     }
 
@@ -2652,6 +2868,103 @@ mod tests {
         assert_eq!(shell.tabs[1].path.as_deref(), Some(path_b.as_path()));
         assert_eq!(shell.tabs[0].text, "AAA");
         assert_eq!(shell.tabs[1].text, "BBB");
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn find_next_stores_last_search_and_repeat_reuses_it() {
+        // First find_next records the query+flags so a later
+        // find_next_repeat (the F3 / Find Next path) can fire
+        // without the user re-entering the search term.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "hello hello world").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        let hit = shell.find_next(&mut ui, "hello", SearchFlags::MATCH_CASE);
+        assert_eq!(hit, Some(0), "first find_next returns position");
+        assert_eq!(ui.search_calls.len(), 1);
+        assert_eq!(ui.search_calls[0].0, "hello");
+        assert_eq!(ui.search_calls[0].1, SearchFlags::MATCH_CASE);
+
+        // Repeat — uses stored query, no new args.
+        let hit2 = shell.find_next_repeat(&mut ui);
+        assert_eq!(hit2, Some(0));
+        assert_eq!(ui.search_calls.len(), 2, "second call recorded");
+        assert_eq!(ui.search_calls[1].0, "hello");
+
+        // Backward-repeat reuses the same stored query.
+        let hit3 = shell.find_prev_repeat(&mut ui);
+        assert!(hit3.is_some());
+        assert_eq!(ui.search_calls[2].2, "prev");
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn find_next_with_no_open_tab_is_noop() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let hit = shell.find_next(&mut ui, "anything", SearchFlags::NONE);
+        assert_eq!(hit, None);
+        assert!(ui.search_calls.is_empty());
+        // Empty search isn't stored as last_search so a stray
+        // F3 doesn't trigger an empty-query call.
+        assert!(shell.find_next_repeat(&mut ui).is_none());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn replace_all_empty_query_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "abc").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        let count = shell.replace_all(&mut ui, "", "x", SearchFlags::NONE);
+        assert_eq!(count, 0, "empty query must not enter Scintilla loop");
+        assert!(ui.replace_calls.is_empty());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn replace_all_counts_substitutions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "foo bar foo baz foo").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        let count = shell.replace_all(&mut ui, "foo", "qux", SearchFlags::NONE);
+        assert_eq!(count, 3);
+        assert_eq!(ui.buffer_text, "qux bar qux baz qux");
     }
 
     #[test]

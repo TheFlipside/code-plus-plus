@@ -10,8 +10,10 @@
 use core::ffi::c_void;
 
 use codepp_scintilla_sys::{
-    sptr_t, uptr_t, CreateLexer, ScintillaDirectFunction, SCI_SETILEXER, SCI_SETKEYWORDS,
-    SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFORE, SCI_STYLESETITALIC,
+    sptr_t, uptr_t, CreateLexer, ScintillaDirectFunction, SCI_GETTARGETEND, SCI_GETTARGETSTART,
+    SCI_REPLACETARGET, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT, SCI_SEARCHPREV,
+    SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETSEARCHFLAGS, SCI_SETTARGETRANGE, SCI_STYLECLEARALL,
+    SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFORE, SCI_STYLESETITALIC,
 };
 
 /// Opaque handle to a Scintilla editor control.
@@ -180,5 +182,121 @@ impl EditorHandle {
     /// through into the new lexer's style indices.
     pub fn style_clear_all(&self) {
         self.send(SCI_STYLECLEARALL, 0, 0);
+    }
+
+    // --- Search / replace -------------------------------------------------
+
+    /// Install the SCFIND_* flag bitset on the view's sticky
+    /// search state. Used by `SCI_SEARCHINTARGET`, which (unlike
+    /// `SCI_SEARCHNEXT/PREV`) reads flags from sticky state rather
+    /// than from `wparam`. `search_next` / `search_prev` take
+    /// flags directly so this is only needed before a Replace All
+    /// loop.
+    pub fn set_search_flags(&self, flags: u32) {
+        self.send(SCI_SETSEARCHFLAGS, flags as uptr_t, 0);
+    }
+
+    /// Anchor the search position at the current selection start.
+    /// Pair with `search_next`/`search_prev` so the search walks
+    /// forward/backward from the user's caret rather than from
+    /// document-start. Without an anchor, repeat-search would
+    /// re-find the just-found match.
+    pub fn search_anchor(&self) {
+        self.send(SCI_SEARCHANCHOR, 0, 0);
+    }
+
+    /// Search forward from the anchor for `needle` under the
+    /// supplied SCFIND_* `flags`. Scintilla reads flags from
+    /// `wparam` for `SCI_SEARCHNEXT` (verified against
+    /// `Editor.cxx::SearchText`), so passing them here keeps the
+    /// helper self-contained — no hidden dependency on a previous
+    /// `set_search_flags` call. Returns the byte offset of the
+    /// match, or `-1` on miss. On a hit, Scintilla moves the
+    /// selection to the match, which doubles as the new anchor for
+    /// the next `search_next` so Find Next walks through the
+    /// buffer.
+    pub fn search_next(&self, needle: &str, flags: u32) -> isize {
+        let mut buf = Vec::with_capacity(needle.len() + 1);
+        buf.extend_from_slice(needle.as_bytes());
+        buf.push(0);
+        self.send(SCI_SEARCHNEXT, flags as uptr_t, buf.as_ptr() as sptr_t)
+    }
+
+    /// Search backward from the anchor for `needle`. Same flags
+    /// + return shape as [`Self::search_next`].
+    pub fn search_prev(&self, needle: &str, flags: u32) -> isize {
+        let mut buf = Vec::with_capacity(needle.len() + 1);
+        buf.extend_from_slice(needle.as_bytes());
+        buf.push(0);
+        self.send(SCI_SEARCHPREV, flags as uptr_t, buf.as_ptr() as sptr_t)
+    }
+
+    /// Set the byte range (`[start, end)`) Replace All iterates
+    /// over and `search_in_target` searches within. Used for
+    /// Replace-All-in-Selection (range = current selection) and
+    /// for Replace-All-in-Document (range = `[0, length)`).
+    pub fn set_target_range(&self, start: u64, end: u64) {
+        self.send(SCI_SETTARGETRANGE, start as uptr_t, end as sptr_t);
+    }
+
+    /// Search for `needle` (NUL-terminated UTF-8) within the
+    /// current target range. On a hit, Scintilla narrows the
+    /// target to the match's byte range so a subsequent
+    /// `replace_target` substitutes only the match. Returns the
+    /// byte offset of the match, or `-1` on miss.
+    pub fn search_in_target(&self, needle: &str) -> isize {
+        // SCI_SEARCHINTARGET takes the length in wparam and a
+        // *non-NUL-terminated* pointer in lparam — but a
+        // NUL-terminator is harmless (Scintilla reads `wparam`
+        // bytes only) and writing it keeps this helper symmetrical
+        // with `search_next`. The buffer is dropped after `send`
+        // returns, which is fine because Scintilla copies into its
+        // internal state synchronously.
+        let mut buf = Vec::with_capacity(needle.len() + 1);
+        buf.extend_from_slice(needle.as_bytes());
+        buf.push(0);
+        self.send(
+            SCI_SEARCHINTARGET,
+            needle.len() as uptr_t,
+            buf.as_ptr() as sptr_t,
+        )
+    }
+
+    /// Replace the current target range with `replacement` (literal
+    /// text, NOT regex `\1` substitution — that's
+    /// `SCI_REPLACETARGETRE`, not yet wired). After the replace,
+    /// the target range is reset to point at the inserted text so
+    /// the next `search_in_target` resumes from just past the
+    /// substitution. Returns the byte length of the replacement.
+    pub fn replace_target(&self, replacement: &str) -> isize {
+        // Scintilla's `ViewFromParams(lParam, wParam)` treats
+        // `wParam == usize::MAX` as a sentinel meaning "use strlen
+        // on the buffer". `replacement.as_ptr()` is not
+        // NUL-terminated (it's a `&str`), so the strlen branch
+        // would read past the slice. A `&str` with `usize::MAX`
+        // bytes is unallocatable on any 64-bit Rust process, so
+        // this is a theoretical assert rather than a practical
+        // guard — debug-only is enough.
+        debug_assert!(
+            replacement.len() != usize::MAX,
+            "replacement length must not equal usize::MAX",
+        );
+        self.send(
+            SCI_REPLACETARGET,
+            replacement.len() as uptr_t,
+            replacement.as_ptr() as sptr_t,
+        )
+    }
+
+    /// Read the byte offset of the current target's start. After a
+    /// `search_in_target` hit, this equals the match's start.
+    pub fn target_start(&self) -> u64 {
+        self.send(SCI_GETTARGETSTART, 0, 0).max(0) as u64
+    }
+
+    /// Read the byte offset of the current target's end. After a
+    /// `search_in_target` hit, this equals the match's end.
+    pub fn target_end(&self) -> u64 {
+        self.send(SCI_GETTARGETEND, 0, 0).max(0) as u64
     }
 }

@@ -34,15 +34,16 @@ use codepp_scintilla_sys::{
     SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_RUST_CHARACTER,
     SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC,
     SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
-    SCE_RUST_WORD, SCE_RUST_WORD2, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT,
-    SCI_EMPTYUNDOBUFFER, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
-    SCI_GETLENGTH, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOPOS,
-    SCI_PASTE, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT,
-    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
-    SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
+    SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT,
+    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
+    SCI_GETDIRECTPOINTER, SCI_GETLENGTH, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETTEXT,
+    SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOPOS, SCI_PASTE, SCI_REDO,
+    SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
+    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTEXT,
+    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT,
+    SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
 };
-use codepp_shell::{HostHandles, PendingDialog, Shell, Tab, UiPlatform};
+use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
@@ -404,6 +405,100 @@ impl UiPlatform for Win32Ui {
             apply_default_styles(&self.editor);
             apply_rust_theme(&self.editor);
         }
+    }
+
+    fn search_next(&mut self, query: &str, flags: SearchFlags) -> Option<u64> {
+        // Anchor the search at the current selection so Find Next
+        // walks from where the user last left off (rather than
+        // re-finding the same match each call). search_next takes
+        // flags directly via wparam — no sticky-state surprise
+        // from a previous Replace All having left SCFIND_REGEX set.
+        self.editor.search_anchor();
+        match self.editor.search_next(query, flags.bits()) {
+            -1 => None,
+            pos => Some(pos as u64),
+        }
+    }
+
+    fn search_prev(&mut self, query: &str, flags: SearchFlags) -> Option<u64> {
+        self.editor.search_anchor();
+        match self.editor.search_prev(query, flags.bits()) {
+            -1 => None,
+            pos => Some(pos as u64),
+        }
+    }
+
+    fn replace_current(&mut self, query: &str, replacement: &str, flags: SearchFlags) -> bool {
+        // Defense-in-depth empty-query guard: `Shell::replace_current`
+        // also gates this, but a future caller that bypasses the
+        // shell-level wrapper would otherwise hit Scintilla's
+        // permissive empty-target-match behaviour and replace the
+        // selection with `replacement` regardless of content.
+        if query.is_empty() {
+            return false;
+        }
+        // Use the target range to verify the current selection
+        // matches the search query before replacing — guards
+        // against the user dragging a different selection between
+        // a Find and the Replace click. SCI_GET{SELECTIONSTART,END}
+        // gives the selection range; SCI_SETTARGETRANGE pins it as
+        // the target; SCI_SEARCHINTARGET returns nonneg iff the
+        // target text matches `query` under `flags`. SEARCHINTARGET
+        // (unlike SEARCH{NEXT,PREV}) reads flags from the sticky
+        // state set by SCI_SETSEARCHFLAGS, so set them first.
+        let sel_start = self.editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as u64;
+        let sel_end = self.editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as u64;
+        if sel_start == sel_end {
+            return false;
+        }
+        self.editor.set_search_flags(flags.bits());
+        self.editor.set_target_range(sel_start, sel_end);
+        if self.editor.search_in_target(query) < 0 {
+            return false;
+        }
+        // SEARCHINTARGET narrows the target to the match; replace
+        // exactly that. Then re-anchor selection on the inserted
+        // text so a subsequent Find Next walks past it.
+        self.editor.replace_target(replacement);
+        let new_end = self.editor.target_end();
+        self.editor
+            .send(SCI_SETSELECTIONSTART, sel_start as usize, 0);
+        self.editor.send(SCI_SETSELECTIONEND, new_end as usize, 0);
+        true
+    }
+
+    fn replace_all(&mut self, query: &str, replacement: &str, flags: SearchFlags) -> usize {
+        if query.is_empty() {
+            return 0;
+        }
+        // Wrap the whole iteration in a single Scintilla undo group
+        // so Ctrl+Z reverts the entire Replace All in one step.
+        // SEARCHINTARGET reads flags from the sticky state set
+        // here once before the loop.
+        self.editor.set_search_flags(flags.bits());
+        self.editor.send(SCI_BEGINUNDOACTION, 0, 0);
+        let mut count = 0usize;
+        let mut cursor = 0u64;
+        loop {
+            // Re-read the document length each iteration — the
+            // previous replace_target may have grown or shrunk
+            // the document, so a precomputed end would miss
+            // matches past the size delta or stop short of them.
+            let doc_len = self.editor.send(SCI_GETLENGTH, 0, 0).max(0) as u64;
+            self.editor.set_target_range(cursor, doc_len);
+            let hit = self.editor.search_in_target(query);
+            if hit < 0 {
+                break;
+            }
+            self.editor.replace_target(replacement);
+            // Resume just past the inserted replacement; without
+            // this, replacing "a" with "ab" would re-match the
+            // newly-inserted "a" and loop forever.
+            cursor = self.editor.target_end();
+            count += 1;
+        }
+        self.editor.send(SCI_ENDUNDOACTION, 0, 0);
+        count
     }
 
     // confirm_reload and show_error were intentionally removed from
