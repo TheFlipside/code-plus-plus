@@ -41,6 +41,25 @@ extern "C" {
     pub fn Scintilla_ReleaseResources() -> i32;
 }
 
+// Lexilla's public C entry points are declared `__stdcall` on Win32
+// (`LEXILLA_CALL` in `Lexilla.h`); on x64 Windows that resolves to the
+// single Microsoft x64 calling convention so `extern "system"` ==
+// `extern "C"`, but `system` is the convention-agnostic spelling and
+// stays correct if/when we add an x86 build.
+extern "system" {
+    /// Construct an `ILexer5*` for the lexer registered under `name`
+    /// (e.g. `b"cpp\0"`, `b"rust\0"`). Returns null if no concrete
+    /// `Lex*.cxx` registered that name in `build.rs`. The returned
+    /// pointer is owned by the lexer module — Scintilla calls
+    /// `ILexer5::Release()` when `SCI_SETILEXER` replaces or detaches
+    /// the lexer, so callers must not free it themselves.
+    ///
+    /// Provided by `vendor/lexilla/src/Lexilla.cxx` when statically
+    /// linked together with the concrete `Lex*.cxx` files in
+    /// `build.rs`.
+    pub fn CreateLexer(name: *const core::ffi::c_char) -> *mut c_void;
+}
+
 /// The Win32 window class name registered by `Scintilla_RegisterClasses`.
 pub const SCINTILLA_CLASS_NAME: &str = "Scintilla";
 
@@ -102,6 +121,74 @@ pub const SCI_RELEASEDOCUMENT: u32 = 2377;
 /// `SC_DOCUMENTOPTION_*` values (styles-none, text-large) cover
 /// rare cases and aren't yet exposed here.
 pub const SC_DOCUMENTOPTION_DEFAULT: isize = 0;
+
+// Lexer attachment — Phase 4. `SCI_SETILEXER(0, ilexer_ptr)` attaches
+// the `ILexer5*` returned by Lexilla's `CreateLexer` to the Scintilla
+// view. Scintilla takes ownership of the pointer and releases it when
+// the lexer is replaced or the document is destroyed.
+pub const SCI_SETILEXER: u32 = 4033;
+pub const SCI_GETLEXER: u32 = 4002;
+/// Wide-form `SCI_GETLEXERLANGUAGE` — out-writes the lexer's name
+/// (e.g. `"cpp"`) into the caller's `char*` buffer.
+pub const SCI_GETLEXERLANGUAGE: u32 = 4012;
+
+// Per-lexer keyword classes. `SCI_SETKEYWORDS(set_index, words_ptr)`
+// installs a space-separated list of keywords for one of the lexer's
+// numbered keyword classes (LexCPP defines 5; LexRust defines 7; the
+// upper bound is 9 across all lexers in Lexilla 5.x). Without these,
+// the lexer recognises tokens but classifies every word as
+// SCE_C_IDENTIFIER / SCE_RUST_IDENTIFIER / etc., so nothing renders
+// as a keyword.
+pub const SCI_SETKEYWORDS: u32 = 4005;
+
+// Style colour controls — set per style-index. Phase 4 m1 uses the
+// SetFore/SetBack pair to install a minimal default theme so the
+// demo gate ("open a .cpp, see colours") is visible.
+pub const SCI_STYLESETFORE: u32 = 2051;
+pub const SCI_STYLESETBACK: u32 = 2052;
+pub const SCI_STYLESETBOLD: u32 = 2053;
+pub const SCI_STYLESETITALIC: u32 = 2054;
+/// Apply STYLE_DEFAULT to all other styles. Useful as the first call
+/// after switching lexers so the previous lexer's per-style colours
+/// don't bleed through.
+pub const SCI_STYLECLEARALL: u32 = 2050;
+/// `STYLE_DEFAULT = 32` — the style index Scintilla uses as the
+/// fallback for any text not classified by a lexer. Setting its
+/// fore/back/font here is the way to set the editor's "default"
+/// appearance.
+pub const STYLE_DEFAULT: usize = 32;
+
+// LexCPP style indices used by the Phase 4 m1 default theme. The
+// full set lives in `vendor/lexilla/include/SciLexer.h`; only those
+// the theme actually targets are mirrored here.
+pub const SCE_C_DEFAULT: usize = 0;
+pub const SCE_C_COMMENT: usize = 1;
+pub const SCE_C_COMMENTLINE: usize = 2;
+pub const SCE_C_COMMENTDOC: usize = 3;
+pub const SCE_C_NUMBER: usize = 4;
+pub const SCE_C_WORD: usize = 5;
+pub const SCE_C_STRING: usize = 6;
+pub const SCE_C_CHARACTER: usize = 7;
+pub const SCE_C_PREPROCESSOR: usize = 9;
+pub const SCE_C_OPERATOR: usize = 10;
+pub const SCE_C_COMMENTLINEDOC: usize = 15;
+pub const SCE_C_WORD2: usize = 16;
+
+// LexRust style indices.
+pub const SCE_RUST_DEFAULT: usize = 0;
+pub const SCE_RUST_COMMENTBLOCK: usize = 1;
+pub const SCE_RUST_COMMENTLINE: usize = 2;
+pub const SCE_RUST_COMMENTBLOCKDOC: usize = 3;
+pub const SCE_RUST_COMMENTLINEDOC: usize = 4;
+pub const SCE_RUST_NUMBER: usize = 5;
+pub const SCE_RUST_WORD: usize = 6;
+pub const SCE_RUST_WORD2: usize = 7;
+pub const SCE_RUST_STRING: usize = 13;
+pub const SCE_RUST_CHARACTER: usize = 15;
+pub const SCE_RUST_OPERATOR: usize = 16;
+pub const SCE_RUST_IDENTIFIER: usize = 17;
+pub const SCE_RUST_LIFETIME: usize = 18;
+pub const SCE_RUST_MACRO: usize = 19;
 
 // SCN_* notification codes (delivered via WM_NOTIFY's NMHDR.code) are added
 // when Phase 2+ first dispatches them. Each constant must be cross-checked

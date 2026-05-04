@@ -8,8 +8,20 @@
 //                                      entry point, we link statically)
 //   vendor/lexilla/src/Lexilla.cxx   — lexer registry entry point
 //   vendor/lexilla/lexlib/*.cxx      — lexer base classes (12 files)
-//   vendor/lexilla/lexers/Lex*.cxx   — concrete lexers (none compiled in
-//                                      Phase 1; Phase 4 adds them)
+//   vendor/lexilla/lexers/Lex*.cxx   — concrete lexers (Phase 4 m1 starter
+//                                      set: LexCPP for C/C++, LexRust for
+//                                      Rust, LexNull as the no-op fallback.
+//                                      Adding more lexers here is a
+//                                      one-line append — every Lex*.cxx
+//                                      registers itself with Lexilla via
+//                                      a global LexerModule constructor,
+//                                      so static-linking the file is
+//                                      enough to make `CreateLexer("name")`
+//                                      find it. The list is kept small to
+//                                      bound binary size and Phase 4
+//                                      build time; subsequent milestones
+//                                      add languages as the demo needs
+//                                      them.)
 //
 // Win32 system libs linked: user32, imm32, ole32, oleaut32, msimg32, gdi32,
 // comdlg32, advapi32, comctl32 — required by Scintilla's Win32 backend.
@@ -44,7 +56,9 @@ fn main() {
     println!("cargo:rerun-if-changed=vendor/scintilla/include");
     println!("cargo:rerun-if-changed=vendor/lexilla/src");
     println!("cargo:rerun-if-changed=vendor/lexilla/lexlib");
+    println!("cargo:rerun-if-changed=vendor/lexilla/lexers");
     println!("cargo:rerun-if-changed=vendor/lexilla/include");
+    println!("cargo:rerun-if-changed=cxx/LexillaShim.cxx");
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS");
 
@@ -145,10 +159,15 @@ fn build_lexilla(scintilla: &Path, lexilla: &Path) {
         .include(lexilla.join("include"))
         .include(lexilla.join("lexlib"));
 
-    build.file(lexilla.join("src/Lexilla.cxx"));
+    // Use our slim shim instead of `vendor/lexilla/src/Lexilla.cxx`. The
+    // shim implements the same C ABI but only references the lexer
+    // modules we statically link below — upstream Lexilla.cxx hardcodes
+    // refs to all 125 lexers and would fail to link with `unresolved
+    // external symbol lmXxx` for every lexer not in our subset. See
+    // `cxx/LexillaShim.cxx` for the maintenance contract.
+    build.file("cxx/LexillaShim.cxx");
 
-    // Lexer base classes. lexers/Lex*.cxx are intentionally not compiled
-    // here — Phase 4 adds the concrete lexers.
+    // Lexer base classes.
     for f in &[
         "Accessor",
         "CharacterCategory",
@@ -164,6 +183,15 @@ fn build_lexilla(scintilla: &Path, lexilla: &Path) {
         "WordList",
     ] {
         build.file(lexilla.join("lexlib").join(format!("{f}.cxx")));
+    }
+
+    // Concrete lexers — Phase 4 m1 starter set. Each Lex*.cxx file
+    // contains a global `LexerModule` instance whose constructor
+    // registers it with Lexilla's catalogue; static-linking the file
+    // is therefore sufficient to make `CreateLexer("cpp")` etc.
+    // resolve. To add a language, drop its name in here.
+    for f in &["LexCPP", "LexRust", "LexNull"] {
+        build.file(lexilla.join("lexers").join(format!("{f}.cxx")));
     }
 
     build.compile("lexilla");

@@ -23,14 +23,20 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use codepp_core::{Encoding, Eol};
+use codepp_core::lang::{CPP_KEYWORDS, C_KEYWORDS, L_C, L_CPP, L_RUST, RUST_KEYWORDS};
+use codepp_core::{Encoding, Eol, LangType};
 use codepp_editor::EditorHandle;
 use codepp_plugin_host::{Notification, NppData, NPPMSG, NPPMSG_RANGE, PLUGIN_CMD_ID_BASE};
 use codepp_scintilla_sys::{
-    ScintillaDirectFunction, Scintilla_RegisterClasses, SCI_CREATEDOCUMENT, SCI_EMPTYUNDOBUFFER,
-    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETLENGTH, SCI_GETTEXT,
-    SCI_GOTOPOS, SCI_RELEASEDOCUMENT, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT, SCI_SETTEXT,
-    SC_DOCUMENTOPTION_DEFAULT,
+    ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_C_CHARACTER, SCE_C_COMMENT,
+    SCE_C_COMMENTDOC, SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR,
+    SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_RUST_CHARACTER,
+    SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC,
+    SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
+    SCE_RUST_WORD, SCE_RUST_WORD2, SCI_CREATEDOCUMENT, SCI_EMPTYUNDOBUFFER, SCI_GETCURRENTPOS,
+    SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETLENGTH, SCI_GETTEXT, SCI_GOTOPOS,
+    SCI_RELEASEDOCUMENT, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT, SCI_SETTEXT,
+    SC_DOCUMENTOPTION_DEFAULT, STYLE_DEFAULT,
 };
 use codepp_shell::{HostHandles, PendingDialog, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR};
@@ -248,12 +254,136 @@ impl UiPlatform for Win32Ui {
         write_status_part(self.status_hwnd, 0, text);
     }
 
+    fn apply_lang(&mut self, lang: LangType) {
+        // Look up the Lexilla lexer name in core::lang. None means
+        // either L_TEXT (no lexer wanted) or a language whose lexer
+        // isn't yet in build.rs's static-link set — both fall through
+        // to clear_lexer so the view renders as plain text instead
+        // of carrying the previous tab's lexer state.
+        let Some(name) = lang.lexer_name() else {
+            self.editor.clear_lexer();
+            // Reset the styles to a single default — otherwise the
+            // previous lexer's per-style colours stay applied to
+            // whatever style indices Scintilla picks for unstyled
+            // text, producing visual contamination on tab switch.
+            apply_default_styles(&self.editor);
+            return;
+        };
+        if !self.editor.set_lexer_by_name(name) {
+            // Lexilla returned NULL — the static build doesn't
+            // contain this lexer. Trace and fall through to plain
+            // rendering.
+            tracing::warn!(lexer = name, "CreateLexer returned NULL");
+            self.editor.clear_lexer();
+            apply_default_styles(&self.editor);
+            return;
+        }
+        // Per-language theming + keywords. The set is small enough
+        // that an inline branch is clearer than a per-language
+        // table; it grows as Phase 4 adds lexers.
+        // Order: keywords → reset-then-restyle. `set_keywords` only
+        // mutates the lexer's internal word list (no style state),
+        // so it doesn't matter that `apply_default_styles` runs
+        // after — the keyword list survives the style reset. Listed
+        // first to keep this method's logical order
+        // (lexer-data-then-paint) clearer at the call site.
+        if lang == L_C || lang == L_CPP {
+            self.editor.set_keywords(
+                0,
+                if lang == L_C {
+                    C_KEYWORDS
+                } else {
+                    CPP_KEYWORDS
+                },
+            );
+            apply_default_styles(&self.editor);
+            apply_cpp_theme(&self.editor);
+        } else if lang == L_RUST {
+            self.editor.set_keywords(0, RUST_KEYWORDS);
+            apply_default_styles(&self.editor);
+            apply_rust_theme(&self.editor);
+        }
+    }
+
     // confirm_reload and show_error were intentionally removed from
     // UiPlatform: each runs `MessageBoxW` whose nested message pump
     // can re-enter the wnd_proc and produce aliasing UB on the
     // GWLP_USERDATA-borrowed WindowState. Modal dialogs are deferred
     // — `Shell::drain` returns `Vec<PendingDialog>` that the wnd_proc
     // shows after the borrow is dropped (see `WM_APP_WAKE`).
+}
+
+// --- Phase 4 m1 default theme -------------------------------------------
+//
+// Scintilla colours are `COLORREF`-encoded `0x00BBGGRR`: the low byte is
+// red, middle is green, high is blue. The values below are a single
+// hand-picked light-background scheme — black on white, with greenish
+// comments, blue keywords, brick-red strings, magenta numbers. Phase 4
+// m2 will route the theme through a dedicated module so users can
+// switch schemes; the inline approach here is the smallest thing that
+// makes the demo gate ("open .cpp, see colour") visible.
+
+const FG_DEFAULT: u32 = 0x00_00_00_00; // black
+const BG_DEFAULT: u32 = 0x00_FF_FF_FF; // white
+const FG_COMMENT: u32 = 0x00_00_80_00; // green (BBGGRR)
+const FG_KEYWORD: u32 = 0x00_FF_00_00; // blue
+const FG_KEYWORD2: u32 = 0x00_C0_60_00; // steel blue
+const FG_STRING: u32 = 0x00_22_22_99; // brick red (BBGGRR -> R=99 G=22 B=22)
+const FG_NUMBER: u32 = 0x00_80_00_80; // magenta
+const FG_PREPROC: u32 = 0x00_80_40_80; // purple
+const FG_OPERATOR: u32 = 0x00_30_30_30; // dark grey
+const FG_LIFETIME: u32 = 0x00_00_60_C0; // amber
+const FG_MACRO: u32 = 0x00_80_30_80; // violet
+
+/// Initialise STYLE_DEFAULT then reset every other style to it. This is
+/// Scintilla's idiomatic "blank slate before lexer-specific styling"
+/// sequence and stops the previous lexer's colours from leaking through
+/// on lexer switch. Editor must already be bound to the document the
+/// caller wants to style.
+fn apply_default_styles(editor: &EditorHandle) {
+    editor.style_set_fore(STYLE_DEFAULT, FG_DEFAULT);
+    editor.style_set_back(STYLE_DEFAULT, BG_DEFAULT);
+    editor.style_clear_all();
+}
+
+/// LexCPP per-style overrides. Both C and C++ buffers share this
+/// theme; the only thing that varies is the keyword list installed
+/// via `SCI_SETKEYWORDS`.
+fn apply_cpp_theme(editor: &EditorHandle) {
+    editor.style_set_fore(SCE_C_COMMENT, FG_COMMENT);
+    editor.style_set_fore(SCE_C_COMMENTLINE, FG_COMMENT);
+    editor.style_set_fore(SCE_C_COMMENTDOC, FG_COMMENT);
+    editor.style_set_fore(SCE_C_COMMENTLINEDOC, FG_COMMENT);
+    editor.style_set_italic(SCE_C_COMMENT, true);
+    editor.style_set_italic(SCE_C_COMMENTLINE, true);
+    editor.style_set_fore(SCE_C_WORD, FG_KEYWORD);
+    editor.style_set_bold(SCE_C_WORD, true);
+    editor.style_set_fore(SCE_C_WORD2, FG_KEYWORD2);
+    editor.style_set_fore(SCE_C_STRING, FG_STRING);
+    editor.style_set_fore(SCE_C_CHARACTER, FG_STRING);
+    editor.style_set_fore(SCE_C_NUMBER, FG_NUMBER);
+    editor.style_set_fore(SCE_C_PREPROCESSOR, FG_PREPROC);
+    editor.style_set_fore(SCE_C_OPERATOR, FG_OPERATOR);
+}
+
+/// LexRust per-style overrides. Style indices differ from LexCPP — see
+/// `vendor/lexilla/include/SciLexer.h` `SCE_RUST_*`.
+fn apply_rust_theme(editor: &EditorHandle) {
+    editor.style_set_fore(SCE_RUST_COMMENTBLOCK, FG_COMMENT);
+    editor.style_set_fore(SCE_RUST_COMMENTLINE, FG_COMMENT);
+    editor.style_set_fore(SCE_RUST_COMMENTBLOCKDOC, FG_COMMENT);
+    editor.style_set_fore(SCE_RUST_COMMENTLINEDOC, FG_COMMENT);
+    editor.style_set_italic(SCE_RUST_COMMENTBLOCK, true);
+    editor.style_set_italic(SCE_RUST_COMMENTLINE, true);
+    editor.style_set_fore(SCE_RUST_WORD, FG_KEYWORD);
+    editor.style_set_bold(SCE_RUST_WORD, true);
+    editor.style_set_fore(SCE_RUST_WORD2, FG_KEYWORD2);
+    editor.style_set_fore(SCE_RUST_STRING, FG_STRING);
+    editor.style_set_fore(SCE_RUST_CHARACTER, FG_STRING);
+    editor.style_set_fore(SCE_RUST_NUMBER, FG_NUMBER);
+    editor.style_set_fore(SCE_RUST_OPERATOR, FG_OPERATOR);
+    editor.style_set_fore(SCE_RUST_LIFETIME, FG_LIFETIME);
+    editor.style_set_fore(SCE_RUST_MACRO, FG_MACRO);
 }
 
 /// Fire every queued NPPN_* notification through `Shell::notify_plugins`,
@@ -514,7 +644,7 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
     // Snapshot what we need from the tab, then drop the borrow
     // before reaching for `state.editor` (a Copy field) so we can
     // call into Scintilla without a live `&mut Tab` borrow.
-    let (mut doc, text_to_populate, encoding, eol, byte_len) = {
+    let (mut doc, text_to_populate, encoding, eol, byte_len, lang) = {
         let tab = &state.shell.tabs[new_idx];
         (
             tab.scintilla_doc,
@@ -526,6 +656,7 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
             tab.encoding.clone(),
             tab.eol,
             tab.byte_len,
+            tab.lang,
         )
     };
 
@@ -556,6 +687,12 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
         status_hwnd: state.status_hwnd,
         editor: state.editor,
     };
+    // Re-apply the new tab's lexer/theme. Each tab carries its own
+    // LangType; without this call the previous tab's lexer stays
+    // bound to the single Scintilla view and colours the new
+    // buffer with the wrong rules (or, if the previous tab was
+    // L_TEXT, leaves a coloured buffer un-styled).
+    <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
     <Win32Ui as UiPlatform>::update_status(&mut win32_ui, &encoding, eol, byte_len);
 
     // Reflect the new active tab in the window title.

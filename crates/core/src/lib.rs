@@ -7,6 +7,7 @@
 pub mod encoding;
 pub mod eol;
 pub mod file;
+pub mod lang;
 pub mod session;
 
 pub use encoding::{Encoding, EncodingError};
@@ -14,4 +15,5 @@ pub use eol::Eol;
 pub use file::{
     LoadError, LoadErrorKind, LoadResult, LoadedFile, Loader, LoaderShutdown, RequestId,
 };
+pub use lang::LangType;
 pub use session::{Session, SessionError, Tab};

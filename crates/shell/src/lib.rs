@@ -25,7 +25,8 @@ use std::thread;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use codepp_core::file::{Loader, LoaderShutdown};
-use codepp_core::{Encoding, Eol, LoadResult, RequestId, Session};
+use codepp_core::lang::L_TEXT;
+use codepp_core::{Encoding, Eol, LangType, LoadResult, RequestId, Session};
 use codepp_platform::watch::{FileChange, FileWatcher};
 #[cfg(target_os = "windows")]
 use codepp_plugin_host::{
@@ -99,6 +100,14 @@ pub trait UiPlatform {
     /// `update_status` call repaints the standard fields. Phase 3
     /// platforms route this onto whichever section best matches.
     fn set_plugin_status(&mut self, section: usize, text: &str);
+
+    /// Attach the lexer (and any per-language style theme + keyword
+    /// lists) appropriate for `lang` to the *currently-active*
+    /// editor document. `L_TEXT` detaches whatever lexer is bound,
+    /// returning the view to plain rendering. Called by `Shell`
+    /// after a fresh load and on tab-switch so the right colours
+    /// follow the user's tab moves.
+    fn apply_lang(&mut self, lang: LangType);
 }
 
 /// A modal dialog request the UI must show after `Shell::drain`
@@ -130,7 +139,7 @@ pub enum PendingDialog {
 /// Scintilla view between them with `SCI_SETDOCPOINTER` on tab
 /// click. Milestone 6a leaves it `None` — the existing single-tab
 /// UI shares one implicit document.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Tab {
     /// Stable buffer id assigned at tab-creation time. Zero is
     /// reserved for "no buffer" (matches Notepad++'s convention).
@@ -152,6 +161,27 @@ pub struct Tab {
     /// has been attached to a Scintilla view. Milestone 6b's UI
     /// populates this; milestone 6a leaves it 0.
     pub scintilla_doc: isize,
+    /// N++-compatible `LangType` for this buffer. Phase 4 m1 derives
+    /// it from the path extension on first load; later milestones
+    /// expose `NPPM_SETBUFFERLANGTYPE` so plugins can override. New
+    /// (unsaved) tabs and unrecognised extensions default to `L_TEXT`.
+    pub lang: LangType,
+}
+
+impl Default for Tab {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            path: None,
+            encoding: Encoding::default(),
+            eol: Eol::default(),
+            byte_len: 0,
+            text: String::new(),
+            pending_load: None,
+            scintilla_doc: 0,
+            lang: L_TEXT,
+        }
+    }
 }
 
 /// Snapshot returned by [`Shell::close_active_tab`] describing the
@@ -718,7 +748,13 @@ impl Shell {
                 tab.eol = loaded.eol;
                 tab.byte_len = loaded.byte_len;
                 tab.text = loaded.text.clone();
+                // Derive lang from the path extension. Plugins may
+                // override later via NPPM_SETBUFFERLANGTYPE; for the
+                // first-load default the extension is the only signal
+                // we have.
+                tab.lang = LangType::from_path(&loaded.path);
                 let stored_doc = tab.scintilla_doc;
+                let lang = tab.lang;
                 #[cfg(target_os = "windows")]
                 let buffer_id = tab.id as isize;
 
@@ -762,6 +798,11 @@ impl Shell {
                         tab.scintilla_doc = bound_doc;
                     }
                     ui.set_buffer_text(&loaded.text, cursor);
+                    // apply_lang AFTER set_buffer_text — Scintilla
+                    // re-styles the visible region on lexer attach,
+                    // so the lexer needs to see the document already
+                    // populated to colour it on the first paint.
+                    ui.apply_lang(lang);
                     ui.update_status(&loaded.encoding, loaded.eol, loaded.byte_len);
 
                     // The just-loaded tab is now the user-visible
@@ -1076,9 +1117,18 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             .and_then(|t| t.path.clone())
     }
 
-    fn buffer_lang_type(&self, _id: isize) -> i32 {
-        // L_TEXT (0). Phase 4 wires this through the lexer registry.
-        0
+    fn buffer_lang_type(&self, id: isize) -> i32 {
+        // Phase 4 m1: every tab carries its own `LangType`, derived
+        // from the path extension at first-load time. Plugins reading
+        // NPPM_GETBUFFERLANGTYPE for an unknown id get `L_TEXT` (the
+        // same default the tab is born with), matching Notepad++'s
+        // "no such buffer" behaviour.
+        self.shell
+            .tabs
+            .iter()
+            .find(|t| t.id as isize == id)
+            .map(|t| t.lang.as_npp_id())
+            .unwrap_or(L_TEXT.as_npp_id())
     }
 
     fn plugins_config_dir(&self) -> PathBuf {
@@ -1250,6 +1300,7 @@ mod tests {
         /// increasing fake "doc pointers" so each tab gets a
         /// distinct value.
         next_fake_doc: isize,
+        apply_lang_calls: Vec<LangType>,
     }
 
     impl UiPlatform for FakeUi {
@@ -1286,6 +1337,9 @@ mod tests {
         }
         fn set_plugin_status(&mut self, section: usize, text: &str) {
             self.plugin_status_calls.push((section, text.to_string()));
+        }
+        fn apply_lang(&mut self, lang: LangType) {
+            self.apply_lang_calls.push(lang);
         }
     }
 
@@ -2198,5 +2252,130 @@ mod tests {
         assert_ne!(shell.tabs[0].scintilla_doc, 0);
         assert_ne!(shell.tabs[1].scintilla_doc, 0);
         assert_ne!(shell.tabs[0].scintilla_doc, shell.tabs[1].scintilla_doc);
+    }
+
+    #[test]
+    fn open_cpp_file_calls_apply_lang_with_l_cpp() {
+        // Phase 4 m1: opening a `.cpp` derives `LangType::L_CPP` from
+        // the extension and forwards it to the UI's `apply_lang`. The
+        // FakeUi records every call; we check both that the call
+        // happens and that it carries the right LangType.
+        use codepp_core::lang::L_CPP;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.cpp");
+        std::fs::write(&path, "int main() { return 0; }\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.apply_lang_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        assert_eq!(ui.apply_lang_calls.len(), 1);
+        assert_eq!(ui.apply_lang_calls[0], L_CPP);
+        // The lang lands on the tab so plugins reading
+        // NPPM_GETBUFFERLANGTYPE see it without a re-derive.
+        assert_eq!(shell.tabs[0].lang, L_CPP);
+    }
+
+    #[test]
+    fn open_unknown_extension_calls_apply_lang_with_l_text() {
+        use codepp_core::lang::L_TEXT;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.xyz");
+        std::fs::write(&path, "plain").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.apply_lang_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        assert_eq!(ui.apply_lang_calls.len(), 1);
+        assert_eq!(ui.apply_lang_calls[0], L_TEXT);
+    }
+
+    #[test]
+    fn apply_lang_runs_after_set_buffer_text() {
+        // Scintilla re-styles the visible region on lexer attach, so
+        // `apply_lang` must run after `set_buffer_text` — otherwise
+        // the lexer sees an empty buffer and the first paint shows
+        // un-coloured text. Order is observable via the FakeUi's
+        // separate vectors plus the order each one was pushed in
+        // — apply_load_result writes set_text first, apply_lang
+        // second, so the ratio set_text:apply_lang stays 1:1 with
+        // the same call ordering across loads.
+        use codepp_core::lang::L_RUST;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, "fn main() {}").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.apply_lang_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        assert_eq!(ui.set_text_calls.len(), 1);
+        assert_eq!(ui.apply_lang_calls.len(), 1);
+        assert_eq!(ui.apply_lang_calls[0], L_RUST);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn buffer_lang_type_returns_tabs_lang_to_plugins() {
+        // Verifies that `HostBridge::buffer_lang_type` (the trait
+        // impl plugins reach via NPPM_GETBUFFERLANGTYPE) reads the
+        // tab's stored lang, not a hardcoded L_TEXT. Goes through
+        // the same dispatch_plugin_message path the real wnd_proc
+        // uses on `WM_NPPM_*` so we exercise the host-bridge hookup,
+        // not just the bare `HostServices` impl.
+        use codepp_core::lang::L_RUST;
+        use codepp_plugin_host::dispatch::NPPM_GETBUFFERLANGTYPE;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.rs");
+        std::fs::write(&path, "fn x() {}").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.apply_lang_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        // First opened tab gets buffer id 1 (sequential, base 1).
+        let id = shell.tabs[0].id as usize;
+        // SAFETY: dispatch_plugin_message's wnd_proc safety contract
+        // requires UI-thread invocation; the test thread is the sole
+        // owner of `shell` and `ui`, satisfying the contract.
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_GETBUFFERLANGTYPE,
+                id,
+                0,
+            )
+        };
+        assert_eq!(r, Some(L_RUST.as_npp_id() as isize));
     }
 }
