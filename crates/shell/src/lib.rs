@@ -56,7 +56,24 @@ pub const PRIMARY_BUFFER_ID: isize = 1;
 /// are deferred via [`PendingDialog`] — `Shell::drain` returns a list
 /// the UI consumes *after* the drain's borrow ends.
 pub trait UiPlatform {
-    /// Push the given decoded text into the active editor control.
+    /// Ensure the editor's currently-displayed document is the one
+    /// belonging to tab `idx`. `scintilla_doc` is the tab's stored
+    /// document pointer (0 = "no document yet, please create one").
+    /// The method returns the document pointer the tab is now
+    /// bound to — `Shell` writes this back onto `Tab.scintilla_doc`
+    /// so subsequent activations short-circuit.
+    ///
+    /// On Win32 this routes through `SCI_CREATEDOCUMENT` (when
+    /// `scintilla_doc == 0`) plus `SCI_SETDOCPOINTER` to bind the
+    /// document to the single Scintilla view. Multi-tab Phase 3
+    /// uses this pattern to keep each tab independent without
+    /// owning multiple Scintilla controls.
+    fn activate_tab(&mut self, idx: usize, scintilla_doc: isize) -> isize;
+
+    /// Push the given decoded text into the *currently-active*
+    /// editor document. The caller is responsible for having called
+    /// [`Self::activate_tab`] first to ensure the right document is
+    /// bound to the view.
     /// On Win32 this routes through `EditorHandle::send` with
     /// `SCI_SETTEXT` plus `SCI_GOTOPOS` for the cursor restore.
     fn set_buffer_text(&mut self, text: &str, cursor: u64);
@@ -559,26 +576,53 @@ impl Shell {
                     .map(|t| t.cursor)
                     .unwrap_or(0);
 
-                // Apply UI updates only if this is the active tab.
-                // Background-tab loads (multi-tab 6b+) won't push
-                // their text into the visible Scintilla view.
-                let is_active = self.active_tab == Some(target_idx);
-                if is_active {
-                    ui.set_buffer_text(&loaded.text, cursor);
-                    ui.update_status(&loaded.encoding, loaded.eol, loaded.byte_len);
-                }
-
+                // Write the tab fields first so any UI calls below
+                // observe a tab in its post-load state. The borrow
+                // ends at the end of the if-let-else.
                 let Some(tab) = self.tabs.get_mut(target_idx) else {
                     return;
                 };
                 tab.pending_load = None;
                 tab.path = Some(loaded.path.clone());
-                tab.encoding = loaded.encoding;
+                tab.encoding = loaded.encoding.clone();
                 tab.eol = loaded.eol;
                 tab.byte_len = loaded.byte_len;
-                tab.text = loaded.text;
+                tab.text = loaded.text.clone();
+                let stored_doc = tab.scintilla_doc;
                 #[cfg(target_os = "windows")]
                 let buffer_id = tab.id as isize;
+                #[cfg(target_os = "windows")]
+                let _ = buffer_id; // silenced if the cfg-gated push below isn't reached
+
+                // Apply UI updates only when this load targets the
+                // **active** tab. `activate_tab` rebinds the single
+                // Scintilla view to the supplied document — calling
+                // it for a non-active tab would leave the view
+                // pointed at the wrong document for the rest of
+                // the drain (and forever, since nothing else
+                // re-binds). Phase 3's `open_file` always makes the
+                // newly-opened tab active, so the active branch is
+                // the only path actually exercised by the v1 demo.
+                //
+                // Background-tab loads (session-restore opening
+                // multiple files at once, or
+                // `NPPM_DOOPEN`-driven loads onto an already-active
+                // tab) get their `text`/`encoding` fields populated
+                // above, but their Scintilla document stays
+                // uncreated until first activation by a tab click
+                // — see `handle_tab_selchange`. Milestone 6c will
+                // add a `populate_background_tab` flow that
+                // creates + fills the document without disturbing
+                // the visible view.
+                let is_active = self.active_tab == Some(target_idx);
+                if is_active {
+                    let bound_doc = ui.activate_tab(target_idx, stored_doc);
+                    if let Some(tab) = self.tabs.get_mut(target_idx) {
+                        tab.scintilla_doc = bound_doc;
+                    }
+                    ui.set_buffer_text(&loaded.text, cursor);
+                    ui.update_status(&loaded.encoding, loaded.eol, loaded.byte_len);
+                }
 
                 // Queue NPPN_FILEOPENED for the loaded plugins. The UI
                 // drains the queue via take_notifications() after
@@ -1054,9 +1098,28 @@ mod tests {
         set_text_calls: Vec<(String, u64)>,
         status_calls: Vec<(String, String, u64)>,
         plugin_status_calls: Vec<(usize, String)>,
+        /// (tab_idx, in_doc, returned_doc) per `activate_tab` call.
+        activate_tab_calls: Vec<(usize, isize, isize)>,
+        /// Stand-in for SCI_CREATEDOCUMENT — hand out monotonically
+        /// increasing fake "doc pointers" so each tab gets a
+        /// distinct value.
+        next_fake_doc: isize,
     }
 
     impl UiPlatform for FakeUi {
+        fn activate_tab(&mut self, idx: usize, scintilla_doc: isize) -> isize {
+            // If the tab already has a doc, keep it; otherwise hand
+            // out a fresh fake pointer (the real Win32 impl calls
+            // SCI_CREATEDOCUMENT here).
+            let bound = if scintilla_doc != 0 {
+                scintilla_doc
+            } else {
+                self.next_fake_doc += 1;
+                self.next_fake_doc
+            };
+            self.activate_tab_calls.push((idx, scintilla_doc, bound));
+            bound
+        }
         fn set_buffer_text(&mut self, text: &str, cursor: u64) {
             self.buffer_text = text.to_string();
             self.cursor = cursor;
@@ -1615,5 +1678,51 @@ mod tests {
             load_count_before,
             "no re-load occurred for an in-memory tab"
         );
+    }
+
+    #[test]
+    fn activate_tab_returned_doc_persists_on_tab() {
+        // First open: tab[0].scintilla_doc starts at 0; the FakeUi's
+        // activate_tab hands out a fresh fake pointer (1) and Shell
+        // records it on the tab. Second open: tab[1] also starts at
+        // 0; FakeUi hands out a different pointer (2). Each tab
+        // ends up bound to a distinct document.
+        let dir = tempfile::tempdir().unwrap();
+        let path_a = dir.path().join("a.txt");
+        let path_b = dir.path().join("b.txt");
+        std::fs::write(&path_a, "a").unwrap();
+        std::fs::write(&path_b, "b").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        shell.open_file(path_a);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 1,
+            Duration::from_secs(2),
+        );
+        shell.open_file(path_b);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 2,
+            Duration::from_secs(2),
+        );
+
+        assert_eq!(ui.activate_tab_calls.len(), 2);
+        // First call: idx=0, in_doc=0 (uninitialised).
+        assert_eq!(ui.activate_tab_calls[0].0, 0);
+        assert_eq!(ui.activate_tab_calls[0].1, 0);
+        // Second call: idx=1, in_doc=0 (uninitialised again — fresh tab).
+        assert_eq!(ui.activate_tab_calls[1].0, 1);
+        assert_eq!(ui.activate_tab_calls[1].1, 0);
+        // The fake doc pointers handed back land on the tabs and
+        // are distinct.
+        assert_ne!(shell.tabs[0].scintilla_doc, 0);
+        assert_ne!(shell.tabs[1].scintilla_doc, 0);
+        assert_ne!(shell.tabs[0].scintilla_doc, shell.tabs[1].scintilla_doc);
     }
 }
