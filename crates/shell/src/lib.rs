@@ -1232,10 +1232,49 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         tracing::trace!("NPPM_MAKECURRENTBUFFERDIRTY (no-op, tracked by Scintilla)");
     }
 
-    fn set_buffer_lang_type(&mut self, _id: isize, _lang: i32) -> bool {
-        // Phase 4 wires this through the lexer registry; until
-        // then refusing (FALSE) tells the plugin nothing changed.
-        false
+    fn set_buffer_lang_type(&mut self, id: isize, lang: i32) -> bool {
+        // Phase 4 m2: real per-buffer lang switch.
+        //
+        //   1. Find the tab. Unknown id → FALSE (matches N++'s
+        //      "no such buffer, nothing changed" return).
+        //   2. No-op same-lang sets — re-applying the same lexer
+        //      flickers the visible buffer and a NPPN_LANGCHANGED
+        //      fired for an unchanged lang would be a false
+        //      positive that breaks plugins audit-logging language
+        //      changes.
+        //   3. Mutate the data model first; if this is the active
+        //      tab, re-apply the lexer through the UI (the lexer
+        //      lives on the *view*, not the document, so the
+        //      apply_lang call has to land on the active editor
+        //      regardless of which tab the plugin targeted).
+        //   4. Queue NPPN_LANGCHANGED. Drain happens after the
+        //      &mut Shell borrow drops, same as the other
+        //      lifecycle notifications.
+        let new_lang = LangType(lang);
+        let Some(idx) = self.shell.tabs.iter().position(|t| t.id as isize == id) else {
+            return false;
+        };
+        if self.shell.tabs[idx].lang == new_lang {
+            return true;
+        }
+        self.shell.tabs[idx].lang = new_lang;
+        if self.shell.active_tab == Some(idx) {
+            self.ui.apply_lang(new_lang);
+        }
+        self.shell
+            .pending_notifications
+            .push(Notification::LangChanged {
+                buffer_id: self.shell.tabs[idx].id as isize,
+            });
+        true
+    }
+
+    fn language_name(&self, lang: i32) -> Option<&'static str> {
+        LangType(lang).language_name()
+    }
+
+    fn language_desc(&self, lang: i32) -> Option<&'static str> {
+        LangType(lang).language_desc()
     }
 
     fn set_menu_item_check(&mut self, _cmd_id: i32, _checked: bool) {
@@ -2334,6 +2373,110 @@ mod tests {
         assert_eq!(ui.set_text_calls.len(), 1);
         assert_eq!(ui.apply_lang_calls.len(), 1);
         assert_eq!(ui.apply_lang_calls[0], L_RUST);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn set_buffer_lang_type_updates_tab_and_queues_langchanged() {
+        // Phase 4 m2: a plugin that NPPM_SETBUFFERLANGTYPE's the
+        // active buffer to a new lang must (a) flip Tab.lang, (b)
+        // re-apply the lexer through the UI (lexer lives on the
+        // view, not the doc), (c) queue NPPN_LANGCHANGED so other
+        // plugins see the change.
+        use codepp_core::lang::{L_CPP, L_RUST};
+        use codepp_plugin_host::dispatch::NPPM_SETBUFFERLANGTYPE;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.rs");
+        std::fs::write(&path, "fn x() {}").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.apply_lang_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        // After load: tab[0].lang == L_RUST. Now have a "plugin"
+        // re-classify it as L_CPP via the dispatcher.
+        assert_eq!(shell.tabs[0].lang, L_RUST);
+        let id = shell.tabs[0].id as usize;
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SETBUFFERLANGTYPE,
+                id,
+                L_CPP.as_npp_id() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(shell.tabs[0].lang, L_CPP);
+        // apply_lang fired twice: once on load (L_RUST), once on
+        // the plugin-driven set (L_CPP).
+        assert_eq!(ui.apply_lang_calls.len(), 2);
+        assert_eq!(*ui.apply_lang_calls.last().unwrap(), L_CPP);
+        // NPPN_LANGCHANGED queued for delivery.
+        assert!(
+            shell
+                .pending_notifications
+                .iter()
+                .any(|n| matches!(n, Notification::LangChanged { .. })),
+            "NPPN_LANGCHANGED not queued",
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn set_buffer_lang_type_same_lang_is_idempotent() {
+        // Re-classifying a buffer to its current lang must not
+        // re-apply the lexer (visible flicker) or queue
+        // NPPN_LANGCHANGED (false positive that breaks plugins
+        // audit-logging language changes).
+        use codepp_core::lang::L_RUST;
+        use codepp_plugin_host::dispatch::NPPM_SETBUFFERLANGTYPE;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.rs");
+        std::fs::write(&path, "fn x() {}").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.apply_lang_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        let id = shell.tabs[0].id as usize;
+        // Drain any queued notifications from the open path so we
+        // observe only the SETBUFFERLANGTYPE response.
+        let _ = shell.take_notifications();
+        let calls_before = ui.apply_lang_calls.len();
+
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SETBUFFERLANGTYPE,
+                id,
+                L_RUST.as_npp_id() as isize,
+            )
+        };
+        // Returns success (the buffer IS that lang now, just was
+        // already that lang).
+        assert_eq!(r, Some(1));
+        // No re-apply, no notification queued.
+        assert_eq!(ui.apply_lang_calls.len(), calls_before);
+        assert!(!shell
+            .pending_notifications
+            .iter()
+            .any(|n| matches!(n, Notification::LangChanged { .. })));
     }
 
     #[test]

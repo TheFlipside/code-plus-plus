@@ -13,13 +13,15 @@
 
 #![cfg(target_os = "windows")]
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 use codepp_platform::{has_plugin_extension, DynLib};
 
+use crate::dispatch::NPPN_READY;
 use crate::ffi::{
     BeNotifiedFn, FuncItem, GetFuncsArrayFn, GetNameFn, IsUnicodeFn, MessageProcFn, NppData,
-    SetInfoFn,
+    SCNotification, SciNotifyHeader, SetInfoFn,
 };
 
 /// One discovered plugin candidate, by path. Holds whichever lifecycle
@@ -313,8 +315,50 @@ impl PluginHost {
                 // later plugin fails to load and never publishes its
                 // FuncItems.
                 self.next_cmd_id = self.next_cmd_id.saturating_add(loaded.funcs.len() as i32);
+                let be_notified = loaded.be_notified;
                 plugin.name = Some(loaded.name.clone());
                 plugin.state = PluginState::Loaded(loaded);
+                // Fire NPPN_READY at the just-loaded plugin only.
+                // N++ broadcasts NPPN_READY once after all static
+                // plugins finish initialising; Code++ loads lazily,
+                // so per-plugin delivery at load time is the
+                // closest equivalent — each plugin sees READY at
+                // the moment it's actually ready to handle host
+                // messages, never sees a duplicate, and plugins
+                // loaded later don't trigger spurious READY
+                // broadcasts to already-initialised peers. The
+                // PluginCallGuard the caller holds (see
+                // `ui_win32::ensure_plugins_loaded`'s wrap) keeps
+                // a synchronous re-entrant SendMessage from
+                // aliasing &mut WindowState while beNotified runs.
+                let sci = SCNotification {
+                    nmhdr: SciNotifyHeader {
+                        hwnd_from: npp_data.npp_handle,
+                        id_from: 0,
+                        code: NPPN_READY,
+                    },
+                    ..SCNotification::default()
+                };
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    // SAFETY: `be_notified` came from a successful
+                    // resolve in `load_inner`; SCNotification is
+                    // #[repr(C)] and lives on this stack frame
+                    // through the synchronous call.
+                    unsafe { be_notified(&sci as *const SCNotification) }
+                }));
+                if result.is_err() {
+                    // Match the warn-on-panic pattern in
+                    // `dispatch::notify_all`. Swallowing silently
+                    // would mask plugin bugs that fail during
+                    // NPPN_READY-driven init — observability
+                    // parity matters because the load() caller is
+                    // told `Ok(())` regardless of whether the
+                    // notification panicked.
+                    tracing::warn!(
+                        path = %path.display(),
+                        "plugin panicked in beNotified(NPPN_READY)",
+                    );
+                }
                 Ok(())
             }
             Err(e) => {
@@ -390,7 +434,6 @@ fn load_inner(path: &Path, npp_data: NppData, cmd_id_base: i32) -> Result<Loaded
     // Rust-authored plugin that panics doesn't unwind across the C
     // ABI (that's UB; DESIGN.md §6.5). C++ plugins that throw past
     // their own ABI are out of scope — broken in Notepad++ too.
-    use std::panic::{catch_unwind, AssertUnwindSafe};
     catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: set_info has the C ABI declared in
         // PluginInterface.h; npp_data is a valid #[repr(C)] NppData

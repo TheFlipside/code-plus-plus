@@ -50,8 +50,8 @@ at all, the same as in 64-bit Notepad++.)
 | Message | Status | Phase | Notes |
 | --- | --- | --- | --- |
 | `NPPM_GETCURRENTSCINTILLA` | ✅ | v1 | Out-writes the active view index (always 0 in single-view Phase 3). `example-hello` calls it before every `SCI_INSERTTEXT`. |
-| `NPPM_GETCURRENTLANGTYPE` | 🟡 | v1 | Returns `L_TEXT` (0). Real lang detection is v2 (lexer registry). |
-| `NPPM_SETCURRENTLANGTYPE` | 🟡 | v1 | Returns `FALSE`; the host doesn't yet have a lang state to set. v2. |
+| `NPPM_GETCURRENTLANGTYPE` | ✅ | v1 | Returns the active tab's `LangType` (the v2 m1+m2 lexer wiring made this real). |
+| `NPPM_SETCURRENTLANGTYPE` | ✅ | v1 | Sets the active tab's lang via `set_buffer_lang_type`; re-applies the lexer in the editor and queues `NPPN_LANGCHANGED` on a real change. |
 | `NPPM_GETNBOPENFILES` | ⚫ | v2 | |
 | `NPPM_GETOPENFILENAMES` | ⚫ | v2 | |
 | `NPPM_MODELESSDIALOG` | ⚫ | v2 | |
@@ -94,8 +94,8 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_GETFULLPATHFROMBUFFERID` | ✅ | v1 | Wide-path write capped at `MAX_PATH_TCHARS` (260); probe call (`lparam == 0`) always returns `MAX_PATH_TCHARS`, never the actual path length, so a plugin can't under-allocate based on the probe and overflow on the second call. |
 | `NPPM_GETCURRENTBUFFERID` | ✅ | v1 | Returns the active tab's `BufferID` (sequential `i32`, base 1). |
 | `NPPM_RELOADBUFFERID` | ⚫ | v2 | |
-| `NPPM_GETBUFFERLANGTYPE` | 🟡 | v1 | Returns `L_TEXT`. v2 wires through the lexer registry. |
-| `NPPM_SETBUFFERLANGTYPE` | ⚫ | v2 | |
+| `NPPM_GETBUFFERLANGTYPE` | ✅ | v1 | Returns the per-tab `LangType` derived from the path extension on first load (and overridable by plugins via `NPPM_SETBUFFERLANGTYPE`). |
+| `NPPM_SETBUFFERLANGTYPE` | ✅ | v1 | Mutates `Tab.lang`, re-applies the lexer when the tab is active, queues `NPPN_LANGCHANGED`. Idempotent on a same-lang set (no flicker, no false-positive notification). |
 | `NPPM_GETBUFFERENCODING` / `SETBUFFERENCODING` | ⚫ | v2 | |
 | `NPPM_GETBUFFERFORMAT` / `SETBUFFERFORMAT` | ⚫ | v2 | EOL style. |
 | `NPPM_HIDETOOLBAR` / `ISTOOLBARHIDDEN` | ⚫ | v3 | |
@@ -104,13 +104,15 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_GETSHORTCUTBYCMDID` | ⚫ | v3 | |
 | `NPPM_DOOPEN` | ✅ | v1 | Routes through `Shell::open_file`; same code path as the File→Open menu. |
 | `NPPM_SAVECURRENTFILEAS` | ⚫ | v2 | |
-| Long tail (`NPPM_GETLANGUAGENAME` … `NPPM_GETZOOMLEVEL`) | ⚫ | v3 | |
+| `NPPM_GETLANGUAGENAME` | ✅ | v1 | Wide-string write (probe-then-write protocol). Returns the short menu name for known langs ("C", "C++", "Rust", "Normal Text"); zero on unknown lang. |
+| `NPPM_GETLANGUAGEDESC` | ✅ | v1 | Same shape as `NPPM_GETLANGUAGENAME`; returns the long human-readable description. |
+| Long tail (`NPPM_ALLOCATESUPPORTED` … `NPPM_GETZOOMLEVEL`) | ⚫ | v3 | |
 
 ## NPPN_* (notifications)
 
 | Notification | Status | Phase | Notes |
 | --- | --- | --- | --- |
-| `NPPN_READY` | 🟡 | v1 | `Notification::Ready` and the `NPPN_READY` code mapping exist; no fire site yet. The natural location is `PluginHost::load`, just after the `Ok(loaded)` branch records the plugin's `LoadedPlugin` — that puts the notification right after `setInfo` + `getFuncsArray` per the N++ contract. |
+| `NPPN_READY` | ✅ | v1 | Fired at the just-loaded plugin only (per-plugin delivery in `PluginHost::load` right after `setInfo` + `getFuncsArray`). Code++'s lazy-load can't broadcast a single global ready like N++ does — per-plugin is the closest equivalent: each plugin sees READY exactly once at the moment it's actually ready to handle host messages. |
 | `NPPN_TBMODIFICATION` | ⚫ | v2 | |
 | `NPPN_FILEBEFORECLOSE` | 🟡 | v1 | Code mapping wired; not fired today (the close path queues `FILECLOSED` only). Adding the `BEFORE` fire site is a small follow-up. |
 | `NPPN_FILECLOSED` | ✅ | v1 | Queued by `Shell::close_active_tab` after the data-model snapshot, fired after the `&mut Shell` borrow drops. |
@@ -120,7 +122,7 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPN_FILESAVED` | ✅ | v1 | Queued by `Shell::save_current_to_disk`. |
 | `NPPN_SHUTDOWN` | ✅ | v1 | Fired by `ui_win32`'s `WM_DESTROY` handler before unload. |
 | `NPPN_BUFFERACTIVATED` | ✅ | v1 | Queued on tab open, tab switch, tab close (when the new active tab differs), and `NPPM_SWITCHTOFILE` to a different open tab. Switch-to-already-active is suppressed. |
-| `NPPN_LANGCHANGED` | 🟡 | v1 | Code mapping wired; no fire site (lang state isn't modeled until v2 lexers). |
+| `NPPN_LANGCHANGED` | ✅ | v1 | Queued by `HostBridge::set_buffer_lang_type` on a real change (no-op same-lang sets are filtered out). Drained after the `&mut Shell` borrow drops, same pattern as the other lifecycle notifications. |
 | Other (`WORDSTYLESUPDATED`, `SHORTCUTREMAPPED`, … `GLOBALMODIFIED`) | ⚫ | v3 | |
 
 ## How to update this matrix

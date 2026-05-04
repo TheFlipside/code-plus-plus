@@ -67,7 +67,10 @@ pub const NPPM_GETNPPVERSION: u32 = NPPMSG + 50;
 pub const NPPM_GETFULLPATHFROMBUFFERID: u32 = NPPMSG + 58;
 pub const NPPM_GETCURRENTBUFFERID: u32 = NPPMSG + 60;
 pub const NPPM_GETBUFFERLANGTYPE: u32 = NPPMSG + 64;
+pub const NPPM_SETBUFFERLANGTYPE: u32 = NPPMSG + 65;
 pub const NPPM_DOOPEN: u32 = NPPMSG + 77;
+pub const NPPM_GETLANGUAGENAME: u32 = NPPMSG + 83;
+pub const NPPM_GETLANGUAGEDESC: u32 = NPPMSG + 84;
 
 /// Selectors for [`NPPM_GETMENUHANDLE`].
 pub const NPPPLUGINMENU: i32 = 0;
@@ -242,6 +245,16 @@ pub trait HostServices {
     /// Lang-type for buffer `id`. Phase 3 returns `L_TEXT` (0); Phase
     /// 4 wires this through the lexer registry.
     fn buffer_lang_type(&self, id: isize) -> i32;
+    /// Short language name for `lang` (`NPPM_GETLANGUAGENAME`). N++
+    /// uses the same string the user sees in the Language menu —
+    /// "C", "C++", "Rust", "Normal Text". `None` for langs whose
+    /// name isn't known to the host (the dispatcher writes a zero-
+    /// length wide string in that case so plugins observe "no
+    /// name" rather than garbage).
+    fn language_name(&self, lang: i32) -> Option<&'static str>;
+    /// Long language description (`NPPM_GETLANGUAGEDESC`). Same
+    /// `None` semantics as [`Self::language_name`].
+    fn language_desc(&self, lang: i32) -> Option<&'static str>;
     /// Per-install plugin config directory.
     fn plugins_config_dir(&self) -> PathBuf;
     /// HMENU for `which` (NPPPLUGINMENU or NPPMAINMENU). NULL means
@@ -490,6 +503,21 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 
         NPPM_GETBUFFERLANGTYPE => services.buffer_lang_type(wparam as isize) as isize,
 
+        NPPM_SETBUFFERLANGTYPE => {
+            // wparam: buffer id, lparam: LangType i32 (signed). The
+            // host fires NPPN_LANGCHANGED on the *change*, not on
+            // every call — a no-op set (same lang already on the
+            // buffer) returns success without re-styling, since
+            // re-applying the same lexer would visibly flicker the
+            // colours and the notification would be a false-positive.
+            // The trait impl is responsible for that idempotence.
+            if services.set_buffer_lang_type(wparam as isize, lparam as i32) {
+                1
+            } else {
+                0
+            }
+        }
+
         NPPM_DOOPEN => {
             if lparam == 0 {
                 0
@@ -502,6 +530,28 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 services.open_file(PathBuf::from(decoded));
                 1
             }
+        }
+
+        NPPM_GETLANGUAGENAME => {
+            // wparam: LangType id (i32 widened to usize by Win32's
+            // `WPARAM`). lparam: wide char* OUT, or 0 for size-probe.
+            // Returns count of TCHARs needed (incl. NUL) on probe /
+            // count written on store. 0 on unknown lang — plugins
+            // that expect a valid lang already bounded their wparam.
+            //
+            // `wparam as i32` truncates the upper 32 bits. The N++
+            // ABI specifies LangType is a 32-bit signed int (the
+            // `LangType_` enum), so a plugin sending a wParam whose
+            // high bits are non-zero is malformed; the truncation
+            // matches the ABI without an explicit guard.
+            write_lang_string_with_probe(services.language_name(wparam as i32), lparam)
+        }
+
+        NPPM_GETLANGUAGEDESC => {
+            // Same shape as NPPM_GETLANGUAGENAME above; longer
+            // human-readable description, same probe contract,
+            // same `wparam as i32` ABI truncation.
+            write_lang_string_with_probe(services.language_desc(wparam as i32), lparam)
         }
 
         // Known NPPM_* range, but no v1 implementation. Plugins that
@@ -561,6 +611,49 @@ unsafe fn wide_ptr_to_string(mut p: *const u16) -> String {
         return String::new();
     }
     s
+}
+
+/// Shared body for `NPPM_GETLANGUAGENAME` / `NPPM_GETLANGUAGEDESC`.
+/// Implements the N++ contract: `lparam == 0` means "probe — return
+/// the number of TCHARs the host *will write* if a buffer of that
+/// size is supplied"; otherwise write up to `MAX_PATH_TCHARS` units
+/// into the plugin's buffer and return the count actually written.
+/// `None` (unknown lang) reports zero on both probe and write —
+/// plugins reading the probe see "no name available" rather than
+/// allocating a one-NUL buffer that would silently match an empty
+/// real name.
+///
+/// Probe and write must agree on the same number for the protocol
+/// to hold: a plugin that allocates `probe` units expects the write
+/// to fill exactly that many. So the probe path applies the same
+/// `MAX_PATH_TCHARS` cap the write path applies — for any future
+/// language name long enough to be truncated, both paths now report
+/// the truncated length.
+fn write_lang_string_with_probe(name: Option<&'static str>, lparam: isize) -> isize {
+    let Some(name) = name else { return 0 };
+    if lparam == 0 {
+        // +1 for the trailing NUL the host always writes; cap at
+        // MAX_PATH_TCHARS to match the truncation `write_wide_path`
+        // applies on the write side.
+        let codeunit_count = name.encode_utf16().count().min(MAX_PATH_TCHARS - 1);
+        (codeunit_count + 1) as isize
+    } else {
+        // SAFETY: per the documented ABI, plugin promises `lparam`
+        // points to a wide buffer of at least `MAX_PATH_TCHARS`
+        // (260) units. `Path::new(&str)` is a zero-cost cast — we
+        // reuse `write_wide_path` for the truncation+NUL logic
+        // rather than duplicate its bounds-checking code. The
+        // helper's name says "path" because that was the first
+        // user; the implementation is plain UTF-16 writeout.
+        let written = unsafe {
+            write_wide_path(
+                lparam as *mut u16,
+                MAX_PATH_TCHARS,
+                std::path::Path::new(name),
+            )
+        };
+        written as isize
+    }
 }
 
 /// Write `path` as a null-terminated wide string into the buffer at
@@ -655,6 +748,22 @@ mod tests {
         }
         fn buffer_lang_type(&self, _id: isize) -> i32 {
             self.buffer_lang
+        }
+        fn language_name(&self, lang: i32) -> Option<&'static str> {
+            match lang {
+                0 => Some("Normal Text"),
+                3 => Some("C++"),
+                81 => Some("Rust"),
+                _ => None,
+            }
+        }
+        fn language_desc(&self, lang: i32) -> Option<&'static str> {
+            match lang {
+                0 => Some("Normal text file"),
+                3 => Some("C++ source file"),
+                81 => Some("Rust source file"),
+                _ => None,
+            }
         }
         fn plugins_config_dir(&self) -> PathBuf {
             self.plugins_dir.clone()
@@ -996,9 +1105,61 @@ mod tests {
         assert_eq!(NPPMSG, WM_USER + 1000);
         assert_eq!(NPPM_GETCURRENTSCINTILLA, NPPMSG + 4);
         assert_eq!(NPPM_GETCURRENTBUFFERID, NPPMSG + 60);
+        assert_eq!(NPPM_SETBUFFERLANGTYPE, NPPMSG + 65);
         assert_eq!(NPPM_DOOPEN, NPPMSG + 77);
+        assert_eq!(NPPM_GETLANGUAGENAME, NPPMSG + 83);
+        assert_eq!(NPPM_GETLANGUAGEDESC, NPPMSG + 84);
         assert_eq!(NPPM_GETPLUGINSCONFIGDIR, NPPMSG + 46);
         assert_eq!(NPPM_GETNPPVERSION, NPPMSG + 50);
         assert_eq!(NPPN_FIRST, 1000);
+    }
+
+    #[test]
+    fn set_buffer_lang_type_dispatches() {
+        let mut s = MockServices::default();
+        // wparam = buffer id, lparam = LangType id (3 = L_CPP).
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SETBUFFERLANGTYPE, 7, 3) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["set_lang[7]=3"]);
+    }
+
+    #[test]
+    fn get_language_name_probe_returns_length_with_nul() {
+        // wparam = LangType (81 = L_RUST in our compat header), lparam = 0
+        // → probe. Expect "Rust".len() + 1 (4 + 1 NUL = 5 TCHARs).
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETLANGUAGENAME, 81, 0) };
+        assert_eq!(r, Some(5));
+    }
+
+    #[test]
+    fn get_language_name_unknown_lang_returns_zero() {
+        // Unknown LangType id — host has no name for it. Plugins
+        // that read the probe see 0 and back off rather than
+        // allocating a one-NUL buffer that would silently match an
+        // empty real name.
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETLANGUAGENAME, 9999, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn get_language_name_writes_wide_string() {
+        let mut s = MockServices::default();
+        let mut buf = [0u16; 16];
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_GETLANGUAGENAME, 81, buf.as_mut_ptr() as isize) };
+        // Wrote 5 TCHARs ("Rust\0").
+        assert_eq!(r, Some(5));
+        let written: Vec<u16> = buf.iter().take_while(|&&c| c != 0).copied().collect();
+        assert_eq!(String::from_utf16(&written).unwrap(), "Rust");
+    }
+
+    #[test]
+    fn get_language_desc_returns_long_form() {
+        // L_CPP description is "C++ source file" (15 chars + NUL = 16).
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETLANGUAGEDESC, 3, 0) };
+        assert_eq!(r, Some(16));
     }
 }

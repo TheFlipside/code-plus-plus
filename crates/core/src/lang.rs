@@ -69,6 +69,34 @@ impl LangType {
             _ => None,
         }
     }
+
+    /// Short language name returned by `NPPM_GETLANGUAGENAME`. Notepad++'s
+    /// convention is the same string the user sees in the Language menu
+    /// ("C", "C++", "Rust", "Normal Text"). Returns `None` for variants
+    /// we don't yet recognise; the dispatch arm translates that into a
+    /// zero-length write so plugins observe "no name available".
+    pub fn language_name(self) -> Option<&'static str> {
+        match self {
+            L_TEXT => Some("Normal Text"),
+            L_C => Some("C"),
+            L_CPP => Some("C++"),
+            L_RUST => Some("Rust"),
+            _ => None,
+        }
+    }
+
+    /// Long human-readable description returned by `NPPM_GETLANGUAGEDESC`.
+    /// Notepad++ uses the longer phrasing here ("C++ source file");
+    /// plugins display it in language-pickers and about-dialogs.
+    pub fn language_desc(self) -> Option<&'static str> {
+        match self {
+            L_TEXT => Some("Normal text file"),
+            L_C => Some("C source file"),
+            L_CPP => Some("C++ source file"),
+            L_RUST => Some("Rust source file"),
+            _ => None,
+        }
+    }
 }
 
 // --- Numeric ids must match `LangType_` in
@@ -249,6 +277,20 @@ mod tests {
         // milestones add the corresponding Lex*.cxx to build.rs.
         assert_eq!(L_PYTHON.lexer_name(), None);
         assert_eq!(L_HTML.lexer_name(), None);
+    }
+
+    #[test]
+    fn language_name_and_desc_for_known_langs() {
+        assert_eq!(L_TEXT.language_name(), Some("Normal Text"));
+        assert_eq!(L_TEXT.language_desc(), Some("Normal text file"));
+        assert_eq!(L_C.language_name(), Some("C"));
+        assert_eq!(L_CPP.language_name(), Some("C++"));
+        assert_eq!(L_RUST.language_name(), Some("Rust"));
+        assert_eq!(L_RUST.language_desc(), Some("Rust source file"));
+        // Unknown langs return None — dispatch translates that into
+        // an empty wide-string write per the NPPM_GETLANGUAGENAME contract.
+        assert_eq!(L_PYTHON.language_name(), None);
+        assert_eq!(LangType(9999).language_name(), None);
     }
 
     #[test]
