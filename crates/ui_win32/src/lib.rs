@@ -50,9 +50,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SendMessageW, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
     TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, FCONTROL,
     FVIRTKEY, GWLP_USERDATA, HACCEL, HMENU, IDC_ARROW, IDYES, MB_ICONQUESTION, MB_ICONWARNING,
-    MB_OK, MB_YESNO, MF_POPUP, MF_STRING, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_APP, WM_COMMAND,
-    WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_SETFOCUS, WM_SIZE,
-    WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    MB_OK, MB_YESNO, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_APP,
+    WM_COMMAND, WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_SETFOCUS,
+    WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
 const ID_FILE_SAVE: u16 = 1000;
@@ -732,6 +732,17 @@ unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
             }
         };
         for func in funcs {
+            // N++ FuncItem ABI convention: a NULL `_pFunc` marks a menu
+            // separator. The item_name for such an entry is a
+            // placeholder the plugin does not expect to see rendered
+            // (mimeTools, for example, writes a sentinel string there);
+            // dispatching MF_STRING with that label is the visible bug.
+            if func.p_func.is_none() {
+                if let Err(e) = unsafe { AppendMenuW(submenu, MF_SEPARATOR, 0, PCWSTR::null()) } {
+                    tracing::warn!(plugin = %plugin_name, error = %e, "AppendMenuW (separator) failed");
+                }
+                continue;
+            }
             // FuncItem.item_name is a fixed-length null-terminated UTF-16
             // array; pass its pointer directly to AppendMenuW.
             let label = PCWSTR(func.item_name.as_ptr());
