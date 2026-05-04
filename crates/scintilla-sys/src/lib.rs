@@ -109,9 +109,26 @@ pub const SCI_GETZOOM: u32 = 2374;
 // Setting `SCI_SETSCROLLWIDTHTRACKING(1)` makes Scintilla track the
 // actual longest visible line and update `scrollWidth` accordingly,
 // so the horizontal scrollbar appears only when content overflows
-// and stops at the real end of the longest line.
+// and stops at the real end of the longest line. Tracking only
+// grows `scrollWidth` (high-water-mark behaviour); to make it
+// shrink when long lines are deleted, the host explicitly sets
+// `SCI_SETSCROLLWIDTH(1)` on every text-modifying SCN_MODIFIED so
+// Scintilla resets `lineWidthMaxSeen` and recomputes from the
+// current visible content.
 pub const SCI_SETSCROLLWIDTH: u32 = 2274;
 pub const SCI_SETSCROLLWIDTHTRACKING: u32 = 2516;
+
+// Notification codes delivered via WM_NOTIFY's NMHDR.code. Each
+// `SCN_*` is paired with the SCNotification fields the Scintilla
+// docs document for that code.
+pub const SCN_MODIFIED: u32 = 2008;
+
+// `SCNotification.modificationType` flags for SCN_MODIFIED. The
+// host filters on the text-changing flags (insert / delete) for
+// `scrollWidth` recompute; the rest (style change, fold-level
+// change, etc.) don't affect line widths.
+pub const SC_MOD_INSERTTEXT: i32 = 0x1;
+pub const SC_MOD_DELETETEXT: i32 = 0x2;
 
 // History
 pub const SCI_UNDO: u32 = 2176;

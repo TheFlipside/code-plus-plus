@@ -26,6 +26,7 @@ use std::sync::Arc;
 use codepp_core::lang::{CPP_KEYWORDS, C_KEYWORDS, L_C, L_CPP, L_RUST, RUST_KEYWORDS};
 use codepp_core::{Encoding, Eol, LangType};
 use codepp_editor::EditorHandle;
+use codepp_plugin_host::ffi::SCNotification;
 use codepp_plugin_host::{Notification, NppData, NPPMSG, NPPMSG_RANGE, PLUGIN_CMD_ID_BASE};
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_C_CHARACTER, SCE_C_COMMENT,
@@ -38,8 +39,8 @@ use codepp_scintilla_sys::{
     SCI_GETLENGTH, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOPOS,
     SCI_PASTE, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT,
     SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
-    SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SC_DOCUMENTOPTION_DEFAULT,
-    STYLE_DEFAULT,
+    SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
+    SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
 };
 use codepp_shell::{HostHandles, PendingDialog, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR};
@@ -2760,6 +2761,39 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         };
                         if owns_source {
                             handle_tab_selchange(hwnd);
+                        }
+                    } else if nmhdr.code == SCN_MODIFIED {
+                        // Scintilla's tracking-mode horizontal
+                        // scrollWidth is high-water-mark — it grows
+                        // when a wider line appears but never
+                        // shrinks when long lines are deleted, so
+                        // the scrollbar stays after the long line
+                        // is gone. SCI_SETSCROLLWIDTH(1) resets
+                        // `lineWidthMaxSeen`; the next paint
+                        // recomputes from the current visible
+                        // content. Filter to text-changing
+                        // modifications only (insert / delete) —
+                        // style and fold notifications don't
+                        // affect line widths.
+                        //
+                        // SAFETY (outer `unsafe`): Win32 hands us a
+                        // pointer to a Scintilla `SCNotification`
+                        // valid for the dispatch; nmhdr is just its
+                        // first field. We read modification_type
+                        // by value into a local; nothing escapes.
+                        let owns_source = if let Some(state) = state_from_hwnd(hwnd) {
+                            nmhdr.hwndFrom == state.scintilla_hwnd
+                        } else {
+                            false
+                        };
+                        if owns_source {
+                            let sci = &*(lparam.0 as *const SCNotification);
+                            let modtype = sci.modification_type;
+                            if (modtype & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT)) != 0 {
+                                if let Some(state) = state_from_hwnd(hwnd) {
+                                    state.editor.send(SCI_SETSCROLLWIDTH, 1, 0);
+                                }
+                            }
                         }
                     }
                 }
