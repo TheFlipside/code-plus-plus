@@ -115,6 +115,9 @@ code-plus-plus/
 │   └── app/
 ├── plugins/
 │   ├── example-hello/            # in-tree sample plugin (DLL)
+│   ├── mimetools-clone/          # Phase 4 m7: clean-room mimeTools (DLL)
+│   ├── nppconverter-clone/       # Phase 4 m7: clean-room NppConverter (DLL)
+│   ├── nppexport-clone/          # Phase 4 m7: clean-room NppExport (DLL)
 │   └── nppcompat-headers/        # the C headers a plugin author #includes
 └── tools/
     └── npp-plugin-test/          # harness that loads a real N++ plugin
@@ -125,7 +128,13 @@ Top-level `Cargo.toml`:
 ```toml
 [workspace]
 resolver = "2"
-members = ["crates/*", "plugins/example-hello"]
+members = [
+    "crates/*",
+    "plugins/example-hello",
+    "plugins/mimetools-clone",     # added Phase 4 m7
+    "plugins/nppconverter-clone",  # added Phase 4 m7
+    "plugins/nppexport-clone",     # added Phase 4 m7
+]
 default-members = ["crates/app"]
 ```
 
@@ -220,7 +229,7 @@ Pattern, mandatory for every worker that produces a UI-visible result:
 | `core` | Unit tests, no FFI, no UI. Encoding detection, EOL detection, session round-trip, settings parse — all pure functions. |
 | `scintilla-sys` | Smoke test: link, create Scintilla instance off-screen, send `SCI_INSERTTEXT`, read back via `SCI_GETTEXT`. Catches build/link regressions. |
 | `editor` | Integration test: same as above, but exercising the safe wrapper and the direct-call path. |
-| `plugin-host` | Loads `plugins/example-hello` and asserts the lifecycle messages fire in order. |
+| `plugin-host` | Loads `plugins/example-hello` and asserts the lifecycle messages fire in order. From Phase 4 m7 onward, also loads each preinstalled plugin (`mimetools-clone`, `nppconverter-clone`, `nppexport-clone`) and asserts at least one NPPM round-trip per plugin (e.g. mimetools-clone's base64 round-trip, nppconverter-clone's hex→ASCII selection conversion, nppexport-clone's HTML output containing the lexer-styled spans). |
 | `tools/npp-plugin-test` | Loads a real, unmodified Notepad++ plugin DLL (e.g. NppExec) and verifies setInfo / getName / getFuncsArray succeed. Only runs on Windows in CI. |
 | End-to-end | Manual smoke checklist in `docs/smoke.md` for each phase's demo. |
 
@@ -291,6 +300,17 @@ A coverage matrix lives in `docs/nppm-coverage.md` and is updated every time a n
 - Plugin calls are wrapped in a `tracing` span and a `catch_unwind` boundary on the Rust side so a panic inside Rust-written plugins doesn't unwind across FFI. C++ plugins that throw past their own ABI are out of scope (they're broken in N++ too).
 - Per-plugin timeout for `beNotified`: log a warning if it exceeds 100 ms, but do not kill the plugin. Notepad++ doesn't either; behavior parity matters.
 
+### 6.6 Preinstalled plugins — clean-room in-tree reimplementations
+
+Notepad++ defaults ship with three preinstalled plugins — **mimeTools**, **NppConverter**, and **NppExport** — and Code++ wants the same out-of-the-box experience. Three in-tree plugin crates (`plugins/mimetools-clone/`, `plugins/nppconverter-clone/`, `plugins/nppexport-clone/`) deliver that, built as `cdylib`s against Code++'s own N++-compatible plugin ABI. Beyond the user-facing default-set parity, three real plugins exercising the host's NPPM surface in three different ways are a far stronger ABI smoke test than `example-hello` alone — more dogfood, tighter feedback loop on host bugs.
+
+That they happen to be in-tree clean-room reimplementations rather than bundled upstream binaries is also a licensing constraint, not just a preference: two of the three upstream plugins (`mimeTools`, `NppConverter`) are licensed **GPLv3**; the third (`NppExport`) ships without a license file, which under default copyright is "all rights reserved". Bundling either category inside Code++'s MIT-licensed release archive is a hard no:
+
+- **GPLv3 plugins:** the plugin and the host are independent works at runtime — a user who downloads `mimeTools.dll` separately and drops it into the plugins directory is fine, the same way it works in N++ (no special arrangement required). The problem is **redistribution**: shipping a GPLv3 binary inside Code++'s release archive makes Code++ the distributor of a GPL-licensed work, and GPLv3's terms then govern what the distributor can do — terms that conflict with the MIT license under which Code++ as a whole is released. This mirrors the workspace's own `deny.toml` policy, which denies copyleft licenses on Cargo dependencies for the same redistribution reason.
+- **Unlicensed plugins:** simply not legally redistributable.
+
+So the decision: clean-room reimplement all three under MIT inside the Code++ workspace. The functionality is purely buffer-text transformation (encode/decode, hex/ASCII conversion, syntax-aware export) so the reimplementations are tractable. Users who want the upstream GPLv3 plugins can still install them by hand — runtime loading by the plugin host is the same as for any other third-party plugin and doesn't trigger any redistribution obligation on Code++.
+
 ---
 
 ## 7. Implementation Phases
@@ -311,7 +331,7 @@ This rule exists specifically to prevent the failure mode where layers are built
 | **1 — Scintilla shell** | Wire `scintilla-sys` end-to-end: real `build.rs` compiling vendored Scintilla + Lexilla, real `extern "C"` surface, real link. `editor` obtains direct-call pointers and routes hot ops through them. `ui_win32` creates a real Scintilla `HWND` as a child window and forwards keyboard/mouse messages. | `cargo run -p app` opens a window containing a Scintilla control. Typing produces text. Ctrl+Z/Y undo/redo. Ctrl+A select-all. Right-click context menu (Scintilla's built-in) works. **Exit task:** open Task Manager and confirm process memory under 30 MB with a few KB of typed text. |
 | **2 — Core: session, file I/O, encoding** | `core::session` model + `session.xml` round-trip. `core::file::open(path)` reads on a worker thread, posts result to UI thread via the marshaling pattern in §5.4. `core::encoding` and `core::eol` integrated. `platform::watch` wired to detect external changes. | Drag-and-drop a 10 MB UTF-8 file onto the window: it opens without UI freeze (verify with a frame-time log). Status bar shows encoding and EOL. Edit, save, reopen — content and encoding preserved. Close app, reopen — same tab restored at same cursor position via `session.xml`. Modify the file in another editor while Code++ has it open — reload prompt appears. |
 | **3 — Multi-tab, menus, plugin host (NPPM v1)** | Tab strip with multiple buffers, each owning a Scintilla view (or one shared view with switched documents — decide based on Scintilla doc-pointer perf testing in this phase). Full menu set: File, Edit, Search, View, Encoding, Language, Settings, Tools, Macro, Run, Plugins, Window, ?. `plugin-host` implements the six entry points, lifecycle, and the NPPM/NPPN subset listed in §6.3. Build `plugins/example-hello` as a real DLL in the workspace. | Open three files in three tabs, switch between them. The in-tree `example-hello` plugin DLL is loaded from disk on first menu open and inserts "Hello from plugin" into the active buffer when its menu item is clicked. **Critical second test:** download an unmodified small Notepad++ plugin (e.g., a "convert tabs to spaces" plugin), drop it into the plugins folder, restart, exercise it. It must work. If it does not, the NPPM coverage is incomplete and the phase is not done. |
-| **4 — Lexers, search, find-in-files, encoding conversions** | Wire Lexilla: language detection by extension, `SCI_SETILEXER`, style mapping. Find/Replace dialog driving Scintilla's search messages. Find-in-files on a worker pool with results panel. Encoding conversion menu (UTF-8 ↔ UTF-16, ANSI codepages). Long tail of NPPM/NPPN messages so more plugins work. | Open a 5000-line `.cpp` and `.rs` file: syntax highlighting visible, no scroll lag. Find/Replace works in the active buffer. Find-in-files across a 1000-file directory completes in seconds and clicking a result jumps to the line. Convert a UTF-8 file to UTF-16 LE and back; bytes are correct. The NPPM coverage matrix in `docs/nppm-coverage.md` is at least 80% green. |
+| **4 — Lexers, search, find-in-files, encoding conversions, preinstalled plugins** | Wire Lexilla: language detection by extension, `SCI_SETILEXER`, style mapping. Find/Replace dialog driving Scintilla's search messages. Find-in-files on a worker pool with results panel. Encoding conversion menu (UTF-8 ↔ UTF-16, ANSI codepages). Long tail of NPPM/NPPN messages so more plugins work. **Three in-tree preinstalled plugins** (`mimetools-clone`, `nppconverter-clone`, `nppexport-clone`) — clean-room MIT-licensed reimplementations of the canonical Notepad++ defaults (see §6.6 for the rationale). Built as `cdylib`s against our own N++-compatible plugin ABI; ship with the Windows release artifact from this phase, extended to Linux/macOS in Phase 5 alongside the rest of the cross-platform bring-up. | Open a 5000-line `.cpp` and `.rs` file: syntax highlighting visible, no scroll lag. Find/Replace works in the active buffer. Find-in-files across a 1000-file directory completes in seconds and clicking a result jumps to the line. Convert a UTF-8 file to UTF-16 LE and back; bytes are correct. On the Phase 4 Windows runner, all three preinstalled plugins load on first menu open and their items work end-to-end (mimetools-clone round-trips base64; nppconverter-clone converts a hex selection to ASCII; nppexport-clone writes the active buffer to HTML with the active lexer's styling). The NPPM coverage matrix in `docs/nppm-coverage.md` is at least 80% green. |
 | **5 — Linux (GTK) and macOS (Cocoa)** | Implement `ui_gtk` and `ui_cocoa` against the same `UiPlatform` trait. Adjust `scintilla-sys` build for the GTK/Cocoa Scintilla backends. Cross-platform plugin loading via `dlopen`/`dlsym`. `app` selects backend at compile time via cargo features (`--features win32` / `--features gtk` / `--features cocoa`), one and only one selected. | `cargo run -p app --features gtk` on Linux: same app, opens, edits, saves, plugin loads (a recompiled `example-hello.so`). Same on macOS with `--features cocoa`. The `core` crate has zero `#[cfg(target_os)]` lines added in this phase — if any appeared, refactor them out before declaring done. |
 
 ### 7.3 What gets re-tested at every phase boundary
