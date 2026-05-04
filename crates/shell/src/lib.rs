@@ -174,6 +174,14 @@ pub struct Shell {
     /// trait surface against `dlopen`.
     #[cfg(target_os = "windows")]
     plugins: PluginHost,
+    /// Outbound NPPN_* notifications queued by shell operations
+    /// (load complete, save complete) since the last
+    /// [`Self::take_notifications`] drain. The UI fires each one
+    /// **after** dropping any `&mut Shell` borrow, since `beNotified`
+    /// runs synchronous plugin code that may `SendMessage(NPPM_*)`
+    /// back into the wnd_proc.
+    #[cfg(target_os = "windows")]
+    pending_notifications: Vec<Notification>,
     loader: Loader,
     _loader_shutdown: LoaderShutdown,
     file_watcher: FileWatcher,
@@ -210,12 +218,25 @@ impl Shell {
             buffer: ActiveBuffer::default(),
             #[cfg(target_os = "windows")]
             plugins: PluginHost::new(),
+            #[cfg(target_os = "windows")]
+            pending_notifications: Vec::new(),
             loader,
             _loader_shutdown: loader_shutdown,
             file_watcher,
             load_rx: load_rx_outer,
             change_rx: fc_rx_outer,
         })
+    }
+
+    /// Drain queued plugin notifications. Called by the UI after
+    /// [`Self::drain`] (or any operation that may have queued a
+    /// notification) — the UI fires each one through
+    /// [`Self::notify_plugins`] **after** dropping the `&mut Shell`
+    /// borrow, since `beNotified` runs synchronous plugin code that
+    /// may re-enter the wnd_proc.
+    #[cfg(target_os = "windows")]
+    pub fn take_notifications(&mut self) -> Vec<Notification> {
+        std::mem::take(&mut self.pending_notifications)
     }
 
     /// Enumerate plugin DLLs in `dir`. No DLL is mapped — the loader
@@ -420,6 +441,18 @@ impl Shell {
                 self.buffer.eol = loaded.eol;
                 self.buffer.byte_len = loaded.byte_len;
                 self.buffer.text = loaded.text;
+
+                // Queue NPPN_FILEOPENED for the loaded plugins. The UI
+                // drains the queue via take_notifications() after
+                // dropping its &mut Shell borrow — required because
+                // beNotified runs synchronous plugin code that may
+                // re-enter the wnd_proc. Phase 3 single-tab uses the
+                // primary buffer id; multi-tab milestone 6 will pass
+                // the per-tab id.
+                #[cfg(target_os = "windows")]
+                self.pending_notifications.push(Notification::FileOpened {
+                    buffer_id: PRIMARY_BUFFER_ID,
+                });
             }
             Err(err) => {
                 self.buffer.pending_load = None;
@@ -541,6 +574,15 @@ impl Shell {
         // a status-bar size that doesn't match the bytes we just
         // wrote. We already know the size; use it.
         self.buffer.byte_len = bytes.len() as u64;
+
+        // Queue NPPN_FILESAVED. The UI fires it via take_notifications()
+        // after this method returns and after dropping any &mut Shell
+        // borrow.
+        #[cfg(target_os = "windows")]
+        self.pending_notifications.push(Notification::FileSaved {
+            buffer_id: PRIMARY_BUFFER_ID,
+        });
+
         Ok(())
     }
 
@@ -1146,5 +1188,76 @@ mod tests {
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let shell = Shell::new(wake).unwrap();
         shell.notify_plugins(Notification::Ready, core::ptr::null_mut());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn successful_open_queues_file_opened_notification() {
+        // A successful load through the loader → drain → apply path
+        // should leave a NPPN_FILEOPENED notification waiting for
+        // the UI to fire after dropping its &mut Shell borrow.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notify.txt");
+        std::fs::write(&path, "x").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        let notifications = shell.take_notifications();
+        assert_eq!(notifications.len(), 1, "exactly one queued notification");
+        match &notifications[0] {
+            Notification::FileOpened { buffer_id } => {
+                assert_eq!(*buffer_id, PRIMARY_BUFFER_ID);
+            }
+            other => panic!("expected FileOpened, got {other:?}"),
+        }
+
+        // Subsequent take_notifications returns an empty Vec (queue
+        // drained) — the UI doesn't re-fire on every wake.
+        assert!(shell.take_notifications().is_empty());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn successful_save_queues_file_saved_notification() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("save-notify.txt");
+        std::fs::write(&path, "before").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+        // Reset queue state before testing the save path: drain the
+        // `FileOpened` queued by the load so the second
+        // `take_notifications` later in this test is unambiguously
+        // the response to `save_current_to_disk`.
+        let _ = shell.take_notifications();
+
+        ui.buffer_text = "after".to_string();
+        shell.save_current_to_disk(&mut ui).unwrap();
+
+        let notifications = shell.take_notifications();
+        assert_eq!(notifications.len(), 1);
+        assert!(matches!(
+            notifications[0],
+            Notification::FileSaved {
+                buffer_id: PRIMARY_BUFFER_ID
+            }
+        ));
     }
 }

@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use codepp_core::{Encoding, Eol};
 use codepp_editor::EditorHandle;
-use codepp_plugin_host::{NppData, NPPMSG, NPPMSG_RANGE, PLUGIN_CMD_ID_BASE};
+use codepp_plugin_host::{Notification, NppData, NPPMSG, NPPMSG_RANGE, PLUGIN_CMD_ID_BASE};
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, SCI_EMPTYUNDOBUFFER, SCI_GETCURRENTPOS,
     SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETLENGTH, SCI_GETTEXT, SCI_GOTOPOS,
@@ -210,6 +210,55 @@ impl UiPlatform for Win32Ui {
     // GWLP_USERDATA-borrowed WindowState. Modal dialogs are deferred
     // — `Shell::drain` returns `Vec<PendingDialog>` that the wnd_proc
     // shows after the borrow is dropped (see `WM_APP_WAKE`).
+}
+
+/// Fire every queued NPPN_* notification through `Shell::notify_plugins`,
+/// each call wrapped in `PluginCallGuard` (re-entrance guard) and
+/// `catch_unwind` (host-internal panics must not unwind across the
+/// `extern "system"` wnd_proc frame).
+///
+/// Each notification grabs a fresh `&mut WindowState` borrow, calls
+/// notify_plugins (which iterates plugins through `&Shell`), then
+/// drops the borrow before the next iteration. A plugin's beNotified
+/// that `SendMessage(NPPM_*)`s back hits `state_from_hwnd → None`
+/// while the guard is set; the inner wnd_proc returns 0 and the
+/// outer borrow stays sound.
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+unsafe fn fire_queued_notifications(hwnd: HWND) {
+    // Drain the queue under one borrow, then release before
+    // calling into plugin code — `take_notifications` only needs
+    // `&mut Shell` for the swap, no plugin code runs inside it.
+    // SAFETY: caller's contract requires UI-thread invocation;
+    // state_from_hwnd's own contract is satisfied there.
+    let notifications = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        state.shell.take_notifications()
+    } else {
+        Vec::new()
+    };
+    if notifications.is_empty() {
+        return;
+    }
+    for notification in notifications {
+        // SAFETY: same as above; UI-thread call.
+        if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+            // The guard is created INSIDE the catch_unwind closure
+            // so that a panic from `PluginCallGuard::enter()` (the
+            // nesting-detection assert) is caught here rather than
+            // unwinding across the extern "system" wnd_proc frame.
+            // The guard's Drop runs when the closure exits (panic
+            // or normal return), tightly scoping
+            // PLUGIN_CALL_ACTIVE to the plugin call.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = PluginCallGuard::enter();
+                state.shell.notify_plugins(notification, hwnd.0);
+            }));
+        }
+        // Borrow on `state` ends at the end of each iteration so
+        // the next iteration acquires fresh.
+    }
 }
 
 /// Append loaded-plugin FuncItems onto the per-plugin submenu after
@@ -618,6 +667,11 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         }
                     }
                 }
+                // Fire any NPPN_* notifications queued by the drain
+                // (NPPN_FILEOPENED on a successful load). Done AFTER
+                // dialogs so a plugin that might block in beNotified
+                // doesn't delay the user-visible reload prompt.
+                fire_queued_notifications(hwnd);
                 LRESULT(0)
             }
             WM_DROPFILES => {
@@ -637,15 +691,27 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // the error message and show the dialog AFTER
                         // the borrow is dropped (same UB rule as
                         // WM_APP_WAKE).
+                        //
+                        // The save call is wrapped in catch_unwind so
+                        // a host-internal panic — e.g. a `Vec::push`
+                        // OOM in the notification queue, or a
+                        // tracing-subscriber misbehaviour — doesn't
+                        // unwind across the `extern "system"`
+                        // wnd_proc frame (UB at the FFI boundary).
                         let save_error: Option<String> = {
                             if let Some(state) = state_from_hwnd(hwnd) {
                                 let (shell, mut ui) = state.split();
-                                match shell.save_current_to_disk(&mut ui) {
-                                    Ok(()) => {
+                                let result =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        shell.save_current_to_disk(&mut ui)
+                                    }));
+                                match result {
+                                    Ok(Ok(())) => {
                                         state.editor.send(SCI_SETSAVEPOINT, 0, 0);
                                         None
                                     }
-                                    Err(e) => Some(e.to_string()),
+                                    Ok(Err(e)) => Some(e.to_string()),
+                                    Err(_) => Some("internal panic during save".to_string()),
                                 }
                             } else {
                                 None
@@ -654,6 +720,10 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         if let Some(msg) = save_error {
                             show_error_dialog(hwnd, "Save failed", &msg);
                         }
+                        // On a successful save, save_current_to_disk
+                        // queues NPPN_FILESAVED; on failure the queue
+                        // is empty and this is a no-op.
+                        fire_queued_notifications(hwnd);
                     }
                     ID_FILE_EXIT => {
                         let _ = DestroyWindow(hwnd);
@@ -691,9 +761,15 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 // SendMessages NPPM_* back; defense
                                 // in depth even though NLL has
                                 // already dropped the lookup borrow.
-                                let _guard = PluginCallGuard::enter();
+                                // Guard inside the catch_unwind
+                                // closure so nested-guard assert is
+                                // caught here. Same pattern as
+                                // `fire_queued_notifications`.
                                 let _ =
-                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f()));
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        let _guard = PluginCallGuard::enter();
+                                        f();
+                                    }));
                             }
                         }
                     }
@@ -764,11 +840,15 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // inside `load_inner`; this outer guard catches
                     // panics in our own bookkeeping.
                     if let Some(state) = state_from_hwnd(hwnd) {
-                        let _guard = PluginCallGuard::enter();
+                        // Guard inside the catch_unwind closure so
+                        // its assert (nested-guard detection) is
+                        // caught here rather than unwinding across
+                        // extern "system". Same pattern as
+                        // `fire_queued_notifications`.
                         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let _guard = PluginCallGuard::enter();
                             state.shell.ensure_plugins_loaded(npp_data);
                         }));
-                        // _guard drops here, clearing the flag.
                     }
                     // Populate the menu from loaded plugins. We rebuild
                     // the FuncItem list inside a borrow, then call
@@ -805,33 +885,59 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // text/cursor through the editor while it still
                 // exists — once we PostQuitMessage the message pump
                 // unwinds and the Scintilla window is destroyed.
-                //
-                // **Deferred (milestone 5):** fire `NPPN_SHUTDOWN` to
-                // every loaded plugin before reclaiming the
-                // WindowState. Outbound notify is held back until the
-                // re-entrance design pass that pairs with the
-                // example-hello plugin — a plugin's `beNotified` can
-                // synchronously `SendMessage(NPPM_*)` back into our
-                // wnd_proc, materializing a second `&mut WindowState`
-                // from the same raw pointer. Inbound NPPM_* dispatch
-                // (this commit) is safe because no foreign code runs
-                // while we hold the borrow; outbound notify breaks
-                // that invariant and needs separate hardening.
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let (shell, mut ui) = state.split();
-                    if let Err(e) = shell.save_session(&mut ui) {
-                        tracing::warn!(error = %e, "session save failed");
+                    // catch_unwind for the same reason as
+                    // ID_FILE_SAVE: a panic in shell bookkeeping must
+                    // not unwind across the extern "system" wnd_proc
+                    // frame during teardown.
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        shell.save_session(&mut ui)
+                    }));
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => tracing::warn!(error = %e, "session save failed"),
+                        Err(_) => tracing::warn!("session save panicked"),
                     }
                 }
 
-                // Reclaim the WindowState box.
+                // Drain any leftover NPPN_FILEOPENED/NPPN_FILESAVED
+                // notifications that were queued since the last
+                // WM_APP_WAKE drain — a file-open completing right
+                // before the user closes the app would otherwise be
+                // silently dropped, breaking plugins that audit-log
+                // file activity. Safe to call here: no borrow is
+                // held, and `fire_queued_notifications` arms its
+                // own PluginCallGuard around each plugin call.
+                fire_queued_notifications(hwnd);
+
+                // Fire NPPN_SHUTDOWN to every loaded plugin while the
+                // WindowState (and the PluginHost it owns) still
+                // exists. The PluginCallGuard prevents a plugin's
+                // beNotified from materializing a second
+                // &mut WindowState via re-entrant SendMessage; the
+                // catch_unwind keeps a host-internal panic from
+                // unwinding across the extern "system" wnd_proc.
+                if let Some(state) = state_from_hwnd(hwnd) {
+                    // Guard inside the catch_unwind closure so the
+                    // nested-guard assert (if it ever fired) is
+                    // caught here. Same pattern as
+                    // `fire_queued_notifications`.
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _guard = PluginCallGuard::enter();
+                        state.shell.notify_plugins(Notification::Shutdown, hwnd.0);
+                    }));
+                }
+
+                // Reclaim the WindowState box. After this point, any
+                // re-entrant wnd_proc gets `None` from
+                // `state_from_hwnd` (GWLP_USERDATA == 0), so any late
+                // plugin SendMessage during teardown is safely
+                // dispatched as DefWindowProcW.
                 let raw = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 if raw != 0 {
                     let _ = Box::from_raw(raw as *mut WindowState);
                 }
-                // TODO(milestone-5): fire NPPN_SHUTDOWN here once the
-                // re-entrance design pass lands (see WM_DESTROY block
-                // comment above).
                 PostQuitMessage(0);
                 LRESULT(0)
             }
@@ -904,6 +1010,21 @@ struct PluginCallGuard;
 
 impl PluginCallGuard {
     fn enter() -> Self {
+        // Reject nested guards. The current call sites never nest
+        // (each is a leaf of the wnd_proc that holds no borrow
+        // above it), but a future change that adds a second `enter`
+        // while one is already armed would silently get a guard
+        // whose Drop clears the flag too early — re-opening the
+        // aliasing window for any plugin code still on the stack.
+        //
+        // Hard `assert!` (not `debug_assert!`) so release builds
+        // catch it too. Every call site invokes `enter()` from
+        // inside a `catch_unwind` closure, so the panic is caught
+        // there rather than crossing the `extern "system"` boundary.
+        assert!(
+            !PLUGIN_CALL_ACTIVE.load(Ordering::Acquire),
+            "PluginCallGuard nested — Drop ordering would clear the flag too early"
+        );
         PLUGIN_CALL_ACTIVE.store(true, Ordering::Release);
         Self
     }
