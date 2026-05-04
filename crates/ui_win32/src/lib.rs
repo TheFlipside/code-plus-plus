@@ -33,10 +33,12 @@ use codepp_scintilla_sys::{
     SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_RUST_CHARACTER,
     SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC,
     SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
-    SCE_RUST_WORD, SCE_RUST_WORD2, SCI_CREATEDOCUMENT, SCI_EMPTYUNDOBUFFER, SCI_GETCURRENTPOS,
-    SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETLENGTH, SCI_GETTEXT, SCI_GOTOPOS,
-    SCI_RELEASEDOCUMENT, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT, SCI_SETTEXT,
-    SC_DOCUMENTOPTION_DEFAULT, STYLE_DEFAULT,
+    SCE_RUST_WORD, SCE_RUST_WORD2, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT,
+    SCI_EMPTYUNDOBUFFER, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+    SCI_GETLENGTH, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOPOS,
+    SCI_PASTE, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT,
+    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN,
+    SCI_ZOOMOUT, SC_DOCUMENTOPTION_DEFAULT, STYLE_DEFAULT,
 };
 use codepp_shell::{HostHandles, PendingDialog, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR};
@@ -47,23 +49,111 @@ use windows::Win32::UI::Controls::{
     InitCommonControlsEx, ICC_BAR_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, NMHDR, TCITEMW,
     TCM_DELETEITEM, TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL, TCN_SELCHANGE, WC_TABCONTROL,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{SetFocus, VK_W};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SetFocus, VK_0, VK_A, VK_C, VK_F, VK_G, VK_H, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_V, VK_W,
+    VK_X, VK_Y, VK_Z,
+};
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreateAcceleratorTableW, CreateMenu, CreateWindowExW, DefWindowProcW,
-    DestroyWindow, DispatchMessageW, DrawMenuBar, GetClientRect, GetMessageW, GetWindowLongPtrW,
-    LoadCursorW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SendMessageW, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
-    TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, FCONTROL,
-    FVIRTKEY, GWLP_USERDATA, HACCEL, HMENU, IDC_ARROW, IDYES, MB_ICONQUESTION, MB_ICONWARNING,
-    MB_OK, MB_YESNO, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_APP,
-    WM_COMMAND, WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_SETFOCUS,
-    WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CreateAcceleratorTableW, CreateMenu,
+    CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyWindow, DispatchMessageW, DrawMenuBar,
+    GetClientRect, GetMenuItemCount, GetMessageW, GetWindowLongPtrW, LoadCursorW, MessageBoxW,
+    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW,
+    SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL,
+    HMENU, IDC_ARROW, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO,
+    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY, WM_DROPFILES,
+    WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_SETFOCUS, WM_SIZE, WNDCLASSEXW, WS_CHILD,
+    WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
+// --- Built-in menu command ids ----------------------------------------
+//
+// The host's built-in WM_COMMAND ids live in 1000..=1999. Plugin
+// command ids start at PLUGIN_CMD_ID_BASE = 50000, well above any
+// host-built-in. Two ranges inside 1000..=1999 are *dynamic* — the
+// cmd id encodes a parameter the WM_COMMAND handler decodes back:
+//
+//   ID_LANGUAGE_BASE..ID_LANGUAGE_END  → LangType id
+//   ID_WINDOW_BASE..ID_WINDOW_END      → tab index
+//
+// The static ids below avoid those two ranges so a click on a static
+// item never collides with a dynamic one.
+//
+// File (1000-1099)
 const ID_FILE_SAVE: u16 = 1000;
 const ID_FILE_EXIT: u16 = 1001;
 const ID_FILE_CLOSE: u16 = 1002;
+const ID_FILE_NEW: u16 = 1003;
+const ID_FILE_OPEN: u16 = 1004;
+const ID_FILE_SAVE_AS: u16 = 1005;
+const ID_FILE_SAVE_ALL: u16 = 1006;
+const ID_FILE_CLOSE_ALL: u16 = 1007;
+const ID_FILE_RELOAD: u16 = 1008;
+const ID_FILE_PRINT: u16 = 1009;
+
+// Edit (1100-1199) — most route directly to Scintilla via SCI_*.
+const ID_EDIT_UNDO: u16 = 1100;
+const ID_EDIT_REDO: u16 = 1101;
+const ID_EDIT_CUT: u16 = 1102;
+const ID_EDIT_COPY: u16 = 1103;
+const ID_EDIT_PASTE: u16 = 1104;
+const ID_EDIT_DELETE: u16 = 1105;
+const ID_EDIT_SELECTALL: u16 = 1106;
+
+// Search (1200-1299) — disabled stubs until Phase 4 m3 wires
+// Find/Replace dialogs.
+const ID_SEARCH_FIND: u16 = 1200;
+const ID_SEARCH_FINDNEXT: u16 = 1201;
+const ID_SEARCH_FINDPREV: u16 = 1202;
+const ID_SEARCH_REPLACE: u16 = 1203;
+const ID_SEARCH_FINDINFILES: u16 = 1204;
+const ID_SEARCH_GOTOLINE: u16 = 1205;
+
+// View (1300-1399).
+const ID_VIEW_WORDWRAP: u16 = 1300;
+const ID_VIEW_SHOWWS: u16 = 1301;
+const ID_VIEW_SHOWEOL: u16 = 1302;
+const ID_VIEW_ZOOMIN: u16 = 1303;
+const ID_VIEW_ZOOMOUT: u16 = 1304;
+const ID_VIEW_ZOOMRESET: u16 = 1305;
+
+// Encoding (1400-1499) — m1 ships the menu shape with disabled
+// conversion stubs; the radio marker reflects the active buffer's
+// encoding for plugins/users that read the menu state. m5 wires
+// the conversions.
+//
+// Order matters: `CheckMenuRadioItem` takes a [first_id, last_id]
+// closed range to clear-then-set. If the range is inverted the
+// "clear other items in range" pass becomes a no-op and stale
+// radio marks pile up. Keep these strictly ascending.
+const ID_ENCODING_ANSI: u16 = 1400;
+const ID_ENCODING_UTF8: u16 = 1401;
+const ID_ENCODING_UTF8_BOM: u16 = 1402;
+const ID_ENCODING_UTF16_LE: u16 = 1403;
+const ID_ENCODING_UTF16_BE: u16 = 1404;
+
+// Language (1500-1599) — *dynamic*: cmd id = ID_LANGUAGE_BASE +
+// LangType numeric id. LangType ids run 0..=93 in the N++ ABI; we
+// reserve a 100-wide window so the full set fits. `_END` is the
+// last valid id (inclusive), giving 100 slots [BASE, END].
+const ID_LANGUAGE_BASE: u16 = 1500;
+const ID_LANGUAGE_END: u16 = 1599;
+const ID_LANGUAGE_CAP: usize = (ID_LANGUAGE_END - ID_LANGUAGE_BASE + 1) as usize;
+
+// Settings / Tools / Macro / Run (1600-1699) — disabled stubs.
+const ID_SETTINGS_PREFERENCES: u16 = 1600;
+
+// Window (1700-1799) — *dynamic*: cmd id = ID_WINDOW_BASE + tab idx.
+// 100-wide window caps the visible-by-shortcut tab list. `_END` is
+// inclusive (last valid id); `_CAP` is the count of usable slots.
+const ID_WINDOW_BASE: u16 = 1700;
+const ID_WINDOW_END: u16 = 1799;
+const ID_WINDOW_CAP: usize = (ID_WINDOW_END - ID_WINDOW_BASE + 1) as usize;
+
+// Help (1800-1899).
+const ID_HELP_ABOUT: u16 = 1800;
 
 /// Our cross-thread wake-up message. Producer threads `PostMessage`
 /// this to drag the UI thread out of its `GetMessageW` idle and into
@@ -107,6 +197,15 @@ struct WindowState {
     /// menu skip the work; we never reload plugins after the first
     /// touch, even if the user re-opens the menu.
     plugins_menu_initialized: bool,
+    /// HMENUs of the four menus whose contents reflect live state
+    /// (encoding radio, language radio, View toggle/check marks,
+    /// Window's per-tab list). The popup HMENU on
+    /// `WM_INITMENUPOPUP` is matched against these to dispatch the
+    /// right refresh routine.
+    view_menu: HMENU,
+    encoding_menu: HMENU,
+    language_menu: HMENU,
+    window_menu: HMENU,
     editor: EditorHandle,
     shell: Shell,
 }
@@ -871,6 +970,547 @@ fn tab_label_for(tab: &Tab) -> Vec<u16> {
     cleaned.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Bundle of HMENUs the wnd_proc and `WindowState` need to keep
+/// addressable after `build_main_menu` returns. The bar itself is
+/// what `CreateWindowExW` consumes; the four named popups need
+/// dynamic refresh on `WM_INITMENUPOPUP` (state-driven check marks
+/// or rebuilt-on-open lists). The plugin submenu is exposed
+/// separately because the plugin host's `NPPM_GETMENUHANDLE` ABI
+/// hands it back as a stable handle, distinct from any other host
+/// menu.
+struct BuiltMenuBar {
+    bar: HMENU,
+    plugin_menu: HMENU,
+    view_menu: HMENU,
+    encoding_menu: HMENU,
+    language_menu: HMENU,
+    window_menu: HMENU,
+}
+
+/// Construct the full N++-shaped main menu: File, Edit, Search,
+/// View, Encoding, Language, Settings, Tools, Macro, Run, Plugins,
+/// Window, ?. Items that already have a real handler attached
+/// (Edit's clipboard ops, View's toggles, File's Save/Close/Exit)
+/// are enabled; items whose feature lands later in Phase 4+ are
+/// inserted as `MF_GRAYED` placeholders so the structure is
+/// observable and the cmd ids are reserved.
+///
+/// # Safety
+///
+/// `CreateMenu` / `AppendMenuW` are pure heap operations; they
+/// don't re-enter our wnd_proc. The returned handles are owned by
+/// the host process for the window's lifetime.
+fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
+    unsafe {
+        let bar = CreateMenu()?;
+
+        // ----- File -----
+        let file_menu = CreateMenu()?;
+        AppendMenuW(
+            file_menu,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_NEW as usize,
+            w!("&New\tCtrl+N"),
+        )?;
+        AppendMenuW(
+            file_menu,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_OPEN as usize,
+            w!("&Open...\tCtrl+O"),
+        )?;
+        AppendMenuW(
+            file_menu,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_RELOAD as usize,
+            w!("&Reload from Disk"),
+        )?;
+        AppendMenuW(
+            file_menu,
+            MF_STRING,
+            ID_FILE_SAVE as usize,
+            w!("&Save\tCtrl+S"),
+        )?;
+        AppendMenuW(
+            file_menu,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_SAVE_AS as usize,
+            w!("Save &As..."),
+        )?;
+        AppendMenuW(
+            file_menu,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_SAVE_ALL as usize,
+            w!("Sav&e All"),
+        )?;
+        AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(
+            file_menu,
+            MF_STRING,
+            ID_FILE_CLOSE as usize,
+            w!("&Close\tCtrl+W"),
+        )?;
+        AppendMenuW(
+            file_menu,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_CLOSE_ALL as usize,
+            w!("Close A&ll"),
+        )?;
+        AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(
+            file_menu,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_PRINT as usize,
+            w!("&Print...\tCtrl+P"),
+        )?;
+        AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(file_menu, MF_STRING, ID_FILE_EXIT as usize, w!("E&xit"))?;
+        AppendMenuW(bar, MF_POPUP, file_menu.0 as usize, w!("&File"))?;
+
+        // ----- Edit ----- (Scintilla-backed; all enabled.)
+        let edit_menu = CreateMenu()?;
+        AppendMenuW(
+            edit_menu,
+            MF_STRING,
+            ID_EDIT_UNDO as usize,
+            w!("&Undo\tCtrl+Z"),
+        )?;
+        AppendMenuW(
+            edit_menu,
+            MF_STRING,
+            ID_EDIT_REDO as usize,
+            w!("&Redo\tCtrl+Y"),
+        )?;
+        AppendMenuW(edit_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(
+            edit_menu,
+            MF_STRING,
+            ID_EDIT_CUT as usize,
+            w!("Cu&t\tCtrl+X"),
+        )?;
+        AppendMenuW(
+            edit_menu,
+            MF_STRING,
+            ID_EDIT_COPY as usize,
+            w!("&Copy\tCtrl+C"),
+        )?;
+        AppendMenuW(
+            edit_menu,
+            MF_STRING,
+            ID_EDIT_PASTE as usize,
+            w!("&Paste\tCtrl+V"),
+        )?;
+        AppendMenuW(
+            edit_menu,
+            MF_STRING,
+            ID_EDIT_DELETE as usize,
+            w!("&Delete\tDel"),
+        )?;
+        AppendMenuW(edit_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(
+            edit_menu,
+            MF_STRING,
+            ID_EDIT_SELECTALL as usize,
+            w!("Select &All\tCtrl+A"),
+        )?;
+        AppendMenuW(bar, MF_POPUP, edit_menu.0 as usize, w!("&Edit"))?;
+
+        // ----- Search ----- (stubs — Phase 4 m3 wires Find/Replace.)
+        let search_menu = CreateMenu()?;
+        AppendMenuW(
+            search_menu,
+            MF_STRING | MF_GRAYED,
+            ID_SEARCH_FIND as usize,
+            w!("&Find...\tCtrl+F"),
+        )?;
+        AppendMenuW(
+            search_menu,
+            MF_STRING | MF_GRAYED,
+            ID_SEARCH_FINDNEXT as usize,
+            w!("Find &Next\tF3"),
+        )?;
+        AppendMenuW(
+            search_menu,
+            MF_STRING | MF_GRAYED,
+            ID_SEARCH_FINDPREV as usize,
+            w!("Find Pre&vious\tShift+F3"),
+        )?;
+        AppendMenuW(
+            search_menu,
+            MF_STRING | MF_GRAYED,
+            ID_SEARCH_REPLACE as usize,
+            w!("&Replace...\tCtrl+H"),
+        )?;
+        AppendMenuW(search_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(
+            search_menu,
+            MF_STRING | MF_GRAYED,
+            ID_SEARCH_FINDINFILES as usize,
+            w!("Find in Fi&les...\tCtrl+Shift+F"),
+        )?;
+        AppendMenuW(search_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+        // Go to Line — same MF_GRAYED treatment as the rest of the
+        // Search menu until m3 wires the dialogs. The Ctrl+G
+        // accelerator still posts a WM_COMMAND, which the
+        // dispatcher trace-logs.
+        AppendMenuW(
+            search_menu,
+            MF_STRING | MF_GRAYED,
+            ID_SEARCH_GOTOLINE as usize,
+            w!("&Go to Line...\tCtrl+G"),
+        )?;
+        AppendMenuW(bar, MF_POPUP, search_menu.0 as usize, w!("&Search"))?;
+
+        // ----- View ----- (toggles refreshed in WM_INITMENUPOPUP.)
+        let view_menu = CreateMenu()?;
+        AppendMenuW(
+            view_menu,
+            MF_STRING,
+            ID_VIEW_WORDWRAP as usize,
+            w!("&Word Wrap"),
+        )?;
+        AppendMenuW(
+            view_menu,
+            MF_STRING,
+            ID_VIEW_SHOWWS as usize,
+            w!("Show White&space"),
+        )?;
+        AppendMenuW(
+            view_menu,
+            MF_STRING,
+            ID_VIEW_SHOWEOL as usize,
+            w!("Show End of &Line"),
+        )?;
+        AppendMenuW(view_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(
+            view_menu,
+            MF_STRING,
+            ID_VIEW_ZOOMIN as usize,
+            w!("Zoom &In\tCtrl++"),
+        )?;
+        AppendMenuW(
+            view_menu,
+            MF_STRING,
+            ID_VIEW_ZOOMOUT as usize,
+            w!("Zoom &Out\tCtrl+-"),
+        )?;
+        AppendMenuW(
+            view_menu,
+            MF_STRING,
+            ID_VIEW_ZOOMRESET as usize,
+            w!("&Restore Zoom\tCtrl+0"),
+        )?;
+        AppendMenuW(bar, MF_POPUP, view_menu.0 as usize, w!("&View"))?;
+
+        // ----- Encoding ----- (radio refreshed in WM_INITMENUPOPUP;
+        // conversions wired in m5, grayed for now.)
+        let encoding_menu = CreateMenu()?;
+        AppendMenuW(
+            encoding_menu,
+            MF_STRING | MF_GRAYED,
+            ID_ENCODING_ANSI as usize,
+            w!("&ANSI"),
+        )?;
+        AppendMenuW(
+            encoding_menu,
+            MF_STRING | MF_GRAYED,
+            ID_ENCODING_UTF8 as usize,
+            w!("UTF-&8 (no BOM)"),
+        )?;
+        AppendMenuW(
+            encoding_menu,
+            MF_STRING | MF_GRAYED,
+            ID_ENCODING_UTF8_BOM as usize,
+            w!("UTF-8 with &BOM"),
+        )?;
+        AppendMenuW(
+            encoding_menu,
+            MF_STRING | MF_GRAYED,
+            ID_ENCODING_UTF16_LE as usize,
+            w!("UTF-16 &LE BOM"),
+        )?;
+        AppendMenuW(
+            encoding_menu,
+            MF_STRING | MF_GRAYED,
+            ID_ENCODING_UTF16_BE as usize,
+            w!("UTF-16 B&E BOM"),
+        )?;
+        AppendMenuW(bar, MF_POPUP, encoding_menu.0 as usize, w!("E&ncoding"))?;
+
+        // ----- Language ----- (one item per known LangType; cmd id
+        // = ID_LANGUAGE_BASE + lang.0. Radio refreshed in
+        // WM_INITMENUPOPUP based on the active tab's lang.)
+        let language_menu = CreateMenu()?;
+        for (lang, label) in [
+            (codepp_core::lang::L_TEXT, w!("&Normal Text")),
+            (codepp_core::lang::L_C, w!("&C")),
+            (codepp_core::lang::L_CPP, w!("C&++")),
+            (codepp_core::lang::L_RUST, w!("&Rust")),
+        ] {
+            AppendMenuW(
+                language_menu,
+                MF_STRING,
+                (ID_LANGUAGE_BASE as i32 + lang.as_npp_id()) as usize,
+                label,
+            )?;
+        }
+        AppendMenuW(bar, MF_POPUP, language_menu.0 as usize, w!("&Language"))?;
+
+        // ----- Settings ----- (stubs.)
+        let settings_menu = CreateMenu()?;
+        AppendMenuW(
+            settings_menu,
+            MF_STRING | MF_GRAYED,
+            ID_SETTINGS_PREFERENCES as usize,
+            w!("&Preferences..."),
+        )?;
+        AppendMenuW(bar, MF_POPUP, settings_menu.0 as usize, w!("Se&ttings"))?;
+
+        // ----- Tools / Macro / Run ----- (placeholder submenus —
+        // the menu *items* land alongside the features in later
+        // phases; for now the top-level entries reserve the slots
+        // and show as empty grayed popups.)
+        let tools_menu = CreateMenu()?;
+        AppendMenuW(
+            tools_menu,
+            MF_STRING | MF_GRAYED,
+            0,
+            w!("(no tools wired yet)"),
+        )?;
+        AppendMenuW(bar, MF_POPUP, tools_menu.0 as usize, w!("&Tools"))?;
+
+        let macro_menu = CreateMenu()?;
+        AppendMenuW(
+            macro_menu,
+            MF_STRING | MF_GRAYED,
+            0,
+            w!("(macro recording lands later)"),
+        )?;
+        AppendMenuW(bar, MF_POPUP, macro_menu.0 as usize, w!("&Macro"))?;
+
+        let run_menu = CreateMenu()?;
+        AppendMenuW(
+            run_menu,
+            MF_STRING | MF_GRAYED,
+            0,
+            w!("(run-command lands later)"),
+        )?;
+        AppendMenuW(bar, MF_POPUP, run_menu.0 as usize, w!("R&un"))?;
+
+        // ----- Plugins ----- (populated lazily by `populate_plugin_menu`
+        // on first WM_INITMENUPOPUP; the HMENU is alive from now on
+        // so plugins that query NPPM_GETMENUHANDLE before the popup
+        // get a real handle.)
+        let plugin_menu = CreateMenu()?;
+        AppendMenuW(bar, MF_POPUP, plugin_menu.0 as usize, w!("&Plugins"))?;
+
+        // ----- Window ----- (rebuilt every WM_INITMENUPOPUP from
+        // Shell.tabs; cmd id = ID_WINDOW_BASE + tab idx.)
+        let window_menu = CreateMenu()?;
+        AppendMenuW(
+            window_menu,
+            MF_STRING | MF_GRAYED,
+            0,
+            w!("(no open windows)"),
+        )?;
+        AppendMenuW(bar, MF_POPUP, window_menu.0 as usize, w!("&Window"))?;
+
+        // ----- ? (Help) -----
+        let help_menu = CreateMenu()?;
+        AppendMenuW(
+            help_menu,
+            MF_STRING,
+            ID_HELP_ABOUT as usize,
+            w!("&About Code++"),
+        )?;
+        AppendMenuW(bar, MF_POPUP, help_menu.0 as usize, w!("&?"))?;
+
+        Ok(BuiltMenuBar {
+            bar,
+            plugin_menu,
+            view_menu,
+            encoding_menu,
+            language_menu,
+            window_menu,
+        })
+    }
+}
+
+/// Refresh check marks on the View menu so they reflect the live
+/// Scintilla state (`SCI_GETWRAPMODE`, `SCI_GETVIEWWS`,
+/// `SCI_GETVIEWEOL`). Cheap to call on every `WM_INITMENUPOPUP` —
+/// three direct-call queries plus three `CheckMenuItem` calls.
+///
+/// # Safety
+///
+/// `view_menu` must be a live HMENU (the one built by
+/// `build_main_menu`); caller must run on the UI thread.
+unsafe fn refresh_view_menu(view_menu: HMENU, editor: &EditorHandle) {
+    let wrap_on = editor.send(SCI_GETWRAPMODE, 0, 0) != 0;
+    let ws_on = editor.send(SCI_GETVIEWWS, 0, 0) != 0;
+    let eol_on = editor.send(SCI_GETVIEWEOL, 0, 0) != 0;
+    let mark = |id: u16, on: bool| {
+        let flags = MF_BYCOMMAND.0 | if on { MF_CHECKED.0 } else { MF_UNCHECKED.0 };
+        // CheckMenuItem returns the previous state on success or
+        // -1u32 on failure; we treat both as fire-and-forget — a
+        // failure here just means the check mark is wrong on this
+        // open, never a process-stability issue.
+        unsafe {
+            let _ = CheckMenuItem(view_menu, id as u32, flags);
+        }
+    };
+    mark(ID_VIEW_WORDWRAP, wrap_on);
+    mark(ID_VIEW_SHOWWS, ws_on);
+    mark(ID_VIEW_SHOWEOL, eol_on);
+}
+
+/// Radio-mark the menu item matching `lang` in the Language menu.
+/// `CheckMenuRadioItem` ensures only one item in the range carries
+/// the radio glyph at a time. Phase 4 m1 wires four langs (Normal
+/// Text, C, C++, Rust); cmd ids run from `ID_LANGUAGE_BASE` upward.
+///
+/// # Safety
+///
+/// `language_menu` must be a live HMENU; caller on the UI thread.
+unsafe fn refresh_language_menu(language_menu: HMENU, lang: LangType) {
+    // CheckMenuRadioItem(menu, first_id, last_id, check_id, MF_BYCOMMAND).
+    // The range is closed [first, last]; we use the full reserved
+    // band so future `Lang` additions don't need an off-by-one
+    // here. `check_id` outside the range is a no-op which keeps an
+    // unrecognised lang from clearing all marks.
+    //
+    // `lang.as_npp_id()` is whatever i32 the plugin ABI handed us,
+    // including i32::MAX from a hostile NPPM_SETBUFFERLANGTYPE.
+    // Bound the value before the addition to avoid overflow on the
+    // intermediate i32 stage and to keep the resulting target id
+    // inside the cmd-id range Win32 will accept.
+    let lang_id = lang.as_npp_id();
+    if lang_id < 0 || lang_id as usize >= ID_LANGUAGE_CAP {
+        return;
+    }
+    let target = ID_LANGUAGE_BASE as u32 + lang_id as u32;
+    unsafe {
+        let _ = CheckMenuRadioItem(
+            language_menu,
+            ID_LANGUAGE_BASE as u32,
+            ID_LANGUAGE_END as u32,
+            target,
+            MF_BYCOMMAND.0,
+        );
+    }
+}
+
+/// Radio-mark the Encoding menu's active item. Encoding values
+/// don't yet have a numeric ABI to share with plugins, so the
+/// match is on a small inline table — extended alongside the
+/// `core::encoding` set as new variants land.
+///
+/// # Safety
+///
+/// `encoding_menu` must be a live HMENU; caller on the UI thread.
+unsafe fn refresh_encoding_menu(encoding_menu: HMENU, encoding: &Encoding) {
+    // The Phase 3 status-bar label is the most stable identity we
+    // have for an `Encoding`; matching on it avoids exporting more
+    // surface from `core::encoding` than the menu actually needs.
+    // Anything not in the table leaves no radio mark — a
+    // user-visible "no encoding selected" cue that an unfamiliar
+    // encoding is current.
+    let target = match encoding.label() {
+        "ANSI" => Some(ID_ENCODING_ANSI),
+        "UTF-8" => Some(ID_ENCODING_UTF8),
+        "UTF-8 BOM" => Some(ID_ENCODING_UTF8_BOM),
+        "UTF-16 LE" => Some(ID_ENCODING_UTF16_LE),
+        "UTF-16 BE" => Some(ID_ENCODING_UTF16_BE),
+        _ => None,
+    };
+    if let Some(id) = target {
+        unsafe {
+            let _ = CheckMenuRadioItem(
+                encoding_menu,
+                ID_ENCODING_ANSI as u32,
+                ID_ENCODING_UTF16_BE as u32,
+                id as u32,
+                MF_BYCOMMAND.0,
+            );
+        }
+    }
+}
+
+/// Rebuild the Window menu from the current tab list. Each tab gets
+/// one entry (`<idx>: <filename>`); the active tab is check-marked.
+/// Cmd id = `ID_WINDOW_BASE + idx`.
+///
+/// The submenu is fully torn down and rebuilt on every popup — the
+/// tab set is small (≤ 100 capped by the cmd-id range), so a per-
+/// open rebuild is far simpler than tracking deltas.
+///
+/// # Safety
+///
+/// `window_menu` must be a live HMENU; caller on the UI thread.
+unsafe fn refresh_window_menu(window_menu: HMENU, shell: &Shell) {
+    // Clear by deleting every existing item by position. Iterate
+    // backward so deletion of item N doesn't shift item N+1 into
+    // the just-cleared slot.
+    let count = unsafe { GetMenuItemCount(Some(window_menu)) };
+    if count > 0 {
+        for i in (0..count).rev() {
+            unsafe {
+                let _ = DeleteMenu(window_menu, i as u32, MF_BYPOSITION);
+            }
+        }
+    }
+
+    if shell.tabs.is_empty() {
+        unsafe {
+            let _ = AppendMenuW(
+                window_menu,
+                MF_STRING | MF_GRAYED,
+                0,
+                w!("(no open windows)"),
+            );
+        }
+        return;
+    }
+
+    for (idx, tab) in shell.tabs.iter().enumerate() {
+        if idx >= ID_WINDOW_CAP {
+            // Cap the visible list at the cmd-id window. The
+            // remainder is reachable through tab-strip clicks; the
+            // menu just shows the first ID_WINDOW_CAP entries.
+            break;
+        }
+        // Same filename-extraction rule as the tab strip: prefer
+        // `path.file_name()`, fall back to "Untitled" for buffers
+        // that haven't been saved yet, sanitize for control chars.
+        let raw = tab
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name().and_then(|s| s.to_str()))
+            .unwrap_or("Untitled");
+        let cleaned = sanitize_filename_for_display(raw);
+        // Prefix with "<idx+1> " for keyboard-friendly mnemonic
+        // (matches N++ which uses 1-based numbering in this menu).
+        let display = format!("{} {}", idx + 1, cleaned);
+        let display_w: Vec<u16> = display.encode_utf16().chain(std::iter::once(0)).collect();
+        let id = (ID_WINDOW_BASE as usize) + idx;
+        unsafe {
+            let _ = AppendMenuW(window_menu, MF_STRING, id, PCWSTR(display_w.as_ptr()));
+        }
+    }
+
+    if let Some(active) = shell.active_tab {
+        // Defense in depth: only mark the active tab if it's in the
+        // visible-cmd-id window. A future `active_tab` outside the
+        // 0..ID_WINDOW_CAP range would silently overflow the u32
+        // addition; bounded check keeps the target id well-formed.
+        if active < ID_WINDOW_CAP {
+            let id = ID_WINDOW_BASE as u32 + active as u32;
+            unsafe {
+                let _ = CheckMenuItem(window_menu, id, MF_BYCOMMAND.0 | MF_CHECKED.0);
+            }
+        }
+    }
+}
+
 /// Append loaded-plugin FuncItems onto the per-plugin submenu after
 /// a successful lazy-load round. Each plugin gets its own popup
 /// submenu under the top-level "Plugins" entry, with the plugin's
@@ -999,6 +1639,119 @@ fn show_error_dialog(main_hwnd: HWND, title: &str, message: &str) {
     }
 }
 
+/// Show the "About Code++" dialog. Modal MessageBox, so the borrow
+/// must already be dropped at the call site (the WM_COMMAND handler
+/// calls this through `state_from_hwnd` already, but pulls only
+/// HWND values out before showing).
+fn show_about_dialog(main_hwnd: HWND) {
+    let body = format!(
+        "Code++ {}\nA cross-platform Notepad++ clone in Rust on Scintilla.\n\nhttps://git.fiedler.live/tux/code-plus-plus",
+        env!("CARGO_PKG_VERSION"),
+    );
+    let body_w = HSTRING::from(body);
+    let title = w!("About Code++");
+    unsafe {
+        MessageBoxW(Some(main_hwnd), &body_w, title, MB_OK | MB_ICONINFORMATION);
+    }
+}
+
+/// Handle a Language-menu click — flip the active tab's lang to the
+/// supplied LangType id. Routes through the same `set_buffer_lang_type`
+/// the plugin ABI uses, so the code path covers re-applying the lexer
+/// for the active tab and queueing `NPPN_LANGCHANGED`.
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+unsafe fn handle_language_menu_click(hwnd: HWND, lang_id: i32) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unsafe { handle_language_menu_click_inner(hwnd, lang_id) };
+    }));
+}
+
+unsafe fn handle_language_menu_click_inner(hwnd: HWND, lang_id: i32) {
+    // Route through `dispatch_plugin_message` with the
+    // NPPM_SETBUFFERLANGTYPE wire format so the menu click and a
+    // plugin-driven set go through one code path. That code already
+    // re-applies the lexer for the active tab and queues
+    // NPPN_LANGCHANGED on a real change; mirroring it here means
+    // adding/changing language behaviour only happens in one place.
+    let buffer_id = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        match state.shell.active() {
+            Some(t) => t.id as usize,
+            None => return,
+        }
+    } else {
+        return;
+    };
+    if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        let handles = state.host_handles(hwnd);
+        let (shell, mut ui) = state.split();
+        // SAFETY: `dispatch_plugin_message` requires a UI-thread
+        // call with valid handles for this window. The wnd_proc
+        // contract gives us both.
+        unsafe {
+            let _ = shell.dispatch_plugin_message(
+                &mut ui,
+                handles,
+                codepp_plugin_host::dispatch::NPPM_SETBUFFERLANGTYPE,
+                buffer_id,
+                lang_id as isize,
+            );
+        }
+    }
+    unsafe {
+        fire_queued_notifications(hwnd);
+    }
+}
+
+/// Handle a Window-menu click — switch the active tab to `tab_idx`.
+/// Routes through the same code path as a tab-strip click so the
+/// editor view, status bar, language and window title all update
+/// together.
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+unsafe fn handle_window_menu_click(hwnd: HWND, tab_idx: usize) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unsafe { handle_window_menu_click_inner(hwnd, tab_idx) };
+    }));
+}
+
+unsafe fn handle_window_menu_click_inner(hwnd: HWND, tab_idx: usize) {
+    // TCM_SETCURSEL doesn't generate TCN_SELCHANGE, so we manually
+    // invoke the selchange handler after a successful cursor move
+    // to do the rest of the work (doc rebind, status, lexer,
+    // notification queueing). The selchange call is gated on the
+    // cursor move actually happening — if `state_from_hwnd` returns
+    // None (e.g. PLUGIN_CALL_ACTIVE is set because a plugin's
+    // beNotified synthesised this WM_COMMAND), no cursor move
+    // occurred and firing selchange anyway would queue a spurious
+    // BUFFERACTIVATED on the wrong tab.
+    let did_move = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        if tab_idx >= state.shell.tabs.len() {
+            return;
+        }
+        unsafe {
+            SendMessageW(
+                state.tab_hwnd,
+                TCM_SETCURSEL,
+                Some(WPARAM(tab_idx)),
+                Some(LPARAM(0)),
+            );
+        }
+        true
+    } else {
+        false
+    };
+    if did_move {
+        unsafe {
+            handle_tab_selchange(hwnd);
+        }
+    }
+}
+
 /// Run the Code++ Win32 event loop. Blocks until the user exits.
 ///
 /// `initial_path` (if `Some`) is queued for opening immediately after
@@ -1036,28 +1789,13 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             return Err(windows::core::Error::from_thread());
         }
 
-        // File menu: Save (Ctrl+S not wired to an accelerator yet —
-        // Phase 3 brings the accelerator table) and Exit.
-        let menubar = CreateMenu()?;
-        let file_menu = CreateMenu()?;
-        AppendMenuW(file_menu, MF_STRING, ID_FILE_SAVE as usize, w!("&Save"))?;
-        AppendMenuW(
-            file_menu,
-            MF_STRING,
-            ID_FILE_CLOSE as usize,
-            w!("&Close\tCtrl+W"),
-        )?;
-        AppendMenuW(file_menu, MF_STRING, ID_FILE_EXIT as usize, w!("E&xit"))?;
-        AppendMenuW(menubar, MF_POPUP, file_menu.0 as usize, w!("&File"))?;
-
-        // Plugins submenu placeholder. Empty until milestone 5 wires
-        // the lazy-load + getFuncsArray flow that populates it. The
-        // HMENU exists from startup so plugins that query
-        // `NPPM_GETMENUHANDLE(NPPPLUGINMENU)` get a real handle to
-        // append into rather than NULL — the submenu just shows up
-        // empty in the UI until a plugin contributes items.
-        let plugin_menu = CreateMenu()?;
-        AppendMenuW(menubar, MF_POPUP, plugin_menu.0 as usize, w!("&Plugins"))?;
+        // Full N++-shaped menu bar. `build_main_menu` returns the
+        // bar plus the HMENUs of submenus we need later for dynamic
+        // refresh (encoding/lang radios, View toggles) or for plugin
+        // ABI exposure (the per-plugin submenu).
+        let menus = build_main_menu()?;
+        let menubar = menus.bar;
+        let plugin_menu = menus.plugin_menu;
 
         // Create the main window without children first; we attach
         // them after the Shell is built and stashed in GWLP_USERDATA.
@@ -1214,6 +1952,10 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             main_menu: menubar,
             plugin_menu,
             plugins_menu_initialized: false,
+            view_menu: menus.view_menu,
+            encoding_menu: menus.encoding_menu,
+            language_menu: menus.language_menu,
+            window_menu: menus.window_menu,
             editor,
             shell,
         });
@@ -1250,20 +1992,109 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         );
         let _ = SetFocus(Some(scintilla_hwnd));
 
-        // Accelerator table — Ctrl+W → ID_FILE_CLOSE. We route
-        // through `TranslateAcceleratorW` rather than handling
-        // `WM_KEYDOWN` in the wnd_proc because Scintilla owns
-        // keyboard focus while the user types, so a parent-side
-        // WM_KEYDOWN never fires for editor keystrokes. The
-        // accelerator table is queried before
-        // `TranslateMessage`/`DispatchMessageW`, posting a
-        // `WM_COMMAND(ID_FILE_CLOSE)` to the main window without
-        // depending on focus.
-        let accels = [ACCEL {
-            fVirt: ACCEL_VIRT_FLAGS(FCONTROL.0 | FVIRTKEY.0),
-            key: VK_W.0,
-            cmd: ID_FILE_CLOSE,
-        }];
+        // Accelerator table. We route through `TranslateAcceleratorW`
+        // rather than handling `WM_KEYDOWN` in the wnd_proc because
+        // Scintilla owns keyboard focus while the user types, so a
+        // parent-side WM_KEYDOWN never fires for editor keystrokes.
+        // The accelerator table is queried before
+        // `TranslateMessage`/`DispatchMessageW`, posting a WM_COMMAND
+        // to the main window without depending on focus.
+        //
+        // The table covers commands the menu actually exposes today:
+        //   - File: Save (Ctrl+S), Close (Ctrl+W).
+        //   - Edit: Undo / Redo / Cut / Copy / Paste / Select All.
+        //     Scintilla also handles these natively via its own
+        //     keyboard table when focused; routing through here
+        //     keeps the menu items "fire on shortcut" parity even
+        //     if Scintilla's table changes upstream.
+        //   - Search: Find / Replace / Find-in-Files / Goto Line —
+        //     entries with disabled menu items still receive
+        //     WM_COMMAND, so the dispatcher's default arm logs and
+        //     no-ops until m3 wires the real handlers.
+        //   - View: Zoom In / Zoom Out / Restore Zoom.
+        let ctrl = ACCEL_VIRT_FLAGS(FCONTROL.0 | FVIRTKEY.0);
+        let ctrl_shift = ACCEL_VIRT_FLAGS(FCONTROL.0 | FSHIFT.0 | FVIRTKEY.0);
+        let accels = [
+            // File
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_S.0,
+                cmd: ID_FILE_SAVE,
+            },
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_W.0,
+                cmd: ID_FILE_CLOSE,
+            },
+            // Edit
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_Z.0,
+                cmd: ID_EDIT_UNDO,
+            },
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_Y.0,
+                cmd: ID_EDIT_REDO,
+            },
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_X.0,
+                cmd: ID_EDIT_CUT,
+            },
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_C.0,
+                cmd: ID_EDIT_COPY,
+            },
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_V.0,
+                cmd: ID_EDIT_PASTE,
+            },
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_A.0,
+                cmd: ID_EDIT_SELECTALL,
+            },
+            // Search
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_F.0,
+                cmd: ID_SEARCH_FIND,
+            },
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_H.0,
+                cmd: ID_SEARCH_REPLACE,
+            },
+            ACCEL {
+                fVirt: ctrl_shift,
+                key: VK_F.0,
+                cmd: ID_SEARCH_FINDINFILES,
+            },
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_G.0,
+                cmd: ID_SEARCH_GOTOLINE,
+            },
+            // View
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_OEM_PLUS.0,
+                cmd: ID_VIEW_ZOOMIN,
+            },
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_OEM_MINUS.0,
+                cmd: ID_VIEW_ZOOMOUT,
+            },
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_0.0,
+                cmd: ID_VIEW_ZOOMRESET,
+            },
+        ];
         let haccel: HACCEL = CreateAcceleratorTableW(&accels)?;
 
         // Standard message loop with accelerator translation.
@@ -1427,7 +2258,105 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     ID_FILE_EXIT => {
                         let _ = DestroyWindow(hwnd);
                     }
+                    // Edit menu — every entry is a single Scintilla
+                    // direct-call. `editor` is `Copy`, so we pull a
+                    // local copy out of the brief `&mut state` borrow
+                    // and the borrow ends before the SCI call. Plugin
+                    // re-entrance isn't a concern (Scintilla direct
+                    // calls don't go through any wnd_proc).
+                    ID_EDIT_UNDO | ID_EDIT_REDO | ID_EDIT_CUT | ID_EDIT_COPY | ID_EDIT_PASTE
+                    | ID_EDIT_DELETE | ID_EDIT_SELECTALL => {
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            let editor = state.editor;
+                            let sci_msg = match cmd_u16 {
+                                ID_EDIT_UNDO => SCI_UNDO,
+                                ID_EDIT_REDO => SCI_REDO,
+                                ID_EDIT_CUT => SCI_CUT,
+                                ID_EDIT_COPY => SCI_COPY,
+                                ID_EDIT_PASTE => SCI_PASTE,
+                                ID_EDIT_DELETE => SCI_CLEAR,
+                                ID_EDIT_SELECTALL => SCI_SELECTALL,
+                                _ => unreachable!(),
+                            };
+                            editor.send(sci_msg, 0, 0);
+                        }
+                    }
+                    // View toggles — flip the corresponding Scintilla
+                    // setting; the next WM_INITMENUPOPUP refreshes
+                    // the check mark from the now-updated state.
+                    ID_VIEW_WORDWRAP => {
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            let editor = state.editor;
+                            let on = editor.send(SCI_GETWRAPMODE, 0, 0) != 0;
+                            editor.send(SCI_SETWRAPMODE, if on { 0 } else { 1 }, 0);
+                        }
+                    }
+                    ID_VIEW_SHOWWS => {
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            let editor = state.editor;
+                            let on = editor.send(SCI_GETVIEWWS, 0, 0) != 0;
+                            // SCWS_INVISIBLE = 0, SCWS_VISIBLEALWAYS = 1.
+                            editor.send(SCI_SETVIEWWS, if on { 0 } else { 1 }, 0);
+                        }
+                    }
+                    ID_VIEW_SHOWEOL => {
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            let editor = state.editor;
+                            let on = editor.send(SCI_GETVIEWEOL, 0, 0) != 0;
+                            editor.send(SCI_SETVIEWEOL, if on { 0 } else { 1 }, 0);
+                        }
+                    }
+                    ID_VIEW_ZOOMIN => {
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            state.editor.send(SCI_ZOOMIN, 0, 0);
+                        }
+                    }
+                    ID_VIEW_ZOOMOUT => {
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            state.editor.send(SCI_ZOOMOUT, 0, 0);
+                        }
+                    }
+                    ID_VIEW_ZOOMRESET => {
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            state.editor.send(SCI_SETZOOM, 0, 0);
+                        }
+                    }
+                    // Help → About: simple MessageBox with version
+                    // info. Modal pump runs after the borrow drops.
+                    ID_HELP_ABOUT => {
+                        show_about_dialog(hwnd);
+                    }
+                    // Search stubs — all enabled in the accelerator
+                    // table so the shortcuts already register; the
+                    // menu items themselves are MF_GRAYED until m3
+                    // wires them, but the accelerator path arrives
+                    // here regardless. Trace-log so the user sees a
+                    // breadcrumb in the perf-trace; no UI affordance
+                    // until the dialogs land.
+                    ID_SEARCH_FIND
+                    | ID_SEARCH_FINDNEXT
+                    | ID_SEARCH_FINDPREV
+                    | ID_SEARCH_REPLACE
+                    | ID_SEARCH_FINDINFILES
+                    | ID_SEARCH_GOTOLINE => {
+                        tracing::trace!(cmd = cmd_u16, "search command not yet wired (Phase 4 m3)",);
+                    }
                     _ => {
+                        // Dynamic-range commands (Language menu,
+                        // Window menu). These reach the `_` arm
+                        // because their cmd ids carry a parameter
+                        // value (lang-id or tab-idx) rather than a
+                        // single fixed constant.
+                        if (ID_LANGUAGE_BASE..=ID_LANGUAGE_END).contains(&cmd_u16) {
+                            let lang_id = (cmd_u16 - ID_LANGUAGE_BASE) as i32;
+                            handle_language_menu_click(hwnd, lang_id);
+                            return LRESULT(0);
+                        }
+                        if (ID_WINDOW_BASE..=ID_WINDOW_END).contains(&cmd_u16) {
+                            let tab_idx = (cmd_u16 - ID_WINDOW_BASE) as usize;
+                            handle_window_menu_click(hwnd, tab_idx);
+                            return LRESULT(0);
+                        }
                         // Plugin menu-command dispatch. Plugin cmd-ids
                         // start at PLUGIN_CMD_ID_BASE (50000) — well
                         // above any host built-in. Look up the
@@ -1561,6 +2490,28 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // open (without a redraw, the items only
                         // appear after the popup re-displays).
                         let _ = DrawMenuBar(hwnd);
+                    }
+                }
+                // Refresh dynamic state on the four state-driven
+                // submenus (View toggles, Encoding/Language radios,
+                // Window list). Each refresh is read-only against
+                // `state` apart from the rebuild on `window_menu`,
+                // which only mutates the menu HMENU — not anything
+                // a re-entrant call could observe through `state`.
+                // None of these helpers re-enter our wnd_proc.
+                if let Some(state) = state_from_hwnd(hwnd) {
+                    if popup_hmenu_value == state.view_menu.0 as usize {
+                        refresh_view_menu(state.view_menu, &state.editor);
+                    } else if popup_hmenu_value == state.encoding_menu.0 as usize {
+                        if let Some(active) = state.shell.active() {
+                            refresh_encoding_menu(state.encoding_menu, &active.encoding);
+                        }
+                    } else if popup_hmenu_value == state.language_menu.0 as usize {
+                        if let Some(active) = state.shell.active() {
+                            refresh_language_menu(state.language_menu, active.lang);
+                        }
+                    } else if popup_hmenu_value == state.window_menu.0 as usize {
+                        refresh_window_menu(state.window_menu, &state.shell);
                     }
                 }
                 DefWindowProcW(hwnd, msg, wparam, lparam)

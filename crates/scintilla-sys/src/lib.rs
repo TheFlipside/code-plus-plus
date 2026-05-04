@@ -78,6 +78,31 @@ pub const SCI_GETLENGTH: u32 = 2006;
 pub const SCI_GETTEXT: u32 = 2182;
 pub const SCI_SETTEXT: u32 = 2181;
 
+// Clipboard / cursor-keyboard ops — Scintilla handles these natively
+// when the editor has focus, but the host's Edit menu needs the
+// constants too so menu clicks (no key event involved) reach the
+// same code path.
+pub const SCI_CUT: u32 = 2177;
+pub const SCI_COPY: u32 = 2178;
+pub const SCI_PASTE: u32 = 2179;
+pub const SCI_CLEAR: u32 = 2180;
+pub const SCI_GOTOLINE: u32 = 2024;
+pub const SCI_GETLINECOUNT: u32 = 2154;
+pub const SCI_DOCUMENTSTART: u32 = 2316;
+pub const SCI_DOCUMENTEND: u32 = 2318;
+
+// View toggles + zoom — driven by the View menu.
+pub const SCI_SETWRAPMODE: u32 = 2268;
+pub const SCI_GETWRAPMODE: u32 = 2269;
+pub const SCI_SETVIEWWS: u32 = 2021;
+pub const SCI_GETVIEWWS: u32 = 2020;
+pub const SCI_SETVIEWEOL: u32 = 2356;
+pub const SCI_GETVIEWEOL: u32 = 2355;
+pub const SCI_ZOOMIN: u32 = 2333;
+pub const SCI_ZOOMOUT: u32 = 2334;
+pub const SCI_SETZOOM: u32 = 2373;
+pub const SCI_GETZOOM: u32 = 2374;
+
 // History
 pub const SCI_UNDO: u32 = 2176;
 pub const SCI_REDO: u32 = 2011;
