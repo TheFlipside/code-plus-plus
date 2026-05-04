@@ -37,8 +37,9 @@ use codepp_scintilla_sys::{
     SCI_EMPTYUNDOBUFFER, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
     SCI_GETLENGTH, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOPOS,
     SCI_PASTE, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT,
-    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN,
-    SCI_ZOOMOUT, SC_DOCUMENTOPTION_DEFAULT, STYLE_DEFAULT,
+    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SC_DOCUMENTOPTION_DEFAULT,
+    STYLE_DEFAULT,
 };
 use codepp_shell::{HostHandles, PendingDialog, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR};
@@ -47,7 +48,8 @@ use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, ICC_BAR_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, NMHDR, TCITEMW,
-    TCM_DELETEITEM, TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL, TCN_SELCHANGE, WC_TABCONTROL,
+    TCM_DELETEITEM, TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE,
+    WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     SetFocus, VK_0, VK_A, VK_C, VK_F, VK_G, VK_H, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_V, VK_W,
@@ -648,12 +650,61 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
         //     the just-released document would create a use-after-
         //     free window where any keystroke or paint touches a
         //     buffer whose external refcount is zero.
-        //  3. No new active tab (closed the last open tab). View
-        //     stays bound to the freshly-released doc; Scintilla's
-        //     view ownership keeps it alive until the next open
-        //     replaces it. This is the standard "all tabs closed"
-        //     fallback — no UAF because nothing else releases the
-        //     view's hold.
+        //  3. No new active tab (closed the last open tab). Bind
+        //     the view to a fresh empty placeholder doc so the user
+        //     sees an empty editor — not the just-closed file's
+        //     stale content. Without this, Scintilla's view-implicit
+        //     ref keeps the closed doc alive and visible until the
+        //     next open's `activate_tab` rebinds the view, which
+        //     produces the visible "closed file's text remained on
+        //     screen" bug.
+        if state.shell.active_tab.is_none() {
+            // Refcount lifecycle:
+            //   CREATE         → placeholder.refcount = 1 (our ref)
+            //   SETDOCPOINTER  → view AddRefs new + Releases whatever
+            //                    was previously bound. If we held a
+            //                    materialized closed.scintilla_doc it
+            //                    was already explicitly RELEASEDOCUMENT'd
+            //                    above (refcount 1 → view's implicit
+            //                    ref); SETDOCPOINTER's view-Release
+            //                    drops that to 0, freeing it.
+            //                    placeholder.refcount becomes 2.
+            //   RELEASEDOCUMENT → placeholder.refcount = 1, just the
+            //                    view's implicit ref. The next
+            //                    SETDOCPOINTER (from a future open's
+            //                    activate_tab) drops that final ref
+            //                    and the placeholder is freed cleanly.
+            //
+            // Guard against a NULL CREATEDOCUMENT return (Scintilla
+            // returns 0 on allocation failure). Using 0 as the lparam
+            // for RELEASEDOCUMENT would invoke release-of-null which
+            // isn't part of the public ABI contract; guard the whole
+            // block so on OOM we leave the view in whatever state
+            // Scintilla's own fallback produces — same observable
+            // behaviour as before this fix and not worse.
+            let placeholder = state
+                .editor
+                .send(SCI_CREATEDOCUMENT, 0, SC_DOCUMENTOPTION_DEFAULT);
+            if placeholder != 0 {
+                state.editor.send(SCI_SETDOCPOINTER, 0, placeholder);
+                state.editor.send(SCI_RELEASEDOCUMENT, 0, placeholder);
+            }
+            // Refresh chrome to the empty state — status bar should
+            // reflect the no-buffer state. The title bar gets
+            // refreshed unconditionally in Phase 3 below
+            // (`update_window_title`), which already handles the
+            // `active_tab.is_none()` case by rendering just "Code++".
+            let mut win32_ui = Win32Ui {
+                status_hwnd: state.status_hwnd,
+                editor: state.editor,
+            };
+            <Win32Ui as UiPlatform>::update_status(
+                &mut win32_ui,
+                &Encoding::default(),
+                Eol::default(),
+                0,
+            );
+        }
         if let Some(active_idx) = state.shell.active_tab {
             if closed.new_active_doc != 0 {
                 state
@@ -929,6 +980,43 @@ unsafe fn sync_tab_strip(state: &mut WindowState) {
             );
         }
         state.synced_tab_count += 1;
+    }
+
+    // Refresh the labels of tabs already on the strip. Without
+    // this, a tab that was inserted while its `path` was still
+    // None (synced as "Untitled" right after `open_file`) keeps
+    // the placeholder label after `apply_load_result` populates
+    // its real path: the insert-only loop above never revisits
+    // existing items. TCM_SETITEMW with the same payload shape
+    // updates a single TCITEM field in place.
+    for idx in 0..state.synced_tab_count {
+        // `.get(idx)` rather than `[idx]` so a future refactor
+        // that ever lets `synced_tab_count` drift past
+        // `shell.tabs.len()` degrades to a missing-update no-op
+        // for that one tab rather than panicking across the
+        // `extern "system"` wnd_proc frame.
+        let Some(tab) = state.shell.tabs.get(idx) else {
+            break;
+        };
+        let label = tab_label_for(tab);
+        let mut label_storage = label;
+        let mut item = TCITEMW {
+            mask: windows::Win32::UI::Controls::TCITEMHEADERA_MASK(0x0001), // TCIF_TEXT
+            pszText: windows::core::PWSTR(label_storage.as_mut_ptr()),
+            ..Default::default()
+        };
+        // SAFETY: `state.tab_hwnd` is a live HWND created in
+        // `run`; `&mut item` and `label_storage` both stay live
+        // for the duration of the synchronous SendMessageW call.
+        // TCM_SETITEMW does not re-enter our wnd_proc.
+        unsafe {
+            SendMessageW(
+                state.tab_hwnd,
+                TCM_SETITEMW,
+                Some(WPARAM(idx)),
+                Some(LPARAM(&mut item as *mut TCITEMW as isize)),
+            );
+        }
     }
 
     // Reflect the active tab index on the visual control. Done
@@ -1896,6 +1984,19 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         let direct_fn: ScintillaDirectFunction = std::mem::transmute(direct_fn_lr.0);
         let direct_ptr = direct_ptr_lr.0 as *mut c_void;
         let editor = EditorHandle::new(scintilla_hwnd.0, direct_fn, direct_ptr);
+
+        // Horizontal scroll: by default Scintilla seeds scrollWidth
+        // at 2000 px and never shrinks it, so the user can scroll
+        // far past the end of any visible line into empty space.
+        // Width tracking (SCI_SETSCROLLWIDTHTRACKING(1)) tells
+        // Scintilla to recompute scrollWidth as the longest visible
+        // line, with `SCI_SETSCROLLWIDTH(1)` seeding the starting
+        // value at 1 px so the first paint doesn't carry the 2000
+        // default forward. Together: horizontal scrollbar only
+        // appears when content actually overflows, and scrolling
+        // stops at the real end of the longest line.
+        editor.send(SCI_SETSCROLLWIDTH, 1, 0);
+        editor.send(SCI_SETSCROLLWIDTHTRACKING, 1, 0);
 
         // Wake closure: PostMessage ourselves WM_APP_WAKE.
         // PostMessage is thread-safe — it just enqueues a message for

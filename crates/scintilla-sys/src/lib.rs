@@ -103,6 +103,16 @@ pub const SCI_ZOOMOUT: u32 = 2334;
 pub const SCI_SETZOOM: u32 = 2373;
 pub const SCI_GETZOOM: u32 = 2374;
 
+// Horizontal-scroll width control. Scintilla defaults `scrollWidth`
+// to 2000 px and never auto-shrinks, which produces the visible
+// "scroll past the end of any line into empty space" behaviour.
+// Setting `SCI_SETSCROLLWIDTHTRACKING(1)` makes Scintilla track the
+// actual longest visible line and update `scrollWidth` accordingly,
+// so the horizontal scrollbar appears only when content overflows
+// and stops at the real end of the longest line.
+pub const SCI_SETSCROLLWIDTH: u32 = 2274;
+pub const SCI_SETSCROLLWIDTHTRACKING: u32 = 2516;
+
 // History
 pub const SCI_UNDO: u32 = 2176;
 pub const SCI_REDO: u32 = 2011;
