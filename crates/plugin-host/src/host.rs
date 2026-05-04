@@ -222,8 +222,18 @@ impl PluginHost {
     ///                                             Notepad++ default)
     ///   plugins/<name>/<archdir>/<name>.dll      (depth 2, the
     ///                                             NppExec /
-    ///                                             ComparePlugin
+    ///                                             ComparePlus
     ///                                             64-bit layout)
+    ///
+    /// At depth ≥ 1 the candidate's filename stem must match the
+    /// plugin's directory name (`is_plugin_dll`). Without that filter
+    /// a plugin's bundled dependencies (e.g. ComparePlus shipping
+    /// `git2.dll` and `sqlite3.dll` under `libs/`) would be picked up
+    /// as plugins themselves, fed to `LoadLibraryW` at first-touch
+    /// load, and either fail entry-point resolution noisily (best
+    /// case) or run their `DllMain` and bring foreign DLL state into
+    /// the host process (worst case). The N++ convention this filter
+    /// mirrors is the same protection.
     ///
     /// Symlinks: `is_dir()`/`is_file()` follow symlinks, so a
     /// directory symlink in the plugins folder is enumerated. On
@@ -259,7 +269,7 @@ impl PluginHost {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() && has_plugin_extension(&path) {
+            if path.is_file() && has_plugin_extension(&path) && is_plugin_dll(&path, depth) {
                 self.plugins.push(PluginInfo {
                     path,
                     name: None,
@@ -537,6 +547,51 @@ fn load_inner(path: &Path, npp_data: NppData, cmd_id_base: i32) -> Result<Loaded
     })
 }
 
+/// Decide whether a `*.dll` candidate found at `depth` in the plugins
+/// tree is actually a plugin or a bundled dependency. The Notepad++
+/// convention is:
+///
+/// * **depth 0** (`plugins/X.dll`): always a plugin. Code++ allows this
+///   layout for convenience even though stock N++ requires the per-
+///   plugin subdirectory.
+/// * **depth 1** (`plugins/X/Y.dll`): plugin only when `Y == X`. The
+///   stem must match the parent directory. This rejects bundled
+///   dependencies (`plugins/X/libs/git2.dll` → `plugins/X/libs/`,
+///   stem "git2" ≠ parent "libs").
+/// * **depth 2** (`plugins/X/<arch>/Y.dll`): plugin only when `Y == X`,
+///   i.e. the stem must match the *grandparent* directory (the
+///   plugin name), not the immediate `<arch>` parent. This is the
+///   NppExec / ComparePlus 64-bit layout.
+///
+/// Returns false on any path that lacks the parent / grandparent
+/// component the rule needs (defensive — `read_dir` shouldn't produce
+/// such paths but the parent component is `Option`-typed).
+fn is_plugin_dll(path: &Path, depth: u32) -> bool {
+    let stem = match path.file_stem().and_then(|s| s.to_str()) {
+        Some(s) => s,
+        None => return false,
+    };
+    // Case-insensitive comparison: NTFS is case-insensitive by
+    // default, so a plugin named "ComparePlus" might be returned by
+    // read_dir as "Compareplus" or any other casing depending on
+    // how it was created. ASCII case-insensitive is enough — plugin
+    // names in the wild are ASCII. `dir_matches_stem` is `Fn` (no
+    // captured state moved on call) so additional match arms below
+    // can call it without consuming it.
+    let dir_matches_stem = |dir: Option<&Path>| -> bool {
+        dir.and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(|n| n.eq_ignore_ascii_case(stem))
+            .unwrap_or(false)
+    };
+    match depth {
+        0 => true,
+        1 => dir_matches_stem(path.parent()),
+        2 => dir_matches_stem(path.parent().and_then(|p| p.parent())),
+        _ => false,
+    }
+}
+
 /// Decode a null-terminated wide-char string (`*const u16`) into an
 /// owned UTF-8 `String`. Bounded scan to 4096 chars to avoid running
 /// off into arbitrary memory if the plugin returns an unterminated
@@ -650,6 +705,62 @@ mod tests {
             host.iter().next().unwrap().path.file_name().unwrap(),
             "nppexec.dll"
         );
+    }
+
+    #[test]
+    fn discover_rejects_bundled_deps_in_libs_subdir() {
+        // ComparePlus ships its libs (git2.dll, sqlite3.dll) under
+        // plugins/<plugin>/libs/. Without the filename-stem-matches-
+        // dirname filter, those would be enumerated as plugins
+        // themselves and fed to LoadLibraryW, which can crash the
+        // process if the bundled DLL's DllMain runs unexpected
+        // code or its later setInfo lookup hits a name collision.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("ComparePlus");
+        let libs = plugin_dir.join("libs");
+        std::fs::create_dir_all(&libs).unwrap();
+        std::fs::write(plugin_dir.join("ComparePlus.dll"), b"x").unwrap();
+        std::fs::write(libs.join("git2.dll"), b"x").unwrap();
+        std::fs::write(libs.join("sqlite3.dll"), b"x").unwrap();
+
+        let mut host = PluginHost::new();
+        let n = host.discover(dir.path()).unwrap();
+        assert_eq!(n, 1, "only ComparePlus.dll should be a plugin");
+        assert_eq!(
+            host.iter().next().unwrap().path.file_name().unwrap(),
+            "ComparePlus.dll"
+        );
+    }
+
+    #[test]
+    fn discover_rejects_misnamed_dll_under_plugin_dir() {
+        // plugins/Foo/Bar.dll — stem "Bar" doesn't match parent
+        // "Foo", so it's a bundled dependency, not the plugin entry.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("Foo");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        std::fs::write(plugin_dir.join("Bar.dll"), b"x").unwrap();
+
+        let mut host = PluginHost::new();
+        let n = host.discover(dir.path()).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn discover_accepts_case_mismatched_dll_name() {
+        // NTFS is case-insensitive; the user might have a directory
+        // "ComparePlus" containing "compareplus.dll" or vice versa.
+        // The filter uses ASCII case-insensitive comparison so the
+        // same plugin layout works regardless of how the casing
+        // landed in read_dir output.
+        let dir = tempfile::tempdir().unwrap();
+        let plugin_dir = dir.path().join("ComparePlus");
+        std::fs::create_dir(&plugin_dir).unwrap();
+        std::fs::write(plugin_dir.join("compareplus.dll"), b"x").unwrap();
+
+        let mut host = PluginHost::new();
+        let n = host.discover(dir.path()).unwrap();
+        assert_eq!(n, 1);
     }
 
     #[test]
