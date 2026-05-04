@@ -98,23 +98,43 @@ pub enum PendingDialog {
     Error { title: String, message: String },
 }
 
-/// State for the single tab Phase 2 supports. Phase 3 turns this into
-/// `Vec<Tab>` keyed by an `EditorHandle` per buffer.
-#[derive(Debug, Default)]
-pub struct ActiveBuffer {
+/// One open buffer (one tab in the multi-tab UI).
+///
+/// Phase 3 milestone 6a moves the single-buffer model to a tabbed
+/// model. Each `Tab` carries its own path, encoding, EOL, decoded
+/// text shadow, pending-load id, and a host-assigned `id` that
+/// flows through the plugin ABI as `BufferID` (returned by
+/// `NPPM_GETCURRENTBUFFERID`, accepted by `NPPM_GETFULLPATHFROMBUFFERID`,
+/// and carried in `NPPN_*.nmhdr.idFrom`).
+///
+/// `scintilla_doc` is the Scintilla document pointer that backs the
+/// tab's editor state. Milestone 6b's UI tab control creates one
+/// document per tab via `SCI_CREATEDOCUMENT` and switches the single
+/// Scintilla view between them with `SCI_SETDOCPOINTER` on tab
+/// click. Milestone 6a leaves it `None` — the existing single-tab
+/// UI shares one implicit document.
+#[derive(Debug, Default, Clone)]
+pub struct Tab {
+    /// Stable buffer id assigned at tab-creation time. Zero is
+    /// reserved for "no buffer" (matches Notepad++'s convention).
+    pub id: i32,
     pub path: Option<PathBuf>,
     pub encoding: Encoding,
     pub eol: Eol,
     pub byte_len: u64,
     /// Most recent decoded text. Held so `save_file` can re-encode
-    /// without round-tripping through Scintilla. Phase 3 will instead
-    /// pull the latest text from Scintilla via the direct-call API
+    /// without round-tripping through Scintilla. Phase 3 milestone 6b
+    /// pulls the latest text from Scintilla via the direct-call API
     /// (SCI_GETTEXT) at save time, since the user may have edited it.
     pub text: String,
     /// Pending request id from the loader, so we know which load
-    /// result actually pertains to this buffer (vs. a stale one if
+    /// result actually pertains to this tab (vs. a stale one if
     /// the user dropped a second file before the first finished).
     pub pending_load: Option<RequestId>,
+    /// Scintilla document pointer (`sptr_t`). Non-zero once the tab
+    /// has been attached to a Scintilla view. Milestone 6b's UI
+    /// populates this; milestone 6a leaves it 0.
+    pub scintilla_doc: isize,
 }
 
 /// Per-call platform handles the UI hands the dispatcher when
@@ -169,7 +189,20 @@ impl HostHandles {
 /// (DESIGN.md §6.4).
 pub struct Shell {
     pub session: Session,
-    pub buffer: ActiveBuffer,
+    /// Open tabs. Empty at startup; the first `open_file` populates
+    /// `tabs[0]` and sets `active_tab = Some(0)`. Subsequent opens
+    /// either replace the active tab (if it has no path yet — the
+    /// initial-empty case) or push a new tab. The UI drives the
+    /// tab strip from `tabs[]` and `active_tab`.
+    pub tabs: Vec<Tab>,
+    /// Index into [`Self::tabs`] of the currently-active tab.
+    /// `None` when no file is open.
+    pub active_tab: Option<usize>,
+    /// Next buffer id to hand out. Starts at 1 (0 is "no buffer").
+    /// Monotonically increasing; never reused so closed-tab ids
+    /// don't accidentally resolve a plugin lookup to a different
+    /// buffer.
+    next_buffer_id: i32,
     /// Plugin registry. Windows-only until Phase 5 wires the same
     /// trait surface against `dlopen`.
     #[cfg(target_os = "windows")]
@@ -215,7 +248,9 @@ impl Shell {
 
         Ok(Self {
             session: Session::new(),
-            buffer: ActiveBuffer::default(),
+            tabs: Vec::new(),
+            active_tab: None,
+            next_buffer_id: 1,
             #[cfg(target_os = "windows")]
             plugins: PluginHost::new(),
             #[cfg(target_os = "windows")]
@@ -226,6 +261,44 @@ impl Shell {
             load_rx: load_rx_outer,
             change_rx: fc_rx_outer,
         })
+    }
+
+    /// Read access to the currently-active tab, or `None` if no
+    /// file is open. The UI uses this to populate the title bar
+    /// and status fields.
+    pub fn active(&self) -> Option<&Tab> {
+        self.active_tab.and_then(|i| self.tabs.get(i))
+    }
+
+    /// Mutable access to the currently-active tab. Internal Shell
+    /// methods use this; the UI should go through high-level
+    /// operations like `save_current_to_disk` rather than mutating
+    /// directly.
+    fn active_mut(&mut self) -> Option<&mut Tab> {
+        let idx = self.active_tab?;
+        self.tabs.get_mut(idx)
+    }
+
+    /// Allocate a fresh buffer id. Caller is responsible for
+    /// installing it on a `Tab`. Bumps the `next_buffer_id` counter
+    /// without reuse — see the field doc.
+    ///
+    /// Uses `checked_add` rather than `saturating_add`: saturation
+    /// would silently start handing out colliding ids at
+    /// `i32::MAX`, breaking the per-tab plugin-ABI BufferID
+    /// contract. Two billion tab opens in a single session is
+    /// unreachable in practice, but a hostile in-process plugin
+    /// could in principle call `NPPM_DOOPEN` in a tight loop —
+    /// the panic here turns that DoS path into a clean abort
+    /// rather than a silent ABI break. The panic is caught by the
+    /// wnd_proc's `catch_unwind` wrappers.
+    fn allocate_buffer_id(&mut self) -> i32 {
+        let id = self.next_buffer_id;
+        self.next_buffer_id = self
+            .next_buffer_id
+            .checked_add(1)
+            .expect("buffer id space exhausted (i32::MAX opens in one session)");
+        id
     }
 
     /// Drain queued plugin notifications. Called by the UI after
@@ -365,11 +438,63 @@ impl Shell {
         unsafe { dispatch_nppm(&mut bridge, msg, wparam, lparam) }
     }
 
-    /// Queue a file open. The result will arrive on the load-results
-    /// channel; the UI thread drains it on the next wake.
+    /// Queue a file open. The load runs on a worker thread; the
+    /// result lands on the load-results channel and the UI drains
+    /// it on the next wake.
+    ///
+    /// **Tab routing (Phase 3 milestone 6a):** if there is no active
+    /// tab, or the active tab has no path yet (the
+    /// just-launched-empty case), the load result populates the
+    /// active tab in place. Otherwise a new tab is appended and
+    /// becomes active.
     pub fn open_file(&mut self, path: PathBuf) {
-        if let Some(id) = self.loader.open(path.clone()) {
-            self.buffer.pending_load = Some(id);
+        let Some(req_id) = self.loader.open(path.clone()) else {
+            return;
+        };
+        // Decide where the load result will land. If the active
+        // tab is empty, reuse it; otherwise allocate a fresh tab
+        // now so we have a buffer id to associate with `req_id`.
+        let target_idx = match self.active_tab {
+            Some(i) if self.tabs.get(i).map(|t| t.path.is_none()).unwrap_or(false) => i,
+            _ => {
+                let id = self.allocate_buffer_id();
+                self.tabs.push(Tab {
+                    id,
+                    pending_load: Some(req_id),
+                    ..Tab::default()
+                });
+                let new_idx = self.tabs.len() - 1;
+                self.active_tab = Some(new_idx);
+                return;
+            }
+        };
+        // Reusing an empty tab — assign an id if it didn't have one
+        // and set the pending-load marker.
+        let needs_id = self
+            .tabs
+            .get(target_idx)
+            .map(|t| t.id == 0)
+            .unwrap_or(false);
+        let new_id = if needs_id {
+            Some(self.allocate_buffer_id())
+        } else {
+            None
+        };
+        if let Some(tab) = self.tabs.get_mut(target_idx) {
+            if let Some(id) = new_id {
+                tab.id = id;
+            }
+            tab.pending_load = Some(req_id);
+        } else {
+            // active_tab pointed at a missing index — recover by
+            // creating a new tab.
+            let id = self.allocate_buffer_id();
+            self.tabs.push(Tab {
+                id,
+                pending_load: Some(req_id),
+                ..Tab::default()
+            });
+            self.active_tab = Some(self.tabs.len() - 1);
         }
     }
 
@@ -404,19 +529,20 @@ impl Shell {
     ) {
         match result {
             Ok(loaded) => {
-                // Discard if a newer load is pending — the user dropped
-                // another file before this one finished.
-                if let Some(pid) = self.buffer.pending_load {
-                    if pid != loaded.id {
-                        tracing::debug!(
-                            stale_id = loaded.id,
-                            pending_id = pid,
-                            "discarding stale load result"
-                        );
-                        return;
-                    }
-                }
-                self.buffer.pending_load = None;
+                // Find the tab whose pending_load matches this id — that
+                // tells us which tab the user requested this load for.
+                // Anything else is stale.
+                let Some(target_idx) = self
+                    .tabs
+                    .iter()
+                    .position(|t| t.pending_load == Some(loaded.id))
+                else {
+                    tracing::debug!(
+                        stale_id = loaded.id,
+                        "discarding stale load result (no matching pending tab)"
+                    );
+                    return;
+                };
 
                 // Begin watching the new file before pushing into
                 // the editor — if the watch fails the user still gets
@@ -433,29 +559,73 @@ impl Shell {
                     .map(|t| t.cursor)
                     .unwrap_or(0);
 
-                ui.set_buffer_text(&loaded.text, cursor);
-                ui.update_status(&loaded.encoding, loaded.eol, loaded.byte_len);
+                // Apply UI updates only if this is the active tab.
+                // Background-tab loads (multi-tab 6b+) won't push
+                // their text into the visible Scintilla view.
+                let is_active = self.active_tab == Some(target_idx);
+                if is_active {
+                    ui.set_buffer_text(&loaded.text, cursor);
+                    ui.update_status(&loaded.encoding, loaded.eol, loaded.byte_len);
+                }
 
-                self.buffer.path = Some(loaded.path.clone());
-                self.buffer.encoding = loaded.encoding;
-                self.buffer.eol = loaded.eol;
-                self.buffer.byte_len = loaded.byte_len;
-                self.buffer.text = loaded.text;
+                let buffer_id;
+                if let Some(tab) = self.tabs.get_mut(target_idx) {
+                    tab.pending_load = None;
+                    tab.path = Some(loaded.path.clone());
+                    tab.encoding = loaded.encoding;
+                    tab.eol = loaded.eol;
+                    tab.byte_len = loaded.byte_len;
+                    tab.text = loaded.text;
+                    buffer_id = tab.id as isize;
+                } else {
+                    return;
+                }
 
                 // Queue NPPN_FILEOPENED for the loaded plugins. The UI
                 // drains the queue via take_notifications() after
                 // dropping its &mut Shell borrow — required because
                 // beNotified runs synchronous plugin code that may
-                // re-enter the wnd_proc. Phase 3 single-tab uses the
-                // primary buffer id; multi-tab milestone 6 will pass
-                // the per-tab id.
+                // re-enter the wnd_proc.
                 #[cfg(target_os = "windows")]
-                self.pending_notifications.push(Notification::FileOpened {
-                    buffer_id: PRIMARY_BUFFER_ID,
-                });
+                self.pending_notifications
+                    .push(Notification::FileOpened { buffer_id });
             }
             Err(err) => {
-                self.buffer.pending_load = None;
+                // A failed load on a fresh tab (one that never had a
+                // path) leaves an orphan: nonzero buffer id, but
+                // `path = None`. Plugins gate on `id != 0 ⇒ path
+                // is Some`; preserving the orphan would silently
+                // break that invariant. Find the matching tab and
+                // either remove it (fresh open) or just clear
+                // `pending_load` (reload of a tab with prior
+                // contents — keep its previous path/text).
+                let target = self
+                    .tabs
+                    .iter()
+                    .position(|t| t.pending_load == Some(err.id));
+                if let Some(idx) = target {
+                    let is_fresh = self.tabs[idx].path.is_none();
+                    if is_fresh {
+                        self.tabs.remove(idx);
+                        self.active_tab = match self.active_tab {
+                            Some(active_idx) if active_idx == idx => {
+                                if self.tabs.is_empty() {
+                                    None
+                                } else if active_idx >= self.tabs.len() {
+                                    Some(self.tabs.len() - 1)
+                                } else {
+                                    Some(active_idx)
+                                }
+                            }
+                            Some(active_idx) if active_idx > idx => Some(active_idx - 1),
+                            other => other,
+                        };
+                    } else {
+                        // Reload failed; keep the tab's prior contents,
+                        // just drop the pending marker.
+                        self.tabs[idx].pending_load = None;
+                    }
+                }
                 pending.push(PendingDialog::Error {
                     title: "Open failed".to_string(),
                     message: format!("{}: {}", err.path.display(), err.error),
@@ -468,32 +638,25 @@ impl Shell {
         // Path comparison is by exact equality. Windows can spell
         // the same file as a long name, an 8.3 short name, or a
         // junction-routed path; all three would silently miss the
-        // reload prompt here. Two aggravating factors:
-        //
-        //   1. The plugin host's `NPPM_RELOADFILE` lets a plugin
-        //      stash any path it wants in `self.buffer.path`. A
-        //      plugin can therefore deliberately load a file under
-        //      a non-canonical spelling and the watcher's later
-        //      change events for that file (which arrive under a
-        //      *different* spelling) will silently not match.
-        //   2. The user can experience the same mismatch by hand,
-        //      e.g. opening a file via a junction.
-        //
-        // Tracker: TODO milestone 5 hardening pass — canonicalize
-        // both `loaded.path` (at watch-registration time in
-        // `apply_load_result`) and the change-event path here
-        // before comparing. Until then, the failure mode is
-        // user-visible (no reload prompt → user keeps editing
-        // stale content) but bounded by the user's filesystem
-        // habits.
+        // reload prompt here. Plugin `NPPM_RELOADFILE` and user
+        // junction-traversal both reach this code path, and the
+        // canonicalize-both-sides hardening is tracked for milestone 5.
         match change {
             FileChange::Modified(path) => {
-                if self.buffer.path.as_deref() == Some(path.as_path()) {
+                if self
+                    .tabs
+                    .iter()
+                    .any(|t| t.path.as_deref() == Some(path.as_path()))
+                {
                     pending.push(PendingDialog::ConfirmReload(path));
                 }
             }
             FileChange::Removed(path) => {
-                if self.buffer.path.as_deref() == Some(path.as_path()) {
+                if self
+                    .tabs
+                    .iter()
+                    .any(|t| t.path.as_deref() == Some(path.as_path()))
+                {
                     pending.push(PendingDialog::Error {
                         title: "File removed".to_string(),
                         message: format!(
@@ -526,14 +689,19 @@ impl Shell {
     pub fn save_current_to_disk<U: UiPlatform>(&mut self, ui: &mut U) -> Result<(), ShellError> {
         use std::io::Write;
 
-        let path = self
-            .buffer
-            .path
-            .as_ref()
-            .ok_or(ShellError::NoActivePath)?
-            .clone();
+        // Snapshot what we need from the active tab so we can release
+        // its borrow before calling the watcher and the I/O helpers
+        // (which take their own &mut self).
+        let (path, encoding, buffer_id) = {
+            let tab = self.active().ok_or(ShellError::NoActivePath)?;
+            (
+                tab.path.as_ref().ok_or(ShellError::NoActivePath)?.clone(),
+                tab.encoding.clone(),
+                tab.id as isize,
+            )
+        };
         let text = ui.get_buffer_text();
-        let bytes = codepp_core::encoding::encode(&text, &self.buffer.encoding)
+        let bytes = codepp_core::encoding::encode(&text, &encoding)
             .map_err(|e| ShellError::Encoding(e.to_string()))?;
 
         let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
@@ -567,61 +735,89 @@ impl Shell {
         }
         write_result?;
 
-        self.buffer.text = text;
         // Use the byte count of what we just encoded — re-reading from
         // disk would race with a process that swapped the file between
         // our `persist` and the `metadata` call (TOCTOU), and produce
         // a status-bar size that doesn't match the bytes we just
         // wrote. We already know the size; use it.
-        self.buffer.byte_len = bytes.len() as u64;
+        if let Some(tab) = self.active_mut() {
+            tab.text = text;
+            tab.byte_len = bytes.len() as u64;
+        }
 
         // Queue NPPN_FILESAVED. The UI fires it via take_notifications()
         // after this method returns and after dropping any &mut Shell
         // borrow.
         #[cfg(target_os = "windows")]
-        self.pending_notifications.push(Notification::FileSaved {
-            buffer_id: PRIMARY_BUFFER_ID,
-        });
+        self.pending_notifications
+            .push(Notification::FileSaved { buffer_id });
 
         Ok(())
     }
 
     /// Persist the open-tab list to `session.xml` at the configured
-    /// path. Called on clean shutdown. Pulls the live cursor from the
-    /// editor so the next launch restores the caret where the user
-    /// left it.
+    /// path. Called on clean shutdown. The active tab's cursor is
+    /// pulled live from the editor so the next launch restores the
+    /// caret where the user left it; non-active tabs use cursor 0
+    /// for now (milestone 6b's UI tab control records per-tab cursors
+    /// at switch time).
     pub fn save_session<U: UiPlatform>(&self, ui: &mut U) -> Result<(), ShellError> {
         let Some(path) = codepp_platform::session_xml_path() else {
             // No config dir resolvable (sandboxed environment); skip
             // session save silently.
             return Ok(());
         };
-        // For Phase 2's single-tab world the session has at most one
-        // tab; Phase 3 reflects every open tab.
         let mut session = Session::new();
-        if let Some(buffer_path) = &self.buffer.path {
+        for (idx, tab) in self.tabs.iter().enumerate() {
+            let Some(tab_path) = &tab.path else {
+                continue; // unsaved/empty tab
+            };
+            // Active tab cursor comes from the editor; others are 0
+            // until milestone 6b's tab-switch hook persists per-tab
+            // cursors.
+            let cursor = if Some(idx) == self.active_tab {
+                ui.get_cursor_pos()
+            } else {
+                0
+            };
             session.tabs.push(codepp_core::Tab {
-                path: buffer_path.clone(),
-                cursor: ui.get_cursor_pos(),
-                encoding: self.buffer.encoding.clone(),
-                eol: self.buffer.eol,
+                path: tab_path.clone(),
+                cursor,
+                encoding: tab.encoding.clone(),
+                eol: tab.eol,
             });
-            session.active = Some(0);
         }
+        session.active = self.active_tab.and_then(|active_idx| {
+            // Map the tabs[] index to the index inside session.tabs[],
+            // accounting for any unsaved tabs we skipped above.
+            let mut session_idx = 0usize;
+            for (i, tab) in self.tabs.iter().enumerate() {
+                if tab.path.is_none() {
+                    continue;
+                }
+                if i == active_idx {
+                    return Some(session_idx);
+                }
+                session_idx += 1;
+            }
+            None
+        });
         session
             .save_to_xml(&path)
             .map_err(|e| ShellError::Session(e.to_string()))?;
         Ok(())
     }
 
-    /// Read `session.xml` and return the first tab to restore (Phase
-    /// 2 single-tab restore). Returns `None` if there's nothing to
-    /// restore.
+    /// Read `session.xml` and return the first tab to restore as the
+    /// "initial open" path the UI passes to [`Self::open_file`]. The
+    /// remaining tabs in the session file are left in
+    /// `self.session.tabs` and milestone 6b's UI iterates them to
+    /// open each as a new tab.
     pub fn load_session(&mut self) -> Option<PathBuf> {
         let path = codepp_platform::session_xml_path()?;
         let session = Session::load_from_xml(&path).ok()?;
-        let tab = session.tabs.into_iter().next()?;
-        self.session.tabs.push(tab.clone());
+        let tab = session.tabs.first()?.clone();
+        self.session = session;
         Some(tab.path)
     }
 }
@@ -677,22 +873,23 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn current_buffer_id(&self) -> isize {
-        // Phase 3 single-tab: 0 if there's no active file (e.g.
-        // before the first open), `PRIMARY_BUFFER_ID` otherwise.
-        // Plugins gate on nonzero to mean "there is a buffer."
-        if self.shell.buffer.path.is_some() {
-            PRIMARY_BUFFER_ID
-        } else {
-            0
-        }
+        // 0 means "no buffer" — matches the Notepad++ convention.
+        // Active tab's id otherwise. A tab whose load is still
+        // pending also reports its id (the buffer exists; only the
+        // contents are still arriving), so plugins can address
+        // newly-opened tabs without waiting for the load to finish.
+        self.shell.active().map(|t| t.id as isize).unwrap_or(0)
     }
 
     fn buffer_path(&self, id: isize) -> Option<PathBuf> {
-        if id == PRIMARY_BUFFER_ID {
-            self.shell.buffer.path.clone()
-        } else {
-            None
-        }
+        // Linear scan over tabs. Phase 3's tab counts are small
+        // (handful at most); a HashMap<id, idx> is overkill until
+        // multi-window or session-restore lands hundreds of tabs.
+        self.shell
+            .tabs
+            .iter()
+            .find(|t| t.id as isize == id)
+            .and_then(|t| t.path.clone())
     }
 
     fn buffer_lang_type(&self, _id: isize) -> i32 {
@@ -744,7 +941,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn reload_file(&mut self, path: Option<PathBuf>) {
-        let path = path.or_else(|| self.shell.buffer.path.clone());
+        let path = path.or_else(|| self.shell.active().and_then(|t| t.path.clone()));
         if let Some(p) = path {
             self.shell.confirm_reload(p);
         }
@@ -757,16 +954,25 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn switch_to_file(&mut self, path: PathBuf) -> bool {
-        // Phase 3 single-tab: same path is a no-op success; a
-        // different path goes through the regular open path.
-        // Multi-tab (milestone 6) routes to an existing tab when
-        // present.
-        match &self.shell.buffer.path {
-            Some(p) if *p == path => true,
-            _ => {
-                self.shell.open_file(path);
-                true
-            }
+        // If the path is already open in some tab, activate it.
+        // Otherwise route through the regular open path, which
+        // either reuses an empty active tab or pushes a new one.
+        if let Some(idx) = self
+            .shell
+            .tabs
+            .iter()
+            .position(|t| t.path.as_deref() == Some(path.as_path()))
+        {
+            self.shell.active_tab = Some(idx);
+            // TODO milestone 6b: drive the UI tab control to make
+            // the visual selection match. For now, NPPM_SWITCHTOFILE
+            // updates the data-model active index but the UI tab
+            // control (when it lands in 6b) won't redraw automatically
+            // until tab-change wiring is added.
+            true
+        } else {
+            self.shell.open_file(path);
+            true
         }
     }
 
@@ -968,6 +1174,16 @@ mod tests {
             &pending[0],
             PendingDialog::Error { title, .. } if title == "Open failed"
         ));
+        // The fresh tab created for the open should be removed when
+        // the load fails — leaving it would orphan a buffer id with
+        // `path = None`, breaking the `id != 0 ⇒ path is Some`
+        // contract that well-behaved Notepad++ plugins assume.
+        assert_eq!(
+            shell.tabs.len(),
+            0,
+            "fresh tab should be removed on load failure"
+        );
+        assert_eq!(shell.active_tab, None);
     }
 
     // -- Plugin dispatcher entry-point tests ------------------------
@@ -1035,7 +1251,8 @@ mod tests {
                 0,
             )
         };
-        assert_eq!(r, Some(PRIMARY_BUFFER_ID));
+        let expected_id = shell.active().expect("active tab").id as isize;
+        assert_eq!(r, Some(expected_id));
     }
 
     #[cfg(target_os = "windows")]
@@ -1058,13 +1275,14 @@ mod tests {
 
         const NPPM_GETFULLPATHFROMBUFFERID: u32 = (0x0400 + 1000) + 58;
         const MAX_PATH_TCHARS: usize = 260;
+        let active_id = shell.active().expect("active tab").id as usize;
         let mut buf = vec![0u16; MAX_PATH_TCHARS];
         let r = unsafe {
             shell.dispatch_plugin_message(
                 &mut ui,
                 HostHandles::null(),
                 NPPM_GETFULLPATHFROMBUFFERID,
-                PRIMARY_BUFFER_ID as usize,
+                active_id,
                 buf.as_mut_ptr() as isize,
             )
         };
@@ -1211,11 +1429,16 @@ mod tests {
             Duration::from_secs(2),
         );
 
+        // Bind the active tab's id from the actual data model rather
+        // than asserting a literal — the value happens to be
+        // PRIMARY_BUFFER_ID today (next_buffer_id starts at 1) but
+        // the contract is "the active tab's id," not "always 1."
+        let expected_id = shell.active().expect("active tab").id as isize;
         let notifications = shell.take_notifications();
         assert_eq!(notifications.len(), 1, "exactly one queued notification");
         match &notifications[0] {
             Notification::FileOpened { buffer_id } => {
-                assert_eq!(*buffer_id, PRIMARY_BUFFER_ID);
+                assert_eq!(*buffer_id, expected_id);
             }
             other => panic!("expected FileOpened, got {other:?}"),
         }
@@ -1251,13 +1474,145 @@ mod tests {
         ui.buffer_text = "after".to_string();
         shell.save_current_to_disk(&mut ui).unwrap();
 
+        // Bind the active tab's id rather than asserting the literal.
+        let expected_id = shell.active().expect("active tab").id as isize;
         let notifications = shell.take_notifications();
         assert_eq!(notifications.len(), 1);
-        assert!(matches!(
-            notifications[0],
-            Notification::FileSaved {
-                buffer_id: PRIMARY_BUFFER_ID
-            }
-        ));
+        match &notifications[0] {
+            Notification::FileSaved { buffer_id } => assert_eq!(*buffer_id, expected_id),
+            other => panic!("expected FileSaved, got {other:?}"),
+        }
+    }
+
+    // -- Multi-tab data model tests (milestone 6a) ------------------
+
+    #[test]
+    fn first_open_populates_tab_zero_in_place() {
+        // Initial state: no tabs, no active tab. The first open
+        // creates tab[0] (using the empty-active-tab branch's
+        // freshly-allocated id) and makes it active. The buffer id
+        // is 1 (next_buffer_id starts there).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("first.txt");
+        std::fs::write(&path, "x").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        assert_eq!(shell.tabs.len(), 0);
+        assert_eq!(shell.active_tab, None);
+
+        shell.open_file(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        assert_eq!(shell.tabs.len(), 1, "first open creates exactly one tab");
+        assert_eq!(shell.active_tab, Some(0));
+        let tab = shell.active().unwrap();
+        assert_eq!(tab.id, PRIMARY_BUFFER_ID as i32);
+        assert_eq!(tab.path, Some(path));
+    }
+
+    #[test]
+    fn second_open_pushes_new_tab_with_distinct_id() {
+        // Two opens of distinct paths: the second one should NOT
+        // replace tab[0] (it already has a path) — it pushes a new
+        // tab with a fresh id.
+        let dir = tempfile::tempdir().unwrap();
+        let path_a = dir.path().join("a.txt");
+        let path_b = dir.path().join("b.txt");
+        std::fs::write(&path_a, "a").unwrap();
+        std::fs::write(&path_b, "b").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        shell.open_file(path_a.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 1,
+            Duration::from_secs(2),
+        );
+        let id_a = shell.active().unwrap().id;
+
+        shell.open_file(path_b.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 2,
+            Duration::from_secs(2),
+        );
+
+        assert_eq!(shell.tabs.len(), 2, "two distinct opens → two tabs");
+        assert_eq!(shell.active_tab, Some(1), "second open is now active");
+        let id_b = shell.active().unwrap().id;
+        assert_ne!(id_a, id_b, "ids must be distinct across tabs");
+        assert_eq!(shell.tabs[0].path.as_ref(), Some(&path_a));
+        assert_eq!(shell.tabs[1].path.as_ref(), Some(&path_b));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn switch_to_file_activates_existing_tab_without_reopen() {
+        // Open two files (one tab each), then have a "plugin" call
+        // NPPM_SWITCHTOFILE for the first path. The data-model active
+        // index should flip to tab[0] WITHOUT a re-load (the file
+        // is already in memory). The bridge implements this directly.
+        let dir = tempfile::tempdir().unwrap();
+        let path_a = dir.path().join("a.txt");
+        let path_b = dir.path().join("b.txt");
+        std::fs::write(&path_a, "a").unwrap();
+        std::fs::write(&path_b, "b").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path_a.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 1,
+            Duration::from_secs(2),
+        );
+        shell.open_file(path_b.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 2,
+            Duration::from_secs(2),
+        );
+        assert_eq!(shell.active_tab, Some(1));
+        let load_count_before = ui.set_text_calls.len();
+
+        // NPPM_SWITCHTOFILE = NPPMSG + 37
+        const NPPM_SWITCHTOFILE: u32 = (0x0400 + 1000) + 37;
+        let path_a_str = path_a.to_string_lossy().into_owned();
+        let wide: Vec<u16> = path_a_str
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SWITCHTOFILE,
+                0,
+                wide.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(shell.active_tab, Some(0), "switch flipped to existing tab");
+        assert_eq!(
+            ui.set_text_calls.len(),
+            load_count_before,
+            "no re-load occurred for an in-memory tab"
+        );
     }
 }

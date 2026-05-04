@@ -83,6 +83,26 @@ pub const SCI_GETSELECTIONEND: u32 = 2145;
 pub const SCI_SETSELECTIONSTART: u32 = 2142;
 pub const SCI_SETSELECTIONEND: u32 = 2144;
 
+// Document handles — Scintilla supports multiple documents attached to
+// one view via `SCI_SETDOCPOINTER`. Code++ uses this for multi-tab in
+// Phase 3 milestone 6: each tab owns a Scintilla document, and tab
+// switch is one `SCI_SETDOCPOINTER` call to repoint the single
+// Scintilla view at the active tab's document. Documents are
+// reference-counted; create with `SCI_CREATEDOCUMENT`, retain with
+// `SCI_ADDREFDOCUMENT`, release with `SCI_RELEASEDOCUMENT`.
+pub const SCI_GETDOCPOINTER: u32 = 2357;
+pub const SCI_SETDOCPOINTER: u32 = 2358;
+pub const SCI_CREATEDOCUMENT: u32 = 2375;
+pub const SCI_ADDREFDOCUMENT: u32 = 2376;
+pub const SCI_RELEASEDOCUMENT: u32 = 2377;
+
+/// Default document-creation flag. Pass as the **`lparam`** of
+/// `SCI_CREATEDOCUMENT(wparam = bytes_hint, lparam = options)`.
+/// `0` is the right value for a plain text document; the other
+/// `SC_DOCUMENTOPTION_*` values (styles-none, text-large) cover
+/// rare cases and aren't yet exposed here.
+pub const SC_DOCUMENTOPTION_DEFAULT: isize = 0;
+
 // SCN_* notification codes (delivered via WM_NOTIFY's NMHDR.code) are added
 // when Phase 2+ first dispatches them. Each constant must be cross-checked
 // against `vendor/scintilla/include/Scintilla.h` at the time of addition;
