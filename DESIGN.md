@@ -358,8 +358,9 @@ If a future feature breaks any of these, it must either be feature-gated (off by
 ### 9.3 CI
 
 - **Hosting:** the canonical repository is on Forgejo at <https://git.fiedler.live/tux/code-plus-plus>. A read-only mirror is pushed to GitHub. CI runs on Forgejo Actions only; the GitHub mirror has no workflow.
-- **Runners:** three self-hosted Forgejo runners with labels `windows`, `linux`, and `macos`. The build job's matrix maps `runs-on: ${{ matrix.runner }}` directly to those labels. Lint and `cargo-deny` jobs run on the `linux` runner.
-- **Required jobs:** `cargo build --workspace --all-targets` on each runner, `cargo test -p codepp-core` on each runner, `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo deny check`.
+- **Runners:** three self-hosted Forgejo runners with labels `windows`, `linux`, and `macos`. Both the `build` and `lint` jobs use `runs-on: ${{ matrix.runner }}` to fan out across all three labels. The `fmt` and `cargo-deny` jobs run on the `linux` runner only — rustfmt is deterministic across platforms and cargo-deny inspects the workspace manifest, neither benefits from re-running per OS.
+- **Why clippy on every platform:** the codebase's per-OS code is heavy (`ui_win32` is Windows-only today; `ui_gtk`/`ui_cocoa` join in Phase 5). A Linux-only clippy run silently accepts dead Windows-cfg code on the Linux/macOS paths; a Windows-only clippy run does the symmetric thing for the Linux/macOS UI backends. Running clippy on every platform means a missing cfg gate or a stale platform-specific lint produces a CI failure on the platform that observes the dead code, not at Phase 5 bring-up time.
+- **Required jobs:** `cargo build --workspace --all-targets` on each runner, `cargo test -p codepp-core` on each runner, `cargo clippy --workspace --all-targets -- -D warnings` on each runner, `cargo fmt --check` (linux), `cargo deny check` (linux).
 - **Windows job** additionally runs the Notepad++ plugin compatibility smoke test from Phase 3 onward.
 - **Permissions:** workflows declare `permissions: contents: read` at the workflow level.
 - **Hardening for self-hosted runners** (these are deliberate decisions enforced from Phase 0 onward, not deferrable):

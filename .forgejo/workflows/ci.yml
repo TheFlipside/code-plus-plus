@@ -57,15 +57,40 @@ jobs:
       - name: cargo test (core)
         run: cargo test -p codepp-core --all-targets
 
-  lint:
-    name: lint
+  # rustfmt is deterministic across platforms — running it on more
+  # than one runner is wasted CI time. Linux is fine.
+  fmt:
+    name: fmt
     runs-on: linux
     steps:
       - name: Checkout (pinned to actions/checkout v4.3.1)
         uses: https://github.com/actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          submodules: recursive
+          submodules: false
       - run: cargo fmt --all -- --check
+
+  # Clippy runs on every platform. Each runner sees a different
+  # subset of code: Windows compiles `ui_win32`, `plugin-host`,
+  # `example-hello`, and `scintilla-sys`'s real backend; Linux/macOS
+  # compile the same crates as empty-cfg shells and exercise the
+  # `core`/`platform`/`shell` cross-platform paths. A Linux-only
+  # lint silently accepted real Windows-cfg dead code (see
+  # `b85344b`, `00e13b1`, `527a907`); a Windows-only lint would do
+  # the symmetric thing for the Linux/macOS UI backends in Phase 5.
+  # Three matrix legs guarantee neither side rots without a CI
+  # signal.
+  lint:
+    name: lint (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows, linux, macos]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout (pinned to actions/checkout v4.3.1)
+        uses: https://github.com/actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          submodules: recursive
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   deny:
