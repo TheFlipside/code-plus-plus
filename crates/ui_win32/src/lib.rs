@@ -46,11 +46,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     DrawMenuBar, GetClientRect, GetMessageW, GetWindowLongPtrW, LoadCursorW, MessageBoxW,
     MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW,
-    ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, HMENU,
-    IDC_ARROW, IDYES, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_POPUP, MF_STRING, MSG,
-    SW_SHOW, WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP,
-    WM_NCCREATE, WM_NOTIFY, WM_SETFOCUS, WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW,
-    WS_VISIBLE,
+    SetWindowTextW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
+    GWLP_USERDATA, HMENU, IDC_ARROW, IDYES, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO,
+    MF_POPUP, MF_STRING, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY,
+    WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_SETFOCUS, WM_SIZE, WNDCLASSEXW,
+    WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
 const ID_FILE_SAVE: u16 = 1000;
@@ -382,6 +382,79 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
         editor: state.editor,
     };
     <Win32Ui as UiPlatform>::update_status(&mut win32_ui, &encoding, eol, byte_len);
+
+    // Reflect the new active tab in the window title.
+    // SAFETY: caller's UI-thread contract carries to update_window_title.
+    unsafe {
+        update_window_title(hwnd, &state.shell);
+    }
+
+    // Queue NPPN_BUFFERACTIVATED for plugins that track the
+    // active buffer. The borrow on `state` is released by NLL at
+    // its last use here (the queue method), before
+    // `fire_queued_notifications` re-acquires a fresh borrow.
+    state.shell.queue_buffer_activated();
+    // SAFETY: caller's UI-thread contract carries.
+    unsafe {
+        fire_queued_notifications(hwnd);
+    }
+}
+
+/// Sanitize a filename string for display in chrome (tab labels,
+/// window titles): strip embedded NULs, CR/LF/TAB, and cap at
+/// `TAB_LABEL_MAX_TCHARS - 1` UTF-16 code units. Without this:
+///
+///   - An embedded U+0000 (legal on some network filesystems,
+///     trivially injectable via `NPPM_DOOPEN` from a plugin)
+///     truncates `SetWindowTextW`/SB_SETTEXTW silently — the
+///     chrome no longer reflects the real open file, confusing
+///     users into acting on the wrong file.
+///   - CR/LF/TAB render as glyph noise on tab strips and may
+///     produce odd line wrapping in title bars.
+///   - Multi-MB paths (legal on some filesystems) produce huge
+///     temporary allocations on every chrome refresh.
+fn sanitize_filename_for_display(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .filter(|&c| !matches!(c, '\0' | '\r' | '\n' | '\t'))
+        .collect();
+    // Cap by char count rather than code-unit count for simplicity;
+    // the difference is small for chrome strings and stays safely
+    // under the wide-buffer cap downstream.
+    if cleaned.chars().count() > TAB_LABEL_MAX_TCHARS - 1 {
+        cleaned.chars().take(TAB_LABEL_MAX_TCHARS - 1).collect()
+    } else {
+        cleaned
+    }
+}
+
+/// Set the main window's title to reflect the currently-active tab:
+/// `"<filename> - Code++"` when there's an active path,
+/// `"Untitled - Code++"` when the active tab has no path yet,
+/// `"Code++"` when no tab is open. Called whenever `Shell.active_tab`
+/// changes (tab click, sync after open, plugin-driven switch).
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+unsafe fn update_window_title(hwnd: HWND, shell: &Shell) {
+    let title = match shell.active() {
+        Some(tab) => match tab.path.as_ref().and_then(|p| p.file_name()) {
+            Some(name) => {
+                let sanitized = sanitize_filename_for_display(&name.to_string_lossy());
+                format!("{sanitized} - Code++")
+            }
+            None => "Untitled - Code++".to_string(),
+        },
+        None => "Code++".to_string(),
+    };
+    let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: hwnd is a valid main-window HWND owned by the caller's
+    // thread; `wide` is a null-terminated UTF-16 buffer that lives
+    // for the duration of the synchronous SetWindowTextW call.
+    unsafe {
+        let _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
+    }
 }
 
 /// Bring the Win32 tab strip into sync with `state.shell.tabs`.
@@ -457,16 +530,8 @@ fn tab_label_for(tab: &Tab) -> Vec<u16> {
         .as_ref()
         .and_then(|p| p.file_name().and_then(|s| s.to_str()))
         .unwrap_or("Untitled");
-    let cleaned: String = raw
-        .chars()
-        .filter(|c| !matches!(*c, '\r' | '\n' | '\t'))
-        .collect();
-    let mut units: Vec<u16> = cleaned.encode_utf16().collect();
-    if units.len() > TAB_LABEL_MAX_TCHARS - 1 {
-        units.truncate(TAB_LABEL_MAX_TCHARS - 1);
-    }
-    units.push(0);
-    units
+    let cleaned = sanitize_filename_for_display(raw);
+    cleaned.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 /// Append loaded-plugin FuncItems onto the per-plugin submenu after
@@ -924,9 +989,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // were pushed during the drain. Done after the
                 // dialog/notification cycle so the user sees the
                 // new tab appear at the same moment they get the
-                // open's "load complete" feedback.
+                // open's "load complete" feedback. The window
+                // title is refreshed alongside so the title bar
+                // reflects whichever tab the drain just activated.
                 if let Some(state) = state_from_hwnd(hwnd) {
                     sync_tab_strip(state);
+                    update_window_title(hwnd, &state.shell);
                 }
                 LRESULT(0)
             }

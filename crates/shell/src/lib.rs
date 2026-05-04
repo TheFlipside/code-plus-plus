@@ -329,6 +329,26 @@ impl Shell {
         std::mem::take(&mut self.pending_notifications)
     }
 
+    /// Queue `NPPN_BUFFERACTIVATED` for the currently-active tab.
+    /// Call sites: `apply_load_result` after a fresh open (the new
+    /// tab becomes active), `HostBridge::switch_to_file` when a
+    /// plugin activates an existing tab, and `ui_win32`'s
+    /// `handle_tab_selchange` on a user tab click. Each delivery
+    /// fires after the `&mut Shell` borrow drops, so plugin
+    /// `beNotified` callbacks can `SendMessage(NPPM_*)` back
+    /// without aliasing UB.
+    ///
+    /// Idempotent — a no-op when there's no active tab. Safe to
+    /// call from sites that may race with a close-tab path.
+    #[cfg(target_os = "windows")]
+    pub fn queue_buffer_activated(&mut self) {
+        if let Some(tab) = self.active() {
+            let buffer_id = tab.id as isize;
+            self.pending_notifications
+                .push(Notification::BufferActivated { buffer_id });
+        }
+    }
+
     /// Enumerate plugin DLLs in `dir`. No DLL is mapped — the loader
     /// only records paths; first-touch load happens when a plugin's
     /// menu is opened (DESIGN.md §6.4). Returns the count discovered.
@@ -591,8 +611,6 @@ impl Shell {
                 let stored_doc = tab.scintilla_doc;
                 #[cfg(target_os = "windows")]
                 let buffer_id = tab.id as isize;
-                #[cfg(target_os = "windows")]
-                let _ = buffer_id; // silenced if the cfg-gated push below isn't reached
 
                 // Apply UI updates only when this load targets the
                 // **active** tab. `activate_tab` rebinds the single
@@ -614,6 +632,19 @@ impl Shell {
                 // add a `populate_background_tab` flow that
                 // creates + fills the document without disturbing
                 // the visible view.
+                // Queue NPPN_FILEOPENED for the loaded plugins. The UI
+                // drains the queue via take_notifications() after
+                // dropping its &mut Shell borrow — required because
+                // beNotified runs synchronous plugin code that may
+                // re-enter the wnd_proc. Pushed BEFORE
+                // NPPN_BUFFERACTIVATED below so the delivery order
+                // matches Notepad++'s canonical sequence: file-open
+                // events fire before buffer-activation events on
+                // the same load.
+                #[cfg(target_os = "windows")]
+                self.pending_notifications
+                    .push(Notification::FileOpened { buffer_id });
+
                 let is_active = self.active_tab == Some(target_idx);
                 if is_active {
                     let bound_doc = ui.activate_tab(target_idx, stored_doc);
@@ -622,16 +653,14 @@ impl Shell {
                     }
                     ui.set_buffer_text(&loaded.text, cursor);
                     ui.update_status(&loaded.encoding, loaded.eol, loaded.byte_len);
-                }
 
-                // Queue NPPN_FILEOPENED for the loaded plugins. The UI
-                // drains the queue via take_notifications() after
-                // dropping its &mut Shell borrow — required because
-                // beNotified runs synchronous plugin code that may
-                // re-enter the wnd_proc.
-                #[cfg(target_os = "windows")]
-                self.pending_notifications
-                    .push(Notification::FileOpened { buffer_id });
+                    // The just-loaded tab is now the user-visible
+                    // buffer — fire NPPN_BUFFERACTIVATED so plugins
+                    // observing buffer changes pick up the new id.
+                    // Notification queue is Windows-gated.
+                    #[cfg(target_os = "windows")]
+                    self.queue_buffer_activated();
+                }
             }
             Err(err) => {
                 // A failed load on a fresh tab (one that never had a
@@ -1008,15 +1037,22 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             .iter()
             .position(|t| t.path.as_deref() == Some(path.as_path()))
         {
-            self.shell.active_tab = Some(idx);
-            // TODO milestone 6b: drive the UI tab control to make
-            // the visual selection match. For now, NPPM_SWITCHTOFILE
-            // updates the data-model active index but the UI tab
-            // control (when it lands in 6b) won't redraw automatically
-            // until tab-change wiring is added.
+            // Skip the queue entirely if the target is already
+            // active — `NPPN_BUFFERACTIVATED` signals "the user's
+            // active buffer changed," and a switch to the
+            // already-active buffer is not such a change. Plugins
+            // that audit-log activations would otherwise log
+            // false positives, and plugins that reset buffer-local
+            // state on activation would clobber valid state.
+            if self.shell.active_tab != Some(idx) {
+                self.shell.active_tab = Some(idx);
+                self.shell.queue_buffer_activated();
+            }
             true
         } else {
             self.shell.open_file(path);
+            // open_file's load completion will fire BUFFERACTIVATED
+            // for the new tab via apply_load_result.
             true
         }
     }
@@ -1499,13 +1535,19 @@ mod tests {
         // the contract is "the active tab's id," not "always 1."
         let expected_id = shell.active().expect("active tab").id as isize;
         let notifications = shell.take_notifications();
-        assert_eq!(notifications.len(), 1, "exactly one queued notification");
-        match &notifications[0] {
-            Notification::FileOpened { buffer_id } => {
-                assert_eq!(*buffer_id, expected_id);
-            }
-            other => panic!("expected FileOpened, got {other:?}"),
-        }
+        // A successful open queues NPPN_FILEOPENED followed by
+        // NPPN_BUFFERACTIVATED (matches Notepad++'s canonical
+        // ordering: file-open before buffer-activation on the
+        // same load).
+        assert_eq!(notifications.len(), 2);
+        assert!(matches!(
+            notifications[0],
+            Notification::FileOpened { buffer_id } if buffer_id == expected_id
+        ));
+        assert!(matches!(
+            notifications[1],
+            Notification::BufferActivated { buffer_id } if buffer_id == expected_id
+        ));
 
         // Subsequent take_notifications returns an empty Vec (queue
         // drained) — the UI doesn't re-fire on every wake.
@@ -1677,6 +1719,149 @@ mod tests {
             ui.set_text_calls.len(),
             load_count_before,
             "no re-load occurred for an in-memory tab"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn open_queues_buffer_activated_for_the_new_tab() {
+        // A successful open completes with the new tab as active —
+        // apply_load_result should queue NPPN_BUFFERACTIVATED
+        // alongside NPPN_FILEOPENED so plugins observing buffer
+        // changes see the new id.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("activated.txt");
+        std::fs::write(&path, "x").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        let expected_id = shell.active().expect("active tab").id as isize;
+        let notifications = shell.take_notifications();
+        // Two queued: FileOpened + BufferActivated, both for the
+        // active tab's id. Order: FileOpened first (queued before
+        // the activate notification in apply_load_result).
+        assert_eq!(notifications.len(), 2);
+        assert!(matches!(
+            notifications[0],
+            Notification::FileOpened { buffer_id } if buffer_id == expected_id
+        ));
+        assert!(matches!(
+            notifications[1],
+            Notification::BufferActivated { buffer_id } if buffer_id == expected_id
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn switch_to_file_queues_buffer_activated() {
+        // NPPM_SWITCHTOFILE on an already-open path activates the
+        // existing tab. The dispatcher path should queue
+        // NPPN_BUFFERACTIVATED; without it, plugins observing
+        // tab changes via switch wouldn't pick up the move.
+        let dir = tempfile::tempdir().unwrap();
+        let path_a = dir.path().join("a.txt");
+        let path_b = dir.path().join("b.txt");
+        std::fs::write(&path_a, "a").unwrap();
+        std::fs::write(&path_b, "b").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path_a.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 1,
+            Duration::from_secs(2),
+        );
+        shell.open_file(path_b);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 2,
+            Duration::from_secs(2),
+        );
+        // Discard the FileOpened/BufferActivated notifications
+        // queued by the two opens so the next take_notifications
+        // is unambiguously the response to the switch below.
+        let _ = shell.take_notifications();
+
+        const NPPM_SWITCHTOFILE: u32 = (0x0400 + 1000) + 37;
+        let path_a_str = path_a.to_string_lossy().into_owned();
+        let wide: Vec<u16> = path_a_str
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SWITCHTOFILE,
+                0,
+                wide.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        let id_a = shell.tabs[0].id as isize;
+        let notifications = shell.take_notifications();
+        assert_eq!(notifications.len(), 1);
+        assert!(matches!(
+            notifications[0],
+            Notification::BufferActivated { buffer_id } if buffer_id == id_a
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn switch_to_file_to_already_active_tab_skips_notification() {
+        // NPPM_SWITCHTOFILE for the path that's already active is
+        // a tautological switch — no buffer change happened. The
+        // dispatcher must NOT queue NPPN_BUFFERACTIVATED, otherwise
+        // plugins that audit-log activations log a false positive
+        // and plugins that reset buffer-local state on activation
+        // clobber valid state.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.txt");
+        std::fs::write(&path, "a").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 1,
+            Duration::from_secs(2),
+        );
+        // Drain the open's notifications.
+        let _ = shell.take_notifications();
+
+        const NPPM_SWITCHTOFILE: u32 = (0x0400 + 1000) + 37;
+        let path_str = path.to_string_lossy().into_owned();
+        let wide: Vec<u16> = path_str.encode_utf16().chain(std::iter::once(0)).collect();
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SWITCHTOFILE,
+                0,
+                wide.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert!(
+            shell.take_notifications().is_empty(),
+            "switch-to-already-active must not queue any notification"
         );
     }
 
