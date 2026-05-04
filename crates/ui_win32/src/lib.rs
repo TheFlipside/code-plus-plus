@@ -2061,14 +2061,40 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             shell,
         });
 
-        // Resolve the initial file:
+        // Resolve the initial files:
         //   1. Explicit CLI argument wins (manual override / test path).
-        //   2. Otherwise, restore the previously-open tab from session.xml.
-        // Either way, queue a single open through the loader.
-        {
-            let path_to_open = initial_path.or_else(|| state.shell.load_session());
-            if let Some(path) = path_to_open {
-                state.shell.open_file(path);
+        //      Single file → single open.
+        //   2. Otherwise, restore *every* tab from session.xml in its
+        //      stored order, then override `active_tab` to the
+        //      session's recorded active index. Without the override
+        //      `open_file` would always end with the last-pushed tab
+        //      active, regardless of which one the user had focused
+        //      before shutdown.
+        if let Some(path) = initial_path {
+            state.shell.open_file(path);
+        } else {
+            let paths = state.shell.load_session_paths();
+            for p in paths {
+                state.shell.open_file(p);
+            }
+            if let Some(idx) = state.shell.session_active_index() {
+                if idx < state.shell.tabs.len() {
+                    state.shell.active_tab = Some(idx);
+                } else {
+                    // Saved active index points outside the
+                    // restored tab range — happens if a tab
+                    // failed to push (e.g. `loader.open` returned
+                    // None for a path) or if session.xml was
+                    // tampered. Fall back to the most-recently-
+                    // pushed tab and surface the rejection so the
+                    // user has a breadcrumb if their previously-
+                    // active buffer isn't the one focused.
+                    tracing::warn!(
+                        session_active = idx,
+                        restored = state.shell.tabs.len(),
+                        "session.xml active index out of range; using last-restored tab",
+                    );
+                }
             }
         }
 

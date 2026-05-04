@@ -46,6 +46,15 @@ use codepp_plugin_host::{
 /// than the literal `1` so the search stays useful.
 pub const PRIMARY_BUFFER_ID: isize = 1;
 
+/// Upper bound on tabs restored from session.xml. Caps the work
+/// triggered by a corrupted or tampered session file (a runaway
+/// session-save bug or an attacker with write access to AppData
+/// could otherwise queue thousands of async loads at startup, each
+/// allocating a Tab + decoded buffer text — a local DoS for the
+/// invoking user's account). Set well above any realistic open-tab
+/// count.
+pub const MAX_SESSION_TABS: usize = 512;
+
 /// Side-effecting operations the shell needs from the UI thread. Each
 /// platform UI crate (`ui_win32`, `ui_gtk`, `ui_cocoa`) implements this
 /// trait.
@@ -629,10 +638,27 @@ impl Shell {
             return;
         };
         // Decide where the load result will land. If the active
-        // tab is empty, reuse it; otherwise allocate a fresh tab
+        // tab is empty *and isn't already waiting for its own load
+        // to complete*, reuse it; otherwise allocate a fresh tab
         // now so we have a buffer id to associate with `req_id`.
+        //
+        // Without the `pending_load.is_none()` guard, two rapid
+        // open_file calls (e.g. session restore reopening multiple
+        // tabs) would both target the same empty tab — the second
+        // call overwrites the first call's pending-load marker, so
+        // the first load's apply_load_result finds no matching tab
+        // and silently discards the buffer. Symptom: only the last
+        // file in a multi-tab session is restored.
         let target_idx = match self.active_tab {
-            Some(i) if self.tabs.get(i).map(|t| t.path.is_none()).unwrap_or(false) => i,
+            Some(i)
+                if self
+                    .tabs
+                    .get(i)
+                    .map(|t| t.path.is_none() && t.pending_load.is_none())
+                    .unwrap_or(false) =>
+            {
+                i
+            }
             _ => {
                 let id = self.allocate_buffer_id();
                 self.tabs.push(Tab {
@@ -1033,17 +1059,69 @@ impl Shell {
         Ok(())
     }
 
-    /// Read `session.xml` and return the first tab to restore as the
-    /// "initial open" path the UI passes to [`Self::open_file`]. The
-    /// remaining tabs in the session file are left in
-    /// `self.session.tabs` and milestone 6b's UI iterates them to
-    /// open each as a new tab.
-    pub fn load_session(&mut self) -> Option<PathBuf> {
-        let path = codepp_platform::session_xml_path()?;
-        let session = Session::load_from_xml(&path).ok()?;
-        let tab = session.tabs.first()?.clone();
+    /// Read `session.xml` and return all stored tab paths in their
+    /// original order, capped at [`MAX_SESSION_TABS`]. The parsed
+    /// [`Session`] is stored on `self` so `apply_load_result` can
+    /// later look up each restored tab's cursor position by path.
+    /// Returns an empty Vec when the file is missing — first-run
+    /// case, never an error. A parse failure also returns empty,
+    /// with a warn-level log so a corrupted file is observable.
+    ///
+    /// The UI is expected to:
+    ///   1. Call this method.
+    ///   2. Call [`Self::open_file`] for each path returned.
+    ///   3. Read [`Self::session_active_index`] and override
+    ///      `self.active_tab` so the visible buffer matches the
+    ///      pre-shutdown one. Without this override, `open_file`
+    ///      always activates the most-recently-pushed tab,
+    ///      defeating the session's stored selection.
+    pub fn load_session_paths(&mut self) -> Vec<PathBuf> {
+        let Some(path) = codepp_platform::session_xml_path() else {
+            return Vec::new();
+        };
+        let session = match Session::load_from_xml(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                // Don't propagate as a hard error — a corrupted
+                // session file shouldn't block startup. Warn so
+                // the user has a breadcrumb if they wonder why
+                // their tabs didn't come back, and so a tampered
+                // session.xml leaves a trace.
+                tracing::warn!(path = %path.display(), error = ?e, "session.xml load failed; starting clean");
+                return Vec::new();
+            }
+        };
+        // Cap restored tabs at `MAX_SESSION_TABS`. A session.xml
+        // with thousands of <tab> entries (corrupted, tampered, or
+        // a runaway session-save bug) would otherwise queue that
+        // many async loads at startup and allocate a Tab + decoded
+        // text per file — a local denial-of-service against the
+        // invoking user's account. The cap is generous enough that
+        // no realistic user hits it.
+        if session.tabs.len() > MAX_SESSION_TABS {
+            tracing::warn!(
+                stored = session.tabs.len(),
+                cap = MAX_SESSION_TABS,
+                "session.xml exceeds tab cap; excess tabs not restored",
+            );
+        }
+        let paths: Vec<PathBuf> = session
+            .tabs
+            .iter()
+            .take(MAX_SESSION_TABS)
+            .map(|t| t.path.clone())
+            .collect();
         self.session = session;
-        Some(tab.path)
+        paths
+    }
+
+    /// Active tab index recorded in the most recently parsed
+    /// session.xml, or `None` if no session was loaded. Returned as
+    /// a separate accessor so the UI can read it after the
+    /// `load_session_paths` + `open_file` loop without keeping
+    /// `&self.session` borrowed across mutations.
+    pub fn session_active_index(&self) -> Option<usize> {
+        self.session.active
     }
 }
 
@@ -2520,5 +2598,99 @@ mod tests {
             )
         };
         assert_eq!(r, Some(L_RUST.as_npp_id() as isize));
+    }
+
+    #[test]
+    fn rapid_back_to_back_opens_dont_collide() {
+        // Regression: two open_file calls back-to-back (before
+        // either load completes) used to share tab[0] because the
+        // empty-tab reuse rule only checked `path.is_none()` and
+        // not `pending_load.is_none()`. The second open clobbered
+        // the first's pending_load id so the first load result
+        // was discarded as "stale" — only one of the two files
+        // ended up open. Symptom in the wild: session restore
+        // with two tabs only restored the last one.
+        let dir = tempfile::tempdir().unwrap();
+        let path_a = dir.path().join("first.txt");
+        let path_b = dir.path().join("second.txt");
+        std::fs::write(&path_a, "AAA").unwrap();
+        std::fs::write(&path_b, "BBB").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        // Both opens before draining — no apply_load_result has
+        // fired yet, so tab[0] is still "no path, pending_load=Some".
+        shell.open_file(path_a.clone());
+        shell.open_file(path_b.clone());
+
+        // Distinct tabs at this point with distinct pending_loads.
+        assert_eq!(shell.tabs.len(), 2);
+        assert!(shell.tabs[0].pending_load.is_some());
+        assert!(shell.tabs[1].pending_load.is_some());
+        assert_ne!(shell.tabs[0].pending_load, shell.tabs[1].pending_load);
+
+        // Drain both loads. Both files should land on their tabs.
+        // Wait until both pending_loads clear so the content
+        // assertions below aren't observing a half-drained state
+        // (a 500 ms timeout that fires before both loads complete
+        // would otherwise let the test pass on a tab still
+        // pending its real content).
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |_, _| false,
+            Duration::from_millis(500),
+        );
+        assert_eq!(shell.tabs.len(), 2, "both tabs survived the drain");
+        assert!(
+            shell.tabs[0].pending_load.is_none() && shell.tabs[1].pending_load.is_none(),
+            "both loads must complete before content assertions",
+        );
+        assert_eq!(shell.tabs[0].path.as_deref(), Some(path_a.as_path()));
+        assert_eq!(shell.tabs[1].path.as_deref(), Some(path_b.as_path()));
+        assert_eq!(shell.tabs[0].text, "AAA");
+        assert_eq!(shell.tabs[1].text, "BBB");
+    }
+
+    #[test]
+    fn session_xml_roundtrip_preserves_tab_order_and_active_index() {
+        // session.xml round-trip: write a 2-tab session via the
+        // production save_to_xml path, then load it back and verify
+        // both paths are preserved in their stored order plus the
+        // active index. This is the data-shape contract that
+        // `load_session_paths` depends on — `load_session_paths`
+        // itself can't be unit-tested without the platform's
+        // `session_xml_path` (test-only override would be its own
+        // refactor).
+        use codepp_core::session::{Session as CoreSession, Tab as CoreTab};
+        let dir = tempfile::tempdir().unwrap();
+        let xml_path = dir.path().join("session.xml");
+        let original = CoreSession {
+            active: Some(1),
+            tabs: vec![
+                CoreTab {
+                    path: PathBuf::from("/tmp/first.txt"),
+                    cursor: 0,
+                    encoding: Encoding::default(),
+                    eol: Eol::default(),
+                },
+                CoreTab {
+                    path: PathBuf::from("/tmp/second.txt"),
+                    cursor: 5,
+                    encoding: Encoding::default(),
+                    eol: Eol::default(),
+                },
+            ],
+        };
+        original.save_to_xml(&xml_path).unwrap();
+
+        let parsed = CoreSession::load_from_xml(&xml_path).unwrap();
+        assert_eq!(parsed.active, Some(1));
+        assert_eq!(parsed.tabs.len(), 2);
+        assert_eq!(parsed.tabs[0].path, PathBuf::from("/tmp/first.txt"));
+        assert_eq!(parsed.tabs[1].path, PathBuf::from("/tmp/second.txt"));
+        assert_eq!(parsed.tabs[1].cursor, 5);
     }
 }
