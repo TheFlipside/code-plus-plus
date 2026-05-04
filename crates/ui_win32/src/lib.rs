@@ -594,6 +594,31 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
                     Some(LPARAM(0)),
                 );
             }
+
+            // Re-apply the new active tab's lexer/theme AND refresh
+            // the status bar. Both fields live on the *view* (lexer
+            // attachment) and the chrome (status bar text), neither
+            // of which the rebind above touches — without these
+            // calls the user sees the closed tab's colours and
+            // status text after the close. The two snapshots happen
+            // together so we hold the &Tab borrow once. Pulled out
+            // of the borrow scope by Copy: status_hwnd is HWND and
+            // editor is EditorHandle, both Copy; the Win32Ui
+            // methods only touch self.{editor,status_hwnd}, so the
+            // outer &mut state borrow stays sound across the calls.
+            let snapshot = state
+                .shell
+                .tabs
+                .get(active_idx)
+                .map(|t| (t.lang, t.encoding.clone(), t.eol, t.byte_len));
+            if let Some((lang, encoding, eol, byte_len)) = snapshot {
+                let mut win32_ui = Win32Ui {
+                    status_hwnd: state.status_hwnd,
+                    editor: state.editor,
+                };
+                <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
+                <Win32Ui as UiPlatform>::update_status(&mut win32_ui, &encoding, eol, byte_len);
+            }
         }
     }
 
