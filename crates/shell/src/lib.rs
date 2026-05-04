@@ -154,6 +154,41 @@ pub struct Tab {
     pub scintilla_doc: isize,
 }
 
+/// Snapshot returned by [`Shell::close_active_tab`] describing the
+/// platform-side cleanup the UI must perform. Shell has already
+/// removed the tab from `Shell.tabs`, updated `Shell.active_tab`,
+/// queued the `NPPN_FILECLOSED` / `NPPN_BUFFERACTIVATED`
+/// notifications, and unregistered the file watcher; what's left
+/// is the things only the UI knows about — the tab control and
+/// the Scintilla document.
+#[derive(Debug, Clone)]
+pub struct ClosedTab {
+    /// Index the tab occupied in `Shell.tabs` at the moment of
+    /// close. Same index for the platform tab strip — the UI
+    /// removes the item at this index. After this snapshot is
+    /// returned, `Shell.tabs.len()` is one less and
+    /// `Shell.active_tab` reflects the new selection.
+    pub closed_idx: usize,
+    /// Buffer id of the closed tab. Useful for plugin-host bookkeeping.
+    pub buffer_id: i32,
+    /// Path the closed tab was bound to (if any). Mostly for logging
+    /// — the watcher unwatch already happened inside Shell.
+    pub path: Option<PathBuf>,
+    /// Scintilla document pointer the closed tab owned. UI calls
+    /// `SCI_RELEASEDOCUMENT` against this so Scintilla can free
+    /// the underlying buffer. Zero when the tab never had its
+    /// document materialized (rare — only background-loaded tabs
+    /// closed before first activation).
+    pub scintilla_doc: isize,
+    /// Scintilla document pointer for the new active tab, if any.
+    /// UI calls `SCI_SETDOCPOINTER` on this to bind the view to
+    /// the now-visible tab. Zero when there's no new active tab
+    /// (closed the last open tab) or when the new active tab's
+    /// document hasn't been materialized yet — `handle_tab_selchange`
+    /// will lazily create one on the next user click.
+    pub new_active_doc: isize,
+}
+
 /// Per-call platform handles the UI hands the dispatcher when
 /// routing an inbound NPPM_* message. The host crate is platform-
 /// agnostic; the UI fills these with whatever opaque pointer types
@@ -347,6 +382,81 @@ impl Shell {
             self.pending_notifications
                 .push(Notification::BufferActivated { buffer_id });
         }
+    }
+
+    /// Close the currently-active tab. Returns a [`ClosedTab`] the
+    /// UI uses to release the Scintilla document, switch the view
+    /// to the new active tab's document, and remove the tab item
+    /// from any platform tab strip. `NPPN_FILECLOSED` is queued
+    /// for the closed buffer; if a different tab is now active,
+    /// `NPPN_BUFFERACTIVATED` is queued for it. Returns `None`
+    /// when there's nothing to close.
+    ///
+    /// New-active-tab selection follows the standard editor UX:
+    /// prefer the right-neighbour (the tab that slid into the
+    /// closed slot's index), fall back to the previous tab if
+    /// the closed tab was the rightmost. Closing the last tab
+    /// leaves `active_tab = None`.
+    ///
+    /// The file watcher is unregistered for the closed path
+    /// inside this method so the UI doesn't have to remember;
+    /// a failed `unwatch` is logged at debug level (the watcher
+    /// silently ignores already-unregistered paths).
+    pub fn close_active_tab(&mut self) -> Option<ClosedTab> {
+        let idx = self.active_tab?;
+        if idx >= self.tabs.len() {
+            return None;
+        }
+        let removed = self.tabs.remove(idx);
+
+        if let Some(p) = &removed.path {
+            if let Err(e) = self.file_watcher.unwatch(p) {
+                tracing::debug!(
+                    error = %e,
+                    path = ?p,
+                    "unwatch on close (already unwatched is fine)"
+                );
+            }
+        }
+
+        // Pick the new active tab. If the closed tab was the last
+        // one, `idx` now equals `tabs.len()` after the remove —
+        // step left to keep an in-range index.
+        let new_active = if self.tabs.is_empty() {
+            None
+        } else if idx < self.tabs.len() {
+            Some(idx)
+        } else {
+            Some(self.tabs.len() - 1)
+        };
+        self.active_tab = new_active;
+
+        let new_active_doc = new_active
+            .and_then(|i| self.tabs.get(i))
+            .map(|t| t.scintilla_doc)
+            .unwrap_or(0);
+
+        // Notification ordering: NPPN_FILECLOSED first (the closed
+        // buffer's id is what plugins act on), then
+        // NPPN_BUFFERACTIVATED for the new active tab — matches
+        // Notepad++'s sequence.
+        #[cfg(target_os = "windows")]
+        {
+            self.pending_notifications.push(Notification::FileClosed {
+                buffer_id: removed.id as isize,
+            });
+            if new_active.is_some() {
+                self.queue_buffer_activated();
+            }
+        }
+
+        Some(ClosedTab {
+            closed_idx: idx,
+            buffer_id: removed.id,
+            path: removed.path,
+            scintilla_doc: removed.scintilla_doc,
+            new_active_doc,
+        })
     }
 
     /// Enumerate plugin DLLs in `dir`. No DLL is mapped — the loader
@@ -1863,6 +1973,185 @@ mod tests {
             shell.take_notifications().is_empty(),
             "switch-to-already-active must not queue any notification"
         );
+    }
+
+    #[test]
+    fn close_active_tab_with_no_tabs_returns_none() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        assert!(shell.close_active_tab().is_none());
+        assert!(shell.tabs.is_empty());
+        assert_eq!(shell.active_tab, None);
+    }
+
+    #[test]
+    fn close_active_tab_last_tab_clears_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("only.txt");
+        std::fs::write(&path, "x").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 1,
+            Duration::from_secs(2),
+        );
+
+        let closed = shell.close_active_tab().expect("close returns snapshot");
+        assert_eq!(closed.closed_idx, 0);
+        assert!(shell.tabs.is_empty());
+        assert_eq!(shell.active_tab, None);
+        // No new active tab → the snapshot's new_active_doc is 0.
+        assert_eq!(closed.new_active_doc, 0);
+    }
+
+    #[test]
+    fn close_active_tab_middle_prefers_right_neighbour() {
+        // Three tabs, active is the middle one. Closing it should
+        // make the previously-third tab (now at index 1) active.
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        let c = dir.path().join("c.txt");
+        std::fs::write(&a, "a").unwrap();
+        std::fs::write(&b, "b").unwrap();
+        std::fs::write(&c, "c").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for path in [a, b.clone(), c.clone()] {
+            shell.open_file(path);
+            let target = ui.set_text_calls.len() + 1;
+            drain_until(
+                &mut shell,
+                &mut ui,
+                |u, _| u.set_text_calls.len() == target,
+                Duration::from_secs(2),
+            );
+        }
+        // Activate the middle tab.
+        shell.active_tab = Some(1);
+        let closed = shell.close_active_tab().expect("close returns snapshot");
+        assert_eq!(closed.closed_idx, 1);
+        assert_eq!(closed.path.as_ref(), Some(&b));
+        assert_eq!(shell.tabs.len(), 2);
+        // Right-neighbour took the closed slot's index.
+        assert_eq!(shell.active_tab, Some(1));
+        assert_eq!(shell.tabs[1].path.as_ref(), Some(&c));
+    }
+
+    #[test]
+    fn close_active_tab_rightmost_falls_back_to_previous() {
+        // Two tabs, active is the rightmost. Closing it should
+        // make the previously-first tab active (since there's no
+        // right-neighbour to slide into).
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        std::fs::write(&a, "a").unwrap();
+        std::fs::write(&b, "b").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for path in [a.clone(), b] {
+            shell.open_file(path);
+            let target = ui.set_text_calls.len() + 1;
+            drain_until(
+                &mut shell,
+                &mut ui,
+                |u, _| u.set_text_calls.len() == target,
+                Duration::from_secs(2),
+            );
+        }
+        assert_eq!(shell.active_tab, Some(1));
+        let closed = shell.close_active_tab().expect("close returns snapshot");
+        assert_eq!(closed.closed_idx, 1);
+        assert_eq!(shell.tabs.len(), 1);
+        assert_eq!(shell.active_tab, Some(0));
+        assert_eq!(shell.tabs[0].path.as_ref(), Some(&a));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn close_active_tab_queues_file_closed_then_buffer_activated() {
+        // Closing one of two open tabs should queue NPPN_FILECLOSED
+        // for the closed buffer followed by NPPN_BUFFERACTIVATED
+        // for the now-active sibling. Order matches Notepad++.
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        std::fs::write(&a, "a").unwrap();
+        std::fs::write(&b, "b").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for path in [a.clone(), b] {
+            shell.open_file(path);
+            let target = ui.set_text_calls.len() + 1;
+            drain_until(
+                &mut shell,
+                &mut ui,
+                |u, _| u.set_text_calls.len() == target,
+                Duration::from_secs(2),
+            );
+        }
+        // Drain the open's notifications.
+        let _ = shell.take_notifications();
+
+        let closed_id = shell.tabs[1].id as isize;
+        let new_active_id = shell.tabs[0].id as isize;
+        let closed = shell.close_active_tab().expect("close");
+        assert_eq!(closed.buffer_id as isize, closed_id);
+
+        let notifications = shell.take_notifications();
+        assert_eq!(notifications.len(), 2);
+        assert!(matches!(
+            notifications[0],
+            Notification::FileClosed { buffer_id } if buffer_id == closed_id
+        ));
+        assert!(matches!(
+            notifications[1],
+            Notification::BufferActivated { buffer_id } if buffer_id == new_active_id
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn close_last_tab_queues_only_file_closed() {
+        // Closing the only open tab queues NPPN_FILECLOSED but NOT
+        // NPPN_BUFFERACTIVATED — there's no new active buffer to
+        // activate.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("only.txt");
+        std::fs::write(&path, "x").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() == 1,
+            Duration::from_secs(2),
+        );
+        let _ = shell.take_notifications();
+
+        let closed_id = shell.tabs[0].id as isize;
+        let _ = shell.close_active_tab().expect("close");
+        let notifications = shell.take_notifications();
+        assert_eq!(notifications.len(), 1);
+        assert!(matches!(
+            notifications[0],
+            Notification::FileClosed { buffer_id } if buffer_id == closed_id
+        ));
     }
 
     #[test]

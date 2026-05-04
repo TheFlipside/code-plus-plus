@@ -29,7 +29,8 @@ use codepp_plugin_host::{Notification, NppData, NPPMSG, NPPMSG_RANGE, PLUGIN_CMD
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, SCI_CREATEDOCUMENT, SCI_EMPTYUNDOBUFFER,
     SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETLENGTH, SCI_GETTEXT,
-    SCI_GOTOPOS, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT, SCI_SETTEXT, SC_DOCUMENTOPTION_DEFAULT,
+    SCI_GOTOPOS, SCI_RELEASEDOCUMENT, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT, SCI_SETTEXT,
+    SC_DOCUMENTOPTION_DEFAULT,
 };
 use codepp_shell::{HostHandles, PendingDialog, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR};
@@ -38,23 +39,25 @@ use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, ICC_BAR_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, NMHDR, TCITEMW,
-    TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL, TCN_SELCHANGE, WC_TABCONTROL,
+    TCM_DELETEITEM, TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL, TCN_SELCHANGE, WC_TABCONTROL,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+use windows::Win32::UI::Input::KeyboardAndMouse::{SetFocus, VK_W};
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreateMenu, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    DrawMenuBar, GetClientRect, GetMessageW, GetWindowLongPtrW, LoadCursorW, MessageBoxW,
-    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW,
-    SetWindowTextW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
-    GWLP_USERDATA, HMENU, IDC_ARROW, IDYES, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO,
-    MF_POPUP, MF_STRING, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY,
-    WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_SETFOCUS, WM_SIZE, WNDCLASSEXW,
-    WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    AppendMenuW, CreateAcceleratorTableW, CreateMenu, CreateWindowExW, DefWindowProcW,
+    DestroyWindow, DispatchMessageW, DrawMenuBar, GetClientRect, GetMessageW, GetWindowLongPtrW,
+    LoadCursorW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
+    SendMessageW, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
+    TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, FCONTROL,
+    FVIRTKEY, GWLP_USERDATA, HACCEL, HMENU, IDC_ARROW, IDYES, MB_ICONQUESTION, MB_ICONWARNING,
+    MB_OK, MB_YESNO, MF_POPUP, MF_STRING, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_APP, WM_COMMAND,
+    WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_SETFOCUS, WM_SIZE,
+    WNDCLASSEXW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
 const ID_FILE_SAVE: u16 = 1000;
 const ID_FILE_EXIT: u16 = 1001;
+const ID_FILE_CLOSE: u16 = 1002;
 
 /// Our cross-thread wake-up message. Producer threads `PostMessage`
 /// this to drag the UI thread out of its `GetMessageW` idle and into
@@ -299,6 +302,178 @@ unsafe fn fire_queued_notifications(hwnd: HWND) {
         }
         // Borrow on `state` ends at the end of each iteration so
         // the next iteration acquires fresh.
+    }
+}
+
+/// Close the active tab in response to `WM_COMMAND(ID_FILE_CLOSE)`
+/// (Ctrl+W accelerator, File → Close menu item, or future
+/// right-click → Close). Drives the platform-side cleanup the
+/// shell-side `close_active_tab` doesn't know about: removes the
+/// item from the tab control, releases the closed document via
+/// `SCI_RELEASEDOCUMENT` (drops Scintilla's last refcount on the
+/// buffer so memory is freed), and rebinds the view to the new
+/// active document if there is one. Closing the last tab leaves
+/// the view bound to a fresh empty document until the next
+/// `open_file`.
+///
+/// Notifications (`NPPN_FILECLOSED` + possibly
+/// `NPPN_BUFFERACTIVATED`) are queued by the shell-side close;
+/// we deliver them via `fire_queued_notifications` after the
+/// borrow ends, so plugin `beNotified` callbacks see a fully
+/// quiesced state.
+///
+/// The function body is wrapped in `catch_unwind` so a host-
+/// internal panic (allocation failure inside `Vec::push` or
+/// `String::clone`, a misbehaving `tracing` subscriber, the
+/// `allocate_buffer_id` overflow assert) doesn't unwind across
+/// the `extern "system"` wnd_proc frame — that's UB. Plugin
+/// code never runs here, so the wrap is purely a defense
+/// against host-internal panics.
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+unsafe fn handle_close_active_tab(hwnd: HWND) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: caller's UI-thread contract carries.
+        unsafe {
+            handle_close_active_tab_inner(hwnd);
+        }
+    }));
+}
+
+/// Body of [`handle_close_active_tab`], factored out so the
+/// caller can wrap it in a single `catch_unwind`.
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
+    // Phase 1: ask the shell to do its half. We hold a brief
+    // `&mut WindowState` borrow only for the duration of this
+    // call — `close_active_tab` is pure data-model work plus an
+    // unwatch, no plugin code runs inside it.
+    let closed = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        state.shell.close_active_tab()
+    } else {
+        return;
+    };
+    let Some(closed) = closed else {
+        return; // nothing was open
+    };
+
+    // Defense in depth: a refactor that ever produced
+    // `closed.scintilla_doc == closed.new_active_doc` (e.g. a
+    // future "reload in place" path that reuses the existing
+    // doc) would have us release the view's only ref to the
+    // doc before the rebind — UAF. Catch it as an assert in
+    // debug builds; release builds rely on the structural
+    // guarantee that `SCI_CREATEDOCUMENT` returns unique pointers.
+    if closed.scintilla_doc != 0 && closed.new_active_doc != 0 {
+        debug_assert_ne!(
+            closed.scintilla_doc, closed.new_active_doc,
+            "closed and new-active doc pointers must be distinct"
+        );
+    }
+
+    // Phase 2: platform cleanup. Re-acquire the borrow; no plugin
+    // code runs in this phase either (TCM_*, SCI_* are all
+    // synchronous and don't re-enter our wnd_proc).
+    if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        // Remove the item from the tab control. wparam is the
+        // index; lparam is unused for TCM_DELETEITEM.
+        unsafe {
+            SendMessageW(
+                state.tab_hwnd,
+                TCM_DELETEITEM,
+                Some(WPARAM(closed.closed_idx)),
+                Some(LPARAM(0)),
+            );
+        }
+        state.synced_tab_count = state.synced_tab_count.saturating_sub(1);
+
+        // Release the closed tab's Scintilla document. The view
+        // is still bound to it at this point, so Scintilla's
+        // implicit view-ownership keeps the buffer alive until
+        // the rebind below; the SCI_RELEASEDOCUMENT here drops
+        // our external reference. Skip when the doc was never
+        // materialized (background-loaded tab closed before
+        // first activation — no `SCI_CREATEDOCUMENT` was issued).
+        if closed.scintilla_doc != 0 {
+            state
+                .editor
+                .send(SCI_RELEASEDOCUMENT, 0, closed.scintilla_doc);
+        }
+
+        // Rebind the view to whatever's now active. Three sub-
+        // cases:
+        //
+        //  1. New active tab has a materialized doc — straight
+        //     SCI_SETDOCPOINTER. View releases the just-released
+        //     `closed.scintilla_doc` (now its final release →
+        //     buffer freed) and AddRefs the new doc.
+        //  2. New active tab has *no* materialized doc (it was
+        //     loaded in the background and never activated).
+        //     **Must** lazy-create + populate the doc here, not
+        //     defer to a future click: leaving the view bound to
+        //     the just-released document would create a use-after-
+        //     free window where any keystroke or paint touches a
+        //     buffer whose external refcount is zero.
+        //  3. No new active tab (closed the last open tab). View
+        //     stays bound to the freshly-released doc; Scintilla's
+        //     view ownership keeps it alive until the next open
+        //     replaces it. This is the standard "all tabs closed"
+        //     fallback — no UAF because nothing else releases the
+        //     view's hold.
+        if let Some(active_idx) = state.shell.active_tab {
+            if closed.new_active_doc != 0 {
+                state
+                    .editor
+                    .send(SCI_SETDOCPOINTER, 0, closed.new_active_doc);
+            } else if let Some(text) = state.shell.tabs.get(active_idx).map(|t| t.text.clone()) {
+                // Sub-case 2: lazily materialize the doc from the
+                // tab's stored text. `tabs.get(active_idx)` rather
+                // than `[active_idx]` so a future refactor that
+                // could put `active_tab` out of range fails as a
+                // missed-rebind no-op rather than a panic across
+                // the `extern "system"` wnd_proc frame. Same
+                // pattern as `handle_tab_selchange`'s lazy-create
+                // branch.
+                let new_doc = state
+                    .editor
+                    .send(SCI_CREATEDOCUMENT, 0, SC_DOCUMENTOPTION_DEFAULT);
+                state.editor.send(SCI_SETDOCPOINTER, 0, new_doc);
+                let mut bytes = Vec::with_capacity(text.len() + 1);
+                bytes.extend_from_slice(text.as_bytes());
+                bytes.push(0);
+                state.editor.send(SCI_SETTEXT, 0, bytes.as_ptr() as isize);
+                state.editor.send(SCI_EMPTYUNDOBUFFER, 0, 0);
+                state.editor.send(SCI_SETSAVEPOINT, 0, 0);
+                if let Some(tab) = state.shell.tabs.get_mut(active_idx) {
+                    tab.scintilla_doc = new_doc;
+                }
+            }
+
+            // Sync the visual selection on the tab strip with
+            // the new active index.
+            unsafe {
+                SendMessageW(
+                    state.tab_hwnd,
+                    TCM_SETCURSEL,
+                    Some(WPARAM(active_idx)),
+                    Some(LPARAM(0)),
+                );
+            }
+        }
+    }
+
+    // Phase 3: chrome refresh + notification delivery. No state
+    // borrow held while plugin code runs.
+    unsafe {
+        if let Some(state) = state_from_hwnd(hwnd) {
+            update_window_title(hwnd, &state.shell);
+        }
+        fire_queued_notifications(hwnd);
     }
 }
 
@@ -693,6 +868,12 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         let menubar = CreateMenu()?;
         let file_menu = CreateMenu()?;
         AppendMenuW(file_menu, MF_STRING, ID_FILE_SAVE as usize, w!("&Save"))?;
+        AppendMenuW(
+            file_menu,
+            MF_STRING,
+            ID_FILE_CLOSE as usize,
+            w!("&Close\tCtrl+W"),
+        )?;
         AppendMenuW(file_menu, MF_STRING, ID_FILE_EXIT as usize, w!("E&xit"))?;
         AppendMenuW(menubar, MF_POPUP, file_menu.0 as usize, w!("&File"))?;
 
@@ -896,7 +1077,23 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         );
         let _ = SetFocus(Some(scintilla_hwnd));
 
-        // Standard message loop.
+        // Accelerator table — Ctrl+W → ID_FILE_CLOSE. We route
+        // through `TranslateAcceleratorW` rather than handling
+        // `WM_KEYDOWN` in the wnd_proc because Scintilla owns
+        // keyboard focus while the user types, so a parent-side
+        // WM_KEYDOWN never fires for editor keystrokes. The
+        // accelerator table is queried before
+        // `TranslateMessage`/`DispatchMessageW`, posting a
+        // `WM_COMMAND(ID_FILE_CLOSE)` to the main window without
+        // depending on focus.
+        let accels = [ACCEL {
+            fVirt: ACCEL_VIRT_FLAGS(FCONTROL.0 | FVIRTKEY.0),
+            key: VK_W.0,
+            cmd: ID_FILE_CLOSE,
+        }];
+        let haccel: HACCEL = CreateAcceleratorTableW(&accels)?;
+
+        // Standard message loop with accelerator translation.
         let mut msg = MSG::default();
         loop {
             let ret = GetMessageW(&mut msg, None, 0, 0);
@@ -904,8 +1101,10 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                 0 => break,
                 -1 => return Err(windows::core::Error::from_thread()),
                 _ => {
-                    let _ = TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
+                    if TranslateAcceleratorW(main_hwnd, haccel, &msg) == 0 {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
                 }
             }
         }
@@ -1048,6 +1247,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // queues NPPN_FILESAVED; on failure the queue
                         // is empty and this is a no-op.
                         fire_queued_notifications(hwnd);
+                    }
+                    ID_FILE_CLOSE => {
+                        handle_close_active_tab(hwnd);
                     }
                     ID_FILE_EXIT => {
                         let _ = DestroyWindow(hwnd);
