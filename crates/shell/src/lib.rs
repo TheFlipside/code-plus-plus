@@ -568,18 +568,17 @@ impl Shell {
                     ui.update_status(&loaded.encoding, loaded.eol, loaded.byte_len);
                 }
 
-                let buffer_id;
-                if let Some(tab) = self.tabs.get_mut(target_idx) {
-                    tab.pending_load = None;
-                    tab.path = Some(loaded.path.clone());
-                    tab.encoding = loaded.encoding;
-                    tab.eol = loaded.eol;
-                    tab.byte_len = loaded.byte_len;
-                    tab.text = loaded.text;
-                    buffer_id = tab.id as isize;
-                } else {
+                let Some(tab) = self.tabs.get_mut(target_idx) else {
                     return;
-                }
+                };
+                tab.pending_load = None;
+                tab.path = Some(loaded.path.clone());
+                tab.encoding = loaded.encoding;
+                tab.eol = loaded.eol;
+                tab.byte_len = loaded.byte_len;
+                tab.text = loaded.text;
+                #[cfg(target_os = "windows")]
+                let buffer_id = tab.id as isize;
 
                 // Queue NPPN_FILEOPENED for the loaded plugins. The UI
                 // drains the queue via take_notifications() after
@@ -692,12 +691,11 @@ impl Shell {
         // Snapshot what we need from the active tab so we can release
         // its borrow before calling the watcher and the I/O helpers
         // (which take their own &mut self).
-        let (path, encoding, buffer_id) = {
+        let (path, encoding) = {
             let tab = self.active().ok_or(ShellError::NoActivePath)?;
             (
                 tab.path.as_ref().ok_or(ShellError::NoActivePath)?.clone(),
                 tab.encoding.clone(),
-                tab.id as isize,
             )
         };
         let text = ui.get_buffer_text();
@@ -749,8 +747,11 @@ impl Shell {
         // after this method returns and after dropping any &mut Shell
         // borrow.
         #[cfg(target_os = "windows")]
-        self.pending_notifications
-            .push(Notification::FileSaved { buffer_id });
+        {
+            let buffer_id = self.active().map(|t| t.id as isize).unwrap_or(0);
+            self.pending_notifications
+                .push(Notification::FileSaved { buffer_id });
+        }
 
         Ok(())
     }
