@@ -1350,13 +1350,14 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             w!("Find in Fi&les...\tCtrl+Shift+F"),
         )?;
         AppendMenuW(search_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
-        // Go to Line — same MF_GRAYED treatment as the rest of the
-        // Search menu until m3 wires the dialogs. The Ctrl+G
-        // accelerator still posts a WM_COMMAND, which the
-        // dispatcher trace-logs.
+        // Go to Line — wired in m3b1. The other Search items stay
+        // MF_GRAYED until m3b2 lands the Find/Replace dialogs;
+        // TranslateAcceleratorW silently discards a WM_COMMAND
+        // whose target menu item is disabled, so an enabled item
+        // is what makes Ctrl+G actually fire.
         AppendMenuW(
             search_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_SEARCH_GOTOLINE as usize,
             w!("&Go to Line...\tCtrl+G"),
         )?;
