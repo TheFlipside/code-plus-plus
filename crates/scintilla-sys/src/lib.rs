@@ -204,6 +204,12 @@ pub const SCI_GETSELECTIONSTART: u32 = 2143;
 pub const SCI_GETSELECTIONEND: u32 = 2145;
 pub const SCI_SETSELECTIONSTART: u32 = 2142;
 pub const SCI_SETSELECTIONEND: u32 = 2144;
+/// Collapse the selection to a single point — wparam = caret pos.
+/// Used by the Find dialog to advance past the previous match
+/// before re-anchoring (Scintilla's `SCI_SEARCHANCHOR` snaps to
+/// `SelectionStart`, so without collapsing forward a Find Next
+/// click would re-find the same hit on every press).
+pub const SCI_SETEMPTYSELECTION: u32 = 2556;
 
 // Document handles — Scintilla supports multiple documents attached to
 // one view via `SCI_SETDOCPOINTER`. Code++ uses this for multi-tab in

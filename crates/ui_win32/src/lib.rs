@@ -39,11 +39,11 @@ use codepp_scintilla_sys::{
     SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETLENGTH,
     SCI_GETLINECOUNT, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETVIEWEOL,
     SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_PASTE,
-    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT,
-    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
-    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN,
-    SCI_ZOOMOUT, SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
-    STYLE_DEFAULT,
+    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
+    SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND,
+    SCI_SETSELECTIONSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE,
+    SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
 };
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
@@ -70,12 +70,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW,
     SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
-    BS_GROUPBOX, BS_PUSHBUTTON, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
-    ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL,
-    HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING,
-    MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
-    MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DROPFILES,
+    BS_GROUPBOX, BS_PUSHBUTTON, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID,
+    DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
+    HACCEL, HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION,
+    MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP,
+    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DROPFILES,
     WM_INITMENUPOPUP, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT,
     WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
     WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
@@ -218,6 +218,11 @@ const IDC_FR_FIND_NEXT: u16 = 211;
 const IDC_FR_REPLACE_BTN: u16 = 212;
 const IDC_FR_REPLACE_ALL: u16 = 213;
 const IDC_FR_CLOSE: u16 = 214;
+
+/// `IDCANCEL` re-projected as `u16` for use in match arms. `IDCANCEL`
+/// itself is `MESSAGEBOX_RESULT(2)` in windows-rs and can't appear as
+/// a u16 pattern directly.
+const IDCANCEL_U16: u16 = IDCANCEL.0 as u16;
 
 /// Per-window state. Box-allocated, pointer stashed in
 /// `GWLP_USERDATA`. wnd_proc reads it back via
@@ -465,11 +470,16 @@ impl UiPlatform for Win32Ui {
     }
 
     fn search_next(&mut self, query: &str, flags: SearchFlags) -> Option<u64> {
-        // Anchor the search at the current selection so Find Next
-        // walks from where the user last left off (rather than
-        // re-finding the same match each call). search_next takes
-        // flags directly via wparam — no sticky-state surprise
-        // from a previous Replace All having left SCFIND_REGEX set.
+        // Collapse the selection to its END before re-anchoring.
+        // `SCI_SEARCHANCHOR` snaps to `SelectionStart` — without
+        // the collapse, a Find Next after a successful match
+        // would re-anchor to the start of the previous hit and
+        // re-find the same match. Collapsing to the end advances
+        // past it. `search_next` takes flags directly via wparam,
+        // so no sticky-state surprise from a previous Replace All
+        // having left SCFIND_REGEX set.
+        let end = self.editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as usize;
+        self.editor.send(SCI_SETEMPTYSELECTION, end, 0);
         self.editor.search_anchor();
         match self.editor.search_next(query, flags.bits()) {
             -1 => None,
@@ -478,6 +488,11 @@ impl UiPlatform for Win32Ui {
     }
 
     fn search_prev(&mut self, query: &str, flags: SearchFlags) -> Option<u64> {
+        // Symmetric to `search_next`: collapse to the START so the
+        // re-anchor doesn't re-find the previous match when going
+        // backward.
+        let start = self.editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as usize;
+        self.editor.send(SCI_SETEMPTYSELECTION, start, 0);
         self.editor.search_anchor();
         match self.editor.search_prev(query, flags.bits()) {
             -1 => None,
@@ -2655,14 +2670,14 @@ extern "system" fn find_replace_wnd_proc(
                         }
                         LRESULT(0)
                     }
-                    IDC_FR_CLOSE => {
-                        if notif == BN_CLICKED {
-                            let _ = ShowWindow(hwnd, SW_HIDE);
-                            // Restore focus to the editor so the
-                            // user can keep typing immediately.
-                            if let Some(window_state) = state_from_hwnd(state.main_hwnd) {
-                                let _ = SetFocus(Some(window_state.scintilla_hwnd));
-                            }
+                    // The Close button AND Esc both land here:
+                    // Esc → IsDialogMessageW translates it to a
+                    // WM_COMMAND with id=IDCANCEL (=2). Aliasing
+                    // the two ids gives us "Esc closes" for free.
+                    IDC_FR_CLOSE | IDCANCEL_U16 => {
+                        let _ = ShowWindow(hwnd, SW_HIDE);
+                        if let Some(window_state) = state_from_hwnd(state.main_hwnd) {
+                            let _ = SetFocus(Some(window_state.scintilla_hwnd));
                         }
                         LRESULT(0)
                     }
@@ -2702,6 +2717,30 @@ extern "system" fn find_replace_wnd_proc(
                     }
                 }
                 LRESULT(0)
+            }
+            // IsDialogMessageW asks the dialog "which button is the
+            // default?" via DM_GETDEFID when it sees a VK_RETURN.
+            // The standard #32770 dialog class answers this; our
+            // custom class has to do it explicitly. Returning the
+            // Find Next id with the DC_HASDEFID magic in the high
+            // word gives us "Enter triggers Find Next" without
+            // having to special-case VK_RETURN in a key handler.
+            DM_GETDEFID => {
+                let val = (DC_HASDEFID << 16) | (IDC_FR_FIND_NEXT as u32);
+                LRESULT(val as isize)
+            }
+            // Themed STATIC and EDIT controls paint their own
+            // background. Without these handlers the dialog shows
+            // a slightly-darker grey rectangle behind every label,
+            // checkbox, group box, and edit field. Returning the
+            // dialog's COLOR_WINDOW brush + transparent text bk
+            // mode makes the chrome render against the dialog's
+            // own background colour.
+            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                let brush = GetSysColorBrush(COLOR_WINDOW);
+                LRESULT(brush.0 as isize)
             }
             WM_CLOSE => {
                 // The 'X' on the title bar hides the dialog —
