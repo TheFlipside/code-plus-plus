@@ -57,7 +57,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, BST_CHECKED, BST_UNCHECKED, ICC_BAR_CLASSES, ICC_TAB_CLASSES,
     INITCOMMONCONTROLSEX, NMHDR, TCIF_TEXT, TCITEMW, TCM_DELETEITEM, TCM_GETCURSEL,
-    TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_TABCONTROL,
+    TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_COMBOBOX, WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, SetFocus, VK_0, VK_F, VK_F3, VK_G, VK_H, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
@@ -71,16 +71,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW,
     SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
-    BS_GROUPBOX, BS_PUSHBUTTON, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID,
-    DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
-    HACCEL, HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION,
-    MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DROPFILES,
-    WM_INITMENUPOPUP, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT,
-    WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
+    BS_GROUPBOX, BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT,
+    CB_SETEDITSEL, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DM_GETDEFID,
+    ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL,
+    HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING,
+    MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
+    MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+    WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETFOCUS,
+    WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
     WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
-    WS_VISIBLE,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -2966,7 +2967,12 @@ extern "system" fn find_replace_wnd_proc(
             // own background colour. The status_label gets blue
             // text on top so Replace All's count message stands
             // out against the otherwise black-on-white chrome.
-            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT => {
+            // Includes WM_CTLCOLORLISTBOX so the dropdown list of
+            // each combobox paints with the same dialog
+            // background as the rest of the chrome — without it
+            // the list shows up with the system COLOR_3DFACE
+            // tint that doesn't match.
+            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
                 let from = HWND(lparam.0 as *mut c_void);
@@ -3016,6 +3022,22 @@ extern "system" fn find_replace_wnd_proc(
     }
 }
 
+/// Select every character in a combobox's edit field. Comboboxes
+/// don't respond to `EM_SETSEL` directly — `CB_SETEDITSEL` is
+/// Win32's combobox-specific equivalent. lparam packs (start, end)
+/// as two i16 halves; `end = -1` means "end of text", giving the
+/// canonical 0xFFFF0000 wire value.
+unsafe fn combobox_select_all(combo: HWND) {
+    unsafe {
+        SendMessageW(
+            combo,
+            CB_SETEDITSEL,
+            None,
+            Some(LPARAM(0xFFFF0000u32 as i32 as isize)),
+        );
+    }
+}
+
 /// Read a button's checked state. Wraps the `BM_GETCHECK` round-trip
 /// so callers don't have to repeat the WPARAM/LPARAM dance.
 unsafe fn button_checked(btn: HWND) -> bool {
@@ -3039,6 +3061,51 @@ unsafe fn find_replace_flags(state: &FindReplaceState) -> SearchFlags {
         }
     }
     f
+}
+
+/// Refill a combobox's dropdown list from `items`, in order.
+/// `CB_RESETCONTENT` clears any previous entries first so the
+/// list reflects the current Shell history exactly. The edit
+/// portion of the combobox is left alone — only the dropdown
+/// changes.
+unsafe fn populate_combobox(combo: HWND, items: &[String]) {
+    unsafe {
+        SendMessageW(combo, CB_RESETCONTENT, None, None);
+        for item in items {
+            let item_w = HSTRING::from(item.as_str());
+            SendMessageW(
+                combo,
+                CB_ADDSTRING,
+                None,
+                Some(LPARAM(item_w.as_ptr() as isize)),
+            );
+        }
+    }
+}
+
+/// Refresh both Find what / Replace with dropdowns from the
+/// shell's stored `find_history`. Called on every dialog open
+/// so the dropdowns reflect changes since the last time.
+///
+/// # Safety
+///
+/// Caller must not hold any other live `&mut WindowState` borrow
+/// at the call site — this fn calls `state_from_hwnd` to read
+/// the history off the shell, and a second concurrent borrow of
+/// the same `WindowState` slot would alias `&mut`. The current
+/// callers (`show_find_replace_dialog`, both reuse and create
+/// paths) honour this; future callers must too.
+unsafe fn refresh_history_dropdowns(state: &FindReplaceState) {
+    let Some(window_state) = (unsafe { state_from_hwnd(state.main_hwnd) }) else {
+        return;
+    };
+    unsafe {
+        populate_combobox(state.find_edit, &window_state.shell.find_history.finds);
+        populate_combobox(
+            state.replace_edit,
+            &window_state.shell.find_history.replaces,
+        );
+    }
 }
 
 /// If the active editor has a non-empty single-line selection,
@@ -3079,12 +3146,7 @@ unsafe fn prefill_from_selection(state: &FindReplaceState) {
     let text_w = HSTRING::from(text);
     unsafe {
         let _ = SetWindowTextW(state.find_edit, &text_w);
-        SendMessageW(
-            state.find_edit,
-            EM_SETSEL,
-            Some(WPARAM(0)),
-            Some(LPARAM(-1)),
-        );
+        combobox_select_all(state.find_edit);
     }
 }
 
@@ -3364,15 +3426,11 @@ fn show_find_replace_dialog(
                         None,
                     );
                     state.in_selection_range = None;
+                    refresh_history_dropdowns(state);
                     prefill_from_selection(state);
                     let _ = ShowWindow(dlg, SW_SHOW);
                     let _ = SetFocus(Some(state.find_edit));
-                    SendMessageW(
-                        state.find_edit,
-                        EM_SETSEL,
-                        Some(WPARAM(0)),
-                        Some(LPARAM(-1)),
-                    );
+                    combobox_select_all(state.find_edit);
                     return Some(dlg);
                 }
             }
@@ -3434,7 +3492,6 @@ fn show_find_replace_dialog(
         const FIND_LABEL_W: i32 = 90;
         const EDIT_X: i32 = X_PAD + FIND_LABEL_W;
         const EDIT_W: i32 = 240;
-        const EDIT_H: i32 = 24;
         const REPLACE_ROW_Y: i32 = ROW1_Y + 32;
         const CHECKBOX_X: i32 = X_PAD;
         const CHECKBOX_W: i32 = 200;
@@ -3553,15 +3610,28 @@ fn show_find_replace_dialog(
             None,
         )
         .ok()?;
+        // "Find what" / "Replace with" are COMBOBOX (CBS_DROPDOWN)
+        // controls so the dialog can show recent queries in a
+        // dropdown — the visible edit field still acts like a
+        // plain EDIT (GetWindowTextW / SetWindowTextW work
+        // unchanged), and CB_ADDSTRING populates the list. The
+        // height parameter to CreateWindowExW for a CBS_DROPDOWN
+        // is the total *expanded* height (edit + dropdown);
+        // 200 px gives ~8 visible items at the default font.
+        const COMBOBOX_EXPANDED_H: i32 = 200;
         let find_edit = CreateWindowExW(
-            WS_EX_CLIENTEDGE,
-            w!("EDIT"),
+            WINDOW_EX_STYLE::default(),
+            WC_COMBOBOX,
             PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(ES_AUTOHSCROLL),
+            WS_CHILD
+                | WS_VISIBLE
+                | WS_TABSTOP
+                | WS_VSCROLL
+                | style_bits(CBS_DROPDOWN | CBS_AUTOHSCROLL),
             EDIT_X,
             ROW1_Y,
             EDIT_W,
-            EDIT_H,
+            COMBOBOX_EXPANDED_H,
             Some(dlg),
             Some(HMENU(IDC_FR_FIND_EDIT as usize as *mut c_void)),
             Some(instance.into()),
@@ -3569,7 +3639,7 @@ fn show_find_replace_dialog(
         )
         .ok()?;
 
-        // "Replace with:" label + edit (Replace tab only).
+        // "Replace with:" label + combobox (Replace tab only).
         let replace_label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
@@ -3586,14 +3656,14 @@ fn show_find_replace_dialog(
         )
         .ok()?;
         let replace_edit = CreateWindowExW(
-            WS_EX_CLIENTEDGE,
-            w!("EDIT"),
+            WINDOW_EX_STYLE::default(),
+            WC_COMBOBOX,
             PCWSTR::null(),
-            WS_CHILD | WS_TABSTOP | style_bits(ES_AUTOHSCROLL),
+            WS_CHILD | WS_TABSTOP | WS_VSCROLL | style_bits(CBS_DROPDOWN | CBS_AUTOHSCROLL),
             EDIT_X,
             REPLACE_ROW_Y,
             EDIT_W,
-            EDIT_H,
+            COMBOBOX_EXPANDED_H,
             Some(dlg),
             Some(HMENU(IDC_FR_REPLACE_EDIT as usize as *mut c_void)),
             Some(instance.into()),
@@ -3927,6 +3997,7 @@ fn show_find_replace_dialog(
         };
         SendMessageW(tab_ctrl, TCM_SETCURSEL, Some(WPARAM(idx as usize)), None);
         apply_tab_visibility(&state);
+        refresh_history_dropdowns(&state);
         prefill_from_selection(&state);
 
         // Drop ownership: the wnd_proc owns the Box from here on

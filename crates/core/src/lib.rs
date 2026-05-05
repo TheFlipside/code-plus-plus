@@ -7,6 +7,7 @@
 pub mod encoding;
 pub mod eol;
 pub mod file;
+pub mod find_history;
 pub mod lang;
 pub mod session;
 
@@ -15,5 +16,6 @@ pub use eol::Eol;
 pub use file::{
     LoadError, LoadErrorKind, LoadResult, LoadedFile, Loader, LoaderShutdown, RequestId,
 };
+pub use find_history::{FindHistory, FindHistoryError};
 pub use lang::LangType;
 pub use session::{Session, SessionError, Tab};

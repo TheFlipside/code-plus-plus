@@ -106,6 +106,13 @@ pub fn config_xml_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("config.xml"))
 }
 
+/// Path to `find_history.xml` under [`config_dir`] — the rolling
+/// list of recent Find Next / Replace queries the dialog populates
+/// its combobox dropdowns from.
+pub fn find_history_xml_path() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("find_history.xml"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

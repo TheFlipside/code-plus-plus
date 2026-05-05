@@ -26,7 +26,7 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use codepp_core::file::{Loader, LoaderShutdown};
 use codepp_core::lang::L_TEXT;
-use codepp_core::{Encoding, Eol, LangType, LoadResult, RequestId, Session};
+use codepp_core::{Encoding, Eol, FindHistory, LangType, LoadResult, RequestId, Session};
 use codepp_platform::watch::{FileChange, FileWatcher};
 #[cfg(target_os = "windows")]
 use codepp_plugin_host::{
@@ -399,6 +399,12 @@ pub struct Shell {
     /// `None` until the user issues their first search.
     #[cfg(target_os = "windows")]
     last_search: Option<(String, SearchFlags)>,
+    /// Rolling Find/Replace dropdown history. Loaded from
+    /// `find_history.xml` at startup; pushed to on every Find
+    /// Next / Replace operation; saved back on the same path
+    /// after each push (eager save — the file is tiny and the
+    /// alternative is silently losing history on crash).
+    pub find_history: FindHistory,
 }
 
 /// Search-option bitset matching Scintilla's `SCFIND_*` flags. Held
@@ -472,6 +478,7 @@ impl Shell {
             change_rx: fc_rx_outer,
             #[cfg(target_os = "windows")]
             last_search: None,
+            find_history: load_find_history(),
         })
     }
 
@@ -1155,6 +1162,9 @@ impl Shell {
             return None;
         }
         self.last_search = Some((query.to_string(), flags));
+        if self.find_history.push_find(query) {
+            save_find_history(&self.find_history);
+        }
         ui.search_next(query, flags)
     }
 
@@ -1182,6 +1192,9 @@ impl Shell {
             return None;
         }
         self.last_search = Some((query.to_string(), flags));
+        if self.find_history.push_find(query) {
+            save_find_history(&self.find_history);
+        }
         ui.search_prev(query, flags)
     }
 
@@ -1212,6 +1225,11 @@ impl Shell {
         if query.is_empty() || self.active_tab.is_none() {
             return false;
         }
+        let changed_find = self.find_history.push_find(query);
+        let changed_replace = self.find_history.push_replace(replacement);
+        if changed_find || changed_replace {
+            save_find_history(&self.find_history);
+        }
         ui.replace_current(query, replacement, flags)
     }
 
@@ -1232,6 +1250,11 @@ impl Shell {
         if query.is_empty() || self.active_tab.is_none() {
             return 0;
         }
+        let changed_find = self.find_history.push_find(query);
+        let changed_replace = self.find_history.push_replace(replacement);
+        if changed_find || changed_replace {
+            save_find_history(&self.find_history);
+        }
         ui.replace_all(query, replacement, flags)
     }
 
@@ -1247,6 +1270,9 @@ impl Shell {
     ) -> usize {
         if query.is_empty() || self.active_tab.is_none() {
             return 0;
+        }
+        if self.find_history.push_find(query) {
+            save_find_history(&self.find_history);
         }
         ui.count_matches(query, flags)
     }
@@ -1269,6 +1295,9 @@ impl Shell {
             return None;
         }
         self.last_search = Some((query.to_string(), flags));
+        if self.find_history.push_find(query) {
+            save_find_history(&self.find_history);
+        }
         ui.search_next_in_range(query, flags, start, end)
     }
 
@@ -1286,6 +1315,9 @@ impl Shell {
             return None;
         }
         self.last_search = Some((query.to_string(), flags));
+        if self.find_history.push_find(query) {
+            save_find_history(&self.find_history);
+        }
         ui.search_prev_in_range(query, flags, start, end)
     }
 
@@ -1304,6 +1336,11 @@ impl Shell {
     ) -> (usize, u64) {
         if query.is_empty() || self.active_tab.is_none() || end <= start {
             return (0, end);
+        }
+        let changed_find = self.find_history.push_find(query);
+        let changed_replace = self.find_history.push_replace(replacement);
+        if changed_find || changed_replace {
+            save_find_history(&self.find_history);
         }
         ui.replace_all_in_range(query, replacement, flags, start, end)
     }
@@ -1679,6 +1716,34 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
 /// and calls `wake` after each successful send. Used so the shell
 /// can wake the UI thread on every producer event without modifying
 /// the producer crates' APIs.
+/// Read `find_history.xml` if present. A missing file is normal
+/// (first launch); a corrupt one is logged + ignored so the user
+/// still gets a working dialog with empty dropdowns.
+fn load_find_history() -> FindHistory {
+    let Some(path) = codepp_platform::find_history_xml_path() else {
+        return FindHistory::default();
+    };
+    match FindHistory::load(&path) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "find_history.xml load failed; starting empty");
+            FindHistory::default()
+        }
+    }
+}
+
+/// Save `find_history.xml`. Errors are logged + swallowed —
+/// failing to persist the dropdown list isn't worth bubbling
+/// up through the find/replace UI path.
+fn save_find_history(history: &FindHistory) {
+    let Some(path) = codepp_platform::find_history_xml_path() else {
+        return;
+    };
+    if let Err(e) = history.save(&path) {
+        tracing::warn!(path = %path.display(), error = %e, "find_history.xml save failed");
+    }
+}
+
 fn spawn_forwarder<T: Send + 'static>(
     src: Receiver<T>,
     dst: Sender<T>,
