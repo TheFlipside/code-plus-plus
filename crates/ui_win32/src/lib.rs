@@ -2516,13 +2516,6 @@ fn show_goto_dialog(
         )
         .ok()?;
         let _dlg_guard = DlgDestroyGuard(dlg);
-        // Disable themed paint on the dialog itself. Win11's
-        // theme service paints WS_POPUP | WS_CAPTION client
-        // areas with its own shade regardless of class
-        // hbrBackground or WM_ERASEBKGND — disabling the theme
-        // attachment makes DefWindowProc fall back to the
-        // class brush we set above.
-        let _ = SetWindowTheme(dlg, w!(""), w!(""));
 
         // Radio pair. WS_GROUP on the first scopes the auto-radio
         // group; the second is in the same group so picking one
@@ -2776,20 +2769,20 @@ const fn style_bits(bits: i32) -> WINDOW_STYLE {
     WINDOW_STYLE(bits as u32)
 }
 
-/// COLORREF for the dialog background. Win11 themed paint
-/// silently overrides `WNDCLASSEX.hbrBackground` for
-/// `WS_POPUP | WS_CAPTION` windows — the system fills the
-/// client area with its own themed shade (~`#F9F9F9`)
-/// regardless of what we set on the class. Each dialog's
-/// `WM_ERASEBKGND` handler paints the client area with this
-/// brush explicitly to defeat that override, so this constant
-/// IS the rendered colour. Tuned to match the resting fill
-/// Win11 themed BS_AUTOCHECKBOX / BS_AUTORADIOBUTTON paint
-/// as their card so the chrome blends.
-const DIALOG_BG: u32 = 0x00F0F0F0;
+/// COLORREF used by the in-dialog elements that DO route
+/// through our paint code (the BS_GROUPBOX title clear via
+/// `WM_CTLCOLORBTN`, anything else that needs a fill). On
+/// Win11 the actual rendered dialog client area is painted
+/// by the theme service via DWM/UxTheme — outside the
+/// `WM_ERASEBKGND` message path entirely — so our class
+/// `hbrBackground` is silently overridden. Setting this
+/// constant to the same shade Win11 paints (`#F9F9F9`)
+/// makes the rectangles we DO control blend with the
+/// system-painted dialog instead of standing out.
+const DIALOG_BG: u32 = 0x00F9F9F9;
 /// COLORREF for the bottom status strip — a step darker than
 /// the dialog background so it still reads as a distinct band.
-const STATUS_BG: u32 = 0x00D8D8D8;
+const STATUS_BG: u32 = 0x00E8E8E8;
 
 /// Cached brush for the dialog background (Goto + Find/Replace
 /// hbrBackground, plus WM_CTLCOLORBTN's clear brush). Created
@@ -3759,13 +3752,6 @@ fn show_find_replace_dialog(
         // half-built popup. We `mem::forget` the guard at the end
         // of the function once the dialog is fully assembled.
         let dlg_guard = DlgDestroyGuard(dlg);
-        // Disable themed paint on the dialog itself. Win11's
-        // theme service paints WS_POPUP | WS_CAPTION client
-        // areas with its own shade regardless of class
-        // hbrBackground or WM_ERASEBKGND — disabling the theme
-        // attachment makes DefWindowProc fall back to the
-        // class brush.
-        let _ = SetWindowTheme(dlg, w!(""), w!(""));
 
         // Tab control (Find | Replace).
         let tab_ctrl = CreateWindowExW(
