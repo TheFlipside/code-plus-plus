@@ -35,23 +35,22 @@ use codepp_scintilla_sys::{
     SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC,
     SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
     SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT,
-    SCI_CUT, SCI_DOCUMENTEND, SCI_DOCUMENTSTART, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION,
-    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETFIRSTVISIBLELINE,
-    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT,
-    SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS,
-    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE, SCI_POSITIONAFTER,
-    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
-    SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND,
-    SCI_SETSELECTIONSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE,
-    SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT,
-    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
+    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
+    SCI_GETDIRECTPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH, SCI_GETLINECOUNT,
+    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
+    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
+    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
+    SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
+    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTEXT,
+    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT,
+    SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
 };
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{COLORREF, E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    GetStockObject, GetSysColorBrush, SetBkMode, SetTextColor, COLOR_WINDOW, DEFAULT_GUI_FONT,
-    HBRUSH, HDC, HFONT, TRANSPARENT,
+    GetStockObject, GetSysColorBrush, SetBkMode, SetTextColor, COLOR_3DFACE, COLOR_WINDOW,
+    DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
@@ -2297,19 +2296,22 @@ extern "system" fn goto_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 LRESULT(0)
             }
             // Themed STATIC and EDIT controls paint their own
-            // background which doesn't match the dialog's hbrBackground
-            // (`COLOR_WINDOW`) — they show as a slightly darker grey
-            // rectangle behind every label, the readonly value
-            // STATICs, and the editable target. Returning the
-            // `COLOR_WINDOW` brush here, plus setting the DC bk mode
-            // to `TRANSPARENT` so glyphs don't paint their own
-            // background rectangle either, makes everything render
-            // against the dialog's actual background colour.
-            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT => {
+            // STATIC controls (labels + readonly EDITs that
+            // route through WM_CTLCOLORSTATIC) blend with the
+            // dialog's grey COLOR_3DFACE background; the editable
+            // target's WM_CTLCOLOREDIT keeps the standard white
+            // interior so the user sees a clear input field. In
+            // both cases bk mode TRANSPARENT means glyphs don't
+            // paint their own background rect.
+            WM_CTLCOLORSTATIC => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
-                let brush = GetSysColorBrush(COLOR_WINDOW);
-                LRESULT(brush.0 as isize)
+                LRESULT(GetSysColorBrush(COLOR_3DFACE).0 as isize)
+            }
+            WM_CTLCOLOREDIT => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
@@ -2393,7 +2395,12 @@ fn show_goto_dialog(
                 lpfnWndProc: Some(goto_wnd_proc),
                 hInstance: instance.into(),
                 hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-                hbrBackground: HBRUSH((COLOR_WINDOW.0 + 1) as usize as *mut c_void),
+                // COLOR_3DFACE = "control face" = the standard
+                // light-grey dialog background. WM_CTLCOLORSTATIC
+                // returns the same brush so labels and readonly
+                // EDITs blend into it; editable EDITs get their
+                // own white interior via WM_CTLCOLOREDIT.
+                hbrBackground: HBRUSH((COLOR_3DFACE.0 + 1) as usize as *mut c_void),
                 lpszClassName: GOTO_CLASS,
                 ..Default::default()
             };
@@ -2824,11 +2831,17 @@ struct FindReplaceState {
     close_btn: HWND,
     in_selection_cb: HWND,
     /// Bottom-of-dialog STATIC for transient feedback messages
-    /// — currently used by Count and Replace All to report
-    /// numbers. Painted in blue via `WM_CTLCOLORSTATIC` (which
-    /// checks the hwnd-from to distinguish it from regular
-    /// labels).
+    /// — currently used by Count, Replace All, and the
+    /// not-found message. The colour switches between blue
+    /// (info) and red (error) based on `status_is_error`,
+    /// applied in `WM_CTLCOLORSTATIC` when the requesting hwnd
+    /// matches this label.
     status_label: HWND,
+    /// `true` when the most recent message written to
+    /// `status_label` is an error (paint red); `false` for
+    /// informational messages (paint blue). Cleared on every
+    /// dialog open.
+    status_is_error: bool,
     /// Selection range captured the moment "In selection" was
     /// last toggled on. `None` when the box is unchecked. The
     /// `replace_all_in_range` returns an updated `end` after
@@ -2967,12 +2980,13 @@ extern "system" fn find_replace_wnd_proc(
             // own background colour. The status_label gets blue
             // text on top so Replace All's count message stands
             // out against the otherwise black-on-white chrome.
-            // Includes WM_CTLCOLORLISTBOX so the dropdown list of
-            // each combobox paints with the same dialog
-            // background as the rest of the chrome — without it
-            // the list shows up with the system COLOR_3DFACE
-            // tint that doesn't match.
-            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
+            // Static labels + the bottom status STATIC paint on
+            // the dialog's grey COLOR_3DFACE background; the
+            // status STATIC switches its text colour to red on
+            // error and blue on info so Replace All / not-found
+            // messages stand out. Bk mode TRANSPARENT prevents
+            // the glyph painter from drawing its own bg rect.
+            WM_CTLCOLORSTATIC => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
                 let from = HWND(lparam.0 as *mut c_void);
@@ -2981,11 +2995,25 @@ extern "system" fn find_replace_wnd_proc(
                     && (*state_ptr).controls_ready
                     && (*state_ptr).status_label == from
                 {
-                    // RGB(0, 0, 255) — Win32 COLORREF is BGR-packed.
-                    let _ = SetTextColor(hdc, COLORREF(0x00FF0000));
+                    // COLORREF is BGR-packed. RGB(0, 0, 255) =
+                    // 0x00FF0000 (blue, info); RGB(220, 0, 0) =
+                    // 0x000000DC (red, error).
+                    let color = if (*state_ptr).status_is_error {
+                        COLORREF(0x000000DC)
+                    } else {
+                        COLORREF(0x00FF0000)
+                    };
+                    let _ = SetTextColor(hdc, color);
                 }
-                let brush = GetSysColorBrush(COLOR_WINDOW);
-                LRESULT(brush.0 as isize)
+                LRESULT(GetSysColorBrush(COLOR_3DFACE).0 as isize)
+            }
+            // Editable EDITs and combobox dropdown lists keep
+            // the standard white interior — that's the modern
+            // Win11 themed-control look the user expects.
+            WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize)
             }
             WM_CLOSE => {
                 // The 'X' on the title bar hides the dialog —
@@ -3168,15 +3196,14 @@ unsafe fn read_edit_text(edit: HWND) -> String {
 }
 
 /// "Find Next" click handler. Honors the Backward direction
-/// checkbox and Wrap around: on a miss with wrap on, moves the
-/// caret to the document start (or end, when going backward) and
-/// retries. The caret only moves on the wrap-and-retry path so a
-/// non-wrap miss leaves the user where they were. When "In
+/// checkbox and Wrap around. On a wrap-around miss we now
+/// capture the caret beforehand, move it via
+/// `SCI_SETEMPTYSELECTION` (which doesn't scroll, unlike
+/// `SCI_DOCUMENTSTART`/`END`), retry, and restore on a total
+/// miss so the viewport never jumps to position 0. When "In
 /// selection" is on we route through `find_*_in_range` against
-/// the snapshotted bounds and skip the wrap step (a wrap inside
-/// a fixed range is just "search the same range again", which
-/// is what the next click does anyway).
-unsafe fn handle_find_next(state: &FindReplaceState) {
+/// the snapshotted bounds and skip the wrap step.
+unsafe fn handle_find_next(state: &mut FindReplaceState) {
     unsafe {
         let query = read_edit_text(state.find_edit);
         if query.is_empty() {
@@ -3187,38 +3214,103 @@ unsafe fn handle_find_next(state: &FindReplaceState) {
         let wrap = button_checked(state.wrap_around_cb);
         let range = state.in_selection_range;
 
-        let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
+        // First pass — search forward / backward from the caret
+        // (or within the snapshotted range).
+        let editor;
+        let hit;
+        let saved_anchor;
+        let saved_caret;
+        let doc_len;
+        {
+            let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
+                return;
+            };
+            editor = window_state.editor;
+            saved_anchor = editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as usize;
+            saved_caret = editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as usize;
+            doc_len = editor.send(SCI_GETLENGTH, 0, 0).max(0) as usize;
+            let (shell, mut ui) = window_state.split();
+            hit = match (range, backward) {
+                (Some((s, e)), false) => shell.find_next_in_range(&mut ui, &query, flags, s, e),
+                (Some((s, e)), true) => shell.find_prev_in_range(&mut ui, &query, flags, s, e),
+                (None, false) => shell.find_next(&mut ui, &query, flags),
+                (None, true) => shell.find_prev(&mut ui, &query, flags),
+            };
+        }
+        if hit.is_some() {
+            clear_status(state);
             return;
-        };
-        let editor = window_state.editor;
-        let (shell, mut ui) = window_state.split();
+        }
 
-        let hit = match (range, backward) {
-            (Some((s, e)), false) => shell.find_next_in_range(&mut ui, &query, flags, s, e),
-            (Some((s, e)), true) => shell.find_prev_in_range(&mut ui, &query, flags, s, e),
-            (None, false) => shell.find_next(&mut ui, &query, flags),
-            (None, true) => shell.find_prev(&mut ui, &query, flags),
+        // Hit the end without finding. With wrap on (and no
+        // in-selection range), retry from the opposite end —
+        // but use SCI_SETEMPTYSELECTION (doesn't scroll) and
+        // restore the caret on a total miss so the user's view
+        // doesn't jump.
+        let wrap_hit = if wrap && range.is_none() {
+            let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
+                return;
+            };
+            let (_shell, mut ui) = window_state.split();
+            if backward {
+                editor.send(SCI_SETEMPTYSELECTION, doc_len, 0);
+                ui.search_prev(&query, flags)
+            } else {
+                editor.send(SCI_SETEMPTYSELECTION, 0, 0);
+                ui.search_next(&query, flags)
+            }
+        } else {
+            None
         };
-        if hit.is_some() || range.is_some() || !wrap {
+        if wrap_hit.is_some() {
+            clear_status(state);
             return;
         }
-        // Wrap: move caret to far end and retry once. The retry
-        // doesn't re-store last_search (find_prev/_next did that
-        // on the first call) so a fresh F3 outside the dialog
-        // reuses the original query/flags.
-        //
-        // SAFETY/lifetime: `editor` and `ui` are both Copy values
-        // captured before `split`, so neither holds a live borrow
-        // of `window_state` here. `Win32Ui::search_*` only touches
-        // `self.editor` — they do not re-enter `state_from_hwnd`
-        // — so this re-issue path is free of aliased &mut.
-        if backward {
-            editor.send(SCI_DOCUMENTEND, 0, 0);
-            let _ = ui.search_prev(&query, flags);
-        } else {
-            editor.send(SCI_DOCUMENTSTART, 0, 0);
-            let _ = ui.search_next(&query, flags);
+
+        // Total miss — restore the caret to where the user left
+        // it (so the view doesn't snap to position 0) and write
+        // the not-found message in red to the status line.
+        if wrap && range.is_none() {
+            editor.send(SCI_SETSELECTIONSTART, saved_anchor, 0);
+            editor.send(SCI_SETSELECTIONEND, saved_caret, 0);
         }
+        let scope = if range.is_some() {
+            "selection"
+        } else {
+            "entire file"
+        };
+        let msg = format!("Find: Can't find the text \"{query}\" in {scope}");
+        set_error_status(state, &msg);
+    }
+}
+
+/// Write `msg` to the status STATIC and flag it as informational
+/// (blue). Clears the error flag so a previous red message
+/// doesn't leak into a new info display.
+unsafe fn set_info_status(state: &mut FindReplaceState, msg: &str) {
+    state.status_is_error = false;
+    unsafe {
+        let _ = SetWindowTextW(state.status_label, &HSTRING::from(msg));
+    }
+}
+
+/// Same shape as [`set_info_status`] but flags the message as
+/// an error so the WM_CTLCOLORSTATIC handler paints it red.
+unsafe fn set_error_status(state: &mut FindReplaceState, msg: &str) {
+    state.status_is_error = true;
+    unsafe {
+        let _ = SetWindowTextW(state.status_label, &HSTRING::from(msg));
+    }
+}
+
+/// Clear the status STATIC and reset the colour flag. Called
+/// on every successful Find Next / Replace so the previous
+/// not-found / Replace All message doesn't linger past its
+/// usefulness.
+unsafe fn clear_status(state: &mut FindReplaceState) {
+    state.status_is_error = false;
+    unsafe {
+        let _ = SetWindowTextW(state.status_label, w!(""));
     }
 }
 
@@ -3226,11 +3318,11 @@ unsafe fn handle_find_next(state: &FindReplaceState) {
 /// buffer (Count is always whole-buffer in N++ even when "In
 /// selection" is on; we mirror that) and writes the result to
 /// the dialog's blue status line.
-unsafe fn handle_count(state: &FindReplaceState) {
+unsafe fn handle_count(state: &mut FindReplaceState) {
     unsafe {
         let query = read_edit_text(state.find_edit);
         if query.is_empty() {
-            let _ = SetWindowTextW(state.status_label, w!(""));
+            clear_status(state);
             return;
         }
         let flags = find_replace_flags(state);
@@ -3246,7 +3338,7 @@ unsafe fn handle_count(state: &FindReplaceState) {
             count,
             if count == 1 { "" } else { "es" },
         );
-        let _ = SetWindowTextW(state.status_label, &HSTRING::from(msg));
+        set_info_status(state, &msg);
     }
 }
 
@@ -3284,7 +3376,7 @@ unsafe fn handle_in_selection_toggle(state: &mut FindReplaceState) {
 
 /// "Replace" click handler — substitutes the current selection if
 /// it matches the query, then advances to the next match.
-unsafe fn handle_replace(state: &FindReplaceState) {
+unsafe fn handle_replace(state: &mut FindReplaceState) {
     unsafe {
         let query = read_edit_text(state.find_edit);
         if query.is_empty() {
@@ -3293,11 +3385,13 @@ unsafe fn handle_replace(state: &FindReplaceState) {
         let replacement = read_edit_text(state.replace_edit);
         let flags = find_replace_flags(state);
 
-        let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
-            return;
-        };
-        let (shell, mut ui) = window_state.split();
-        let _ = shell.replace_current(&mut ui, &query, &replacement, flags);
+        {
+            let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
+                return;
+            };
+            let (shell, mut ui) = window_state.split();
+            let _ = shell.replace_current(&mut ui, &query, &replacement, flags);
+        }
         // Always advance after a Replace click — matches the
         // Notepad++ flow where Replace == "swap this match and
         // jump to the next one." The window_state borrow above
@@ -3361,7 +3455,7 @@ unsafe fn handle_replace_all(state: &mut FindReplaceState) {
             if count == 1 { "was" } else { "were" },
             scope,
         );
-        let _ = SetWindowTextW(state.status_label, &HSTRING::from(msg));
+        set_info_status(state, &msg);
     }
 }
 
@@ -3418,7 +3512,7 @@ fn show_find_replace_dialog(
                     // In-selection snapshot — its bounds may
                     // refer to text the user has since edited
                     // away.
-                    let _ = SetWindowTextW(state.status_label, w!(""));
+                    clear_status(state);
                     SendMessageW(
                         state.in_selection_cb,
                         BM_SETCHECK,
@@ -3445,7 +3539,11 @@ fn show_find_replace_dialog(
                 lpfnWndProc: Some(find_replace_wnd_proc),
                 hInstance: instance.into(),
                 hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-                hbrBackground: HBRUSH((COLOR_WINDOW.0 + 1) as usize as *mut c_void),
+                // See the matching note on the Goto class —
+                // COLOR_3DFACE is the standard light-grey
+                // dialog background that label/static chrome
+                // blends into.
+                hbrBackground: HBRUSH((COLOR_3DFACE.0 + 1) as usize as *mut c_void),
                 lpszClassName: FIND_REPLACE_CLASS,
                 ..Default::default()
             };
@@ -3476,6 +3574,7 @@ fn show_find_replace_dialog(
             close_btn: HWND::default(),
             in_selection_cb: HWND::default(),
             status_label: HWND::default(),
+            status_is_error: false,
             in_selection_range: None,
             controls_ready: false,
         });

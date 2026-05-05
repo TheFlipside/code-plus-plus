@@ -1734,7 +1734,11 @@ fn load_find_history() -> FindHistory {
 
 /// Save `find_history.xml`. Errors are logged + swallowed —
 /// failing to persist the dropdown list isn't worth bubbling
-/// up through the find/replace UI path.
+/// up through the find/replace UI path. Cfg-gated to Windows
+/// because every caller is on a cfg-gated find/replace method;
+/// without the gate, a Linux/macOS lint build flags it as
+/// dead code.
+#[cfg(target_os = "windows")]
 fn save_find_history(history: &FindHistory) {
     let Some(path) = codepp_platform::find_history_xml_path() else {
         return;
