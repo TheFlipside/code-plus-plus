@@ -49,8 +49,8 @@ use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatfo
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{COLORREF, E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    GetStockObject, GetSysColor, GetSysColorBrush, SetBkColor, SetBkMode, SetTextColor,
-    COLOR_3DFACE, COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, NULL_BRUSH, TRANSPARENT,
+    CreateSolidBrush, GetStockObject, GetSysColorBrush, SetBkColor, SetBkMode, SetTextColor,
+    COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, NULL_BRUSH, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
@@ -2411,12 +2411,13 @@ fn show_goto_dialog(
                 lpfnWndProc: Some(goto_wnd_proc),
                 hInstance: instance.into(),
                 hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
-                // COLOR_3DFACE = "control face" = the standard
-                // light-grey dialog background. WM_CTLCOLORSTATIC
-                // returns the same brush so labels and readonly
-                // EDITs blend into it; editable EDITs get their
-                // own white interior via WM_CTLCOLOREDIT.
-                hbrBackground: HBRUSH((COLOR_3DFACE.0 + 1) as usize as *mut c_void),
+                // Custom-RGB brush so the dialog background
+                // matches the tone Win11 themed checkboxes /
+                // radios / push buttons paint as their
+                // background. COLOR_3DFACE reads as a touch
+                // darker than that on Win11 themed mode and
+                // produces a visible mismatch.
+                hbrBackground: dialog_bg_brush(),
                 lpszClassName: GOTO_CLASS,
                 ..Default::default()
             };
@@ -2759,6 +2760,38 @@ const fn style_bits(bits: i32) -> WINDOW_STYLE {
     WINDOW_STYLE(bits as u32)
 }
 
+/// COLORREF for the dialog background. Picked to match the tone
+/// Win11 themed BS_AUTOCHECKBOX / BS_AUTORADIOBUTTON paint as
+/// their resting background. Slightly lighter than COLOR_3DFACE
+/// (which on themed Win11 reads as a touch darker than the
+/// themed checkbox tone, producing a visible mismatch).
+const DIALOG_BG: u32 = 0x00F3F3F3;
+/// COLORREF for the bottom status strip — slightly darker than
+/// the dialog background so it reads as a distinct band.
+const STATUS_BG: u32 = 0x00E5E5E5;
+
+/// Cached brush for the dialog background (Goto + Find/Replace
+/// hbrBackground, plus WM_CTLCOLORBTN's clear brush). Created
+/// lazily once on first use; the leaked HBRUSH lives for the
+/// app's lifetime, which is fine — the alternative is owning
+/// the brush in WindowState and threading it through every
+/// dialog wnd_proc.
+fn dialog_bg_brush() -> HBRUSH {
+    use std::sync::OnceLock;
+    static BRUSH: OnceLock<isize> = OnceLock::new();
+    let raw = *BRUSH.get_or_init(|| unsafe { CreateSolidBrush(COLORREF(DIALOG_BG)).0 as isize });
+    HBRUSH(raw as *mut c_void)
+}
+
+/// Cached brush for the bottom status strip — see
+/// [`dialog_bg_brush`] for the lifetime rationale.
+fn status_bg_brush() -> HBRUSH {
+    use std::sync::OnceLock;
+    static BRUSH: OnceLock<isize> = OnceLock::new();
+    let raw = *BRUSH.get_or_init(|| unsafe { CreateSolidBrush(COLORREF(STATUS_BG)).0 as isize });
+    HBRUSH(raw as *mut c_void)
+}
+
 /// RAII guard that re-enables `owner` on drop. `show_goto_dialog`
 /// disables the owner before the modal pump and relies on the guard
 /// to re-enable it on every exit path — including a panic between
@@ -2999,16 +3032,8 @@ extern "system" fn find_replace_wnd_proc(
             // STATIC controls return NULL_BRUSH so the dialog's
             // painted hbrBackground shows through them — the
             // status_label is the exception (it gets an explicit
-            // COLOR_3DFACE fill so it reads as a slightly-darker
-            // strip with red/blue text for error/info). Theming-
-            // disabled BUTTON controls (the checkboxes, radios,
-            // and group box) need a real brush so classic paint
-            // can CLEAR the control rect between redraws — without
-            // that the BS_GROUPBOX title is overlapped by the
-            // border line, and toggling a checkbox stacks text
-            // glyphs over the previous frame's text. COLOR_3DFACE
-            // matches the dialog background so the cleared rect
-            // blends in.
+            // status-bg fill so it reads as a slightly-darker
+            // strip with red/blue text for error/info).
             WM_CTLCOLORSTATIC => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
@@ -3027,24 +3052,21 @@ extern "system" fn find_replace_wnd_proc(
                         COLORREF(0x00FF0000)
                     };
                     let _ = SetTextColor(hdc, color);
-                    LRESULT(GetSysColorBrush(COLOR_3DFACE).0 as isize)
+                    LRESULT(status_bg_brush().0 as isize)
                 } else {
                     LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
                 }
             }
+            // Only the theme-disabled BS_GROUPBOX (the "Search
+            // Mode" frame) routes through this — themed
+            // checkboxes / radios paint themselves and ignore
+            // the brush. Returning the dialog brush lets
+            // classic groupbox paint clear the title rect so
+            // the border line breaks at the title text.
             WM_CTLCOLORBTN => {
-                // Theme-disabled BS_AUTOCHECKBOX / BS_AUTORADIOBUTTON
-                // / BS_GROUPBOX rely on classic DrawText for the
-                // label, which only clears the glyph background
-                // when bkmode is OPAQUE (the default — we
-                // deliberately do NOT set TRANSPARENT here, or
-                // every toggle would stack new glyphs over the
-                // previous frame's). The bk colour matches the
-                // returned brush so the cleared rect blends with
-                // the rest of the dialog.
                 let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkColor(hdc, COLORREF(GetSysColor(COLOR_3DFACE)));
-                LRESULT(GetSysColorBrush(COLOR_3DFACE).0 as isize)
+                let _ = SetBkColor(hdc, COLORREF(DIALOG_BG));
+                LRESULT(dialog_bg_brush().0 as isize)
             }
             // Editable EDITs and combobox dropdown lists keep
             // the standard white interior — that's the modern
@@ -3579,10 +3601,9 @@ fn show_find_replace_dialog(
                 hInstance: instance.into(),
                 hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
                 // See the matching note on the Goto class —
-                // COLOR_3DFACE is the standard light-grey
-                // dialog background that label/static chrome
-                // blends into.
-                hbrBackground: HBRUSH((COLOR_3DFACE.0 + 1) as usize as *mut c_void),
+                // custom RGB brush keyed to the Win11 themed
+                // checkbox tone so the chrome matches.
+                hbrBackground: dialog_bg_brush(),
                 lpszClassName: FIND_REPLACE_CLASS,
                 ..Default::default()
             };
