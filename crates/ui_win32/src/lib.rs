@@ -68,14 +68,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
     TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_SETCHECK, BN_CLICKED,
     BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, ES_RIGHT, FCONTROL, FSHIFT, FVIRTKEY,
-    GWLP_USERDATA, HACCEL, HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION,
-    MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
-    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_SHOW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP,
-    WM_NCCREATE, WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION,
-    WS_CHILD, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    CW_USEDEFAULT, ES_AUTOHSCROLL, ES_NUMBER, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL,
+    HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING,
+    MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
+    MF_STRING, MF_UNCHECKED, MSG, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
+    WM_COMMAND, WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_QUIT,
+    WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT,
+    WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -2258,15 +2258,19 @@ fn show_goto_dialog(
             None,
         )
         .ok()?;
+        // Readonly value: STATIC, not EDIT. STATICs render with the
+        // dialog's own background brush, so the greyish-edit-field
+        // look that ES_READONLY produces is gone. SetWindowTextW
+        // still drives the displayed value.
         let here = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
-            w!("EDIT"),
+            w!("STATIC"),
             PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE | style_bits(ES_READONLY | ES_AUTOHSCROLL | ES_RIGHT),
+            WS_CHILD | WS_VISIBLE,
             BOX_X,
-            ROW1_Y,
+            ROW1_Y + 2,
             BOX_W,
-            BOX_H,
+            LABEL_H,
             Some(dlg),
             Some(HMENU(IDC_GOTO_HERE as usize as *mut c_void)),
             Some(instance.into()),
@@ -2295,7 +2299,7 @@ fn show_goto_dialog(
             WINDOW_EX_STYLE::default(),
             w!("EDIT"),
             PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(ES_NUMBER | ES_AUTOHSCROLL | ES_RIGHT),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(ES_NUMBER | ES_AUTOHSCROLL),
             BOX_X,
             ROW2_Y,
             BOX_W,
@@ -2344,13 +2348,13 @@ fn show_goto_dialog(
         .ok()?;
         let max_box = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
-            w!("EDIT"),
+            w!("STATIC"),
             PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE | style_bits(ES_READONLY | ES_AUTOHSCROLL | ES_RIGHT),
+            WS_CHILD | WS_VISIBLE,
             BOX_X,
-            ROW3_Y,
+            ROW3_Y + 2,
             BOX_W,
-            BOX_H,
+            LABEL_H,
             Some(dlg),
             Some(HMENU(IDC_GOTO_MAX as usize as *mut c_void)),
             Some(instance.into()),
