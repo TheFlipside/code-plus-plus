@@ -3013,7 +3013,7 @@ unsafe fn handle_replace_all(state: &FindReplaceState) {
             shell.replace_all(&mut ui, &query, &replacement, flags)
         };
         let msg = format!(
-            "Replace All: {} occurence{} {} replaced in entire file",
+            "Replace All: {} occurrence{} {} replaced in entire file",
             count,
             if count == 1 { "" } else { "s" },
             if count == 1 { "was" } else { "were" },
