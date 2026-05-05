@@ -50,7 +50,7 @@ use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{COLORREF, E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetStockObject, GetSysColorBrush, SetBkMode, SetTextColor, COLOR_3DFACE, COLOR_WINDOW,
-    DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, TRANSPARENT,
+    DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, NULL_BRUSH, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
@@ -76,11 +76,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING,
     MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
     MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETFOCUS,
-    WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
-    WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
-    WS_VISIBLE, WS_VSCROLL,
+    WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
+    WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT,
+    WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE,
+    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU,
+    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -2296,17 +2296,17 @@ extern "system" fn goto_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 LRESULT(0)
             }
             // Themed STATIC and EDIT controls paint their own
-            // STATIC controls (labels + readonly EDITs that
-            // route through WM_CTLCOLORSTATIC) blend with the
-            // dialog's grey COLOR_3DFACE background; the editable
-            // target's WM_CTLCOLOREDIT keeps the standard white
-            // interior so the user sees a clear input field. In
-            // both cases bk mode TRANSPARENT means glyphs don't
-            // paint their own background rect.
-            WM_CTLCOLORSTATIC => {
+            // STATIC controls + the group-box BTN return
+            // NULL_BRUSH so the dialog's painted hbrBackground
+            // shows through. Returning a system COLOR_3DFACE
+            // brush would re-paint with the unthemed system
+            // grey, which on Win11 themed mode is slightly
+            // darker than the actual dialog background and
+            // produces visible rectangles around every label.
+            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
-                LRESULT(GetSysColorBrush(COLOR_3DFACE).0 as isize)
+                LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
             }
             WM_CTLCOLOREDIT => {
                 let hdc = HDC(wparam.0 as *mut c_void);
@@ -2980,18 +2980,22 @@ extern "system" fn find_replace_wnd_proc(
             // own background colour. The status_label gets blue
             // text on top so Replace All's count message stands
             // out against the otherwise black-on-white chrome.
-            // Static labels + the bottom status STATIC paint on
-            // the dialog's grey COLOR_3DFACE background; the
-            // status STATIC switches its text colour to red on
-            // error and blue on info so Replace All / not-found
-            // messages stand out. Bk mode TRANSPARENT prevents
-            // the glyph painter from drawing its own bg rect.
-            WM_CTLCOLORSTATIC => {
+            // STATIC controls + the group-box BTN: regular
+            // labels return NULL_BRUSH so the dialog's themed
+            // hbrBackground shows through (returning a system
+            // COLOR_3DFACE brush would paint a slightly-darker
+            // rectangle around every label on Win11). The
+            // bottom status_label is the one exception — the
+            // user wants it slightly darker than the dialog,
+            // so it gets the explicit COLOR_3DFACE fill plus a
+            // red-or-blue text colour for error vs info.
+            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
                 let from = HWND(lparam.0 as *mut c_void);
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const FindReplaceState;
-                if !state_ptr.is_null()
+                if msg == WM_CTLCOLORSTATIC
+                    && !state_ptr.is_null()
                     && (*state_ptr).controls_ready
                     && (*state_ptr).status_label == from
                 {
@@ -3004,8 +3008,10 @@ extern "system" fn find_replace_wnd_proc(
                         COLORREF(0x00FF0000)
                     };
                     let _ = SetTextColor(hdc, color);
+                    LRESULT(GetSysColorBrush(COLOR_3DFACE).0 as isize)
+                } else {
+                    LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
                 }
-                LRESULT(GetSysColorBrush(COLOR_3DFACE).0 as isize)
             }
             // Editable EDITs and combobox dropdown lists keep
             // the standard white interior — that's the modern
