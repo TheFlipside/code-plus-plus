@@ -68,7 +68,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
     TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_SETCHECK, BN_CLICKED,
     BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY,
+    CW_USEDEFAULT, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, ES_RIGHT, FCONTROL, FSHIFT, FVIRTKEY,
     GWLP_USERDATA, HACCEL, HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION,
     MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
     MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_SHOW, WINDOW_EX_STYLE,
@@ -2163,8 +2163,8 @@ fn show_goto_dialog(
         // Center on the owner. GetWindowRect returns screen coords,
         // which is what CreateWindowExW for a top-level WS_POPUP
         // wants.
-        const DLG_W: i32 = 300;
-        const DLG_H: i32 = 290;
+        const DLG_W: i32 = 480;
+        const DLG_H: i32 = 195;
         let mut owner_rect = RECT::default();
         let _ = GetWindowRect(owner, &mut owner_rect);
         let owner_w = owner_rect.right - owner_rect.left;
@@ -2175,7 +2175,7 @@ fn show_goto_dialog(
         let dlg = CreateWindowExW(
             WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
             GOTO_CLASS,
-            w!("Go to..."),
+            w!("Go To..."),
             WS_POPUP | WS_CAPTION | WS_SYSMENU,
             dlg_x,
             dlg_y,
@@ -2189,12 +2189,24 @@ fn show_goto_dialog(
         .ok()?;
         let _dlg_guard = DlgDestroyGuard(dlg);
 
-        // Layout (client-area pixels). Three rows of label + box,
-        // radio pair on top, OK/Cancel at bottom.
-        const X_PAD: i32 = 16;
-        const ROW_W: i32 = 260;
+        // Layout (client-area pixels). Three rows of [label] [box]
+        // [button], with radios on top. The buttons sit inline
+        // with rows 2 and 3 — Notepad++ style — rather than
+        // sharing a bottom strip.
+        const X_PAD: i32 = 14;
+        const LABEL_X: i32 = X_PAD;
+        const LABEL_W: i32 = 190;
+        const BOX_X: i32 = LABEL_X + LABEL_W + 6;
+        const BOX_W: i32 = 70;
+        const BTN_X: i32 = BOX_X + BOX_W + 16;
+        const BTN_W: i32 = 160;
         const BOX_H: i32 = 22;
-        const LABEL_H: i32 = 18;
+        const LABEL_H: i32 = 20;
+        const BTN_H: i32 = 26;
+        const RADIO_Y: i32 = 14;
+        const ROW1_Y: i32 = 50;
+        const ROW2_Y: i32 = 84;
+        const ROW3_Y: i32 = 118;
 
         // Radio pair. WS_GROUP on the first scopes the auto-radio
         // group; the second is in the same group so picking one
@@ -2205,7 +2217,7 @@ fn show_goto_dialog(
             w!("&Line"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | style_bits(BS_AUTORADIOBUTTON),
             X_PAD,
-            14,
+            RADIO_Y,
             90,
             BOX_H,
             Some(dlg),
@@ -2219,8 +2231,8 @@ fn show_goto_dialog(
             w!("BUTTON"),
             w!("&Offset"),
             WS_CHILD | WS_VISIBLE | style_bits(BS_AUTORADIOBUTTON),
-            X_PAD + 100,
-            14,
+            X_PAD + 140,
+            RADIO_Y,
             90,
             BOX_H,
             Some(dlg),
@@ -2230,15 +2242,15 @@ fn show_goto_dialog(
         )
         .ok()?;
 
-        // Row 1: "You are here:" + readonly box.
+        // Row 1: "You are here:" + readonly box. No button.
         let label_here = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             w!("You are here:"),
             WS_CHILD | WS_VISIBLE,
-            X_PAD,
-            54,
-            ROW_W,
+            LABEL_X,
+            ROW1_Y + 2,
+            LABEL_W,
             LABEL_H,
             Some(dlg),
             None,
@@ -2250,10 +2262,10 @@ fn show_goto_dialog(
             WINDOW_EX_STYLE::default(),
             w!("EDIT"),
             PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE | style_bits(ES_READONLY | ES_AUTOHSCROLL),
-            X_PAD,
-            74,
-            ROW_W,
+            WS_CHILD | WS_VISIBLE | style_bits(ES_READONLY | ES_AUTOHSCROLL | ES_RIGHT),
+            BOX_X,
+            ROW1_Y,
+            BOX_W,
             BOX_H,
             Some(dlg),
             Some(HMENU(IDC_GOTO_HERE as usize as *mut c_void)),
@@ -2262,15 +2274,16 @@ fn show_goto_dialog(
         )
         .ok()?;
 
-        // Row 2: "You want to go to:" + editable box.
+        // Row 2: "You want to go to:" + editable box + "Go" button
+        // (the dialog's IDOK).
         let label_target = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             w!("You want to go to:"),
             WS_CHILD | WS_VISIBLE,
-            X_PAD,
-            108,
-            ROW_W,
+            LABEL_X,
+            ROW2_Y + 2,
+            LABEL_W,
             LABEL_H,
             Some(dlg),
             None,
@@ -2282,10 +2295,10 @@ fn show_goto_dialog(
             WINDOW_EX_STYLE::default(),
             w!("EDIT"),
             PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(ES_NUMBER | ES_AUTOHSCROLL),
-            X_PAD,
-            128,
-            ROW_W,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(ES_NUMBER | ES_AUTOHSCROLL | ES_RIGHT),
+            BOX_X,
+            ROW2_Y,
+            BOX_W,
             BOX_H,
             Some(dlg),
             Some(HMENU(IDC_GOTO_TARGET as usize as *mut c_void)),
@@ -2293,16 +2306,35 @@ fn show_goto_dialog(
             None,
         )
         .ok()?;
+        // Buttons are 4px taller than the boxes they sit beside,
+        // so subtract `(BTN_H - BOX_H) / 2 = 2` from the row Y to
+        // center the button vertically against its companion box.
+        let ok_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("&Go"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_DEFPUSHBUTTON),
+            BTN_X,
+            ROW2_Y - 2,
+            BTN_W,
+            BTN_H,
+            Some(dlg),
+            Some(HMENU(IDOK.0 as u16 as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
 
-        // Row 3: "You can't go further than:" + readonly box.
+        // Row 3: "You can't go further than:" + readonly box +
+        // "I'm going nowhere" button (the dialog's IDCANCEL).
         let label_max = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             w!("You can't go further than:"),
             WS_CHILD | WS_VISIBLE,
-            X_PAD,
-            162,
-            ROW_W,
+            LABEL_X,
+            ROW3_Y + 2,
+            LABEL_W,
             LABEL_H,
             Some(dlg),
             None,
@@ -2314,10 +2346,10 @@ fn show_goto_dialog(
             WINDOW_EX_STYLE::default(),
             w!("EDIT"),
             PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE | style_bits(ES_READONLY | ES_AUTOHSCROLL),
-            X_PAD,
-            182,
-            ROW_W,
+            WS_CHILD | WS_VISIBLE | style_bits(ES_READONLY | ES_AUTOHSCROLL | ES_RIGHT),
+            BOX_X,
+            ROW3_Y,
+            BOX_W,
             BOX_H,
             Some(dlg),
             Some(HMENU(IDC_GOTO_MAX as usize as *mut c_void)),
@@ -2325,32 +2357,15 @@ fn show_goto_dialog(
             None,
         )
         .ok()?;
-
-        // Buttons.
-        let ok_btn = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            w!("OK"),
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_DEFPUSHBUTTON),
-            X_PAD + 100,
-            226,
-            75,
-            26,
-            Some(dlg),
-            Some(HMENU(IDOK.0 as u16 as usize as *mut c_void)),
-            Some(instance.into()),
-            None,
-        )
-        .ok()?;
         let cancel = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
-            w!("Cancel"),
+            w!("I'm going &nowhere"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_PUSHBUTTON),
-            X_PAD + 185,
-            226,
-            75,
-            26,
+            BTN_X,
+            ROW3_Y - 2,
+            BTN_W,
+            BTN_H,
             Some(dlg),
             Some(HMENU(IDCANCEL.0 as u16 as usize as *mut c_void)),
             Some(instance.into()),
