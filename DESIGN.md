@@ -341,6 +341,12 @@ This rule exists specifically to prevent the failure mode where layers are built
 - The previous phase's demo still passes.
 - Cold-start time measured against the §8 budget. Regression > 20% blocks the phase.
 
+### 7.4 Phase 5 polish items deferred from earlier phases
+
+These are not blockers for the phase that surfaced them, but get addressed in Phase 5 as part of the cross-platform bring-up.
+
+- **Migrate `ui_win32` modal/modeless dialogs from custom `WS_POPUP` classes to standard `#32770` dialog templates.** The Goto and Find/Replace dialogs currently use `CreateWindowExW` with our own registered class. Win11 paints the client area of `WS_POPUP | WS_CAPTION` windows through DWM/UxTheme, outside the `WM_ERASEBKGND` message path entirely — so `WNDCLASSEX.hbrBackground` is silently overridden and our chrome ends up at a slightly different shade than what the system paints. The standard dialog class (`#32770`, instantiated via `DialogBoxIndirectParamW` / `CreateDialogIndirectParamW` with a `DLGTEMPLATEEX` in memory) is the only window class Microsoft retrofitted with cooperative themed-background logic; that's the path Notepad++ uses, and it's why N++'s dialog chrome blends seamlessly. Migrating means a different dispatch model (dialog procs return `BOOL`, use `EndDialog` instead of `DestroyWindow`, etc.) and constructing in-memory `DLGTEMPLATE` byte streams — meaningful work but mechanical. Worth doing in Phase 5 alongside the `ui_gtk`/`ui_cocoa` brings-up because Linux/macOS will need their own dialog primitives anyway, so this is a natural moment to redesign the cross-platform dialog abstraction.
+
 ---
 
 ## 8. Hard Performance Constraints
