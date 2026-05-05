@@ -75,8 +75,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_SHOW, WINDOW_EX_STYLE,
     WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY,
     WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT,
-    WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP,
-    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
+    WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -2180,22 +2181,26 @@ fn show_goto_dialog(
         // window size is derived via AdjustWindowRectEx so the
         // border/title bar don't eat into the right padding the way
         // they would if we passed CLIENT_W as the window size.
-        const CLIENT_W: i32 = 480;
-        const CLIENT_H: i32 = 195;
+        // Tightened against Notepad++'s reference proportions:
+        // narrower dialog so the buttons sit close to the boxes,
+        // shorter so there's only ~14 px of breathing room below
+        // the bottom button.
+        const CLIENT_W: i32 = 430;
+        const CLIENT_H: i32 = 156;
         const X_PAD: i32 = 14;
         const LABEL_X: i32 = X_PAD;
         const LABEL_W: i32 = 155;
         const BOX_X: i32 = 175;
-        const BOX_W: i32 = 90;
+        const BOX_W: i32 = 80;
         const BTN_W: i32 = 130;
         const BTN_X: i32 = CLIENT_W - X_PAD - BTN_W;
         const BOX_H: i32 = 22;
         const LABEL_H: i32 = 20;
         const BTN_H: i32 = 26;
-        const RADIO_Y: i32 = 14;
-        const ROW1_Y: i32 = 50;
-        const ROW2_Y: i32 = 84;
-        const ROW3_Y: i32 = 118;
+        const RADIO_Y: i32 = 12;
+        const ROW1_Y: i32 = 44;
+        const ROW2_Y: i32 = 74;
+        const ROW3_Y: i32 = 104;
 
         let mut window_rect = RECT {
             left: 0,
@@ -2286,13 +2291,16 @@ fn show_goto_dialog(
             None,
         )
         .ok()?;
-        // Readonly value: themed EDIT with ES_READONLY so it shows
-        // a visible border (matching the editable target row).
-        // The greyish-fill problem is handled by WM_CTLCOLORSTATIC
-        // returning the dialog's COLOR_WINDOW brush — readonly
-        // EDITs send WM_CTLCOLORSTATIC, not WM_CTLCOLOREDIT.
+        // Readonly value: themed EDIT with ES_READONLY + the
+        // sunken `WS_EX_CLIENTEDGE` border so the box is visibly
+        // framed. Without the extended style the EDIT paints
+        // borderless on Windows 11 and merges into the dialog
+        // background. The greyish-fill problem stays handled by
+        // WM_CTLCOLORSTATIC returning the dialog's COLOR_WINDOW
+        // brush — readonly EDITs send WM_CTLCOLORSTATIC, not
+        // WM_CTLCOLOREDIT.
         let here = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
+            WS_EX_CLIENTEDGE,
             w!("EDIT"),
             PCWSTR::null(),
             WS_CHILD | WS_VISIBLE | style_bits(ES_READONLY | ES_AUTOHSCROLL),
@@ -2325,7 +2333,7 @@ fn show_goto_dialog(
         )
         .ok()?;
         let target = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
+            WS_EX_CLIENTEDGE,
             w!("EDIT"),
             PCWSTR::null(),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(ES_NUMBER | ES_AUTOHSCROLL),
