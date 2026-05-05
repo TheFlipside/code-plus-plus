@@ -62,21 +62,21 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CreateAcceleratorTableW, CreateMenu,
-    CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyWindow, DispatchMessageW, DrawMenuBar,
-    GetClientRect, GetMenuItemCount, GetMessageW, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
-    IsDialogMessageW, IsWindow, LoadCursorW, MessageBoxW, MoveWindow, PostMessageW,
+    AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CreateAcceleratorTableW,
+    CreateMenu, CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyWindow, DispatchMessageW,
+    DrawMenuBar, GetClientRect, GetMenuItemCount, GetMessageW, GetWindowLongPtrW, GetWindowRect,
+    GetWindowTextW, IsDialogMessageW, IsWindow, LoadCursorW, MessageBoxW, MoveWindow, PostMessageW,
     PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
     TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_SETCHECK, BN_CLICKED,
     BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, ES_AUTOHSCROLL, ES_NUMBER, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL,
-    HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING,
-    MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
-    MF_STRING, MF_UNCHECKED, MSG, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
-    WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP,
-    WM_NCCREATE, WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION,
-    WS_CHILD, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    CW_USEDEFAULT, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY,
+    GWLP_USERDATA, HACCEL, HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION,
+    MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_SHOW, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT,
+    WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -2176,17 +2176,48 @@ fn show_goto_dialog(
         });
         let state_ptr: *mut GotoDialogState = &mut *state;
 
-        // Center on the owner. GetWindowRect returns screen coords,
-        // which is what CreateWindowExW for a top-level WS_POPUP
-        // wants.
-        const DLG_W: i32 = 480;
-        const DLG_H: i32 = 195;
+        // Layout is computed in CLIENT coordinates and the actual
+        // window size is derived via AdjustWindowRectEx so the
+        // border/title bar don't eat into the right padding the way
+        // they would if we passed CLIENT_W as the window size.
+        const CLIENT_W: i32 = 480;
+        const CLIENT_H: i32 = 195;
+        const X_PAD: i32 = 14;
+        const LABEL_X: i32 = X_PAD;
+        const LABEL_W: i32 = 155;
+        const BOX_X: i32 = 175;
+        const BOX_W: i32 = 90;
+        const BTN_W: i32 = 130;
+        const BTN_X: i32 = CLIENT_W - X_PAD - BTN_W;
+        const BOX_H: i32 = 22;
+        const LABEL_H: i32 = 20;
+        const BTN_H: i32 = 26;
+        const RADIO_Y: i32 = 14;
+        const ROW1_Y: i32 = 50;
+        const ROW2_Y: i32 = 84;
+        const ROW3_Y: i32 = 118;
+
+        let mut window_rect = RECT {
+            left: 0,
+            top: 0,
+            right: CLIENT_W,
+            bottom: CLIENT_H,
+        };
+        let _ = AdjustWindowRectEx(
+            &mut window_rect,
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            false,
+            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+        );
+        let dlg_w = window_rect.right - window_rect.left;
+        let dlg_h = window_rect.bottom - window_rect.top;
+
         let mut owner_rect = RECT::default();
         let _ = GetWindowRect(owner, &mut owner_rect);
         let owner_w = owner_rect.right - owner_rect.left;
         let owner_h = owner_rect.bottom - owner_rect.top;
-        let dlg_x = owner_rect.left + (owner_w - DLG_W) / 2;
-        let dlg_y = owner_rect.top + (owner_h - DLG_H) / 2;
+        let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
+        let dlg_y = owner_rect.top + (owner_h - dlg_h) / 2;
 
         let dlg = CreateWindowExW(
             WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
@@ -2195,8 +2226,8 @@ fn show_goto_dialog(
             WS_POPUP | WS_CAPTION | WS_SYSMENU,
             dlg_x,
             dlg_y,
-            DLG_W,
-            DLG_H,
+            dlg_w,
+            dlg_h,
             Some(owner),
             None,
             Some(instance.into()),
@@ -2204,26 +2235,6 @@ fn show_goto_dialog(
         )
         .ok()?;
         let _dlg_guard = DlgDestroyGuard(dlg);
-
-        // Layout (client-area pixels). Three rows of [label] [box]
-        // [button], with radios on top. The boxes sit close to the
-        // labels — left edge roughly under the Offset radio's text
-        // — and the buttons are right-anchored independently so
-        // moving the box X doesn't drag them left.
-        const X_PAD: i32 = 14;
-        const LABEL_X: i32 = X_PAD;
-        const LABEL_W: i32 = 155;
-        const BOX_X: i32 = 175;
-        const BOX_W: i32 = 90;
-        const BTN_W: i32 = 160;
-        const BTN_X: i32 = DLG_W - X_PAD - BTN_W;
-        const BOX_H: i32 = 22;
-        const LABEL_H: i32 = 20;
-        const BTN_H: i32 = 26;
-        const RADIO_Y: i32 = 14;
-        const ROW1_Y: i32 = 50;
-        const ROW2_Y: i32 = 84;
-        const ROW3_Y: i32 = 118;
 
         // Radio pair. WS_GROUP on the first scopes the auto-radio
         // group; the second is in the same group so picking one
@@ -2275,19 +2286,20 @@ fn show_goto_dialog(
             None,
         )
         .ok()?;
-        // Readonly value: STATIC, not EDIT. STATICs render with the
-        // dialog's own background brush, so the greyish-edit-field
-        // look that ES_READONLY produces is gone. SetWindowTextW
-        // still drives the displayed value.
+        // Readonly value: themed EDIT with ES_READONLY so it shows
+        // a visible border (matching the editable target row).
+        // The greyish-fill problem is handled by WM_CTLCOLORSTATIC
+        // returning the dialog's COLOR_WINDOW brush — readonly
+        // EDITs send WM_CTLCOLORSTATIC, not WM_CTLCOLOREDIT.
         let here = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
+            w!("EDIT"),
             PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE,
+            WS_CHILD | WS_VISIBLE | style_bits(ES_READONLY | ES_AUTOHSCROLL),
             BOX_X,
-            ROW1_Y + 2,
+            ROW1_Y,
             BOX_W,
-            LABEL_H,
+            BOX_H,
             Some(dlg),
             Some(HMENU(IDC_GOTO_HERE as usize as *mut c_void)),
             Some(instance.into()),
