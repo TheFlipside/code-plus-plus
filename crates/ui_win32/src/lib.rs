@@ -37,8 +37,8 @@ use codepp_scintilla_sys::{
     SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT,
     SCI_CUT, SCI_DOCUMENTEND, SCI_DOCUMENTSTART, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION,
     SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETFIRSTVISIBLELINE,
-    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETTEXT,
-    SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS,
+    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT,
+    SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS,
     SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE, SCI_REDO,
     SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT,
     SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
@@ -48,10 +48,10 @@ use codepp_scintilla_sys::{
 };
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    GetStockObject, GetSysColorBrush, SetBkMode, COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HDC,
-    HFONT, TRANSPARENT,
+    GetStockObject, GetSysColorBrush, SetBkMode, SetTextColor, COLOR_WINDOW, DEFAULT_GUI_FONT,
+    HBRUSH, HDC, HFONT, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
@@ -2656,6 +2656,11 @@ struct FindReplaceState {
     replace_btn: HWND,
     replace_all_btn: HWND,
     close_btn: HWND,
+    /// Bottom-of-dialog STATIC for transient feedback messages
+    /// — currently used by Replace All to report the count.
+    /// Painted in blue via `WM_CTLCOLORSTATIC` (which checks the
+    /// hwnd-from to distinguish it from the regular labels).
+    status_label: HWND,
     /// Set true once all HWNDs above are populated.
     controls_ready: bool,
 }
@@ -2768,10 +2773,21 @@ extern "system" fn find_replace_wnd_proc(
             // checkbox, group box, and edit field. Returning the
             // dialog's COLOR_WINDOW brush + transparent text bk
             // mode makes the chrome render against the dialog's
-            // own background colour.
+            // own background colour. The status_label gets blue
+            // text on top so Replace All's count message stands
+            // out against the otherwise black-on-white chrome.
             WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
+                let from = HWND(lparam.0 as *mut c_void);
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const FindReplaceState;
+                if !state_ptr.is_null()
+                    && (*state_ptr).controls_ready
+                    && (*state_ptr).status_label == from
+                {
+                    // RGB(0, 0, 255) — Win32 COLORREF is BGR-packed.
+                    let _ = SetTextColor(hdc, COLORREF(0x00FF0000));
+                }
                 let brush = GetSysColorBrush(COLOR_WINDOW);
                 LRESULT(brush.0 as isize)
             }
@@ -2833,6 +2849,53 @@ unsafe fn find_replace_flags(state: &FindReplaceState) -> SearchFlags {
         }
     }
     f
+}
+
+/// If the active editor has a non-empty single-line selection,
+/// drop it into the dialog's "Find what" edit (overwriting any
+/// previous query) and select-all the field so a typed character
+/// replaces it. Multi-line selections are skipped — the user
+/// almost certainly didn't mean to search for a block of text,
+/// and a literal newline in the find box doesn't search well in
+/// Normal mode anyway.
+unsafe fn prefill_from_selection(state: &FindReplaceState) {
+    let Some(window_state) = (unsafe { state_from_hwnd(state.main_hwnd) }) else {
+        return;
+    };
+    let editor = window_state.editor;
+    let sel_start = editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as usize;
+    let sel_end = editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as usize;
+    if sel_end <= sel_start {
+        return;
+    }
+    let len = sel_end - sel_start;
+    // Cap the prefill at 1 KiB — anyone selecting more than that
+    // didn't mean it for the find box.
+    if len > 1024 {
+        return;
+    }
+    let mut buf = vec![0u8; len + 1];
+    let copied = editor
+        .send(SCI_GETSELTEXT, 0, buf.as_mut_ptr() as isize)
+        .max(0) as usize;
+    let bytes = &buf[..copied.min(len)];
+    if bytes.iter().any(|&b| b == b'\n' || b == b'\r') {
+        return;
+    }
+    let text = match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => return,
+    };
+    let text_w = HSTRING::from(text);
+    unsafe {
+        let _ = SetWindowTextW(state.find_edit, &text_w);
+        SendMessageW(
+            state.find_edit,
+            EM_SETSEL,
+            Some(WPARAM(0)),
+            Some(LPARAM(-1)),
+        );
+    }
 }
 
 /// Read the visible text of an edit control. Returns an empty
@@ -2930,7 +2993,9 @@ unsafe fn handle_replace(state: &FindReplaceState) {
 }
 
 /// "Replace All" click handler — replaces every occurrence in the
-/// active buffer in one undo group.
+/// active buffer in one undo group, then writes a count message to
+/// the status STATIC at the bottom of the dialog (blue, painted by
+/// WM_CTLCOLORSTATIC).
 unsafe fn handle_replace_all(state: &FindReplaceState) {
     unsafe {
         let query = read_edit_text(state.find_edit);
@@ -2940,11 +3005,21 @@ unsafe fn handle_replace_all(state: &FindReplaceState) {
         let replacement = read_edit_text(state.replace_edit);
         let flags = find_replace_flags(state);
 
-        let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
-            return;
+        let count = {
+            let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
+                return;
+            };
+            let (shell, mut ui) = window_state.split();
+            shell.replace_all(&mut ui, &query, &replacement, flags)
         };
-        let (shell, mut ui) = window_state.split();
-        let _ = shell.replace_all(&mut ui, &query, &replacement, flags);
+        let msg = format!(
+            "Replace All: {} occurence{} {} replaced in entire file",
+            count,
+            if count == 1 { "" } else { "s" },
+            if count == 1 { "was" } else { "were" },
+        );
+        let msg_w = HSTRING::from(msg);
+        let _ = SetWindowTextW(state.status_label, &msg_w);
     }
 }
 
@@ -2995,6 +3070,11 @@ fn show_find_replace_dialog(
                         None,
                     );
                     apply_tab_visibility(state);
+                    // Wipe any stale Replace All count from the
+                    // previous session, then prefill the find box
+                    // from the current selection.
+                    let _ = SetWindowTextW(state.status_label, w!(""));
+                    prefill_from_selection(state);
                     let _ = ShowWindow(dlg, SW_SHOW);
                     let _ = SetFocus(Some(state.find_edit));
                     SendMessageW(
@@ -3045,6 +3125,7 @@ fn show_find_replace_dialog(
             replace_btn: HWND::default(),
             replace_all_btn: HWND::default(),
             close_btn: HWND::default(),
+            status_label: HWND::default(),
             controls_ready: false,
         });
         let state_ptr: *mut FindReplaceState = &mut *state;
@@ -3444,6 +3525,25 @@ fn show_find_replace_dialog(
         )
         .ok()?;
 
+        // Bottom-of-dialog status STATIC for transient feedback
+        // (Replace All count, etc). Empty until something writes
+        // to it; painted in blue via WM_CTLCOLORSTATIC.
+        let status_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE,
+            X_PAD,
+            CLOSE_Y + 4,
+            BTN_X - X_PAD - 14,
+            18,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
         // Apply the system GUI font to every child.
         let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
         for child in [
@@ -3465,6 +3565,7 @@ fn show_find_replace_dialog(
             replace_btn,
             replace_all_btn,
             close_btn,
+            status_label,
         ] {
             apply_dialog_font(child, font);
         }
@@ -3487,6 +3588,7 @@ fn show_find_replace_dialog(
         state.replace_btn = replace_btn;
         state.replace_all_btn = replace_all_btn;
         state.close_btn = close_btn;
+        state.status_label = status_label;
         state.controls_ready = true;
 
         let idx = match initial_tab {
@@ -3495,6 +3597,7 @@ fn show_find_replace_dialog(
         };
         SendMessageW(tab_ctrl, TCM_SETCURSEL, Some(WPARAM(idx as usize)), None);
         apply_tab_visibility(&state);
+        prefill_from_selection(&state);
 
         // Drop ownership: the wnd_proc owns the Box from here on
         // and reclaims it on WM_NCDESTROY. The pointer in

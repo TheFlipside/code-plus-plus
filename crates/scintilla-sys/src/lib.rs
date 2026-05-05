@@ -204,6 +204,10 @@ pub const SCI_GETSELECTIONSTART: u32 = 2143;
 pub const SCI_GETSELECTIONEND: u32 = 2145;
 pub const SCI_SETSELECTIONSTART: u32 = 2142;
 pub const SCI_SETSELECTIONEND: u32 = 2144;
+/// Copy the current selection's text into the caller-supplied
+/// buffer (lparam = char* out). Returns the byte length written
+/// (excluding the trailing NUL Scintilla adds).
+pub const SCI_GETSELTEXT: u32 = 2161;
 /// Collapse the selection to a single point — wparam = caret pos.
 /// Used by the Find dialog to advance past the previous match
 /// before re-anchoring (Scintilla's `SCI_SEARCHANCHOR` snaps to
