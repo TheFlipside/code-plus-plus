@@ -214,6 +214,15 @@ pub const SCI_SETEMPTYSELECTION: u32 = 2556;
 /// move the selection but don't bring it into view; the Find
 /// dialog issues this after every successful hit.
 pub const SCI_SCROLLCARET: u32 = 2169;
+/// First currently visible (visual) line — top of the viewport.
+pub const SCI_GETFIRSTVISIBLELINE: u32 = 2152;
+/// Number of lines that currently fit in the viewport.
+pub const SCI_LINESONSCREEN: u32 = 2370;
+/// Scroll the view by `(columns, lines)` — wparam=columns,
+/// lparam=lines. Used by the Find dialog to centre an
+/// out-of-view match without disturbing matches already on
+/// screen.
+pub const SCI_LINESCROLL: u32 = 2168;
 
 // Document handles — Scintilla supports multiple documents attached to
 // one view via `SCI_SETDOCPOINTER`. Code++ uses this for multi-tab in

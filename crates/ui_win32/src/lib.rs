@@ -36,14 +36,15 @@ use codepp_scintilla_sys::{
     SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
     SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT,
     SCI_CUT, SCI_DOCUMENTEND, SCI_DOCUMENTSTART, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION,
-    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETLENGTH,
-    SCI_GETLINECOUNT, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETVIEWEOL,
-    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_PASTE,
-    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_SCROLLCARET, SCI_SELECTALL, SCI_SETDOCPOINTER,
-    SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
-    SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
+    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETFIRSTVISIBLELINE,
+    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETTEXT,
+    SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS,
+    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE, SCI_REDO,
+    SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT,
+    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
+    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN,
+    SCI_ZOOMOUT, SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
+    STYLE_DEFAULT,
 };
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
@@ -484,10 +485,7 @@ impl UiPlatform for Win32Ui {
         match self.editor.search_next(query, flags.bits()) {
             -1 => None,
             pos => {
-                // Scintilla updates the selection but doesn't
-                // scroll the viewport — `SCI_SCROLLCARET` brings
-                // the new caret/selection into view.
-                self.editor.send(SCI_SCROLLCARET, 0, 0);
+                center_caret_if_offscreen(&self.editor);
                 Some(pos as u64)
             }
         }
@@ -503,7 +501,7 @@ impl UiPlatform for Win32Ui {
         match self.editor.search_prev(query, flags.bits()) {
             -1 => None,
             pos => {
-                self.editor.send(SCI_SCROLLCARET, 0, 0);
+                center_caret_if_offscreen(&self.editor);
                 Some(pos as u64)
             }
         }
@@ -621,6 +619,32 @@ fn apply_default_styles(editor: &EditorHandle) {
     editor.style_set_fore(STYLE_DEFAULT, FG_DEFAULT);
     editor.style_set_back(STYLE_DEFAULT, BG_DEFAULT);
     editor.style_clear_all();
+}
+
+/// Bring the caret line into view: if it's already in the visible
+/// region just leave the viewport alone (Notepad++ style — quiet
+/// on small jumps), otherwise scroll so the caret line lands at
+/// the centre of the viewport. Used after Find Next / Find
+/// Previous so the user sees the new selection without the view
+/// snapping to the bottom edge.
+///
+/// Note: line numbers here are document lines, which equal visual
+/// lines while we're not running with folding or word wrap on.
+/// If those land later, swap to `SCI_VISIBLEFROMDOCLINE` for the
+/// match-line conversion.
+fn center_caret_if_offscreen(editor: &EditorHandle) {
+    let pos = editor.send(SCI_GETCURRENTPOS, 0, 0).max(0) as usize;
+    let line = editor.send(SCI_LINEFROMPOSITION, pos, 0).max(0);
+    let first = editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0).max(0);
+    let lines = editor.send(SCI_LINESONSCREEN, 0, 0).max(1);
+    if line >= first && line < first + lines {
+        return;
+    }
+    let target_first = (line - lines / 2).max(0);
+    let delta = target_first - first;
+    if delta != 0 {
+        editor.send(SCI_LINESCROLL, 0, delta);
+    }
 }
 
 /// LexCPP per-style overrides. Both C and C++ buffers share this
