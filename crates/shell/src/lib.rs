@@ -1126,6 +1126,24 @@ impl Shell {
         ui.search_next(&query, flags)
     }
 
+    /// Backward sibling of [`Self::find_next`] — used by the Find
+    /// dialog when the "Backward direction" checkbox is on. Stores
+    /// the query+flags as the new `last_search` so a subsequent
+    /// `find_next_repeat` / `find_prev_repeat` reuses them.
+    #[cfg(target_os = "windows")]
+    pub fn find_prev<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        query: &str,
+        flags: SearchFlags,
+    ) -> Option<u64> {
+        if query.is_empty() || self.active_tab.is_none() {
+            return None;
+        }
+        self.last_search = Some((query.to_string(), flags));
+        ui.search_prev(query, flags)
+    }
+
     /// Repeat the last `find_next` going backward.
     #[cfg(target_os = "windows")]
     pub fn find_prev_repeat<U: UiPlatform>(&mut self, ui: &mut U) -> Option<u64> {

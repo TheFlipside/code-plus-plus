@@ -35,17 +35,18 @@ use codepp_scintilla_sys::{
     SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC,
     SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
     SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT,
-    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
-    SCI_GETDIRECTPOINTER, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETSELECTIONEND,
-    SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE,
-    SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_PASTE, SCI_REDO, SCI_RELEASEDOCUMENT,
-    SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
-    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTEXT,
-    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT,
-    SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
+    SCI_CUT, SCI_DOCUMENTEND, SCI_DOCUMENTSTART, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION,
+    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETLENGTH,
+    SCI_GETLINECOUNT, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETVIEWEOL,
+    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_PASTE,
+    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT,
+    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
+    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN,
+    SCI_ZOOMOUT, SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
+    STYLE_DEFAULT,
 };
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
-use windows::core::{w, Result, HSTRING, PCWSTR};
+use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetStockObject, GetSysColorBrush, SetBkMode, COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HDC,
@@ -54,27 +55,28 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, BST_CHECKED, ICC_BAR_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX,
-    NMHDR, TCITEMW, TCM_DELETEITEM, TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW,
-    TCN_SELCHANGE, WC_TABCONTROL,
+    NMHDR, TCIF_TEXT, TCITEMW, TCM_DELETEITEM, TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL,
+    TCM_SETITEMW, TCN_SELCHANGE, WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, SetFocus, VK_0, VK_F, VK_G, VK_H, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
+    EnableWindow, SetFocus, VK_0, VK_F, VK_F3, VK_G, VK_H, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
 };
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CreateAcceleratorTableW,
     CreateMenu, CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyWindow, DispatchMessageW,
     DrawMenuBar, GetClientRect, GetMenuItemCount, GetMessageW, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextW, IsDialogMessageW, IsWindow, LoadCursorW, MessageBoxW, MoveWindow, PostMessageW,
-    PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
-    TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_SETCHECK, BN_CLICKED,
-    BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY,
-    GWLP_USERDATA, HACCEL, HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION,
-    MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
-    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_SHOW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT,
+    GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW, IsWindow, LoadCursorW, MessageBoxW,
+    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW,
+    SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
+    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
+    BS_GROUPBOX, BS_PUSHBUTTON, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
+    ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL,
+    HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING,
+    MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
+    MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+    WM_CLOSE, WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DROPFILES,
+    WM_INITMENUPOPUP, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT,
     WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
     WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
     WS_VISIBLE,
@@ -194,6 +196,29 @@ const IDC_GOTO_HERE: u16 = 102;
 const IDC_GOTO_TARGET: u16 = 103;
 const IDC_GOTO_MAX: u16 = 104;
 
+/// Find/Replace dialog window class. Registered once on the first
+/// `show_find_replace_dialog`. Modeless: the dialog persists across
+/// open/close cycles via ShowWindow(SW_HIDE) so the typed query and
+/// flag state survive between Find sessions.
+const FIND_REPLACE_CLASS: PCWSTR = w!("CodePlusPlusFindReplaceDialog");
+
+/// Find/Replace dialog control ids.
+const IDC_FR_TAB: u16 = 200;
+const IDC_FR_FIND_EDIT: u16 = 201;
+const IDC_FR_REPLACE_EDIT: u16 = 202;
+const IDC_FR_BACKWARD: u16 = 203;
+const IDC_FR_WHOLE_WORD: u16 = 204;
+const IDC_FR_MATCH_CASE: u16 = 205;
+const IDC_FR_WRAP_AROUND: u16 = 206;
+const IDC_FR_MODE_NORMAL: u16 = 207;
+const IDC_FR_MODE_EXTENDED: u16 = 208;
+const IDC_FR_MODE_REGEX: u16 = 209;
+const IDC_FR_DOT_NEWLINE: u16 = 210;
+const IDC_FR_FIND_NEXT: u16 = 211;
+const IDC_FR_REPLACE_BTN: u16 = 212;
+const IDC_FR_REPLACE_ALL: u16 = 213;
+const IDC_FR_CLOSE: u16 = 214;
+
 /// Per-window state. Box-allocated, pointer stashed in
 /// `GWLP_USERDATA`. wnd_proc reads it back via
 /// `GetWindowLongPtrW(GWLP_USERDATA)` on every message. The main
@@ -236,6 +261,11 @@ struct WindowState {
     encoding_menu: HMENU,
     language_menu: HMENU,
     window_menu: HMENU,
+    /// HWND of the modeless Find/Replace dialog, lazily created on
+    /// the first Ctrl+F / Ctrl+H / menu click. The main message
+    /// loop reads this in `IsDialogMessageW(dlg, &msg)` so Tab /
+    /// Enter / Esc work inside the dialog while it's open.
+    find_replace_dlg: Option<HWND>,
     editor: EditorHandle,
     shell: Shell,
 }
@@ -1324,29 +1354,29 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         )?;
         AppendMenuW(bar, MF_POPUP, edit_menu.0 as usize, w!("&Edit"))?;
 
-        // ----- Search ----- (stubs — Phase 4 m3 wires Find/Replace.)
+        // ----- Search ----- (Find/Replace wired in m3b2.)
         let search_menu = CreateMenu()?;
         AppendMenuW(
             search_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_SEARCH_FIND as usize,
             w!("&Find...\tCtrl+F"),
         )?;
         AppendMenuW(
             search_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_SEARCH_FINDNEXT as usize,
             w!("Find &Next\tF3"),
         )?;
         AppendMenuW(
             search_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_SEARCH_FINDPREV as usize,
             w!("Find Pre&vious\tShift+F3"),
         )?;
         AppendMenuW(
             search_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_SEARCH_REPLACE as usize,
             w!("&Replace...\tCtrl+H"),
         )?;
@@ -2526,6 +2556,888 @@ impl Drop for DlgDestroyGuard {
     }
 }
 
+// --- Find/Replace modeless dialog ------------------------------------
+//
+// A `WS_POPUP` + `WS_CAPTION` + `WS_SYSMENU` window with a tab
+// control across the top (Find / Replace) and a shared body of
+// edit fields, checkboxes, and a Search Mode radio group. Modeless:
+// `Close` hides the dialog with ShowWindow(SW_HIDE) so the typed
+// query, flag state, and active tab survive between sessions.
+// First-time creation is lazy on the first Ctrl+F / Ctrl+H click.
+//
+// Modeless dialogs require the main message pump to call
+// `IsDialogMessageW(dlg, &msg)` BEFORE TranslateAccelerator /
+// DispatchMessage so Tab / Enter / Esc / mnemonic handling works.
+// The pump in `Win32Ui::run` reads the dialog HWND off WindowState
+// for that — see `WindowState.find_replace_dlg`.
+
+/// Active tab in the Find/Replace dialog.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FindReplaceTab {
+    Find,
+    Replace,
+}
+
+/// Heap-allocated dialog state. The wnd_proc reads/writes through
+/// `GWLP_USERDATA`. Lifetime is tied to the dialog window — when
+/// the dialog is destroyed (on app shutdown), the wnd_proc's
+/// WM_NCDESTROY drops this Box.
+struct FindReplaceState {
+    /// HWND of the main host window — needed so the wnd_proc can
+    /// route Find Next / Replace / Replace All into the host's
+    /// `Shell` (which lives in `WindowState` on the main HWND).
+    main_hwnd: HWND,
+    /// Currently active tab.
+    tab: FindReplaceTab,
+    /// All control HWNDs.
+    tab_ctrl: HWND,
+    find_label: HWND,
+    find_edit: HWND,
+    replace_label: HWND,
+    replace_edit: HWND,
+    backward_cb: HWND,
+    whole_word_cb: HWND,
+    match_case_cb: HWND,
+    wrap_around_cb: HWND,
+    mode_group: HWND,
+    mode_normal_radio: HWND,
+    mode_extended_radio: HWND,
+    mode_regex_radio: HWND,
+    dot_newline_cb: HWND,
+    find_next_btn: HWND,
+    replace_btn: HWND,
+    replace_all_btn: HWND,
+    close_btn: HWND,
+    /// Set true once all HWNDs above are populated.
+    controls_ready: bool,
+}
+
+extern "system" fn find_replace_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        match msg {
+            WM_NCCREATE => {
+                let cs = lparam.0 as *const CREATESTRUCTW;
+                if !cs.is_null() {
+                    let state_ptr = (*cs).lpCreateParams as isize;
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_COMMAND => {
+                let cmd = (wparam.0 & 0xFFFF) as u16;
+                let notif = ((wparam.0 >> 16) & 0xFFFF) as u32;
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut FindReplaceState;
+                if state_ptr.is_null() || !(*state_ptr).controls_ready {
+                    return DefWindowProcW(hwnd, msg, wparam, lparam);
+                }
+                let state = &mut *state_ptr;
+                match cmd {
+                    IDC_FR_FIND_NEXT => {
+                        if notif == BN_CLICKED {
+                            handle_find_next(state);
+                        }
+                        LRESULT(0)
+                    }
+                    IDC_FR_REPLACE_BTN => {
+                        if notif == BN_CLICKED {
+                            handle_replace(state);
+                        }
+                        LRESULT(0)
+                    }
+                    IDC_FR_REPLACE_ALL => {
+                        if notif == BN_CLICKED {
+                            handle_replace_all(state);
+                        }
+                        LRESULT(0)
+                    }
+                    IDC_FR_CLOSE => {
+                        if notif == BN_CLICKED {
+                            let _ = ShowWindow(hwnd, SW_HIDE);
+                            // Restore focus to the editor so the
+                            // user can keep typing immediately.
+                            if let Some(window_state) = state_from_hwnd(state.main_hwnd) {
+                                let _ = SetFocus(Some(window_state.scintilla_hwnd));
+                            }
+                        }
+                        LRESULT(0)
+                    }
+                    IDC_FR_MODE_REGEX | IDC_FR_MODE_NORMAL | IDC_FR_MODE_EXTENDED => {
+                        if notif == BN_CLICKED {
+                            // ". matches newline" is only meaningful
+                            // in regex mode; grey/ungrey it as the
+                            // user toggles the mode radios.
+                            let regex_on = button_checked(state.mode_regex_radio);
+                            let _ = EnableWindow(state.dot_newline_cb, regex_on);
+                        }
+                        LRESULT(0)
+                    }
+                    _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+                }
+            }
+            WM_NOTIFY => {
+                let nmhdr = lparam.0 as *const NMHDR;
+                if nmhdr.is_null() {
+                    return DefWindowProcW(hwnd, msg, wparam, lparam);
+                }
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut FindReplaceState;
+                if state_ptr.is_null() || !(*state_ptr).controls_ready {
+                    return DefWindowProcW(hwnd, msg, wparam, lparam);
+                }
+                let state = &mut *state_ptr;
+                if (*nmhdr).hwndFrom == state.tab_ctrl && (*nmhdr).code == TCN_SELCHANGE {
+                    let sel = SendMessageW(state.tab_ctrl, TCM_GETCURSEL, None, None).0;
+                    let new_tab = if sel == 1 {
+                        FindReplaceTab::Replace
+                    } else {
+                        FindReplaceTab::Find
+                    };
+                    if state.tab != new_tab {
+                        state.tab = new_tab;
+                        apply_tab_visibility(state);
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_CLOSE => {
+                // The 'X' on the title bar hides the dialog —
+                // Close button shares this behaviour via WM_COMMAND.
+                let _ = ShowWindow(hwnd, SW_HIDE);
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut FindReplaceState;
+                if !state_ptr.is_null() && (*state_ptr).controls_ready {
+                    let state = &*state_ptr;
+                    if let Some(window_state) = state_from_hwnd(state.main_hwnd) {
+                        let _ = SetFocus(Some(window_state.scintilla_hwnd));
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_NCDESTROY => {
+                // Reclaim the heap-allocated state. Only fires on
+                // app shutdown — the Close button hides, doesn't
+                // destroy. Reading via GWLP_USERDATA + Box::from_raw
+                // is safe here because no other code path can race
+                // a destroyed window's userdata.
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut FindReplaceState;
+                if !state_ptr.is_null() {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                    drop(Box::from_raw(state_ptr));
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }));
+    match result {
+        Ok(lr) => lr,
+        Err(_) => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// Read a button's checked state. Wraps the `BM_GETCHECK` round-trip
+/// so callers don't have to repeat the WPARAM/LPARAM dance.
+unsafe fn button_checked(btn: HWND) -> bool {
+    let r = unsafe { SendMessageW(btn, BM_GETCHECK, None, None).0 };
+    r as u32 == BST_CHECKED.0
+}
+
+/// Read the current Find/Replace flag state from the checkboxes
+/// and Search Mode radios into a SearchFlags bitmask.
+unsafe fn find_replace_flags(state: &FindReplaceState) -> SearchFlags {
+    let mut f = SearchFlags::NONE;
+    unsafe {
+        if button_checked(state.match_case_cb) {
+            f = f.union(SearchFlags::MATCH_CASE);
+        }
+        if button_checked(state.whole_word_cb) {
+            f = f.union(SearchFlags::WHOLE_WORD);
+        }
+        if button_checked(state.mode_regex_radio) {
+            f = f.union(SearchFlags::REGEX);
+        }
+    }
+    f
+}
+
+/// Read the visible text of an edit control. Returns an empty
+/// string on failure / empty input. Sizes the buffer from the
+/// edit's reported length so a multi-KB find query (e.g. a
+/// long regex or pasted block) doesn't truncate silently —
+/// fixed-size buffers here are a real footgun because the user
+/// would then run a search against phantom data.
+unsafe fn read_edit_text(edit: HWND) -> String {
+    let len = unsafe { GetWindowTextLengthW(edit) };
+    if len <= 0 {
+        return String::new();
+    }
+    // +1 for the trailing NUL that GetWindowTextW always writes.
+    let mut buf = vec![0u16; len as usize + 1];
+    let copied = unsafe { GetWindowTextW(edit, &mut buf) } as usize;
+    String::from_utf16_lossy(&buf[..copied])
+}
+
+/// "Find Next" click handler. Honors the Backward direction
+/// checkbox and Wrap around: on a miss with wrap on, moves the
+/// caret to the document start (or end, when going backward) and
+/// retries. The caret only moves on the wrap-and-retry path so a
+/// non-wrap miss leaves the user where they were.
+unsafe fn handle_find_next(state: &FindReplaceState) {
+    unsafe {
+        let query = read_edit_text(state.find_edit);
+        if query.is_empty() {
+            return;
+        }
+        let flags = find_replace_flags(state);
+        let backward = button_checked(state.backward_cb);
+        let wrap = button_checked(state.wrap_around_cb);
+
+        let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
+            return;
+        };
+        let editor = window_state.editor;
+        let (shell, mut ui) = window_state.split();
+
+        let hit = if backward {
+            shell.find_prev(&mut ui, &query, flags)
+        } else {
+            shell.find_next(&mut ui, &query, flags)
+        };
+        if hit.is_some() {
+            return;
+        }
+        if !wrap {
+            return;
+        }
+        // Wrap: move caret to far end and retry once. The retry
+        // doesn't re-store last_search (find_prev/_next did that
+        // on the first call) so a fresh F3 outside the dialog
+        // reuses the original query/flags.
+        //
+        // SAFETY/lifetime: `editor` and `ui` are both Copy values
+        // captured before `split`, so neither holds a live borrow
+        // of `window_state` here. `Win32Ui::search_*` only touches
+        // `self.editor` — they do not re-enter `state_from_hwnd`
+        // — so this re-issue path is free of aliased &mut.
+        if backward {
+            editor.send(SCI_DOCUMENTEND, 0, 0);
+            let _ = ui.search_prev(&query, flags);
+        } else {
+            editor.send(SCI_DOCUMENTSTART, 0, 0);
+            let _ = ui.search_next(&query, flags);
+        }
+    }
+}
+
+/// "Replace" click handler — substitutes the current selection if
+/// it matches the query, then advances to the next match.
+unsafe fn handle_replace(state: &FindReplaceState) {
+    unsafe {
+        let query = read_edit_text(state.find_edit);
+        if query.is_empty() {
+            return;
+        }
+        let replacement = read_edit_text(state.replace_edit);
+        let flags = find_replace_flags(state);
+
+        let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
+            return;
+        };
+        let (shell, mut ui) = window_state.split();
+        let _ = shell.replace_current(&mut ui, &query, &replacement, flags);
+        // Always advance after a Replace click — matches the
+        // Notepad++ flow where Replace == "swap this match and
+        // jump to the next one." The window_state borrow above
+        // is dropped at the end of the inner scope; handle_find_next
+        // re-acquires its own.
+        handle_find_next(state);
+    }
+}
+
+/// "Replace All" click handler — replaces every occurrence in the
+/// active buffer in one undo group.
+unsafe fn handle_replace_all(state: &FindReplaceState) {
+    unsafe {
+        let query = read_edit_text(state.find_edit);
+        if query.is_empty() {
+            return;
+        }
+        let replacement = read_edit_text(state.replace_edit);
+        let flags = find_replace_flags(state);
+
+        let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
+            return;
+        };
+        let (shell, mut ui) = window_state.split();
+        let _ = shell.replace_all(&mut ui, &query, &replacement, flags);
+    }
+}
+
+/// Show or hide controls based on the active tab. Find tab hides
+/// the Replace-only controls (Replace with edit + label, Replace
+/// button, Replace All button); Replace tab shows them.
+unsafe fn apply_tab_visibility(state: &FindReplaceState) {
+    let show_replace = state.tab == FindReplaceTab::Replace;
+    let cmd = if show_replace { SW_SHOW } else { SW_HIDE };
+    unsafe {
+        let _ = ShowWindow(state.replace_label, cmd);
+        let _ = ShowWindow(state.replace_edit, cmd);
+        let _ = ShowWindow(state.replace_btn, cmd);
+        let _ = ShowWindow(state.replace_all_btn, cmd);
+    }
+}
+
+/// Lazily create the Find/Replace dialog (the first call creates
+/// it; subsequent calls re-show the existing one) and select the
+/// requested tab. Returns the dialog HWND so the caller can stash
+/// it on `WindowState` for `IsDialogMessageW` integration.
+fn show_find_replace_dialog(
+    main_hwnd: HWND,
+    existing: Option<HWND>,
+    initial_tab: FindReplaceTab,
+) -> Option<HWND> {
+    use std::sync::OnceLock;
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+
+    unsafe {
+        // Reuse path: the dialog already exists. Just bring it to
+        // the foreground, select the right tab, and focus the
+        // Find what edit so the user can type immediately.
+        if let Some(dlg) = existing {
+            if IsWindow(Some(dlg)).as_bool() {
+                let state_ptr = GetWindowLongPtrW(dlg, GWLP_USERDATA) as *mut FindReplaceState;
+                if !state_ptr.is_null() && (*state_ptr).controls_ready {
+                    let state = &mut *state_ptr;
+                    state.tab = initial_tab;
+                    let idx = match initial_tab {
+                        FindReplaceTab::Find => 0,
+                        FindReplaceTab::Replace => 1,
+                    };
+                    SendMessageW(
+                        state.tab_ctrl,
+                        TCM_SETCURSEL,
+                        Some(WPARAM(idx as usize)),
+                        None,
+                    );
+                    apply_tab_visibility(state);
+                    let _ = ShowWindow(dlg, SW_SHOW);
+                    let _ = SetFocus(Some(state.find_edit));
+                    SendMessageW(
+                        state.find_edit,
+                        EM_SETSEL,
+                        Some(WPARAM(0)),
+                        Some(LPARAM(-1)),
+                    );
+                    return Some(dlg);
+                }
+            }
+        }
+
+        // First-time creation.
+        let instance = GetModuleHandleW(None).ok()?;
+        REGISTERED.get_or_init(|| {
+            let class = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(find_replace_wnd_proc),
+                hInstance: instance.into(),
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                hbrBackground: HBRUSH((COLOR_WINDOW.0 + 1) as usize as *mut c_void),
+                lpszClassName: FIND_REPLACE_CLASS,
+                ..Default::default()
+            };
+            let _ = RegisterClassExW(&class);
+        });
+
+        let mut state = Box::new(FindReplaceState {
+            main_hwnd,
+            tab: initial_tab,
+            tab_ctrl: HWND::default(),
+            find_label: HWND::default(),
+            find_edit: HWND::default(),
+            replace_label: HWND::default(),
+            replace_edit: HWND::default(),
+            backward_cb: HWND::default(),
+            whole_word_cb: HWND::default(),
+            match_case_cb: HWND::default(),
+            wrap_around_cb: HWND::default(),
+            mode_group: HWND::default(),
+            mode_normal_radio: HWND::default(),
+            mode_extended_radio: HWND::default(),
+            mode_regex_radio: HWND::default(),
+            dot_newline_cb: HWND::default(),
+            find_next_btn: HWND::default(),
+            replace_btn: HWND::default(),
+            replace_all_btn: HWND::default(),
+            close_btn: HWND::default(),
+            controls_ready: false,
+        });
+        let state_ptr: *mut FindReplaceState = &mut *state;
+
+        // Layout (client coords). Tab control across the top, then
+        // a left column with edit fields + checkboxes + Search Mode
+        // group, and a right column with the action buttons.
+        const CLIENT_W: i32 = 540;
+        const CLIENT_H: i32 = 320;
+        const X_PAD: i32 = 14;
+        const TAB_TOP: i32 = 8;
+        const ROW1_Y: i32 = 50;
+        const FIND_LABEL_W: i32 = 90;
+        const EDIT_X: i32 = X_PAD + FIND_LABEL_W;
+        const EDIT_W: i32 = 240;
+        const EDIT_H: i32 = 24;
+        const REPLACE_ROW_Y: i32 = ROW1_Y + 32;
+        const CHECKBOX_X: i32 = X_PAD;
+        const CHECKBOX_W: i32 = 200;
+        const CHECKBOX_H: i32 = 20;
+        const CHECKBOX_TOP: i32 = REPLACE_ROW_Y + 40;
+        const MODE_GROUP_TOP: i32 = CHECKBOX_TOP + 4 * 22 + 8;
+        const MODE_GROUP_W: i32 = 320;
+        const MODE_GROUP_H: i32 = 70;
+        const BTN_W: i32 = 180;
+        const BTN_H: i32 = 26;
+        const BTN_X: i32 = CLIENT_W - X_PAD - BTN_W;
+        const BTN_GAP: i32 = 6;
+        const FIND_NEXT_Y: i32 = ROW1_Y;
+        const REPLACE_Y: i32 = FIND_NEXT_Y + BTN_H + BTN_GAP;
+        const REPLACE_ALL_Y: i32 = REPLACE_Y + BTN_H + BTN_GAP;
+        const CLOSE_Y: i32 = CLIENT_H - X_PAD - BTN_H;
+
+        let mut window_rect = RECT {
+            left: 0,
+            top: 0,
+            right: CLIENT_W,
+            bottom: CLIENT_H,
+        };
+        let _ = AdjustWindowRectEx(
+            &mut window_rect,
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            false,
+            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+        );
+        let dlg_w = window_rect.right - window_rect.left;
+        let dlg_h = window_rect.bottom - window_rect.top;
+
+        let mut owner_rect = RECT::default();
+        let _ = GetWindowRect(main_hwnd, &mut owner_rect);
+        let owner_w = owner_rect.right - owner_rect.left;
+        let owner_h = owner_rect.bottom - owner_rect.top;
+        let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
+        let dlg_y = owner_rect.top + (owner_h - dlg_h) / 2;
+
+        let dlg = CreateWindowExW(
+            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+            FIND_REPLACE_CLASS,
+            w!("Find"),
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            dlg_x,
+            dlg_y,
+            dlg_w,
+            dlg_h,
+            Some(main_hwnd),
+            None,
+            Some(instance.into()),
+            Some(state_ptr as *mut c_void),
+        )
+        .ok()?;
+        // If any child creation below `?`-fails, the dialog HWND
+        // is destroyed by this guard so we don't leak a live but
+        // half-built popup. We `mem::forget` the guard at the end
+        // of the function once the dialog is fully assembled.
+        let dlg_guard = DlgDestroyGuard(dlg);
+
+        // Tab control (Find | Replace).
+        let tab_ctrl = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            WC_TABCONTROL,
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            X_PAD,
+            TAB_TOP,
+            CLIENT_W - 2 * X_PAD,
+            CLIENT_H - TAB_TOP - X_PAD,
+            Some(dlg),
+            Some(HMENU(IDC_FR_TAB as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        // Insert two tab items.
+        let mut find_label_buf: Vec<u16> =
+            "Find".encode_utf16().chain(std::iter::once(0)).collect();
+        let mut replace_label_buf: Vec<u16> =
+            "Replace".encode_utf16().chain(std::iter::once(0)).collect();
+        for (idx, label_buf) in [&mut find_label_buf, &mut replace_label_buf]
+            .into_iter()
+            .enumerate()
+        {
+            let item = TCITEMW {
+                mask: TCIF_TEXT,
+                pszText: PWSTR(label_buf.as_mut_ptr()),
+                cchTextMax: label_buf.len() as i32,
+                ..Default::default()
+            };
+            SendMessageW(
+                tab_ctrl,
+                TCM_INSERTITEMW,
+                Some(WPARAM(idx)),
+                Some(LPARAM(&item as *const _ as isize)),
+            );
+        }
+
+        // "Find what:" label + edit (always visible).
+        let find_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Find what:"),
+            WS_CHILD | WS_VISIBLE,
+            X_PAD,
+            ROW1_Y + 4,
+            FIND_LABEL_W - 4,
+            CHECKBOX_H,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let find_edit = CreateWindowExW(
+            WS_EX_CLIENTEDGE,
+            w!("EDIT"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(ES_AUTOHSCROLL),
+            EDIT_X,
+            ROW1_Y,
+            EDIT_W,
+            EDIT_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_FIND_EDIT as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        // "Replace with:" label + edit (Replace tab only).
+        let replace_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Replace with:"),
+            WS_CHILD,
+            X_PAD,
+            REPLACE_ROW_Y + 4,
+            FIND_LABEL_W - 4,
+            CHECKBOX_H,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let replace_edit = CreateWindowExW(
+            WS_EX_CLIENTEDGE,
+            w!("EDIT"),
+            PCWSTR::null(),
+            WS_CHILD | WS_TABSTOP | style_bits(ES_AUTOHSCROLL),
+            EDIT_X,
+            REPLACE_ROW_Y,
+            EDIT_W,
+            EDIT_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_REPLACE_EDIT as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        // Checkboxes.
+        let backward_cb = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("&Backward direction"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_AUTOCHECKBOX),
+            CHECKBOX_X,
+            CHECKBOX_TOP,
+            CHECKBOX_W,
+            CHECKBOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_BACKWARD as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let whole_word_cb = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Match &whole word only"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_AUTOCHECKBOX),
+            CHECKBOX_X,
+            CHECKBOX_TOP + 22,
+            CHECKBOX_W,
+            CHECKBOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_WHOLE_WORD as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let match_case_cb = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Match &case"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_AUTOCHECKBOX),
+            CHECKBOX_X,
+            CHECKBOX_TOP + 44,
+            CHECKBOX_W,
+            CHECKBOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_MATCH_CASE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let wrap_around_cb = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("W&rap around"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_AUTOCHECKBOX),
+            CHECKBOX_X,
+            CHECKBOX_TOP + 66,
+            CHECKBOX_W,
+            CHECKBOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_WRAP_AROUND as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        // Wrap is on by default (matches Notepad++).
+        SendMessageW(
+            wrap_around_cb,
+            BM_SETCHECK,
+            Some(WPARAM(BST_CHECKED.0 as usize)),
+            None,
+        );
+
+        // Search Mode group.
+        let mode_group = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Search Mode"),
+            WS_CHILD | WS_VISIBLE | style_bits(BS_GROUPBOX),
+            X_PAD,
+            MODE_GROUP_TOP,
+            MODE_GROUP_W,
+            MODE_GROUP_H,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let mode_normal_radio = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("&Normal"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | style_bits(BS_AUTORADIOBUTTON),
+            X_PAD + 14,
+            MODE_GROUP_TOP + 20,
+            120,
+            CHECKBOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_MODE_NORMAL as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let mode_extended_radio = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("E&xtended (\\n, \\r, \\t, \\0, \\x...)"),
+            WS_CHILD | WS_VISIBLE | style_bits(BS_AUTORADIOBUTTON),
+            X_PAD + 14,
+            MODE_GROUP_TOP + 42,
+            220,
+            CHECKBOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_MODE_EXTENDED as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        // Extended mode isn't implemented yet — disable so the
+        // user knows (and so a click can't put us into a state we
+        // don't support).
+        let _ = EnableWindow(mode_extended_radio, false);
+        let mode_regex_radio = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Re&gular expression"),
+            WS_CHILD | WS_VISIBLE | style_bits(BS_AUTORADIOBUTTON),
+            X_PAD + 140,
+            MODE_GROUP_TOP + 20,
+            150,
+            CHECKBOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_MODE_REGEX as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let dot_newline_cb = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!(". &matches newline"),
+            WS_CHILD | WS_VISIBLE | style_bits(BS_AUTOCHECKBOX),
+            X_PAD + 140,
+            MODE_GROUP_TOP + 42,
+            160,
+            CHECKBOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_DOT_NEWLINE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let _ = EnableWindow(dot_newline_cb, false);
+        // Default Normal mode.
+        SendMessageW(
+            mode_normal_radio,
+            BM_SETCHECK,
+            Some(WPARAM(BST_CHECKED.0 as usize)),
+            None,
+        );
+
+        // Right-column buttons.
+        let find_next_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("&Find Next"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_DEFPUSHBUTTON),
+            BTN_X,
+            FIND_NEXT_Y,
+            BTN_W,
+            BTN_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_FIND_NEXT as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let replace_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("&Replace"),
+            WS_CHILD | WS_TABSTOP | style_bits(BS_PUSHBUTTON),
+            BTN_X,
+            REPLACE_Y,
+            BTN_W,
+            BTN_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_REPLACE_BTN as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let replace_all_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Replace &All"),
+            WS_CHILD | WS_TABSTOP | style_bits(BS_PUSHBUTTON),
+            BTN_X,
+            REPLACE_ALL_Y,
+            BTN_W,
+            BTN_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_REPLACE_ALL as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let close_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("&Close"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_PUSHBUTTON),
+            BTN_X,
+            CLOSE_Y,
+            BTN_W,
+            BTN_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_CLOSE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        // Apply the system GUI font to every child.
+        let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
+        for child in [
+            tab_ctrl,
+            find_label,
+            find_edit,
+            replace_label,
+            replace_edit,
+            backward_cb,
+            whole_word_cb,
+            match_case_cb,
+            wrap_around_cb,
+            mode_group,
+            mode_normal_radio,
+            mode_extended_radio,
+            mode_regex_radio,
+            dot_newline_cb,
+            find_next_btn,
+            replace_btn,
+            replace_all_btn,
+            close_btn,
+        ] {
+            apply_dialog_font(child, font);
+        }
+
+        state.tab_ctrl = tab_ctrl;
+        state.find_label = find_label;
+        state.find_edit = find_edit;
+        state.replace_label = replace_label;
+        state.replace_edit = replace_edit;
+        state.backward_cb = backward_cb;
+        state.whole_word_cb = whole_word_cb;
+        state.match_case_cb = match_case_cb;
+        state.wrap_around_cb = wrap_around_cb;
+        state.mode_group = mode_group;
+        state.mode_normal_radio = mode_normal_radio;
+        state.mode_extended_radio = mode_extended_radio;
+        state.mode_regex_radio = mode_regex_radio;
+        state.dot_newline_cb = dot_newline_cb;
+        state.find_next_btn = find_next_btn;
+        state.replace_btn = replace_btn;
+        state.replace_all_btn = replace_all_btn;
+        state.close_btn = close_btn;
+        state.controls_ready = true;
+
+        let idx = match initial_tab {
+            FindReplaceTab::Find => 0,
+            FindReplaceTab::Replace => 1,
+        };
+        SendMessageW(tab_ctrl, TCM_SETCURSEL, Some(WPARAM(idx as usize)), None);
+        apply_tab_visibility(&state);
+
+        // Drop ownership: the wnd_proc owns the Box from here on
+        // and reclaims it on WM_NCDESTROY. The pointer in
+        // GWLP_USERDATA was set during WM_NCCREATE. Disarm the
+        // dlg_guard for the same reason — the dialog is fully
+        // built and we want it to outlive this function.
+        std::mem::forget(state);
+        std::mem::forget(dlg_guard);
+
+        let _ = ShowWindow(dlg, SW_SHOW);
+        let _ = SetFocus(Some(find_edit));
+        Some(dlg)
+    }
+}
+
 /// Handle a Language-menu click — flip the active tab's lang to the
 /// supplied LangType id. Routes through the same `set_buffer_lang_type`
 /// the plugin ABI uses, so the code path covers re-applying the lexer
@@ -2840,6 +3752,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             encoding_menu: menus.encoding_menu,
             language_menu: menus.language_menu,
             window_menu: menus.window_menu,
+            find_replace_dlg: None,
             editor,
             shell,
         });
@@ -2966,6 +3879,17 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                 key: VK_G.0,
                 cmd: ID_SEARCH_GOTOLINE,
             },
+            // Find Next / Find Previous repeat shortcuts.
+            ACCEL {
+                fVirt: ACCEL_VIRT_FLAGS(FVIRTKEY.0),
+                key: VK_F3.0,
+                cmd: ID_SEARCH_FINDNEXT,
+            },
+            ACCEL {
+                fVirt: ACCEL_VIRT_FLAGS(FSHIFT.0 | FVIRTKEY.0),
+                key: VK_F3.0,
+                cmd: ID_SEARCH_FINDPREV,
+            },
             // View
             ACCEL {
                 fVirt: ctrl,
@@ -2986,6 +3910,12 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         let haccel: HACCEL = CreateAcceleratorTableW(&accels)?;
 
         // Standard message loop with accelerator translation.
+        // The Find/Replace dialog is modeless, so its messages must
+        // pass through `IsDialogMessageW` BEFORE the accelerator
+        // table — otherwise Tab / Enter / Esc / mnemonic handling
+        // inside the dialog would be intercepted by the main
+        // window's accelerators (Ctrl+F especially) and never reach
+        // the dialog's controls.
         let mut msg = MSG::default();
         loop {
             let ret = GetMessageW(&mut msg, None, 0, 0);
@@ -2993,7 +3923,24 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                 0 => break,
                 -1 => return Err(windows::core::Error::from_thread()),
                 _ => {
-                    if TranslateAcceleratorW(main_hwnd, haccel, &msg) == 0 {
+                    // Extract the dialog HWND as a Copy value and
+                    // drop the WindowState borrow BEFORE calling
+                    // IsDialogMessageW. IsDialogMessageW dispatches
+                    // synchronously into the dialog's wnd_proc,
+                    // which can re-enter `state_from_hwnd(main_hwnd)`
+                    // (e.g. Replace All routing through Shell). If
+                    // the outer borrow were still alive at that
+                    // point we'd produce two `&mut WindowState`
+                    // referring to the same slot — aliasing UB.
+                    let dlg_handle: Option<HWND> =
+                        state_from_hwnd(main_hwnd).and_then(|s| s.find_replace_dlg);
+                    let mut handled = false;
+                    if let Some(dlg) = dlg_handle {
+                        if IsWindow(Some(dlg)).as_bool() && IsDialogMessageW(dlg, &msg).as_bool() {
+                            handled = true;
+                        }
+                    }
+                    if !handled && TranslateAcceleratorW(main_hwnd, haccel, &msg) == 0 {
                         let _ = TranslateMessage(&msg);
                         DispatchMessageW(&msg);
                     }
@@ -3264,17 +4211,44 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             let _ = SetFocus(Some(scintilla_hwnd));
                         }
                     }
-                    // Find / Replace stubs — Ctrl+F / Ctrl+H
-                    // accelerators already arrive here; the dialogs
-                    // are wired in m3b2.
-                    ID_SEARCH_FIND
-                    | ID_SEARCH_FINDNEXT
-                    | ID_SEARCH_FINDPREV
-                    | ID_SEARCH_REPLACE
-                    | ID_SEARCH_FINDINFILES => {
+                    // Find / Replace — open the modeless dialog and
+                    // select the appropriate tab. The dialog is
+                    // lazily created on first invocation and reused
+                    // (via ShowWindow(SW_HIDE) on Close) afterwards
+                    // so the typed query and flag state survive
+                    // across open/close cycles.
+                    ID_SEARCH_FIND | ID_SEARCH_REPLACE => {
+                        let initial_tab = if cmd_u16 == ID_SEARCH_REPLACE {
+                            FindReplaceTab::Replace
+                        } else {
+                            FindReplaceTab::Find
+                        };
+                        let existing = state_from_hwnd(hwnd).and_then(|s| s.find_replace_dlg);
+                        if let Some(dlg) = show_find_replace_dialog(hwnd, existing, initial_tab) {
+                            if let Some(state) = state_from_hwnd(hwnd) {
+                                state.find_replace_dlg = Some(dlg);
+                            }
+                        }
+                    }
+                    // F3 / Shift+F3 — repeat the last search using
+                    // the query/flags Shell::find_next stored on the
+                    // most recent dialog interaction.
+                    ID_SEARCH_FINDNEXT => {
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            let (shell, mut ui) = state.split();
+                            let _ = shell.find_next_repeat(&mut ui);
+                        }
+                    }
+                    ID_SEARCH_FINDPREV => {
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            let (shell, mut ui) = state.split();
+                            let _ = shell.find_prev_repeat(&mut ui);
+                        }
+                    }
+                    ID_SEARCH_FINDINFILES => {
                         tracing::trace!(
                             cmd = cmd_u16,
-                            "find/replace command not yet wired (Phase 4 m3b2)",
+                            "find-in-files command not yet wired (Phase 4 m4)",
                         );
                     }
                     _ => {
