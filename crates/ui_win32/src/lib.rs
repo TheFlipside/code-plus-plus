@@ -52,9 +52,9 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, ICC_BAR_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, NMHDR, TCITEMW,
-    TCM_DELETEITEM, TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE,
-    WC_TABCONTROL,
+    InitCommonControlsEx, BST_CHECKED, ICC_BAR_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX,
+    NMHDR, TCITEMW, TCM_DELETEITEM, TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW,
+    TCN_SELCHANGE, WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, SetFocus, VK_0, VK_F, VK_G, VK_H, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
@@ -66,15 +66,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetMenuItemCount, GetMessageW, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
     IsDialogMessageW, IsWindow, LoadCursorW, MessageBoxW, MoveWindow, PostMessageW,
     PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
-    TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BS_DEFPUSHBUTTON,
-    BS_PUSHBUTTON, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, ES_AUTOHSCROLL, ES_NUMBER,
-    FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL, HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES,
-    MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND,
-    MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
-    SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DROPFILES,
-    WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT, WM_SIZE,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
-    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_SETCHECK, BN_CLICKED,
+    BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
+    CW_USEDEFAULT, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY,
+    GWLP_USERDATA, HACCEL, HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION,
+    MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_SHOW, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP,
+    WM_NCCREATE, WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION,
+    WS_CHILD, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -173,18 +174,23 @@ const MAIN_CLASS: PCWSTR = w!("CodePlusPlusMainWindow");
 const SCINTILLA_CLASS: PCWSTR = w!("Scintilla");
 const STATUSBAR_CLASS: PCWSTR = w!("msctls_statusbar32");
 
-/// Window class for the Goto Line modal popup. Registered once on
-/// first `show_goto_line_dialog`. The dialog is a plain top-level
+/// Window class for the "Go to..." modal popup. Registered once on
+/// first `show_goto_dialog`. The dialog is a plain top-level
 /// `WS_POPUP`/`WS_CAPTION`/`WS_SYSMENU` window with our own wnd_proc;
 /// `IsDialogMessageW` in the modal pump still handles Tab navigation
 /// and the IDOK/IDCANCEL keyboard contract because the window has
 /// `WS_EX_CONTROLPARENT` and the controls have `WS_TABSTOP`.
-const GOTO_LINE_CLASS: PCWSTR = w!("CodePlusPlusGotoLineDialog");
+const GOTO_CLASS: PCWSTR = w!("CodePlusPlusGotoDialog");
 
-/// Goto Line dialog control id for the line-number edit field.
-/// IDOK / IDCANCEL are the standard Win32 button ids and are reused
-/// for the dialog's OK and Cancel buttons.
-const IDC_GOTO_LINE_EDIT: u16 = 100;
+/// "Go to..." dialog control ids. IDOK / IDCANCEL are the standard
+/// Win32 button ids and are reused for the dialog's OK and Cancel
+/// buttons. The radio pair toggles between Line and Offset mode;
+/// HERE / TARGET / MAX are the three labeled boxes.
+const IDC_GOTO_RADIO_LINE: u16 = 100;
+const IDC_GOTO_RADIO_OFFSET: u16 = 101;
+const IDC_GOTO_HERE: u16 = 102;
+const IDC_GOTO_TARGET: u16 = 103;
+const IDC_GOTO_MAX: u16 = 104;
 
 /// Per-window state. Box-allocated, pointer stashed in
 /// `GWLP_USERDATA`. wnd_proc reads it back via
@@ -1359,7 +1365,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             search_menu,
             MF_STRING,
             ID_SEARCH_GOTOLINE as usize,
-            w!("&Go to Line...\tCtrl+G"),
+            w!("&Go to...\tCtrl+G"),
         )?;
         AppendMenuW(bar, MF_POPUP, search_menu.0 as usize, w!("&Search"))?;
 
@@ -1858,65 +1864,112 @@ fn show_about_dialog(main_hwnd: HWND) {
     }
 }
 
-// --- Goto Line modal dialog ------------------------------------------
+// --- "Go to..." modal dialog -----------------------------------------
 //
-// A small `WS_POPUP` + `WS_CAPTION` + `WS_SYSMENU` window with one
-// EDIT field (numeric only) and OK/Cancel buttons. The pump is a
-// nested `GetMessageW` loop that runs until the dialog HWND is
-// destroyed (via OK/Cancel/X-button); `IsDialogMessageW` in the
-// loop handles Tab/Enter/Esc/mnemonic semantics for free because
-// the dialog has `WS_EX_CONTROLPARENT` and the children have
+// A small `WS_POPUP` + `WS_CAPTION` + `WS_SYSMENU` window with a
+// Line/Offset radio toggle, three labeled boxes ("you are here / want
+// to go to / can't go further than"), and OK/Cancel buttons. The
+// editable middle box is the only place the user types; the other
+// two are read-only edits whose values track the radio state.
+//
+// The pump is a nested `GetMessageW` loop that runs until the dialog
+// HWND is destroyed (via OK/Cancel/X-button); `IsDialogMessageW` in
+// the loop handles Tab/Enter/Esc/mnemonic semantics for free because
+// the dialog has `WS_EX_CONTROLPARENT` and the controls have
 // `WS_TABSTOP`.
 //
 // While the modal is up the owner is `EnableWindow(false)`'d so the
 // user can't reach the main window's menu/accelerators; on destroy
-// we re-enable and SetFocus back to Scintilla.
+// we re-enable (RAII) and SetFocus back to Scintilla.
 //
-// Result is plumbed back via a heap-allocated `GotoLineState` whose
-// pointer is stashed in the dialog HWND's `GWLP_USERDATA`. The
-// outer caller reads `state.result` after the pump exits.
+// Result is plumbed back via a heap-allocated `GotoDialogState`
+// whose pointer is stashed in the dialog HWND's `GWLP_USERDATA`.
+// The outer caller reads `state.result` after the pump exits.
 
 /// `EM_SETSEL` — declared inline because windows-rs splits its
 /// edit-control message constants across modules and reaching one
 /// just for this single use is more import noise than the literal.
 const EM_SETSEL: u32 = 0x00B1;
 
-/// Heap-allocated dialog state. The wnd_proc reads/writes through
-/// `GWLP_USERDATA`; the outer `show_goto_line_dialog` owns the
-/// `Box<GotoLineState>` and reads `result` after the modal pump
-/// exits (the dialog window is already destroyed at that point so
-/// no wnd_proc can race the read).
-struct GotoLineState {
-    /// `Some(line)` iff the user clicked OK with valid input. Stays
-    /// `None` on Cancel/Esc/X-button close.
-    result: Option<u32>,
-    /// 1-based upper bound used to validate input. `0` means the
-    /// editor is empty; we still allow line 1 in that case (Scintilla
-    /// clamps to the available line count anyway).
-    max_line: u32,
-    /// Edit-control HWND. Set by `show_goto_line_dialog` after the
-    /// child controls are created; the wnd_proc reads it for
-    /// `GetWindowTextW` on IDOK and to refocus after invalid input.
-    edit_hwnd: HWND,
+/// Which axis the dialog's "want to go to" value applies to.
+/// Toggled by the radio pair.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GotoMode {
+    Line,
+    Offset,
 }
 
-extern "system" fn goto_line_wnd_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+/// What the user picked. The caller decodes this and dispatches to
+/// `SCI_GOTOLINE` or `SCI_GOTOPOS`.
+enum GotoTarget {
+    /// 1-based line number.
+    Line(u32),
+    /// 0-based byte offset.
+    Offset(u32),
+}
+
+/// Heap-allocated dialog state. The wnd_proc reads/writes through
+/// `GWLP_USERDATA`; the outer `show_goto_dialog` owns the
+/// `Box<GotoDialogState>` and reads `result` after the modal pump
+/// exits (the dialog window is already destroyed at that point so
+/// no wnd_proc can race the read).
+struct GotoDialogState {
+    /// `Some(target)` iff the user clicked OK with valid input.
+    /// Stays `None` on Cancel/Esc/X-button close.
+    result: Option<GotoTarget>,
+    /// Active mode. Mutated by the radio click handler.
+    mode: GotoMode,
+    /// 1-based current line in the active editor.
+    current_line: u32,
+    /// 1-based total line count.
+    max_line: u32,
+    /// 0-based current byte offset of the caret.
+    current_offset: u32,
+    /// 0-based document length in bytes.
+    max_offset: u32,
+    /// Control HWNDs, set by `show_goto_dialog` after the children
+    /// are created; the wnd_proc reads them on radio click and
+    /// IDOK to update the readonly boxes and parse the user's
+    /// input.
+    here_hwnd: HWND,
+    target_hwnd: HWND,
+    max_hwnd: HWND,
+    /// Set to `true` once `show_goto_dialog` has populated the
+    /// three control HWNDs above. The wnd_proc gates on this so a
+    /// `WM_COMMAND` delivered between `WM_NCCREATE` and the end of
+    /// child setup (e.g. via `SendMessage` from another thread, or
+    /// a plugin synthesizing input) doesn't dereference null HWNDs.
+    controls_ready: bool,
+}
+
+impl GotoDialogState {
+    /// Current-axis "you are here" value.
+    fn here_value(&self) -> u32 {
+        match self.mode {
+            GotoMode::Line => self.current_line,
+            GotoMode::Offset => self.current_offset,
+        }
+    }
+    /// Current-axis upper bound. `max_line` is clamped to at least 1
+    /// so an empty buffer still presents a useful range.
+    fn max_value(&self) -> u32 {
+        match self.mode {
+            GotoMode::Line => self.max_line.max(1),
+            GotoMode::Offset => self.max_offset,
+        }
+    }
+}
+
+extern "system" fn goto_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // The whole body runs under `catch_unwind` so a panic from
-    // String::from_utf16_lossy / SetFocus / SendMessageW cannot
-    // unwind across this `extern "system"` frame (UB at the FFI
-    // boundary). On a panic we fall back to DefWindowProcW which
-    // is what every other branch already does for unhandled msgs.
+    // String::from_utf16_lossy / SetFocus / SendMessageW /
+    // SetWindowTextW cannot unwind across this `extern "system"`
+    // frame (UB at the FFI boundary). On a panic we fall back to
+    // DefWindowProcW which is what every other branch already does
+    // for unhandled msgs.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         match msg {
             WM_NCCREATE => {
-                // CREATESTRUCT.lpCreateParams carries the
-                // `*mut GotoLineState` we passed to CreateWindowExW.
-                // Stash it before any other message can fire.
                 let cs = lparam.0 as *const CREATESTRUCTW;
                 if !cs.is_null() {
                     let state_ptr = (*cs).lpCreateParams as isize;
@@ -1926,21 +1979,38 @@ extern "system" fn goto_line_wnd_proc(
             }
             WM_COMMAND => {
                 let cmd = (wparam.0 & 0xFFFF) as i32;
+                let notif = ((wparam.0 >> 16) & 0xFFFF) as u32;
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GotoDialogState;
+                // controls_ready guard: a stray WM_COMMAND between
+                // WM_NCCREATE and child-setup completion would
+                // otherwise dereference null HWNDs (set/focus on
+                // null is silent but SetFocus(null) clears
+                // foreground focus, an observable misbehaviour).
+                let state = if !state_ptr.is_null() && (*state_ptr).controls_ready {
+                    Some(&mut *state_ptr)
+                } else {
+                    None
+                };
                 if cmd == IDOK.0 {
-                    let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GotoLineState;
-                    if !state_ptr.is_null() {
-                        let state = &mut *state_ptr;
-                        if let Some(n) = read_goto_line_value(state.edit_hwnd, state.max_line) {
-                            state.result = Some(n);
+                    if let Some(state) = state {
+                        if let Some(n) = read_target_value(state.target_hwnd, state.max_value()) {
+                            let target = match state.mode {
+                                // Clamp Line to >= 1 so a stray "0"
+                                // doesn't fall off the bottom of the
+                                // 1-based axis.
+                                GotoMode::Line => GotoTarget::Line(n.max(1)),
+                                GotoMode::Offset => GotoTarget::Offset(n),
+                            };
+                            state.result = Some(target);
                             let _ = DestroyWindow(hwnd);
                         } else {
-                            // Invalid input: leave the dialog open
-                            // with the edit re-focused and its text
-                            // re-selected so the user can just
-                            // retype.
-                            let _ = SetFocus(Some(state.edit_hwnd));
+                            // Empty / unparseable input: leave the
+                            // dialog open with the target field
+                            // re-focused and selected so a retry is
+                            // a single keystroke.
+                            let _ = SetFocus(Some(state.target_hwnd));
                             SendMessageW(
-                                state.edit_hwnd,
+                                state.target_hwnd,
                                 EM_SETSEL,
                                 Some(WPARAM(0)),
                                 Some(LPARAM(-1)),
@@ -1950,6 +2020,28 @@ extern "system" fn goto_line_wnd_proc(
                     LRESULT(0)
                 } else if cmd == IDCANCEL.0 {
                     let _ = DestroyWindow(hwnd);
+                    LRESULT(0)
+                } else if (cmd == IDC_GOTO_RADIO_LINE as i32 || cmd == IDC_GOTO_RADIO_OFFSET as i32)
+                    && notif == BN_CLICKED
+                {
+                    if let Some(state) = state {
+                        let new_mode = if cmd == IDC_GOTO_RADIO_LINE as i32 {
+                            GotoMode::Line
+                        } else {
+                            GotoMode::Offset
+                        };
+                        if state.mode != new_mode {
+                            state.mode = new_mode;
+                            populate_axis_boxes(state);
+                            let _ = SetFocus(Some(state.target_hwnd));
+                            SendMessageW(
+                                state.target_hwnd,
+                                EM_SETSEL,
+                                Some(WPARAM(0)),
+                                Some(LPARAM(-1)),
+                            );
+                        }
+                    }
                     LRESULT(0)
                 } else {
                     DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -1968,11 +2060,30 @@ extern "system" fn goto_line_wnd_proc(
     }
 }
 
-/// Read the edit-control text and parse it as a 1-based line number.
-/// Returns `Some(n)` only if the input parses cleanly to a positive
-/// integer; out-of-range input is clamped to `max_line` so the user
-/// always lands on a real line.
-unsafe fn read_goto_line_value(edit: HWND, max_line: u32) -> Option<u32> {
+/// Populate the three labeled boxes for the current `state.mode`.
+/// Called on initial display and on every radio toggle so the
+/// "You are here / want to go to / can't go further than" values
+/// reflect the active axis. Pure text update — focus and selection
+/// are handled by the caller so this can run safely before
+/// `ShowWindow`.
+unsafe fn populate_axis_boxes(state: &GotoDialogState) {
+    unsafe {
+        let here = HSTRING::from(state.here_value().to_string());
+        let max = HSTRING::from(state.max_value().to_string());
+        let _ = SetWindowTextW(state.here_hwnd, &here);
+        let _ = SetWindowTextW(state.max_hwnd, &max);
+        // Seed the editable target with the current value so the
+        // user has a concrete starting point in the active axis.
+        let _ = SetWindowTextW(state.target_hwnd, &here);
+    }
+}
+
+/// Read the editable target box and parse it as a `u32`. Returns
+/// `None` only on empty/unparseable input; values above `max` are
+/// clamped so the user always lands inside the document. Note that
+/// 0 is a valid offset (start of file); the line-vs-offset floor
+/// gating happens in the IDOK handler.
+unsafe fn read_target_value(edit: HWND, max: u32) -> Option<u32> {
     let mut buf = [0u16; 32];
     let len = unsafe { GetWindowTextW(edit, &mut buf) };
     if len <= 0 {
@@ -1980,10 +2091,7 @@ unsafe fn read_goto_line_value(edit: HWND, max_line: u32) -> Option<u32> {
     }
     let text = String::from_utf16_lossy(&buf[..len as usize]);
     let n = text.trim().parse::<u32>().ok()?;
-    if n == 0 {
-        return None;
-    }
-    Some(n.min(max_line.max(1)))
+    Some(n.min(max))
 }
 
 /// Apply the system default GUI font to a freshly-created child
@@ -2000,13 +2108,18 @@ unsafe fn apply_dialog_font(child: HWND, font: HFONT) {
     }
 }
 
-/// Show the modal Goto Line dialog and return the line the user
-/// picked (1-based), or `None` on Cancel. `current_line` is
-/// 1-based and pre-fills the edit field. `max_line` is the
-/// document's line count and is shown as a hint in the label.
+/// Show the modal "Go to..." dialog and return the user's choice,
+/// or `None` on Cancel. `current_line` / `max_line` are 1-based;
+/// `current_offset` / `max_offset` are 0-based byte counts.
 ///
 /// Must be called from the UI thread that owns `owner`.
-fn show_goto_line_dialog(owner: HWND, current_line: u32, max_line: u32) -> Option<u32> {
+fn show_goto_dialog(
+    owner: HWND,
+    current_line: u32,
+    max_line: u32,
+    current_offset: u32,
+    max_offset: u32,
+) -> Option<GotoTarget> {
     use std::sync::OnceLock;
     static REGISTERED: OnceLock<()> = OnceLock::new();
 
@@ -2017,38 +2130,41 @@ fn show_goto_line_dialog(owner: HWND, current_line: u32, max_line: u32) -> Optio
             let class = WNDCLASSEXW {
                 cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
                 style: CS_HREDRAW | CS_VREDRAW,
-                lpfnWndProc: Some(goto_line_wnd_proc),
+                lpfnWndProc: Some(goto_wnd_proc),
                 hInstance: instance.into(),
                 hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
                 hbrBackground: HBRUSH((COLOR_WINDOW.0 + 1) as usize as *mut c_void),
-                lpszClassName: GOTO_LINE_CLASS,
+                lpszClassName: GOTO_CLASS,
                 ..Default::default()
             };
-            // Idempotent — RegisterClassExW returns the same atom on
-            // repeat. Failure is non-fatal here; the subsequent
-            // CreateWindowExW will surface a usable error.
             let _ = RegisterClassExW(&class);
         });
 
-        // Heap-allocate the state so the wnd_proc can mutate
-        // `result` and we can read it after DestroyWindow. The
-        // raw pointer below remains valid for the lifetime of
-        // `state` because the local binding is never moved
-        // (`state` is the sole owner; we shadow `state.edit_hwnd`
-        // through a `&mut *state` reborrow but the `Box` itself
-        // stays in this stack frame until the function returns).
-        let mut state = Box::new(GotoLineState {
+        // Heap-allocate the state so the wnd_proc can mutate it
+        // and we can read `result` after DestroyWindow. The raw
+        // pointer below remains valid for the lifetime of `state`
+        // because the local binding is never moved (`state` is
+        // the sole owner; the `Box` stays in this stack frame
+        // until the function returns).
+        let mut state = Box::new(GotoDialogState {
             result: None,
+            mode: GotoMode::Line,
+            current_line,
             max_line,
-            edit_hwnd: HWND::default(),
+            current_offset,
+            max_offset,
+            here_hwnd: HWND::default(),
+            target_hwnd: HWND::default(),
+            max_hwnd: HWND::default(),
+            controls_ready: false,
         });
-        let state_ptr: *mut GotoLineState = &mut *state;
+        let state_ptr: *mut GotoDialogState = &mut *state;
 
         // Center on the owner. GetWindowRect returns screen coords,
         // which is what CreateWindowExW for a top-level WS_POPUP
-        // wants (client-rel coords would be for a child window).
-        const DLG_W: i32 = 320;
-        const DLG_H: i32 = 130;
+        // wants.
+        const DLG_W: i32 = 300;
+        const DLG_H: i32 = 290;
         let mut owner_rect = RECT::default();
         let _ = GetWindowRect(owner, &mut owner_rect);
         let owner_w = owner_rect.right - owner_rect.left;
@@ -2056,14 +2172,10 @@ fn show_goto_line_dialog(owner: HWND, current_line: u32, max_line: u32) -> Optio
         let dlg_x = owner_rect.left + (owner_w - DLG_W) / 2;
         let dlg_y = owner_rect.top + (owner_h - DLG_H) / 2;
 
-        // Dialog window. WS_EX_CONTROLPARENT lets IsDialogMessageW
-        // walk into the children's tab order. Created hidden
-        // (no WS_VISIBLE) so a child-creation failure can destroy
-        // it without a visible flicker.
         let dlg = CreateWindowExW(
             WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
-            GOTO_LINE_CLASS,
-            w!("Go to Line"),
+            GOTO_CLASS,
+            w!("Go to..."),
             WS_POPUP | WS_CAPTION | WS_SYSMENU,
             dlg_x,
             dlg_y,
@@ -2075,60 +2187,155 @@ fn show_goto_line_dialog(owner: HWND, current_line: u32, max_line: u32) -> Optio
             Some(state_ptr as *mut c_void),
         )
         .ok()?;
-        // Past this point every exit path destroys the dialog —
-        // `?` propagation from child creation, panic, WM_QUIT
-        // mid-pump, GetMessageW error. The guard's IsWindow check
-        // turns the happy path (already-destroyed via OK/Cancel)
-        // into a no-op.
         let _dlg_guard = DlgDestroyGuard(dlg);
 
-        // Children. Failures propagate via `?`; the dlg_guard
-        // tears the parent down on the way out, which cascades
-        // to any children that did succeed. SS_LEFT is `0` so
-        // it doesn't appear in the static control's style mask
-        // explicitly. Layout is in raw pixels; DPI awareness is a
-        // Phase 4 polish item that applies workspace-wide.
-        let label_text = HSTRING::from(format!("Line number (1 - {}):", max_line.max(1)));
-        let edit_text = HSTRING::from(current_line.max(1).to_string());
-        let label = CreateWindowExW(
+        // Layout (client-area pixels). Three rows of label + box,
+        // radio pair on top, OK/Cancel at bottom.
+        const X_PAD: i32 = 16;
+        const ROW_W: i32 = 260;
+        const BOX_H: i32 = 22;
+        const LABEL_H: i32 = 18;
+
+        // Radio pair. WS_GROUP on the first scopes the auto-radio
+        // group; the second is in the same group so picking one
+        // unchecks the other automatically.
+        let radio_line = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("&Line"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | style_bits(BS_AUTORADIOBUTTON),
+            X_PAD,
+            14,
+            90,
+            BOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_GOTO_RADIO_LINE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let radio_offset = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("&Offset"),
+            WS_CHILD | WS_VISIBLE | style_bits(BS_AUTORADIOBUTTON),
+            X_PAD + 100,
+            14,
+            90,
+            BOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_GOTO_RADIO_OFFSET as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        // Row 1: "You are here:" + readonly box.
+        let label_here = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
-            &label_text,
+            w!("You are here:"),
             WS_CHILD | WS_VISIBLE,
-            12,
-            12,
-            290,
-            18,
+            X_PAD,
+            54,
+            ROW_W,
+            LABEL_H,
             Some(dlg),
             None,
             Some(instance.into()),
             None,
         )
         .ok()?;
-        let edit = CreateWindowExW(
+        let here = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("EDIT"),
-            &edit_text,
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(ES_NUMBER | ES_AUTOHSCROLL),
-            12,
-            34,
-            290,
-            22,
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | style_bits(ES_READONLY | ES_AUTOHSCROLL),
+            X_PAD,
+            74,
+            ROW_W,
+            BOX_H,
             Some(dlg),
-            Some(HMENU(IDC_GOTO_LINE_EDIT as usize as *mut c_void)),
+            Some(HMENU(IDC_GOTO_HERE as usize as *mut c_void)),
             Some(instance.into()),
             None,
         )
         .ok()?;
+
+        // Row 2: "You want to go to:" + editable box.
+        let label_target = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("You want to go to:"),
+            WS_CHILD | WS_VISIBLE,
+            X_PAD,
+            108,
+            ROW_W,
+            LABEL_H,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let target = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("EDIT"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(ES_NUMBER | ES_AUTOHSCROLL),
+            X_PAD,
+            128,
+            ROW_W,
+            BOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_GOTO_TARGET as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        // Row 3: "You can't go further than:" + readonly box.
+        let label_max = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("You can't go further than:"),
+            WS_CHILD | WS_VISIBLE,
+            X_PAD,
+            162,
+            ROW_W,
+            LABEL_H,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let max_box = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("EDIT"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | style_bits(ES_READONLY | ES_AUTOHSCROLL),
+            X_PAD,
+            182,
+            ROW_W,
+            BOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_GOTO_MAX as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        // Buttons.
         let ok_btn = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
             w!("OK"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_DEFPUSHBUTTON),
-            142,
-            68,
+            X_PAD + 100,
+            226,
             75,
-            24,
+            26,
             Some(dlg),
             Some(HMENU(IDOK.0 as u16 as usize as *mut c_void)),
             Some(instance.into()),
@@ -2140,39 +2347,63 @@ fn show_goto_line_dialog(owner: HWND, current_line: u32, max_line: u32) -> Optio
             w!("BUTTON"),
             w!("Cancel"),
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_PUSHBUTTON),
-            227,
-            68,
+            X_PAD + 185,
+            226,
             75,
-            24,
+            26,
             Some(dlg),
             Some(HMENU(IDCANCEL.0 as u16 as usize as *mut c_void)),
             Some(instance.into()),
             None,
         )
         .ok()?;
-        state.edit_hwnd = edit;
+
+        state.here_hwnd = here;
+        state.target_hwnd = target;
+        state.max_hwnd = max_box;
+        // The wnd_proc gates WM_COMMAND on this flag — flip it
+        // only after the three HWNDs above are populated so a
+        // stray pre-show message can't dereference null handles.
+        state.controls_ready = true;
 
         let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
-        for child in [label, edit, ok_btn, cancel] {
+        for child in [
+            radio_line,
+            radio_offset,
+            label_here,
+            here,
+            label_target,
+            target,
+            label_max,
+            max_box,
+            ok_btn,
+            cancel,
+        ] {
             apply_dialog_font(child, font);
         }
 
-        // Disable owner; the RAII guard re-enables on every exit
-        // path — including a panic between this point and the
-        // pump's natural exit. Without it, an unwind here would
-        // soft-lock the main window. Constructed AFTER
-        // `EnableWindow(false)` so its Drop pairs with that call.
+        // Initial mode = Line; check the corresponding radio and
+        // populate the three boxes BEFORE the dialog is shown so
+        // the first frame paints the correct values.
+        SendMessageW(
+            radio_line,
+            BM_SETCHECK,
+            Some(WPARAM(BST_CHECKED.0 as usize)),
+            Some(LPARAM(0)),
+        );
+        populate_axis_boxes(&state);
+
+        // Disable owner FIRST, then reveal the dialog and move
+        // focus. Doing it in this order means the moment the
+        // owner could see "I just lost focus" is also the moment
+        // it's disabled, eliminating the brief window where input
+        // could still reach the main window.
         let _ = EnableWindow(owner, false);
         let _owner_guard = OwnerEnableGuard(owner);
-
-        // Now reveal the dialog and put the caret in the edit
-        // field with the seed value pre-selected so a typed
-        // digit overwrites it immediately.
         let _ = ShowWindow(dlg, SW_SHOW);
-        let _ = SetFocus(Some(edit));
-        SendMessageW(edit, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+        let _ = SetFocus(Some(target));
+        SendMessageW(target, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
 
-        // Modal pump.
         let mut msg = MSG::default();
         loop {
             if !IsWindow(Some(dlg)).as_bool() {
@@ -2181,9 +2412,6 @@ fn show_goto_line_dialog(owner: HWND, current_line: u32, max_line: u32) -> Optio
             let ret = GetMessageW(&mut msg, None, 0, 0);
             match ret.0 {
                 0 => {
-                    // WM_QUIT during the modal pump means the app is
-                    // tearing down. Re-post so the outer message loop
-                    // sees it and shuts down cleanly.
                     let _ = PostMessageW(None, WM_QUIT, msg.wParam, msg.lParam);
                     break;
                 }
@@ -2197,11 +2425,7 @@ fn show_goto_line_dialog(owner: HWND, current_line: u32, max_line: u32) -> Optio
             }
         }
 
-        // _owner_guard re-enables the owner; _dlg_guard destroys
-        // the dialog if the pump exited via WM_QUIT or a
-        // GetMessageW error (the OK/Cancel paths already destroyed
-        // it). Both fire on Drop in reverse declaration order.
-        state.result
+        state.result.take()
     }
 }
 
@@ -2213,7 +2437,7 @@ const fn style_bits(bits: i32) -> WINDOW_STYLE {
     WINDOW_STYLE(bits as u32)
 }
 
-/// RAII guard that re-enables `owner` on drop. `show_goto_line_dialog`
+/// RAII guard that re-enables `owner` on drop. `show_goto_dialog`
 /// disables the owner before the modal pump and relies on the guard
 /// to re-enable it on every exit path — including a panic between
 /// disable and the pump's natural exit. Without the guard a panic
@@ -2934,34 +3158,51 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     ID_HELP_ABOUT => {
                         show_about_dialog(hwnd);
                     }
-                    // Goto Line (m3b1). Pull the current caret line +
-                    // total line count off the editor before showing
-                    // the modal so the dialog can pre-fill and bound
-                    // the input. After the user picks, route through
-                    // SCI_GOTOLINE (zero-based) and re-focus
-                    // Scintilla so the user can type immediately.
+                    // Go to... (m3b1). Pull the caret's line + offset
+                    // and the document's line count + length off the
+                    // editor so the dialog can populate both axes
+                    // independently. After the user picks, dispatch
+                    // to SCI_GOTOLINE (zero-based line) or SCI_GOTOPOS
+                    // (zero-based byte offset) per the result variant
+                    // and re-focus Scintilla so the user can type
+                    // immediately.
                     ID_SEARCH_GOTOLINE => {
                         let seed = if let Some(state) = state_from_hwnd(hwnd) {
                             let editor = state.editor;
-                            let pos = editor.send(SCI_GETCURRENTPOS, 0, 0);
-                            let cur = editor.send(SCI_LINEFROMPOSITION, pos as usize, 0) as i32;
-                            let total = editor.send(SCI_GETLINECOUNT, 0, 0) as i32;
+                            let pos = editor.send(SCI_GETCURRENTPOS, 0, 0).max(0) as u32;
+                            let cur_line =
+                                editor.send(SCI_LINEFROMPOSITION, pos as usize, 0).max(0) as u32;
+                            let total_lines = editor.send(SCI_GETLINECOUNT, 0, 0).max(0) as u32;
+                            let length = editor.send(SCI_GETLENGTH, 0, 0).max(0) as u32;
                             Some((
-                                cur.saturating_add(1).max(1) as u32,
-                                total.max(1) as u32,
+                                cur_line.saturating_add(1).max(1),
+                                total_lines.max(1),
+                                pos,
+                                length,
                                 state.scintilla_hwnd,
                             ))
                         } else {
                             None
                         };
-                        if let Some((current, max_line, scintilla_hwnd)) = seed {
-                            if let Some(target) = show_goto_line_dialog(hwnd, current, max_line) {
+                        if let Some((cur_line, max_line, cur_offset, max_offset, scintilla_hwnd)) =
+                            seed
+                        {
+                            if let Some(target) =
+                                show_goto_dialog(hwnd, cur_line, max_line, cur_offset, max_offset)
+                            {
                                 if let Some(state) = state_from_hwnd(hwnd) {
-                                    state.editor.send(
-                                        SCI_GOTOLINE,
-                                        target.saturating_sub(1) as usize,
-                                        0,
-                                    );
+                                    match target {
+                                        GotoTarget::Line(n) => {
+                                            state.editor.send(
+                                                SCI_GOTOLINE,
+                                                n.saturating_sub(1) as usize,
+                                                0,
+                                            );
+                                        }
+                                        GotoTarget::Offset(p) => {
+                                            state.editor.send(SCI_GOTOPOS, p as usize, 0);
+                                        }
+                                    }
                                 }
                             }
                             let _ = SetFocus(Some(scintilla_hwnd));
