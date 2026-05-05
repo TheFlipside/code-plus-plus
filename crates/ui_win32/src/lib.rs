@@ -2760,15 +2760,17 @@ const fn style_bits(bits: i32) -> WINDOW_STYLE {
     WINDOW_STYLE(bits as u32)
 }
 
-/// COLORREF for the dialog background. Picked to match the tone
-/// Win11 themed BS_AUTOCHECKBOX / BS_AUTORADIOBUTTON paint as
-/// their resting background. Slightly lighter than COLOR_3DFACE
-/// (which on themed Win11 reads as a touch darker than the
-/// themed checkbox tone, producing a visible mismatch).
-const DIALOG_BG: u32 = 0x00F3F3F3;
-/// COLORREF for the bottom status strip — slightly darker than
-/// the dialog background so it reads as a distinct band.
-const STATUS_BG: u32 = 0x00E5E5E5;
+/// COLORREF for the dialog background. Picked empirically to
+/// match the tone Win11 themed BS_AUTOCHECKBOX /
+/// BS_AUTORADIOBUTTON paint as their resting fill — those
+/// controls draw a faint card around their entire client rect,
+/// which on COLOR_3DFACE-painted dialogs reads as visibly
+/// darker than the dialog itself. RGB(0xE8, 0xE8, 0xE8) is
+/// close enough that the cards disappear into the dialog.
+const DIALOG_BG: u32 = 0x00E8E8E8;
+/// COLORREF for the bottom status strip — a step darker than
+/// the dialog background so it still reads as a distinct band.
+const STATUS_BG: u32 = 0x00D8D8D8;
 
 /// Cached brush for the dialog background (Goto + Find/Replace
 /// hbrBackground, plus WM_CTLCOLORBTN's clear brush). Created
