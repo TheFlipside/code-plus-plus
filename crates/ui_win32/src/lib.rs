@@ -36,9 +36,10 @@ use codepp_scintilla_sys::{
     SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
     SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT,
     SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
-    SCI_GETDIRECTPOINTER, SCI_GETLENGTH, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETTEXT,
-    SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOPOS, SCI_PASTE, SCI_REDO,
-    SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
+    SCI_GETDIRECTPOINTER, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETSELECTIONEND,
+    SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE,
+    SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_PASTE, SCI_REDO, SCI_RELEASEDOCUMENT,
+    SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
     SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTEXT,
     SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT,
     SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
@@ -46,7 +47,9 @@ use codepp_scintilla_sys::{
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
+use windows::Win32::Graphics::Gdi::{
+    GetStockObject, COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HFONT,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, ICC_BAR_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, NMHDR, TCITEMW,
@@ -54,21 +57,24 @@ use windows::Win32::UI::Controls::{
     WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SetFocus, VK_0, VK_F, VK_G, VK_H, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
+    EnableWindow, SetFocus, VK_0, VK_F, VK_G, VK_H, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
 };
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CreateAcceleratorTableW, CreateMenu,
     CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyWindow, DispatchMessageW, DrawMenuBar,
-    GetClientRect, GetMenuItemCount, GetMessageW, GetWindowLongPtrW, LoadCursorW, MessageBoxW,
-    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW,
-    SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
-    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL,
-    HMENU, IDC_ARROW, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO,
-    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    MF_UNCHECKED, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_APP, WM_COMMAND, WM_DESTROY, WM_DROPFILES,
-    WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_SETFOCUS, WM_SIZE, WNDCLASSEXW, WS_CHILD,
-    WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    GetClientRect, GetMenuItemCount, GetMessageW, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
+    IsDialogMessageW, IsWindow, LoadCursorW, MessageBoxW, MoveWindow, PostMessageW,
+    PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
+    TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BS_DEFPUSHBUTTON,
+    BS_PUSHBUTTON, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, ES_AUTOHSCROLL, ES_NUMBER,
+    FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL, HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES,
+    MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND,
+    MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
+    SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_DROPFILES,
+    WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT, WM_SIZE,
+    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -166,6 +172,19 @@ const WM_APP_WAKE: u32 = WM_APP + 1;
 const MAIN_CLASS: PCWSTR = w!("CodePlusPlusMainWindow");
 const SCINTILLA_CLASS: PCWSTR = w!("Scintilla");
 const STATUSBAR_CLASS: PCWSTR = w!("msctls_statusbar32");
+
+/// Window class for the Goto Line modal popup. Registered once on
+/// first `show_goto_line_dialog`. The dialog is a plain top-level
+/// `WS_POPUP`/`WS_CAPTION`/`WS_SYSMENU` window with our own wnd_proc;
+/// `IsDialogMessageW` in the modal pump still handles Tab navigation
+/// and the IDOK/IDCANCEL keyboard contract because the window has
+/// `WS_EX_CONTROLPARENT` and the controls have `WS_TABSTOP`.
+const GOTO_LINE_CLASS: PCWSTR = w!("CodePlusPlusGotoLineDialog");
+
+/// Goto Line dialog control id for the line-number edit field.
+/// IDOK / IDCANCEL are the standard Win32 button ids and are reused
+/// for the dialog's OK and Cancel buttons.
+const IDC_GOTO_LINE_EDIT: u16 = 100;
 
 /// Per-window state. Box-allocated, pointer stashed in
 /// `GWLP_USERDATA`. wnd_proc reads it back via
@@ -1838,6 +1857,394 @@ fn show_about_dialog(main_hwnd: HWND) {
     }
 }
 
+// --- Goto Line modal dialog ------------------------------------------
+//
+// A small `WS_POPUP` + `WS_CAPTION` + `WS_SYSMENU` window with one
+// EDIT field (numeric only) and OK/Cancel buttons. The pump is a
+// nested `GetMessageW` loop that runs until the dialog HWND is
+// destroyed (via OK/Cancel/X-button); `IsDialogMessageW` in the
+// loop handles Tab/Enter/Esc/mnemonic semantics for free because
+// the dialog has `WS_EX_CONTROLPARENT` and the children have
+// `WS_TABSTOP`.
+//
+// While the modal is up the owner is `EnableWindow(false)`'d so the
+// user can't reach the main window's menu/accelerators; on destroy
+// we re-enable and SetFocus back to Scintilla.
+//
+// Result is plumbed back via a heap-allocated `GotoLineState` whose
+// pointer is stashed in the dialog HWND's `GWLP_USERDATA`. The
+// outer caller reads `state.result` after the pump exits.
+
+/// `EM_SETSEL` — declared inline because windows-rs splits its
+/// edit-control message constants across modules and reaching one
+/// just for this single use is more import noise than the literal.
+const EM_SETSEL: u32 = 0x00B1;
+
+/// Heap-allocated dialog state. The wnd_proc reads/writes through
+/// `GWLP_USERDATA`; the outer `show_goto_line_dialog` owns the
+/// `Box<GotoLineState>` and reads `result` after the modal pump
+/// exits (the dialog window is already destroyed at that point so
+/// no wnd_proc can race the read).
+struct GotoLineState {
+    /// `Some(line)` iff the user clicked OK with valid input. Stays
+    /// `None` on Cancel/Esc/X-button close.
+    result: Option<u32>,
+    /// 1-based upper bound used to validate input. `0` means the
+    /// editor is empty; we still allow line 1 in that case (Scintilla
+    /// clamps to the available line count anyway).
+    max_line: u32,
+    /// Edit-control HWND. Set by `show_goto_line_dialog` after the
+    /// child controls are created; the wnd_proc reads it for
+    /// `GetWindowTextW` on IDOK and to refocus after invalid input.
+    edit_hwnd: HWND,
+}
+
+extern "system" fn goto_line_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    // The whole body runs under `catch_unwind` so a panic from
+    // String::from_utf16_lossy / SetFocus / SendMessageW cannot
+    // unwind across this `extern "system"` frame (UB at the FFI
+    // boundary). On a panic we fall back to DefWindowProcW which
+    // is what every other branch already does for unhandled msgs.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        match msg {
+            WM_NCCREATE => {
+                // CREATESTRUCT.lpCreateParams carries the
+                // `*mut GotoLineState` we passed to CreateWindowExW.
+                // Stash it before any other message can fire.
+                let cs = lparam.0 as *const CREATESTRUCTW;
+                if !cs.is_null() {
+                    let state_ptr = (*cs).lpCreateParams as isize;
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_COMMAND => {
+                let cmd = (wparam.0 & 0xFFFF) as i32;
+                if cmd == IDOK.0 {
+                    let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut GotoLineState;
+                    if !state_ptr.is_null() {
+                        let state = &mut *state_ptr;
+                        if let Some(n) = read_goto_line_value(state.edit_hwnd, state.max_line) {
+                            state.result = Some(n);
+                            let _ = DestroyWindow(hwnd);
+                        } else {
+                            // Invalid input: leave the dialog open
+                            // with the edit re-focused and its text
+                            // re-selected so the user can just
+                            // retype.
+                            let _ = SetFocus(Some(state.edit_hwnd));
+                            SendMessageW(
+                                state.edit_hwnd,
+                                EM_SETSEL,
+                                Some(WPARAM(0)),
+                                Some(LPARAM(-1)),
+                            );
+                        }
+                    }
+                    LRESULT(0)
+                } else if cmd == IDCANCEL.0 {
+                    let _ = DestroyWindow(hwnd);
+                    LRESULT(0)
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+            }
+            WM_CLOSE => {
+                let _ = DestroyWindow(hwnd);
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }));
+    match result {
+        Ok(lr) => lr,
+        Err(_) => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// Read the edit-control text and parse it as a 1-based line number.
+/// Returns `Some(n)` only if the input parses cleanly to a positive
+/// integer; out-of-range input is clamped to `max_line` so the user
+/// always lands on a real line.
+unsafe fn read_goto_line_value(edit: HWND, max_line: u32) -> Option<u32> {
+    let mut buf = [0u16; 32];
+    let len = unsafe { GetWindowTextW(edit, &mut buf) };
+    if len <= 0 {
+        return None;
+    }
+    let text = String::from_utf16_lossy(&buf[..len as usize]);
+    let n = text.trim().parse::<u32>().ok()?;
+    if n == 0 {
+        return None;
+    }
+    Some(n.min(max_line.max(1)))
+}
+
+/// Apply the system default GUI font to a freshly-created child
+/// control. Without this Win32 falls back to the bitmap "System"
+/// font from the Win95 era, which looks broken on every modern DPI.
+unsafe fn apply_dialog_font(child: HWND, font: HFONT) {
+    unsafe {
+        SendMessageW(
+            child,
+            WM_SETFONT,
+            Some(WPARAM(font.0 as usize)),
+            Some(LPARAM(1)),
+        );
+    }
+}
+
+/// Show the modal Goto Line dialog and return the line the user
+/// picked (1-based), or `None` on Cancel. `current_line` is
+/// 1-based and pre-fills the edit field. `max_line` is the
+/// document's line count and is shown as a hint in the label.
+///
+/// Must be called from the UI thread that owns `owner`.
+fn show_goto_line_dialog(owner: HWND, current_line: u32, max_line: u32) -> Option<u32> {
+    use std::sync::OnceLock;
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+
+    unsafe {
+        let instance = GetModuleHandleW(None).ok()?;
+
+        REGISTERED.get_or_init(|| {
+            let class = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(goto_line_wnd_proc),
+                hInstance: instance.into(),
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                hbrBackground: HBRUSH((COLOR_WINDOW.0 + 1) as usize as *mut c_void),
+                lpszClassName: GOTO_LINE_CLASS,
+                ..Default::default()
+            };
+            // Idempotent — RegisterClassExW returns the same atom on
+            // repeat. Failure is non-fatal here; the subsequent
+            // CreateWindowExW will surface a usable error.
+            let _ = RegisterClassExW(&class);
+        });
+
+        // Heap-allocate the state so the wnd_proc can mutate
+        // `result` and we can read it after DestroyWindow. The
+        // raw pointer below remains valid for the lifetime of
+        // `state` because the local binding is never moved
+        // (`state` is the sole owner; we shadow `state.edit_hwnd`
+        // through a `&mut *state` reborrow but the `Box` itself
+        // stays in this stack frame until the function returns).
+        let mut state = Box::new(GotoLineState {
+            result: None,
+            max_line,
+            edit_hwnd: HWND::default(),
+        });
+        let state_ptr: *mut GotoLineState = &mut *state;
+
+        // Center on the owner. GetWindowRect returns screen coords,
+        // which is what CreateWindowExW for a top-level WS_POPUP
+        // wants (client-rel coords would be for a child window).
+        const DLG_W: i32 = 320;
+        const DLG_H: i32 = 130;
+        let mut owner_rect = RECT::default();
+        let _ = GetWindowRect(owner, &mut owner_rect);
+        let owner_w = owner_rect.right - owner_rect.left;
+        let owner_h = owner_rect.bottom - owner_rect.top;
+        let dlg_x = owner_rect.left + (owner_w - DLG_W) / 2;
+        let dlg_y = owner_rect.top + (owner_h - DLG_H) / 2;
+
+        // Dialog window. WS_EX_CONTROLPARENT lets IsDialogMessageW
+        // walk into the children's tab order. Created hidden
+        // (no WS_VISIBLE) so a child-creation failure can destroy
+        // it without a visible flicker.
+        let dlg = CreateWindowExW(
+            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+            GOTO_LINE_CLASS,
+            w!("Go to Line"),
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            dlg_x,
+            dlg_y,
+            DLG_W,
+            DLG_H,
+            Some(owner),
+            None,
+            Some(instance.into()),
+            Some(state_ptr as *mut c_void),
+        )
+        .ok()?;
+        // Past this point every exit path destroys the dialog —
+        // `?` propagation from child creation, panic, WM_QUIT
+        // mid-pump, GetMessageW error. The guard's IsWindow check
+        // turns the happy path (already-destroyed via OK/Cancel)
+        // into a no-op.
+        let _dlg_guard = DlgDestroyGuard(dlg);
+
+        // Children. Failures propagate via `?`; the dlg_guard
+        // tears the parent down on the way out, which cascades
+        // to any children that did succeed. SS_LEFT is `0` so
+        // it doesn't appear in the static control's style mask
+        // explicitly. Layout is in raw pixels; DPI awareness is a
+        // Phase 4 polish item that applies workspace-wide.
+        let label_text = HSTRING::from(format!("Line number (1 - {}):", max_line.max(1)));
+        let edit_text = HSTRING::from(current_line.max(1).to_string());
+        let label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            &label_text,
+            WS_CHILD | WS_VISIBLE,
+            12,
+            12,
+            290,
+            18,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let edit = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("EDIT"),
+            &edit_text,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(ES_NUMBER | ES_AUTOHSCROLL),
+            12,
+            34,
+            290,
+            22,
+            Some(dlg),
+            Some(HMENU(IDC_GOTO_LINE_EDIT as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let ok_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("OK"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_DEFPUSHBUTTON),
+            142,
+            68,
+            75,
+            24,
+            Some(dlg),
+            Some(HMENU(IDOK.0 as u16 as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let cancel = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Cancel"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_PUSHBUTTON),
+            227,
+            68,
+            75,
+            24,
+            Some(dlg),
+            Some(HMENU(IDCANCEL.0 as u16 as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        state.edit_hwnd = edit;
+
+        let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
+        for child in [label, edit, ok_btn, cancel] {
+            apply_dialog_font(child, font);
+        }
+
+        // Disable owner; the RAII guard re-enables on every exit
+        // path — including a panic between this point and the
+        // pump's natural exit. Without it, an unwind here would
+        // soft-lock the main window. Constructed AFTER
+        // `EnableWindow(false)` so its Drop pairs with that call.
+        let _ = EnableWindow(owner, false);
+        let _owner_guard = OwnerEnableGuard(owner);
+
+        // Now reveal the dialog and put the caret in the edit
+        // field with the seed value pre-selected so a typed
+        // digit overwrites it immediately.
+        let _ = ShowWindow(dlg, SW_SHOW);
+        let _ = SetFocus(Some(edit));
+        SendMessageW(edit, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+
+        // Modal pump.
+        let mut msg = MSG::default();
+        loop {
+            if !IsWindow(Some(dlg)).as_bool() {
+                break;
+            }
+            let ret = GetMessageW(&mut msg, None, 0, 0);
+            match ret.0 {
+                0 => {
+                    // WM_QUIT during the modal pump means the app is
+                    // tearing down. Re-post so the outer message loop
+                    // sees it and shuts down cleanly.
+                    let _ = PostMessageW(None, WM_QUIT, msg.wParam, msg.lParam);
+                    break;
+                }
+                -1 => break,
+                _ => {
+                    if !IsDialogMessageW(dlg, &msg).as_bool() {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                }
+            }
+        }
+
+        // _owner_guard re-enables the owner; _dlg_guard destroys
+        // the dialog if the pump exited via WM_QUIT or a
+        // GetMessageW error (the OK/Cancel paths already destroyed
+        // it). Both fire on Drop in reverse declaration order.
+        state.result
+    }
+}
+
+/// Lift a control-style bitmask (ES_*/BS_*) into the `WINDOW_STYLE`
+/// newtype that windows-rs models WS_* flags with. The two are
+/// bitwise-compatible by Win32 design, but Rust requires the type
+/// match for `|` against `WS_CHILD` etc.
+const fn style_bits(bits: i32) -> WINDOW_STYLE {
+    WINDOW_STYLE(bits as u32)
+}
+
+/// RAII guard that re-enables `owner` on drop. `show_goto_line_dialog`
+/// disables the owner before the modal pump and relies on the guard
+/// to re-enable it on every exit path — including a panic between
+/// disable and the pump's natural exit. Without the guard a panic
+/// there would soft-lock the main window forever.
+struct OwnerEnableGuard(HWND);
+impl Drop for OwnerEnableGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = EnableWindow(self.0, true);
+        }
+    }
+}
+
+/// RAII guard that destroys a dialog HWND on drop if it's still
+/// alive. Pairs with `OwnerEnableGuard` to make every exit path —
+/// `?` propagation, panic, WM_QUIT mid-pump, or `GetMessageW` error —
+/// correctly tear down both the dialog window and the disabled-owner
+/// state. The `IsWindow` check covers the happy path where the user
+/// already clicked OK/Cancel: the dialog is already destroyed and
+/// `DestroyWindow` on a dead HWND is a silent error we don't care
+/// about, but skipping it keeps the trace log clean.
+struct DlgDestroyGuard(HWND);
+impl Drop for DlgDestroyGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if IsWindow(Some(self.0)).as_bool() {
+                let _ = DestroyWindow(self.0);
+            }
+        }
+    }
+}
+
 /// Handle a Language-menu click — flip the active tab's lang to the
 /// supplied LangType id. Routes through the same `set_buffer_lang_type`
 /// the plugin ABI uses, so the code path covers re-applying the lexer
@@ -2526,20 +2933,51 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     ID_HELP_ABOUT => {
                         show_about_dialog(hwnd);
                     }
-                    // Search stubs — all enabled in the accelerator
-                    // table so the shortcuts already register; the
-                    // menu items themselves are MF_GRAYED until m3
-                    // wires them, but the accelerator path arrives
-                    // here regardless. Trace-log so the user sees a
-                    // breadcrumb in the perf-trace; no UI affordance
-                    // until the dialogs land.
+                    // Goto Line (m3b1). Pull the current caret line +
+                    // total line count off the editor before showing
+                    // the modal so the dialog can pre-fill and bound
+                    // the input. After the user picks, route through
+                    // SCI_GOTOLINE (zero-based) and re-focus
+                    // Scintilla so the user can type immediately.
+                    ID_SEARCH_GOTOLINE => {
+                        let seed = if let Some(state) = state_from_hwnd(hwnd) {
+                            let editor = state.editor;
+                            let pos = editor.send(SCI_GETCURRENTPOS, 0, 0);
+                            let cur = editor.send(SCI_LINEFROMPOSITION, pos as usize, 0) as i32;
+                            let total = editor.send(SCI_GETLINECOUNT, 0, 0) as i32;
+                            Some((
+                                cur.saturating_add(1).max(1) as u32,
+                                total.max(1) as u32,
+                                state.scintilla_hwnd,
+                            ))
+                        } else {
+                            None
+                        };
+                        if let Some((current, max_line, scintilla_hwnd)) = seed {
+                            if let Some(target) = show_goto_line_dialog(hwnd, current, max_line) {
+                                if let Some(state) = state_from_hwnd(hwnd) {
+                                    state.editor.send(
+                                        SCI_GOTOLINE,
+                                        target.saturating_sub(1) as usize,
+                                        0,
+                                    );
+                                }
+                            }
+                            let _ = SetFocus(Some(scintilla_hwnd));
+                        }
+                    }
+                    // Find / Replace stubs — Ctrl+F / Ctrl+H
+                    // accelerators already arrive here; the dialogs
+                    // are wired in m3b2.
                     ID_SEARCH_FIND
                     | ID_SEARCH_FINDNEXT
                     | ID_SEARCH_FINDPREV
                     | ID_SEARCH_REPLACE
-                    | ID_SEARCH_FINDINFILES
-                    | ID_SEARCH_GOTOLINE => {
-                        tracing::trace!(cmd = cmd_u16, "search command not yet wired (Phase 4 m3)",);
+                    | ID_SEARCH_FINDINFILES => {
+                        tracing::trace!(
+                            cmd = cmd_u16,
+                            "find/replace command not yet wired (Phase 4 m3b2)",
+                        );
                     }
                     _ => {
                         // Dynamic-range commands (Language menu,

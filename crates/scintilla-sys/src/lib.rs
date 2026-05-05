@@ -88,6 +88,7 @@ pub const SCI_PASTE: u32 = 2179;
 pub const SCI_CLEAR: u32 = 2180;
 pub const SCI_GOTOLINE: u32 = 2024;
 pub const SCI_GETLINECOUNT: u32 = 2154;
+pub const SCI_LINEFROMPOSITION: u32 = 2166;
 pub const SCI_DOCUMENTSTART: u32 = 2316;
 pub const SCI_DOCUMENTEND: u32 = 2318;
 
