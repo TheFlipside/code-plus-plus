@@ -4124,27 +4124,19 @@ fn show_find_replace_dialog(
         ] {
             apply_dialog_font(child, font);
         }
-        // Disable visual styles on the BS_AUTOCHECKBOX /
-        // BS_AUTORADIOBUTTON / BS_GROUPBOX controls so they
-        // respect WM_CTLCOLORBTN's NULL_BRUSH return — the
-        // themed paint otherwise draws a slightly-darker
-        // rectangle around each control that doesn't match the
-        // dialog's hbrBackground. Push buttons are left themed
-        // so they keep their rounded Win11 look.
-        for child in [
-            backward_cb,
-            whole_word_cb,
-            match_case_cb,
-            wrap_around_cb,
-            in_selection_cb,
-            mode_group,
-            mode_normal_radio,
-            mode_extended_radio,
-            mode_regex_radio,
-            dot_newline_cb,
-        ] {
-            disable_visual_style(child);
-        }
+        // Disable visual styles ONLY on the BS_GROUPBOX. The
+        // themed groupbox paint cuts the border line through
+        // the "Search Mode" title; classic paint with the
+        // COLOR_3DFACE brush from WM_CTLCOLORBTN clears the
+        // title rect cleanly.
+        //
+        // Checkboxes and radios stay themed: classic-painted
+        // BS_AUTOCHECKBOX/BS_AUTORADIOBUTTON don't reliably
+        // erase their text region between toggles (DrawText's
+        // OPAQUE-bkmode clear isn't enough — tightly-drawn
+        // glyphs still stack across redraws), and themed
+        // paint handles its own redraw correctly.
+        disable_visual_style(mode_group);
 
         state.tab_ctrl = tab_ctrl;
         state.find_label = find_label;
