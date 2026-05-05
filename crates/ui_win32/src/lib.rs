@@ -39,11 +39,11 @@ use codepp_scintilla_sys::{
     SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETLENGTH,
     SCI_GETLINECOUNT, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETVIEWEOL,
     SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_PASTE,
-    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
-    SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND,
-    SCI_SETSELECTIONSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE,
-    SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT,
-    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
+    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_SCROLLCARET, SCI_SELECTALL, SCI_SETDOCPOINTER,
+    SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
+    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
+    SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
 };
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
@@ -483,7 +483,13 @@ impl UiPlatform for Win32Ui {
         self.editor.search_anchor();
         match self.editor.search_next(query, flags.bits()) {
             -1 => None,
-            pos => Some(pos as u64),
+            pos => {
+                // Scintilla updates the selection but doesn't
+                // scroll the viewport — `SCI_SCROLLCARET` brings
+                // the new caret/selection into view.
+                self.editor.send(SCI_SCROLLCARET, 0, 0);
+                Some(pos as u64)
+            }
         }
     }
 
@@ -496,7 +502,10 @@ impl UiPlatform for Win32Ui {
         self.editor.search_anchor();
         match self.editor.search_prev(query, flags.bits()) {
             -1 => None,
-            pos => Some(pos as u64),
+            pos => {
+                self.editor.send(SCI_SCROLLCARET, 0, 0);
+                Some(pos as u64)
+            }
         }
     }
 

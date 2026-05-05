@@ -210,6 +210,10 @@ pub const SCI_SETSELECTIONEND: u32 = 2144;
 /// `SelectionStart`, so without collapsing forward a Find Next
 /// click would re-find the same hit on every press).
 pub const SCI_SETEMPTYSELECTION: u32 = 2556;
+/// Scroll the view so the caret is visible. `SCI_SEARCHNEXT/PREV`
+/// move the selection but don't bring it into view; the Find
+/// dialog issues this after every successful hit.
+pub const SCI_SCROLLCARET: u32 = 2169;
 
 // Document handles — Scintilla supports multiple documents attached to
 // one view via `SCI_SETDOCPOINTER`. Code++ uses this for multi-tab in
