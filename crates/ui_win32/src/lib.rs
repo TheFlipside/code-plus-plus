@@ -48,7 +48,8 @@ use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatfo
 use windows::core::{w, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    GetStockObject, COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HFONT,
+    GetStockObject, GetSysColorBrush, SetBkMode, COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HDC,
+    HFONT, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
@@ -72,10 +73,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING,
     MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
     MF_STRING, MF_UNCHECKED, MSG, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
-    WM_COMMAND, WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NOTIFY, WM_QUIT,
-    WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT,
-    WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
-    WS_VISIBLE,
+    WM_COMMAND, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP,
+    WM_NCCREATE, WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION,
+    WS_CHILD, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -2051,6 +2052,21 @@ extern "system" fn goto_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 let _ = DestroyWindow(hwnd);
                 LRESULT(0)
             }
+            // Themed STATIC and EDIT controls paint their own
+            // background which doesn't match the dialog's hbrBackground
+            // (`COLOR_WINDOW`) — they show as a slightly darker grey
+            // rectangle behind every label, the readonly value
+            // STATICs, and the editable target. Returning the
+            // `COLOR_WINDOW` brush here, plus setting the DC bk mode
+            // to `TRANSPARENT` so glyphs don't paint their own
+            // background rectangle either, makes everything render
+            // against the dialog's actual background colour.
+            WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                let brush = GetSysColorBrush(COLOR_WINDOW);
+                LRESULT(brush.0 as isize)
+            }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
     }));
@@ -2190,16 +2206,17 @@ fn show_goto_dialog(
         let _dlg_guard = DlgDestroyGuard(dlg);
 
         // Layout (client-area pixels). Three rows of [label] [box]
-        // [button], with radios on top. The buttons sit inline
-        // with rows 2 and 3 — Notepad++ style — rather than
-        // sharing a bottom strip.
+        // [button], with radios on top. The boxes sit close to the
+        // labels — left edge roughly under the Offset radio's text
+        // — and the buttons are right-anchored independently so
+        // moving the box X doesn't drag them left.
         const X_PAD: i32 = 14;
         const LABEL_X: i32 = X_PAD;
-        const LABEL_W: i32 = 190;
-        const BOX_X: i32 = LABEL_X + LABEL_W + 6;
-        const BOX_W: i32 = 70;
-        const BTN_X: i32 = BOX_X + BOX_W + 16;
+        const LABEL_W: i32 = 155;
+        const BOX_X: i32 = 175;
+        const BOX_W: i32 = 90;
         const BTN_W: i32 = 160;
+        const BTN_X: i32 = DLG_W - X_PAD - BTN_W;
         const BOX_H: i32 = 22;
         const LABEL_H: i32 = 20;
         const BTN_H: i32 = 26;
