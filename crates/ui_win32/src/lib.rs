@@ -49,8 +49,8 @@ use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatfo
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{COLORREF, E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, GetStockObject, GetSysColorBrush, SetBkColor, SetBkMode, SetTextColor,
-    COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, NULL_BRUSH, TRANSPARENT,
+    CreateSolidBrush, FillRect, GetStockObject, GetSysColorBrush, SetBkColor, SetBkMode,
+    SetTextColor, COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, NULL_BRUSH, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
@@ -78,10 +78,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
     MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
     WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
-    WM_DESTROY, WM_DROPFILES, WM_INITMENUPOPUP, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT,
-    WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE,
-    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU,
-    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WM_DESTROY, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP, WM_NCCREATE, WM_NCDESTROY,
+    WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW,
+    WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -2296,14 +2296,23 @@ extern "system" fn goto_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 let _ = DestroyWindow(hwnd);
                 LRESULT(0)
             }
-            // Themed STATIC and EDIT controls paint their own
-            // STATIC controls + the group-box BTN return
-            // NULL_BRUSH so the dialog's painted hbrBackground
-            // shows through. Returning a system COLOR_3DFACE
-            // brush would re-paint with the unthemed system
-            // grey, which on Win11 themed mode is slightly
-            // darker than the actual dialog background and
-            // produces visible rectangles around every label.
+            // Win11 themed paint silently overrides our class
+            // hbrBackground for WS_POPUP | WS_CAPTION dialogs —
+            // the default WM_ERASEBKGND fills with a themed
+            // shade rather than honouring the brush. Painting
+            // the client rect ourselves with `dialog_bg_brush`
+            // and returning 1 (handled) defeats that override
+            // so the dialog renders our chosen colour.
+            WM_ERASEBKGND => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let mut rect = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rect);
+                FillRect(hdc, &rect, dialog_bg_brush());
+                LRESULT(1)
+            }
+            // STATIC + group-box BTN return NULL_BRUSH so the
+            // hbrBackground (now reliably our colour thanks to
+            // WM_ERASEBKGND above) shows through.
             WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
@@ -2760,14 +2769,17 @@ const fn style_bits(bits: i32) -> WINDOW_STYLE {
     WINDOW_STYLE(bits as u32)
 }
 
-/// COLORREF for the dialog background. Picked empirically to
-/// match the tone Win11 themed BS_AUTOCHECKBOX /
-/// BS_AUTORADIOBUTTON paint as their resting fill — those
-/// controls draw a faint card around their entire client rect,
-/// which on COLOR_3DFACE-painted dialogs reads as visibly
-/// darker than the dialog itself. RGB(0xE8, 0xE8, 0xE8) is
-/// close enough that the cards disappear into the dialog.
-const DIALOG_BG: u32 = 0x00E8E8E8;
+/// COLORREF for the dialog background. Win11 themed paint
+/// silently overrides `WNDCLASSEX.hbrBackground` for
+/// `WS_POPUP | WS_CAPTION` windows — the system fills the
+/// client area with its own themed shade (~`#F9F9F9`)
+/// regardless of what we set on the class. Each dialog's
+/// `WM_ERASEBKGND` handler paints the client area with this
+/// brush explicitly to defeat that override, so this constant
+/// IS the rendered colour. Tuned to match the resting fill
+/// Win11 themed BS_AUTOCHECKBOX / BS_AUTORADIOBUTTON paint
+/// as their card so the chrome blends.
+const DIALOG_BG: u32 = 0x00F0F0F0;
 /// COLORREF for the bottom status strip — a step darker than
 /// the dialog background so it still reads as a distinct band.
 const STATUS_BG: u32 = 0x00D8D8D8;
@@ -3031,6 +3043,20 @@ extern "system" fn find_replace_wnd_proc(
             // own background colour. The status_label gets blue
             // text on top so Replace All's count message stands
             // out against the otherwise black-on-white chrome.
+            // Win11 themed paint silently overrides our class
+            // hbrBackground for WS_POPUP | WS_CAPTION dialogs —
+            // painting the client rect ourselves with
+            // `dialog_bg_brush` defeats that so the dialog
+            // renders our chosen colour, and the STATIC /
+            // group-box paths below can rely on the
+            // hbrBackground actually being what we set.
+            WM_ERASEBKGND => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let mut rect = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rect);
+                FillRect(hdc, &rect, dialog_bg_brush());
+                LRESULT(1)
+            }
             // STATIC controls return NULL_BRUSH so the dialog's
             // painted hbrBackground shows through them — the
             // status_label is the exception (it gets an explicit
