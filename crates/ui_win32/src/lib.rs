@@ -54,9 +54,10 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, BST_CHECKED, BST_UNCHECKED, ICC_BAR_CLASSES, ICC_TAB_CLASSES,
-    INITCOMMONCONTROLSEX, NMHDR, TCIF_TEXT, TCITEMW, TCM_DELETEITEM, TCM_GETCURSEL,
-    TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_COMBOBOX, WC_TABCONTROL,
+    InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, ICC_BAR_CLASSES,
+    ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, NMHDR, TCIF_TEXT, TCITEMW, TCM_DELETEITEM,
+    TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_COMBOBOX,
+    WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, SetFocus, VK_0, VK_F, VK_F3, VK_G, VK_H, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
@@ -2356,6 +2357,21 @@ unsafe fn read_target_value(edit: HWND, max: u32) -> Option<u32> {
     Some(n.min(max))
 }
 
+/// Disable visual styles on `hwnd` so it falls back to classic
+/// (Win95-era) painting. Used for `BS_AUTOCHECKBOX`,
+/// `BS_AUTORADIOBUTTON`, and `BS_GROUPBOX` whose themed paint
+/// produces a slightly-darker rectangle around the control that
+/// doesn't match the dialog's `hbrBackground`. Classic-painted
+/// buttons honour `WM_CTLCOLORBTN`'s NULL_BRUSH return and let
+/// the dialog's actual background show through, giving a clean
+/// flush look. Visual style on push buttons (Find Next, Close,
+/// etc.) is left intact so they keep their rounded Win11 look.
+unsafe fn disable_visual_style(hwnd: HWND) {
+    unsafe {
+        let _ = SetWindowTheme(hwnd, w!(""), w!(""));
+    }
+}
+
 /// Apply the system default GUI font to a freshly-created child
 /// control. Without this Win32 falls back to the bitmap "System"
 /// font from the Win95 era, which looks broken on every modern DPI.
@@ -3615,7 +3631,16 @@ fn show_find_replace_dialog(
         const COUNT_Y: i32 = FIND_NEXT_Y + BTN_H + BTN_GAP;
         const REPLACE_Y: i32 = COUNT_Y + BTN_H + BTN_GAP;
         const REPLACE_ALL_Y: i32 = REPLACE_Y + BTN_H + BTN_GAP;
-        const CLOSE_Y: i32 = CLIENT_H - X_PAD - BTN_H;
+        // Status bar runs the full client width along the very
+        // bottom of the dialog; the Close button sits one row
+        // above it. The status STATIC's slightly-darker fill
+        // (COLOR_3DFACE via WM_CTLCOLORSTATIC) makes it read as
+        // a distinct status strip.
+        const STATUS_H: i32 = 20;
+        const STATUS_BOTTOM_PAD: i32 = 4;
+        const STATUS_Y: i32 = CLIENT_H - STATUS_H - STATUS_BOTTOM_PAD;
+        const STATUS_TO_CLOSE_GAP: i32 = 8;
+        const CLOSE_Y: i32 = STATUS_Y - STATUS_TO_CLOSE_GAP - BTN_H;
 
         let mut window_rect = RECT {
             left: 0,
@@ -4027,17 +4052,21 @@ fn show_find_replace_dialog(
         .ok()?;
 
         // Bottom-of-dialog status STATIC for transient feedback
-        // (Replace All count, etc). Empty until something writes
-        // to it; painted in blue via WM_CTLCOLORSTATIC.
+        // (Replace All count, not-found message, etc). Spans
+        // the full client width along the bottom of the dialog
+        // so the slightly-darker COLOR_3DFACE fill reads as a
+        // distinct status strip. Painted blue (info) or red
+        // (error) by WM_CTLCOLORSTATIC depending on
+        // `state.status_is_error`.
         let status_label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             PCWSTR::null(),
             WS_CHILD | WS_VISIBLE,
             X_PAD,
-            CLOSE_Y + 4,
-            BTN_X - X_PAD - 14,
-            18,
+            STATUS_Y,
+            CLIENT_W - 2 * X_PAD,
+            STATUS_H,
             Some(dlg),
             None,
             Some(instance.into()),
@@ -4071,6 +4100,27 @@ fn show_find_replace_dialog(
             status_label,
         ] {
             apply_dialog_font(child, font);
+        }
+        // Disable visual styles on the BS_AUTOCHECKBOX /
+        // BS_AUTORADIOBUTTON / BS_GROUPBOX controls so they
+        // respect WM_CTLCOLORBTN's NULL_BRUSH return — the
+        // themed paint otherwise draws a slightly-darker
+        // rectangle around each control that doesn't match the
+        // dialog's hbrBackground. Push buttons are left themed
+        // so they keep their rounded Win11 look.
+        for child in [
+            backward_cb,
+            whole_word_cb,
+            match_case_cb,
+            wrap_around_cb,
+            in_selection_cb,
+            mode_group,
+            mode_normal_radio,
+            mode_extended_radio,
+            mode_regex_radio,
+            dot_newline_cb,
+        ] {
+            disable_visual_style(child);
         }
 
         state.tab_ctrl = tab_ctrl;
