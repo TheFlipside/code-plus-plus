@@ -49,8 +49,8 @@ use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatfo
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{COLORREF, E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    GetStockObject, GetSysColorBrush, SetBkMode, SetTextColor, COLOR_3DFACE, COLOR_WINDOW,
-    DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, NULL_BRUSH, TRANSPARENT,
+    GetStockObject, GetSysColor, GetSysColorBrush, SetBkColor, SetBkMode, SetTextColor,
+    COLOR_3DFACE, COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, NULL_BRUSH, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
@@ -3033,8 +3033,17 @@ extern "system" fn find_replace_wnd_proc(
                 }
             }
             WM_CTLCOLORBTN => {
+                // Theme-disabled BS_AUTOCHECKBOX / BS_AUTORADIOBUTTON
+                // / BS_GROUPBOX rely on classic DrawText for the
+                // label, which only clears the glyph background
+                // when bkmode is OPAQUE (the default — we
+                // deliberately do NOT set TRANSPARENT here, or
+                // every toggle would stack new glyphs over the
+                // previous frame's). The bk colour matches the
+                // returned brush so the cleared rect blends with
+                // the rest of the dialog.
                 let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkMode(hdc, TRANSPARENT);
+                let _ = SetBkColor(hdc, COLORREF(GetSysColor(COLOR_3DFACE)));
                 LRESULT(GetSysColorBrush(COLOR_3DFACE).0 as isize)
             }
             // Editable EDITs and combobox dropdown lists keep
