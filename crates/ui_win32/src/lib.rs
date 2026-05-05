@@ -2996,22 +2996,25 @@ extern "system" fn find_replace_wnd_proc(
             // own background colour. The status_label gets blue
             // text on top so Replace All's count message stands
             // out against the otherwise black-on-white chrome.
-            // STATIC controls + the group-box BTN: regular
-            // labels return NULL_BRUSH so the dialog's themed
-            // hbrBackground shows through (returning a system
-            // COLOR_3DFACE brush would paint a slightly-darker
-            // rectangle around every label on Win11). The
-            // bottom status_label is the one exception — the
-            // user wants it slightly darker than the dialog,
-            // so it gets the explicit COLOR_3DFACE fill plus a
-            // red-or-blue text colour for error vs info.
-            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
+            // STATIC controls return NULL_BRUSH so the dialog's
+            // painted hbrBackground shows through them — the
+            // status_label is the exception (it gets an explicit
+            // COLOR_3DFACE fill so it reads as a slightly-darker
+            // strip with red/blue text for error/info). Theming-
+            // disabled BUTTON controls (the checkboxes, radios,
+            // and group box) need a real brush so classic paint
+            // can CLEAR the control rect between redraws — without
+            // that the BS_GROUPBOX title is overlapped by the
+            // border line, and toggling a checkbox stacks text
+            // glyphs over the previous frame's text. COLOR_3DFACE
+            // matches the dialog background so the cleared rect
+            // blends in.
+            WM_CTLCOLORSTATIC => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
                 let from = HWND(lparam.0 as *mut c_void);
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const FindReplaceState;
-                if msg == WM_CTLCOLORSTATIC
-                    && !state_ptr.is_null()
+                if !state_ptr.is_null()
                     && (*state_ptr).controls_ready
                     && (*state_ptr).status_label == from
                 {
@@ -3028,6 +3031,11 @@ extern "system" fn find_replace_wnd_proc(
                 } else {
                     LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
                 }
+            }
+            WM_CTLCOLORBTN => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                LRESULT(GetSysColorBrush(COLOR_3DFACE).0 as isize)
             }
             // Editable EDITs and combobox dropdown lists keep
             // the standard white interior — that's the modern
@@ -3606,7 +3614,7 @@ fn show_find_replace_dialog(
         // a left column with edit fields + checkboxes + Search Mode
         // group, and a right column with the action buttons.
         const CLIENT_W: i32 = 540;
-        const CLIENT_H: i32 = 350;
+        const CLIENT_H: i32 = 380;
         const X_PAD: i32 = 14;
         const TAB_TOP: i32 = 8;
         const ROW1_Y: i32 = 50;
@@ -3622,7 +3630,9 @@ fn show_find_replace_dialog(
         // Wrap around, In selection.
         const MODE_GROUP_TOP: i32 = CHECKBOX_TOP + 5 * 22 + 8;
         const MODE_GROUP_W: i32 = 320;
-        const MODE_GROUP_H: i32 = 70;
+        // Three rows inside the Search Mode group: Normal,
+        // Extended, Regular expression + ". matches newline".
+        const MODE_GROUP_H: i32 = 92;
         const BTN_W: i32 = 180;
         const BTN_H: i32 = 26;
         const BTN_X: i32 = CLIENT_W - X_PAD - BTN_W;
@@ -3901,6 +3911,10 @@ fn show_find_replace_dialog(
             None,
         )
         .ok()?;
+        // Three rows in the group: Normal (row 1), Extended
+        // (row 2), Regex + ". matches newline" (row 3 — the
+        // checkbox sits beside the Regex radio rather than
+        // overlapping the Extended row's text).
         let mode_normal_radio = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
@@ -3908,7 +3922,7 @@ fn show_find_replace_dialog(
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | style_bits(BS_AUTORADIOBUTTON),
             X_PAD + 14,
             MODE_GROUP_TOP + 20,
-            120,
+            150,
             CHECKBOX_H,
             Some(dlg),
             Some(HMENU(IDC_FR_MODE_NORMAL as usize as *mut c_void)),
@@ -3923,7 +3937,7 @@ fn show_find_replace_dialog(
             WS_CHILD | WS_VISIBLE | style_bits(BS_AUTORADIOBUTTON),
             X_PAD + 14,
             MODE_GROUP_TOP + 42,
-            220,
+            270,
             CHECKBOX_H,
             Some(dlg),
             Some(HMENU(IDC_FR_MODE_EXTENDED as usize as *mut c_void)),
@@ -3940,8 +3954,8 @@ fn show_find_replace_dialog(
             w!("BUTTON"),
             w!("Re&gular expression"),
             WS_CHILD | WS_VISIBLE | style_bits(BS_AUTORADIOBUTTON),
-            X_PAD + 140,
-            MODE_GROUP_TOP + 20,
+            X_PAD + 14,
+            MODE_GROUP_TOP + 64,
             150,
             CHECKBOX_H,
             Some(dlg),
@@ -3955,9 +3969,9 @@ fn show_find_replace_dialog(
             w!("BUTTON"),
             w!(". &matches newline"),
             WS_CHILD | WS_VISIBLE | style_bits(BS_AUTOCHECKBOX),
-            X_PAD + 140,
-            MODE_GROUP_TOP + 42,
-            160,
+            X_PAD + 170,
+            MODE_GROUP_TOP + 64,
+            140,
             CHECKBOX_H,
             Some(dlg),
             Some(HMENU(IDC_FR_DOT_NEWLINE as usize as *mut c_void)),
