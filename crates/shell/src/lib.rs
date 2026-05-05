@@ -156,6 +156,47 @@ pub trait UiPlatform {
     /// Scintilla undo group so the user can Ctrl+Z the entire
     /// Replace All in a single step. Returns the count.
     fn replace_all(&mut self, query: &str, replacement: &str, flags: SearchFlags) -> usize;
+
+    /// Count every match of `query` in the active buffer. Pure
+    /// query — does not move the user's selection. The Find
+    /// dialog's "Count" button surfaces the result in its status
+    /// line.
+    fn count_matches(&mut self, query: &str, flags: SearchFlags) -> usize;
+
+    /// Forward search restricted to a byte range — used by the
+    /// "In selection" mode of the Find dialog. Returns the
+    /// match's byte offset, or `None` if no match falls inside
+    /// `[start, end)`. Implementations must NOT move the caret
+    /// outside the range on a miss.
+    fn search_next_in_range(
+        &mut self,
+        query: &str,
+        flags: SearchFlags,
+        start: u64,
+        end: u64,
+    ) -> Option<u64>;
+
+    /// Backward sibling of [`Self::search_next_in_range`].
+    fn search_prev_in_range(
+        &mut self,
+        query: &str,
+        flags: SearchFlags,
+        start: u64,
+        end: u64,
+    ) -> Option<u64>;
+
+    /// Replace All restricted to `[start, end)`. Returns
+    /// `(count, new_end)` — the caller uses `new_end` to keep its
+    /// in-selection range bookkeeping in sync after replacements
+    /// shrink or grow the original window.
+    fn replace_all_in_range(
+        &mut self,
+        query: &str,
+        replacement: &str,
+        flags: SearchFlags,
+        start: u64,
+        end: u64,
+    ) -> (usize, u64);
 }
 
 /// A modal dialog request the UI must show after `Shell::drain`
@@ -1194,6 +1235,79 @@ impl Shell {
         ui.replace_all(query, replacement, flags)
     }
 
+    /// Count occurrences of `query` in the active buffer. The
+    /// Find dialog's "Count" button surfaces the result; does
+    /// not affect selection or last_search state (matching N++).
+    #[cfg(target_os = "windows")]
+    pub fn count_matches<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        query: &str,
+        flags: SearchFlags,
+    ) -> usize {
+        if query.is_empty() || self.active_tab.is_none() {
+            return 0;
+        }
+        ui.count_matches(query, flags)
+    }
+
+    /// In-selection sibling of [`Self::find_next`]. The dialog
+    /// captures the selection bounds when "In selection" is
+    /// checked and forwards them on every Find Next click;
+    /// `last_search` is still recorded so an F3 outside the
+    /// dialog falls back to the whole-buffer behaviour.
+    #[cfg(target_os = "windows")]
+    pub fn find_next_in_range<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        query: &str,
+        flags: SearchFlags,
+        start: u64,
+        end: u64,
+    ) -> Option<u64> {
+        if query.is_empty() || self.active_tab.is_none() || end <= start {
+            return None;
+        }
+        self.last_search = Some((query.to_string(), flags));
+        ui.search_next_in_range(query, flags, start, end)
+    }
+
+    /// Backward sibling of [`Self::find_next_in_range`].
+    #[cfg(target_os = "windows")]
+    pub fn find_prev_in_range<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        query: &str,
+        flags: SearchFlags,
+        start: u64,
+        end: u64,
+    ) -> Option<u64> {
+        if query.is_empty() || self.active_tab.is_none() || end <= start {
+            return None;
+        }
+        self.last_search = Some((query.to_string(), flags));
+        ui.search_prev_in_range(query, flags, start, end)
+    }
+
+    /// Replace All restricted to `[start, end)`. Returns
+    /// `(count, new_end)` so the caller can refresh its
+    /// in-selection range after the document length shifts.
+    #[cfg(target_os = "windows")]
+    pub fn replace_all_in_range<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        query: &str,
+        replacement: &str,
+        flags: SearchFlags,
+        start: u64,
+        end: u64,
+    ) -> (usize, u64) {
+        if query.is_empty() || self.active_tab.is_none() || end <= start {
+            return (0, end);
+        }
+        ui.replace_all_in_range(query, replacement, flags, start, end)
+    }
+
     /// Persist the open-tab list to `session.xml` at the configured
     /// path. Called on clean shutdown. The active tab's cursor is
     /// pulled live from the editor so the next launch restores the
@@ -1691,6 +1805,73 @@ mod tests {
             let count = self.buffer_text.matches(query).count();
             self.buffer_text = self.buffer_text.replace(query, replacement);
             count
+        }
+        fn count_matches(&mut self, query: &str, flags: SearchFlags) -> usize {
+            self.search_calls
+                .push((query.to_string(), flags, "count".to_string()));
+            self.buffer_text.matches(query).count()
+        }
+        fn search_next_in_range(
+            &mut self,
+            query: &str,
+            flags: SearchFlags,
+            start: u64,
+            end: u64,
+        ) -> Option<u64> {
+            self.search_calls
+                .push((query.to_string(), flags, "next_in_range".to_string()));
+            let lo = (start as usize).min(self.buffer_text.len());
+            let hi = (end as usize).min(self.buffer_text.len());
+            if hi <= lo {
+                return None;
+            }
+            self.buffer_text[lo..hi]
+                .find(query)
+                .map(|p| (lo + p) as u64)
+        }
+        fn search_prev_in_range(
+            &mut self,
+            query: &str,
+            flags: SearchFlags,
+            start: u64,
+            end: u64,
+        ) -> Option<u64> {
+            self.search_calls
+                .push((query.to_string(), flags, "prev_in_range".to_string()));
+            let lo = (start as usize).min(self.buffer_text.len());
+            let hi = (end as usize).min(self.buffer_text.len());
+            if hi <= lo {
+                return None;
+            }
+            self.buffer_text[lo..hi]
+                .rfind(query)
+                .map(|p| (lo + p) as u64)
+        }
+        fn replace_all_in_range(
+            &mut self,
+            query: &str,
+            replacement: &str,
+            flags: SearchFlags,
+            start: u64,
+            end: u64,
+        ) -> (usize, u64) {
+            self.replace_calls.push((
+                query.to_string(),
+                replacement.to_string(),
+                flags,
+                "all_in_range".to_string(),
+            ));
+            let lo = (start as usize).min(self.buffer_text.len());
+            let hi = (end as usize).min(self.buffer_text.len());
+            if hi <= lo {
+                return (0, end);
+            }
+            let inside = &self.buffer_text[lo..hi];
+            let count = inside.matches(query).count();
+            let replaced_inside = inside.replace(query, replacement);
+            let new_end = lo + replaced_inside.len();
+            self.buffer_text.replace_range(lo..hi, &replaced_inside);
+            (count, new_end as u64)
         }
     }
 

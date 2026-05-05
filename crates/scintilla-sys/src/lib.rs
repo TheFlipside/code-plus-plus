@@ -227,6 +227,11 @@ pub const SCI_LINESONSCREEN: u32 = 2370;
 /// out-of-view match without disturbing matches already on
 /// screen.
 pub const SCI_LINESCROLL: u32 = 2168;
+/// Position one character after `pos` (wparam=pos). Honours
+/// multi-byte UTF-8 boundaries — using `pos + 1` to advance past
+/// a zero-width regex match would land mid-codepoint and skip
+/// the next character.
+pub const SCI_POSITIONAFTER: u32 = 2418;
 
 // Document handles — Scintilla supports multiple documents attached to
 // one view via `SCI_SETDOCPOINTER`. Code++ uses this for multi-tab in

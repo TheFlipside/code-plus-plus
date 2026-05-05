@@ -39,12 +39,12 @@ use codepp_scintilla_sys::{
     SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETFIRSTVISIBLELINE,
     SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT,
     SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS,
-    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE, SCI_REDO,
-    SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT,
-    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
-    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN,
-    SCI_ZOOMOUT, SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
-    STYLE_DEFAULT,
+    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE, SCI_POSITIONAFTER,
+    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
+    SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND,
+    SCI_SETSELECTIONSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE,
+    SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
 };
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
@@ -55,9 +55,9 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, BST_CHECKED, ICC_BAR_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX,
-    NMHDR, TCIF_TEXT, TCITEMW, TCM_DELETEITEM, TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL,
-    TCM_SETITEMW, TCN_SELCHANGE, WC_TABCONTROL,
+    InitCommonControlsEx, BST_CHECKED, BST_UNCHECKED, ICC_BAR_CLASSES, ICC_TAB_CLASSES,
+    INITCOMMONCONTROLSEX, NMHDR, TCIF_TEXT, TCITEMW, TCM_DELETEITEM, TCM_GETCURSEL,
+    TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, SetFocus, VK_0, VK_F, VK_F3, VK_G, VK_H, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
@@ -219,6 +219,8 @@ const IDC_FR_FIND_NEXT: u16 = 211;
 const IDC_FR_REPLACE_BTN: u16 = 212;
 const IDC_FR_REPLACE_ALL: u16 = 213;
 const IDC_FR_CLOSE: u16 = 214;
+const IDC_FR_COUNT: u16 = 215;
+const IDC_FR_IN_SELECTION: u16 = 216;
 
 /// `IDCANCEL` re-projected as `u16` for use in match arms. `IDCANCEL`
 /// itself is `MESSAGEBOX_RESULT(2)` in windows-rs and can't appear as
@@ -578,6 +580,168 @@ impl UiPlatform for Win32Ui {
         }
         self.editor.send(SCI_ENDUNDOACTION, 0, 0);
         count
+    }
+
+    fn count_matches(&mut self, query: &str, flags: SearchFlags) -> usize {
+        if query.is_empty() {
+            return 0;
+        }
+        // Whole-buffer iteration via SEARCHINTARGET so the user's
+        // selection is never disturbed.
+        self.editor.set_search_flags(flags.bits());
+        let doc_len = self.editor.send(SCI_GETLENGTH, 0, 0).max(0) as u64;
+        let mut count = 0usize;
+        let mut cursor = 0u64;
+        while cursor < doc_len {
+            self.editor.set_target_range(cursor, doc_len);
+            let hit = self.editor.search_in_target(query);
+            if hit < 0 {
+                break;
+            }
+            count += 1;
+            let next = self.editor.target_end();
+            // Zero-width regex matches need an explicit byte
+            // advance — but using +1 directly would land
+            // mid-codepoint on multi-byte UTF-8. SCI_POSITIONAFTER
+            // walks one whole character forward.
+            cursor = if next > cursor {
+                next
+            } else {
+                self.editor.send(SCI_POSITIONAFTER, next as usize, 0).max(0) as u64
+            };
+        }
+        count
+    }
+
+    fn search_next_in_range(
+        &mut self,
+        query: &str,
+        flags: SearchFlags,
+        start: u64,
+        end: u64,
+    ) -> Option<u64> {
+        if query.is_empty() || end <= start {
+            return None;
+        }
+        self.editor.set_search_flags(flags.bits());
+        // Anchor at the caret if it's strictly inside the range,
+        // otherwise restart from `start`. Without the
+        // strict-inside check a forward selection (caret == end)
+        // would produce a zero-width target and silently miss
+        // every match in the snapshotted range.
+        let caret = self.editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as u64;
+        let lo = if caret >= start && caret < end {
+            caret
+        } else {
+            start
+        };
+        self.editor.set_target_range(lo, end);
+        let hit = self.editor.search_in_target(query);
+        if hit < 0 {
+            return None;
+        }
+        let pos = self.editor.target_start();
+        let match_end = self.editor.target_end();
+        self.editor.send(SCI_SETSELECTIONSTART, pos as usize, 0);
+        self.editor.send(SCI_SETSELECTIONEND, match_end as usize, 0);
+        center_caret_if_offscreen(&self.editor);
+        Some(pos)
+    }
+
+    fn search_prev_in_range(
+        &mut self,
+        query: &str,
+        flags: SearchFlags,
+        start: u64,
+        end: u64,
+    ) -> Option<u64> {
+        if query.is_empty() || end <= start {
+            return None;
+        }
+        self.editor.set_search_flags(flags.bits());
+        // Symmetric upper-bound choice to search_next_in_range:
+        // use the caret if it's strictly past `start`, else
+        // restart from `end`.
+        let caret = self.editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as u64;
+        let upper = if caret > start && caret <= end {
+            caret
+        } else {
+            end
+        };
+        // Scintilla's SEARCHINTARGET only walks forward, so we
+        // accumulate every match in [start, upper) and keep the
+        // last one as the "previous" hit relative to the caret.
+        let mut last: Option<(u64, u64)> = None;
+        let mut cursor = start;
+        while cursor < upper {
+            self.editor.set_target_range(cursor, upper);
+            let hit = self.editor.search_in_target(query);
+            if hit < 0 {
+                break;
+            }
+            let pos = self.editor.target_start();
+            let me = self.editor.target_end();
+            last = Some((pos, me));
+            cursor = if me > cursor {
+                me
+            } else {
+                self.editor.send(SCI_POSITIONAFTER, me as usize, 0).max(0) as u64
+            };
+        }
+        let (pos, match_end) = last?;
+        self.editor.send(SCI_SETSELECTIONSTART, pos as usize, 0);
+        self.editor.send(SCI_SETSELECTIONEND, match_end as usize, 0);
+        center_caret_if_offscreen(&self.editor);
+        Some(pos)
+    }
+
+    fn replace_all_in_range(
+        &mut self,
+        query: &str,
+        replacement: &str,
+        flags: SearchFlags,
+        start: u64,
+        end: u64,
+    ) -> (usize, u64) {
+        if query.is_empty() || end <= start {
+            return (0, end);
+        }
+        self.editor.set_search_flags(flags.bits());
+        self.editor.send(SCI_BEGINUNDOACTION, 0, 0);
+        let mut count = 0usize;
+        let mut cursor = start;
+        let mut range_end = end;
+        loop {
+            self.editor.set_target_range(cursor, range_end);
+            let hit = self.editor.search_in_target(query);
+            if hit < 0 {
+                break;
+            }
+            let match_start = self.editor.target_start();
+            let match_end = self.editor.target_end();
+            self.editor.replace_target(replacement);
+            // The actual byte length inserted is read back from
+            // `target_end()` after `replace_target` — using
+            // `replacement.len()` would be wrong under regex
+            // mode where a `$1` backref expands to whatever the
+            // captured group held, not the format-string length.
+            // `saturating_sub` defends against a hypothetical
+            // Scintilla edge case where `target_end` reports a
+            // value below `match_start` — without it the u64
+            // wrap would propagate into `range_end` and lock the
+            // loop into an infinite spin.
+            let new_target_end = self.editor.target_end();
+            let actual_replacement_len = new_target_end.saturating_sub(match_start);
+            let delta = actual_replacement_len as i64 - (match_end as i64 - match_start as i64);
+            cursor = new_target_end;
+            range_end = (range_end as i64 + delta).max(cursor as i64) as u64;
+            count += 1;
+            if cursor >= range_end {
+                break;
+            }
+        }
+        self.editor.send(SCI_ENDUNDOACTION, 0, 0);
+        (count, range_end)
     }
 
     // confirm_reload and show_error were intentionally removed from
@@ -2653,14 +2817,22 @@ struct FindReplaceState {
     mode_regex_radio: HWND,
     dot_newline_cb: HWND,
     find_next_btn: HWND,
+    count_btn: HWND,
     replace_btn: HWND,
     replace_all_btn: HWND,
     close_btn: HWND,
+    in_selection_cb: HWND,
     /// Bottom-of-dialog STATIC for transient feedback messages
-    /// — currently used by Replace All to report the count.
-    /// Painted in blue via `WM_CTLCOLORSTATIC` (which checks the
-    /// hwnd-from to distinguish it from the regular labels).
+    /// — currently used by Count and Replace All to report
+    /// numbers. Painted in blue via `WM_CTLCOLORSTATIC` (which
+    /// checks the hwnd-from to distinguish it from regular
+    /// labels).
     status_label: HWND,
+    /// Selection range captured the moment "In selection" was
+    /// last toggled on. `None` when the box is unchecked. The
+    /// `replace_all_in_range` returns an updated `end` after
+    /// each Replace All so this stays in sync as text grows.
+    in_selection_range: Option<(u64, u64)>,
     /// Set true once all HWNDs above are populated.
     controls_ready: bool,
 }
@@ -2696,6 +2868,12 @@ extern "system" fn find_replace_wnd_proc(
                         }
                         LRESULT(0)
                     }
+                    IDC_FR_COUNT => {
+                        if notif == BN_CLICKED {
+                            handle_count(state);
+                        }
+                        LRESULT(0)
+                    }
                     IDC_FR_REPLACE_BTN => {
                         if notif == BN_CLICKED {
                             handle_replace(state);
@@ -2705,6 +2883,18 @@ extern "system" fn find_replace_wnd_proc(
                     IDC_FR_REPLACE_ALL => {
                         if notif == BN_CLICKED {
                             handle_replace_all(state);
+                        }
+                        LRESULT(0)
+                    }
+                    // "In selection" toggle: snapshot the editor's
+                    // selection bounds when the user checks the
+                    // box, clear the snapshot when they uncheck.
+                    // Subsequent Find Next / Replace All calls
+                    // honor the snapshot regardless of how the
+                    // selection has since been mutated.
+                    IDC_FR_IN_SELECTION => {
+                        if notif == BN_CLICKED {
+                            handle_in_selection_toggle(state);
                         }
                         LRESULT(0)
                     }
@@ -2919,7 +3109,11 @@ unsafe fn read_edit_text(edit: HWND) -> String {
 /// checkbox and Wrap around: on a miss with wrap on, moves the
 /// caret to the document start (or end, when going backward) and
 /// retries. The caret only moves on the wrap-and-retry path so a
-/// non-wrap miss leaves the user where they were.
+/// non-wrap miss leaves the user where they were. When "In
+/// selection" is on we route through `find_*_in_range` against
+/// the snapshotted bounds and skip the wrap step (a wrap inside
+/// a fixed range is just "search the same range again", which
+/// is what the next click does anyway).
 unsafe fn handle_find_next(state: &FindReplaceState) {
     unsafe {
         let query = read_edit_text(state.find_edit);
@@ -2929,6 +3123,7 @@ unsafe fn handle_find_next(state: &FindReplaceState) {
         let flags = find_replace_flags(state);
         let backward = button_checked(state.backward_cb);
         let wrap = button_checked(state.wrap_around_cb);
+        let range = state.in_selection_range;
 
         let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
             return;
@@ -2936,15 +3131,13 @@ unsafe fn handle_find_next(state: &FindReplaceState) {
         let editor = window_state.editor;
         let (shell, mut ui) = window_state.split();
 
-        let hit = if backward {
-            shell.find_prev(&mut ui, &query, flags)
-        } else {
-            shell.find_next(&mut ui, &query, flags)
+        let hit = match (range, backward) {
+            (Some((s, e)), false) => shell.find_next_in_range(&mut ui, &query, flags, s, e),
+            (Some((s, e)), true) => shell.find_prev_in_range(&mut ui, &query, flags, s, e),
+            (None, false) => shell.find_next(&mut ui, &query, flags),
+            (None, true) => shell.find_prev(&mut ui, &query, flags),
         };
-        if hit.is_some() {
-            return;
-        }
-        if !wrap {
+        if hit.is_some() || range.is_some() || !wrap {
             return;
         }
         // Wrap: move caret to far end and retry once. The retry
@@ -2963,6 +3156,66 @@ unsafe fn handle_find_next(state: &FindReplaceState) {
         } else {
             editor.send(SCI_DOCUMENTSTART, 0, 0);
             let _ = ui.search_next(&query, flags);
+        }
+    }
+}
+
+/// "Count" click handler — counts every match in the active
+/// buffer (Count is always whole-buffer in N++ even when "In
+/// selection" is on; we mirror that) and writes the result to
+/// the dialog's blue status line.
+unsafe fn handle_count(state: &FindReplaceState) {
+    unsafe {
+        let query = read_edit_text(state.find_edit);
+        if query.is_empty() {
+            let _ = SetWindowTextW(state.status_label, w!(""));
+            return;
+        }
+        let flags = find_replace_flags(state);
+        let count = {
+            let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
+                return;
+            };
+            let (shell, mut ui) = window_state.split();
+            shell.count_matches(&mut ui, &query, flags)
+        };
+        let msg = format!(
+            "Count: {} match{} in entire file",
+            count,
+            if count == 1 { "" } else { "es" },
+        );
+        let _ = SetWindowTextW(state.status_label, &HSTRING::from(msg));
+    }
+}
+
+/// "In selection" checkbox click handler. On check, snapshot the
+/// editor's current selection bounds; on uncheck, clear. When
+/// the box is checked but no selection exists, clear the box
+/// (visual feedback that there's nothing to confine to).
+unsafe fn handle_in_selection_toggle(state: &mut FindReplaceState) {
+    unsafe {
+        if !button_checked(state.in_selection_cb) {
+            state.in_selection_range = None;
+            return;
+        }
+        let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
+            return;
+        };
+        let editor = window_state.editor;
+        let s = editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as u64;
+        let e = editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as u64;
+        if e > s {
+            state.in_selection_range = Some((s, e));
+        } else {
+            // No selection — un-check the box so the user sees
+            // that "In selection" can't apply right now.
+            SendMessageW(
+                state.in_selection_cb,
+                BM_SETCHECK,
+                Some(WPARAM(BST_UNCHECKED.0 as usize)),
+                None,
+            );
+            state.in_selection_range = None;
         }
     }
 }
@@ -2993,10 +3246,14 @@ unsafe fn handle_replace(state: &FindReplaceState) {
 }
 
 /// "Replace All" click handler — replaces every occurrence in the
-/// active buffer in one undo group, then writes a count message to
-/// the status STATIC at the bottom of the dialog (blue, painted by
-/// WM_CTLCOLORSTATIC).
-unsafe fn handle_replace_all(state: &FindReplaceState) {
+/// active buffer (or in the snapshotted "In selection" range) in
+/// one undo group, then writes a count message to the status
+/// STATIC at the bottom of the dialog (blue, painted by
+/// WM_CTLCOLORSTATIC). When restricted to a range, the
+/// `replace_all_in_range` returns the new end so we can keep
+/// `state.in_selection_range` in sync as replacements grow or
+/// shrink the affected window.
+unsafe fn handle_replace_all(state: &mut FindReplaceState) {
     unsafe {
         let query = read_edit_text(state.find_edit);
         if query.is_empty() {
@@ -3004,22 +3261,45 @@ unsafe fn handle_replace_all(state: &FindReplaceState) {
         }
         let replacement = read_edit_text(state.replace_edit);
         let flags = find_replace_flags(state);
+        let range = state.in_selection_range;
 
-        let count = {
+        // Borrow the WindowState only for the operation itself,
+        // then release it before mutating `state.in_selection_range`
+        // — keeps the in-flight WindowState borrow disjoint from
+        // the dialog state mutation.
+        let (count, refreshed_range) = {
             let Some(window_state) = state_from_hwnd(state.main_hwnd) else {
                 return;
             };
             let (shell, mut ui) = window_state.split();
-            shell.replace_all(&mut ui, &query, &replacement, flags)
+            match range {
+                Some((s, e)) => {
+                    let (n, new_end) =
+                        shell.replace_all_in_range(&mut ui, &query, &replacement, flags, s, e);
+                    (n, Some((s, new_end)))
+                }
+                None => (
+                    shell.replace_all(&mut ui, &query, &replacement, flags),
+                    None,
+                ),
+            }
+        };
+        if refreshed_range.is_some() {
+            state.in_selection_range = refreshed_range;
+        }
+        let scope = if range.is_some() {
+            "selection"
+        } else {
+            "entire file"
         };
         let msg = format!(
-            "Replace All: {} occurrence{} {} replaced in entire file",
+            "Replace All: {} occurrence{} {} replaced in {}",
             count,
             if count == 1 { "" } else { "s" },
             if count == 1 { "was" } else { "were" },
+            scope,
         );
-        let msg_w = HSTRING::from(msg);
-        let _ = SetWindowTextW(state.status_label, &msg_w);
+        let _ = SetWindowTextW(state.status_label, &HSTRING::from(msg));
     }
 }
 
@@ -3071,9 +3351,19 @@ fn show_find_replace_dialog(
                     );
                     apply_tab_visibility(state);
                     // Wipe any stale Replace All count from the
-                    // previous session, then prefill the find box
-                    // from the current selection.
+                    // previous session, prefill the find box from
+                    // the current selection, and clear the
+                    // In-selection snapshot — its bounds may
+                    // refer to text the user has since edited
+                    // away.
                     let _ = SetWindowTextW(state.status_label, w!(""));
+                    SendMessageW(
+                        state.in_selection_cb,
+                        BM_SETCHECK,
+                        Some(WPARAM(BST_UNCHECKED.0 as usize)),
+                        None,
+                    );
+                    state.in_selection_range = None;
                     prefill_from_selection(state);
                     let _ = ShowWindow(dlg, SW_SHOW);
                     let _ = SetFocus(Some(state.find_edit));
@@ -3122,10 +3412,13 @@ fn show_find_replace_dialog(
             mode_regex_radio: HWND::default(),
             dot_newline_cb: HWND::default(),
             find_next_btn: HWND::default(),
+            count_btn: HWND::default(),
             replace_btn: HWND::default(),
             replace_all_btn: HWND::default(),
             close_btn: HWND::default(),
+            in_selection_cb: HWND::default(),
             status_label: HWND::default(),
+            in_selection_range: None,
             controls_ready: false,
         });
         let state_ptr: *mut FindReplaceState = &mut *state;
@@ -3134,7 +3427,7 @@ fn show_find_replace_dialog(
         // a left column with edit fields + checkboxes + Search Mode
         // group, and a right column with the action buttons.
         const CLIENT_W: i32 = 540;
-        const CLIENT_H: i32 = 320;
+        const CLIENT_H: i32 = 350;
         const X_PAD: i32 = 14;
         const TAB_TOP: i32 = 8;
         const ROW1_Y: i32 = 50;
@@ -3147,7 +3440,9 @@ fn show_find_replace_dialog(
         const CHECKBOX_W: i32 = 200;
         const CHECKBOX_H: i32 = 20;
         const CHECKBOX_TOP: i32 = REPLACE_ROW_Y + 40;
-        const MODE_GROUP_TOP: i32 = CHECKBOX_TOP + 4 * 22 + 8;
+        // 5 checkboxes: Backward, Whole word, Match case,
+        // Wrap around, In selection.
+        const MODE_GROUP_TOP: i32 = CHECKBOX_TOP + 5 * 22 + 8;
         const MODE_GROUP_W: i32 = 320;
         const MODE_GROUP_H: i32 = 70;
         const BTN_W: i32 = 180;
@@ -3155,7 +3450,8 @@ fn show_find_replace_dialog(
         const BTN_X: i32 = CLIENT_W - X_PAD - BTN_W;
         const BTN_GAP: i32 = 6;
         const FIND_NEXT_Y: i32 = ROW1_Y;
-        const REPLACE_Y: i32 = FIND_NEXT_Y + BTN_H + BTN_GAP;
+        const COUNT_Y: i32 = FIND_NEXT_Y + BTN_H + BTN_GAP;
+        const REPLACE_Y: i32 = COUNT_Y + BTN_H + BTN_GAP;
         const REPLACE_ALL_Y: i32 = REPLACE_Y + BTN_H + BTN_GAP;
         const CLOSE_Y: i32 = CLIENT_H - X_PAD - BTN_H;
 
@@ -3366,6 +3662,21 @@ fn show_find_replace_dialog(
             None,
         )
         .ok()?;
+        let in_selection_cb = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("In &selection"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_AUTOCHECKBOX),
+            CHECKBOX_X,
+            CHECKBOX_TOP + 88,
+            CHECKBOX_W,
+            CHECKBOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_IN_SELECTION as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
         // Wrap is on by default (matches Notepad++).
         SendMessageW(
             wrap_around_cb,
@@ -3479,6 +3790,21 @@ fn show_find_replace_dialog(
             None,
         )
         .ok()?;
+        let count_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Co&unt"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_PUSHBUTTON),
+            BTN_X,
+            COUNT_Y,
+            BTN_W,
+            BTN_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_COUNT as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
         let replace_btn = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
@@ -3556,12 +3882,14 @@ fn show_find_replace_dialog(
             whole_word_cb,
             match_case_cb,
             wrap_around_cb,
+            in_selection_cb,
             mode_group,
             mode_normal_radio,
             mode_extended_radio,
             mode_regex_radio,
             dot_newline_cb,
             find_next_btn,
+            count_btn,
             replace_btn,
             replace_all_btn,
             close_btn,
@@ -3579,12 +3907,14 @@ fn show_find_replace_dialog(
         state.whole_word_cb = whole_word_cb;
         state.match_case_cb = match_case_cb;
         state.wrap_around_cb = wrap_around_cb;
+        state.in_selection_cb = in_selection_cb;
         state.mode_group = mode_group;
         state.mode_normal_radio = mode_normal_radio;
         state.mode_extended_radio = mode_extended_radio;
         state.mode_regex_radio = mode_regex_radio;
         state.dot_newline_cb = dot_newline_cb;
         state.find_next_btn = find_next_btn;
+        state.count_btn = count_btn;
         state.replace_btn = replace_btn;
         state.replace_all_btn = replace_all_btn;
         state.close_btn = close_btn;
