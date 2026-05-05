@@ -2516,6 +2516,13 @@ fn show_goto_dialog(
         )
         .ok()?;
         let _dlg_guard = DlgDestroyGuard(dlg);
+        // Disable themed paint on the dialog itself. Win11's
+        // theme service paints WS_POPUP | WS_CAPTION client
+        // areas with its own shade regardless of class
+        // hbrBackground or WM_ERASEBKGND — disabling the theme
+        // attachment makes DefWindowProc fall back to the
+        // class brush we set above.
+        let _ = SetWindowTheme(dlg, w!(""), w!(""));
 
         // Radio pair. WS_GROUP on the first scopes the auto-radio
         // group; the second is in the same group so picking one
@@ -3752,6 +3759,13 @@ fn show_find_replace_dialog(
         // half-built popup. We `mem::forget` the guard at the end
         // of the function once the dialog is fully assembled.
         let dlg_guard = DlgDestroyGuard(dlg);
+        // Disable themed paint on the dialog itself. Win11's
+        // theme service paints WS_POPUP | WS_CAPTION client
+        // areas with its own shade regardless of class
+        // hbrBackground or WM_ERASEBKGND — disabling the theme
+        // attachment makes DefWindowProc fall back to the
+        // class brush.
+        let _ = SetWindowTheme(dlg, w!(""), w!(""));
 
         // Tab control (Find | Replace).
         let tab_ctrl = CreateWindowExW(
