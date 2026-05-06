@@ -96,8 +96,10 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_RELOADBUFFERID` | ⚫ | v2 | |
 | `NPPM_GETBUFFERLANGTYPE` | ✅ | v1 | Returns the per-tab `LangType` derived from the path extension on first load (and overridable by plugins via `NPPM_SETBUFFERLANGTYPE`). |
 | `NPPM_SETBUFFERLANGTYPE` | ✅ | v1 | Mutates `Tab.lang`, re-applies the lexer when the tab is active, queues `NPPN_LANGCHANGED`. Idempotent on a same-lang set (no flicker, no false-positive notification). |
-| `NPPM_GETBUFFERENCODING` / `SETBUFFERENCODING` | ⚫ | v2 | |
-| `NPPM_GETBUFFERFORMAT` / `SETBUFFERFORMAT` | ⚫ | v2 | EOL style. |
+| `NPPM_GETBUFFERENCODING` | ✅ | v2 | Returns `UniMode`: `UNI_COOKIE` (UTF-8 without BOM), `UNI_UTF8` (UTF-8 with BOM), `UNI_UTF16LE`/`UNI_UTF16BE` (with BOM), `UNI_UTF16LE_NO_BOM`/`UNI_UTF16BE_NO_BOM`. `Encoding::Other` (unknown WHATWG codepage) collapses to `UNI_8BIT`. Pure 7-bit ASCII is reported as `UNI_COOKIE` (the detector folds ASCII into UTF-8); `UNI_7BIT` is defined for ABI completeness but never returned. `-1` for unknown buffer id. |
+| `NPPM_SETBUFFERENCODING` | ⚫ | v2 | |
+| `NPPM_GETBUFFERFORMAT` | ✅ | v2 | Returns `EolType`: `WIN_FORMAT`/`MAC_FORMAT`/`UNIX_FORMAT`. Code++'s internal `Eol::Mixed` reports `UNIX_FORMAT` (the Edit→EOL-Conversion default). `-1` for unknown buffer id. |
+| `NPPM_SETBUFFERFORMAT` | ⚫ | v2 | |
 | `NPPM_HIDETOOLBAR` / `ISTOOLBARHIDDEN` | ⚫ | v3 | |
 | `NPPM_HIDEMENU` / `ISMENUHIDDEN` | ⚫ | v3 | |
 | `NPPM_HIDESTATUSBAR` / `ISSTATUSBARHIDDEN` | ⚫ | v3 | |

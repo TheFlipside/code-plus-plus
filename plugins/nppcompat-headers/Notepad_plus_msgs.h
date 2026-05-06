@@ -191,8 +191,21 @@
 /* v1: returns the lang-type id for the buffer at wParam. */
 #define NPPM_GETBUFFERLANGTYPE            (NPPMSG + 64)
 #define NPPM_SETBUFFERLANGTYPE            (NPPMSG + 65)
+/* v2: returns the encoding (UniMode enum) of the buffer at wParam.
+ *     -1 if the buffer id is unknown — distinct from UNI_8BIT (0)
+ *     so plugins can tell "no such buffer" from "8-bit buffer".
+ *     Code++'s `Encoding::Other(label)` (an unknown WHATWG codepage
+ *     such as `windows-1252` or `shift_jis`) collapses to UNI_8BIT
+ *     because N++'s ABI carries no codepage identity past this
+ *     return value either. */
 #define NPPM_GETBUFFERENCODING            (NPPMSG + 66)
 #define NPPM_SETBUFFERENCODING            (NPPMSG + 67)
+/* v2: returns the EOL format (EolType enum) of the buffer at wParam.
+ *     -1 if the buffer id is unknown — same separation rationale as
+ *     NPPM_GETBUFFERENCODING. Code++'s internal `Eol::Mixed`
+ *     (per-line preservation when the file's EOL is inconsistent)
+ *     reports UNIX_FORMAT (LF) since that is what the
+ *     "Edit -> EOL Conversion" normalisation picks. */
 #define NPPM_GETBUFFERFORMAT              (NPPMSG + 68)
 #define NPPM_SETBUFFERFORMAT              (NPPMSG + 69)
 
@@ -251,6 +264,94 @@
 #define ALL_OPEN_FILES 0
 #define PRIMARY_VIEW   1
 #define SECOND_VIEW    2
+
+/*
+ * Encoding (UniMode) values returned by NPPM_GETBUFFERENCODING.
+ * Numeric values match Notepad++'s public ABI so plugins compiled
+ * against either header use the same wire codes.
+ *
+ * Each name is a `#define` rather than an `enum` member so a plugin
+ * source that also includes Notepad++'s upstream header (the typical
+ * port-from-N++ scenario) is safe regardless of which definition
+ * style upstream uses. Per-name `#ifndef` guards mean the second
+ * header to be included observes the values already defined and
+ * skips redefining them — the values agree, so whichever header
+ * runs first wins and the other is a no-op.
+ *
+ *   uni8Bit         (0) - ANSI / system codepage / unknown 8-bit.
+ *   uniUTF8         (1) - UTF-8 with BOM (the BOM-prefixed variant).
+ *   uniUTF16BE      (2) - UTF-16 big-endian, with BOM.
+ *   uniUTF16LE      (3) - UTF-16 little-endian, with BOM.
+ *   uniCookie       (4) - UTF-8 without BOM.
+ *   uni7Bit         (5) - pure 7-bit ASCII. Code++'s detection
+ *                         pipeline reports pure ASCII as `uniCookie`
+ *                         (UTF-8 without BOM); this constant exists
+ *                         for ABI completeness and is never the
+ *                         return value of NPPM_GETBUFFERENCODING.
+ *   uniUTF16BE_NoBOM(6) - UTF-16 BE, no BOM (heuristic-detected).
+ *   uniUTF16LE_NoBOM(7) - UTF-16 LE, no BOM (heuristic-detected).
+ *   uniEnd          (8) - sentinel; never returned.
+ */
+#ifndef uni8Bit
+#define uni8Bit          0
+#endif
+#ifndef uniUTF8
+#define uniUTF8          1
+#endif
+#ifndef uniUTF16BE
+#define uniUTF16BE       2
+#endif
+#ifndef uniUTF16LE
+#define uniUTF16LE       3
+#endif
+#ifndef uniCookie
+#define uniCookie        4
+#endif
+#ifndef uni7Bit
+#define uni7Bit          5
+#endif
+#ifndef uniUTF16BE_NoBOM
+#define uniUTF16BE_NoBOM 6
+#endif
+#ifndef uniUTF16LE_NoBOM
+#define uniUTF16LE_NoBOM 7
+#endif
+#ifndef uniEnd
+#define uniEnd           8
+#endif
+
+/* Type alias for `UniMode`. `int` (rather than `enum UniMode_`) so
+ * plugins that include both this header and upstream N++ don't see
+ * conflicting tag declarations. Numeric values are stable per the
+ * ABI; an `int` here is wide enough and unambiguous. */
+#ifndef NPP_UNIMODE_TYPEDEF
+#define NPP_UNIMODE_TYPEDEF
+typedef int UniMode;
+#endif
+
+/*
+ * EOL format (EolType) values returned by NPPM_GETBUFFERFORMAT.
+ * Numeric values match Notepad++'s public ABI. Same per-name
+ * `#ifndef` guard rationale as UniMode above.
+ *
+ *   WIN_FORMAT  (0) - CRLF (Windows / DOS / HTTP / most net protocols).
+ *   MAC_FORMAT  (1) - CR (pre-OS X Macintosh).
+ *   UNIX_FORMAT (2) - LF (Unix / Linux / modern macOS).
+ */
+#ifndef WIN_FORMAT
+#define WIN_FORMAT  0
+#endif
+#ifndef MAC_FORMAT
+#define MAC_FORMAT  1
+#endif
+#ifndef UNIX_FORMAT
+#define UNIX_FORMAT 2
+#endif
+
+#ifndef NPP_EOLTYPE_TYPEDEF
+#define NPP_EOLTYPE_TYPEDEF
+typedef int EolType;
+#endif
 
 /*
  * Lang-type IDs returned by NPPM_GETCURRENTLANGTYPE etc. These match

@@ -1858,9 +1858,48 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // Primary view exposes the active tab's `tabs[]` index;
         // secondary view doesn't exist yet (split-view is Phase 5),
         // so it reports -1 — the documented "no view" sentinel.
+        // The `i as i32` cast is safe: `MAX_SESSION_TABS = 512`,
+        // well below `i32::MAX`.
         match view {
             0 => self.shell.active_tab.map(|i| i as i32).unwrap_or(-1),
             _ => -1,
+        }
+    }
+
+    fn buffer_encoding(&self, id: isize) -> i32 {
+        // Map Code++'s internal `Encoding` to N++'s `UniMode` enum.
+        // `Other` (unknown WHATWG codepage label, e.g. `windows-1252`,
+        // `shift_jis`) collapses to `UNI_8BIT` — N++'s ABI doesn't
+        // carry the codepage identity past this point either, and
+        // plugins gating on "is this Unicode?" still get the right
+        // answer (UNI_8BIT is "no").
+        let Some(tab) = self.shell.tabs.iter().find(|t| t.id as isize == id) else {
+            return -1;
+        };
+        match &tab.encoding {
+            codepp_core::Encoding::Utf8 => codepp_plugin_host::UNI_COOKIE,
+            codepp_core::Encoding::Utf8Bom => codepp_plugin_host::UNI_UTF8,
+            codepp_core::Encoding::Utf16LeBom => codepp_plugin_host::UNI_UTF16LE,
+            codepp_core::Encoding::Utf16BeBom => codepp_plugin_host::UNI_UTF16BE,
+            codepp_core::Encoding::Utf16Le => codepp_plugin_host::UNI_UTF16LE_NO_BOM,
+            codepp_core::Encoding::Utf16Be => codepp_plugin_host::UNI_UTF16BE_NO_BOM,
+            codepp_core::Encoding::Other(_) => codepp_plugin_host::UNI_8BIT,
+        }
+    }
+
+    fn buffer_format(&self, id: isize) -> i32 {
+        // Map Code++'s internal `Eol` to N++'s `EolType`. `Mixed` is
+        // unique to Code++ (per-line preservation when a file's EOL
+        // is inconsistent); we report `UNIX_FORMAT` since LF is the
+        // modern default and matches what "Edit → EOL Conversion"
+        // would normalise a mixed file to.
+        let Some(tab) = self.shell.tabs.iter().find(|t| t.id as isize == id) else {
+            return -1;
+        };
+        match tab.eol {
+            codepp_core::Eol::CrLf => codepp_plugin_host::WIN_FORMAT,
+            codepp_core::Eol::Cr => codepp_plugin_host::MAC_FORMAT,
+            codepp_core::Eol::Lf | codepp_core::Eol::Mixed => codepp_plugin_host::UNIX_FORMAT,
         }
     }
 }
@@ -2309,6 +2348,91 @@ mod tests {
         let nul = buf.iter().position(|&u| u == 0).unwrap();
         let got = String::from_utf16_lossy(&buf[..nul]);
         assert_eq!(PathBuf::from(got), path);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn plugin_dispatch_get_buffer_format_maps_mixed_to_unix() {
+        // `Eol::Mixed` is unique to Code++ — N++'s ABI has no
+        // equivalent. The HostBridge mapping reports `UNIX_FORMAT`
+        // (LF) so a plugin doing `if (format == WIN_FORMAT)` on a
+        // mixed-EOL file gets a stable answer rather than depending
+        // on which line ending happens to be most common in the
+        // buffer. This test pins that contract.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mixed.txt");
+        std::fs::write(&path, "a\nb\r\nc\n").unwrap();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        // Force the tab into the Mixed-EOL state. The on-disk
+        // detection rounds to a single dominant EOL; explicit
+        // assignment lets this test cover the Mixed branch
+        // without crafting a file the detector classifies that
+        // way (the detector's threshold is intentionally lenient
+        // and may shift in future tuning).
+        let active_id = shell.active().expect("active tab").id as usize;
+        shell.tabs[0].eol = codepp_core::Eol::Mixed;
+
+        const NPPM_GETBUFFERFORMAT: u32 = (0x0400 + 1000) + 68;
+        const UNIX_FORMAT: isize = 2;
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_GETBUFFERFORMAT,
+                active_id,
+                0,
+            )
+        };
+        assert_eq!(r, Some(UNIX_FORMAT));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn plugin_dispatch_get_buffer_encoding_returns_unimode() {
+        // Default load of a UTF-8 file (no BOM) should report
+        // `uniCookie` (UTF-8 without BOM) — the most common case
+        // for plain text files. The "Cookie" naming is a historical
+        // N++ misnomer for "BOM-less UTF-8"; we keep it for ABI
+        // compatibility.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("utf8.txt");
+        std::fs::write(&path, "hello").unwrap();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        let active_id = shell.active().expect("active tab").id as usize;
+        const NPPM_GETBUFFERENCODING: u32 = (0x0400 + 1000) + 66;
+        const UNI_COOKIE: isize = 4;
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_GETBUFFERENCODING,
+                active_id,
+                0,
+            )
+        };
+        assert_eq!(r, Some(UNI_COOKIE));
     }
 
     #[cfg(target_os = "windows")]

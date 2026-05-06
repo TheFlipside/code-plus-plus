@@ -78,6 +78,8 @@ pub const NPPM_GETFULLPATHFROMBUFFERID: u32 = NPPMSG + 58;
 pub const NPPM_GETCURRENTBUFFERID: u32 = NPPMSG + 60;
 pub const NPPM_GETBUFFERLANGTYPE: u32 = NPPMSG + 64;
 pub const NPPM_SETBUFFERLANGTYPE: u32 = NPPMSG + 65;
+pub const NPPM_GETBUFFERENCODING: u32 = NPPMSG + 66;
+pub const NPPM_GETBUFFERFORMAT: u32 = NPPMSG + 68;
 pub const NPPM_DOOPEN: u32 = NPPMSG + 77;
 pub const NPPM_GETLANGUAGENAME: u32 = NPPMSG + 83;
 pub const NPPM_GETLANGUAGEDESC: u32 = NPPMSG + 84;
@@ -96,6 +98,28 @@ pub const NPPMAINMENU: i32 = 1;
 pub const ALL_OPEN_FILES: i32 = 0;
 pub const PRIMARY_VIEW: i32 = 1;
 pub const SECOND_VIEW: i32 = 2;
+
+/// Encoding values returned by [`NPPM_GETBUFFERENCODING`]. Numeric
+/// values match Notepad++'s public `UniMode` enum so plugins
+/// compiled against either header read the same wire format.
+/// `UNI_END` is the sentinel — never returned, but documented so
+/// plugins doing `>= UNI_END` bounds checks behave the same way.
+pub const UNI_8BIT: i32 = 0;
+pub const UNI_UTF8: i32 = 1;
+pub const UNI_UTF16BE: i32 = 2;
+pub const UNI_UTF16LE: i32 = 3;
+pub const UNI_COOKIE: i32 = 4;
+pub const UNI_7BIT: i32 = 5;
+pub const UNI_UTF16BE_NO_BOM: i32 = 6;
+pub const UNI_UTF16LE_NO_BOM: i32 = 7;
+pub const UNI_END: i32 = 8;
+
+/// EOL format values returned by [`NPPM_GETBUFFERFORMAT`]. Numeric
+/// values match Notepad++'s `EolType` so plugins read the same wire
+/// codes here as they do in N++.
+pub const WIN_FORMAT: i32 = 0;
+pub const MAC_FORMAT: i32 = 1;
+pub const UNIX_FORMAT: i32 = 2;
 
 // --- v1 NPPN_* set ---------------------------------------------------
 
@@ -319,6 +343,24 @@ pub trait HostServices {
     /// `-1` when the view has no active tab (the only "no view" the
     /// secondary path produces in single-view Code++).
     fn current_doc_index(&self, view: i32) -> i32;
+
+    /// Encoding (UniMode) of the buffer with id `id`. Return values
+    /// match Notepad++'s `UniMode` enum: see [`UNI_8BIT`] /
+    /// [`UNI_UTF8`] / [`UNI_UTF16BE`] / [`UNI_UTF16LE`] /
+    /// [`UNI_COOKIE`] / [`UNI_7BIT`] / [`UNI_UTF16BE_NO_BOM`] /
+    /// [`UNI_UTF16LE_NO_BOM`]. Returns `-1` when `id` is unknown so
+    /// plugins can distinguish "unknown buffer" from "valid 8-bit
+    /// buffer" (UniMode 0).
+    fn buffer_encoding(&self, id: isize) -> i32;
+
+    /// EOL format of the buffer with id `id`. Returns one of
+    /// [`WIN_FORMAT`] / [`MAC_FORMAT`] / [`UNIX_FORMAT`], or `-1`
+    /// when `id` is unknown. Code++'s internal `Eol::Mixed` (a
+    /// per-line preservation mode N++ does not have) maps to
+    /// [`UNIX_FORMAT`] — the modern default and the one Code++'s
+    /// "Edit → EOL Conversion" picks if the user normalises a
+    /// mixed buffer.
+    fn buffer_format(&self, id: isize) -> i32;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -653,6 +695,22 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             }
         }
 
+        NPPM_GETBUFFERENCODING => {
+            // wparam: buffer id. Return value is a `UniMode` enum
+            // numeric (see UNI_* constants above). `-1` for unknown
+            // id — distinct from `UNI_8BIT` (0) so a plugin can tell
+            // "no such buffer" from "8-bit buffer".
+            services.buffer_encoding(wparam as isize) as isize
+        }
+
+        NPPM_GETBUFFERFORMAT => {
+            // wparam: buffer id. Return value is an `EolType` numeric
+            // (`WIN_FORMAT` / `MAC_FORMAT` / `UNIX_FORMAT`); `-1` for
+            // unknown id, same separation rationale as
+            // `NPPM_GETBUFFERENCODING`.
+            services.buffer_format(wparam as isize) as isize
+        }
+
         NPPM_DOOPEN => {
             if lparam == 0 {
                 0
@@ -892,6 +950,13 @@ mod tests {
         /// Active tab index in the primary view (used for
         /// `NPPM_GETCURRENTDOCINDEX`). `-1` means no active tab.
         active_tab_primary: i32,
+        /// Per-buffer encoding (UniMode integer). Looked up by
+        /// buffer id; missing entries return `-1` matching the
+        /// dispatcher's "unknown id" contract.
+        buffer_encodings: Vec<(isize, i32)>,
+        /// Per-buffer EOL format (EolType integer). Same lookup
+        /// shape as `buffer_encodings`.
+        buffer_formats: Vec<(isize, i32)>,
         // recorded mutations
         log: RefCell<Vec<String>>,
     }
@@ -1020,6 +1085,20 @@ mod tests {
                 0 => self.active_tab_primary,
                 _ => -1,
             }
+        }
+        fn buffer_encoding(&self, id: isize) -> i32 {
+            self.buffer_encodings
+                .iter()
+                .find(|(i, _)| *i == id)
+                .map(|(_, e)| *e)
+                .unwrap_or(-1)
+        }
+        fn buffer_format(&self, id: isize) -> i32 {
+            self.buffer_formats
+                .iter()
+                .find(|(i, _)| *i == id)
+                .map(|(_, f)| *f)
+                .unwrap_or(-1)
         }
     }
 
@@ -1643,6 +1722,50 @@ mod tests {
             ..Default::default()
         };
         let r = unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTDOCINDEX, 0, 0) };
+        assert_eq!(r, Some(-1));
+    }
+
+    #[test]
+    fn get_buffer_encoding_returns_unimode() {
+        let mut s = MockServices {
+            buffer_encodings: vec![(7, UNI_UTF8), (8, UNI_8BIT), (9, UNI_COOKIE)],
+            ..Default::default()
+        };
+        // Cover all three populated ids, including the UNI_8BIT
+        // path — this is the value that `Encoding::Other(_)`
+        // collapses to in the production HostBridge mapping, and
+        // should be observable through the dispatcher unchanged.
+        for (id, expected) in [(7, UNI_UTF8), (8, UNI_8BIT), (9, UNI_COOKIE)] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERENCODING, id, 0) };
+            assert_eq!(r, Some(expected as isize), "id={id}");
+        }
+    }
+
+    #[test]
+    fn get_buffer_encoding_unknown_id_returns_minus_one() {
+        // Distinct from UNI_8BIT (0) so plugins can tell "no such
+        // buffer" from "valid 8-bit buffer".
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERENCODING, 999, 0) };
+        assert_eq!(r, Some(-1));
+    }
+
+    #[test]
+    fn get_buffer_format_returns_eol_type() {
+        let mut s = MockServices {
+            buffer_formats: vec![(7, WIN_FORMAT), (8, UNIX_FORMAT), (9, MAC_FORMAT)],
+            ..Default::default()
+        };
+        for (id, expected) in [(7, WIN_FORMAT), (8, UNIX_FORMAT), (9, MAC_FORMAT)] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERFORMAT, id, 0) };
+            assert_eq!(r, Some(expected as isize));
+        }
+    }
+
+    #[test]
+    fn get_buffer_format_unknown_id_returns_minus_one() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERFORMAT, 999, 0) };
         assert_eq!(r, Some(-1));
     }
 }
