@@ -233,11 +233,12 @@ const STATUS_HEIGHT_PX: i32 = 22;
 
 /// Pixel inset between the Scintilla view and the surrounding
 /// chrome (tab strip above, status bar below, window edges left
-/// and right). The parent's `WM_ERASEBKGND` paints the four
-/// 1-pixel strips revealed by this inset in
-/// [`editor_border_brush`], producing a clearly visible delimiter
-/// around the edit area on every side.
-const EDITOR_BORDER_PX: i32 = 1;
+/// and right). The parent's `WM_ERASEBKGND` paints the strips
+/// revealed by this inset in [`editor_border_brush`], producing
+/// a clearly visible delimiter around the edit area on every
+/// side. 2 px reads cleanly at 96 DPI; 1 px was visually subtle
+/// in screenshots.
+const EDITOR_BORDER_PX: i32 = 2;
 
 /// Height of the splitter handle between the editor and the FIF
 /// results dock. 4 px is the smallest band that's still draggable
@@ -2747,7 +2748,19 @@ fn write_status_part(status_hwnd: HWND, part_index: usize, text: &str) {
 // 0 to auto-fit; the fixed width below comfortably fits the longest
 // `LANG_TABLE.menu_label` plus padding.
 const STATUS_PART_LANG_W: i32 = 220;
-const STATUS_PART_LENGTH_W: i32 = 150;
+// Wide enough for "length: 99,999,999   lines: 999,999" (the
+// realistic upper bound at Scintilla's ~2 GiB document ceiling)
+// without truncating the line count when six- or seven-digit
+// numbers appear. Picked empirically — a 6,290-line file with
+// 201k bytes already fills ~180 px in the system font. Total
+// fixed-right-side parts (length 230 + cursor 220 + EOL 150 +
+// encoding 130 + ins/ovr 45) sum to 775 px; combined with the
+// `STATUS_PART_LANG_W = 220` minimum on the left, the layout
+// collapses on windows narrower than ~995 px client width
+// (`setup_status_parts`'s `.max(STATUS_PART_LANG_W)` clamp keeps
+// it sound — the right-side parts spill off-screen rather than
+// crashing).
+const STATUS_PART_LENGTH_W: i32 = 230;
 const STATUS_PART_CURSOR_W: i32 = 220;
 const STATUS_PART_EOL_W: i32 = 150;
 // 130px fits the longest non-`Other` `Encoding::label` —
@@ -6194,6 +6207,19 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             Some(instance.into()),
             None,
         )?;
+        // Disable the visual-style theme on the tab control so our
+        // `NM_CUSTOMDRAW` overlay (the orange top edge on the
+        // active tab — see `handle_tab_custom_draw`) actually
+        // fires. Themed (UxTheme-rendered) tab controls largely
+        // ignore `NM_CUSTOMDRAW` because the control draws via
+        // the theme engine, bypassing the custom-draw callbacks.
+        // `SetWindowTheme(hwnd, L"", L"")` falls back to the
+        // classic non-themed renderer, which honours custom draw
+        // fully. Tab chrome reads as flatter / less Aero in
+        // exchange — a fair trade for being able to highlight the
+        // active buffer at a glance. The active-tab indicator is
+        // user-requested.
+        let _ = SetWindowTheme(tab_hwnd, w!(""), w!(""));
 
         // Scintilla child — sized via WM_SIZE relative to the status bar.
         let scintilla_hwnd = CreateWindowExW(
@@ -6747,6 +6773,12 @@ unsafe fn layout_children(
             let actual_dock_height = (mid_height - scintilla_height - SPLITTER_HEIGHT_PX).max(0);
             // Editor: top + left + right insets only — the
             // splitter sits flush below it as the bottom delimiter.
+            // The `- EDITOR_BORDER_PX` matches the `editor_y +=
+            // EDITOR_BORDER_PX` shift above so the bottom edge
+            // lands exactly at `scintilla_top + scintilla_height`
+            // (i.e. flush against the splitter); without this
+            // subtraction the editor would overlap the splitter
+            // top by `EDITOR_BORDER_PX` pixels.
             let editor_h = (scintilla_height - EDITOR_BORDER_PX).max(0);
             let _ = MoveWindow(scintilla, editor_x, editor_y, editor_w, editor_h, true);
             let _ = MoveWindow(splitter, 0, splitter_top, width, SPLITTER_HEIGHT_PX, true);
