@@ -1950,6 +1950,21 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.shell.tabs[idx].lang = new_lang;
         if self.shell.active_tab == Some(idx) {
             self.ui.apply_lang(new_lang);
+            // Refresh the status bar's language slot too — the
+            // lexer changes via `apply_lang` but the chrome
+            // doesn't know that, and a user-driven Language menu
+            // pick (or a plugin's NPPM_SETBUFFERLANGTYPE) shouldn't
+            // require a tab switch to reflect the new label. Read
+            // the rest of the metadata back from the tab so the
+            // call sets the same encoding / EOL / byte-length the
+            // bar already showed; the dynamic-parts refresh inside
+            // `update_status` re-reads Scintilla for length /
+            // cursor / INS-OVR.
+            let tab = &self.shell.tabs[idx];
+            let encoding = tab.encoding.clone();
+            let eol = tab.eol;
+            let byte_len = tab.byte_len;
+            self.ui.update_status(new_lang, &encoding, eol, byte_len);
         }
         self.shell
             .pending_notifications
@@ -2276,7 +2291,7 @@ mod tests {
         buffer_text: String,
         cursor: u64,
         set_text_calls: Vec<(String, u64)>,
-        status_calls: Vec<(String, String, u64)>,
+        status_calls: Vec<(LangType, String, String, u64)>,
         plugin_status_calls: Vec<(usize, String)>,
         /// (tab_idx, in_doc, returned_doc) per `activate_tab` call.
         activate_tab_calls: Vec<(usize, isize, isize)>,
@@ -2319,12 +2334,13 @@ mod tests {
         }
         fn update_status(
             &mut self,
-            _lang: codepp_core::LangType,
+            lang: codepp_core::LangType,
             encoding: &Encoding,
             eol: Eol,
             byte_len: u64,
         ) {
             self.status_calls.push((
+                lang,
                 encoding.label().to_string(),
                 eol.label().to_string(),
                 byte_len,
@@ -2503,7 +2519,7 @@ mod tests {
         assert_eq!(ui.set_text_calls[0].0, "Hello, Code++!");
         assert_eq!(ui.set_text_calls[0].1, 0);
         assert_eq!(ui.status_calls.len(), 1);
-        assert_eq!(ui.status_calls[0].0, "UTF-8");
+        assert_eq!(ui.status_calls[0].1, "UTF-8");
         // Successful loads produce no pending dialogs.
         assert!(pending.is_empty());
         assert!(wake_count.load(Ordering::Relaxed) >= 1);
@@ -3867,6 +3883,7 @@ mod tests {
         // re-classify it as L_CPP via the dispatcher.
         assert_eq!(shell.tabs[0].lang, L_RUST);
         let id = shell.tabs[0].id as usize;
+        let status_before = ui.status_calls.len();
         let r = unsafe {
             shell.dispatch_plugin_message(
                 &mut ui,
@@ -3882,6 +3899,22 @@ mod tests {
         // the plugin-driven set (L_CPP).
         assert_eq!(ui.apply_lang_calls.len(), 2);
         assert_eq!(*ui.apply_lang_calls.last().unwrap(), L_CPP);
+        // The status bar's language slot reads from the lang we
+        // just set — without a refresh here the user-visible label
+        // stays stale until they switch tabs and back. Pin the
+        // refresh by asserting `update_status` was called with the
+        // *new* lang as part of the dispatch (counting alone would
+        // miss a refactor that accidentally re-passed the old lang).
+        assert_eq!(
+            ui.status_calls.len(),
+            status_before + 1,
+            "set_buffer_lang_type on the active tab must refresh the status bar",
+        );
+        assert_eq!(
+            ui.status_calls.last().unwrap().0,
+            L_CPP,
+            "status bar must repaint with the new lang, not the old one",
+        );
         // NPPN_LANGCHANGED queued for delivery.
         assert!(
             shell
@@ -3920,7 +3953,8 @@ mod tests {
         // Drain any queued notifications from the open path so we
         // observe only the SETBUFFERLANGTYPE response.
         let _ = shell.take_notifications();
-        let calls_before = ui.apply_lang_calls.len();
+        let apply_calls_before = ui.apply_lang_calls.len();
+        let status_calls_before = ui.status_calls.len();
 
         let r = unsafe {
             shell.dispatch_plugin_message(
@@ -3934,8 +3968,12 @@ mod tests {
         // Returns success (the buffer IS that lang now, just was
         // already that lang).
         assert_eq!(r, Some(1));
-        // No re-apply, no notification queued.
-        assert_eq!(ui.apply_lang_calls.len(), calls_before);
+        // No re-apply, no status refresh, no notification queued —
+        // status_calls is part of the same idempotent contract; a
+        // spurious update_status would trigger a chrome repaint
+        // on a no-op set.
+        assert_eq!(ui.apply_lang_calls.len(), apply_calls_before);
+        assert_eq!(ui.status_calls.len(), status_calls_before);
         assert!(!shell
             .pending_notifications
             .iter()
