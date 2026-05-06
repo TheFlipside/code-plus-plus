@@ -189,7 +189,16 @@
  *     plugin gating that does `if (NPPM_GETNPPVERSION() >= ...)`. */
 #define NPPM_GETNPPVERSION                (NPPMSG + 50)
 
+/* v2: hide or show the tab strip. wParam = BOOL (TRUE hides,
+ *     FALSE shows). Returns the *previous* hidden state so a
+ *     plugin can detect "I just changed it" (return != wparam)
+ *     vs. "it was already in this state". The Scintilla view
+ *     auto-resizes to fill the freed space when hidden, and
+ *     shrinks back to its original height when shown — driven
+ *     by a deferred WM_SIZE PostMessage to avoid re-entering
+ *     wnd_proc under PluginCallGuard. */
 #define NPPM_HIDETABBAR                   (NPPMSG + 51)
+/* v2: returns BOOL — current tab-strip hidden state. */
 #define NPPM_ISTABBARHIDDEN               (NPPMSG + 52)
 
 /* Buffer-id queries ------------------------------------------------ */

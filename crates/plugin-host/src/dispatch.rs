@@ -76,6 +76,8 @@ pub const NPPM_MAKECURRENTBUFFERDIRTY: u32 = NPPMSG + 44;
 pub const NPPM_GETPLUGINSCONFIGDIR: u32 = NPPMSG + 46;
 pub const NPPM_MENUCOMMAND: u32 = NPPMSG + 48;
 pub const NPPM_GETNPPVERSION: u32 = NPPMSG + 50;
+pub const NPPM_HIDETABBAR: u32 = NPPMSG + 51;
+pub const NPPM_ISTABBARHIDDEN: u32 = NPPMSG + 52;
 pub const NPPM_GETFULLPATHFROMBUFFERID: u32 = NPPMSG + 58;
 pub const NPPM_GETCURRENTBUFFERID: u32 = NPPMSG + 60;
 pub const NPPM_RELOADBUFFERID: u32 = NPPMSG + 61;
@@ -450,6 +452,21 @@ pub trait HostServices {
     /// Returns the new encoding numeric ([`UNI_8BIT`]) on
     /// success, or `-1` if the view has no active buffer.
     fn decode_sci(&mut self, view: i32) -> i32;
+
+    /// `true` if the tab strip is currently hidden, `false` if
+    /// visible. Drives [`NPPM_ISTABBARHIDDEN`].
+    fn is_tabbar_hidden(&self) -> bool;
+
+    /// Toggle the tab strip's visibility. `hidden == true` hides
+    /// it, `false` shows it. Returns the *previous* hidden state
+    /// — that's the contract `NPPM_HIDETABBAR` plugins read to
+    /// know whether they actually changed anything.
+    ///
+    /// Same-value calls are still routed to the UI so the editor
+    /// view layout refreshes idempotently (a UI-only invariant
+    /// guard). The previous-state return is the sole signal to
+    /// the plugin.
+    fn set_tabbar_hidden(&mut self, hidden: bool) -> bool;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -739,6 +756,21 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         }
 
         NPPM_GETNPPVERSION => CODEPP_PLUGIN_API_VERSION,
+
+        NPPM_HIDETABBAR => {
+            // wparam: BOOL — TRUE hides the tab strip, FALSE shows
+            // it. Returns the *previous* hidden state per the N++
+            // contract, so a plugin can detect "I just changed it"
+            // (return != hidden) vs. "it was already in this state"
+            // (return == hidden).
+            let hidden = wparam != 0;
+            services.set_tabbar_hidden(hidden) as isize
+        }
+
+        NPPM_ISTABBARHIDDEN => {
+            // No args. Returns BOOL — current hidden state.
+            services.is_tabbar_hidden() as isize
+        }
 
         NPPM_GETFULLPATHFROMBUFFERID => {
             // wParam: buffer id. lParam: TCHAR* OUT (caller-allocated).
@@ -1097,6 +1129,10 @@ mod tests {
         /// Active tab index in the primary view (used for
         /// `NPPM_GETCURRENTDOCINDEX`). `-1` means no active tab.
         active_tab_primary: i32,
+        /// Tab-strip visibility for `NPPM_HIDETABBAR` /
+        /// `NPPM_ISTABBARHIDDEN`. `false` (visible) by default,
+        /// matching the host's startup state.
+        tabbar_hidden: bool,
         /// Per-buffer encoding (UniMode integer). Looked up by
         /// buffer id; missing entries return `-1` matching the
         /// dispatcher's "unknown id" contract.
@@ -1316,6 +1352,15 @@ mod tests {
             }
             self.record(format!("decode_sci[view={view}]"));
             UNI_8BIT
+        }
+        fn is_tabbar_hidden(&self) -> bool {
+            self.tabbar_hidden
+        }
+        fn set_tabbar_hidden(&mut self, hidden: bool) -> bool {
+            let prev = self.tabbar_hidden;
+            self.tabbar_hidden = hidden;
+            self.record(format!("set_tabbar_hidden({hidden})"));
+            prev
         }
     }
 
@@ -2177,5 +2222,37 @@ mod tests {
         // Mock should not have been called — the dispatcher arm
         // short-circuited before reaching it.
         assert!(s.calls().is_empty());
+    }
+
+    #[test]
+    fn is_tabbar_hidden_reports_current_state() {
+        let mut s = MockServices::default();
+        // Default: visible.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ISTABBARHIDDEN, 0, 0) };
+        assert_eq!(r, Some(0));
+
+        // Flip to hidden.
+        s.tabbar_hidden = true;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ISTABBARHIDDEN, 0, 0) };
+        assert_eq!(r, Some(1));
+    }
+
+    #[test]
+    fn hide_tabbar_returns_previous_state_and_flips() {
+        let mut s = MockServices::default();
+        // Hide for the first time — previous state was visible (0).
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_HIDETABBAR, 1, 0) };
+        assert_eq!(r, Some(0));
+        assert!(s.tabbar_hidden);
+
+        // Hide again — previous state was hidden (1), no real change.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_HIDETABBAR, 1, 0) };
+        assert_eq!(r, Some(1));
+        assert!(s.tabbar_hidden);
+
+        // Show — previous state was hidden (1), flips to visible.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_HIDETABBAR, 0, 0) };
+        assert_eq!(r, Some(1));
+        assert!(!s.tabbar_hidden);
     }
 }

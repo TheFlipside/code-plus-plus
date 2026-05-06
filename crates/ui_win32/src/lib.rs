@@ -74,7 +74,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateMenu, CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyWindow, DispatchMessageW,
     DrawMenuBar, GetClientRect, GetCursorPos, GetDlgItem, GetMenuItemCount, GetMessageW, GetParent,
     GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW,
-    IsWindow, LoadCursorW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
+    IsWindow, IsWindowVisible, LoadCursorW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
     RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
     TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK,
     BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
@@ -489,6 +489,7 @@ impl WindowState {
     fn split(&mut self) -> (&mut Shell, Win32Ui) {
         let ui = Win32Ui {
             status_hwnd: self.status_hwnd,
+            tab_hwnd: self.tab_hwnd,
             editor: self.editor,
         };
         (&mut self.shell, ui)
@@ -512,16 +513,16 @@ impl WindowState {
 }
 
 /// `UiPlatform` impl. Lightweight — just carries the HWND values
-/// `Shell::drain` needs to reach the editor and status bar. The
-/// main HWND is intentionally absent: dialogs that need it are
-/// deferred (`PendingDialog`) and shown by wnd_proc using its own
-/// HWND parameter, so no Win32Ui method needs main_hwnd. The tab
-/// HWND is also absent: `activate_tab` only needs the Scintilla
-/// view (via `editor`); the visual tab-strip selection is driven
-/// by `sync_tab_strip` after the drain, not by the trait method.
+/// `Shell::drain` needs to reach the editor, status bar, and tab
+/// strip. The main HWND is intentionally absent: dialogs that
+/// need it are deferred (`PendingDialog`) and shown by wnd_proc
+/// using its own HWND parameter; methods that need to post back
+/// to the main window (e.g. `set_tabbar_hidden`'s deferred
+/// relayout) derive it via `GetParent(self.tab_hwnd)`.
 #[derive(Clone, Copy)]
 struct Win32Ui {
     status_hwnd: HWND,
+    tab_hwnd: HWND,
     editor: EditorHandle,
 }
 
@@ -953,6 +954,63 @@ impl UiPlatform for Win32Ui {
     // GWLP_USERDATA-borrowed WindowState. Modal dialogs are deferred
     // — `Shell::drain` returns `Vec<PendingDialog>` that the wnd_proc
     // shows after the borrow is dropped (see `WM_APP_WAKE`).
+
+    fn is_tabbar_hidden(&self) -> bool {
+        // SAFETY: `self.tab_hwnd` was captured from the live tab
+        // control during `WindowState::split`; `IsWindowVisible` is
+        // a read-only Win32 query that never re-enters wnd_proc.
+        // Returns FALSE for an invalid HWND, which we surface as
+        // "not hidden" (matching the unstarted-window default).
+        // INVARIANT: UI-thread-only. `IsWindowVisible` reads the
+        // window's `WS_VISIBLE` style flag; pairing that read with
+        // `ShowWindow` writes from another thread is formally a
+        // race on the window-style word. Every call site here
+        // runs on the UI thread (all `dispatch_nppm` invocations
+        // are on the wnd_proc thread).
+        !unsafe { IsWindowVisible(self.tab_hwnd).as_bool() }
+    }
+
+    fn set_tabbar_hidden(&mut self, hidden: bool) -> bool {
+        let prev = self.is_tabbar_hidden();
+        // ShowWindow + a deferred relayout via PostMessage(WM_SIZE).
+        // Synchronous SendMessage would re-enter the wnd_proc on
+        // this thread, and any plugin call dispatching this is
+        // already inside `PluginCallGuard` — `state_from_hwnd`
+        // would refuse the re-borrow and the layout would no-op.
+        // PostMessage queues the size message for after the guard
+        // drops; the message-pump dequeue then runs WM_SIZE
+        // normally with full state access.
+        let cmd = if hidden { SW_HIDE } else { SW_SHOW };
+        unsafe {
+            let _ = ShowWindow(self.tab_hwnd, cmd);
+            // Derive the main window from the tab control's parent
+            // — Win32Ui carries the tab HWND but not the main one,
+            // and GetParent is a cheap read with no message pump.
+            if let Ok(parent) = GetParent(self.tab_hwnd) {
+                let mut rect = RECT::default();
+                if GetClientRect(parent, &mut rect).is_ok() {
+                    let w = (rect.right - rect.left).max(0);
+                    let h = (rect.bottom - rect.top).max(0);
+                    // WM_SIZE's lparam packs (height << 16 | width).
+                    // Width and height fit in u16 by the Win32
+                    // contract on a single screen; clamp explicitly
+                    // so a future multi-monitor edge case doesn't
+                    // produce a garbage lparam.
+                    let w16 = (w as u32 & 0xFFFF) as isize;
+                    let h16 = ((h as u32 & 0xFFFF) << 16) as isize;
+                    // `wparam = 0` synthesizes `SIZE_RESTORED`. The
+                    // main wnd_proc's WM_SIZE handler ignores wparam
+                    // entirely, so this is benign today; if it ever
+                    // branches on the value (e.g. to skip layout on
+                    // `SIZE_MINIMIZED`), revisit this caller so a
+                    // hidden-tabs trigger doesn't produce a spurious
+                    // "restored" event.
+                    let _ = PostMessageW(Some(parent), WM_SIZE, WPARAM(0), LPARAM(h16 | w16));
+                }
+            }
+        }
+        prev
+    }
 }
 
 // --- Phase 4 m1 default theme -------------------------------------------
@@ -1290,6 +1348,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
             // `active_tab.is_none()` case by rendering just "Code++".
             let mut win32_ui = Win32Ui {
                 status_hwnd: state.status_hwnd,
+                tab_hwnd: state.tab_hwnd,
                 editor: state.editor,
             };
             <Win32Ui as UiPlatform>::update_status(
@@ -1358,6 +1417,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
             if let Some((lang, encoding, eol, byte_len)) = snapshot {
                 let mut win32_ui = Win32Ui {
                     status_hwnd: state.status_hwnd,
+                    tab_hwnd: state.tab_hwnd,
                     editor: state.editor,
                 };
                 <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
@@ -1454,6 +1514,7 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
     // reason to fire on a click-only switch).
     let mut win32_ui = Win32Ui {
         status_hwnd: state.status_hwnd,
+        tab_hwnd: state.tab_hwnd,
         editor: state.editor,
     };
     // Re-apply the new tab's lexer/theme. Each tab carries its own
@@ -5874,6 +5935,10 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             fif_dock_hwnd,
             initial_dock_visible,
             initial_dock_height,
+            // Tab strip is visible by default — the only path that
+            // hides it is `NPPM_HIDETABBAR`, which can't fire
+            // before `WM_APP_WAKE`.
+            false,
             rect.right,
             rect.bottom,
         );
@@ -6047,6 +6112,7 @@ unsafe fn layout_children(
     dock: HWND,
     dock_visible: bool,
     dock_height: i32,
+    tab_hidden: bool,
     width: i32,
     height: i32,
 ) {
@@ -6055,7 +6121,16 @@ unsafe fn layout_children(
     // measure these precisely; the constants become measured
     // values once `layout_children` goes DPI-aware (Phase 4 polish
     // item).
-    let tab_height = TAB_HEIGHT_PX;
+    //
+    // When the tab strip is hidden (NPPM_HIDETABBAR), it claims
+    // zero height and the Scintilla view starts at y=0 — the same
+    // visual result Notepad++ produces when its own tab strip is
+    // hidden. The `MoveWindow` call below still runs and keeps
+    // the (already invisible via ShowWindow(SW_HIDE)) tab control
+    // at full width with height=0 — a zero-height window costs
+    // nothing to keep around, and the visibility toggle stays
+    // orthogonal to the layout.
+    let tab_height = if tab_hidden { 0 } else { TAB_HEIGHT_PX };
     let status_height = STATUS_HEIGHT_PX;
     unsafe {
         let _ = MoveWindow(tabs, 0, 0, width, tab_height, true);
@@ -6841,6 +6916,9 @@ unsafe fn show_fif_dock(main_hwnd: HWND) {
         let _ = ShowWindow(dock, SW_SHOW);
         let mut rect = RECT::default();
         if GetClientRect(main_hwnd, &mut rect).is_ok() {
+            // Read current tab-strip visibility — `IsWindowVisible`
+            // is the source of truth (toggled by `NPPM_HIDETABBAR`).
+            let tab_hidden = !IsWindowVisible(tabs).as_bool();
             layout_children(
                 tabs,
                 scintilla,
@@ -6849,6 +6927,7 @@ unsafe fn show_fif_dock(main_hwnd: HWND) {
                 dock,
                 true,
                 dock_height,
+                tab_hidden,
                 rect.right,
                 rect.bottom,
             );
@@ -6884,6 +6963,7 @@ unsafe fn hide_fif_dock(main_hwnd: HWND) {
         let _ = ShowWindow(dock, SW_HIDE);
         let mut rect = RECT::default();
         if GetClientRect(main_hwnd, &mut rect).is_ok() {
+            let tab_hidden = !IsWindowVisible(tabs).as_bool();
             layout_children(
                 tabs,
                 scintilla,
@@ -6892,6 +6972,7 @@ unsafe fn hide_fif_dock(main_hwnd: HWND) {
                 dock,
                 false,
                 dock_height,
+                tab_hidden,
                 rect.right,
                 rect.bottom,
             );
@@ -7070,6 +7151,7 @@ extern "system" fn splitter_wnd_proc(
                 if let Some(state) = state_from_hwnd(parent) {
                     state.fif_dock_height = new_height;
                 }
+                let tab_hidden = !IsWindowVisible(tabs).as_bool();
                 layout_children(
                     tabs,
                     scintilla,
@@ -7078,6 +7160,7 @@ extern "system" fn splitter_wnd_proc(
                     dock,
                     dock_visible,
                     new_height,
+                    tab_hidden,
                     rect.right,
                     rect.bottom,
                 );
@@ -7342,6 +7425,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 if let Some((encoding, eol, byte_len)) = snapshot {
                                     let mut win32_ui = Win32Ui {
                                         status_hwnd: state.status_hwnd,
+                                        tab_hwnd: state.tab_hwnd,
                                         editor: state.editor,
                                     };
                                     <Win32Ui as UiPlatform>::update_status(
@@ -7622,6 +7706,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 let width = (lparam.0 & 0xFFFF) as i32;
                 let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
                 if let Some(state) = state_from_hwnd(hwnd) {
+                    let tab_hidden = !IsWindowVisible(state.tab_hwnd).as_bool();
                     layout_children(
                         state.tab_hwnd,
                         state.scintilla_hwnd,
@@ -7630,6 +7715,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         state.fif_dock_hwnd,
                         state.fif_dock_visible,
                         state.fif_dock_height,
+                        tab_hidden,
                         width,
                         height,
                     );

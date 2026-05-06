@@ -211,6 +211,21 @@ pub trait UiPlatform {
         start: u64,
         end: u64,
     ) -> (usize, u64);
+
+    /// `true` if the Win32 tab strip is currently hidden, `false`
+    /// if visible. Plumbed from `NPPM_ISTABBARHIDDEN`.
+    fn is_tabbar_hidden(&self) -> bool;
+
+    /// Toggle tab-strip visibility. `hidden == true` hides;
+    /// `false` shows. Returns the *previous* hidden state — the
+    /// `NPPM_HIDETABBAR` ABI signal that lets a plugin know
+    /// whether it actually changed anything. Implementations
+    /// should also trigger an editor-area relayout so the
+    /// Scintilla view grows / shrinks to fill the freed / lost
+    /// space, but the relayout may be deferred (e.g. via
+    /// PostMessage to avoid re-entering wnd_proc under
+    /// `PluginCallGuard`).
+    fn set_tabbar_hidden(&mut self, hidden: bool) -> bool;
 }
 
 /// A modal dialog request the UI must show after `Shell::drain`
@@ -2175,6 +2190,14 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         debug_assert!(ok, "current_buffer_id() returned an id no live tab carries");
         codepp_plugin_host::UNI_8BIT
     }
+
+    fn is_tabbar_hidden(&self) -> bool {
+        self.ui.is_tabbar_hidden()
+    }
+
+    fn set_tabbar_hidden(&mut self, hidden: bool) -> bool {
+        self.ui.set_tabbar_hidden(hidden)
+    }
 }
 
 /// Spawn a forwarder thread that pumps items from `src` into `dst`
@@ -2256,6 +2279,9 @@ mod tests {
         apply_lang_calls: Vec<LangType>,
         search_calls: Vec<(String, SearchFlags, String)>,
         replace_calls: Vec<(String, String, SearchFlags, String)>,
+        /// Tab-strip visibility shadow. Default `false` (visible)
+        /// matches the real UI's startup state.
+        tabbar_hidden: bool,
     }
 
     impl UiPlatform for FakeUi {
@@ -2406,6 +2432,14 @@ mod tests {
             let new_end = lo + replaced_inside.len();
             self.buffer_text.replace_range(lo..hi, &replaced_inside);
             (count, new_end as u64)
+        }
+        fn is_tabbar_hidden(&self) -> bool {
+            self.tabbar_hidden
+        }
+        fn set_tabbar_hidden(&mut self, hidden: bool) -> bool {
+            let prev = self.tabbar_hidden;
+            self.tabbar_hidden = hidden;
+            prev
         }
     }
 

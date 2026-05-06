@@ -89,7 +89,8 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_GETNPPVERSION` | ✅ | v1 | Returns `CODEPP_PLUGIN_API_VERSION` (0.1, packed `(major << 16) \| minor`). Deliberately *below* any real Notepad++ release so version-gated N++ features (`if (NPPM_GETNPPVERSION() >= 0x00080000)` and the like) correctly fail their gate checks until Code++ implements those features. |
 | `NPPM_GETNPPDIRECTORY` | ⚫ | v1 | Not yet in `dispatch.rs` constants; needs `HostServices::program_dir`. |
 | `NPPM_GETNPPFULLFILEPATH` | ⚫ | v1 | Not yet in `dispatch.rs` constants; needs `HostServices::program_path`. |
-| `NPPM_HIDETABBAR` / `ISTABBARHIDDEN` | ⚫ | v2 | |
+| `NPPM_HIDETABBAR` | ✅ | v2 | wparam = `BOOL`. Hides/shows the Win32 tab strip via `ShowWindow(SW_HIDE/SHOW)` and triggers an editor-area relayout via `PostMessageW(WM_SIZE)` (deferred so the wnd_proc isn't re-entered while `PluginCallGuard` is active). The Scintilla view fills the freed space when hidden. Returns the previous hidden state — N++'s contract for plugin-detected toggle changes. |
+| `NPPM_ISTABBARHIDDEN` | ✅ | v2 | Returns `BOOL` — current tab-strip hidden state, queried via `IsWindowVisible`. |
 | `NPPM_GETPOSFROMBUFFERID` / `GETBUFFERIDFROMPOS` | ⚫ | v1 | Pending; not yet in `dispatch.rs`. |
 | `NPPM_GETFULLPATHFROMBUFFERID` | ✅ | v1 | Wide-path write capped at `MAX_PATH_TCHARS` (260); probe call (`lparam == 0`) always returns `MAX_PATH_TCHARS`, never the actual path length, so a plugin can't under-allocate based on the probe and overflow on the second call. |
 | `NPPM_GETCURRENTBUFFERID` | ✅ | v1 | Returns the active tab's `BufferID` (sequential `i32`, base 1). |
