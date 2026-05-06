@@ -262,6 +262,40 @@ const IDC_FR_REPLACE_ALL: u16 = 213;
 const IDC_FR_CLOSE: u16 = 214;
 const IDC_FR_COUNT: u16 = 215;
 const IDC_FR_IN_SELECTION: u16 = 216;
+// FIF tab — m4 step 4a. Layout mirrors N++'s "Find in Files" tab:
+// Filters + Directory comboboxes, two FIF-only checkboxes
+// (sub-folders, hidden folders), and two FIF-only action buttons
+// (Find All, Replace in Files). Find what / Replace with /
+// Match case / Whole word / Search Mode / Close are shared with
+// the Find and Replace tabs.
+const IDC_FR_FIF_FILTERS: u16 = 217;
+const IDC_FR_FIF_DIRECTORY: u16 = 218;
+const IDC_FR_FIF_BROWSE: u16 = 219;
+const IDC_FR_FIF_SUBFOLDERS: u16 = 220;
+const IDC_FR_FIF_HIDDEN_FOLDERS: u16 = 221;
+const IDC_FR_FIF_FIND_ALL: u16 = 222;
+const IDC_FR_FIF_REPLACE_IN_FILES: u16 = 223;
+
+// Find/Replace dialog checkbox-grid dimensions. Promoted to module
+// scope so `apply_tab_visibility` can reposition Whole word and
+// Match case on the FIF tab to align with the right-column
+// FIF-only checkboxes. The Y-chain constants (`FR_DLG_*_Y`) are
+// shared with `show_find_replace_dialog`: the dialog body's local
+// Y constants alias these, so editing a single value propagates
+// to both the layout and the runtime checkbox repositioning.
+const FR_CHECKBOX_X: i32 = 14;
+const FR_CHECKBOX_W: i32 = 200;
+const FR_CHECKBOX_H: i32 = 20;
+const FR_CHECKBOX_GAP: i32 = 22;
+const FR_DLG_ROW1_Y: i32 = 50;
+const FR_DLG_ROW_GAP: i32 = 32;
+const FR_DLG_REPLACE_ROW_Y: i32 = FR_DLG_ROW1_Y + FR_DLG_ROW_GAP;
+const FR_DLG_FIF_FILTERS_Y: i32 = FR_DLG_REPLACE_ROW_Y + FR_DLG_ROW_GAP;
+const FR_DLG_FIF_DIRECTORY_Y: i32 = FR_DLG_FIF_FILTERS_Y + FR_DLG_ROW_GAP;
+/// Y of the topmost checkbox in the dialog. The 40 px offset
+/// past the last edit row leaves space for the combobox dropdown
+/// arrow without clipping.
+const FR_CHECKBOX_TOP: i32 = FR_DLG_FIF_DIRECTORY_Y + 40;
 
 /// `IDCANCEL` re-projected as `u16` for use in match arms. `IDCANCEL`
 /// itself is `MESSAGEBOX_RESULT(2)` in windows-rs and can't appear as
@@ -1669,17 +1703,12 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             w!("&Replace...\tCtrl+H"),
         )?;
         AppendMenuW(search_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
-        // Find in Files stays MF_GRAYED until m4 step 4 wires the
-        // FIF tab in the Find/Replace dialog. The dock infrastructure
-        // (window classes, splitter, layout) lands in step 3, but
-        // surfacing it through the menu before step 4 connects the
-        // proper search → progress → results flow would expose the
-        // empty dock to users. `TranslateAcceleratorW` silently
-        // discards a `WM_COMMAND` whose target menu item is
-        // disabled, so Ctrl+Shift+F also stays inert until then.
+        // Find in Files — m4 step 4a opens the FIF tab in the
+        // Find/Replace dialog. Step 4b will wire the Find All
+        // button to actually drive `Shell::start_fif`.
         AppendMenuW(
             search_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_SEARCH_FINDINFILES as usize,
             w!("Find in Fi&les...\tCtrl+Shift+F"),
         )?;
@@ -2937,6 +2966,7 @@ impl Drop for DlgDestroyGuard {
 enum FindReplaceTab {
     Find,
     Replace,
+    FindInFiles,
 }
 
 /// Heap-allocated dialog state. The wnd_proc reads/writes through
@@ -2971,6 +3001,21 @@ struct FindReplaceState {
     replace_all_btn: HWND,
     close_btn: HWND,
     in_selection_cb: HWND,
+    /// FIF-tab-only controls (m4 step 4a). Layout mirrors N++:
+    /// Filters and Directory comboboxes appear in the same column
+    /// as Find what / Replace with on the rows below them; the two
+    /// new checkboxes sit in a right-side column next to Match
+    /// whole word / Match case; the two new buttons share the
+    /// right action column with Find Next / Count / Replace.
+    fif_filters_label: HWND,
+    fif_filters_edit: HWND,
+    fif_directory_label: HWND,
+    fif_directory_edit: HWND,
+    fif_browse_btn: HWND,
+    fif_subfolders_cb: HWND,
+    fif_hidden_folders_cb: HWND,
+    fif_find_all_btn: HWND,
+    fif_replace_in_files_btn: HWND,
     /// Bottom-of-dialog STATIC for transient feedback messages
     /// — currently used by Count, Replace All, and the
     /// not-found message. The colour switches between blue
@@ -3041,6 +3086,16 @@ extern "system" fn find_replace_wnd_proc(
                         }
                         LRESULT(0)
                     }
+                    // FIF buttons — m4 step 4a stubs. Step 4b wires
+                    // Find All to `Shell::start_fif`, Replace in
+                    // Files to the same with replace-on-match
+                    // semantics, and Browse to `IFileDialog`.
+                    IDC_FR_FIF_FIND_ALL | IDC_FR_FIF_REPLACE_IN_FILES | IDC_FR_FIF_BROWSE => {
+                        if notif == BN_CLICKED {
+                            tracing::trace!(cmd, "FIF action awaiting m4 step 4b wiring");
+                        }
+                        LRESULT(0)
+                    }
                     // "In selection" toggle: snapshot the editor's
                     // selection bounds when the user checks the
                     // box, clear the snapshot when they uncheck.
@@ -3089,10 +3144,10 @@ extern "system" fn find_replace_wnd_proc(
                 let state = &mut *state_ptr;
                 if (*nmhdr).hwndFrom == state.tab_ctrl && (*nmhdr).code == TCN_SELCHANGE {
                     let sel = SendMessageW(state.tab_ctrl, TCM_GETCURSEL, None, None).0;
-                    let new_tab = if sel == 1 {
-                        FindReplaceTab::Replace
-                    } else {
-                        FindReplaceTab::Find
+                    let new_tab = match sel {
+                        1 => FindReplaceTab::Replace,
+                        2 => FindReplaceTab::FindInFiles,
+                        _ => FindReplaceTab::Find,
                     };
                     if state.tab != new_tab {
                         state.tab = new_tab;
@@ -3104,12 +3159,24 @@ extern "system" fn find_replace_wnd_proc(
             // IsDialogMessageW asks the dialog "which button is the
             // default?" via DM_GETDEFID when it sees a VK_RETURN.
             // The standard #32770 dialog class answers this; our
-            // custom class has to do it explicitly. Returning the
-            // Find Next id with the DC_HASDEFID magic in the high
-            // word gives us "Enter triggers Find Next" without
-            // having to special-case VK_RETURN in a key handler.
+            // custom class has to do it explicitly. The default
+            // depends on the active tab — Enter on the FIF tab
+            // should kick off Find All, not Find Next (which
+            // doesn't have a target buffer). Returning the
+            // matching id with the DC_HASDEFID magic in the high
+            // word gives us "Enter triggers the right button"
+            // without a special-case VK_RETURN handler.
             DM_GETDEFID => {
-                let val = (DC_HASDEFID << 16) | (IDC_FR_FIND_NEXT as u32);
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const FindReplaceState;
+                let id = if !state_ptr.is_null()
+                    && (*state_ptr).controls_ready
+                    && (*state_ptr).tab == FindReplaceTab::FindInFiles
+                {
+                    IDC_FR_FIF_FIND_ALL
+                } else {
+                    IDC_FR_FIND_NEXT
+                };
+                let val = (DC_HASDEFID << 16) | (id as u32);
                 LRESULT(val as isize)
             }
             // Themed STATIC and EDIT controls paint their own
@@ -3626,17 +3693,81 @@ unsafe fn handle_replace_all(state: &mut FindReplaceState) {
     }
 }
 
-/// Show or hide controls based on the active tab. Find tab hides
-/// the Replace-only controls (Replace with edit + label, Replace
-/// button, Replace All button); Replace tab shows them.
+/// Show or hide controls based on the active tab.
+///
+/// | Control                               | Find | Replace | FIF |
+/// |---------------------------------------|------|---------|-----|
+/// | find_edit, mode group, match_case,    |  ✓   |    ✓    |  ✓  |
+/// |   whole_word, dot_newline, close      |      |         |     |
+/// | replace_label/edit                    |  ✗   |    ✓    |  ✓  |
+/// | replace_btn, replace_all_btn          |  ✗   |    ✓    |  ✗  |
+/// | backward_cb, wrap_around_cb,          |  ✓   |    ✓    |  ✗  |
+/// |   in_selection_cb                     |      |         |     |
+/// | find_next_btn, count_btn              |  ✓   |    ✓    |  ✗  |
+/// | fif_filters/directory/browse,         |  ✗   |    ✗    |  ✓  |
+/// |   sub-folders, hidden folders,        |      |         |     |
+/// |   find_all, replace_in_files          |      |         |     |
 unsafe fn apply_tab_visibility(state: &FindReplaceState) {
-    let show_replace = state.tab == FindReplaceTab::Replace;
-    let cmd = if show_replace { SW_SHOW } else { SW_HIDE };
+    let is_replace = state.tab == FindReplaceTab::Replace;
+    let is_fif = state.tab == FindReplaceTab::FindInFiles;
+    let in_buffer = !is_fif;
+    let show = |hwnd: HWND, flag: bool| unsafe {
+        let _ = ShowWindow(hwnd, if flag { SW_SHOW } else { SW_HIDE });
+    };
+    // Replace-with row visible on Replace AND FIF (FIF uses
+    // the same edit for "Replace in Files").
+    show(state.replace_label, is_replace || is_fif);
+    show(state.replace_edit, is_replace || is_fif);
+    // Replace-action buttons are buffer-only.
+    show(state.replace_btn, is_replace);
+    show(state.replace_all_btn, is_replace);
+    // Buffer-only checkboxes + buttons.
+    show(state.backward_cb, in_buffer);
+    show(state.wrap_around_cb, in_buffer);
+    show(state.in_selection_cb, in_buffer);
+    show(state.find_next_btn, in_buffer);
+    show(state.count_btn, in_buffer);
+    // FIF-only controls.
+    show(state.fif_filters_label, is_fif);
+    show(state.fif_filters_edit, is_fif);
+    show(state.fif_directory_label, is_fif);
+    show(state.fif_directory_edit, is_fif);
+    show(state.fif_browse_btn, is_fif);
+    show(state.fif_subfolders_cb, is_fif);
+    show(state.fif_hidden_folders_cb, is_fif);
+    show(state.fif_find_all_btn, is_fif);
+    show(state.fif_replace_in_files_btn, is_fif);
+
+    // Reposition Whole word + Match case so they line up with the
+    // right-column FIF checkboxes (sub-folders / hidden folders).
+    // On Find/Replace, Backward sits at the top of the column with
+    // Whole word and Match case below it; on FIF, Backward is
+    // hidden so Whole word slides up to fill the gap.
+    let (whole_word_y, match_case_y) = if is_fif {
+        (FR_CHECKBOX_TOP, FR_CHECKBOX_TOP + FR_CHECKBOX_GAP)
+    } else {
+        (
+            FR_CHECKBOX_TOP + FR_CHECKBOX_GAP,
+            FR_CHECKBOX_TOP + 2 * FR_CHECKBOX_GAP,
+        )
+    };
     unsafe {
-        let _ = ShowWindow(state.replace_label, cmd);
-        let _ = ShowWindow(state.replace_edit, cmd);
-        let _ = ShowWindow(state.replace_btn, cmd);
-        let _ = ShowWindow(state.replace_all_btn, cmd);
+        let _ = MoveWindow(
+            state.whole_word_cb,
+            FR_CHECKBOX_X,
+            whole_word_y,
+            FR_CHECKBOX_W,
+            FR_CHECKBOX_H,
+            true,
+        );
+        let _ = MoveWindow(
+            state.match_case_cb,
+            FR_CHECKBOX_X,
+            match_case_y,
+            FR_CHECKBOX_W,
+            FR_CHECKBOX_H,
+            true,
+        );
     }
 }
 
@@ -3665,6 +3796,7 @@ fn show_find_replace_dialog(
                     let idx = match initial_tab {
                         FindReplaceTab::Find => 0,
                         FindReplaceTab::Replace => 1,
+                        FindReplaceTab::FindInFiles => 2,
                     };
                     SendMessageW(
                         state.tab_ctrl,
@@ -3739,6 +3871,15 @@ fn show_find_replace_dialog(
             replace_all_btn: HWND::default(),
             close_btn: HWND::default(),
             in_selection_cb: HWND::default(),
+            fif_filters_label: HWND::default(),
+            fif_filters_edit: HWND::default(),
+            fif_directory_label: HWND::default(),
+            fif_directory_edit: HWND::default(),
+            fif_browse_btn: HWND::default(),
+            fif_subfolders_cb: HWND::default(),
+            fif_hidden_folders_cb: HWND::default(),
+            fif_find_all_btn: HWND::default(),
+            fif_replace_in_files_btn: HWND::default(),
             status_label: HWND::default(),
             status_is_error: false,
             in_selection_range: None,
@@ -3750,21 +3891,34 @@ fn show_find_replace_dialog(
         // a left column with edit fields + checkboxes + Search Mode
         // group, and a right column with the action buttons.
         const CLIENT_W: i32 = 540;
-        const CLIENT_H: i32 = 380;
+        // Step 4a expands the dialog by 64 px to fit the FIF tab's
+        // Filters and Directory rows. Find/Replace tabs see the
+        // extra space as empty padding between Replace-with and
+        // the checkbox stack — acceptable trade vs. resizing the
+        // dialog every tab switch.
+        const CLIENT_H: i32 = 444;
         const X_PAD: i32 = 14;
         const TAB_TOP: i32 = 8;
-        const ROW1_Y: i32 = 50;
+        const ROW1_Y: i32 = FR_DLG_ROW1_Y;
         const FIND_LABEL_W: i32 = 90;
         const EDIT_X: i32 = X_PAD + FIND_LABEL_W;
         const EDIT_W: i32 = 240;
-        const REPLACE_ROW_Y: i32 = ROW1_Y + 32;
-        const CHECKBOX_X: i32 = X_PAD;
-        const CHECKBOX_W: i32 = 200;
-        const CHECKBOX_H: i32 = 20;
-        const CHECKBOX_TOP: i32 = REPLACE_ROW_Y + 40;
-        // 5 checkboxes: Backward, Whole word, Match case,
-        // Wrap around, In selection.
-        const MODE_GROUP_TOP: i32 = CHECKBOX_TOP + 5 * 22 + 8;
+        const REPLACE_ROW_Y: i32 = FR_DLG_REPLACE_ROW_Y;
+        const FIF_FILTERS_Y: i32 = FR_DLG_FIF_FILTERS_Y;
+        const FIF_DIRECTORY_Y: i32 = FR_DLG_FIF_DIRECTORY_Y;
+        const FIF_BROWSE_W: i32 = 24;
+        const FIF_BROWSE_GAP: i32 = 4;
+        const CHECKBOX_X: i32 = FR_CHECKBOX_X;
+        const CHECKBOX_W: i32 = FR_CHECKBOX_W;
+        const CHECKBOX_H: i32 = FR_CHECKBOX_H;
+        const CHECKBOX_TOP: i32 = FR_CHECKBOX_TOP;
+        // FIF tab puts two extra checkboxes ("In all sub-folders",
+        // "In hidden folders") in the right-hand column at the top
+        // of the checkbox stack, beneath the action buttons.
+        const FIF_RIGHT_CB_X: i32 = CLIENT_W - X_PAD - CHECKBOX_W;
+        // 5 checkboxes in the left column: Backward, Whole word,
+        // Match case, Wrap around, In selection.
+        const MODE_GROUP_TOP: i32 = CHECKBOX_TOP + 5 * FR_CHECKBOX_GAP + 8;
         const MODE_GROUP_W: i32 = 320;
         // Three rows inside the Search Mode group: Normal,
         // Extended, Regular expression + ". matches newline".
@@ -3777,6 +3931,12 @@ fn show_find_replace_dialog(
         const COUNT_Y: i32 = FIND_NEXT_Y + BTN_H + BTN_GAP;
         const REPLACE_Y: i32 = COUNT_Y + BTN_H + BTN_GAP;
         const REPLACE_ALL_Y: i32 = REPLACE_Y + BTN_H + BTN_GAP;
+        // FIF action buttons share the right column. "Find All"
+        // overlays "Find Next"; "Replace in Files" overlays
+        // "Count" — the corresponding Find/Replace buttons hide
+        // when the FIF tab is active so there's no visual clash.
+        const FIF_FIND_ALL_Y: i32 = FIND_NEXT_Y;
+        const FIF_REPLACE_IN_FILES_Y: i32 = COUNT_Y;
         // Status bar runs the full client width along the very
         // bottom of the dialog; the Close button sits one row
         // above it. The status STATIC's slightly-darker fill
@@ -3847,14 +4007,24 @@ fn show_find_replace_dialog(
             None,
         )
         .ok()?;
-        // Insert two tab items.
+        // Insert three tab items: Find / Replace / Find in Files.
+        // The order matters for the TCN_SELCHANGE → enum mapping
+        // and for the `idx` returned by `TCM_GETCURSEL`.
         let mut find_label_buf: Vec<u16> =
             "Find".encode_utf16().chain(std::iter::once(0)).collect();
         let mut replace_label_buf: Vec<u16> =
             "Replace".encode_utf16().chain(std::iter::once(0)).collect();
-        for (idx, label_buf) in [&mut find_label_buf, &mut replace_label_buf]
-            .into_iter()
-            .enumerate()
+        let mut fif_label_buf: Vec<u16> = "Find in Files"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        for (idx, label_buf) in [
+            &mut find_label_buf,
+            &mut replace_label_buf,
+            &mut fif_label_buf,
+        ]
+        .into_iter()
+        .enumerate()
         {
             let item = TCITEMW {
                 mask: TCIF_TEXT,
@@ -4185,6 +4355,148 @@ fn show_find_replace_dialog(
             None,
         )
         .ok()?;
+        // FIF tab controls (m4 step 4a). All created hidden — the
+        // initial `apply_tab_visibility` call after the state's
+        // `controls_ready = true` flips on whichever subset matches
+        // `initial_tab`. Filters + Directory are COMBOBOX so the
+        // dropdown history pattern (m3b2c) can extend naturally
+        // when step 4b adds FIF query history.
+        let fif_filters_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Filters:"),
+            WS_CHILD,
+            X_PAD,
+            FIF_FILTERS_Y + 4,
+            FIND_LABEL_W - 4,
+            CHECKBOX_H,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let fif_filters_edit = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            WC_COMBOBOX,
+            PCWSTR::null(),
+            WS_CHILD | WS_TABSTOP | WS_VSCROLL | style_bits(CBS_DROPDOWN | CBS_AUTOHSCROLL),
+            EDIT_X,
+            FIF_FILTERS_Y,
+            EDIT_W,
+            120,
+            Some(dlg),
+            Some(HMENU(IDC_FR_FIF_FILTERS as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let fif_directory_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Directory:"),
+            WS_CHILD,
+            X_PAD,
+            FIF_DIRECTORY_Y + 4,
+            FIND_LABEL_W - 4,
+            CHECKBOX_H,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let fif_directory_edit = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            WC_COMBOBOX,
+            PCWSTR::null(),
+            WS_CHILD | WS_TABSTOP | WS_VSCROLL | style_bits(CBS_DROPDOWN | CBS_AUTOHSCROLL),
+            EDIT_X,
+            FIF_DIRECTORY_Y,
+            EDIT_W - FIF_BROWSE_W - FIF_BROWSE_GAP,
+            120,
+            Some(dlg),
+            Some(HMENU(IDC_FR_FIF_DIRECTORY as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let fif_browse_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("..."),
+            WS_CHILD | WS_TABSTOP | style_bits(BS_PUSHBUTTON),
+            EDIT_X + EDIT_W - FIF_BROWSE_W,
+            FIF_DIRECTORY_Y,
+            FIF_BROWSE_W,
+            CHECKBOX_H + 2,
+            Some(dlg),
+            Some(HMENU(IDC_FR_FIF_BROWSE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let fif_subfolders_cb = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("In all sub-folders"),
+            WS_CHILD | WS_TABSTOP | style_bits(BS_AUTOCHECKBOX),
+            FIF_RIGHT_CB_X,
+            CHECKBOX_TOP,
+            CHECKBOX_W,
+            CHECKBOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_FIF_SUBFOLDERS as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let fif_hidden_folders_cb = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("In hidden folders"),
+            WS_CHILD | WS_TABSTOP | style_bits(BS_AUTOCHECKBOX),
+            FIF_RIGHT_CB_X,
+            CHECKBOX_TOP + FR_CHECKBOX_GAP,
+            CHECKBOX_W,
+            CHECKBOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_FIF_HIDDEN_FOLDERS as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let fif_find_all_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Find &All"),
+            WS_CHILD | WS_TABSTOP | style_bits(BS_DEFPUSHBUTTON),
+            BTN_X,
+            FIF_FIND_ALL_Y,
+            BTN_W,
+            BTN_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_FIF_FIND_ALL as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let fif_replace_in_files_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Replace in &Files"),
+            WS_CHILD | WS_TABSTOP | style_bits(BS_PUSHBUTTON),
+            BTN_X,
+            FIF_REPLACE_IN_FILES_Y,
+            BTN_W,
+            BTN_H,
+            Some(dlg),
+            Some(HMENU(IDC_FR_FIF_REPLACE_IN_FILES as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
         let close_btn = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("BUTTON"),
@@ -4248,6 +4560,15 @@ fn show_find_replace_dialog(
             replace_all_btn,
             close_btn,
             status_label,
+            fif_filters_label,
+            fif_filters_edit,
+            fif_directory_label,
+            fif_directory_edit,
+            fif_browse_btn,
+            fif_subfolders_cb,
+            fif_hidden_folders_cb,
+            fif_find_all_btn,
+            fif_replace_in_files_btn,
         ] {
             apply_dialog_font(child, font);
         }
@@ -4285,12 +4606,32 @@ fn show_find_replace_dialog(
         state.replace_btn = replace_btn;
         state.replace_all_btn = replace_all_btn;
         state.close_btn = close_btn;
+        state.fif_filters_label = fif_filters_label;
+        state.fif_filters_edit = fif_filters_edit;
+        state.fif_directory_label = fif_directory_label;
+        state.fif_directory_edit = fif_directory_edit;
+        state.fif_browse_btn = fif_browse_btn;
+        state.fif_subfolders_cb = fif_subfolders_cb;
+        state.fif_hidden_folders_cb = fif_hidden_folders_cb;
+        state.fif_find_all_btn = fif_find_all_btn;
+        state.fif_replace_in_files_btn = fif_replace_in_files_btn;
         state.status_label = status_label;
+
+        // Step 4a ships the FIF tab layout; the action buttons stay
+        // disabled until step 4b wires `Shell::start_fif`,
+        // replace-on-match, and the IFileDialog directory picker.
+        // Greying them is honest about the capability — clicking
+        // would otherwise trace-log silently and confuse users.
+        let _ = EnableWindow(fif_find_all_btn, false);
+        let _ = EnableWindow(fif_replace_in_files_btn, false);
+        let _ = EnableWindow(fif_browse_btn, false);
+
         state.controls_ready = true;
 
         let idx = match initial_tab {
             FindReplaceTab::Find => 0,
             FindReplaceTab::Replace => 1,
+            FindReplaceTab::FindInFiles => 2,
         };
         SendMessageW(tab_ctrl, TCM_SETCURSEL, Some(WPARAM(idx as usize)), None);
         apply_tab_visibility(&state);
@@ -5396,11 +5737,11 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // (via ShowWindow(SW_HIDE) on Close) afterwards
                     // so the typed query and flag state survive
                     // across open/close cycles.
-                    ID_SEARCH_FIND | ID_SEARCH_REPLACE => {
-                        let initial_tab = if cmd_u16 == ID_SEARCH_REPLACE {
-                            FindReplaceTab::Replace
-                        } else {
-                            FindReplaceTab::Find
+                    ID_SEARCH_FIND | ID_SEARCH_REPLACE | ID_SEARCH_FINDINFILES => {
+                        let initial_tab = match cmd_u16 {
+                            ID_SEARCH_REPLACE => FindReplaceTab::Replace,
+                            ID_SEARCH_FINDINFILES => FindReplaceTab::FindInFiles,
+                            _ => FindReplaceTab::Find,
                         };
                         let existing = state_from_hwnd(hwnd).and_then(|s| s.find_replace_dlg);
                         if let Some(dlg) = show_find_replace_dialog(hwnd, existing, initial_tab) {
@@ -5423,16 +5764,6 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             let (shell, mut ui) = state.split();
                             let _ = shell.find_prev_repeat(&mut ui);
                         }
-                    }
-                    ID_SEARCH_FINDINFILES => {
-                        // Wired in m4 step 4 once the FIF tab in the
-                        // Find/Replace dialog exists. The menu item
-                        // is `MF_GRAYED` until then so this branch
-                        // is unreachable at runtime.
-                        tracing::trace!(
-                            cmd = cmd_u16,
-                            "find-in-files command awaiting m4 step 4 wiring",
-                        );
                     }
                     _ => {
                         // Dynamic-range commands (Language menu,
