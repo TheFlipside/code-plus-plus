@@ -4,17 +4,110 @@
 //!   `setInfo`, `getName`, `getFuncsArray`, `beNotified`,
 //!   `messageProc`, `isUnicode`.
 //!
-//! Phase 4 m7 scaffolding: two menu items wired to no-op placeholders.
-//! The real HTML export (per-character `SCI_GETSTYLEAT` walk +
-//! `SCI_STYLEGET*` color lookup + `<span style="...">` emission +
-//! `GetSaveFileNameW` for the output path) lands in the follow-up
-//! commit.
+//! Two menu items, both turning the active buffer into HTML that
+//! preserves the active lexer's styling:
+//!   * **Export to HTML...** — `GetSaveFileNameW` for the destination
+//!     path, then write the HTML there.
+//!   * **Copy HTML to Clipboard** — same HTML, but to `CF_UNICODETEXT`
+//!     on the system clipboard so the user can paste it into a
+//!     browser, an email, or a `.html` file directly.
+//!
+//! Style extraction is straightforward but per-character: walk the
+//! buffer with `SCI_GETSTYLEAT(pos)`, collapse adjacent same-style
+//! runs, then query `SCI_STYLEGET{FORE,BACK,BOLD,ITALIC,SIZE,FONT}`
+//! for each unique style. The output uses class-based CSS so a
+//! 5000-line file with 8 active styles emits 8 CSS rules and one
+//! `<span>` per run, not one per character.
 
 #![cfg(target_os = "windows")]
 
 use core::cell::UnsafeCell;
+use core::ffi::c_void;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use codepp_plugin_host::ffi::{FuncItem, NppData, SCNotification, MENU_TITLE_LENGTH};
+
+type Hwnd = *mut c_void;
+
+#[link(name = "user32")]
+extern "system" {
+    fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
+    fn OpenClipboard(hwnd: Hwnd) -> i32;
+    fn CloseClipboard() -> i32;
+    fn EmptyClipboard() -> i32;
+    fn SetClipboardData(format: u32, hmem: *mut c_void) -> *mut c_void;
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn GlobalAlloc(flags: u32, bytes: usize) -> *mut c_void;
+    fn GlobalLock(hmem: *mut c_void) -> *mut c_void;
+    fn GlobalUnlock(hmem: *mut c_void) -> i32;
+    fn GlobalFree(hmem: *mut c_void) -> *mut c_void;
+}
+
+#[link(name = "comdlg32")]
+extern "system" {
+    fn GetSaveFileNameW(ofn: *mut OpenFileName) -> i32;
+}
+
+const NPPMSG: u32 = 0x0400 + 1000;
+const NPPM_GETCURRENTSCINTILLA: u32 = NPPMSG + 4;
+const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
+const STATUSBAR_DOC_TYPE: usize = 0;
+
+const SCI_GETLENGTH: u32 = 2006;
+const SCI_GETTEXT: u32 = 2182;
+const SCI_GETSTYLEAT: u32 = 2010;
+const SCI_STYLEGETFORE: u32 = 2481;
+const SCI_STYLEGETBACK: u32 = 2482;
+const SCI_STYLEGETBOLD: u32 = 2483;
+const SCI_STYLEGETITALIC: u32 = 2484;
+const SCI_STYLEGETSIZE: u32 = 2485;
+const SCI_STYLEGETFONT: u32 = 2486;
+const STYLE_DEFAULT: u32 = 32;
+
+// Win32 clipboard / global-memory constants.
+const CF_UNICODETEXT: u32 = 13;
+const GMEM_MOVEABLE: u32 = 0x0002;
+
+// Win32 OPENFILENAMEW flags.
+const OFN_OVERWRITEPROMPT: u32 = 0x0000_0002;
+const OFN_HIDEREADONLY: u32 = 0x0000_0004;
+const OFN_PATHMUSTEXIST: u32 = 0x0000_0800;
+const OFN_EXPLORER: u32 = 0x0008_0000;
+const MAX_PATH: usize = 260;
+
+#[repr(C)]
+struct OpenFileName {
+    l_struct_size: u32,
+    hwnd_owner: Hwnd,
+    h_instance: Hwnd,
+    lp_str_filter: *const u16,
+    lp_str_custom_filter: *mut u16,
+    n_max_cust_filter: u32,
+    n_filter_index: u32,
+    lp_str_file: *mut u16,
+    n_max_file: u32,
+    lp_str_file_title: *mut u16,
+    n_max_file_title: u32,
+    lp_str_initial_dir: *const u16,
+    lp_str_title: *const u16,
+    flags: u32,
+    n_file_offset: u16,
+    n_file_extension: u16,
+    lp_str_def_ext: *const u16,
+    l_cust_data: isize,
+    lpfn_hook: *mut c_void,
+    lp_template_name: *const u16,
+    pv_reserved: *mut c_void,
+    dw_reserved: u32,
+    flags_ex: u32,
+}
+
+static NPP_HANDLE: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+static SCINTILLA_MAIN: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+static SCINTILLA_SECONDARY: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
 
 const PLUGIN_NAME: [u16; 7] = make_plugin_name();
 
@@ -70,10 +163,10 @@ static FUNCS: SyncCell<[FuncItem; 2]> = SyncCell::new([
 ]);
 
 #[no_mangle]
-pub extern "C" fn setInfo(_data: NppData) {
-    // Scaffold: callbacks are no-ops, so the handle snapshot isn't
-    // needed yet. The follow-up commit re-introduces atomic-pointer
-    // storage of the three handles when the real callbacks land.
+pub extern "C" fn setInfo(data: NppData) {
+    NPP_HANDLE.store(data.npp_handle, Ordering::Release);
+    SCINTILLA_MAIN.store(data.scintilla_main_handle, Ordering::Release);
+    SCINTILLA_SECONDARY.store(data.scintilla_second_handle, Ordering::Release);
 }
 
 #[no_mangle]
@@ -104,5 +197,824 @@ pub extern "C" fn isUnicode() -> i32 {
     1
 }
 
-extern "C" fn cmd_export_html() {}
-extern "C" fn cmd_copy_html() {}
+// ---- Scintilla helpers (same shape as cppconverter / cppmimetools) ----
+
+fn active_scintilla() -> Hwnd {
+    let npp = NPP_HANDLE.load(Ordering::Acquire);
+    if npp.is_null() {
+        return core::ptr::null_mut();
+    }
+    let mut which: i32 = 0;
+    // SAFETY: `&mut which` is a valid `int*` for the SendMessage call.
+    unsafe {
+        SendMessageW(
+            npp,
+            NPPM_GETCURRENTSCINTILLA,
+            0,
+            &mut which as *mut i32 as isize,
+        );
+    }
+    if which == 0 {
+        SCINTILLA_MAIN.load(Ordering::Acquire)
+    } else {
+        SCINTILLA_SECONDARY.load(Ordering::Acquire)
+    }
+}
+
+/// Read the entire active buffer as raw UTF-8 bytes.
+///
+/// `SCI_GETTEXT` writes `length + 1` bytes (content plus NUL) into
+/// the supplied buffer when called with a length argument. We allocate
+/// `len + 1` and truncate the trailing NUL afterward. Hardened with
+/// `usize::try_from` + `checked_add` against pathological sizes (same
+/// pattern as cppconverter's `get_selection_bytes`).
+fn get_buffer_bytes(sci: Hwnd) -> Vec<u8> {
+    if sci.is_null() {
+        return Vec::new();
+    }
+    // SAFETY: SCI_GETLENGTH takes no pointer; pure query.
+    let len = unsafe { SendMessageW(sci, SCI_GETLENGTH, 0, 0) };
+    if len <= 0 {
+        return Vec::new();
+    }
+    let len_us = match usize::try_from(len) {
+        Ok(n) => n,
+        Err(_) => return Vec::new(),
+    };
+    let alloc = match len_us.checked_add(1) {
+        Some(n) => n,
+        None => return Vec::new(),
+    };
+    let mut buf = vec![0u8; alloc];
+    // SAFETY: `SCI_GETTEXT(length, *char)` reads `length` from wparam
+    // (which we pass as `alloc`, so Scintilla writes at most `alloc`
+    // bytes — content + NUL terminator) and writes through `lparam`
+    // for the duration of the call.
+    unsafe {
+        SendMessageW(sci, SCI_GETTEXT, alloc, buf.as_mut_ptr() as isize);
+    }
+    buf.truncate(len_us);
+    buf
+}
+
+/// For each byte in the buffer, ask Scintilla for its style index
+/// via `SCI_GETSTYLEAT(pos)`. One round-trip per byte — fine for
+/// modest buffers; a larger document benefits from `SCI_GETSTYLEDTEXT`
+/// which returns interleaved text/style bytes in one call. Deferred
+/// until a perf gripe surfaces.
+fn collect_style_bytes(sci: Hwnd, len: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(len);
+    for pos in 0..len {
+        // SAFETY: SCI_GETSTYLEAT takes wparam=pos as a position; no
+        // pointer arguments. The return is a style byte (truncated
+        // from the LRESULT to u8 by the cast).
+        let style = unsafe { SendMessageW(sci, SCI_GETSTYLEAT, pos, 0) };
+        out.push(style as u8);
+    }
+    out
+}
+
+/// Pull the per-style attributes (foreground / background / bold /
+/// italic / size / font) Scintilla needs to render a span. Result is
+/// the snapshot at the time of the call; a re-styling that happens
+/// during export would not be reflected, but export runs on the UI
+/// thread synchronously so re-styling can't happen mid-export.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StyleAttrs {
+    fore_rgb: u32,
+    back_rgb: u32,
+    bold: bool,
+    italic: bool,
+    size_pts: i32,
+    font_name: String,
+}
+
+fn query_style_attrs(sci: Hwnd, style: u8) -> StyleAttrs {
+    // SAFETY: SCI_STYLEGET* take wparam=style; no pointer arguments.
+    // Return values are RGB (0x00BBGGRR) or boolean (0/1) or pt size.
+    let style = style as usize;
+    let fore_rgb = unsafe { SendMessageW(sci, SCI_STYLEGETFORE, style, 0) } as u32;
+    let back_rgb = unsafe { SendMessageW(sci, SCI_STYLEGETBACK, style, 0) } as u32;
+    let bold = unsafe { SendMessageW(sci, SCI_STYLEGETBOLD, style, 0) } != 0;
+    let italic = unsafe { SendMessageW(sci, SCI_STYLEGETITALIC, style, 0) } != 0;
+    let size_pts = unsafe { SendMessageW(sci, SCI_STYLEGETSIZE, style, 0) } as i32;
+    let font_name = query_style_font(sci, style);
+    StyleAttrs {
+        fore_rgb,
+        back_rgb,
+        bold,
+        italic,
+        size_pts,
+        font_name,
+    }
+}
+
+/// `SCI_STYLEGETFONT(style, char *font)` writes a NUL-terminated
+/// ASCII (or UTF-8) font name. Two-phase like SCI_GETSELTEXT: pass
+/// null first to get length, then alloc and call again. Empty name
+/// (Scintilla returns 0) means "use the default font" — we surface
+/// the empty string and the consumer falls back to the body's CSS.
+fn query_style_font(sci: Hwnd, style: usize) -> String {
+    // SAFETY: passing wparam=style, lparam=0 asks for the length only;
+    // Scintilla writes nothing through any pointer.
+    let len = unsafe { SendMessageW(sci, SCI_STYLEGETFONT, style, 0) };
+    if len <= 0 {
+        return String::new();
+    }
+    let len_us = match usize::try_from(len) {
+        Ok(n) => n,
+        Err(_) => return String::new(),
+    };
+    let alloc = match len_us.checked_add(1) {
+        Some(n) => n,
+        None => return String::new(),
+    };
+    let mut buf = vec![0u8; alloc];
+    // SAFETY: `buf.as_mut_ptr()` is valid for `alloc` bytes; Scintilla
+    // writes the font name plus NUL terminator there.
+    unsafe {
+        SendMessageW(sci, SCI_STYLEGETFONT, style, buf.as_mut_ptr() as isize);
+    }
+    buf.truncate(len_us);
+    String::from_utf8(buf).unwrap_or_default()
+}
+
+// ---- HTML construction (pure-Rust core, fully testable) ----
+
+/// One contiguous run of identically-styled bytes from the buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StyleRun {
+    style: u8,
+    bytes: Vec<u8>,
+}
+
+/// Group a `(text_bytes, style_bytes)` pair into runs — adjacent
+/// positions with the same style index collapse into a single
+/// `StyleRun`. Returns an empty vec for empty input.
+fn group_runs(text: &[u8], styles: &[u8]) -> Vec<StyleRun> {
+    let n = text.len().min(styles.len());
+    let mut runs = Vec::new();
+    if n == 0 {
+        return runs;
+    }
+    let mut start = 0;
+    for i in 1..n {
+        if styles[i] != styles[start] {
+            runs.push(StyleRun {
+                style: styles[start],
+                bytes: text[start..i].to_vec(),
+            });
+            start = i;
+        }
+    }
+    runs.push(StyleRun {
+        style: styles[start],
+        bytes: text[start..n].to_vec(),
+    });
+    runs
+}
+
+/// Escape one byte sequence (interpreted as UTF-8 with lossy
+/// fallback on invalid sequences) into HTML-safe form: `&` → `&amp;`,
+/// `<` → `&lt;`, `>` → `&gt;`, `"` → `&quot;`. Other characters pass
+/// through verbatim — the output is wrapped in `<span>` whose CSS
+/// `white-space: pre` preserves whitespace and newlines as-is.
+fn escape_html_into(out: &mut String, bytes: &[u8]) {
+    let s = String::from_utf8_lossy(bytes);
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            other => out.push(other),
+        }
+    }
+}
+
+/// Strip every character outside the conservative allowlist
+/// `[A-Za-z0-9 _-]` from a font name so an attacker-supplied value
+/// can't escape the surrounding `<style>` block by embedding
+/// `</style><script>…`. The font name flows from `SCI_STYLEGETFONT`,
+/// which any plugin (including a third-party DLL co-resident in the
+/// plugins directory) can mutate via `SCI_STYLESETFONT`. Output-side
+/// HTML escaping is insufficient because `</style>` inside a CSS
+/// string still terminates the style element. An allowlist is the
+/// only correct fix; every real-world font-family name is covered.
+fn sanitize_font_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_'))
+        .collect()
+}
+
+/// Format a Scintilla-style RGB integer (`0x00BBGGRR`) as a CSS
+/// `#RRGGBB` string. Scintilla's color order is little-endian-like
+/// (the low byte is R, then G, then B); CSS wants the canonical
+/// big-endian "RRGGBB" hex form.
+fn rgb_to_css(rgb: u32) -> String {
+    let r = rgb & 0xff;
+    let g = (rgb >> 8) & 0xff;
+    let b = (rgb >> 16) & 0xff;
+    format!("#{r:02X}{g:02X}{b:02X}")
+}
+
+/// Assemble the final HTML document.
+///
+/// Output structure: a minimal `<!DOCTYPE html>` page with a single
+/// `<style>` block containing one rule per active style and a body
+/// rule pinning `white-space: pre` (so newlines and runs of spaces
+/// from the source survive). The body itself is one `<span>` per
+/// `StyleRun`. The default style (`STYLE_DEFAULT` = 32) is folded
+/// into the body's CSS, so a run of all-default-style text emits
+/// `<span class="s32">…</span>` with the same colors the body has —
+/// slightly redundant but keeps `group_runs` simple.
+fn build_html(runs: &[StyleRun], style_attrs: &[(u8, StyleAttrs)]) -> String {
+    let default = style_attrs
+        .iter()
+        .find(|(s, _)| *s as u32 == STYLE_DEFAULT)
+        .map(|(_, a)| a.clone())
+        .unwrap_or(StyleAttrs {
+            fore_rgb: 0x00_00_00_00,
+            back_rgb: 0x00_FF_FF_FF,
+            bold: false,
+            italic: false,
+            size_pts: 11,
+            font_name: String::from("Consolas"),
+        });
+
+    let mut html =
+        String::with_capacity(1024 + runs.iter().map(|r| r.bytes.len() * 2).sum::<usize>());
+    html.push_str("<!DOCTYPE html>\n<html>\n<head>\n");
+    html.push_str("<meta charset=\"UTF-8\">\n");
+    html.push_str("<title>Exported from Code++</title>\n");
+    html.push_str("<style>\n");
+
+    // Body rule: default font / size / colors. `white-space: pre`
+    // makes spaces and newlines render literally, no `<br>`s needed.
+    html.push_str("body {\n");
+    let sanitized_font = sanitize_font_name(&default.font_name);
+    let body_font = if sanitized_font.is_empty() {
+        "monospace"
+    } else {
+        sanitized_font.as_str()
+    };
+    html.push_str(&format!("  font-family: {body_font:?}, monospace;\n"));
+    html.push_str(&format!("  font-size: {}pt;\n", default.size_pts));
+    html.push_str(&format!("  color: {};\n", rgb_to_css(default.fore_rgb)));
+    html.push_str(&format!(
+        "  background-color: {};\n",
+        rgb_to_css(default.back_rgb)
+    ));
+    html.push_str("  white-space: pre;\n");
+    html.push_str("}\n");
+
+    // Per-style rules. Skip the body-default class so our HTML
+    // doesn't duplicate the body styling; non-default styles get
+    // their own class.
+    for (style, attrs) in style_attrs {
+        if *style as u32 == STYLE_DEFAULT {
+            continue;
+        }
+        html.push_str(&format!(".s{} {{ ", style));
+        html.push_str(&format!("color: {};", rgb_to_css(attrs.fore_rgb)));
+        if attrs.back_rgb != default.back_rgb {
+            html.push_str(&format!(
+                " background-color: {};",
+                rgb_to_css(attrs.back_rgb)
+            ));
+        }
+        if attrs.bold {
+            html.push_str(" font-weight: bold;");
+        }
+        if attrs.italic {
+            html.push_str(" font-style: italic;");
+        }
+        html.push_str(" }\n");
+    }
+
+    html.push_str("</style>\n</head>\n<body>");
+
+    for run in runs {
+        if run.style as u32 == STYLE_DEFAULT {
+            // No class needed — body styling already applies. Just
+            // wrap in <span> for symmetry so a future restyling pass
+            // can target each run uniformly.
+            html.push_str("<span>");
+        } else {
+            html.push_str(&format!("<span class=\"s{}\">", run.style));
+        }
+        escape_html_into(&mut html, &run.bytes);
+        html.push_str("</span>");
+    }
+
+    html.push_str("</body>\n</html>\n");
+    html
+}
+
+/// Build the per-style attribute table for every style index that
+/// actually appears in `runs`. Each unique style index is queried
+/// exactly once.
+fn collect_style_attrs(sci: Hwnd, runs: &[StyleRun]) -> Vec<(u8, StyleAttrs)> {
+    let mut seen = std::collections::BTreeSet::new();
+    seen.insert(STYLE_DEFAULT as u8);
+    for r in runs {
+        seen.insert(r.style);
+    }
+    seen.into_iter()
+        .map(|s| (s, query_style_attrs(sci, s)))
+        .collect()
+}
+
+/// Build the HTML for the active buffer. Common path for both
+/// "Export to HTML..." and "Copy HTML to Clipboard"; returns the
+/// full document as a `String`.
+fn export_html_for_active() -> String {
+    let sci = active_scintilla();
+    if sci.is_null() {
+        return String::new();
+    }
+    let text = get_buffer_bytes(sci);
+    if text.is_empty() {
+        return String::new();
+    }
+    let styles = collect_style_bytes(sci, text.len());
+    let runs = group_runs(&text, &styles);
+    let attrs = collect_style_attrs(sci, &runs);
+    build_html(&runs, &attrs)
+}
+
+// ---- Win32 helpers (clipboard, file save dialog) ----
+
+fn set_status(text: &str) {
+    let npp = NPP_HANDLE.load(Ordering::Acquire);
+    if npp.is_null() {
+        return;
+    }
+    let wide: Vec<u16> = text.encode_utf16().chain(core::iter::once(0)).collect();
+    // SAFETY: `wide.as_ptr()` is a valid NUL-terminated UTF-16 buffer
+    // for the duration of the call. NPPM_SETSTATUSBAR's `lparam` is
+    // documented to take a `wchar_t*`.
+    unsafe {
+        SendMessageW(
+            npp,
+            NPPM_SETSTATUSBAR,
+            STATUSBAR_DOC_TYPE,
+            wide.as_ptr() as isize,
+        );
+    }
+}
+
+/// Copy `s` (a UTF-8 string) onto the Windows clipboard as
+/// `CF_UNICODETEXT`. Returns `true` on success. The clipboard takes
+/// ownership of the global memory we allocate; per the API, we must
+/// not free it ourselves once `SetClipboardData` succeeds.
+fn copy_to_clipboard(s: &str) -> bool {
+    let npp = NPP_HANDLE.load(Ordering::Acquire);
+    let wide: Vec<u16> = s.encode_utf16().chain(core::iter::once(0)).collect();
+    let bytes = wide.len() * core::mem::size_of::<u16>();
+
+    // SAFETY: GlobalAlloc / GlobalLock / SetClipboardData are
+    // documented Win32 APIs. The flow:
+    //   1. Allocate movable global memory of `bytes` bytes.
+    //   2. Lock it to get a pointer; copy our UTF-16 buffer in.
+    //   3. Unlock; the lock count must hit 0 before SetClipboardData.
+    //   4. OpenClipboard for the host's window (or 0 if unknown).
+    //   5. EmptyClipboard, SetClipboardData(CF_UNICODETEXT, hmem).
+    //   6. CloseClipboard. The clipboard now owns `hmem`; do not free.
+    // On any failure path we GlobalFree to avoid a leak.
+    //
+    // Known limitation: `EmptyClipboard` runs before `SetClipboardData`
+    // per the documented Win32 sequence (Set requires Empty first to
+    // transfer ownership). If `SetClipboardData` fails between them
+    // (rare — only on OOM or resource exhaustion), the user's previous
+    // clipboard content is lost. There's no API path to set without
+    // first emptying; this is accepted everywhere on Windows.
+    unsafe {
+        let hmem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if hmem.is_null() {
+            return false;
+        }
+        let dest = GlobalLock(hmem);
+        if dest.is_null() {
+            GlobalFree(hmem);
+            return false;
+        }
+        core::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, dest as *mut u8, bytes);
+        GlobalUnlock(hmem);
+
+        if OpenClipboard(npp) == 0 {
+            GlobalFree(hmem);
+            return false;
+        }
+        EmptyClipboard();
+        let result = SetClipboardData(CF_UNICODETEXT, hmem);
+        CloseClipboard();
+        if result.is_null() {
+            // SetClipboardData failed; clipboard didn't take ownership.
+            GlobalFree(hmem);
+            return false;
+        }
+    }
+    true
+}
+
+/// Show the standard Windows "Save As" dialog and return the chosen
+/// path on success, or `None` if the user cancelled.
+fn prompt_save_path() -> Option<String> {
+    let npp = NPP_HANDLE.load(Ordering::Acquire);
+
+    // Filter string: pairs of NUL-terminated wide strings, terminated
+    // by a double-NUL. "HTML Files (*.html)\0*.html\0All Files
+    // (*.*)\0*.*\0\0".
+    let filter: Vec<u16> = "HTML Files (*.html)\0*.html\0All Files (*.*)\0*.*\0\0"
+        .encode_utf16()
+        .collect();
+
+    let default_ext: Vec<u16> = "html\0".encode_utf16().collect();
+
+    // Path buffer: must be at least MAX_PATH wide chars and zeroed.
+    // GetSaveFileNameW writes the chosen path into it (including the
+    // appended default extension on success).
+    let mut path = vec![0u16; MAX_PATH + 1];
+
+    let mut ofn = OpenFileName {
+        l_struct_size: core::mem::size_of::<OpenFileName>() as u32,
+        hwnd_owner: npp,
+        h_instance: core::ptr::null_mut(),
+        lp_str_filter: filter.as_ptr(),
+        lp_str_custom_filter: core::ptr::null_mut(),
+        n_max_cust_filter: 0,
+        n_filter_index: 1,
+        lp_str_file: path.as_mut_ptr(),
+        n_max_file: path.len() as u32,
+        lp_str_file_title: core::ptr::null_mut(),
+        n_max_file_title: 0,
+        lp_str_initial_dir: core::ptr::null(),
+        lp_str_title: core::ptr::null(),
+        flags: OFN_OVERWRITEPROMPT | OFN_HIDEREADONLY | OFN_PATHMUSTEXIST | OFN_EXPLORER,
+        n_file_offset: 0,
+        n_file_extension: 0,
+        lp_str_def_ext: default_ext.as_ptr(),
+        l_cust_data: 0,
+        lpfn_hook: core::ptr::null_mut(),
+        lp_template_name: core::ptr::null(),
+        pv_reserved: core::ptr::null_mut(),
+        dw_reserved: 0,
+        flags_ex: 0,
+    };
+
+    // SAFETY: `&mut ofn` is a valid pointer to an `OpenFileName`
+    // struct fully initialized above. All buffers it references are
+    // owned in this scope and outlive the call. Returns 0 on
+    // user-cancel or error; non-zero on success.
+    let ok = unsafe { GetSaveFileNameW(&mut ofn) };
+    if ok == 0 {
+        return None;
+    }
+
+    // Find the NUL terminator and decode.
+    let nul = path.iter().position(|&u| u == 0).unwrap_or(path.len());
+    Some(String::from_utf16_lossy(&path[..nul]))
+}
+
+// ---- Menu callbacks ----
+
+extern "C" fn cmd_export_html() {
+    let html = export_html_for_active();
+    if html.is_empty() {
+        set_status("Export: empty buffer");
+        return;
+    }
+    let Some(path) = prompt_save_path() else {
+        // User cancelled; no status update so the previous status
+        // line stays visible (matches N++'s "silent cancel" UX).
+        return;
+    };
+    match std::fs::write(&path, &html) {
+        Ok(()) => set_status(&format!("Export: wrote {path}")),
+        Err(e) => set_status(&format!("Export failed: {e}")),
+    }
+}
+
+extern "C" fn cmd_copy_html() {
+    let html = export_html_for_active();
+    if html.is_empty() {
+        set_status("Export: empty buffer");
+        return;
+    }
+    if copy_to_clipboard(&html) {
+        set_status("Export: HTML copied to clipboard");
+    } else {
+        set_status("Export: clipboard write failed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn attrs(fore: u32, back: u32, bold: bool, italic: bool) -> StyleAttrs {
+        StyleAttrs {
+            fore_rgb: fore,
+            back_rgb: back,
+            bold,
+            italic,
+            size_pts: 11,
+            font_name: String::from("Consolas"),
+        }
+    }
+
+    #[test]
+    fn sanitize_font_name_strips_style_injection() {
+        // The injection vector: a font name containing `</style>` would
+        // close the <style> block in the HTML output and let arbitrary
+        // markup through. The sanitizer drops every `<`, `>`, `/`, `;`
+        // and other CSS-meaningful characters.
+        let evil = "</style><script>alert(1)</script><style";
+        let cleaned = sanitize_font_name(evil);
+        assert!(!cleaned.contains('<'));
+        assert!(!cleaned.contains('>'));
+        assert!(!cleaned.contains('/'));
+        // The text payload (`stylescriptalert1scriptstyle`) survives
+        // as a single safe identifier — harmless in CSS.
+    }
+
+    #[test]
+    fn sanitize_font_name_preserves_real_names() {
+        // Real font names should pass through. Spaces, hyphens, and
+        // underscores are allowed in the allowlist.
+        assert_eq!(sanitize_font_name("Consolas"), "Consolas");
+        assert_eq!(sanitize_font_name("Courier New"), "Courier New");
+        assert_eq!(sanitize_font_name("DejaVu Sans Mono"), "DejaVu Sans Mono");
+        assert_eq!(sanitize_font_name("JetBrains_Mono-NL"), "JetBrains_Mono-NL");
+    }
+
+    #[test]
+    fn build_html_does_not_emit_close_style_in_body() {
+        // End-to-end injection check: a malicious font name on the
+        // default style must NOT result in a literal `</style>` in
+        // the output BEFORE the legitimate one that closes the
+        // body's CSS block.
+        let runs = vec![StyleRun {
+            style: STYLE_DEFAULT as u8,
+            bytes: b"x".to_vec(),
+        }];
+        let mut a = attrs(0, 0x00_FF_FF_FF, false, false);
+        a.font_name = String::from("</style><script>alert(1)</script>");
+        let attrs_table = vec![(STYLE_DEFAULT as u8, a)];
+        let html = build_html(&runs, &attrs_table);
+        // There should be exactly one `</style>` (the closing tag),
+        // not two (the legitimate close + an injected one before it).
+        assert_eq!(html.matches("</style>").count(), 1);
+        // Belt and suspenders: the injection text must not appear.
+        assert!(!html.contains("<script>"));
+        assert!(!html.contains("alert(1)"));
+    }
+
+    #[test]
+    fn rgb_to_css_swaps_byte_order() {
+        // Scintilla's `0x00BBGGRR` packs R in the low byte; CSS
+        // expects "#RRGGBB". Pinning so a future RGB tweak doesn't
+        // silently flip the colors blue<->red.
+        assert_eq!(rgb_to_css(0x00_00_00_FF), "#FF0000"); // red
+        assert_eq!(rgb_to_css(0x00_00_FF_00), "#00FF00"); // green
+        assert_eq!(rgb_to_css(0x00_FF_00_00), "#0000FF"); // blue
+        assert_eq!(rgb_to_css(0x00_FF_FF_FF), "#FFFFFF");
+        assert_eq!(rgb_to_css(0x00_00_00_00), "#000000");
+    }
+
+    #[test]
+    fn group_runs_empty() {
+        assert_eq!(group_runs(b"", &[]), vec![]);
+    }
+
+    #[test]
+    fn group_runs_single_style() {
+        let text = b"hello";
+        let styles = vec![5u8; text.len()];
+        assert_eq!(
+            group_runs(text, &styles),
+            vec![StyleRun {
+                style: 5,
+                bytes: text.to_vec(),
+            }],
+        );
+    }
+
+    #[test]
+    fn group_runs_collapses_adjacent() {
+        let text = b"abcXYZdef";
+        // "abc" → style 1, "XYZ" → style 2, "def" → style 1.
+        let styles = vec![1, 1, 1, 2, 2, 2, 1, 1, 1];
+        assert_eq!(
+            group_runs(text, &styles),
+            vec![
+                StyleRun {
+                    style: 1,
+                    bytes: b"abc".to_vec()
+                },
+                StyleRun {
+                    style: 2,
+                    bytes: b"XYZ".to_vec()
+                },
+                StyleRun {
+                    style: 1,
+                    bytes: b"def".to_vec()
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn group_runs_alternating_per_byte() {
+        // Worst case for run collapse: every byte differs from its
+        // neighbour. Should produce one run per byte.
+        let text = b"abcd";
+        let styles = vec![1, 2, 3, 4];
+        let runs = group_runs(text, &styles);
+        assert_eq!(runs.len(), 4);
+        for (i, run) in runs.iter().enumerate() {
+            assert_eq!(run.style, (i + 1) as u8);
+            assert_eq!(run.bytes.len(), 1);
+            assert_eq!(run.bytes[0], text[i]);
+        }
+    }
+
+    #[test]
+    fn group_runs_single_byte() {
+        // Edge case: the loop `for i in 1..n` never executes when
+        // n == 1, so the final `runs.push` alone handles the output.
+        // Pinning so a refactor that fuses the push into the loop
+        // doesn't accidentally drop the single-byte case.
+        let runs = group_runs(b"a", &[7]);
+        assert_eq!(
+            runs,
+            vec![StyleRun {
+                style: 7,
+                bytes: b"a".to_vec(),
+            }],
+        );
+    }
+
+    #[test]
+    fn group_runs_truncates_to_min_length() {
+        // Defensive: if the styles slice is shorter than the text,
+        // we don't index past it. Production paths keep them aligned
+        // (one style per byte), but this prevents a panic if a
+        // future code path drifts.
+        let text = b"abcdef";
+        let styles = vec![1, 1, 2];
+        let runs = group_runs(text, &styles);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].bytes, b"ab");
+        assert_eq!(runs[1].bytes, b"c");
+    }
+
+    #[test]
+    fn escape_html_basic_specials() {
+        let mut s = String::new();
+        escape_html_into(&mut s, b"a & b < c > d \" e");
+        assert_eq!(s, "a &amp; b &lt; c &gt; d &quot; e");
+    }
+
+    #[test]
+    fn escape_html_passes_through_unicode() {
+        let mut s = String::new();
+        // "é" is 0xC3 0xA9 in UTF-8 — should round-trip through the
+        // utf8-lossy decode and out as the literal char.
+        escape_html_into(&mut s, &[0xC3, 0xA9]);
+        assert_eq!(s, "é");
+    }
+
+    #[test]
+    fn escape_html_lossy_on_invalid_utf8() {
+        let mut s = String::new();
+        // Lone 0xFF byte is invalid UTF-8; from_utf8_lossy substitutes
+        // the replacement character. Pin the substitution explicitly
+        // so a future swap to a non-lossy decoder becomes a deliberate
+        // decision (the panic-on-invalid alternative would crash the
+        // host on a binary file the user opened).
+        escape_html_into(&mut s, &[0xFF]);
+        assert!(s.contains('\u{FFFD}'), "lossy substitution missing: {s:?}");
+    }
+
+    #[test]
+    fn build_html_emits_doctype_meta_title() {
+        let runs = vec![StyleRun {
+            style: STYLE_DEFAULT as u8,
+            bytes: b"hello".to_vec(),
+        }];
+        let attrs = vec![(
+            STYLE_DEFAULT as u8,
+            attrs(0x00_00_00_00, 0x00_FF_FF_FF, false, false),
+        )];
+        let html = build_html(&runs, &attrs);
+        assert!(html.starts_with("<!DOCTYPE html>"));
+        assert!(html.contains("<meta charset=\"UTF-8\">"));
+        assert!(html.contains("<title>Exported from Code++</title>"));
+        assert!(html.contains("white-space: pre"));
+        assert!(html.contains("hello"));
+        assert!(html.ends_with("</body>\n</html>\n"));
+    }
+
+    #[test]
+    fn build_html_emits_per_style_class() {
+        let runs = vec![
+            StyleRun {
+                style: STYLE_DEFAULT as u8,
+                bytes: b"plain ".to_vec(),
+            },
+            StyleRun {
+                style: 5,
+                bytes: b"red".to_vec(),
+            },
+        ];
+        let attrs = vec![
+            (
+                STYLE_DEFAULT as u8,
+                attrs(0x00_00_00_00, 0x00_FF_FF_FF, false, false),
+            ),
+            (5, attrs(0x00_00_00_FF, 0x00_FF_FF_FF, true, false)),
+        ];
+        let html = build_html(&runs, &attrs);
+        // Style 5 gets a CSS class with the red color and bold.
+        assert!(html.contains(".s5 { color: #FF0000; font-weight: bold; }"));
+        // The default-style run is wrapped in a plain <span>, no class.
+        assert!(html.contains("<span>plain </span>"));
+        // The red run uses the class.
+        assert!(html.contains("<span class=\"s5\">red</span>"));
+    }
+
+    #[test]
+    fn build_html_omits_background_when_same_as_default() {
+        let runs = vec![StyleRun {
+            style: 5,
+            bytes: b"x".to_vec(),
+        }];
+        let attrs = vec![
+            (STYLE_DEFAULT as u8, attrs(0, 0x00_FF_FF_FF, false, false)),
+            // Same background as default — should not be repeated.
+            (5, attrs(0x00_00_00_FF, 0x00_FF_FF_FF, false, false)),
+        ];
+        let html = build_html(&runs, &attrs);
+        assert!(html.contains(".s5 { color: #FF0000; }"));
+        assert!(!html.contains(".s5 { color: #FF0000; background-color"));
+    }
+
+    #[test]
+    fn build_html_includes_background_when_distinct() {
+        let runs = vec![StyleRun {
+            style: 6,
+            bytes: b"y".to_vec(),
+        }];
+        let attrs = vec![
+            (STYLE_DEFAULT as u8, attrs(0, 0x00_FF_FF_FF, false, false)),
+            (6, attrs(0x00_00_00_00, 0x00_AA_BB_CC, false, false)),
+        ];
+        let html = build_html(&runs, &attrs);
+        assert!(html.contains("background-color: #CCBBAA"));
+    }
+
+    #[test]
+    fn build_html_escapes_special_characters() {
+        let runs = vec![StyleRun {
+            style: STYLE_DEFAULT as u8,
+            bytes: b"if (x < 10 && y > 0)".to_vec(),
+        }];
+        let attrs = vec![(STYLE_DEFAULT as u8, attrs(0, 0x00_FF_FF_FF, false, false))];
+        let html = build_html(&runs, &attrs);
+        assert!(html.contains("if (x &lt; 10 &amp;&amp; y &gt; 0)"));
+        assert!(!html.contains("if (x < 10"));
+    }
+
+    #[test]
+    fn build_html_preserves_newlines_via_white_space_pre() {
+        // Newlines in source code show up as literal `\n` bytes in
+        // the run text. The body's `white-space: pre` rule renders
+        // them as line breaks; we must not escape or transform them
+        // in `escape_html_into`. Pin both sides: the CSS rule is
+        // present and the literal newline survives in the output.
+        let runs = vec![StyleRun {
+            style: STYLE_DEFAULT as u8,
+            bytes: b"line1\nline2".to_vec(),
+        }];
+        let attrs = vec![(STYLE_DEFAULT as u8, attrs(0, 0x00_FF_FF_FF, false, false))];
+        let html = build_html(&runs, &attrs);
+        assert!(html.contains("white-space: pre"));
+        assert!(html.contains("line1\nline2"));
+    }
+
+    #[test]
+    fn build_html_falls_back_when_default_style_absent() {
+        // No STYLE_DEFAULT entry in the attrs table — the function
+        // should pick reasonable defaults rather than panic.
+        let runs = vec![StyleRun {
+            style: 1,
+            bytes: b"x".to_vec(),
+        }];
+        let attrs = vec![(1u8, attrs(0x00_00_00_FF, 0x00_FF_FF_FF, false, false))];
+        let html = build_html(&runs, &attrs);
+        assert!(html.contains("<!DOCTYPE html>"));
+        assert!(html.contains("Consolas") || html.contains("monospace"));
+    }
+}
