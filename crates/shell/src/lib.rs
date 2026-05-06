@@ -1243,6 +1243,46 @@ impl Shell {
         Ok(())
     }
 
+    /// Change the active tab's save-time encoding to `encoding`,
+    /// driving the Encoding menu's "Convert to ..." items.
+    ///
+    /// Code++'s Scintilla view always stores text as UTF-8 internally
+    /// (we set `SC_CP_UTF8` at create time), so an encoding change
+    /// is purely a metadata flip: the in-memory bytes don't move,
+    /// but the next [`Self::save_current_to_disk`] re-encodes through
+    /// the new variant before writing to disk. Open the file again
+    /// and `core::encoding::detect`/`decode` reads the new bytes
+    /// back into UTF-8 — round-trip-correct for any text whose
+    /// codepoints are representable in both encodings (which is
+    /// every text for the four UTF variants the Encoding menu
+    /// currently exposes).
+    ///
+    /// Returns `true` if the encoding actually changed (caller
+    /// should refresh the status bar / radio); `false` on no-op
+    /// (same encoding already, or no active tab). The no-op path is
+    /// silent — re-clicking the active radio item shouldn't poke
+    /// the title bar with a fake "modified" indicator.
+    ///
+    /// **Known limitation (deferred to a polish pass):** Scintilla's
+    /// own modify flag (driven by `SCI_GETMODIFY`) is not flipped by
+    /// this metadata-only change, so the title-bar dirty glyph won't
+    /// surface "encoding pending save". The status bar updates
+    /// (different label) and the user can still Ctrl+S to commit.
+    /// N++'s glyph behaviour here is the same.
+    pub fn set_buffer_encoding(&mut self, encoding: codepp_core::Encoding) -> bool {
+        let Some(idx) = self.active_tab else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get_mut(idx) else {
+            return false;
+        };
+        if tab.encoding == encoding {
+            return false;
+        }
+        tab.encoding = encoding;
+        true
+    }
+
     /// Search the active editor forward for `query` under `flags`
     /// and activate the match (Scintilla moves the selection to
     /// it). Returns the byte offset of the match, or `None` on
@@ -2212,6 +2252,143 @@ mod tests {
 
         let on_disk = std::fs::read_to_string(&path).unwrap();
         assert_eq!(on_disk, "edited\n");
+    }
+
+    #[test]
+    fn set_buffer_encoding_no_active_tab_returns_false() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        assert!(!shell.set_buffer_encoding(codepp_core::Encoding::Utf16LeBom));
+    }
+
+    #[test]
+    fn set_buffer_encoding_same_value_returns_false() {
+        // Re-clicking the active radio item must be a silent no-op
+        // — without the equality check, every same-encoding click
+        // would still notify-callers (notification spam, status-bar
+        // repaint flicker).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("u8.txt");
+        std::fs::write(&path, "hello\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        // Plain ASCII content detects as UTF-8 (no BOM).
+        assert_eq!(
+            shell.active().unwrap().encoding,
+            codepp_core::Encoding::Utf8
+        );
+        assert!(!shell.set_buffer_encoding(codepp_core::Encoding::Utf8));
+    }
+
+    #[test]
+    fn set_buffer_encoding_then_save_writes_new_encoding_bytes() {
+        // Phase 4 demo bullet: "Convert a UTF-8 file to UTF-16 LE
+        // and back; bytes are correct." This test pins the
+        // forward leg.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("conv.txt");
+        std::fs::write(&path, "abc\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        // Mirror the in-memory text the Scintilla buffer would
+        // hold — `FakeUi::get_buffer_text` returns this verbatim
+        // and `save_current_to_disk` re-encodes it through the
+        // tab's current encoding.
+        ui.buffer_text = "abc\n".to_string();
+        assert!(shell.set_buffer_encoding(codepp_core::Encoding::Utf16LeBom));
+        shell.save_current_to_disk(&mut ui).unwrap();
+
+        let on_disk = std::fs::read(&path).unwrap();
+        // UTF-16 LE BOM: 0xFF 0xFE then 'a'/'b'/'c'/'\n' as
+        // little-endian u16s (each high byte zero).
+        assert_eq!(
+            on_disk,
+            vec![0xFF, 0xFE, b'a', 0x00, b'b', 0x00, b'c', 0x00, b'\n', 0x00]
+        );
+    }
+
+    #[test]
+    fn set_buffer_encoding_round_trip_to_utf16_and_back() {
+        // The full round-trip the Phase 4 demo describes: open a
+        // UTF-8 file, convert to UTF-16 LE BOM, save, reopen,
+        // convert back to UTF-8, save, and compare the final
+        // bytes against the original. The text content survives
+        // both legs because every codepoint is representable in
+        // both encodings.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trip.txt");
+        let original_bytes = b"hello world\n".to_vec();
+        std::fs::write(&path, &original_bytes).unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+        ui.buffer_text = "hello world\n".to_string();
+
+        // Forward: UTF-8 -> UTF-16 LE BOM.
+        assert!(shell.set_buffer_encoding(codepp_core::Encoding::Utf16LeBom));
+        shell.save_current_to_disk(&mut ui).unwrap();
+        let utf16_bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&utf16_bytes[..2], b"\xFF\xFE", "BOM should be present");
+
+        // Re-open the file to round-trip the bytes through
+        // detection + decode. After this pass the active tab
+        // sees the saved encoding (Utf16LeBom) and the same text.
+        // `close_active_tab` is synchronous (data-model only); no
+        // intermediate drain needed before the re-open. Capture
+        // the baseline `set_text_calls` count and wait for *one
+        // more* to land — `>= 2` would be satisfied prematurely
+        // if the first open's load happened to push more than
+        // one chunk.
+        let baseline = ui.set_text_calls.len();
+        shell.close_active_tab();
+        shell.open_file(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() > baseline,
+            Duration::from_secs(2),
+        );
+        assert_eq!(
+            shell.active().unwrap().encoding,
+            codepp_core::Encoding::Utf16LeBom,
+        );
+
+        // Back: UTF-16 LE BOM -> UTF-8 (no BOM). After save, the
+        // on-disk bytes match the original UTF-8 input
+        // byte-for-byte.
+        ui.buffer_text = "hello world\n".to_string();
+        assert!(shell.set_buffer_encoding(codepp_core::Encoding::Utf8));
+        shell.save_current_to_disk(&mut ui).unwrap();
+        let final_bytes = std::fs::read(&path).unwrap();
+        assert_eq!(final_bytes, original_bytes);
     }
 
     #[test]

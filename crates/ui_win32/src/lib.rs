@@ -1883,7 +1883,8 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         AppendMenuW(bar, MF_POPUP, view_menu.0 as usize, w!("&View"))?;
 
         // ----- Encoding ----- (radio refreshed in WM_INITMENUPOPUP;
-        // conversions wired in m5, grayed for now.)
+        // ANSI grayed pending the system-codepage detection path —
+        // see the WM_COMMAND handler comment for the deferral.)
         let encoding_menu = CreateMenu()?;
         AppendMenuW(
             encoding_menu,
@@ -1893,25 +1894,25 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         )?;
         AppendMenuW(
             encoding_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_ENCODING_UTF8 as usize,
             w!("UTF-&8 (no BOM)"),
         )?;
         AppendMenuW(
             encoding_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_ENCODING_UTF8_BOM as usize,
             w!("UTF-8 with &BOM"),
         )?;
         AppendMenuW(
             encoding_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_ENCODING_UTF16_LE as usize,
             w!("UTF-16 &LE BOM"),
         )?;
         AppendMenuW(
             encoding_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_ENCODING_UTF16_BE as usize,
             w!("UTF-16 B&E BOM"),
         )?;
@@ -2099,8 +2100,15 @@ unsafe fn refresh_encoding_menu(encoding_menu: HMENU, encoding: &Encoding) {
         "ANSI" => Some(ID_ENCODING_ANSI),
         "UTF-8" => Some(ID_ENCODING_UTF8),
         "UTF-8 BOM" => Some(ID_ENCODING_UTF8_BOM),
-        "UTF-16 LE" => Some(ID_ENCODING_UTF16_LE),
-        "UTF-16 BE" => Some(ID_ENCODING_UTF16_BE),
+        // The Encoding menu's "UTF-16 LE/BE BOM" items map to
+        // `Utf16LeBom` / `Utf16BeBom` (the BOM variants are the
+        // canonical save targets — the no-BOM variants are
+        // detection-only). Both label strings — with and without
+        // the trailing " BOM" — point at the same radio item so
+        // a heuristic-detected no-BOM file still highlights the
+        // matching menu entry.
+        "UTF-16 LE" | "UTF-16 LE BOM" => Some(ID_ENCODING_UTF16_LE),
+        "UTF-16 BE" | "UTF-16 BE BOM" => Some(ID_ENCODING_UTF16_BE),
         _ => None,
     };
     if let Some(id) = target {
@@ -7294,6 +7302,56 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     ID_VIEW_ZOOMRESET => {
                         if let Some(state) = state_from_hwnd(hwnd) {
                             state.editor.send(SCI_SETZOOM, 0, 0);
+                        }
+                    }
+                    // Encoding menu (m5): "Convert to ..." items.
+                    // Code++'s Scintilla view always holds UTF-8
+                    // internally — the conversion is purely a
+                    // metadata flip on `tab.encoding`. The next
+                    // Save re-encodes through the chosen variant;
+                    // the round-trip back to UTF-8 on reopen is
+                    // bytes-correct for every codepoint
+                    // representable in both encodings (which is
+                    // every text for the four UTF variants).
+                    //
+                    // ANSI is grayed today: it would need
+                    // GetACP-driven system-codepage detection plus
+                    // a save-time error path for unrepresentable
+                    // characters. Tracked as a follow-up.
+                    ID_ENCODING_UTF8 | ID_ENCODING_UTF8_BOM | ID_ENCODING_UTF16_LE
+                    | ID_ENCODING_UTF16_BE => {
+                        let target = match cmd_u16 {
+                            ID_ENCODING_UTF8 => Encoding::Utf8,
+                            ID_ENCODING_UTF8_BOM => Encoding::Utf8Bom,
+                            ID_ENCODING_UTF16_LE => Encoding::Utf16LeBom,
+                            ID_ENCODING_UTF16_BE => Encoding::Utf16BeBom,
+                            _ => unreachable!("outer match guarantees one of the four"),
+                        };
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            if state.shell.set_buffer_encoding(target) {
+                                // Refresh the status bar so the
+                                // encoding label reflects the
+                                // change immediately. byte_len is
+                                // the on-disk byte count — kept
+                                // from the tab snapshot since the
+                                // in-memory text didn't change.
+                                let snapshot = state
+                                    .shell
+                                    .active()
+                                    .map(|t| (t.encoding.clone(), t.eol, t.byte_len));
+                                if let Some((encoding, eol, byte_len)) = snapshot {
+                                    let mut win32_ui = Win32Ui {
+                                        status_hwnd: state.status_hwnd,
+                                        editor: state.editor,
+                                    };
+                                    <Win32Ui as UiPlatform>::update_status(
+                                        &mut win32_ui,
+                                        &encoding,
+                                        eol,
+                                        byte_len,
+                                    );
+                                }
+                            }
                         }
                     }
                     // Help → About: simple MessageBox with version

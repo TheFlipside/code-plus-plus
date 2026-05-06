@@ -244,7 +244,20 @@ pub fn encode(text: &str, encoding: &Encoding) -> Result<Vec<u8>, EncodingError>
 /// big-endian otherwise; prepends the matching BOM when `with_bom`.
 fn encode_utf16(text: &str, le: bool, with_bom: bool) -> Vec<u8> {
     let units: Vec<u16> = text.encode_utf16().collect();
-    let mut out = Vec::with_capacity(units.len() * 2 + if with_bom { 2 } else { 0 });
+    // Pre-size with checked arithmetic. A wrapping `units.len() * 2`
+    // followed by a short allocation would invite a heap-overflow on
+    // any future 32-bit port (~2 GB of text overflows `usize::MAX`
+    // there); on 64-bit the bound is unreachable in practice but the
+    // checked variant is free to write. On overflow we fall back to
+    // a zero-capacity Vec — `extend_from_slice` will then grow the
+    // allocation normally and the OOM (if any) surfaces in the
+    // allocator, not as silent corruption.
+    let cap = units
+        .len()
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(if with_bom { 2 } else { 0 }))
+        .unwrap_or(0);
+    let mut out = Vec::with_capacity(cap);
     if with_bom {
         out.extend_from_slice(if le { b"\xFF\xFE" } else { b"\xFE\xFF" });
     }
