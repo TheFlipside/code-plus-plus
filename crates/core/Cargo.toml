@@ -20,7 +20,9 @@ name = "codepp_core"
 [dependencies]
 crossbeam-channel = { workspace = true }
 encoding_rs       = { workspace = true }
+globset           = { workspace = true }
 quick-xml         = { workspace = true }
+regex             = { workspace = true }
 serde             = { workspace = true }
 # tempfile is a runtime dep (used by session::save_to_xml's atomic write)
 # *and* a test fixture, so it's not [dev-dependencies] only.

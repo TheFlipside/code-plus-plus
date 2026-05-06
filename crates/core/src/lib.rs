@@ -6,6 +6,7 @@
 
 pub mod encoding;
 pub mod eol;
+pub mod fif;
 pub mod file;
 pub mod find_history;
 pub mod lang;
@@ -13,6 +14,10 @@ pub mod session;
 
 pub use encoding::{Encoding, EncodingError};
 pub use eol::Eol;
+pub use fif::{
+    FifMatch, FifQuery, FifQueryError, FifQueryOpts, FifWalkOpts, FifWalkOptsError,
+    FileSearchOutcome,
+};
 pub use file::{
     LoadError, LoadErrorKind, LoadResult, LoadedFile, Loader, LoaderShutdown, RequestId,
 };
