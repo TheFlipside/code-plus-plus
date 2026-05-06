@@ -334,14 +334,19 @@ struct FifPendingFile {
     truncated: bool,
 }
 
-/// Mapping from a listview row index back to a source path. The
-/// `NM_DBLCLK` handler uses this to open the file. The matched
-/// line/column already live in `FifPendingFile.matches`; the m4
-/// polish caret-jump will reintroduce them on this struct when it
-/// wires post-load navigation through Scintilla.
+/// Mapping from a listview row index back to a source location.
+/// The `NM_DBLCLK` handler queues an open + a post-load caret jump
+/// to the matched span. Line is 1-based as the search engine
+/// reports it; cols are UTF-8 byte offsets within the line, which
+/// is what Scintilla's position arithmetic expects. Selecting the
+/// span (rather than just placing the caret) makes the match
+/// instantly visible without further user interaction.
 #[derive(Clone)]
 struct FifListviewRow {
     path: PathBuf,
+    line_no: u32,
+    col_start: u32,
+    col_end: u32,
 }
 
 /// Drag-tracking state captured on `WM_LBUTTONDOWN` over the FIF
@@ -454,6 +459,13 @@ struct WindowState {
     /// resolve the clicked row index back to a file path + line
     /// number. Index here matches the listview row index 1:1.
     fif_listview_index: Vec<FifListviewRow>,
+    /// Caret jumps queued by `NM_DBLCLK` and applied after the
+    /// matching file's load completes. Each entry carries the same
+    /// (path, line, col) data as a [`FifListviewRow`] — reusing
+    /// the struct keeps the dblclk handler free of conversion
+    /// noise. The drain applies the jump as a `SCI_SETSEL` so the
+    /// matched span is selected (and scrolled into view).
+    fif_pending_jumps: Vec<FifListviewRow>,
     editor: EditorHandle,
     shell: Shell,
 }
@@ -977,11 +989,38 @@ fn apply_default_styles(editor: &EditorHandle) {
 /// If those land later, swap to `SCI_VISIBLEFROMDOCLINE` for the
 /// match-line conversion.
 fn center_caret_if_offscreen(editor: &EditorHandle) {
+    center_caret_impl(editor, false);
+}
+
+/// Unconditionally center the caret line in the viewport.
+///
+/// Use this after Scintilla messages that auto-scroll (`SCI_SETSEL`,
+/// `SCI_SETSELECTIONSTART/END`, `SCI_GOTOPOS`), where
+/// [`center_caret_if_offscreen`] would short-circuit because the
+/// preceding command already pulled the line on-screen at the
+/// nearest edge. Find Next uses `SCI_SEARCHNEXT` which doesn't
+/// scroll, so its centring helper can rely on the offscreen check;
+/// the FIF "open at result" jump uses `SCI_SETSEL` and needs the
+/// re-scroll to land the match in the middle of the editor — even
+/// more important when the bottom dock is showing and the editor's
+/// usable height is reduced.
+fn center_caret(editor: &EditorHandle) {
+    center_caret_impl(editor, true);
+}
+
+/// Shared centring math. With `force = false` we early-return if
+/// the caret line is already on-screen (Find Next behaviour: don't
+/// jump the viewport on every successful match); with `force = true`
+/// we always re-scroll (FIF dblclk behaviour: SCI_SETSEL has just
+/// pulled the line edge-visible, so "already on-screen" means "at
+/// the bottom edge under the dock" — which is what we're trying to
+/// avoid).
+fn center_caret_impl(editor: &EditorHandle, force: bool) {
     let pos = editor.send(SCI_GETCURRENTPOS, 0, 0).max(0) as usize;
     let line = editor.send(SCI_LINEFROMPOSITION, pos, 0).max(0);
     let first = editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0).max(0);
     let lines = editor.send(SCI_LINESONSCREEN, 0, 0).max(1);
-    if line >= first && line < first + lines {
+    if !force && line >= first && line < first + lines {
         return;
     }
     let target_first = (line - lines / 2).max(0);
@@ -3168,12 +3207,9 @@ extern "system" fn find_replace_wnd_proc(
                         }
                         LRESULT(0)
                     }
-                    // Replace in Files ships in a follow-up — the
-                    // search half is identical to Find All; the
-                    // per-match replace step is the new piece.
                     IDC_FR_FIF_REPLACE_IN_FILES => {
                         if notif == BN_CLICKED {
-                            tracing::trace!(cmd, "FIF Replace in Files awaiting wiring");
+                            handle_fif_replace_in_files(hwnd, state);
                         }
                         LRESULT(0)
                     }
@@ -3774,52 +3810,147 @@ unsafe fn handle_replace_all(state: &mut FindReplaceState) {
     }
 }
 
-/// "Find All" click handler on the FIF tab. Reads the dialog's
-/// query/directory/flag state, builds a [`codepp_shell::FifRequest`],
-/// kicks off `Shell::start_fif`, and (on success) hides the dialog
-/// and shows the modeless progress window.
-unsafe fn handle_fif_find_all(dlg: HWND, state: &mut FindReplaceState) {
+/// Frozen snapshot of the FIF tab's input controls. Captured once
+/// before any modal pump (e.g. the Replace in Files MessageBoxW)
+/// and reused for both the confirmation prompt and the orchestrator
+/// request — guarantees the user runs exactly the search they
+/// confirmed, not whatever the controls said after the pump.
+struct FifSnapshot {
+    query: String,
+    directory: String,
+    recurse: bool,
+    match_case: bool,
+    whole_word: bool,
+    regex: bool,
+    /// `Some(s)` → Replace in Files (`s` may be empty for "delete
+    /// each match"); `None` → plain Find in Files.
+    replacement: Option<String>,
+}
+
+/// Read every FIF-tab control into a snapshot. Validates the
+/// required fields (query + directory) and surfaces an error on
+/// the dialog status row. Returns `None` on validation failure or
+/// any state-borrow problem.
+unsafe fn snapshot_fif_dialog(
+    state: &mut FindReplaceState,
+    replacement: Option<String>,
+) -> Option<FifSnapshot> {
     let query = unsafe { read_edit_text(state.find_edit) };
     if query.is_empty() {
         unsafe { set_error_status(state, "Query is empty") };
-        return;
+        return None;
     }
     let directory = unsafe { read_edit_text(state.fif_directory_edit) };
     if directory.is_empty() {
         unsafe { set_error_status(state, "Directory is empty") };
-        return;
+        return None;
     }
-    let recurse = unsafe { button_checked(state.fif_subfolders_cb) };
-    // `In hidden folders` is a future-use flag; the default exclude
-    // set already prunes `.git`/`.svn`/etc. and step 4b ships
-    // without OS-level hidden-attribute filtering. Tracked as a
-    // polish item.
-    let _hidden = unsafe { button_checked(state.fif_hidden_folders_cb) };
-
-    let mut walk_opts = codepp_core::FifWalkOpts::default();
-    walk_opts.recurse = recurse;
-
-    let query_opts = codepp_core::FifQueryOpts {
+    Some(FifSnapshot {
+        query,
+        directory,
+        recurse: unsafe { button_checked(state.fif_subfolders_cb) },
+        // `In hidden folders` is a future-use flag; the default
+        // exclude set already prunes `.git`/`.svn`/etc. and we
+        // ship without OS-level hidden-attribute filtering for
+        // now. Read it so the snapshot has all toggles even
+        // though the orchestrator ignores it.
         match_case: unsafe { button_checked(state.match_case_cb) },
         whole_word: unsafe { button_checked(state.whole_word_cb) },
         regex: unsafe { button_checked(state.mode_regex_radio) },
-    };
+        replacement,
+    })
+}
 
-    let request = codepp_shell::FifRequest {
-        query: query.clone(),
-        opts: query_opts,
-        root: PathBuf::from(&directory),
-        walk: walk_opts,
+/// "Find All" click handler on the FIF tab. Snapshots the dialog,
+/// kicks off `Shell::start_fif`, and (on success) hides the dialog
+/// and shows the modeless progress window.
+unsafe fn handle_fif_find_all(dlg: HWND, state: &mut FindReplaceState) {
+    let Some(snap) = (unsafe { snapshot_fif_dialog(state, None) }) else {
+        return;
+    };
+    unsafe { start_fif_from_snapshot(dlg, state, snap) };
+}
+
+/// "Replace in Files" click handler on the FIF tab. Same flow as
+/// Find All but routes a non-`None` replacement string into the
+/// shell so each matched file is rewritten in place. Confirms via
+/// `MessageBoxW` first because the operation is destructive — and
+/// snapshots all input controls BEFORE the modal pump so the
+/// confirmation text and the actual job parameters cannot diverge
+/// (the pump runs the dialog wndproc, which would otherwise let
+/// the user edit the controls between Yes-click and orchestrator
+/// dispatch).
+unsafe fn handle_fif_replace_in_files(dlg: HWND, state: &mut FindReplaceState) {
+    let replacement = unsafe { read_edit_text(state.replace_edit) };
+    let Some(snap) = (unsafe { snapshot_fif_dialog(state, Some(replacement)) }) else {
+        return;
+    };
+    let recurse_note = if snap.recurse {
+        " (and sub-folders)"
+    } else {
+        ""
+    };
+    let replacement_for_prompt = snap.replacement.as_deref().unwrap_or("");
+    let prompt = format!(
+        "Replace every occurrence of\n\n  {}\n\nwith\n\n  {replacement_for_prompt}\n\nin\n\n  {}{recurse_note}\n\nThis modifies files on disk. Continue?",
+        snap.query, snap.directory,
+    );
+    let mut prompt_w: Vec<u16> = prompt.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut title_w: Vec<u16> = "Replace in Files"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let result = unsafe {
+        MessageBoxW(
+            Some(state.main_hwnd),
+            PCWSTR(prompt_w.as_mut_ptr()),
+            PCWSTR(title_w.as_mut_ptr()),
+            MB_YESNO | MB_ICONWARNING,
+        )
+    };
+    if result != IDYES {
+        return;
+    }
+    unsafe { start_fif_from_snapshot(dlg, state, snap) };
+}
+
+/// Build a `FifRequest` from the captured snapshot, kick off
+/// `Shell::start_fif`, hide the dialog, show the progress window,
+/// and reset the dock state so the next set of results lands in a
+/// clean listview.
+unsafe fn start_fif_from_snapshot(dlg: HWND, state: &mut FindReplaceState, snap: FifSnapshot) {
+    let mut walk_opts = codepp_core::FifWalkOpts::default();
+    walk_opts.recurse = snap.recurse;
+
+    let query_opts = codepp_core::FifQueryOpts {
+        match_case: snap.match_case,
+        whole_word: snap.whole_word,
+        regex: snap.regex,
     };
 
     let main_hwnd = state.main_hwnd;
 
-    // Borrow main window state briefly to start the job; release
-    // before we touch any other UI to keep `state_from_hwnd`
-    // re-entries safe (DESIGN.md §5.4).
+    // Snapshot the currently-open tab paths so the orchestrator
+    // can skip them in replace mode. Done in the same brief borrow
+    // that calls `start_fif` — the snapshot is consumed by the
+    // worker pool, not retained on the shell.
     let job_raw = {
         let Some(win) = (unsafe { state_from_hwnd(main_hwnd) }) else {
             return;
+        };
+        let open_tab_paths: Vec<PathBuf> = win
+            .shell
+            .tabs
+            .iter()
+            .filter_map(|t| t.path.clone())
+            .collect();
+        let request = codepp_shell::FifRequest {
+            query: snap.query.clone(),
+            opts: query_opts,
+            root: PathBuf::from(&snap.directory),
+            walk: walk_opts,
+            replacement: snap.replacement,
+            open_tab_paths,
         };
         match win.shell.start_fif(request) {
             Ok(id) => id.raw(),
@@ -3836,15 +3967,18 @@ unsafe fn handle_fif_find_all(dlg: HWND, state: &mut FindReplaceState) {
         let _ = ShowWindow(dlg, SW_HIDE);
     }
 
-    let progress = unsafe { show_fif_progress(main_hwnd, &query) };
+    let progress = unsafe { show_fif_progress(main_hwnd, &snap.query) };
 
     // Re-borrow to install the progress HWND and active-job
-    // tracking on the main window state.
+    // tracking on the main window state. Clear pending caret
+    // jumps too so a stale entry from a previous job doesn't
+    // misroute the next dblclk on a same-named file.
     if let Some(win) = unsafe { state_from_hwnd(main_hwnd) } {
         win.fif_progress_hwnd = progress;
         win.fif_active_job = Some(job_raw);
         win.fif_pending_results.clear();
         win.fif_listview_index.clear();
+        win.fif_pending_jumps.clear();
         unsafe { fif_listview_clear(win.fif_listview_hwnd) };
     }
 }
@@ -4833,11 +4967,15 @@ fn show_find_replace_dialog(
         state.fif_replace_in_files_btn = fif_replace_in_files_btn;
         state.status_label = status_label;
 
-        // Replace in Files ships in a follow-up; the search-half is
-        // shared with Find All but the per-match replace step
-        // hasn't landed yet. Greying it is honest about the
-        // capability vs. a silent trace on click.
-        let _ = EnableWindow(fif_replace_in_files_btn, false);
+        // Default sub-folders to checked. Most FIF use cases want
+        // recursive search (project-wide query); the user can
+        // uncheck for a single-folder search before kicking off.
+        SendMessageW(
+            fif_subfolders_cb,
+            BM_SETCHECK,
+            Some(WPARAM(BST_CHECKED.0 as usize)),
+            None,
+        );
 
         state.controls_ready = true;
 
@@ -5320,6 +5458,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             fif_active_job: None,
             fif_pending_results: Vec::new(),
             fif_listview_index: Vec::new(),
+            fif_pending_jumps: Vec::new(),
             editor,
             shell,
         });
@@ -6112,12 +6251,16 @@ unsafe fn finalize_fif_job(main_hwnd: HWND, terminal: codepp_shell::FifEvent) {
         unsafe { close_fif_progress(p) };
     }
 
-    let (cancelled, total_files) = match &terminal {
-        codepp_shell::FifEvent::Done { stats, .. } => (false, stats.files_with_matches),
-        codepp_shell::FifEvent::Cancelled { .. } => (true, pending.len()),
+    let (cancelled, files_modified, files_skipped_open, total_replacements) = match &terminal {
+        codepp_shell::FifEvent::Done { stats, .. } => (
+            false,
+            stats.files_modified,
+            stats.files_skipped_open,
+            stats.total_replacements,
+        ),
+        codepp_shell::FifEvent::Cancelled { .. } => (true, 0, 0, 0),
         _ => return,
     };
-    let _ = total_files; // captured for the future dock-header polish
 
     // Populate listview + index. We rebuild `fif_listview_index`
     // here so the `NM_DBLCLK` handler can map row → location.
@@ -6138,6 +6281,9 @@ unsafe fn finalize_fif_job(main_hwnd: HWND, terminal: codepp_shell::FifEvent) {
             if row >= 0 {
                 new_index.push(FifListviewRow {
                     path: file.path.clone(),
+                    line_no: m.line_no,
+                    col_start: m.col_start,
+                    col_end: m.col_end,
                 });
             }
         }
@@ -6151,12 +6297,43 @@ unsafe fn finalize_fif_job(main_hwnd: HWND, terminal: codepp_shell::FifEvent) {
     };
     if let Some(status) = status_hwnd_for_text {
         let prefix = if cancelled { "Cancelled — " } else { "" };
-        let s = format!(
-            "{prefix}{total_hits} match{} in {} file{}",
-            if total_hits == 1 { "" } else { "es" },
-            pending.len(),
-            if pending.len() == 1 { "" } else { "s" },
-        );
+        let skip_suffix = if files_skipped_open > 0 {
+            format!(
+                " (skipped {files_skipped_open} open file{})",
+                if files_skipped_open == 1 { "" } else { "s" },
+            )
+        } else {
+            String::new()
+        };
+        let s = if files_modified == 0 && files_skipped_open > 0 {
+            // All matching files were open in tabs — nothing was
+            // written. Distinct wording from "Replaced 0 in 0
+            // files" so it doesn't read as "search ran and found
+            // nothing".
+            format!(
+                "{prefix}No files replaced — all {files_skipped_open} matching file{} {} open in a tab",
+                if files_skipped_open == 1 { "" } else { "s" },
+                if files_skipped_open == 1 { "is" } else { "are" },
+            )
+        } else if files_modified > 0 || files_skipped_open > 0 {
+            // Use the worker's authoritative replace count rather
+            // than `total_hits` — the search side caps per-file at
+            // `MAX_MATCHES_PER_FILE` for display, but the replace
+            // ran uncapped, so reporting the search count would
+            // undercount on dense matches.
+            format!(
+                "{prefix}Replaced {total_replacements} occurrence{} in {files_modified} file{}{skip_suffix}",
+                if total_replacements == 1 { "" } else { "s" },
+                if files_modified == 1 { "" } else { "s" },
+            )
+        } else {
+            format!(
+                "{prefix}{total_hits} match{} in {} file{}",
+                if total_hits == 1 { "" } else { "es" },
+                pending.len(),
+                if pending.len() == 1 { "" } else { "s" },
+            )
+        };
         let mut buf: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
         unsafe {
             let _ = SetWindowTextW(status, PCWSTR(buf.as_mut_ptr()));
@@ -6192,26 +6369,84 @@ unsafe fn finalize_fif_job(main_hwnd: HWND, terminal: codepp_shell::FifEvent) {
 /// path; the post-load focus shift is handled by the existing
 /// load drain).
 unsafe fn handle_fif_listview_dblclk(main_hwnd: HWND, row: usize) {
-    // Look up the row in the index and queue the open through the
-    // Shell's normal load path. After load completes, the
-    // WM_APP_WAKE drain will set the active tab; m4 polish will
-    // wire a post-load caret jump to (line_no, col_start) — for
-    // now Scintilla lands at column 0 of line 0 and the user can
-    // press Ctrl+G to navigate.
-    let path = {
+    // Look up the row in the index, queue an open through the
+    // Shell's normal load path, and stash the (line, col) so the
+    // next `WM_APP_WAKE` drain can apply the caret jump once the
+    // file's text is in Scintilla. open_file is async so we can't
+    // jump synchronously here — the buffer would still be empty.
+    let row_data = {
         let Some(state) = (unsafe { state_from_hwnd(main_hwnd) }) else {
             return;
         };
-        state
-            .fif_listview_index
-            .get(row)
-            .map(|FifListviewRow { path }| path.clone())
+        state.fif_listview_index.get(row).cloned()
     };
-    let Some(path) = path else {
+    let Some(row) = row_data else {
         return;
     };
     if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-        state.shell.open_file(path);
+        state.fif_pending_jumps.push(row.clone());
+        state.shell.open_file(row.path);
+    }
+}
+
+/// Walk `fif_pending_jumps`; for each entry whose path matches a
+/// fully-loaded tab in the shell, apply a Scintilla `SCI_GOTOLINE`
+/// + `SCI_GOTOPOS` to land the caret at the matched (line, col).
+///
+/// Applied entries are removed; unmatched ones stay queued for a
+/// later drain — the load may still be in flight.
+unsafe fn apply_pending_fif_jumps(main_hwnd: HWND) {
+    let Some(state) = (unsafe { state_from_hwnd(main_hwnd) }) else {
+        return;
+    };
+    if state.fif_pending_jumps.is_empty() {
+        return;
+    }
+    // Snapshot the active tab's path + load state. If the active
+    // tab isn't loaded yet, there's nothing to apply this round.
+    let Some(active) = state.shell.active() else {
+        return;
+    };
+    let Some(active_path) = active.path.as_ref().cloned() else {
+        return;
+    };
+    if active.pending_load.is_some() {
+        return;
+    }
+    let editor = state.editor;
+    let mut applied_any = false;
+    state.fif_pending_jumps.retain(|jump| {
+        if jump.path != active_path {
+            return true; // not yet — keep for next drain
+        }
+        // SCI_GOTOLINE puts the caret at column 0 of (line - 1)
+        // and brings the line into view. We then read the
+        // line-start position via SCI_GETCURRENTPOS and select
+        // the matched span via SCI_SETSEL — the selection
+        // highlights the match and Scintilla's built-in
+        // EnsureCaretVisible scrolls horizontally so a long
+        // line's match isn't clipped by the right edge.
+        let line_zero_based = jump.line_no.saturating_sub(1) as codepp_scintilla_sys::uptr_t;
+        editor.send(codepp_scintilla_sys::SCI_GOTOLINE, line_zero_based, 0);
+        let line_start = editor.send(codepp_scintilla_sys::SCI_GETCURRENTPOS, 0, 0);
+        let start_pos =
+            (line_start as i64 + jump.col_start as i64).max(0) as codepp_scintilla_sys::uptr_t;
+        let end_pos =
+            (line_start as i64 + jump.col_end as i64).max(0) as codepp_scintilla_sys::sptr_t;
+        editor.send(codepp_scintilla_sys::SCI_SETSEL, start_pos, end_pos);
+        applied_any = true;
+        false // remove this entry
+    });
+    // Unconditional vertical re-centre. `SCI_SETSEL` already
+    // scrolled the matched line on-screen at the nearest edge —
+    // for the dock case, that edge is just above the dock's
+    // header, which leaves the match looking pinned to the
+    // bottom. `center_caret` (vs `_if_offscreen`) ignores the
+    // already-on-screen short-circuit and re-scrolls so the
+    // matched line lands in the middle of the editor's reduced
+    // height.
+    if applied_any {
+        center_caret(&editor);
     }
 }
 
@@ -6576,6 +6811,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // NM_DBLCLK handler — doesn't race a still-loading
                 // tab from this same wake.
                 drain_fif_events(hwnd);
+                // Apply any caret jumps queued by FIF dblclk now
+                // that the just-completed loads have populated
+                // their target tabs. Done after `drain_fif_events`
+                // so a search-completion that reveals the dock
+                // doesn't compete with a same-wake jump.
+                apply_pending_fif_jumps(hwnd);
                 LRESULT(0)
             }
             WM_DROPFILES => {

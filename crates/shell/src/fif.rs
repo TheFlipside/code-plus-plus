@@ -180,6 +180,23 @@ pub struct FifStats {
     pub total_matches: usize,
     /// `true` when the global cap was hit and the job ended early.
     pub global_cap_hit: bool,
+    /// Files rewritten in Replace-in-Files mode. Always 0 for
+    /// search-only jobs.
+    pub files_modified: usize,
+    /// Total substitutions performed across all rewritten files.
+    /// Distinct from `total_matches` because the search loop caps
+    /// per-file matches at [`codepp_core::fif::MAX_MATCHES_PER_FILE`]
+    /// for display, while the replace loop runs the regex
+    /// uncapped. The status label uses this for the "Replaced X
+    /// occurrences" wording so it doesn't undercount on dense
+    /// matches. Always 0 for search-only jobs.
+    pub total_replacements: usize,
+    /// Files matched during Replace-in-Files but not rewritten
+    /// because the user has them open in a tab. Skipping them
+    /// avoids racing the file watcher (whose "external change"
+    /// dialog would otherwise pop for every open file the worker
+    /// touched) and keeps the user's in-buffer edits intact.
+    pub files_skipped_open: usize,
     /// Wall-clock duration measured at the coordinator.
     pub elapsed_ms: u64,
 }
@@ -199,6 +216,19 @@ pub struct FifRequest {
     pub root: PathBuf,
     /// Include/exclude globs and the per-file size ceiling.
     pub walk: FifWalkOpts,
+    /// `Some(s)` switches the orchestrator from search-only into
+    /// "Replace in Files" mode: every matched file is rewritten
+    /// in place with `s` substituted for each match. The match
+    /// list still flows through `FifEvent::FileMatches` so the
+    /// UI can show what changed. `None` is plain Find in Files.
+    pub replacement: Option<String>,
+    /// Absolute paths of files the user currently has open in a
+    /// tab. Workers in Replace-in-Files mode skip these to avoid
+    /// (a) the file watcher's "external change" dialog firing for
+    /// every modified open file, and (b) silently overwriting an
+    /// in-buffer edit the user hasn't saved yet. Empty for plain
+    /// Find in Files (the search loop doesn't write anything).
+    pub open_tab_paths: Vec<PathBuf>,
 }
 
 /// Per-job control surface the orchestrator retains until the next
@@ -273,6 +303,21 @@ impl FifOrchestrator {
         let walk = Arc::new(request.walk);
         let query = Arc::new(query);
         let stats = Arc::new(FifStatsAtomic::default());
+        // `replacement` is `None` for search-only jobs and `Some`
+        // for Replace in Files. Wrapped in an `Arc` so each worker
+        // can hold a cheap pointer rather than cloning the string.
+        let replacement: Option<Arc<(String, bool)>> = request.replacement.map(|s| {
+            // The boolean is "expand $N capture-group references";
+            // mirrors the regex flag from `request.opts`.
+            Arc::new((s, request.opts.regex))
+        });
+        // Skip-list for replace mode — paths the user has open in a
+        // tab. Stored as an `Arc<HashSet>` so workers share one
+        // copy. For typical session sizes (≤ ~50 tabs) hash lookup
+        // dominates linear scan; HashSet is also future-proof if
+        // the editor ever supports hundreds of tabs.
+        let open_paths: Arc<std::collections::HashSet<PathBuf>> =
+            Arc::new(request.open_tab_paths.into_iter().collect());
 
         let n_workers = available_parallelism()
             .map(|n| n.get())
@@ -296,10 +341,23 @@ impl FifOrchestrator {
             let total = total.clone();
             let stats = stats.clone();
             let walk = walk.clone();
+            let replacement = replacement.clone();
+            let open_paths = open_paths.clone();
             let h = thread::Builder::new()
                 .name(format!("codepp-fif-worker-{i}"))
                 .spawn(move || {
-                    worker_main(id, path_rx, event_tx, query, cancel, total, walk, stats)
+                    worker_main(
+                        id,
+                        path_rx,
+                        event_tx,
+                        query,
+                        cancel,
+                        total,
+                        walk,
+                        stats,
+                        replacement,
+                        open_paths,
+                    )
                 })
                 .map_err(FifError::SpawnFailed)?;
             worker_handles.push(h);
@@ -396,6 +454,9 @@ struct FifStatsAtomic {
     files_skipped_size: AtomicUsize,
     files_with_matches: AtomicUsize,
     total_matches: AtomicUsize,
+    files_modified: AtomicUsize,
+    total_replacements: AtomicUsize,
+    files_skipped_open: AtomicUsize,
     global_cap_hit: AtomicBool,
 }
 
@@ -407,6 +468,9 @@ impl FifStatsAtomic {
             files_skipped_size: self.files_skipped_size.load(Ordering::Relaxed),
             files_with_matches: self.files_with_matches.load(Ordering::Relaxed),
             total_matches: self.total_matches.load(Ordering::Relaxed),
+            files_modified: self.files_modified.load(Ordering::Relaxed),
+            total_replacements: self.total_replacements.load(Ordering::Relaxed),
+            files_skipped_open: self.files_skipped_open.load(Ordering::Relaxed),
             global_cap_hit: self.global_cap_hit.load(Ordering::Relaxed),
             // Filled in by the coordinator from the wall-clock timer.
             elapsed_ms: 0,
@@ -537,7 +601,7 @@ fn walker_main(
     // path_tx drops here; workers receive `Err` and exit.
 }
 
-// Eight `Arc` clones, all freshly cloned by `start()` per worker.
+// Ten `Arc` clones, all freshly cloned by `start()` per worker.
 // Bundling them into a struct just to satisfy the lint would add an
 // indirection without removing any data — every field is still on
 // the worker's stack frame.
@@ -551,6 +615,15 @@ fn worker_main(
     total: Arc<AtomicUsize>,
     walk: Arc<FifWalkOpts>,
     stats: Arc<FifStatsAtomic>,
+    // `Some((replacement, expand_groups))` for Replace in Files
+    // mode — the worker rewrites each matched file in place after
+    // emitting its match list. `None` is plain Find in Files.
+    replacement: Option<Arc<(String, bool)>>,
+    // Files the user has open in a tab. In replace mode the worker
+    // skips writing to these — the file watcher would otherwise
+    // pop "external change" prompts for every modified open file,
+    // and overwriting could clobber unsaved in-buffer edits.
+    open_paths: Arc<std::collections::HashSet<PathBuf>>,
 ) {
     while let Ok(path) = path_rx.recv() {
         if cancel.load(Ordering::Acquire) {
@@ -624,6 +697,72 @@ fn worker_main(
         stats
             .total_matches
             .fetch_add(outcome.matches.len(), Ordering::Relaxed);
+
+        // Replace in Files: rewrite the file in place with the
+        // user's replacement string substituted for each match.
+        // The match list still flows through `FileMatches` so the
+        // dock can show what changed. We write through a temp +
+        // rename so a crash mid-write can't truncate the source.
+        //
+        // Skip files the user has open: rewriting them would race
+        // the file watcher (Windows reports the temp+rename as a
+        // delete-then-create, popping "external change" dialogs
+        // for every modified open file) and could clobber unsaved
+        // in-buffer edits. The match list still flows so the dock
+        // shows what *would* have been replaced; the user can
+        // re-run after closing those tabs.
+        if let Some(repl) = &replacement {
+            if open_paths.contains(&path) {
+                // TODO(m4 polish, DESIGN.md §7.4): apply the
+                // replacement to the open tab's Scintilla buffer
+                // instead of skipping. N++ does this so the user
+                // gets undo + no watcher event, and the on-disk
+                // file isn't out of sync with the editor.
+                stats.files_skipped_open.fetch_add(1, Ordering::Relaxed);
+                let _ = event_tx.send(FifEvent::FileMatches {
+                    job: id,
+                    path,
+                    outcome,
+                });
+                continue;
+            }
+            let (new_text, n_replaced) =
+                codepp_core::fif::replace_in_text(&query, &text, &repl.0, repl.1);
+            // `n_replaced` is the truth — `outcome.matches.len()`
+            // caps at `MAX_MATCHES_PER_FILE` for display, while
+            // `replace_in_text` runs uncapped. UI status label
+            // reads `total_replacements` for the replace wording.
+            // Re-encode through the file's original encoding so a
+            // CP1252 file stays CP1252 after the rewrite. The
+            // best-effort encode below may fail if the replacement
+            // text introduces characters the legacy codepage can't
+            // represent — surface that as a skipped file rather
+            // than corrupting the contents.
+            match codepp_core::encoding::encode(&new_text, &enc) {
+                Ok(new_bytes) => {
+                    if let Err(e) = atomic_write(&path, &new_bytes) {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "fif worker: replace write failed"
+                        );
+                    } else {
+                        stats.files_modified.fetch_add(1, Ordering::Relaxed);
+                        stats
+                            .total_replacements
+                            .fetch_add(n_replaced, Ordering::Relaxed);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "fif worker: replacement encoding failed (file kept unchanged)",
+                    );
+                }
+            }
+        }
+
         if event_tx
             .send(FifEvent::FileMatches {
                 job: id,
@@ -635,6 +774,62 @@ fn worker_main(
             return;
         }
     }
+}
+
+/// Atomic file write: emit to a temp file in the same directory,
+/// then rename over the target. Avoids truncating the original on a
+/// crash mid-write. The temp file uses a `.codepp-fif.tmp` suffix
+/// so a leftover from a killed process is recognizable. Same
+/// cross-platform-rename caveat as everywhere else: on Windows,
+/// `fs::rename` succeeds atomically when both paths are on the
+/// same volume, which is guaranteed here since we generate the
+/// temp path from the target's parent.
+fn atomic_write(target: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = target.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "target has no parent directory",
+        )
+    })?;
+    let tmp = {
+        let mut name = target
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
+        name.push(".codepp-fif.tmp");
+        parent.join(name)
+    };
+
+    // Drop guard: removes the temp file unless `commit()` clears
+    // the flag. Covers both the `?` early-returns (Err propagation)
+    // and panic paths (e.g. `write_all` panic on a custom
+    // allocator) so a partially-written temp doesn't survive on
+    // disk to confuse a future re-run or accumulate as garbage.
+    struct TempGuard<'a> {
+        path: &'a std::path::Path,
+        committed: bool,
+    }
+    impl Drop for TempGuard<'_> {
+        fn drop(&mut self) {
+            if !self.committed {
+                let _ = std::fs::remove_file(self.path);
+            }
+        }
+    }
+    let mut guard = TempGuard {
+        path: &tmp,
+        committed: false,
+    };
+
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_data()?;
+    }
+    std::fs::rename(&tmp, target)?;
+    guard.committed = true;
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -718,6 +913,8 @@ mod tests {
             opts: FifQueryOpts::default(),
             root: dir.path().to_path_buf(),
             walk: FifWalkOpts::default(),
+            replacement: None,
+            open_tab_paths: Vec::new(),
         };
         let err = orch.start(req).unwrap_err();
         assert!(matches!(err, FifError::Query(_)));
@@ -739,6 +936,8 @@ mod tests {
             opts: FifQueryOpts::default(),
             root: bad,
             walk: FifWalkOpts::default(),
+            replacement: None,
+            open_tab_paths: Vec::new(),
         };
         let err = orch.start(req).unwrap_err();
         assert!(matches!(err, FifError::BadRoot(_)));
@@ -754,6 +953,8 @@ mod tests {
             opts: FifQueryOpts::default(),
             root: dir.path().to_path_buf(),
             walk: FifWalkOpts::default(),
+            replacement: None,
+            open_tab_paths: Vec::new(),
         };
         let job = orch.start(req).unwrap();
         let events = drain_until_done(&rx, Duration::from_secs(5));
@@ -792,6 +993,8 @@ mod tests {
             opts: FifQueryOpts::default(),
             root: dir.path().to_path_buf(),
             walk: FifWalkOpts::default(),
+            replacement: None,
+            open_tab_paths: Vec::new(),
         };
         let _ = orch.start(req).unwrap();
         let events = drain_until_done(&rx, Duration::from_secs(5));
@@ -831,6 +1034,8 @@ mod tests {
             opts: FifQueryOpts::default(),
             root: dir.path().to_path_buf(),
             walk: FifWalkOpts::default(),
+            replacement: None,
+            open_tab_paths: Vec::new(),
         };
         let _ = orch.start(req).unwrap();
         let events = drain_until_done(&rx, Duration::from_secs(5));
@@ -859,6 +1064,8 @@ mod tests {
             opts: FifQueryOpts::default(),
             root: dir.path().to_path_buf(),
             walk: FifWalkOpts::default(),
+            replacement: None,
+            open_tab_paths: Vec::new(),
         };
         let _ = orch.start(req).unwrap();
         let events = drain_until_done(&rx, Duration::from_secs(5));
@@ -893,6 +1100,8 @@ mod tests {
             opts: FifQueryOpts::default(),
             root: dir.path().to_path_buf(),
             walk: FifWalkOpts::default(),
+            replacement: None,
+            open_tab_paths: Vec::new(),
         };
         let id1 = orch.start(req1).unwrap();
         let req2 = FifRequest {
@@ -900,6 +1109,8 @@ mod tests {
             opts: FifQueryOpts::default(),
             root: dir.path().to_path_buf(),
             walk: FifWalkOpts::default(),
+            replacement: None,
+            open_tab_paths: Vec::new(),
         };
         let id2 = orch.start(req2).unwrap();
         assert_ne!(id1, id2);
@@ -946,6 +1157,8 @@ mod tests {
             opts: FifQueryOpts::default(),
             root: dir.path().to_path_buf(),
             walk: FifWalkOpts::default(),
+            replacement: None,
+            open_tab_paths: Vec::new(),
         };
         let err = orch.start(req).unwrap_err();
         assert!(matches!(err, FifError::TooManyJobs));
@@ -963,5 +1176,109 @@ mod tests {
         // Same file under a generous cap reads cleanly.
         let buf = read_capped(&p, 4096).unwrap();
         assert_eq!(buf.len(), 2048);
+    }
+
+    #[test]
+    fn replace_in_files_rewrites_matching_files() {
+        let (tx, rx) = unbounded();
+        let mut orch = FifOrchestrator::new(tx);
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "alpha needle gamma\n").unwrap();
+        fs::write(dir.path().join("b.txt"), "no match here\n").unwrap();
+        fs::write(
+            dir.path().join("c.txt"),
+            "needle once\nneedle twice\nneedle thrice\n",
+        )
+        .unwrap();
+
+        let req = FifRequest {
+            query: "needle".into(),
+            opts: FifQueryOpts::default(),
+            root: dir.path().to_path_buf(),
+            walk: FifWalkOpts::default(),
+            replacement: Some("HAYSTACK".into()),
+            open_tab_paths: Vec::new(),
+        };
+        let _ = orch.start(req).unwrap();
+        let events = drain_until_done(&rx, Duration::from_secs(5));
+
+        // Verify the two matching files were rewritten and the
+        // non-matching file is untouched.
+        let a = fs::read_to_string(dir.path().join("a.txt")).unwrap();
+        let b = fs::read_to_string(dir.path().join("b.txt")).unwrap();
+        let c = fs::read_to_string(dir.path().join("c.txt")).unwrap();
+        assert_eq!(a, "alpha HAYSTACK gamma\n");
+        assert_eq!(b, "no match here\n");
+        assert_eq!(c, "HAYSTACK once\nHAYSTACK twice\nHAYSTACK thrice\n");
+
+        // Done event reports `files_modified == 2`.
+        let done_stats = events
+            .into_iter()
+            .find_map(|e| match e {
+                FifEvent::Done { stats, .. } => Some(stats),
+                _ => None,
+            })
+            .expect("no Done event");
+        assert_eq!(done_stats.files_modified, 2);
+        assert_eq!(done_stats.total_matches, 4);
+    }
+
+    #[test]
+    fn replace_skips_files_open_in_a_tab() {
+        let (tx, rx) = unbounded();
+        let mut orch = FifOrchestrator::new(tx);
+        let dir = tempdir().unwrap();
+        let kept = dir.path().join("kept.txt");
+        let modified = dir.path().join("modified.txt");
+        fs::write(&kept, "needle in user buffer\n").unwrap();
+        fs::write(&modified, "needle on disk\n").unwrap();
+
+        let req = FifRequest {
+            query: "needle".into(),
+            opts: FifQueryOpts::default(),
+            root: dir.path().to_path_buf(),
+            walk: FifWalkOpts::default(),
+            replacement: Some("HAY".into()),
+            open_tab_paths: vec![kept.clone()],
+        };
+        let _ = orch.start(req).unwrap();
+        let _events = drain_until_done(&rx, Duration::from_secs(5));
+
+        // The open file is left untouched; the other was rewritten.
+        assert_eq!(
+            fs::read_to_string(&kept).unwrap(),
+            "needle in user buffer\n"
+        );
+        assert_eq!(fs::read_to_string(&modified).unwrap(), "HAY on disk\n");
+    }
+
+    #[test]
+    fn replace_atomic_write_leaves_no_temp_on_success() {
+        let (tx, rx) = unbounded();
+        let mut orch = FifOrchestrator::new(tx);
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("only.txt"), "needle\n").unwrap();
+
+        let req = FifRequest {
+            query: "needle".into(),
+            opts: FifQueryOpts::default(),
+            root: dir.path().to_path_buf(),
+            walk: FifWalkOpts::default(),
+            replacement: Some("X".into()),
+            open_tab_paths: Vec::new(),
+        };
+        let _ = orch.start(req).unwrap();
+        let _events = drain_until_done(&rx, Duration::from_secs(5));
+
+        // After a successful replace, no `.codepp-fif.tmp` lingers.
+        let entries: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name())
+            .collect();
+        for name in &entries {
+            let s = name.to_string_lossy();
+            assert!(!s.contains(".codepp-fif.tmp"), "leftover temp file: {s}");
+        }
     }
 }

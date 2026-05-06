@@ -214,6 +214,12 @@ pub const SCI_GETSELTEXT: u32 = 2161;
 /// `SelectionStart`, so without collapsing forward a Find Next
 /// click would re-find the same hit on every press).
 pub const SCI_SETEMPTYSELECTION: u32 = 2556;
+/// Set selection: `wparam = anchor`, `lparam = caret`. Both are
+/// byte positions; the selection runs from `min` to `max` of the
+/// pair. Scrolls the caret into view as a side effect, so this
+/// suffices for "open file at match" navigation without a
+/// follow-up `SCI_SCROLLCARET`.
+pub const SCI_SETSEL: u32 = 2160;
 /// Scroll the view so the caret is visible. `SCI_SEARCHNEXT/PREV`
 /// move the selection but don't bring it into view; the Find
 /// dialog issues this after every successful hit.

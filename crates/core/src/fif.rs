@@ -312,6 +312,54 @@ fn clip_line(line: &str) -> String {
     s
 }
 
+/// Apply `query`'s pattern to `text` and return the rewritten text
+/// plus the number of substitutions performed. `expand_groups`
+/// controls whether `$0`/`$1`/... in `replacement` are expanded as
+/// regex backreferences (Replace All on a regex query) or treated
+/// as literal characters (Replace All on a literal query — `$1`
+/// stays `$1` in the output).
+///
+/// Returns `(Cow::Borrowed(text), 0)` for any input larger than
+/// [`MAX_TEXT_BYTES`] — same backstop as [`search_in_text`]. The
+/// `Cow` return avoids allocating a multi-gigabyte copy of the
+/// input on the unreachable-by-construction oversize branch (the
+/// 32 MiB `DEFAULT_MAX_FILE_BYTES` upstream bound makes oversize
+/// impossible from the worker), and lets the no-substitutions
+/// case skip allocating altogether.
+pub fn replace_in_text<'t>(
+    query: &FifQuery,
+    text: &'t str,
+    replacement: &str,
+    expand_groups: bool,
+) -> (std::borrow::Cow<'t, str>, usize) {
+    if text.len() > MAX_TEXT_BYTES {
+        return (std::borrow::Cow::Borrowed(text), 0);
+    }
+    let mut count: usize = 0;
+    let result = query
+        .pattern
+        .replace_all(text, |caps: &regex::Captures<'_>| {
+            // Skip zero-width matches for the same reason
+            // `search_in_text` does: a regex like `^` would otherwise
+            // splice the replacement at every line start, exploding the
+            // file size for no useful Replace All semantic.
+            if let Some(m) = caps.get(0) {
+                if m.start() == m.end() {
+                    return String::new();
+                }
+            }
+            count += 1;
+            if expand_groups {
+                let mut buf = String::new();
+                caps.expand(replacement, &mut buf);
+                buf
+            } else {
+                replacement.to_string()
+            }
+        });
+    (result, count)
+}
+
 /// Heuristic binary detector. Returns `true` if `prefix` (typically
 /// the first [`BINARY_PROBE_BYTES`] of a file) looks like binary
 /// content the user does not want searched.
@@ -628,6 +676,73 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].col_start, 2); // α is 2 bytes in UTF-8
         assert_eq!(hits[0].col_end, 4);
+    }
+
+    fn replace(
+        query: &str,
+        opts: FifQueryOpts,
+        text: &str,
+        repl: &str,
+        expand: bool,
+    ) -> (String, usize) {
+        let q = FifQuery::compile(query, opts).expect("compile");
+        let (cow, n) = replace_in_text(&q, text, repl, expand);
+        (cow.into_owned(), n)
+    }
+
+    #[test]
+    fn replace_literal_substitutes_each_match() {
+        let (out, n) = replace("foo", FifQueryOpts::default(), "foo bar foo", "baz", false);
+        assert_eq!(out, "baz bar baz");
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn replace_literal_keeps_dollar_sign_literal() {
+        // Literal mode: `$1` in the replacement must NOT expand to
+        // a capture group — it should appear verbatim in the output.
+        let (out, n) = replace("foo", FifQueryOpts::default(), "foo", "$1", false);
+        assert_eq!(out, "$1");
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn replace_regex_expands_capture_groups() {
+        let opts = FifQueryOpts {
+            regex: true,
+            match_case: true,
+            ..FifQueryOpts::default()
+        };
+        let (out, n) = replace(r"(\w+)", opts, "hello world", "[$1]", true);
+        assert_eq!(out, "[hello] [world]");
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn replace_skips_zero_width_matches() {
+        // `^` matches zero-width at every line start. Without the
+        // skip the file would gain a replacement at every line
+        // boundary, exploding the buffer.
+        let opts = FifQueryOpts {
+            regex: true,
+            ..FifQueryOpts::default()
+        };
+        let (out, n) = replace("^", opts, "a\nb\n", "X", false);
+        assert_eq!(out, "a\nb\n");
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn replace_no_matches_returns_input_unchanged() {
+        let (out, n) = replace(
+            "needle",
+            FifQueryOpts::default(),
+            "no match here",
+            "X",
+            false,
+        );
+        assert_eq!(out, "no match here");
+        assert_eq!(n, 0);
     }
 
     #[test]
