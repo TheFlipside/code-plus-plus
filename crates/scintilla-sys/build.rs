@@ -185,12 +185,98 @@ fn build_lexilla(scintilla: &Path, lexilla: &Path) {
         build.file(lexilla.join("lexlib").join(format!("{f}.cxx")));
     }
 
-    // Concrete lexers — Phase 4 m1 starter set. Each Lex*.cxx file
+    // Concrete lexers — Phase 4 m6 expanded set. Each Lex*.cxx file
     // contains a global `LexerModule` instance whose constructor
     // registers it with Lexilla's catalogue; static-linking the file
     // is therefore sufficient to make `CreateLexer("cpp")` etc.
-    // resolve. To add a language, drop its name in here.
-    for f in &["LexCPP", "LexRust", "LexNull"] {
+    // resolve. To add a language, drop its filename in here AND add
+    // a row to `crates/core/src/lang.rs::LANG_TABLE`. The two lists
+    // must stay in sync — any LangType row whose `lexer` is `Some(_)`
+    // refers to a name registered by one of these files.
+    //
+    // Cross-reference (one Lex*.cxx may register multiple names):
+    //   LexBasic    → vb / freebasic / purebasic / blitzbasic / powerbasic
+    //   LexHTML     → hypertext / xml / asp / php
+    //   LexHex      → hex / srec / tehex
+    //   LexProps    → props (also covers ".ini")
+    //   LexLisp     → lisp (also used for Scheme via the same lexer)
+    //   LexFortran  → fortran (free form) and f77 (fixed form)
+    //   LexCPP      → cpp (also covers C, C#, Java, JS, TS, Obj-C, Go, Swift, RC)
+    //
+    // The list grows when a new LangType is added; performance impact
+    // is marginal (each lexer adds ~50–150 KB to the static binary
+    // and a single `LexerModule` global construction at startup).
+    for f in &[
+        "LexAda",
+        "LexAsm",
+        "LexAsn1",
+        "LexAU3",
+        "LexAVS",
+        "LexBaan",
+        "LexBash",
+        "LexBasic",
+        "LexBatch",
+        "LexCOBOL",
+        "LexCPP",
+        "LexCSS",
+        "LexCaml",
+        "LexCmake",
+        "LexCoffeeScript",
+        "LexCrontab",
+        "LexCsound",
+        "LexD",
+        "LexDiff",
+        "LexErlang",
+        "LexErrorList",
+        "LexEScript",
+        "LexForth",
+        "LexFortran",
+        "LexGDScript",
+        "LexGui4Cli",
+        "LexHTML",
+        "LexHaskell",
+        "LexHex",
+        "LexHollywood",
+        "LexInno",
+        "LexJSON",
+        "LexKix",
+        "LexLaTeX",
+        "LexLisp",
+        "LexLua",
+        "LexMMIXAL",
+        "LexMSSQL",
+        "LexMake",
+        "LexMatlab",
+        "LexNim",
+        "LexNsis",
+        "LexNull",
+        "LexOScript",
+        "LexPS",
+        "LexPascal",
+        "LexPerl",
+        "LexPowerShell",
+        "LexProps",
+        "LexPython",
+        "LexR",
+        "LexRaku",
+        "LexRebol",
+        "LexRegistry",
+        "LexRuby",
+        "LexRust",
+        "LexSAS",
+        "LexSQL",
+        "LexSmalltalk",
+        "LexSpice",
+        "LexTCL",
+        "LexTOML",
+        "LexTeX",
+        "LexTxt2tags",
+        "LexVB",
+        "LexVHDL",
+        "LexVerilog",
+        "LexVisualProlog",
+        "LexYAML",
+    ] {
         build.file(lexilla.join("lexers").join(format!("{f}.cxx")));
     }
 

@@ -71,13 +71,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CreateAcceleratorTableW,
-    CreateMenu, CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyWindow, DispatchMessageW,
-    DrawMenuBar, GetClientRect, GetCursorPos, GetDlgItem, GetMenuItemCount, GetMessageW, GetParent,
-    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW,
-    IsWindow, IsWindowVisible, LoadCursorW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
-    TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK,
-    BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
+    CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyMenu,
+    DestroyWindow, DispatchMessageW, DrawMenuBar, GetClientRect, GetCursorPos, GetDlgItem,
+    GetMenuItemCount, GetMessageW, GetParent, GetSubMenu, GetWindowLongPtrW, GetWindowRect,
+    GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW, IsWindow, IsWindowVisible, LoadCursorW,
+    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW,
+    SetCursor, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
+    TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
+    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
     CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER,
     ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL, HMENU, IDCANCEL, IDC_ARROW,
@@ -1979,23 +1980,20 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         )?;
         AppendMenuW(bar, MF_POPUP, encoding_menu.0 as usize, w!("E&ncoding"))?;
 
-        // ----- Language ----- (one item per known LangType; cmd id
-        // = ID_LANGUAGE_BASE + lang.0. Radio refreshed in
+        // ----- Language ----- (built from `core::lang::LANG_TABLE`.
+        // cmd id = ID_LANGUAGE_BASE + lang.0. Radio refreshed in
         // WM_INITMENUPOPUP based on the active tab's lang.)
-        let language_menu = CreateMenu()?;
-        for (lang, label) in [
-            (codepp_core::lang::L_TEXT, w!("&Normal Text")),
-            (codepp_core::lang::L_C, w!("&C")),
-            (codepp_core::lang::L_CPP, w!("C&++")),
-            (codepp_core::lang::L_RUST, w!("&Rust")),
-        ] {
-            AppendMenuW(
-                language_menu,
-                MF_STRING,
-                (ID_LANGUAGE_BASE as i32 + lang.as_npp_id()) as usize,
-                label,
-            )?;
-        }
+        //
+        // Layout (matches Notepad++):
+        //   1. "Normal Text" — always at top, single entry.
+        //   2. Separator.
+        //   3. Alphabetical block. Same-first-letter groups of 2+
+        //      collapse into a submenu titled by the letter;
+        //      single-entry letters stay at the top level.
+        //   4. Separator.
+        //   5. "User-Defined language" submenu — greyed pending the
+        //      Phase 5 user-defined-language work.
+        let language_menu = build_language_menu()?;
         AppendMenuW(bar, MF_POPUP, language_menu.0 as usize, w!("&Language"))?;
 
         // ----- Settings ----- (stubs.)
@@ -2131,6 +2129,13 @@ unsafe fn refresh_language_menu(language_menu: HMENU, lang: LangType) {
         return;
     }
     let target = ID_LANGUAGE_BASE as u32 + lang_id as u32;
+    // CheckMenuRadioItem only marks items in the menu it's called
+    // on. With m6's first-letter submenus the active item may live
+    // inside a child popup, so we apply the call to the top-level
+    // menu *and* every immediate-child submenu. CheckMenuRadioItem
+    // is a no-op on a menu that doesn't contain `target`, so the
+    // sweep is harmless on unrelated submenus and idempotent on
+    // re-application.
     unsafe {
         let _ = CheckMenuRadioItem(
             language_menu,
@@ -2139,7 +2144,258 @@ unsafe fn refresh_language_menu(language_menu: HMENU, lang: LangType) {
             target,
             MF_BYCOMMAND.0,
         );
+        let count = GetMenuItemCount(Some(language_menu));
+        for i in 0..count {
+            let sub = GetSubMenu(language_menu, i);
+            if !sub.is_invalid() {
+                let _ = CheckMenuRadioItem(
+                    sub,
+                    ID_LANGUAGE_BASE as u32,
+                    ID_LANGUAGE_END as u32,
+                    target,
+                    MF_BYCOMMAND.0,
+                );
+            }
+        }
     }
+}
+
+/// Build the Language menu from `core::lang::LANG_TABLE`. Returns
+/// the top-level HMENU, ready to be appended to the menu bar.
+///
+/// Layout matches Notepad++:
+///
+///  1. "Normal Text" — always at the top, single entry, mapped to
+///     `L_TEXT` (cmd id `ID_LANGUAGE_BASE + 0`).
+///  2. Separator.
+///  3. Alphabetical block of every other `LANG_TABLE` entry. Same-
+///     first-letter groups of 2 or more collapse into a submenu
+///     titled by the letter; single-entry letters stay at the top
+///     level.
+///  4. Separator.
+///  5. "User-Defined language" submenu — greyed pending the
+///     Phase 5 user-defined-language work, plus three placeholder
+///     items the user listed (Define your language..., Open UDL
+///     folder..., Notepad++ UDL Collection) and the two Markdown
+///     entries (preinstalled / dark mode).
+///  6. "User-defined" greyed-out tail item.
+///
+/// `LANG_TABLE` is asserted to be alphabetical in `core::lang`'s
+/// tests, so the iteration walks adjacent same-letter rows
+/// directly without sorting here.
+fn build_language_menu() -> Result<HMENU> {
+    use codepp_core::lang::LANG_TABLE;
+
+    // Top-level menu, RAII-wrapped: any `?`-propagated failure
+    // below destroys the kernel HMENU before the function unwinds,
+    // so a partially-built menu never leaks. `take()` defuses the
+    // guard right before the successful return.
+    let menu = MenuGuard::wrap(unsafe { CreateMenu()? });
+
+    // 1. "Normal Text" at the top. The L_TEXT row sits at index 0
+    //    of LANG_TABLE by construction (pinned in
+    //    `lang_table_first_entry_is_normal_text`).
+    let text_label = wide_terminated("Normal Text");
+    unsafe {
+        AppendMenuW(
+            menu.handle(),
+            MF_STRING,
+            (ID_LANGUAGE_BASE as i32 + LANG_TABLE[0].lang.as_npp_id()) as usize,
+            PCWSTR(text_label.as_ptr()),
+        )?;
+        AppendMenuW(menu.handle(), MF_SEPARATOR, 0, PCWSTR::null())?;
+    }
+
+    // 3. Alphabetical block. Walk adjacent same-first-letter rows
+    //    and decide submenu vs. top-level by run length.
+    let entries = &LANG_TABLE[1..];
+    let mut i = 0;
+    while i < entries.len() {
+        let first_letter = entries[i]
+            .menu_label
+            .chars()
+            .next()
+            .map(|c| c.to_ascii_uppercase());
+        // Find the run of entries that share `first_letter`.
+        let mut j = i + 1;
+        while j < entries.len()
+            && entries[j]
+                .menu_label
+                .chars()
+                .next()
+                .map(|c| c.to_ascii_uppercase())
+                == first_letter
+        {
+            j += 1;
+        }
+        let run = &entries[i..j];
+
+        if run.len() == 1 {
+            // Single entry — append directly at top level.
+            let label = wide_terminated(run[0].menu_label);
+            unsafe {
+                AppendMenuW(
+                    menu.handle(),
+                    MF_STRING,
+                    (ID_LANGUAGE_BASE as i32 + run[0].lang.as_npp_id()) as usize,
+                    PCWSTR(label.as_ptr()),
+                )?;
+            }
+        } else {
+            // Multiple entries — create a submenu titled by the
+            // letter, append each entry to it, then attach the
+            // submenu to the top-level menu. Same RAII guard
+            // covers a `?`-failure inside the inner loop or on
+            // the attach call below.
+            let sub = MenuGuard::wrap(unsafe { CreatePopupMenu()? });
+            for entry in run {
+                let label = wide_terminated(entry.menu_label);
+                unsafe {
+                    AppendMenuW(
+                        sub.handle(),
+                        MF_STRING,
+                        (ID_LANGUAGE_BASE as i32 + entry.lang.as_npp_id()) as usize,
+                        PCWSTR(label.as_ptr()),
+                    )?;
+                }
+            }
+            let letter = first_letter
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let letter_w = wide_terminated(&letter);
+            // Attach: ownership of the submenu transfers to `menu`
+            // on success. Defuse the submenu guard *only* after
+            // the attach call returns Ok — a `?` failure here
+            // still drops `sub` and frees the orphan.
+            let sub_handle = sub.handle();
+            unsafe {
+                AppendMenuW(
+                    menu.handle(),
+                    MF_POPUP,
+                    sub_handle.0 as usize,
+                    PCWSTR(letter_w.as_ptr()),
+                )?;
+            }
+            let _ = sub.take();
+        }
+
+        i = j;
+    }
+
+    // 4 + 5. User-Defined section, greyed pending Phase 5.
+    unsafe {
+        AppendMenuW(menu.handle(), MF_SEPARATOR, 0, PCWSTR::null())?;
+    }
+
+    let udl_sub = MenuGuard::wrap(unsafe { CreatePopupMenu()? });
+    for label in [
+        "Define your language...",
+        "Open User Defined Language folder...",
+        "Notepad++ User Defined Languages Collection",
+    ] {
+        let l = wide_terminated(label);
+        // cmd id 0 with MF_GRAYED — the placeholder won't
+        // route through WM_COMMAND, just sits as a visual
+        // entry until Phase 5 wires the real command ids.
+        unsafe {
+            AppendMenuW(
+                udl_sub.handle(),
+                MF_STRING | MF_GRAYED,
+                0,
+                PCWSTR(l.as_ptr()),
+            )?;
+        }
+    }
+    unsafe {
+        AppendMenuW(udl_sub.handle(), MF_SEPARATOR, 0, PCWSTR::null())?;
+    }
+    for label in [
+        "Markdown (preinstalled)",
+        "Markdown (preinstalled dark mode)",
+    ] {
+        let l = wide_terminated(label);
+        unsafe {
+            AppendMenuW(
+                udl_sub.handle(),
+                MF_STRING | MF_GRAYED,
+                0,
+                PCWSTR(l.as_ptr()),
+            )?;
+        }
+    }
+    let udl_label = wide_terminated("User-Defined language");
+    let udl_handle = udl_sub.handle();
+    unsafe {
+        AppendMenuW(
+            menu.handle(),
+            MF_POPUP | MF_GRAYED,
+            udl_handle.0 as usize,
+            PCWSTR(udl_label.as_ptr()),
+        )?;
+    }
+    let _ = udl_sub.take();
+
+    let user_def = wide_terminated("User-defined");
+    unsafe {
+        AppendMenuW(
+            menu.handle(),
+            MF_STRING | MF_GRAYED,
+            0,
+            PCWSTR(user_def.as_ptr()),
+        )?;
+    }
+
+    Ok(menu.take())
+}
+
+/// RAII wrapper around an HMENU that calls `DestroyMenu` on drop
+/// unless ownership is taken via [`Self::take`]. Used by
+/// [`build_language_menu`] so a `?`-propagated failure during
+/// menu construction doesn't leak the in-flight kernel object.
+///
+/// The guard is dropped (and the menu destroyed) on every error
+/// path; on success the caller pulls the HMENU out via `take`,
+/// which sets the wrapped handle to null and converts the Drop
+/// into a no-op.
+struct MenuGuard {
+    menu: HMENU,
+}
+
+impl MenuGuard {
+    fn wrap(menu: HMENU) -> Self {
+        Self { menu }
+    }
+    fn handle(&self) -> HMENU {
+        self.menu
+    }
+    /// Defuse the guard, returning the contained HMENU. After
+    /// `take`, `Drop` is a no-op — the caller has assumed ownership.
+    fn take(mut self) -> HMENU {
+        let m = self.menu;
+        self.menu = HMENU(core::ptr::null_mut());
+        m
+    }
+}
+
+impl Drop for MenuGuard {
+    fn drop(&mut self) {
+        if !self.menu.is_invalid() {
+            // SAFETY: `self.menu` was returned from CreateMenu /
+            // CreatePopupMenu and has not been attached to a
+            // parent menu (the `take()` defuse runs only after a
+            // successful attach). DestroyMenu on an unattached
+            // HMENU is the documented release path.
+            let _ = unsafe { DestroyMenu(self.menu) };
+        }
+    }
+}
+
+/// Build a UTF-16 `Vec<u16>` with a trailing null. Caller pulls
+/// the raw pointer via `.as_ptr()`; the buffer must out-live the
+/// `PCWSTR` use. `AppendMenuW` copies the string immediately, so
+/// per-call locals are sufficient.
+fn wide_terminated(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 /// Radio-mark the Encoding menu's active item. Encoding values
