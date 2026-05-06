@@ -1,0 +1,23 @@
+[package]
+name = "codepp-cppconverter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Code++ preinstalled plugin: ASCII↔HEX selection conversion. Clean-room MIT reimplementation of Notepad++'s NppConverter."
+
+[lints]
+workspace = true
+
+[lib]
+# `cdylib` produces `cppconverter.dll` on Windows; the host loads it
+# via `LoadLibraryW`. Same cross-platform story as cppmimetools — the
+# entry-point module is `#[cfg(target_os = "windows")]`-gated until
+# Phase 5 ports the host to `dlopen`/`dlsym`.
+crate-type = ["cdylib"]
+name = "cppconverter"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+codepp-plugin-host = { workspace = true }

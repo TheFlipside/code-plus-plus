@@ -77,6 +77,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "codepp-cppconverter"
+version = "0.1.0"
+dependencies = [
+ "codepp-plugin-host",
+]
+
+[[package]]
+name = "codepp-cppexport"
+version = "0.1.0"
+dependencies = [
+ "codepp-plugin-host",
+]
+
+[[package]]
+name = "codepp-cppmimetools"
+version = "0.1.0"
+dependencies = [
+ "codepp-plugin-host",
+]
+
+[[package]]
 name = "codepp-editor"
 version = "0.1.0"
 dependencies = [

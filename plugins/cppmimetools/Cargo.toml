@@ -1,0 +1,25 @@
+[package]
+name = "codepp-cppmimetools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Code++ preinstalled plugin: encode/decode selections (Base64, URL, quoted-printable). Clean-room MIT reimplementation of Notepad++'s mimeTools."
+
+[lints]
+workspace = true
+
+[lib]
+# `cdylib` produces `cppmimetools.dll` on Windows; the host loads it via
+# `LoadLibraryW`. The same source compiles to `.so`/`.dylib` once Phase 5
+# ports the host to `dlopen`/`dlsym`. On non-Windows hosts today the
+# entry-point module is gated behind `#[cfg(target_os = "windows")]`,
+# so the build still emits an empty cdylib stub for the workspace's
+# cross-platform `cargo build` to pass.
+crate-type = ["cdylib"]
+name = "cppmimetools"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+codepp-plugin-host = { workspace = true }

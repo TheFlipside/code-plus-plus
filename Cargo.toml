@@ -6,7 +6,13 @@
 
 [workspace]
 resolver = "2"
-members = ["crates/*", "plugins/example-hello"]
+members = [
+    "crates/*",
+    "plugins/example-hello",
+    "plugins/cppmimetools",
+    "plugins/cppconverter",
+    "plugins/cppexport",
+]
 default-members = ["crates/app"]
 
 [workspace.package]

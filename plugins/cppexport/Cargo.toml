@@ -1,0 +1,21 @@
+[package]
+name = "codepp-cppexport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Code++ preinstalled plugin: export the active buffer to HTML preserving the active lexer's styling. Clean-room MIT reimplementation of Notepad++'s NppExport."
+
+[lints]
+workspace = true
+
+[lib]
+# `cdylib` produces `cppexport.dll` on Windows; the host loads it via
+# `LoadLibraryW`. Same cross-platform story as the other m7 plugins.
+crate-type = ["cdylib"]
+name = "cppexport"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+codepp-plugin-host = { workspace = true }
