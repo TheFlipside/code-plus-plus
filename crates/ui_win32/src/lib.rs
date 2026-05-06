@@ -57,15 +57,13 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, CDDS_ITEMPOSTPAINT,
-    CDDS_ITEMPREPAINT, CDDS_PREPAINT, CDRF_DODEFAULT, CDRF_NOTIFYITEMDRAW, CDRF_NOTIFYPOSTPAINT,
-    ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT,
-    LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_TEXT, LVITEMW, LVM_DELETEALLITEMS,
-    LVM_GETITEMCOUNT, LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE,
-    LVM_SETITEMTEXTW, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS,
-    LVS_SINGLESEL, NMCUSTOMDRAW, NMHDR, NMITEMACTIVATE, NM_CUSTOMDRAW, NM_DBLCLK, TCIF_TEXT,
-    TCITEMW, TCM_DELETEITEM, TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW,
-    TCN_SELCHANGE, WC_COMBOBOX, WC_LISTVIEWW, WC_TABCONTROL,
+    InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, ICC_BAR_CLASSES,
+    ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT, LVCF_FMT, LVCF_TEXT,
+    LVCF_WIDTH, LVCOLUMNW, LVIF_TEXT, LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT,
+    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMTEXTW,
+    LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, NMHDR,
+    NMITEMACTIVATE, NM_DBLCLK, TCIF_TEXT, TCITEMW, TCM_DELETEITEM, TCM_GETCURSEL, TCM_INSERTITEMW,
+    TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_COMBOBOX, WC_LISTVIEWW, WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, ReleaseCapture, SetCapture, SetFocus, VK_0, VK_F, VK_F3, VK_G, VK_H,
@@ -1481,69 +1479,6 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
             update_window_title(hwnd, &state.shell);
         }
         fire_queued_notifications(hwnd);
-    }
-}
-
-/// Tab-control `NM_CUSTOMDRAW` handler — overlays a strong
-/// orange strip along the top edge of the active tab once
-/// Windows has finished its default rendering for that item.
-///
-/// Returns the `CDRF_*` flags the parent must propagate back to
-/// the tab control:
-///  - `CDDS_PREPAINT` → `CDRF_NOTIFYITEMDRAW` so we get per-item
-///    callbacks.
-///  - `CDDS_ITEMPREPAINT` → `CDRF_NOTIFYPOSTPAINT` so we run
-///    after the default paint for each item (the orange overlay
-///    needs the tab body to be painted first to avoid the
-///    default rendering covering it).
-///  - `CDDS_ITEMPOSTPAINT` → fill a `ACTIVE_TAB_EDGE_PX`-tall
-///    strip at `nmcd.rc.top` for the active tab; return
-///    `CDRF_DODEFAULT` (no further work needed).
-///  - Any other stage → `CDRF_DODEFAULT` so the tab control
-///    proceeds normally.
-///
-/// # Safety
-///
-/// Caller must invoke from the UI thread that owns `hwnd`. The
-/// `nmcd.hdc` is the tab control's paint DC for the duration of
-/// this call only — `FillRect` is sound, holding the pointer
-/// past return is not.
-unsafe fn handle_tab_custom_draw(hwnd: HWND, nmcd: &NMCUSTOMDRAW) -> u32 {
-    match nmcd.dwDrawStage {
-        s if s == CDDS_PREPAINT => CDRF_NOTIFYITEMDRAW,
-        s if s == CDDS_ITEMPREPAINT => CDRF_NOTIFYPOSTPAINT,
-        s if s == CDDS_ITEMPOSTPAINT => {
-            // Read the active index off `Shell.active_tab` rather
-            // than re-asking the tab control via TCM_GETCURSEL.
-            // Both produce the same value, but `state` is already
-            // borrowed here and the field read avoids a
-            // synchronous SendMessage back into the tab control
-            // while it's mid-paint — a pattern that's
-            // architecturally sound (ComCtrl's TCM_GETCURSEL
-            // doesn't re-enter the paint pump) but fragile to
-            // audit.
-            let Some(state) = (unsafe { state_from_hwnd(hwnd) }) else {
-                return CDRF_DODEFAULT;
-            };
-            let active = state.shell.active_tab.map(|i| i as isize).unwrap_or(-1);
-            // `dwItemSpec` is `usize`; tab indices are `i32`. A
-            // -1 active (no selection) compares not-equal to any
-            // usize cast, so the strip is skipped naturally
-            // without a separate guard.
-            if nmcd.dwItemSpec as isize == active {
-                let strip = RECT {
-                    left: nmcd.rc.left,
-                    top: nmcd.rc.top,
-                    right: nmcd.rc.right,
-                    bottom: nmcd.rc.top + ACTIVE_TAB_EDGE_PX,
-                };
-                unsafe {
-                    FillRect(nmcd.hdc, &strip, active_tab_edge_brush());
-                }
-            }
-            CDRF_DODEFAULT
-        }
-        _ => CDRF_DODEFAULT,
     }
 }
 
@@ -3624,16 +3559,6 @@ const STATUS_BG: u32 = 0x00E8E8E8;
 /// drift that comes with using `GetSysColor(COLOR_3DSHADOW)`
 /// directly.
 const EDITOR_BORDER: u32 = 0x00A0A0A0;
-/// COLORREF for the strong orange top edge painted on the active
-/// tab via `NM_CUSTOMDRAW`. Format is `0x00BBGGRR` (Win32 native);
-/// the value here is RGB(255, 140, 0) — Windows' "DarkOrange" —
-/// chosen to read clearly against both light and dark tab chrome.
-const ACTIVE_TAB_ORANGE: u32 = 0x00008CFF;
-/// Thickness in pixels of the orange strip painted along the top
-/// edge of the active tab. 3 px is enough to read at any
-/// reasonable DPI; a future polish item could scale this with the
-/// system DPI alongside `TAB_HEIGHT_PX`.
-const ACTIVE_TAB_EDGE_PX: i32 = 3;
 
 /// Cached brush for the dialog background (Goto + Find/Replace
 /// hbrBackground, plus WM_CTLCOLORBTN's clear brush). Created
@@ -3658,17 +3583,6 @@ fn editor_border_brush() -> HBRUSH {
     static BRUSH: OnceLock<isize> = OnceLock::new();
     let raw =
         *BRUSH.get_or_init(|| unsafe { CreateSolidBrush(COLORREF(EDITOR_BORDER)).0 as isize });
-    HBRUSH(raw as *mut c_void)
-}
-
-/// Cached brush for the orange top-edge strip painted on the
-/// active tab in `NM_CUSTOMDRAW`. Same leak-on-purpose lifetime
-/// as [`dialog_bg_brush`].
-fn active_tab_edge_brush() -> HBRUSH {
-    use std::sync::OnceLock;
-    static BRUSH: OnceLock<isize> = OnceLock::new();
-    let raw =
-        *BRUSH.get_or_init(|| unsafe { CreateSolidBrush(COLORREF(ACTIVE_TAB_ORANGE)).0 as isize });
     HBRUSH(raw as *mut c_void)
 }
 
@@ -6207,19 +6121,6 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             Some(instance.into()),
             None,
         )?;
-        // Disable the visual-style theme on the tab control so our
-        // `NM_CUSTOMDRAW` overlay (the orange top edge on the
-        // active tab — see `handle_tab_custom_draw`) actually
-        // fires. Themed (UxTheme-rendered) tab controls largely
-        // ignore `NM_CUSTOMDRAW` because the control draws via
-        // the theme engine, bypassing the custom-draw callbacks.
-        // `SetWindowTheme(hwnd, L"", L"")` falls back to the
-        // classic non-themed renderer, which honours custom draw
-        // fully. Tab chrome reads as flatter / less Aero in
-        // exchange — a fair trade for being able to highlight the
-        // active buffer at a glance. The active-tab indicator is
-        // user-requested.
-        let _ = SetWindowTheme(tab_hwnd, w!(""), w!(""));
 
         // Scintilla child — sized via WM_SIZE relative to the status bar.
         let scintilla_hwnd = CreateWindowExW(
@@ -8545,34 +8446,6 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         };
                         if owns_source {
                             handle_tab_selchange(hwnd);
-                        }
-                    } else if nmhdr.code == NM_CUSTOMDRAW {
-                        // Tab-strip custom paint — adds a strong
-                        // orange top-edge strip on the active tab
-                        // so the user can identify the focused
-                        // buffer at a glance. Source-filter to
-                        // our tab control (a future sibling tab
-                        // strip shouldn't pull our overlay).
-                        let owns_source = if let Some(state) = state_from_hwnd(hwnd) {
-                            nmhdr.hwndFrom == state.tab_hwnd
-                        } else {
-                            false
-                        };
-                        if owns_source && lparam.0 != 0 {
-                            // SAFETY (outer `unsafe`): for an
-                            // NM_CUSTOMDRAW notification lparam
-                            // points to a valid NMCUSTOMDRAW
-                            // whose first field is NMHDR. Read
-                            // by reference; the struct outlives
-                            // the dispatch call. The
-                            // `lparam.0 != 0` guard above is
-                            // belt-and-braces — Win32 contracts
-                            // a non-null lparam for this code,
-                            // but a control destroyed mid-paint
-                            // could in principle deliver a null
-                            // and dereferencing here would be UB.
-                            let nmcd = &*(lparam.0 as *const NMCUSTOMDRAW);
-                            return LRESULT(handle_tab_custom_draw(hwnd, nmcd) as isize);
                         }
                     } else if nmhdr.code == SCN_MODIFIED {
                         // Scintilla's tracking-mode horizontal
