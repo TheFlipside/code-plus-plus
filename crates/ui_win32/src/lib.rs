@@ -55,9 +55,12 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, ICC_BAR_CLASSES,
-    ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, NMHDR, TCIF_TEXT, TCITEMW, TCM_DELETEITEM,
-    TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_COMBOBOX,
-    WC_TABCONTROL,
+    ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT, LVCF_FMT, LVCF_TEXT,
+    LVCF_WIDTH, LVCOLUMNW, LVIF_TEXT, LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT,
+    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMTEXTW,
+    LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, NMHDR,
+    NMITEMACTIVATE, NM_DBLCLK, TCIF_TEXT, TCITEMW, TCM_DELETEITEM, TCM_GETCURSEL, TCM_INSERTITEMW,
+    TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_COMBOBOX, WC_LISTVIEWW, WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, ReleaseCapture, SetCapture, SetFocus, VK_0, VK_F, VK_F3, VK_G, VK_H,
@@ -67,7 +70,7 @@ use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDR
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CreateAcceleratorTableW,
     CreateMenu, CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyWindow, DispatchMessageW,
-    DrawMenuBar, GetClientRect, GetCursorPos, GetMenuItemCount, GetMessageW, GetParent,
+    DrawMenuBar, GetClientRect, GetCursorPos, GetDlgItem, GetMenuItemCount, GetMessageW, GetParent,
     GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW,
     IsWindow, LoadCursorW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
     RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
@@ -190,6 +193,26 @@ const STATUSBAR_CLASS: PCWSTR = w!("msctls_statusbar32");
 /// the parent's `WindowState`.
 const FIF_DOCK_CLASS: PCWSTR = w!("CodePlusPlusFifDock");
 const FIF_SPLITTER_CLASS: PCWSTR = w!("CodePlusPlusFifSplitter");
+/// Modeless top-level window class for the FIF progress dialog
+/// shown while a search is running (m4 step 4b).
+const FIF_PROGRESS_CLASS: PCWSTR = w!("CodePlusPlusFifProgress");
+
+/// Control ids for the FIF progress window's three children.
+const IDC_FIF_PROGRESS_PATH: u16 = 300;
+const IDC_FIF_PROGRESS_STATS: u16 = 301;
+const IDC_FIF_PROGRESS_CANCEL: u16 = 302;
+
+/// Control id for the dock's close-X button. Local to the dock's
+/// own wndproc — never reaches `main_wnd_proc`'s WM_COMMAND switch.
+const IDC_FIF_DOCK_CLOSE: u16 = 303;
+
+/// Height of the FIF dock's header band (status label on the
+/// left, close X on the right). The listview starts immediately
+/// below this band.
+const FIF_DOCK_HEADER_H: i32 = 22;
+/// Width of the dock's close-X button — slightly wider than tall
+/// so it reads as a button rather than a square.
+const FIF_DOCK_CLOSE_W: i32 = 24;
 
 /// Tab strip height in pixels. The Win32 default at 96 DPI; once
 /// `layout_children` becomes DPI-aware (Phase 4 polish item) this
@@ -302,6 +325,25 @@ const FR_CHECKBOX_TOP: i32 = FR_DLG_FIF_DIRECTORY_Y + 40;
 /// a u16 pattern directly.
 const IDCANCEL_U16: u16 = IDCANCEL.0 as u16;
 
+/// One per-file FIF outcome buffered while a search is running.
+/// The owning [`WindowState`] flushes these into the listview on
+/// `FifEvent::Done`.
+struct FifPendingFile {
+    path: PathBuf,
+    matches: Vec<codepp_core::FifMatch>,
+    truncated: bool,
+}
+
+/// Mapping from a listview row index back to a source path. The
+/// `NM_DBLCLK` handler uses this to open the file. The matched
+/// line/column already live in `FifPendingFile.matches`; the m4
+/// polish caret-jump will reintroduce them on this struct when it
+/// wires post-load navigation through Scintilla.
+#[derive(Clone)]
+struct FifListviewRow {
+    path: PathBuf,
+}
+
 /// Drag-tracking state captured on `WM_LBUTTONDOWN` over the FIF
 /// splitter and consumed on each `WM_MOUSEMOVE` until the matching
 /// `WM_LBUTTONUP`. Stored on `WindowState` rather than the splitter
@@ -367,23 +409,51 @@ struct WindowState {
     /// loop reads this in `IsDialogMessageW(dlg, &msg)` so Tab /
     /// Enter / Esc work inside the dialog while it's open.
     find_replace_dlg: Option<HWND>,
-    /// FIF results dock (Phase 4 m4 step 3). Empty container in
-    /// step 3; step 4 fills it with a SysListView32. Hidden until
-    /// the user opens the Find-in-Files panel.
+    /// FIF results dock (Phase 4 m4 step 3). Hidden until a search
+    /// completes and step 4b populates the listview.
     fif_dock_hwnd: HWND,
+    /// SysListView32 child of `fif_dock_hwnd`. Three columns: File
+    /// / Line / Match. Cleared on each new search; populated on
+    /// the terminal `FifEvent::Done` event.
+    fif_listview_hwnd: HWND,
+    /// Status STATIC pinned to the dock header — "X matches in Y
+    /// files" when results are present.
+    fif_dock_status: HWND,
+    /// Close-X button at the dock header's right edge. Click
+    /// hides the dock without losing the listview contents.
+    fif_dock_close: HWND,
     /// Draggable handle that resizes the dock vs. the editor when
     /// the dock is visible. Hidden alongside `fif_dock_hwnd`.
     fif_splitter_hwnd: HWND,
-    /// Whether the dock + splitter are currently shown. Toggled by
-    /// the Search → Find in Files menu (will be driven by the
-    /// FIF dialog's Search button in step 4).
+    /// Whether the dock + splitter are currently shown. Set true
+    /// when the search-completion drain reveals results; cleared
+    /// when the user closes the dock (step 4b's × button) or
+    /// starts a new search that yields no results.
     fif_dock_visible: bool,
     /// Persisted dock height across show/hide cycles within one
     /// session. Cross-session persistence lands with the rest of
-    /// the FIF dialog state in step 4.
+    /// the FIF dialog state.
     fif_dock_height: i32,
     /// `Some` iff the user is currently mid-drag on the splitter.
     fif_splitter_drag: Option<SplitterDrag>,
+    /// Modeless top-level progress window shown while a FIF job
+    /// is running. `None` until the user clicks Find All; the
+    /// terminal `FifEvent` (Done or Cancelled) destroys it and
+    /// resets back to None.
+    fif_progress_hwnd: Option<HWND>,
+    /// Job id of the currently-running FIF search. Filters stale
+    /// events when a second `start_fif` preempts the first.
+    /// Cleared on terminal event.
+    fif_active_job: Option<u64>,
+    /// Per-file outcomes accumulated during the active job. Drained
+    /// into the listview on the terminal `Done` event so the user
+    /// sees the full result set at once rather than rows
+    /// trickling in.
+    fif_pending_results: Vec<FifPendingFile>,
+    /// Backing store for the listview's items so `NM_DBLCLK` can
+    /// resolve the clicked row index back to a file path + line
+    /// number. Index here matches the listview row index 1:1.
+    fif_listview_index: Vec<FifListviewRow>,
     editor: EditorHandle,
     shell: Shell,
 }
@@ -3086,13 +3156,24 @@ extern "system" fn find_replace_wnd_proc(
                         }
                         LRESULT(0)
                     }
-                    // FIF buttons — m4 step 4a stubs. Step 4b wires
-                    // Find All to `Shell::start_fif`, Replace in
-                    // Files to the same with replace-on-match
-                    // semantics, and Browse to `IFileDialog`.
-                    IDC_FR_FIF_FIND_ALL | IDC_FR_FIF_REPLACE_IN_FILES | IDC_FR_FIF_BROWSE => {
+                    IDC_FR_FIF_FIND_ALL => {
                         if notif == BN_CLICKED {
-                            tracing::trace!(cmd, "FIF action awaiting m4 step 4b wiring");
+                            handle_fif_find_all(hwnd, state);
+                        }
+                        LRESULT(0)
+                    }
+                    IDC_FR_FIF_BROWSE => {
+                        if notif == BN_CLICKED {
+                            handle_fif_browse(state);
+                        }
+                        LRESULT(0)
+                    }
+                    // Replace in Files ships in a follow-up — the
+                    // search half is identical to Find All; the
+                    // per-match replace step is the new piece.
+                    IDC_FR_FIF_REPLACE_IN_FILES => {
+                        if notif == BN_CLICKED {
+                            tracing::trace!(cmd, "FIF Replace in Files awaiting wiring");
                         }
                         LRESULT(0)
                     }
@@ -3690,6 +3771,141 @@ unsafe fn handle_replace_all(state: &mut FindReplaceState) {
             scope,
         );
         set_info_status(state, &msg);
+    }
+}
+
+/// "Find All" click handler on the FIF tab. Reads the dialog's
+/// query/directory/flag state, builds a [`codepp_shell::FifRequest`],
+/// kicks off `Shell::start_fif`, and (on success) hides the dialog
+/// and shows the modeless progress window.
+unsafe fn handle_fif_find_all(dlg: HWND, state: &mut FindReplaceState) {
+    let query = unsafe { read_edit_text(state.find_edit) };
+    if query.is_empty() {
+        unsafe { set_error_status(state, "Query is empty") };
+        return;
+    }
+    let directory = unsafe { read_edit_text(state.fif_directory_edit) };
+    if directory.is_empty() {
+        unsafe { set_error_status(state, "Directory is empty") };
+        return;
+    }
+    let recurse = unsafe { button_checked(state.fif_subfolders_cb) };
+    // `In hidden folders` is a future-use flag; the default exclude
+    // set already prunes `.git`/`.svn`/etc. and step 4b ships
+    // without OS-level hidden-attribute filtering. Tracked as a
+    // polish item.
+    let _hidden = unsafe { button_checked(state.fif_hidden_folders_cb) };
+
+    let mut walk_opts = codepp_core::FifWalkOpts::default();
+    walk_opts.recurse = recurse;
+
+    let query_opts = codepp_core::FifQueryOpts {
+        match_case: unsafe { button_checked(state.match_case_cb) },
+        whole_word: unsafe { button_checked(state.whole_word_cb) },
+        regex: unsafe { button_checked(state.mode_regex_radio) },
+    };
+
+    let request = codepp_shell::FifRequest {
+        query: query.clone(),
+        opts: query_opts,
+        root: PathBuf::from(&directory),
+        walk: walk_opts,
+    };
+
+    let main_hwnd = state.main_hwnd;
+
+    // Borrow main window state briefly to start the job; release
+    // before we touch any other UI to keep `state_from_hwnd`
+    // re-entries safe (DESIGN.md §5.4).
+    let job_raw = {
+        let Some(win) = (unsafe { state_from_hwnd(main_hwnd) }) else {
+            return;
+        };
+        match win.shell.start_fif(request) {
+            Ok(id) => id.raw(),
+            Err(e) => {
+                unsafe { set_error_status(state, &format!("Find in Files: {e}")) };
+                return;
+            }
+        }
+    };
+
+    unsafe {
+        // Hide the Find/Replace dialog while the search runs — N++
+        // does the same. Refocus is handled by the progress window.
+        let _ = ShowWindow(dlg, SW_HIDE);
+    }
+
+    let progress = unsafe { show_fif_progress(main_hwnd, &query) };
+
+    // Re-borrow to install the progress HWND and active-job
+    // tracking on the main window state.
+    if let Some(win) = unsafe { state_from_hwnd(main_hwnd) } {
+        win.fif_progress_hwnd = progress;
+        win.fif_active_job = Some(job_raw);
+        win.fif_pending_results.clear();
+        win.fif_listview_index.clear();
+        unsafe { fif_listview_clear(win.fif_listview_hwnd) };
+    }
+}
+
+/// "Browse..." click handler on the FIF tab. Opens a folder picker
+/// (`SHBrowseForFolderW`) and writes the chosen path into the
+/// directory combobox edit field.
+unsafe fn handle_fif_browse(state: &FindReplaceState) {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{
+        SHBrowseForFolderW, SHGetPathFromIDListW, BFFM_INITIALIZED, BIF_NEWDIALOGSTYLE,
+        BIF_RETURNONLYFSDIRS, BROWSEINFOW,
+    };
+
+    // Seed the browser with whatever's currently in the directory
+    // combobox so the picker opens at the user's last choice.
+    let initial = unsafe { read_edit_text(state.fif_directory_edit) };
+    let mut initial_w: Vec<u16> = initial.encode_utf16().chain(std::iter::once(0)).collect();
+
+    // Custom callback to set the initial selection on
+    // BFFM_INITIALIZED. Hands the picker the seeded path string as
+    // an LPARAM. Ignored on first launch when `initial` is empty.
+    extern "system" fn browse_cb(hwnd: HWND, msg: u32, _lparam: LPARAM, lp_data: LPARAM) -> i32 {
+        if msg == BFFM_INITIALIZED && lp_data.0 != 0 {
+            const BFFM_SETSELECTIONW: u32 = 0x466;
+            unsafe {
+                SendMessageW(hwnd, BFFM_SETSELECTIONW, Some(WPARAM(1)), Some(lp_data));
+            }
+        }
+        0
+    }
+
+    let bi = BROWSEINFOW {
+        hwndOwner: state.main_hwnd,
+        ulFlags: BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE,
+        lpfn: Some(browse_cb),
+        lParam: LPARAM(if initial.is_empty() {
+            0
+        } else {
+            initial_w.as_mut_ptr() as isize
+        }),
+        ..Default::default()
+    };
+    let pidl = unsafe { SHBrowseForFolderW(&bi) };
+    if pidl.is_null() {
+        return;
+    }
+    let mut path_buf = [0u16; 260]; // MAX_PATH; SHGetPathFromIDListW caps here.
+    let ok = unsafe { SHGetPathFromIDListW(pidl, &mut path_buf) };
+    unsafe { CoTaskMemFree(Some(pidl as *const _)) };
+    if !ok.as_bool() {
+        return;
+    }
+    let null_idx = path_buf
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(path_buf.len());
+    let path = String::from_utf16_lossy(&path_buf[..null_idx]);
+    let mut path_w: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let _ = SetWindowTextW(state.fif_directory_edit, PCWSTR(path_w.as_mut_ptr()));
     }
 }
 
@@ -4617,14 +4833,11 @@ fn show_find_replace_dialog(
         state.fif_replace_in_files_btn = fif_replace_in_files_btn;
         state.status_label = status_label;
 
-        // Step 4a ships the FIF tab layout; the action buttons stay
-        // disabled until step 4b wires `Shell::start_fif`,
-        // replace-on-match, and the IFileDialog directory picker.
-        // Greying them is honest about the capability — clicking
-        // would otherwise trace-log silently and confuse users.
-        let _ = EnableWindow(fif_find_all_btn, false);
+        // Replace in Files ships in a follow-up; the search-half is
+        // shared with Find All but the per-match replace step
+        // hasn't landed yet. Greying it is honest about the
+        // capability vs. a silent trace on click.
         let _ = EnableWindow(fif_replace_in_files_btn, false);
-        let _ = EnableWindow(fif_browse_btn, false);
 
         state.controls_ready = true;
 
@@ -4759,10 +4972,11 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
     unsafe {
         let instance = GetModuleHandleW(None)?;
 
-        // Common controls — status bar (BAR) and tab strip (TAB).
+        // Common controls — status bar (BAR), tab strip (TAB),
+        // and listview (LISTVIEW) for the FIF results dock.
         let icc = INITCOMMONCONTROLSEX {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_BAR_CLASSES | ICC_TAB_CLASSES,
+            dwICC: ICC_BAR_CLASSES | ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES,
         };
         InitCommonControlsEx(&icc).ok()?;
 
@@ -4916,6 +5130,98 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             None,
         )?;
 
+        // Header chrome inside the dock — a status STATIC on the
+        // left for "X matches in Y files" and a close-X button on
+        // the right. Both are visible from creation; the dock's
+        // own visibility gates them.
+        let fif_dock_status = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE,
+            0,
+            0,
+            0,
+            0,
+            Some(fif_dock_hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        )?;
+        let fif_dock_close = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            // Multiplication-sign U+2715 reads as a close glyph at
+            // small sizes without needing a custom-drawn button or
+            // an icon resource.
+            w!("\u{2715}"),
+            WS_CHILD | WS_VISIBLE | style_bits(BS_PUSHBUTTON),
+            0,
+            0,
+            0,
+            0,
+            Some(fif_dock_hwnd),
+            Some(HMENU(IDC_FIF_DOCK_CLOSE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )?;
+
+        // Listview inside the dock (m4 step 4b). Visible from
+        // creation so the dock's first show flashes results
+        // immediately rather than after a separate paint cycle.
+        // The dock itself stays hidden (WS_CHILD only); this child
+        // is only visible when the dock is.
+        let fif_listview_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            WC_LISTVIEWW,
+            PCWSTR::null(),
+            WS_CHILD
+                | WS_VISIBLE
+                | WS_TABSTOP
+                | style_bits((LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL) as i32),
+            0,
+            0,
+            0,
+            0,
+            Some(fif_dock_hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        )?;
+        // Full-row select + double-buffering for smooth scroll.
+        SendMessageW(
+            fif_listview_hwnd,
+            LVM_SETEXTENDEDLISTVIEWSTYLE,
+            Some(WPARAM(0)),
+            Some(LPARAM(
+                (LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER) as isize,
+            )),
+        );
+        // Insert the three columns. Widths chosen for a 900-px
+        // initial main-window width (default `CreateWindowExW` size
+        // in `run`); the user can resize each header independently
+        // post-search.
+        for (i, (title, width)) in [("File", 360_i32), ("Line", 70_i32), ("Match", 480_i32)]
+            .iter()
+            .enumerate()
+        {
+            let mut text: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+            let col = LVCOLUMNW {
+                mask: LVCF_FMT | LVCF_TEXT | LVCF_WIDTH,
+                fmt: LVCFMT_LEFT,
+                cx: *width,
+                pszText: PWSTR(text.as_mut_ptr()),
+                cchTextMax: text.len() as i32,
+                ..Default::default()
+            };
+            SendMessageW(
+                fif_listview_hwnd,
+                LVM_INSERTCOLUMNW,
+                Some(WPARAM(i)),
+                Some(LPARAM(&col as *const _ as isize)),
+            );
+        }
+
         // Capture the direct-call pair.
         let direct_fn_lr = SendMessageW(scintilla_hwnd, SCI_GETDIRECTFUNCTION, None, None);
         let direct_ptr_lr = SendMessageW(scintilla_hwnd, SCI_GETDIRECTPOINTER, None, None);
@@ -5003,10 +5309,17 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             window_menu: menus.window_menu,
             find_replace_dlg: None,
             fif_dock_hwnd,
+            fif_listview_hwnd,
+            fif_dock_status,
+            fif_dock_close,
             fif_splitter_hwnd,
             fif_dock_visible: false,
             fif_dock_height: DEFAULT_DOCK_HEIGHT_PX,
             fif_splitter_drag: None,
+            fif_progress_hwnd: None,
+            fif_active_job: None,
+            fif_pending_results: Vec::new(),
+            fif_listview_index: Vec::new(),
             editor,
             shell,
         });
@@ -5284,6 +5597,9 @@ unsafe fn layout_children(
             let actual_dock_height = (mid_height - scintilla_height - SPLITTER_HEIGHT_PX).max(0);
             let _ = MoveWindow(scintilla, 0, scintilla_top, width, scintilla_height, true);
             let _ = MoveWindow(splitter, 0, splitter_top, width, SPLITTER_HEIGHT_PX, true);
+            // The dock's own WM_SIZE handler positions its
+            // children (status STATIC, close-X button, listview)
+            // — see `fif_dock_wnd_proc`.
             let _ = MoveWindow(dock, 0, dock_top, width, actual_dock_height, true);
         } else {
             // Splitter and dock are hidden — leave them where they
@@ -5342,20 +5658,719 @@ unsafe fn register_fif_classes() {
             ..Default::default()
         };
         let _ = RegisterClassExW(&splitter_class);
+
+        // FIF progress dialog: modeless top-level window shown
+        // while a search is running. Standard arrow cursor; system
+        // 3D face for the background; small cap-only window styled
+        // by `show_fif_progress`.
+        let progress_class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(fif_progress_wnd_proc),
+            hInstance: instance.into(),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            hbrBackground: dialog_bg_brush(),
+            lpszClassName: FIF_PROGRESS_CLASS,
+            ..Default::default()
+        };
+        let _ = RegisterClassExW(&progress_class);
     });
 }
 
-/// Wnd_proc for the FIF dock container. Step 3 just delegates to
-/// `DefWindowProcW`, so the dock paints its registered background
-/// brush and reports a HitTestClient on hovers. Step 4 will add a
-/// `WM_NOTIFY` handler that forwards listview clicks to the shell.
+/// Resolve the progress window's owner HWND from `GWLP_USERDATA`
+/// (stashed at `WM_NCCREATE`) and call `Shell::cancel_fif` through
+/// it. Used by both Cancel-button clicks and the title-bar X.
+unsafe fn cancel_via_owner(progress: HWND) {
+    let owner_raw = unsafe { GetWindowLongPtrW(progress, GWLP_USERDATA) };
+    if owner_raw == 0 {
+        return;
+    }
+    let owner = HWND(owner_raw as *mut c_void);
+    if let Some(state) = unsafe { state_from_hwnd(owner) } {
+        state.shell.cancel_fif();
+    }
+}
+
+/// Wnd_proc for the FIF progress dialog. Owns nothing — Cancel
+/// clicks route to `Shell::cancel_fif` via the parent's
+/// `WindowState`, and the window is destroyed by the search-
+/// completion drain in `main_wnd_proc`.
+extern "system" fn fif_progress_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_COMMAND => {
+                let cmd = (wparam.0 & 0xFFFF) as u16;
+                if cmd == IDC_FIF_PROGRESS_CANCEL || cmd == IDCANCEL_U16 {
+                    cancel_via_owner(hwnd);
+                    // The terminal `FifEvent::Cancelled` will
+                    // destroy this window; no need to do it here.
+                    return LRESULT(0);
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_CLOSE => {
+                // System-menu close (the title-bar X). Route
+                // through Shell::cancel_fif so the terminal event
+                // arrives and `finalize_fif_job` clears
+                // `fif_progress_hwnd`. Skipping this would let
+                // `DefWindowProcW` destroy the window directly,
+                // leaving a stale HWND in `WindowState` that
+                // `finalize_fif_job` would later double-destroy.
+                cancel_via_owner(hwnd);
+                LRESULT(0)
+            }
+            WM_NCCREATE => {
+                let cs = lparam.0 as *const CREATESTRUCTW;
+                if !cs.is_null() {
+                    let owner_ptr = (*cs).lpCreateParams as isize;
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, owner_ptr);
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_ERASEBKGND => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let mut rect = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rect);
+                FillRect(hdc, &rect, dialog_bg_brush());
+                LRESULT(1)
+            }
+            WM_CTLCOLORSTATIC => LRESULT(dialog_bg_brush().0 as isize),
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+}
+
+/// Construct and show the FIF progress dialog. `owner` is the main
+/// window — its `WindowState` is reachable via `GWLP_USERDATA`, and
+/// the Cancel button forwards through it to `Shell::cancel_fif`.
+unsafe fn show_fif_progress(owner: HWND, query: &str) -> Option<HWND> {
+    unsafe {
+        let instance = GetModuleHandleW(None).ok()?;
+        const W: i32 = 460;
+        const H: i32 = 140;
+        let mut owner_rect = RECT::default();
+        let _ = GetWindowRect(owner, &mut owner_rect);
+        let owner_w = owner_rect.right - owner_rect.left;
+        let owner_h = owner_rect.bottom - owner_rect.top;
+        let x = owner_rect.left + (owner_w - W) / 2;
+        let y = owner_rect.top + (owner_h - H) / 2;
+
+        let mut title_buf: Vec<u16> = "Find in Files"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let dlg = CreateWindowExW(
+            WS_EX_DLGMODALFRAME,
+            FIF_PROGRESS_CLASS,
+            PCWSTR(title_buf.as_mut_ptr()),
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            x,
+            y,
+            W,
+            H,
+            Some(owner),
+            None,
+            Some(instance.into()),
+            Some(owner.0),
+        )
+        .ok()?;
+
+        // First-row label: query text. Second-row label: current
+        // file path. Third-row label: stats (X hits in Y files).
+        // Cancel button at the bottom-right.
+        const PAD: i32 = 12;
+        const ROW_H: i32 = 18;
+        const QUERY_Y: i32 = 12;
+        const PATH_Y: i32 = QUERY_Y + ROW_H + 6;
+        const STATS_Y: i32 = PATH_Y + ROW_H + 6;
+        const BTN_W: i32 = 80;
+        const BTN_H: i32 = 26;
+        const BTN_X: i32 = W - PAD - BTN_W - 8; // 8 for client/non-client gap
+        const BTN_Y: i32 = H - PAD - BTN_H - 24;
+
+        let mut query_buf: Vec<u16> = format!("Searching for: {query}")
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR(query_buf.as_mut_ptr()),
+            WS_CHILD | WS_VISIBLE,
+            PAD,
+            QUERY_Y,
+            W - 2 * PAD,
+            ROW_H,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        );
+        let path_static = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Starting…"),
+            WS_CHILD | WS_VISIBLE,
+            PAD,
+            PATH_Y,
+            W - 2 * PAD,
+            ROW_H,
+            Some(dlg),
+            Some(HMENU(IDC_FIF_PROGRESS_PATH as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let stats_static = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("0 hits in 0 files"),
+            WS_CHILD | WS_VISIBLE,
+            PAD,
+            STATS_Y,
+            W - 2 * PAD - BTN_W - 8,
+            ROW_H,
+            Some(dlg),
+            Some(HMENU(IDC_FIF_PROGRESS_STATS as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let cancel_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("&Cancel"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_DEFPUSHBUTTON),
+            BTN_X,
+            BTN_Y,
+            BTN_W,
+            BTN_H,
+            Some(dlg),
+            Some(HMENU(IDC_FIF_PROGRESS_CANCEL as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
+        for child in [path_static, stats_static, cancel_btn] {
+            apply_dialog_font(child, font);
+        }
+
+        let _ = ShowWindow(dlg, SW_SHOW);
+        Some(dlg)
+    }
+}
+
+/// Update the "current path" label on the progress dialog.
+unsafe fn fif_progress_set_path(progress: HWND, path: &Path) {
+    // Truncation is char-based, not byte-based: a slice at
+    // `display.len() - 79` panics if that byte falls inside a
+    // multi-byte UTF-8 sequence (any non-ASCII tail in the path —
+    // CJK / Cyrillic / accented Latin / emoji directory names are
+    // common). `char_indices().rev().nth(78)` finds the byte
+    // offset 79 chars back from the end.
+    const MAX_DISPLAY_CHARS: usize = 80;
+    let display = path.to_string_lossy();
+    let truncated = if display.chars().count() > MAX_DISPLAY_CHARS {
+        let start = display
+            .char_indices()
+            .rev()
+            .nth(MAX_DISPLAY_CHARS - 2)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        format!("…{}", &display[start..])
+    } else {
+        display.into_owned()
+    };
+    let mut buf: Vec<u16> = truncated.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        if let Ok(child) = GetDlgItem(Some(progress), IDC_FIF_PROGRESS_PATH as i32) {
+            let _ = SetWindowTextW(child, PCWSTR(buf.as_mut_ptr()));
+        }
+    }
+}
+
+/// Update the "X hits in Y files" label on the progress dialog.
+unsafe fn fif_progress_set_stats(progress: HWND, hits: usize, files: usize) {
+    let s = format!(
+        "{hits} hit{} in {files} file{}",
+        if hits == 1 { "" } else { "s" },
+        if files == 1 { "" } else { "s" },
+    );
+    let mut buf: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        if let Ok(child) = GetDlgItem(Some(progress), IDC_FIF_PROGRESS_STATS as i32) {
+            let _ = SetWindowTextW(child, PCWSTR(buf.as_mut_ptr()));
+        }
+    }
+}
+
+/// Tear down the progress dialog. Called from the search-completion
+/// drain in `main_wnd_proc::WM_APP_WAKE`.
+unsafe fn close_fif_progress(progress: HWND) {
+    unsafe {
+        let _ = DestroyWindow(progress);
+    }
+}
+
+/// Clear the FIF results listview and reset the row index. Called
+/// at the start of each search.
+unsafe fn fif_listview_clear(listview: HWND) {
+    unsafe {
+        SendMessageW(listview, LVM_DELETEALLITEMS, None, None);
+    }
+}
+
+/// Append one row to the FIF results listview. Returns the
+/// just-inserted row index, or -1 on failure.
+unsafe fn fif_listview_append(
+    listview: HWND,
+    file_display: &str,
+    line_no: u32,
+    match_text: &str,
+) -> i32 {
+    unsafe {
+        let mut file_buf: Vec<u16> = file_display
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let item_count = SendMessageW(listview, LVM_GETITEMCOUNT, None, None).0 as i32;
+        let item = LVITEMW {
+            mask: LVIF_TEXT,
+            iItem: item_count,
+            iSubItem: 0,
+            pszText: PWSTR(file_buf.as_mut_ptr()),
+            cchTextMax: file_buf.len() as i32,
+            ..Default::default()
+        };
+        let new_idx = SendMessageW(
+            listview,
+            LVM_INSERTITEMW,
+            Some(WPARAM(0)),
+            Some(LPARAM(&item as *const _ as isize)),
+        )
+        .0 as i32;
+        if new_idx < 0 {
+            return -1;
+        }
+        let mut line_buf: Vec<u16> = format!("{line_no}")
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let line_item = LVITEMW {
+            mask: LVIF_TEXT,
+            iItem: new_idx,
+            iSubItem: 1,
+            pszText: PWSTR(line_buf.as_mut_ptr()),
+            cchTextMax: line_buf.len() as i32,
+            ..Default::default()
+        };
+        SendMessageW(
+            listview,
+            LVM_SETITEMTEXTW,
+            Some(WPARAM(new_idx as usize)),
+            Some(LPARAM(&line_item as *const _ as isize)),
+        );
+        let mut match_buf: Vec<u16> = match_text
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let match_item = LVITEMW {
+            mask: LVIF_TEXT,
+            iItem: new_idx,
+            iSubItem: 2,
+            pszText: PWSTR(match_buf.as_mut_ptr()),
+            cchTextMax: match_buf.len() as i32,
+            ..Default::default()
+        };
+        SendMessageW(
+            listview,
+            LVM_SETITEMTEXTW,
+            Some(WPARAM(new_idx as usize)),
+            Some(LPARAM(&match_item as *const _ as isize)),
+        );
+        new_idx
+    }
+}
+
+/// Drain queued FIF events from the shell and route them to the
+/// progress window (during search) or the dock listview (on
+/// search completion). Called from `WM_APP_WAKE` after the
+/// loader/file-watcher drains. Filters by `fif_active_job` so
+/// stale events from a preempted job land harmlessly.
+unsafe fn drain_fif_events(main_hwnd: HWND) {
+    let (events, active_job) = {
+        let Some(state) = (unsafe { state_from_hwnd(main_hwnd) }) else {
+            return;
+        };
+        (state.shell.take_fif_events(), state.fif_active_job)
+    };
+    if events.is_empty() {
+        return;
+    }
+    let Some(active_job) = active_job else {
+        return;
+    };
+
+    let mut last_path: Option<PathBuf> = None;
+    let mut new_files = 0usize;
+    let mut new_hits = 0usize;
+    let mut terminal: Option<codepp_shell::FifEvent> = None;
+
+    for event in events {
+        match event {
+            codepp_shell::FifEvent::FileMatches { job, path, outcome } => {
+                if job.raw() != active_job {
+                    continue; // stale, from a preempted job
+                }
+                new_files += 1;
+                new_hits += outcome.matches.len();
+                last_path = Some(path.clone());
+                if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+                    state.fif_pending_results.push(FifPendingFile {
+                        path,
+                        matches: outcome.matches,
+                        truncated: outcome.truncated,
+                    });
+                }
+            }
+            term @ (codepp_shell::FifEvent::Done { .. }
+            | codepp_shell::FifEvent::Cancelled { .. }) => {
+                let job_id = match &term {
+                    codepp_shell::FifEvent::Done { job, .. } => job.raw(),
+                    codepp_shell::FifEvent::Cancelled { job, .. } => job.raw(),
+                    _ => unreachable!(),
+                };
+                if job_id == active_job {
+                    terminal = Some(term);
+                }
+            }
+        }
+    }
+
+    // Update progress window with the latest path + cumulative
+    // counts. Done before the terminal event handling so the user
+    // sees a final number tick on the way to "complete".
+    if new_files > 0 || new_hits > 0 {
+        let snap = unsafe { state_from_hwnd(main_hwnd) }
+            .map(|s| (s.fif_progress_hwnd, total_pending_stats(s)));
+        if let Some((Some(progress), (total_hits, total_files))) = snap {
+            unsafe { fif_progress_set_stats(progress, total_hits, total_files) };
+            if let Some(p) = &last_path {
+                unsafe { fif_progress_set_path(progress, p) };
+            }
+        }
+    }
+
+    if let Some(term) = terminal {
+        unsafe { finalize_fif_job(main_hwnd, term) };
+    }
+}
+
+/// Sum the per-file pending results into `(hits, files)` counters
+/// for the progress window's running total.
+fn total_pending_stats(state: &WindowState) -> (usize, usize) {
+    let files = state.fif_pending_results.len();
+    let hits: usize = state
+        .fif_pending_results
+        .iter()
+        .map(|f| f.matches.len())
+        .sum();
+    (hits, files)
+}
+
+/// Handle the terminal `FifEvent::Done` / `Cancelled`. Closes the
+/// progress window, populates the listview from buffered results,
+/// shows the dock if any matches were found, and clears the
+/// active-job tracking.
+unsafe fn finalize_fif_job(main_hwnd: HWND, terminal: codepp_shell::FifEvent) {
+    // Drain progress HWND + pending results out of state in one
+    // brief borrow; populate the listview AFTER the borrow ends so
+    // `LVM_INSERTITEMW` syncs cannot re-enter.
+    let (progress_hwnd, pending, listview, dialog) = {
+        let Some(state) = (unsafe { state_from_hwnd(main_hwnd) }) else {
+            return;
+        };
+        let progress = state.fif_progress_hwnd.take();
+        let pending = std::mem::take(&mut state.fif_pending_results);
+        state.fif_active_job = None;
+        (
+            progress,
+            pending,
+            state.fif_listview_hwnd,
+            state.find_replace_dlg,
+        )
+    };
+
+    if let Some(p) = progress_hwnd {
+        unsafe { close_fif_progress(p) };
+    }
+
+    let (cancelled, total_files) = match &terminal {
+        codepp_shell::FifEvent::Done { stats, .. } => (false, stats.files_with_matches),
+        codepp_shell::FifEvent::Cancelled { .. } => (true, pending.len()),
+        _ => return,
+    };
+    let _ = total_files; // captured for the future dock-header polish
+
+    // Populate listview + index. We rebuild `fif_listview_index`
+    // here so the `NM_DBLCLK` handler can map row → location.
+    let mut new_index: Vec<FifListviewRow> = Vec::with_capacity(64);
+    let total_hits: usize = pending.iter().map(|f| f.matches.len()).sum();
+    unsafe { fif_listview_clear(listview) };
+    for file in &pending {
+        let display = file.path.to_string_lossy();
+        let suffix = if file.truncated { " (truncated)" } else { "" };
+        let display_with = if suffix.is_empty() {
+            display.into_owned()
+        } else {
+            format!("{display}{suffix}")
+        };
+        for m in &file.matches {
+            let row =
+                unsafe { fif_listview_append(listview, &display_with, m.line_no, &m.line_text) };
+            if row >= 0 {
+                new_index.push(FifListviewRow {
+                    path: file.path.clone(),
+                });
+            }
+        }
+    }
+    let any_results = !new_index.is_empty();
+    let status_hwnd_for_text = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        state.fif_listview_index = new_index;
+        Some(state.fif_dock_status)
+    } else {
+        None
+    };
+    if let Some(status) = status_hwnd_for_text {
+        let prefix = if cancelled { "Cancelled — " } else { "" };
+        let s = format!(
+            "{prefix}{total_hits} match{} in {} file{}",
+            if total_hits == 1 { "" } else { "es" },
+            pending.len(),
+            if pending.len() == 1 { "" } else { "s" },
+        );
+        let mut buf: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            let _ = SetWindowTextW(status, PCWSTR(buf.as_mut_ptr()));
+        }
+    }
+
+    // Reveal the dock if we have something to show. On a
+    // cancelled-with-zero-results we leave the dock as-is so the
+    // user isn't surprised by a sudden empty pane.
+    if any_results {
+        unsafe { show_fif_dock(main_hwnd) };
+    } else if cancelled {
+        // No-op: keep prior dock state.
+    } else {
+        // Done with zero results: surface a status message on the
+        // Find/Replace dialog if it's still around. Quietest
+        // signal that doesn't demand a modal dialog.
+        if let Some(dlg) = dialog {
+            let mut buf: Vec<u16> = "Find in Files: no results"
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            unsafe {
+                let _ = SetWindowTextW(dlg, PCWSTR(buf.as_mut_ptr()));
+            }
+        }
+    }
+}
+
+/// Open the file referenced by the listview row the user just
+/// double-clicked, then position the caret at the matched line +
+/// column once the load completes (queued via Shell's normal load
+/// path; the post-load focus shift is handled by the existing
+/// load drain).
+unsafe fn handle_fif_listview_dblclk(main_hwnd: HWND, row: usize) {
+    // Look up the row in the index and queue the open through the
+    // Shell's normal load path. After load completes, the
+    // WM_APP_WAKE drain will set the active tab; m4 polish will
+    // wire a post-load caret jump to (line_no, col_start) — for
+    // now Scintilla lands at column 0 of line 0 and the user can
+    // press Ctrl+G to navigate.
+    let path = {
+        let Some(state) = (unsafe { state_from_hwnd(main_hwnd) }) else {
+            return;
+        };
+        state
+            .fif_listview_index
+            .get(row)
+            .map(|FifListviewRow { path }| path.clone())
+    };
+    let Some(path) = path else {
+        return;
+    };
+    if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        state.shell.open_file(path);
+    }
+}
+
+/// Show the FIF dock and resize Scintilla around it. Idempotent.
+unsafe fn show_fif_dock(main_hwnd: HWND) {
+    let snapshot = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        if state.fif_dock_visible {
+            return;
+        }
+        state.fif_dock_visible = true;
+        Some((
+            state.tab_hwnd,
+            state.scintilla_hwnd,
+            state.status_hwnd,
+            state.fif_splitter_hwnd,
+            state.fif_dock_hwnd,
+            state.fif_dock_height,
+        ))
+    } else {
+        None
+    };
+    let Some((tabs, scintilla, status, splitter, dock, dock_height)) = snapshot else {
+        return;
+    };
+    unsafe {
+        let _ = ShowWindow(splitter, SW_SHOW);
+        let _ = ShowWindow(dock, SW_SHOW);
+        let mut rect = RECT::default();
+        if GetClientRect(main_hwnd, &mut rect).is_ok() {
+            layout_children(
+                tabs,
+                scintilla,
+                status,
+                splitter,
+                dock,
+                true,
+                dock_height,
+                rect.right,
+                rect.bottom,
+            );
+        }
+    }
+}
+
+/// Hide the FIF dock and resize Scintilla to reclaim its space.
+/// Idempotent. Listview contents are preserved across show/hide
+/// cycles — the user can re-trigger via the next search.
+unsafe fn hide_fif_dock(main_hwnd: HWND) {
+    let snapshot = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        if !state.fif_dock_visible {
+            return;
+        }
+        state.fif_dock_visible = false;
+        Some((
+            state.tab_hwnd,
+            state.scintilla_hwnd,
+            state.status_hwnd,
+            state.fif_splitter_hwnd,
+            state.fif_dock_hwnd,
+            state.fif_dock_height,
+        ))
+    } else {
+        None
+    };
+    let Some((tabs, scintilla, status, splitter, dock, dock_height)) = snapshot else {
+        return;
+    };
+    unsafe {
+        let _ = ShowWindow(splitter, SW_HIDE);
+        let _ = ShowWindow(dock, SW_HIDE);
+        let mut rect = RECT::default();
+        if GetClientRect(main_hwnd, &mut rect).is_ok() {
+            layout_children(
+                tabs,
+                scintilla,
+                status,
+                splitter,
+                dock,
+                false,
+                dock_height,
+                rect.right,
+                rect.bottom,
+            );
+        }
+    }
+}
+
+/// Wnd_proc for the FIF dock container. Owns the layout of its
+/// own children (status STATIC, close-X button, listview) on
+/// `WM_SIZE`, forwards `WM_NOTIFY` from the listview up to
+/// `main_wnd_proc` (so `NM_DBLCLK` reaches the file-open routing),
+/// and handles its own close-X button click.
 extern "system" fn fif_dock_wnd_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    unsafe {
+        match msg {
+            WM_SIZE => {
+                let width = (lparam.0 & 0xFFFF) as i32;
+                let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
+                let parent = GetParent(hwnd).unwrap_or_default();
+                let snap = state_from_hwnd(parent)
+                    .map(|s| (s.fif_dock_status, s.fif_dock_close, s.fif_listview_hwnd));
+                if let Some((status, close, listview)) = snap {
+                    // Header band: status fills (0 .. close_x);
+                    // close button is right-aligned. Listview
+                    // takes everything below the header.
+                    let close_x = (width - FIF_DOCK_CLOSE_W).max(0);
+                    let _ = MoveWindow(
+                        status,
+                        4,
+                        2,
+                        (close_x - 8).max(0),
+                        FIF_DOCK_HEADER_H - 4,
+                        true,
+                    );
+                    let _ = MoveWindow(
+                        close,
+                        close_x,
+                        1,
+                        FIF_DOCK_CLOSE_W,
+                        FIF_DOCK_HEADER_H - 2,
+                        true,
+                    );
+                    let listview_h = (height - FIF_DOCK_HEADER_H).max(0);
+                    let _ = MoveWindow(listview, 0, FIF_DOCK_HEADER_H, width, listview_h, true);
+                }
+                LRESULT(0)
+            }
+            WM_NOTIFY => {
+                // Forward to main_hwnd so the listview's NM_DBLCLK
+                // (and any future NM_RCLICK / LVN_*) reaches the
+                // routing handler in `main_wnd_proc::WM_NOTIFY`.
+                // DefWindowProcW does NOT forward WM_NOTIFY by
+                // default; the dock has to do it explicitly.
+                let parent = GetParent(hwnd).unwrap_or_default();
+                if !parent.0.is_null() {
+                    return SendMessageW(parent, msg, Some(wparam), Some(lparam));
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_COMMAND => {
+                let cmd = (wparam.0 & 0xFFFF) as u16;
+                if cmd == IDC_FIF_DOCK_CLOSE {
+                    let parent = GetParent(hwnd).unwrap_or_default();
+                    if !parent.0.is_null() {
+                        hide_fif_dock(parent);
+                    }
+                    return LRESULT(0);
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_CTLCOLORSTATIC => LRESULT(dialog_bg_brush().0 as isize),
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
 }
 
 /// Wnd_proc for the FIF splitter handle. Stays small — captures
@@ -5554,6 +6569,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     sync_tab_strip(state);
                     update_window_title(hwnd, &state.shell);
                 }
+                // Drain any FIF events the orchestrator delivered
+                // since last wake. Must happen AFTER the load /
+                // change drains above so a click on a FIF result
+                // that opens a file in a new tab — see step 4b's
+                // NM_DBLCLK handler — doesn't race a still-loading
+                // tab from this same wake.
+                drain_fif_events(hwnd);
                 LRESULT(0)
             }
             WM_DROPFILES => {
@@ -6119,6 +7141,22 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 if let Some(state) = state_from_hwnd(hwnd) {
                                     state.editor.send(SCI_SETSCROLLWIDTH, 1, 0);
                                 }
+                            }
+                        }
+                    } else if nmhdr.code == NM_DBLCLK {
+                        // Source-filter on the FIF listview so we
+                        // don't poach double-clicks meant for the
+                        // tab strip or any future listview.
+                        let owns_listview = if let Some(state) = state_from_hwnd(hwnd) {
+                            nmhdr.hwndFrom == state.fif_listview_hwnd
+                        } else {
+                            false
+                        };
+                        if owns_listview {
+                            let nmia = &*(lparam.0 as *const NMITEMACTIVATE);
+                            let row = nmia.iItem;
+                            if row >= 0 {
+                                handle_fif_listview_dblclk(hwnd, row as usize);
                             }
                         }
                     }
