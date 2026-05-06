@@ -2124,6 +2124,57 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         };
         self.shell.set_buffer_eol_by_id(id, eol)
     }
+
+    fn encode_sci(&mut self, view: i32) -> i32 {
+        // Single-view through Phase 4: only view 0 has an active
+        // buffer. View 1 (secondary) is reserved for split-view
+        // (Phase 5); it has no active buffer today, so a plugin
+        // asking for it gets -1 — matching N++'s "view has no
+        // buffer" return value.
+        if view != 0 {
+            return -1;
+        }
+        let id = self.current_buffer_id();
+        if id == 0 {
+            return -1;
+        }
+        // The `set_buffer_encoding_by_id` short-circuit on
+        // same-value still reports success, so a plugin calling
+        // `NPPM_ENCODESCI` on an already-UTF-8 buffer gets
+        // UNI_COOKIE back without any state churn. The bool
+        // return distinguishes "set succeeded" from "unknown id";
+        // the id we just pulled from `current_buffer_id()` is by
+        // construction live (it points at the active tab), so the
+        // false case is unreachable here. The `debug_assert!` pins
+        // that invariant so a future refactor making
+        // `current_buffer_id` return stale ids surfaces in tests
+        // rather than silently lying to the plugin.
+        let ok = self
+            .shell
+            .set_buffer_encoding_by_id(id, codepp_core::Encoding::Utf8);
+        debug_assert!(ok, "current_buffer_id() returned an id no live tab carries");
+        codepp_plugin_host::UNI_COOKIE
+    }
+
+    fn decode_sci(&mut self, view: i32) -> i32 {
+        if view != 0 {
+            return -1;
+        }
+        let id = self.current_buffer_id();
+        if id == 0 {
+            return -1;
+        }
+        // Same `windows-1252` rationale as `set_buffer_encoding`'s
+        // `UNI_8BIT` mapping — de-facto ANSI on western-European
+        // installs; `GetACP`-driven detection is Phase 5 polish.
+        // Same `debug_assert!` invariant as `encode_sci` above.
+        let ok = self.shell.set_buffer_encoding_by_id(
+            id,
+            codepp_core::Encoding::Other("windows-1252".to_string()),
+        );
+        debug_assert!(ok, "current_buffer_id() returned an id no live tab carries");
+        codepp_plugin_host::UNI_8BIT
+    }
 }
 
 /// Spawn a forwarder thread that pumps items from `src` into `dst`
@@ -2872,6 +2923,82 @@ mod tests {
             )
         };
         assert_eq!(r, Some(UNI_COOKIE));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn plugin_dispatch_decode_sci_then_get_buffer_encoding_returns_uni_8bit() {
+        // NPPM_DECODESCI on the primary view flips the active
+        // tab's encoding to "ANSI" (`Encoding::Other("windows-1252")`
+        // in our internal model). A subsequent NPPM_GETBUFFERENCODING
+        // observes the metadata change as `UNI_8BIT`. This pins the
+        // round-trip so a future refactor of the UNI_8BIT mapping
+        // (e.g. GetACP-driven detection) doesn't silently break the
+        // get/set/encode/decode quartet's cross-consistency.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dec.txt");
+        std::fs::write(&path, "x").unwrap();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        const NPPM_DECODESCI: u32 = (0x0400 + 1000) + 27;
+        const NPPM_GETBUFFERENCODING: u32 = (0x0400 + 1000) + 66;
+        const UNI_8BIT: isize = 0;
+
+        // Primary view, wparam = 0.
+        let r = unsafe {
+            shell.dispatch_plugin_message(&mut ui, HostHandles::null(), NPPM_DECODESCI, 0, 0)
+        };
+        assert_eq!(r, Some(UNI_8BIT));
+
+        let active_id = shell.active().expect("active").id as usize;
+        let r2 = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_GETBUFFERENCODING,
+                active_id,
+                0,
+            )
+        };
+        assert_eq!(r2, Some(UNI_8BIT));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn plugin_dispatch_encode_sci_secondary_view_returns_minus_one() {
+        // Single-view Code++ has no secondary view, so view == 1
+        // always reports -1 ("view has no active buffer") even
+        // when the primary view has an active tab.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("enc.txt");
+        std::fs::write(&path, "y").unwrap();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        const NPPM_ENCODESCI: u32 = (0x0400 + 1000) + 26;
+        let r = unsafe {
+            shell.dispatch_plugin_message(&mut ui, HostHandles::null(), NPPM_ENCODESCI, 1, 0)
+        };
+        assert_eq!(r, Some(-1));
     }
 
     #[cfg(target_os = "windows")]

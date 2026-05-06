@@ -122,7 +122,21 @@
 #define NPPM_SETSTATUSBAR                 (NPPMSG + 24)
 /* v1: returns the menu HMENU for one of NPPMAINMENU / NPPPLUGINMENU. */
 #define NPPM_GETMENUHANDLE                (NPPMSG + 25)
+/* v2: convert the active buffer of the view at wParam (0 = primary,
+ *     1 = secondary) to UTF-8 (no BOM). Code++'s Scintilla view is
+ *     always UTF-8 internally; this is a metadata flip on the
+ *     active tab's encoding, the same path as
+ *     NPPM_SETBUFFERENCODING(id, UNI_COOKIE). Returns the new
+ *     encoding numeric (UNI_COOKIE) on success, -1 if the view has
+ *     no active buffer. Single-view Code++ (Phase 4) only has a
+ *     primary view, so `wParam == 1` always returns -1. */
 #define NPPM_ENCODESCI                    (NPPMSG + 26)
+/* v2: inverse of NPPM_ENCODESCI — convert the active buffer of the
+ *     view at wParam to single-byte ANSI. Same metadata-flip path
+ *     as NPPM_SETBUFFERENCODING(id, UNI_8BIT); the on-disk encoding
+ *     becomes the system codepage on the next save. Returns the
+ *     new encoding numeric (UNI_8BIT) on success, -1 if the view
+ *     has no active buffer. */
 #define NPPM_DECODESCI                    (NPPMSG + 27)
 /* v1: switches focus to the buffer at lParam (path). */
 #define NPPM_ACTIVATEDOC                  (NPPMSG + 28)

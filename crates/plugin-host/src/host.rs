@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use codepp_platform::{has_plugin_extension, DynLib};
 
-use crate::dispatch::NPPN_READY;
+use crate::dispatch::{NPPN_READY, NPPN_TBMODIFICATION};
 use crate::ffi::{
     BeNotifiedFn, FuncItem, GetFuncsArrayFn, GetNameFn, IsUnicodeFn, MessageProcFn, NppData,
     SCNotification, SciNotifyHeader, SetInfoFn,
@@ -367,6 +367,40 @@ impl PluginHost {
                     tracing::warn!(
                         path = %path.display(),
                         "plugin panicked in beNotified(NPPN_READY)",
+                    );
+                }
+
+                // NPPN_TBMODIFICATION immediately follows NPPN_READY:
+                // N++'s sequence is "READY, then TBMODIFICATION so
+                // plugins can register toolbar icons before the
+                // toolbar finishes initialising". Code++ doesn't
+                // ship a toolbar yet, so any
+                // `NPPM_ADDTOOLBARICON` from inside the handler
+                // is currently a no-op (returns 0 and logs in the
+                // dispatcher), but firing the notification at the
+                // ABI-correct timing means a future toolbar
+                // implementation can wire `ADDTOOLBARICON` without
+                // changing notification ordering and breaking
+                // plugin-author expectations.
+                let tbmod_sci = SCNotification {
+                    nmhdr: SciNotifyHeader {
+                        hwnd_from: npp_data.npp_handle,
+                        id_from: 0,
+                        code: NPPN_TBMODIFICATION,
+                    },
+                    ..SCNotification::default()
+                };
+                let tbmod_result = catch_unwind(AssertUnwindSafe(|| {
+                    // SAFETY: same as the NPPN_READY call above —
+                    // `be_notified` came from a successful resolve;
+                    // SCNotification is `#[repr(C)]` and lives on
+                    // the stack through the synchronous call.
+                    unsafe { be_notified(&tbmod_sci as *const SCNotification) }
+                }));
+                if tbmod_result.is_err() {
+                    tracing::warn!(
+                        path = %path.display(),
+                        "plugin panicked in beNotified(NPPN_TBMODIFICATION)",
                     );
                 }
                 Ok(())

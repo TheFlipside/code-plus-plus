@@ -59,6 +59,8 @@ pub const NPPM_GETOPENFILENAMESSECOND: u32 = NPPMSG + 18;
 pub const NPPM_GETCURRENTDOCINDEX: u32 = NPPMSG + 23;
 pub const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
 pub const NPPM_GETMENUHANDLE: u32 = NPPMSG + 25;
+pub const NPPM_ENCODESCI: u32 = NPPMSG + 26;
+pub const NPPM_DECODESCI: u32 = NPPMSG + 27;
 pub const NPPM_ACTIVATEDOC: u32 = NPPMSG + 28;
 /// Open the Find in Files dialog, optionally pre-filling the
 /// directory (`wparam`, wide string) and filters (`lparam`, wide
@@ -418,6 +420,36 @@ pub trait HostServices {
     ///
     /// Returns `false` for unknown buffer id or unknown EolType.
     fn set_buffer_format(&mut self, id: isize, eoltype: i32) -> bool;
+
+    /// Convert the active buffer of `view` (0 = primary,
+    /// 1 = secondary) to UTF-8 (no BOM). The N++ contract for
+    /// `NPPM_ENCODESCI`: switch the Scintilla view's bytes to
+    /// UTF-8 and report the new encoding. Code++'s Scintilla view
+    /// is *always* UTF-8 internally (we set `SC_CP_UTF8` at create
+    /// time), so the byte representation needs no work — the only
+    /// observable change is `tab.encoding` flipping to
+    /// [`codepp_core::Encoding::Utf8`] (UNI_COOKIE), which is
+    /// what the next save will produce.
+    ///
+    /// Returns the new encoding numeric ([`UNI_COOKIE`]) on
+    /// success, or `-1` if the requested view has no active
+    /// buffer (the only failure mode in single-view Code++ is
+    /// `view == 1`, the secondary view, which is empty).
+    fn encode_sci(&mut self, view: i32) -> i32;
+
+    /// Inverse of [`Self::encode_sci`]: switch the active buffer
+    /// of `view` to single-byte ANSI (the system codepage). N++
+    /// uses `SCI_SETCODEPAGE(0)` here; in Code++ the equivalent is
+    /// flipping `tab.encoding` to [`codepp_core::Encoding::Other`]
+    /// with the system-codepage WHATWG label. The Scintilla view
+    /// itself stays in UTF-8 mode — we don't unwind the
+    /// `SC_CP_UTF8` setting because Code++'s internal model
+    /// requires UTF-8 in the buffer; the on-disk encoding is what
+    /// the user actually picks via the metadata.
+    ///
+    /// Returns the new encoding numeric ([`UNI_8BIT`]) on
+    /// success, or `-1` if the view has no active buffer.
+    fn decode_sci(&mut self, view: i32) -> i32;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -777,6 +809,30 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // `Encoding` variant — see the trait doc-comment for
             // the rationale).
             services.set_buffer_encoding(wparam as isize, lparam as i32) as isize
+        }
+
+        NPPM_ENCODESCI => {
+            // wparam: view selector (0 = primary, 1 = secondary).
+            // Returns the new encoding numeric (UNI_COOKIE) on
+            // success, or -1 when the view has no active buffer.
+            // The pre-check rejects out-of-range wparams *before*
+            // the `usize -> i32` truncation: without it, a plugin
+            // passing `0x1_0000_0000` would truncate to 0 and be
+            // silently accepted as "primary view". Phase 5
+            // split-view will need to widen this to `<= 1`; the
+            // explicit bound flags that maintenance point.
+            if wparam > 1 {
+                return Some(-1);
+            }
+            services.encode_sci(wparam as i32) as isize
+        }
+
+        NPPM_DECODESCI => {
+            // Same wparam pre-check rationale as NPPM_ENCODESCI.
+            if wparam > 1 {
+                return Some(-1);
+            }
+            services.decode_sci(wparam as i32) as isize
         }
 
         NPPM_SETBUFFERFORMAT => {
@@ -1243,6 +1299,23 @@ mod tests {
             }
             self.record(format!("set_format[{id}]={eoltype}"));
             true
+        }
+        fn encode_sci(&mut self, view: i32) -> i32 {
+            // Single-view mock: only view 0 has an active buffer
+            // (when one is configured). Mirrors the production
+            // single-view-through-Phase-4 contract.
+            if view != 0 || self.current_buffer == 0 {
+                return -1;
+            }
+            self.record(format!("encode_sci[view={view}]"));
+            UNI_COOKIE
+        }
+        fn decode_sci(&mut self, view: i32) -> i32 {
+            if view != 0 || self.current_buffer == 0 {
+                return -1;
+            }
+            self.record(format!("decode_sci[view={view}]"));
+            UNI_8BIT
         }
     }
 
@@ -2022,5 +2095,87 @@ mod tests {
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, NPPM_SETBUFFERFORMAT, 999, WIN_FORMAT as isize) };
         assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn encode_sci_primary_view_returns_uni_cookie() {
+        let mut s = MockServices {
+            current_buffer: 7,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ENCODESCI, 0, 0) };
+        assert_eq!(r, Some(UNI_COOKIE as isize));
+        assert_eq!(s.calls(), vec!["encode_sci[view=0]"]);
+    }
+
+    #[test]
+    fn encode_sci_secondary_view_returns_minus_one() {
+        // View 1 is the secondary view (split-view), which has no
+        // active buffer in single-view Code++. Plugins calling
+        // ENCODESCI on it should observe the same "view has no
+        // buffer" return value N++ produces (-1).
+        let mut s = MockServices {
+            current_buffer: 7,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ENCODESCI, 1, 0) };
+        assert_eq!(r, Some(-1));
+    }
+
+    #[test]
+    fn encode_sci_no_active_buffer_returns_minus_one() {
+        // Empty session — no tabs, no active buffer. View 0
+        // exists but has nothing to encode.
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ENCODESCI, 0, 0) };
+        assert_eq!(r, Some(-1));
+    }
+
+    #[test]
+    fn decode_sci_primary_view_returns_uni_8bit() {
+        let mut s = MockServices {
+            current_buffer: 7,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DECODESCI, 0, 0) };
+        assert_eq!(r, Some(UNI_8BIT as isize));
+        assert_eq!(s.calls(), vec!["decode_sci[view=0]"]);
+    }
+
+    #[test]
+    fn decode_sci_secondary_view_returns_minus_one() {
+        let mut s = MockServices {
+            current_buffer: 7,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DECODESCI, 1, 0) };
+        assert_eq!(r, Some(-1));
+    }
+
+    #[test]
+    fn decode_sci_no_active_buffer_returns_minus_one() {
+        // Symmetric to `encode_sci_no_active_buffer_returns_minus_one`:
+        // primary view with no current buffer (empty session)
+        // returns -1 from `decode_sci`.
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DECODESCI, 0, 0) };
+        assert_eq!(r, Some(-1));
+    }
+
+    #[test]
+    fn encode_sci_out_of_range_view_returns_minus_one() {
+        // Pre-cast guard: a wparam outside [0, 1] is rejected
+        // before the `usize -> i32` truncation. Without the guard,
+        // 0x1_0000_0000 would truncate to 0 and be accepted as
+        // "primary view".
+        let mut s = MockServices {
+            current_buffer: 7,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ENCODESCI, 2, 0) };
+        assert_eq!(r, Some(-1));
+        // Mock should not have been called — the dispatcher arm
+        // short-circuited before reaching it.
+        assert!(s.calls().is_empty());
     }
 }

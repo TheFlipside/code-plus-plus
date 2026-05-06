@@ -67,8 +67,8 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_GETCURRENTDOCINDEX` | ✅ | v2 | wparam = view (0 = primary, 1 = secondary). Returns the active tab's index in `Shell.tabs` for primary, `-1` for secondary in single-view Code++ and for the no-active-tab case. |
 | `NPPM_SETSTATUSBAR` | ✅ | v1 | Wide-string `lparam` written into the requested status-bar part via `SB_SETTEXTW`. NUL-stripped before encoding. |
 | `NPPM_GETMENUHANDLE` | ✅ | v1 | Returns the plugins-submenu HMENU (the one with per-plugin popups beneath it). Main-menu HMENU on request. |
-| `NPPM_ENCODESCI` | ⚫ | v2 | |
-| `NPPM_DECODESCI` | ⚫ | v2 | |
+| `NPPM_ENCODESCI` | ✅ | v2 | wparam = view selector (0 = primary, 1 = secondary). Flips the view's active buffer to UTF-8 (no BOM) — same metadata-flip path as `NPPM_SETBUFFERENCODING(id, UNI_COOKIE)`. Returns `UNI_COOKIE` on success, `-1` if the view has no active buffer (always the case for `view == 1` in single-view Code++). |
+| `NPPM_DECODESCI` | ✅ | v2 | wparam = view selector. Inverse of `ENCODESCI`: flips the active buffer's encoding to "ANSI" (`Encoding::Other("windows-1252")`, same de-facto western-European choice as the `UNI_8BIT` set path). Returns `UNI_8BIT` on success, `-1` for a view with no active buffer. |
 | `NPPM_ACTIVATEDOC` | 🟡 | v1 | Returns `TRUE` (single-tab fast path holds; multi-tab Phase 3 routes through `SWITCHTOFILE` so this remains a no-op true). |
 | `NPPM_LAUNCHFINDINFILESDLG` | ✅ | v2 | Opens the FIF tab in the Find/Replace dialog. `wparam` (wide path, optional) pre-fills the Directory combobox; `lparam` (wide string, optional) pre-fills Filters. Empty / NULL pointers leave the controls at their current values. |
 | `NPPM_DMMSHOW` / `DMMHIDE` / `DMMUPDATEDISPINFO` / `DMMREGASDCKDLG` / `DMMVIEWOTHERTAB` / `DMMGETPLUGINHWNDBYNAME` | ⚫ | v3 | Docking-manager API, full set lands v3. |
@@ -115,7 +115,7 @@ at all, the same as in 64-bit Notepad++.)
 | Notification | Status | Phase | Notes |
 | --- | --- | --- | --- |
 | `NPPN_READY` | ✅ | v1 | Fired at the just-loaded plugin only (per-plugin delivery in `PluginHost::load` right after `setInfo` + `getFuncsArray`). Code++'s lazy-load can't broadcast a single global ready like N++ does — per-plugin is the closest equivalent: each plugin sees READY exactly once at the moment it's actually ready to handle host messages. |
-| `NPPN_TBMODIFICATION` | ⚫ | v2 | |
+| `NPPN_TBMODIFICATION` | ✅ | v2 | Fired by `PluginHost::load` immediately after `NPPN_READY` for each just-loaded plugin — N++'s "READY then TBMODIFICATION" sequence. Code++ doesn't ship a toolbar yet, so any `NPPM_ADDTOOLBARICON` from inside the handler is currently a no-op (returns 0 with a tracing warn). Firing the notification at the ABI-correct timing means a future toolbar implementation can wire `ADDTOOLBARICON` without breaking plugin-author expectations about ordering. |
 | `NPPN_FILEBEFORECLOSE` | 🟡 | v1 | Fired by `Shell::close_active_tab` ahead of `FILECLOSED` (N++ ordering). **Timing divergence (Phase 5 polish):** Code++'s notifications are queue-deferred — by the time a plugin's `beNotified(NPPN_FILEBEFORECLOSE)` runs, the tab has already been removed from `Shell.tabs`, so a callback into `NPPM_GETFULLPATHFROMBUFFERID(id)` returns -1 (unknown id). N++ delivers this notification synchronously while the buffer is still alive. Plugins that need the path at close time should cache it from the prior BUFFERACTIVATED. Synchronous-delivery wiring is tracked in DESIGN.md §7.4. |
 | `NPPN_FILECLOSED` | ✅ | v1 | Queued by `Shell::close_active_tab` after the data-model snapshot, fired after the `&mut Shell` borrow drops. |
 | `NPPN_FILEBEFOREOPEN` | ⚫ | v2 | |
