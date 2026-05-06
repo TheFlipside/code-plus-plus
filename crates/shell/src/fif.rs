@@ -478,29 +478,45 @@ impl FifStatsAtomic {
     }
 }
 
-/// Directory basenames the walker prunes unconditionally. The
-/// user-facing exclude globset is file-level (matches files inside
-/// these directories), but pruning the descent itself avoids 99% of
-/// the wasted I/O. Mirrors the basenames hardcoded by ripgrep, git,
-/// and ag.
-const PRUNED_DIR_BASENAMES: &[&str] = &[
-    ".git",
-    ".hg",
-    ".svn",
-    ".jj",
-    "target",
-    "node_modules",
-    ".cargo",
-    "build",
-    "dist",
-    ".idea",
-    ".vs",
-    ".vscode",
-    "__pycache__",
-];
+/// Directory basenames the walker prunes unconditionally — purely
+/// performance-driven exclusions whose contents are almost never
+/// what the user is searching for (build artefacts, dependency
+/// caches, etc.). Mirrors the corresponding lists in ripgrep / ag.
+/// Dot-prefixed directories (`.git`, `.idea`, etc.) are pruned
+/// dynamically via the `walk_hidden_dirs` flag rather than enumerated
+/// here — that way new VCS systems and IDEs don't need to be added
+/// one at a time.
+const ALWAYS_PRUNED_DIR_BASENAMES: &[&str] =
+    &["target", "node_modules", "build", "dist", "__pycache__"];
 
-fn dir_should_prune(name: &OsStr) -> bool {
-    PRUNED_DIR_BASENAMES.iter().any(|p| name == OsStr::new(p))
+/// Whether the walker should descend into `name`, given the user's
+/// hidden-folders preference. Dot-prefixed basenames (the dotfile
+/// convention used by VCS metadata directories like `.git`/`.hg`,
+/// IDE state directories like `.idea`/`.vs`/`.vscode`, and tool
+/// caches like `.cargo`/`.next`/`.terraform`) are pruned by default;
+/// they're descended only when the user opts in via "In hidden
+/// folders". Always-pruned basenames are pruned regardless.
+fn dir_should_prune(name: &OsStr, walk_hidden_dirs: bool) -> bool {
+    if ALWAYS_PRUNED_DIR_BASENAMES
+        .iter()
+        .any(|p| name == OsStr::new(p))
+    {
+        return true;
+    }
+    if !walk_hidden_dirs {
+        // Cheap dotfile check. `name.to_str()` only fails on a
+        // non-UTF-8 OsStr — on Windows that's a WTF-16 sequence
+        // containing a lone surrogate, which by definition cannot
+        // start with the ASCII byte `.`, so a `None` here is
+        // conservatively-correct: the directory is descended into,
+        // matching the "not a dotfile" interpretation.
+        if let Some(s) = name.to_str() {
+            if s.starts_with('.') {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn walker_main(
@@ -571,7 +587,7 @@ fn walker_main(
                     continue;
                 }
                 if let Some(name) = path.file_name() {
-                    if dir_should_prune(name) {
+                    if dir_should_prune(name, walk.walk_hidden_dirs) {
                         continue;
                     }
                 }
@@ -896,11 +912,24 @@ mod tests {
 
     #[test]
     fn dir_should_prune_recognises_known_basenames() {
-        assert!(dir_should_prune(OsStr::new(".git")));
-        assert!(dir_should_prune(OsStr::new("target")));
-        assert!(dir_should_prune(OsStr::new("node_modules")));
-        assert!(!dir_should_prune(OsStr::new("src")));
-        assert!(!dir_should_prune(OsStr::new("git"))); // no leading dot
+        // walk_hidden_dirs = false (default): always-pruned + dot-prefixed.
+        assert!(dir_should_prune(OsStr::new(".git"), false));
+        assert!(dir_should_prune(OsStr::new(".idea"), false));
+        assert!(dir_should_prune(OsStr::new(".future-vcs"), false));
+        assert!(dir_should_prune(OsStr::new("target"), false));
+        assert!(dir_should_prune(OsStr::new("node_modules"), false));
+        assert!(!dir_should_prune(OsStr::new("src"), false));
+        assert!(!dir_should_prune(OsStr::new("git"), false)); // no leading dot
+    }
+
+    #[test]
+    fn walk_hidden_dirs_descends_into_dot_prefixed() {
+        // walk_hidden_dirs = true: dot-prefixed names lose their
+        // automatic prune; always-pruned still applies.
+        assert!(!dir_should_prune(OsStr::new(".git"), true));
+        assert!(!dir_should_prune(OsStr::new(".idea"), true));
+        assert!(dir_should_prune(OsStr::new("target"), true));
+        assert!(dir_should_prune(OsStr::new("node_modules"), true));
     }
 
     #[test]

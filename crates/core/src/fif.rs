@@ -401,6 +401,16 @@ pub struct FifWalkOpts {
     /// Recurse into subdirectories. `false` for "search this folder
     /// only" UI mode.
     pub recurse: bool,
+    /// Descend into directories whose basename starts with `.`
+    /// (the dotfile / "hidden directory" convention on Unix and
+    /// the same naming convention used by `.git`/`.idea`/etc. on
+    /// Windows). `false` by default — most FIF use cases don't
+    /// want to scan VCS metadata, IDE caches, or other hidden
+    /// state. Driven by the FIF dialog's "In hidden folders"
+    /// checkbox. Always-pruned basenames (`target`,
+    /// `node_modules`, etc.) are unaffected by this flag — they're
+    /// pruned for performance regardless.
+    pub walk_hidden_dirs: bool,
     /// Skip files larger than this. Defaults to
     /// [`DEFAULT_MAX_FILE_BYTES`].
     pub max_file_bytes: u64,
@@ -418,18 +428,18 @@ pub struct FifWalkOpts {
 
 impl Default for FifWalkOpts {
     fn default() -> Self {
+        // Only the always-pruned basenames go in the file-level
+        // exclude set. Dot-prefixed dirs (`.git`/`.hg`/`.idea`/…)
+        // are pruned at walk time when `walk_hidden_dirs` is false;
+        // including them here too would override the user's "In
+        // hidden folders" opt-in, which is the opposite of what the
+        // checkbox should do.
         let mut excludes = GlobSetBuilder::new();
         for pat in [
-            "**/.git/**",
-            "**/.hg/**",
-            "**/.svn/**",
             "**/target/**",
             "**/node_modules/**",
-            "**/.cargo/**",
             "**/dist/**",
             "**/build/**",
-            "**/.idea/**",
-            "**/.vs/**",
         ] {
             // `Glob::new` only fails on malformed patterns, and these
             // are compile-time literals — `expect` is the right
@@ -440,6 +450,7 @@ impl Default for FifWalkOpts {
         }
         Self {
             recurse: true,
+            walk_hidden_dirs: false,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             includes: GlobSet::empty(),
             excludes: excludes.build().expect("default exclude globset"),
@@ -816,12 +827,30 @@ mod tests {
     }
 
     #[test]
-    fn walk_opts_default_excludes_git_and_target() {
+    fn walk_opts_default_excludes_build_artefacts() {
+        // Default excludes cover the always-pruned set
+        // (target / node_modules / build / dist). Dot-prefixed
+        // directories (.git / .idea / etc.) are NOT in the
+        // file-level filter — they're handled by the walker via
+        // `walk_hidden_dirs`, so a path inside `.git` reaches
+        // `path_matches` only when the user explicitly opted into
+        // hidden folders, at which point it should match.
         let opts = FifWalkOpts::default();
-        assert!(!opts.path_matches(Path::new("project/.git/config")));
         assert!(!opts.path_matches(Path::new("project/target/debug/foo")));
         assert!(!opts.path_matches(Path::new("project/node_modules/x/y.js")));
+        assert!(!opts.path_matches(Path::new("project/build/out.o")));
+        assert!(!opts.path_matches(Path::new("project/dist/bundle.js")));
+        // Dot-prefixed paths pass the file-level filter — pruning
+        // happens at walk time.
+        assert!(opts.path_matches(Path::new("project/.git/config")));
+        assert!(opts.path_matches(Path::new("project/.idea/workspace.xml")));
+        // Normal source files match.
         assert!(opts.path_matches(Path::new("project/src/main.rs")));
+    }
+
+    #[test]
+    fn walk_hidden_dirs_default_is_false() {
+        assert!(!FifWalkOpts::default().walk_hidden_dirs);
     }
 
     #[test]
@@ -830,6 +859,19 @@ mod tests {
         opts.set_includes(&["**/*.rs"]).unwrap();
         assert!(opts.path_matches(Path::new("src/main.rs")));
         assert!(!opts.path_matches(Path::new("src/main.cpp")));
+    }
+
+    #[test]
+    fn walk_opts_includes_match_at_any_depth_with_double_star_prefix() {
+        // The UI side (`apply_filters_to_walk_opts` in ui_win32)
+        // prepends `**/` to user-typed extension globs so `*.rs`
+        // matches `src/sub/main.rs` and not just `main.rs` at the
+        // root. Verify the underlying globset path rejects bare
+        // `*.rs` for nested paths and accepts `**/*.rs`.
+        let mut opts = FifWalkOpts::default();
+        opts.set_includes(&["**/*.rs"]).unwrap();
+        assert!(opts.path_matches(Path::new("src/sub/deep/main.rs")));
+        assert!(opts.path_matches(Path::new("main.rs")));
     }
 
     #[test]

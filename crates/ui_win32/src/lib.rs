@@ -3851,10 +3851,18 @@ unsafe fn apply_fif_prefill(dlg: HWND, prefill: &codepp_shell::FifLaunchPrefill)
 struct FifSnapshot {
     query: String,
     directory: String,
+    /// Filters text as the user typed it. Whitespace-separated
+    /// glob patterns (e.g. `*.cpp *.h`); empty / "*" / "*.*"
+    /// means "all files". Parsed into includes by
+    /// [`apply_filters_to_walk_opts`] when the request is built.
+    filters: String,
     recurse: bool,
     match_case: bool,
     whole_word: bool,
     regex: bool,
+    /// User opted into hidden directories via the FIF tab
+    /// checkbox. Threaded through to [`FifWalkOpts::walk_hidden_dirs`].
+    hidden_folders: bool,
     /// `Some(s)` → Replace in Files (`s` may be empty for "delete
     /// each match"); `None` → plain Find in Files.
     replacement: Option<String>,
@@ -3878,20 +3886,73 @@ unsafe fn snapshot_fif_dialog(
         unsafe { set_error_status(state, "Directory is empty") };
         return None;
     }
+    let filters = unsafe { read_edit_text(state.fif_filters_edit) };
     Some(FifSnapshot {
         query,
         directory,
+        filters,
         recurse: unsafe { button_checked(state.fif_subfolders_cb) },
-        // `In hidden folders` is a future-use flag; the default
-        // exclude set already prunes `.git`/`.svn`/etc. and we
-        // ship without OS-level hidden-attribute filtering for
-        // now. Read it so the snapshot has all toggles even
-        // though the orchestrator ignores it.
         match_case: unsafe { button_checked(state.match_case_cb) },
         whole_word: unsafe { button_checked(state.whole_word_cb) },
         regex: unsafe { button_checked(state.mode_regex_radio) },
+        hidden_folders: unsafe { button_checked(state.fif_hidden_folders_cb) },
         replacement,
     })
+}
+
+/// Parse the FIF tab's Filters text into globset patterns and
+/// install them on `walk_opts.set_includes`. Empty filters and the
+/// "match anything" sentinels (`*`, `*.*`) are no-ops; the walker
+/// then searches every file under the root. Tokens are split on
+/// whitespace; each token gets `**/` prepended unless it already
+/// starts with `**/`, so a user's `*.rs` matches at any depth.
+///
+/// Returns [`FilterParseError::NegationUnsupported`] if the user
+/// typed a `!`-prefixed token. We surface the limit instead of
+/// silently dropping the user's intent (deferred to a later polish).
+fn apply_filters_to_walk_opts(
+    walk_opts: &mut codepp_core::FifWalkOpts,
+    filters_text: &str,
+) -> std::result::Result<(), FilterParseError> {
+    let mut patterns: Vec<String> = Vec::new();
+    for tok in filters_text.split_whitespace() {
+        if tok == "*" || tok == "*.*" {
+            continue;
+        }
+        if tok.starts_with('!') {
+            return Err(FilterParseError::NegationUnsupported);
+        }
+        let p = if tok.starts_with("**/") {
+            tok.to_string()
+        } else {
+            format!("**/{tok}")
+        };
+        patterns.push(p);
+    }
+    if patterns.is_empty() {
+        return Ok(());
+    }
+    let refs: Vec<&str> = patterns.iter().map(String::as_str).collect();
+    walk_opts
+        .set_includes(&refs)
+        .map_err(FilterParseError::Walk)
+}
+
+#[derive(Debug)]
+enum FilterParseError {
+    NegationUnsupported,
+    Walk(codepp_core::FifWalkOptsError),
+}
+
+impl std::fmt::Display for FilterParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FilterParseError::NegationUnsupported => f.write_str(
+                "filters: '!' negation is not yet supported — remove the negated tokens",
+            ),
+            FilterParseError::Walk(e) => write!(f, "{e}"),
+        }
+    }
 }
 
 /// "Find All" click handler on the FIF tab. Snapshots the dialog,
@@ -3954,6 +4015,11 @@ unsafe fn handle_fif_replace_in_files(dlg: HWND, state: &mut FindReplaceState) {
 unsafe fn start_fif_from_snapshot(dlg: HWND, state: &mut FindReplaceState, snap: FifSnapshot) {
     let mut walk_opts = codepp_core::FifWalkOpts::default();
     walk_opts.recurse = snap.recurse;
+    walk_opts.walk_hidden_dirs = snap.hidden_folders;
+    if let Err(e) = apply_filters_to_walk_opts(&mut walk_opts, &snap.filters) {
+        unsafe { set_error_status(state, &format!("Find in Files: {e}")) };
+        return;
+    }
 
     let query_opts = codepp_core::FifQueryOpts {
         match_case: snap.match_case,
@@ -7584,5 +7650,61 @@ unsafe fn handle_dropped_files(state: &mut WindowState, hdrop: HDROP) {
         buf.truncate(copied);
         let path = PathBuf::from(String::from_utf16_lossy(&buf));
         state.shell.open_file(path);
+    }
+}
+
+#[cfg(test)]
+mod fif_filter_tests {
+    use super::{apply_filters_to_walk_opts, FilterParseError};
+    use codepp_core::FifWalkOpts;
+    use std::path::Path;
+
+    fn included(opts: &FifWalkOpts, rel: &str) -> bool {
+        opts.path_matches(Path::new(rel))
+    }
+
+    #[test]
+    fn empty_and_match_all_sentinels_install_no_includes() {
+        for input in ["", "   ", "*", "*.*", "* *.*"] {
+            let mut opts = FifWalkOpts::default();
+            apply_filters_to_walk_opts(&mut opts, input).expect("ok");
+            // No includes installed → every non-excluded file is searched.
+            assert!(included(&opts, "src/foo.rs"), "input {input:?}");
+            assert!(included(&opts, "src/foo.h"), "input {input:?}");
+        }
+    }
+
+    #[test]
+    fn bare_extension_glob_matches_at_any_depth() {
+        let mut opts = FifWalkOpts::default();
+        apply_filters_to_walk_opts(&mut opts, "*.rs").expect("ok");
+        assert!(included(&opts, "src/foo.rs"));
+        assert!(included(&opts, "deep/nested/dir/foo.rs"));
+        assert!(!included(&opts, "src/foo.h"));
+    }
+
+    #[test]
+    fn multiple_tokens_union_as_includes() {
+        let mut opts = FifWalkOpts::default();
+        apply_filters_to_walk_opts(&mut opts, "*.cpp *.h").expect("ok");
+        assert!(included(&opts, "src/foo.cpp"));
+        assert!(included(&opts, "src/foo.h"));
+        assert!(!included(&opts, "src/foo.rs"));
+    }
+
+    #[test]
+    fn already_double_star_prefixed_is_passed_through() {
+        let mut opts = FifWalkOpts::default();
+        apply_filters_to_walk_opts(&mut opts, "**/src/*.rs").expect("ok");
+        assert!(included(&opts, "src/foo.rs"));
+        assert!(included(&opts, "deep/src/foo.rs"));
+        assert!(!included(&opts, "lib/foo.rs"));
+    }
+
+    #[test]
+    fn negation_token_is_rejected() {
+        let mut opts = FifWalkOpts::default();
+        let err = apply_filters_to_walk_opts(&mut opts, "*.rs !*.test.rs").unwrap_err();
+        assert!(matches!(err, FilterParseError::NegationUnsupported));
     }
 }
