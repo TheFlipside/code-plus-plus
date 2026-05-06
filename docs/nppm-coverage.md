@@ -52,19 +52,19 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_GETCURRENTSCINTILLA` | ✅ | v1 | Out-writes the active view index (always 0 in single-view Phase 3). `example-hello` calls it before every `SCI_INSERTTEXT`. |
 | `NPPM_GETCURRENTLANGTYPE` | ✅ | v1 | Returns the active tab's `LangType` (the v2 m1+m2 lexer wiring made this real). |
 | `NPPM_SETCURRENTLANGTYPE` | ✅ | v1 | Sets the active tab's lang via `set_buffer_lang_type`; re-applies the lexer in the editor and queues `NPPN_LANGCHANGED` on a real change. |
-| `NPPM_GETNBOPENFILES` | ⚫ | v2 | |
-| `NPPM_GETOPENFILENAMES` | ⚫ | v2 | |
+| `NPPM_GETNBOPENFILES` | ✅ | v2 | wparam selector: `ALL_OPEN_FILES` / `PRIMARY_VIEW` / `SECOND_VIEW`. Phase 4 single-view: `ALL` and `PRIMARY` agree, `SECOND` is always 0. |
+| `NPPM_GETOPENFILENAMES` | ✅ | v2 | Probe (wparam = NULL) returns the count without writing; otherwise writes up to `lparam` paths into the caller's TCHAR** array, capped at MAX_PATH per slot. Returns the number of slots actually written so the plugin can detect under-allocation. Untitled tabs (no on-disk path) are excluded — the array contract requires real paths. |
 | `NPPM_MODELESSDIALOG` | ⚫ | v2 | |
 | `NPPM_GETNBSESSIONFILES` | ⚫ | v2 | |
 | `NPPM_GETSESSIONFILES` | ⚫ | v2 | |
 | `NPPM_SAVESESSION` | ⚫ | v2 | |
 | `NPPM_SAVECURRENTSESSION` | ⚫ | v2 | |
-| `NPPM_GETOPENFILENAMESPRIMARY` | ⚫ | v2 | |
-| `NPPM_GETOPENFILENAMESSECOND` | ⚫ | v3 | Split-view is v3 scope. |
+| `NPPM_GETOPENFILENAMESPRIMARY` | ✅ | v2 | Selector-fixed alias of `NPPM_GETOPENFILENAMES` against `PRIMARY_VIEW`. |
+| `NPPM_GETOPENFILENAMESSECOND` | ✅ | v2 | Selector-fixed alias against `SECOND_VIEW` — always returns 0 / writes nothing in single-view Code++ (Phase 4). Real semantics land alongside split-view in Phase 5. |
 | `NPPM_CREATESCINTILLAHANDLE` | ⚫ | v3 | Plugins that need their own Scintilla. |
 | `NPPM_DESTROYSCINTILLAHANDLE` | ⏸ | — | Deprecated upstream; no-op. |
 | `NPPM_GETNBUSERLANG` | ⚫ | v3 | |
-| `NPPM_GETCURRENTDOCINDEX` | ⚫ | v2 | |
+| `NPPM_GETCURRENTDOCINDEX` | ✅ | v2 | wparam = view (0 = primary, 1 = secondary). Returns the active tab's index in `Shell.tabs` for primary, `-1` for secondary in single-view Code++ and for the no-active-tab case. |
 | `NPPM_SETSTATUSBAR` | ✅ | v1 | Wide-string `lparam` written into the requested status-bar part via `SB_SETTEXTW`. NUL-stripped before encoding. |
 | `NPPM_GETMENUHANDLE` | ✅ | v1 | Returns the plugins-submenu HMENU (the one with per-plugin popups beneath it). Main-menu HMENU on request. |
 | `NPPM_ENCODESCI` | ⚫ | v2 | |

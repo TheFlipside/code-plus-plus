@@ -1833,6 +1833,36 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.shell
             .set_fif_launch_prefill(FifLaunchPrefill { directory, filters });
     }
+
+    fn open_buffer_paths(&self, selector: i32) -> Vec<PathBuf> {
+        // Single-view through Phase 4: ALL_OPEN_FILES and
+        // PRIMARY_VIEW return the same set; SECOND_VIEW is empty.
+        // Untitled tabs (no on-disk path) are filtered out so the
+        // TCHAR** plugin contract — each slot receives a real
+        // path — holds. Tab order in `shell.tabs` matches the tab
+        // strip's left-to-right order, which is what plugins
+        // expect for "the i-th open file".
+        match selector {
+            codepp_plugin_host::ALL_OPEN_FILES | codepp_plugin_host::PRIMARY_VIEW => self
+                .shell
+                .tabs
+                .iter()
+                .filter_map(|t| t.path.clone())
+                .collect(),
+            codepp_plugin_host::SECOND_VIEW => Vec::new(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn current_doc_index(&self, view: i32) -> i32 {
+        // Primary view exposes the active tab's `tabs[]` index;
+        // secondary view doesn't exist yet (split-view is Phase 5),
+        // so it reports -1 — the documented "no view" sentinel.
+        match view {
+            0 => self.shell.active_tab.map(|i| i as i32).unwrap_or(-1),
+            _ => -1,
+        }
+    }
 }
 
 /// Spawn a forwarder thread that pumps items from `src` into `dst`

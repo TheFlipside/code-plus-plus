@@ -65,9 +65,24 @@
 #define NPPM_GETCURRENTLANGTYPE           (NPPMSG + 5)
 /* v1: sets the active buffer's lang-type id. */
 #define NPPM_SETCURRENTLANGTYPE           (NPPMSG + 6)
-/* v2: returns the count of currently open files (both views). */
+/* v2: count of currently open files. wParam = selector
+ *     (ALL_OPEN_FILES, PRIMARY_VIEW, SECOND_VIEW). Code++ is
+ *     single-view through Phase 4: ALL and PRIMARY return the same
+ *     count; SECOND is always 0. */
 #define NPPM_GETNBOPENFILES               (NPPMSG + 7)
-/* v2: fills lParam (TCHAR**) with full paths of open files. */
+/* v2: fills wParam (TCHAR**) with full paths of open files.
+ *     wParam: pointer to caller-allocated array of TCHAR* slots,
+ *             each pointing to a buffer of at least MAX_PATH wide
+ *             chars. NULL is a probe — host returns the count of
+ *             files it would write.
+ *     lParam: array capacity (slot count).
+ *     The plain form always queries ALL_OPEN_FILES — there is no
+ *     selector field on this message because wParam is consumed as
+ *     the pointer. Use the -PRIMARY / -SECOND aliases below to
+ *     restrict to a single view. Return value is the number of
+ *     slots actually written, NOT the count attempted: a slot
+ *     whose plugin-allocated pointer is NULL is logged and
+ *     skipped, and the return reflects the gap. */
 #define NPPM_GETOPENFILENAMES             (NPPMSG + 8)
 /* v2: enable/disable Code++'s modeless-dialog forwarding. */
 #define NPPM_MODELESSDIALOG               (NPPMSG + 12)
@@ -81,7 +96,13 @@
 
 /* Multi-view (split-view) — primary / secondary --------------------- */
 
+/* v2: selector-fixed alias of NPPM_GETOPENFILENAMES — same arg
+ *     shape, but always uses PRIMARY_VIEW regardless of any
+ *     additional selector encoded by the caller. Predates the
+ *     selector form on plain GETOPENFILENAMES. */
 #define NPPM_GETOPENFILENAMESPRIMARY      (NPPMSG + 17)
+/* v2: selector-fixed alias targeting SECOND_VIEW. Returns 0 on
+ *     single-view Code++ (Phase 4); split-view is Phase 5 scope. */
 #define NPPM_GETOPENFILENAMESSECOND       (NPPMSG + 18)
 
 /* Scintilla handle management -------------------------------------- */
@@ -89,6 +110,10 @@
 #define NPPM_CREATESCINTILLAHANDLE        (NPPMSG + 20)
 #define NPPM_DESTROYSCINTILLAHANDLE       (NPPMSG + 21)  /* deprecated upstream */
 #define NPPM_GETNBUSERLANG                (NPPMSG + 22)
+/* v2: returns the active tab index in the requested view
+ *     (wParam: 0 = primary, 1 = secondary). Returns -1 when the
+ *     view has no active tab — including the secondary view in
+ *     single-view Code++ (Phase 4). */
 #define NPPM_GETCURRENTDOCINDEX           (NPPMSG + 23)
 
 /* UI / menu / status bar ------------------------------------------- */
@@ -215,6 +240,17 @@
  */
 #define NPPPLUGINMENU 0  /* the per-plugin submenu under "Plugins" */
 #define NPPMAINMENU   1  /* the entire main menu bar (HMENU) */
+
+/*
+ * Selectors for NPPM_GETNBOPENFILES / NPPM_GETOPENFILENAMES wParam.
+ * ALL_OPEN_FILES queries the union across views; PRIMARY_VIEW and
+ * SECOND_VIEW restrict to one. The numeric values match Notepad++'s
+ * public ABI so plugins compiled against either header use the same
+ * codes on the wire.
+ */
+#define ALL_OPEN_FILES 0
+#define PRIMARY_VIEW   1
+#define SECOND_VIEW    2
 
 /*
  * Lang-type IDs returned by NPPM_GETCURRENTLANGTYPE etc. These match

@@ -22,8 +22,8 @@ pub use ffi::{
 
 #[cfg(target_os = "windows")]
 pub use dispatch::{
-    dispatch_nppm, notify_all, HostServices, Notification, NPPMAINMENU, NPPMSG, NPPMSG_RANGE,
-    NPPPLUGINMENU,
+    dispatch_nppm, notify_all, HostServices, Notification, ALL_OPEN_FILES, NPPMAINMENU, NPPMSG,
+    NPPMSG_RANGE, NPPPLUGINMENU, PRIMARY_VIEW, SECOND_VIEW,
 };
 
 #[cfg(target_os = "windows")]

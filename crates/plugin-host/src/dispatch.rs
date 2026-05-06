@@ -52,6 +52,11 @@ pub const NPPMSG_RANGE: u32 = 200;
 pub const NPPM_GETCURRENTSCINTILLA: u32 = NPPMSG + 4;
 pub const NPPM_GETCURRENTLANGTYPE: u32 = NPPMSG + 5;
 pub const NPPM_SETCURRENTLANGTYPE: u32 = NPPMSG + 6;
+pub const NPPM_GETNBOPENFILES: u32 = NPPMSG + 7;
+pub const NPPM_GETOPENFILENAMES: u32 = NPPMSG + 8;
+pub const NPPM_GETOPENFILENAMESPRIMARY: u32 = NPPMSG + 17;
+pub const NPPM_GETOPENFILENAMESSECOND: u32 = NPPMSG + 18;
+pub const NPPM_GETCURRENTDOCINDEX: u32 = NPPMSG + 23;
 pub const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
 pub const NPPM_GETMENUHANDLE: u32 = NPPMSG + 25;
 pub const NPPM_ACTIVATEDOC: u32 = NPPMSG + 28;
@@ -80,6 +85,17 @@ pub const NPPM_GETLANGUAGEDESC: u32 = NPPMSG + 84;
 /// Selectors for [`NPPM_GETMENUHANDLE`].
 pub const NPPPLUGINMENU: i32 = 0;
 pub const NPPMAINMENU: i32 = 1;
+
+/// Selectors for [`NPPM_GETNBOPENFILES`] / [`NPPM_GETOPENFILENAMES`]
+/// (`wparam`). `ALL_OPEN_FILES` returns the union across views;
+/// `PRIMARY_VIEW` and `SECOND_VIEW` request a per-view subset. The
+/// dedicated messages [`NPPM_GETOPENFILENAMESPRIMARY`] /
+/// [`NPPM_GETOPENFILENAMESSECOND`] are equivalent to passing those
+/// selectors via [`NPPM_GETOPENFILENAMES`] but predate the unified
+/// form in N++'s ABI; both are still used by plugins.
+pub const ALL_OPEN_FILES: i32 = 0;
+pub const PRIMARY_VIEW: i32 = 1;
+pub const SECOND_VIEW: i32 = 2;
 
 // --- v1 NPPN_* set ---------------------------------------------------
 
@@ -284,6 +300,25 @@ pub trait HostServices {
     /// already hold". Used by `NPPM_LAUNCHFINDINFILESDLG` so a
     /// plugin can drive a project-wide search.
     fn launch_find_in_files_dialog(&mut self, directory: Option<PathBuf>, filters: Option<String>);
+
+    /// Paths of files currently open in the requested view selector.
+    /// `selector` matches the [`NPPM_GETNBOPENFILES`] /
+    /// [`NPPM_GETOPENFILENAMES`] wparam contract:
+    /// [`ALL_OPEN_FILES`], [`PRIMARY_VIEW`], or [`SECOND_VIEW`].
+    /// Code++ is single-view through Phase 4, so `ALL` and
+    /// `PRIMARY` return the same set and `SECOND` returns empty
+    /// — the dispatcher relies on the impl honouring the selector
+    /// rather than slicing here. Untitled tabs (no on-disk path)
+    /// are omitted: N++'s ABI documents this surface as "open
+    /// *files*", and a plugin that allocated a TCHAR** array
+    /// expects each slot to receive a real path.
+    fn open_buffer_paths(&self, selector: i32) -> Vec<PathBuf>;
+
+    /// Index of the active tab in `view` (0 = primary, 1 = secondary)
+    /// — same convention as [`Self::scintilla_hwnd_for_view`]. Returns
+    /// `-1` when the view has no active tab (the only "no view" the
+    /// secondary path produces in single-view Code++).
+    fn current_doc_index(&self, view: i32) -> i32;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -366,6 +401,95 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             } else {
                 0
             }
+        }
+
+        NPPM_GETNBOPENFILES => {
+            // wparam: selector ([`ALL_OPEN_FILES`], [`PRIMARY_VIEW`],
+            // [`SECOND_VIEW`]). Returns the number of files in the
+            // requested set.
+            services.open_buffer_paths(wparam as i32).len() as isize
+        }
+
+        NPPM_GETOPENFILENAMES | NPPM_GETOPENFILENAMESPRIMARY | NPPM_GETOPENFILENAMESSECOND => {
+            // wparam: TCHAR** OUT — array of plugin-allocated wide
+            // buffers, each at least MAX_PATH_TCHARS units. **Not a
+            // selector** — the plain `GETOPENFILENAMES` form is
+            // implicitly `ALL_OPEN_FILES` because wparam is consumed
+            // as the pointer here. The -PRIMARY / -SECOND aliases
+            // override the selector via the message number.
+            //
+            // lparam: capacity of the array (in slots, not in TCHARs).
+            //
+            // We keep the three messages in one arm rather than
+            // forking handlers so the truncation / pointer-validity
+            // logic lives in exactly one place.
+            let selector = match msg {
+                NPPM_GETOPENFILENAMESPRIMARY => PRIMARY_VIEW,
+                NPPM_GETOPENFILENAMESSECOND => SECOND_VIEW,
+                NPPM_GETOPENFILENAMES => ALL_OPEN_FILES,
+                // Outer match guarantees we entered through one of
+                // the three messages above; this arm is unreachable
+                // and exists only to satisfy `match` exhaustiveness
+                // when the message list is extended.
+                _ => unreachable!("NPPM_GETOPENFILENAMES* outer match guarantees three msgs"),
+            };
+            if wparam == 0 {
+                // NULL out-array — plugin is asking "how many
+                // would you write?" without committing storage.
+                // Mirrors the NPPM_GETFULLPATHFROMBUFFERID probe
+                // contract; works identically for the -PRIMARY /
+                // -SECOND aliases (selector is honoured before the
+                // probe short-circuit).
+                return Some(services.open_buffer_paths(selector).len() as isize);
+            }
+            let cap = lparam.max(0) as usize;
+            let paths = services.open_buffer_paths(selector);
+            // `cap` from the plugin can be arbitrarily large, but
+            // the host iterates only up to `paths.len()` — bounded
+            // by host-controlled state, not by plugin input. The
+            // assert documents that invariant for future maintainers
+            // who might add lazy iteration / plugin-driven filters.
+            let to_write = paths.len().min(cap);
+            debug_assert!(to_write <= paths.len());
+            // SAFETY: plugin promises wparam is a valid pointer to
+            // an array of at least `cap` `*mut u16` slots, each
+            // pointing to a writable wide buffer of at least
+            // MAX_PATH_TCHARS units. The pointer-array is read with
+            // `read_unaligned` per slot to tolerate misaligned
+            // input, matching the NPPM_GETCURRENTSCINTILLA pattern.
+            let arr = wparam as *const *mut u16;
+            // Track slots we *actually* wrote — distinct from
+            // `to_write`, which counts slots we attempted. A null
+            // slot pointer is a plugin bug (the contract requires
+            // every slot to point at a real wide buffer), so we
+            // log it and skip rather than crash; the return value
+            // reports honestly so the plugin can detect the gap by
+            // comparing against `cap`.
+            let mut written_slots = 0usize;
+            for (i, path) in paths.iter().take(to_write).enumerate() {
+                let slot_ptr = unsafe { arr.add(i) };
+                let dst = unsafe { core::ptr::read_unaligned(slot_ptr) };
+                if dst.is_null() {
+                    tracing::warn!(
+                        slot = i,
+                        "NPPM_GETOPENFILENAMES: plugin slot pointer is null; skipping",
+                    );
+                    continue;
+                }
+                let _ = unsafe { write_wide_path(dst, MAX_PATH_TCHARS, path) };
+                written_slots += 1;
+            }
+            written_slots as isize
+        }
+
+        NPPM_GETCURRENTDOCINDEX => {
+            // wparam: view selector (0 = primary, 1 = secondary).
+            // Returns the active tab index in that view, or -1 if
+            // the view has no active tab. N++ uses `int` here, so
+            // the negative-on-empty signal fits. The `i as i32` cast
+            // in `HostBridge::current_doc_index` is safe because
+            // `MAX_SESSION_TABS = 512` (tab count cap in `core::session`).
+            services.current_doc_index(wparam as i32) as isize
         }
 
         NPPM_SETSTATUSBAR => {
@@ -761,6 +885,13 @@ mod tests {
         plugins_dir: PathBuf,
         plugin_menu: usize,
         main_menu: usize,
+        /// Open file paths in the primary view, in tab order.
+        /// Empty means "no open files". Drives the
+        /// `NPPM_GETNBOPENFILES` / `NPPM_GETOPENFILENAMES` tests.
+        open_files_primary: Vec<PathBuf>,
+        /// Active tab index in the primary view (used for
+        /// `NPPM_GETCURRENTDOCINDEX`). `-1` means no active tab.
+        active_tab_primary: i32,
         // recorded mutations
         log: RefCell<Vec<String>>,
     }
@@ -872,6 +1003,23 @@ mod tests {
                     .unwrap_or_else(|| "<none>".into()),
                 filters.unwrap_or_else(|| "<none>".into())
             ));
+        }
+        fn open_buffer_paths(&self, selector: i32) -> Vec<PathBuf> {
+            // Single-view mock: ALL == PRIMARY, SECOND is always
+            // empty. Mirrors the production `HostBridge` impl so
+            // the dispatcher tests cover the same selector code
+            // paths plugins will hit in release.
+            match selector {
+                ALL_OPEN_FILES | PRIMARY_VIEW => self.open_files_primary.clone(),
+                SECOND_VIEW => Vec::new(),
+                _ => Vec::new(),
+            }
+        }
+        fn current_doc_index(&self, view: i32) -> i32 {
+            match view {
+                0 => self.active_tab_primary,
+                _ => -1,
+            }
         }
     }
 
@@ -1283,5 +1431,218 @@ mod tests {
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, NPPM_GETLANGUAGEDESC, 3, 0) };
         assert_eq!(r, Some(16));
+    }
+
+    #[test]
+    fn nb_open_files_counts_per_selector() {
+        let mut s = MockServices {
+            open_files_primary: vec![PathBuf::from("/a.txt"), PathBuf::from("/b.txt")],
+            ..Default::default()
+        };
+        let all = unsafe { dispatch_nppm(&mut s, NPPM_GETNBOPENFILES, ALL_OPEN_FILES as usize, 0) };
+        let prim = unsafe { dispatch_nppm(&mut s, NPPM_GETNBOPENFILES, PRIMARY_VIEW as usize, 0) };
+        let sec = unsafe { dispatch_nppm(&mut s, NPPM_GETNBOPENFILES, SECOND_VIEW as usize, 0) };
+        assert_eq!(all, Some(2));
+        assert_eq!(prim, Some(2));
+        assert_eq!(sec, Some(0));
+    }
+
+    #[test]
+    fn open_filenames_writes_each_path_into_caller_slot() {
+        let mut s = MockServices {
+            open_files_primary: vec![PathBuf::from("D:/a.txt"), PathBuf::from("D:/b.txt")],
+            ..Default::default()
+        };
+        // Plugin allocates 2 buffers of MAX_PATH_TCHARS each, plus a
+        // pointer array of length 2.
+        let mut slot_a = vec![0u16; MAX_PATH_TCHARS];
+        let mut slot_b = vec![0u16; MAX_PATH_TCHARS];
+        let arr: [*mut u16; 2] = [slot_a.as_mut_ptr(), slot_b.as_mut_ptr()];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETOPENFILENAMES,
+                arr.as_ptr() as usize,
+                arr.len() as isize,
+            )
+        };
+        assert_eq!(r, Some(2));
+        let take_until_nul = |buf: &[u16]| {
+            let n = buf.iter().position(|&u| u == 0).unwrap_or(buf.len());
+            String::from_utf16_lossy(&buf[..n])
+        };
+        assert_eq!(take_until_nul(&slot_a), "D:/a.txt");
+        assert_eq!(take_until_nul(&slot_b), "D:/b.txt");
+    }
+
+    #[test]
+    fn open_filenames_truncates_at_caller_capacity() {
+        // Three open files but only two slots → write the first two
+        // and report 2 so the plugin can detect under-allocation.
+        let mut s = MockServices {
+            open_files_primary: vec![
+                PathBuf::from("/x.txt"),
+                PathBuf::from("/y.txt"),
+                PathBuf::from("/z.txt"),
+            ],
+            ..Default::default()
+        };
+        let mut slot_a = vec![0u16; MAX_PATH_TCHARS];
+        let mut slot_b = vec![0u16; MAX_PATH_TCHARS];
+        let arr: [*mut u16; 2] = [slot_a.as_mut_ptr(), slot_b.as_mut_ptr()];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETOPENFILENAMES,
+                arr.as_ptr() as usize,
+                arr.len() as isize,
+            )
+        };
+        assert_eq!(r, Some(2));
+    }
+
+    #[test]
+    fn open_filenames_null_array_returns_count_for_probe() {
+        // wparam == 0 is the probe form: "how many files would you
+        // write?", same shape as NPPM_GETFULLPATHFROMBUFFERID's probe.
+        let mut s = MockServices {
+            open_files_primary: vec![PathBuf::from("/a.txt"), PathBuf::from("/b.txt")],
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETOPENFILENAMES, 0, 0) };
+        assert_eq!(r, Some(2));
+    }
+
+    #[test]
+    fn open_filenames_primary_alias_uses_primary_view() {
+        // The -PRIMARY message is selector-fixed: even if the
+        // wparam/lparam look like `ALL` in the plain selector form,
+        // the dispatcher uses PRIMARY_VIEW for the lookup.
+        let mut s = MockServices {
+            open_files_primary: vec![PathBuf::from("/p.txt")],
+            ..Default::default()
+        };
+        let mut slot = vec![0u16; MAX_PATH_TCHARS];
+        let arr: [*mut u16; 1] = [slot.as_mut_ptr()];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETOPENFILENAMESPRIMARY,
+                arr.as_ptr() as usize,
+                1,
+            )
+        };
+        assert_eq!(r, Some(1));
+    }
+
+    #[test]
+    fn open_filenames_second_alias_returns_zero() {
+        // Secondary view doesn't exist in single-view Code++; the
+        // alias must produce `0` regardless of how many primary files
+        // are open, so plugins gating on "is split-view active?" by
+        // way of "does the secondary view have files?" get the right
+        // answer (no).
+        let mut s = MockServices {
+            open_files_primary: vec![PathBuf::from("/p.txt")],
+            ..Default::default()
+        };
+        let mut slot = vec![0u16; MAX_PATH_TCHARS];
+        let arr: [*mut u16; 1] = [slot.as_mut_ptr()];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETOPENFILENAMESSECOND,
+                arr.as_ptr() as usize,
+                1,
+            )
+        };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn open_filenames_primary_probe_returns_view_count() {
+        // The probe form (wparam = NULL) must respect the message's
+        // selector. PRIMARY → count of primary view's files.
+        let mut s = MockServices {
+            open_files_primary: vec![PathBuf::from("/a.txt"), PathBuf::from("/b.txt")],
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETOPENFILENAMESPRIMARY, 0, 0) };
+        assert_eq!(r, Some(2));
+    }
+
+    #[test]
+    fn open_filenames_second_probe_returns_zero() {
+        // SECOND probe is always 0 in single-view Code++. Without
+        // this test a regression in the probe arm could silently
+        // return the primary count for SECOND probes, which would
+        // mislead plugins gating on split-view presence.
+        let mut s = MockServices {
+            open_files_primary: vec![PathBuf::from("/a.txt")],
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETOPENFILENAMESSECOND, 0, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn open_filenames_skips_null_slot_and_undercounts() {
+        // Plugin programming bug: array slot pointer is NULL. Host
+        // must not crash, must skip the null slot, and the return
+        // value must reflect the actual write count — NOT the
+        // attempted count — so the plugin can detect the gap.
+        let mut s = MockServices {
+            open_files_primary: vec![PathBuf::from("/a.txt"), PathBuf::from("/b.txt")],
+            ..Default::default()
+        };
+        let mut slot_b = vec![0u16; MAX_PATH_TCHARS];
+        // First slot pointer is NULL; second is real.
+        let arr: [*mut u16; 2] = [core::ptr::null_mut(), slot_b.as_mut_ptr()];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETOPENFILENAMES,
+                arr.as_ptr() as usize,
+                arr.len() as isize,
+            )
+        };
+        // 2 files attempted, 1 written (the null slot was skipped).
+        assert_eq!(r, Some(1));
+        // The second slot did receive its path.
+        let n = slot_b.iter().position(|&u| u == 0).unwrap_or(slot_b.len());
+        assert_eq!(String::from_utf16_lossy(&slot_b[..n]), "/b.txt");
+    }
+
+    #[test]
+    fn current_doc_index_returns_active_tab_in_primary() {
+        let mut s = MockServices {
+            active_tab_primary: 2,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTDOCINDEX, 0, 0) };
+        assert_eq!(r, Some(2));
+    }
+
+    #[test]
+    fn current_doc_index_for_secondary_returns_minus_one() {
+        let mut s = MockServices {
+            active_tab_primary: 2,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTDOCINDEX, 1, 0) };
+        assert_eq!(r, Some(-1));
+    }
+
+    #[test]
+    fn current_doc_index_when_no_tabs_returns_minus_one() {
+        // Default: active_tab_primary = 0 in MockServices::default(),
+        // but with no open files. We deliberately seed -1 here to
+        // cover the "no active tab" branch.
+        let mut s = MockServices {
+            active_tab_primary: -1,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTDOCINDEX, 0, 0) };
+        assert_eq!(r, Some(-1));
     }
 }
