@@ -35,16 +35,17 @@ use codepp_scintilla_sys::{
     SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC,
     SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
     SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT,
-    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
-    SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH,
-    SCI_GETLINECOUNT, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT,
-    SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS,
-    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE, SCI_POSITIONAFTER,
-    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETDOCPOINTER,
-    SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
-    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT,
-    SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
+    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETCOLUMN, SCI_GETCURRENTPOS,
+    SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
+    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
+    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE,
+    SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE,
+    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
+    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND,
+    SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM,
+    SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_UPDATEUI, SC_DOCUMENTOPTION_DEFAULT,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
 };
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
@@ -605,23 +606,37 @@ impl UiPlatform for Win32Ui {
         lang: codepp_core::LangType,
         encoding: &Encoding,
         eol: Eol,
-        byte_len: u64,
+        _byte_len: u64,
     ) {
-        // Language label at the leftmost slot — same string the
-        // Language menu and `NPPM_GETLANGUAGENAME` return so the
-        // user can identify the file at a glance. Falls back to
-        // "Normal Text" for any LangType not in the table (the
-        // same fallback NPPM_GETLANGUAGENAME exposes via its empty
-        // wide-string write contract).
+        // Multi-part status bar (see `setup_status_parts` for the
+        // 7-slot layout). This call writes the metadata-driven
+        // parts (lang / EOL / encoding); the caret-driven parts
+        // (length-lines / cursor / INS-OVR) are refreshed by
+        // `refresh_status_dynamic_parts` so they pick up the
+        // current Scintilla state on every call (including after
+        // a file load whose `byte_len` arg here is now stale-by-
+        // construction — Scintilla has the authoritative number
+        // since the buffer is fully populated by the time
+        // `update_status` runs).
         let lang_label = lang.language_name().unwrap_or("Normal Text");
-        let text = format!(
-            "  {} | {} | {} | {} bytes",
-            lang_label,
-            encoding.label(),
-            eol.label(),
-            byte_len
+        write_status_part(
+            self.status_hwnd,
+            STATUS_PART_LANG,
+            &format!("  {lang_label}"),
         );
-        write_status_part(self.status_hwnd, 0, &text);
+        write_status_part(
+            self.status_hwnd,
+            STATUS_PART_EOL,
+            &format!("  {}", eol.long_label()),
+        );
+        write_status_part(
+            self.status_hwnd,
+            STATUS_PART_ENCODING,
+            &format!("  {}", encoding.label()),
+        );
+        // Spring (part 1) stays empty so the status bar can absorb
+        // window-resize delta there.
+        refresh_status_dynamic_parts(self.status_hwnd, &self.editor);
     }
 
     fn set_plugin_status(&mut self, section: usize, text: &str) {
@@ -2641,6 +2656,165 @@ fn write_status_part(status_hwnd: HWND, part_index: usize, text: &str) {
             Some(LPARAM(wide.as_ptr() as isize)),
         );
     }
+}
+
+// Status bar part layout. Seven slots, plus the size-grip the
+// status-bar control draws on its own at the right edge:
+//
+//   0: language label         ("Normal Text", "C++", ...)
+//   1: spring                  (empty; absorbs window-resize delta)
+//   2: length / lines          ("length: 1,819   lines: 116")
+//   3: caret position          ("Ln: 104   Col: 9   Pos: 1,539")
+//   4: EOL                     ("Windows (CR LF)" / "Unix (LF)" / ...)
+//   5: encoding                ("UTF-8")
+//   6: INS / OVR               ("INS" / "OVR")
+//
+// Widths are 96-DPI defaults; the size-grip is system-rendered. A
+// future polish item will measure the language label and switch part
+// 0 to auto-fit; the fixed width below comfortably fits the longest
+// `LANG_TABLE.menu_label` plus padding.
+const STATUS_PART_LANG_W: i32 = 220;
+const STATUS_PART_LENGTH_W: i32 = 150;
+const STATUS_PART_CURSOR_W: i32 = 220;
+const STATUS_PART_EOL_W: i32 = 150;
+// 130px fits the longest non-`Other` `Encoding::label` —
+// `"UTF-16 LE BOM"` plus the leading two-space pad (~110px at
+// 96 DPI in the system font); the extra 20px is breathing room
+// for high-DPI rendering and locale label growth.
+const STATUS_PART_ENCODING_W: i32 = 130;
+const STATUS_PART_INSOVR_W: i32 = 45;
+
+const STATUS_PART_LANG: usize = 0;
+#[allow(dead_code)]
+const STATUS_PART_SPRING: usize = 1;
+const STATUS_PART_LENGTH: usize = 2;
+const STATUS_PART_CURSOR: usize = 3;
+const STATUS_PART_EOL: usize = 4;
+const STATUS_PART_ENCODING: usize = 5;
+const STATUS_PART_INSOVR: usize = 6;
+
+const SB_SETPARTS: u32 = 0x0404;
+
+/// Compute right-edge x-coordinates for the 7-part status bar
+/// layout and apply them via `SB_SETPARTS`. Called at status-bar
+/// creation time and from every WM_SIZE so the spring (part 1)
+/// absorbs the width delta while every other part keeps its
+/// designed width.
+///
+/// The right edges are cumulative pixel offsets from the
+/// status-bar's left edge. The last entry must be `-1` so the
+/// final part extends to the control's right edge (which the
+/// status bar naturally accounts for the system size-grip in).
+fn setup_status_parts(status_hwnd: HWND, client_width: i32) {
+    // Sum of fixed-width parts on the right side of the spring.
+    let right_total = STATUS_PART_LENGTH_W
+        + STATUS_PART_CURSOR_W
+        + STATUS_PART_EOL_W
+        + STATUS_PART_ENCODING_W
+        + STATUS_PART_INSOVR_W;
+    // Spring's right edge: window width minus the right-side
+    // fixed parts. Clamp to >= STATUS_PART_LANG_W so the spring
+    // doesn't collapse below the language slot when the window is
+    // narrower than the sum of fixed widths.
+    let spring_right = (client_width - right_total).max(STATUS_PART_LANG_W);
+    let edges: [i32; 7] = [
+        STATUS_PART_LANG_W,
+        spring_right,
+        spring_right + STATUS_PART_LENGTH_W,
+        spring_right + STATUS_PART_LENGTH_W + STATUS_PART_CURSOR_W,
+        spring_right + STATUS_PART_LENGTH_W + STATUS_PART_CURSOR_W + STATUS_PART_EOL_W,
+        spring_right
+            + STATUS_PART_LENGTH_W
+            + STATUS_PART_CURSOR_W
+            + STATUS_PART_EOL_W
+            + STATUS_PART_ENCODING_W,
+        // Last part extends to the right edge of the status bar
+        // (the control reserves space for the system size-grip
+        // automatically).
+        -1,
+    ];
+    unsafe {
+        SendMessageW(
+            status_hwnd,
+            SB_SETPARTS,
+            Some(WPARAM(edges.len())),
+            Some(LPARAM(edges.as_ptr() as isize)),
+        );
+    }
+}
+
+/// Format an integer with comma thousand-separators (e.g. `1819`
+/// → `"1,819"`). Used for the byte-count and caret-position
+/// fields in the status bar so a 50k-line file's `Pos: 412,683`
+/// stays scannable. Locale-agnostic — Code++ doesn't carry a
+/// locale layer yet, so the comma matches the most common
+/// English-installation convention.
+fn format_thousands(n: u64) -> String {
+    let s = n.to_string();
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        // `char::from(u8)` is the unambiguous "interpret this byte
+        // as a Latin-1 / 7-bit-ASCII codepoint" conversion. The
+        // `as char` cast does the same thing but reads as a wider
+        // operation than what's actually needed; if a future
+        // refactor ever passes non-digit bytes here the explicit
+        // form makes the Latin-1 reinterpretation visible.
+        out.push(char::from(*b));
+    }
+    out
+}
+
+/// Refresh the Scintilla-driven parts of the status bar (parts 2,
+/// 3, 6 — length/lines, cursor, INS/OVR). Reads from the editor
+/// view directly so the values reflect the live caret state. The
+/// shell-driven parts (lang, encoding, EOL) are left untouched
+/// here; they're written by [`UiPlatform::update_status`] when
+/// the underlying metadata changes.
+///
+/// Called from:
+///  - `Win32Ui::update_status` (full refresh on metadata change)
+///  - `main_wnd_proc::WM_NOTIFY/SCN_UPDATEUI` (caret movement)
+fn refresh_status_dynamic_parts(status_hwnd: HWND, editor: &EditorHandle) {
+    let length = editor.send(SCI_GETLENGTH, 0, 0).max(0) as u64;
+    let lines = editor.send(SCI_GETLINECOUNT, 0, 0).max(0) as u64;
+    let pos = editor.send(SCI_GETCURRENTPOS, 0, 0).max(0) as u64;
+    // SCI_LINEFROMPOSITION returns 0-based line; the status bar
+    // shows 1-based per N++ convention.
+    let line0 = editor.send(SCI_LINEFROMPOSITION, pos as usize, 0).max(0) as u64;
+    // SCI_GETCOLUMN returns 0-based column (virtual-space-aware,
+    // tab-expanded); same +1 for display.
+    let col0 = editor.send(SCI_GETCOLUMN, pos as usize, 0).max(0) as u64;
+    let overtype = editor.send(SCI_GETOVERTYPE, 0, 0) != 0;
+
+    let length_text = format!(
+        "  length: {}   lines: {}",
+        format_thousands(length),
+        format_thousands(lines)
+    );
+    // Ln / Col are 1-based for display (caret on the first line
+    // shows `Ln: 1`); Pos is 0-based (caret at start-of-file
+    // shows `Pos: 0`) — this matches Notepad++'s status-bar
+    // convention exactly. `saturating_add` over plain `+ 1` so
+    // the +1 path stays sound even on the unreachable-by-
+    // construction edge case where Scintilla returns `u64::MAX`
+    // (bytes are bounded at INT_MAX ≈ 2 GiB by Scintilla's own
+    // document model, so overflow is impossible in practice; the
+    // explicit saturation makes the intent visible to a reviewer).
+    let cursor_text = format!(
+        "  Ln: {}   Col: {}   Pos: {}",
+        line0.saturating_add(1),
+        col0.saturating_add(1),
+        format_thousands(pos)
+    );
+    let insovr_text = if overtype { "  OVR" } else { "  INS" };
+
+    write_status_part(status_hwnd, STATUS_PART_LENGTH, &length_text);
+    write_status_part(status_hwnd, STATUS_PART_CURSOR, &cursor_text);
+    write_status_part(status_hwnd, STATUS_PART_INSOVR, insovr_text);
 }
 
 /// Show a "file changed externally — reload?" dialog. Standalone so
@@ -5867,18 +6041,23 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // A freshly-created status bar has zero parts. SB_SETTEXTW on a
         // non-existent part silently no-ops (returns success without
         // storing anything), which produces an empty status bar at
-        // runtime. Define a single full-width part now; later phases
-        // can split into multiple parts (encoding | EOL | cursor | etc).
+        // runtime. Apply the 7-part layout right away so writes from
+        // the first `update_status` land in the right slots; WM_SIZE
+        // re-applies it on every window resize so the spring (part 1)
+        // tracks the current width.
         {
-            const SB_SETPARTS: u32 = 0x0404;
-            // -1 in the right-edge array means "extend to right edge".
-            let edges: [i32; 1] = [-1];
-            SendMessageW(
-                status_hwnd,
-                SB_SETPARTS,
-                Some(WPARAM(edges.len())),
-                Some(LPARAM(edges.as_ptr() as isize)),
-            );
+            let mut client = RECT::default();
+            let initial_width = if GetClientRect(main_hwnd, &mut client).is_ok() {
+                client.right
+            } else {
+                // Fallback: the window-creation `CreateWindowExW`
+                // path uses CW_USEDEFAULT for the initial size, so
+                // GetClientRect should succeed; the 800px fallback
+                // exists only to keep `setup_status_parts` from
+                // computing nonsense edges if the call ever fails.
+                800
+            };
+            setup_status_parts(status_hwnd, initial_width);
         }
 
         // Tab control — sits below the menu bar, above Scintilla.
@@ -7997,6 +8176,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         width,
                         height,
                     );
+                    // Re-apply the 7-part layout so the spring
+                    // (part 1) absorbs the width delta. The fixed
+                    // right-side parts keep their designed widths;
+                    // text written by `update_status` /
+                    // `refresh_status_dynamic_parts` lands in the
+                    // same slots regardless of window width.
+                    setup_status_parts(state.status_hwnd, width);
                 }
                 LRESULT(0)
             }
@@ -8197,7 +8383,49 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             if (modtype & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT)) != 0 {
                                 if let Some(state) = state_from_hwnd(hwnd) {
                                     state.editor.send(SCI_SETSCROLLWIDTH, 1, 0);
+                                    // Length / lines refresh on
+                                    // every text-modifying edit.
+                                    // The SCN_UPDATEUI arm below
+                                    // also refreshes, and a
+                                    // typical edit fires both
+                                    // (SCN_MODIFIED then
+                                    // SCN_UPDATEUI) — but this
+                                    // arm covers scripted edits
+                                    // (e.g. plugin paste, FIF
+                                    // in-buffer replace) that
+                                    // don't move the caret and
+                                    // therefore don't trigger
+                                    // SCN_UPDATEUI. The double-
+                                    // fire is cheap (a handful
+                                    // of direct-call reads + 3
+                                    // SB_SETTEXTW writes) and
+                                    // keeps length/lines in sync
+                                    // unconditionally.
+                                    refresh_status_dynamic_parts(state.status_hwnd, &state.editor);
                                 }
+                            }
+                        }
+                    } else if nmhdr.code == SCN_UPDATEUI {
+                        // SCN_UPDATEUI fires on caret movement,
+                        // selection change, scrolling, and most
+                        // other UI-relevant Scintilla state
+                        // shifts. Scoping the source filter to
+                        // our Scintilla view keeps a future
+                        // sibling editor (Phase 5 split-view)
+                        // from cross-talking into our status
+                        // bar. The dynamic parts are cheap (a
+                        // handful of direct-call queries plus
+                        // three SB_SETTEXTW writes), well below
+                        // the per-keystroke budget in
+                        // DESIGN.md §8.
+                        let owns_source = if let Some(state) = state_from_hwnd(hwnd) {
+                            nmhdr.hwndFrom == state.scintilla_hwnd
+                        } else {
+                            false
+                        };
+                        if owns_source {
+                            if let Some(state) = state_from_hwnd(hwnd) {
+                                refresh_status_dynamic_parts(state.status_hwnd, &state.editor);
                             }
                         }
                     } else if nmhdr.code == NM_DBLCLK {
@@ -8386,5 +8614,35 @@ mod fif_filter_tests {
         let mut opts = FifWalkOpts::default();
         let err = apply_filters_to_walk_opts(&mut opts, "*.rs !*.test.rs").unwrap_err();
         assert!(matches!(err, FilterParseError::NegationUnsupported));
+    }
+}
+
+#[cfg(test)]
+mod status_bar_format_tests {
+    use super::format_thousands;
+
+    #[test]
+    fn small_numbers_pass_through_unchanged() {
+        assert_eq!(format_thousands(0), "0");
+        assert_eq!(format_thousands(7), "7");
+        assert_eq!(format_thousands(99), "99");
+        assert_eq!(format_thousands(999), "999");
+    }
+
+    #[test]
+    fn thousand_separators_at_every_third_digit_from_the_right() {
+        assert_eq!(format_thousands(1_000), "1,000");
+        assert_eq!(format_thousands(1_234), "1,234");
+        assert_eq!(format_thousands(12_345), "12,345");
+        assert_eq!(format_thousands(123_456), "123,456");
+        assert_eq!(format_thousands(1_234_567), "1,234,567");
+        assert_eq!(format_thousands(1_000_000_000), "1,000,000,000");
+    }
+
+    #[test]
+    fn large_u64_values_format_correctly() {
+        // ~2 GiB — Scintilla's document-size ceiling. The actual
+        // upper bound `format_thousands` could see in production.
+        assert_eq!(format_thousands(2_147_483_647), "2,147,483,647");
     }
 }

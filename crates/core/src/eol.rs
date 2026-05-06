@@ -50,6 +50,21 @@ impl Eol {
         }
     }
 
+    /// Long human-readable label, in the form Notepad++ shows in
+    /// its status bar: "Windows (CR LF)", "Unix (LF)",
+    /// "Macintosh (CR)". For [`Self::Mixed`] there's no canonical
+    /// long form (the file uses more than one EOL); we surface
+    /// "Mixed" as-is so the user sees the unusual state without
+    /// being told it's a specific OS convention.
+    pub const fn long_label(self) -> &'static str {
+        match self {
+            Eol::Lf => "Unix (LF)",
+            Eol::CrLf => "Windows (CR LF)",
+            Eol::Cr => "Macintosh (CR)",
+            Eol::Mixed => "Mixed",
+        }
+    }
+
     /// Inverse of [`label`](Self::label). Unknown values default to
     /// `Lf` so a hand-edited session.xml doesn't crash the editor.
     /// A warning is logged via `tracing` so a corrupted session is
@@ -196,5 +211,16 @@ mod tests {
         buf.truncate(65_536);
         buf.extend_from_slice(b"abc\rdef\rghi\r");
         assert_eq!(detect(&buf), Eol::CrLf);
+    }
+
+    #[test]
+    fn long_label_matches_notepad_plus_plus_status_bar_form() {
+        // The status bar reads `long_label` directly; pinning the
+        // exact strings here keeps a future label tweak from
+        // silently breaking the screenshot-driven user contract.
+        assert_eq!(Eol::Lf.long_label(), "Unix (LF)");
+        assert_eq!(Eol::CrLf.long_label(), "Windows (CR LF)");
+        assert_eq!(Eol::Cr.long_label(), "Macintosh (CR)");
+        assert_eq!(Eol::Mixed.long_label(), "Mixed");
     }
 }

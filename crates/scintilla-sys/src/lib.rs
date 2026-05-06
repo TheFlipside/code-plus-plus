@@ -89,6 +89,13 @@ pub const SCI_CLEAR: u32 = 2180;
 pub const SCI_GOTOLINE: u32 = 2024;
 pub const SCI_GETLINECOUNT: u32 = 2154;
 pub const SCI_LINEFROMPOSITION: u32 = 2166;
+/// Column (visual / virtual-space-aware) of a byte offset on its
+/// line. Used by the status bar to render `Col: N` after the
+/// caret moves.
+pub const SCI_GETCOLUMN: u32 = 2129;
+/// Overtype (insert vs. overwrite) flag — toggled by the Insert
+/// key, surfaced in the status bar's `INS`/`OVR` slot.
+pub const SCI_GETOVERTYPE: u32 = 2187;
 pub const SCI_DOCUMENTSTART: u32 = 2316;
 pub const SCI_DOCUMENTEND: u32 = 2318;
 
@@ -173,6 +180,12 @@ pub const SCI_ENDUNDOACTION: u32 = 2079;
 // `EditorHandle::send`. A future refactor that ever crosses those
 // channels would need to disambiguate by source HWND first.
 pub const SCN_MODIFIED: u32 = 2008;
+/// Scintilla notification fired whenever the caret moves, the
+/// selection changes, or any other UI-relevant state shifts. The
+/// status bar's cursor / column / pos slots refresh on each
+/// SCN_UPDATEUI so they track the live caret without needing a
+/// separate timer.
+pub const SCN_UPDATEUI: u32 = 2007;
 
 // `SCNotification.modificationType` flags for SCN_MODIFIED. The
 // host filters on the text-changing flags (insert / delete) for
