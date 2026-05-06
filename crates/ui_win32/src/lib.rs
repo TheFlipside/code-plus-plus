@@ -600,9 +600,23 @@ impl UiPlatform for Win32Ui {
         pos.max(0) as u64
     }
 
-    fn update_status(&mut self, encoding: &Encoding, eol: Eol, byte_len: u64) {
+    fn update_status(
+        &mut self,
+        lang: codepp_core::LangType,
+        encoding: &Encoding,
+        eol: Eol,
+        byte_len: u64,
+    ) {
+        // Language label at the leftmost slot — same string the
+        // Language menu and `NPPM_GETLANGUAGENAME` return so the
+        // user can identify the file at a glance. Falls back to
+        // "Normal Text" for any LangType not in the table (the
+        // same fallback NPPM_GETLANGUAGENAME exposes via its empty
+        // wide-string write contract).
+        let lang_label = lang.language_name().unwrap_or("Normal Text");
         let text = format!(
-            "  {} | {} | {} bytes",
+            "  {} | {} | {} | {} bytes",
+            lang_label,
             encoding.label(),
             eol.label(),
             byte_len
@@ -1354,6 +1368,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
             };
             <Win32Ui as UiPlatform>::update_status(
                 &mut win32_ui,
+                codepp_core::lang::L_TEXT,
                 &Encoding::default(),
                 Eol::default(),
                 0,
@@ -1422,7 +1437,13 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
                     editor: state.editor,
                 };
                 <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
-                <Win32Ui as UiPlatform>::update_status(&mut win32_ui, &encoding, eol, byte_len);
+                <Win32Ui as UiPlatform>::update_status(
+                    &mut win32_ui,
+                    lang,
+                    &encoding,
+                    eol,
+                    byte_len,
+                );
             }
         }
     }
@@ -1524,7 +1545,7 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
     // buffer with the wrong rules (or, if the previous tab was
     // L_TEXT, leaves a coloured buffer un-styled).
     <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
-    <Win32Ui as UiPlatform>::update_status(&mut win32_ui, &encoding, eol, byte_len);
+    <Win32Ui as UiPlatform>::update_status(&mut win32_ui, lang, &encoding, eol, byte_len);
 
     // Reflect the new active tab in the window title.
     // SAFETY: caller's UI-thread contract carries to update_window_title.
@@ -7677,8 +7698,8 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 let snapshot = state
                                     .shell
                                     .active()
-                                    .map(|t| (t.encoding.clone(), t.eol, t.byte_len));
-                                if let Some((encoding, eol, byte_len)) = snapshot {
+                                    .map(|t| (t.lang, t.encoding.clone(), t.eol, t.byte_len));
+                                if let Some((lang, encoding, eol, byte_len)) = snapshot {
                                     let mut win32_ui = Win32Ui {
                                         status_hwnd: state.status_hwnd,
                                         tab_hwnd: state.tab_hwnd,
@@ -7686,6 +7707,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                     };
                                     <Win32Ui as UiPlatform>::update_status(
                                         &mut win32_ui,
+                                        lang,
                                         &encoding,
                                         eol,
                                         byte_len,

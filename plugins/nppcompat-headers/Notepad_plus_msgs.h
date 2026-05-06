@@ -409,7 +409,11 @@ typedef enum LangType_ {
     L_NIM, L_NNCRONTAB, L_OSCRIPT, L_REBOL, L_REGISTRY, L_RUST,
     L_SPICE, L_TXT2TAGS, L_VISUALPROLOG, L_TYPESCRIPT, L_GDSCRIPT,
     L_HOLLYWOOD, L_GOLANG, L_RAKU, L_TOML, L_SAS, L_ERRORLIST,
-    L_EXTERNAL
+    L_EXTERNAL,
+    /* JSON5 — distinct from L_JSON so plugins can address either
+       independently via NPPM_SETBUFFERLANGTYPE. Same lexer
+       backing (LexJSON parses both flavours). */
+    L_JSON5
 } LangType;
 
 /* ------------------------------------------------------------------ */

@@ -114,9 +114,17 @@ pub trait UiPlatform {
     /// the user's caret position.
     fn get_cursor_pos(&mut self) -> u64;
 
-    /// Update the status bar with encoding, EOL, and any
-    /// platform-specific extras.
-    fn update_status(&mut self, encoding: &Encoding, eol: Eol, byte_len: u64);
+    /// Update the status bar with the active buffer's language,
+    /// encoding, EOL, and byte count. The leftmost segment shows
+    /// the language label so the user can tell at a glance what
+    /// the editor will syntax-highlight as.
+    fn update_status(
+        &mut self,
+        lang: codepp_core::LangType,
+        encoding: &Encoding,
+        eol: Eol,
+        byte_len: u64,
+    );
 
     /// Plugin-driven status-bar override (`NPPM_SETSTATUSBAR`). The
     /// plugin owns `section`'s contents until the next host
@@ -1110,7 +1118,7 @@ impl Shell {
                     // so the lexer needs to see the document already
                     // populated to colour it on the first paint.
                     ui.apply_lang(lang);
-                    ui.update_status(&loaded.encoding, loaded.eol, loaded.byte_len);
+                    ui.update_status(lang, &loaded.encoding, loaded.eol, loaded.byte_len);
 
                     // The just-loaded tab is now the user-visible
                     // buffer — fire NPPN_BUFFERACTIVATED so plugins
@@ -2309,7 +2317,13 @@ mod tests {
         fn get_cursor_pos(&mut self) -> u64 {
             self.cursor
         }
-        fn update_status(&mut self, encoding: &Encoding, eol: Eol, byte_len: u64) {
+        fn update_status(
+            &mut self,
+            _lang: codepp_core::LangType,
+            encoding: &Encoding,
+            eol: Eol,
+            byte_len: u64,
+        ) {
             self.status_calls.push((
                 encoding.label().to_string(),
                 eol.label().to_string(),

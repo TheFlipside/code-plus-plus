@@ -244,6 +244,12 @@ fn build_lexilla(scintilla: &Path, lexilla: &Path) {
         "LexLisp",
         "LexLua",
         "LexMMIXAL",
+        // Linked but currently unreferenced from `LANG_TABLE` —
+        // kept on hand for a future Microsoft Transact-SQL menu
+        // entry distinct from the generic SQL one (LexSQL is what
+        // the table uses today). Drop this line if the
+        // specialisation never lands; the flag-the-deletion comment
+        // here makes the intent visible to a cleanup pass.
         "LexMSSQL",
         "LexMake",
         "LexMatlab",

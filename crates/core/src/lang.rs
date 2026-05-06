@@ -439,7 +439,19 @@ pub const LANG_TABLE: &[LangEntry] = &[
         menu_label: "JSON",
         desc: "JSON file",
         lexer: Some("json"),
-        extensions: &["json", "json5"],
+        extensions: &["json"],
+    },
+    LangEntry {
+        lang: L_JSON5,
+        menu_label: "JSON5",
+        desc: "JSON5 file",
+        // Lexilla's `LexJSON.cxx` registers the `json` lexer that
+        // accepts both strict JSON and the JSON5 extensions
+        // (single-quoted strings, trailing commas, comments). N++
+        // does the same — there's no separate Lexilla
+        // registration named `json5`.
+        lexer: Some("json"),
+        extensions: &["json5"],
     },
     LangEntry {
         lang: L_JSP,
@@ -489,13 +501,6 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Matlab source file",
         lexer: Some("matlab"),
         extensions: &["matlab"],
-    },
-    LangEntry {
-        lang: L_SQL,
-        menu_label: "Microsoft Transact-SQL",
-        desc: "Microsoft Transact-SQL source file",
-        lexer: Some("mssql"),
-        extensions: &["sql"],
     },
     LangEntry {
         lang: L_MMIXAL,
@@ -685,6 +690,18 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Spice circuit file",
         lexer: Some("spice"),
         extensions: &["sp", "spice"],
+    },
+    LangEntry {
+        lang: L_SQL,
+        menu_label: "SQL",
+        desc: "SQL source file",
+        // Generic SQL via `LexSQL.cxx`. The `mssql` lexer (from
+        // `LexMSSQL.cxx`) is also linked into the binary for any
+        // future Microsoft Transact-SQL specialisation but is not
+        // referenced from this table — N++'s public LangType_
+        // enum doesn't carry a separate id for T-SQL.
+        lexer: Some("sql"),
+        extensions: &["sql"],
     },
     LangEntry {
         lang: L_SWIFT,
@@ -899,6 +916,14 @@ pub const L_TOML: LangType = LangType(90);
 pub const L_SAS: LangType = LangType(91);
 pub const L_ERRORLIST: LangType = LangType(92);
 pub const L_EXTERNAL: LangType = LangType(93);
+/// Notepad++ added JSON5 as a distinct language id in a recent
+/// release; numeric value `94` matches the upstream public ABI as
+/// of the Lexilla 5.x line that ships with the latest N++ stable.
+/// Kept distinct from [`L_JSON`] so the menu can show two
+/// alphabetically-adjacent entries (`JSON` / `JSON5`) and a
+/// plugin can address either independently via
+/// `NPPM_SETBUFFERLANGTYPE`.
+pub const L_JSON5: LangType = LangType(94);
 
 /// Space-separated keyword list installed via `SCI_SETKEYWORDS(0, ...)`
 /// when the active language is C. Keeps the demo-gate `.c` file showing
@@ -990,6 +1015,11 @@ mod tests {
         assert_eq!(L_PYTHON.lexer_name(), Some("python"));
         assert_eq!(L_HTML.lexer_name(), Some("hypertext"));
         assert_eq!(L_JSON.lexer_name(), Some("json"));
+        // L_JSON5 shares the `json` lexer with L_JSON — pin that
+        // explicitly so a future table edit that loses the row or
+        // misroutes the lexer name produces a test failure rather
+        // than silently dropping syntax highlighting on `.json5`.
+        assert_eq!(L_JSON5.lexer_name(), Some("json"));
         assert_eq!(L_YAML.lexer_name(), Some("yaml"));
         // A plugin can still set a LangType not in the table via
         // NPPM_SETBUFFERLANGTYPE — that round-trips as None.
@@ -1015,7 +1045,7 @@ mod tests {
     #[test]
     fn npp_ids_match_compat_header() {
         // Spot-check the boundary-value ids against the LangType_ enum
-        // in plugins/nppcompat-headers/Notepad_plus_msgs.h. These four
+        // in plugins/nppcompat-headers/Notepad_plus_msgs.h. These
         // are enough to catch a one-off drift in the middle of the
         // table.
         assert_eq!(L_TEXT.as_npp_id(), 0);
@@ -1023,6 +1053,13 @@ mod tests {
         assert_eq!(L_PYTHON.as_npp_id(), 22);
         assert_eq!(L_RUST.as_npp_id(), 81);
         assert_eq!(L_EXTERNAL.as_npp_id(), 93);
+        // L_JSON5 sits one past L_EXTERNAL — pin the value here so
+        // the compat header's implicit enum sequencing
+        // (`L_EXTERNAL = 93`, `L_JSON5` next) and this constant
+        // stay aligned. Drift between the two would mean a plugin
+        // compiled against the C header sees a different value
+        // than the Rust dispatcher resolves.
+        assert_eq!(L_JSON5.as_npp_id(), 94);
     }
 
     #[test]
