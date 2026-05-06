@@ -36,12 +36,13 @@ use codepp_scintilla_sys::{
     SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
     SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT,
     SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
-    SCI_GETDIRECTPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH, SCI_GETLINECOUNT,
-    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
-    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
-    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
-    SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
-    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTEXT,
+    SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETLENGTH,
+    SCI_GETLINECOUNT, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT,
+    SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS,
+    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE, SCI_POSITIONAFTER,
+    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETDOCPOINTER,
+    SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
+    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
     SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT,
     SCN_MODIFIED, SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
 };
@@ -49,8 +50,9 @@ use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatfo
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{COLORREF, E_FAIL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, FillRect, GetStockObject, GetSysColorBrush, SetBkColor, SetBkMode,
-    SetTextColor, COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, NULL_BRUSH, TRANSPARENT,
+    CreateSolidBrush, FillRect, GetStockObject, GetSysColorBrush, InvalidateRect, SetBkColor,
+    SetBkMode, SetTextColor, COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, NULL_BRUSH,
+    TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
@@ -85,9 +87,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
     WM_DESTROY, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS,
-    WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
-    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU,
-    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WM_SETFONT, WM_SETREDRAW, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW,
+    WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -466,6 +468,15 @@ struct WindowState {
     /// noise. The drain applies the jump as a `SCI_SETSEL` so the
     /// matched span is selected (and scrolled into view).
     fif_pending_jumps: Vec<FifListviewRow>,
+    /// `(files_modified, total_replacements)` produced by the
+    /// in-buffer Replace-in-Files pass that runs *before* the
+    /// worker for any open tab whose path falls under the FIF root
+    /// and matches the include filter. Set in
+    /// `start_fif_from_snapshot` and merged into the displayed
+    /// stats by `finalize_fif_job`. `None` for plain Find in Files
+    /// or when no open tabs matched. Cleared on the terminal
+    /// `FifEvent` so a subsequent search starts fresh.
+    fif_in_buffer_counts: Option<(usize, usize)>,
     editor: EditorHandle,
     shell: Shell,
 }
@@ -4008,6 +4019,203 @@ unsafe fn handle_fif_replace_in_files(dlg: HWND, state: &mut FindReplaceState) {
     unsafe { start_fif_from_snapshot(dlg, state, snap) };
 }
 
+/// Apply the FIF replacement to every open tab whose path falls
+/// under `root` and matches the include/exclude filter. Run before
+/// the worker starts so the disk-side worker can keep its existing
+/// "skip files open in a tab" behaviour: the in-buffer state is the
+/// source of truth for an open file (unsaved edits, encoding, etc.),
+/// so rewriting it to disk would clobber the user's working copy
+/// and trigger the file watcher's "external change" dialog. After
+/// this pass, those tabs carry the post-replacement text and the
+/// user can save with Ctrl+S — same flow as Notepad++.
+///
+/// Returns `(files_modified, total_replacements)`. `(0, 0)` if no
+/// open tab is under `root`, if no match was found in any open
+/// tab, or if `FifQuery::compile` fails (the worker will fail with
+/// the same error a moment later, surfacing it through the dialog).
+unsafe fn apply_fif_in_buffer_replace(
+    state: &mut WindowState,
+    root: &std::path::Path,
+    walk_opts: &codepp_core::FifWalkOpts,
+    query_string: &str,
+    query_opts: codepp_core::FifQueryOpts,
+    replacement: &str,
+) -> (usize, usize) {
+    let Ok(query) = codepp_core::FifQuery::compile(query_string, query_opts) else {
+        return (0, 0);
+    };
+    let expand_groups = query_opts.regex;
+
+    // Snapshot which tabs are candidates *before* we start sending
+    // Scintilla messages. Without this, a SCN_MODIFIED notification
+    // produced by SCI_REPLACETARGET could re-enter on this thread
+    // and mutate `state.shell.tabs` mid-iteration.
+    let candidates: Vec<isize> = state
+        .shell
+        .tabs
+        .iter()
+        .filter_map(|tab| {
+            let path = tab.path.as_ref()?;
+            // Worker pre-filter: under the requested root, then the
+            // include/exclude glob set. Mirror the walker's order so
+            // tabs match exactly the same set the worker would have.
+            if !path.starts_with(root) {
+                return None;
+            }
+            if !walk_opts.path_matches(path) {
+                return None;
+            }
+            // A tab whose document was never materialized has no
+            // in-memory buffer to rewrite. Should be impossible in
+            // practice (every loaded tab gets activated at least
+            // once, which calls SCI_CREATEDOCUMENT), but guard so a
+            // future code path that defers materialization doesn't
+            // silently corrupt by writing into doc 0.
+            if tab.scintilla_doc == 0 {
+                return None;
+            }
+            Some(tab.scintilla_doc)
+        })
+        .collect();
+
+    if candidates.is_empty() {
+        return (0, 0);
+    }
+
+    // Save the active doc pointer so we can restore it after the
+    // doc-swap dance. Without this the user's active tab silently
+    // changes to whichever candidate was visited last.
+    let original_doc = state.editor.send(SCI_GETDOCPOINTER, 0, 0);
+
+    // Suppress repaint while we cycle the bound document. Each
+    // SCI_SETDOCPOINTER triggers a full editor repaint, which would
+    // visibly flash the user's view across every candidate tab.
+    // The guard restores redraw + InvalidateRect on Drop, so a panic
+    // anywhere in the loop cannot leave the editor permanently
+    // frozen. (Same RAII discipline as `PluginCallGuard` below.)
+    let _redraw_guard = unsafe { ScintillaRedrawGuard::enter(state.scintilla_hwnd) };
+
+    // SCI_REPLACETARGET fires SCN_MODIFIED via a synchronous
+    // SendMessage(parent, WM_NOTIFY, ...). That re-enters
+    // `main_wnd_proc` on this same thread, which would call
+    // `state_from_hwnd` and materialize a second `&mut WindowState`
+    // from the raw GWLP_USERDATA pointer — aliased with our outer
+    // `state: &mut WindowState`, which is undefined behaviour by
+    // Rust's borrow rules. The plugin re-entrancy guard makes
+    // `state_from_hwnd` return `None` while held, so the inner
+    // wnd_proc handles the SCN_MODIFIED with no host borrow.
+    // Drop happens on every exit path including panic, so a panic
+    // mid-loop doesn't leave the flag wedged.
+    let _call_guard = PluginCallGuard::enter();
+
+    let mut files_modified = 0usize;
+    let mut total_replacements = 0usize;
+
+    for doc in &candidates {
+        // Bind the candidate document to the single Scintilla view.
+        // Direct-call: the function pointer on `editor` was captured
+        // from this same view, so it operates on whichever document
+        // is currently bound.
+        state.editor.send(SCI_SETDOCPOINTER, 0, *doc);
+
+        let old_len = state.editor.send(SCI_GETLENGTH, 0, 0).max(0) as usize;
+        if old_len == 0 {
+            continue;
+        }
+        // SCI_GETTEXT writes old_len + 1 bytes (null terminator).
+        // Cap the buffer accordingly; the truncation below drops it.
+        let cap = old_len + 1;
+        let mut buf = vec![0u8; cap];
+        let written = state
+            .editor
+            .send(SCI_GETTEXT, cap, buf.as_mut_ptr() as isize);
+        if written <= 0 {
+            continue;
+        }
+        buf.truncate(written as usize);
+        // Scintilla's buffer is always UTF-8 in our app
+        // (SCI_SETCODEPAGE = SC_CP_UTF8 by default; encoding
+        // conversion happens at load/save in `core::file`, not
+        // inside the buffer). `from_utf8` is therefore the
+        // expected-success path; the lossy fallback is a defensive
+        // measure for the rare case where the bytes are actually
+        // invalid UTF-8 (e.g. a plugin wrote raw bytes via
+        // SCI_INSERTTEXT and didn't translate first).
+        let text = match String::from_utf8(buf) {
+            Ok(s) => s,
+            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+        };
+
+        let (new_text, n_replaced) =
+            codepp_core::fif::replace_in_text(&query, &text, replacement, expand_groups);
+
+        if n_replaced == 0 {
+            continue;
+        }
+
+        // Single undo group around the whole-buffer rewrite. Ctrl+Z
+        // reverts every replacement at once (matches active-tab
+        // Replace All semantics). `old_len` is the BYTE length of
+        // the buffer before the rewrite — that's what
+        // SCI_SETTARGETEND wants (the end offset of the region to
+        // replace), distinct from `new_text.len()` (the size of
+        // what we're writing in).
+        state.editor.send(SCI_BEGINUNDOACTION, 0, 0);
+        state.editor.send(SCI_SETTARGETSTART, 0, 0);
+        state.editor.send(SCI_SETTARGETEND, old_len, 0);
+        // SCI_REPLACETARGET takes wparam = byte length, lparam =
+        // pointer; embedded NULs survive (the call is
+        // length-prefixed, not null-terminated).
+        state.editor.send(
+            SCI_REPLACETARGET,
+            new_text.len(),
+            new_text.as_ptr() as isize,
+        );
+        state.editor.send(SCI_ENDUNDOACTION, 0, 0);
+
+        files_modified += 1;
+        total_replacements += n_replaced;
+    }
+
+    // Restore the original document. Redraw is restored when
+    // `_redraw_guard` drops at the end of this scope.
+    state.editor.send(SCI_SETDOCPOINTER, 0, original_doc);
+
+    (files_modified, total_replacements)
+}
+
+/// RAII pair around `WM_SETREDRAW(false)` / `WM_SETREDRAW(true) +
+/// InvalidateRect`. Used to suppress flicker during a multi-step
+/// editor mutation (FIF in-buffer replace cycles the bound
+/// document for each candidate tab). Crucial property: Drop
+/// **must** restore redraw on every exit including panic — without
+/// this discipline a panic mid-loop leaves the Scintilla view
+/// permanently frozen, which is unrecoverable for the user.
+struct ScintillaRedrawGuard {
+    hwnd: HWND,
+}
+
+impl ScintillaRedrawGuard {
+    /// SAFETY: `hwnd` must reference a live Scintilla view on this
+    /// thread. The guard sends two `SendMessageW`s to it; sending
+    /// to a destroyed HWND is undefined behaviour.
+    unsafe fn enter(hwnd: HWND) -> Self {
+        let _ = unsafe { SendMessageW(hwnd, WM_SETREDRAW, Some(WPARAM(0)), Some(LPARAM(0))) };
+        Self { hwnd }
+    }
+}
+
+impl Drop for ScintillaRedrawGuard {
+    fn drop(&mut self) {
+        // Best-effort restore — these calls cannot fail in any
+        // recoverable way, and we are deliberately ignoring the
+        // results so panic-during-Drop is impossible (which would
+        // double-panic the host).
+        let _ = unsafe { SendMessageW(self.hwnd, WM_SETREDRAW, Some(WPARAM(1)), Some(LPARAM(0))) };
+        let _ = unsafe { InvalidateRect(Some(self.hwnd), None, true) };
+    }
+}
+
 /// Build a `FifRequest` from the captured snapshot, kick off
 /// `Shell::start_fif`, hide the dialog, show the progress window,
 /// and reset the dock state so the next set of results lands in a
@@ -4028,6 +4236,24 @@ unsafe fn start_fif_from_snapshot(dlg: HWND, state: &mut FindReplaceState, snap:
     };
 
     let main_hwnd = state.main_hwnd;
+    let root = PathBuf::from(&snap.directory);
+
+    // Replace-in-Files for files the user has open in a tab is
+    // applied here, BEFORE the worker starts. The worker continues
+    // to skip those paths on disk; the in-buffer pass is the source
+    // of truth for an open file. See `apply_fif_in_buffer_replace`
+    // for the rationale.
+    let in_buffer_counts: Option<(usize, usize)> = snap.replacement.as_ref().and_then(|repl| {
+        let win = (unsafe { state_from_hwnd(main_hwnd) })?;
+        let counts = unsafe {
+            apply_fif_in_buffer_replace(win, &root, &walk_opts, &snap.query, query_opts, repl)
+        };
+        if counts == (0, 0) {
+            None
+        } else {
+            Some(counts)
+        }
+    });
 
     // Snapshot the currently-open tab paths so the orchestrator
     // can skip them in replace mode. Done in the same brief borrow
@@ -4046,7 +4272,7 @@ unsafe fn start_fif_from_snapshot(dlg: HWND, state: &mut FindReplaceState, snap:
         let request = codepp_shell::FifRequest {
             query: snap.query.clone(),
             opts: query_opts,
-            root: PathBuf::from(&snap.directory),
+            root,
             walk: walk_opts,
             replacement: snap.replacement,
             open_tab_paths,
@@ -4054,7 +4280,19 @@ unsafe fn start_fif_from_snapshot(dlg: HWND, state: &mut FindReplaceState, snap:
         match win.shell.start_fif(request) {
             Ok(id) => id.raw(),
             Err(e) => {
-                unsafe { set_error_status(state, &format!("Find in Files: {e}")) };
+                // The in-buffer pass already committed replacements
+                // to open tabs. Tell the user — silent dirty buffers
+                // would be confusing and could be saved over real
+                // data on Ctrl+S without the user realizing why.
+                let suffix = match in_buffer_counts {
+                    Some((files, n)) => format!(
+                        " ({n} replacement{} already applied to {files} open tab{})",
+                        if n == 1 { "" } else { "s" },
+                        if files == 1 { "" } else { "s" },
+                    ),
+                    None => String::new(),
+                };
+                unsafe { set_error_status(state, &format!("Find in Files: {e}{suffix}")) };
                 return;
             }
         }
@@ -4078,6 +4316,7 @@ unsafe fn start_fif_from_snapshot(dlg: HWND, state: &mut FindReplaceState, snap:
         win.fif_pending_results.clear();
         win.fif_listview_index.clear();
         win.fif_pending_jumps.clear();
+        win.fif_in_buffer_counts = in_buffer_counts;
         unsafe { fif_listview_clear(win.fif_listview_hwnd) };
     }
 }
@@ -5558,6 +5797,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             fif_pending_results: Vec::new(),
             fif_listview_index: Vec::new(),
             fif_pending_jumps: Vec::new(),
+            fif_in_buffer_counts: None,
             editor,
             shell,
         });
@@ -6331,18 +6571,25 @@ unsafe fn finalize_fif_job(main_hwnd: HWND, terminal: codepp_shell::FifEvent) {
     // Drain progress HWND + pending results out of state in one
     // brief borrow; populate the listview AFTER the borrow ends so
     // `LVM_INSERTITEMW` syncs cannot re-enter.
-    let (progress_hwnd, pending, listview, dialog) = {
+    let (progress_hwnd, pending, listview, dialog, in_buffer_counts) = {
         let Some(state) = (unsafe { state_from_hwnd(main_hwnd) }) else {
             return;
         };
         let progress = state.fif_progress_hwnd.take();
         let pending = std::mem::take(&mut state.fif_pending_results);
         state.fif_active_job = None;
+        // Take the in-buffer tally even on cancel: the in-buffer
+        // pass already ran (synchronously, before `start_fif`), so
+        // those edits are real and need to show in the status. The
+        // alternative — silently dropping them — would leave the
+        // user wondering why their open tabs are dirty.
+        let in_buffer = state.fif_in_buffer_counts.take();
         (
             progress,
             pending,
             state.fif_listview_hwnd,
             state.find_replace_dlg,
+            in_buffer,
         )
     };
 
@@ -6350,16 +6597,27 @@ unsafe fn finalize_fif_job(main_hwnd: HWND, terminal: codepp_shell::FifEvent) {
         unsafe { close_fif_progress(p) };
     }
 
-    let (cancelled, files_modified, files_skipped_open, total_replacements) = match &terminal {
-        codepp_shell::FifEvent::Done { stats, .. } => (
-            false,
-            stats.files_modified,
-            stats.files_skipped_open,
-            stats.total_replacements,
-        ),
-        codepp_shell::FifEvent::Cancelled { .. } => (true, 0, 0, 0),
-        _ => return,
-    };
+    let (cancelled, mut files_modified, files_skipped_open, mut total_replacements) =
+        match &terminal {
+            codepp_shell::FifEvent::Done { stats, .. } => (
+                false,
+                stats.files_modified,
+                stats.files_skipped_open,
+                stats.total_replacements,
+            ),
+            codepp_shell::FifEvent::Cancelled { .. } => (true, 0, 0, 0),
+            _ => return,
+        };
+
+    // Fold the in-buffer pass's tally into the worker's stats. The
+    // worker's `files_skipped_open` already counts these tabs (it
+    // skipped them on disk), so subtract the in-buffer files from
+    // it to keep the total honest: "skipped" should mean "still
+    // unaddressed", not "covered by in-buffer".
+    let (in_buffer_files, in_buffer_replacements) = in_buffer_counts.unwrap_or((0, 0));
+    files_modified += in_buffer_files;
+    total_replacements += in_buffer_replacements;
+    let files_skipped_open = files_skipped_open.saturating_sub(in_buffer_files);
 
     // Populate listview + index. We rebuild `fif_listview_index`
     // here so the `NM_DBLCLK` handler can map row → location.
