@@ -1312,6 +1312,78 @@ impl Shell {
         true
     }
 
+    /// Like [`Self::set_buffer_encoding`] but addresses an arbitrary
+    /// open buffer by id rather than the active one. Plumbs
+    /// `NPPM_SETBUFFERENCODING` from a plugin onto a specific buffer
+    /// — the plugin contract takes a buffer id, not "the active
+    /// buffer", so we need an id-keyed setter alongside the
+    /// menu-driven active-tab setter.
+    ///
+    /// Same metadata-only semantics: the next save through the
+    /// affected tab encodes via the new variant.
+    ///
+    /// Returns `true` whenever the buffer ends up in the requested
+    /// state — both for an actual change and for a same-value
+    /// no-op. Returns `false` only for an unknown id. This matches
+    /// `set_buffer_lang_type`'s contract, which is the convention
+    /// `NPPM_SETBUFFERLANGTYPE` plugins already rely on, and
+    /// matches Notepad++'s "TRUE = the buffer is now in the
+    /// requested state" return semantics. Distinguishing
+    /// "unknown id" from "no-op success" is the bit plugins gate
+    /// on; collapsing both to `false` would silently break plugins
+    /// that conditionally re-encode only when the set "succeeds".
+    pub fn set_buffer_encoding_by_id(
+        &mut self,
+        id: isize,
+        encoding: codepp_core::Encoding,
+    ) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id as isize == id) else {
+            return false;
+        };
+        if tab.encoding == encoding {
+            // Same-value no-op: the buffer is already in the
+            // requested state, which is success per the N++
+            // contract. Skip the mutation (no need to rewrite the
+            // same value) but report success.
+            return true;
+        }
+        tracing::debug!(
+            buffer_id = id,
+            from = %tab.encoding.label(),
+            to = %encoding.label(),
+            "set_buffer_encoding_by_id"
+        );
+        tab.encoding = encoding;
+        true
+    }
+
+    /// Set the EOL format on the buffer with id `id`. Mirrors
+    /// [`Self::set_buffer_encoding_by_id`] for line endings — same
+    /// "TRUE = buffer is in the requested state" return convention,
+    /// `false` only for unknown id.
+    ///
+    /// **Phase 4 metadata-only:** existing line-ending bytes inside
+    /// the Scintilla document are not rewritten — `SCI_CONVERTEOLS`
+    /// needs UI-side cooperation (the doc-pointer-swap dance to
+    /// reach a non-active buffer's document), tracked in DESIGN.md
+    /// §7.4.
+    pub fn set_buffer_eol_by_id(&mut self, id: isize, eol: codepp_core::Eol) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id as isize == id) else {
+            return false;
+        };
+        if tab.eol == eol {
+            return true;
+        }
+        tracing::debug!(
+            buffer_id = id,
+            from = %tab.eol.label(),
+            to = %eol.label(),
+            "set_buffer_eol_by_id"
+        );
+        tab.eol = eol;
+        true
+    }
+
     /// Search the active editor forward for `query` under `flags`
     /// and activate the match (Scintilla moves the selection to
     /// it). Returns the byte offset of the match, or `None` on
@@ -2006,6 +2078,52 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.shell.confirm_reload(path);
         true
     }
+
+    fn set_buffer_encoding(&mut self, id: isize, unimode: i32) -> bool {
+        // Inverse of `Self::buffer_encoding`'s mapping. We reject
+        // UNI_7BIT outright: Code++'s detection pipeline never
+        // produces it (pure ASCII is reported as `UNI_COOKIE`/Utf8)
+        // and there's no exact `Encoding` variant for "ASCII", so
+        // a plugin asking for it would silently get UTF-8 and be
+        // surprised on save. Better to fail loudly with a `false`
+        // return.
+        //
+        // UNI_8BIT maps to `windows-1252` because that's the de-
+        // facto "ANSI" codepage on western-European Windows
+        // installs. The encoding label round-trips through
+        // `Encoding::from_label`, so a session.xml save+restore
+        // cycle preserves the choice. (Future polish: detect the
+        // system codepage via `GetACP` at startup and use that.)
+        let encoding = match unimode {
+            codepp_plugin_host::UNI_8BIT => {
+                codepp_core::Encoding::Other("windows-1252".to_string())
+            }
+            codepp_plugin_host::UNI_UTF8 => codepp_core::Encoding::Utf8Bom,
+            codepp_plugin_host::UNI_UTF16BE => codepp_core::Encoding::Utf16BeBom,
+            codepp_plugin_host::UNI_UTF16LE => codepp_core::Encoding::Utf16LeBom,
+            codepp_plugin_host::UNI_COOKIE => codepp_core::Encoding::Utf8,
+            codepp_plugin_host::UNI_UTF16BE_NO_BOM => codepp_core::Encoding::Utf16Be,
+            codepp_plugin_host::UNI_UTF16LE_NO_BOM => codepp_core::Encoding::Utf16Le,
+            // UNI_7BIT, UNI_END, or anything else: rejected.
+            _ => return false,
+        };
+        self.shell.set_buffer_encoding_by_id(id, encoding)
+    }
+
+    fn set_buffer_format(&mut self, id: isize, eoltype: i32) -> bool {
+        // Inverse of `Self::buffer_format`'s mapping. Code++'s
+        // `Eol::Mixed` is per-line preservation — a state plugins
+        // cannot ask for since it has no N++ counterpart. The
+        // setter never produces `Mixed`; only WIN/MAC/UNIX_FORMAT
+        // are accepted.
+        let eol = match eoltype {
+            codepp_plugin_host::WIN_FORMAT => codepp_core::Eol::CrLf,
+            codepp_plugin_host::MAC_FORMAT => codepp_core::Eol::Cr,
+            codepp_plugin_host::UNIX_FORMAT => codepp_core::Eol::Lf,
+            _ => return false,
+        };
+        self.shell.set_buffer_eol_by_id(id, eol)
+    }
 }
 
 /// Spawn a forwarder thread that pumps items from `src` into `dst`
@@ -2453,6 +2571,86 @@ mod tests {
         shell.save_current_to_disk(&mut ui).unwrap();
         let final_bytes = std::fs::read(&path).unwrap();
         assert_eq!(final_bytes, original_bytes);
+    }
+
+    #[test]
+    fn set_buffer_encoding_by_id_targets_specific_tab() {
+        // The id-keyed setter must mutate only the addressed tab,
+        // leaving other tabs' encodings untouched. Plugin-driven
+        // NPPM_SETBUFFERENCODING addresses tabs by id, not by
+        // active-ness, so a plugin that flips the encoding on a
+        // background tab shouldn't accidentally flip the active
+        // tab's metadata.
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        std::fs::write(&a, "a").unwrap();
+        std::fs::write(&b, "b").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for path in [a, b] {
+            shell.open_file(path);
+            let target = ui.set_text_calls.len() + 1;
+            drain_until(
+                &mut shell,
+                &mut ui,
+                |u, _| u.set_text_calls.len() == target,
+                Duration::from_secs(2),
+            );
+        }
+        let id_b = shell.tabs[1].id as isize;
+
+        // Default UTF-8 on both tabs.
+        assert_eq!(shell.tabs[0].encoding, codepp_core::Encoding::Utf8);
+        assert_eq!(shell.tabs[1].encoding, codepp_core::Encoding::Utf8);
+
+        // Flip tab `b`'s encoding only — tab `a` stays UTF-8.
+        assert!(shell.set_buffer_encoding_by_id(id_b, codepp_core::Encoding::Utf16LeBom));
+        assert_eq!(shell.tabs[0].encoding, codepp_core::Encoding::Utf8);
+        assert_eq!(shell.tabs[1].encoding, codepp_core::Encoding::Utf16LeBom);
+
+        // Same-value set on the same id reports `true` — the buffer
+        // *is* in the requested state, which is success per the N++
+        // contract. (Distinguishing same-value-success from
+        // unknown-id is the bit plugins gate on.)
+        assert!(shell.set_buffer_encoding_by_id(id_b, codepp_core::Encoding::Utf16LeBom));
+
+        // Unknown id is rejected.
+        assert!(!shell.set_buffer_encoding_by_id(9999, codepp_core::Encoding::Utf8));
+    }
+
+    #[test]
+    fn set_buffer_eol_by_id_targets_specific_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("eol.txt");
+        std::fs::write(&path, "line\n").unwrap();
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        let id = shell.tabs[0].id as isize;
+        // Detection of "line\n" produces Eol::Lf.
+        assert_eq!(shell.tabs[0].eol, codepp_core::Eol::Lf);
+
+        // Flip to CRLF.
+        assert!(shell.set_buffer_eol_by_id(id, codepp_core::Eol::CrLf));
+        assert_eq!(shell.tabs[0].eol, codepp_core::Eol::CrLf);
+
+        // Same-value reports success — the buffer is already in
+        // the requested state.
+        assert!(shell.set_buffer_eol_by_id(id, codepp_core::Eol::CrLf));
+
+        // Unknown id rejected.
+        assert!(!shell.set_buffer_eol_by_id(9999, codepp_core::Eol::Lf));
     }
 
     #[test]

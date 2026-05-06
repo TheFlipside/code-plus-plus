@@ -80,7 +80,9 @@ pub const NPPM_RELOADBUFFERID: u32 = NPPMSG + 61;
 pub const NPPM_GETBUFFERLANGTYPE: u32 = NPPMSG + 64;
 pub const NPPM_SETBUFFERLANGTYPE: u32 = NPPMSG + 65;
 pub const NPPM_GETBUFFERENCODING: u32 = NPPMSG + 66;
+pub const NPPM_SETBUFFERENCODING: u32 = NPPMSG + 67;
 pub const NPPM_GETBUFFERFORMAT: u32 = NPPMSG + 68;
+pub const NPPM_SETBUFFERFORMAT: u32 = NPPMSG + 69;
 pub const NPPM_DOOPEN: u32 = NPPMSG + 77;
 pub const NPPM_GETLANGUAGENAME: u32 = NPPMSG + 83;
 pub const NPPM_GETLANGUAGEDESC: u32 = NPPMSG + 84;
@@ -380,6 +382,42 @@ pub trait HostServices {
     /// known and had an associated path), `false` otherwise. Same
     /// "ok / unknown" shape as [`Self::set_buffer_lang_type`].
     fn reload_buffer_id(&mut self, id: isize, with_alert: bool) -> bool;
+
+    /// Set the save-time encoding of the buffer with id `id` from a
+    /// [`UNI_8BIT`] / [`UNI_UTF8`] / [`UNI_UTF16BE`] / [`UNI_UTF16LE`]
+    /// / [`UNI_COOKIE`] / [`UNI_UTF16BE_NO_BOM`] /
+    /// [`UNI_UTF16LE_NO_BOM`] numeric. Mirrors the menu-driven
+    /// `Shell::set_buffer_encoding` but works on any open buffer
+    /// rather than just the active one — that's the contract
+    /// `NPPM_SETBUFFERENCODING` plugins expect.
+    ///
+    /// [`UNI_7BIT`] is rejected (returns `false`): Code++'s detection
+    /// pipeline never produces this value (pure ASCII is reported as
+    /// `UNI_COOKIE`), and there is no exact-match `Encoding` variant
+    /// for "ASCII". A plugin asking for it likely wants `UNI_COOKIE`
+    /// (UTF-8 without BOM) which is the natural superset.
+    ///
+    /// Returns `false` for unknown buffer id, unknown UniMode value,
+    /// or `UNI_7BIT` per the rule above.
+    fn set_buffer_encoding(&mut self, id: isize, unimode: i32) -> bool;
+
+    /// Set the EOL format of the buffer with id `id` from a
+    /// [`WIN_FORMAT`] / [`MAC_FORMAT`] / [`UNIX_FORMAT`] numeric.
+    ///
+    /// **Phase 4 limitation:** the change is metadata-only — the
+    /// existing line-ending bytes inside the Scintilla document are
+    /// NOT rewritten. The next save still encodes the buffer text
+    /// through `tab.encoding`, so the file's bytes are correct
+    /// only if the buffer's in-memory line endings already match
+    /// the new format (which is true for empty buffers and any
+    /// buffer the user reloads after the metadata change). N++
+    /// additionally issues `SCI_CONVERTEOLS` to rewrite the bytes
+    /// in place — that needs a UI-side hook (the doc-pointer-swap
+    /// dance to reach a non-active buffer) tracked in DESIGN.md
+    /// §7.4.
+    ///
+    /// Returns `false` for unknown buffer id or unknown EolType.
+    fn set_buffer_format(&mut self, id: isize, eoltype: i32) -> bool;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -728,6 +766,26 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // unknown id, same separation rationale as
             // `NPPM_GETBUFFERENCODING`.
             services.buffer_format(wparam as isize) as isize
+        }
+
+        NPPM_SETBUFFERENCODING => {
+            // wparam: buffer id. lparam: UniMode numeric. Returns
+            // 1 on success (id resolved AND value accepted — same
+            // value as already set is also success per the N++
+            // "buffer is in the requested state" contract), 0 on
+            // unknown id / unknown UniMode / UNI_7BIT (no exact
+            // `Encoding` variant — see the trait doc-comment for
+            // the rationale).
+            services.set_buffer_encoding(wparam as isize, lparam as i32) as isize
+        }
+
+        NPPM_SETBUFFERFORMAT => {
+            // wparam: buffer id. lparam: EolType numeric. Returns
+            // 1 on success (same "is in the requested state"
+            // semantics as SETBUFFERENCODING), 0 on unknown id or
+            // unknown EolType. Phase 4 metadata-only — see the
+            // trait doc-comment for the SCI_CONVERTEOLS deferral.
+            services.set_buffer_format(wparam as isize, lparam as i32) as isize
         }
 
         NPPM_RELOADBUFFERID => {
@@ -1149,6 +1207,41 @@ mod tests {
                 "reload_id[{id}]={} alert={with_alert}",
                 path.display()
             ));
+            true
+        }
+        fn set_buffer_encoding(&mut self, id: isize, unimode: i32) -> bool {
+            // Match the production HostBridge's "unknown id → false"
+            // contract: only buffers we know about (via the
+            // `buffer_paths` map, the canonical "is this id real?"
+            // signal in the mock) accept a set. UniMode validation
+            // mirrors the production mapping below.
+            if !self.buffer_paths.iter().any(|(i, _)| *i == id) {
+                return false;
+            }
+            // Reject unknown UniMode and UNI_7BIT (no exact Encoding).
+            if !matches!(
+                unimode,
+                UNI_8BIT
+                    | UNI_UTF8
+                    | UNI_UTF16BE
+                    | UNI_UTF16LE
+                    | UNI_COOKIE
+                    | UNI_UTF16BE_NO_BOM
+                    | UNI_UTF16LE_NO_BOM
+            ) {
+                return false;
+            }
+            self.record(format!("set_encoding[{id}]={unimode}"));
+            true
+        }
+        fn set_buffer_format(&mut self, id: isize, eoltype: i32) -> bool {
+            if !self.buffer_paths.iter().any(|(i, _)| *i == id) {
+                return false;
+            }
+            if !matches!(eoltype, WIN_FORMAT | MAC_FORMAT | UNIX_FORMAT) {
+                return false;
+            }
+            self.record(format!("set_format[{id}]={eoltype}"));
             true
         }
     }
@@ -1854,5 +1947,80 @@ mod tests {
         let r = unsafe { dispatch_nppm(&mut s, NPPM_RELOADBUFFERID, 999, 0) };
         assert_eq!(r, Some(0));
         assert!(s.calls().is_empty());
+    }
+
+    #[test]
+    fn set_buffer_encoding_dispatches_unimode_to_services() {
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from("D:/x.txt"))],
+            ..Default::default()
+        };
+        for unimode in [UNI_8BIT, UNI_UTF8, UNI_UTF16LE, UNI_COOKIE] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_SETBUFFERENCODING, 7, unimode as isize) };
+            assert_eq!(r, Some(1), "unimode={unimode}");
+        }
+    }
+
+    #[test]
+    fn set_buffer_encoding_rejects_unknown_unimode() {
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from("D:/x.txt"))],
+            ..Default::default()
+        };
+        // 99 is outside the UniMode range; the mock and the
+        // production mapping both reject it.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SETBUFFERENCODING, 7, 99) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn set_buffer_encoding_rejects_uni_7bit() {
+        // UNI_7BIT has no exact `Encoding` variant — pure ASCII is
+        // reported as `UNI_COOKIE` on the way out, and a plugin
+        // setting it would imply "save as 7-bit ASCII" which Code++
+        // does not model. Reject explicitly so a plugin sees 0
+        // rather than a silent fallback.
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from("D:/x.txt"))],
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SETBUFFERENCODING, 7, UNI_7BIT as isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn set_buffer_encoding_unknown_id_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SETBUFFERENCODING, 999, UNI_UTF8 as isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn set_buffer_format_dispatches_eoltype_to_services() {
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from("D:/x.txt"))],
+            ..Default::default()
+        };
+        for eol in [WIN_FORMAT, MAC_FORMAT, UNIX_FORMAT] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_SETBUFFERFORMAT, 7, eol as isize) };
+            assert_eq!(r, Some(1), "eoltype={eol}");
+        }
+    }
+
+    #[test]
+    fn set_buffer_format_rejects_unknown_eoltype() {
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from("D:/x.txt"))],
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SETBUFFERFORMAT, 7, 99) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn set_buffer_format_unknown_id_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SETBUFFERFORMAT, 999, WIN_FORMAT as isize) };
+        assert_eq!(r, Some(0));
     }
 }
