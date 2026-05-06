@@ -3810,6 +3810,39 @@ unsafe fn handle_replace_all(state: &mut FindReplaceState) {
     }
 }
 
+/// Set the FIF tab's Directory and Filters comboboxes from a
+/// plugin-supplied prefill. Used immediately after the FIF dialog
+/// is shown via `NPPM_LAUNCHFINDINFILESDLG`. Empty fields on the
+/// prefill are skipped so a partial pre-fill doesn't clobber user
+/// state for the absent field.
+unsafe fn apply_fif_prefill(dlg: HWND, prefill: &codepp_shell::FifLaunchPrefill) {
+    unsafe {
+        let state_ptr = GetWindowLongPtrW(dlg, GWLP_USERDATA) as *mut FindReplaceState;
+        if state_ptr.is_null() || !(*state_ptr).controls_ready {
+            return;
+        }
+        let state = &*state_ptr;
+        if let Some(dir) = &prefill.directory {
+            // `to_string_lossy()` makes the lossy decoding explicit;
+            // `display().to_string()` is functionally identical but
+            // hides the lossy step. The lossy path is unreachable in
+            // practice — the dispatcher already rejected
+            // bad-surrogate inputs in `wide_ptr_to_string`.
+            let mut buf: Vec<u16> = dir
+                .as_path()
+                .to_string_lossy()
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            let _ = SetWindowTextW(state.fif_directory_edit, PCWSTR(buf.as_mut_ptr()));
+        }
+        if let Some(filters) = &prefill.filters {
+            let mut buf: Vec<u16> = filters.encode_utf16().chain(std::iter::once(0)).collect();
+            let _ = SetWindowTextW(state.fif_filters_edit, PCWSTR(buf.as_mut_ptr()));
+        }
+    }
+}
+
 /// Frozen snapshot of the FIF tab's input controls. Captured once
 /// before any modal pump (e.g. the Replace in Files MessageBoxW)
 /// and reused for both the confirmation prompt and the orchestrator
@@ -7313,6 +7346,43 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // wnd_proc body runs inside one already.
                     let routed =
                         shell.dispatch_plugin_message(&mut ui, handles, m, wparam.0, lparam.0);
+                    // After the dispatch borrow ends, drain any
+                    // FIF-launch prefill the plugin queued via
+                    // NPPM_LAUNCHFINDINFILESDLG and open the dialog
+                    // with the directory / filters pre-filled.
+                    //
+                    // **PLUGIN_CALL_ACTIVE invariant:** if a plugin
+                    // re-entered this arm from inside its own
+                    // `beNotified` (PluginCallGuard active), the
+                    // outer `state_from_hwnd` above would have
+                    // returned `None` and we'd never reach here —
+                    // so a re-entrant `NPPM_LAUNCHFINDINFILESDLG`
+                    // never reaches the dispatcher and never
+                    // writes a stale prefill. The drain below
+                    // therefore only sees prefills produced from a
+                    // non-re-entrant plugin call, and consumes
+                    // them on the same wnd_proc tick.
+                    //
+                    // The dialog HWND is stashed on `WindowState`
+                    // BEFORE `apply_fif_prefill` so any
+                    // CBN_EDITCHANGE the SetWindowTextW writes
+                    // might surface (the dialog wndproc handles
+                    // those, not main_wnd_proc, but defence in
+                    // depth) sees the up-to-date dialog handle
+                    // rather than a stale `None`.
+                    let prefill =
+                        state_from_hwnd(hwnd).and_then(|s| s.shell.take_fif_launch_prefill());
+                    if let Some(prefill) = prefill {
+                        let existing = state_from_hwnd(hwnd).and_then(|s| s.find_replace_dlg);
+                        if let Some(dlg) =
+                            show_find_replace_dialog(hwnd, existing, FindReplaceTab::FindInFiles)
+                        {
+                            if let Some(s) = state_from_hwnd(hwnd) {
+                                s.find_replace_dlg = Some(dlg);
+                            }
+                            apply_fif_prefill(dlg, &prefill);
+                        }
+                    }
                     match routed {
                         Some(lr) => LRESULT(lr),
                         None => DefWindowProcW(hwnd, msg, wparam, lparam),

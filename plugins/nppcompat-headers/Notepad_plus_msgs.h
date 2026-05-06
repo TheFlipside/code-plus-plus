@@ -104,6 +104,13 @@
 
 /* Find-in-files dialog --------------------------------------------- */
 
+/* Open the Find in Files dialog with optional pre-fill.
+ * wParam: TCHAR* directory (or NULL to leave the field unchanged).
+ * lParam: TCHAR* filters   (or NULL to leave the field unchanged).
+ * An empty non-NULL string is treated identically to NULL — the
+ * dispatcher folds the bad-surrogate path of `wide_ptr_to_string`
+ * into the same "use current value" semantics so a single corrupt
+ * arg can't trash a good prefill on the other arg. */
 #define NPPM_LAUNCHFINDINFILESDLG         (NPPMSG + 29)
 
 /* Docking / docked-dialog API (DM = "Docking Manager") ------------- */

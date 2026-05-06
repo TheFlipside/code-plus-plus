@@ -55,6 +55,11 @@ pub const NPPM_SETCURRENTLANGTYPE: u32 = NPPMSG + 6;
 pub const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
 pub const NPPM_GETMENUHANDLE: u32 = NPPMSG + 25;
 pub const NPPM_ACTIVATEDOC: u32 = NPPMSG + 28;
+/// Open the Find in Files dialog, optionally pre-filling the
+/// directory (`wparam`, wide string) and filters (`lparam`, wide
+/// string). Both pointers may be NULL — N++'s ABI treats them as
+/// "use the dialog's current values".
+pub const NPPM_LAUNCHFINDINFILESDLG: u32 = NPPMSG + 29;
 pub const NPPM_RELOADFILE: u32 = NPPMSG + 36;
 pub const NPPM_SWITCHTOFILE: u32 = NPPMSG + 37;
 pub const NPPM_SAVECURRENTFILE: u32 = NPPMSG + 38;
@@ -273,6 +278,12 @@ pub trait HostServices {
     /// Activate the buffer at index `pos` in view `view`. Phase 3
     /// single-tab is a no-op success.
     fn activate_doc(&mut self, view: i32, pos: i32) -> bool;
+    /// Open the Find in Files dialog (FIF tab), optionally pre-
+    /// filling the directory and filter combobox text. Both args
+    /// `None` means "open the dialog with whatever the controls
+    /// already hold". Used by `NPPM_LAUNCHFINDINFILESDLG` so a
+    /// plugin can drive a project-wide search.
+    fn launch_find_in_files_dialog(&mut self, directory: Option<PathBuf>, filters: Option<String>);
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -530,6 +541,43 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 services.open_file(PathBuf::from(decoded));
                 1
             }
+        }
+
+        NPPM_LAUNCHFINDINFILESDLG => {
+            // wparam: directory (TCHAR*) — optional pre-fill.
+            // lparam: filters (TCHAR*) — optional pre-fill.
+            // Either / both NULL means "open the dialog with
+            // whatever the controls already hold". Empty wide
+            // strings are treated as NULL — `wide_ptr_to_string`
+            // returns "" on a bad-surrogate decode, and we don't
+            // want a single bad UTF-16 unit to trash a good
+            // pre-fill on the other arg.
+            //
+            // Both pointers are read by SAFETY contract from the
+            // plugin: each must be either NULL or a valid wide
+            // null-terminated buffer.
+            let directory = if wparam == 0 {
+                None
+            } else {
+                let s = unsafe { wide_ptr_to_string(wparam as *const u16) };
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(s))
+                }
+            };
+            let filters = if lparam == 0 {
+                None
+            } else {
+                let s = unsafe { wide_ptr_to_string(lparam as *const u16) };
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            };
+            services.launch_find_in_files_dialog(directory, filters);
+            1
         }
 
         NPPM_GETLANGUAGENAME => {
@@ -812,6 +860,19 @@ mod tests {
             self.record(format!("activate[{view},{pos}]"));
             true
         }
+        fn launch_find_in_files_dialog(
+            &mut self,
+            directory: Option<PathBuf>,
+            filters: Option<String>,
+        ) {
+            self.record(format!(
+                "fif_launch[dir={},filters={}]",
+                directory
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "<none>".into()),
+                filters.unwrap_or_else(|| "<none>".into())
+            ));
+        }
     }
 
     fn make_wide(s: &str) -> Vec<u16> {
@@ -917,6 +978,67 @@ mod tests {
         let r = unsafe { dispatch_nppm(&mut s, NPPM_DOOPEN, 0, 0) };
         assert_eq!(r, Some(0));
         assert!(s.calls().is_empty());
+    }
+
+    #[test]
+    fn fif_launch_decodes_dir_and_filters() {
+        let mut s = MockServices::default();
+        let dir = make_wide(r"C:\src");
+        let filters = make_wide("*.rs *.toml");
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_LAUNCHFINDINFILESDLG,
+                dir.as_ptr() as usize,
+                filters.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(
+            s.calls(),
+            vec![r"fif_launch[dir=C:\src,filters=*.rs *.toml]"]
+        );
+    }
+
+    #[test]
+    fn fif_launch_null_args_passes_none() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_LAUNCHFINDINFILESDLG, 0, 0) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["fif_launch[dir=<none>,filters=<none>]"]);
+    }
+
+    #[test]
+    fn fif_launch_partial_prefill_dir_only() {
+        let mut s = MockServices::default();
+        let dir = make_wide(r"C:\proj");
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_LAUNCHFINDINFILESDLG, dir.as_ptr() as usize, 0) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec![r"fif_launch[dir=C:\proj,filters=<none>]"]);
+    }
+
+    #[test]
+    fn fif_launch_bad_surrogate_dir_falls_back_to_none() {
+        // Lone high surrogate followed by NUL: not a valid UTF-16
+        // sequence. `wide_ptr_to_string` rejects this with an empty
+        // string rather than substituting U+FFFD; the dispatcher
+        // arm folds the empty result to `None` so a bad surrogate
+        // in `wparam` doesn't trash a good `lparam` prefill (and
+        // vice versa).
+        let bad: [u16; 2] = [0xD800, 0x0000];
+        let filters = make_wide("*.txt");
+        let mut s = MockServices::default();
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_LAUNCHFINDINFILESDLG,
+                bad.as_ptr() as usize,
+                filters.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["fif_launch[dir=<none>,filters=*.txt]"]);
     }
 
     #[test]

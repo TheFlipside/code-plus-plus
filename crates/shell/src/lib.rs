@@ -37,6 +37,17 @@ use codepp_plugin_host::{
 pub mod fif;
 pub use fif::{FifError, FifEvent, FifJobId, FifRequest, FifStats};
 
+/// Plugin-driven pre-fill for the next FIF dialog open. Populated
+/// by `NPPM_LAUNCHFINDINFILESDLG` and drained by the Win32 plugin
+/// dispatch in `main_wnd_proc`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FifLaunchPrefill {
+    /// Optional directory to seed the dialog's Directory combobox.
+    pub directory: Option<PathBuf>,
+    /// Optional filter expression to seed the Filters combobox.
+    pub filters: Option<String>,
+}
+
 /// Stable nonzero buffer id for the active buffer in the Phase 3
 /// single-tab world. Multi-tab assigns per-tab ids in milestone 6.
 /// Plugins receive this from `NPPM_GETCURRENTBUFFERID` and pass it
@@ -422,6 +433,15 @@ pub struct Shell {
     /// the `&mut Shell` borrow (matching the
     /// `pending_notifications` pattern).
     pending_fif: Vec<FifEvent>,
+    /// Pending pre-fill for the next FIF dialog open, set by
+    /// `NPPM_LAUNCHFINDINFILESDLG`. The Win32 plugin dispatch
+    /// drains this immediately after `dispatch_plugin_message`
+    /// returns and opens the dialog with the directory and
+    /// filters pre-populated. `None` is the common case (menu /
+    /// hotkey driven open uses whatever the dialog already
+    /// holds).
+    #[cfg(target_os = "windows")]
+    pending_fif_launch: Option<FifLaunchPrefill>,
 }
 
 /// Search-option bitset matching Scintilla's `SCFIND_*` flags. Held
@@ -508,6 +528,8 @@ impl Shell {
             fif_orchestrator,
             fif_rx: fif_rx_outer,
             pending_fif: Vec::new(),
+            #[cfg(target_os = "windows")]
+            pending_fif_launch: None,
         })
     }
 
@@ -908,6 +930,28 @@ impl Shell {
     /// operation that mustn't run with shell state locked.
     pub fn take_fif_events(&mut self) -> Vec<FifEvent> {
         std::mem::take(&mut self.pending_fif)
+    }
+
+    /// Drain the pending `NPPM_LAUNCHFINDINFILESDLG` prefill, if a
+    /// plugin posted one since the last call. The Win32 plugin
+    /// dispatch consumes this immediately after
+    /// `dispatch_plugin_message` returns and feeds it to the FIF
+    /// dialog opener.
+    #[cfg(target_os = "windows")]
+    pub fn take_fif_launch_prefill(&mut self) -> Option<FifLaunchPrefill> {
+        self.pending_fif_launch.take()
+    }
+
+    /// Setter for the FIF launch prefill — used by the
+    /// `HostServices::launch_find_in_files_dialog` impl on
+    /// `HostBridge` to stash the plugin's pre-fill request. Public
+    /// in symmetry with [`Self::take_fif_launch_prefill`] so the
+    /// write path mirrors the read path; the field itself stays
+    /// private so external callers can't bypass the take/set
+    /// contract.
+    #[cfg(target_os = "windows")]
+    pub fn set_fif_launch_prefill(&mut self, prefill: FifLaunchPrefill) {
+        self.pending_fif_launch = Some(prefill);
     }
 
     /// Confirm a deferred reload: requeue the file through the loader.
@@ -1774,6 +1818,20 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             "NPPM_ACTIVATEDOC (no-op, single-tab Phase 3)"
         );
         true
+    }
+
+    fn launch_find_in_files_dialog(&mut self, directory: Option<PathBuf>, filters: Option<String>) {
+        // Stash the prefill on the underlying Shell; the Win32
+        // dispatch in `main_wnd_proc` drains it via
+        // `Shell::take_fif_launch_prefill` right after
+        // `dispatch_plugin_message` returns. The dialog open
+        // itself can't happen here — the shell layer doesn't know
+        // about HWNDs (DESIGN.md §2.1) — but the prefill data
+        // structure is shared, so the UI sees exactly what the
+        // plugin requested. Routed through the public setter to
+        // keep the take/set pair as the only field-touch sites.
+        self.shell
+            .set_fif_launch_prefill(FifLaunchPrefill { directory, filters });
     }
 }
 

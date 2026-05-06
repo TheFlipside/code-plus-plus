@@ -70,7 +70,7 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_ENCODESCI` | ⚫ | v2 | |
 | `NPPM_DECODESCI` | ⚫ | v2 | |
 | `NPPM_ACTIVATEDOC` | 🟡 | v1 | Returns `TRUE` (single-tab fast path holds; multi-tab Phase 3 routes through `SWITCHTOFILE` so this remains a no-op true). |
-| `NPPM_LAUNCHFINDINFILESDLG` | ⚫ | v2 | |
+| `NPPM_LAUNCHFINDINFILESDLG` | ✅ | v2 | Opens the FIF tab in the Find/Replace dialog. `wparam` (wide path, optional) pre-fills the Directory combobox; `lparam` (wide string, optional) pre-fills Filters. Empty / NULL pointers leave the controls at their current values. |
 | `NPPM_DMMSHOW` / `DMMHIDE` / `DMMUPDATEDISPINFO` / `DMMREGASDCKDLG` / `DMMVIEWOTHERTAB` / `DMMGETPLUGINHWNDBYNAME` | ⚫ | v3 | Docking-manager API, full set lands v3. |
 | `NPPM_LOADSESSION` | ⚫ | v2 | |
 | `NPPM_RELOADFILE` | ✅ | v1 | Routes through the same reload path the file-watcher uses; null `lparam` reloads the current buffer. |
