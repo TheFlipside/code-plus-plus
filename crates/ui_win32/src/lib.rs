@@ -47,7 +47,7 @@ use codepp_scintilla_sys::{
 };
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{COLORREF, E_FAIL, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, E_FAIL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateSolidBrush, FillRect, GetStockObject, GetSysColorBrush, SetBkColor, SetBkMode,
     SetTextColor, COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, NULL_BRUSH, TRANSPARENT,
@@ -60,28 +60,31 @@ use windows::Win32::UI::Controls::{
     WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, SetFocus, VK_0, VK_F, VK_F3, VK_G, VK_H, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
+    EnableWindow, ReleaseCapture, SetCapture, SetFocus, VK_0, VK_F, VK_F3, VK_G, VK_H,
+    VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
 };
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CreateAcceleratorTableW,
     CreateMenu, CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyWindow, DispatchMessageW,
-    DrawMenuBar, GetClientRect, GetMenuItemCount, GetMessageW, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW, IsWindow, LoadCursorW, MessageBoxW,
-    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetWindowLongPtrW,
-    SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
-    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
-    BS_GROUPBOX, BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT,
-    CB_SETEDITSEL, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DM_GETDEFID,
-    ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL,
-    HMENU, IDCANCEL, IDC_ARROW, IDOK, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING,
-    MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
-    MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+    DrawMenuBar, GetClientRect, GetCursorPos, GetMenuItemCount, GetMessageW, GetParent,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW,
+    IsWindow, LoadCursorW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
+    TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK,
+    BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
+    CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER,
+    ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL, HMENU, IDCANCEL, IDC_ARROW,
+    IDC_SIZENS, IDOK, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO,
+    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED,
     WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
-    WM_DESTROY, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP, WM_NCCREATE, WM_NCDESTROY,
-    WM_NOTIFY, WM_QUIT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW,
-    WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WM_DESTROY, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS,
+    WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
+    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU,
+    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -180,6 +183,43 @@ const MAIN_CLASS: PCWSTR = w!("CodePlusPlusMainWindow");
 const SCINTILLA_CLASS: PCWSTR = w!("Scintilla");
 const STATUSBAR_CLASS: PCWSTR = w!("msctls_statusbar32");
 
+/// Window classes for the find-in-files bottom dock and its draggable
+/// splitter. Both are registered lazily on first `run()` invocation.
+/// The dock is a plain WS_CHILD container; the splitter owns a tiny
+/// wnd_proc that sets the resize cursor and forwards drag events to
+/// the parent's `WindowState`.
+const FIF_DOCK_CLASS: PCWSTR = w!("CodePlusPlusFifDock");
+const FIF_SPLITTER_CLASS: PCWSTR = w!("CodePlusPlusFifSplitter");
+
+/// Tab strip height in pixels. The Win32 default at 96 DPI; once
+/// `layout_children` becomes DPI-aware (Phase 4 polish item) this
+/// becomes a measured value via `TCM_GETITEMRECT`. Promoted to a
+/// module-level constant so the splitter clamp computation in
+/// `splitter_wnd_proc` shares the same source of truth.
+const TAB_HEIGHT_PX: i32 = 22;
+
+/// Status bar height in pixels. Same DPI-deferral rationale as
+/// `TAB_HEIGHT_PX`.
+const STATUS_HEIGHT_PX: i32 = 22;
+
+/// Height of the splitter handle between the editor and the FIF
+/// results dock. 4 px is the smallest band that's still draggable
+/// without the user having to pixel-hunt; matches the splitter
+/// thickness in N++.
+const SPLITTER_HEIGHT_PX: i32 = 4;
+/// Initial dock height the first time the user shows the FIF panel.
+/// Persistence across sessions is a Phase 4 m4 step 4 polish item;
+/// for now every shell launch starts at this default.
+const DEFAULT_DOCK_HEIGHT_PX: i32 = 200;
+/// Minimum dock height while the panel is shown. Below this the
+/// listview can't render even one usable row, so the splitter
+/// clamps to this value when the user drags down.
+const MIN_DOCK_HEIGHT_PX: i32 = 60;
+/// Minimum Scintilla height the splitter preserves while the dock
+/// is shown. The user can shrink the dock but never the editor;
+/// this matches N++'s "the editor is the priority surface" feel.
+const MIN_SCINTILLA_HEIGHT_PX: i32 = 60;
+
 /// Window class for the "Go to..." modal popup. Registered once on
 /// first `show_goto_dialog`. The dialog is a plain top-level
 /// `WS_POPUP`/`WS_CAPTION`/`WS_SYSMENU` window with our own wnd_proc;
@@ -228,6 +268,24 @@ const IDC_FR_IN_SELECTION: u16 = 216;
 /// a u16 pattern directly.
 const IDCANCEL_U16: u16 = IDCANCEL.0 as u16;
 
+/// Drag-tracking state captured on `WM_LBUTTONDOWN` over the FIF
+/// splitter and consumed on each `WM_MOUSEMOVE` until the matching
+/// `WM_LBUTTONUP`. Stored on `WindowState` rather than the splitter
+/// itself so the splitter wnd_proc stays a thin forwarder; reading
+/// the parent's state is one `state_from_hwnd(GetParent(...))` away.
+#[derive(Debug, Clone, Copy)]
+struct SplitterDrag {
+    /// Cursor Y in screen coords at the moment the user pressed.
+    /// Compared against `GetCursorPos` on each `WM_MOUSEMOVE` so the
+    /// drag tracks the cursor rather than the splitter (which is
+    /// itself moving as the user drags).
+    start_screen_y: i32,
+    /// Dock height when the user started the drag. The new height
+    /// is `dock_height_at_start + (start_screen_y - current_y)` —
+    /// dragging up grows the dock.
+    dock_height_at_start: i32,
+}
+
 /// Per-window state. Box-allocated, pointer stashed in
 /// `GWLP_USERDATA`. wnd_proc reads it back via
 /// `GetWindowLongPtrW(GWLP_USERDATA)` on every message. The main
@@ -275,6 +333,23 @@ struct WindowState {
     /// loop reads this in `IsDialogMessageW(dlg, &msg)` so Tab /
     /// Enter / Esc work inside the dialog while it's open.
     find_replace_dlg: Option<HWND>,
+    /// FIF results dock (Phase 4 m4 step 3). Empty container in
+    /// step 3; step 4 fills it with a SysListView32. Hidden until
+    /// the user opens the Find-in-Files panel.
+    fif_dock_hwnd: HWND,
+    /// Draggable handle that resizes the dock vs. the editor when
+    /// the dock is visible. Hidden alongside `fif_dock_hwnd`.
+    fif_splitter_hwnd: HWND,
+    /// Whether the dock + splitter are currently shown. Toggled by
+    /// the Search → Find in Files menu (will be driven by the
+    /// FIF dialog's Search button in step 4).
+    fif_dock_visible: bool,
+    /// Persisted dock height across show/hide cycles within one
+    /// session. Cross-session persistence lands with the rest of
+    /// the FIF dialog state in step 4.
+    fif_dock_height: i32,
+    /// `Some` iff the user is currently mid-drag on the splitter.
+    fif_splitter_drag: Option<SplitterDrag>,
     editor: EditorHandle,
     shell: Shell,
 }
@@ -1594,6 +1669,14 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             w!("&Replace...\tCtrl+H"),
         )?;
         AppendMenuW(search_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+        // Find in Files stays MF_GRAYED until m4 step 4 wires the
+        // FIF tab in the Find/Replace dialog. The dock infrastructure
+        // (window classes, splitter, layout) lands in step 3, but
+        // surfacing it through the menu before step 4 connects the
+        // proper search → progress → results flow would expose the
+        // empty dock to users. `TranslateAcceleratorW` silently
+        // discards a `WM_COMMAND` whose target menu item is
+        // disabled, so Ctrl+Shift+F also stays inert until then.
         AppendMenuW(
             search_menu,
             MF_STRING | MF_GRAYED,
@@ -1601,11 +1684,6 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             w!("Find in Fi&les...\tCtrl+Shift+F"),
         )?;
         AppendMenuW(search_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
-        // Go to Line — wired in m3b1. The other Search items stay
-        // MF_GRAYED until m3b2 lands the Find/Replace dialogs;
-        // TranslateAcceleratorW silently discards a WM_COMMAND
-        // whose target menu item is disabled, so an enabled item
-        // is what makes Ctrl+G actually fire.
         AppendMenuW(
             search_menu,
             MF_STRING,
@@ -4462,6 +4540,41 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             None,
         )?;
 
+        // FIF dock + splitter — both hidden at startup. The dock is a
+        // bare WS_CHILD container; step 4 will populate it with a
+        // SysListView32 and a small status row. WS_CLIPCHILDREN keeps
+        // future child-control redraws from flickering through the
+        // dock's own paint.
+        register_fif_classes();
+        let fif_dock_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            FIF_DOCK_CLASS,
+            PCWSTR::null(),
+            WS_CHILD | WS_CLIPCHILDREN,
+            0,
+            0,
+            0,
+            0,
+            Some(main_hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        )?;
+        let fif_splitter_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            FIF_SPLITTER_CLASS,
+            PCWSTR::null(),
+            WS_CHILD,
+            0,
+            0,
+            0,
+            0,
+            Some(main_hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        )?;
+
         // Capture the direct-call pair.
         let direct_fn_lr = SendMessageW(scintilla_hwnd, SCI_GETDIRECTFUNCTION, None, None);
         let direct_ptr_lr = SendMessageW(scintilla_hwnd, SCI_GETDIRECTPOINTER, None, None);
@@ -4548,6 +4661,11 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             language_menu: menus.language_menu,
             window_menu: menus.window_menu,
             find_replace_dlg: None,
+            fif_dock_hwnd,
+            fif_splitter_hwnd,
+            fif_dock_visible: false,
+            fif_dock_height: DEFAULT_DOCK_HEIGHT_PX,
+            fif_splitter_drag: None,
             editor,
             shell,
         });
@@ -4589,6 +4707,13 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             }
         }
 
+        // Snapshot the FIF layout defaults from the live state so
+        // the initial `layout_children` call below has a single
+        // source of truth — if the WindowState initializer ever
+        // changes, the layout call follows automatically.
+        let initial_dock_visible = state.fif_dock_visible;
+        let initial_dock_height = state.fif_dock_height;
+
         // Box now finalized. Install the raw pointer in GWLP_USERDATA;
         // the Box is reclaimed in WM_DESTROY.
         let state_ptr = Box::into_raw(state);
@@ -4605,6 +4730,10 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             tab_hwnd,
             scintilla_hwnd,
             status_hwnd,
+            fif_splitter_hwnd,
+            fif_dock_hwnd,
+            initial_dock_visible,
+            initial_dock_height,
             rect.right,
             rect.bottom,
         );
@@ -4750,13 +4879,44 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
 /// bottom, Scintilla fills the remainder.
 ///
 /// SAFETY: caller must hold valid HWNDs for the four windows.
-unsafe fn layout_children(tabs: HWND, scintilla: HWND, status: HWND, width: i32, height: i32) {
-    // SB_GETBORDERS / TCM_GETITEMRECT could measure these precisely;
-    // for now use fixed 22 px each which matches the Win32 default
-    // tab/status height at 96 DPI. DPI-aware sizing is a Phase 4
-    // polish item.
-    let tab_height = 22_i32;
-    let status_height = 22_i32;
+/// Authoritative clamp for the FIF dock height. Single source of
+/// truth shared by `layout_children` (which applies the clamp to
+/// the persisted height on every layout) and `splitter_wnd_proc`
+/// (which applies it on every drag-move). When `layout_children`
+/// goes DPI-aware, this helper is the only spot that needs the
+/// `TAB_HEIGHT_PX` / `STATUS_HEIGHT_PX` substitutions — the drag
+/// handler picks up the change for free.
+fn clamp_dock_height(client_height: i32, requested: i32) -> i32 {
+    let mid = (client_height - TAB_HEIGHT_PX - STATUS_HEIGHT_PX).max(0);
+    let usable = mid.saturating_sub(SPLITTER_HEIGHT_PX);
+    // `(usable - MIN_SCINTILLA_HEIGHT_PX).max(MIN_DOCK_HEIGHT_PX)`
+    // collapses to `MIN_DOCK_HEIGHT_PX` on a window crushed below
+    // the splitter's minimums — `clamp(MIN, MIN)` then renders the
+    // dock at exactly `MIN_DOCK_HEIGHT_PX` rather than panicking
+    // on a low > high range.
+    let upper = (usable - MIN_SCINTILLA_HEIGHT_PX).max(MIN_DOCK_HEIGHT_PX);
+    requested.clamp(MIN_DOCK_HEIGHT_PX, upper)
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn layout_children(
+    tabs: HWND,
+    scintilla: HWND,
+    status: HWND,
+    splitter: HWND,
+    dock: HWND,
+    dock_visible: bool,
+    dock_height: i32,
+    width: i32,
+    height: i32,
+) {
+    // Module-level `TAB_HEIGHT_PX` / `STATUS_HEIGHT_PX` carry the
+    // 96-DPI defaults. `SB_GETBORDERS` / `TCM_GETITEMRECT` could
+    // measure these precisely; the constants become measured
+    // values once `layout_children` goes DPI-aware (Phase 4 polish
+    // item).
+    let tab_height = TAB_HEIGHT_PX;
+    let status_height = STATUS_HEIGHT_PX;
     unsafe {
         let _ = MoveWindow(tabs, 0, 0, width, tab_height, true);
         let _ = MoveWindow(
@@ -4768,8 +4928,232 @@ unsafe fn layout_children(tabs: HWND, scintilla: HWND, status: HWND, width: i32,
             true,
         );
         let scintilla_top = tab_height;
-        let scintilla_height = (height - status_height - tab_height).max(0);
-        let _ = MoveWindow(scintilla, 0, scintilla_top, width, scintilla_height, true);
+        let mid_height = (height - status_height - tab_height).max(0);
+
+        if dock_visible {
+            // Authoritative clamp — re-applies the same rule the
+            // splitter drag uses, so a window-resize-down that
+            // pushes past the persisted dock height is corrected
+            // here and the layout stays idempotent.
+            let dock_h = clamp_dock_height(height, dock_height);
+            let usable = mid_height.saturating_sub(SPLITTER_HEIGHT_PX);
+            let scintilla_height = (usable - dock_h).max(MIN_SCINTILLA_HEIGHT_PX);
+            let splitter_top = scintilla_top + scintilla_height;
+            let dock_top = splitter_top + SPLITTER_HEIGHT_PX;
+            let actual_dock_height = (mid_height - scintilla_height - SPLITTER_HEIGHT_PX).max(0);
+            let _ = MoveWindow(scintilla, 0, scintilla_top, width, scintilla_height, true);
+            let _ = MoveWindow(splitter, 0, splitter_top, width, SPLITTER_HEIGHT_PX, true);
+            let _ = MoveWindow(dock, 0, dock_top, width, actual_dock_height, true);
+        } else {
+            // Splitter and dock are hidden — leave them where they
+            // are; ShowWindow toggles their visibility separately.
+            let _ = MoveWindow(scintilla, 0, scintilla_top, width, mid_height, true);
+        }
+    }
+}
+
+/// Register the FIF dock and splitter window classes. Idempotent —
+/// `RegisterClassExW` returns 0 with `ERROR_CLASS_ALREADY_EXISTS` on
+/// repeat calls, which we ignore. Safe to call from `run()` before
+/// `CreateWindowExW` references the class names.
+unsafe fn register_fif_classes() {
+    use std::sync::OnceLock;
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+    REGISTERED.get_or_init(|| unsafe {
+        let instance = GetModuleHandleW(None).unwrap_or_default();
+        // Dock: empty container, default arrow cursor, system 3D
+        // face for the background so it visually delineates from
+        // Scintilla above and the status bar below. The wndproc is
+        // a one-line forwarder rather than `DefWindowProcW`
+        // directly, because windows-rs declares `DefWindowProcW`
+        // as `unsafe fn` rather than the `extern "system"`
+        // signature `WNDCLASSEXW.lpfnWndProc` requires.
+        let dock_class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(fif_dock_wnd_proc),
+            hInstance: instance.into(),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            hbrBackground: dialog_bg_brush(),
+            lpszClassName: FIF_DOCK_CLASS,
+            ..Default::default()
+        };
+        let _ = RegisterClassExW(&dock_class);
+
+        // Splitter: thin band that owns the resize cursor and the
+        // mouse-capture drag protocol. Its background brush
+        // matches the dock so the seam between them is invisible
+        // until the user hovers (cursor change) — same visual
+        // affordance N++ uses.
+        let splitter_class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(splitter_wnd_proc),
+            hInstance: instance.into(),
+            // The cursor is also forced via WM_SETCURSOR so it
+            // changes the moment the splitter is hovered, not
+            // only after the first mouse-down. This `hCursor`
+            // value is the fallback Windows uses if WM_SETCURSOR
+            // isn't handled.
+            hCursor: LoadCursorW(None, IDC_SIZENS).unwrap_or_default(),
+            hbrBackground: dialog_bg_brush(),
+            lpszClassName: FIF_SPLITTER_CLASS,
+            ..Default::default()
+        };
+        let _ = RegisterClassExW(&splitter_class);
+    });
+}
+
+/// Wnd_proc for the FIF dock container. Step 3 just delegates to
+/// `DefWindowProcW`, so the dock paints its registered background
+/// brush and reports a HitTestClient on hovers. Step 4 will add a
+/// `WM_NOTIFY` handler that forwards listview clicks to the shell.
+extern "system" fn fif_dock_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+/// Wnd_proc for the FIF splitter handle. Stays small — captures
+/// drag state on `WM_LBUTTONDOWN`, applies the new dock height on
+/// each `WM_MOUSEMOVE`, releases on `WM_LBUTTONUP`. Reads/writes
+/// the parent `WindowState` via `state_from_hwnd(GetParent(...))`
+/// so all drag state lives in one place.
+extern "system" fn splitter_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_SETCURSOR => {
+                if let Ok(cursor) = LoadCursorW(None, IDC_SIZENS) {
+                    let _ = SetCursor(Some(cursor));
+                }
+                // Returning non-zero stops Windows from forwarding
+                // WM_SETCURSOR to the parent (which would clobber
+                // our cursor with the parent's class arrow).
+                LRESULT(1)
+            }
+            WM_LBUTTONDOWN => {
+                let parent = GetParent(hwnd).unwrap_or_default();
+                if let Some(state) = state_from_hwnd(parent) {
+                    let mut pt = POINT::default();
+                    if GetCursorPos(&mut pt).is_ok() {
+                        state.fif_splitter_drag = Some(SplitterDrag {
+                            start_screen_y: pt.y,
+                            dock_height_at_start: state.fif_dock_height,
+                        });
+                        let _ = SetCapture(hwnd);
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_MOUSEMOVE => {
+                let parent = GetParent(hwnd).unwrap_or_default();
+                // Snapshot drag state + HWNDs while holding a brief
+                // borrow; the borrow ends with the `if let` so the
+                // `layout_children` call below cannot re-enter a
+                // live `&mut WindowState` via `MoveWindow` →
+                // `WM_SIZE` on a child whose wndproc later wants to
+                // touch the parent state. Mirrors the pattern in
+                // `toggle_fif_dock`.
+                let snap = if let Some(state) = state_from_hwnd(parent) {
+                    state.fif_splitter_drag.map(|drag| {
+                        (
+                            drag,
+                            state.fif_dock_height,
+                            state.tab_hwnd,
+                            state.scintilla_hwnd,
+                            state.status_hwnd,
+                            state.fif_splitter_hwnd,
+                            state.fif_dock_hwnd,
+                            state.fif_dock_visible,
+                        )
+                    })
+                } else {
+                    None
+                };
+                let Some((
+                    drag,
+                    current_height,
+                    tabs,
+                    scintilla,
+                    status,
+                    splitter,
+                    dock,
+                    dock_visible,
+                )) = snap
+                else {
+                    return LRESULT(0);
+                };
+                let mut pt = POINT::default();
+                if GetCursorPos(&mut pt).is_err() {
+                    return LRESULT(0);
+                }
+                let mut rect = RECT::default();
+                if GetClientRect(parent, &mut rect).is_err() {
+                    return LRESULT(0);
+                }
+                // Dragging up grows the dock; dragging down shrinks
+                // it. `clamp_dock_height` is the same authority
+                // `layout_children` consults, so the value we write
+                // back into state matches what gets rendered.
+                let proposed = drag.dock_height_at_start + (drag.start_screen_y - pt.y);
+                let new_height = clamp_dock_height(rect.bottom, proposed);
+                if new_height == current_height {
+                    return LRESULT(0);
+                }
+                // Brief write-back. Borrow ends at the closing
+                // `}` so layout_children below has no live
+                // `&mut WindowState` to alias.
+                if let Some(state) = state_from_hwnd(parent) {
+                    state.fif_dock_height = new_height;
+                }
+                layout_children(
+                    tabs,
+                    scintilla,
+                    status,
+                    splitter,
+                    dock,
+                    dock_visible,
+                    new_height,
+                    rect.right,
+                    rect.bottom,
+                );
+                LRESULT(0)
+            }
+            WM_LBUTTONUP => {
+                let parent = GetParent(hwnd).unwrap_or_default();
+                if let Some(state) = state_from_hwnd(parent) {
+                    state.fif_splitter_drag = None;
+                }
+                // `ReleaseCapture` on a window that doesn't hold
+                // capture is a documented no-op, so the call is
+                // unconditionally safe here. No `GetCapture()`
+                // guard needed.
+                let _ = ReleaseCapture();
+                LRESULT(0)
+            }
+            WM_CAPTURECHANGED => {
+                // Capture stolen by another window (alt-tab,
+                // task-switcher, parent destruction). Without this
+                // handler the user could alt-tab mid-drag, return,
+                // and have the next mouse-move outside-the-button
+                // resize the dock — exactly the bug Windows
+                // documents `WM_CAPTURECHANGED` to prevent.
+                let parent = GetParent(hwnd).unwrap_or_default();
+                if let Some(state) = state_from_hwnd(parent) {
+                    state.fif_splitter_drag = None;
+                }
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
     }
 }
 
@@ -5041,9 +5425,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         }
                     }
                     ID_SEARCH_FINDINFILES => {
+                        // Wired in m4 step 4 once the FIF tab in the
+                        // Find/Replace dialog exists. The menu item
+                        // is `MF_GRAYED` until then so this branch
+                        // is unreachable at runtime.
                         tracing::trace!(
                             cmd = cmd_u16,
-                            "find-in-files command not yet wired (Phase 4 m4)",
+                            "find-in-files command awaiting m4 step 4 wiring",
                         );
                     }
                     _ => {
@@ -5229,6 +5617,10 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         state.tab_hwnd,
                         state.scintilla_hwnd,
                         state.status_hwnd,
+                        state.fif_splitter_hwnd,
+                        state.fif_dock_hwnd,
+                        state.fif_dock_visible,
+                        state.fif_dock_height,
                         width,
                         height,
                     );
