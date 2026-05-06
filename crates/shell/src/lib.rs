@@ -34,6 +34,9 @@ use codepp_plugin_host::{
     PluginHost, NPPMAINMENU, NPPPLUGINMENU,
 };
 
+pub mod fif;
+pub use fif::{FifError, FifEvent, FifJobId, FifRequest, FifStats};
+
 /// Stable nonzero buffer id for the active buffer in the Phase 3
 /// single-tab world. Multi-tab assigns per-tab ids in milestone 6.
 /// Plugins receive this from `NPPM_GETCURRENTBUFFERID` and pass it
@@ -405,6 +408,20 @@ pub struct Shell {
     /// after each push (eager save — the file is tiny and the
     /// alternative is silently losing history on crash).
     pub find_history: FindHistory,
+    /// Find-in-files orchestrator. Owns the active-job cancel
+    /// flag and the next-job-id counter; events flow back through
+    /// `fif_rx` (see [`Self::drain`]).
+    fif_orchestrator: fif::FifOrchestrator,
+    /// Receiver half of the FIF event channel. Senders are cloned
+    /// per-job into walker / workers / coordinator, so dropping a
+    /// job's threads doesn't close this channel.
+    fif_rx: Receiver<FifEvent>,
+    /// FIF events drained off `fif_rx` but not yet consumed by the
+    /// UI. The UI calls [`Self::take_fif_events`] after each drain
+    /// to pull them, then applies them to the results dock outside
+    /// the `&mut Shell` borrow (matching the
+    /// `pending_notifications` pattern).
+    pending_fif: Vec<FifEvent>,
 }
 
 /// Search-option bitset matching Scintilla's `SCFIND_*` flags. Held
@@ -460,7 +477,16 @@ impl Shell {
         let file_watcher =
             FileWatcher::new(fc_tx_inner).map_err(|e| ShellError::WatcherInit(e.to_string()))?;
         let (fc_tx_outer, fc_rx_outer) = unbounded::<FileChange>();
-        spawn_forwarder(fc_rx_inner, fc_tx_outer, wake, "watch-forwarder");
+        spawn_forwarder(fc_rx_inner, fc_tx_outer, wake.clone(), "watch-forwarder");
+
+        // FIF events: each job's walker/workers/coordinator clone
+        // `fif_tx_inner` so per-job thread teardown doesn't close
+        // the channel. The forwarder calls `wake` on each event so
+        // the UI's message-pump iteration drains them via `drain`.
+        let (fif_tx_inner, fif_rx_inner) = unbounded::<FifEvent>();
+        let (fif_tx_outer, fif_rx_outer) = unbounded::<FifEvent>();
+        spawn_forwarder(fif_rx_inner, fif_tx_outer, wake, "fif-forwarder");
+        let fif_orchestrator = fif::FifOrchestrator::new(fif_tx_inner);
 
         Ok(Self {
             session: Session::new(),
@@ -479,6 +505,9 @@ impl Shell {
             #[cfg(target_os = "windows")]
             last_search: None,
             find_history: load_find_history(),
+            fif_orchestrator,
+            fif_rx: fif_rx_outer,
+            pending_fif: Vec::new(),
         })
     }
 
@@ -842,7 +871,43 @@ impl Shell {
         while let Ok(change) = self.change_rx.try_recv() {
             self.apply_file_change(change, &mut pending);
         }
+        // Stage FIF events for the UI to consume after the borrow
+        // ends — same pattern as plugin notifications. Per active
+        // job the bound is `MAX_MATCHES_TOTAL + 1` (terminal event);
+        // across multiple `start_fif` calls without an intervening
+        // `take_fif_events` it scales linearly with the number of
+        // jobs. Win32 calls `take_fif_events` on every WM_APP_WAKE,
+        // so practical depth stays below the per-job ceiling.
+        while let Ok(event) = self.fif_rx.try_recv() {
+            self.pending_fif.push(event);
+        }
         pending
+    }
+
+    /// Start a find-in-files job. Preempts any in-flight job and
+    /// returns the new job's id. Events are drained off the shell's
+    /// FIF channel into `pending_fif` on each `drain` and consumed
+    /// by [`Self::take_fif_events`].
+    ///
+    /// Returns [`FifError::Query`] on a malformed query (without
+    /// spawning any threads) and [`FifError::BadRoot`] when the
+    /// requested root is not a directory.
+    pub fn start_fif(&mut self, request: FifRequest) -> Result<FifJobId, FifError> {
+        self.fif_orchestrator.start(request)
+    }
+
+    /// Cancel the current find-in-files job, if any. Idempotent.
+    pub fn cancel_fif(&mut self) {
+        self.fif_orchestrator.cancel();
+    }
+
+    /// Drain queued FIF events. Called by the UI after [`Self::drain`]
+    /// (or any operation that may have queued events) so the events
+    /// can be applied to the results dock outside the `&mut Shell`
+    /// borrow — listview population is a UI-thread, dialog-pump-safe
+    /// operation that mustn't run with shell state locked.
+    pub fn take_fif_events(&mut self) -> Vec<FifEvent> {
+        std::mem::take(&mut self.pending_fif)
     }
 
     /// Confirm a deferred reload: requeue the file through the loader.

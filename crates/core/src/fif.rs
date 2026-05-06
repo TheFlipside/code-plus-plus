@@ -353,9 +353,6 @@ pub struct FifWalkOpts {
     /// Recurse into subdirectories. `false` for "search this folder
     /// only" UI mode.
     pub recurse: bool,
-    /// Follow symlinks. `false` by default — symlink loops are a
-    /// classic FIF DoS, and N++ doesn't follow either.
-    pub follow_symlinks: bool,
     /// Skip files larger than this. Defaults to
     /// [`DEFAULT_MAX_FILE_BYTES`].
     pub max_file_bytes: u64,
@@ -395,7 +392,6 @@ impl Default for FifWalkOpts {
         }
         Self {
             recurse: true,
-            follow_symlinks: false,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             includes: GlobSet::empty(),
             excludes: excludes.build().expect("default exclude globset"),
