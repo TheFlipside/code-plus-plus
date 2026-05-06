@@ -187,6 +187,17 @@
 #define NPPM_GETBUFFERIDFROMPOS           (NPPMSG + 59)
 /* v1: returns the active buffer's id (LRESULT). */
 #define NPPM_GETCURRENTBUFFERID           (NPPMSG + 60)
+/* v2: reload the buffer at wParam (buffer id) from disk, blowing
+ *     away in-memory edits.
+ *     wParam: buffer id.
+ *     lParam: BOOL — TRUE asks for the "modified externally —
+ *             reload?" confirmation, FALSE for a silent reload.
+ *     **Phase 4 limitation:** Code++ silently reloads regardless of
+ *     the alert flag; the dialog-routing wiring lands in a later
+ *     polish. Plugins passing TRUE see a `tracing::warn!` so the
+ *     gap is visible in the host log.
+ *     Returns 1 on success (id resolved to a path and reload was
+ *     issued), 0 if the id is unknown or has no on-disk path. */
 #define NPPM_RELOADBUFFERID               (NPPMSG + 61)
 /* v1: returns the lang-type id for the buffer at wParam. */
 #define NPPM_GETBUFFERLANGTYPE            (NPPMSG + 64)

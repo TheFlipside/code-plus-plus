@@ -654,19 +654,48 @@ impl Shell {
             .map(|t| t.scintilla_doc)
             .unwrap_or(0);
 
-        // Notification ordering: NPPN_FILECLOSED first (the closed
-        // buffer's id is what plugins act on), then
-        // NPPN_BUFFERACTIVATED for the new active tab — matches
-        // Notepad++'s sequence.
+        // Queue notifications in the same order N++ delivers them:
+        //   1. NPPN_FILEBEFORECLOSE
+        //   2. NPPN_FILECLOSED
+        //   3. NPPN_BUFFERACTIVATED (only if there's a new active tab)
+        //
+        // **Known timing divergence vs N++ (tracked as Phase 5 polish):**
+        // these notifications are pushed onto `pending_notifications`
+        // and delivered to plugins by the UI *after* `take_notifications`
+        // drains them — i.e., after `close_active_tab` returns and
+        // after the tab has been removed from `self.tabs`. N++
+        // delivers FILEBEFORECLOSE synchronously while the buffer is
+        // still in its data structures, so a plugin's
+        // `beNotified(NPPN_FILEBEFORECLOSE)` can call back into
+        // `NPPM_GETFULLPATHFROMBUFFERID(id)` and get a real path.
+        // Code++'s queue-deferred dispatch model means that callback
+        // returns -1 (unknown id) instead. Plugins that need the path
+        // at close time should cache it from the prior
+        // BUFFERACTIVATED notification rather than relying on the
+        // path lookup here.
+        //
+        // The fix needs synchronous-delivery plumbing for specific
+        // notifications (Shell calling back into the plugin host
+        // mid-operation, currently not part of the architecture);
+        // the change is bigger than this batch should carry.
+        let closing_id = removed.id as isize;
         #[cfg(target_os = "windows")]
         {
+            self.pending_notifications
+                .push(Notification::FileBeforeClose {
+                    buffer_id: closing_id,
+                });
             self.pending_notifications.push(Notification::FileClosed {
-                buffer_id: removed.id as isize,
+                buffer_id: closing_id,
             });
             if new_active.is_some() {
                 self.queue_buffer_activated();
             }
         }
+        // Suppress "unused" on non-Windows builds where the notification
+        // queue isn't fed.
+        #[cfg(not(target_os = "windows"))]
+        let _ = closing_id;
 
         Some(ClosedTab {
             closed_idx: idx,
@@ -1942,6 +1971,41 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             codepp_core::Eol::Lf | codepp_core::Eol::Mixed => codepp_plugin_host::UNIX_FORMAT,
         }
     }
+
+    fn reload_buffer_id(&mut self, id: isize, with_alert: bool) -> bool {
+        // Resolve the buffer id to its on-disk path. Untitled tabs
+        // (no path) report -1 from `NPPM_GETFULLPATHFROMBUFFERID`
+        // and similarly are not reloadable here — there's nothing
+        // to re-read off disk.
+        let Some(path) = self
+            .shell
+            .tabs
+            .iter()
+            .find(|t| t.id as isize == id)
+            .and_then(|t| t.path.clone())
+        else {
+            return false;
+        };
+        if with_alert {
+            // Phase 4 limitation: the dispatcher cannot push into
+            // the per-window pending-dialog queue from inside a
+            // synchronous plugin call without re-engineering the
+            // borrow plumbing on `Shell::drain`. Silently reloading
+            // matches `with_alert == false` — which is what most
+            // plugins pass in practice. The trace makes the gap
+            // observable; the wiring is tracked as a follow-up.
+            tracing::warn!(
+                buffer_id = id,
+                path = %path.display(),
+                "NPPM_RELOADBUFFERID with_alert=true: silent reload until \
+                 dialog-queue wiring lands (Phase 5 polish)",
+            );
+        }
+        // `confirm_reload` is the same code path the file watcher's
+        // post-prompt "Yes" arm uses — re-runs the loader for `path`.
+        self.shell.confirm_reload(path);
+        true
+    }
 }
 
 /// Spawn a forwarder thread that pumps items from `src` into `dst`
@@ -3189,9 +3253,11 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn close_active_tab_queues_file_closed_then_buffer_activated() {
-        // Closing one of two open tabs should queue NPPN_FILECLOSED
-        // for the closed buffer followed by NPPN_BUFFERACTIVATED
-        // for the now-active sibling. Order matches Notepad++.
+        // Closing one of two open tabs queues, in order:
+        //   1. NPPN_FILEBEFORECLOSE (so plugins can save state)
+        //   2. NPPN_FILECLOSED (final-act for the closed buffer)
+        //   3. NPPN_BUFFERACTIVATED (new active sibling)
+        // Order matches Notepad++.
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.txt");
         let b = dir.path().join("b.txt");
@@ -3220,13 +3286,17 @@ mod tests {
         assert_eq!(closed.buffer_id as isize, closed_id);
 
         let notifications = shell.take_notifications();
-        assert_eq!(notifications.len(), 2);
+        assert_eq!(notifications.len(), 3);
         assert!(matches!(
             notifications[0],
-            Notification::FileClosed { buffer_id } if buffer_id == closed_id
+            Notification::FileBeforeClose { buffer_id } if buffer_id == closed_id
         ));
         assert!(matches!(
             notifications[1],
+            Notification::FileClosed { buffer_id } if buffer_id == closed_id
+        ));
+        assert!(matches!(
+            notifications[2],
             Notification::BufferActivated { buffer_id } if buffer_id == new_active_id
         ));
     }
@@ -3234,9 +3304,9 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn close_last_tab_queues_only_file_closed() {
-        // Closing the only open tab queues NPPN_FILECLOSED but NOT
-        // NPPN_BUFFERACTIVATED — there's no new active buffer to
-        // activate.
+        // Closing the only open tab queues NPPN_FILEBEFORECLOSE
+        // followed by NPPN_FILECLOSED but NOT NPPN_BUFFERACTIVATED
+        // — there's no new active buffer to activate.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("only.txt");
         std::fs::write(&path, "x").unwrap();
@@ -3256,9 +3326,13 @@ mod tests {
         let closed_id = shell.tabs[0].id as isize;
         let _ = shell.close_active_tab().expect("close");
         let notifications = shell.take_notifications();
-        assert_eq!(notifications.len(), 1);
+        assert_eq!(notifications.len(), 2);
         assert!(matches!(
             notifications[0],
+            Notification::FileBeforeClose { buffer_id } if buffer_id == closed_id
+        ));
+        assert!(matches!(
+            notifications[1],
             Notification::FileClosed { buffer_id } if buffer_id == closed_id
         ));
     }

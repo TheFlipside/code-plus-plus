@@ -93,7 +93,7 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_GETPOSFROMBUFFERID` / `GETBUFFERIDFROMPOS` | ⚫ | v1 | Pending; not yet in `dispatch.rs`. |
 | `NPPM_GETFULLPATHFROMBUFFERID` | ✅ | v1 | Wide-path write capped at `MAX_PATH_TCHARS` (260); probe call (`lparam == 0`) always returns `MAX_PATH_TCHARS`, never the actual path length, so a plugin can't under-allocate based on the probe and overflow on the second call. |
 | `NPPM_GETCURRENTBUFFERID` | ✅ | v1 | Returns the active tab's `BufferID` (sequential `i32`, base 1). |
-| `NPPM_RELOADBUFFERID` | ⚫ | v2 | |
+| `NPPM_RELOADBUFFERID` | ✅ | v2 | wparam = buffer id, lparam = `BOOL` "alert before reload". Returns 1 on success, 0 for unknown id or no on-disk path. **Limitation:** `with_alert == true` reloads silently (without the user-confirmation prompt N++ shows), discarding any unsaved in-memory edits. Plugin-author warning: a workflow that relies on the alert to let the user abort (e.g. "discard and reload from VCS") will silently destroy unsaved work in Code++ until the dialog-routing wiring lands; a `tracing::warn!` fires in the host log when this code path is taken. |
 | `NPPM_GETBUFFERLANGTYPE` | ✅ | v1 | Returns the per-tab `LangType` derived from the path extension on first load (and overridable by plugins via `NPPM_SETBUFFERLANGTYPE`). |
 | `NPPM_SETBUFFERLANGTYPE` | ✅ | v1 | Mutates `Tab.lang`, re-applies the lexer when the tab is active, queues `NPPN_LANGCHANGED`. Idempotent on a same-lang set (no flicker, no false-positive notification). |
 | `NPPM_GETBUFFERENCODING` | ✅ | v2 | Returns `UniMode`: `UNI_COOKIE` (UTF-8 without BOM), `UNI_UTF8` (UTF-8 with BOM), `UNI_UTF16LE`/`UNI_UTF16BE` (with BOM), `UNI_UTF16LE_NO_BOM`/`UNI_UTF16BE_NO_BOM`. `Encoding::Other` (unknown WHATWG codepage) collapses to `UNI_8BIT`. Pure 7-bit ASCII is reported as `UNI_COOKIE` (the detector folds ASCII into UTF-8); `UNI_7BIT` is defined for ABI completeness but never returned. `-1` for unknown buffer id. |
@@ -116,7 +116,7 @@ at all, the same as in 64-bit Notepad++.)
 | --- | --- | --- | --- |
 | `NPPN_READY` | ✅ | v1 | Fired at the just-loaded plugin only (per-plugin delivery in `PluginHost::load` right after `setInfo` + `getFuncsArray`). Code++'s lazy-load can't broadcast a single global ready like N++ does — per-plugin is the closest equivalent: each plugin sees READY exactly once at the moment it's actually ready to handle host messages. |
 | `NPPN_TBMODIFICATION` | ⚫ | v2 | |
-| `NPPN_FILEBEFORECLOSE` | 🟡 | v1 | Code mapping wired; not fired today (the close path queues `FILECLOSED` only). Adding the `BEFORE` fire site is a small follow-up. |
+| `NPPN_FILEBEFORECLOSE` | 🟡 | v1 | Fired by `Shell::close_active_tab` ahead of `FILECLOSED` (N++ ordering). **Timing divergence (Phase 5 polish):** Code++'s notifications are queue-deferred — by the time a plugin's `beNotified(NPPN_FILEBEFORECLOSE)` runs, the tab has already been removed from `Shell.tabs`, so a callback into `NPPM_GETFULLPATHFROMBUFFERID(id)` returns -1 (unknown id). N++ delivers this notification synchronously while the buffer is still alive. Plugins that need the path at close time should cache it from the prior BUFFERACTIVATED. Synchronous-delivery wiring is tracked in DESIGN.md §7.4. |
 | `NPPN_FILECLOSED` | ✅ | v1 | Queued by `Shell::close_active_tab` after the data-model snapshot, fired after the `&mut Shell` borrow drops. |
 | `NPPN_FILEBEFOREOPEN` | ⚫ | v2 | |
 | `NPPN_FILEOPENED` | ✅ | v1 | Queued by `Shell::apply_load_result` on first successful load; deferred until after the borrow drops. |

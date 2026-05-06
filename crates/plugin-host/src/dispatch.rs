@@ -76,6 +76,7 @@ pub const NPPM_MENUCOMMAND: u32 = NPPMSG + 48;
 pub const NPPM_GETNPPVERSION: u32 = NPPMSG + 50;
 pub const NPPM_GETFULLPATHFROMBUFFERID: u32 = NPPMSG + 58;
 pub const NPPM_GETCURRENTBUFFERID: u32 = NPPMSG + 60;
+pub const NPPM_RELOADBUFFERID: u32 = NPPMSG + 61;
 pub const NPPM_GETBUFFERLANGTYPE: u32 = NPPMSG + 64;
 pub const NPPM_SETBUFFERLANGTYPE: u32 = NPPMSG + 65;
 pub const NPPM_GETBUFFERENCODING: u32 = NPPMSG + 66;
@@ -361,6 +362,24 @@ pub trait HostServices {
     /// "Edit → EOL Conversion" picks if the user normalises a
     /// mixed buffer.
     fn buffer_format(&self, id: isize) -> i32;
+
+    /// Reload the buffer identified by `id` from disk, blowing away
+    /// any in-memory edits that have not been saved.
+    ///
+    /// `with_alert == true` means the plugin asked for the
+    /// "modified externally — reload?" confirmation prompt to
+    /// surface; `false` means a silent reload. **Phase 4
+    /// limitation:** Code++ silently reloads in both cases. The
+    /// confirmation-prompt path requires routing through the
+    /// per-window pending-dialog queue, which the dispatcher
+    /// doesn't currently access. Tracked as a follow-up; plugins
+    /// passing `with_alert == true` get a `tracing::warn!` so the
+    /// gap is visible in the log.
+    ///
+    /// Returns `true` if the reload was issued (the buffer id was
+    /// known and had an associated path), `false` otherwise. Same
+    /// "ok / unknown" shape as [`Self::set_buffer_lang_type`].
+    fn reload_buffer_id(&mut self, id: isize, with_alert: bool) -> bool;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -709,6 +728,20 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // unknown id, same separation rationale as
             // `NPPM_GETBUFFERENCODING`.
             services.buffer_format(wparam as isize) as isize
+        }
+
+        NPPM_RELOADBUFFERID => {
+            // wparam: buffer id. lparam: BOOL — TRUE asks for the
+            // "reload?" confirmation, FALSE for a silent reload.
+            // Returns 1 on success (id resolved to a path and
+            // reload was issued), 0 if the id is unknown.
+            let id = wparam as isize;
+            let with_alert = lparam != 0;
+            if services.reload_buffer_id(id, with_alert) {
+                1
+            } else {
+                0
+            }
         }
 
         NPPM_DOOPEN => {
@@ -1099,6 +1132,24 @@ mod tests {
                 .find(|(i, _)| *i == id)
                 .map(|(_, f)| *f)
                 .unwrap_or(-1)
+        }
+        fn reload_buffer_id(&mut self, id: isize, with_alert: bool) -> bool {
+            // Look up the path from the same `buffer_paths` map the
+            // production HostBridge uses, so the dispatcher's
+            // unknown-id branch is exercised the same way.
+            let Some(path) = self
+                .buffer_paths
+                .iter()
+                .find(|(i, _)| *i == id)
+                .map(|(_, p)| p.clone())
+            else {
+                return false;
+            };
+            self.record(format!(
+                "reload_id[{id}]={} alert={with_alert}",
+                path.display()
+            ));
+            true
         }
     }
 
@@ -1767,5 +1818,41 @@ mod tests {
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERFORMAT, 999, 0) };
         assert_eq!(r, Some(-1));
+    }
+
+    #[test]
+    fn reload_buffer_id_known_id_returns_one_and_records_call() {
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from("D:/notes.txt"))],
+            ..Default::default()
+        };
+        // with_alert = 0 (FALSE) — silent reload.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_RELOADBUFFERID, 7, 0) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["reload_id[7]=D:/notes.txt alert=false"]);
+    }
+
+    #[test]
+    fn reload_buffer_id_with_alert_records_alert_true() {
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from("D:/notes.txt"))],
+            ..Default::default()
+        };
+        // with_alert = 1 (TRUE) — caller wants the "modified
+        // externally" prompt. Phase 4 silently reloads either
+        // way; this test pins the alert flag is forwarded
+        // through the dispatcher boundary so the eventual
+        // dialog-routing wiring observes it.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_RELOADBUFFERID, 7, 1) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["reload_id[7]=D:/notes.txt alert=true"]);
+    }
+
+    #[test]
+    fn reload_buffer_id_unknown_id_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_RELOADBUFFERID, 999, 0) };
+        assert_eq!(r, Some(0));
+        assert!(s.calls().is_empty());
     }
 }
