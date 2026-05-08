@@ -40,13 +40,13 @@ use codepp_scintilla_sys::{
     SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
     SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
     SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
-    SCI_LINESONSCREEN, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
-    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT,
-    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
-    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
-    SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_UPDATEUI,
-    SC_DOCUMENTOPTION_DEFAULT, SC_MARGIN_NUMBER, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
-    STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_PASTE, SCI_POSITIONAFTER,
+    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETDOCPOINTER,
+    SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
+    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
+    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT,
+    SCN_MODIFIED, SCN_UPDATEUI, SC_DOCUMENTOPTION_DEFAULT, SC_MARGIN_TEXT, SC_MOD_DELETETEXT,
+    SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
@@ -566,6 +566,14 @@ impl UiPlatform for Win32Ui {
         // Bind the resolved document to the single Scintilla view.
         // wparam is unused; lparam is the doc pointer.
         self.editor.send(SCI_SETDOCPOINTER, 0, doc);
+        // Always refresh the visible window's line numbers on
+        // attach: a brand-new doc needs line 0 seeded; an existing
+        // doc may have been edited off-screen since last populate
+        // (its width or content may have shifted), or its current
+        // viewport may sit on a region the populate hasn't reached
+        // yet. Cost is bounded by viewport height (~50 lines), not
+        // file size — cheap to run unconditionally.
+        populate_visible_line_numbers(&self.editor);
         doc
     }
 
@@ -1135,11 +1143,124 @@ fn apply_default_styles(editor: &EditorHandle) {
 ///
 /// A future "show line numbers" view toggle becomes
 /// `editor.set_margin_width(LINE_NUMBER_MARGIN, if on { LINE_NUMBER_MARGIN_PX } else { 0 })`.
+///
+/// We use `SC_MARGIN_TEXT` (left-aligned per-line text we manage
+/// ourselves) rather than `SC_MARGIN_NUMBER` (right-aligned,
+/// auto-rendered by Scintilla) — the right-aligned built-in mode
+/// floats short numbers to the right edge of the bar and there's
+/// no Scintilla setting to override that. Population happens at
+/// document creation in `Win32Ui::activate_tab` and incrementally
+/// via the `SCN_MODIFIED` handler when line count changes.
 fn apply_line_number_margin(editor: &EditorHandle) {
-    editor.set_margin_type(LINE_NUMBER_MARGIN, SC_MARGIN_NUMBER);
+    editor.set_margin_type(LINE_NUMBER_MARGIN, SC_MARGIN_TEXT);
     editor.style_set_fore(STYLE_LINENUMBER, FG_LINE_NUMBER);
     editor.style_set_back(STYLE_LINENUMBER, BG_LINE_NUMBER);
     editor.set_margin_width(LINE_NUMBER_MARGIN, LINE_NUMBER_MARGIN_PX);
+}
+
+/// Number of lines beyond the visible window's bottom edge to
+/// pre-populate. A small overscan covers the gap between
+/// `SCI_LINESONSCREEN`'s integer-truncated row count and a partial
+/// line clipped by the viewport, plus one row of margin so a small
+/// scroll doesn't reveal a blank line before the next
+/// `SCN_UPDATEUI` lands.
+const LINE_NUMBER_OVERSCAN: u64 = 4;
+
+/// Number of decimal digits needed to render `line_count` (so a
+/// 100-line buffer wants width `3`, a 99-line buffer wants `2`).
+/// The width drives the right-alignment column for every visible
+/// line number — when the file grows across a 9→10 / 99→100 /
+/// etc. boundary, every visible row's text shifts one column
+/// right in lockstep, so 3-digit "100" lines up over the 2-digit
+/// "99" with their last digits in the same column.
+fn line_number_width(line_count: u64) -> usize {
+    let mut digits: usize = 1;
+    let mut n = line_count.max(1);
+    while n >= 10 {
+        digits += 1;
+        n /= 10;
+    }
+    digits
+}
+
+/// Write per-line line-number text for lines `[start, end)` into
+/// the `LINE_NUMBER_MARGIN` of the currently-bound document, styled
+/// as `STYLE_LINENUMBER`. Format is `" {N+1:>width$}"` — a fixed
+/// 1-char left pad followed by the line number right-aligned in a
+/// `width`-char column, so the rightmost digit of every line falls
+/// on the same column. `width` is supplied by the caller (always
+/// from [`line_number_width`] of the current document line count)
+/// rather than computed per-line so the value is stable across the
+/// whole batch.
+fn populate_line_numbers_range(editor: &EditorHandle, start: u64, end: u64, width: usize) {
+    if start >= end {
+        return;
+    }
+    // Per-call scratch buffer: leading space + right-aligned
+    // digits + NUL. `u64` tops out at 20 digits; `" "` + 20 + `\0`
+    // = 22 bytes. 32 covers it without a heap alloc.
+    let mut buf = [0u8; 32];
+    for line in start..end {
+        use std::io::Write;
+        // `cursor` is re-bound on each iteration, so `write!`
+        // always begins at `buf[0]` — `Write for &mut [u8]`
+        // advances `cursor` (the slice header) but never `buf`
+        // itself, so `buf.as_ptr()` keeps pointing at the bytes
+        // we just wrote. Trailing bytes from the previous
+        // iteration are harmless: Scintilla reads up to the NUL
+        // we wrote and stops.
+        let mut cursor = &mut buf[..];
+        // " " + {N+1, right-aligned to `width`} + "\0". Line
+        // indices are 0-based in Scintilla, 1-based for the user.
+        write!(cursor, " {:>width$}\0", line + 1, width = width)
+            .expect("32-byte scratch buffer exhausted formatting line number");
+        // `line as usize` is sound on every supported target:
+        // Scintilla's 2 GiB buffer ceiling caps line count at ~2
+        // billion (one byte per line) on 32-bit and 64-bit alike,
+        // well within `u32::MAX` and therefore `usize::MAX`.
+        editor.send(SCI_MARGINSETTEXT, line as usize, buf.as_ptr() as isize);
+        editor.send(SCI_MARGINSETSTYLE, line as usize, STYLE_LINENUMBER as isize);
+    }
+}
+
+/// Populate line-number text for the lines currently visible in
+/// the viewport (plus a small overscan). Cheap and bounded —
+/// scales with viewport height, not file size, so a 100k-line
+/// file load doesn't stall the UI thread.
+///
+/// Width is derived from the *total* document line count, not just
+/// the visible range. This way the rightmost digit always falls in
+/// the same column for every line in the document — when the file
+/// grows past a boundary (e.g. 99 → 100) the next call here shifts
+/// every visible line one column right uniformly, instead of
+/// leaving the visible window with a mix of widths.
+///
+/// Off-screen lines stay with whatever margin text they last had
+/// (typically empty for newly-created lines, or numbers laid out
+/// at a stale width from before the latest line-count change).
+/// Either is invisible to the user; the `SCN_UPDATEUI` vertical-
+/// scroll hook re-populates the new visible window with the
+/// current width just before those lines enter the viewport.
+///
+/// Margin text is per-document state in Scintilla, so this is the
+/// right level of write — it survives `SCI_SETDOCPOINTER` cycles
+/// and only needs re-running when content changes or the visible
+/// range shifts.
+fn populate_visible_line_numbers(editor: &EditorHandle) {
+    // Scintilla guarantees `SCI_GETLINECOUNT >= 1` for any document
+    // (an empty document still has line 0); clamp to 1 so the
+    // formatting code downstream — and `line_number_width` —
+    // always sees a sensible floor instead of relying on the
+    // invariant implicitly.
+    let total = editor.send(SCI_GETLINECOUNT, 0, 0).max(1) as u64;
+    let first = editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0).max(0) as u64;
+    let on_screen = editor.send(SCI_LINESONSCREEN, 0, 0).max(0) as u64;
+    let last = first
+        .saturating_add(on_screen)
+        .saturating_add(LINE_NUMBER_OVERSCAN)
+        .min(total);
+    let width = line_number_width(total);
+    populate_line_numbers_range(editor, first.min(total), last, width);
 }
 
 /// Bring the caret line into view: if it's already in the visible
@@ -1436,6 +1557,10 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
                 .send(SCI_CREATEDOCUMENT, 0, SC_DOCUMENTOPTION_DEFAULT);
             if placeholder != 0 {
                 state.editor.send(SCI_SETDOCPOINTER, 0, placeholder);
+                // Seed the placeholder's empty line 0 so the
+                // line-number bar shows "1" instead of blank
+                // chrome on the empty editor.
+                populate_visible_line_numbers(&state.editor);
                 state.editor.send(SCI_RELEASEDOCUMENT, 0, placeholder);
             }
             // Refresh chrome to the empty state — status bar should
@@ -9099,9 +9224,28 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         if owns_source {
                             let sci = &*(lparam.0 as *const SCNotification);
                             let modtype = sci.modification_type;
+                            let lines_added = sci.lines_added;
                             if (modtype & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT)) != 0 {
                                 if let Some(state) = state_from_hwnd(hwnd) {
                                     state.editor.send(SCI_SETSCROLLWIDTH, 1, 0);
+                                    // Line-number margin: when line
+                                    // count changed, repopulate the
+                                    // *visible* window with the
+                                    // current digit-width. We don't
+                                    // walk the whole affected suffix
+                                    // — that would be O(N) for a
+                                    // bulk text load (e.g. opening
+                                    // a 100k-line file fires one
+                                    // SCN_MODIFIED with linesAdded
+                                    // ~= 100k). The off-screen
+                                    // suffix gets populated lazily
+                                    // by the `SCN_UPDATEUI`
+                                    // vertical-scroll hook just
+                                    // before those lines enter the
+                                    // viewport.
+                                    if lines_added != 0 {
+                                        populate_visible_line_numbers(&state.editor);
+                                    }
                                     // Length / lines refresh on
                                     // every text-modifying edit.
                                     // The SCN_UPDATEUI arm below
@@ -9143,8 +9287,28 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             false
                         };
                         if owns_source {
+                            // Read the `updated` flags out of the
+                            // notification before any
+                            // `state_from_hwnd` re-borrow — same
+                            // pattern as the SCN_MODIFIED arm.
+                            let sci = &*(lparam.0 as *const SCNotification);
+                            let updated = sci.updated;
                             if let Some(state) = state_from_hwnd(hwnd) {
                                 refresh_status_dynamic_parts(state.status_hwnd, &state.editor);
+                                // Vertical scroll moved the visible
+                                // window. Lazily populate any newly-
+                                // visible line numbers — covers the
+                                // off-screen suffix that the
+                                // SCN_MODIFIED arm intentionally
+                                // skipped to avoid the O(N) bulk-
+                                // load stall. Filter on
+                                // `SC_UPDATE_V_SCROLL` so the broad
+                                // SCN_UPDATEUI firehose (caret
+                                // movement, selection change) doesn't
+                                // re-do this work on every keystroke.
+                                if (updated & SC_UPDATE_V_SCROLL) != 0 {
+                                    populate_visible_line_numbers(&state.editor);
+                                }
                             }
                         }
                     } else if nmhdr.code == NM_DBLCLK {
@@ -9333,6 +9497,42 @@ mod fif_filter_tests {
         let mut opts = FifWalkOpts::default();
         let err = apply_filters_to_walk_opts(&mut opts, "*.rs !*.test.rs").unwrap_err();
         assert!(matches!(err, FilterParseError::NegationUnsupported));
+    }
+}
+
+#[cfg(test)]
+mod line_number_format_tests {
+    use super::line_number_width;
+
+    #[test]
+    fn width_grows_at_decimal_boundaries() {
+        // Single-digit floor: even 0 / 1 lines need width 1 so an
+        // empty-buffer placeholder shows "1" instead of nothing.
+        assert_eq!(line_number_width(0), 1);
+        assert_eq!(line_number_width(1), 1);
+        assert_eq!(line_number_width(9), 1);
+        // 9 → 10 boundary: width jumps to 2 so "10" fits.
+        assert_eq!(line_number_width(10), 2);
+        assert_eq!(line_number_width(99), 2);
+        // 99 → 100 boundary: the user's reported case.
+        assert_eq!(line_number_width(100), 3);
+        assert_eq!(line_number_width(999), 3);
+        assert_eq!(line_number_width(1_000), 4);
+        assert_eq!(line_number_width(99_999), 5);
+        assert_eq!(line_number_width(100_000), 6);
+    }
+
+    #[test]
+    fn formatted_line_numbers_share_a_rightmost_column() {
+        // Mirror of the user's reference case: in a 100-line file
+        // (width = 3), `1`, `99`, and `100` should all render with
+        // the rightmost digit at the same column when prefixed
+        // with the 1-char left pad. Verifying via direct format!
+        // call rather than going through Scintilla.
+        let width = line_number_width(100);
+        assert_eq!(format!(" {:>width$}", 1, width = width), "   1");
+        assert_eq!(format!(" {:>width$}", 99, width = width), "  99");
+        assert_eq!(format!(" {:>width$}", 100, width = width), " 100");
     }
 }
 

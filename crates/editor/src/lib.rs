@@ -174,12 +174,11 @@ impl EditorHandle {
 
     // --- Margins -----------------------------------------------------------
 
-    /// Set margin `n`'s type — e.g.
-    /// `SC_MARGIN_NUMBER` to render the margin as right-aligned
-    /// line numbers in `STYLE_LINENUMBER`. The margin's width and
-    /// per-style colours are configured separately via
-    /// [`Self::set_margin_width`] and the `style_set_*` helpers
-    /// against `STYLE_LINENUMBER`.
+    /// Set margin `n`'s type — e.g. `SC_MARGIN_TEXT` to render
+    /// per-line text the host writes via `SCI_MARGINSETTEXT`,
+    /// styled per-line via `SCI_MARGINSETSTYLE`. The margin's
+    /// width and per-style colours are configured separately via
+    /// [`Self::set_margin_width`] and the `style_set_*` helpers.
     pub fn set_margin_type(&self, margin: u32, ty: u32) {
         self.send(SCI_SETMARGINTYPEN, margin as uptr_t, ty as sptr_t);
     }

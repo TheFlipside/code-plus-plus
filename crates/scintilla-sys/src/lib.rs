@@ -194,6 +194,19 @@ pub const SCN_UPDATEUI: u32 = 2007;
 pub const SC_MOD_INSERTTEXT: i32 = 0x1;
 pub const SC_MOD_DELETETEXT: i32 = 0x2;
 
+// `SCNotification.updated` flags for SCN_UPDATEUI. Used to filter
+// the broad-spectrum UPDATEUI firehose down to the events the host
+// actually cares about — `SC_UPDATE_V_SCROLL` is the one signalling
+// the visible line range moved (so the line-number margin's
+// visible-window populate needs to refresh). The full flag set is
+// listed for reference even if not all of them have a hook today;
+// the values are public Scintilla ABI and must match the upstream
+// header.
+pub const SC_UPDATE_CONTENT: i32 = 0x1;
+pub const SC_UPDATE_SELECTION: i32 = 0x2;
+pub const SC_UPDATE_V_SCROLL: i32 = 0x4;
+pub const SC_UPDATE_H_SCROLL: i32 = 0x8;
+
 // History
 pub const SCI_UNDO: u32 = 2176;
 pub const SCI_REDO: u32 = 2011;
@@ -312,10 +325,12 @@ pub const SCI_STYLECLEARALL: u32 = 2050;
 /// appearance.
 pub const STYLE_DEFAULT: usize = 32;
 /// `STYLE_LINENUMBER = 33` — the style index used to render line
-/// numbers in any margin whose type is `SC_MARGIN_NUMBER`. Setting
-/// its fore/back is how the line-number bar gets its colour scheme.
-/// `SCI_STYLECLEARALL` resets this back to `STYLE_DEFAULT`, so any
-/// custom colours must be re-applied after the clear.
+/// numbers, both in Scintilla's built-in `SC_MARGIN_NUMBER` and in
+/// `SC_MARGIN_TEXT` margins whose per-line style is set to this
+/// index via `SCI_MARGINSETSTYLE`. Setting its fore/back is how the
+/// line-number bar gets its colour scheme. `SCI_STYLECLEARALL`
+/// resets this back to `STYLE_DEFAULT`, so any custom colours must
+/// be re-applied after the clear.
 pub const STYLE_LINENUMBER: usize = 33;
 
 // Margins. Scintilla supports up to `SC_MAX_MARGIN + 1` margins (5
@@ -330,21 +345,36 @@ pub const STYLE_LINENUMBER: usize = 33;
 //     `SC_MARGIN_NUMBER = 1`, `SC_MARGIN_BACK = 2`,
 //     `SC_MARGIN_FORE = 3`, `SC_MARGIN_TEXT = 4`, etc.
 //
-// To render the line-number margin: pass *index* `0` and *type*
-// `SC_MARGIN_NUMBER` (= 1) — the numeric clash between "index 1"
-// and "`SC_MARGIN_NUMBER` = 1" is purely coincidental.
-//
 // `SCI_SETMARGINWIDTHN(margin, pixels)` controls visibility — width
 // `0` hides the margin without clearing its other state, so the
 // future "show line numbers" toggle is one width-write away.
+//
+// `SCI_MARGINSETTEXT(line, char_ptr)` writes per-line text into a
+// `SC_MARGIN_TEXT` margin and `SCI_MARGINSETSTYLE(line, style)` sets
+// its style. Code++ uses these to render line numbers right-aligned
+// within a fixed-width column (1-char left pad + `digits(line_count)`
+// chars of right-aligned digits) so `1`, `99`, and `100` all share
+// the same rightmost column. Scintilla's built-in `SC_MARGIN_NUMBER`
+// also right-aligns, but anchors to the bar's full width — short
+// numbers float to the far right of the bar — and exposes no
+// alignment control. Managing the text per-line ourselves is what
+// gives us the column-width handle. Margin text is per-document
+// state in Scintilla (stored on `Document`, not the view), so it
+// survives `SCI_SETDOCPOINTER` cycles and only needs (re-)populating
+// after document creation and after `SCN_MODIFIED` events that
+// change line count.
 pub const SCI_SETMARGINTYPEN: u32 = 2240;
 pub const SCI_SETMARGINWIDTHN: u32 = 2242;
-/// `SC_MARGIN_NUMBER = 1` — the *type constant* that, when passed
-/// as the `lparam` of `SCI_SETMARGINTYPEN`, makes the addressed
-/// margin render right-aligned line numbers using
-/// `STYLE_LINENUMBER`. Not to be confused with margin *index* 1
-/// (the symbol margin in the Code++/N++ index convention).
-pub const SC_MARGIN_NUMBER: u32 = 1;
+pub const SCI_MARGINSETTEXT: u32 = 2530;
+pub const SCI_MARGINSETSTYLE: u32 = 2532;
+/// `SC_MARGIN_TEXT = 4` — the *type constant* that, when passed as
+/// the `lparam` of `SCI_SETMARGINTYPEN`, makes the addressed margin
+/// render per-line text supplied via `SCI_MARGINSETTEXT`, styled by
+/// the index supplied via `SCI_MARGINSETSTYLE`. Used by Code++ to
+/// render line numbers right-aligned within a fixed-width column —
+/// the host formats each line's text with leading spaces so the
+/// rightmost digit lands in the same column for every line.
+pub const SC_MARGIN_TEXT: u32 = 4;
 
 // LexCPP style indices used by the Phase 4 m1 default theme. The
 // full set lives in `vendor/lexilla/include/SciLexer.h`; only those
