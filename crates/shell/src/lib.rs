@@ -5169,9 +5169,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
     fn open_file_already_active_is_idempotent() {
         // If the path is already open AND active, open_file is a
         // pure no-op — no extra tab, no spurious BUFFERACTIVATED.
+        // Windows-gated because `take_notifications` and the
+        // `Notification` enum are only compiled in on Windows
+        // today (the plugin host is Phase 5 work for the other
+        // platforms; until then the queue doesn't exist).
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("only.txt");
         std::fs::write(&path, "x\n").unwrap();
