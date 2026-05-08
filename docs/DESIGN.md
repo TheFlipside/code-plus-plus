@@ -84,10 +84,14 @@ This is a real Cargo workspace, not a multi-module crate.
 code-plus-plus/
 ├── Cargo.toml                    # [workspace] manifest
 ├── Cargo.lock
-├── DESIGN.md
 ├── README.md
+├── CLAUDE.md                     # operational rules for AI assist
 ├── rust-toolchain.toml           # pin a specific stable rustc
 ├── .github/workflows/ci.yml
+├── docs/
+│   ├── DESIGN.md                 # this file
+│   ├── DEVELOPMENT.md            # platform-by-platform setup
+│   └── nppm-coverage.md          # plugin-ABI coverage matrix
 ├── crates/
 │   ├── core/
 │   │   ├── Cargo.toml

@@ -63,5 +63,5 @@ These are not derivable from the code. Read DESIGN.md for the rationale; these a
 ## See Also
 
 @README.md
-@DESIGN.md
-@DEVELOPMENT.md
+@docs/DESIGN.md
+@docs/DEVELOPMENT.md

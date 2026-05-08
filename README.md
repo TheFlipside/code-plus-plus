@@ -35,13 +35,13 @@ The thesis: **performance is an architectural property, not a tuning result.** Y
 4. **Zero work at startup that isn't on the visible-frame critical path.** No directory scans. No plugin DLL loads. No project indexing. No AST construction. The session file is read; windows are created; threads are spawned for whatever needs to happen later. That's it.
 5. **Plugins load when they are first used, not before.** A user with 40 installed plugins pays no startup cost for the 39 they don't touch this session.
 6. **Notepad++ plugin compatibility from the ground up.** The six plugin entry points, the `NppData` struct, and the `NPPM_*`/`NPPN_*` message families are implemented to match Notepad++'s public ABI. A binary plugin that works in Notepad++ on Windows works in Code++ on Windows.
-7. **End-to-end demos at every phase.** Every implementation phase (see [DESIGN.md](DESIGN.md) §7) ends with a runnable demo against real Scintilla, real OS events, real disk I/O, and real plugin DLLs. No phase ships on stubs. This rule exists to stop architectural drift before it starts.
+7. **End-to-end demos at every phase.** Every implementation phase (see [DESIGN.md](docs/DESIGN.md) §7) ends with a runnable demo against real Scintilla, real OS events, real disk I/O, and real plugin DLLs. No phase ships on stubs. This rule exists to stop architectural drift before it starts.
 
 ---
 
 ## Project Status
 
-**Phase 0 — Scaffolding** is the current phase. The repository contains the design and developer-environment documentation; the workspace, crates, and submodule pins land next. See [DESIGN.md](DESIGN.md) §7.2 for the full phase plan and end-of-phase demo for each.
+**Phase 0 — Scaffolding** is the current phase. The repository contains the design and developer-environment documentation; the workspace, crates, and submodule pins land next. See [DESIGN.md](docs/DESIGN.md) §7.2 for the full phase plan and end-of-phase demo for each.
 
 | Phase | Theme | Demo |
 | --- | --- | --- |
@@ -56,7 +56,7 @@ The thesis: **performance is an architectural property, not a tuning result.** Y
 
 ## Getting Started
 
-For setup instructions on Windows, Linux, and macOS, see [DEVELOPMENT.md](DEVELOPMENT.md).
+For setup instructions on Windows, Linux, and macOS, see [DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 The short version, once your toolchain is in place:
 
@@ -73,8 +73,8 @@ The canonical repository is hosted on Forgejo at <https://git.fiedler.live/tux/c
 
 ## Documentation
 
-- **[DESIGN.md](DESIGN.md)** — full architecture, dependency graph, crate responsibilities, plugin ABI, performance budgets, and the phase plan. Read this if you want to understand any decision in the codebase.
-- **[DEVELOPMENT.md](DEVELOPMENT.md)** — platform-by-platform setup for Windows, Linux, and macOS, plus common development tasks and troubleshooting.
+- **[DESIGN.md](docs/DESIGN.md)** — full architecture, dependency graph, crate responsibilities, plugin ABI, performance budgets, and the phase plan. Read this if you want to understand any decision in the codebase.
+- **[DEVELOPMENT.md](docs/DEVELOPMENT.md)** — platform-by-platform setup for Windows, Linux, and macOS, plus common development tasks and troubleshooting.
 - **[CLAUDE.md](CLAUDE.md)** — operational rules and project conventions used by the AI development assistant.
 
 ---

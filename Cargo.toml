@@ -2,7 +2,7 @@
 #
 # Crate names are prefixed `codepp-` to avoid colliding with std (`core`)
 # and to make external references unambiguous. Directory names follow
-# DESIGN.md §3 (`crates/core`, `crates/editor`, ...).
+# docs/DESIGN.md §3 (`crates/core`, `crates/editor`, ...).
 
 [workspace]
 resolver = "2"
