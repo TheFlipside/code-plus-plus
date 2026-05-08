@@ -1326,6 +1326,30 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
         }
         state.synced_tab_count = state.synced_tab_count.saturating_sub(1);
 
+        // Force the tab control to recompute its internal scroll
+        // bounds against the (now smaller) item list. Without this,
+        // closing tabs from the right edge of a horizontally-
+        // scrolled strip leaves the scroll position pointing past
+        // the last remaining item — the user sees an empty
+        // overflow region instead of the tabs that are still open.
+        // Sending WM_SIZE with the current dimensions tells the
+        // control "re-layout against your existing client rect",
+        // which clamps the scroll-pos to a valid range and brings
+        // the new active tab back into view via the TCM_SETCURSEL
+        // below.
+        let mut rect = RECT::default();
+        if unsafe { GetClientRect(state.tab_hwnd, &mut rect) }.is_ok() {
+            let lparam = ((rect.bottom as u32) << 16) | (rect.right as u32);
+            unsafe {
+                SendMessageW(
+                    state.tab_hwnd,
+                    WM_SIZE,
+                    Some(WPARAM(0)),
+                    Some(LPARAM(lparam as i32 as isize)),
+                );
+            }
+        }
+
         // Release the closed tab's Scintilla document. The view
         // is still bound to it at this point, so Scintilla's
         // implicit view-ownership keeps the buffer alive until

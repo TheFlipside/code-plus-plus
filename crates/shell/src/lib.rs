@@ -1225,8 +1225,9 @@ impl Shell {
         };
         // Decide where the load result will land. If the active
         // tab is empty *and isn't already waiting for its own load
-        // to complete*, reuse it; otherwise allocate a fresh tab
-        // now so we have a buffer id to associate with `req_id`.
+        // to complete and isn't a user-created File→New buffer*,
+        // reuse it; otherwise allocate a fresh tab now so we have
+        // a buffer id to associate with `req_id`.
         //
         // Without the `pending_load.is_none()` guard, two rapid
         // open_file calls (e.g. session restore reopening multiple
@@ -1235,12 +1236,26 @@ impl Shell {
         // the first load's apply_load_result finds no matching tab
         // and silently discards the buffer. Symptom: only the last
         // file in a multi-tab session is restored.
+        //
+        // The `untitled_seq.is_none()` guard distinguishes an
+        // anonymous internal placeholder (which is fair game for
+        // reuse) from an explicit File→New buffer (`untitled_seq =
+        // Some(N)`, rendered as "new N" in the tab strip). Reusing
+        // a File→New tab silently replaces it with the opened
+        // file — the user's deliberate "I made a new buffer" gets
+        // erased the moment they Open something. Today no internal
+        // path produces a Tab with `path = None && pending_load =
+        // None && untitled_seq = None`, so this branch is
+        // effectively dead, but the guard stays as defense-in-depth
+        // for future paths that might need an internal placeholder.
         let target_idx = match self.active_tab {
             Some(i)
                 if self
                     .tabs
                     .get(i)
-                    .map(|t| t.path.is_none() && t.pending_load.is_none())
+                    .map(|t| {
+                        t.path.is_none() && t.pending_load.is_none() && t.untitled_seq.is_none()
+                    })
                     .unwrap_or(false) =>
             {
                 i
@@ -5137,6 +5152,45 @@ mod tests {
         assert_eq!(shell.tabs.len(), 2);
         assert_eq!(shell.tabs[0].path.as_deref(), Some(path.as_path()));
         assert_eq!(shell.tabs[1].path.as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn open_file_does_not_overwrite_explicit_untitled_tab() {
+        // Regression for the user-reported bug where File→New
+        // followed by File→Open silently replaced the new
+        // untitled buffer's tab with the opened file. The reuse-
+        // empty-active branch in `open_file` matched on
+        // `path.is_none() && pending_load.is_none()` — both true
+        // for a fresh File→New buffer, so it got eaten. The fix:
+        // also gate on `untitled_seq.is_none()`, distinguishing
+        // an internal placeholder from a deliberate user-created
+        // buffer.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opened.txt");
+        std::fs::write(&path, "x\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        assert_eq!(shell.tabs.len(), 1);
+        assert_eq!(shell.tabs[0].untitled_seq, Some(1));
+
+        shell.open_file(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() >= 2,
+            Duration::from_secs(2),
+        );
+
+        // Two tabs now: the original "new 1" untitled, and the
+        // newly-opened file. The new file is active.
+        assert_eq!(shell.tabs.len(), 2);
+        assert_eq!(shell.tabs[0].untitled_seq, Some(1));
+        assert!(shell.tabs[0].path.is_none());
+        assert_eq!(shell.tabs[1].path.as_deref(), Some(path.as_path()));
+        assert_eq!(shell.active_tab, Some(1));
     }
 
     #[test]
