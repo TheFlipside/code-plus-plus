@@ -69,6 +69,32 @@ pub const PRIMARY_BUFFER_ID: isize = 1;
 /// count.
 pub const MAX_SESSION_TABS: usize = 512;
 
+/// Hard ceiling on the number of tabs that can be open at one time.
+/// `Shell::open_file` and `Shell::new_untitled` refuse to allocate
+/// past this bound and log a `tracing::warn!` instead of crashing.
+///
+/// Bounds the CPU-time DoS surface for a hostile in-process plugin
+/// that calls `NPPM_DOOPEN` (or any path-opening NPPM message) in
+/// a tight loop. Without a cap, the loop would push `Shell.tabs`
+/// indefinitely until `next_buffer_id` overflowed at `i32::MAX`
+/// (~2 billion iterations) — a panic the `catch_unwind` boundary
+/// would catch, but only after burning ~10s of minutes of pegged
+/// CPU. Capping at a generous-but-finite value cuts that DoS
+/// window from billions of iterations to thousands.
+///
+/// 1024 is well above any realistic human workflow (Notepad++
+/// users rarely exceed ~100 tabs in even the largest sessions)
+/// and well above the `MAX_SESSION_TABS` (512) ceiling for
+/// session restore.
+///
+/// **Known limitation:** a plugin that *cycles* (open + close in
+/// a loop) instead of accumulating tabs can still climb
+/// `next_buffer_id` indefinitely — `tabs.len()` stays at zero so
+/// the cap below never fires. Tracked for a follow-up that
+/// gracefully refuses allocations once `next_buffer_id` is within
+/// striking distance of `i32::MAX`, instead of panicking.
+pub const MAX_OPEN_TABS: usize = 1024;
+
 /// Side-effecting operations the shell needs from the UI thread. Each
 /// platform UI crate (`ui_win32`, `ui_gtk`, `ui_cocoa`) implements this
 /// trait.
@@ -923,6 +949,14 @@ impl Shell {
     /// `session.xml` round-trip; that's the recovery-sidecar
     /// milestone's concern.
     pub fn new_untitled<U: UiPlatform>(&mut self, ui: &mut U) {
+        if self.tabs.len() >= MAX_OPEN_TABS {
+            tracing::warn!(
+                cap = MAX_OPEN_TABS,
+                open = self.tabs.len(),
+                "new_untitled refused: tab cap reached",
+            );
+            return;
+        }
         let id = self.allocate_buffer_id();
         let seq = self.next_untitled_seq();
         self.tabs.push(Tab {
@@ -1217,6 +1251,22 @@ impl Shell {
                 #[cfg(target_os = "windows")]
                 self.queue_buffer_activated();
             }
+            return;
+        }
+
+        // Bound the per-session DoS surface — see `MAX_OPEN_TABS`.
+        // The check is below the de-dupe branch so a hostile-or-
+        // accidental re-open of an already-open file still
+        // succeeds (it doesn't grow the tab count). It's above the
+        // `loader.open` call so we don't enqueue a load we'll then
+        // discard.
+        if self.tabs.len() >= MAX_OPEN_TABS {
+            tracing::warn!(
+                cap = MAX_OPEN_TABS,
+                open = self.tabs.len(),
+                path = ?path,
+                "open_file refused: tab cap reached",
+            );
             return;
         }
 
@@ -2147,7 +2197,47 @@ impl Shell {
     }
 }
 
-/// Errors surfaced by `Shell` operations.
+/// Errors that can arise from `Shell` operations. The display form
+/// of each variant ends up in user-facing message dialogs (Save
+/// failed, Save All summary, etc.) via `e.to_string()`.
+///
+/// **Threat-model note (per the m8-commit-1 security audit):** the
+/// `String` payloads on `Encoding`, `Io`, `Session`, and
+/// `WatcherInit` are produced by `e.to_string()` on the underlying
+/// error type and may include filesystem paths the user has
+/// supplied (the Save As destination, the path of an externally
+/// changed file, the location of `session.xml`). For Code++'s
+/// threat model — a local desktop editor where the user supplies
+/// every path themselves — those paths are *user-known input*, not
+/// untrusted data, and echoing them back in an error dialog is
+/// equivalent to the user re-reading what they typed. No
+/// information disclosure occurs.
+///
+/// Explicit per-variant audit:
+///
+/// * `WatcherInit(s)` — surfaces the `notify` crate's init error.
+///   Describes OS-level filesystem-watcher state (e.g. "too many
+///   watchers"); no user paths.
+/// * `NoActivePath` — no payload, no path data.
+/// * `Encoding(s)` — surfaces `codepp_core::encoding::encode`
+///   errors. Describes byte-level encoding failures (e.g. "char
+///   '⠿' not representable in windows-1252"); no paths.
+/// * `Io(s)` — surfaces `std::io::Error` and `tempfile::Error`
+///   `to_string()`. The `std::io::Error` form does **not** include
+///   the path; it's the OS-level error string ("permission
+///   denied", "no such file"). `tempfile::PersistError.error` is
+///   similarly path-free. The path lives separately in our own
+///   error context (e.g. `format!("buffer {id}: {e}")` in Save All).
+/// * `Session(s)` — surfaces `quick-xml` parse/write errors over
+///   `session.xml`. May include the canonical session-file path
+///   (`%APPDATA%\code-plus-plus\session.xml`), which is an
+///   internal location, not user-supplied.
+///
+/// Re-evaluate this table whenever a new variant is added or an
+/// existing variant's string source changes — particularly if a
+/// new variant ever surfaces remote-server URLs, OAuth tokens, or
+/// any other category the desktop-editor threat model doesn't
+/// already cover.
 #[derive(Debug)]
 pub enum ShellError {
     WatcherInit(String),
@@ -5191,6 +5281,90 @@ mod tests {
         assert!(shell.tabs[0].path.is_none());
         assert_eq!(shell.tabs[1].path.as_deref(), Some(path.as_path()));
         assert_eq!(shell.active_tab, Some(1));
+    }
+
+    #[test]
+    fn new_untitled_refuses_past_max_open_tabs() {
+        // The DoS cap from MAX_OPEN_TABS bounds how many tabs a
+        // hostile in-process plugin can stack before allocation
+        // refuses. Tests using a small loop are bounded by the
+        // constant — 1024 untitled buffers in a unit test is a
+        // few microseconds of Vec push + atomic increment, well
+        // under the test-suite budget.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for _ in 0..MAX_OPEN_TABS {
+            shell.new_untitled(&mut ui);
+        }
+        assert_eq!(shell.tabs.len(), MAX_OPEN_TABS);
+
+        // Past the cap → refused, no new tab, no panic.
+        shell.new_untitled(&mut ui);
+        assert_eq!(shell.tabs.len(), MAX_OPEN_TABS);
+
+        // Closing one frees a slot; the next New succeeds again.
+        shell.active_tab = Some(0);
+        shell.close_active_tab();
+        assert_eq!(shell.tabs.len(), MAX_OPEN_TABS - 1);
+        shell.new_untitled(&mut ui);
+        assert_eq!(shell.tabs.len(), MAX_OPEN_TABS);
+    }
+
+    #[test]
+    fn open_file_refuses_past_max_open_tabs() {
+        // Same cap applies to `open_file`. Test covers two
+        // branches in production code:
+        //   1. New-path open at the cap: refused, no new tab,
+        //      no loader request.
+        //   2. Re-open of an already-open path at the cap:
+        //      de-dupe branch fires before the cap check, so
+        //      the call succeeds and switches active without
+        //      growing the count.
+        let dir = tempfile::tempdir().unwrap();
+        let opened_first = dir.path().join("opened-first.txt");
+        let new_at_cap = dir.path().join("new-at-cap.txt");
+        std::fs::write(&opened_first, "x\n").unwrap();
+        std::fs::write(&new_at_cap, "y\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        // Open one real file first so we have a known path on a
+        // real tab; the de-dupe assertion below targets it.
+        shell.open_file(opened_first.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+        assert_eq!(shell.tabs.len(), 1);
+        let opened_first_idx = 0usize;
+
+        // Fill the remainder with untitled buffers so the total
+        // hits MAX_OPEN_TABS exactly.
+        for _ in 0..(MAX_OPEN_TABS - 1) {
+            shell.new_untitled(&mut ui);
+        }
+        assert_eq!(shell.tabs.len(), MAX_OPEN_TABS);
+        let active_before = shell.active_tab;
+
+        // Branch 1 — fresh path at the cap: refused.
+        shell.open_file(new_at_cap);
+        assert_eq!(shell.tabs.len(), MAX_OPEN_TABS);
+
+        // Branch 2 — already-open path at the cap: de-dupe fires
+        // *before* the cap check, so the call succeeds and the
+        // active flips back to that tab. Tab count unchanged.
+        shell.open_file(opened_first);
+        assert_eq!(shell.tabs.len(), MAX_OPEN_TABS);
+        assert_eq!(shell.active_tab, Some(opened_first_idx));
+        assert_ne!(
+            shell.active_tab, active_before,
+            "de-dupe at cap must still flip the active tab",
+        );
     }
 
     #[test]
