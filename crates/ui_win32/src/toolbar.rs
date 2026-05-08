@@ -34,10 +34,11 @@ use core::ffi::c_void;
 use std::io::Cursor;
 
 use windows::core::{Result, PCWSTR};
-use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    CreateDIBSection, DeleteObject, GetDC, GetDeviceCaps, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER,
-    BI_RGB, DIB_RGB_COLORS, HBITMAP, LOGPIXELSY,
+    CreateDIBSection, DeleteObject, FillRect, GetDC, GetDeviceCaps, GetStockObject, ReleaseDC,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HBRUSH, HDC, LOGPIXELSY,
+    WHITE_BRUSH,
 };
 use windows::Win32::UI::Controls::{
     ImageList_Add, ImageList_Create, CCS_NODIVIDER, CCS_NOPARENTALIGN, CCS_NORESIZE, HIMAGELIST,
@@ -45,8 +46,10 @@ use windows::Win32::UI::Controls::{
     TBSTYLE_CHECK, TBSTYLE_FLAT, TBSTYLE_SEP, TBSTYLE_TOOLTIPS, TB_ADDBUTTONS, TB_AUTOSIZE,
     TB_BUTTONSTRUCTSIZE, TB_GETSTATE, TB_SETIMAGELIST, TB_SETSTATE, TOOLBARCLASSNAME,
 };
+use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_VISIBLE,
+    CreateWindowExW, GetClientRect, SendMessageW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ERASEBKGND,
+    WS_CHILD, WS_VISIBLE,
 };
 
 use crate::{
@@ -740,11 +743,99 @@ pub unsafe fn create_toolbar(parent: HWND, instance: HMODULE) -> Result<ToolbarH
         SendMessageW(hwnd, TB_AUTOSIZE, None, None);
     }
 
+    // Repaint the toolbar's background as plain white. The default
+    // `ToolbarWindow32` chrome on Win10/11 paints a system-grey
+    // backdrop, which the user found visually heavy against the
+    // light editor body. A `WM_ERASEBKGND` subclass is the
+    // canonical override — UxTheme respects the subclass return
+    // value here (unlike the tab-strip case where it routes around
+    // `NM_CUSTOMDRAW`), so the buttons still draw with their full
+    // themed look but the gaps and surrounding strip read as white.
+    // SAFETY: `hwnd` is the toolbar control we just created;
+    // `toolbar_white_subclass` is a real `extern "system"` fn with
+    // the SUBCLASSPROC signature. Subclass id `1` is unique because
+    // we only ever subclass each toolbar HWND once.
+    let subclass_ok =
+        unsafe { SetWindowSubclass(hwnd, Some(toolbar_white_subclass), 1, 0) }.as_bool();
+    if !subclass_ok {
+        // Failure here means the user sees the system-grey
+        // backdrop instead of white — a visual regression, not a
+        // correctness bug, so we trace and continue rather than
+        // bail out of toolbar creation. Realistic causes:
+        // comctl32's subclass support not initialised (missing
+        // `InitCommonControlsEx`), or out-of-memory during the
+        // subclass-table allocation.
+        tracing::warn!(
+            "SetWindowSubclass failed on toolbar HWND — \
+             background will render system-grey instead of white"
+        );
+    }
+
     Ok(ToolbarHandles {
         hwnd,
         image_list,
         bitmap_px,
     })
+}
+
+// --- Background subclass ------------------------------------------------------
+
+/// Subclass procedure: paints `WM_ERASEBKGND` with the system
+/// `WHITE_BRUSH` and forwards everything else to the default
+/// toolbar wndproc.
+///
+/// Signature matches `SUBCLASSPROC` exactly (`unsafe extern
+/// "system" fn`); the inner unsafe blocks are required by the
+/// workspace's `unsafe_op_in_unsafe_fn = "deny"` lint regardless
+/// of the outer fn modifier, so making the outer fn `unsafe`
+/// costs nothing and matches the windows-rs type alias literally.
+///
+/// Auto-removed when the toolbar HWND is destroyed (per
+/// `SetWindowSubclass` lifetime contract); no explicit
+/// `RemoveWindowSubclass` needed in `WM_DESTROY`.
+unsafe extern "system" fn toolbar_white_subclass(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id_subclass: usize,
+    _ref_data: usize,
+) -> LRESULT {
+    if msg == WM_ERASEBKGND {
+        // SAFETY: `wparam.0` is documented to be the HDC for the
+        // erase-background pass; `GetClientRect` reads the rect we
+        // own through `hwnd`; `GetStockObject(WHITE_BRUSH)`
+        // returns a system-managed brush whose handle we don't
+        // need to free; `FillRect` paints the whole client area.
+        unsafe {
+            let hdc = HDC(wparam.0 as *mut c_void);
+            let mut rect = RECT::default();
+            // If `GetClientRect` or `GetStockObject` somehow fails,
+            // fall through to the default subclass proc rather
+            // than returning `LRESULT(1)` with a degraded paint
+            // that would lie about having drawn. The failure paths
+            // are unreachable on a live toolbar HWND with a stock
+            // brush constant; this is purely defensive against a
+            // future constant swap or unusual host environment.
+            let stock = GetStockObject(WHITE_BRUSH);
+            if !stock.0.is_null() && GetClientRect(hwnd, &mut rect).is_ok() {
+                let brush = HBRUSH(stock.0);
+                // `FillRect` returns 0 only on a NULL DC or NULL
+                // brush, neither of which can happen by the time
+                // we reach this branch (DC comes from a valid
+                // `WM_ERASEBKGND`; brush was just null-checked).
+                // Discard for symmetry with `GetClientRect` above.
+                let _ = FillRect(hdc, &rect, brush);
+                // 1 (TRUE) tells the default wndproc "background
+                // already erased" so it skips its grey re-fill.
+                return LRESULT(1);
+            }
+        }
+    }
+    // SAFETY: `DefSubclassProc` is the runtime's "next handler in
+    // the subclass chain"; passing through every other message is
+    // the documented default for any subclass we don't intercept.
+    unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
 }
 
 // --- Tooltip handler ----------------------------------------------------------
