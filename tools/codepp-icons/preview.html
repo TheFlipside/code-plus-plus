@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- The script tag below is the only inline JS we want to run; the
+     SVG bodies fetched at runtime are inserted via innerHTML, so any
+     <script> snuck into a future malformed icon body would otherwise
+     execute. `script-src 'unsafe-inline'` keeps the page's own
+     bootstrap script working while still blocking external script
+     loads, and `default-src 'self'` keeps fetches scoped to the
+     local origin. Defence-in-depth — every existing icon is plain
+     geometry, but this stops a footgun on the icon-author machine. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:;">
+<title>Code++ icon set preview</title>
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --panel: #252526;
+    --panel-2: #2d2d30;
+    --text: #cccccc;
+    --muted: #858585;
+    --accent: #007acc;
+    --border: #3c3c3c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 13px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+
+  .toolbar {
+    display: flex;
+    gap: 2px;
+    padding: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 32px;
+    flex-wrap: wrap;
+  }
+  .toolbar button {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 4px;
+    cursor: pointer;
+    line-height: 0;
+  }
+  .toolbar button:hover {
+    background: rgba(255,255,255,0.06);
+    border-color: var(--border);
+  }
+  .toolbar .sep {
+    width: 1px;
+    background: var(--border);
+    margin: 4px 4px;
+  }
+
+  h2 { font-size: 14px; margin: 24px 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
+  }
+  .cell {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 8px 10px;
+    text-align: center;
+  }
+  .cell svg { display: block; margin: 0 auto 10px; }
+  .cell .name {
+    font-size: 11px;
+    color: var(--muted);
+    font-family: ui-monospace, "SF Mono", Consolas, monospace;
+    word-break: break-all;
+  }
+
+  .sizes {
+    display: flex;
+    align-items: end;
+    justify-content: center;
+    gap: 16px;
+    margin-bottom: 32px;
+    padding: 16px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .sizes > div { text-align: center; }
+  .sizes .lbl { color: var(--muted); font-size: 11px; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<h1>Code++ icon set</h1>
+<p class="sub">35 icons &middot; 24&times;24 SVG &middot; original artwork, Notepad++-equivalent vocabulary</p>
+
+<h2>Mock toolbar</h2>
+<div class="toolbar" id="toolbar"></div>
+
+<h2>Scaling test</h2>
+<div class="sizes" id="sizes"></div>
+
+<h2>All icons</h2>
+<div class="grid" id="grid"></div>
+
+<script>
+const NAMES = [
+  "new","open","folder-workspace","save","save-all","save-macro",
+  "close","close-all","print",
+  "cut","copy","paste","undo","redo",
+  "find","find-next","replace",
+  "zoom-in","zoom-out","word-wrap","show-whitespace","show-all-chars","show-indent-guide",
+  "sync-scroll-vertical","sync-scroll-horizontal",
+  "document-map","document-list","function-list",
+  "define-language","monitoring",
+  "macro-record","macro-play","macro-pause","macro-stop","run"
+];
+
+const TOOLBAR_GROUPS = [
+  ["new","open","folder-workspace","save","save-all","save-macro","close","close-all","print"],
+  ["cut","copy","paste","undo","redo"],
+  ["find","find-next","replace"],
+  ["zoom-in","zoom-out","word-wrap","show-whitespace","show-all-chars","show-indent-guide"],
+  ["sync-scroll-vertical","sync-scroll-horizontal","document-map","document-list","function-list"],
+  ["define-language","monitoring"],
+  ["macro-record","macro-play","macro-pause","macro-stop","run"],
+];
+
+async function loadIcon(name) {
+  const r = await fetch(`../../assets/icons/${name}.svg`);
+  return r.text();
+}
+
+(async () => {
+  const cache = {};
+  await Promise.all(NAMES.map(async n => cache[n] = await loadIcon(n)));
+
+  // Toolbar
+  const tb = document.getElementById("toolbar");
+  TOOLBAR_GROUPS.forEach((group, i) => {
+    if (i > 0) {
+      const s = document.createElement("div");
+      s.className = "sep";
+      tb.appendChild(s);
+    }
+    group.forEach(n => {
+      const b = document.createElement("button");
+      b.title = n;
+      b.innerHTML = cache[n];
+      tb.appendChild(b);
+    });
+  });
+
+  // Sizes
+  const sizes = document.getElementById("sizes");
+  [16, 24, 32, 48, 64].forEach(px => {
+    const wrap = document.createElement("div");
+    wrap.innerHTML = cache["save"].replace(
+      'width="24" height="24"',
+      `width="${px}" height="${px}"`
+    );
+    const lbl = document.createElement("div");
+    lbl.className = "lbl";
+    lbl.textContent = `${px}px`;
+    wrap.appendChild(lbl);
+    sizes.appendChild(wrap);
+  });
+
+  // Grid
+  const grid = document.getElementById("grid");
+  NAMES.forEach(n => {
+    const cell = document.createElement("div");
+    cell.className = "cell";
+    cell.innerHTML = cache[n].replace(
+      'width="24" height="24"',
+      'width="40" height="40"'
+    ) + `<div class="name">${n}.svg</div>`;
+    grid.appendChild(cell);
+  });
+})();
+</script>
+
+</body>
+</html>
