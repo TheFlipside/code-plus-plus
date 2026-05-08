@@ -1088,12 +1088,12 @@ const FG_OPERATOR: u32 = 0x00_30_30_30; // dark grey
 const FG_LIFETIME: u32 = 0x00_00_60_C0; // amber
 const FG_MACRO: u32 = 0x00_80_30_80; // violet
 
-// Line-number margin colours: a darker-grey strip on the left, light
-// numerals. Matches the reference screenshot — high contrast against
-// the white editor body so the margin reads as a distinct "chrome"
-// region. BBGGRR encoded; R=G=B because the colours are pure greys.
-const BG_LINE_NUMBER: u32 = 0x00_3C_3C_3C; // ~RGB(60,60,60)  dark grey
-const FG_LINE_NUMBER: u32 = 0x00_DD_DD_DD; // ~RGB(221,221,221) off-white
+// Line-number margin colours: a near-white strip on the left, soft
+// medium-grey numerals — high enough contrast to read at a glance
+// without competing visually with the editor body. BBGGRR encoded;
+// R=G=B because the colours are pure greys.
+const BG_LINE_NUMBER: u32 = 0x00_E4_E4_E4; // ~RGB(228,228,228) near-white
+const FG_LINE_NUMBER: u32 = 0x00_70_70_70; // ~RGB(112,112,112) medium grey
 
 /// Margin index for line numbers. Scintilla exposes 5 margins;
 /// margin 0 is the conventional line-number slot, with margin 1
@@ -1101,25 +1101,14 @@ const FG_LINE_NUMBER: u32 = 0x00_DD_DD_DD; // ~RGB(221,221,221) off-white
 /// when those land in a later phase.
 const LINE_NUMBER_MARGIN: u32 = 0;
 
-/// Sample string used to size [`LINE_NUMBER_MARGIN`] via
-/// `SCI_TEXTWIDTH`. The six `9` digits cover line counts up to
-/// 999,999 — past any plausible source file — and the
-/// leading/trailing `_` characters add visual breathing room so
-/// the right-aligned digits don't kiss the margin's edges. The
-/// user's reference screenshot shows the bar deliberately wider
-/// than the live line count needs, so the margin width never has
-/// to grow during normal editing; a future settings-driven view
-/// toggle will flip the width between this measurement and `0`.
-const LINE_NUMBER_SAMPLE: &str = "_999999_";
-
-/// Fallback pixel width for [`LINE_NUMBER_MARGIN`] used at editor
-/// creation, before [`apply_default_styles`] has had a chance to
-/// run `SCI_TEXTWIDTH` against the live font metrics. Sized so the
-/// margin shows immediately on the first paint instead of flashing
-/// in at zero width and then expanding once styles initialise. The
-/// font-aware measurement in `apply_line_number_margin` overrides
-/// this on every language application.
-const LINE_NUMBER_MARGIN_FALLBACK_PX: i32 = 60;
+/// Pixel width of [`LINE_NUMBER_MARGIN`]. Fixed rather than
+/// font-metric-derived because the brief is a deliberately roomy
+/// bar that fits comfortably for typical files without ever
+/// needing to grow during editing. A future settings-driven view
+/// toggle will flip the width between this value and `0` (Scintilla
+/// hides a margin via width-zero without resetting its type or
+/// styles).
+const LINE_NUMBER_MARGIN_PX: i32 = 50;
 
 /// Initialise STYLE_DEFAULT then reset every other style to it. This is
 /// Scintilla's idiomatic "blank slate before lexer-specific styling"
@@ -1144,22 +1133,13 @@ fn apply_default_styles(editor: &EditorHandle) {
 /// (re-applies after `SCI_STYLECLEARALL` has reset
 /// `STYLE_LINENUMBER` back to `STYLE_DEFAULT`).
 ///
-/// Width is computed from the current `STYLE_LINENUMBER` font via
-/// `SCI_TEXTWIDTH`, so the margin auto-scales to whatever font /
-/// font-size combination is in effect at call time. A future
-/// "show line numbers" view toggle becomes
-/// `editor.set_margin_width(LINE_NUMBER_MARGIN, if on { measured } else { 0 })`.
+/// A future "show line numbers" view toggle becomes
+/// `editor.set_margin_width(LINE_NUMBER_MARGIN, if on { LINE_NUMBER_MARGIN_PX } else { 0 })`.
 fn apply_line_number_margin(editor: &EditorHandle) {
     editor.set_margin_type(LINE_NUMBER_MARGIN, SC_MARGIN_NUMBER);
     editor.style_set_fore(STYLE_LINENUMBER, FG_LINE_NUMBER);
     editor.style_set_back(STYLE_LINENUMBER, BG_LINE_NUMBER);
-    let measured = editor.text_width(STYLE_LINENUMBER, LINE_NUMBER_SAMPLE);
-    let width = if measured > 0 {
-        measured
-    } else {
-        LINE_NUMBER_MARGIN_FALLBACK_PX
-    };
-    editor.set_margin_width(LINE_NUMBER_MARGIN, width);
+    editor.set_margin_width(LINE_NUMBER_MARGIN, LINE_NUMBER_MARGIN_PX);
 }
 
 /// Bring the caret line into view: if it's already in the visible
@@ -6702,11 +6682,11 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         editor.send(SCI_SETSCROLLWIDTHTRACKING, 1, 0);
 
         // Line-number margin: configure once here so it appears on
-        // the first paint with the fallback width, then
-        // `apply_default_styles` (called on every language switch)
-        // recomputes the width via `SCI_TEXTWIDTH` against the live
-        // font and re-applies `STYLE_LINENUMBER` colours that
-        // `SCI_STYLECLEARALL` clobbers.
+        // the first paint, then `apply_default_styles` (called on
+        // every language switch) re-applies `STYLE_LINENUMBER`
+        // colours that `SCI_STYLECLEARALL` clobbers. The margin's
+        // width is a fixed `LINE_NUMBER_MARGIN_PX` and doesn't
+        // change between calls.
         apply_line_number_margin(&editor);
 
         // Wake closure: PostMessage ourselves WM_APP_WAKE.

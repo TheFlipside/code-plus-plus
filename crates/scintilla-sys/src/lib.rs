@@ -337,13 +337,8 @@ pub const STYLE_LINENUMBER: usize = 33;
 // `SCI_SETMARGINWIDTHN(margin, pixels)` controls visibility — width
 // `0` hides the margin without clearing its other state, so the
 // future "show line numbers" toggle is one width-write away.
-// `SCI_TEXTWIDTH(style, ascii_text)` measures a sample string
-// rendered in the given style and returns its pixel width — used to
-// size the line-number margin to fit a representative line count
-// (e.g. `"_999999_"` for up-to-6-digit line numbers).
 pub const SCI_SETMARGINTYPEN: u32 = 2240;
 pub const SCI_SETMARGINWIDTHN: u32 = 2242;
-pub const SCI_TEXTWIDTH: u32 = 2276;
 /// `SC_MARGIN_NUMBER = 1` — the *type constant* that, when passed
 /// as the `lparam` of `SCI_SETMARGINTYPEN`, makes the addressed
 /// margin render right-aligned line numbers using
