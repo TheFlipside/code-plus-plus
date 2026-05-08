@@ -68,8 +68,9 @@ use windows::Win32::UI::Controls::{
     LVCF_WIDTH, LVCOLUMNW, LVIF_TEXT, LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT,
     LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMTEXTW,
     LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, NMHDR,
-    NMITEMACTIVATE, NM_DBLCLK, TCIF_TEXT, TCITEMW, TCM_DELETEITEM, TCM_GETCURSEL, TCM_INSERTITEMW,
-    TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_COMBOBOX, WC_LISTVIEWW, WC_TABCONTROL,
+    NMITEMACTIVATE, NM_DBLCLK, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL,
+    TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_COMBOBOX, WC_LISTVIEWW,
+    WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, ReleaseCapture, SetCapture, SetFocus, VK_0, VK_F, VK_F3, VK_G, VK_H, VK_N, VK_O,
@@ -1314,40 +1315,17 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
     // code runs in this phase either (TCM_*, SCI_* are all
     // synchronous and don't re-enter our wnd_proc).
     if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
-        // Remove the item from the tab control. wparam is the
-        // index; lparam is unused for TCM_DELETEITEM.
+        // Nuclear-resync the visible strip: delete every item the
+        // tab control holds and re-insert from `state.shell.tabs`.
+        // This is heavier than a single `TCM_DELETEITEM` for the
+        // closed index, but it's the only reliable way to reset
+        // the tab control's internal overflow-scroll state — see
+        // `force_tab_strip_resync`'s doc-comment for the full
+        // rationale (the user-reported bug where closing tabs at
+        // the left edge of a scrolled strip leaves the visible
+        // region empty even though tabs still exist).
         unsafe {
-            SendMessageW(
-                state.tab_hwnd,
-                TCM_DELETEITEM,
-                Some(WPARAM(closed.closed_idx)),
-                Some(LPARAM(0)),
-            );
-        }
-        state.synced_tab_count = state.synced_tab_count.saturating_sub(1);
-
-        // Force the tab control to recompute its internal scroll
-        // bounds against the (now smaller) item list. Without this,
-        // closing tabs from the right edge of a horizontally-
-        // scrolled strip leaves the scroll position pointing past
-        // the last remaining item — the user sees an empty
-        // overflow region instead of the tabs that are still open.
-        // Sending WM_SIZE with the current dimensions tells the
-        // control "re-layout against your existing client rect",
-        // which clamps the scroll-pos to a valid range and brings
-        // the new active tab back into view via the TCM_SETCURSEL
-        // below.
-        let mut rect = RECT::default();
-        if unsafe { GetClientRect(state.tab_hwnd, &mut rect) }.is_ok() {
-            let lparam = ((rect.bottom as u32) << 16) | (rect.right as u32);
-            unsafe {
-                SendMessageW(
-                    state.tab_hwnd,
-                    WM_SIZE,
-                    Some(WPARAM(0)),
-                    Some(LPARAM(lparam as i32 as isize)),
-                );
-            }
+            force_tab_strip_resync(state);
         }
 
         // Release the closed tab's Scintilla document. The view
@@ -1808,6 +1786,51 @@ unsafe fn refresh_tab_chrome(hwnd: HWND) {
             sync_tab_strip(state);
             update_window_title(hwnd, &state.shell);
         }
+    }
+}
+
+/// Nuclear-option re-sync of the visible tab strip: delete every
+/// item the Win32 control holds, reset our `synced_tab_count`, then
+/// re-insert all tabs from `state.shell.tabs` via the standard
+/// [`sync_tab_strip`] path.
+///
+/// **Why this exists:** the Win32 tab control's overflow-scroll
+/// state (driven by an internal `msctls_updown32` spinner) doesn't
+/// reliably clamp on `TCM_DELETEITEM`. After closing tabs that
+/// formed the visible region of a horizontally-scrolled strip, the
+/// control's scroll-pos can stay pointing past the (now smaller)
+/// item list — the user sees an empty overflow region even though
+/// tabs still exist. `WM_SIZE` to the same dimensions doesn't
+/// re-trigger the clamp (the handler short-circuits on no-op size
+/// changes), and there's no public message to "scroll active into
+/// view". The only documented way to fully reset internal state is
+/// to delete all items; on re-insert the control rebuilds its
+/// scroll bounds from scratch.
+///
+/// Cost: one `TCM_DELETEALLITEMS` plus N `TCM_INSERTITEMW` calls.
+/// For typical workloads (≤100 tabs) that's a few microseconds per
+/// close — well below the perceptual threshold and below the
+/// per-keystroke budget in DESIGN.md §8.
+///
+/// # Safety
+///
+/// Caller must hold the UI thread's `&mut WindowState` borrow. The
+/// SendMessageW calls dispatch synchronously into the common-
+/// control's WndProc and don't re-enter our wnd_proc.
+unsafe fn force_tab_strip_resync(state: &mut WindowState) {
+    // SAFETY: tab_hwnd is a valid HWND created in `run`; both
+    // messages take no pointer arguments.
+    unsafe {
+        SendMessageW(
+            state.tab_hwnd,
+            TCM_DELETEALLITEMS,
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
+        );
+    }
+    state.synced_tab_count = 0;
+    unsafe {
+        sync_tab_strip(state);
     }
 }
 
