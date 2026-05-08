@@ -23,4 +23,4 @@ crate-type = ["cdylib"]
 name = "example_hello"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-codepp-plugin-host = { workspace = true }
+codepp-plugin-sdk = { workspace = true }

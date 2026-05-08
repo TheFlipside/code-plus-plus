@@ -21,17 +21,17 @@
 
 #![cfg(target_os = "windows")]
 
-use core::cell::UnsafeCell;
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicPtr, Ordering};
 
-use codepp_plugin_host::ffi::{FuncItem, NppData, SCNotification, MENU_TITLE_LENGTH};
+use codepp_plugin_sdk::{self as sdk, FuncItem, Hwnd, NppData, SCNotification, SyncCell};
 
-type Hwnd = *mut c_void;
-
+// Clipboard fns live in user32 alongside the SDK's `SendMessageW`.
+// Listing them in a separate extern block (with the same
+// `#[link]`) compiles cleanly — the linker dedupes the duplicate
+// `user32` entry — and keeps the clipboard surface visible
+// here rather than buried in the SDK's general-purpose header.
 #[link(name = "user32")]
 extern "system" {
-    fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
     fn OpenClipboard(hwnd: Hwnd) -> i32;
     fn CloseClipboard() -> i32;
     fn EmptyClipboard() -> i32;
@@ -51,11 +51,10 @@ extern "system" {
     fn GetSaveFileNameW(ofn: *mut OpenFileName) -> i32;
 }
 
-const NPPMSG: u32 = 0x0400 + 1000;
-const NPPM_GETCURRENTSCINTILLA: u32 = NPPMSG + 4;
-const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
-const STATUSBAR_DOC_TYPE: usize = 0;
-
+// Plugin-specific Scintilla messages — the per-byte style queries
+// and the buffer-text reads the HTML/RTF export needs. The SDK
+// only ships the selection-replacement subset every plugin shares;
+// per-style introspection is unique to cppexport.
 const SCI_GETLENGTH: u32 = 2006;
 const SCI_GETTEXT: u32 = 2182;
 const SCI_GETSTYLEAT: u32 = 2010;
@@ -105,10 +104,6 @@ struct OpenFileName {
     flags_ex: u32,
 }
 
-static NPP_HANDLE: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
-static SCINTILLA_MAIN: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
-static SCINTILLA_SECONDARY: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
-
 const PLUGIN_NAME: [u16; 7] = make_plugin_name();
 
 const fn make_plugin_name() -> [u16; 7] {
@@ -123,38 +118,16 @@ const fn make_plugin_name() -> [u16; 7] {
     buf
 }
 
-const fn menu_label(bytes: &[u8]) -> [u16; MENU_TITLE_LENGTH] {
-    let mut buf = [0u16; MENU_TITLE_LENGTH];
-    let mut i = 0;
-    while i < bytes.len() && i < MENU_TITLE_LENGTH - 1 {
-        buf[i] = bytes[i] as u16;
-        i += 1;
-    }
-    buf
-}
-
-#[repr(transparent)]
-struct SyncCell<T>(UnsafeCell<T>);
-unsafe impl<T> Sync for SyncCell<T> {}
-impl<T> SyncCell<T> {
-    const fn new(val: T) -> Self {
-        Self(UnsafeCell::new(val))
-    }
-    fn get(&self) -> *mut T {
-        self.0.get()
-    }
-}
-
 static FUNCS: SyncCell<[FuncItem; 2]> = SyncCell::new([
     FuncItem {
-        item_name: menu_label(b"Export to HTML..."),
+        item_name: sdk::menu_label(b"Export to HTML..."),
         p_func: Some(cmd_export_html),
         cmd_id: 0,
         init2_check: 0,
         p_sh_key: core::ptr::null_mut(),
     },
     FuncItem {
-        item_name: menu_label(b"Copy HTML to Clipboard"),
+        item_name: sdk::menu_label(b"Copy HTML to Clipboard"),
         p_func: Some(cmd_copy_html),
         cmd_id: 0,
         init2_check: 0,
@@ -164,9 +137,7 @@ static FUNCS: SyncCell<[FuncItem; 2]> = SyncCell::new([
 
 #[no_mangle]
 pub extern "C" fn setInfo(data: NppData) {
-    NPP_HANDLE.store(data.npp_handle, Ordering::Release);
-    SCINTILLA_MAIN.store(data.scintilla_main_handle, Ordering::Release);
-    SCINTILLA_SECONDARY.store(data.scintilla_second_handle, Ordering::Release);
+    sdk::store_handles(data);
 }
 
 #[no_mangle]
@@ -197,29 +168,7 @@ pub extern "C" fn isUnicode() -> i32 {
     1
 }
 
-// ---- Scintilla helpers (same shape as cppconverter / cppmimetools) ----
-
-fn active_scintilla() -> Hwnd {
-    let npp = NPP_HANDLE.load(Ordering::Acquire);
-    if npp.is_null() {
-        return core::ptr::null_mut();
-    }
-    let mut which: i32 = 0;
-    // SAFETY: `&mut which` is a valid `int*` for the SendMessage call.
-    unsafe {
-        SendMessageW(
-            npp,
-            NPPM_GETCURRENTSCINTILLA,
-            0,
-            &mut which as *mut i32 as isize,
-        );
-    }
-    if which == 0 {
-        SCINTILLA_MAIN.load(Ordering::Acquire)
-    } else {
-        SCINTILLA_SECONDARY.load(Ordering::Acquire)
-    }
-}
+// ---- Scintilla helpers ----
 
 /// Read the entire active buffer as raw UTF-8 bytes.
 ///
@@ -233,7 +182,7 @@ fn get_buffer_bytes(sci: Hwnd) -> Vec<u8> {
         return Vec::new();
     }
     // SAFETY: SCI_GETLENGTH takes no pointer; pure query.
-    let len = unsafe { SendMessageW(sci, SCI_GETLENGTH, 0, 0) };
+    let len = unsafe { sdk::SendMessageW(sci, SCI_GETLENGTH, 0, 0) };
     if len <= 0 {
         return Vec::new();
     }
@@ -251,7 +200,7 @@ fn get_buffer_bytes(sci: Hwnd) -> Vec<u8> {
     // bytes — content + NUL terminator) and writes through `lparam`
     // for the duration of the call.
     unsafe {
-        SendMessageW(sci, SCI_GETTEXT, alloc, buf.as_mut_ptr() as isize);
+        sdk::SendMessageW(sci, SCI_GETTEXT, alloc, buf.as_mut_ptr() as isize);
     }
     buf.truncate(len_us);
     buf
@@ -268,7 +217,7 @@ fn collect_style_bytes(sci: Hwnd, len: usize) -> Vec<u8> {
         // SAFETY: SCI_GETSTYLEAT takes wparam=pos as a position; no
         // pointer arguments. The return is a style byte (truncated
         // from the LRESULT to u8 by the cast).
-        let style = unsafe { SendMessageW(sci, SCI_GETSTYLEAT, pos, 0) };
+        let style = unsafe { sdk::SendMessageW(sci, SCI_GETSTYLEAT, pos, 0) };
         out.push(style as u8);
     }
     out
@@ -293,11 +242,11 @@ fn query_style_attrs(sci: Hwnd, style: u8) -> StyleAttrs {
     // SAFETY: SCI_STYLEGET* take wparam=style; no pointer arguments.
     // Return values are RGB (0x00BBGGRR) or boolean (0/1) or pt size.
     let style = style as usize;
-    let fore_rgb = unsafe { SendMessageW(sci, SCI_STYLEGETFORE, style, 0) } as u32;
-    let back_rgb = unsafe { SendMessageW(sci, SCI_STYLEGETBACK, style, 0) } as u32;
-    let bold = unsafe { SendMessageW(sci, SCI_STYLEGETBOLD, style, 0) } != 0;
-    let italic = unsafe { SendMessageW(sci, SCI_STYLEGETITALIC, style, 0) } != 0;
-    let size_pts = unsafe { SendMessageW(sci, SCI_STYLEGETSIZE, style, 0) } as i32;
+    let fore_rgb = unsafe { sdk::SendMessageW(sci, SCI_STYLEGETFORE, style, 0) } as u32;
+    let back_rgb = unsafe { sdk::SendMessageW(sci, SCI_STYLEGETBACK, style, 0) } as u32;
+    let bold = unsafe { sdk::SendMessageW(sci, SCI_STYLEGETBOLD, style, 0) } != 0;
+    let italic = unsafe { sdk::SendMessageW(sci, SCI_STYLEGETITALIC, style, 0) } != 0;
+    let size_pts = unsafe { sdk::SendMessageW(sci, SCI_STYLEGETSIZE, style, 0) } as i32;
     let font_name = query_style_font(sci, style);
     StyleAttrs {
         fore_rgb,
@@ -317,7 +266,7 @@ fn query_style_attrs(sci: Hwnd, style: u8) -> StyleAttrs {
 fn query_style_font(sci: Hwnd, style: usize) -> String {
     // SAFETY: passing wparam=style, lparam=0 asks for the length only;
     // Scintilla writes nothing through any pointer.
-    let len = unsafe { SendMessageW(sci, SCI_STYLEGETFONT, style, 0) };
+    let len = unsafe { sdk::SendMessageW(sci, SCI_STYLEGETFONT, style, 0) };
     if len <= 0 {
         return String::new();
     }
@@ -333,10 +282,18 @@ fn query_style_font(sci: Hwnd, style: usize) -> String {
     // SAFETY: `buf.as_mut_ptr()` is valid for `alloc` bytes; Scintilla
     // writes the font name plus NUL terminator there.
     unsafe {
-        SendMessageW(sci, SCI_STYLEGETFONT, style, buf.as_mut_ptr() as isize);
+        sdk::SendMessageW(sci, SCI_STYLEGETFONT, style, buf.as_mut_ptr() as isize);
     }
     buf.truncate(len_us);
-    String::from_utf8(buf).unwrap_or_default()
+    // Lossy decode rather than strict — Scintilla can return font
+    // names in the active codepage on legacy systems (Latin-1
+    // "Consolas-foo" with a Latin-1 byte slipping through, for
+    // example). Strict `from_utf8` would discard the *whole* name
+    // on the first invalid byte; lossy substitutes the bad bytes
+    // with U+FFFD which `sanitize_font_name` later filters out,
+    // so a partly-valid name like "Consolas-XXX" survives as
+    // "Consolas-" rather than collapsing entirely to monospace.
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 // ---- HTML construction (pure-Rust core, fully testable) ----
@@ -529,7 +486,7 @@ fn collect_style_attrs(sci: Hwnd, runs: &[StyleRun]) -> Vec<(u8, StyleAttrs)> {
 /// "Export to HTML..." and "Copy HTML to Clipboard"; returns the
 /// full document as a `String`.
 fn export_html_for_active() -> String {
-    let sci = active_scintilla();
+    let sci = sdk::active_scintilla();
     if sci.is_null() {
         return String::new();
     }
@@ -545,31 +502,12 @@ fn export_html_for_active() -> String {
 
 // ---- Win32 helpers (clipboard, file save dialog) ----
 
-fn set_status(text: &str) {
-    let npp = NPP_HANDLE.load(Ordering::Acquire);
-    if npp.is_null() {
-        return;
-    }
-    let wide: Vec<u16> = text.encode_utf16().chain(core::iter::once(0)).collect();
-    // SAFETY: `wide.as_ptr()` is a valid NUL-terminated UTF-16 buffer
-    // for the duration of the call. NPPM_SETSTATUSBAR's `lparam` is
-    // documented to take a `wchar_t*`.
-    unsafe {
-        SendMessageW(
-            npp,
-            NPPM_SETSTATUSBAR,
-            STATUSBAR_DOC_TYPE,
-            wide.as_ptr() as isize,
-        );
-    }
-}
-
 /// Copy `s` (a UTF-8 string) onto the Windows clipboard as
 /// `CF_UNICODETEXT`. Returns `true` on success. The clipboard takes
 /// ownership of the global memory we allocate; per the API, we must
 /// not free it ourselves once `SetClipboardData` succeeds.
 fn copy_to_clipboard(s: &str) -> bool {
-    let npp = NPP_HANDLE.load(Ordering::Acquire);
+    let npp = sdk::npp_handle();
     let wide: Vec<u16> = s.encode_utf16().chain(core::iter::once(0)).collect();
     let bytes = wide.len() * core::mem::size_of::<u16>();
 
@@ -621,7 +559,7 @@ fn copy_to_clipboard(s: &str) -> bool {
 /// Show the standard Windows "Save As" dialog and return the chosen
 /// path on success, or `None` if the user cancelled.
 fn prompt_save_path() -> Option<String> {
-    let npp = NPP_HANDLE.load(Ordering::Acquire);
+    let npp = sdk::npp_handle();
 
     // Filter string: pairs of NUL-terminated wide strings, terminated
     // by a double-NUL. "HTML Files (*.html)\0*.html\0All Files
@@ -682,7 +620,7 @@ fn prompt_save_path() -> Option<String> {
 extern "C" fn cmd_export_html() {
     let html = export_html_for_active();
     if html.is_empty() {
-        set_status("Export: empty buffer");
+        sdk::set_status("Export: empty buffer");
         return;
     }
     let Some(path) = prompt_save_path() else {
@@ -691,21 +629,21 @@ extern "C" fn cmd_export_html() {
         return;
     };
     match std::fs::write(&path, &html) {
-        Ok(()) => set_status(&format!("Export: wrote {path}")),
-        Err(e) => set_status(&format!("Export failed: {e}")),
+        Ok(()) => sdk::set_status(&format!("Export: wrote {path}")),
+        Err(e) => sdk::set_status(&format!("Export failed: {e}")),
     }
 }
 
 extern "C" fn cmd_copy_html() {
     let html = export_html_for_active();
     if html.is_empty() {
-        set_status("Export: empty buffer");
+        sdk::set_status("Export: empty buffer");
         return;
     }
     if copy_to_clipboard(&html) {
-        set_status("Export: HTML copied to clipboard");
+        sdk::set_status("Export: HTML copied to clipboard");
     } else {
-        set_status("Export: clipboard write failed");
+        sdk::set_status("Export: clipboard write failed");
     }
 }
 

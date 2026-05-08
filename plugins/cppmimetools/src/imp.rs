@@ -14,33 +14,7 @@
 
 #![cfg(target_os = "windows")]
 
-use core::cell::UnsafeCell;
-use core::ffi::c_void;
-use core::sync::atomic::{AtomicPtr, Ordering};
-
-use codepp_plugin_host::ffi::{FuncItem, NppData, SCNotification, MENU_TITLE_LENGTH};
-
-type Hwnd = *mut c_void;
-
-#[link(name = "user32")]
-extern "system" {
-    fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
-}
-
-const NPPMSG: u32 = 0x0400 + 1000;
-const NPPM_GETCURRENTSCINTILLA: u32 = NPPMSG + 4;
-const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
-const STATUSBAR_DOC_TYPE: usize = 0;
-
-const SCI_GETSELTEXT: u32 = 2161;
-const SCI_GETSELECTIONSTART: u32 = 2143;
-const SCI_GETSELECTIONEND: u32 = 2145;
-const SCI_SETTARGETRANGE: u32 = 2686;
-const SCI_REPLACETARGET: u32 = 2194;
-
-static NPP_HANDLE: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
-static SCINTILLA_MAIN: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
-static SCINTILLA_SECONDARY: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+use codepp_plugin_sdk::{self as sdk, FuncItem, NppData, SCNotification, SyncCell};
 
 const PLUGIN_NAME: [u16; 11] = make_plugin_name();
 
@@ -56,66 +30,44 @@ const fn make_plugin_name() -> [u16; 11] {
     buf
 }
 
-const fn menu_label(bytes: &[u8]) -> [u16; MENU_TITLE_LENGTH] {
-    let mut buf = [0u16; MENU_TITLE_LENGTH];
-    let mut i = 0;
-    while i < bytes.len() && i < MENU_TITLE_LENGTH - 1 {
-        buf[i] = bytes[i] as u16;
-        i += 1;
-    }
-    buf
-}
-
-#[repr(transparent)]
-struct SyncCell<T>(UnsafeCell<T>);
-unsafe impl<T> Sync for SyncCell<T> {}
-impl<T> SyncCell<T> {
-    const fn new(val: T) -> Self {
-        Self(UnsafeCell::new(val))
-    }
-    fn get(&self) -> *mut T {
-        self.0.get()
-    }
-}
-
 static FUNCS: SyncCell<[FuncItem; 6]> = SyncCell::new([
     FuncItem {
-        item_name: menu_label(b"Base64 Encode"),
+        item_name: sdk::menu_label(b"Base64 Encode"),
         p_func: Some(cmd_base64_encode),
         cmd_id: 0,
         init2_check: 0,
         p_sh_key: core::ptr::null_mut(),
     },
     FuncItem {
-        item_name: menu_label(b"Base64 Decode"),
+        item_name: sdk::menu_label(b"Base64 Decode"),
         p_func: Some(cmd_base64_decode),
         cmd_id: 0,
         init2_check: 0,
         p_sh_key: core::ptr::null_mut(),
     },
     FuncItem {
-        item_name: menu_label(b"URL Encode"),
+        item_name: sdk::menu_label(b"URL Encode"),
         p_func: Some(cmd_url_encode),
         cmd_id: 0,
         init2_check: 0,
         p_sh_key: core::ptr::null_mut(),
     },
     FuncItem {
-        item_name: menu_label(b"URL Decode"),
+        item_name: sdk::menu_label(b"URL Decode"),
         p_func: Some(cmd_url_decode),
         cmd_id: 0,
         init2_check: 0,
         p_sh_key: core::ptr::null_mut(),
     },
     FuncItem {
-        item_name: menu_label(b"Quoted-Printable Encode"),
+        item_name: sdk::menu_label(b"Quoted-Printable Encode"),
         p_func: Some(cmd_qp_encode),
         cmd_id: 0,
         init2_check: 0,
         p_sh_key: core::ptr::null_mut(),
     },
     FuncItem {
-        item_name: menu_label(b"Quoted-Printable Decode"),
+        item_name: sdk::menu_label(b"Quoted-Printable Decode"),
         p_func: Some(cmd_qp_decode),
         cmd_id: 0,
         init2_check: 0,
@@ -125,9 +77,7 @@ static FUNCS: SyncCell<[FuncItem; 6]> = SyncCell::new([
 
 #[no_mangle]
 pub extern "C" fn setInfo(data: NppData) {
-    NPP_HANDLE.store(data.npp_handle, Ordering::Release);
-    SCINTILLA_MAIN.store(data.scintilla_main_handle, Ordering::Release);
-    SCINTILLA_SECONDARY.store(data.scintilla_second_handle, Ordering::Release);
+    sdk::store_handles(data);
 }
 
 #[no_mangle]
@@ -158,174 +108,77 @@ pub extern "C" fn isUnicode() -> i32 {
     1
 }
 
-// ---- Scintilla helpers (same shape as cppconverter) ----
-
-fn active_scintilla() -> Hwnd {
-    let npp = NPP_HANDLE.load(Ordering::Acquire);
-    if npp.is_null() {
-        return core::ptr::null_mut();
-    }
-    let mut which: i32 = 0;
-    // SAFETY: `&mut which` is a valid `int*` for the SendMessage
-    // call. NPPM_GETCURRENTSCINTILLA is documented to write through
-    // it (the host's dispatcher implements that contract).
-    unsafe {
-        SendMessageW(
-            npp,
-            NPPM_GETCURRENTSCINTILLA,
-            0,
-            &mut which as *mut i32 as isize,
-        );
-    }
-    if which == 0 {
-        SCINTILLA_MAIN.load(Ordering::Acquire)
-    } else {
-        SCINTILLA_SECONDARY.load(Ordering::Acquire)
-    }
-}
-
-fn get_selection_bytes(sci: Hwnd) -> Vec<u8> {
-    if sci.is_null() {
-        return Vec::new();
-    }
-    // SAFETY: passing wparam=0, lparam=0 to SCI_GETSELTEXT asks for
-    // the length only and writes nothing through any pointer.
-    let len = unsafe { SendMessageW(sci, SCI_GETSELTEXT, 0, 0) };
-    if len <= 0 {
-        return Vec::new();
-    }
-    let len_us = match usize::try_from(len) {
-        Ok(n) => n,
-        Err(_) => return Vec::new(),
-    };
-    let alloc = match len_us.checked_add(1) {
-        Some(n) => n,
-        None => return Vec::new(),
-    };
-    let mut buf = vec![0u8; alloc];
-    // SAFETY: `buf.as_mut_ptr()` is valid for `len + 1` bytes;
-    // Scintilla writes exactly that many through it for SCI_GETSELTEXT.
-    unsafe {
-        SendMessageW(sci, SCI_GETSELTEXT, 0, buf.as_mut_ptr() as isize);
-    }
-    buf.truncate(len_us);
-    buf
-}
-
-fn replace_selection(sci: Hwnd, bytes: &[u8]) {
-    if sci.is_null() {
-        return;
-    }
-    // SAFETY: pure queries, no pointer arguments.
-    let (start, end) = unsafe {
-        (
-            SendMessageW(sci, SCI_GETSELECTIONSTART, 0, 0),
-            SendMessageW(sci, SCI_GETSELECTIONEND, 0, 0),
-        )
-    };
-    // SAFETY: SCI_SETTARGETRANGE takes wparam=start, lparam=end as
-    // document positions. No pointer arguments.
-    unsafe {
-        SendMessageW(sci, SCI_SETTARGETRANGE, start as usize, end);
-    }
-    // SAFETY: SCI_REPLACETARGET reads `wparam` bytes from `lparam`.
-    // `bytes.as_ptr()` is valid for `bytes.len()` bytes for the call;
-    // Scintilla doesn't retain the pointer.
-    unsafe {
-        SendMessageW(sci, SCI_REPLACETARGET, bytes.len(), bytes.as_ptr() as isize);
-    }
-}
-
-fn set_status(text: &str) {
-    let npp = NPP_HANDLE.load(Ordering::Acquire);
-    if npp.is_null() {
-        return;
-    }
-    let wide: Vec<u16> = text.encode_utf16().chain(core::iter::once(0)).collect();
-    // SAFETY: `wide.as_ptr()` is a valid NUL-terminated UTF-16 buffer
-    // for the duration of the call. NPPM_SETSTATUSBAR's `lparam` is
-    // documented to take a `wchar_t*`.
-    unsafe {
-        SendMessageW(
-            npp,
-            NPPM_SETSTATUSBAR,
-            STATUSBAR_DOC_TYPE,
-            wide.as_ptr() as isize,
-        );
-    }
-}
-
 // ---- Menu callbacks ----
 
 extern "C" fn cmd_base64_encode() {
-    let sci = active_scintilla();
-    let bytes = get_selection_bytes(sci);
+    let sci = sdk::active_scintilla();
+    let bytes = sdk::get_selection_bytes(sci);
     if bytes.is_empty() {
-        set_status("MIME Tools: no selection");
+        sdk::set_status("MIME Tools: no selection");
         return;
     }
     let out = base64_encode(&bytes);
-    replace_selection(sci, out.as_bytes());
+    sdk::replace_selection(sci, out.as_bytes());
 }
 
 extern "C" fn cmd_base64_decode() {
-    let sci = active_scintilla();
-    let bytes = get_selection_bytes(sci);
+    let sci = sdk::active_scintilla();
+    let bytes = sdk::get_selection_bytes(sci);
     if bytes.is_empty() {
-        set_status("MIME Tools: no selection");
+        sdk::set_status("MIME Tools: no selection");
         return;
     }
     match base64_decode(&bytes) {
-        Ok(out) => replace_selection(sci, &out),
-        Err(msg) => set_status(&format!("MIME Tools: {msg}")),
+        Ok(out) => sdk::replace_selection(sci, &out),
+        Err(msg) => sdk::set_status(&format!("MIME Tools: {msg}")),
     }
 }
 
 extern "C" fn cmd_url_encode() {
-    let sci = active_scintilla();
-    let bytes = get_selection_bytes(sci);
+    let sci = sdk::active_scintilla();
+    let bytes = sdk::get_selection_bytes(sci);
     if bytes.is_empty() {
-        set_status("MIME Tools: no selection");
+        sdk::set_status("MIME Tools: no selection");
         return;
     }
     let out = url_encode(&bytes);
-    replace_selection(sci, out.as_bytes());
+    sdk::replace_selection(sci, out.as_bytes());
 }
 
 extern "C" fn cmd_url_decode() {
-    let sci = active_scintilla();
-    let bytes = get_selection_bytes(sci);
+    let sci = sdk::active_scintilla();
+    let bytes = sdk::get_selection_bytes(sci);
     if bytes.is_empty() {
-        set_status("MIME Tools: no selection");
+        sdk::set_status("MIME Tools: no selection");
         return;
     }
     match url_decode(&bytes) {
-        Ok(out) => replace_selection(sci, &out),
-        Err(msg) => set_status(&format!("MIME Tools: {msg}")),
+        Ok(out) => sdk::replace_selection(sci, &out),
+        Err(msg) => sdk::set_status(&format!("MIME Tools: {msg}")),
     }
 }
 
 extern "C" fn cmd_qp_encode() {
-    let sci = active_scintilla();
-    let bytes = get_selection_bytes(sci);
+    let sci = sdk::active_scintilla();
+    let bytes = sdk::get_selection_bytes(sci);
     if bytes.is_empty() {
-        set_status("MIME Tools: no selection");
+        sdk::set_status("MIME Tools: no selection");
         return;
     }
     let out = qp_encode(&bytes);
-    replace_selection(sci, out.as_bytes());
+    sdk::replace_selection(sci, out.as_bytes());
 }
 
 extern "C" fn cmd_qp_decode() {
-    let sci = active_scintilla();
-    let bytes = get_selection_bytes(sci);
+    let sci = sdk::active_scintilla();
+    let bytes = sdk::get_selection_bytes(sci);
     if bytes.is_empty() {
-        set_status("MIME Tools: no selection");
+        sdk::set_status("MIME Tools: no selection");
         return;
     }
     match qp_decode(&bytes) {
-        Ok(out) => replace_selection(sci, &out),
-        Err(msg) => set_status(&format!("MIME Tools: {msg}")),
+        Ok(out) => sdk::replace_selection(sci, &out),
+        Err(msg) => sdk::set_status(&format!("MIME Tools: {msg}")),
     }
 }
 

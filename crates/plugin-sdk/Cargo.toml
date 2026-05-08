@@ -1,0 +1,28 @@
+[package]
+name = "codepp-plugin-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Shared FFI helpers for in-tree Code++ plugin cdylibs (handle-storage, SyncCell, NPPM/SCI constants, selection round-trip)."
+
+[lints]
+workspace = true
+
+# Plain rlib — consumed by each plugin's cdylib via workspace dep. Each
+# cdylib that links us in gets its own private copy of the SDK's
+# statics (the three NppData handle atomics), so multiple plugins
+# loaded into the same host process don't share state.
+#
+# `crate-type = ["rlib"]` is explicit (rather than relying on the
+# default) so a future "expose the SDK as a shared dylib" change has
+# to be deliberate — the per-cdylib-static-isolation guarantee that
+# the handle-storage relies on would silently break if anyone added
+# `"dylib"` or `"cdylib"` to this list.
+[lib]
+crate-type = ["rlib"]
+
+[target.'cfg(target_os = "windows")'.dependencies]
+codepp-plugin-host = { workspace = true }

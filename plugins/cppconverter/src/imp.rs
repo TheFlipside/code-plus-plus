@@ -5,46 +5,22 @@
 //!   `messageProc`, `isUnicode`.
 //!
 //! The two menu items operate on the active Scintilla view's
-//! selection: ASCII → HEX rewrites the selection as space-separated
-//! uppercase hex bytes ("AB CD EF"); HEX → ASCII does the inverse.
-//! Both are byte-level — Scintilla's buffer is UTF-8 but the hex
-//! form is the standard hex-dump representation, which doesn't care
-//! about encoding.
+//! selection: ASCII → HEX rewrites the selection as space-
+//! separated uppercase hex bytes ("AB CD EF"); HEX → ASCII does
+//! the inverse. Both are byte-level — Scintilla's buffer is UTF-8
+//! but the hex form is the standard hex-dump representation,
+//! which doesn't care about encoding.
+//!
+//! All shared FFI scaffolding (handle storage, `SyncCell`, the
+//! NPPM/SCI message constants, the selection round-trip helpers,
+//! the status-bar helper) lives in `codepp-plugin-sdk`. This file
+//! keeps only the cppconverter-specific bits: the plugin name,
+//! the two-item `FUNCS` array, the menu callbacks, and the pure-
+//! Rust ASCII↔HEX transforms with their unit tests.
 
 #![cfg(target_os = "windows")]
 
-use core::cell::UnsafeCell;
-use core::ffi::c_void;
-use core::sync::atomic::{AtomicPtr, Ordering};
-
-use codepp_plugin_host::ffi::{FuncItem, NppData, SCNotification, MENU_TITLE_LENGTH};
-
-type Hwnd = *mut c_void;
-
-#[link(name = "user32")]
-extern "system" {
-    fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
-}
-
-/// `WM_USER + 1000` — the NPPM_* base. Inlined to avoid a runtime
-/// dependency on the host crate's constants from inside FFI bodies.
-const NPPMSG: u32 = 0x0400 + 1000;
-const NPPM_GETCURRENTSCINTILLA: u32 = NPPMSG + 4;
-const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
-const STATUSBAR_DOC_TYPE: usize = 0;
-
-const SCI_GETSELTEXT: u32 = 2161;
-const SCI_GETSELECTIONSTART: u32 = 2143;
-const SCI_GETSELECTIONEND: u32 = 2145;
-const SCI_SETTARGETRANGE: u32 = 2686;
-const SCI_REPLACETARGET: u32 = 2194;
-
-/// Snapshot of the three handles `setInfo` delivers. Atomics so the
-/// menu callback (UI thread) reads consistent values without taking
-/// a lock — same pattern as `example-hello`.
-static NPP_HANDLE: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
-static SCINTILLA_MAIN: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
-static SCINTILLA_SECONDARY: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+use codepp_plugin_sdk::{self as sdk, FuncItem, NppData, SCNotification, SyncCell};
 
 const PLUGIN_NAME: [u16; 10] = make_plugin_name();
 
@@ -60,38 +36,16 @@ const fn make_plugin_name() -> [u16; 10] {
     buf
 }
 
-const fn menu_label(bytes: &[u8]) -> [u16; MENU_TITLE_LENGTH] {
-    let mut buf = [0u16; MENU_TITLE_LENGTH];
-    let mut i = 0;
-    while i < bytes.len() && i < MENU_TITLE_LENGTH - 1 {
-        buf[i] = bytes[i] as u16;
-        i += 1;
-    }
-    buf
-}
-
-#[repr(transparent)]
-struct SyncCell<T>(UnsafeCell<T>);
-unsafe impl<T> Sync for SyncCell<T> {}
-impl<T> SyncCell<T> {
-    const fn new(val: T) -> Self {
-        Self(UnsafeCell::new(val))
-    }
-    fn get(&self) -> *mut T {
-        self.0.get()
-    }
-}
-
 static FUNCS: SyncCell<[FuncItem; 2]> = SyncCell::new([
     FuncItem {
-        item_name: menu_label(b"ASCII -> HEX"),
+        item_name: sdk::menu_label(b"ASCII -> HEX"),
         p_func: Some(cmd_ascii_to_hex),
         cmd_id: 0,
         init2_check: 0,
         p_sh_key: core::ptr::null_mut(),
     },
     FuncItem {
-        item_name: menu_label(b"HEX -> ASCII"),
+        item_name: sdk::menu_label(b"HEX -> ASCII"),
         p_func: Some(cmd_hex_to_ascii),
         cmd_id: 0,
         init2_check: 0,
@@ -101,9 +55,7 @@ static FUNCS: SyncCell<[FuncItem; 2]> = SyncCell::new([
 
 #[no_mangle]
 pub extern "C" fn setInfo(data: NppData) {
-    NPP_HANDLE.store(data.npp_handle, Ordering::Release);
-    SCINTILLA_MAIN.store(data.scintilla_main_handle, Ordering::Release);
-    SCINTILLA_SECONDARY.store(data.scintilla_second_handle, Ordering::Release);
+    sdk::store_handles(data);
 }
 
 #[no_mangle]
@@ -134,155 +86,27 @@ pub extern "C" fn isUnicode() -> i32 {
     1
 }
 
-/// Resolve the active Scintilla view's HWND. Asks the host
-/// (NPPM_GETCURRENTSCINTILLA writes 0=main / 1=secondary into the
-/// out-pointer) and looks up the matching handle stored by setInfo.
-/// Returns null if setInfo hasn't run yet — the menu callbacks treat
-/// null as "give up silently", which is what N++ plugins do too.
-fn active_scintilla() -> Hwnd {
-    let npp = NPP_HANDLE.load(Ordering::Acquire);
-    if npp.is_null() {
-        return core::ptr::null_mut();
-    }
-    let mut which: i32 = 0;
-    // SAFETY: `&mut which` is a valid `int*` for the SendMessage
-    // call. NPPM_GETCURRENTSCINTILLA is documented to write through
-    // it (the host's dispatcher implements that contract).
-    unsafe {
-        SendMessageW(
-            npp,
-            NPPM_GETCURRENTSCINTILLA,
-            0,
-            &mut which as *mut i32 as isize,
-        );
-    }
-    if which == 0 {
-        SCINTILLA_MAIN.load(Ordering::Acquire)
-    } else {
-        SCINTILLA_SECONDARY.load(Ordering::Acquire)
-    }
-}
-
-/// Read the active selection as raw bytes via `SCI_GETSELTEXT`.
-///
-/// Two-phase: first call with null `text` gets the length; second
-/// call with a sized buffer fills it. This is Scintilla's documented
-/// pattern for "get a string of a-priori-unknown length". Scintilla 5
-/// returns the byte count of the selection (without the NUL); we
-/// allocate `len + 1` so Scintilla can write its own terminator into
-/// the trailing byte, then truncate it off before returning.
-///
-/// Uses `checked_add` + `try_from` on the `len + 1` allocation so a
-/// pathological `isize::MAX` return from a future Scintilla on a
-/// 32-bit target can't underflow into an undersized buffer (defense
-/// in depth — Code++ targets x86_64 today, but the cost is one
-/// branch).
-fn get_selection_bytes(sci: Hwnd) -> Vec<u8> {
-    if sci.is_null() {
-        return Vec::new();
-    }
-    // SAFETY: passing wparam=0, lparam=0 to SCI_GETSELTEXT asks for
-    // the length only and writes nothing through any pointer.
-    let len = unsafe { SendMessageW(sci, SCI_GETSELTEXT, 0, 0) };
-    if len <= 0 {
-        return Vec::new();
-    }
-    let len_us = match usize::try_from(len) {
-        Ok(n) => n,
-        Err(_) => return Vec::new(),
-    };
-    let alloc = match len_us.checked_add(1) {
-        Some(n) => n,
-        None => return Vec::new(),
-    };
-    let mut buf = vec![0u8; alloc];
-    // SAFETY: `buf.as_mut_ptr()` is valid for `len + 1` bytes;
-    // Scintilla writes exactly that many through it for SCI_GETSELTEXT.
-    unsafe {
-        SendMessageW(sci, SCI_GETSELTEXT, 0, buf.as_mut_ptr() as isize);
-    }
-    buf.truncate(len_us);
-    buf
-}
-
-/// Replace the active selection with `bytes`. Uses the
-/// `SCI_SETTARGETRANGE` then `SCI_REPLACETARGET` pair so the
-/// replacement is binary-safe: `SCI_REPLACETARGET` takes an explicit
-/// length, whereas `SCI_REPLACESEL` reads its `lparam` as a
-/// NUL-terminated C string and would silently truncate at the first
-/// interior `\0`. Matters here because `hex_to_ascii` can produce
-/// NULs from input like `"00 41 42"`.
-fn replace_selection(sci: Hwnd, bytes: &[u8]) {
-    if sci.is_null() {
-        return;
-    }
-    // SAFETY: both SendMessages are pure queries with no pointer
-    // arguments — wparam/lparam are zero. Scintilla's documented
-    // return is the document-byte position.
-    let (start, end) = unsafe {
-        (
-            SendMessageW(sci, SCI_GETSELECTIONSTART, 0, 0),
-            SendMessageW(sci, SCI_GETSELECTIONEND, 0, 0),
-        )
-    };
-    // SAFETY: SCI_SETTARGETRANGE takes wparam=start, lparam=end as
-    // document positions. No pointer arguments. The caller has just
-    // read both from Scintilla; passing them back is well-defined.
-    unsafe {
-        SendMessageW(sci, SCI_SETTARGETRANGE, start as usize, end);
-    }
-    // SAFETY: SCI_REPLACETARGET reads `wparam` bytes from `lparam`.
-    // `bytes.as_ptr()` is valid for `bytes.len()` bytes for the
-    // duration of the call; Scintilla doesn't retain the pointer
-    // past the call. Length passed unmodified.
-    unsafe {
-        SendMessageW(sci, SCI_REPLACETARGET, bytes.len(), bytes.as_ptr() as isize);
-    }
-}
-
-/// Set the host status bar's "doc-type" pane (slot 0) to the given
-/// ASCII text. Plugins can drive this independently of the host's
-/// own lang / encoding labels — typically used for transient feedback.
-fn set_status(text: &str) {
-    let npp = NPP_HANDLE.load(Ordering::Acquire);
-    if npp.is_null() {
-        return;
-    }
-    let wide: Vec<u16> = text.encode_utf16().chain(core::iter::once(0)).collect();
-    // SAFETY: `wide.as_ptr()` is a valid NUL-terminated UTF-16 buffer
-    // for the duration of the call. NPPM_SETSTATUSBAR's `lparam` is
-    // documented to take a `wchar_t*`.
-    unsafe {
-        SendMessageW(
-            npp,
-            NPPM_SETSTATUSBAR,
-            STATUSBAR_DOC_TYPE,
-            wide.as_ptr() as isize,
-        );
-    }
-}
-
 extern "C" fn cmd_ascii_to_hex() {
-    let sci = active_scintilla();
-    let bytes = get_selection_bytes(sci);
+    let sci = sdk::active_scintilla();
+    let bytes = sdk::get_selection_bytes(sci);
     if bytes.is_empty() {
-        set_status("Converter: no selection");
+        sdk::set_status("Converter: no selection");
         return;
     }
     let out = ascii_to_hex(&bytes);
-    replace_selection(sci, out.as_bytes());
+    sdk::replace_selection(sci, out.as_bytes());
 }
 
 extern "C" fn cmd_hex_to_ascii() {
-    let sci = active_scintilla();
-    let bytes = get_selection_bytes(sci);
+    let sci = sdk::active_scintilla();
+    let bytes = sdk::get_selection_bytes(sci);
     if bytes.is_empty() {
-        set_status("Converter: no selection");
+        sdk::set_status("Converter: no selection");
         return;
     }
     match hex_to_ascii(&bytes) {
-        Ok(out) => replace_selection(sci, &out),
-        Err(msg) => set_status(&format!("Converter: {msg}")),
+        Ok(out) => sdk::replace_selection(sci, &out),
+        Err(msg) => sdk::set_status(&format!("Converter: {msg}")),
     }
 }
 
