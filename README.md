@@ -2,7 +2,7 @@
 
 **A 1:1, cross-platform clone of Notepad++ — written in Rust, powered by Scintilla, fast on every OS.**
 
-![Code++](code++.png)
+<img src="assets/code++.png" alt="Code++" width="128">
 
 ---
 
