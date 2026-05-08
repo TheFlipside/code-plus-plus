@@ -864,6 +864,163 @@ impl Shell {
     /// just-launched-empty case), the load result populates the
     /// active tab in place. Otherwise a new tab is appended and
     /// becomes active.
+    /// Create a fresh untitled buffer and make it active.
+    ///
+    /// Synchronous — no I/O, no worker thread; just allocates a new
+    /// `Tab` with `path = None`, binds it to a freshly-created
+    /// Scintilla document via [`UiPlatform::activate_tab`], and
+    /// queues `NPPN_BUFFERACTIVATED` so plugins watching the active
+    /// buffer pick up the new id. The user must use Save As to
+    /// give it a path before the first save (`save_current_to_disk`
+    /// returns [`ShellError::NoActivePath`] otherwise).
+    ///
+    /// Phase 4 m8: replaces the `MF_GRAYED` placeholder for File→New.
+    /// Lossy on app exit — untitled buffers don't survive
+    /// `session.xml` round-trip; that's the recovery-sidecar
+    /// milestone's concern.
+    pub fn new_untitled<U: UiPlatform>(&mut self, ui: &mut U) {
+        let id = self.allocate_buffer_id();
+        self.tabs.push(Tab {
+            id,
+            ..Tab::default()
+        });
+        let new_idx = self.tabs.len() - 1;
+        self.active_tab = Some(new_idx);
+
+        // Bind a fresh Scintilla document to the new tab — passing
+        // 0 tells the UI "I don't have one yet, create one for me".
+        // The returned doc pointer is what subsequent activations
+        // re-bind to.
+        let bound_doc = ui.activate_tab(new_idx, 0);
+        if let Some(tab) = self.tabs.get_mut(new_idx) {
+            tab.scintilla_doc = bound_doc;
+        }
+        ui.set_buffer_text("", 0);
+        ui.apply_lang(L_TEXT);
+        ui.update_status(L_TEXT, &Encoding::default(), Eol::default(), 0);
+
+        // No NPPN_FILEOPENED — that's reserved for "a real file
+        // arrived"; matches Notepad++'s convention. BUFFERACTIVATED
+        // fires so plugins observing buffer changes pick up the new
+        // id and tab index.
+        #[cfg(target_os = "windows")]
+        self.queue_buffer_activated();
+    }
+
+    /// Save the active tab to a caller-supplied path, updating the
+    /// tab's path metadata so subsequent Save (`Ctrl+S`) writes to
+    /// the same destination. Driven by File→Save As… and by the
+    /// plugin ABI's path-changing flows in Phase 5.
+    ///
+    /// The active path (if any) is unwatched before the write and
+    /// the new path is watched afterwards — so external-change
+    /// detection follows the file as it moves. The encode + atomic
+    /// `tempfile::persist` pattern matches [`Self::save_current_to_disk`];
+    /// the only differences are the path source (caller, not tab) and
+    /// the trailing `tab.path` mutation.
+    ///
+    /// Returns the same `Result<(), ShellError>` shape as
+    /// `save_current_to_disk`. `NoActivePath` here means "no active
+    /// tab to save", not "the active tab has no path" — Save As
+    /// works regardless of whether the tab was titled.
+    pub fn save_buffer_as<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        new_path: PathBuf,
+    ) -> Result<(), ShellError> {
+        use std::io::Write;
+
+        let (old_path, encoding) = {
+            let tab = self.active().ok_or(ShellError::NoActivePath)?;
+            (tab.path.clone(), tab.encoding.clone())
+        };
+        let text = ui.get_buffer_text();
+        // Encode BEFORE the unwatch below — if encoding fails we
+        // return early and the unwatch never happens, so the old
+        // file's watch stays intact. Reordering would silently lose
+        // change-detection on a still-untouched file.
+        let bytes = codepp_core::encoding::encode(&text, &encoding)
+            .map_err(|e| ShellError::Encoding(e.to_string()))?;
+
+        let parent = new_path.parent().filter(|p| !p.as_os_str().is_empty());
+        let parent_dir = parent.unwrap_or_else(|| std::path::Path::new("."));
+
+        // Stop watching the old location before the new write — so a
+        // mid-save external-change event for the old path doesn't
+        // generate a spurious reload prompt for a buffer that's
+        // moving away anyway. The old watch is restored on a write
+        // failure (see below); on success the tab moves to the new
+        // path and the old file is no longer ours.
+        let was_watching_old = old_path
+            .as_ref()
+            .map(|p| self.file_watcher.unwatch(p).is_ok())
+            .unwrap_or(false);
+
+        let write_result = (|| -> Result<(), ShellError> {
+            let mut tmp = tempfile::Builder::new()
+                .prefix(".codepp-save-")
+                .suffix(".tmp")
+                .tempfile_in(parent_dir)
+                .map_err(|e| ShellError::Io(e.to_string()))?;
+            tmp.write_all(&bytes)
+                .map_err(|e| ShellError::Io(e.to_string()))?;
+            tmp.as_file_mut()
+                .sync_all()
+                .map_err(|e| ShellError::Io(e.to_string()))?;
+            tmp.persist(&new_path)
+                .map_err(|e| ShellError::Io(e.error.to_string()))?;
+            Ok(())
+        })();
+
+        match &write_result {
+            Ok(()) => {
+                // Successful write — point the tab at the new path
+                // and watch it.
+                if let Some(tab) = self.active_mut() {
+                    tab.path = Some(new_path.clone());
+                    tab.text = text;
+                    tab.byte_len = bytes.len() as u64;
+                    // Re-derive lang from the new extension so a
+                    // .txt → .rs Save As immediately gets Rust
+                    // highlighting on the next paint.
+                    tab.lang = LangType::from_path(&new_path);
+                }
+                if let Err(e) = self.file_watcher.watch(&new_path) {
+                    tracing::warn!(error = %e, path = ?new_path, "failed to watch new path after Save As");
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    let buffer_id = self.active().map(|t| t.id as isize).unwrap_or(0);
+                    self.pending_notifications
+                        .push(Notification::FileSaved { buffer_id });
+                }
+                // Push the new lang through the UI so the lexer
+                // re-attaches and the chrome refreshes.
+                if let Some(tab) = self.active() {
+                    let lang = tab.lang;
+                    let encoding = tab.encoding.clone();
+                    let eol = tab.eol;
+                    let byte_len = tab.byte_len;
+                    ui.apply_lang(lang);
+                    ui.update_status(lang, &encoding, eol, byte_len);
+                }
+            }
+            Err(_) => {
+                // Save failed; restore the old watch so the user
+                // doesn't silently lose external-change detection
+                // on the original file.
+                if was_watching_old {
+                    if let Some(p) = old_path.as_ref() {
+                        if let Err(e) = self.file_watcher.watch(p) {
+                            tracing::warn!(error = %e, path = ?p, "failed to re-watch old path after Save As failure");
+                        }
+                    }
+                }
+            }
+        }
+        write_result
+    }
+
     pub fn open_file(&mut self, path: PathBuf) {
         let Some(req_id) = self.loader.open(path.clone()) else {
             return;
@@ -4212,5 +4369,167 @@ mod tests {
         assert_eq!(parsed.tabs[0].path, PathBuf::from("/tmp/first.txt"));
         assert_eq!(parsed.tabs[1].path, PathBuf::from("/tmp/second.txt"));
         assert_eq!(parsed.tabs[1].cursor, 5);
+    }
+
+    #[test]
+    fn new_untitled_creates_active_tab_without_path() {
+        // File→New: a fresh untitled buffer becomes the active tab,
+        // gets a buffer id, and binds a Scintilla document. The lang
+        // defaults to L_TEXT (no path means no extension to derive
+        // from). No file watcher is registered (path is None).
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        assert!(shell.tabs.is_empty());
+
+        shell.new_untitled(&mut ui);
+
+        assert_eq!(shell.tabs.len(), 1);
+        assert_eq!(shell.active_tab, Some(0));
+        let tab = &shell.tabs[0];
+        assert!(tab.path.is_none());
+        assert_eq!(tab.lang, codepp_core::lang::L_TEXT);
+        assert!(tab.id > 0, "tab must have an allocated buffer id");
+        assert_ne!(tab.scintilla_doc, 0, "Scintilla doc must be bound");
+
+        // UI received the activation, an empty-buffer set, lang
+        // attach, and a status refresh — same shape as a fresh load.
+        assert_eq!(ui.activate_tab_calls.len(), 1);
+        assert_eq!(ui.set_text_calls.len(), 1);
+        assert_eq!(ui.set_text_calls[0].0, "");
+        assert_eq!(
+            ui.apply_lang_calls.last().copied(),
+            Some(codepp_core::lang::L_TEXT)
+        );
+        assert_eq!(ui.status_calls.len(), 1);
+    }
+
+    #[test]
+    fn new_untitled_then_again_appends_second_tab() {
+        // Two New invocations produce two distinct tabs with distinct
+        // buffer ids and distinct Scintilla docs. The second New
+        // becomes the new active tab — matching the standard
+        // editor expectation that fresh buffers come to the front.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        shell.new_untitled(&mut ui);
+
+        assert_eq!(shell.tabs.len(), 2);
+        assert_eq!(shell.active_tab, Some(1));
+        assert_ne!(shell.tabs[0].id, shell.tabs[1].id);
+        assert_ne!(shell.tabs[0].scintilla_doc, shell.tabs[1].scintilla_doc);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn new_untitled_queues_buffer_activated() {
+        // BUFFERACTIVATED — but not FILEOPENED — fires for a brand-new
+        // untitled buffer. The distinction matches Notepad++'s
+        // contract: FILEOPENED is reserved for "a real file landed on
+        // disk and got loaded".
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+
+        let queued = shell.take_notifications();
+        assert!(
+            queued
+                .iter()
+                .any(|n| matches!(n, Notification::BufferActivated { .. })),
+            "BUFFERACTIVATED should be queued for the new untitled buffer",
+        );
+        assert!(
+            !queued
+                .iter()
+                .any(|n| matches!(n, Notification::FileOpened { .. })),
+            "FILEOPENED must not fire for an untitled buffer (no real file)",
+        );
+    }
+
+    #[test]
+    fn save_buffer_as_writes_bytes_and_updates_path() {
+        // Save As on an untitled buffer: writes the live editor text
+        // to the chosen path, flips tab.path from None to Some, and
+        // re-derives the lang from the new extension.
+        let dir = tempfile::tempdir().unwrap();
+        let new_path = dir.path().join("hello.rs");
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+
+        // Simulate the user typing — the FakeUi's get_buffer_text
+        // returns this verbatim, mirroring SCI_GETTEXT on the real
+        // path.
+        ui.buffer_text = "fn main() {}\n".to_string();
+
+        shell.save_buffer_as(&mut ui, new_path.clone()).unwrap();
+
+        // File on disk has the right bytes.
+        let on_disk = std::fs::read_to_string(&new_path).unwrap();
+        assert_eq!(on_disk, "fn main() {}\n");
+
+        // Tab metadata moved to the new path.
+        let tab = shell.active().unwrap();
+        assert_eq!(tab.path.as_ref(), Some(&new_path));
+        assert_eq!(tab.byte_len, 13);
+        // Lang re-derived from the .rs extension.
+        assert_eq!(tab.lang, codepp_core::lang::L_RUST);
+    }
+
+    #[test]
+    fn save_buffer_as_then_save_writes_to_new_path() {
+        // After Save As, a subsequent Save (Ctrl+S) goes to the new
+        // location, not the old one. Pinning so a refactor that
+        // forgets to update tab.path doesn't silently keep saving
+        // to the old file.
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("orig.txt");
+        let renamed = dir.path().join("renamed.txt");
+        std::fs::write(&original, "first\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(original.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        ui.buffer_text = "second\n".to_string();
+        shell.save_buffer_as(&mut ui, renamed.clone()).unwrap();
+
+        // The renamed path now has the new content; the original
+        // is untouched (still its pre-open content).
+        assert_eq!(std::fs::read_to_string(&renamed).unwrap(), "second\n");
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), "first\n");
+
+        // Subsequent Save writes back to the renamed path, not the
+        // original — the tab is now "owned" by the new file.
+        ui.buffer_text = "third\n".to_string();
+        shell.save_current_to_disk(&mut ui).unwrap();
+        assert_eq!(std::fs::read_to_string(&renamed).unwrap(), "third\n");
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), "first\n");
+    }
+
+    #[test]
+    fn save_buffer_as_no_active_tab_returns_error() {
+        // Save As without any open tab is `NoActivePath`, matching
+        // the same-shape return on `save_current_to_disk`.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("nope.txt");
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let r = shell.save_buffer_as(&mut ui, target);
+        assert!(matches!(r, Err(ShellError::NoActivePath)));
     }
 }

@@ -49,13 +49,19 @@ use codepp_scintilla_sys::{
 };
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{COLORREF, E_FAIL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    COLORREF, E_FAIL, HWND, LPARAM, LRESULT, MAX_PATH, POINT, RECT, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
     CreateSolidBrush, FillRect, GetStockObject, GetSysColorBrush, InvalidateRect, SetBkColor,
     SetBkMode, SetTextColor, COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, NULL_BRUSH,
     TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Controls::Dialogs::{
+    GetOpenFileNameW, GetSaveFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY,
+    OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+};
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, ICC_BAR_CLASSES,
     ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT, LVCF_FMT, LVCF_TEXT,
@@ -66,7 +72,7 @@ use windows::Win32::UI::Controls::{
     TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_COMBOBOX, WC_LISTVIEWW, WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, ReleaseCapture, SetCapture, SetFocus, VK_0, VK_F, VK_F3, VK_G, VK_H,
+    EnableWindow, ReleaseCapture, SetCapture, SetFocus, VK_0, VK_F, VK_F3, VK_G, VK_H, VK_N, VK_O,
     VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
 };
 use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
@@ -1797,13 +1803,13 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         let file_menu = CreateMenu()?;
         AppendMenuW(
             file_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_FILE_NEW as usize,
             w!("&New\tCtrl+N"),
         )?;
         AppendMenuW(
             file_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_FILE_OPEN as usize,
             w!("&Open...\tCtrl+O"),
         )?;
@@ -1821,9 +1827,9 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         )?;
         AppendMenuW(
             file_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_FILE_SAVE_AS as usize,
-            w!("Save &As..."),
+            w!("Save &As...\tCtrl+Shift+S"),
         )?;
         AppendMenuW(
             file_menu,
@@ -2859,6 +2865,143 @@ fn show_error_dialog(main_hwnd: HWND, title: &str, message: &str) {
     unsafe {
         MessageBoxW(Some(main_hwnd), &msg_w, &title_w, MB_OK | MB_ICONWARNING);
     }
+}
+
+/// File-open / file-save filter strings the OS dialog displays in
+/// the "Files of type" combo box. Win32 expects pairs of
+/// NUL-terminated wide strings (display label, glob) terminated
+/// by an extra empty NUL — i.e. the trailing `\0\0` below isn't a
+/// typo, it's how the API knows the list ended.
+///
+/// Kept generic `*.*` for now; lexer-specific filters (e.g. `*.rs;
+/// *.toml` for Rust projects) would require knowing the active
+/// language at dialog-show time, which the Phase 5 cross-platform
+/// dialog abstraction can layer in.
+fn build_dialog_filter() -> Vec<u16> {
+    "All Files (*.*)\0*.*\0Text Files (*.txt)\0*.txt\0\0"
+        .encode_utf16()
+        .collect()
+}
+
+/// Show the standard "Open" dialog and return the chosen path, or
+/// `None` if the user cancelled. Owner is the main Code++ HWND so
+/// the dialog is modal-relative and the user can't hit the file
+/// menu twice.
+///
+/// The path buffer is sized to `MAX_PATH + 1` wide chars (Windows
+/// rejects longer paths in the standard dialog without an explicit
+/// long-path opt-in; matching Notepad++'s behaviour for now). The
+/// returned `PathBuf` decodes via `from_utf16_lossy` — paths
+/// containing surrogate halves (extremely rare on real filesystems)
+/// degrade to a U+FFFD-substituted path that `std::fs::open` will
+/// then refuse, surfacing as an Open error rather than silent
+/// corruption.
+fn prompt_open_path(owner: HWND) -> Option<PathBuf> {
+    let filter = build_dialog_filter();
+    // One past `MAX_PATH` so the trailing NUL fits even at the cap.
+    let mut path = vec![0u16; MAX_PATH as usize + 1];
+
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: core::mem::size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: owner,
+        lpstrFilter: PCWSTR(filter.as_ptr()),
+        lpstrFile: PWSTR(path.as_mut_ptr()),
+        nMaxFile: path.len() as u32,
+        nFilterIndex: 1,
+        // OFN_NOCHANGEDIR: without it, the dialog silently mutates the
+        // process working directory as a side effect of the user
+        // navigating around. That would corrupt every later relative
+        // path the app resolves (including save_buffer_as's `Path::new(".")`
+        // fallback when the chosen file has no parent component).
+        Flags: OFN_FILEMUSTEXIST
+            | OFN_PATHMUSTEXIST
+            | OFN_HIDEREADONLY
+            | OFN_EXPLORER
+            | OFN_NOCHANGEDIR,
+        ..Default::default()
+    };
+
+    // SAFETY: `&mut ofn` is a valid pointer to a fully-initialised
+    // `OPENFILENAMEW` struct. `filter` and `path` outlive the call
+    // (both are local Vecs held until function return). The
+    // dialog blocks until the user clicks OK or Cancel; on
+    // success Windows writes the chosen path into `path` and we
+    // truncate at the first NUL.
+    let ok = unsafe { GetOpenFileNameW(&mut ofn) }.as_bool();
+    if !ok {
+        return None;
+    }
+
+    let nul = path.iter().position(|&u| u == 0).unwrap_or(path.len());
+    let s = String::from_utf16_lossy(&path[..nul]);
+    if s.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(s))
+}
+
+/// Show the standard "Save As" dialog and return the chosen path,
+/// or `None` if the user cancelled. `default_name` (if `Some`)
+/// pre-fills the file-name edit field — used by Save As to suggest
+/// the active tab's current basename.
+///
+/// `OFN_OVERWRITEPROMPT` is set so the OS handles the "file
+/// already exists, overwrite?" confirmation — saves us
+/// reimplementing it. `OFN_PATHMUSTEXIST` rejects nonexistent
+/// directories at the dialog level rather than letting the save
+/// fail later with a less helpful error.
+fn prompt_save_path(owner: HWND, default_name: Option<&str>) -> Option<PathBuf> {
+    let filter = build_dialog_filter();
+    let mut path = vec![0u16; MAX_PATH as usize + 1];
+    if let Some(name) = default_name {
+        // Pre-fill the file-name edit field. Truncate to MAX_PATH
+        // and NUL-terminate; longer names would trip Windows' own
+        // length check. Truncation here is rare (most file names
+        // are well under 260 code units) but trace it so a future
+        // user report of "Save As suggested a wrong name" is
+        // diagnosable from the log.
+        let utf16: Vec<u16> = name.encode_utf16().collect();
+        let len = utf16.len().min(MAX_PATH as usize);
+        if len < utf16.len() {
+            tracing::warn!(
+                full_len = utf16.len(),
+                truncated_to = len,
+                "Save As default filename longer than MAX_PATH; truncated",
+            );
+        }
+        path[..len].copy_from_slice(&utf16[..len]);
+        path[len] = 0;
+    }
+
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: core::mem::size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: owner,
+        lpstrFilter: PCWSTR(filter.as_ptr()),
+        lpstrFile: PWSTR(path.as_mut_ptr()),
+        nMaxFile: path.len() as u32,
+        nFilterIndex: 1,
+        // See `prompt_open_path` for why OFN_NOCHANGEDIR is mandatory.
+        Flags: OFN_OVERWRITEPROMPT
+            | OFN_PATHMUSTEXIST
+            | OFN_HIDEREADONLY
+            | OFN_EXPLORER
+            | OFN_NOCHANGEDIR,
+        ..Default::default()
+    };
+
+    // SAFETY: same contract as `prompt_open_path` — fully-init
+    // struct, buffers outlive the call.
+    let ok = unsafe { GetSaveFileNameW(&mut ofn) }.as_bool();
+    if !ok {
+        return None;
+    }
+
+    let nul = path.iter().position(|&u| u == 0).unwrap_or(path.len());
+    let s = String::from_utf16_lossy(&path[..nul]);
+    if s.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(s))
 }
 
 /// Show the "About Code++" dialog. Modal MessageBox, so the borrow
@@ -6468,7 +6611,8 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         //
         // The table covers only the commands Scintilla doesn't
         // already bind natively:
-        //   - File: Save (Ctrl+S), Close (Ctrl+W).
+        //   - File: New (Ctrl+N), Open (Ctrl+O), Save (Ctrl+S),
+        //     Save As (Ctrl+Shift+S), Close (Ctrl+W).
         //   - Search: Find / Replace / Find-in-Files / Goto Line.
         //   - View: Zoom In / Zoom Out / Restore Zoom.
         let ctrl = ACCEL_VIRT_FLAGS(FCONTROL.0 | FVIRTKEY.0);
@@ -6477,8 +6621,23 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             // File
             ACCEL {
                 fVirt: ctrl,
+                key: VK_N.0,
+                cmd: ID_FILE_NEW,
+            },
+            ACCEL {
+                fVirt: ctrl,
+                key: VK_O.0,
+                cmd: ID_FILE_OPEN,
+            },
+            ACCEL {
+                fVirt: ctrl,
                 key: VK_S.0,
                 cmd: ID_FILE_SAVE,
+            },
+            ACCEL {
+                fVirt: ctrl_shift,
+                key: VK_S.0,
+                cmd: ID_FILE_SAVE_AS,
             },
             ACCEL {
                 fVirt: ctrl,
@@ -7843,6 +8002,79 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // On a successful save, save_current_to_disk
                         // queues NPPN_FILESAVED; on failure the queue
                         // is empty and this is a no-op.
+                        fire_queued_notifications(hwnd);
+                    }
+                    ID_FILE_NEW => {
+                        // File→New: synchronous untitled-buffer
+                        // creation. No I/O, so no need to defer
+                        // until after the borrow drops; the
+                        // BUFFERACTIVATED notification queues and
+                        // gets fired below.
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            let (shell, mut ui) = state.split();
+                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                shell.new_untitled(&mut ui);
+                            }));
+                        }
+                        fire_queued_notifications(hwnd);
+                    }
+                    ID_FILE_OPEN => {
+                        // Show the OS dialog *outside* the &mut state
+                        // borrow — it spins its own message loop that
+                        // can re-enter our wnd_proc, and any active
+                        // borrow at that point would alias-UB.
+                        let path = prompt_open_path(hwnd);
+                        if let Some(p) = path {
+                            if let Some(state) = state_from_hwnd(hwnd) {
+                                let _ =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        state.shell.open_file(p);
+                                    }));
+                            }
+                        }
+                        fire_queued_notifications(hwnd);
+                    }
+                    ID_FILE_SAVE_AS => {
+                        // Pre-fill with the active tab's basename so
+                        // the user sees what they're renaming. Read
+                        // the suggestion from the borrow then drop
+                        // it before showing the modal dialog.
+                        let suggestion = if let Some(state) = state_from_hwnd(hwnd) {
+                            state
+                                .shell
+                                .active()
+                                .and_then(|t| t.path.as_ref())
+                                .and_then(|p| p.file_name())
+                                .and_then(|s| s.to_str())
+                                .map(|s| s.to_string())
+                        } else {
+                            None
+                        };
+                        let new_path = prompt_save_path(hwnd, suggestion.as_deref());
+                        let save_error: Option<String> = if let Some(p) = new_path {
+                            if let Some(state) = state_from_hwnd(hwnd) {
+                                let (shell, mut ui) = state.split();
+                                let result =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        shell.save_buffer_as(&mut ui, p)
+                                    }));
+                                match result {
+                                    Ok(Ok(())) => {
+                                        state.editor.send(SCI_SETSAVEPOINT, 0, 0);
+                                        None
+                                    }
+                                    Ok(Err(e)) => Some(e.to_string()),
+                                    Err(_) => Some("internal panic during save".to_string()),
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(msg) = save_error {
+                            show_error_dialog(hwnd, "Save As failed", &msg);
+                        }
                         fire_queued_notifications(hwnd);
                     }
                     ID_FILE_CLOSE => {
