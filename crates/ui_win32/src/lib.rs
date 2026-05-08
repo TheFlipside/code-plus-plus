@@ -18,6 +18,8 @@
 
 #![cfg(target_os = "windows")]
 
+mod toolbar;
+
 use core::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -152,6 +154,17 @@ const ID_VIEW_SHOWEOL: u16 = 1302;
 const ID_VIEW_ZOOMIN: u16 = 1303;
 const ID_VIEW_ZOOMOUT: u16 = 1304;
 const ID_VIEW_ZOOMRESET: u16 = 1305;
+// Toolbar-only View entries — no menu items in M2; clicking these
+// fires `WM_COMMAND` that falls through to the default arm until
+// a future commit wires the underlying feature.
+const ID_VIEW_SHOW_ALL_CHARS: u16 = 1306;
+const ID_VIEW_SHOW_INDENT_GUIDE: u16 = 1307;
+const ID_VIEW_SYNC_V_SCROLL: u16 = 1308;
+const ID_VIEW_SYNC_H_SCROLL: u16 = 1309;
+const ID_VIEW_DOCMAP: u16 = 1310;
+const ID_VIEW_DOCLIST: u16 = 1311;
+const ID_VIEW_FUNCLIST: u16 = 1312;
+const ID_VIEW_FOLDER_AS_WORKSPACE: u16 = 1313;
 
 // Encoding (1400-1499) — m1 ships the menu shape with disabled
 // conversion stubs; the radio marker reflects the active buffer's
@@ -188,6 +201,19 @@ const ID_WINDOW_CAP: usize = (ID_WINDOW_END - ID_WINDOW_BASE + 1) as usize;
 
 // Help (1800-1899).
 const ID_HELP_ABOUT: u16 = 1800;
+
+// Tools (1900-1999) — toolbar-only entries for features that aren't
+// implemented yet. Clicking falls through; the IDs reserve the
+// command space so the toolbar's button table is complete.
+const ID_TOOLS_DEFINE_LANG: u16 = 1900;
+const ID_TOOLS_MONITORING: u16 = 1901;
+
+// Macro (2000-2099) — toolbar-only entries; same M2 status.
+const ID_MACRO_RECORD: u16 = 2000;
+const ID_MACRO_STOP: u16 = 2001;
+const ID_MACRO_PLAY: u16 = 2002;
+const ID_MACRO_RUN_MULTIPLE: u16 = 2003;
+const ID_MACRO_SAVE: u16 = 2004;
 
 /// Our cross-thread wake-up message. Producer threads `PostMessage`
 /// this to drag the UI thread out of its `GetMessageW` idle and into
@@ -396,6 +422,20 @@ struct SplitterDrag {
 struct WindowState {
     scintilla_hwnd: HWND,
     status_hwnd: HWND,
+    /// Toolbar control HWND. Sits between the menu bar and the tab
+    /// strip; populated with file/edit/search/view/macro buttons
+    /// bound to existing menu IDs (see `mod toolbar`). One image
+    /// list shared by every button — destroyed in `WM_DESTROY`.
+    toolbar_hwnd: HWND,
+    /// Image list that backs `toolbar_hwnd`. Owned by the window —
+    /// `ImageList_Destroy` runs on shutdown so the bitmaps don't
+    /// outlive the toolbar that draws them.
+    toolbar_image_list: windows::Win32::UI::Controls::HIMAGELIST,
+    /// Bitmap pixel size (24 or 48) chosen at toolbar creation
+    /// time based on system DPI. Cached on `WindowState` so the
+    /// layout pass doesn't repeat the DPI probe — `toolbar_height_px`
+    /// derives from this.
+    toolbar_bitmap_px: i32,
     /// Win32 tab control HWND. Sits between the menu bar and the
     /// Scintilla view; one tab item per `Shell.tabs[i]`. Multi-tab
     /// (Phase 3 milestone 6b) uses `SCI_SETDOCPOINTER` to repoint
@@ -6617,7 +6657,17 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             setup_status_parts(status_hwnd, initial_width);
         }
 
-        // Tab control — sits below the menu bar, above Scintilla.
+        // Toolbar — sits below the menu bar, above the tab strip.
+        // Buttons are bound to existing menu IDs so click →
+        // WM_COMMAND reuses the menu's handlers (see `mod toolbar`
+        // for the full layout). Created here, sized via WM_SIZE
+        // through `layout_children`.
+        let toolbar_handles = toolbar::create_toolbar(main_hwnd, instance)?;
+        let toolbar_hwnd = toolbar_handles.hwnd;
+        let toolbar_image_list = toolbar_handles.image_list;
+        let toolbar_bitmap_px = toolbar_handles.bitmap_px;
+
+        // Tab control — sits below the toolbar, above Scintilla.
         // One TCITEMW per `Shell.tabs[i]` is inserted lazily by
         // `sync_tab_strip` after the first drain delivers a load
         // result. WM_NOTIFY (TCN_SELCHANGE) wires click → tab
@@ -6864,6 +6914,9 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         let mut state = Box::new(WindowState {
             scintilla_hwnd,
             status_hwnd,
+            toolbar_hwnd,
+            toolbar_image_list,
+            toolbar_bitmap_px,
             tab_hwnd,
             synced_tab_count: 0,
             main_menu: menubar,
@@ -6949,6 +7002,8 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         let mut rect = RECT::default();
         GetClientRect(main_hwnd, &mut rect)?;
         layout_children(
+            toolbar_hwnd,
+            toolbar::toolbar_height_px(toolbar_bitmap_px),
             tab_hwnd,
             scintilla_hwnd,
             status_hwnd,
@@ -7140,8 +7195,8 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
 /// goes DPI-aware, this helper is the only spot that needs the
 /// `TAB_HEIGHT_PX` / `STATUS_HEIGHT_PX` substitutions — the drag
 /// handler picks up the change for free.
-fn clamp_dock_height(client_height: i32, requested: i32) -> i32 {
-    let mid = (client_height - TAB_HEIGHT_PX - STATUS_HEIGHT_PX).max(0);
+fn clamp_dock_height(client_height: i32, toolbar_height: i32, requested: i32) -> i32 {
+    let mid = (client_height - toolbar_height - TAB_HEIGHT_PX - STATUS_HEIGHT_PX).max(0);
     let usable = mid.saturating_sub(SPLITTER_HEIGHT_PX);
     // `(usable - MIN_SCINTILLA_HEIGHT_PX).max(MIN_DOCK_HEIGHT_PX)`
     // collapses to `MIN_DOCK_HEIGHT_PX` on a window crushed below
@@ -7154,6 +7209,8 @@ fn clamp_dock_height(client_height: i32, requested: i32) -> i32 {
 
 #[allow(clippy::too_many_arguments)]
 unsafe fn layout_children(
+    toolbar: HWND,
+    toolbar_height: i32,
     tabs: HWND,
     scintilla: HWND,
     status: HWND,
@@ -7182,7 +7239,11 @@ unsafe fn layout_children(
     let tab_height = if tab_hidden { 0 } else { TAB_HEIGHT_PX };
     let status_height = STATUS_HEIGHT_PX;
     unsafe {
-        let _ = MoveWindow(tabs, 0, 0, width, tab_height, true);
+        // Toolbar at the very top (y=0). The tab strip is pushed
+        // down by `toolbar_height`; everything below cascades from
+        // there.
+        let _ = MoveWindow(toolbar, 0, 0, width, toolbar_height, true);
+        let _ = MoveWindow(tabs, 0, toolbar_height, width, tab_height, true);
         let _ = MoveWindow(
             status,
             0,
@@ -7191,8 +7252,8 @@ unsafe fn layout_children(
             status_height,
             true,
         );
-        let scintilla_top = tab_height;
-        let mid_height = (height - status_height - tab_height).max(0);
+        let scintilla_top = toolbar_height + tab_height;
+        let mid_height = (height - status_height - tab_height - toolbar_height).max(0);
 
         // Inset the Scintilla view by `EDITOR_BORDER_PX` on every
         // side of its allocated cell. The parent's
@@ -7217,7 +7278,7 @@ unsafe fn layout_children(
             // splitter drag uses, so a window-resize-down that
             // pushes past the persisted dock height is corrected
             // here and the layout stays idempotent.
-            let dock_h = clamp_dock_height(height, dock_height);
+            let dock_h = clamp_dock_height(height, toolbar_height, dock_height);
             let usable = mid_height.saturating_sub(SPLITTER_HEIGHT_PX);
             let scintilla_height = (usable - dock_h).max(MIN_SCINTILLA_HEIGHT_PX);
             let splitter_top = scintilla_top + scintilla_height;
@@ -7976,6 +8037,8 @@ unsafe fn show_fif_dock(main_hwnd: HWND) {
         }
         state.fif_dock_visible = true;
         Some((
+            state.toolbar_hwnd,
+            state.toolbar_bitmap_px,
             state.tab_hwnd,
             state.scintilla_hwnd,
             state.status_hwnd,
@@ -7986,7 +8049,17 @@ unsafe fn show_fif_dock(main_hwnd: HWND) {
     } else {
         None
     };
-    let Some((tabs, scintilla, status, splitter, dock, dock_height)) = snapshot else {
+    let Some((
+        toolbar_hwnd,
+        toolbar_bitmap_px,
+        tabs,
+        scintilla,
+        status,
+        splitter,
+        dock,
+        dock_height,
+    )) = snapshot
+    else {
         return;
     };
     unsafe {
@@ -7998,6 +8071,8 @@ unsafe fn show_fif_dock(main_hwnd: HWND) {
             // is the source of truth (toggled by `NPPM_HIDETABBAR`).
             let tab_hidden = !IsWindowVisible(tabs).as_bool();
             layout_children(
+                toolbar_hwnd,
+                toolbar::toolbar_height_px(toolbar_bitmap_px),
                 tabs,
                 scintilla,
                 status,
@@ -8023,6 +8098,8 @@ unsafe fn hide_fif_dock(main_hwnd: HWND) {
         }
         state.fif_dock_visible = false;
         Some((
+            state.toolbar_hwnd,
+            state.toolbar_bitmap_px,
             state.tab_hwnd,
             state.scintilla_hwnd,
             state.status_hwnd,
@@ -8033,7 +8110,17 @@ unsafe fn hide_fif_dock(main_hwnd: HWND) {
     } else {
         None
     };
-    let Some((tabs, scintilla, status, splitter, dock, dock_height)) = snapshot else {
+    let Some((
+        toolbar_hwnd,
+        toolbar_bitmap_px,
+        tabs,
+        scintilla,
+        status,
+        splitter,
+        dock,
+        dock_height,
+    )) = snapshot
+    else {
         return;
     };
     unsafe {
@@ -8043,6 +8130,8 @@ unsafe fn hide_fif_dock(main_hwnd: HWND) {
         if GetClientRect(main_hwnd, &mut rect).is_ok() {
             let tab_hidden = !IsWindowVisible(tabs).as_bool();
             layout_children(
+                toolbar_hwnd,
+                toolbar::toolbar_height_px(toolbar_bitmap_px),
                 tabs,
                 scintilla,
                 status,
@@ -8182,6 +8271,8 @@ extern "system" fn splitter_wnd_proc(
                         (
                             drag,
                             state.fif_dock_height,
+                            state.toolbar_hwnd,
+                            state.toolbar_bitmap_px,
                             state.tab_hwnd,
                             state.scintilla_hwnd,
                             state.status_hwnd,
@@ -8196,6 +8287,8 @@ extern "system" fn splitter_wnd_proc(
                 let Some((
                     drag,
                     current_height,
+                    toolbar_hwnd,
+                    toolbar_bitmap_px,
                     tabs,
                     scintilla,
                     status,
@@ -8206,6 +8299,7 @@ extern "system" fn splitter_wnd_proc(
                 else {
                     return LRESULT(0);
                 };
+                let toolbar_height = toolbar::toolbar_height_px(toolbar_bitmap_px);
                 let mut pt = POINT::default();
                 if GetCursorPos(&mut pt).is_err() {
                     return LRESULT(0);
@@ -8219,7 +8313,7 @@ extern "system" fn splitter_wnd_proc(
                 // `layout_children` consults, so the value we write
                 // back into state matches what gets rendered.
                 let proposed = drag.dock_height_at_start + (drag.start_screen_y - pt.y);
-                let new_height = clamp_dock_height(rect.bottom, proposed);
+                let new_height = clamp_dock_height(rect.bottom, toolbar_height, proposed);
                 if new_height == current_height {
                     return LRESULT(0);
                 }
@@ -8231,6 +8325,8 @@ extern "system" fn splitter_wnd_proc(
                 }
                 let tab_hidden = !IsWindowVisible(tabs).as_bool();
                 layout_children(
+                    toolbar_hwnd,
+                    toolbar_height,
                     tabs,
                     scintilla,
                     status,
@@ -8985,7 +9081,10 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let tab_hidden = !IsWindowVisible(state.tab_hwnd).as_bool();
+                    let toolbar_height = toolbar::toolbar_height_px(state.toolbar_bitmap_px);
                     layout_children(
+                        state.toolbar_hwnd,
+                        toolbar_height,
                         state.tab_hwnd,
                         state.scintilla_hwnd,
                         state.status_hwnd,
@@ -9083,6 +9182,40 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         let _guard = PluginCallGuard::enter();
                         state.shell.notify_plugins(Notification::Shutdown, hwnd.0);
                     }));
+                }
+
+                // Free the toolbar's image list. The OS would
+                // reclaim it at process exit anyway, but explicit
+                // teardown matches the project's "leak nothing on
+                // graceful shutdown" pattern.
+                //
+                // ORDER-SENSITIVE: this block must run before the
+                // `Box::from_raw` reclaim immediately below — both
+                // read `state` through `GWLP_USERDATA`, and the Box
+                // reclaim is what makes subsequent `state_from_hwnd`
+                // calls return `None`. Reordering the two would
+                // leak the imagelist on shutdown.
+                //
+                // Detach the imagelist from the toolbar *before*
+                // destroying it — `NPPN_SHUTDOWN` fires immediately
+                // above, and a plugin's handler is allowed to call
+                // `RedrawWindow` / `UpdateWindow` on top-level UI
+                // (not banned by the ABI). With the imagelist
+                // detached first, even a worst-case re-paint hits
+                // the empty-imagelist path inside the toolbar
+                // proc and renders blank cells instead of
+                // dereferencing a freed HIMAGELIST.
+                if let Some(state) = state_from_hwnd(hwnd) {
+                    use windows::Win32::UI::Controls::TB_SETIMAGELIST;
+                    SendMessageW(
+                        state.toolbar_hwnd,
+                        TB_SETIMAGELIST,
+                        Some(WPARAM(0)),
+                        Some(LPARAM(0)),
+                    );
+                    let _ = windows::Win32::UI::Controls::ImageList_Destroy(Some(
+                        state.toolbar_image_list,
+                    ));
                 }
 
                 // Reclaim the WindowState box. After this point, any
@@ -9326,6 +9459,26 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             if row >= 0 {
                                 handle_fif_listview_dblclk(hwnd, row as usize);
                             }
+                        }
+                    } else if nmhdr.code == windows::Win32::UI::Controls::TBN_GETINFOTIPW {
+                        // Toolbar wants a tooltip for the hovered
+                        // button. Filter on the source HWND so the
+                        // FIF listview / a future sibling toolbar
+                        // doesn't drive our button-tooltip table by
+                        // accident. SAFETY (covered by the wnd_proc
+                        // outer unsafe): toolbar guarantees lparam
+                        // points at a valid `NMTBGETINFOTIPW` whose
+                        // `pszText` buffer is writable for
+                        // `cchTextMax` UTF-16 units.
+                        let owns_source = if let Some(state) = state_from_hwnd(hwnd) {
+                            nmhdr.hwndFrom == state.toolbar_hwnd
+                        } else {
+                            false
+                        };
+                        if owns_source {
+                            toolbar::fill_info_tip(
+                                lparam.0 as *mut windows::Win32::UI::Controls::NMTBGETINFOTIPW,
+                            );
                         }
                     }
                 }

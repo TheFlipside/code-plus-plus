@@ -491,12 +491,24 @@ PNG_SIZES = (
 
 
 def render_png(svg_text: str, size: int) -> bytes:
-    """Rasterise an SVG string to a PNG byte-string at `size`x`size`.
+    """Rasterise an SVG string to a PNG byte-string at `size`x`size`,
+    with a transparent background.
+
+    `rlPyCairo` (reportlab's PNG backend) only emits 3-channel RGB
+    even when the SVG declares transparent regions — opaque white
+    fills the gaps. To recover transparency for toolbar use the RGB
+    output is post-processed: every pixel whose colour is exactly
+    `#FFFFFF` is treated as background and gets alpha = 0; every
+    other pixel keeps alpha = 255. The icon set deliberately uses
+    `PAPER = #FAFAFA` (off-white) for document bodies so the
+    threshold doesn't punch holes through icon interiors.
 
     Imports happen here (lazy) so a partial install — say `svglib`
-    present but `pycairo` missing — only blocks the PNG step, not the
-    SVG step that doesn't need either.
+    present but `pycairo` missing — only blocks the PNG step, not
+    the SVG step that doesn't need either. PIL is a transitive dep
+    of reportlab so it's always available wherever the PNG path is.
     """
+    from PIL import Image, ImageChops
     from reportlab.graphics import renderPM
     from svglib.svglib import svg2rlg
 
@@ -518,7 +530,21 @@ def render_png(svg_text: str, size: int) -> bytes:
     drawing.width *= scale
     drawing.height *= scale
     drawing.scale(scale, scale)
-    return renderPM.drawToString(drawing, fmt="PNG")
+
+    rgb_png = renderPM.drawToString(drawing, fmt="PNG")
+    img = Image.open(BytesIO(rgb_png)).convert("RGB")
+    # Build a single-channel alpha mask: 0 where the pixel exactly
+    # equals (255,255,255), 255 elsewhere. ImageChops.difference is
+    # the C-fast path for this — list-comprehending pixels in pure
+    # Python is ~50x slower at icon-set scale.
+    white = Image.new("RGB", img.size, (255, 255, 255))
+    diff = ImageChops.difference(img, white).convert("L")
+    alpha = diff.point(lambda v: 255 if v > 0 else 0)
+    img.putalpha(alpha)
+
+    out = BytesIO()
+    img.save(out, format="PNG", optimize=True)
+    return out.getvalue()
 
 
 def main() -> int:
