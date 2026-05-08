@@ -4,13 +4,20 @@
 //!   `setInfo`, `getName`, `getFuncsArray`, `beNotified`,
 //!   `messageProc`, `isUnicode`.
 //!
-//! Two menu items, both turning the active buffer into HTML that
-//! preserves the active lexer's styling:
-//!   * **Export to HTML...** — `GetSaveFileNameW` for the destination
-//!     path, then write the HTML there.
-//!   * **Copy HTML to Clipboard** — same HTML, but to `CF_UNICODETEXT`
-//!     on the system clipboard so the user can paste it into a
-//!     browser, an email, or a `.html` file directly.
+//! Four menu items, two HTML and two RTF, each in an
+//! Export-to-file plus Copy-to-clipboard pair:
+//!   * **Export to HTML...** — `GetSaveFileNameW` for the
+//!     destination path, then write the HTML there.
+//!   * **Copy HTML to Clipboard** — same HTML, but to
+//!     `CF_UNICODETEXT` on the system clipboard so the user can
+//!     paste it into a browser, an email, or a `.html` file
+//!     directly.
+//!   * **Export to RTF...** — same as Export to HTML but emits
+//!     RTF (Rich Text Format) for paste into Word, Outlook,
+//!     WordPad, or LibreOffice.
+//!   * **Copy RTF to Clipboard** — same RTF, but to the
+//!     registered `Rich Text Format` clipboard type that
+//!     RTF-aware editors prefer.
 //!
 //! Style extraction is straightforward but per-character: walk the
 //! buffer with `SCI_GETSTYLEAT(pos)`, collapse adjacent same-style
@@ -36,6 +43,7 @@ extern "system" {
     fn CloseClipboard() -> i32;
     fn EmptyClipboard() -> i32;
     fn SetClipboardData(format: u32, hmem: *mut c_void) -> *mut c_void;
+    fn RegisterClipboardFormatA(format_name: *const u8) -> u32;
 }
 
 #[link(name = "kernel32")]
@@ -135,7 +143,7 @@ const fn make_plugin_name() -> [u16; 7] {
     buf
 }
 
-static FUNCS: SyncCell<[FuncItem; 2]> = SyncCell::new([
+static FUNCS: SyncCell<[FuncItem; 4]> = SyncCell::new([
     FuncItem {
         item_name: sdk::menu_label(b"Export to HTML..."),
         p_func: Some(cmd_export_html),
@@ -146,6 +154,20 @@ static FUNCS: SyncCell<[FuncItem; 2]> = SyncCell::new([
     FuncItem {
         item_name: sdk::menu_label(b"Copy HTML to Clipboard"),
         p_func: Some(cmd_copy_html),
+        cmd_id: 0,
+        init2_check: 0,
+        p_sh_key: core::ptr::null_mut(),
+    },
+    FuncItem {
+        item_name: sdk::menu_label(b"Export to RTF..."),
+        p_func: Some(cmd_export_rtf),
+        cmd_id: 0,
+        init2_check: 0,
+        p_sh_key: core::ptr::null_mut(),
+    },
+    FuncItem {
+        item_name: sdk::menu_label(b"Copy RTF to Clipboard"),
+        p_func: Some(cmd_copy_rtf),
         cmd_id: 0,
         init2_check: 0,
         p_sh_key: core::ptr::null_mut(),
@@ -167,7 +189,7 @@ pub extern "C" fn getFuncsArray(nb: *mut i32) -> *mut FuncItem {
     if !nb.is_null() {
         // SAFETY: per the ABI, `nb` is a valid out-pointer the host
         // owns for the duration of this call.
-        unsafe { *nb = 2 };
+        unsafe { *nb = 4 };
     }
     FUNCS.get().cast::<FuncItem>()
 }
@@ -504,6 +526,163 @@ fn build_html(runs: &[StyleRun], style_attrs: &[(u8, StyleAttrs)]) -> String {
     html
 }
 
+// ---- RTF construction (pure-Rust core, fully testable) --------
+
+/// Escape a single Unicode `char` into RTF body syntax, appending
+/// the result to `out`.
+///
+/// RTF body rules:
+///   * Backslash, `{`, and `}` are control characters and must be
+///     escaped as `\\`, `\{`, `\}`.
+///   * `\n` becomes `\par\n` so the receiving editor renders a
+///     paragraph break (and the source RTF stays human-readable).
+///     `\r` is dropped — `\r\n` collapses to `\par`, lone `\r` is
+///     ignored because most modern source files use LF or CRLF
+///     and emitting a stray `\par` for `\r` alone would double
+///     the paragraph count on Mac-classic line endings.
+///   * `\t` becomes `\tab ` (with a trailing space terminator —
+///     RTF parses control words by reading until a non-letter).
+///   * Printable ASCII (0x20–0x7E) other than the above goes
+///     through literally.
+///   * Everything else is encoded via `\uN?`, where N is the UTF-16
+///     code unit interpreted as a signed 16-bit integer (RTF's
+///     wire format) and `?` is the fallback character for legacy
+///     readers that don't recognise `\u`. Non-BMP code points
+///     emit a UTF-16 surrogate pair (two `\uN?`s).
+fn rtf_escape_char_into(out: &mut String, c: char) {
+    match c {
+        '\\' => out.push_str("\\\\"),
+        '{' => out.push_str("\\{"),
+        '}' => out.push_str("\\}"),
+        '\n' => out.push_str("\\par\n"),
+        '\r' => {} // dropped — see doc comment.
+        '\t' => out.push_str("\\tab "),
+        c if (0x20..=0x7E).contains(&(c as u32)) => out.push(c),
+        c => {
+            // Non-ASCII: emit each UTF-16 code unit as `\uN?` with
+            // N interpreted as a signed 16-bit integer per the RTF
+            // spec. `c.encode_utf16(&mut buf)` returns a slice of
+            // 1 unit (BMP) or 2 units (surrogate pair).
+            let mut buf = [0u16; 2];
+            for unit in c.encode_utf16(&mut buf) {
+                let signed = *unit as i16;
+                out.push_str(&format!("\\u{signed}?"));
+            }
+        }
+    }
+}
+
+/// Assemble a complete RTF document from styled runs and the
+/// per-style attribute table.
+///
+/// Output structure: standard `{\rtf1\ansi\deff0` preamble, then a
+/// `{\fonttbl}` group with one font (the default style's), then a
+/// `{\colortbl}` group with one entry per unique foreground colour
+/// across all styles (de-duplicated so identical colours share an
+/// index), then a default font-size declaration, then the body —
+/// each run prefixed with `\cfN\bN\iN ` to set its colour and
+/// bold/italic state. Finishes with `}`.
+///
+/// The body always sets bold and italic explicitly per-run (rather
+/// than relying on RTF's inheritance) so a run boundary doesn't
+/// silently carry the previous run's emphasis through.
+fn build_rtf(runs: &[StyleRun], style_attrs: &[(u8, StyleAttrs)]) -> String {
+    let default = style_attrs
+        .iter()
+        .find(|(s, _)| *s as u32 == STYLE_DEFAULT)
+        .map(|(_, a)| a.clone())
+        .unwrap_or(StyleAttrs {
+            fore_rgb: 0x00_00_00_00,
+            back_rgb: 0x00_FF_FF_FF,
+            bold: false,
+            italic: false,
+            size_pts: 11,
+            font_name: String::from("Consolas"),
+        });
+
+    // Build the colour table. RTF's `\colortbl;` starts with an
+    // implicit empty "auto" entry (index 0) before any
+    // user-defined colours, so our user-defined indices are
+    // 1-based. Use BTreeMap for the dedup-by-key (identical RGBs
+    // share an index); deterministic output ordering comes from
+    // the upstream `style_attrs` iteration order, which is itself
+    // BTreeSet-ordered inside `collect_style_attrs`.
+    let mut color_index: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
+    for (_, attrs) in style_attrs {
+        if !color_index.contains_key(&attrs.fore_rgb) {
+            let next = color_index.len() + 1;
+            color_index.insert(attrs.fore_rgb, next);
+        }
+    }
+    // Ordered insertion: rebuild the colour-table list in
+    // assigned-index order so the `\redR\greenG\blueB;` entries
+    // line up with the indices we'll emit in `\cfN`.
+    let mut colors_ordered: Vec<(u32, usize)> =
+        color_index.iter().map(|(rgb, idx)| (*rgb, *idx)).collect();
+    colors_ordered.sort_by_key(|(_, idx)| *idx);
+
+    let mut rtf = String::new();
+    rtf.push_str("{\\rtf1\\ansi\\deff0\n");
+
+    // Font table — one entry. Sanitize the font name (same
+    // allowlist as build_html) so a hostile lexer-set font name
+    // can't inject RTF control words via the font-name slot.
+    let body_font = sanitize_font_name(&default.font_name);
+    let body_font = if body_font.is_empty() {
+        "Consolas".to_string()
+    } else {
+        body_font
+    };
+    rtf.push_str(&format!("{{\\fonttbl{{\\f0\\fmodern {body_font};}}}}\n"));
+
+    // Color table.
+    rtf.push_str("{\\colortbl;");
+    for (rgb, _) in &colors_ordered {
+        let r = rgb & 0xff;
+        let g = (rgb >> 8) & 0xff;
+        let b = (rgb >> 16) & 0xff;
+        rtf.push_str(&format!("\\red{r}\\green{g}\\blue{b};"));
+    }
+    rtf.push_str("}\n");
+
+    // Default font size in half-points (RTF convention). Clamp
+    // negative values to 0 — `SCI_STYLEGETSIZE` is documented as
+    // a positive integer but a hostile lexer could return a
+    // negative i32 and `\fs-2` is malformed RTF that some
+    // consumers reject with a parse error.
+    rtf.push_str(&format!(
+        "\\fs{}\n",
+        default.size_pts.max(0).saturating_mul(2),
+    ));
+
+    // Body — emit each run with explicit colour + bold + italic
+    // state, then the escaped run text.
+    for run in runs {
+        let attrs = style_attrs
+            .iter()
+            .find(|(s, _)| *s == run.style)
+            .map(|(_, a)| a);
+        let cf_idx = attrs
+            .and_then(|a| color_index.get(&a.fore_rgb))
+            .copied()
+            .unwrap_or(0);
+        let bold = attrs.map(|a| a.bold).unwrap_or(false);
+        let italic = attrs.map(|a| a.italic).unwrap_or(false);
+        rtf.push_str(&format!(
+            "\\cf{cf_idx}\\b{}\\i{} ",
+            if bold { 1 } else { 0 },
+            if italic { 1 } else { 0 },
+        ));
+        let s = String::from_utf8_lossy(&run.bytes);
+        for c in s.chars() {
+            rtf_escape_char_into(&mut rtf, c);
+        }
+    }
+
+    rtf.push_str("\n}\n");
+    rtf
+}
+
 /// Build the per-style attribute table for every style index that
 /// actually appears in `runs`. Each unique style index is queried
 /// exactly once.
@@ -553,7 +732,14 @@ fn export_html_for_active() -> String {
 fn copy_to_clipboard(s: &str) -> bool {
     let npp = sdk::npp_handle();
     let wide: Vec<u16> = s.encode_utf16().chain(core::iter::once(0)).collect();
-    let bytes = wide.len() * core::mem::size_of::<u16>();
+    // Defense in depth — `wide.len() * size_of::<u16>()` could
+    // wrap on a pathological `usize::MAX / 2`-length input. Real
+    // clipboard payloads are far smaller, but a `checked_mul`
+    // bounds the allocation to a safe value.
+    let bytes = match wide.len().checked_mul(core::mem::size_of::<u16>()) {
+        Some(n) => n,
+        None => return false,
+    };
 
     // SAFETY: GlobalAlloc / GlobalLock / SetClipboardData are
     // documented Win32 APIs. The flow:
@@ -601,18 +787,26 @@ fn copy_to_clipboard(s: &str) -> bool {
 }
 
 /// Show the standard Windows "Save As" dialog and return the chosen
-/// path on success, or `None` if the user cancelled.
-fn prompt_save_path() -> Option<String> {
+/// path on success, or `None` if the user cancelled. Caller-supplied
+/// filter pieces let HTML and RTF callers share the dialog plumbing
+/// without duplicating the OPENFILENAMEW setup.
+///
+/// `filter_label` is what the user sees in the "Files of type"
+/// combo (e.g. `"HTML Files (*.html)"`); `filter_glob` is the match
+/// pattern (e.g. `"*.html"`); `default_ext` is the extension Win32
+/// appends when the user types a name without one (e.g. `"html"`).
+fn prompt_save_path(filter_label: &str, filter_glob: &str, default_ext: &str) -> Option<String> {
     let npp = sdk::npp_handle();
 
     // Filter string: pairs of NUL-terminated wide strings, terminated
-    // by a double-NUL. "HTML Files (*.html)\0*.html\0All Files
-    // (*.*)\0*.*\0\0".
-    let filter: Vec<u16> = "HTML Files (*.html)\0*.html\0All Files (*.*)\0*.*\0\0"
-        .encode_utf16()
-        .collect();
+    // by a double-NUL — Win32 parses them as (display, glob) pairs
+    // and stops at the empty pair. We always include an "All Files"
+    // fallback so the user can pick anything.
+    let filter_str = format!("{filter_label}\0{filter_glob}\0All Files (*.*)\0*.*\0\0");
+    let filter: Vec<u16> = filter_str.encode_utf16().collect();
 
-    let default_ext: Vec<u16> = "html\0".encode_utf16().collect();
+    let default_ext_str = format!("{default_ext}\0");
+    let default_ext: Vec<u16> = default_ext_str.encode_utf16().collect();
 
     // Path buffer: must be at least MAX_PATH wide chars and zeroed.
     // GetSaveFileNameW writes the chosen path into it (including the
@@ -667,7 +861,7 @@ extern "C" fn cmd_export_html() {
         sdk::set_status("Export: empty buffer");
         return;
     }
-    let Some(path) = prompt_save_path() else {
+    let Some(path) = prompt_save_path("HTML Files (*.html)", "*.html", "html") else {
         // User cancelled; no status update so the previous status
         // line stays visible (matches N++'s "silent cancel" UX).
         return;
@@ -689,6 +883,124 @@ extern "C" fn cmd_copy_html() {
     } else {
         sdk::set_status("Export: clipboard write failed");
     }
+}
+
+extern "C" fn cmd_export_rtf() {
+    let rtf = export_rtf_for_active();
+    if rtf.is_empty() {
+        sdk::set_status("Export: empty buffer");
+        return;
+    }
+    let Some(path) = prompt_save_path("RTF Files (*.rtf)", "*.rtf", "rtf") else {
+        return;
+    };
+    match std::fs::write(&path, &rtf) {
+        Ok(()) => sdk::set_status(&format!("Export: wrote {path}")),
+        Err(e) => sdk::set_status(&format!("Export failed: {e}")),
+    }
+}
+
+extern "C" fn cmd_copy_rtf() {
+    let rtf = export_rtf_for_active();
+    if rtf.is_empty() {
+        sdk::set_status("Export: empty buffer");
+        return;
+    }
+    if copy_rtf_to_clipboard(&rtf) {
+        sdk::set_status("Export: RTF copied to clipboard");
+    } else {
+        sdk::set_status("Export: clipboard write failed");
+    }
+}
+
+/// Build the RTF for the active buffer. Common path for both
+/// "Export to RTF..." and "Copy RTF to Clipboard"; mirrors the
+/// shape of `export_html_for_active` so the two formats stay in
+/// lockstep.
+fn export_rtf_for_active() -> String {
+    let sci = sdk::active_scintilla();
+    if sci.is_null() {
+        return String::new();
+    }
+    // SAFETY: SCI_GETLENGTH takes no pointer; pure query.
+    let len = unsafe { sdk::SendMessageW(sci, SCI_GETLENGTH, 0, 0) };
+    let len_us = match usize::try_from(len) {
+        Ok(n) => n,
+        Err(_) => return String::new(),
+    };
+    if len_us == 0 {
+        return String::new();
+    }
+    let (text, styles) = collect_text_and_styles(sci, len_us);
+    if text.is_empty() {
+        return String::new();
+    }
+    let runs = group_runs(&text, &styles);
+    let attrs = collect_style_attrs(sci, &runs);
+    build_rtf(&runs, &attrs)
+}
+
+/// Copy `rtf` (a plain ASCII RTF document — non-ASCII codepoints
+/// are encoded as `\uN?` escapes inside the RTF body) onto the
+/// clipboard under the registered "Rich Text Format" type. Word,
+/// Outlook, WordPad, and other RTF-aware editors paste from this
+/// format with formatting preserved.
+fn copy_rtf_to_clipboard(rtf: &str) -> bool {
+    // Resolve the registered RTF clipboard format. `RegisterClipboardFormat`
+    // canonicalises by name, so every process that asks for "Rich
+    // Text Format" gets the same format id back. Returns 0 on
+    // failure (extremely rare — only on resource exhaustion).
+    let format_name = b"Rich Text Format\0";
+    let cf_rtf = unsafe { RegisterClipboardFormatA(format_name.as_ptr()) };
+    if cf_rtf == 0 {
+        return false;
+    }
+
+    let bytes = rtf.as_bytes();
+    // `bytes.len() + 1` would wrap on `usize::MAX` input — would
+    // then `GlobalAlloc(0)` succeeds with a minimum-sized block
+    // and the subsequent `copy_nonoverlapping(usize::MAX bytes)`
+    // would write past the end. `checked_add` bounds it.
+    let alloc_size = match bytes.len().checked_add(1) {
+        Some(n) => n,
+        None => return false,
+    };
+    let npp = sdk::npp_handle();
+
+    // SAFETY: same Win32 sequence as `copy_to_clipboard` — see that
+    // function's comment for the lifecycle. The only differences:
+    // the clipboard format is the registered RTF id (not
+    // CF_UNICODETEXT), and the bytes are raw ASCII (RTF escapes its
+    // own non-ASCII content via `\uN?` so the wire format is
+    // always 7-bit safe).
+    unsafe {
+        let hmem = GlobalAlloc(GMEM_MOVEABLE, alloc_size);
+        if hmem.is_null() {
+            return false;
+        }
+        let dest = GlobalLock(hmem);
+        if dest.is_null() {
+            GlobalFree(hmem);
+            return false;
+        }
+        core::ptr::copy_nonoverlapping(bytes.as_ptr(), dest as *mut u8, bytes.len());
+        // Trailing NUL — RTF readers expect it.
+        *(dest as *mut u8).add(bytes.len()) = 0;
+        GlobalUnlock(hmem);
+
+        if OpenClipboard(npp) == 0 {
+            GlobalFree(hmem);
+            return false;
+        }
+        EmptyClipboard();
+        let result = SetClipboardData(cf_rtf, hmem);
+        CloseClipboard();
+        if result.is_null() {
+            GlobalFree(hmem);
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -998,5 +1310,223 @@ mod tests {
         let html = build_html(&runs, &attrs);
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("Consolas") || html.contains("monospace"));
+    }
+
+    // ---- RTF tests ----
+
+    fn rtf_escape(s: &str) -> String {
+        let mut out = String::new();
+        for c in s.chars() {
+            rtf_escape_char_into(&mut out, c);
+        }
+        out
+    }
+
+    #[test]
+    fn rtf_escape_passes_printable_ascii() {
+        assert_eq!(rtf_escape("Hello, world!"), "Hello, world!");
+    }
+
+    #[test]
+    fn rtf_escape_braces_and_backslash() {
+        // The three RTF control characters get prefixed with `\`.
+        assert_eq!(rtf_escape("a\\b{c}d"), "a\\\\b\\{c\\}d");
+    }
+
+    #[test]
+    fn rtf_escape_newline_becomes_par() {
+        assert_eq!(rtf_escape("a\nb"), "a\\par\nb");
+    }
+
+    #[test]
+    fn rtf_escape_crlf_collapses_to_par() {
+        // `\r` is dropped, `\n` becomes `\par\n` — net effect for
+        // a CRLF input is a single paragraph break, matching the
+        // single-paragraph semantic of CRLF.
+        assert_eq!(rtf_escape("a\r\nb"), "a\\par\nb");
+    }
+
+    #[test]
+    fn rtf_escape_tab_emits_control_word() {
+        // `\tab ` with a trailing space — RTF parses control words
+        // by reading until a non-letter, so the space delimits the
+        // word from following text.
+        assert_eq!(rtf_escape("a\tb"), "a\\tab b");
+    }
+
+    #[test]
+    fn rtf_escape_non_ascii_emits_unicode_escape() {
+        // `é` is U+00E9 = 233. Not a surrogate, so one `\u233?`.
+        assert_eq!(rtf_escape("é"), "\\u233?");
+    }
+
+    #[test]
+    fn rtf_escape_non_bmp_emits_surrogate_pair() {
+        // `🎉` is U+1F389 = 127881. UTF-16 encodes that as a
+        // surrogate pair (0xD83C, 0xDF89). Both halves emit as
+        // signed-16 values: 0xD83C = -10180, 0xDF89 = -8311.
+        assert_eq!(rtf_escape("🎉"), "\\u-10180?\\u-8311?");
+    }
+
+    #[test]
+    fn rtf_escape_high_byte_in_range() {
+        // 0x7F is DEL — not in the printable range (0x20..=0x7E),
+        // so it goes through the unicode path. As u16 = 127.
+        assert_eq!(rtf_escape("\x7f"), "\\u127?");
+    }
+
+    #[test]
+    fn build_rtf_emits_preamble_fonttbl_colortbl() {
+        let runs = vec![StyleRun {
+            style: STYLE_DEFAULT as u8,
+            bytes: b"hello".to_vec(),
+        }];
+        let attrs = vec![(
+            STYLE_DEFAULT as u8,
+            attrs(0x00_00_00_00, 0x00_FF_FF_FF, false, false),
+        )];
+        let rtf = build_rtf(&runs, &attrs);
+        assert!(rtf.starts_with("{\\rtf1\\ansi"));
+        assert!(rtf.contains("\\fonttbl"));
+        assert!(rtf.contains("\\colortbl;"));
+        assert!(rtf.contains("\\fmodern Consolas;"));
+        assert!(rtf.ends_with("}\n"));
+        assert!(rtf.contains("hello"));
+    }
+
+    #[test]
+    fn build_rtf_emits_per_run_state() {
+        let runs = vec![
+            StyleRun {
+                style: STYLE_DEFAULT as u8,
+                bytes: b"plain ".to_vec(),
+            },
+            StyleRun {
+                style: 5,
+                bytes: b"red".to_vec(),
+            },
+        ];
+        let attrs = vec![
+            (
+                STYLE_DEFAULT as u8,
+                attrs(0x00_00_00_00, 0x00_FF_FF_FF, false, false),
+            ),
+            (5, attrs(0x00_00_00_FF, 0x00_FF_FF_FF, true, false)),
+        ];
+        let rtf = build_rtf(&runs, &attrs);
+        // Every run gets explicit \cf, \b, \i markers — no
+        // inheritance ambiguity at run boundaries.
+        assert!(rtf.contains("\\cf"));
+        assert!(rtf.contains("\\b1"));
+        assert!(rtf.contains("\\b0"));
+        assert!(rtf.contains("\\i0"));
+    }
+
+    #[test]
+    fn build_rtf_dedupes_identical_colors() {
+        // Two styles with the same fore_rgb should share a color
+        // table index — the table has one user entry, not two.
+        let runs = vec![
+            StyleRun {
+                style: 1,
+                bytes: b"a".to_vec(),
+            },
+            StyleRun {
+                style: 2,
+                bytes: b"b".to_vec(),
+            },
+        ];
+        let attrs = vec![
+            (1u8, attrs(0x00_00_00_FF, 0x00_FF_FF_FF, false, false)),
+            (2u8, attrs(0x00_00_00_FF, 0x00_FF_FF_FF, true, false)),
+        ];
+        let rtf = build_rtf(&runs, &attrs);
+        // Exactly one `\redR\greenG\blueB;` in the colour table.
+        let red_count = rtf.matches("\\red").count();
+        assert_eq!(
+            red_count, 1,
+            "duplicate fore_rgb values should share a colour-table index: {rtf:?}",
+        );
+    }
+
+    #[test]
+    fn build_rtf_emits_colors_in_correct_byte_order() {
+        // Scintilla packs RGB as 0x00BBGGRR; our colour-table
+        // emission pulls the bytes apart and writes them in the
+        // RTF \red\green\blue order. Pin the ordering so a future
+        // refactor that flips R and B is caught.
+        let runs = vec![StyleRun {
+            style: 1,
+            bytes: b"x".to_vec(),
+        }];
+        // 0x00_00_00_FF = pure red in Scintilla's packing.
+        let attrs = vec![(1u8, attrs(0x00_00_00_FF, 0x00_FF_FF_FF, false, false))];
+        let rtf = build_rtf(&runs, &attrs);
+        assert!(
+            rtf.contains("\\red255\\green0\\blue0"),
+            "expected red entry in colour table: {rtf:?}",
+        );
+    }
+
+    #[test]
+    fn build_rtf_escapes_braces_in_run_text() {
+        // The body's per-run text goes through rtf_escape_char_into,
+        // so `{` and `}` and `\` survive as escape sequences rather
+        // than corrupting the RTF structure.
+        let runs = vec![StyleRun {
+            style: STYLE_DEFAULT as u8,
+            bytes: b"if (x) { y \\ z; }".to_vec(),
+        }];
+        let attrs = vec![(STYLE_DEFAULT as u8, attrs(0, 0x00_FF_FF_FF, false, false))];
+        let rtf = build_rtf(&runs, &attrs);
+        assert!(rtf.contains("if (x) \\{ y \\\\ z; \\}"));
+    }
+
+    #[test]
+    fn build_rtf_sanitizes_font_name() {
+        // Font name made entirely of RTF control characters
+        // collapses to empty after sanitization → falls back to
+        // "Consolas". Pin both the fallback presence AND the
+        // absence of the injected control words so a future
+        // refactor can't silently emit a malformed `\fmodern ;`
+        // group OR let a control character reach the wire.
+        let runs = vec![StyleRun {
+            style: STYLE_DEFAULT as u8,
+            bytes: b"x".to_vec(),
+        }];
+        let mut a = attrs(0, 0x00_FF_FF_FF, false, false);
+        a.font_name = String::from("}{\\");
+        let attrs_table = vec![(STYLE_DEFAULT as u8, a)];
+        let rtf = build_rtf(&runs, &attrs_table);
+        assert!(
+            rtf.contains("{\\fonttbl{\\f0\\fmodern Consolas;}}"),
+            "empty sanitized font name should fall back to Consolas: {rtf:?}",
+        );
+    }
+
+    #[test]
+    fn build_rtf_font_name_partial_sanitization() {
+        // Mixed name "Bad}\\b" sanitizes to "Badb" (the `}` and
+        // `\` are stripped, but the `b` survives the allowlist).
+        // Pin so a future allowlist tightening doesn't silently
+        // accept what should now be filtered.
+        let runs = vec![StyleRun {
+            style: STYLE_DEFAULT as u8,
+            bytes: b"x".to_vec(),
+        }];
+        let mut a = attrs(0, 0x00_FF_FF_FF, false, false);
+        a.font_name = String::from("Bad}\\b");
+        let attrs_table = vec![(STYLE_DEFAULT as u8, a)];
+        let rtf = build_rtf(&runs, &attrs_table);
+        assert!(
+            rtf.contains("{\\fonttbl{\\f0\\fmodern Badb;}}"),
+            "expected sanitized 'Badb' in font table: {rtf:?}",
+        );
+        // No literal `}` between `\fmodern ` and the `;` — that
+        // would close the fonttbl group early.
+        assert!(
+            !rtf.contains("\\fmodern Bad}"),
+            "stray `}}` should not survive sanitization: {rtf:?}",
+        );
     }
 }

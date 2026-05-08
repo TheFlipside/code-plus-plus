@@ -46,7 +46,7 @@ fn decode_label(label_w: &[u16]) -> String {
 }
 
 #[test]
-fn cppexport_loads_and_publishes_two_func_items() {
+fn cppexport_loads_and_publishes_four_func_items() {
     let Some(dll) = locate_cppexport() else {
         eprintln!(
             "skipping cppexport integration test: \
@@ -75,22 +75,29 @@ fn cppexport_loads_and_publishes_two_func_items() {
     );
 
     let funcs = info.func_items().expect("loaded plugin has func items");
-    assert_eq!(funcs.len(), 2, "cppexport contributes two menu items");
+    assert_eq!(funcs.len(), 4, "cppexport contributes four menu items");
 
     // Cmd-ids are sequential from the base.
-    assert_eq!(funcs[0].cmd_id, PLUGIN_CMD_ID_BASE);
-    assert_eq!(funcs[1].cmd_id, PLUGIN_CMD_ID_BASE + 1);
+    for (i, item) in funcs.iter().enumerate() {
+        assert_eq!(item.cmd_id, PLUGIN_CMD_ID_BASE + i as i32);
+        assert!(item.p_func.is_some(), "p_func unset at slot {i}");
+    }
 
-    // Menu labels in the documented order.
-    assert_eq!(decode_label(&funcs[0].item_name), "Export to HTML...");
-    assert_eq!(decode_label(&funcs[1].item_name), "Copy HTML to Clipboard");
-
-    // Both callbacks are non-null.
-    assert!(funcs[0].p_func.is_some());
-    assert!(funcs[1].p_func.is_some());
+    // Menu labels in the documented order: HTML pair, then RTF pair.
+    let labels: Vec<String> = funcs.iter().map(|f| decode_label(&f.item_name)).collect();
+    assert_eq!(
+        labels,
+        vec![
+            "Export to HTML...",
+            "Copy HTML to Clipboard",
+            "Export to RTF...",
+            "Copy RTF to Clipboard",
+        ],
+    );
 
     // Lookup by cmd-id finds each callback; one beyond misses.
-    assert!(host.lookup_cmd(PLUGIN_CMD_ID_BASE).is_some());
-    assert!(host.lookup_cmd(PLUGIN_CMD_ID_BASE + 1).is_some());
-    assert!(host.lookup_cmd(PLUGIN_CMD_ID_BASE + 2).is_none());
+    for i in 0..4 {
+        assert!(host.lookup_cmd(PLUGIN_CMD_ID_BASE + i).is_some());
+    }
+    assert!(host.lookup_cmd(PLUGIN_CMD_ID_BASE + 4).is_none());
 }
