@@ -106,6 +106,15 @@ pub const SCI_SETVIEWWS: u32 = 2021;
 pub const SCI_GETVIEWWS: u32 = 2020;
 pub const SCI_SETVIEWEOL: u32 = 2356;
 pub const SCI_GETVIEWEOL: u32 = 2355;
+pub const SCI_SETINDENTATIONGUIDES: u32 = 2132;
+pub const SCI_GETINDENTATIONGUIDES: u32 = 2133;
+/// `SC_IV_NONE = 0` — indentation-guide mode "off".
+pub const SC_IV_NONE: usize = 0;
+/// `SC_IV_LOOKBOTH = 3` — render guides at every level the
+/// surrounding indented blocks declare, including across blank
+/// lines (the most useful general-purpose setting; matches what
+/// Notepad++ enables when the user toggles "Show indent guide").
+pub const SC_IV_LOOKBOTH: usize = 3;
 pub const SCI_ZOOMIN: u32 = 2333;
 pub const SCI_ZOOMOUT: u32 = 2334;
 pub const SCI_SETZOOM: u32 = 2373;

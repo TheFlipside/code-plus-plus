@@ -39,15 +39,16 @@ use codepp_scintilla_sys::{
     SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT,
     SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETCOLUMN, SCI_GETCURRENTPOS,
     SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
-    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
-    SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
-    SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
-    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_PASTE, SCI_POSITIONAFTER,
-    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETDOCPOINTER,
-    SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
-    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT,
-    SCN_MODIFIED, SCN_UPDATEUI, SC_DOCUMENTOPTION_DEFAULT, SC_MARGIN_TEXT, SC_MOD_DELETETEXT,
+    SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
+    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
+    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
+    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_PASTE,
+    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT,
+    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
+    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_UPDATEUI,
+    SC_DOCUMENTOPTION_DEFAULT, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_TEXT, SC_MOD_DELETETEXT,
     SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
@@ -1691,6 +1692,15 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
                     eol,
                     byte_len,
                 );
+                // Same SCI_SETDOCPOINTER-doesn't-fire-SCN_UPDATEUI
+                // story as `handle_tab_selchange`: refresh toolbar
+                // state explicitly so Undo/Redo and view-toggle
+                // checks reflect the now-active buffer.
+                // SAFETY: `state.toolbar_hwnd` is owned by us;
+                // `state.editor` is bound to the active doc.
+                unsafe {
+                    toolbar::refresh_state(state.toolbar_hwnd, &state.editor);
+                }
             }
         }
     }
@@ -1793,6 +1803,20 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
     // L_TEXT, leaves a coloured buffer un-styled).
     <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
     <Win32Ui as UiPlatform>::update_status(&mut win32_ui, lang, &encoding, eol, byte_len);
+
+    // Refresh toolbar state for the newly-bound buffer. Same
+    // rationale as the status-bar update above: `SCI_SETDOCPOINTER`
+    // (the message that bound the new doc to our view) does not
+    // fire `SCN_UPDATEUI` per `Editor.cxx::SetDocPointer` — only
+    // `Redraw()`. Without this explicit refresh the toolbar's
+    // Undo/Redo enabled state and view-toggle checks would keep
+    // showing the previous tab's state until the user next types
+    // or moves the caret. SAFETY: `state.toolbar_hwnd` is the
+    // toolbar we own; `state.editor` is bound to the just-
+    // attached doc.
+    unsafe {
+        toolbar::refresh_state(state.toolbar_hwnd, &state.editor);
+    }
 
     // Reflect the new active tab in the window title.
     // SAFETY: caller's UI-thread contract carries to update_window_title.
@@ -7020,6 +7044,14 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         );
         let _ = SetFocus(Some(scintilla_hwnd));
 
+        // Initial toolbar-state sync. Without this the first paint
+        // shows Undo/Redo enabled (TBSTATE_ENABLED is the default
+        // for non-greyed M2 buttons), but the empty buffer can
+        // neither undo nor redo — flip them to the correct greyed
+        // state up front. SCN_UPDATEUI will keep them in sync from
+        // the next user action onwards.
+        toolbar::refresh_state(toolbar_hwnd, &editor);
+
         // First-run / empty-session fallback: if neither a CLI path
         // nor a stored session populated any tabs, pop a fresh
         // untitled buffer so the user lands on a typable editor
@@ -8726,23 +8758,74 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     ID_VIEW_WORDWRAP => {
                         if let Some(state) = state_from_hwnd(hwnd) {
                             let editor = state.editor;
+                            let toolbar_hwnd = state.toolbar_hwnd;
                             let on = editor.send(SCI_GETWRAPMODE, 0, 0) != 0;
                             editor.send(SCI_SETWRAPMODE, if on { 0 } else { 1 }, 0);
+                            // SCI_SETWRAPMODE doesn't fire SCN_UPDATEUI,
+                            // so push the new check state onto the
+                            // toolbar explicitly.
+                            toolbar::refresh_state(toolbar_hwnd, &editor);
                         }
                     }
                     ID_VIEW_SHOWWS => {
                         if let Some(state) = state_from_hwnd(hwnd) {
                             let editor = state.editor;
+                            let toolbar_hwnd = state.toolbar_hwnd;
                             let on = editor.send(SCI_GETVIEWWS, 0, 0) != 0;
                             // SCWS_INVISIBLE = 0, SCWS_VISIBLEALWAYS = 1.
                             editor.send(SCI_SETVIEWWS, if on { 0 } else { 1 }, 0);
+                            toolbar::refresh_state(toolbar_hwnd, &editor);
                         }
                     }
                     ID_VIEW_SHOWEOL => {
                         if let Some(state) = state_from_hwnd(hwnd) {
                             let editor = state.editor;
+                            let toolbar_hwnd = state.toolbar_hwnd;
                             let on = editor.send(SCI_GETVIEWEOL, 0, 0) != 0;
                             editor.send(SCI_SETVIEWEOL, if on { 0 } else { 1 }, 0);
+                            toolbar::refresh_state(toolbar_hwnd, &editor);
+                        }
+                    }
+                    // Toolbar-only "Show All Chars" — flips both
+                    // whitespace and EOL visibility together. The
+                    // button stays checked only when *both* are on
+                    // (a user who toggled just one via the View
+                    // submenu is in a "split" state and the
+                    // combined indicator reads off, matching the
+                    // mode it represents).
+                    ID_VIEW_SHOW_ALL_CHARS => {
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            let editor = state.editor;
+                            let toolbar_hwnd = state.toolbar_hwnd;
+                            let ws_on = editor.send(SCI_GETVIEWWS, 0, 0) != 0;
+                            let eol_on = editor.send(SCI_GETVIEWEOL, 0, 0) != 0;
+                            // Click pivots on the combined state:
+                            // both on → both off; otherwise → both on.
+                            // That makes the click semantics agree
+                            // with the button's check indicator.
+                            let target = if ws_on && eol_on { 0 } else { 1 };
+                            editor.send(SCI_SETVIEWWS, target, 0);
+                            editor.send(SCI_SETVIEWEOL, target, 0);
+                            toolbar::refresh_state(toolbar_hwnd, &editor);
+                        }
+                    }
+                    // Toolbar-only "Show Indent Guide" — toggles
+                    // between SC_IV_NONE and SC_IV_LOOKBOTH (the
+                    // "guides through whitespace" mode that's most
+                    // useful for indented code; matches what
+                    // Notepad++ enables).
+                    ID_VIEW_SHOW_INDENT_GUIDE => {
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            let editor = state.editor;
+                            let toolbar_hwnd = state.toolbar_hwnd;
+                            let mode = editor.send(SCI_GETINDENTATIONGUIDES, 0, 0) as usize;
+                            let target = if mode == SC_IV_NONE {
+                                SC_IV_LOOKBOTH
+                            } else {
+                                SC_IV_NONE
+                            };
+                            editor.send(SCI_SETINDENTATIONGUIDES, target, 0);
+                            toolbar::refresh_state(toolbar_hwnd, &editor);
                         }
                     }
                     ID_VIEW_ZOOMIN => {
@@ -9398,6 +9481,21 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                     // keeps length/lines in sync
                                     // unconditionally.
                                     refresh_status_dynamic_parts(state.status_hwnd, &state.editor);
+                                    // SCN_MODIFIED implies the undo
+                                    // stack changed (every edit
+                                    // pushes onto it; every
+                                    // discardable edit pops).
+                                    // Refresh Undo/Redo enabled
+                                    // state on every text-changing
+                                    // modification — covers both
+                                    // user keystrokes (which also
+                                    // fire SCN_UPDATEUI; the double
+                                    // call is cheap, ~10 µs each)
+                                    // and scripted edits (plugin
+                                    // paste, FIF in-buffer replace)
+                                    // that don't trigger the
+                                    // SCN_UPDATEUI path.
+                                    toolbar::refresh_state(state.toolbar_hwnd, &state.editor);
                                 }
                             }
                         }
@@ -9428,6 +9526,15 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             let updated = sci.updated;
                             if let Some(state) = state_from_hwnd(hwnd) {
                                 refresh_status_dynamic_parts(state.status_hwnd, &state.editor);
+                                // Sync the toolbar's dynamic state
+                                // (Undo/Redo enabled, view-toggle
+                                // checks). SCN_UPDATEUI fires after
+                                // every Scintilla state change the
+                                // user can drive — typing, undo,
+                                // tab switch, view-toggle setter
+                                // — so this single call covers all
+                                // of those without per-event hooks.
+                                toolbar::refresh_state(state.toolbar_hwnd, &state.editor);
                                 // Vertical scroll moved the visible
                                 // window. Lazily populate any newly-
                                 // visible line numbers — covers the

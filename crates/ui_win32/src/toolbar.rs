@@ -790,13 +790,12 @@ pub unsafe fn fill_info_tip(pnmtbgit: *mut NMTBGETINFOTIPW) {
     }
 }
 
-// --- State helpers (used by M3) ----------------------------------------------
+// --- State helpers ------------------------------------------------------------
 
-/// Toggle a toolbar button's enabled-vs-greyed state. Used by M3 to
-/// reflect Scintilla's `SCI_CANUNDO` / `SCI_CANREDO` queries on
+/// Toggle a toolbar button's enabled-vs-greyed state. Used to reflect
+/// Scintilla's `SCI_CANUNDO` / `SCI_CANREDO` queries on
 /// `SCN_UPDATEUI`. The corresponding `is_check` style is preserved
 /// — `TB_SETSTATE` rewrites the `TBSTATE_*` byte, not the `fsStyle`.
-#[allow(dead_code)] // wired in M3
 pub unsafe fn set_button_enabled(toolbar: HWND, cmd_id: u16, enabled: bool) {
     // SAFETY: `toolbar` is a real toolbar HWND owned by the caller
     // (the ui_win32 main window) and stays alive for the duration
@@ -804,15 +803,74 @@ pub unsafe fn set_button_enabled(toolbar: HWND, cmd_id: u16, enabled: bool) {
     unsafe { set_button_state_bit(toolbar, cmd_id, TBSTATE_ENABLED as u8, enabled) };
 }
 
-/// Toggle a toolbar button's checked-vs-normal indicator. Used by
-/// M3 to reflect view-toggle state (Word Wrap, Show All Chars,
-/// Show Indent Guide). Theme renders the checked state as a
-/// permanent pressed-look highlight; that's the "active option"
-/// visual indicator from the spec.
-#[allow(dead_code)] // wired in M3
+/// Toggle a toolbar button's checked-vs-normal indicator. Used to
+/// reflect view-toggle state (Word Wrap, Show All Chars, Show Indent
+/// Guide). Theme renders the checked state as a permanent pressed-
+/// look highlight; that's the "active option" visual indicator from
+/// the spec.
 pub unsafe fn set_button_checked(toolbar: HWND, cmd_id: u16, checked: bool) {
     // SAFETY: same as `set_button_enabled`.
     unsafe { set_button_state_bit(toolbar, cmd_id, TBSTATE_CHECKED as u8, checked) };
+}
+
+/// Sync every dynamic-state toolbar button against the editor's
+/// current Scintilla state. Cheap (a handful of direct-call queries
+/// plus at most five `TB_SETSTATE` writes) and idempotent — safe to
+/// run on every `SCN_UPDATEUI` and after every view-toggle handler.
+///
+/// Wired buttons:
+///
+/// - Undo / Redo: `TBSTATE_ENABLED` flipped from `SCI_CANUNDO` /
+///   `SCI_CANREDO`. Per-buffer because Scintilla tracks an undo
+///   stack per document and `SCI_SETDOCPOINTER` makes those queries
+///   reflect the newly-bound buffer's state.
+/// - Word Wrap: `TBSTATE_CHECKED` from `SCI_GETWRAPMODE`.
+/// - Show All Chars: `TBSTATE_CHECKED` when *both* `SCI_GETVIEWWS`
+///   and `SCI_GETVIEWEOL` are on. The sub-toggles in the View menu
+///   can produce a "split" state where only one is set; the toolbar
+///   button represents the "all chars are visible" mode
+///   specifically and stays unchecked in the split case.
+/// - Show Indent Guide: `TBSTATE_CHECKED` from
+///   `SCI_GETINDENTATIONGUIDES != SC_IV_NONE`.
+///
+/// The four "panel visibility" toggles (Document Map / List,
+/// Function List, Folder as Workspace) are toggle-style buttons but
+/// stay un-checked — their underlying features aren't implemented
+/// yet, so there's nothing to query.
+///
+/// # Safety
+///
+/// `toolbar` must be a live `ToolbarWindow32` HWND owned by the
+/// caller (the `ui_win32` main window). `editor`'s direct-call
+/// `(fn_ptr, instance_ptr)` pair must currently address the
+/// document whose state the caller wants to read; with the multi-
+/// tab `SCI_SETDOCPOINTER` model that's whichever doc is bound at
+/// call time. Both calls happen on the UI thread — the toolbar
+/// `SendMessageW` and Scintilla direct-call dispatch are both
+/// synchronous and must not cross threads.
+pub unsafe fn refresh_state(toolbar: HWND, editor: &codepp_editor::EditorHandle) {
+    use codepp_scintilla_sys::{
+        SCI_CANREDO, SCI_CANUNDO, SCI_GETINDENTATIONGUIDES, SCI_GETVIEWEOL, SCI_GETVIEWWS,
+        SCI_GETWRAPMODE, SC_IV_NONE,
+    };
+
+    let can_undo = editor.send(SCI_CANUNDO, 0, 0) != 0;
+    let can_redo = editor.send(SCI_CANREDO, 0, 0) != 0;
+    let wrap_on = editor.send(SCI_GETWRAPMODE, 0, 0) != 0;
+    let ws_on = editor.send(SCI_GETVIEWWS, 0, 0) != 0;
+    let eol_on = editor.send(SCI_GETVIEWEOL, 0, 0) != 0;
+    let indent_on = (editor.send(SCI_GETINDENTATIONGUIDES, 0, 0) as usize) != SC_IV_NONE;
+
+    // SAFETY: `toolbar` is a real toolbar HWND from `WindowState`;
+    // each `set_button_*` call uses TB_GETSTATE / TB_SETSTATE which
+    // are synchronous direct sends.
+    unsafe {
+        set_button_enabled(toolbar, ID_EDIT_UNDO, can_undo);
+        set_button_enabled(toolbar, ID_EDIT_REDO, can_redo);
+        set_button_checked(toolbar, ID_VIEW_WORDWRAP, wrap_on);
+        set_button_checked(toolbar, ID_VIEW_SHOW_ALL_CHARS, ws_on && eol_on);
+        set_button_checked(toolbar, ID_VIEW_SHOW_INDENT_GUIDE, indent_on);
+    }
 }
 
 /// Read-modify-write helper: get the current state byte, flip one
