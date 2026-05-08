@@ -87,22 +87,23 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, DispatchMessageW, DrawMenuBar, GetClientRect, GetCursorPos, GetDlgItem,
     GetMenuItemCount, GetMessageW, GetParent, GetSubMenu, GetWindowLongPtrW, GetWindowRect,
     GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW, IsWindow, IsWindowVisible, LoadCursorW,
-    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW,
-    SetCursor, SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
-    TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
-    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
+    LoadIconW, LoadImageW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
+    TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK,
+    BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
     CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER,
-    ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL, HMENU, IDCANCEL, IDC_ARROW,
-    IDC_SIZENS, IDOK, IDYES, MB_ICONINFORMATION, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO,
-    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED,
-    WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
-    WM_DESTROY, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS,
-    WM_SETFONT, WM_SETREDRAW, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW,
-    WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL, HICON, HMENU, IDCANCEL,
+    IDC_ARROW, IDC_SIZENS, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONINFORMATION,
+    MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
+    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DROPFILES,
+    WM_ERASEBKGND, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
+    WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SIZE,
+    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
+    WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -6602,12 +6603,44 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             return Err(windows::core::Error::from_thread());
         }
 
+        // Load the application icon — the same multi-resolution
+        // `assets/code++.ico` that `crates/app/build.rs` embedded as
+        // resource id `1` in the `.exe`. `LoadIconW` picks the
+        // platform's preferred large size (typically 32x32) for the
+        // title bar; `LoadImageW` with explicit `(16, 16)` requests
+        // the small-icon variant for Alt+Tab and the Task Manager.
+        // Both paths fall back to a null `HICON` on failure, which
+        // makes Win32 use `IDI_APPLICATION` (the generic Windows
+        // icon) — graceful degradation if the resource ever fails
+        // to load.
+        //
+        // `1 as *const u16` is the `MAKEINTRESOURCEW` idiom: when
+        // the high word of `lpiconname` is zero, Win32 reads the
+        // low word as a numeric resource ID rather than dereferencing
+        // a string pointer. clippy's `manual_dangling_ptr` lint
+        // misclassifies this as a bug — suppress with rationale.
+        #[allow(clippy::manual_dangling_ptr)]
+        const APP_ICON_RESOURCE: PCWSTR = PCWSTR(1 as *const u16);
+        let icon_large = LoadIconW(Some(instance.into()), APP_ICON_RESOURCE).unwrap_or_default();
+        let icon_small = LoadImageW(
+            Some(instance.into()),
+            APP_ICON_RESOURCE,
+            IMAGE_ICON,
+            16,
+            16,
+            LR_DEFAULTCOLOR,
+        )
+        .map(|h| HICON(h.0))
+        .unwrap_or_default();
+
         // Register our main-window class.
         let main_class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(main_wnd_proc),
             hInstance: instance.into(),
+            hIcon: icon_large,
+            hIconSm: icon_small,
             hCursor: LoadCursorW(None, IDC_ARROW)?,
             hbrBackground: HBRUSH((COLOR_WINDOW.0 + 1) as usize as *mut c_void),
             lpszClassName: MAIN_CLASS,
