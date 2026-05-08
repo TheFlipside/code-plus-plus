@@ -37,15 +37,15 @@ use codepp_scintilla_sys::{
     SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT,
     SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETCOLUMN, SCI_GETCURRENTPOS,
     SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
-    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
-    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE,
-    SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_PASTE,
-    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
-    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND,
-    SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETZOOM,
-    SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_UPDATEUI, SC_DOCUMENTOPTION_DEFAULT,
-    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
+    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
+    SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
+    SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
+    SCI_LINESONSCREEN, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
+    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETSAVEPOINT,
+    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
+    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_UPDATEUI,
+    SC_DOCUMENTOPTION_DEFAULT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, STYLE_DEFAULT,
 };
 use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
@@ -668,6 +668,12 @@ impl UiPlatform for Win32Ui {
         // bug to file.
         let _ = section;
         write_status_part(self.status_hwnd, 0, text);
+    }
+
+    fn mark_saved(&mut self) {
+        // Clear the modified flag on the currently-bound document.
+        // Scintilla's dirty glyph (and SCI_GETMODIFY) keys off this.
+        self.editor.send(SCI_SETSAVEPOINT, 0, 0);
     }
 
     fn apply_lang(&mut self, lang: LangType) {
@@ -1815,7 +1821,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         )?;
         AppendMenuW(
             file_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_FILE_RELOAD as usize,
             w!("&Reload from Disk"),
         )?;
@@ -1833,7 +1839,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         )?;
         AppendMenuW(
             file_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_FILE_SAVE_ALL as usize,
             w!("Sav&e All"),
         )?;
@@ -1846,7 +1852,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         )?;
         AppendMenuW(
             file_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_FILE_CLOSE_ALL as usize,
             w!("Close A&ll"),
         )?;
@@ -2854,6 +2860,23 @@ fn show_reload_dialog(main_hwnd: HWND, path: &Path) -> bool {
     let title = w!("Code++: file changed externally");
     let response =
         unsafe { MessageBoxW(Some(main_hwnd), &prompt, title, MB_YESNO | MB_ICONQUESTION) };
+    response == IDYES
+}
+
+/// Generic Yes/No prompt — returns `true` for Yes, `false` for No
+/// (or any other dismissal). Modal, so the caller must drop any
+/// `&mut WindowState` borrow before calling.
+fn show_yes_no_dialog(main_hwnd: HWND, title: &str, message: &str) -> bool {
+    let title_w = HSTRING::from(title);
+    let msg_w = HSTRING::from(message);
+    let response = unsafe {
+        MessageBoxW(
+            Some(main_hwnd),
+            &msg_w,
+            &title_w,
+            MB_YESNO | MB_ICONQUESTION,
+        )
+    };
     response == IDYES
 }
 
@@ -7985,10 +8008,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                         shell.save_current_to_disk(&mut ui)
                                     }));
                                 match result {
-                                    Ok(Ok(())) => {
-                                        state.editor.send(SCI_SETSAVEPOINT, 0, 0);
-                                        None
-                                    }
+                                    Ok(Ok(())) => None,
                                     Ok(Err(e)) => Some(e.to_string()),
                                     Err(_) => Some("internal panic during save".to_string()),
                                 }
@@ -8000,8 +8020,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             show_error_dialog(hwnd, "Save failed", &msg);
                         }
                         // On a successful save, save_current_to_disk
-                        // queues NPPN_FILESAVED; on failure the queue
-                        // is empty and this is a no-op.
+                        // queues NPPN_FILESAVED and clears the dirty
+                        // glyph via `UiPlatform::mark_saved`; on
+                        // failure both are no-ops.
                         fire_queued_notifications(hwnd);
                     }
                     ID_FILE_NEW => {
@@ -8059,10 +8080,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                         shell.save_buffer_as(&mut ui, p)
                                     }));
                                 match result {
-                                    Ok(Ok(())) => {
-                                        state.editor.send(SCI_SETSAVEPOINT, 0, 0);
-                                        None
-                                    }
+                                    Ok(Ok(())) => None,
                                     Ok(Err(e)) => Some(e.to_string()),
                                     Err(_) => Some("internal panic during save".to_string()),
                                 }
@@ -8074,6 +8092,115 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         };
                         if let Some(msg) = save_error {
                             show_error_dialog(hwnd, "Save As failed", &msg);
+                        }
+                        // save_buffer_as clears the dirty glyph via
+                        // UiPlatform::mark_saved on success.
+                        fire_queued_notifications(hwnd);
+                    }
+                    ID_FILE_SAVE_ALL => {
+                        // Iterate every titled tab, save each, then
+                        // restore the original active. Errors are
+                        // collected per-tab; if any fired, surface
+                        // a summary in a single error dialog after
+                        // the borrow ends.
+                        let errors: Vec<(i32, codepp_shell::ShellError)> =
+                            if let Some(state) = state_from_hwnd(hwnd) {
+                                let (shell, mut ui) = state.split();
+                                let result =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        shell.save_all(&mut ui)
+                                    }));
+                                // Each successful per-tab save already
+                                // cleared its dirty glyph via
+                                // `UiPlatform::mark_saved` inside
+                                // `save_current_to_disk` — no batch-
+                                // level save-point fold needed (and
+                                // the old one was wrong: it left
+                                // successfully-saved tabs dirty
+                                // whenever any sibling failed). On
+                                // a wholesale catch_unwind catch we
+                                // just report no errors and let the
+                                // higher-level panic handler log it.
+                                result.unwrap_or_default()
+                            } else {
+                                Vec::new()
+                            };
+                        if !errors.is_empty() {
+                            let summary = errors
+                                .iter()
+                                .map(|(id, e)| format!("buffer {id}: {e}"))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            show_error_dialog(hwnd, "Save All — some files failed", &summary);
+                        }
+                        fire_queued_notifications(hwnd);
+                    }
+                    ID_FILE_CLOSE_ALL => {
+                        // Loop the existing single-tab close path
+                        // until no tabs remain. Each iteration
+                        // does one shell-side close + one UI rebind
+                        // / SCI_RELEASEDOCUMENT, exactly as a
+                        // user-driven Ctrl+W does. The loop bound
+                        // is `tabs.len()` rather than `while
+                        // !is_empty()` so a misbehaving close path
+                        // that fails to remove a tab can't spin
+                        // forever — surface as a stuck tab the user
+                        // can complain about, not a hang.
+                        let initial = if let Some(state) = state_from_hwnd(hwnd) {
+                            state.shell.tabs.len()
+                        } else {
+                            0
+                        };
+                        for _ in 0..initial {
+                            let still_open = state_from_hwnd(hwnd)
+                                .map(|s| !s.shell.tabs.is_empty())
+                                .unwrap_or(false);
+                            if !still_open {
+                                break;
+                            }
+                            handle_close_active_tab(hwnd);
+                        }
+                        fire_queued_notifications(hwnd);
+                    }
+                    ID_FILE_RELOAD => {
+                        // Reload from disk. Two checks before we
+                        // touch anything:
+                        //   1. Active tab has a path. Without one
+                        //      (untitled buffer) there's nothing to
+                        //      reload; skip both prompt and call so
+                        //      the user doesn't see a Yes/No dialog
+                        //      that silently no-ops on Yes.
+                        //   2. The buffer is dirty. If Scintilla's
+                        //      modified flag is clear, reload is
+                        //      idempotent and the prompt is just
+                        //      noise — skip it.
+                        let (has_path, dirty) = if let Some(state) = state_from_hwnd(hwnd) {
+                            let has_path =
+                                state.shell.active().and_then(|t| t.path.as_ref()).is_some();
+                            let dirty = state.editor.send(SCI_GETMODIFY, 0, 0) != 0;
+                            (has_path, dirty)
+                        } else {
+                            (false, false)
+                        };
+                        if has_path {
+                            let proceed = if dirty {
+                                show_yes_no_dialog(
+                                    hwnd,
+                                    "Reload from Disk",
+                                    "Discard unsaved changes and reload from disk?",
+                                )
+                            } else {
+                                true
+                            };
+                            if proceed {
+                                if let Some(state) = state_from_hwnd(hwnd) {
+                                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                        || {
+                                            state.shell.reload_active();
+                                        },
+                                    ));
+                                }
+                            }
                         }
                         fire_queued_notifications(hwnd);
                     }

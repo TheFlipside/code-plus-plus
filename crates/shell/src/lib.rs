@@ -132,6 +132,17 @@ pub trait UiPlatform {
     /// platforms route this onto whichever section best matches.
     fn set_plugin_status(&mut self, section: usize, text: &str);
 
+    /// Tell the editor "the currently-bound document was just saved
+    /// to disk" so it can clear its modified flag. On Win32 this is
+    /// `SCI_SETSAVEPOINT(0, 0)`; clears Scintilla's dirty glyph and
+    /// makes `SCI_GETMODIFY` return 0 until the next edit.
+    ///
+    /// Called by [`Shell::save_current_to_disk`], [`Shell::save_buffer_as`],
+    /// and [`Shell::save_all`] on each successful per-tab write so
+    /// every saved tab gets its dirty state cleared regardless of
+    /// what other tabs in a Save All did.
+    fn mark_saved(&mut self);
+
     /// Attach the lexer (and any per-language style theme + keyword
     /// lists) appropriate for `lang` to the *currently-active*
     /// editor document. `L_TEXT` detaches whatever lexer is bound,
@@ -907,6 +918,129 @@ impl Shell {
         self.queue_buffer_activated();
     }
 
+    /// Save every titled, non-loading tab to disk in tab order.
+    /// Returns one `(buffer_id, error)` pair for each tab whose
+    /// save failed; an empty `Vec` means everything saved cleanly.
+    ///
+    /// Phase 4 m8: drives File→Save All. Untitled buffers (no
+    /// path) and tabs still waiting on their loader (`pending_load`
+    /// is `Some`) are skipped silently — both are inappropriate
+    /// targets for Save All (the former needs Save As, the latter
+    /// would race the loader's write).
+    ///
+    /// Implementation: iterates tabs by index, switching the
+    /// editor's bound document to each in turn so
+    /// `save_current_to_disk`'s `ui.get_buffer_text()` reads the
+    /// right tab's content. The final step rebinds to whichever
+    /// tab was active at entry, so the user's view is exactly
+    /// where they left it. The intermediate doc switches are
+    /// invisible to plugins — `save_all` deliberately does **not**
+    /// queue `NPPN_BUFFERACTIVATED` for the per-tab activations,
+    /// matching N++'s contract that Save All looks like one
+    /// atomic operation from a plugin's perspective.
+    pub fn save_all<U: UiPlatform>(&mut self, ui: &mut U) -> Vec<(i32, ShellError)> {
+        // Capture the *buffer id* of the tab the user was on, not
+        // its index. If the tab list shrinks during the loop (a
+        // future re-entrant path triggered by FILESAVED handlers
+        // could in principle remove tabs), the stored index would
+        // point at the wrong tab on restore — leading to a
+        // subsequent Ctrl+S writing to the wrong file. Looking up
+        // the index by id at the end is robust to shifts.
+        let original_active_id = self.active().map(|t| t.id);
+        let mut errors = Vec::new();
+
+        for idx in 0..self.tabs.len() {
+            // Skip untitled buffers and in-flight loads.
+            let skip = self
+                .tabs
+                .get(idx)
+                .map(|t| t.path.is_none() || t.pending_load.is_some())
+                .unwrap_or(true);
+            if skip {
+                continue;
+            }
+            // Bind the editor to this tab's document. Re-read the
+            // returned doc pointer — `activate_tab` may have
+            // lazy-created it (background-loaded tab being saved
+            // for the first time would land here in theory; in
+            // practice that combination doesn't occur because
+            // `pending_load.is_some()` filters it above).
+            let stored_doc = self.tabs[idx].scintilla_doc;
+            let bound_doc = ui.activate_tab(idx, stored_doc);
+            if let Some(tab) = self.tabs.get_mut(idx) {
+                tab.scintilla_doc = bound_doc;
+            }
+            self.active_tab = Some(idx);
+
+            // Wrap the per-tab save in `catch_unwind` so a panic in
+            // one tab (e.g. a tracing-subscriber misbehaviour, an
+            // OOM, a bug in the encoding crate) doesn't abort the
+            // outer loop — `self.active_tab` would be left pointing
+            // at the panicked tab, breaking the restore step below
+            // and leaving the user's view on a buffer they didn't
+            // ask to be on. Treating the panic as a per-tab error
+            // keeps the loop bounded and the active-tab restore
+            // unconditional.
+            let id = self.tabs.get(idx).map(|t| t.id).unwrap_or(0);
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.save_current_to_disk(ui)
+            }));
+            match r {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => errors.push((id, e)),
+                Err(_) => {
+                    errors.push((
+                        id,
+                        ShellError::Io(String::from("internal panic during save")),
+                    ));
+                }
+            }
+        }
+
+        // Restore the original active tab so the user's view
+        // returns to where they were before Save All. No
+        // `queue_buffer_activated` here — the user perceives Save
+        // All as a single operation, not N+1 activations. Look up
+        // the index by buffer id (rather than the entry-time
+        // index) so a mid-loop tab shrink doesn't leave the
+        // restore pointing at the wrong tab.
+        if let Some(orig_id) = original_active_id {
+            if let Some(orig_idx) = self.tabs.iter().position(|t| t.id == orig_id) {
+                let stored_doc = self.tabs[orig_idx].scintilla_doc;
+                ui.activate_tab(orig_idx, stored_doc);
+                self.active_tab = Some(orig_idx);
+            }
+        }
+
+        errors
+    }
+
+    /// Re-read the active tab's file from disk, discarding any
+    /// in-buffer edits. Returns `false` (and does nothing) if the
+    /// active tab has no path (untitled buffer) or no tab is open.
+    ///
+    /// Phase 4 m8: drives File→Reload from Disk. Routes through
+    /// [`Self::confirm_reload`] (the same path the file-watcher
+    /// "external change detected, reload?" prompt takes), so the
+    /// in-buffer edits the user discards are exactly the same set
+    /// the watcher path would discard.
+    ///
+    /// Caller (the UI) is responsible for prompting the user
+    /// before calling this — `reload_active` itself doesn't ask.
+    /// The dirty check belongs in the UI because it requires
+    /// querying Scintilla's `SCI_GETMODIFY` directly (Code++
+    /// doesn't shadow dirty state on the `Tab`).
+    pub fn reload_active(&mut self) -> bool {
+        let path = self.active().and_then(|t| t.path.clone());
+        match path {
+            Some(p) => {
+                self.confirm_reload(p);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Save the active tab to a caller-supplied path, updating the
     /// tab's path metadata so subsequent Save (`Ctrl+S`) writes to
     /// the same destination. Driven by File→Save As… and by the
@@ -988,12 +1122,15 @@ impl Shell {
                 if let Err(e) = self.file_watcher.watch(&new_path) {
                     tracing::warn!(error = %e, path = ?new_path, "failed to watch new path after Save As");
                 }
+                // Notification push first, then dirty-glyph clear —
+                // see save_current_to_disk for the ordering rationale.
                 #[cfg(target_os = "windows")]
                 {
                     let buffer_id = self.active().map(|t| t.id as isize).unwrap_or(0);
                     self.pending_notifications
                         .push(Notification::FileSaved { buffer_id });
                 }
+                ui.mark_saved();
                 // Push the new lang through the UI so the lexer
                 // re-attaches and the chrome refreshes.
                 if let Some(tab) = self.active() {
@@ -1439,15 +1576,28 @@ impl Shell {
             tab.byte_len = bytes.len() as u64;
         }
 
-        // Queue NPPN_FILESAVED. The UI fires it via take_notifications()
-        // after this method returns and after dropping any &mut Shell
-        // borrow.
+        // Queue NPPN_FILESAVED *before* clearing the dirty glyph.
+        // If `mark_saved` were called first and the queue push
+        // panicked (OOM-class), Scintilla would show the buffer
+        // as clean but plugins watching FILESAVED would silently
+        // miss the notification — invisible to the user, hard to
+        // diagnose. Pushing first means the worst case is "saved
+        // file still shows the dirty glyph", which the user can
+        // notice and fix with another Ctrl+S.
         #[cfg(target_os = "windows")]
         {
             let buffer_id = self.active().map(|t| t.id as isize).unwrap_or(0);
             self.pending_notifications
                 .push(Notification::FileSaved { buffer_id });
         }
+
+        // Clear Scintilla's dirty glyph for the just-saved buffer.
+        // Done here so every save path (single Save, Save As, the
+        // per-tab loop in Save All) gets the dirty-state reset
+        // automatically — without this Save All would only clear
+        // the glyph when *every* tab succeeded, since the UI
+        // handler folds save-points only on a fully-clean batch.
+        ui.mark_saved();
 
         Ok(())
     }
@@ -2459,6 +2609,11 @@ mod tests {
         apply_lang_calls: Vec<LangType>,
         search_calls: Vec<(String, SearchFlags, String)>,
         replace_calls: Vec<(String, String, SearchFlags, String)>,
+        /// Counter incremented each time `mark_saved` is called —
+        /// lets tests assert that every successful per-tab save in
+        /// Save All cleared its dirty glyph (one mark_saved per
+        /// successful tab).
+        mark_saved_calls: usize,
         /// Tab-strip visibility shadow. Default `false` (visible)
         /// matches the real UI's startup state.
         tabbar_hidden: bool,
@@ -2505,6 +2660,9 @@ mod tests {
         }
         fn set_plugin_status(&mut self, section: usize, text: &str) {
             self.plugin_status_calls.push((section, text.to_string()));
+        }
+        fn mark_saved(&mut self) {
+            self.mark_saved_calls += 1;
         }
         fn apply_lang(&mut self, lang: LangType) {
             self.apply_lang_calls.push(lang);
@@ -4517,6 +4675,201 @@ mod tests {
         shell.save_current_to_disk(&mut ui).unwrap();
         assert_eq!(std::fs::read_to_string(&renamed).unwrap(), "third\n");
         assert_eq!(std::fs::read_to_string(&original).unwrap(), "first\n");
+    }
+
+    #[test]
+    fn save_all_writes_every_titled_tab() {
+        // Open two real files, edit each, then Save All. Both files
+        // on disk should reflect the post-edit content.
+        let dir = tempfile::tempdir().unwrap();
+        let a_path = dir.path().join("a.txt");
+        let b_path = dir.path().join("b.txt");
+        std::fs::write(&a_path, "old A\n").unwrap();
+        std::fs::write(&b_path, "old B\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(a_path.clone());
+        shell.open_file(b_path.clone());
+        // Drain twice so both load results land before Save All
+        // runs. drain_until polls until the predicate is satisfied
+        // — having two set_text calls is a fine completion signal.
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() >= 2,
+            Duration::from_secs(2),
+        );
+
+        // FakeUi has one buffer slot, so save_all reads the same
+        // text into both files — that's fine for this unit test;
+        // the per-tab content selection is a Win32-side concern
+        // that the SCI_GETTEXT round-trip handles.
+        let activate_calls_before = ui.activate_tab_calls.len();
+        let mark_saved_before = ui.mark_saved_calls;
+        ui.buffer_text = "new B\n".to_string();
+        let errors = shell.save_all(&mut ui);
+        assert!(
+            errors.is_empty(),
+            "all tabs should save cleanly: {errors:?}"
+        );
+
+        // Both on-disk files have the post-Save-All content.
+        let on_disk_a = std::fs::read_to_string(&a_path).unwrap();
+        let on_disk_b = std::fs::read_to_string(&b_path).unwrap();
+        assert_eq!(on_disk_a, "new B\n");
+        assert_eq!(on_disk_b, "new B\n");
+
+        // Verify that save_all *actually iterated*: at least 3
+        // activate_tab calls happened (one per tab during the
+        // loop, plus one to restore the original active). Without
+        // this, a regression that saved only the active tab and
+        // skipped the rest would still leave the on-disk content
+        // matching (because save_all writes "new B\n" via the
+        // current active) — pin the iteration explicitly. And
+        // every successful per-tab save must have cleared its
+        // dirty glyph via mark_saved.
+        assert!(
+            ui.activate_tab_calls.len() >= activate_calls_before + 3,
+            "save_all should activate each tab plus restore original",
+        );
+        assert_eq!(
+            ui.mark_saved_calls,
+            mark_saved_before + 2,
+            "every successful per-tab save must clear its dirty glyph",
+        );
+    }
+
+    #[test]
+    fn save_all_skips_untitled_tabs() {
+        // Mix of (titled, untitled, untitled) — only the first tab
+        // should receive a save call; the two untitled buffers
+        // are skipped because Save All can't choose a path for
+        // them. Order matters here: opening the titled file FIRST
+        // means it gets a fresh tab, then the two new_untitled
+        // calls each create their own tab. (If we'd opened the
+        // titled file second, it would reuse the empty untitled
+        // tab — that path-reuse is correct behaviour for the open
+        // flow but would collapse the test setup to 2 tabs.)
+        let dir = tempfile::tempdir().unwrap();
+        let titled_path = dir.path().join("titled.txt");
+        std::fs::write(&titled_path, "x\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        shell.open_file(titled_path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+        shell.new_untitled(&mut ui);
+        shell.new_untitled(&mut ui);
+
+        ui.buffer_text = "saved\n".to_string();
+        let errors = shell.save_all(&mut ui);
+        assert!(errors.is_empty());
+        // Titled file got written.
+        assert_eq!(std::fs::read_to_string(&titled_path).unwrap(), "saved\n");
+        // Tab count unchanged: 3 in, 3 out.
+        assert_eq!(shell.tabs.len(), 3);
+        // The two untitled tabs still have path = None.
+        assert!(shell.tabs[0].path.is_some());
+        assert!(shell.tabs[1].path.is_none());
+        assert!(shell.tabs[2].path.is_none());
+    }
+
+    #[test]
+    fn save_all_restores_original_active_tab() {
+        // Open three files; switch to the middle one; Save All;
+        // active tab should still be the middle one when done.
+        let dir = tempfile::tempdir().unwrap();
+        let paths: Vec<PathBuf> = (0..3)
+            .map(|i| {
+                let p = dir.path().join(format!("f{i}.txt"));
+                std::fs::write(&p, format!("c{i}\n")).unwrap();
+                p
+            })
+            .collect();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        for p in &paths {
+            shell.open_file(p.clone());
+        }
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() >= 3,
+            Duration::from_secs(2),
+        );
+
+        // Switch to the middle tab and Save All.
+        shell.active_tab = Some(1);
+        ui.buffer_text = "saved\n".to_string();
+        let _ = shell.save_all(&mut ui);
+
+        // Active tab is preserved. The intermediate switches happen
+        // but the final state is the user-visible one they started.
+        assert_eq!(shell.active_tab, Some(1));
+    }
+
+    #[test]
+    fn reload_active_with_no_tab_returns_false() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        assert!(!shell.reload_active());
+    }
+
+    #[test]
+    fn reload_active_on_untitled_returns_false() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        // Untitled has no path; reload is a no-op.
+        assert!(!shell.reload_active());
+    }
+
+    #[test]
+    fn reload_active_on_titled_kicks_off_load() {
+        // After Reload, the loader is given a new request for the
+        // active tab's path. Use the same observation FakeUi-based
+        // round-trip tests use: drain until set_buffer_text is
+        // called for the post-reload content.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reload.txt");
+        std::fs::write(&path, "first\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        // Externally rewrite the file and Reload.
+        std::fs::write(&path, "second\n").unwrap();
+        let calls_before = ui.set_text_calls.len();
+        assert!(shell.reload_active());
+        // Reload kicks off an async load — drain until the second
+        // set_buffer_text lands.
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() > calls_before,
+            Duration::from_secs(2),
+        );
+        assert!(ui.set_text_calls.last().unwrap().0.contains("second"));
     }
 
     #[test]
