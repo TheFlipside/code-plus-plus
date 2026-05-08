@@ -28,7 +28,7 @@
 
 #![cfg(target_os = "windows")]
 
-use core::ffi::c_void;
+use core::ffi::{c_char, c_void};
 
 use codepp_plugin_sdk::{self as sdk, FuncItem, Hwnd, NppData, SCNotification, SyncCell};
 
@@ -43,7 +43,7 @@ extern "system" {
     fn CloseClipboard() -> i32;
     fn EmptyClipboard() -> i32;
     fn SetClipboardData(format: u32, hmem: *mut c_void) -> *mut c_void;
-    fn RegisterClipboardFormatA(format_name: *const u8) -> u32;
+    fn RegisterClipboardFormatA(format_name: *const c_char) -> u32;
 }
 
 #[link(name = "kernel32")]
@@ -143,7 +143,7 @@ const fn make_plugin_name() -> [u16; 7] {
     buf
 }
 
-static FUNCS: SyncCell<[FuncItem; 4]> = SyncCell::new([
+static FUNCS: SyncCell<[FuncItem; 5]> = SyncCell::new([
     FuncItem {
         item_name: sdk::menu_label(b"Export to HTML..."),
         p_func: Some(cmd_export_html),
@@ -172,6 +172,13 @@ static FUNCS: SyncCell<[FuncItem; 4]> = SyncCell::new([
         init2_check: 0,
         p_sh_key: core::ptr::null_mut(),
     },
+    FuncItem {
+        item_name: sdk::menu_label(b"Copy All Formats to Clipboard"),
+        p_func: Some(cmd_copy_all),
+        cmd_id: 0,
+        init2_check: 0,
+        p_sh_key: core::ptr::null_mut(),
+    },
 ]);
 
 #[no_mangle]
@@ -189,7 +196,7 @@ pub extern "C" fn getFuncsArray(nb: *mut i32) -> *mut FuncItem {
     if !nb.is_null() {
         // SAFETY: per the ABI, `nb` is a valid out-pointer the host
         // owns for the duration of this call.
-        unsafe { *nb = 4 };
+        unsafe { *nb = 5 };
     }
     FUNCS.get().cast::<FuncItem>()
 }
@@ -730,60 +737,17 @@ fn export_html_for_active() -> String {
 /// ownership of the global memory we allocate; per the API, we must
 /// not free it ourselves once `SetClipboardData` succeeds.
 fn copy_to_clipboard(s: &str) -> bool {
-    let npp = sdk::npp_handle();
     let wide: Vec<u16> = s.encode_utf16().chain(core::iter::once(0)).collect();
-    // Defense in depth — `wide.len() * size_of::<u16>()` could
-    // wrap on a pathological `usize::MAX / 2`-length input. Real
-    // clipboard payloads are far smaller, but a `checked_mul`
-    // bounds the allocation to a safe value.
+    // SAFETY: cast `&[u16]` to `&[u8]` of the same byte length so
+    // `global_alloc_copy` sees the raw bytes. `wide` outlives the
+    // call. The byte-length multiply is bounded — `wide.len()` is
+    // already at most `isize::MAX / 2`, so doubling can't wrap.
     let bytes = match wide.len().checked_mul(core::mem::size_of::<u16>()) {
         Some(n) => n,
         None => return false,
     };
-
-    // SAFETY: GlobalAlloc / GlobalLock / SetClipboardData are
-    // documented Win32 APIs. The flow:
-    //   1. Allocate movable global memory of `bytes` bytes.
-    //   2. Lock it to get a pointer; copy our UTF-16 buffer in.
-    //   3. Unlock; the lock count must hit 0 before SetClipboardData.
-    //   4. OpenClipboard for the host's window (or 0 if unknown).
-    //   5. EmptyClipboard, SetClipboardData(CF_UNICODETEXT, hmem).
-    //   6. CloseClipboard. The clipboard now owns `hmem`; do not free.
-    // On any failure path we GlobalFree to avoid a leak.
-    //
-    // Known limitation: `EmptyClipboard` runs before `SetClipboardData`
-    // per the documented Win32 sequence (Set requires Empty first to
-    // transfer ownership). If `SetClipboardData` fails between them
-    // (rare — only on OOM or resource exhaustion), the user's previous
-    // clipboard content is lost. There's no API path to set without
-    // first emptying; this is accepted everywhere on Windows.
-    unsafe {
-        let hmem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-        if hmem.is_null() {
-            return false;
-        }
-        let dest = GlobalLock(hmem);
-        if dest.is_null() {
-            GlobalFree(hmem);
-            return false;
-        }
-        core::ptr::copy_nonoverlapping(wide.as_ptr() as *const u8, dest as *mut u8, bytes);
-        GlobalUnlock(hmem);
-
-        if OpenClipboard(npp) == 0 {
-            GlobalFree(hmem);
-            return false;
-        }
-        EmptyClipboard();
-        let result = SetClipboardData(CF_UNICODETEXT, hmem);
-        CloseClipboard();
-        if result.is_null() {
-            // SetClipboardData failed; clipboard didn't take ownership.
-            GlobalFree(hmem);
-            return false;
-        }
-    }
-    true
+    let wide_bytes = unsafe { core::slice::from_raw_parts(wide.as_ptr() as *const u8, bytes) };
+    set_clipboard_format(CF_UNICODETEXT, wide_bytes, false)
 }
 
 /// Show the standard Windows "Save As" dialog and return the chosen
@@ -913,6 +877,48 @@ extern "C" fn cmd_copy_rtf() {
     }
 }
 
+/// Render the active buffer in **all three** clipboard formats —
+/// CF_UNICODETEXT (plain), CF_HTML (styled HTML wrapped per the
+/// CF_HTML byte-offset spec), and the registered "Rich Text
+/// Format" — so the receiving app can pick whichever it understands
+/// best. Notepad++'s upstream `NppExport` ships the same item
+/// under the same label.
+extern "C" fn cmd_copy_all() {
+    let sci = sdk::active_scintilla();
+    if sci.is_null() {
+        return;
+    }
+    // SAFETY: SCI_GETLENGTH takes no pointer; pure query.
+    let len = unsafe { sdk::SendMessageW(sci, SCI_GETLENGTH, 0, 0) };
+    let len_us = match usize::try_from(len) {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+    if len_us == 0 {
+        sdk::set_status("Export: empty buffer");
+        return;
+    }
+    let (text, styles) = collect_text_and_styles(sci, len_us);
+    if text.is_empty() {
+        sdk::set_status("Export: empty buffer");
+        return;
+    }
+    let runs = group_runs(&text, &styles);
+    let attrs = collect_style_attrs(sci, &runs);
+    let html = build_html(&runs, &attrs);
+    let rtf = build_rtf(&runs, &attrs);
+    // Plain text is the buffer's bytes decoded as UTF-8 (lossy on
+    // invalid sequences). Goes onto CF_UNICODETEXT as the
+    // lowest-common-denominator paste target.
+    let plain = String::from_utf8_lossy(&text).into_owned();
+
+    if copy_all_formats_to_clipboard(&plain, &html, &rtf) {
+        sdk::set_status("Export: HTML + RTF + plain copied to clipboard");
+    } else {
+        sdk::set_status("Export: clipboard write failed");
+    }
+}
+
 /// Build the RTF for the active buffer. Common path for both
 /// "Export to RTF..." and "Copy RTF to Clipboard"; mirrors the
 /// shape of `export_html_for_active` so the two formats stay in
@@ -946,61 +952,341 @@ fn export_rtf_for_active() -> String {
 /// Outlook, WordPad, and other RTF-aware editors paste from this
 /// format with formatting preserved.
 fn copy_rtf_to_clipboard(rtf: &str) -> bool {
-    // Resolve the registered RTF clipboard format. `RegisterClipboardFormat`
-    // canonicalises by name, so every process that asks for "Rich
-    // Text Format" gets the same format id back. Returns 0 on
-    // failure (extremely rare — only on resource exhaustion).
-    let format_name = b"Rich Text Format\0";
-    let cf_rtf = unsafe { RegisterClipboardFormatA(format_name.as_ptr()) };
+    let cf_rtf = register_rtf_format();
     if cf_rtf == 0 {
         return false;
     }
+    set_clipboard_format(cf_rtf, rtf.as_bytes(), true)
+}
 
-    let bytes = rtf.as_bytes();
-    // `bytes.len() + 1` would wrap on `usize::MAX` input — would
-    // then `GlobalAlloc(0)` succeeds with a minimum-sized block
-    // and the subsequent `copy_nonoverlapping(usize::MAX bytes)`
-    // would write past the end. `checked_add` bounds it.
-    let alloc_size = match bytes.len().checked_add(1) {
+/// Copy three formats — plain text (CF_UNICODETEXT), CF_HTML, and
+/// "Rich Text Format" — onto the clipboard in a single
+/// Open/Empty/Close sequence. The receiving app picks whichever
+/// format it understands (Word/Outlook prefer CF_HTML or RTF;
+/// browser-based editors that paste-as-HTML get the CF_HTML; plain
+/// editors fall back to the unicode text). Mirrors NppExport's
+/// "Copy all formats" flow.
+///
+/// Returns `true` if at least one of the three formats was
+/// accepted by the clipboard. The Win32 contract: `SetClipboardData`
+/// returns the handle (= success, clipboard now owns the memory)
+/// or null (= failure, plugin must `GlobalFree`). We track each
+/// format independently and free per-format on failure.
+fn copy_all_formats_to_clipboard(plain: &str, html: &str, rtf: &str) -> bool {
+    // Format registrations are independent: a failure to register
+    // CF_HTML or "Rich Text Format" (~impossible — only happens
+    // when the system-wide registered-format table is exhausted)
+    // means *that one* format gets skipped; the others still ship.
+    // CF_UNICODETEXT is built-in (id 13) so it never needs
+    // registration and never gets skipped.
+    let cf_html = register_html_format();
+    let cf_rtf = register_rtf_format();
+
+    // `chain(once(0))` bakes the NUL terminator that CF_UNICODETEXT
+    // requires into the wide-char vector before we hand it to
+    // `global_alloc_copy(.., false)` — so the `nul_terminate=false`
+    // arg below is correct, not a mistake.
+    let plain_wide: Vec<u16> = plain.encode_utf16().chain(core::iter::once(0)).collect();
+    let plain_byte_len = match plain_wide.len().checked_mul(core::mem::size_of::<u16>()) {
         Some(n) => n,
         None => return false,
     };
+
     let npp = sdk::npp_handle();
 
-    // SAFETY: same Win32 sequence as `copy_to_clipboard` — see that
-    // function's comment for the lifecycle. The only differences:
-    // the clipboard format is the registered RTF id (not
-    // CF_UNICODETEXT), and the bytes are raw ASCII (RTF escapes its
-    // own non-ASCII content via `\uN?` so the wire format is
-    // always 7-bit safe).
+    // SAFETY: each `global_alloc_copy` produces an owned movable
+    // global handle (or null on alloc failure). We collect all
+    // three before opening the clipboard so a partial-failure
+    // path can free everything cleanly. The Open/Empty/Set/Close
+    // sequence below matches the `set_clipboard_format` lifecycle;
+    // each `SetClipboardData` either transfers ownership (returns
+    // non-null) or fails (we free).
     unsafe {
-        let hmem = GlobalAlloc(GMEM_MOVEABLE, alloc_size);
+        let plain_wide_bytes =
+            core::slice::from_raw_parts(plain_wide.as_ptr() as *const u8, plain_byte_len);
+        let plain_hmem = global_alloc_copy(plain_wide_bytes, false);
+        // Skip the HTML / RTF allocations entirely if their
+        // registered format ids are zero — no point allocating
+        // for a format we can't set.
+        let html_hmem = if cf_html != 0 {
+            global_alloc_copy(build_cf_html(html).as_bytes(), true)
+        } else {
+            core::ptr::null_mut()
+        };
+        let rtf_hmem = if cf_rtf != 0 {
+            global_alloc_copy(rtf.as_bytes(), true)
+        } else {
+            core::ptr::null_mut()
+        };
+
+        // If every allocation failed there's nothing to ship.
+        if plain_hmem.is_null() && html_hmem.is_null() && rtf_hmem.is_null() {
+            return false;
+        }
+
+        if OpenClipboard(npp) == 0 {
+            if !plain_hmem.is_null() {
+                GlobalFree(plain_hmem);
+            }
+            if !html_hmem.is_null() {
+                GlobalFree(html_hmem);
+            }
+            if !rtf_hmem.is_null() {
+                GlobalFree(rtf_hmem);
+            }
+            return false;
+        }
+        EmptyClipboard();
+
+        let r_plain = if !plain_hmem.is_null() {
+            SetClipboardData(CF_UNICODETEXT, plain_hmem)
+        } else {
+            core::ptr::null_mut()
+        };
+        let r_html = if !html_hmem.is_null() {
+            SetClipboardData(cf_html, html_hmem)
+        } else {
+            core::ptr::null_mut()
+        };
+        let r_rtf = if !rtf_hmem.is_null() {
+            SetClipboardData(cf_rtf, rtf_hmem)
+        } else {
+            core::ptr::null_mut()
+        };
+
+        CloseClipboard();
+
+        // Free any handles the clipboard didn't take.
+        if !plain_hmem.is_null() && r_plain.is_null() {
+            GlobalFree(plain_hmem);
+        }
+        if !html_hmem.is_null() && r_html.is_null() {
+            GlobalFree(html_hmem);
+        }
+        if !rtf_hmem.is_null() && r_rtf.is_null() {
+            GlobalFree(rtf_hmem);
+        }
+
+        // Success if at least one format landed.
+        !r_plain.is_null() || !r_html.is_null() || !r_rtf.is_null()
+    }
+}
+
+/// Cache the registered "Rich Text Format" clipboard id. Win32's
+/// `RegisterClipboardFormat` canonicalises by name (every caller
+/// that asks for the same name gets the same id) so the value is
+/// stable for the process lifetime; the `OnceLock` shaves one
+/// kernel transition per clipboard write after the first.
+fn register_rtf_format() -> u32 {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<u32> = OnceLock::new();
+    *CACHED.get_or_init(|| unsafe { RegisterClipboardFormatA(c"Rich Text Format".as_ptr()) })
+}
+
+/// Same shape as [`register_rtf_format`] but for the `CF_HTML`
+/// registered format. The exact name "HTML Format" is canonical
+/// per Microsoft's CF_HTML spec; Word, Outlook, and Chromium-
+/// based editors all key on this string.
+fn register_html_format() -> u32 {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<u32> = OnceLock::new();
+    *CACHED.get_or_init(|| unsafe { RegisterClipboardFormatA(c"HTML Format".as_ptr()) })
+}
+
+/// Wrap an HTML document in CF_HTML's documented byte-offset
+/// header so Word, Outlook, and CF_HTML-aware browsers can paste
+/// it as styled HTML rather than raw markup.
+///
+/// CF_HTML's spec (Microsoft):
+/// ```text
+/// Version:0.9
+/// StartHTML:NNNNNNNNNN
+/// EndHTML:NNNNNNNNNN
+/// StartFragment:NNNNNNNNNN
+/// EndFragment:NNNNNNNNNN
+/// <html>...
+/// <body>...
+/// <!--StartFragment-->[content]<!--EndFragment-->
+/// </body></html>
+/// ```
+/// Each `NNNNNNNNNN` is a 10-digit zero-padded byte offset into
+/// the entire CF_HTML payload (header included). The receiving
+/// app reads the offsets to extract the "interesting" content
+/// without parsing the surrounding `<html>` shell.
+///
+/// We inject `<!--StartFragment-->` / `<!--EndFragment-->` markers
+/// into the existing `build_html` output (right inside the
+/// `<body>` tags), then prepend the header with computed offsets.
+fn build_cf_html(full_html: &str) -> String {
+    const SF_MARKER: &str = "<!--StartFragment-->";
+    const EF_MARKER: &str = "<!--EndFragment-->";
+    const BODY_OPEN: &str = "<body>";
+    const BODY_CLOSE: &str = "</body>";
+
+    let html_with_markers = if let (Some(open_idx), Some(close_idx)) =
+        (full_html.find(BODY_OPEN), full_html.rfind(BODY_CLOSE))
+    {
+        let after_open = open_idx + BODY_OPEN.len();
+        let mut s = String::with_capacity(full_html.len() + SF_MARKER.len() + EF_MARKER.len());
+        s.push_str(&full_html[..after_open]);
+        s.push_str(SF_MARKER);
+        s.push_str(&full_html[after_open..close_idx]);
+        s.push_str(EF_MARKER);
+        s.push_str(&full_html[close_idx..]);
+        s
+    } else {
+        // Defensive fallback: no `<body>` tags found in build_html
+        // output (shouldn't happen — build_html always emits them
+        // — but a future refactor that drops them would otherwise
+        // produce a malformed CF_HTML payload). Wrap the whole
+        // input with the minimal required structure.
+        format!("<html><body>{SF_MARKER}{full_html}{EF_MARKER}</body></html>")
+    };
+
+    // Defensive `find` rather than `.expect()` — even though both
+    // markers were just injected and must be present, an
+    // assertion failure here would panic across the FFI boundary
+    // when this is called from a plugin menu callback. Falling
+    // back to an empty payload is safer: the receiving app sees
+    // no clipboard data, the plugin doesn't crash the host.
+    let (sf_offset_in_html, ef_offset_in_html) = match (
+        html_with_markers.find(SF_MARKER),
+        html_with_markers.find(EF_MARKER),
+    ) {
+        (Some(sf), Some(ef)) => (sf, ef),
+        _ => return String::new(),
+    };
+
+    // Build the header twice through the same helper — once with
+    // placeholder zeros to measure the byte length, once with the
+    // computed real offsets. Both calls share the same `format!`
+    // template literal inside `cf_html_header`, so the lengths
+    // are guaranteed identical (each `{:010}` field is exactly
+    // 10 ASCII digits regardless of value, which is the property
+    // CF_HTML's spec relies on). That sidesteps the alternative
+    // — a separate const "template" string whose length had to
+    // match the runtime `format!` — which can silently drift in
+    // release builds where `debug_assert_eq!` is a no-op.
+    let header_len = cf_html_header(0, 0, 0, 0).len();
+
+    let start_html = header_len;
+    let start_fragment = header_len + sf_offset_in_html + SF_MARKER.len();
+    let end_fragment = header_len + ef_offset_in_html;
+    let end_html = header_len + html_with_markers.len();
+
+    let header = cf_html_header(start_html, end_html, start_fragment, end_fragment);
+    debug_assert_eq!(
+        header.len(),
+        header_len,
+        "CF_HTML header length drifted between sizing and emission — offsets would be off",
+    );
+
+    format!("{header}{html_with_markers}")
+}
+
+/// Format a CF_HTML header with the four offset fields. Used by
+/// [`build_cf_html`] to size and to emit, ensuring both passes
+/// share one format-string source of truth.
+fn cf_html_header(
+    start_html: usize,
+    end_html: usize,
+    start_fragment: usize,
+    end_fragment: usize,
+) -> String {
+    format!(
+        "Version:0.9\r\n\
+         StartHTML:{start_html:010}\r\n\
+         EndHTML:{end_html:010}\r\n\
+         StartFragment:{start_fragment:010}\r\n\
+         EndFragment:{end_fragment:010}\r\n",
+    )
+}
+
+/// Allocate a `GlobalAlloc(GMEM_MOVEABLE)` block of `bytes.len()`
+/// (or `bytes.len() + 1` if `nul_terminate`), copy `bytes` in, and
+/// return the handle. Returns null on alloc / lock / overflow
+/// failure. The caller hands the handle to `SetClipboardData`
+/// (which transfers ownership) or `GlobalFree`s it.
+///
+/// # Safety
+///
+/// On success the returned `*mut c_void` is a valid `HGLOBAL`
+/// owned by the caller. Caller is responsible for either passing
+/// it to a successful `SetClipboardData` or `GlobalFree`-ing it.
+unsafe fn global_alloc_copy(bytes: &[u8], nul_terminate: bool) -> *mut c_void {
+    let alloc_size = if nul_terminate {
+        match bytes.len().checked_add(1) {
+            Some(n) => n,
+            None => return core::ptr::null_mut(),
+        }
+    } else {
+        bytes.len()
+    };
+    // SAFETY: GlobalAlloc with GMEM_MOVEABLE returns a handle (or
+    // null on failure). We don't dereference until after a
+    // successful Lock.
+    let hmem = unsafe { GlobalAlloc(GMEM_MOVEABLE, alloc_size) };
+    if hmem.is_null() {
+        return core::ptr::null_mut();
+    }
+    // SAFETY: GlobalLock on a valid moveable handle returns a
+    // pointer to its content (or null on failure). We free on
+    // failure to keep the handle from leaking.
+    let dest = unsafe { GlobalLock(hmem) };
+    if dest.is_null() {
+        unsafe { GlobalFree(hmem) };
+        return core::ptr::null_mut();
+    }
+    if !bytes.is_empty() {
+        // SAFETY: `dest` is valid for `alloc_size` bytes; `bytes`
+        // is valid for `bytes.len()` bytes which is ≤ alloc_size.
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), dest as *mut u8, bytes.len());
+        }
+    }
+    if nul_terminate {
+        // SAFETY: `dest + bytes.len()` is in-bounds (alloc_size = bytes.len() + 1).
+        unsafe { *(dest as *mut u8).add(bytes.len()) = 0 };
+    }
+    // SAFETY: pairs with the GlobalLock above. After unlock the
+    // lock count returns to zero, which SetClipboardData requires.
+    unsafe { GlobalUnlock(hmem) };
+    hmem
+}
+
+/// Push a single clipboard format onto the clipboard. Wraps the
+/// Open/Empty/Set/Close sequence around one
+/// [`global_alloc_copy`]; on `SetClipboardData` failure the
+/// allocation is freed. Returns `true` on success.
+///
+/// Known limitation (inherited from Win32): `EmptyClipboard` runs
+/// before `SetClipboardData`, so a SetClipboardData failure
+/// (extremely rare — only OOM or resource exhaustion) loses the
+/// user's previous clipboard content. There's no API path to set
+/// without first emptying.
+fn set_clipboard_format(format: u32, bytes: &[u8], nul_terminate: bool) -> bool {
+    let npp = sdk::npp_handle();
+    // SAFETY: `global_alloc_copy` returns a handle owned by us
+    // until either `SetClipboardData` accepts ownership or we
+    // `GlobalFree` it on a failure path.
+    unsafe {
+        let hmem = global_alloc_copy(bytes, nul_terminate);
         if hmem.is_null() {
             return false;
         }
-        let dest = GlobalLock(hmem);
-        if dest.is_null() {
-            GlobalFree(hmem);
-            return false;
-        }
-        core::ptr::copy_nonoverlapping(bytes.as_ptr(), dest as *mut u8, bytes.len());
-        // Trailing NUL — RTF readers expect it.
-        *(dest as *mut u8).add(bytes.len()) = 0;
-        GlobalUnlock(hmem);
-
         if OpenClipboard(npp) == 0 {
             GlobalFree(hmem);
             return false;
         }
         EmptyClipboard();
-        let result = SetClipboardData(cf_rtf, hmem);
+        let result = SetClipboardData(format, hmem);
         CloseClipboard();
         if result.is_null() {
             GlobalFree(hmem);
             return false;
         }
+        true
     }
-    true
 }
 
 #[cfg(test)]
@@ -1502,6 +1788,87 @@ mod tests {
             rtf.contains("{\\fonttbl{\\f0\\fmodern Consolas;}}"),
             "empty sanitized font name should fall back to Consolas: {rtf:?}",
         );
+    }
+
+    // ---- CF_HTML tests ----
+
+    #[test]
+    fn build_cf_html_emits_required_header_fields() {
+        let html = "<!DOCTYPE html>\n<html>\n<body>\n<span>x</span>\n</body>\n</html>\n";
+        let payload = build_cf_html(html);
+        assert!(payload.starts_with("Version:0.9\r\n"));
+        assert!(payload.contains("StartHTML:"));
+        assert!(payload.contains("EndHTML:"));
+        assert!(payload.contains("StartFragment:"));
+        assert!(payload.contains("EndFragment:"));
+        assert!(payload.contains("<!--StartFragment-->"));
+        assert!(payload.contains("<!--EndFragment-->"));
+    }
+
+    #[test]
+    fn build_cf_html_offsets_point_at_correct_positions() {
+        // Parse the offsets out of the header and check they
+        // identify the documented positions in the payload.
+        let html = "<!DOCTYPE html>\n<html>\n<body>\n<span>x</span>\n</body>\n</html>\n";
+        let payload = build_cf_html(html);
+
+        let parse_offset = |key: &str| -> usize {
+            let line_start = payload.find(key).unwrap() + key.len();
+            // Each offset field is 10 ASCII digits.
+            payload[line_start..line_start + 10]
+                .parse::<usize>()
+                .unwrap()
+        };
+        let start_html = parse_offset("StartHTML:");
+        let end_html = parse_offset("EndHTML:");
+        let start_fragment = parse_offset("StartFragment:");
+        let end_fragment = parse_offset("EndFragment:");
+
+        // StartHTML lands at the first byte of `<` in `<!DOCTYPE`.
+        assert_eq!(&payload.as_bytes()[start_html..start_html + 1], b"<");
+        // EndHTML is the total payload length.
+        assert_eq!(end_html, payload.len());
+        // StartFragment lands immediately after the marker.
+        let sf_marker_end =
+            payload.find("<!--StartFragment-->").unwrap() + "<!--StartFragment-->".len();
+        assert_eq!(start_fragment, sf_marker_end);
+        // EndFragment lands at the start of the closing marker.
+        let ef_marker_start = payload.find("<!--EndFragment-->").unwrap();
+        assert_eq!(end_fragment, ef_marker_start);
+    }
+
+    #[test]
+    fn build_cf_html_offsets_are_zero_padded_to_10_digits() {
+        // The CF_HTML spec requires exactly 10-digit zero-padded
+        // offset fields. A drift in pad width would push every
+        // subsequent field's byte position.
+        let html = "<html><body>x</body></html>";
+        let payload = build_cf_html(html);
+        for key in ["StartHTML:", "EndHTML:", "StartFragment:", "EndFragment:"] {
+            let pos = payload.find(key).unwrap() + key.len();
+            let digits = &payload[pos..pos + 10];
+            assert!(
+                digits.chars().all(|c| c.is_ascii_digit()),
+                "{key} should be exactly 10 digits, got {digits:?}",
+            );
+            // The 11th char must be `\r` (the \r\n line terminator).
+            assert_eq!(payload.as_bytes()[pos + 10], b'\r');
+        }
+    }
+
+    #[test]
+    fn build_cf_html_falls_back_when_body_tags_missing() {
+        // Defensive path: an HTML input without `<body>` tags
+        // (shouldn't happen from build_html, but a future
+        // refactor could break the assumption) should still
+        // produce a valid CF_HTML payload by wrapping the input
+        // in minimal `<html><body>` scaffolding.
+        let payload = build_cf_html("<span>just a fragment</span>");
+        assert!(payload.contains("<!--StartFragment-->"));
+        assert!(payload.contains("just a fragment"));
+        assert!(payload.contains("<!--EndFragment-->"));
+        assert!(payload.contains("<html>"));
+        assert!(payload.contains("</html>"));
     }
 
     #[test]
