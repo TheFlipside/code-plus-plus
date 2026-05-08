@@ -1668,6 +1668,125 @@ unsafe fn update_window_title(hwnd: HWND, shell: &Shell) {
 /// # Safety
 ///
 /// Caller must invoke from the UI thread that owns `state`'s HWNDs.
+/// Bring the visible tab strip and window title into sync with
+/// `state.shell` after a synchronous Shell mutation that doesn't
+/// route through the loader (and so doesn't naturally trigger a
+/// `WM_APP_WAKE`). Used by the File menu handlers (New, Open,
+/// Reload, Close, Close All, Save As) — each one mutates
+/// `shell.tabs` or `shell.active_tab` in place and then calls
+/// this so the user sees the change immediately rather than
+/// after the next message-pump cycle.
+///
+/// # Safety
+///
+/// Caller must hold the UI thread's `&mut WindowState` borrow and
+/// not be in the middle of a plugin callback (sync_tab_strip
+/// sends synchronous TCM_* messages but doesn't re-enter wnd_proc
+/// for them).
+/// Run the Save As flow: prompt for a destination path (pre-filled
+/// with the active tab's current basename), then route through
+/// `Shell::save_buffer_as`. Used by both the explicit File→Save As
+/// menu path and the File→Save fallback when the active tab has no
+/// path (an untitled buffer can't Ctrl+S to "the active path"
+/// because there isn't one — we redirect to Save As instead of
+/// surfacing a confusing "no active file path" error).
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+unsafe fn run_save_as_flow(hwnd: HWND) {
+    let suggestion = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        state
+            .shell
+            .active()
+            .and_then(|t| t.path.as_ref())
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+    } else {
+        None
+    };
+    let new_path = prompt_save_path(hwnd, suggestion.as_deref());
+    let save_error: Option<String> = if let Some(p) = new_path {
+        if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+            let (shell, mut ui) = state.split();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                shell.save_buffer_as(&mut ui, p)
+            }));
+            match result {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(e.to_string()),
+                Err(_) => Some("internal panic during save".to_string()),
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(msg) = save_error {
+        show_error_dialog(hwnd, "Save As failed", &msg);
+    }
+    // save_buffer_as updates the tab's path on success — refresh
+    // the strip so the label switches from "new N" (or the old
+    // basename) to the new file's basename.
+    unsafe { refresh_tab_chrome(hwnd) };
+}
+
+/// Enforce the "always at least one tab" invariant: if `shell.tabs`
+/// is empty after a close path (Close, Close All, startup with no
+/// session and no CLI path), create a fresh untitled buffer so the
+/// user always sees an editor with at least one tab visible.
+///
+/// Notepad++ has the same invariant — closing the last tab pops a
+/// "new 1" tab into existence rather than leaving an empty editor
+/// chrome with no tab to type into.
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+unsafe fn ensure_one_tab(hwnd: HWND) {
+    let created = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        if state.shell.tabs.is_empty() {
+            let (shell, mut ui) = state.split();
+            // catch_unwind: same defensive shape as the menu
+            // handlers — a panic inside Shell or Win32Ui can't
+            // unwind across the wnd_proc's `extern "system"` frame.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                shell.new_untitled(&mut ui);
+            }));
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    // Only refresh chrome when we actually created a new tab — the
+    // close-path callers already ran `sync_tab_strip` once via
+    // `handle_close_active_tab_inner`, and the WM_APP_WAKE caller
+    // ran it during the drain. A redundant double-refresh is a
+    // wasteful TCM_INSERTITEMW + TCM_SETCURSEL pair on every
+    // close, observable in traces.
+    if created {
+        unsafe { refresh_tab_chrome(hwnd) };
+    }
+}
+
+unsafe fn refresh_tab_chrome(hwnd: HWND) {
+    if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        // SAFETY: caller holds the UI-thread invariant. Both
+        // helpers are `unsafe fn` because they send Win32 messages
+        // and read `state` through a raw pointer dance, but
+        // neither re-enters wnd_proc synchronously, so the borrow
+        // we hold here is exclusive for their duration.
+        unsafe {
+            sync_tab_strip(state);
+            update_window_title(hwnd, &state.shell);
+        }
+    }
+}
+
 unsafe fn sync_tab_strip(state: &mut WindowState) {
     while state.synced_tab_count < state.shell.tabs.len() {
         let idx = state.synced_tab_count;
@@ -1762,12 +1881,26 @@ unsafe fn sync_tab_strip(state: &mut WindowState) {
 const TAB_LABEL_MAX_TCHARS: usize = 260;
 
 fn tab_label_for(tab: &Tab) -> Vec<u16> {
-    let raw = tab
-        .path
-        .as_ref()
-        .and_then(|p| p.file_name().and_then(|s| s.to_str()))
-        .unwrap_or("Untitled");
-    let cleaned = sanitize_filename_for_display(raw);
+    // Three label sources, in order:
+    //   1. Real path → file_name basename (the common case).
+    //   2. No path but a `untitled_seq` set → "new N" (a buffer
+    //      created by File→New).
+    //   3. Fallback "Untitled" (a path with no parseable basename
+    //      — extremely rare in practice, but a safe label for
+    //      defense in depth).
+    let owned = tab.path.as_ref().and_then(|p| {
+        p.file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+    });
+    let owned = match owned {
+        Some(s) => s,
+        None => match tab.untitled_seq {
+            Some(n) => format!("new {n}"),
+            None => "Untitled".to_string(),
+        },
+    };
+    let cleaned = sanitize_filename_for_display(&owned);
     cleaned.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
@@ -6608,6 +6741,18 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         );
         let _ = SetFocus(Some(scintilla_hwnd));
 
+        // First-run / empty-session fallback: if neither a CLI path
+        // nor a stored session populated any tabs, pop a fresh
+        // untitled buffer so the user lands on a typable editor
+        // instead of an empty chrome. The "always at least one tab"
+        // invariant matches Notepad++'s behaviour and what the
+        // close paths enforce. Done AFTER `SetWindowLongPtrW` above
+        // so `state_from_hwnd` (used by `ensure_one_tab` →
+        // `refresh_tab_chrome`) resolves to the freshly-installed
+        // pointer; before this point the GWLP_USERDATA is still
+        // zero and the helper would no-op.
+        ensure_one_tab(main_hwnd);
+
         // Accelerator table. We route through `TranslateAcceleratorW`
         // rather than handling `WM_KEYDOWN` in the wnd_proc because
         // Scintilla owns keyboard focus while the user types, so a
@@ -7961,6 +8106,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     sync_tab_strip(state);
                     update_window_title(hwnd, &state.shell);
                 }
+                // Defense in depth for the "always at least one tab"
+                // invariant: a load failure on a fresh tab removes
+                // the tab in `apply_load_result`, which can leave the
+                // workspace empty. Pop a fallback untitled buffer so
+                // the user lands on something typable instead of an
+                // empty editor chrome.
+                ensure_one_tab(hwnd);
                 // Drain any FIF events the orchestrator delivered
                 // since last wake. Must happen AFTER the load /
                 // change drains above so a click on a FIF result
@@ -8000,24 +8152,46 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // tracing-subscriber misbehaviour — doesn't
                         // unwind across the `extern "system"`
                         // wnd_proc frame (UB at the FFI boundary).
-                        let save_error: Option<String> = {
-                            if let Some(state) = state_from_hwnd(hwnd) {
-                                let (shell, mut ui) = state.split();
-                                let result =
-                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                        shell.save_current_to_disk(&mut ui)
-                                    }));
-                                match result {
-                                    Ok(Ok(())) => None,
-                                    Ok(Err(e)) => Some(e.to_string()),
-                                    Err(_) => Some("internal panic during save".to_string()),
+                        // Three save outcomes:
+                        //   * Ok — written; nothing to surface.
+                        //   * Err(NoActivePath) — the active tab is
+                        //     untitled. Redirect to Save As so
+                        //     Ctrl+S on an untitled buffer DTRTs
+                        //     instead of throwing a confusing
+                        //     "no active file path" error.
+                        //   * Other Err — surface in the error
+                        //     dialog (read-only file, permission
+                        //     issue, encoding failure, etc.).
+                        enum SaveOutcome {
+                            Ok,
+                            RedirectSaveAs,
+                            Failed(String),
+                        }
+                        let outcome = if let Some(state) = state_from_hwnd(hwnd) {
+                            let (shell, mut ui) = state.split();
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    shell.save_current_to_disk(&mut ui)
+                                }));
+                            match result {
+                                Ok(Ok(())) => SaveOutcome::Ok,
+                                Ok(Err(codepp_shell::ShellError::NoActivePath)) => {
+                                    SaveOutcome::RedirectSaveAs
                                 }
-                            } else {
-                                None
+                                Ok(Err(e)) => SaveOutcome::Failed(e.to_string()),
+                                Err(_) => {
+                                    SaveOutcome::Failed("internal panic during save".to_string())
+                                }
                             }
+                        } else {
+                            SaveOutcome::Ok
                         };
-                        if let Some(msg) = save_error {
-                            show_error_dialog(hwnd, "Save failed", &msg);
+                        match outcome {
+                            SaveOutcome::Ok => {}
+                            SaveOutcome::RedirectSaveAs => run_save_as_flow(hwnd),
+                            SaveOutcome::Failed(msg) => {
+                                show_error_dialog(hwnd, "Save failed", &msg);
+                            }
                         }
                         // On a successful save, save_current_to_disk
                         // queues NPPN_FILESAVED and clears the dirty
@@ -8037,6 +8211,11 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 shell.new_untitled(&mut ui);
                             }));
                         }
+                        // The new tab won't appear on the strip
+                        // without an explicit sync — `new_untitled`
+                        // is synchronous, doesn't go through the
+                        // loader, so no WM_APP_WAKE is queued.
+                        refresh_tab_chrome(hwnd);
                         fire_queued_notifications(hwnd);
                     }
                     ID_FILE_OPEN => {
@@ -8053,48 +8232,21 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                     }));
                             }
                         }
+                        // If `open_file` switched to an existing tab
+                        // (the de-dupe branch) there's no async load
+                        // to wake on, so the tab strip's TCM_SETCURSEL
+                        // won't update without an explicit refresh.
+                        // Idempotent in the load-actually-kicked-off
+                        // case (the WM_APP_WAKE drain runs sync_tab_strip
+                        // again when the load completes).
+                        refresh_tab_chrome(hwnd);
                         fire_queued_notifications(hwnd);
                     }
                     ID_FILE_SAVE_AS => {
-                        // Pre-fill with the active tab's basename so
-                        // the user sees what they're renaming. Read
-                        // the suggestion from the borrow then drop
-                        // it before showing the modal dialog.
-                        let suggestion = if let Some(state) = state_from_hwnd(hwnd) {
-                            state
-                                .shell
-                                .active()
-                                .and_then(|t| t.path.as_ref())
-                                .and_then(|p| p.file_name())
-                                .and_then(|s| s.to_str())
-                                .map(|s| s.to_string())
-                        } else {
-                            None
-                        };
-                        let new_path = prompt_save_path(hwnd, suggestion.as_deref());
-                        let save_error: Option<String> = if let Some(p) = new_path {
-                            if let Some(state) = state_from_hwnd(hwnd) {
-                                let (shell, mut ui) = state.split();
-                                let result =
-                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                        shell.save_buffer_as(&mut ui, p)
-                                    }));
-                                match result {
-                                    Ok(Ok(())) => None,
-                                    Ok(Err(e)) => Some(e.to_string()),
-                                    Err(_) => Some("internal panic during save".to_string()),
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-                        if let Some(msg) = save_error {
-                            show_error_dialog(hwnd, "Save As failed", &msg);
-                        }
+                        run_save_as_flow(hwnd);
                         // save_buffer_as clears the dirty glyph via
-                        // UiPlatform::mark_saved on success.
+                        // UiPlatform::mark_saved on success and
+                        // run_save_as_flow refreshes the tab strip.
                         fire_queued_notifications(hwnd);
                     }
                     ID_FILE_SAVE_ALL => {
@@ -8133,6 +8285,10 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 .join("\n");
                             show_error_dialog(hwnd, "Save All — some files failed", &summary);
                         }
+                        // Save All flips the active tab during the
+                        // loop and restores it; the tab strip
+                        // selection needs to follow.
+                        refresh_tab_chrome(hwnd);
                         fire_queued_notifications(hwnd);
                     }
                     ID_FILE_CLOSE_ALL => {
@@ -8160,6 +8316,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             }
                             handle_close_active_tab(hwnd);
                         }
+                        // The "always at least one tab" invariant:
+                        // Close All leaves the workspace empty; pop a
+                        // fresh untitled buffer so the user sees a
+                        // visible tab to type into instead of an
+                        // empty editor chrome.
+                        ensure_one_tab(hwnd);
                         fire_queued_notifications(hwnd);
                     }
                     ID_FILE_RELOAD => {
@@ -8206,6 +8368,11 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     }
                     ID_FILE_CLOSE => {
                         handle_close_active_tab(hwnd);
+                        // The "always at least one tab" invariant:
+                        // closing the last tab pops a fresh untitled
+                        // buffer so the user always sees an editor
+                        // with a visible tab to type into.
+                        ensure_one_tab(hwnd);
                     }
                     ID_FILE_EXIT => {
                         let _ = DestroyWindow(hwnd);

@@ -303,6 +303,15 @@ pub struct Tab {
     /// expose `NPPM_SETBUFFERLANGTYPE` so plugins can override. New
     /// (unsaved) tabs and unrecognised extensions default to `L_TEXT`.
     pub lang: LangType,
+    /// Per-tab untitled sequence number — `Some(N)` for buffers
+    /// created by File→New that haven't been saved yet, rendered
+    /// in the tab strip as `"new N"`. Cleared (`= None`) by
+    /// [`Shell::save_buffer_as`] once the buffer gets a real path.
+    /// New numbers are assigned in [`Shell::new_untitled`] using
+    /// the smallest unused value across all currently-open
+    /// untitled tabs, so closing `new 1` then creating a new
+    /// untitled buffer gives `new 1` again.
+    pub untitled_seq: Option<u32>,
 }
 
 impl Default for Tab {
@@ -317,6 +326,7 @@ impl Default for Tab {
             pending_load: None,
             scintilla_doc: 0,
             lang: L_TEXT,
+            untitled_seq: None,
         }
     }
 }
@@ -605,6 +615,29 @@ impl Shell {
         id
     }
 
+    /// Smallest unused untitled sequence number across all currently-
+    /// open tabs. Closing `new 1` and creating a new untitled buffer
+    /// gives `new 1` again — same convention Notepad++ uses, and
+    /// keeps the displayed numbers small for ergonomic tab labels.
+    fn next_untitled_seq(&self) -> u32 {
+        // The buffer-id counter (i32, currently `next_buffer_id`)
+        // would have panicked at i32::MAX (~2 billion opens in one
+        // session) long before this loop could reach u32::MAX, so
+        // the search is bounded in practice. We still cap explicitly
+        // at u32::MAX rather than risk a non-terminating loop on a
+        // hypothetical future buffer-id refactor that uses u64.
+        let mut n: u32 = 1;
+        loop {
+            if !self.tabs.iter().any(|t| t.untitled_seq == Some(n)) {
+                return n;
+            }
+            match n.checked_add(1) {
+                Some(next) => n = next,
+                None => return u32::MAX,
+            }
+        }
+    }
+
     /// Drain queued plugin notifications. Called by the UI after
     /// [`Self::drain`] (or any operation that may have queued a
     /// notification) — the UI fires each one through
@@ -891,8 +924,10 @@ impl Shell {
     /// milestone's concern.
     pub fn new_untitled<U: UiPlatform>(&mut self, ui: &mut U) {
         let id = self.allocate_buffer_id();
+        let seq = self.next_untitled_seq();
         self.tabs.push(Tab {
             id,
+            untitled_seq: Some(seq),
             ..Tab::default()
         });
         let new_idx = self.tabs.len() - 1;
@@ -1118,6 +1153,12 @@ impl Shell {
                     // .txt → .rs Save As immediately gets Rust
                     // highlighting on the next paint.
                     tab.lang = LangType::from_path(&new_path);
+                    // The buffer is no longer untitled — drop the
+                    // sequence number so the tab strip switches
+                    // from "new N" to the file's basename, and so
+                    // a future File→New can reuse the now-freed
+                    // sequence value.
+                    tab.untitled_seq = None;
                 }
                 if let Err(e) = self.file_watcher.watch(&new_path) {
                     tracing::warn!(error = %e, path = ?new_path, "failed to watch new path after Save As");
@@ -1159,6 +1200,26 @@ impl Shell {
     }
 
     pub fn open_file(&mut self, path: PathBuf) {
+        // De-duplicate: if the path is already open in some tab,
+        // switch to that tab rather than allocating a fresh one.
+        // Without this, the user can stack identical-content tabs
+        // by repeatedly Open-dialoging the same file — and Reload
+        // (which routes through `confirm_reload` → `open_file` for
+        // the not-yet-open case) would create duplicates of the
+        // file the user is reloading.
+        if let Some(idx) = self
+            .tabs
+            .iter()
+            .position(|t| t.path.as_deref() == Some(path.as_path()))
+        {
+            if self.active_tab != Some(idx) {
+                self.active_tab = Some(idx);
+                #[cfg(target_os = "windows")]
+                self.queue_buffer_activated();
+            }
+            return;
+        }
+
         let Some(req_id) = self.loader.open(path.clone()) else {
             return;
         };
@@ -1300,11 +1361,38 @@ impl Shell {
         self.pending_fif_launch = Some(prefill);
     }
 
-    /// Confirm a deferred reload: requeue the file through the loader.
-    /// Called by the UI after the user clicks Yes on the reload prompt
-    /// returned in [`PendingDialog::ConfirmReload`].
+    /// Confirm a deferred reload: requeue the file through the loader,
+    /// targeting the *existing* tab that already has this path. Called
+    /// by the UI after the user clicks Yes on the reload prompt
+    /// returned in [`PendingDialog::ConfirmReload`], and by File→Reload
+    /// (via [`Self::reload_active`]).
+    ///
+    /// Does **not** create a new tab — the path is already open by
+    /// definition (the file watcher only fires for watched files,
+    /// which are open files; menu-driven Reload only runs on the
+    /// active tab's path). Marks the matching tab's `pending_load`
+    /// so [`Self::apply_load_result`] overwrites its contents in
+    /// place when the loader completes.
+    ///
+    /// If the path *isn't* found in any tab — a defensive fallback
+    /// for hypothetical stale-watcher scenarios — falls through to
+    /// [`Self::open_file`], which will deduplicate or open as
+    /// appropriate.
     pub fn confirm_reload(&mut self, path: PathBuf) {
-        self.open_file(path);
+        let Some(idx) = self
+            .tabs
+            .iter()
+            .position(|t| t.path.as_deref() == Some(path.as_path()))
+        else {
+            self.open_file(path);
+            return;
+        };
+        let Some(req_id) = self.loader.open(path) else {
+            return;
+        };
+        if let Some(tab) = self.tabs.get_mut(idx) {
+            tab.pending_load = Some(req_id);
+        }
     }
 
     fn apply_load_result<U: UiPlatform>(
@@ -4884,5 +4972,230 @@ mod tests {
         let mut ui = FakeUi::default();
         let r = shell.save_buffer_as(&mut ui, target);
         assert!(matches!(r, Err(ShellError::NoActivePath)));
+    }
+
+    #[test]
+    fn new_untitled_assigns_sequential_numbers() {
+        // First New gets seq 1; second gets 2; third gets 3.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        shell.new_untitled(&mut ui);
+        shell.new_untitled(&mut ui);
+        let seqs: Vec<Option<u32>> = shell.tabs.iter().map(|t| t.untitled_seq).collect();
+        assert_eq!(seqs, vec![Some(1), Some(2), Some(3)]);
+    }
+
+    #[test]
+    fn new_untitled_after_close_reuses_smallest_unused_seq() {
+        // Close `new 1` then create another untitled buffer — the
+        // new one takes seq 1 again, not seq 4. Matches Notepad++'s
+        // smallest-unused convention and keeps the tab labels
+        // ergonomic over a long session.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui); // seq 1
+        shell.new_untitled(&mut ui); // seq 2
+        shell.new_untitled(&mut ui); // seq 3
+                                     // Close the first tab (seq 1).
+        shell.active_tab = Some(0);
+        shell.close_active_tab();
+        // The remaining tabs should be seqs 2 and 3.
+        let remaining: Vec<Option<u32>> = shell.tabs.iter().map(|t| t.untitled_seq).collect();
+        assert_eq!(remaining, vec![Some(2), Some(3)]);
+        // Next New picks up the freed slot rather than allocating 4.
+        shell.new_untitled(&mut ui);
+        let after: Vec<Option<u32>> = shell.tabs.iter().map(|t| t.untitled_seq).collect();
+        assert_eq!(after, vec![Some(2), Some(3), Some(1)]);
+    }
+
+    #[test]
+    fn save_buffer_as_clears_untitled_seq() {
+        // After Save As gives an untitled buffer a real path, the
+        // untitled seq is dropped — the tab label switches from
+        // "new N" to the file basename, and the freed N becomes
+        // available for a future File→New.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("named.txt");
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        ui.buffer_text = "x\n".to_string();
+        assert_eq!(shell.tabs[0].untitled_seq, Some(1));
+        shell.save_buffer_as(&mut ui, target.clone()).unwrap();
+        assert_eq!(shell.tabs[0].untitled_seq, None);
+        assert_eq!(shell.tabs[0].path.as_deref(), Some(target.as_path()));
+    }
+
+    #[test]
+    fn open_file_already_open_just_switches() {
+        // Opening a file that's already in tab 0 while tab 1 is
+        // active should switch active back to tab 0, not create a
+        // duplicate tab. Verifies the de-duplication branch in
+        // open_file's prologue.
+        let dir = tempfile::tempdir().unwrap();
+        let p1 = dir.path().join("first.txt");
+        let p2 = dir.path().join("second.txt");
+        std::fs::write(&p1, "1\n").unwrap();
+        std::fs::write(&p2, "2\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(p1.clone());
+        shell.open_file(p2.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() >= 2,
+            Duration::from_secs(2),
+        );
+        assert_eq!(shell.tabs.len(), 2);
+        assert_eq!(shell.active_tab, Some(1));
+
+        // Re-opening p1: tab count stays at 2, active flips to 0.
+        shell.open_file(p1.clone());
+        assert_eq!(shell.tabs.len(), 2);
+        assert_eq!(shell.active_tab, Some(0));
+    }
+
+    #[test]
+    fn open_file_already_active_is_idempotent() {
+        // If the path is already open AND active, open_file is a
+        // pure no-op — no extra tab, no spurious BUFFERACTIVATED.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("only.txt");
+        std::fs::write(&path, "x\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+        let _ = shell.take_notifications();
+
+        shell.open_file(path);
+        // No new tab.
+        assert_eq!(shell.tabs.len(), 1);
+        // No spurious activation notification.
+        let queued = shell.take_notifications();
+        assert!(
+            !queued
+                .iter()
+                .any(|n| matches!(n, Notification::BufferActivated { .. })),
+            "re-opening already-active path must not queue BUFFERACTIVATED",
+        );
+    }
+
+    #[test]
+    fn open_file_dedupe_known_limitation_for_in_flight_load() {
+        // Pinning a known limitation: opening the same file twice in
+        // quick succession *before the first load completes* can
+        // produce two tabs. The de-dupe branch in `open_file` keys
+        // on `tab.path`, which is `None` while the load is still
+        // in flight, so the second call falls through. The reuse-
+        // empty-active branch is also gated on
+        // `pending_load.is_none()`, which is false during the
+        // first request's flight, so the second call allocates a
+        // fresh tab.
+        //
+        // Fixing this cleanly needs a `pending_path: Option<PathBuf>`
+        // on `Tab` (or a Shell-side `HashMap<RequestId, PathBuf>`)
+        // so de-dupe can see the in-flight path before it lands —
+        // tracked for a follow-up commit. The user-visible report
+        // that motivated the de-dupe (Reload creating duplicates,
+        // see `confirm_reload`) doesn't go through this path: it
+        // already targets the matching tab directly.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("once.txt");
+        std::fs::write(&path, "x\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path.clone());
+        shell.open_file(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() >= 2,
+            Duration::from_secs(2),
+        );
+        // Today's behaviour: 2 tabs both holding the same path.
+        // When the limitation is fixed, this assertion flips to 1
+        // and the test renames; the test stays as the regression
+        // gate.
+        assert_eq!(shell.tabs.len(), 2);
+        assert_eq!(shell.tabs[0].path.as_deref(), Some(path.as_path()));
+        assert_eq!(shell.tabs[1].path.as_deref(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn close_active_tab_can_drain_to_empty() {
+        // Verify that `close_active_tab` itself produces an empty
+        // tab list when called repeatedly — the contract that
+        // `ensure_one_tab` (UI-side) layers on top of. Without this
+        // contract, the UI would pop infinite untitled tabs trying
+        // to satisfy the invariant.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        shell.new_untitled(&mut ui);
+        shell.new_untitled(&mut ui);
+        assert_eq!(shell.tabs.len(), 3);
+        while shell.close_active_tab().is_some() {}
+        assert!(shell.tabs.is_empty());
+        assert_eq!(shell.active_tab, None);
+    }
+
+    #[test]
+    fn confirm_reload_overwrites_active_tab_in_place() {
+        // Reload via confirm_reload (the same path File→Reload
+        // takes) replaces the active tab's content with the
+        // post-reload bytes — same buffer id, same tab index. No
+        // new tab.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("reload.txt");
+        std::fs::write(&path, "first\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+        let original_id = shell.tabs[0].id;
+        let initial_tabs = shell.tabs.len();
+
+        std::fs::write(&path, "second\n").unwrap();
+        let calls_before = ui.set_text_calls.len();
+        shell.confirm_reload(path.clone());
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() > calls_before,
+            Duration::from_secs(2),
+        );
+
+        // Tab count unchanged — no duplicate created.
+        assert_eq!(shell.tabs.len(), initial_tabs);
+        // Same buffer id — reload, not re-open.
+        assert_eq!(shell.tabs[0].id, original_id);
+        // New content arrived.
+        assert!(ui.set_text_calls.last().unwrap().0.contains("second"));
     }
 }
