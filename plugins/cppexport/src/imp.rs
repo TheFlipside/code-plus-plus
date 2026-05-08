@@ -51,13 +51,12 @@ extern "system" {
     fn GetSaveFileNameW(ofn: *mut OpenFileName) -> i32;
 }
 
-// Plugin-specific Scintilla messages — the per-byte style queries
-// and the buffer-text reads the HTML/RTF export needs. The SDK
-// only ships the selection-replacement subset every plugin shares;
-// per-style introspection is unique to cppexport.
+// Plugin-specific Scintilla messages — the buffer-text/style
+// queries and the per-style attribute reads the HTML/RTF export
+// needs. The SDK only ships the selection-replacement subset every
+// plugin shares; per-style introspection is unique to cppexport.
 const SCI_GETLENGTH: u32 = 2006;
-const SCI_GETTEXT: u32 = 2182;
-const SCI_GETSTYLEAT: u32 = 2010;
+const SCI_GETSTYLEDTEXTFULL: u32 = 2778;
 const SCI_STYLEGETFORE: u32 = 2481;
 const SCI_STYLEGETBACK: u32 = 2482;
 const SCI_STYLEGETBOLD: u32 = 2483;
@@ -65,6 +64,24 @@ const SCI_STYLEGETITALIC: u32 = 2484;
 const SCI_STYLEGETSIZE: u32 = 2485;
 const SCI_STYLEGETFONT: u32 = 2486;
 const STYLE_DEFAULT: u32 = 32;
+
+/// Mirror of Scintilla's `Sci_CharacterRangeFull` (Sci_Position
+/// = ptrdiff_t, so two pointer-sized signed integers).
+#[repr(C)]
+struct SciCharacterRangeFull {
+    cp_min: isize,
+    cp_max: isize,
+}
+
+/// Mirror of Scintilla's `Sci_TextRangeFull`. Used as the
+/// `lparam` for `SCI_GETSTYLEDTEXTFULL`. Scintilla fills the
+/// buffer with interleaved (text byte, style byte) pairs over
+/// the requested range.
+#[repr(C)]
+struct SciTextRangeFull {
+    chrg: SciCharacterRangeFull,
+    lpstr_text: *mut u8,
+}
 
 // Win32 clipboard / global-memory constants.
 const CF_UNICODETEXT: u32 = 13;
@@ -170,57 +187,76 @@ pub extern "C" fn isUnicode() -> i32 {
 
 // ---- Scintilla helpers ----
 
-/// Read the entire active buffer as raw UTF-8 bytes.
+/// Pull the entire buffer's text and per-byte style indices in a
+/// single `SCI_GETSTYLEDTEXTFULL` round-trip. Returns
+/// `(text_bytes, style_bytes)` of equal length.
 ///
-/// `SCI_GETTEXT` writes `length + 1` bytes (content plus NUL) into
-/// the supplied buffer when called with a length argument. We allocate
-/// `len + 1` and truncate the trailing NUL afterward. Hardened with
-/// `usize::try_from` + `checked_add` against pathological sizes (same
-/// pattern as cppconverter's `get_selection_bytes`).
-fn get_buffer_bytes(sci: Hwnd) -> Vec<u8> {
-    if sci.is_null() {
-        return Vec::new();
+/// **Performance:** the prior implementation called `SCI_GETSTYLEAT`
+/// once per byte — N round-trips for an N-byte buffer. On a 200KB
+/// source file that's 200,000 SendMessage calls; cppexport users
+/// reported export-button latency. `SCI_GETSTYLEDTEXTFULL` returns
+/// the same data in one call by writing alternating
+/// (text_byte, style_byte) pairs into a caller-supplied buffer.
+///
+/// **Layout:** Scintilla writes `2 * (cp_max - cp_min) + 2` bytes —
+/// one text byte plus one style byte per character in the range,
+/// followed by a trailing NUL pair. We split the result by even/odd
+/// indices into the two output streams.
+fn collect_text_and_styles(sci: Hwnd, len: usize) -> (Vec<u8>, Vec<u8>) {
+    if sci.is_null() || len == 0 {
+        return (Vec::new(), Vec::new());
     }
-    // SAFETY: SCI_GETLENGTH takes no pointer; pure query.
-    let len = unsafe { sdk::SendMessageW(sci, SCI_GETLENGTH, 0, 0) };
-    if len <= 0 {
-        return Vec::new();
-    }
-    let len_us = match usize::try_from(len) {
-        Ok(n) => n,
-        Err(_) => return Vec::new(),
-    };
-    let alloc = match len_us.checked_add(1) {
+    // Allocate the interleaved buffer. `len.checked_mul(2)` guards
+    // against a (theoretical) document so large that doubling
+    // overflows usize — defense in depth, since the document size
+    // can't exceed `isize::MAX` on any realistic target.
+    let alloc = match len.checked_mul(2).and_then(|n| n.checked_add(2)) {
         Some(n) => n,
-        None => return Vec::new(),
+        None => return (Vec::new(), Vec::new()),
+    };
+    // Convert `len` to `isize` for the range's `cp_max` field
+    // explicitly rather than via an `as` cast — `len > isize::MAX`
+    // (already implicit-capped by the `checked_mul(2)` guard above,
+    // but worth pinning) would otherwise cast to a negative value
+    // and Scintilla would silently treat the range as empty.
+    let cp_max = match isize::try_from(len) {
+        Ok(n) => n,
+        Err(_) => return (Vec::new(), Vec::new()),
     };
     let mut buf = vec![0u8; alloc];
-    // SAFETY: `SCI_GETTEXT(length, *char)` reads `length` from wparam
-    // (which we pass as `alloc`, so Scintilla writes at most `alloc`
-    // bytes — content + NUL terminator) and writes through `lparam`
-    // for the duration of the call.
-    unsafe {
-        sdk::SendMessageW(sci, SCI_GETTEXT, alloc, buf.as_mut_ptr() as isize);
-    }
-    buf.truncate(len_us);
-    buf
-}
+    let buf_ptr = buf.as_mut_ptr();
 
-/// For each byte in the buffer, ask Scintilla for its style index
-/// via `SCI_GETSTYLEAT(pos)`. One round-trip per byte — fine for
-/// modest buffers; a larger document benefits from `SCI_GETSTYLEDTEXT`
-/// which returns interleaved text/style bytes in one call. Deferred
-/// until a perf gripe surfaces.
-fn collect_style_bytes(sci: Hwnd, len: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(len);
-    for pos in 0..len {
-        // SAFETY: SCI_GETSTYLEAT takes wparam=pos as a position; no
-        // pointer arguments. The return is a style byte (truncated
-        // from the LRESULT to u8 by the cast).
-        let style = unsafe { sdk::SendMessageW(sci, SCI_GETSTYLEAT, pos, 0) };
-        out.push(style as u8);
+    let mut range = SciTextRangeFull {
+        chrg: SciCharacterRangeFull { cp_min: 0, cp_max },
+        lpstr_text: buf_ptr,
+    };
+    // SAFETY: `range` is a valid `Sci_TextRangeFull` for the
+    // duration of the call. Scintilla writes through
+    // `range.lpstr_text` at most `2 * (cp_max - cp_min) + 2 =
+    // alloc` bytes — exactly the size we allocated. Synchronous
+    // UI-thread call, same no-TOCTOU invariant as the SDK's
+    // `get_selection_bytes` (no other code can mutate the buffer
+    // between the SCI_GETLENGTH that produced `len` and the fill
+    // call here).
+    unsafe {
+        sdk::SendMessageW(
+            sci,
+            SCI_GETSTYLEDTEXTFULL,
+            0,
+            &mut range as *mut SciTextRangeFull as isize,
+        );
     }
-    out
+
+    // Split interleaved (text, style) pairs into two byte streams.
+    // `chunks_exact(2).take(len)` handles the trailing NUL pair
+    // implicitly — we drop it by only consuming `len` chunks.
+    let mut text = Vec::with_capacity(len);
+    let mut styles = Vec::with_capacity(len);
+    for pair in buf.chunks_exact(2).take(len) {
+        text.push(pair[0]);
+        styles.push(pair[1]);
+    }
+    (text, styles)
 }
 
 /// Pull the per-style attributes (foreground / background / bold /
@@ -490,11 +526,19 @@ fn export_html_for_active() -> String {
     if sci.is_null() {
         return String::new();
     }
-    let text = get_buffer_bytes(sci);
+    // SAFETY: SCI_GETLENGTH takes no pointer; pure query.
+    let len = unsafe { sdk::SendMessageW(sci, SCI_GETLENGTH, 0, 0) };
+    let len_us = match usize::try_from(len) {
+        Ok(n) => n,
+        Err(_) => return String::new(),
+    };
+    if len_us == 0 {
+        return String::new();
+    }
+    let (text, styles) = collect_text_and_styles(sci, len_us);
     if text.is_empty() {
         return String::new();
     }
-    let styles = collect_style_bytes(sci, text.len());
     let runs = group_runs(&text, &styles);
     let attrs = collect_style_attrs(sci, &runs);
     build_html(&runs, &attrs)
