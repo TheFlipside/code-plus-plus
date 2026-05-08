@@ -13,3 +13,10 @@ Cargo.lock.bak
 # OS
 Thumbs.db
 .DS_Store
+
+# Output of the test-data generators in tools/. Each script writes
+# into the CWD; running any of them from the repo root would
+# otherwise litter the working tree.
+test_case.cpp
+test_case.rs
+/test_files/
