@@ -1,14 +1,18 @@
 //! Per-user configuration directory resolution.
 //!
-//! The directory is `<platform-config-base>/code-plus-plus/`, where
-//! the base follows each OS's convention:
+//! The directory is `<platform-config-base>/Code++/`, where the base
+//! follows each OS's convention:
 //!
-//!   - **Windows:** `%APPDATA%\code-plus-plus\` (e.g.
-//!     `C:\Users\<user>\AppData\Roaming\code-plus-plus\`).
-//!   - **Linux / other Unix:** `$XDG_CONFIG_HOME/code-plus-plus/`,
-//!     defaulting to `$HOME/.config/code-plus-plus/` when
-//!     `XDG_CONFIG_HOME` is unset (XDG Base Directory Spec).
-//!   - **macOS:** `$HOME/Library/Application Support/code-plus-plus/`.
+//!   - **Windows:** `%APPDATA%\Code++\` (e.g.
+//!     `C:\Users\<user>\AppData\Roaming\Code++\`).
+//!   - **Linux / other Unix:** `$XDG_CONFIG_HOME/Code++/`, defaulting
+//!     to `$HOME/.config/Code++/` when `XDG_CONFIG_HOME` is unset
+//!     (XDG Base Directory Spec).
+//!   - **macOS:** `$HOME/Library/Application Support/Code++/`.
+//!
+//! `+` is a valid filename character on NTFS, ext4/btrfs/xfs, and
+//! APFS/HFS+ — no escaping or alternative form is required on any
+//! supported target.
 //!
 //! Implemented manually rather than via the `dirs` crate because
 //! `dirs` transitively pulls in `option-ext`, which is MPL-2.0 —
@@ -23,7 +27,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-const APP_DIR: &str = "code-plus-plus";
+const APP_DIR: &str = "Code++";
 
 /// Per-user config directory. May not yet exist; callers writing to
 /// it must `create_dir_all` first (or use a writer that does — e.g.

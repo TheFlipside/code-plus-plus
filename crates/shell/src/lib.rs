@@ -2230,7 +2230,7 @@ impl Shell {
 ///   error context (e.g. `format!("buffer {id}: {e}")` in Save All).
 /// * `Session(s)` — surfaces `quick-xml` parse/write errors over
 ///   `session.xml`. May include the canonical session-file path
-///   (`%APPDATA%\code-plus-plus\session.xml`), which is an
+///   (`%APPDATA%\Code++\session.xml`), which is an
 ///   internal location, not user-supplied.
 ///
 /// Re-evaluate this table whenever a new variant is added or an

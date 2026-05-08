@@ -143,7 +143,7 @@ impl Session {
         quick_xml::se::to_writer(&mut xml, self).map_err(SessionError::Serialize)?;
 
         // Ensure the parent directory exists (first-run case where
-        // %APPDATA%\code-plus-plus has not been created yet). The
+        // %APPDATA%\Code++ has not been created yet). The
         // tempfile is anchored to this directory so persist() is a
         // same-filesystem rename and therefore atomic.
         let parent = path.parent().filter(|p| !p.as_os_str().is_empty());

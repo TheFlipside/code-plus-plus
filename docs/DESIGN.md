@@ -223,7 +223,7 @@ Pattern, mandatory for every worker that produces a UI-visible result:
 ### 5.5 Logging and diagnostics
 
 - `tracing` throughout. Default subscriber is **off** in release builds (zero cost) and **on** when `--verbose` or `CODEPP_LOG=info` is set.
-- One log sink: stderr in dev, rotating file in `%LOCALAPPDATA%\code-plus-plus\logs\` in release.
+- One log sink: stderr in dev, rotating file in `%LOCALAPPDATA%\Code++\logs\` in release.
 - Plugin host wraps every plugin call in a `tracing::span!` so misbehaving plugins are identifiable.
 
 ### 5.6 Testing strategy
@@ -292,7 +292,7 @@ A coverage matrix lives in `docs/nppm-coverage.md` and is updated every time a n
 
 ### 6.4 Lifecycle
 
-1. App starts → `plugin-host` enumerates `%APPDATA%\code-plus-plus\plugins\*\*.dll` (Windows) / `~/.config/code-plus-plus/plugins/*/*.so` (Linux) / equivalent on macOS.
+1. App starts → `plugin-host` enumerates `%APPDATA%\Code++\plugins\*\*.dll` (Windows) / `~/.config/Code++/plugins/*/*.so` (Linux) / equivalent on macOS.
 2. Loading is **deferred**: the host records the file path and registers menu placeholders. No DLL is mapped.
 3. First time the user opens the Plugins menu, hovers a plugin entry, or fires a hotkey owned by the plugin, the host loads that DLL: `LoadLibraryW` → resolve six exports → call `setInfo(NppData{...})` → call `getFuncsArray` → install the menu items and shortcuts → fire `NPPN_READY`.
 4. On subsequent file events, the host calls `beNotified` on each loaded plugin synchronously on the UI thread (matches N++ semantics).
