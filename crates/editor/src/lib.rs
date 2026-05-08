@@ -12,8 +12,9 @@ use core::ffi::c_void;
 use codepp_scintilla_sys::{
     sptr_t, uptr_t, CreateLexer, ScintillaDirectFunction, SCI_GETTARGETEND, SCI_GETTARGETSTART,
     SCI_REPLACETARGET, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT, SCI_SEARCHPREV,
-    SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETSEARCHFLAGS, SCI_SETTARGETRANGE, SCI_STYLECLEARALL,
-    SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFORE, SCI_STYLESETITALIC,
+    SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETSEARCHFLAGS,
+    SCI_SETTARGETRANGE, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFORE,
+    SCI_STYLESETITALIC, SCI_TEXTWIDTH,
 };
 
 /// Opaque handle to a Scintilla editor control.
@@ -169,6 +170,54 @@ impl EditorHandle {
     /// Toggle the italic attribute for a style.
     pub fn style_set_italic(&self, style: usize, italic: bool) {
         self.send(SCI_STYLESETITALIC, style as uptr_t, italic as sptr_t);
+    }
+
+    // --- Margins -----------------------------------------------------------
+
+    /// Set margin `n`'s type — e.g.
+    /// `SC_MARGIN_NUMBER` to render the margin as right-aligned
+    /// line numbers in `STYLE_LINENUMBER`. The margin's width and
+    /// per-style colours are configured separately via
+    /// [`Self::set_margin_width`] and the `style_set_*` helpers
+    /// against `STYLE_LINENUMBER`.
+    pub fn set_margin_type(&self, margin: u32, ty: u32) {
+        self.send(SCI_SETMARGINTYPEN, margin as uptr_t, ty as sptr_t);
+    }
+
+    /// Set margin `n`'s pixel width. Width `0` hides the margin
+    /// without resetting its type or other state — useful for the
+    /// future "show line numbers" view toggle, which only needs to
+    /// flip between a measured width and `0`.
+    pub fn set_margin_width(&self, margin: u32, pixels: i32) {
+        self.send(SCI_SETMARGINWIDTHN, margin as uptr_t, pixels as sptr_t);
+    }
+
+    /// Measure the rendered pixel width of `sample` when drawn in
+    /// the given Scintilla style. Used to size the line-number
+    /// margin so it fits a representative line count without
+    /// clipping at the current font's metrics. `sample` is sent as
+    /// a NUL-terminated ASCII byte string — non-ASCII samples
+    /// would risk a measurement against Scintilla's UTF-8 path,
+    /// which is well-defined but not what callers want here.
+    pub fn text_width(&self, style: usize, sample: &str) -> i32 {
+        debug_assert!(
+            sample.is_ascii(),
+            "text_width sample must be ASCII to keep the measurement font-metric-deterministic",
+        );
+        let mut buf = Vec::with_capacity(sample.len() + 1);
+        buf.extend_from_slice(sample.as_bytes());
+        buf.push(0);
+        // SCI_TEXTWIDTH reads `sample` synchronously on the
+        // direct-call path (`EditorHandle::send` always invokes
+        // `direct_fn` directly, never `PostMessage`), so the Vec
+        // backing the buffer is live for the entire duration of the
+        // measurement and can drop on return.
+        let pixels = self.send(SCI_TEXTWIDTH, style as uptr_t, buf.as_ptr() as sptr_t);
+        // Scintilla returns a pixel count that fits comfortably in
+        // i32 for any plausible sample; saturate defensively rather
+        // than allow an as-cast wraparound on the theoretical large
+        // result.
+        pixels.clamp(0, i32::MAX as sptr_t) as i32
     }
 
     /// Reset every style index to the current `STYLE_DEFAULT`. The

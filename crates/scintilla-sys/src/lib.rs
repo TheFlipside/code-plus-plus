@@ -301,12 +301,55 @@ pub const SCI_STYLESETITALIC: u32 = 2054;
 /// Apply STYLE_DEFAULT to all other styles. Useful as the first call
 /// after switching lexers so the previous lexer's per-style colours
 /// don't bleed through.
+///
+/// Note: this also clobbers the predefined styles in the 32–39 range
+/// (`STYLE_DEFAULT`, `STYLE_LINENUMBER`, etc.) — anything outside
+/// `STYLE_DEFAULT` itself must be re-applied after this message.
 pub const SCI_STYLECLEARALL: u32 = 2050;
 /// `STYLE_DEFAULT = 32` — the style index Scintilla uses as the
 /// fallback for any text not classified by a lexer. Setting its
 /// fore/back/font here is the way to set the editor's "default"
 /// appearance.
 pub const STYLE_DEFAULT: usize = 32;
+/// `STYLE_LINENUMBER = 33` — the style index used to render line
+/// numbers in any margin whose type is `SC_MARGIN_NUMBER`. Setting
+/// its fore/back is how the line-number bar gets its colour scheme.
+/// `SCI_STYLECLEARALL` resets this back to `STYLE_DEFAULT`, so any
+/// custom colours must be re-applied after the clear.
+pub const STYLE_LINENUMBER: usize = 33;
+
+// Margins. Scintilla supports up to `SC_MAX_MARGIN + 1` margins (5
+// by default), each addressed by a zero-based **index** (the
+// `wparam` of `SCI_SETMARGINTYPEN` / `SCI_SETMARGINWIDTHN`) and
+// configured with a **type constant** (`SC_MARGIN_*`, the `lparam`).
+// Two distinct numbering systems — don't conflate them:
+//
+//   - Index convention used by Code++ and Notepad++: `0` = line
+//     numbers, `1` = symbols/bookmarks, `2` = fold markers.
+//   - Type constants from `Scintilla.h`: `SC_MARGIN_SYMBOL = 0`,
+//     `SC_MARGIN_NUMBER = 1`, `SC_MARGIN_BACK = 2`,
+//     `SC_MARGIN_FORE = 3`, `SC_MARGIN_TEXT = 4`, etc.
+//
+// To render the line-number margin: pass *index* `0` and *type*
+// `SC_MARGIN_NUMBER` (= 1) — the numeric clash between "index 1"
+// and "`SC_MARGIN_NUMBER` = 1" is purely coincidental.
+//
+// `SCI_SETMARGINWIDTHN(margin, pixels)` controls visibility — width
+// `0` hides the margin without clearing its other state, so the
+// future "show line numbers" toggle is one width-write away.
+// `SCI_TEXTWIDTH(style, ascii_text)` measures a sample string
+// rendered in the given style and returns its pixel width — used to
+// size the line-number margin to fit a representative line count
+// (e.g. `"_999999_"` for up-to-6-digit line numbers).
+pub const SCI_SETMARGINTYPEN: u32 = 2240;
+pub const SCI_SETMARGINWIDTHN: u32 = 2242;
+pub const SCI_TEXTWIDTH: u32 = 2276;
+/// `SC_MARGIN_NUMBER = 1` — the *type constant* that, when passed
+/// as the `lparam` of `SCI_SETMARGINTYPEN`, makes the addressed
+/// margin render right-aligned line numbers using
+/// `STYLE_LINENUMBER`. Not to be confused with margin *index* 1
+/// (the symbol margin in the Code++/N++ index convention).
+pub const SC_MARGIN_NUMBER: u32 = 1;
 
 // LexCPP style indices used by the Phase 4 m1 default theme. The
 // full set lives in `vendor/lexilla/include/SciLexer.h`; only those
