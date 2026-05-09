@@ -245,11 +245,48 @@ typedef struct sessionInfo_ {
  * arg can't trash a good prefill on the other arg. */
 #define NPPM_LAUNCHFINDINFILESDLG         (NPPMSG + 29)
 
-/* Docking / docked-dialog API (DM = "Docking Manager") ------------- */
+/* Docking / docked-dialog API (DM = "Docking Manager") -------------
+ *
+ * The host wraps the plugin's `hClient` HWND in a host-owned
+ * floating frame; the plugin is responsible for the lifetime of
+ * `hClient` (register before plugin shutdown, but DO NOT destroy
+ * before the frame closes — the host re-parents the HWND into its
+ * frame, so the plugin's normal "destroy on shutdown" cleanup is
+ * fine). See `Docking.h` for the `tTbData` struct, the `DWS_*`
+ * style flags, and the `DMN_*` notification codes. */
 
+/* v3: show the floating frame previously registered for the
+ *     `hClient` HWND in lParam (wParam unused). Returns 1 on
+ *     success, 0 if the HWND isn't registered. */
 #define NPPM_DMMSHOW                      (NPPMSG + 30)
+/* v3: hide the floating frame previously registered for the
+ *     `hClient` HWND in lParam (wParam unused). Registration
+ *     survives — a subsequent NPPM_DMMSHOW re-shows. The user
+ *     clicking the frame's X button routes through the same
+ *     hide path (no DestroyWindow). Returns 1 on success, 0 if
+ *     the HWND isn't registered. */
 #define NPPM_DMMHIDE                      (NPPMSG + 31)
+/* v3: refresh the floating frame's title / icon / add-info from
+ *     the plugin's tTbData. wParam unused; lParam: registered
+ *     hClient. Code++ floating-only mode (Phase 4 m4) returns
+ *     success for any registered HWND but does **not** re-read
+ *     the plugin's wide-string fields — the frame title stays
+ *     as registered. Phase 5 docking-manager work re-reads the
+ *     original tTbData pointer and refreshes everything. */
 #define NPPM_DMMUPDATEDISPINFO            (NPPMSG + 32)
+/* v3: register a plugin's HWND as a dockable dialog. wParam
+ *     unused; lParam: pointer to a `tTbData` (see Docking.h).
+ *     The host wraps `hClient` in a WS_OVERLAPPEDWINDOW |
+ *     WS_EX_TOOLWINDOW frame, re-parents `hClient` into the
+ *     frame's client area, and stores the registration entry.
+ *     The frame is hidden until NPPM_DMMSHOW.
+ *     Wide-string fields (pszName / pszModuleName / pszAddInfo)
+ *     are read once at registration into host-side owned copies;
+ *     the plugin's tTbData buffer can be freed after the call
+ *     returns (though plugins typically keep it alive for the
+ *     plugin's lifetime — N++ has the same convention).
+ *     Returns 1 on success, 0 for null hClient / dead HWND /
+ *     duplicate registration / frame-creation failure. */
 #define NPPM_DMMREGASDCKDLG               (NPPMSG + 33)
 /* v2: open every titled file listed in a session-XML at lParam,
  *     in the order they appear. The recorded active-tab is
@@ -261,6 +298,11 @@ typedef struct sessionInfo_ {
  *     Returns: 1 on a successful parse, 0 on read / parse
  *     failure. */
 #define NPPM_LOADSESSION                  (NPPMSG + 34)
+/* v3: switch to a sibling tab in the same docking container as the
+ *     dialog whose name appears at lParam (wParam unused). Code++
+ *     floating-only mode (Phase 4 m4) has no tab strip — every
+ *     dock dialog is its own floating frame — so this is a no-op
+ *     returning 0. Phase 5 docking-manager work activates it. */
 #define NPPM_DMMVIEWOTHERTAB              (NPPMSG + 35)
 
 /* File operations -------------------------------------------------- */
@@ -311,6 +353,14 @@ typedef struct toolbarIcons_ {
  *     to read the real kernel version. Falls back to `WV_WIN10` if
  *     the probe fails. */
 #define NPPM_GETWINDOWSVERSION            (NPPMSG + 42)
+/* v3: look up a registered docking dialog's `hClient` by display
+ *     name. wParam: TCHAR* module name (or NULL = match any
+ *     module's registration). lParam: TCHAR* dialog name
+ *     (required, the value the registering tTbData supplied as
+ *     pszName). Returns the matching hClient HWND, or 0 if no
+ *     entry matches. Plugins use this to discover whether
+ *     another plugin's docked dialog is up — the standard
+ *     dependency-discovery pattern in N++. */
 #define NPPM_DMMGETPLUGINHWNDBYNAME       (NPPMSG + 43)
 #define NPPM_MAKECURRENTBUFFERDIRTY       (NPPMSG + 44)
 #define NPPM_GETENABLETHEMETEXTUREFUNC    (NPPMSG + 45)  /* deprecated upstream */

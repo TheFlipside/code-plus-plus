@@ -394,6 +394,44 @@ pub trait UiPlatform {
         parent: codepp_plugin_host::Hwnd,
     ) -> codepp_plugin_host::Hwnd;
 
+    /// Register a plugin's docking dialog and create the
+    /// host-owned floating frame that wraps it. Drives
+    /// `NPPM_DMMREGASDCKDLG`. The frame is created hidden;
+    /// the plugin must follow with `show_dock_dialog` to make
+    /// it visible. Returns `true` on success, `false` for dead
+    /// `params.h_client`, frame-creation failure, or duplicate
+    /// `h_client` registration.
+    #[cfg(target_os = "windows")]
+    fn register_dock_dialog(&mut self, params: codepp_plugin_host::DockDialogParams) -> bool;
+
+    /// Show the floating frame previously registered for
+    /// `h_client`. Drives `NPPM_DMMSHOW`. Returns `true` on
+    /// success, `false` for unregistered HWND.
+    #[cfg(target_os = "windows")]
+    fn show_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool;
+
+    /// Hide the floating frame previously registered for
+    /// `h_client`. Drives `NPPM_DMMHIDE`. The registration
+    /// survives — a subsequent `show_dock_dialog` re-shows.
+    /// Returns `true` on success, `false` for unregistered
+    /// HWND.
+    #[cfg(target_os = "windows")]
+    fn hide_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool;
+
+    /// Refresh the floating frame's title (and add-info /
+    /// icon) from the cached `DockDialogParams`. Drives
+    /// `NPPM_DMMUPDATEDISPINFO`. Returns `true` on success,
+    /// `false` for unregistered HWND.
+    #[cfg(target_os = "windows")]
+    fn update_dock_disp_info(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool;
+
+    /// Look up a registered docking dialog by display name
+    /// (and optional module-name disambiguator). Drives
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME`. Returns the registered
+    /// `h_client` HWND, or NULL if no entry matches.
+    #[cfg(target_os = "windows")]
+    fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> codepp_plugin_host::Hwnd;
+
     /// Pull the current text content of the buffer backed by the
     /// Scintilla document at `scintilla_doc`. The implementation may
     /// briefly bind that document to the editor view to read it
@@ -4358,6 +4396,26 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.ui.create_plugin_scintilla(parent)
     }
 
+    fn register_dock_dialog(&mut self, params: codepp_plugin_host::DockDialogParams) -> bool {
+        self.ui.register_dock_dialog(params)
+    }
+
+    fn show_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
+        self.ui.show_dock_dialog(h_client)
+    }
+
+    fn hide_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
+        self.ui.hide_dock_dialog(h_client)
+    }
+
+    fn update_dock_disp_info(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
+        self.ui.update_dock_disp_info(h_client)
+    }
+
+    fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> codepp_plugin_host::Hwnd {
+        self.ui.dock_hwnd_by_name(name, module_name)
+    }
+
     fn trigger_tab_context_menu(&mut self, view: i32, tab_idx: i32) -> bool {
         // Code++'s tab strip doesn't yet ship a context menu (no
         // Close / Close-Others / Rename / Move-to-other-view
@@ -4980,6 +5038,33 @@ mod tests {
             // path only matters for shell-level integration
             // tests, which don't yet drive plugin Scintilla
             // creation.
+            core::ptr::null_mut()
+        }
+        #[cfg(target_os = "windows")]
+        fn register_dock_dialog(&mut self, _params: codepp_plugin_host::DockDialogParams) -> bool {
+            // Shell-level tests don't model docked dialogs;
+            // the dispatcher mock in `dispatch.rs` covers the
+            // surface end-to-end.
+            true
+        }
+        #[cfg(target_os = "windows")]
+        fn show_dock_dialog(&mut self, _h_client: codepp_plugin_host::Hwnd) -> bool {
+            true
+        }
+        #[cfg(target_os = "windows")]
+        fn hide_dock_dialog(&mut self, _h_client: codepp_plugin_host::Hwnd) -> bool {
+            true
+        }
+        #[cfg(target_os = "windows")]
+        fn update_dock_disp_info(&mut self, _h_client: codepp_plugin_host::Hwnd) -> bool {
+            true
+        }
+        #[cfg(target_os = "windows")]
+        fn dock_hwnd_by_name(
+            &self,
+            _name: &str,
+            _module_name: Option<&str>,
+        ) -> codepp_plugin_host::Hwnd {
             core::ptr::null_mut()
         }
         fn capture_text_from_doc(&mut self, _scintilla_doc: isize) -> String {

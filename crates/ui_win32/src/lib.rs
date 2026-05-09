@@ -106,23 +106,24 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW, GetParent, GetSubMenu, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
     GetWindowTextW, IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW,
     LoadImageW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SendMessageW, SetCursor, SetMenu, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
-    ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK,
-    BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX,
-    BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL,
-    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID,
-    ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
-    GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDOK, IDYES,
-    IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND,
-    MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
-    SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
-    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED,
-    WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
-    WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR,
-    WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP,
-    WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    SendMessageW, SetCursor, SetMenu, SetParent, SetTimer, SetWindowLongPtrW, SetWindowPos,
+    SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
+    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
+    BS_GROUPBOX, BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT,
+    CB_SETEDITSEL, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL,
+    DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY,
+    GWLP_USERDATA, GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS,
+    IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO,
+    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+    WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
+    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT,
+    WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SIZE, WM_TIMER, WNDCLASSEXW,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
+    WS_EX_DLGMODALFRAME, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -271,6 +272,11 @@ const STATUSBAR_CLASS: PCWSTR = w!("msctls_statusbar32");
 /// wnd_proc that sets the resize cursor and forwards drag events to
 /// the parent's `WindowState`.
 const FIF_DOCK_CLASS: PCWSTR = w!("CodePlusPlusFifDock");
+/// Window class for the host-owned floating frame that wraps a
+/// plugin's `h_client` after `NPPM_DMMREGASDCKDLG`. One frame is
+/// created per registered docking dialog; `Scintilla_RegisterClasses`
+/// and friends already prove the lazy-register-via-OnceLock pattern.
+const DOCK_FRAME_CLASS: PCWSTR = w!("CodePlusPlusDockFrame");
 const FIF_SPLITTER_CLASS: PCWSTR = w!("CodePlusPlusFifSplitter");
 /// Modeless top-level window class for the FIF progress dialog
 /// shown while a search is running (m4 step 4b).
@@ -536,6 +542,54 @@ struct TabDrag {
 /// per-user calibration ever matters.
 const TAB_DRAG_THRESHOLD_PX: i32 = 4;
 
+/// One plugin-registered docking dialog. Plugins call
+/// `NPPM_DMMREGASDCKDLG` with a `tTbData` whose `h_client` is the
+/// plugin's pre-built dialog HWND; the host wraps that HWND in a
+/// `frame_hwnd` it owns and re-parents `h_client` into the frame's
+/// client area. The frame's title comes from `name`; the
+/// `module_name` is kept so `NPPM_DMMGETPLUGINHWNDBYNAME` can
+/// disambiguate when two plugins register dialogs with the same
+/// display name.
+///
+/// Floating-only mode (Phase 4 m4) does not yet act on the
+/// docking-position bits in `u_mask` (`DWS_DF_CONT_*`), the
+/// `pszAddInfo` add-info string, or the `iPrevCont` previous-
+/// container hint. Those become live in the Phase 5 docking
+/// manager bring-up.
+struct DockEntry {
+    /// Plugin's pre-built dialog HWND. Re-parented into
+    /// `frame_hwnd`'s client area at registration time. The
+    /// plugin retains lifetime ownership; the host MUST NOT
+    /// `DestroyWindow` it.
+    h_client: HWND,
+    /// Host-owned floating frame. Created `WS_OVERLAPPEDWINDOW |
+    /// WS_EX_TOOLWINDOW`-style so the user gets a normal
+    /// resizable mini-window with title and close buttons but no
+    /// taskbar entry. Destroyed by Win32 when the main window
+    /// dies (the frame is `owned` by the main HWND).
+    frame_hwnd: HWND,
+    /// Display title — also the lookup key for
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME`. Owned `String`; re-read
+    /// from the plugin's `pszName` at registration and not
+    /// updated thereafter (Phase 5 polish: refresh on
+    /// `NPPM_DMMUPDATEDISPINFO`).
+    name: String,
+    /// Plugin DLL filename without extension; the optional
+    /// disambiguator for the two-arg form of
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME`.
+    module_name: String,
+    /// `tTbData.dlg_id` — carried in `nmhdr.idFrom` for any
+    /// future `DMN_*` notification routed back to the plugin
+    /// (DMN_CLOSE in particular, deferred to Phase 5).
+    #[allow(dead_code)]
+    dlg_id: i32,
+    /// Snapshot of `tTbData.u_mask` at registration time.
+    /// Floating-only mode currently checks only `DWS_ICONTAB`;
+    /// the other bits are kept for Phase 5.
+    #[allow(dead_code)]
+    u_mask: u32,
+}
+
 /// Per-window state. Box-allocated, pointer stashed in
 /// `GWLP_USERDATA`. wnd_proc reads it back via
 /// `GetWindowLongPtrW(GWLP_USERDATA)` on every message. The main
@@ -621,6 +675,16 @@ struct WindowState {
     /// (unlike `find_replace_dlg`, which is host-owned and
     /// single-instance).
     plugin_modeless_dialogs: Vec<HWND>,
+    /// Plugin-registered dockable dialogs (floating-only mode for
+    /// Phase 4 m4 — the multi-zone docking manager lands in Phase
+    /// 5). Each entry pairs the plugin's `h_client` HWND with the
+    /// host-owned floating frame that wraps it. Driven by the
+    /// `NPPM_DMM*` family; the Vec is small (typically 1–4
+    /// entries) so linear scans are fine for show / hide / lookup.
+    /// Cleaned up implicitly when the main window dies — the
+    /// frames are owned by the main HWND so Win32 destroys them
+    /// alongside.
+    dock_dialogs: Vec<DockEntry>,
     /// FIF results dock (Phase 4 m4 step 3). Hidden until a search
     /// completes and step 4b populates the listview.
     fif_dock_hwnd: HWND,
@@ -713,6 +777,7 @@ impl WindowState {
             // `Win32Ui` for the full safety argument.
             accel_handle: &raw mut self.accel_handle,
             plugin_modeless_dialogs: &raw mut self.plugin_modeless_dialogs,
+            dock_dialogs: &raw mut self.dock_dialogs,
             editor: self.editor,
         };
         (&mut self.shell, ui)
@@ -785,6 +850,14 @@ struct Win32Ui {
     /// pump once per `GetMessageW` to call `IsDialogMessageW`
     /// against each.
     plugin_modeless_dialogs: *mut Vec<HWND>,
+    /// Pointer to `WindowState.dock_dialogs` so the
+    /// `NPPM_DMM*` family can register / show / hide / look up
+    /// floating frames. Same "Win32Ui stays Copy, UI-thread-only
+    /// access" invariant as `accel_handle` and
+    /// `plugin_modeless_dialogs`. The Vec is mutated by
+    /// `register_dock_dialog` (push) and read by every other
+    /// DMM method.
+    dock_dialogs: *mut Vec<DockEntry>,
     editor: EditorHandle,
 }
 
@@ -1781,6 +1854,246 @@ impl UiPlatform for Win32Ui {
         }
     }
 
+    fn register_dock_dialog(&mut self, params: codepp_plugin_host::DockDialogParams) -> bool {
+        // Floating-only mode (Phase 4 m4): wrap the plugin's
+        // h_client in a host-owned WS_OVERLAPPEDWINDOW frame and
+        // re-parent h_client into the frame's client area. The
+        // frame is hidden until NPPM_DMMSHOW.
+        //
+        // SAFETY: every Win32 call here runs on the UI thread
+        // (the trait method is invoked from a NPPM dispatch).
+        // `dock_dialogs` points at `WindowState.dock_dialogs`,
+        // alive for the main window's lifetime; UI-thread-only
+        // access is guaranteed by `state_from_hwnd`'s
+        // `PluginCallGuard`.
+        let h_client = HWND(params.h_client);
+        if h_client.is_invalid() {
+            return false;
+        }
+        unsafe {
+            if !IsWindow(Some(h_client)).as_bool() {
+                tracing::warn!(
+                    h = h_client.0 as usize,
+                    "NPPM_DMMREGASDCKDLG: h_client is not a live window"
+                );
+                return false;
+            }
+            // Reject duplicate registrations of the same h_client.
+            // Walking the Vec is O(n) but n is small (typically
+            // <= 4 docks per session) and this is the only
+            // call-site that grows it.
+            let dialogs = &mut *self.dock_dialogs;
+            if dialogs.iter().any(|e| e.h_client.0 == h_client.0) {
+                tracing::warn!(
+                    h = h_client.0 as usize,
+                    "NPPM_DMMREGASDCKDLG: h_client already registered"
+                );
+                return false;
+            }
+            // Bound the number of registered frames so a buggy
+            // / malicious plugin can't exhaust the per-process
+            // GDI handle table by flooding REGASDCKDLG with
+            // fresh HWNDs.
+            if dialogs.len() >= DOCK_DIALOG_REGISTRATION_CAP {
+                tracing::warn!(
+                    cap = DOCK_DIALOG_REGISTRATION_CAP,
+                    "NPPM_DMMREGASDCKDLG: registration cap reached; rejecting"
+                );
+                return false;
+            }
+            register_dock_frame_class();
+            let instance = match GetModuleHandleW(None) {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::warn!(error = %e, "NPPM_DMMREGASDCKDLG: GetModuleHandleW failed");
+                    return false;
+                }
+            };
+            // Initial position: use the plugin's `rc_float` if
+            // it's non-empty (right > left, bottom > top); else
+            // fall back to a default size centred on the
+            // primary monitor's working area (cheap, predictable
+            // — Phase 5 docking-manager work places the frame
+            // relative to the host window).
+            let (x, y, width, height) = compute_dock_frame_position(&params.rc_float);
+            // Encode the title in UTF-16 for SetWindowTextW. An
+            // empty name (plugin sent NULL pszName, or all bad
+            // surrogates) falls back to the module name; if
+            // both are empty, use "Plugin Dialog".
+            let title = if !params.name.is_empty() {
+                params.name.as_str()
+            } else if !params.module_name.is_empty() {
+                params.module_name.as_str()
+            } else {
+                "Plugin Dialog"
+            };
+            let title_utf16: Vec<u16> = title.encode_utf16().chain(core::iter::once(0)).collect();
+            // Owned by the main window so Win32 destroys the
+            // frame when the host shuts down (no leak on
+            // forgetful plugins). WS_EX_TOOLWINDOW keeps the
+            // frame off the taskbar — these are accessory
+            // panels, not standalone documents.
+            //
+            // Bail if `GetParent` fails: a null owner would make
+            // the frame unowned, breaking the "Win32 destroys
+            // the frame when the main window dies" invariant
+            // and leaking the frame plus the re-parented
+            // h_client. Same early-return pattern as the rest
+            // of the file's `GetParent(self.tab_hwnd)` call
+            // sites.
+            let main_hwnd_owner = match GetParent(self.tab_hwnd) {
+                Ok(p) if !p.is_invalid() => p,
+                _ => {
+                    tracing::warn!("NPPM_DMMREGASDCKDLG: GetParent(tab_hwnd) returned no owner");
+                    return false;
+                }
+            };
+            let frame = match CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                DOCK_FRAME_CLASS,
+                PCWSTR(title_utf16.as_ptr()),
+                WS_OVERLAPPEDWINDOW,
+                x,
+                y,
+                width,
+                height,
+                Some(main_hwnd_owner),
+                None,
+                Some(instance.into()),
+                // Plugin's h_client passed via lpCreateParams;
+                // dock_frame_wnd_proc stashes it in
+                // GWLP_USERDATA at WM_NCCREATE.
+                Some(h_client.0 as *const core::ffi::c_void),
+            ) {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::warn!(error = %e, "NPPM_DMMREGASDCKDLG: CreateWindowExW failed");
+                    return false;
+                }
+            };
+            // Re-parent the plugin's h_client into the frame's
+            // client area. SetParent returns the previous parent
+            // on success (the value we don't need); on failure
+            // (different desktop, threading mismatch, etc.) it
+            // returns Err. We MUST treat failure as fatal
+            // here — otherwise we'd push a DockEntry whose
+            // frame_hwnd has no child, and dock_frame_wnd_proc's
+            // WM_SIZE would resize an unrelated plugin HWND
+            // that's still attached to the plugin's original
+            // parent (silent UI corruption).
+            //
+            // TOCTOU note: between the `IsWindow(h_client)`
+            // check above and this `SetParent` call there's a
+            // window where the plugin could destroy h_client
+            // from another thread. Same race the
+            // `create_plugin_scintilla` path documents: Win32
+            // has no atomic "act on HWND only if alive"
+            // primitive, the plugin owns the destroy contract,
+            // and the host stays UI-thread-only. SetParent
+            // failure here is the catch-all for any reason
+            // h_client became unusable after the IsWindow
+            // check.
+            if SetParent(h_client, Some(frame)).is_err() {
+                tracing::warn!(
+                    h = h_client.0 as usize,
+                    "NPPM_DMMREGASDCKDLG: SetParent failed; tearing down frame"
+                );
+                let _ = DestroyWindow(frame);
+                return false;
+            }
+            // Resize h_client to the frame's client area
+            // immediately so the first paint shows it filling
+            // the client area; subsequent WM_SIZE on the frame
+            // does the same via dock_frame_wnd_proc.
+            let mut rc = RECT::default();
+            if GetClientRect(frame, &mut rc).is_ok() {
+                let _ = MoveWindow(h_client, 0, 0, rc.right, rc.bottom, true);
+            }
+            // Make the plugin's dialog visible inside the frame.
+            // The frame itself stays hidden until NPPM_DMMSHOW.
+            let _ = ShowWindow(h_client, SW_SHOW);
+            dialogs.push(DockEntry {
+                h_client,
+                frame_hwnd: frame,
+                name: params.name,
+                module_name: params.module_name,
+                dlg_id: params.dlg_id,
+                u_mask: params.u_mask,
+            });
+        }
+        true
+    }
+
+    fn show_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
+        let h = HWND(h_client);
+        if h.is_invalid() {
+            return false;
+        }
+        // SAFETY: `dock_dialogs` is alive while `Win32Ui` is in
+        // scope; UI-thread-only access — see the field doc on
+        // `Win32Ui::dock_dialogs`.
+        unsafe {
+            let dialogs = &*self.dock_dialogs;
+            for entry in dialogs {
+                if entry.h_client.0 == h.0 {
+                    let _ = ShowWindow(entry.frame_hwnd, SW_SHOW);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn hide_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
+        let h = HWND(h_client);
+        if h.is_invalid() {
+            return false;
+        }
+        unsafe {
+            let dialogs = &*self.dock_dialogs;
+            for entry in dialogs {
+                if entry.h_client.0 == h.0 {
+                    let _ = ShowWindow(entry.frame_hwnd, SW_HIDE);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn update_dock_disp_info(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool {
+        // Floating-only mode (Phase 4 m4): the registration's
+        // cached strings (name, module_name) were read once at
+        // REGASDCKDLG time and aren't refreshed here. The full
+        // re-read (re-walking the plugin's `tTbData`'s wide
+        // strings and updating the frame title) is a Phase 5
+        // docking-manager polish item — most real plugins set
+        // their title once at registration and never update,
+        // so the gap is invisible in practice. Returns success
+        // for any registered HWND so plugins that gate on the
+        // boolean return don't bail out.
+        let h = HWND(h_client);
+        if h.is_invalid() {
+            return false;
+        }
+        unsafe {
+            let dialogs = &*self.dock_dialogs;
+            dialogs.iter().any(|e| e.h_client.0 == h.0)
+        }
+    }
+
+    fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> codepp_plugin_host::Hwnd {
+        unsafe {
+            let dialogs = &*self.dock_dialogs;
+            for entry in dialogs {
+                if entry.name == name && module_name.is_none_or(|m| m == entry.module_name) {
+                    return entry.h_client.0;
+                }
+            }
+        }
+        core::ptr::null_mut()
+    }
+
     fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool {
         // Win32 has no in-place mutation API for accelerator
         // tables, so "remove a binding" is implemented as
@@ -2474,6 +2787,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
                 // only.
                 accel_handle: &raw mut state.accel_handle,
                 plugin_modeless_dialogs: &raw mut state.plugin_modeless_dialogs,
+                dock_dialogs: &raw mut state.dock_dialogs,
                 editor: state.editor,
             };
             <Win32Ui as UiPlatform>::update_status(
@@ -2548,6 +2862,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
                     main_menu: state.main_menu,
                     accel_handle: &raw mut state.accel_handle,
                     plugin_modeless_dialogs: &raw mut state.plugin_modeless_dialogs,
+                    dock_dialogs: &raw mut state.dock_dialogs,
                     editor: state.editor,
                 };
                 <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
@@ -2664,6 +2979,7 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
         main_menu: state.main_menu,
         accel_handle: &raw mut state.accel_handle,
         plugin_modeless_dialogs: &raw mut state.plugin_modeless_dialogs,
+        dock_dialogs: &raw mut state.dock_dialogs,
         editor: state.editor,
     };
     // Re-apply the new tab's lexer/theme. Each tab carries its own
@@ -9616,6 +9932,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             window_menu: menus.window_menu,
             find_replace_dlg: None,
             plugin_modeless_dialogs: Vec::new(),
+            dock_dialogs: Vec::new(),
             fif_dock_hwnd,
             fif_listview_hwnd,
             fif_dock_status,
@@ -10215,6 +10532,144 @@ unsafe fn register_fif_classes() {
         };
         let _ = RegisterClassExW(&progress_class);
     });
+}
+
+/// Hard cap on registered dock-dialog count. A misbehaving plugin
+/// that calls `NPPM_DMMREGASDCKDLG` in a loop with fresh HWNDs
+/// would otherwise allocate an unbounded number of frames (each a
+/// GDI / USER object — Win32's per-process default cap is around
+/// 10000). 64 is well above any reasonable plugin's needs (NppExec,
+/// NppFTP, etc. each register one) while leaving room for power
+/// users running many docked plugins simultaneously.
+const DOCK_DIALOG_REGISTRATION_CAP: usize = 64;
+
+/// Default floating-frame dimensions when the plugin's
+/// `rc_float` is empty or adversarial. Width × height in pixels.
+const DOCK_FRAME_DEFAULT_W: i32 = 480;
+const DOCK_FRAME_DEFAULT_H: i32 = 360;
+/// Default top-left corner. Fixed (not monitor-relative) — Phase
+/// 5 docking manager adds DPI / multi-monitor awareness.
+const DOCK_FRAME_DEFAULT_X: i32 = 200;
+const DOCK_FRAME_DEFAULT_Y: i32 = 200;
+
+/// Compute the floating dock frame's initial (x, y, width, height).
+/// If the plugin's `tTbData.rc_float` is well-formed (right > left,
+/// bottom > top, AND the resulting dimensions fit in i32 without
+/// overflow AND are positive), use it verbatim — that's the
+/// position the plugin remembered from its last session. Otherwise
+/// fall back to a centred, modestly-sized panel so the user sees
+/// the dialog somewhere reasonable on first registration.
+///
+/// `saturating_sub` guards against an adversarial `rc_float`:
+/// e.g. `left = i32::MIN, right = i32::MAX` would otherwise
+/// overflow on the `right - left` subtraction (debug panic, release
+/// silent wrap). Saturation produces `i32::MAX` which is then
+/// rejected by the `<= 0` post-check (well — `i32::MAX > 0`, but
+/// CreateWindowExW would silently clamp the window to monitor
+/// bounds). The subsequent dimension-positivity check is the real
+/// guard.
+fn compute_dock_frame_position(rc_float: &codepp_plugin_host::TbRect) -> (i32, i32, i32, i32) {
+    if rc_float.right > rc_float.left && rc_float.bottom > rc_float.top {
+        let w = rc_float.right.saturating_sub(rc_float.left);
+        let h = rc_float.bottom.saturating_sub(rc_float.top);
+        if w > 0 && h > 0 {
+            return (rc_float.left, rc_float.top, w, h);
+        }
+    }
+    (
+        DOCK_FRAME_DEFAULT_X,
+        DOCK_FRAME_DEFAULT_Y,
+        DOCK_FRAME_DEFAULT_W,
+        DOCK_FRAME_DEFAULT_H,
+    )
+}
+
+/// Register the dock-frame window class. Idempotent via OnceLock —
+/// safe to call from `register_dock_dialog` immediately before each
+/// frame's `CreateWindowExW`. The class wndproc is
+/// `dock_frame_wnd_proc` which handles `WM_SIZE` (resize the
+/// plugin's `h_client` to fill the client area) and `WM_CLOSE`
+/// (hide the frame instead of destroying — the registration
+/// outlives a close-button click).
+unsafe fn register_dock_frame_class() {
+    use std::sync::OnceLock;
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+    REGISTERED.get_or_init(|| unsafe {
+        let instance = GetModuleHandleW(None).unwrap_or_default();
+        let class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(dock_frame_wnd_proc),
+            hInstance: instance.into(),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            hbrBackground: dialog_bg_brush(),
+            lpszClassName: DOCK_FRAME_CLASS,
+            ..Default::default()
+        };
+        let _ = RegisterClassExW(&class);
+    });
+}
+
+/// Wnd_proc for the host-owned floating frame that wraps a
+/// plugin's docking dialog (registered via `NPPM_DMMREGASDCKDLG`).
+/// The plugin's `h_client` HWND is stashed in the frame's
+/// `GWLP_USERDATA` at `WM_NCCREATE` so `WM_SIZE` can resize it to
+/// fill the client area without going through the WindowState
+/// registry.
+///
+/// `WM_CLOSE` hides the frame rather than destroying it — the
+/// registration survives, and a subsequent `NPPM_DMMSHOW` re-shows.
+/// The frame is destroyed by Win32 when the main window dies (the
+/// frames are owned by the main HWND).
+extern "system" fn dock_frame_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_NCCREATE => {
+                // CREATESTRUCTW.lpCreateParams carries the plugin's
+                // h_client HWND (passed via the lpParam arg of
+                // CreateWindowExW). Stash it so WM_SIZE can find
+                // it without a Vec lookup.
+                let cs = lparam.0 as *const CREATESTRUCTW;
+                if !cs.is_null() {
+                    let h_client_raw = (*cs).lpCreateParams as isize;
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, h_client_raw);
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_SIZE => {
+                let h_client_raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+                if h_client_raw != 0 {
+                    let h_client = HWND(h_client_raw as *mut c_void);
+                    // Defensive: the plugin may have destroyed
+                    // h_client without unregistering. `IsWindow`
+                    // catches that without a Vec lookup.
+                    if IsWindow(Some(h_client)).as_bool() {
+                        let mut rc = RECT::default();
+                        if GetClientRect(hwnd, &mut rc).is_ok() {
+                            let _ = MoveWindow(h_client, 0, 0, rc.right, rc.bottom, true);
+                        }
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_CLOSE => {
+                // Hide instead of destroy. Phase 5 polish item:
+                // synthesise a `DMN_CLOSE` notification so the
+                // plugin can update its Show/Hide menu state in
+                // sync with the visual change. Today plugins
+                // discover the hide via the next NPPM-driven
+                // refresh or the user re-clicking the menu item.
+                let _ = ShowWindow(hwnd, SW_HIDE);
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
 }
 
 /// Resolve the progress window's owner HWND from `GWLP_USERDATA`
@@ -11900,6 +12355,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                         accel_handle: &raw mut state.accel_handle,
                                         plugin_modeless_dialogs: &raw mut state
                                             .plugin_modeless_dialogs,
+                                        dock_dialogs: &raw mut state.dock_dialogs,
                                         editor: state.editor,
                                     };
                                     <Win32Ui as UiPlatform>::update_status(

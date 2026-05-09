@@ -89,7 +89,23 @@ pub const NPPM_ACTIVATEDOC: u32 = NPPMSG + 28;
 /// string). Both pointers may be NULL — N++'s ABI treats them as
 /// "use the dialog's current values".
 pub const NPPM_LAUNCHFINDINFILESDLG: u32 = NPPMSG + 29;
+// --- Docking-manager (DMM) family ---
+//
+// `NPPM_DMM*` drive plugins' dockable dialogs. Code++ Phase 4 m4
+// runs in floating-only mode: each registered `tTbData` becomes a
+// host-owned overlapped frame that wraps the plugin's `h_client`
+// HWND, with show/hide drilling through to the frame's
+// `ShowWindow`. The full multi-zone docking manager (drag-to-
+// rearrange, drag-to-detach, dock-on-drop, session persistence) is
+// Phase 5 scope so plugin-side ABI freezes here while the host UI
+// is still being designed.
+pub const NPPM_DMMSHOW: u32 = NPPMSG + 30;
+pub const NPPM_DMMHIDE: u32 = NPPMSG + 31;
+pub const NPPM_DMMUPDATEDISPINFO: u32 = NPPMSG + 32;
+pub const NPPM_DMMREGASDCKDLG: u32 = NPPMSG + 33;
 pub const NPPM_LOADSESSION: u32 = NPPMSG + 34;
+pub const NPPM_DMMVIEWOTHERTAB: u32 = NPPMSG + 35;
+pub const NPPM_DMMGETPLUGINHWNDBYNAME: u32 = NPPMSG + 43;
 pub const NPPM_RELOADFILE: u32 = NPPMSG + 36;
 pub const NPPM_SWITCHTOFILE: u32 = NPPMSG + 37;
 pub const NPPM_SAVECURRENTFILE: u32 = NPPMSG + 38;
@@ -270,6 +286,31 @@ pub const MAX_PATH_TCHARS: usize = 260;
 /// scope and the plugin contract has no way to signal partial
 /// success on truncation.
 pub const MAX_SESSION_FILES: usize = 1024;
+
+/// Host-owned parameters extracted from a plugin's `tTbData` at
+/// `NPPM_DMMREGASDCKDLG` dispatch time. The dispatcher reads the
+/// wide-string fields (`pszName`, `pszModuleName`, `pszAddInfo`)
+/// using the same `wide_ptr_to_string` helper the rest of the file
+/// uses, so the plugin's buffers don't need to outlive the call —
+/// the trait impl works against `String`s.
+///
+/// `h_client` and `h_icon_tab` stay raw because they are HWND /
+/// HICON handles, which Win32 owns; the plugin holds the lifetime
+/// contract on both. `dlg_id` and `i_prev_cont` and the floating
+/// `rc_float` are plain values copied byte-for-byte. `u_mask` is
+/// the `DWS_*` bitmask the plugin populated.
+#[derive(Debug, Clone)]
+pub struct DockDialogParams {
+    pub h_client: crate::ffi::Hwnd,
+    pub name: String,
+    pub module_name: String,
+    pub add_info: Option<String>,
+    pub h_icon_tab: crate::ffi::Hwnd,
+    pub rc_float: crate::ffi::TbRect,
+    pub u_mask: u32,
+    pub dlg_id: i32,
+    pub i_prev_cont: i32,
+}
 
 // --- Outbound: NPPN_* notifications ----------------------------------
 
@@ -963,6 +1004,63 @@ pub trait HostServices {
     /// (or via `SCI_GETDIRECTFUNCTION` / `SCI_GETDIRECTPOINTER`
     /// for the hot-path direct-call API).
     fn create_plugin_scintilla(&mut self, parent: crate::ffi::Hwnd) -> crate::ffi::Hwnd;
+
+    /// Register a plugin's HWND as a dockable dialog. Drives
+    /// [`NPPM_DMMREGASDCKDLG`]. The host wraps `params.h_client`
+    /// in a host-owned floating frame whose title is
+    /// `params.name`, optional icon is `params.h_icon_tab`
+    /// (when `DWS_ICONTAB` is set in `params.u_mask`), and
+    /// initial position is `params.rc_float` (or a default
+    /// offset if `rc_float` is empty). The frame is NOT shown
+    /// by registration alone — the plugin must follow with
+    /// `NPPM_DMMSHOW` to make it visible.
+    ///
+    /// The frame's lifetime is bound to the plugin's
+    /// `h_client`: closing the frame hides it (the plugin owns
+    /// `h_client` and is responsible for destroying it on
+    /// shutdown). `DockDialogParams` carries owned host-side
+    /// strings already (the dispatcher reads the plugin's
+    /// wide-char fields before calling the trait), so the
+    /// plugin's wide-buffer lifetime is irrelevant past this
+    /// call returning.
+    ///
+    /// Returns `true` on success, `false` for dead
+    /// `h_client` HWND, frame-creation failure, or duplicate
+    /// registration of the same `h_client`. The dispatcher
+    /// rejects null `h_client` before reaching the trait.
+    fn register_dock_dialog(&mut self, params: DockDialogParams) -> bool;
+
+    /// Show the floating frame wrapping `h_client`. Drives
+    /// [`NPPM_DMMSHOW`]. The plugin's `h_client` must already
+    /// have been registered via `NPPM_DMMREGASDCKDLG`; calls
+    /// against an unregistered HWND return `false`. Returns
+    /// `true` if the frame was shown (or was already visible);
+    /// `false` for unregistered / dead HWND.
+    fn show_dock_dialog(&mut self, h_client: crate::ffi::Hwnd) -> bool;
+
+    /// Hide the floating frame wrapping `h_client`. Drives
+    /// [`NPPM_DMMHIDE`]. Hiding re-shows on a subsequent
+    /// `NPPM_DMMSHOW`; the registration entry survives. Returns
+    /// `true` if the frame was hidden (or was already hidden);
+    /// `false` for unregistered / dead HWND.
+    fn hide_dock_dialog(&mut self, h_client: crate::ffi::Hwnd) -> bool;
+
+    /// Update the floating frame's display info from the
+    /// plugin's current `tTbData`. Drives
+    /// [`NPPM_DMMUPDATEDISPINFO`]. The plugin must keep its
+    /// original `tTbData` registration alive (re-pointing the
+    /// `psz_name` / `psz_add_info` buffers without re-registering
+    /// is allowed, but the host re-reads them on this call and
+    /// caches owned copies). Returns `true` on success, `false`
+    /// for unregistered HWND.
+    fn update_dock_disp_info(&mut self, h_client: crate::ffi::Hwnd) -> bool;
+
+    /// Look up a registered plugin dock dialog's `h_client` by
+    /// display name. Drives [`NPPM_DMMGETPLUGINHWNDBYNAME`].
+    /// `module_name` (optional) disambiguates when two plugins
+    /// register dialogs with the same `psz_name` — `None`
+    /// matches any module. Returns NULL if no entry matches.
+    fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> crate::ffi::Hwnd;
 
     /// Add a plugin-supplied icon to the host toolbar bound to
     /// the given `cmd_id`. Drives [`NPPM_ADDTOOLBARICON`]. The
@@ -1908,6 +2006,172 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             1
         }
 
+        NPPM_DMMREGASDCKDLG => {
+            // wparam: unused. lparam: pointer to a `tTbData`.
+            // Returns: 1 on success, 0 on bad args / duplicate
+            // registration / frame-creation failure.
+            //
+            // Reject NULL / negative lparam up front — same
+            // kernel-mode-pointer guard the rest of the
+            // pointer-payload messages use.
+            if lparam <= 0 {
+                return Some(0);
+            }
+            let td = lparam as *const crate::ffi::TbData;
+            // SAFETY: plugin promises the `tTbData` is valid and
+            // owned for the duration of this call. Fields are
+            // read with `read_unaligned` because plugin
+            // allocations may live on a packed boundary; an
+            // aligned read would invoke UB on the misaligned
+            // case.
+            let (
+                h_client,
+                psz_name,
+                psz_module_name,
+                psz_add_info,
+                h_icon_tab,
+                rc_float,
+                u_mask,
+                dlg_id,
+                i_prev_cont,
+            ) = unsafe {
+                (
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*td).h_client)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*td).psz_name)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*td).psz_module_name)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*td).psz_add_info)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*td).h_icon_tab)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*td).rc_float)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*td).u_mask)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*td).dlg_id)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*td).i_prev_cont)),
+                )
+            };
+            if h_client.is_null() {
+                tracing::warn!("NPPM_DMMREGASDCKDLG: null h_client (plugin coding error)");
+                return Some(0);
+            }
+            // Read the wide strings host-side so the plugin's
+            // buffers don't need to outlive this call. Empty
+            // names (and add_info) fall back to defaults — see
+            // `DockDialogParams` field doc.
+            let name = unsafe { wide_ptr_to_string(psz_name) };
+            let module_name = unsafe { wide_ptr_to_string(psz_module_name) };
+            let add_info = if psz_add_info.is_null() {
+                None
+            } else {
+                let s = unsafe { wide_ptr_to_string(psz_add_info) };
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            };
+            let params = DockDialogParams {
+                h_client,
+                name,
+                module_name,
+                add_info,
+                h_icon_tab,
+                rc_float,
+                u_mask,
+                dlg_id,
+                i_prev_cont,
+            };
+            services.register_dock_dialog(params) as isize
+        }
+
+        NPPM_DMMSHOW => {
+            // wparam: unused. lparam: HWND of the plugin's
+            // h_client that was previously registered via
+            // NPPM_DMMREGASDCKDLG. Returns: 1 on success, 0 if
+            // the HWND isn't a registered dock-client.
+            if lparam <= 0 {
+                return Some(0);
+            }
+            let h_client = lparam as crate::ffi::Hwnd;
+            services.show_dock_dialog(h_client) as isize
+        }
+
+        NPPM_DMMHIDE => {
+            // wparam: unused. lparam: HWND of the registered
+            // h_client. Returns: 1 on success, 0 if the HWND
+            // isn't a registered dock-client.
+            if lparam <= 0 {
+                return Some(0);
+            }
+            let h_client = lparam as crate::ffi::Hwnd;
+            services.hide_dock_dialog(h_client) as isize
+        }
+
+        NPPM_DMMUPDATEDISPINFO => {
+            // wparam: unused. lparam: HWND of the registered
+            // h_client. The plugin has updated its tTbData's
+            // wide-string fields and wants the host to re-read
+            // them; the host's HostServices implementation looks
+            // up the cached registration's pszName /
+            // pszAddInfo / pszModuleName pointers and refreshes
+            // the frame title. Returns: 1 on success, 0 if the
+            // HWND isn't a registered dock-client.
+            if lparam <= 0 {
+                return Some(0);
+            }
+            let h_client = lparam as crate::ffi::Hwnd;
+            services.update_dock_disp_info(h_client) as isize
+        }
+
+        NPPM_DMMVIEWOTHERTAB => {
+            // wparam: unused. lparam: TCHAR* dialog name.
+            // Upstream switches to another tab in the same
+            // docking container as the active dialog. Code++'s
+            // floating-only mode has no tabs; this is a no-op
+            // returning 0. The Phase 5 docking manager wires it
+            // up properly.
+            //
+            // `<= 0` rejects both NULL and kernel-mode-pointer
+            // negatives — even though the floating-only impl
+            // can't do anything useful with the name, we never
+            // hand a kernel address to `wide_ptr_to_string`
+            // (which would dereference it).
+            if lparam <= 0 {
+                return Some(0);
+            }
+            let _name = unsafe { wide_ptr_to_string(lparam as *const u16) };
+            tracing::trace!("NPPM_DMMVIEWOTHERTAB: floating-only mode, no tab to switch to");
+            0
+        }
+
+        NPPM_DMMGETPLUGINHWNDBYNAME => {
+            // wparam: TCHAR* module name (or NULL — match any).
+            // lparam: TCHAR* dialog name (required).
+            // Returns: HWND of the matching plugin's h_client,
+            //         or 0 if no registration matches.
+            //
+            // Same kernel-mode-pointer guard on lparam as
+            // VIEWOTHERTAB. wparam is allowed to be NULL (means
+            // "match any module") but a negative wparam is
+            // also rejected — kernel-mode pointer protection
+            // applies symmetrically to both string args.
+            if lparam <= 0 {
+                return Some(0);
+            }
+            let name = unsafe { wide_ptr_to_string(lparam as *const u16) };
+            if name.is_empty() {
+                return Some(0);
+            }
+            let module_name = if wparam == 0 || (wparam as isize) < 0 {
+                None
+            } else {
+                let s = unsafe { wide_ptr_to_string(wparam as *const u16) };
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            };
+            services.dock_hwnd_by_name(&name, module_name.as_deref()) as isize
+        }
+
         NPPM_GETLANGUAGENAME => {
             // wparam: LangType id (i32 widened to usize by Win32's
             // `WPARAM`). lparam: wide char* OUT, or 0 for size-probe.
@@ -2511,6 +2775,19 @@ mod tests {
         /// this to a non-zero sentinel and assert it lands in
         /// the dispatcher's return value.
         plugin_scintilla_return: usize,
+        /// Registered dock-dialog entries from
+        /// `NPPM_DMMREGASDCKDLG`. Each tuple is
+        /// `(h_client_usize, name, module_name, visible)`. The
+        /// visible flag flips on SHOW / HIDE. The host's real
+        /// implementation also caches `h_icon_tab` and
+        /// `psz_add_info`; the mock keeps the schema minimal —
+        /// tests only need to verify the handler-side
+        /// bookkeeping shape, not the per-field round-trip.
+        dock_dialogs: Vec<(usize, String, String, bool)>,
+        /// Whether `register_dock_dialog` reports success.
+        /// Defaults to `true`; tests that exercise the
+        /// frame-creation-failure path flip it to false.
+        dock_register_succeeds: bool,
         // recorded mutations
         log: RefCell<Vec<String>>,
     }
@@ -3012,6 +3289,69 @@ mod tests {
             ));
             self.plugin_scintilla_parents.push(parent as usize);
             self.plugin_scintilla_return as crate::ffi::Hwnd
+        }
+        fn register_dock_dialog(&mut self, params: DockDialogParams) -> bool {
+            self.record(format!(
+                "register_dock_dialog(h=0x{:x},name={:?},mod={:?})",
+                params.h_client as usize, params.name, params.module_name
+            ));
+            if !self.dock_register_succeeds {
+                return false;
+            }
+            // Reject duplicate h_client registrations the way
+            // the production impl will — same h_client can't be
+            // registered twice.
+            if self
+                .dock_dialogs
+                .iter()
+                .any(|(h, _, _, _)| *h == params.h_client as usize)
+            {
+                return false;
+            }
+            self.dock_dialogs.push((
+                params.h_client as usize,
+                params.name,
+                params.module_name,
+                false, // not visible until SHOW
+            ));
+            true
+        }
+        fn show_dock_dialog(&mut self, h_client: crate::ffi::Hwnd) -> bool {
+            self.record(format!("show_dock_dialog(h=0x{:x})", h_client as usize));
+            for entry in self.dock_dialogs.iter_mut() {
+                if entry.0 == h_client as usize {
+                    entry.3 = true;
+                    return true;
+                }
+            }
+            false
+        }
+        fn hide_dock_dialog(&mut self, h_client: crate::ffi::Hwnd) -> bool {
+            self.record(format!("hide_dock_dialog(h=0x{:x})", h_client as usize));
+            for entry in self.dock_dialogs.iter_mut() {
+                if entry.0 == h_client as usize {
+                    entry.3 = false;
+                    return true;
+                }
+            }
+            false
+        }
+        fn update_dock_disp_info(&mut self, h_client: crate::ffi::Hwnd) -> bool {
+            self.record(format!(
+                "update_dock_disp_info(h=0x{:x})",
+                h_client as usize
+            ));
+            self.dock_dialogs
+                .iter()
+                .any(|(h, _, _, _)| *h == h_client as usize)
+        }
+        fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> crate::ffi::Hwnd {
+            for (h, n, m, _) in &self.dock_dialogs {
+                if n == name && module_name.is_none_or(|mn| mn == m) {
+                    return *h as crate::ffi::Hwnd;
+                }
+            }
+            core::ptr::null_mut()
         }
     }
 
@@ -4979,6 +5319,250 @@ mod tests {
         let r = unsafe { dispatch_nppm(&mut s, NPPM_CREATESCINTILLAHANDLE, 0, -1isize) };
         assert_eq!(r, Some(0));
         assert!(s.plugin_scintilla_parents.is_empty());
+    }
+
+    // --- NPPM_DMM* (docking-manager) --------------------------
+
+    fn build_tb_data(
+        h_client: usize,
+        name: &[u16],
+        module: &[u16],
+        u_mask: u32,
+    ) -> crate::ffi::TbData {
+        crate::ffi::TbData {
+            h_client: h_client as crate::ffi::Hwnd,
+            psz_name: name.as_ptr(),
+            dlg_id: 0,
+            u_mask,
+            h_icon_tab: core::ptr::null_mut(),
+            psz_add_info: core::ptr::null(),
+            rc_float: crate::ffi::TbRect::default(),
+            i_prev_cont: 0,
+            psz_module_name: module.as_ptr(),
+        }
+    }
+
+    #[test]
+    fn dmm_register_records_h_client_and_name() {
+        let mut s = MockServices {
+            dock_register_succeeds: true,
+            ..Default::default()
+        };
+        let name = make_wide("Console");
+        let module = make_wide("NppExec");
+        let td = build_tb_data(0xCAFE_F00D, &name, &module, crate::ffi::DWS_DF_FLOATING);
+        let td_ptr = &td as *const _ as isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMREGASDCKDLG, 0, td_ptr) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.dock_dialogs.len(), 1);
+        assert_eq!(s.dock_dialogs[0].0, 0xCAFE_F00D);
+        assert_eq!(s.dock_dialogs[0].1, "Console");
+        assert_eq!(s.dock_dialogs[0].2, "NppExec");
+        assert!(!s.dock_dialogs[0].3); // not visible until SHOW
+    }
+
+    #[test]
+    fn dmm_register_null_h_client_returns_zero() {
+        let mut s = MockServices {
+            dock_register_succeeds: true,
+            ..Default::default()
+        };
+        let name = make_wide("Console");
+        let module = make_wide("NppExec");
+        let td = build_tb_data(0, &name, &module, 0);
+        let td_ptr = &td as *const _ as isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMREGASDCKDLG, 0, td_ptr) };
+        assert_eq!(r, Some(0));
+        assert!(s.dock_dialogs.is_empty());
+    }
+
+    #[test]
+    fn dmm_register_null_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMREGASDCKDLG, 0, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn dmm_register_negative_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMREGASDCKDLG, 0, -1isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn dmm_register_relays_host_failure() {
+        // Mock simulates a frame-creation failure; dispatcher
+        // returns 0.
+        let mut s = MockServices {
+            dock_register_succeeds: false,
+            ..Default::default()
+        };
+        let name = make_wide("Console");
+        let module = make_wide("NppExec");
+        let td = build_tb_data(0xBEEF, &name, &module, 0);
+        let td_ptr = &td as *const _ as isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMREGASDCKDLG, 0, td_ptr) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn dmm_show_then_hide_flips_visibility() {
+        let mut s = MockServices {
+            dock_register_succeeds: true,
+            dock_dialogs: vec![(0xCAFE, "Console".into(), "NppExec".into(), false)],
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMSHOW, 0, 0xCAFE_isize) };
+        assert_eq!(r, Some(1));
+        assert!(s.dock_dialogs[0].3);
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMHIDE, 0, 0xCAFE_isize) };
+        assert_eq!(r, Some(1));
+        assert!(!s.dock_dialogs[0].3);
+    }
+
+    #[test]
+    fn dmm_show_unregistered_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMSHOW, 0, 0xDEAD_isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn dmm_hide_unregistered_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMHIDE, 0, 0xDEAD_isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn dmm_show_null_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMSHOW, 0, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn dmm_hide_negative_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMHIDE, 0, -1isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn dmm_update_disp_info_registered_returns_one() {
+        let mut s = MockServices {
+            dock_dialogs: vec![(0xCAFE, "Console".into(), "NppExec".into(), true)],
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMUPDATEDISPINFO, 0, 0xCAFE_isize) };
+        assert_eq!(r, Some(1));
+    }
+
+    #[test]
+    fn dmm_update_disp_info_unregistered_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMUPDATEDISPINFO, 0, 0xCAFE_isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn dmm_view_other_tab_is_noop_returning_zero() {
+        // Floating-only mode: no tab-strip exists. Plugin's
+        // request can never succeed, so always return 0.
+        // Phase 5 docking manager wires it up.
+        let mut s = MockServices::default();
+        let name = make_wide("Console");
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMVIEWOTHERTAB, 0, name.as_ptr() as isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn dmm_view_other_tab_negative_lparam_returns_zero() {
+        // Same kernel-mode-pointer guard the rest of the DMM
+        // family uses. A negative `lparam` on Win64 is a
+        // kernel-mode pointer; we never let it reach
+        // `wide_ptr_to_string`.
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMVIEWOTHERTAB, 0, -1isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn dmm_get_hwnd_by_name_negative_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMGETPLUGINHWNDBYNAME, 0, -1isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn dmm_get_hwnd_by_name_finds_match() {
+        let mut s = MockServices {
+            dock_dialogs: vec![
+                (0xCAFE, "Console".into(), "NppExec".into(), true),
+                (0xBEEF, "Output".into(), "NppFTP".into(), true),
+            ],
+            ..Default::default()
+        };
+        let name = make_wide("Output");
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_DMMGETPLUGINHWNDBYNAME,
+                0,
+                name.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(0xBEEF_isize));
+    }
+
+    #[test]
+    fn dmm_get_hwnd_by_name_with_module_disambiguates() {
+        // Two plugins register dialogs with the same display
+        // name. The wparam module-name selects between them.
+        let mut s = MockServices {
+            dock_dialogs: vec![
+                (0x1111, "Output".into(), "PluginA".into(), true),
+                (0x2222, "Output".into(), "PluginB".into(), true),
+            ],
+            ..Default::default()
+        };
+        let name = make_wide("Output");
+        let module_b = make_wide("PluginB");
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_DMMGETPLUGINHWNDBYNAME,
+                module_b.as_ptr() as usize,
+                name.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(0x2222_isize));
+    }
+
+    #[test]
+    fn dmm_get_hwnd_by_name_no_match_returns_zero() {
+        let mut s = MockServices {
+            dock_dialogs: vec![(0xCAFE, "Console".into(), "NppExec".into(), true)],
+            ..Default::default()
+        };
+        let name = make_wide("DoesNotExist");
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_DMMGETPLUGINHWNDBYNAME,
+                0,
+                name.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn dmm_get_hwnd_by_name_null_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMGETPLUGINHWNDBYNAME, 0, 0) };
+        assert_eq!(r, Some(0));
     }
 
     #[test]

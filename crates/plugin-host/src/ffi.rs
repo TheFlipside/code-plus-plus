@@ -268,6 +268,118 @@ pub struct SessionInfo {
     pub files: *mut *mut u16,
 }
 
+/// Mirror of Win32 `RECT` (left/top/right/bottom). Embedded inside
+/// [`TbData`] for the floating dialog's preferred position. Plain
+/// 4×i32 — `#[repr(C)]` keeps Rust from reordering so the layout
+/// matches the upstream `RECT` byte-for-byte.
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct TbRect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+/// Mirror of Notepad++'s `tTbData` — the registration payload for
+/// `NPPM_DMMREGASDCKDLG`. Layout matches the public ABI declared
+/// in `plugins/nppcompat-headers/Docking.h`:
+///
+/// ```text
+/// HWND          h_client       (offset  0, 8 bytes on x64 / 4 on x86)
+/// const TCHAR*  psz_name       (offset  8 / 4)
+/// int           dlg_id         (offset 16 / 8)
+/// UINT          u_mask         (offset 20 / 12)
+/// HICON         h_icon_tab     (offset 24 / 16)
+/// const TCHAR*  psz_add_info   (offset 32 / 20)
+/// RECT          rc_float       (offset 40 / 24, 16 bytes)
+/// int           i_prev_cont    (offset 56 / 40)
+/// const TCHAR*  psz_module_name(offset 64 / 44 — 4 bytes padding on x64)
+/// ```
+///
+/// Total size: 72 bytes (x64) / 48 bytes (x86), enforced by the
+/// `cfg(test)` size assertions below.
+///
+/// Pointers are read with `read_unaligned` on the dispatch side
+/// because plugin allocations may not be aligned to the
+/// pointer-width boundary Rust would otherwise require for an
+/// aligned dereference.
+#[repr(C)]
+pub struct TbData {
+    /// Plugin's docking-dialog HWND. The frame the host creates
+    /// owns this HWND as its child for sizing; the plugin retains
+    /// the lifetime contract (the plugin destroys the HWND, not
+    /// the host).
+    pub h_client: *mut c_void,
+    /// Wide-char display title. Used for the floating frame's
+    /// caption and as the lookup key for
+    /// `NPPM_DMMGETPLUGINHWNDBYNAME`. Plugin owns the buffer;
+    /// host reads on every UPDATEDISPINFO and on lookup.
+    pub psz_name: *const u16,
+    /// Carried in `nmhdr.idFrom` for any future `DMN_*`
+    /// notification routed back to the plugin.
+    pub dlg_id: i32,
+    /// Bit-mask of `DWS_*` flags.
+    pub u_mask: u32,
+    /// Optional title-bar icon. NULL skips icon rendering.
+    pub h_icon_tab: *mut c_void,
+    /// Optional extra-info wide string shown alongside the title.
+    /// NULL skips. Plugin owns the buffer.
+    pub psz_add_info: *const u16,
+    /// Preferred floating position. `(0,0,0,0)` falls back to a
+    /// default offset from the host window.
+    pub rc_float: TbRect,
+    /// Previous-container id (CONT_LEFT/RIGHT/TOP/BOTTOM = 0..=3).
+    /// Stored verbatim; floating-only mode does not act on it.
+    pub i_prev_cont: i32,
+    /// Plugin DLL filename without extension. Used by
+    /// `GETPLUGINHWNDBYNAME`'s second argument (the optional
+    /// module-name disambiguator). Plugin owns the buffer.
+    pub psz_module_name: *const u16,
+}
+
+// --- DWS_* Docking Window Style flags --------------------------------
+//
+// Mirrors the public ABI in `plugins/nppcompat-headers/Docking.h`.
+// Numeric values are not copyrightable; the ABI requires they match.
+
+/// `hIconTab` is shown on the tab strip.
+pub const DWS_ICONTAB: u32 = 0x0000_0001;
+/// `hIconTab` is shown in the title bar (legacy alias).
+pub const DWS_ICONBAR: u32 = 0x0000_0002;
+/// `pszAddInfo` is shown in the title bar.
+pub const DWS_ADDINFO: u32 = 0x0000_0004;
+/// Plugin draws its own dark-mode chrome.
+pub const DWS_USEOWNDARKMODE: u32 = 0x0100_0000;
+
+/// Default-container nibble: opens floating.
+pub const DWS_DF_FLOATING: u32 = 0x8000_0000;
+/// Default-container nibble: dock-left preference.
+pub const DWS_DF_CONT_LEFT: u32 = 0x0000_0000;
+/// Default-container nibble: dock-right preference.
+pub const DWS_DF_CONT_RIGHT: u32 = 0x1000_0000;
+/// Default-container nibble: dock-top preference.
+pub const DWS_DF_CONT_TOP: u32 = 0x2000_0000;
+/// Default-container nibble: dock-bottom preference.
+pub const DWS_DF_CONT_BOTTOM: u32 = 0x3000_0000;
+
+// --- DMN_* dock notifications ----------------------------------------
+//
+// Sent in `SciNotifyHeader.code`. `id_from` is the registered
+// `tTbData.dlg_id`; `hwnd_from` is the host frame's HWND.
+
+/// First DMN_* code. Notifications below this floor are reserved.
+pub const DMN_FIRST: u32 = 0x1000;
+/// User closed the floating dialog (frame hidden, plugin's HWND
+/// stays alive).
+pub const DMN_CLOSE: u32 = DMN_FIRST + 1;
+/// Floating dialog has been docked into a container. Reserved for
+/// the Phase-5 docking manager — never sent in floating-only mode.
+pub const DMN_DOCK: u32 = DMN_FIRST + 2;
+/// Docked dialog has been floated. Reserved for the Phase-5
+/// docking manager — never sent in floating-only mode.
+pub const DMN_FLOAT: u32 = DMN_FIRST + 3;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,5 +505,38 @@ mod tests {
     fn toolbar_icons_total_size_x86() {
         // 4 + 4 = 8 bytes; pointer-sized handles, no padding.
         assert_eq!(core::mem::size_of::<ToolbarIcons>(), 8);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn tb_data_total_size_x64() {
+        // Mirror the upstream `tTbData` layout exactly:
+        //   8 (h_client) + 8 (psz_name) + 4 (dlg_id) + 4 (u_mask)
+        // + 8 (h_icon_tab) + 8 (psz_add_info) + 16 (rc_float)
+        // + 4 (i_prev_cont) + 4 (padding to align next pointer)
+        // + 8 (psz_module_name)
+        // = 72 bytes. Catches any future field-type/order regression
+        // that would break ABI compat with plugins compiled against
+        // `Docking.h`.
+        assert_eq!(
+            core::mem::size_of::<TbData>(),
+            72,
+            "TbData layout regressed; plugins reading the upstream tTbData struct would parse garbage",
+        );
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn tb_data_total_size_x86() {
+        // 4 (h_client) + 4 (psz_name) + 4 (dlg_id) + 4 (u_mask)
+        // + 4 (h_icon_tab) + 4 (psz_add_info) + 16 (rc_float)
+        // + 4 (i_prev_cont) + 4 (psz_module_name)
+        // = 48 bytes; pointers are 4-byte-aligned so no padding.
+        assert_eq!(core::mem::size_of::<TbData>(), 48);
+    }
+
+    #[test]
+    fn tb_rect_is_four_i32() {
+        assert_eq!(core::mem::size_of::<TbRect>(), 16);
     }
 }
