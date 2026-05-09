@@ -2117,11 +2117,30 @@ impl Shell {
                 }
             }
             FileChange::Removed(path) => {
-                if self
+                // Find the tab whose path matches and resolve its
+                // buffer id for the NPPN_FILEDELETED payload. The
+                // tab stays open — the buffer text is still in
+                // memory and the user can save-as to recover the
+                // file. We just queue the notification + the
+                // user-facing dialog; the host does not auto-close.
+                if let Some(tab) = self
                     .tabs
                     .iter()
-                    .any(|t| t.path.as_deref() == Some(path.as_path()))
+                    .find(|t| t.path.as_deref() == Some(path.as_path()))
                 {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let buffer_id = tab.id as isize;
+                        self.pending_notifications
+                            .push(Notification::FileDeleted { buffer_id });
+                    }
+                    // Suppress the unused-variable warning on
+                    // non-Windows builds. Once the GTK / Cocoa
+                    // plugin host bridges land in Phase 5, the
+                    // notification push above moves out of the
+                    // cfg gate and `tab` becomes used here too.
+                    #[cfg(not(target_os = "windows"))]
+                    let _ = tab;
                     pending.push(PendingDialog::Error {
                         title: "File removed".to_string(),
                         message: format!(
@@ -7655,6 +7674,61 @@ mod tests {
         assert!(
             n.iter().any(|x| matches!(x, Notification::DocOrderChanged)),
             "expected NPPN_DOCORDERCHANGED in {n:?}"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn external_remove_of_open_file_queues_file_deleted() {
+        // The file watcher reports a Removed event for a file
+        // currently open in a tab. The host must (a) push
+        // NPPN_FILEDELETED with the matching tab's buffer id so
+        // plugins observe the external delete, and (b) queue
+        // the user-facing error dialog.
+        let mut shell = shell_with_synthetic_tabs(3, Some(1));
+        let _ = shell.take_notifications();
+        let path = shell.tabs[1].path.clone().unwrap();
+        let expected_id = shell.tabs[1].id as isize;
+        let mut pending = Vec::new();
+        shell.apply_file_change(FileChange::Removed(path), &mut pending);
+        let n = shell.take_notifications();
+        assert!(
+            n.iter()
+                .any(|x| matches!(x, Notification::FileDeleted { buffer_id } if *buffer_id == expected_id)),
+            "expected NPPN_FILEDELETED with buffer_id={expected_id} in {n:?}"
+        );
+        assert!(
+            pending.iter().any(
+                |d| matches!(d, PendingDialog::Error { title, .. } if title == "File removed")
+            ),
+            "expected the 'File removed' error dialog in {pending:?}",
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn external_remove_of_unopened_file_does_not_queue() {
+        // A Removed event for a path that's NOT open in any tab
+        // is a watcher straggler (the user closed the tab, then
+        // the watcher's queued event arrived). Must NOT queue
+        // NPPN_FILEDELETED — plugins would see a delete for a
+        // buffer they never saw open.
+        let mut shell = shell_with_synthetic_tabs(3, Some(0));
+        let _ = shell.take_notifications();
+        let mut pending = Vec::new();
+        shell.apply_file_change(
+            FileChange::Removed(PathBuf::from("/tmp/unknown.txt")),
+            &mut pending,
+        );
+        let n = shell.take_notifications();
+        assert!(
+            !n.iter()
+                .any(|x| matches!(x, Notification::FileDeleted { .. })),
+            "watcher straggler must not queue NPPN_FILEDELETED; got {n:?}"
+        );
+        assert!(
+            pending.is_empty(),
+            "watcher straggler must not queue any user dialog; got {pending:?}"
         );
     }
 

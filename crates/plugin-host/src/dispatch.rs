@@ -267,6 +267,14 @@ pub const NPPN_SHORTCUTREMAPPED: u32 = NPPN_FIRST + 13;
 pub const NPPN_FILELOADFAILED: u32 = NPPN_FIRST + 15;
 pub const NPPN_DOCORDERCHANGED: u32 = NPPN_FIRST + 17;
 pub const NPPN_SNAPSHOTDIRTYFILELOADED: u32 = NPPN_FIRST + 18;
+/// A file open in a tab was deleted (or moved out from under us)
+/// externally — by another process, the OS file manager, a sync
+/// client, etc. Fired by Code++'s file watcher when its
+/// `FileChange::Removed` event resolves to a path that's currently
+/// open. The buffer text stays in memory (the user can save-as to
+/// recover the file). Plugins gating on file lifecycle audit-log
+/// this alongside `FILEOPENED` / `FILECLOSED`.
+pub const NPPN_FILEDELETED: u32 = NPPN_FIRST + 26;
 /// App is about to commit to shutdown. Plugins use this to save
 /// their own state alongside the host's session save. Upstream
 /// allows plugins to *veto* shutdown by responding to this in
@@ -403,6 +411,16 @@ pub enum Notification {
     /// shutdown by responding to `beNotified`; the notification
     /// is informational only. Carries no buffer id.
     BeforeShutdown,
+    /// A file open in a tab was deleted externally — the file
+    /// watcher's `FileChange::Removed` event resolved to a
+    /// currently-open tab. The buffer text stays in memory
+    /// (the host doesn't auto-close the tab; the user can
+    /// save-as to recover the file). Plugins typically use
+    /// this to audit file activity and to invalidate any
+    /// path-keyed caches.
+    FileDeleted {
+        buffer_id: isize,
+    },
     /// App is about to exit. Fired before any DLL unload.
     Shutdown,
     /// A plugin's command-shortcut binding was changed. Carries
@@ -434,6 +452,7 @@ impl Notification {
             Self::DocOrderChanged => NPPN_DOCORDERCHANGED,
             Self::SnapshotDirtyFileLoaded { .. } => NPPN_SNAPSHOTDIRTYFILELOADED,
             Self::BeforeShutdown => NPPN_BEFORESHUTDOWN,
+            Self::FileDeleted { .. } => NPPN_FILEDELETED,
             Self::Shutdown => NPPN_SHUTDOWN,
             Self::ShortcutRemapped { .. } => NPPN_SHORTCUTREMAPPED,
         }
@@ -448,7 +467,8 @@ impl Notification {
             | Self::FileSaved { buffer_id }
             | Self::BufferActivated { buffer_id }
             | Self::LangChanged { buffer_id }
-            | Self::SnapshotDirtyFileLoaded { buffer_id } => *buffer_id,
+            | Self::SnapshotDirtyFileLoaded { buffer_id }
+            | Self::FileDeleted { buffer_id } => *buffer_id,
             // SHORTCUTREMAPPED's `nmhdr.idFrom` carries the cmd id —
             // we reuse the `buffer_id` slot as the generic
             // "id_from" payload. The cast chain `i32 → isize →
@@ -3759,6 +3779,20 @@ mod tests {
         assert_eq!(Notification::LangChanged { buffer_id: 0 }.code(), 1011);
         assert_eq!(Notification::ShortcutRemapped { cmd_id: 0 }.code(), 1013);
         assert_eq!(Notification::BeforeShutdown.code(), 1019);
+        assert_eq!(Notification::FileDeleted { buffer_id: 0 }.code(), 1026);
+    }
+
+    #[test]
+    fn file_deleted_carries_buffer_id() {
+        // FILEDELETED's nmhdr.idFrom is the buffer id of the
+        // tab whose on-disk file was removed externally —
+        // standard buffer-id slot use, no override.
+        let n = Notification::FileDeleted { buffer_id: 42 };
+        assert_eq!(n.buffer_id(), 42);
+        let default = 0xDEAD_BEEF_usize as Hwnd;
+        // Default hwndFrom (no override) — same shape as the
+        // other lifecycle notifications.
+        assert_eq!(n.hwnd_from(default), default);
     }
 
     #[test]

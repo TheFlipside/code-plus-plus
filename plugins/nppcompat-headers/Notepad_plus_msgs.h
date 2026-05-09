@@ -887,6 +887,17 @@ typedef enum LangType_ {
 #define NPPN_FILERENAMED           (NPPN_FIRST + 23)
 #define NPPN_FILEBEFOREDELETE      (NPPN_FIRST + 24)
 #define NPPN_FILEDELETEFAILED      (NPPN_FIRST + 25)
+/* v3: a file open in a tab was deleted (or moved out from
+ *     under us) externally — by another process, the OS file
+ *     manager, a sync client, etc. Code++'s file watcher
+ *     reports the `FileChange::Removed` event; the host queues
+ *     this notification when the path matches a currently-open
+ *     tab. The buffer text stays in memory (the tab is NOT
+ *     auto-closed; the user can save-as to recover the file).
+ *     Watcher stragglers — Removed events for paths no longer
+ *     in any tab — are silently dropped, so plugins only see
+ *     the notification for files they could have observed open.
+ *     `nmhdr.idFrom` carries the deleted file's buffer id. */
 #define NPPN_FILEDELETED           (NPPN_FIRST + 26)
 #define NPPN_DARKMODECHANGED       (NPPN_FIRST + 27)
 #define NPPN_CMDLINEPLUGINMSG      (NPPN_FIRST + 28)
