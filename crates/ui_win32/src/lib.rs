@@ -57,9 +57,9 @@ use windows::Win32::Foundation::{
     COLORREF, E_FAIL, HWND, LPARAM, LRESULT, MAX_PATH, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, FillRect, GetStockObject, GetSysColorBrush, InvalidateRect, SetBkColor,
-    SetBkMode, SetTextColor, COLOR_WINDOW, DEFAULT_GUI_FONT, HBRUSH, HDC, HFONT, NULL_BRUSH,
-    TRANSPARENT,
+    CreateFontIndirectW, CreateSolidBrush, DeleteObject, FillRect, GetStockObject,
+    GetSysColorBrush, InvalidateRect, SetBkColor, SetBkMode, SetTextColor, COLOR_WINDOW,
+    DEFAULT_GUI_FONT, FW_BOLD, HBRUSH, HDC, HFONT, LOGFONTW, NULL_BRUSH, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::{
@@ -77,10 +77,12 @@ use windows::Win32::UI::Controls::{
     WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, ReleaseCapture, SetCapture, SetFocus, VK_0, VK_F, VK_F3, VK_G, VK_H, VK_N, VK_O,
-    VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
+    EnableWindow, ReleaseCapture, SetCapture, SetFocus, VK_0, VK_F, VK_F1, VK_F3, VK_G, VK_H, VK_N,
+    VK_O, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
 };
-use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
+use windows::Win32::UI::Shell::{
+    DragAcceptFiles, DragFinish, DragQueryFileW, ShellExecuteW, HDROP,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CreateAcceleratorTableW,
     CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyMenu,
@@ -94,14 +96,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER,
     ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL, HICON, HMENU, IDCANCEL,
-    IDC_ARROW, IDC_SIZENS, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONINFORMATION,
-    MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
-    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
-    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DROPFILES,
-    WM_ERASEBKGND, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
-    WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SIZE,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
+    IDC_ARROW, IDC_HAND, IDC_SIZENS, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONQUESTION,
+    MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP,
+    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
+    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DROPFILES, WM_ERASEBKGND,
+    WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY,
+    WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SIZE, WNDCLASSEXW,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
     WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
     WS_VISIBLE, WS_VSCROLL,
 };
@@ -347,6 +349,53 @@ const IDC_FR_FIF_SUBFOLDERS: u16 = 220;
 const IDC_FR_FIF_HIDDEN_FOLDERS: u16 = 221;
 const IDC_FR_FIF_FIND_ALL: u16 = 222;
 const IDC_FR_FIF_REPLACE_IN_FILES: u16 = 223;
+
+/// About dialog window class.
+const ABOUT_CLASS: PCWSTR = w!("CodePlusPlusAboutDialog");
+
+/// About dialog control ids. The link is the only interactive child
+/// besides the OK button (`IDOK`); STN_CLICKED on it opens the home
+/// URL in the user's default browser via `ShellExecuteW`.
+const IDC_ABOUT_ICON: u16 = 400;
+const IDC_ABOUT_TITLE: u16 = 401;
+const IDC_ABOUT_HOME_LABEL: u16 = 402;
+const IDC_ABOUT_HOME_LINK: u16 = 403;
+const IDC_ABOUT_LICENSE_GROUP: u16 = 404;
+const IDC_ABOUT_LICENSE_TEXT: u16 = 405;
+
+/// `STN_CLICKED` — the static-control click notification fired by
+/// `SS_NOTIFY` controls. windows-rs doesn't re-export this constant
+/// (it overlaps numerically with `BN_CLICKED`), so we declare it
+/// inline. See <https://learn.microsoft.com/windows/win32/controls/stn-clicked>.
+const STN_CLICKED: u32 = 0;
+
+/// `STM_SETICON` — sets the icon shown by an `SS_ICON` STATIC
+/// control. windows-rs hides this constant under
+/// `Win32::UI::Controls::STM_SETICON` with a `STATIC_NOTIFICATIONS`
+/// type tag that's awkward to import for a single message; the
+/// numeric value is stable SDK ABI.
+const STM_SETICON: u32 = 0x0170;
+
+// Static-control style bits. windows-rs models these as a typed
+// `STATIC_STYLES(u32)` newtype under `Win32::System::SystemServices`,
+// which is an awkward import path for the few callers that need
+// them. Declared inline as plain integers — the values are stable
+// SDK constants going back to Win32's first release.
+const SS_LEFT: u32 = 0x0000;
+const SS_ICON: u32 = 0x0003;
+const SS_NOTIFY: u32 = 0x0100;
+
+/// MAKEINTRESOURCEW(1). Windows treats a `PCWSTR` whose high word is
+/// zero as a numeric resource id rather than a pointer to a string;
+/// `code++.ico` is embedded by `app/build.rs` at resource id 1.
+/// Used by the main window's class registration (large + small
+/// taskbar icons) and the About dialog (large + home-row icons).
+///
+/// `1 as *const u16` is the canonical `MAKEINTRESOURCEW` idiom but
+/// trips clippy's `manual_dangling_ptr` lint, which misclassifies
+/// the integer-as-pointer cast — suppressed with rationale.
+#[allow(clippy::manual_dangling_ptr)]
+const APP_ICON_RESOURCE: PCWSTR = PCWSTR(1 as *const u16);
 
 // Find/Replace dialog checkbox-grid dimensions. Promoted to module
 // scope so `apply_tab_visibility` can reposition Whole word and
@@ -2532,7 +2581,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             help_menu,
             MF_STRING,
             ID_HELP_ABOUT as usize,
-            w!("&About Code++"),
+            w!("&About Code++\tF1"),
         )?;
         AppendMenuW(bar, MF_POPUP, help_menu.0 as usize, w!("&?"))?;
 
@@ -3441,19 +3490,634 @@ fn prompt_save_path(owner: HWND, default_name: Option<&str>) -> Option<PathBuf> 
     Some(PathBuf::from(s))
 }
 
-/// Show the "About Code++" dialog. Modal MessageBox, so the borrow
-/// must already be dropped at the call site (the WM_COMMAND handler
-/// calls this through `state_from_hwnd` already, but pulls only
-/// HWND values out before showing).
+// --- About dialog ----------------------------------------------------
+//
+// Custom modal dialog built on a `WS_POPUP` + `WS_CAPTION` + `WS_SYSMENU`
+// window — same scaffolding as the Goto / Find-Replace dialogs so the
+// modal pump, panic boundary, and themed-paint workaround are reused
+// verbatim. Layout mirrors Notepad++'s About box:
+//
+//   ┌──────────────────────────────────────────────────────────┐
+//   │  [icon]   Code++ v<ver>   (64-bit)                       │
+//   │           A cross-platform Notepad++ clone …             │
+//   │                                                          │
+//   │  [icon]  Home:  https://code-plus-plus.org/              │
+//   │                                                          │
+//   │  ┌──────── MIT License ───────────────────────────────┐  │
+//   │  │ <license body, wrapped in a multi-line STATIC>     │  │
+//   │  └────────────────────────────────────────────────────┘  │
+//   │                          [ OK ]                          │
+//   └──────────────────────────────────────────────────────────┘
+//
+// The two `[icon]` controls are both clickable (`SS_NOTIFY`) and route
+// the click to `ShellExecuteW("open", url, …)` so either the small
+// icon or the URL text below opens the home page in the user's
+// default browser. Hovering the URL text or the small icon switches
+// the cursor to `IDC_HAND` via a `WM_SETCURSOR` hook in
+// `about_wnd_proc` — the parent override is needed because
+// SS_NOTIFY by itself doesn't set a hover cursor.
+
+/// Heap-allocated state for the About dialog. Owned by
+/// `show_about_dialog`'s stack frame for the dialog's lifetime; the
+/// raw pointer is stashed in the dialog HWND's `GWLP_USERDATA`.
+///
+/// The bold title font handle is *not* tracked here — it lives as a
+/// local in `show_about_dialog` and is freed via `DeleteObject`
+/// after the modal pump exits, which is sufficient because no
+/// wnd_proc message path needs to read it back.
+struct AboutDialogState {
+    /// HWND of the URL link STATIC. The wnd_proc compares `wparam`
+    /// against this on `WM_SETCURSOR` to switch to `IDC_HAND`, and
+    /// against `lparam` on `WM_CTLCOLORSTATIC` to paint the link
+    /// text blue.
+    link_hwnd: HWND,
+    /// HWND of the small home-row icon STATIC. Clickable too —
+    /// either the icon or the URL opens the home page.
+    home_icon_hwnd: HWND,
+    /// Home URL, owned as a UTF-16 string so `ShellExecuteW` can
+    /// take a `PCWSTR` directly. The `HSTRING` keeps the buffer
+    /// alive across the call.
+    home_url: HSTRING,
+}
+
+extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // Same panic-catch wrapper as the other dialog wnd_procs —
+    // unwinding across `extern "system"` is UB. On panic fall back
+    // to DefWindowProcW which is the natural no-op for unhandled
+    // messages.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        match msg {
+            WM_NCCREATE => {
+                let cs = lparam.0 as *const CREATESTRUCTW;
+                if !cs.is_null() {
+                    let state_ptr = (*cs).lpCreateParams as isize;
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_COMMAND => {
+                let cmd = (wparam.0 & 0xFFFF) as i32;
+                let notif = ((wparam.0 >> 16) & 0xFFFF) as u32;
+                if cmd == IDOK.0 || cmd == IDCANCEL.0 {
+                    let _ = DestroyWindow(hwnd);
+                    LRESULT(0)
+                } else if (cmd == IDC_ABOUT_HOME_LINK as i32 || cmd == IDC_ABOUT_ICON as i32)
+                    && notif == STN_CLICKED
+                {
+                    // Either the small home-row icon or the URL
+                    // text was clicked — open the home page in
+                    // the user's default browser.
+                    let state_ptr =
+                        GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
+                    if !state_ptr.is_null() {
+                        ShellExecuteW(
+                            Some(hwnd),
+                            w!("open"),
+                            &(*state_ptr).home_url,
+                            PCWSTR::null(),
+                            PCWSTR::null(),
+                            SW_SHOWNORMAL,
+                        );
+                    }
+                    LRESULT(0)
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+            }
+            WM_SETCURSOR => {
+                // wparam carries the HWND of the child currently
+                // under the cursor. SS_NOTIFY on its own doesn't
+                // change the cursor, so we override here when the
+                // child is the URL link or the home-row icon —
+                // both clickable, both should show the hand
+                // cursor on hover.
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
+                if !state_ptr.is_null() {
+                    let child = HWND(wparam.0 as *mut c_void);
+                    let st = &*state_ptr;
+                    if child == st.link_hwnd || child == st.home_icon_hwnd {
+                        if let Ok(cursor) = LoadCursorW(None, IDC_HAND) {
+                            let _ = SetCursor(Some(cursor));
+                        }
+                        return LRESULT(1);
+                    }
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_CLOSE => {
+                let _ = DestroyWindow(hwnd);
+                LRESULT(0)
+            }
+            // Same Win11-themed-paint workaround as the Goto and
+            // Find/Replace dialogs: the system theme service
+            // overrides our class hbrBackground for `WS_POPUP` +
+            // `WS_CAPTION` windows. Painting the client rect
+            // ourselves and returning 1 keeps the dialog body in
+            // our chosen colour.
+            WM_ERASEBKGND => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let mut rect = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rect);
+                FillRect(hdc, &rect, dialog_bg_brush());
+                LRESULT(1)
+            }
+            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                // Paint the URL link in standard hyperlink blue
+                // (RGB 0, 0, 238 → COLORREF 0x00EE0000). Other
+                // statics keep the system text colour.
+                let target = HWND(lparam.0 as *mut c_void);
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
+                if !state_ptr.is_null()
+                    && msg == WM_CTLCOLORSTATIC
+                    && target == (*state_ptr).link_hwnd
+                {
+                    let _ = SetTextColor(hdc, COLORREF(0x00EE0000));
+                }
+                LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }));
+    match result {
+        Ok(lr) => lr,
+        Err(_) => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// Body of the MIT license box. Sourced from `LICENSE` at the repo
+/// root. The "MIT License" header line is dropped here because the
+/// surrounding `BS_GROUPBOX` already carries that title — repeating
+/// it inside the box would read as duplication. Hard newlines are
+/// preserved (Win32 STATIC respects `\n`); paragraphs wrap inside
+/// the control's width via the default `SS_LEFT` behaviour because
+/// the source is one long paragraph per `\n\n` block.
+const ABOUT_LICENSE_BODY: &str = "Copyright (c) 2026 Max Fiedler and Code++ contributors\r\n\
+\r\n\
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\r\n\
+\r\n\
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\r\n\
+\r\n\
+THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.";
+
+/// Architecture suffix shown in the title line — `(64-bit)` or
+/// `(32-bit)` depending on the target pointer width. Compile-time
+/// constant so the formatted string can borrow it without
+/// allocating per call.
+const ABOUT_ARCH: &str = if cfg!(target_pointer_width = "64") {
+    "64-bit"
+} else {
+    "32-bit"
+};
+
+/// Show the "About Code++" dialog modally. `main_hwnd` is the
+/// owner; the dialog disables the owner for the duration of the
+/// modal pump and restores it via the existing `OwnerEnableGuard`.
 fn show_about_dialog(main_hwnd: HWND) {
-    let body = format!(
-        "Code++ {}\nA cross-platform Notepad++ clone in Rust on Scintilla.\n\nhttps://git.fiedler.live/tux/code-plus-plus",
-        env!("CARGO_PKG_VERSION"),
-    );
-    let body_w = HSTRING::from(body);
-    let title = w!("About Code++");
+    use std::sync::OnceLock;
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+
     unsafe {
-        MessageBoxW(Some(main_hwnd), &body_w, title, MB_OK | MB_ICONINFORMATION);
+        let instance = match GetModuleHandleW(None) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+
+        REGISTERED.get_or_init(|| {
+            let class = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(about_wnd_proc),
+                hInstance: instance.into(),
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                hbrBackground: dialog_bg_brush(),
+                lpszClassName: ABOUT_CLASS,
+                ..Default::default()
+            };
+            let _ = RegisterClassExW(&class);
+        });
+
+        // --- Layout (CLIENT coordinates) --------------------------
+        //
+        // Tight enough to feel at home next to N++'s About box,
+        // wide enough that the license body wraps to ~5 lines.
+        const CLIENT_W: i32 = 480;
+        const CLIENT_H: i32 = 482;
+        const PAD: i32 = 18;
+
+        // Top row: app icon + title + subtitle.
+        const TOP_ICON_SIZE: i32 = 80;
+        const TOP_ICON_X: i32 = PAD;
+        const TOP_ICON_Y: i32 = PAD;
+        const TITLE_X: i32 = TOP_ICON_X + TOP_ICON_SIZE + 16;
+        const TITLE_Y: i32 = TOP_ICON_Y + 18;
+        const TITLE_W: i32 = CLIENT_W - TITLE_X - PAD;
+        const TITLE_H: i32 = 28;
+        const SUBTITLE_Y: i32 = TITLE_Y + TITLE_H + 4;
+        const SUBTITLE_H: i32 = 18;
+
+        // Home row: small icon + "Home:" label + URL link.
+        const HOME_ROW_Y: i32 = TOP_ICON_Y + TOP_ICON_SIZE + 18;
+        const HOME_ICON_SIZE: i32 = 24;
+        const HOME_ICON_X: i32 = PAD;
+        const HOME_LABEL_X: i32 = HOME_ICON_X + HOME_ICON_SIZE + 8;
+        const HOME_LABEL_Y: i32 = HOME_ROW_Y + 4;
+        const HOME_LABEL_W: i32 = 48;
+        const HOME_LINK_X: i32 = HOME_LABEL_X + HOME_LABEL_W;
+        const HOME_LINK_W: i32 = CLIENT_W - HOME_LINK_X - PAD;
+        const HOME_ROW_H: i32 = 22;
+
+        // License box: BS_GROUPBOX titled "MIT License" with the
+        // license body as a multi-line STATIC inside it. The body
+        // STATIC is inset enough that the group box's line never
+        // touches the text.
+        const LIC_BOX_Y: i32 = HOME_ROW_Y + HOME_ROW_H + 14;
+        const LIC_BOX_X: i32 = PAD;
+        const LIC_BOX_W: i32 = CLIENT_W - 2 * PAD;
+        const LIC_BOX_H: i32 = 240;
+        const LIC_TEXT_X: i32 = LIC_BOX_X + 12;
+        const LIC_TEXT_Y: i32 = LIC_BOX_Y + 22;
+        const LIC_TEXT_W: i32 = LIC_BOX_W - 24;
+        const LIC_TEXT_H: i32 = LIC_BOX_H - 32;
+
+        // OK button at the bottom, centered.
+        const OK_W: i32 = 96;
+        const OK_H: i32 = 28;
+        const OK_X: i32 = (CLIENT_W - OK_W) / 2;
+        const OK_Y: i32 = LIC_BOX_Y + LIC_BOX_H + 12;
+
+        // Sanity-check the layout against CLIENT_H at compile time —
+        // a future tweak that pushes the OK button off the bottom
+        // edge fails to build instead of silently clipping the
+        // button.
+        const _: () = {
+            let bottom = OK_Y + OK_H + PAD;
+            assert!(bottom <= CLIENT_H, "About-dialog layout overflows CLIENT_H");
+        };
+
+        let mut window_rect = RECT {
+            left: 0,
+            top: 0,
+            right: CLIENT_W,
+            bottom: CLIENT_H,
+        };
+        let _ = AdjustWindowRectEx(
+            &mut window_rect,
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            false,
+            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+        );
+        let dlg_w = window_rect.right - window_rect.left;
+        let dlg_h = window_rect.bottom - window_rect.top;
+
+        let mut owner_rect = RECT::default();
+        let _ = GetWindowRect(main_hwnd, &mut owner_rect);
+        let owner_w = owner_rect.right - owner_rect.left;
+        let owner_h = owner_rect.bottom - owner_rect.top;
+        let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
+        let dlg_y = owner_rect.top + (owner_h - dlg_h) / 2;
+
+        // Bold title font: ~12pt at 96 DPI. `lfHeight` follows the
+        // Win32 convention where a negative value is interpreted as
+        // a *character* height in logical units, which matches what
+        // a designer expects when picking a "16 px tall" font.
+        let mut title_lf = LOGFONTW {
+            lfHeight: -16,
+            // `FW_BOLD` is a `FONT_WEIGHT(u32)` newtype in
+            // windows-rs but `LOGFONTW.lfWeight` is `i32` (signed
+            // because the SDK header types it as `LONG`). Extract
+            // the inner u32 and cast — the value is 700, well
+            // inside i32's positive range.
+            lfWeight: FW_BOLD.0 as i32,
+            ..Default::default()
+        };
+        // "Segoe UI" is the system UI font on Vista+; falls back
+        // gracefully if absent. Truncated copy is fine — the array
+        // is zero-padded and any tail past the face name is
+        // ignored.
+        let face = "Segoe UI";
+        let utf16: Vec<u16> = face.encode_utf16().collect();
+        let n = utf16.len().min(title_lf.lfFaceName.len() - 1);
+        title_lf.lfFaceName[..n].copy_from_slice(&utf16[..n]);
+        let title_font = CreateFontIndirectW(&title_lf);
+        // RAII free for the title font — covers every exit path
+        // including the child-creation `Err(_) => return` arms below.
+        let _title_font_guard = GdiObjectGuard(title_font);
+        let default_font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
+
+        // Pre-format the title string so the heap-allocated
+        // `HSTRING` outlives `CreateWindowExW`.
+        let title_text = format!("Code++ v{}    ({})", env!("CARGO_PKG_VERSION"), ABOUT_ARCH);
+        let title_text_w = HSTRING::from(title_text);
+        let home_url = HSTRING::from("https://code-plus-plus.org/");
+        let license_w = HSTRING::from(ABOUT_LICENSE_BODY);
+
+        // Heap-allocate the dialog state. The wnd_proc reads it via
+        // GWLP_USERDATA; the Box stays in this stack frame so the
+        // raw pointer remains valid for the dialog's lifetime.
+        let mut state = Box::new(AboutDialogState {
+            link_hwnd: HWND::default(),
+            home_icon_hwnd: HWND::default(),
+            home_url: home_url.clone(),
+        });
+        let state_ptr: *mut AboutDialogState = &mut *state;
+
+        let dlg = match CreateWindowExW(
+            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+            ABOUT_CLASS,
+            w!("About Code++"),
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            dlg_x,
+            dlg_y,
+            dlg_w,
+            dlg_h,
+            Some(main_hwnd),
+            None,
+            Some(instance.into()),
+            Some(state_ptr as *mut c_void),
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        let _dlg_guard = DlgDestroyGuard(dlg);
+
+        // Large app icon (resource id 1, embedded by app/build.rs).
+        // `LoadImageW` with `IMAGE_ICON` and explicit dimensions
+        // pulls the closest-fit size from the multi-resolution
+        // ICO; 80px maps to the 64px or 128px embedded image with
+        // good quality.
+        let big_icon = LoadImageW(
+            Some(instance.into()),
+            APP_ICON_RESOURCE,
+            IMAGE_ICON,
+            TOP_ICON_SIZE,
+            TOP_ICON_SIZE,
+            LR_DEFAULTCOLOR,
+        )
+        .map(|h| HICON(h.0))
+        .unwrap_or_default();
+        let small_icon = LoadImageW(
+            Some(instance.into()),
+            APP_ICON_RESOURCE,
+            IMAGE_ICON,
+            HOME_ICON_SIZE,
+            HOME_ICON_SIZE,
+            LR_DEFAULTCOLOR,
+        )
+        .map(|h| HICON(h.0))
+        .unwrap_or_default();
+
+        // SS_ICON STATIC sized exactly to the icon bitmap; the
+        // STATIC class auto-paints the icon centered when given
+        // SS_ICON. `STM_SETICON` (declared at module scope alongside
+        // `STN_CLICKED`) sets the icon image after creation —
+        // simpler than packing the HICON into the create-time
+        // `lParam`.
+        let icon_top = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_ICON as i32),
+            TOP_ICON_X,
+            TOP_ICON_Y,
+            TOP_ICON_SIZE,
+            TOP_ICON_SIZE,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        SendMessageW(
+            icon_top,
+            STM_SETICON,
+            Some(WPARAM(big_icon.0 as usize)),
+            Some(LPARAM(0)),
+        );
+
+        let title_static = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            &title_text_w,
+            WS_CHILD | WS_VISIBLE | style_bits(SS_LEFT as i32),
+            TITLE_X,
+            TITLE_Y,
+            TITLE_W,
+            TITLE_H,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_TITLE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+
+        let subtitle = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("A cross-platform Notepad++ clone in Rust on Scintilla."),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_LEFT as i32),
+            TITLE_X,
+            SUBTITLE_Y,
+            TITLE_W,
+            SUBTITLE_H,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+
+        // Home row: small clickable icon (SS_ICON | SS_NOTIFY).
+        let home_icon = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | style_bits((SS_ICON | SS_NOTIFY) as i32),
+            HOME_ICON_X,
+            HOME_ROW_Y,
+            HOME_ICON_SIZE,
+            HOME_ICON_SIZE,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_ICON as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        SendMessageW(
+            home_icon,
+            STM_SETICON,
+            Some(WPARAM(small_icon.0 as usize)),
+            Some(LPARAM(0)),
+        );
+
+        let home_label = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Home:"),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_LEFT as i32),
+            HOME_LABEL_X,
+            HOME_LABEL_Y,
+            HOME_LABEL_W,
+            HOME_ROW_H - 4,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_HOME_LABEL as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+
+        // The clickable URL link. SS_NOTIFY makes the static fire
+        // STN_CLICKED through WM_COMMAND; the wnd_proc forwards it
+        // to ShellExecuteW. WM_CTLCOLORSTATIC paints the text in
+        // hyperlink blue.
+        let link = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            &home_url,
+            WS_CHILD | WS_VISIBLE | style_bits((SS_LEFT | SS_NOTIFY) as i32),
+            HOME_LINK_X,
+            HOME_LABEL_Y,
+            HOME_LINK_W,
+            HOME_ROW_H - 4,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_HOME_LINK as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+
+        // License box and body. `BS_GROUPBOX` carries the "MIT
+        // License" title at the top edge of the rectangle; the
+        // line of the box breaks naturally around the title text
+        // so the line never crosses the title. The body STATIC
+        // inside is inset enough that the box's line never
+        // touches the body either.
+        let lic_box = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("MIT License"),
+            WS_CHILD | WS_VISIBLE | style_bits(BS_GROUPBOX),
+            LIC_BOX_X,
+            LIC_BOX_Y,
+            LIC_BOX_W,
+            LIC_BOX_H,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_LICENSE_GROUP as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        // Drop the visual-style on the group box so its themed
+        // "rounded corners + gradient title cell" paint doesn't
+        // override our flat dialog background — same trick the
+        // Find/Replace dialog uses on its mode group.
+        disable_visual_style(lic_box);
+
+        let lic_text = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            &license_w,
+            WS_CHILD | WS_VISIBLE | style_bits(SS_LEFT as i32),
+            LIC_TEXT_X,
+            LIC_TEXT_Y,
+            LIC_TEXT_W,
+            LIC_TEXT_H,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_LICENSE_TEXT as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+
+        let ok_btn = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("OK"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_DEFPUSHBUTTON),
+            OK_X,
+            OK_Y,
+            OK_W,
+            OK_H,
+            Some(dlg),
+            Some(HMENU(IDOK.0 as u16 as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+
+        // Publish the link and home-icon HWNDs to the wnd_proc
+        // before the modal pump kicks off so the very first
+        // WM_SETCURSOR / WM_CTLCOLORSTATIC message can resolve
+        // them.
+        state.link_hwnd = link;
+        state.home_icon_hwnd = home_icon;
+
+        // Apply fonts: bold title font for the title only, default
+        // GUI font for everything else. Children created above all
+        // need the font message — without it Win32 falls back to
+        // the System bitmap font.
+        apply_dialog_font(title_static, title_font);
+        for child in [subtitle, home_label, link, lic_box, lic_text, ok_btn] {
+            apply_dialog_font(child, default_font);
+        }
+        // `icon_top` and `home_icon` deliberately keep the system
+        // STATIC class default font — `STM_SETICON` overrides any
+        // text content so the font choice is moot, and skipping
+        // the WM_SETFONT round-trip is one fewer message at
+        // dialog-show time.
+
+        // Disable the owner before SHOW so input cannot reach the
+        // main window during the brief moment between window
+        // creation and modal pump start; the RAII guard restores
+        // the owner on every exit path.
+        let _ = EnableWindow(main_hwnd, false);
+        let _owner_guard = OwnerEnableGuard(main_hwnd);
+        let _ = ShowWindow(dlg, SW_SHOW);
+        let _ = SetFocus(Some(ok_btn));
+
+        let mut msg_buf = MSG::default();
+        loop {
+            if !IsWindow(Some(dlg)).as_bool() {
+                break;
+            }
+            let ret = GetMessageW(&mut msg_buf, None, 0, 0);
+            match ret.0 {
+                0 => {
+                    let _ = PostMessageW(None, WM_QUIT, msg_buf.wParam, msg_buf.lParam);
+                    break;
+                }
+                -1 => break,
+                _ => {
+                    if !IsDialogMessageW(dlg, &msg_buf).as_bool() {
+                        let _ = TranslateMessage(&msg_buf);
+                        DispatchMessageW(&msg_buf);
+                    }
+                }
+            }
+        }
+
+        // Title-font cleanup, owner re-enable, and dialog HWND
+        // destroy are all handled by RAII guards (`GdiObjectGuard`,
+        // `OwnerEnableGuard`, `DlgDestroyGuard`) on scope exit.
     }
 }
 
@@ -4203,6 +4867,25 @@ impl Drop for DlgDestroyGuard {
         unsafe {
             if IsWindow(Some(self.0)).as_bool() {
                 let _ = DestroyWindow(self.0);
+            }
+        }
+    }
+}
+
+/// RAII guard that calls `DeleteObject` on a wrapped GDI handle on
+/// drop. Used by the About dialog to free its bold title font on
+/// every exit path — including the child-`CreateWindowExW` failure
+/// returns between the dialog HWND being created and the post-pump
+/// cleanup, which a manual `DeleteObject` at one site would miss.
+/// The handle is `Copy`, so wrapping in the guard does not preclude
+/// passing the same `HFONT` to `apply_dialog_font` for the title
+/// STATIC.
+struct GdiObjectGuard(HFONT);
+impl Drop for GdiObjectGuard {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.0.is_invalid() {
+                let _ = DeleteObject(self.0.into());
             }
         }
     }
@@ -6612,15 +7295,8 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // Both paths fall back to a null `HICON` on failure, which
         // makes Win32 use `IDI_APPLICATION` (the generic Windows
         // icon) — graceful degradation if the resource ever fails
-        // to load.
-        //
-        // `1 as *const u16` is the `MAKEINTRESOURCEW` idiom: when
-        // the high word of `lpiconname` is zero, Win32 reads the
-        // low word as a numeric resource ID rather than dereferencing
-        // a string pointer. clippy's `manual_dangling_ptr` lint
-        // misclassifies this as a bug — suppress with rationale.
-        #[allow(clippy::manual_dangling_ptr)]
-        const APP_ICON_RESOURCE: PCWSTR = PCWSTR(1 as *const u16);
+        // to load. `APP_ICON_RESOURCE` lives at module scope —
+        // see its definition for the `MAKEINTRESOURCEW` rationale.
         let icon_large = LoadIconW(Some(instance.into()), APP_ICON_RESOURCE).unwrap_or_default();
         let icon_small = LoadImageW(
             Some(instance.into()),
@@ -7203,6 +7879,16 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                 fVirt: ctrl,
                 key: VK_0.0,
                 cmd: ID_VIEW_ZOOMRESET,
+            },
+            // Help — F1 opens the About dialog. Plain virtual key
+            // (no modifier bits) so any F1 press from the main
+            // window dispatches `ID_HELP_ABOUT`. Scintilla doesn't
+            // bind F1 natively so there's no contention with the
+            // editor's keyboard table.
+            ACCEL {
+                fVirt: ACCEL_VIRT_FLAGS(FVIRTKEY.0),
+                key: VK_F1.0,
+                cmd: ID_HELP_ABOUT,
             },
         ];
         let haccel: HACCEL = CreateAcceleratorTableW(&accels)?;
