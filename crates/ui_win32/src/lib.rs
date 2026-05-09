@@ -113,17 +113,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CB_SETEDITSEL, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL,
     DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY,
     GWLP_USERDATA, GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS,
-    IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO,
-    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    MF_UNCHECKED, MSG, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
-    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT,
-    WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
-    WS_EX_DLGMODALFRAME, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    IDNO, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
+    MB_YESNO, MB_YESNOCANCEL, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP,
+    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
+    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND,
+    WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY,
+    WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE,
+    WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
+    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -2676,6 +2676,105 @@ unsafe fn handle_close_active_tab(hwnd: HWND) {
 ///
 /// Caller must invoke from the UI thread that owns `hwnd`.
 unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
+    // Phase 0: dirty-check gate. If the active tab's buffer has
+    // unsaved changes, prompt the user with Save / Don't Save /
+    // Cancel before any data-model mutation. Cancel aborts the
+    // entire close — the buffer stays open.
+    //
+    // We sample (display name, has_path, dirty) under a brief
+    // read-only borrow, drop it before the modal pump runs (the
+    // borrow can't outlive the modal — the Win32 message pump
+    // re-enters our wnd_proc, which would alias-UB the
+    // `WindowState`), then act on the user's choice.
+    let prelude = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        state.shell.active().map(|tab| {
+            let name = tab_display_name(tab);
+            let has_path = tab.path.is_some();
+            let dirty = state.editor.send(SCI_GETMODIFY, 0, 0) != 0;
+            (name, has_path, dirty)
+        })
+    } else {
+        return;
+    };
+    let Some((display_name, has_path, dirty)) = prelude else {
+        return; // nothing open
+    };
+    if dirty {
+        match show_save_confirm_dialog(hwnd, &display_name) {
+            SaveConfirmResult::Cancel => return,
+            SaveConfirmResult::No => {
+                // Proceed to the close without saving. The
+                // buffer's edits are discarded with the doc
+                // when SCI_RELEASEDOCUMENT runs in Phase 2.
+            }
+            SaveConfirmResult::Yes => {
+                // `has_path` was sampled BEFORE the confirm
+                // modal ran. The modal's nested message pump
+                // can dispatch WM_APP_WAKE (which drains
+                // shell-level deferred work), but no current
+                // code path clears an already-set `tab.path`
+                // back to `None` — the invariant holds. If a
+                // future code path could break it,
+                // `save_current_to_disk` returns
+                // `ShellError::NoActivePath` and the error
+                // dialog below surfaces it; the worst case is
+                // a confusing "Save failed: no active file
+                // path" message, not silent data loss.
+                if has_path {
+                    // Titled tab — save in place. On error,
+                    // surface the message and abort the close;
+                    // silently dropping the buffer when save
+                    // failed is the worst possible outcome.
+                    //
+                    // `state_from_hwnd` returns `None` when
+                    // `PLUGIN_CALL_ACTIVE` is set — i.e. a
+                    // plugin's `beNotified` is on the stack
+                    // and re-entered our wnd_proc. That path is
+                    // currently unreachable here (the modal
+                    // pump can dispatch plugin notifications,
+                    // but the guard is dropped before the
+                    // modal returns), but the early return is
+                    // the safe behaviour either way: aborting
+                    // the close is better than mutating
+                    // `WindowState` while a plugin call is
+                    // alive.
+                    let save_error = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+                        let (shell, mut ui) = state.split();
+                        match shell.save_current_to_disk(&mut ui) {
+                            Ok(()) => None,
+                            Err(e) => Some(e.to_string()),
+                        }
+                    } else {
+                        return;
+                    };
+                    if let Some(msg) = save_error {
+                        show_error_dialog(hwnd, "Save failed", &msg);
+                        return;
+                    }
+                } else {
+                    // Untitled tab — route through the Save As
+                    // dialog. `run_save_as_flow` shows its own
+                    // error dialog on failure (so we don't
+                    // double-prompt) and updates the tab's path
+                    // on success. After it returns, re-read
+                    // the dirty bit: if the user cancelled the
+                    // GetSaveFileNameW dialog or the save
+                    // itself failed, the buffer is still dirty
+                    // and we must abort the close.
+                    unsafe { run_save_as_flow(hwnd) };
+                    let still_dirty = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+                        state.editor.send(SCI_GETMODIFY, 0, 0) != 0
+                    } else {
+                        return;
+                    };
+                    if still_dirty {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     // Phase 1: ask the shell to do its half. We hold a brief
     // `&mut WindowState` borrow only for the duration of this
     // call — `close_active_tab` is pure data-model work plus an
@@ -3365,14 +3464,22 @@ unsafe fn sync_tab_strip(state: &mut WindowState) {
 /// but render as glyph noise on the tab strip.
 const TAB_LABEL_MAX_TCHARS: usize = 260;
 
-fn tab_label_for(tab: &Tab) -> Vec<u16> {
-    // Three label sources, in order:
-    //   1. Real path → file_name basename (the common case).
-    //   2. No path but a `untitled_seq` set → "new N" (a buffer
-    //      created by File→New).
-    //   3. Fallback "Untitled" (a path with no parseable basename
-    //      — extremely rare in practice, but a safe label for
-    //      defense in depth).
+/// The user-facing display name for a tab — same string the tab
+/// strip renders. Three sources, in order:
+///   1. Real path → `file_name` basename (the common case).
+///   2. No path but `untitled_seq` set → "new N" (created by
+///      File→New).
+///   3. Fallback "Untitled" (a path with no parseable basename —
+///      extremely rare in practice, but a safe label for defense
+///      in depth).
+///
+/// Embedded control characters (`\n`, `\r`, `\t`) are stripped —
+/// they're legal on some filesystems but render as glyph noise.
+/// Returned as an owned `String` so callers can format it into
+/// other strings (the "Save file '<name>' ?" prompt uses this);
+/// [`tab_label_for`] wraps it for the Win32 tab-strip API which
+/// needs a NUL-terminated UTF-16 buffer.
+fn tab_display_name(tab: &Tab) -> String {
     let owned = tab.path.as_ref().and_then(|p| {
         p.file_name()
             .and_then(|s| s.to_str())
@@ -3385,8 +3492,14 @@ fn tab_label_for(tab: &Tab) -> Vec<u16> {
             None => "Untitled".to_string(),
         },
     };
-    let cleaned = sanitize_filename_for_display(&owned);
-    cleaned.encode_utf16().chain(std::iter::once(0)).collect()
+    sanitize_filename_for_display(&owned)
+}
+
+fn tab_label_for(tab: &Tab) -> Vec<u16> {
+    tab_display_name(tab)
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 /// Bundle of HMENUs the wnd_proc and `WindowState` need to keep
@@ -4566,6 +4679,79 @@ fn show_yes_no_dialog(main_hwnd: HWND, title: &str, message: &str) -> bool {
         )
     };
     response == IDYES
+}
+
+/// Outcome of a [`show_save_confirm_dialog`] modal — Notepad++'s
+/// "Save file 'X' ?" three-way prompt.
+///
+///   * `Yes` — save before proceeding (with the close).
+///   * `No` — discard changes and proceed.
+///   * `Cancel` — abort the operation; the buffer stays open.
+///
+/// Anything other than the three explicit buttons (Esc, Alt-F4 on
+/// the dialog, the X in the title bar) maps to `Cancel` — that's
+/// the safe default: the user did not affirm a destructive action,
+/// so we treat the dismissal as "abort." Matches what N++ does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SaveConfirmResult {
+    Yes,
+    No,
+    Cancel,
+}
+
+/// Map the `MessageBoxW` return value (`MESSAGEBOX_RESULT`) to a
+/// [`SaveConfirmResult`]. Centralised so the unit tests can
+/// exercise the mapping without spinning up a real Win32 modal.
+fn save_confirm_from_message_box(
+    response: windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_RESULT,
+) -> SaveConfirmResult {
+    if response == IDYES {
+        SaveConfirmResult::Yes
+    } else if response == IDNO {
+        SaveConfirmResult::No
+    } else {
+        // IDCANCEL, IDABORT, or any unexpected dismissal
+        // (Esc, Alt-F4, dialog-X) — all map to "abort the
+        // close." Safe default; matches Notepad++.
+        SaveConfirmResult::Cancel
+    }
+}
+
+/// Format the "Save file 'NAME' ?" prompt body for
+/// [`show_save_confirm_dialog`]. Extracted so the unit-test
+/// suite can pin the exact spec wording without spinning up a
+/// real Win32 modal — the test calls this fn and asserts the
+/// returned string against the verbatim spec, which means a
+/// stray edit to either the format string or the test trips
+/// the assertion.
+fn save_confirm_prompt_for(display_name: &str) -> String {
+    format!("Save file '{display_name}' ?")
+}
+
+/// "Save file 'NAME' ?" three-way confirmation — shown when the
+/// user closes a tab whose buffer has unsaved changes. Title:
+/// `Save`. Question-mark icon (matches `show_yes_no_dialog`'s
+/// styling). Buttons: Yes / No / Cancel.
+///
+/// `display_name` is the tab strip name as rendered by
+/// [`tab_display_name`] — the same "FILENAME" the user already
+/// sees. The single-quote wrapping in the prompt matches N++'s
+/// formatting verbatim so muscle-memory carries over.
+///
+/// Modal: caller MUST drop any `&mut WindowState` borrow before
+/// invoking, same UB rule as [`show_yes_no_dialog`].
+fn show_save_confirm_dialog(main_hwnd: HWND, display_name: &str) -> SaveConfirmResult {
+    let title = w!("Save");
+    let prompt = HSTRING::from(save_confirm_prompt_for(display_name));
+    let response = unsafe {
+        MessageBoxW(
+            Some(main_hwnd),
+            &prompt,
+            title,
+            MB_YESNOCANCEL | MB_ICONQUESTION,
+        )
+    };
+    save_confirm_from_message_box(response)
 }
 
 /// Show a non-fatal error dialog. Standalone for the same reason as
@@ -13650,5 +13836,118 @@ mod wide_string_equals_tests {
         // The fn returns false up front to avoid the trap.
         let w = make_wide("résumé");
         assert!(!unsafe { wide_string_equals(w.as_ptr(), "résumé") });
+    }
+}
+
+#[cfg(test)]
+mod tab_display_name_tests {
+    use super::{save_confirm_prompt_for, tab_display_name};
+    use codepp_shell::Tab;
+    use std::path::PathBuf;
+
+    #[test]
+    fn titled_tab_returns_basename() {
+        let tab = Tab {
+            path: Some(PathBuf::from("C:/Users/foo/notes.txt")),
+            ..Tab::default()
+        };
+        assert_eq!(tab_display_name(&tab), "notes.txt");
+    }
+
+    #[test]
+    fn untitled_tab_with_seq_returns_new_n() {
+        let tab = Tab {
+            path: None,
+            untitled_seq: Some(3),
+            ..Tab::default()
+        };
+        assert_eq!(tab_display_name(&tab), "new 3");
+    }
+
+    #[test]
+    fn untitled_tab_without_seq_returns_untitled_fallback() {
+        // Defensive case — a path-less tab with no sequence
+        // shouldn't normally exist, but the display name must
+        // still be a sensible label.
+        let tab = Tab {
+            path: None,
+            untitled_seq: None,
+            ..Tab::default()
+        };
+        assert_eq!(tab_display_name(&tab), "Untitled");
+    }
+
+    #[test]
+    fn control_chars_in_basename_are_stripped() {
+        // `sanitize_filename_for_display` removes control
+        // characters before the dialog format inserts the
+        // name into the prompt — without that, a filename
+        // with `\n` would inject newlines into the message
+        // box.
+        let tab = Tab {
+            path: Some(PathBuf::from("with\nlinefeed.txt")),
+            ..Tab::default()
+        };
+        let name = tab_display_name(&tab);
+        assert!(!name.contains('\n'), "got {name:?}");
+    }
+
+    #[test]
+    fn save_confirm_prompt_format_matches_spec() {
+        // The dialog text the user sees when closing a dirty
+        // tab — verbatim spec: "Save file 'NAME' ?". Calls the
+        // production helper directly so a stray edit to either
+        // the format string or this assertion trips the test.
+        assert_eq!(
+            save_confirm_prompt_for("notes.txt"),
+            "Save file 'notes.txt' ?"
+        );
+    }
+
+    #[test]
+    fn save_confirm_prompt_uses_untitled_name_verbatim() {
+        // Untitled tabs feed their "new N" name straight into
+        // the dialog — no special-casing in the prompt.
+        assert_eq!(save_confirm_prompt_for("new 3"), "Save file 'new 3' ?");
+    }
+}
+
+#[cfg(test)]
+mod save_confirm_result_tests {
+    use super::{save_confirm_from_message_box, SaveConfirmResult};
+    use windows::Win32::UI::WindowsAndMessaging::{IDABORT, IDCANCEL, IDNO, IDOK, IDYES};
+
+    #[test]
+    fn idyes_maps_to_yes() {
+        assert_eq!(save_confirm_from_message_box(IDYES), SaveConfirmResult::Yes);
+    }
+
+    #[test]
+    fn idno_maps_to_no() {
+        assert_eq!(save_confirm_from_message_box(IDNO), SaveConfirmResult::No);
+    }
+
+    #[test]
+    fn idcancel_maps_to_cancel() {
+        assert_eq!(
+            save_confirm_from_message_box(IDCANCEL),
+            SaveConfirmResult::Cancel
+        );
+    }
+
+    #[test]
+    fn unexpected_dismissal_maps_to_cancel() {
+        // Esc / Alt-F4 / dialog X / IDABORT / IDOK — anything
+        // that isn't an explicit Yes or No maps to Cancel
+        // (the safe default: don't proceed with a destructive
+        // action when the user didn't affirm one).
+        assert_eq!(
+            save_confirm_from_message_box(IDABORT),
+            SaveConfirmResult::Cancel
+        );
+        assert_eq!(
+            save_confirm_from_message_box(IDOK),
+            SaveConfirmResult::Cancel
+        );
     }
 }
