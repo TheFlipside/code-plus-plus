@@ -697,6 +697,53 @@ impl Shell {
         }
     }
 
+    /// Reorder the tab list by moving the entry at `from` to position
+    /// `to` (in the post-removal list, so `to` ranges
+    /// `0..self.tabs.len()`). The active-tab index is adjusted to
+    /// follow whichever logical tab the user had focused — the
+    /// dragged tab stays focused if it was, and any other active tab
+    /// shifts left or right by one if the move passed through its
+    /// slot.
+    ///
+    /// Used by the UI's tab-drag handler. The reordered `tabs` Vec
+    /// is what `save_session` writes to disk, so persistence is
+    /// automatic.
+    ///
+    /// No-op (returns `false`) when the move is a no-op (`from ==
+    /// to`) or when either index is out of range. Returning a bool
+    /// lets the caller skip the cost of a tab-strip resync when
+    /// nothing changed.
+    pub fn move_tab(&mut self, from: usize, to: usize) -> bool {
+        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+            return false;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        // Adjust the active-tab index. Four cases:
+        //   1. `active == from`  → the dragged tab itself; follow to
+        //      the new position.
+        //   2. `from < active <= to`  → moving rightward past
+        //      `active`; everything in `(from, to]` shifts left by 1.
+        //   3. `to <= active < from`  → moving leftward past
+        //      `active`; everything in `[to, from)` shifts right by 1.
+        //   4. otherwise  → `active` is outside the affected range,
+        //      no change.
+        if let Some(active) = self.active_tab.as_mut() {
+            if *active == from {
+                *active = to;
+            } else if from < *active && *active <= to {
+                *active -= 1;
+            } else if to <= *active && *active < from {
+                *active += 1;
+            }
+        }
+        // Mirror the change into the session-cached active index so
+        // a save-and-relaunch immediately after a drag picks up the
+        // new active position even before any other state changes.
+        self.session.active = self.active_tab;
+        true
+    }
+
     /// Close the currently-active tab. Returns a [`ClosedTab`] the
     /// UI uses to release the Scintilla document, switch the view
     /// to the new active tab's document, and remove the tab item
@@ -5460,5 +5507,86 @@ mod tests {
         assert_eq!(shell.tabs[0].id, original_id);
         // New content arrived.
         assert!(ui.set_text_calls.last().unwrap().0.contains("second"));
+    }
+
+    /// Helper: build a `Shell` with `n` synthetic tabs and a chosen
+    /// active index, suitable for `move_tab` unit tests that don't
+    /// need any of the loader/file-watcher machinery.
+    fn shell_with_synthetic_tabs(n: usize, active: Option<usize>) -> Shell {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        shell.tabs = (0..n)
+            .map(|i| Tab {
+                id: (i as i32) + 1,
+                path: Some(PathBuf::from(format!("/tmp/file{i}.txt"))),
+                ..Tab::default()
+            })
+            .collect();
+        shell.active_tab = active;
+        shell
+    }
+
+    #[test]
+    fn move_tab_dragged_tab_follows_to_new_position() {
+        // Active tab moves with the drag — the user's focused
+        // buffer stays focused regardless of where they drop it.
+        let mut shell = shell_with_synthetic_tabs(5, Some(0));
+        let id_at_0 = shell.tabs[0].id;
+        assert!(shell.move_tab(0, 3));
+        assert_eq!(shell.tabs[3].id, id_at_0);
+        assert_eq!(shell.active_tab, Some(3));
+    }
+
+    #[test]
+    fn move_tab_unaffected_active_stays_put() {
+        // Drag a tab on the right of the active one to the far right
+        // — the active tab is not in the affected range and its
+        // index doesn't change.
+        let mut shell = shell_with_synthetic_tabs(5, Some(1));
+        let active_id = shell.tabs[1].id;
+        assert!(shell.move_tab(3, 4));
+        assert_eq!(shell.active_tab, Some(1));
+        assert_eq!(shell.tabs[1].id, active_id);
+    }
+
+    #[test]
+    fn move_tab_rightward_through_active_shifts_left() {
+        // Active is at index 3 (D in [A,B,C,D,E]); move B (idx 1)
+        // to position 4 → list becomes [A,C,D,E,B]; D is now at idx 2.
+        let mut shell = shell_with_synthetic_tabs(5, Some(3));
+        let active_id = shell.tabs[3].id;
+        assert!(shell.move_tab(1, 4));
+        assert_eq!(shell.active_tab, Some(2));
+        assert_eq!(shell.tabs[2].id, active_id);
+    }
+
+    #[test]
+    fn move_tab_leftward_through_active_shifts_right() {
+        // Active is at index 1 (B in [A,B,C,D,E]); move E (idx 4)
+        // to position 0 → list becomes [E,A,B,C,D]; B is now at idx 2.
+        let mut shell = shell_with_synthetic_tabs(5, Some(1));
+        let active_id = shell.tabs[1].id;
+        assert!(shell.move_tab(4, 0));
+        assert_eq!(shell.active_tab, Some(2));
+        assert_eq!(shell.tabs[2].id, active_id);
+    }
+
+    #[test]
+    fn move_tab_no_op_returns_false() {
+        let mut shell = shell_with_synthetic_tabs(3, Some(1));
+        // from == to
+        assert!(!shell.move_tab(1, 1));
+        // out of range
+        assert!(!shell.move_tab(0, 99));
+        assert!(!shell.move_tab(99, 0));
+        assert_eq!(shell.tabs.len(), 3);
+        assert_eq!(shell.active_tab, Some(1));
+    }
+
+    #[test]
+    fn move_tab_with_no_active_keeps_active_none() {
+        let mut shell = shell_with_synthetic_tabs(3, None);
+        assert!(shell.move_tab(0, 2));
+        assert_eq!(shell.active_tab, None);
     }
 }

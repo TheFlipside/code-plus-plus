@@ -73,16 +73,17 @@ use windows::Win32::UI::Controls::{
     LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_TEXT, LVITEMW, LVM_DELETEALLITEMS,
     LVM_GETITEMCOUNT, LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE,
     LVM_SETITEMTEXTW, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS,
-    LVS_SINGLESEL, NMHDR, NMITEMACTIVATE, NM_DBLCLK, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS,
-    TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_COMBOBOX,
-    WC_LISTVIEWW, WC_TABCONTROL,
+    LVS_SINGLESEL, NMHDR, NMITEMACTIVATE, NM_DBLCLK, TCHITTESTINFO, TCIF_TEXT, TCITEMW,
+    TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_HITTEST, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW,
+    TCN_SELCHANGE, WC_COMBOBOX, WC_LISTVIEWW, WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, ReleaseCapture, SetCapture, SetFocus, VK_0, VK_F, VK_F1, VK_F3, VK_G, VK_H, VK_N,
     VK_O, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
 };
 use windows::Win32::UI::Shell::{
-    DragAcceptFiles, DragFinish, DragQueryFileW, ShellExecuteW, HDROP,
+    DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW, SetWindowSubclass, ShellExecuteW,
+    HDROP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CreateAcceleratorTableW,
@@ -467,6 +468,40 @@ struct SplitterDrag {
     dock_height_at_start: i32,
 }
 
+/// Drag-tracking state for tab reordering. Captured on
+/// `WM_LBUTTONDOWN` over a tab by the tab control's subclass proc
+/// and consumed on each `WM_MOUSEMOVE` until the matching
+/// `WM_LBUTTONUP`/`WM_CAPTURECHANGED`. Lives on `WindowState`
+/// (alongside `SplitterDrag`) rather than the subclass proc itself
+/// so the proc stays a thin forwarder.
+#[derive(Debug, Clone, Copy)]
+struct TabDrag {
+    /// Index in `Shell.tabs` of the tab the user grabbed. Updated
+    /// after every successful neighbour-swap so subsequent
+    /// `WM_MOUSEMOVE`s "carry" the dragged tab toward the cursor.
+    source_idx: usize,
+    /// Cursor X in tab-control client coords at the moment the
+    /// user pressed. Movement past `TAB_DRAG_THRESHOLD_PX` from
+    /// this anchor flips `threshold_passed` and starts the
+    /// reorder; before that point a click that happens to wiggle
+    /// a pixel doesn't trigger a phantom no-op drag.
+    start_x: i32,
+    /// `false` until the user has moved more than
+    /// `TAB_DRAG_THRESHOLD_PX` from `start_x`; once set, every
+    /// further `WM_MOUSEMOVE` evaluates a swap with the tab under
+    /// the cursor. The flag is sticky for the duration of the
+    /// drag — once a click qualifies as a drag, dragging back
+    /// over the original tab still allows further reordering.
+    threshold_passed: bool,
+}
+
+/// Pixels the cursor must travel from its `WM_LBUTTONDOWN` anchor
+/// before a tab click promotes to a drag. Matches the system's
+/// drag-detection threshold closely enough that clicks feel
+/// instant; could be replaced by `GetSystemMetrics(SM_CXDRAG)` if
+/// per-user calibration ever matters.
+const TAB_DRAG_THRESHOLD_PX: i32 = 4;
+
 /// Per-window state. Box-allocated, pointer stashed in
 /// `GWLP_USERDATA`. wnd_proc reads it back via
 /// `GetWindowLongPtrW(GWLP_USERDATA)` on every message. The main
@@ -589,6 +624,13 @@ struct WindowState {
     /// or when no open tabs matched. Cleared on the terminal
     /// `FifEvent` so a subsequent search starts fresh.
     fif_in_buffer_counts: Option<(usize, usize)>,
+    /// `Some` iff the user is mid-drag on a tab. Captured on
+    /// `WM_LBUTTONDOWN` over a tab item by the tab control's
+    /// subclass proc; cleared on `WM_LBUTTONUP` /
+    /// `WM_CAPTURECHANGED`. The subclass proc reads/writes via
+    /// `state_from_hwnd(GetParent(...))`, mirroring the FIF
+    /// splitter's drag-state pattern.
+    tab_drag: Option<TabDrag>,
     editor: EditorHandle,
     shell: Shell,
 }
@@ -7726,6 +7768,16 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             None,
         )?;
 
+        // Subclass the tab control so left-button mouse messages
+        // can drive drag-to-reorder. `tab_subclass_proc` removes
+        // itself from the subclass chain on `WM_NCDESTROY` so the
+        // subclass storage doesn't leak when the window dies.
+        // `SetWindowSubclass` returns BOOL — failure is extremely
+        // rare (out-of-memory only) and would just mean drag
+        // doesn't work; fall through silently in that case rather
+        // than blocking startup.
+        let _ = SetWindowSubclass(tab_hwnd, Some(tab_subclass_proc), TAB_SUBCLASS_ID, 0);
+
         // Scintilla child — sized via WM_SIZE relative to the status bar.
         let scintilla_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
@@ -7980,6 +8032,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             fif_listview_index: Vec::new(),
             fif_pending_jumps: Vec::new(),
             fif_in_buffer_counts: None,
+            tab_drag: None,
             editor,
             shell,
         });
@@ -9442,6 +9495,211 @@ extern "system" fn splitter_wnd_proc(
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
+    }
+}
+
+/// `comctl32` subclass procedure installed on the Win32 tab control.
+/// Intercepts left-button mouse messages so the user can drag a tab
+/// to a new position; everything else (right-click, paint, theme,
+/// `TCN_SELCHANGE` notification routing, …) falls through to the
+/// system tab control via `DefSubclassProc` so default behaviour is
+/// preserved verbatim.
+///
+/// State lives on `WindowState.tab_drag` (the parent's GWLP_USERDATA),
+/// reached via `state_from_hwnd(GetParent(hwnd))`. Same pattern as
+/// `splitter_wnd_proc` — keeps the subclass function thin and lets
+/// the rest of the codebase reach drag state without a new global.
+///
+/// Reorder model: as the cursor moves into a different tab cell,
+/// the dragged tab "bubbles" toward it via `Shell::move_tab` one
+/// neighbour-swap at a time. With ~60 fps `WM_MOUSEMOVE` delivery
+/// the user sees smooth tab reordering even when crossing several
+/// neighbours quickly. `Shell::save_session` writes the current tab
+/// order, so the new arrangement persists across launches without
+/// any extra plumbing.
+///
+/// `WM_NCDESTROY` removes the subclass via `RemoveWindowSubclass`
+/// to avoid the comctl32 documentation's "leaving a subclass on a
+/// dying window leaks the per-subclass storage" footgun.
+extern "system" fn tab_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id_subclass: usize,
+    _ref_data: usize,
+) -> LRESULT {
+    // Same panic-catch pattern as the dialog wnd_procs in this
+    // file: unwinding across an `extern "system"` frame is UB.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        match msg {
+            WM_LBUTTONDOWN => {
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let parent = GetParent(hwnd).unwrap_or_default();
+                let hit = tab_hit_test(hwnd, x, y);
+                if let Some(state) = state_from_hwnd(parent) {
+                    if let Some(idx) = hit {
+                        state.tab_drag = Some(TabDrag {
+                            source_idx: idx,
+                            start_x: x,
+                            threshold_passed: false,
+                        });
+                        let _ = SetCapture(hwnd);
+                    }
+                }
+                // Forward to the system tab control so the click
+                // still fires `TCN_SELCHANGE` and selects the
+                // grabbed tab — that's the right UX (clicking a
+                // tab activates it, dragging then reorders the
+                // already-active tab).
+                DefSubclassProc(hwnd, msg, wparam, lparam)
+            }
+            WM_MOUSEMOVE => {
+                // Only act when we're holding capture for this
+                // drag — `state.tab_drag` is the source-of-truth
+                // since `WM_MOUSEMOVE` fires constantly even
+                // without a button held.
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let parent = GetParent(hwnd).unwrap_or_default();
+                let hit = tab_hit_test(hwnd, x, y);
+                if let Some(state) = state_from_hwnd(parent) {
+                    if let Some(mut drag) = state.tab_drag {
+                        // Defensive: another input path could
+                        // shrink `tabs` mid-drag (e.g., a Ctrl+W
+                        // close — keyboard messages aren't gated
+                        // by mouse capture, so they keep flowing
+                        // to the main window). If our recorded
+                        // source index no longer points at a
+                        // live tab, abandon the drag rather than
+                        // burning O(N) `move_tab` no-ops on
+                        // every subsequent mousemove.
+                        if drag.source_idx >= state.shell.tabs.len() {
+                            state.tab_drag = None;
+                            return DefSubclassProc(hwnd, msg, wparam, lparam);
+                        }
+                        // Promote click → drag once the user has
+                        // crossed the move threshold. Sticky once
+                        // set — wiggling back over the source
+                        // tab still allows further reordering.
+                        if !drag.threshold_passed
+                            && (x - drag.start_x).abs() >= TAB_DRAG_THRESHOLD_PX
+                        {
+                            drag.threshold_passed = true;
+                        }
+                        if drag.threshold_passed {
+                            if let Some(target_idx) = hit {
+                                // Bubble the dragged tab toward the
+                                // cursor one neighbour at a time —
+                                // each iteration calls `move_tab`
+                                // (which adjusts `active_tab` for
+                                // us) and re-syncs the visible tab
+                                // strip. With high-frequency
+                                // mousemove delivery this still
+                                // reads as a smooth animation,
+                                // even when the cursor jumps
+                                // several cells at once.
+                                let max_steps = state.shell.tabs.len();
+                                let mut steps = 0;
+                                while drag.source_idx != target_idx && steps < max_steps {
+                                    let next = if drag.source_idx < target_idx {
+                                        drag.source_idx + 1
+                                    } else {
+                                        drag.source_idx - 1
+                                    };
+                                    if state.shell.move_tab(drag.source_idx, next) {
+                                        drag.source_idx = next;
+                                    } else {
+                                        break;
+                                    }
+                                    steps += 1;
+                                }
+                                if steps > 0 {
+                                    force_tab_strip_resync(state);
+                                }
+                            }
+                        }
+                        state.tab_drag = Some(drag);
+                    }
+                }
+                DefSubclassProc(hwnd, msg, wparam, lparam)
+            }
+            WM_LBUTTONUP => {
+                let parent = GetParent(hwnd).unwrap_or_default();
+                if let Some(state) = state_from_hwnd(parent) {
+                    state.tab_drag = None;
+                }
+                let _ = ReleaseCapture();
+                DefSubclassProc(hwnd, msg, wparam, lparam)
+            }
+            WM_CAPTURECHANGED => {
+                // Same rationale as `splitter_wnd_proc`: if capture
+                // is taken away mid-drag (alt-tab, parent destroy,
+                // …), drop the drag state so the next mouse-move
+                // doesn't reorder tabs without a held button.
+                let parent = GetParent(hwnd).unwrap_or_default();
+                if let Some(state) = state_from_hwnd(parent) {
+                    state.tab_drag = None;
+                }
+                DefSubclassProc(hwnd, msg, wparam, lparam)
+            }
+            WM_NCDESTROY => {
+                // Match comctl32's documented "remove on destroy"
+                // requirement so the subclass storage doesn't
+                // outlive the HWND.
+                let _ = windows::Win32::UI::Shell::RemoveWindowSubclass(
+                    hwnd,
+                    Some(tab_subclass_proc),
+                    TAB_SUBCLASS_ID,
+                );
+                DefSubclassProc(hwnd, msg, wparam, lparam)
+            }
+            _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+        }
+    }));
+    match result {
+        Ok(lr) => lr,
+        // Same fallback as the other wnd_procs in this file:
+        // forward to the system handler on panic so the message
+        // still produces a sensible default.
+        Err(_) => unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// Subclass id passed to `SetWindowSubclass` / `RemoveWindowSubclass`.
+/// Only one subclass is installed on the tab control today, so the
+/// value is arbitrary — the constant just gives it a name.
+const TAB_SUBCLASS_ID: usize = 1;
+
+/// Hit-test the tab control: return the index of the tab at client
+/// coords `(x, y)`, or `None` if the cursor isn't over a tab cell.
+/// `TCM_HITTEST`'s `TCHT_NOWHERE` flag covers the gap between the
+/// last tab and the right edge — we don't need to inspect the flags
+/// since a returned `idx == -1` already means "miss".
+unsafe fn tab_hit_test(tab_hwnd: HWND, x: i32, y: i32) -> Option<usize> {
+    let mut info = TCHITTESTINFO {
+        pt: POINT { x, y },
+        ..Default::default()
+    };
+    // SAFETY: `info` is a stack binding that lives across the
+    // synchronous `SendMessageW`; the raw pointer is valid for
+    // the duration of the call. Inner `unsafe { }` block is
+    // mandated by the project's `unsafe-op-in-unsafe-fn` lint
+    // (see DEVELOPMENT.md / CLAUDE.md gate).
+    let result = unsafe {
+        SendMessageW(
+            tab_hwnd,
+            TCM_HITTEST,
+            None,
+            Some(LPARAM(&mut info as *mut TCHITTESTINFO as isize)),
+        )
+    };
+    let idx = result.0 as i32;
+    if idx >= 0 {
+        Some(idx as usize)
+    } else {
+        None
     }
 }
 
