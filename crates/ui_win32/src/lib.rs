@@ -67,14 +67,14 @@ use windows::Win32::UI::Controls::Dialogs::{
     OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
 };
 use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, ICC_BAR_CLASSES,
-    ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT, LVCF_FMT, LVCF_TEXT,
-    LVCF_WIDTH, LVCOLUMNW, LVIF_TEXT, LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT,
-    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMTEXTW,
-    LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, NMHDR,
-    NMITEMACTIVATE, NM_DBLCLK, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL,
-    TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_COMBOBOX, WC_LISTVIEWW,
-    WC_TABCONTROL,
+    InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT,
+    ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT,
+    LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_TEXT, LVITEMW, LVM_DELETEALLITEMS,
+    LVM_GETITEMCOUNT, LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE,
+    LVM_SETITEMTEXTW, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS,
+    LVS_SINGLESEL, NMHDR, NMITEMACTIVATE, NM_DBLCLK, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS,
+    TCM_GETCURSEL, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCN_SELCHANGE, WC_COMBOBOX,
+    WC_LISTVIEWW, WC_TABCONTROL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, ReleaseCapture, SetCapture, SetFocus, VK_0, VK_F, VK_F1, VK_F3, VK_G, VK_H, VK_N,
@@ -85,27 +85,27 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CreateAcceleratorTableW,
-    CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyMenu,
-    DestroyWindow, DispatchMessageW, DrawMenuBar, GetClientRect, GetCursorPos, GetDlgItem,
-    GetMenuItemCount, GetMessageW, GetParent, GetSubMenu, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW, IsWindow, IsWindowVisible, LoadCursorW,
-    LoadIconW, LoadImageW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
-    TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK,
-    BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
-    CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
-    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER,
-    ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL, HICON, HMENU, IDCANCEL,
-    IDC_ARROW, IDC_HAND, IDC_SIZENS, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONQUESTION,
-    MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
-    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DROPFILES, WM_ERASEBKGND,
-    WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY,
-    WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SIZE, WNDCLASSEXW,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
-    WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
-    WS_VISIBLE, WS_VSCROLL,
+    CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyIcon,
+    DestroyMenu, DestroyWindow, DispatchMessageW, DrawIconEx, DrawMenuBar, GetClientRect,
+    GetCursorPos, GetDlgItem, GetMenuItemCount, GetMessageW, GetParent, GetSubMenu,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW,
+    IsWindow, IsWindowVisible, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, MoveWindow,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW,
+    SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
+    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
+    BS_GROUPBOX, BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT,
+    CB_SETEDITSEL, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL,
+    DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
+    HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDOK, IDYES, IMAGE_ICON,
+    LR_DEFAULTCOLOR, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION,
+    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW,
+    SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND,
+    WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS,
+    WM_SETFONT, WM_SETREDRAW, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW,
+    WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -353,9 +353,11 @@ const IDC_FR_FIF_REPLACE_IN_FILES: u16 = 223;
 /// About dialog window class.
 const ABOUT_CLASS: PCWSTR = w!("CodePlusPlusAboutDialog");
 
-/// About dialog control ids. The link is the only interactive child
-/// besides the OK button (`IDOK`); STN_CLICKED on it opens the home
-/// URL in the user's default browser via `ShellExecuteW`.
+/// About dialog control ids. The URL link is the only interactive
+/// child besides the OK button (`IDOK`); STN_CLICKED on it opens
+/// the home URL via `ShellExecuteW`. The icon STATIC carries the
+/// owner-draw style and is identified by id in `WM_DRAWITEM`'s
+/// `DRAWITEMSTRUCT.CtlID`.
 const IDC_ABOUT_ICON: u16 = 400;
 const IDC_ABOUT_TITLE: u16 = 401;
 const IDC_ABOUT_HOME_LABEL: u16 = 402;
@@ -369,20 +371,18 @@ const IDC_ABOUT_LICENSE_TEXT: u16 = 405;
 /// inline. See <https://learn.microsoft.com/windows/win32/controls/stn-clicked>.
 const STN_CLICKED: u32 = 0;
 
-/// `STM_SETICON` — sets the icon shown by an `SS_ICON` STATIC
-/// control. windows-rs hides this constant under
-/// `Win32::UI::Controls::STM_SETICON` with a `STATIC_NOTIFICATIONS`
-/// type tag that's awkward to import for a single message; the
-/// numeric value is stable SDK ABI.
-const STM_SETICON: u32 = 0x0170;
-
 // Static-control style bits. windows-rs models these as a typed
 // `STATIC_STYLES(u32)` newtype under `Win32::System::SystemServices`,
 // which is an awkward import path for the few callers that need
 // them. Declared inline as plain integers — the values are stable
 // SDK constants going back to Win32's first release.
 const SS_LEFT: u32 = 0x0000;
-const SS_ICON: u32 = 0x0003;
+/// `SS_OWNERDRAW` — the parent receives `WM_DRAWITEM` to paint the
+/// control. Used by the About dialog so the chameleon can be drawn
+/// via `DrawIconEx(DI_NORMAL)` (alpha-aware) rather than the
+/// default `SS_ICON` paint path, which strips 32bpp alpha and
+/// surfaces the icon's transparent pixels as black on Win11.
+const SS_OWNERDRAW: u32 = 0x000D;
 const SS_NOTIFY: u32 = 0x0100;
 
 /// MAKEINTRESOURCEW(1). Windows treats a `PCWSTR` whose high word is
@@ -3521,23 +3521,57 @@ fn prompt_save_path(owner: HWND, default_name: Option<&str>) -> Option<PathBuf> 
 /// `show_about_dialog`'s stack frame for the dialog's lifetime; the
 /// raw pointer is stashed in the dialog HWND's `GWLP_USERDATA`.
 ///
-/// The bold title font handle is *not* tracked here — it lives as a
-/// local in `show_about_dialog` and is freed via `DeleteObject`
-/// after the modal pump exits, which is sufficient because no
-/// wnd_proc message path needs to read it back.
+/// The bold title `HFONT` is owned by a separate `GdiObjectGuard`
+/// because it's only ever read by Win32's message dispatch (via
+/// `WM_SETFONT` plumbed through `apply_dialog_font`) and never by
+/// our wnd_proc, so threading it through state would be noise.
+///
+/// The chameleon `HICON` *is* tracked here and freed by the
+/// `Drop` impl below — that makes the icon's lifetime
+/// indistinguishable from the state's, eliminating the
+/// declaration-order fragility a separate guard would carry (a
+/// reorder that puts the guard above the box would silently let
+/// `WM_DRAWITEM` read a freed icon between the guard's drop and
+/// the box's drop).
 struct AboutDialogState {
     /// HWND of the URL link STATIC. The wnd_proc compares `wparam`
     /// against this on `WM_SETCURSOR` to switch to `IDC_HAND`, and
     /// against `lparam` on `WM_CTLCOLORSTATIC` to paint the link
     /// text blue.
     link_hwnd: HWND,
-    /// HWND of the small home-row icon STATIC. Clickable too —
-    /// either the icon or the URL opens the home page.
-    home_icon_hwnd: HWND,
+    /// HWND of the owner (main editor) window. The IDOK/IDCANCEL
+    /// and WM_CLOSE handlers re-enable the owner *before*
+    /// `DestroyWindow(dlg)` so window activation transfers
+    /// naturally back to the editor instead of falling through
+    /// z-order to whatever other app happened to be running — a
+    /// Win32 quirk where destroying a child whose owner is
+    /// disabled hands focus to the next-eligible window in the
+    /// desktop's activation list.
+    owner_hwnd: HWND,
     /// Home URL, owned as a UTF-16 string so `ShellExecuteW` can
     /// take a `PCWSTR` directly. The `HSTRING` keeps the buffer
     /// alive across the call.
     home_url: HSTRING,
+    /// Chameleon `HICON` for the owner-draw STATIC. Loaded once
+    /// by `show_about_dialog`; the wnd_proc reads it on every
+    /// `WM_DRAWITEM` for the icon control. Drawn via `DrawIconEx`
+    /// with `DI_NORMAL` so the icon's 32bpp alpha channel is
+    /// honoured rather than masked to black (the bug that
+    /// surfaced the original "icon has a black background"
+    /// report). Freed by the `Drop` impl below — owning the
+    /// handle inside the state ties its lifetime exactly to the
+    /// `Box`'s and makes a future reorder safe by construction.
+    app_icon: HICON,
+}
+
+impl Drop for AboutDialogState {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.app_icon.is_invalid() {
+                let _ = DestroyIcon(self.app_icon);
+            }
+        }
+    }
 }
 
 extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -3559,14 +3593,28 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let cmd = (wparam.0 & 0xFFFF) as i32;
                 let notif = ((wparam.0 >> 16) & 0xFFFF) as u32;
                 if cmd == IDOK.0 || cmd == IDCANCEL.0 {
+                    // Re-enable the owner BEFORE destroying the
+                    // dialog. If we destroy first, Windows looks
+                    // for the next-eligible activation target —
+                    // the disabled owner is skipped and focus
+                    // falls through to whatever else is in
+                    // z-order, including other apps. Re-enabling
+                    // first means the owner is the natural
+                    // activation target when the dialog
+                    // disappears. The `OwnerEnableGuard` below
+                    // still runs on scope exit; calling
+                    // `EnableWindow(true)` on an already-enabled
+                    // window is a documented no-op.
+                    let state_ptr =
+                        GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
+                    if !state_ptr.is_null() {
+                        let _ = EnableWindow((*state_ptr).owner_hwnd, true);
+                    }
                     let _ = DestroyWindow(hwnd);
                     LRESULT(0)
-                } else if (cmd == IDC_ABOUT_HOME_LINK as i32 || cmd == IDC_ABOUT_ICON as i32)
-                    && notif == STN_CLICKED
-                {
-                    // Either the small home-row icon or the URL
-                    // text was clicked — open the home page in
-                    // the user's default browser.
+                } else if cmd == IDC_ABOUT_HOME_LINK as i32 && notif == STN_CLICKED {
+                    // URL static was clicked — open the home page
+                    // in the user's default browser.
                     let state_ptr =
                         GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
                     if !state_ptr.is_null() {
@@ -3584,18 +3632,76 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
             }
+            WM_DRAWITEM => {
+                // Owner-draw paint for the chameleon STATIC. We
+                // intercept rather than rely on `SS_ICON`'s
+                // built-in paint because the SS_ICON path on
+                // Win11 strips 32bpp alpha and surfaces
+                // transparent pixels as black against the dialog
+                // background. Painting the dialog brush first,
+                // then `DrawIconEx(DI_NORMAL)`, gives the system
+                // a clean backdrop and lets it composite the
+                // icon's alpha channel correctly.
+                let dis = lparam.0 as *const DRAWITEMSTRUCT;
+                if !dis.is_null() {
+                    let dis = &*dis;
+                    if dis.CtlID == IDC_ABOUT_ICON as u32 {
+                        // Always return "handled" for our control
+                        // id, even if `state_ptr` is unexpectedly
+                        // null or the icon failed to load. Windows
+                        // does not retry `WM_DRAWITEM` for an
+                        // owner-draw STATIC, and falling through
+                        // to `DefWindowProcW` would leave the
+                        // control area unpainted.
+                        let state_ptr =
+                            GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
+                        if !state_ptr.is_null() {
+                            FillRect(dis.hDC, &dis.rcItem, dialog_bg_brush());
+                            let icon = (*state_ptr).app_icon;
+                            if !icon.is_invalid() {
+                                let w = dis.rcItem.right - dis.rcItem.left;
+                                let h = dis.rcItem.bottom - dis.rcItem.top;
+                                let _ = DrawIconEx(
+                                    dis.hDC,
+                                    dis.rcItem.left,
+                                    dis.rcItem.top,
+                                    icon,
+                                    w,
+                                    h,
+                                    0,
+                                    None,
+                                    DI_NORMAL,
+                                );
+                            }
+                        }
+                        return LRESULT(1);
+                    }
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_NCDESTROY => {
+                // Defensive: zero `GWLP_USERDATA` so any stray
+                // message that races between `DestroyWindow`
+                // returning and the modal pump's `IsWindow`
+                // break can't deref the dangling state pointer.
+                // The `Box<AboutDialogState>` itself is owned by
+                // the stack frame in `show_about_dialog` and
+                // drops on function return, which always happens
+                // *after* `DestroyWindow` synchronously delivers
+                // `WM_NCDESTROY` — so the pointer is still valid
+                // at the moment we zero it.
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
             WM_SETCURSOR => {
                 // wparam carries the HWND of the child currently
                 // under the cursor. SS_NOTIFY on its own doesn't
                 // change the cursor, so we override here when the
-                // child is the URL link or the home-row icon —
-                // both clickable, both should show the hand
-                // cursor on hover.
+                // child is the URL link.
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
                 if !state_ptr.is_null() {
                     let child = HWND(wparam.0 as *mut c_void);
-                    let st = &*state_ptr;
-                    if child == st.link_hwnd || child == st.home_icon_hwnd {
+                    if child == (*state_ptr).link_hwnd {
                         if let Ok(cursor) = LoadCursorW(None, IDC_HAND) {
                             let _ = SetCursor(Some(cursor));
                         }
@@ -3605,6 +3711,16 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
             WM_CLOSE => {
+                // Same activation-handoff fix as IDOK/IDCANCEL:
+                // the title-bar X reaches us as `WM_CLOSE`, and
+                // destroying the dialog while the owner is still
+                // disabled would leak focus to whatever sits next
+                // in z-order (often another app). Re-enable the
+                // owner first so activation returns to the editor.
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
+                if !state_ptr.is_null() {
+                    let _ = EnableWindow((*state_ptr).owner_hwnd, true);
+                }
                 let _ = DestroyWindow(hwnd);
                 LRESULT(0)
             }
@@ -3703,25 +3819,24 @@ fn show_about_dialog(main_hwnd: HWND) {
         // Tight enough to feel at home next to N++'s About box,
         // wide enough that the license body wraps to ~5 lines.
         const CLIENT_W: i32 = 480;
-        const CLIENT_H: i32 = 482;
+        const CLIENT_H: i32 = 460;
         const PAD: i32 = 18;
 
-        // Top row: app icon + title + subtitle.
+        // Top row: app icon (owner-drawn for alpha-correct paint)
+        // + title vertically centered against it.
         const TOP_ICON_SIZE: i32 = 80;
         const TOP_ICON_X: i32 = PAD;
         const TOP_ICON_Y: i32 = PAD;
         const TITLE_X: i32 = TOP_ICON_X + TOP_ICON_SIZE + 16;
-        const TITLE_Y: i32 = TOP_ICON_Y + 18;
         const TITLE_W: i32 = CLIENT_W - TITLE_X - PAD;
         const TITLE_H: i32 = 28;
-        const SUBTITLE_Y: i32 = TITLE_Y + TITLE_H + 4;
-        const SUBTITLE_H: i32 = 18;
+        // Centre the title vertically against the icon block.
+        const TITLE_Y: i32 = TOP_ICON_Y + (TOP_ICON_SIZE - TITLE_H) / 2;
 
-        // Home row: small icon + "Home:" label + URL link.
+        // Home row: "Home:" label + URL link (no leading icon —
+        // the chameleon already appears once in the top row).
         const HOME_ROW_Y: i32 = TOP_ICON_Y + TOP_ICON_SIZE + 18;
-        const HOME_ICON_SIZE: i32 = 24;
-        const HOME_ICON_X: i32 = PAD;
-        const HOME_LABEL_X: i32 = HOME_ICON_X + HOME_ICON_SIZE + 8;
+        const HOME_LABEL_X: i32 = PAD;
         const HOME_LABEL_Y: i32 = HOME_ROW_Y + 4;
         const HOME_LABEL_W: i32 = 48;
         const HOME_LINK_X: i32 = HOME_LABEL_X + HOME_LABEL_W;
@@ -3813,13 +3928,32 @@ fn show_about_dialog(main_hwnd: HWND) {
         let home_url = HSTRING::from("https://code-plus-plus.org/");
         let license_w = HSTRING::from(ABOUT_LICENSE_BODY);
 
+        // Load the chameleon icon once for the owner-draw STATIC.
+        // 80px request maps to the 64 or 128 px BMP entry inside
+        // `code++.ico`; either is 32bpp so `DrawIconEx(DI_NORMAL)`
+        // will alpha-composite cleanly. Ownership of the HICON is
+        // transferred into `AboutDialogState` immediately below;
+        // its `Drop` impl calls `DestroyIcon` on every exit path,
+        // including the child-`CreateWindowExW` failure returns.
+        let app_icon = LoadImageW(
+            Some(instance.into()),
+            APP_ICON_RESOURCE,
+            IMAGE_ICON,
+            TOP_ICON_SIZE,
+            TOP_ICON_SIZE,
+            LR_DEFAULTCOLOR,
+        )
+        .map(|h| HICON(h.0))
+        .unwrap_or_default();
+
         // Heap-allocate the dialog state. The wnd_proc reads it via
         // GWLP_USERDATA; the Box stays in this stack frame so the
         // raw pointer remains valid for the dialog's lifetime.
         let mut state = Box::new(AboutDialogState {
             link_hwnd: HWND::default(),
-            home_icon_hwnd: HWND::default(),
+            owner_hwnd: main_hwnd,
             home_url: home_url.clone(),
+            app_icon,
         });
         let state_ptr: *mut AboutDialogState = &mut *state;
 
@@ -3842,61 +3976,36 @@ fn show_about_dialog(main_hwnd: HWND) {
         };
         let _dlg_guard = DlgDestroyGuard(dlg);
 
-        // Large app icon (resource id 1, embedded by app/build.rs).
-        // `LoadImageW` with `IMAGE_ICON` and explicit dimensions
-        // pulls the closest-fit size from the multi-resolution
-        // ICO; 80px maps to the 64px or 128px embedded image with
-        // good quality.
-        let big_icon = LoadImageW(
-            Some(instance.into()),
-            APP_ICON_RESOURCE,
-            IMAGE_ICON,
-            TOP_ICON_SIZE,
-            TOP_ICON_SIZE,
-            LR_DEFAULTCOLOR,
-        )
-        .map(|h| HICON(h.0))
-        .unwrap_or_default();
-        let small_icon = LoadImageW(
-            Some(instance.into()),
-            APP_ICON_RESOURCE,
-            IMAGE_ICON,
-            HOME_ICON_SIZE,
-            HOME_ICON_SIZE,
-            LR_DEFAULTCOLOR,
-        )
-        .map(|h| HICON(h.0))
-        .unwrap_or_default();
-
-        // SS_ICON STATIC sized exactly to the icon bitmap; the
-        // STATIC class auto-paints the icon centered when given
-        // SS_ICON. `STM_SETICON` (declared at module scope alongside
-        // `STN_CLICKED`) sets the icon image after creation —
-        // simpler than packing the HICON into the create-time
-        // `lParam`.
-        let icon_top = match CreateWindowExW(
+        // Top app-icon STATIC: `SS_OWNERDRAW` so the parent's
+        // `WM_DRAWITEM` handler paints the icon via `DrawIconEx`
+        // with `DI_NORMAL`. The default `SS_ICON` paint path on
+        // Win11 strips 32bpp alpha and surfaces transparent
+        // pixels as black, which is what made the chameleon look
+        // like it had a black backdrop in the first cut. The
+        // owner-draw path composites alpha correctly against the
+        // dialog background brush.
+        // The HWND is never read again — paint and click come
+        // through the parent via `WM_DRAWITEM` / `WM_COMMAND` —
+        // but the binding is required because the early-return
+        // path wants a typed `Result`. Underscore-prefixed so
+        // clippy doesn't flag it.
+        let _icon_top = match CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
             PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE | style_bits(SS_ICON as i32),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_OWNERDRAW as i32),
             TOP_ICON_X,
             TOP_ICON_Y,
             TOP_ICON_SIZE,
             TOP_ICON_SIZE,
             Some(dlg),
-            None,
+            Some(HMENU(IDC_ABOUT_ICON as usize as *mut c_void)),
             Some(instance.into()),
             None,
         ) {
             Ok(h) => h,
             Err(_) => return,
         };
-        SendMessageW(
-            icon_top,
-            STM_SETICON,
-            Some(WPARAM(big_icon.0 as usize)),
-            Some(LPARAM(0)),
-        );
 
         let title_static = match CreateWindowExW(
             WINDOW_EX_STYLE::default(),
@@ -3915,49 +4024,6 @@ fn show_about_dialog(main_hwnd: HWND) {
             Ok(h) => h,
             Err(_) => return,
         };
-
-        let subtitle = match CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            w!("A cross-platform Notepad++ clone in Rust on Scintilla."),
-            WS_CHILD | WS_VISIBLE | style_bits(SS_LEFT as i32),
-            TITLE_X,
-            SUBTITLE_Y,
-            TITLE_W,
-            SUBTITLE_H,
-            Some(dlg),
-            None,
-            Some(instance.into()),
-            None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-
-        // Home row: small clickable icon (SS_ICON | SS_NOTIFY).
-        let home_icon = match CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            w!("STATIC"),
-            PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE | style_bits((SS_ICON | SS_NOTIFY) as i32),
-            HOME_ICON_X,
-            HOME_ROW_Y,
-            HOME_ICON_SIZE,
-            HOME_ICON_SIZE,
-            Some(dlg),
-            Some(HMENU(IDC_ABOUT_ICON as usize as *mut c_void)),
-            Some(instance.into()),
-            None,
-        ) {
-            Ok(h) => h,
-            Err(_) => return,
-        };
-        SendMessageW(
-            home_icon,
-            STM_SETICON,
-            Some(WPARAM(small_icon.0 as usize)),
-            Some(LPARAM(0)),
-        );
 
         let home_label = match CreateWindowExW(
             WINDOW_EX_STYLE::default(),
@@ -4064,26 +4130,19 @@ fn show_about_dialog(main_hwnd: HWND) {
             Err(_) => return,
         };
 
-        // Publish the link and home-icon HWNDs to the wnd_proc
-        // before the modal pump kicks off so the very first
-        // WM_SETCURSOR / WM_CTLCOLORSTATIC message can resolve
-        // them.
+        // Publish the link HWND to the wnd_proc before the modal
+        // pump kicks off so the very first `WM_SETCURSOR` /
+        // `WM_CTLCOLORSTATIC` message can resolve it.
         state.link_hwnd = link;
-        state.home_icon_hwnd = home_icon;
 
         // Apply fonts: bold title font for the title only, default
-        // GUI font for everything else. Children created above all
-        // need the font message — without it Win32 falls back to
-        // the System bitmap font.
+        // GUI font for everything else. The owner-draw icon
+        // STATIC carries no text so it needs no font; the system
+        // STATIC class default is used for it implicitly.
         apply_dialog_font(title_static, title_font);
-        for child in [subtitle, home_label, link, lic_box, lic_text, ok_btn] {
+        for child in [home_label, link, lic_box, lic_text, ok_btn] {
             apply_dialog_font(child, default_font);
         }
-        // `icon_top` and `home_icon` deliberately keep the system
-        // STATIC class default font — `STM_SETICON` overrides any
-        // text content so the font choice is moot, and skipping
-        // the WM_SETFONT round-trip is one fewer message at
-        // dialog-show time.
 
         // Disable the owner before SHOW so input cannot reach the
         // main window during the brief moment between window
