@@ -8167,14 +8167,28 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                         cursor,
                         encoding,
                         eol,
+                        disk_changed_externally,
                     } => {
                         // Same shape as the Untitled branch: split
                         // off a UiPlatform handle, seed the new
                         // tab with the backup text, leave the
                         // buffer dirty so the user sees the
-                        // unsaved-edits glyph.
+                        // unsaved-edits glyph. The
+                        // `disk_changed_externally` flag triggers
+                        // an external-edit reload prompt via
+                        // `Shell.deferred_dialogs` →
+                        // `Shell::drain` on the next pump
+                        // iteration.
                         let (shell, mut ui) = state.split();
-                        shell.restore_dirty_with_text(&mut ui, path, text, cursor, encoding, eol);
+                        shell.restore_dirty_with_text(
+                            &mut ui,
+                            path,
+                            text,
+                            cursor,
+                            encoding,
+                            eol,
+                            disk_changed_externally,
+                        );
                     }
                 }
             }
@@ -8229,6 +8243,18 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // the Box is reclaimed in WM_DESTROY.
         let state_ptr = Box::into_raw(state);
         SetWindowLongPtrW(main_hwnd, GWLP_USERDATA, state_ptr as isize);
+
+        // Wake the message pump so any deferred dialogs queued
+        // during session restore (currently only the
+        // external-edit reload prompt for `DirtyFromBackup` tabs
+        // whose disk file changed during the recovery window)
+        // surface on the first WM_APP_WAKE iteration. Without
+        // this, a session that restored only untitled and
+        // dirty-from-backup tabs would have no async loader
+        // event to trigger a drain, and the deferred prompt
+        // would sit in the queue until the user did something
+        // that fired one.
+        let _ = PostMessageW(Some(main_hwnd), WM_APP_WAKE, WPARAM(0), LPARAM(0));
 
         // Drag-drop: tell Windows our window accepts files.
         DragAcceptFiles(main_hwnd, true);

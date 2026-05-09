@@ -359,6 +359,16 @@ pub enum SessionRestoreEntry {
         encoding: Encoding,
         /// EOL style the buffer carried.
         eol: Eol,
+        /// `true` iff the on-disk file's mtime is newer than the
+        /// backup's — i.e. an external process edited `path`
+        /// during the recovery window (between session save and
+        /// this restore). When set, `Shell::restore_dirty_with_text`
+        /// queues a `PendingDialog::ConfirmReload(path)` so the
+        /// user gets prompted: "keep my unsaved edits" (overwrite
+        /// the external write) or "reload" (drop the backup
+        /// overlay). Without this signal the user's first save
+        /// would silently overwrite the external edit.
+        disk_changed_externally: bool,
     },
 }
 
@@ -601,6 +611,15 @@ pub struct Shell {
     /// holds).
     #[cfg(target_os = "windows")]
     pending_fif_launch: Option<FifLaunchPrefill>,
+    /// Modal-dialog requests queued by *synchronous* shell methods
+    /// that don't go through `drain` (the dialog source for the
+    /// async loader / file-watcher paths). Currently used by
+    /// `restore_dirty_with_text` to surface a "file changed
+    /// externally during the recovery window" reload prompt at
+    /// startup. Drained at the *end* of [`Self::drain`] so the
+    /// UI's existing dialog-presentation path picks them up
+    /// without a new code path.
+    deferred_dialogs: Vec<PendingDialog>,
 }
 
 /// Search-option bitset matching Scintilla's `SCFIND_*` flags. Held
@@ -689,6 +708,7 @@ impl Shell {
             pending_fif: Vec::new(),
             #[cfg(target_os = "windows")]
             pending_fif_launch: None,
+            deferred_dialogs: Vec::new(),
         })
     }
 
@@ -1511,6 +1531,14 @@ impl Shell {
         while let Ok(event) = self.fif_rx.try_recv() {
             self.pending_fif.push(event);
         }
+        // Append dialogs queued by sync paths (currently
+        // `restore_dirty_with_text`, which surfaces an "external
+        // edit while the app was crash-killed" reload prompt at
+        // startup). The UI's existing dialog presenter handles
+        // these the same way as drain-sourced dialogs.
+        // `Vec::append` on an empty source is already a no-op
+        // — no extra branch needed for the common case.
+        pending.append(&mut self.deferred_dialogs);
         pending
     }
 
@@ -2435,36 +2463,55 @@ impl Shell {
                 //   * (None, Some) → untitled buffer; create with
                 //     backup text already in place.
                 //   * (None, None) → corrupt entry; skip.
-                let backup_text = t.backup.as_deref().and_then(|name| {
-                    if !is_safe_backup_filename(name) {
-                        tracing::warn!(
-                            backup = %name,
-                            "session.xml backup name failed safety check; backup ignored",
-                        );
-                        return None;
-                    }
-                    let dir = backups_dir.as_ref()?;
-                    let abs_path = dir.join(name);
-                    match read_backup_file(dir, &abs_path) {
-                        Ok(text) => Some(text),
-                        Err(e) => {
+                // Resolve the backup, returning both the text *and*
+                // the absolute path the text came from. The path
+                // is needed below for the mtime comparison that
+                // detects external edits during the recovery
+                // window.
+                let backup_loaded: Option<(String, PathBuf)> =
+                    t.backup.as_deref().and_then(|name| {
+                        if !is_safe_backup_filename(name) {
                             tracing::warn!(
-                                backup = %abs_path.display(),
-                                error = %e,
-                                "failed to read backup file; falling back to disk content if path-bound",
+                                backup = %name,
+                                "session.xml backup name failed safety check; backup ignored",
                             );
-                            None
+                            return None;
                         }
-                    }
-                });
+                        let dir = backups_dir.as_ref()?;
+                        let abs_path = dir.join(name);
+                        match read_backup_file(dir, &abs_path) {
+                            Ok(text) => Some((text, abs_path)),
+                            Err(e) => {
+                                tracing::warn!(
+                                    backup = %abs_path.display(),
+                                    error = %e,
+                                    "failed to read backup file; falling back to disk content if path-bound",
+                                );
+                                None
+                            }
+                        }
+                    });
                 if let Some(path) = &t.path {
-                    if let Some(text) = backup_text {
+                    if let Some((text, backup_path)) = backup_loaded {
+                        // Detect external edits during the
+                        // recovery window: if the on-disk file
+                        // was modified more recently than the
+                        // backup we're about to overlay, the
+                        // user's first File→Save would silently
+                        // overwrite that external write. Surface
+                        // the conflict via the standard reload
+                        // prompt — the user picks "keep my edits"
+                        // (overwriting the disk) or "reload"
+                        // (dropping the backup overlay).
+                        let disk_changed_externally =
+                            is_disk_newer_than_backup(path, &backup_path);
                         Some(SessionRestoreEntry::DirtyFromBackup {
                             path: path.clone(),
                             text,
                             cursor: t.cursor,
                             encoding: t.encoding.clone(),
                             eol: t.eol,
+                            disk_changed_externally,
                         })
                     } else {
                         Some(SessionRestoreEntry::OpenFile(path.clone()))
@@ -2476,7 +2523,7 @@ impl Shell {
                     // a corrupt session entry (`None`-`None`) that
                     // we skip rather than restoring as an empty
                     // tab.
-                    backup_text.map(|text| SessionRestoreEntry::UntitledFromBackup {
+                    backup_loaded.map(|(text, _)| SessionRestoreEntry::UntitledFromBackup {
                         untitled_seq: t.untitled_seq,
                         text,
                         cursor: t.cursor,
@@ -2576,18 +2623,23 @@ impl Shell {
     /// [`Self::restore_untitled_with_text`] for the
     /// `SessionRestoreEntry::DirtyFromBackup` variant.
     ///
-    /// **Known polish item (tracked for a follow-up):** if the
-    /// on-disk file was modified externally between the previous
-    /// session-save and this restore (e.g. by another tool while
-    /// the app was crash-killed), the user is not yet warned —
-    /// they only see their own unsaved edits, and a subsequent
-    /// File→Save would silently overwrite the external write.
-    /// The fix is a stat+mtime compare here that queues a
-    /// `PendingDialog::ConfirmReload(path)` when the disk
-    /// timestamp is newer than the backup file's; landing
-    /// alongside the rest of the recovery-dialog work since the
-    /// pending-dialog plumbing is shaped for the existing
-    /// file-watcher reload path.
+    /// `disk_changed_externally` carries the conflict signal
+    /// computed by `load_session_entries` (disk mtime > backup
+    /// mtime). When `true`, this method queues a
+    /// `PendingDialog::ConfirmReload(path)` onto
+    /// `Shell.deferred_dialogs` so the next `drain` call surfaces
+    /// the standard reload prompt — the user picks "keep my
+    /// unsaved edits" (overwriting the external write on next
+    /// save) or "reload" (dropping the backup overlay and taking
+    /// the disk version). Without this signal the user's first
+    /// File→Save would silently overwrite an external edit made
+    /// during the recovery window.
+    // Seven parameters is over the clippy default (7 max). They
+    // all model a single logical thing — the state of one tab
+    // being restored from backup — but bundling them into a
+    // struct would just shuffle the noise; they're consumed
+    // immediately. The lint suppression is local and documented.
+    #[allow(clippy::too_many_arguments)]
     pub fn restore_dirty_with_text<U: UiPlatform>(
         &mut self,
         ui: &mut U,
@@ -2596,6 +2648,7 @@ impl Shell {
         cursor: u64,
         encoding: Encoding,
         eol: Eol,
+        disk_changed_externally: bool,
     ) -> usize {
         let id = self.allocate_buffer_id();
         let new_idx = self.tabs.len();
@@ -2634,6 +2687,25 @@ impl Shell {
         // works, just without external-change detection.
         if let Err(e) = self.file_watcher.watch(&path) {
             tracing::debug!(error = %e, path = ?path, "watch on dirty restore");
+        }
+        // External-edit detection. If the on-disk file was
+        // modified during the recovery window (between the
+        // previous session save and this restore), we'd otherwise
+        // silently overwrite that change on the user's first
+        // File→Save. Defer a `ConfirmReload` dialog onto the
+        // shell's `deferred_dialogs` queue — `Shell::drain`
+        // returns it to the UI on the next pump iteration, where
+        // the existing reload-prompt path takes over (Yes →
+        // `confirm_reload(path)` replaces the backup text with
+        // disk content; No → user keeps their unsaved edits and
+        // their next save overwrites the disk).
+        if disk_changed_externally {
+            tracing::info!(
+                path = ?path,
+                "on-disk file modified during recovery window; queuing reload prompt",
+            );
+            self.deferred_dialogs
+                .push(PendingDialog::ConfirmReload(path));
         }
         new_idx
     }
@@ -2781,6 +2853,44 @@ fn sanitize_basename_for_backup(path: &Path) -> String {
         out.insert(0, '_');
     }
     out
+}
+
+/// `true` iff the on-disk file at `disk_path` has a more recent
+/// `mtime` than the backup file at `backup_path`. Used by
+/// `load_session_entries` to detect external edits that happened
+/// during the recovery window — the gap between the previous
+/// session save and this restore — when an unattended app might
+/// otherwise silently overwrite an external write on first save.
+///
+/// Defaults to `false` (no conflict assumed) on any I/O error or
+/// if either filesystem can't report a modification time. Erring
+/// toward "no prompt" matches the pre-mtime behaviour and keeps
+/// startup quiet for filesystems with a non-standard time API.
+///
+/// **UI-thread assumption:** the two `std::fs::metadata` calls
+/// stat both paths synchronously. We're called from
+/// `load_session_entries` which already does synchronous file
+/// I/O (reading the backup), so the additional stat is at parity
+/// with existing startup cost. On a cold cache or a network-
+/// mapped drive these stalls compound — if startup latency for
+/// a session full of remote-drive saved files becomes a real
+/// issue, the natural fix is moving session restore onto the
+/// loader thread; nothing in this helper's signature blocks
+/// that move.
+fn is_disk_newer_than_backup(disk_path: &Path, backup_path: &Path) -> bool {
+    let Ok(disk_meta) = std::fs::metadata(disk_path) else {
+        return false;
+    };
+    let Ok(backup_meta) = std::fs::metadata(backup_path) else {
+        return false;
+    };
+    let Ok(disk_t) = disk_meta.modified() else {
+        return false;
+    };
+    let Ok(backup_t) = backup_meta.modified() else {
+        return false;
+    };
+    disk_t > backup_t
 }
 
 /// Reject backup filenames that contain a path separator, parent-
@@ -6342,5 +6452,76 @@ mod tests {
         assert_eq!(sanitize_basename_for_backup(Path::new("")), "untitled");
         assert_eq!(sanitize_basename_for_backup(Path::new(".")), "untitled");
         assert_eq!(sanitize_basename_for_backup(Path::new("..")), "untitled");
+    }
+
+    /// `restore_dirty_with_text` with `disk_changed_externally =
+    /// true` must queue a `PendingDialog::ConfirmReload` so the
+    /// next `Shell::drain` returns it to the UI. Without this
+    /// path the user's first File→Save would silently overwrite
+    /// an external edit made during the recovery window — the
+    /// data-integrity scenario this whole feature targets.
+    ///
+    /// The hardcoded `/tmp/...` paths are unit-test fixtures
+    /// only; the test never touches the filesystem. The
+    /// `file_watcher.watch` call inside `restore_dirty_with_text`
+    /// will fail on the non-existent path on Windows, which is
+    /// non-fatal (the watcher logs at debug and the tab still
+    /// works).
+    #[test]
+    fn restore_dirty_with_disk_changed_queues_confirm_reload() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let path = PathBuf::from("/tmp/conflict.txt");
+
+        shell.restore_dirty_with_text(
+            &mut ui,
+            path.clone(),
+            "user's unsaved edits".into(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            true, // disk file changed externally
+        );
+
+        let pending = shell.drain(&mut ui);
+        let confirm_reload_count = pending
+            .iter()
+            .filter(|d| matches!(d, PendingDialog::ConfirmReload(p) if p == &path))
+            .count();
+        assert_eq!(
+            confirm_reload_count, 1,
+            "expected one ConfirmReload for the conflict path; got {pending:?}"
+        );
+    }
+
+    /// The clean case: when the disk hasn't been touched during
+    /// the recovery window, no reload prompt fires — the user
+    /// just sees their unsaved buffer with the dirty glyph.
+    #[test]
+    fn restore_dirty_without_disk_change_no_prompt() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        shell.restore_dirty_with_text(
+            &mut ui,
+            PathBuf::from("/tmp/clean.txt"),
+            "user's unsaved edits".into(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+        );
+
+        let pending = shell.drain(&mut ui);
+        let confirm_reload_count = pending
+            .iter()
+            .filter(|d| matches!(d, PendingDialog::ConfirmReload(_)))
+            .count();
+        assert_eq!(
+            confirm_reload_count, 0,
+            "no reload prompt expected; got {pending:?}"
+        );
     }
 }
