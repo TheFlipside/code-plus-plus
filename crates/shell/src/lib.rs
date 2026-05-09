@@ -4131,6 +4131,12 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
 /// `Session::save_to_xml`. Returns `true` on success, `false` on
 /// any I/O / serialization failure (the dispatcher reports the
 /// boolean back to the plugin via the message return value).
+///
+/// `cfg(target_os = "windows")`-gated because every caller is in
+/// the `HostBridge` impl, which is similarly gated. Without the
+/// gate, Linux / macOS CI runs the dead-code lint and fails
+/// (`-D warnings`).
+#[cfg(target_os = "windows")]
 fn write_session_files(path: &Path, files: &[PathBuf]) -> bool {
     let session = codepp_core::session::Session {
         active: None,
