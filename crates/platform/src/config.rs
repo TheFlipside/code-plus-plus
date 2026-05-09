@@ -89,6 +89,20 @@ pub fn session_xml_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("session.xml"))
 }
 
+/// Backup directory under [`config_dir`] — `config_dir/backup/`. Holds
+/// the durable text content of every untitled buffer (and, in a future
+/// iteration, every dirty saved-file buffer) so unsaved work survives
+/// any clean shutdown of the app. Naming matches Notepad++'s layout:
+/// each backup file is `<display_name>@<timestamp>` (no extension), so
+/// the directory reads at a glance and a future migration from / to
+/// N++'s actual `backup/` directory is purely a copy.
+///
+/// May not exist yet on first launch — callers that write here are
+/// responsible for `create_dir_all` before persisting.
+pub fn backups_dir() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("backup"))
+}
+
 /// Plugin directory: `config_dir/plugins/`. Phase 3's plugin host
 /// enumerates `*.dll` (Windows) / `*.so` (Linux) / `*.dylib` (macOS)
 /// here. May not yet exist.

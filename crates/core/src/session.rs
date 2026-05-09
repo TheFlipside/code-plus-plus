@@ -38,16 +38,29 @@ use serde::{Deserialize, Serialize};
 use crate::encoding::Encoding;
 use crate::eol::Eol;
 
-/// One open tab's persistent state. `modified` and the in-memory text
-/// are deliberately not stored — the file on disk is the source of
-/// truth, and a modified-but-unsaved buffer that the user closed
-/// without saving is a separate Phase 4 concern (the recovery sidecar).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// One open tab's persistent state.
+///
+/// Two flavours:
+///
+/// 1. **Saved file**: `path` is `Some(...)`, `untitled_seq` is `None`,
+///    `backup` is normally `None`. The on-disk file is the source of
+///    truth; restore re-reads it. (A future iteration may also write
+///    a backup for *dirty* saved files so unsaved edits survive the
+///    next launch — not yet implemented.)
+/// 2. **Untitled buffer ("new N")**: `path` is `None`,
+///    `untitled_seq` is `Some(N)`, `backup` is `Some(filename)`. The
+///    backup file under `platform::backups_dir()` carries the buffer's
+///    text content. Restore re-creates the tab as untitled and seeds
+///    its Scintilla document from the backup file. This is the
+///    Notepad++-style "unsaved work always survives a restart"
+///    behaviour the user relies on indefinitely.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tab {
-    /// Full path to the file this tab represents. The session round-
-    /// trips this verbatim — symlinks are not resolved here.
-    #[serde(rename = "@path")]
-    pub path: PathBuf,
+    /// Full path to the file this tab represents. `Some` for saved
+    /// files; `None` for untitled buffers (which are tracked via
+    /// `untitled_seq` instead).
+    #[serde(rename = "@path", skip_serializing_if = "Option::is_none", default)]
+    pub path: Option<PathBuf>,
     /// Caret byte position within the buffer. Restored on load via
     /// `SCI_GOTOPOS`. Defaults to 0 for files we've never opened.
     #[serde(rename = "@cursor", default)]
@@ -60,6 +73,26 @@ pub struct Tab {
     /// EOL style. Same rationale as `encoding`.
     #[serde(rename = "@eol", default)]
     pub eol: Eol,
+    /// `Some(N)` for unsaved "new N" buffers; `None` for saved
+    /// files. The number is round-tripped verbatim so a user who
+    /// closes with `new 3` open and `new 1`/`new 2` already saved
+    /// reopens with `new 3` rather than the system reassigning
+    /// numbers.
+    #[serde(
+        rename = "@untitled_seq",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub untitled_seq: Option<u32>,
+    /// Filename (relative to `platform::backups_dir()`) of the backup
+    /// file that holds this tab's text content. `Some` for any tab
+    /// whose content can't be reproduced from disk on next launch
+    /// (currently every untitled buffer). The backup file is the
+    /// raw UTF-8 text of the buffer; the `encoding` and `eol` fields
+    /// describe the *target* encoding the user wants applied when
+    /// they eventually save to a real path.
+    #[serde(rename = "@backup", skip_serializing_if = "Option::is_none", default)]
+    pub backup: Option<String>,
 }
 
 /// Persisted main-window geometry. Pixel dimensions are positive in
@@ -259,16 +292,20 @@ mod tests {
             window: None,
             tabs: vec![
                 Tab {
-                    path: PathBuf::from(r"C:\users\alice\hello.txt"),
+                    path: Some(PathBuf::from(r"C:\users\alice\hello.txt")),
                     cursor: 0,
                     encoding: Encoding::Utf8,
                     eol: Eol::Lf,
+                    untitled_seq: None,
+                    backup: None,
                 },
                 Tab {
-                    path: PathBuf::from(r"C:\users\alice\config.toml"),
+                    path: Some(PathBuf::from(r"C:\users\alice\config.toml")),
                     cursor: 142,
                     encoding: Encoding::Utf8Bom,
                     eol: Eol::CrLf,
+                    untitled_seq: None,
+                    backup: None,
                 },
             ],
         };
@@ -284,15 +321,102 @@ mod tests {
             active: Some(0),
             window: None,
             tabs: vec![Tab {
-                path: PathBuf::from("legacy.txt"),
+                path: Some(PathBuf::from("legacy.txt")),
                 cursor: 0,
                 encoding: Encoding::Other("windows-1252".into()),
                 eol: Eol::CrLf,
+                untitled_seq: None,
+                backup: None,
             }],
         };
         session.save_to_xml(&path).unwrap();
         let loaded = Session::load_from_xml(&path).unwrap();
         assert_eq!(session, loaded);
+    }
+
+    /// Untitled buffers carry `path: None`, an `untitled_seq`, and a
+    /// `backup` filename. Round-trip exercises the new schema fields
+    /// in isolation from saved-file tabs.
+    #[test]
+    fn round_trip_untitled_with_backup() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            active: Some(0),
+            window: None,
+            tabs: vec![Tab {
+                path: None,
+                cursor: 17,
+                encoding: Encoding::Utf8,
+                eol: Eol::Lf,
+                untitled_seq: Some(1),
+                backup: Some("new 1@2026-05-04_215750".into()),
+            }],
+        };
+        session.save_to_xml(&path).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(session, loaded);
+    }
+
+    /// Mixed session: a saved file, two untitled buffers, and a saved
+    /// active index that points at one of the untitled tabs. The
+    /// active-index → list-position mapping must round-trip
+    /// regardless of where the untitled tabs sit in the list.
+    #[test]
+    fn round_trip_mixed_saved_and_untitled() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            active: Some(1),
+            window: None,
+            tabs: vec![
+                Tab {
+                    path: Some(PathBuf::from("/tmp/a.txt")),
+                    cursor: 0,
+                    encoding: Encoding::Utf8,
+                    eol: Eol::Lf,
+                    untitled_seq: None,
+                    backup: None,
+                },
+                Tab {
+                    path: None,
+                    cursor: 0,
+                    encoding: Encoding::Utf8,
+                    eol: Eol::Lf,
+                    untitled_seq: Some(1),
+                    backup: Some("new 1@2026-05-04_215800".into()),
+                },
+                Tab {
+                    path: None,
+                    cursor: 0,
+                    encoding: Encoding::Utf8,
+                    eol: Eol::Lf,
+                    untitled_seq: Some(2),
+                    backup: Some("new 2@2026-05-04_215800".into()),
+                },
+            ],
+        };
+        session.save_to_xml(&path).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(session, loaded);
+    }
+
+    /// A session.xml written before the untitled-buffer feature
+    /// shipped only carries `<tab path="..."/>` entries. Confirm
+    /// they parse cleanly with `untitled_seq` and `backup`
+    /// defaulting to `None`.
+    #[test]
+    fn pre_untitled_session_xml_loads_with_none_fields() {
+        let (_dir, path) = temp_session_path();
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
+        std::fs::write(&path, xml).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(loaded.tabs.len(), 1);
+        assert_eq!(
+            loaded.tabs[0].path.as_deref(),
+            Some(std::path::Path::new("hello.txt"))
+        );
+        assert_eq!(loaded.tabs[0].untitled_seq, None);
+        assert_eq!(loaded.tabs[0].backup, None);
     }
 
     #[test]

@@ -51,7 +51,9 @@ use codepp_scintilla_sys::{
     SC_DOCUMENTOPTION_DEFAULT, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_TEXT, SC_MOD_DELETETEXT,
     SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
-use codepp_shell::{HostHandles, PendingDialog, SearchFlags, Shell, Tab, UiPlatform};
+use codepp_shell::{
+    HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
+};
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     COLORREF, E_FAIL, HWND, LPARAM, LRESULT, MAX_PATH, POINT, RECT, WPARAM,
@@ -1206,6 +1208,39 @@ impl UiPlatform for Win32Ui {
             }
         }
         prev
+    }
+
+    fn capture_text_from_doc(&mut self, scintilla_doc: isize) -> String {
+        if scintilla_doc == 0 {
+            // Sentinel for "no document attached yet" — there's
+            // nothing to read. Surface as empty rather than asking
+            // Scintilla to dereference a null doc pointer.
+            return String::new();
+        }
+        // Snapshot the currently-bound document so we can restore
+        // it after the read. `SCI_GETDOCPOINTER` returns the active
+        // doc; a 0 return would mean Scintilla has nothing bound,
+        // which shouldn't happen in our flow but we treat it as
+        // "leave the swap-back as a no-op".
+        let prior_doc = self.editor.send(SCI_GETDOCPOINTER, 0, 0);
+        if prior_doc == scintilla_doc {
+            // Already bound — read directly without round-tripping
+            // through SCI_SETDOCPOINTER twice. Common case for the
+            // active tab.
+            return <Self as UiPlatform>::get_buffer_text(self);
+        }
+        // Bind the target doc, read its text, restore the prior
+        // doc. The view will paint the target document briefly;
+        // since this is called from `save_session` (only fires on
+        // shutdown, which immediately destroys the window), the
+        // user never sees the flicker. `lparam` is `sptr_t` (isize)
+        // — pass the doc pointer through verbatim, no cast.
+        self.editor.send(SCI_SETDOCPOINTER, 0, scintilla_doc);
+        let text = <Self as UiPlatform>::get_buffer_text(self);
+        if prior_doc != 0 {
+            self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
+        }
+        text
     }
 }
 
@@ -8049,9 +8084,44 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         if let Some(path) = initial_path {
             state.shell.open_file(path);
         } else {
-            let paths = state.shell.load_session_paths();
-            for p in paths {
-                state.shell.open_file(p);
+            // Load every restorable tab from session.xml and dispatch
+            // per variant: saved files are queued for async open via
+            // the loader (same path as user-initiated open); untitled
+            // buffers are recreated synchronously with their backup
+            // text already in place. Iterating entries in session
+            // order keeps the user's tab arrangement intact (saved
+            // files interleaved with untitled buffers).
+            let entries = state.shell.load_session_entries();
+            for entry in entries {
+                match entry {
+                    SessionRestoreEntry::OpenFile(p) => {
+                        state.shell.open_file(p);
+                    }
+                    SessionRestoreEntry::UntitledFromBackup {
+                        untitled_seq,
+                        text,
+                        cursor,
+                        encoding,
+                        eol,
+                    } => {
+                        // `restore_untitled_with_text` needs a
+                        // `&mut UiPlatform` to allocate the Scintilla
+                        // doc and seed it with the backup text.
+                        // Split off a fresh `Win32Ui` view here
+                        // exactly the way the wnd_proc dispatch
+                        // does — avoids holding both a `&mut Shell`
+                        // and a parallel `&mut WindowState` borrow.
+                        let (shell, mut ui) = state.split();
+                        shell.restore_untitled_with_text(
+                            &mut ui,
+                            untitled_seq,
+                            text,
+                            cursor,
+                            encoding,
+                            eol,
+                        );
+                    }
+                }
             }
             if let Some(idx) = state.shell.session_active_index() {
                 if idx < state.shell.tabs.len() {
@@ -8060,11 +8130,12 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                     // Saved active index points outside the
                     // restored tab range — happens if a tab
                     // failed to push (e.g. `loader.open` returned
-                    // None for a path) or if session.xml was
-                    // tampered. Fall back to the most-recently-
-                    // pushed tab and surface the rejection so the
-                    // user has a breadcrumb if their previously-
-                    // active buffer isn't the one focused.
+                    // None for a path, or a backup file failed
+                    // to read) or if session.xml was tampered.
+                    // Fall back to the most-recently-pushed tab
+                    // and surface the rejection so the user has
+                    // a breadcrumb if their previously-active
+                    // buffer isn't the one focused.
                     tracing::warn!(
                         session_active = idx,
                         restored = state.shell.tabs.len(),

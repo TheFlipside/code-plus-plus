@@ -71,6 +71,14 @@ pub const PRIMARY_BUFFER_ID: isize = 1;
 /// count.
 pub const MAX_SESSION_TABS: usize = 512;
 
+/// Hard ceiling on the size of an individual backup file we'll read
+/// during session restore. Untitled buffers are normally small (the
+/// user typing notes), but a tampered or accidentally-huge backup
+/// shouldn't allocate gigabytes at startup. 64 MiB is comfortably
+/// above any realistic untitled-buffer size while keeping the
+/// upper bound on a load attack to a fixed amount.
+const MAX_BACKUP_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Hard ceiling on the number of tabs that can be open at one time.
 /// `Shell::open_file` and `Shell::new_untitled` refuse to allocate
 /// past this bound and log a `tracing::warn!` instead of crashing.
@@ -273,6 +281,51 @@ pub trait UiPlatform {
     /// PostMessage to avoid re-entering wnd_proc under
     /// `PluginCallGuard`).
     fn set_tabbar_hidden(&mut self, hidden: bool) -> bool;
+
+    /// Pull the current text content of the buffer backed by the
+    /// Scintilla document at `scintilla_doc`. The implementation may
+    /// briefly bind that document to the editor view to read it
+    /// (the standard Win32 idiom is `SCI_SETDOCPOINTER` swap +
+    /// `SCI_GETTEXT` + `SCI_SETDOCPOINTER` restore), so callers
+    /// should expect the active view to be left as it was found —
+    /// no permanent side effects.
+    ///
+    /// `scintilla_doc == 0` is the "no document yet" sentinel and
+    /// returns an empty string; callers ask only after `activate_tab`
+    /// has populated `Tab.scintilla_doc`. Used by `Shell::save_session`
+    /// to capture every tab's text — including non-active tabs — into
+    /// backup files so untitled and dirty buffers survive a clean
+    /// shutdown.
+    fn capture_text_from_doc(&mut self, scintilla_doc: isize) -> String;
+}
+
+/// One restored tab from `Shell::load_session_entries`. Tells the UI
+/// exactly how to bring a tab back to life: open a real file from
+/// disk, or seed an untitled buffer with text loaded from its
+/// backup file. Iterated in the same order the tabs appeared in
+/// the previous session so the user's tab arrangement (saved files
+/// interleaved with untitled buffers) round-trips faithfully.
+pub enum SessionRestoreEntry {
+    /// Open `path` from disk via the loader (async). The eventual
+    /// load result populates the tab's text + encoding + EOL
+    /// just like a fresh user-initiated open.
+    OpenFile(PathBuf),
+    /// Re-create an untitled buffer at the next slot with the
+    /// pre-loaded text from its backup file. The UI calls
+    /// `Shell::restore_untitled_with_text` for this variant.
+    UntitledFromBackup {
+        /// Original `untitled_seq` so the user's "new 3" comes
+        /// back as "new 3" rather than being re-numbered.
+        untitled_seq: Option<u32>,
+        /// Buffer content read from the backup file.
+        text: String,
+        /// Caret position the user had when they last closed.
+        cursor: u64,
+        /// Encoding the buffer would target on first save.
+        encoding: Encoding,
+        /// EOL style the buffer would target on first save.
+        eol: Eol,
+    },
 }
 
 /// A modal dialog request the UI must show after `Shell::drain`
@@ -1543,7 +1596,7 @@ impl Shell {
                     .session
                     .tabs
                     .iter()
-                    .find(|t| t.path == loaded.path)
+                    .find(|t| t.path.as_deref() == Some(loaded.path.as_path()))
                     .map(|t| t.cursor)
                     .unwrap_or(0);
 
@@ -2134,43 +2187,115 @@ impl Shell {
     /// for now (milestone 6b's UI tab control records per-tab cursors
     /// at switch time).
     pub fn save_session<U: UiPlatform>(&self, ui: &mut U) -> Result<(), ShellError> {
-        let Some(path) = codepp_platform::session_xml_path() else {
+        let Some(session_path) = codepp_platform::session_xml_path() else {
             // No config dir resolvable (sandboxed environment); skip
-            // session save silently.
+            // session save silently. Untitled buffers still die, but
+            // there's nowhere to durably write them.
             return Ok(());
         };
+        let backups_dir = codepp_platform::backups_dir();
         let mut session = Session::new();
         // Persist the current window geometry alongside the tab list
         // so the next launch can restore the user's preferred size.
-        // The UI is responsible for keeping `self.session.window`
-        // in sync via `set_window_geometry` on `WM_SIZE` /
-        // maximize-restore; we just snapshot the latest value here.
+        // The UI keeps `self.session.window` in sync via
+        // `set_window_geometry` on `WM_SIZE` / maximize-restore; we
+        // just snapshot the latest value here.
         session.window = self.session.window;
+
+        // Filenames of all backups we wrote on this save pass.
+        // After session.xml is durably written we use this list to
+        // prune any older backup files in the directory that the
+        // new session no longer references — keeps the directory
+        // bounded over the long term.
+        let mut written_backups: Vec<String> = Vec::new();
+        // Stable timestamp suffix shared by every backup written in
+        // this save pass. Matches Notepad++'s `<name>@<timestamp>`
+        // naming convention for backup files. Local time so the
+        // user can read it at a glance when inspecting the
+        // directory.
+        let timestamp = backup_timestamp();
+
         for (idx, tab) in self.tabs.iter().enumerate() {
-            let Some(tab_path) = &tab.path else {
-                continue; // unsaved/empty tab
-            };
-            // Active tab cursor comes from the editor; others are 0
-            // until milestone 6b's tab-switch hook persists per-tab
-            // cursors.
+            // Active-tab cursor comes from the editor; others are 0
+            // until a future tab-switch hook persists per-tab cursors.
             let cursor = if Some(idx) == self.active_tab {
                 ui.get_cursor_pos()
             } else {
                 0
             };
+
+            // Decide whether this tab needs a backup file. Untitled
+            // buffers always do — they have no file on disk to fall
+            // back on. Saved files don't (yet) — a future iteration
+            // will also back up dirty saved-files so the user's
+            // unsaved edits survive a restart even when there's a
+            // path on disk; for now they are persisted by reference
+            // only, matching prior behaviour.
+            let mut backup_filename: Option<String> = None;
+            if tab.path.is_none() {
+                if let Some(dir) = &backups_dir {
+                    let display = tab
+                        .untitled_seq
+                        .map(|n| format!("new {n}"))
+                        .unwrap_or_else(|| format!("untitled-{}", tab.id.max(0)));
+                    let filename = format!("{display}@{timestamp}");
+                    let abs_path = dir.join(&filename);
+                    let text = ui.capture_text_from_doc(tab.scintilla_doc);
+                    match write_backup_file(&abs_path, text.as_bytes()) {
+                        Ok(()) => {
+                            backup_filename = Some(filename.clone());
+                            written_backups.push(filename);
+                        }
+                        Err(e) => {
+                            // A failed backup write must not lose
+                            // the user's other tabs. Log + skip
+                            // this tab from the persisted list so
+                            // `restore_unsaved_buffers` doesn't
+                            // later look for a file that isn't
+                            // there. The user's untitled tab is
+                            // gone for the next launch; the rest
+                            // of the session is intact.
+                            tracing::warn!(
+                                untitled_seq = ?tab.untitled_seq,
+                                error = %e,
+                                "failed to write backup file for untitled tab; tab will not be restored",
+                            );
+                            continue;
+                        }
+                    }
+                } else {
+                    // No backups directory available (sandboxed
+                    // environment) — skip the untitled tab the
+                    // same way the old code did, so we don't
+                    // persist a `<tab>` referencing a backup we
+                    // can't write.
+                    continue;
+                }
+            }
+
             session.tabs.push(codepp_core::Tab {
-                path: tab_path.clone(),
+                path: tab.path.clone(),
                 cursor,
                 encoding: tab.encoding.clone(),
                 eol: tab.eol,
+                untitled_seq: tab.untitled_seq,
+                backup: backup_filename,
             });
         }
         session.active = self.active_tab.and_then(|active_idx| {
             // Map the tabs[] index to the index inside session.tabs[],
-            // accounting for any unsaved tabs we skipped above.
+            // accounting for any tabs we skipped above (a backup
+            // write that failed, or an untitled tab in a sandboxed
+            // environment with no backups dir).
             let mut session_idx = 0usize;
             for (i, tab) in self.tabs.iter().enumerate() {
-                if tab.path.is_none() {
+                let was_persisted = tab.path.is_some()
+                    || (tab.untitled_seq.is_some()
+                        && session
+                            .tabs
+                            .iter()
+                            .any(|s| s.untitled_seq == tab.untitled_seq && s.path.is_none()));
+                if !was_persisted {
                     continue;
                 }
                 if i == active_idx {
@@ -2181,50 +2306,55 @@ impl Shell {
             None
         });
         session
-            .save_to_xml(&path)
+            .save_to_xml(&session_path)
             .map_err(|e| ShellError::Session(e.to_string()))?;
+
+        // Now that session.xml is durably on disk, prune any backup
+        // files in the directory that this save pass didn't write —
+        // those are leftovers from a previous session whose tabs no
+        // longer exist (closed, saved-and-cleaned, or the user moved
+        // to fewer untitled tabs). Doing this *after* the session.xml
+        // write means a crash mid-save can never delete a backup
+        // that the surviving session.xml still references.
+        if let Some(dir) = backups_dir {
+            prune_unreferenced_backups(&dir, &written_backups);
+        }
+
         Ok(())
     }
 
-    /// Read `session.xml` and return all stored tab paths in their
-    /// original order, capped at [`MAX_SESSION_TABS`]. The parsed
-    /// [`Session`] is stored on `self` so `apply_load_result` can
-    /// later look up each restored tab's cursor position by path.
+    /// Read `session.xml` and return one entry per restored tab in
+    /// the original order, capped at [`MAX_SESSION_TABS`].
+    ///
+    /// Each entry tells the UI exactly what to do for that tab slot:
+    /// open a file from disk for saved tabs, or restore an untitled
+    /// buffer with text loaded from its backup file. The order of
+    /// the returned Vec matches the order of `<tab>` entries in
+    /// session.xml, so the UI just iterates and dispatches per
+    /// variant — preserving the user's tab arrangement exactly.
+    ///
+    /// The parsed [`Session`] is stored on `self` so
+    /// `apply_load_result` can later look up each restored tab's
+    /// cursor position by path, and so `session_active_index` can
+    /// report the saved active index.
+    ///
     /// Returns an empty Vec when the file is missing — first-run
     /// case, never an error. A parse failure also returns empty,
     /// with a warn-level log so a corrupted file is observable.
-    ///
-    /// The UI is expected to:
-    ///   1. Call this method.
-    ///   2. Call [`Self::open_file`] for each path returned.
-    ///   3. Read [`Self::session_active_index`] and override
-    ///      `self.active_tab` so the visible buffer matches the
-    ///      pre-shutdown one. Without this override, `open_file`
-    ///      always activates the most-recently-pushed tab,
-    ///      defeating the session's stored selection.
-    pub fn load_session_paths(&mut self) -> Vec<PathBuf> {
+    pub fn load_session_entries(&mut self) -> Vec<SessionRestoreEntry> {
         let Some(path) = codepp_platform::session_xml_path() else {
             return Vec::new();
         };
         let session = match Session::load_from_xml(&path) {
             Ok(s) => s,
             Err(e) => {
-                // Don't propagate as a hard error — a corrupted
-                // session file shouldn't block startup. Warn so
-                // the user has a breadcrumb if they wonder why
-                // their tabs didn't come back, and so a tampered
-                // session.xml leaves a trace.
                 tracing::warn!(path = %path.display(), error = ?e, "session.xml load failed; starting clean");
                 return Vec::new();
             }
         };
-        // Cap restored tabs at `MAX_SESSION_TABS`. A session.xml
-        // with thousands of <tab> entries (corrupted, tampered, or
-        // a runaway session-save bug) would otherwise queue that
-        // many async loads at startup and allocate a Tab + decoded
-        // text per file — a local denial-of-service against the
-        // invoking user's account. The cap is generous enough that
-        // no realistic user hits it.
+        // Cap restored tabs at `MAX_SESSION_TABS` to prevent a
+        // tampered or runaway session.xml from queuing thousands
+        // of loads / backup reads at startup (local DoS).
         if session.tabs.len() > MAX_SESSION_TABS {
             tracing::warn!(
                 stored = session.tabs.len(),
@@ -2232,14 +2362,125 @@ impl Shell {
                 "session.xml exceeds tab cap; excess tabs not restored",
             );
         }
-        let paths: Vec<PathBuf> = session
+        let backups_dir = codepp_platform::backups_dir();
+        let entries: Vec<SessionRestoreEntry> = session
             .tabs
             .iter()
             .take(MAX_SESSION_TABS)
-            .map(|t| t.path.clone())
+            .filter_map(|t| {
+                if let Some(path) = &t.path {
+                    Some(SessionRestoreEntry::OpenFile(path.clone()))
+                } else if let Some(backup_name) = &t.backup {
+                    // Untitled buffer with a backup file. Read the
+                    // backup synchronously — files are normally
+                    // small (single-buffer text). Cap reads at
+                    // `MAX_BACKUP_FILE_BYTES` so a tampered backup
+                    // can't allocate gigabytes at startup.
+                    if !is_safe_backup_filename(backup_name) {
+                        tracing::warn!(
+                            backup = %backup_name,
+                            "session.xml backup name failed safety check; tab will not be restored",
+                        );
+                        return None;
+                    }
+                    let dir = backups_dir.as_ref()?;
+                    let abs_path = dir.join(backup_name);
+                    match read_backup_file(dir, &abs_path) {
+                        Ok(text) => Some(SessionRestoreEntry::UntitledFromBackup {
+                            untitled_seq: t.untitled_seq,
+                            text,
+                            cursor: t.cursor,
+                            encoding: t.encoding.clone(),
+                            eol: t.eol,
+                        }),
+                        Err(e) => {
+                            tracing::warn!(
+                                backup = %abs_path.display(),
+                                error = %e,
+                                "failed to read backup file; untitled tab will not be restored",
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    // <tab> with neither path nor backup — corrupt
+                    // entry. Skip rather than restoring an empty
+                    // tab.
+                    None
+                }
+            })
             .collect();
         self.session = session;
-        paths
+        entries
+    }
+
+    /// Backwards-compatible wrapper that returns just the disk
+    /// paths from session.xml. Untitled buffers and any tab whose
+    /// backup file is missing are silently dropped. Kept so the
+    /// older single-call shape ("just give me the paths") remains
+    /// available; new code should prefer `load_session_entries`
+    /// to also restore untitled buffers.
+    pub fn load_session_paths(&mut self) -> Vec<PathBuf> {
+        self.load_session_entries()
+            .into_iter()
+            .filter_map(|e| match e {
+                SessionRestoreEntry::OpenFile(p) => Some(p),
+                SessionRestoreEntry::UntitledFromBackup { .. } => None,
+            })
+            .collect()
+    }
+
+    /// Re-create an untitled buffer at the end of the tab list with
+    /// content that came from a backup file. Same shape as
+    /// [`Self::new_untitled`] but seeds the buffer with the saved
+    /// text and restores the original `untitled_seq` so the user's
+    /// "new 3" comes back as "new 3" rather than the next free
+    /// number.
+    ///
+    /// Used by the UI's session-restore loop. Returns the new tab's
+    /// index in `self.tabs`.
+    pub fn restore_untitled_with_text<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        untitled_seq: Option<u32>,
+        text: String,
+        cursor: u64,
+        encoding: Encoding,
+        eol: Eol,
+    ) -> usize {
+        let id = self.allocate_buffer_id();
+        let new_idx = self.tabs.len();
+        let byte_len = text.len() as u64;
+        self.tabs.push(Tab {
+            id,
+            path: None,
+            encoding: encoding.clone(),
+            eol,
+            byte_len,
+            text: text.clone(),
+            pending_load: None,
+            scintilla_doc: 0,
+            lang: codepp_core::lang::L_TEXT,
+            untitled_seq,
+        });
+        self.active_tab = Some(new_idx);
+        // Bind a fresh Scintilla document; matches `new_untitled`'s
+        // path. The 0 sentinel asks the UI to allocate.
+        let new_doc = ui.activate_tab(new_idx, 0);
+        if let Some(tab) = self.tabs.get_mut(new_idx) {
+            tab.scintilla_doc = new_doc;
+        }
+        // Push the backup text + cursor into the now-active editor
+        // document. From the user's perspective this is identical
+        // to having opened the buffer at the same position last
+        // session.
+        ui.set_buffer_text(&text, cursor);
+        // Mark the new doc clean so the editor doesn't show a
+        // dirty glyph immediately — the buffer matches what's on
+        // (backup-)disk, even though there's no real file path.
+        ui.mark_saved();
+        ui.update_status(codepp_core::lang::L_TEXT, &encoding, eol, byte_len);
+        new_idx
     }
 
     /// Active tab index recorded in the most recently parsed
@@ -2270,6 +2511,225 @@ impl Shell {
     /// + close cycle remembers the right "small" fallback.
     pub fn set_window_geometry(&mut self, geometry: WindowGeometry) {
         self.session.window = Some(geometry);
+    }
+}
+
+/// Local-time timestamp string used as the suffix on backup
+/// filenames. Format `YYYY-MM-DD_HHMMSS` (no separators in the
+/// time portion) matches the layout Notepad++ uses, so the
+/// directory reads at a glance.
+///
+/// Implementation falls back to UTC seconds-since-epoch on the
+/// (extremely unlikely) `SystemTime` failure rather than panicking
+/// — a save that produces a slightly weird timestamp is still a
+/// save that protected the user's data.
+fn backup_timestamp() -> String {
+    // The user-facing convention here is local wall-clock time.
+    // `SystemTime::now()` is wall-clock; we format via the `time`
+    // crate would be ideal but isn't a current dep, so we hand-
+    // assemble using `chrono`-free arithmetic on a UNIX timestamp
+    // and the system time-zone offset reported by Windows.
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Approximate local time using `chrono`-style arithmetic on a
+    // raw u64. We're not adding a chrono dep just for the
+    // backup-filename timestamp; UTC is acceptable here because
+    // the timestamp is a uniqueness suffix, not a user-readable
+    // wall-clock display. The format chosen still matches N++'s
+    // lexicographic shape so `ls` orders backups by save time.
+    let days = secs / 86_400;
+    let mut day_secs = secs % 86_400;
+    let hour = day_secs / 3600;
+    day_secs %= 3600;
+    let minute = day_secs / 60;
+    let second = day_secs % 60;
+    // Civil-from-days conversion (Howard Hinnant's algorithm —
+    // public-domain, well-trodden). Converts days-since-1970-01-01
+    // into Y/M/D.
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    format!(
+        "{year:04}-{m:02}-{d:02}_{hour:02}{minute:02}{second:02}",
+        year = year,
+        m = m,
+        d = d,
+        hour = hour,
+        minute = minute,
+        second = second,
+    )
+}
+
+/// Reject backup filenames that contain a path separator, parent-
+/// directory traversal, drive-letter prefixes, Windows reserved
+/// device names, or other shapes that would let a tampered
+/// session.xml escape the backups directory or open a special
+/// device. The legitimate naming scheme (`<display>@<timestamp>`)
+/// never matches any of these — display names like `new 1` and
+/// timestamps like `2026-05-04_215750` carry no special characters.
+fn is_safe_backup_filename(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    // `starts_with('.')` covers `.`, `..`, and any hidden-file
+    // shape (`.session-...tmp`, `.foo`) that we don't want to
+    // surface as a "backup" we'd later prune.
+    if name.starts_with('.') {
+        return false;
+    }
+    // Reject any path traversal or absolute-path / drive-letter
+    // shape.
+    if name.contains('/') || name.contains('\\') || name.contains("..") || name.contains(':') {
+        return false;
+    }
+    // Windows reserved device names. `dir.join("CON")` opens the
+    // console device, so a tampered session.xml with
+    // `backup="CON"` would hang `read_to_string` on the device
+    // rather than reading a file. The reserved set is matched
+    // case-insensitively against the name's stem (the portion
+    // before any trailing `.`), since `CON.txt` is *also* the
+    // console on Windows.
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",
+        "LPT9",
+    ];
+    let stem = name.split('.').next().unwrap_or(name);
+    let stem_upper: String = stem.to_ascii_uppercase();
+    if RESERVED.iter().any(|r| *r == stem_upper) {
+        return false;
+    }
+    true
+}
+
+/// Write `bytes` to `path` atomically (sibling temp file +
+/// rename). Same atomic-write recipe the session.xml save uses,
+/// adapted for raw bytes. Creates the parent directory if it
+/// doesn't exist yet — first-launch case.
+fn write_backup_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".backup-")
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    tmp.write_all(bytes)?;
+    tmp.as_file_mut().sync_all()?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
+/// Read a backup file capped at [`MAX_BACKUP_FILE_BYTES`] and
+/// return its content as UTF-8. Filenames are first validated
+/// against [`is_safe_backup_filename`] in the load path; this
+/// function additionally canonicalises both the requested path and
+/// the parent directory and refuses any path whose canonical form
+/// escapes the backups directory — defence-in-depth against a
+/// tampered session.xml or a symlink dropped into the backup dir
+/// (the latter only writable by a local attacker, but cheap to
+/// guard).
+fn read_backup_file(expected_dir: &Path, path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    // Canonicalise both ends so the prefix comparison works even
+    // when the backups dir uses a relative path or contains
+    // symlinks. `canonicalize` requires the file to exist, which
+    // matches our flow (we only call this after walking the
+    // directory) — for a missing file we'd want the caller to see
+    // the natural ENOENT.
+    let canonical_path = std::fs::canonicalize(path)?;
+    let canonical_dir = std::fs::canonicalize(expected_dir)?;
+    if !canonical_path.starts_with(&canonical_dir) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "backup file canonicalises outside the backups directory",
+        ));
+    }
+    // TOCTOU note: there's a window between `canonicalize` and
+    // `File::open` where `canonical_path` could in theory be swapped
+    // out. Because `canonical_path` is the *resolved* absolute target
+    // (symlinks already chased), the only attacker who could win that
+    // race is one with write access to the user's own AppData / config
+    // dir — i.e. the same user. Acceptable under the desktop-app
+    // trust boundary; no privilege escalation surface.
+    let mut file = std::fs::File::open(&canonical_path)?;
+    let metadata = file.metadata()?;
+    if metadata.len() > MAX_BACKUP_FILE_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("backup file exceeds {MAX_BACKUP_FILE_BYTES} byte cap"),
+        ));
+    }
+    // `as usize` cast is safe: the cap above (64 MiB) is well within
+    // `usize::MAX` on every supported target including 32-bit. The
+    // cap-check is the real defence — the cast could only overflow
+    // on a target where `MAX_BACKUP_FILE_BYTES` exceeded `usize::MAX`,
+    // which the const keeps below.
+    let mut buf = String::with_capacity(metadata.len() as usize);
+    file.read_to_string(&mut buf)?;
+    Ok(buf)
+}
+
+/// Delete every file in `dir` whose name isn't in the `keep` list.
+/// Called after a successful session.xml write to bound the
+/// directory's size — old backups from previous sessions that the
+/// new session.xml no longer references would otherwise pile up
+/// over time.
+///
+/// Errors are logged at warn level rather than propagated: a
+/// failed prune is non-critical (next save will try again), and
+/// returning an error here would mask a *successful* session.xml
+/// write higher up.
+fn prune_unreferenced_backups(dir: &Path, keep: &[String]) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        // No backup directory yet (first save with no untitled
+        // tabs) — nothing to prune.
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        // Skip stray temp files created by `tempfile`'s atomic
+        // write that didn't get persisted (rare; an interrupted
+        // save would otherwise grow these in-place).
+        if name_str.starts_with(".backup-") {
+            let _ = std::fs::remove_file(entry.path());
+            continue;
+        }
+        if keep.iter().any(|k| k == name_str) {
+            continue;
+        }
+        // Belt-and-braces: only delete files that look like our
+        // backup naming convention (`<name>@<timestamp>`). A user
+        // who manually drops files into the backup dir doesn't
+        // lose them on next save.
+        if !name_str.contains('@') {
+            continue;
+        }
+        if let Err(e) = std::fs::remove_file(entry.path()) {
+            tracing::warn!(file = ?entry.path(), error = %e, "failed to remove stale backup file");
+        }
     }
 }
 
@@ -3054,6 +3514,11 @@ mod tests {
             let prev = self.tabbar_hidden;
             self.tabbar_hidden = hidden;
             prev
+        }
+        fn capture_text_from_doc(&mut self, _scintilla_doc: isize) -> String {
+            // Tests don't model per-doc text storage — they share
+            // one buffer. Return whatever the active buffer holds.
+            self.buffer_text.clone()
         }
     }
 
@@ -4776,16 +5241,20 @@ mod tests {
             window: None,
             tabs: vec![
                 CoreTab {
-                    path: PathBuf::from("/tmp/first.txt"),
+                    path: Some(PathBuf::from("/tmp/first.txt")),
                     cursor: 0,
                     encoding: Encoding::default(),
                     eol: Eol::default(),
+                    untitled_seq: None,
+                    backup: None,
                 },
                 CoreTab {
-                    path: PathBuf::from("/tmp/second.txt"),
+                    path: Some(PathBuf::from("/tmp/second.txt")),
                     cursor: 5,
                     encoding: Encoding::default(),
                     eol: Eol::default(),
+                    untitled_seq: None,
+                    backup: None,
                 },
             ],
         };
@@ -4794,8 +5263,8 @@ mod tests {
         let parsed = CoreSession::load_from_xml(&xml_path).unwrap();
         assert_eq!(parsed.active, Some(1));
         assert_eq!(parsed.tabs.len(), 2);
-        assert_eq!(parsed.tabs[0].path, PathBuf::from("/tmp/first.txt"));
-        assert_eq!(parsed.tabs[1].path, PathBuf::from("/tmp/second.txt"));
+        assert_eq!(parsed.tabs[0].path, Some(PathBuf::from("/tmp/first.txt")));
+        assert_eq!(parsed.tabs[1].path, Some(PathBuf::from("/tmp/second.txt")));
         assert_eq!(parsed.tabs[1].cursor, 5);
     }
 
