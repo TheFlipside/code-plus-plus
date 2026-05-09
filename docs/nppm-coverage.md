@@ -83,7 +83,7 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_MAKECURRENTBUFFERDIRTY` | 🟡 | v1 | Tracking lives in Scintilla (`SCI_GETMODIFY`); this currently just trace-logs. Title-bar dirty glyph is a Phase 4 concern. |
 | `NPPM_GETENABLETHEMETEXTUREFUNC` | ⏸ | — | |
 | `NPPM_GETPLUGINSCONFIGDIR` | ✅ | v1 | Wide-path write into the plugin's buffer, capped at `MAX_PATH` TCHARs. |
-| `NPPM_MSGTOPLUGIN` | ⚫ | v3 | Inter-plugin messaging. |
+| `NPPM_MSGTOPLUGIN` | ✅ | v3 | wparam: TCHAR* target plugin name; lparam: pointer to a `CommunicationInfo` struct (`{ internal_msg, src_module_name, info }`). The host looks up the target plugin by `getName()` value, reads `internal_msg` from the struct, and calls the target's `messageProc(internal_msg, info_ptr, 0)`. Returns the target's LRESULT, or 0 if the target plugin isn't loaded / name doesn't match. The relay is wrapped in `catch_unwind` so a Rust-authored target plugin's panic doesn't unwind across the C ABI — same safety boundary as `notify_all`'s `beNotified` delivery. |
 | `NPPM_MENUCOMMAND` | 🟡 | v1 | Trace-logged; the dispatch table for built-in commands (IDM_FILE_OPEN etc.) lands alongside the full menu set in Phase 4. |
 | `NPPM_TRIGGERTABBARCONTEXTMENU` | ⚫ | v3 | |
 | `NPPM_GETNPPVERSION` | ✅ | v1 | Returns `CODEPP_PLUGIN_API_VERSION` (0.1, packed `(major << 16) \| minor`). Deliberately *below* any real Notepad++ release so version-gated N++ features (`if (NPPM_GETNPPVERSION() >= 0x00080000)` and the like) correctly fail their gate checks until Code++ implements those features. |
@@ -110,7 +110,15 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_SAVECURRENTFILEAS` | ✅ | v2 | wparam: BOOL — TRUE writes a copy without re-pointing the active tab (`Shell::save_active_as_copy` — encode + atomic-rename, no tab-metadata mutation, no `NPPN_FILESAVED`); FALSE renames the active tab to the new path (`Shell::save_buffer_as` — full re-derivation including new lang from extension, file-watcher rebind, FILESAVED queue push). Bad-surrogate / null-path lparam returns 0 the same way `NPPM_DOOPEN` rejects them. |
 | `NPPM_GETLANGUAGENAME` | ✅ | v1 | Wide-string write (probe-then-write protocol). Returns the short menu name for known langs ("C", "C++", "Rust", "Normal Text"); zero on unknown lang. |
 | `NPPM_GETLANGUAGEDESC` | ✅ | v1 | Same shape as `NPPM_GETLANGUAGENAME`; returns the long human-readable description. |
-| Long tail (`NPPM_ALLOCATESUPPORTED` … `NPPM_GETZOOMLEVEL`) | ⚫ | v3 | |
+| `NPPM_ALLOCATESUPPORTED` | ✅ | v3 | Returns `FALSE` (Code++ doesn't yet implement `NPPM_ALLOCATECMDID` / `NPPM_ALLOCATEMARKER`). Plugins gating `if (NPPM_ALLOCATESUPPORTED) { … }` fall back to their non-allocating path. The honest answer satisfies the contract — once the allocators land this flips to `TRUE`. |
+| `NPPM_ALLOCATECMDID` / `NPPM_ALLOCATEMARKER` | ⚫ | v3 | Plugin-driven id reservation. |
+| `NPPM_GETAPPDATAPLUGINSALLOWED` | ✅ | v3 | Returns `TRUE`. Code++ always loads from per-user `%APPDATA%\Code++\plugins` (no admin-restricted system dir). |
+| `NPPM_GETCURRENTVIEW` | ✅ | v3 | Returns 0. Single-view through Phase 4. |
+| `NPPM_GETPLUGINHOMEPATH` | ✅ | v3 | wparam: capacity in TCHARs. lparam: TCHAR* OUT. Routes through `codepp_platform::plugins_dir()`. Returns 1 on success, 0 on bad args / unresolvable config dir. Same out-buffer protocol as `NPPM_GETPLUGINSCONFIGDIR`. |
+| `NPPM_GETSETTINGSCLOUDPATH` | ✅ | v3 | Same out-buffer protocol; Code++ doesn't implement settings cloud-sync, so the dispatcher writes an empty wide string (just the NUL terminator) and returns 1. |
+| `NPPM_GETBOOKMARKID` | ✅ | v3 | Returns 24 — N++'s convention for the bookmark Scintilla marker number. Plugins use `SCI_MARKERADD(line, 24)` to set a bookmark. **Limitation:** Code++'s UI doesn't yet style marker 24 as a visible bookmark glyph (Phase 4 polish), but the marker is set on the buffer correctly and any plugin that pre-populates bookmarks works the same way it would in N++. |
+| `NPPM_GETZOOMLEVEL` | ✅ | v3 | Wraps Scintilla `SCI_GETZOOM` via the active editor handle. Range is approximately [-10, 20] (Scintilla's documented bounds). |
+| Long tail (other v3 entries) | ⚫ | v3 | |
 
 ## NPPN_* (notifications)
 

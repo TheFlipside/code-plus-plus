@@ -177,6 +177,38 @@ pub type MessageProcFn = unsafe extern "C" fn(u32, usize, isize) -> isize;
 /// `isUnicode() -> BOOL`. Win32 `BOOL` is a 4-byte int.
 pub type IsUnicodeFn = unsafe extern "C" fn() -> i32;
 
+/// Mirror of Notepad++'s `CommunicationInfo` struct used by
+/// `NPPM_MSGTOPLUGIN` for inter-plugin messaging. The source
+/// plugin populates this and passes a pointer to it in `lParam`;
+/// the host forwards it to the target plugin's `messageProc`.
+///
+/// Layout matches the upstream C struct verbatim:
+///   `long internalMsg; const TCHAR* srcModuleName; void* info;`
+///
+/// `long` is `i32` in the Win32 LLP64 ABI on both x86 and x64;
+/// the pointer fields are pointer-sized, so the struct's overall
+/// size differs across architectures (12 bytes on x86, 24 bytes on
+/// x64 due to alignment padding after the 4-byte `internal_msg`).
+///
+/// The host doesn't dereference `src_module_name` or `info` — they
+/// are forwarded verbatim through the target plugin's `messageProc`
+/// in the `wParam` slot. Only `internal_msg` is read host-side, to
+/// pick the message number the target's `messageProc` receives.
+#[repr(C)]
+pub struct CommunicationInfo {
+    /// Custom message code the source plugin chose for this
+    /// communication. The host calls
+    /// `target.messageProc(internal_msg, wparam = info_ptr, 0)`.
+    pub internal_msg: i32,
+    /// Wide-char name of the source plugin. Forwarded to the
+    /// target plugin via the `info_ptr` (which points at this
+    /// struct) — the host does not dereference it.
+    pub src_module_name: *const u16,
+    /// Opaque payload pointer the source plugin chose. Same
+    /// "host doesn't dereference" rule applies.
+    pub info: *mut c_void,
+}
+
 /// Mirror of Notepad++'s `sessionInfo` struct used by
 /// `NPPM_SAVESESSION`. The plugin populates the three fields and
 /// passes a pointer to this struct in `lParam`.
@@ -287,5 +319,28 @@ mod tests {
         // 4 (path) + 4 (nb_file) + 4 (files) = 12 bytes; no
         // alignment padding needed when pointers are 4 bytes.
         assert_eq!(core::mem::size_of::<SessionInfo>(), 12);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn communication_info_total_size_x64() {
+        // 4 (internal_msg: i32)
+        // + 4 (padding to align the next pointer)
+        // + 8 (src_module_name: *const u16)
+        // + 8 (info: *mut c_void)
+        // = 24 bytes. Mirror the upstream C `CommunicationInfo`
+        // layout exactly so plugin allocations parse correctly.
+        assert_eq!(
+            core::mem::size_of::<CommunicationInfo>(),
+            24,
+            "CommunicationInfo layout regressed; plugins reading the upstream struct would parse garbage",
+        );
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn communication_info_total_size_x86() {
+        // 4 (internal_msg) + 4 (src_module_name) + 4 (info) = 12.
+        assert_eq!(core::mem::size_of::<CommunicationInfo>(), 12);
     }
 }

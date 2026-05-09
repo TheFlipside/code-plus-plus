@@ -303,6 +303,12 @@ pub trait UiPlatform {
     /// contract.
     fn set_statusbar_hidden(&mut self, hidden: bool) -> bool;
 
+    /// Active editor's zoom level in points. Drives
+    /// `NPPM_GETZOOMLEVEL` via the host's `editor_zoom_level`.
+    /// Wraps Scintilla's `SCI_GETZOOM` — typically returns a
+    /// signed int in `[-10, 20]`.
+    fn editor_zoom_level(&self) -> i32;
+
     /// Pull the current text content of the buffer backed by the
     /// Scintilla document at `scintilla_doc`. The implementation may
     /// briefly bind that document to the editor view to read it
@@ -4036,6 +4042,116 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.ui.set_statusbar_hidden(hidden)
     }
 
+    fn alloc_supported(&self) -> bool {
+        // Code++ doesn't yet implement `NPPM_ALLOCATECMDID` /
+        // `NPPM_ALLOCATEMARKER`, so plugins that gate on this
+        // value should fall back to their non-allocating path.
+        // Returning `false` is honest; it lets plugins compile
+        // against the latest header but degrade gracefully.
+        false
+    }
+
+    fn appdata_plugins_allowed(&self) -> bool {
+        // Code++ always loads from the per-user
+        // `%APPDATA%\Code++\plugins` (no admin-restricted system
+        // dir). Plugins gating on this can assume the answer is
+        // always `true` until we ship a system-wide install path.
+        true
+    }
+
+    fn current_view(&self) -> i32 {
+        // Single-view through Phase 4. Phase 5 split-view will
+        // return 0 / 1 based on which view has focus.
+        0
+    }
+
+    fn plugin_home_dir(&self) -> Option<PathBuf> {
+        codepp_platform::plugins_dir()
+    }
+
+    fn settings_cloud_dir(&self) -> Option<PathBuf> {
+        // Code++ doesn't implement settings cloud-sync — the
+        // dispatcher writes an empty wide string into the plugin
+        // buffer. Plugins reading the result get a length-0 path
+        // and should treat it as "no cloud sync configured".
+        None
+    }
+
+    fn bookmark_marker_id(&self) -> i32 {
+        // N++'s convention: marker number 24. Plugins use
+        // `NPPM_GETBOOKMARKID` to learn the marker number, then
+        // call `SCI_MARKERADD(line, MARKER_ID)` to install a
+        // bookmark on a buffer. Code++'s UI doesn't yet style
+        // marker 24 as a visible bookmark glyph (Phase 4 polish),
+        // but the marker is set on the buffer correctly and any
+        // plugin that pre-populates bookmarks works the same way
+        // it would in N++.
+        24
+    }
+
+    fn editor_zoom_level(&self) -> i32 {
+        self.ui.editor_zoom_level()
+    }
+
+    fn forward_plugin_message(
+        &mut self,
+        target_name: &str,
+        internal_msg: i32,
+        info_ptr: usize,
+    ) -> isize {
+        // Look up the target plugin by name. `name()` returns the
+        // cached `getName()` value, which is the wire-format name
+        // plugins use to identify each other (the value that
+        // appears in the Plugins menu). An unloaded or panicked
+        // plugin returns `None` here and the lookup misses — the
+        // upstream contract says "0 when target isn't loaded."
+        let Some(proc) = self
+            .shell
+            .plugins
+            .iter()
+            .find(|p| p.name.as_deref() == Some(target_name))
+            .and_then(|p| p.message_proc_fn())
+        else {
+            tracing::trace!(
+                target = target_name,
+                msg = internal_msg,
+                "NPPM_MSGTOPLUGIN: target plugin not found",
+            );
+            return 0;
+        };
+        // Wrap in `catch_unwind` so a Rust-authored target
+        // plugin's panic doesn't unwind across the C ABI — same
+        // safety boundary as `notify_all` for beNotified.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // SAFETY: `proc` is the plugin's exported
+            // `messageProc` — declared `unsafe extern "C" fn(u32,
+            // usize, isize) -> isize` in `ffi.rs`. The plugin
+            // contract is to read `info_ptr` as a
+            // `CommunicationInfo*`; the host has done the
+            // null-check before calling here.
+            //
+            // The `i32 -> u32` cast preserves the bit pattern. A
+            // plugin sending a negative `long` for `internal_msg`
+            // (legal upstream) sees the same `0xFFFF_FFFF`-style
+            // value the equivalent N++ relay produces — N++'s
+            // call site `target->messageProc(info->internalMsg, …)`
+            // applies the same implicit cast since the
+            // `messageProc` signature's first parameter is `UINT`.
+            unsafe { proc(internal_msg as u32, info_ptr, 0) }
+        }));
+        match result {
+            Ok(lresult) => lresult,
+            Err(_) => {
+                tracing::warn!(
+                    target = target_name,
+                    msg = internal_msg,
+                    "NPPM_MSGTOPLUGIN: target plugin panicked in messageProc",
+                );
+                0
+            }
+        }
+    }
+
     fn save_all_files(&mut self) {
         // `save_all` returns a Vec of per-tab errors. Each error is
         // already surfaced via `ShellError`'s display path elsewhere
@@ -4507,6 +4623,13 @@ mod tests {
             let prev = self.statusbar_hidden;
             self.statusbar_hidden = hidden;
             prev
+        }
+        fn editor_zoom_level(&self) -> i32 {
+            // Tests don't model real Scintilla zoom — return 0 (no
+            // zoom applied) by default. Tests that exercise the
+            // zoom-level surface explicitly are out of scope for
+            // this fake.
+            0
         }
         fn capture_text_from_doc(&mut self, _scintilla_doc: isize) -> String {
             // Tests don't model per-doc text storage — they share

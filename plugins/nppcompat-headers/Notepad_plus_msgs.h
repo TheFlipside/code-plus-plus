@@ -254,7 +254,33 @@ typedef struct sessionInfo_ {
 
 /* v1: returns the path of the per-user plugin config dir (TCHAR* via lParam). */
 #define NPPM_GETPLUGINSCONFIGDIR          (NPPMSG + 46)
+/* v3: forward an inter-plugin message to a named target.
+ *     wParam: TCHAR* target plugin name (the value the target's
+ *             getName() returned).
+ *     lParam: pointer to a `CommunicationInfo` struct (path
+ *             defined below). The host reads `internal_msg` and
+ *             calls `target.messageProc(internal_msg, info_ptr, 0)`,
+ *             returning the LRESULT verbatim.
+ *     Returns: target's messageProc return value, or 0 if the
+ *             target plugin is not loaded / name doesn't match. */
 #define NPPM_MSGTOPLUGIN                  (NPPMSG + 47)
+
+/*
+ * Plugin-to-plugin messaging payload. Used by NPPM_MSGTOPLUGIN.
+ * The source plugin populates the three fields and passes a
+ * pointer to this struct in lParam; the host reads only
+ * `internalMsg` and forwards the struct pointer to the target's
+ * messageProc as wParam. Layout matches Notepad++'s upstream
+ * `CommunicationInfo` verbatim.
+ */
+#ifndef NPP_COMMUNICATION_INFO_DEFINED
+#define NPP_COMMUNICATION_INFO_DEFINED
+typedef struct CommunicationInfo_ {
+    long         internalMsg;     /* custom message code chosen by sender */
+    const TCHAR* srcModuleName;   /* sender's getName() value */
+    void*        info;            /* sender-defined opaque payload */
+} CommunicationInfo;
+#endif
 /* v1: invoke the menu command identified by lParam (cmdID). */
 #define NPPM_MENUCOMMAND                  (NPPMSG + 48)
 #define NPPM_TRIGGERTABBARCONTEXTMENU     (NPPMSG + 49)
@@ -363,6 +389,12 @@ typedef struct sessionInfo_ {
  *             there is no active buffer. */
 #define NPPM_SAVECURRENTFILEAS            (NPPMSG + 78)
 #define NPPM_GETCURRENTNATIVELANGENCODING (NPPMSG + 79)
+/* v3: BOOL — `TRUE` when the host supports
+ *     `NPPM_ALLOCATECMDID` / `NPPM_ALLOCATEMARKER` (the
+ *     plugin-driven id reservation messages). Plugins gate
+ *     `if (NPPM_ALLOCATESUPPORTED) { … }` on this. Code++ returns
+ *     `FALSE` until those allocators land in v3 — plugins that
+ *     check fall back to their non-allocating path. */
 #define NPPM_ALLOCATESUPPORTED            (NPPMSG + 80)
 #define NPPM_ALLOCATECMDID                (NPPMSG + 81)
 #define NPPM_ALLOCATEMARKER               (NPPMSG + 82)
@@ -370,7 +402,13 @@ typedef struct sessionInfo_ {
 #define NPPM_GETLANGUAGEDESC              (NPPMSG + 84)
 #define NPPM_SHOWDOCSWITCHER              (NPPMSG + 85)
 #define NPPM_ISDOCSWITCHERSHOWN           (NPPMSG + 86)
+/* v3: BOOL — `TRUE` when plugins installed under
+ *     `%APPDATA%\Code++\plugins` are honoured (per-user, no admin
+ *     restriction). Code++ always loads from the per-user dir, so
+ *     this is unconditionally `TRUE`. */
 #define NPPM_GETAPPDATAPLUGINSALLOWED     (NPPMSG + 87)
+/* v3: returns the active view index (0 = primary, 1 = secondary).
+ *     Code++ is single-view through Phase 4 → always 0. */
 #define NPPM_GETCURRENTVIEW               (NPPMSG + 88)
 #define NPPM_DOCSWITCHERDISABLECOLUMN     (NPPMSG + 89)
 #define NPPM_GETEDITORDEFAULTFOREGROUNDCOLOR (NPPMSG + 90)
@@ -380,11 +418,31 @@ typedef struct sessionInfo_ {
 #define NPPM_SAVEFILE                     (NPPMSG + 94)
 #define NPPM_DISABLEAUTOUPDATE            (NPPMSG + 95)
 #define NPPM_REMOVESHORTCUTBYCMDID        (NPPMSG + 96)
+/* v3: returns the per-user plugins directory (parent of every
+ *     plugin subdirectory) into a plugin-allocated wide buffer.
+ *     wParam: capacity in TCHARs. lParam: TCHAR* OUT.
+ *     Returns 1 on success, 0 on bad args / unresolvable config
+ *     dir (sandboxed runner). Same out-buffer protocol as
+ *     `NPPM_GETPLUGINSCONFIGDIR`. */
 #define NPPM_GETPLUGINHOMEPATH            (NPPMSG + 97)
+/* v3: returns the settings cloud-sync directory if the user opted
+ *     in. Same out-buffer protocol; Code++ does not implement
+ *     cloud-sync, so the dispatcher writes an empty wide string
+ *     (just the NUL terminator) and returns 1 (the path lookup
+ *     itself didn't fail; the user simply has no cloud sync
+ *     configured). */
 #define NPPM_GETSETTINGSCLOUDPATH         (NPPMSG + 98)
 #define NPPM_SETLINENUMBERWIDTHMODE       (NPPMSG + 99)
 #define NPPM_GETLINENUMBERWIDTHMODE       (NPPMSG + 100)
+/* v3: returns the Scintilla marker number reserved for bookmarks.
+ *     Code++ uses N++'s convention of marker 24, so plugins that
+ *     install a bookmark via `SCI_MARKERADD(line, 24)` work the
+ *     same way they would in N++. (Code++'s UI does not yet style
+ *     marker 24 as a visible bookmark glyph — Phase 4 polish —
+ *     but the marker is set on the buffer correctly.) */
 #define NPPM_GETBOOKMARKID                (NPPMSG + 101)
+/* v3: returns the active editor's zoom level in points (Scintilla
+ *     `SCI_GETZOOM`). Range is approximately [-10, 20]. */
 #define NPPM_GETZOOMLEVEL                 (NPPMSG + 102)
 
 /*

@@ -95,6 +95,7 @@ pub const NPPM_SETMENUITEMCHECK: u32 = NPPMSG + 40;
 pub const NPPM_GETWINDOWSVERSION: u32 = NPPMSG + 42;
 pub const NPPM_MAKECURRENTBUFFERDIRTY: u32 = NPPMSG + 44;
 pub const NPPM_GETPLUGINSCONFIGDIR: u32 = NPPMSG + 46;
+pub const NPPM_MSGTOPLUGIN: u32 = NPPMSG + 47;
 pub const NPPM_MENUCOMMAND: u32 = NPPMSG + 48;
 pub const NPPM_GETNPPVERSION: u32 = NPPMSG + 50;
 pub const NPPM_HIDETABBAR: u32 = NPPMSG + 51;
@@ -118,8 +119,15 @@ pub const NPPM_HIDESTATUSBAR: u32 = NPPMSG + 74;
 pub const NPPM_ISSTATUSBARHIDDEN: u32 = NPPMSG + 75;
 pub const NPPM_DOOPEN: u32 = NPPMSG + 77;
 pub const NPPM_SAVECURRENTFILEAS: u32 = NPPMSG + 78;
+pub const NPPM_ALLOCATESUPPORTED: u32 = NPPMSG + 80;
 pub const NPPM_GETLANGUAGENAME: u32 = NPPMSG + 83;
 pub const NPPM_GETLANGUAGEDESC: u32 = NPPMSG + 84;
+pub const NPPM_GETAPPDATAPLUGINSALLOWED: u32 = NPPMSG + 87;
+pub const NPPM_GETCURRENTVIEW: u32 = NPPMSG + 88;
+pub const NPPM_GETPLUGINHOMEPATH: u32 = NPPMSG + 97;
+pub const NPPM_GETSETTINGSCLOUDPATH: u32 = NPPMSG + 98;
+pub const NPPM_GETBOOKMARKID: u32 = NPPMSG + 101;
+pub const NPPM_GETZOOMLEVEL: u32 = NPPMSG + 102;
 
 /// `RUNCOMMAND_USER` family — see [`RUNCOMMAND_USER`].
 ///
@@ -650,6 +658,78 @@ pub trait HostServices {
     /// TCHAR** array). Untitled tabs (no on-disk path) are filtered
     /// out — the message contracts both expect file paths only.
     fn read_session_file_paths(&self, path: PathBuf) -> Option<Vec<PathBuf>>;
+
+    /// `true` when the host supports `NPPM_ALLOCATECMDID` /
+    /// `NPPM_ALLOCATEMARKER` (the plugin-driven id reservation
+    /// messages). Drives [`NPPM_ALLOCATESUPPORTED`] — plugins use
+    /// this to gate `if (NPPM_ALLOCATESUPPORTED) { … }`. Code++
+    /// returns `false` until those messages land in v3.
+    fn alloc_supported(&self) -> bool;
+
+    /// `true` when plugins installed under `%APPDATA%\Code++\plugins`
+    /// (per-user, no admin rights) are honoured. Drives
+    /// [`NPPM_GETAPPDATAPLUGINSALLOWED`]. Code++ always loads from
+    /// the per-user dir, so this is unconditionally `true`.
+    fn appdata_plugins_allowed(&self) -> bool;
+
+    /// Active view index (0 = primary, 1 = secondary). Drives
+    /// [`NPPM_GETCURRENTVIEW`]. Code++ is single-view through
+    /// Phase 4 → always 0.
+    fn current_view(&self) -> i32;
+
+    /// Per-user plugins directory (the parent of every plugin
+    /// subdirectory). Drives [`NPPM_GETPLUGINHOMEPATH`]. `None`
+    /// in sandboxed runners with no resolvable config dir, in
+    /// which case the dispatcher reports failure.
+    fn plugin_home_dir(&self) -> Option<PathBuf>;
+
+    /// Cloud-sync settings directory if the user has opted in.
+    /// Drives [`NPPM_GETSETTINGSCLOUDPATH`]. Code++ does not
+    /// implement settings cloud-sync, so this is `None` and the
+    /// dispatcher writes an empty wide string.
+    fn settings_cloud_dir(&self) -> Option<PathBuf>;
+
+    /// Scintilla marker number reserved for bookmarks. Drives
+    /// [`NPPM_GETBOOKMARKID`]. Code++ uses N++'s convention of
+    /// marker 24 so plugins that install a bookmark via
+    /// `SCI_MARKERADD(line, NPPM_GETBOOKMARKID())` work the same
+    /// way they would in N++. Note: Code++'s UI does not yet
+    /// surface bookmarks as user-visible markers — that's a Phase
+    /// 4 polish item — so the marker is set on the buffer but
+    /// won't be styled.
+    fn bookmark_marker_id(&self) -> i32;
+
+    /// Active editor's zoom level in points (Scintilla
+    /// `SCI_GETZOOM`). Drives [`NPPM_GETZOOMLEVEL`]. Range is
+    /// approximately `[-10, 20]` (Scintilla's documented bounds).
+    fn editor_zoom_level(&self) -> i32;
+
+    /// Forward an inter-plugin message (`NPPM_MSGTOPLUGIN`) to
+    /// the target plugin named `target_name`. The host calls
+    /// `target.messageProc(internal_msg, info_ptr, 0)` and
+    /// returns the LRESULT. Returns 0 if the target plugin is not
+    /// loaded (or the name does not match any known plugin) — the
+    /// upstream contract.
+    ///
+    /// `internal_msg` is the value the source plugin set on
+    /// `CommunicationInfo.internal_msg` (`long` upstream → `i32`
+    /// in the LLP64 ABI). Kept signed in the trait so the
+    /// `i32 → u32` cast that hands the value to the FFI
+    /// `messageProc(UINT, WPARAM, LPARAM)` happens at exactly one
+    /// site (the impl). A plugin using a negative `long` for the
+    /// message code sees the same bit pattern it would in N++ —
+    /// both hosts perform the same implicit signed-to-unsigned
+    /// cast at the messageProc call.
+    ///
+    /// `info_ptr` is the verbatim CommunicationInfo pointer the
+    /// source plugin supplied; the host does not dereference it
+    /// past reading `internal_msg`.
+    fn forward_plugin_message(
+        &mut self,
+        target_name: &str,
+        internal_msg: i32,
+        info_ptr: usize,
+    ) -> isize;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -995,6 +1075,52 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 }
                 1
             }
+        }
+
+        NPPM_MSGTOPLUGIN => {
+            // wparam: TCHAR* target plugin name (the one that
+            //         appears in the Plugins menu — the value the
+            //         target's `getName()` returned).
+            // lparam: pointer to a `CommunicationInfo` struct.
+            // Returns: the target plugin's `messageProc` return
+            // value, or 0 when the target isn't loaded / name
+            // doesn't match — the upstream contract.
+            //
+            // The host reads only `internal_msg` from the struct
+            // (to pick the message number the target's messageProc
+            // receives); `src_module_name` and `info` are
+            // forwarded verbatim through the wParam pointer slot.
+            // Reject the obvious-bug pointers up front: NULL on
+            // either arg, and a negative `lparam` (which casts to a
+            // high-address kernel-mode pointer on x64 Windows
+            // reserves bit 47+ for the kernel). A buggy source
+            // plugin sending a negative struct address would
+            // otherwise pass the null check, and the target's
+            // `messageProc` would deref into kernel space and
+            // SEGV. N++ inherits the same crash mode; the explicit
+            // guard turns it into a clean reject.
+            if wparam == 0 || lparam <= 0 {
+                return Some(0);
+            }
+            // SAFETY: plugin promises `wparam` is a valid wide
+            // null-terminated string and `lparam` is a valid
+            // CommunicationInfo it owns for the duration of the
+            // call. The MAX_PATH_TCHARS bound on
+            // `wide_ptr_to_string` keeps a missing terminator
+            // from running off into arbitrary memory.
+            let target_name = unsafe { wide_ptr_to_string(wparam as *const u16) };
+            if target_name.is_empty() {
+                return Some(0);
+            }
+            let info = lparam as *const crate::ffi::CommunicationInfo;
+            // SAFETY: `info` is the plugin's struct; we read only
+            // the `internal_msg` field, which is the first 4 bytes
+            // (`i32` per the upstream `long` ABI). `addr_of!` +
+            // `read_unaligned` is the explicit form that handles
+            // a packed plugin allocation safely.
+            let internal_msg =
+                unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*info).internal_msg)) };
+            services.forward_plugin_message(&target_name, internal_msg, lparam as usize)
         }
 
         NPPM_MENUCOMMAND => {
@@ -1466,6 +1592,55 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             write_lang_string_with_probe(services.language_desc(wparam as i32), lparam)
         }
 
+        NPPM_ALLOCATESUPPORTED => services.alloc_supported() as isize,
+
+        NPPM_GETAPPDATAPLUGINSALLOWED => services.appdata_plugins_allowed() as isize,
+
+        NPPM_GETCURRENTVIEW => services.current_view() as isize,
+
+        NPPM_GETPLUGINHOMEPATH => {
+            // wparam: capacity in TCHARs. lparam: TCHAR* OUT.
+            // Returns 1 on success, 0 on bad args or unresolvable
+            // plugins dir (sandboxed runner with no config_dir).
+            // Same out-buffer contract as `NPPM_GETPLUGINSCONFIGDIR`.
+            if lparam == 0 || wparam == 0 {
+                return Some(0);
+            }
+            let Some(path) = services.plugin_home_dir() else {
+                return Some(0);
+            };
+            let cap = wparam.min(MAX_PATH_TCHARS);
+            // SAFETY: plugin promises lparam points to at least
+            // `wparam` TCHARs (capped at MAX_PATH_TCHARS).
+            unsafe {
+                write_wide_path(lparam as *mut u16, cap, &path);
+            }
+            1
+        }
+
+        NPPM_GETSETTINGSCLOUDPATH => {
+            // Same out-buffer contract; an empty path is
+            // legitimate ("no cloud sync configured"). The
+            // dispatcher writes an empty wide string (just the NUL
+            // terminator) so plugins read a length-0 path rather
+            // than uninitialised memory.
+            if lparam == 0 || wparam == 0 {
+                return Some(0);
+            }
+            let path = services
+                .settings_cloud_dir()
+                .unwrap_or_else(|| PathBuf::from(""));
+            let cap = wparam.min(MAX_PATH_TCHARS);
+            unsafe {
+                write_wide_path(lparam as *mut u16, cap, &path);
+            }
+            1
+        }
+
+        NPPM_GETBOOKMARKID => services.bookmark_marker_id() as isize,
+
+        NPPM_GETZOOMLEVEL => services.editor_zoom_level() as isize,
+
         // RUNCOMMAND_USER family. The two host-environment queries
         // share an out-buffer protocol: wparam = capacity in TCHARs,
         // lparam = TCHAR* OUT. Bad pointer / zero capacity returns 0
@@ -1729,6 +1904,18 @@ mod tests {
         /// upgraded WV path gets a deterministic, distinct-from-
         /// production-default value.
         windows_version: i32,
+        /// Plugin-home / cloud-settings dirs returned by the
+        /// long-tail accessors. `None` for the unhappy-path tests.
+        plugin_home_dir: Option<PathBuf>,
+        settings_cloud_dir: Option<PathBuf>,
+        /// Reported zoom level for `NPPM_GETZOOMLEVEL`. Real
+        /// Scintilla zoom range is approximately `[-10, 20]`;
+        /// tests pin specific values.
+        zoom_level: i32,
+        /// LRESULT the mock returns from `forward_plugin_message`.
+        /// Defaults to 0 (the "target plugin not found" sentinel),
+        /// matching the upstream contract.
+        forward_plugin_return: isize,
         // recorded mutations
         log: RefCell<Vec<String>>,
     }
@@ -2063,6 +2250,38 @@ mod tests {
                     .map(PathBuf::from)
                     .collect(),
             )
+        }
+        fn alloc_supported(&self) -> bool {
+            false
+        }
+        fn appdata_plugins_allowed(&self) -> bool {
+            true
+        }
+        fn current_view(&self) -> i32 {
+            0
+        }
+        fn plugin_home_dir(&self) -> Option<PathBuf> {
+            self.plugin_home_dir.clone()
+        }
+        fn settings_cloud_dir(&self) -> Option<PathBuf> {
+            self.settings_cloud_dir.clone()
+        }
+        fn bookmark_marker_id(&self) -> i32 {
+            24
+        }
+        fn editor_zoom_level(&self) -> i32 {
+            self.zoom_level
+        }
+        fn forward_plugin_message(
+            &mut self,
+            target_name: &str,
+            internal_msg: i32,
+            info_ptr: usize,
+        ) -> isize {
+            self.record(format!(
+                "forward_plugin_message[name={target_name},msg={internal_msg},info=0x{info_ptr:x}]"
+            ));
+            self.forward_plugin_return
         }
     }
 
@@ -3510,6 +3729,215 @@ mod tests {
         assert_eq!(r, Some(0));
         // Mock should not have been called — the dispatcher arm
         // short-circuited before reaching it.
+        assert!(s.calls().is_empty());
+    }
+
+    // --- Long-tail accessors ---
+
+    #[test]
+    fn alloc_supported_passes_through() {
+        let mut s = MockServices::default();
+        // Mock returns false; dispatcher relays it as 0.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ALLOCATESUPPORTED, 0, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn appdata_plugins_allowed_returns_true() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETAPPDATAPLUGINSALLOWED, 0, 0) };
+        // Mock returns true; relayed as 1.
+        assert_eq!(r, Some(1));
+    }
+
+    #[test]
+    fn current_view_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTVIEW, 0, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn plugin_home_path_writes_wide_path() {
+        let mut s = MockServices {
+            plugin_home_dir: Some(PathBuf::from("C:/Users/me/AppData/Roaming/Code++/plugins")),
+            ..Default::default()
+        };
+        let mut buf = vec![0u16; MAX_PATH_TCHARS];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETPLUGINHOMEPATH,
+                MAX_PATH_TCHARS,
+                buf.as_mut_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        let nul = buf.iter().position(|&u| u == 0).unwrap();
+        let s = String::from_utf16(&buf[..nul]).unwrap();
+        assert_eq!(s, "C:/Users/me/AppData/Roaming/Code++/plugins");
+    }
+
+    #[test]
+    fn plugin_home_path_unresolvable_returns_zero() {
+        let mut s = MockServices::default();
+        let mut buf = vec![0u16; MAX_PATH_TCHARS];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETPLUGINHOMEPATH,
+                MAX_PATH_TCHARS,
+                buf.as_mut_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn settings_cloud_path_writes_empty_string_when_none() {
+        let mut s = MockServices::default();
+        let mut buf = vec![0xFFFFu16; MAX_PATH_TCHARS];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETSETTINGSCLOUDPATH,
+                MAX_PATH_TCHARS,
+                buf.as_mut_ptr() as isize,
+            )
+        };
+        // Always succeeds — empty path is a legitimate "no cloud
+        // sync configured" answer. The dispatcher writes a NUL
+        // terminator so plugins read length 0.
+        assert_eq!(r, Some(1));
+        assert_eq!(buf[0], 0, "empty path should be just a NUL terminator");
+    }
+
+    #[test]
+    fn bookmark_marker_id_returns_24() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBOOKMARKID, 0, 0) };
+        assert_eq!(r, Some(24));
+    }
+
+    #[test]
+    fn zoom_level_passes_through() {
+        let mut s = MockServices {
+            zoom_level: 5,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETZOOMLEVEL, 0, 0) };
+        assert_eq!(r, Some(5));
+    }
+
+    #[test]
+    fn zoom_level_negative_passes_through() {
+        let mut s = MockServices {
+            zoom_level: -3,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETZOOMLEVEL, 0, 0) };
+        // The signed cast survives — `i32` widens to `isize` with
+        // sign extension, so -3 stays -3 (not 4_294_967_293).
+        assert_eq!(r, Some(-3));
+    }
+
+    // --- NPPM_MSGTOPLUGIN ---
+
+    #[test]
+    fn msgtoplugin_routes_name_and_internal_msg() {
+        use crate::ffi::CommunicationInfo;
+        let mut s = MockServices {
+            forward_plugin_return: 42,
+            ..Default::default()
+        };
+        let target = make_wide("My Plugin");
+        let mut src = make_wide("source plugin");
+        let info = CommunicationInfo {
+            internal_msg: 1234,
+            src_module_name: src.as_mut_ptr(),
+            info: core::ptr::null_mut(),
+        };
+        let info_ptr = &info as *const CommunicationInfo as isize;
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_MSGTOPLUGIN, target.as_ptr() as usize, info_ptr) };
+        assert_eq!(r, Some(42));
+        // Mock recorded the forward call with the right args.
+        assert_eq!(s.calls().len(), 1);
+        let call = &s.calls()[0];
+        assert!(call.contains("name=My Plugin"));
+        assert!(call.contains("msg=1234"));
+    }
+
+    #[test]
+    fn msgtoplugin_null_args_return_zero() {
+        let mut s = MockServices::default();
+        // Null wparam (no target name).
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_MSGTOPLUGIN, 0, 1) },
+            Some(0)
+        );
+        // Null lparam (no CommunicationInfo).
+        let target = make_wide("anything");
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_MSGTOPLUGIN, target.as_ptr() as usize, 0) },
+            Some(0)
+        );
+        assert!(s.calls().is_empty(), "no forward call should have happened");
+    }
+
+    #[test]
+    fn msgtoplugin_empty_name_returns_zero() {
+        // A legitimate empty wide string (just the NUL terminator)
+        // is rejected the same way an out-of-band name would be —
+        // the dispatcher treats `"" == empty` as "no target named".
+        let mut s = MockServices::default();
+        let empty = make_wide("");
+        let dummy_info = make_wide("ignored");
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_MSGTOPLUGIN,
+                empty.as_ptr() as usize,
+                dummy_info.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+        assert!(s.calls().is_empty());
+    }
+
+    #[test]
+    fn msgtoplugin_negative_lparam_returns_zero() {
+        // A negative `lparam` casts to a high-address kernel-mode
+        // pointer on Win64. The dispatcher rejects up front so a
+        // buggy source plugin can't trick the target's messageProc
+        // into dereferencing kernel space.
+        let mut s = MockServices::default();
+        let target = make_wide("anything");
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_MSGTOPLUGIN, target.as_ptr() as usize, -1isize) };
+        assert_eq!(r, Some(0));
+        assert!(s.calls().is_empty());
+    }
+
+    #[test]
+    fn msgtoplugin_bad_surrogate_name_returns_zero() {
+        // A lone high surrogate without its low pair is rejected by
+        // `wide_ptr_to_string`'s U+FFFD-substitution check (it
+        // refuses to silently turn a malformed name into a
+        // different valid string). The dispatcher then sees an
+        // empty decoded name and rejects.
+        let mut s = MockServices::default();
+        let bad: Vec<u16> = vec![0xD800, 0]; // lone high surrogate, NUL-terminated
+        let dummy_info = make_wide("ignored");
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_MSGTOPLUGIN,
+                bad.as_ptr() as usize,
+                dummy_info.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
         assert!(s.calls().is_empty());
     }
 }
