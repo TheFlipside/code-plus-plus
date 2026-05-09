@@ -341,13 +341,26 @@ pub trait UiPlatform {
     /// (Ctrl/Alt/Shift bits + virtual key) when a binding
     /// exists; `None` for unbound cmd ids. Drives
     /// `NPPM_GETSHORTCUTBYCMDID`.
+    ///
+    /// `cfg(target_os = "windows")`-gated because the
+    /// `ShortcutKey` type comes from `codepp_plugin_host`'s
+    /// FFI surface, which is itself Windows-only until Phase 5
+    /// brings up GTK / Cocoa plugin loaders. The Phase 5
+    /// backends will gain their own `cfg`-gated impls of this
+    /// method against their native shortcut systems
+    /// (`gtk_application_set_accels_for_action` /
+    /// `NSMenuItem.keyEquivalent`).
+    #[cfg(target_os = "windows")]
     fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey>;
 
     /// Remove every accelerator-table binding for `cmd_id`.
     /// Returns `true` if at least one binding was removed,
     /// `false` if the cmd id had no binding (table left
     /// unchanged in that case). Drives
-    /// `NPPM_REMOVESHORTCUTBYCMDID`.
+    /// `NPPM_REMOVESHORTCUTBYCMDID`. Same `cfg(windows)` gate
+    /// rationale as `shortcut_for_cmd_id` — the dispatcher
+    /// lives in `plugin-host`, which is Windows-only.
+    #[cfg(target_os = "windows")]
     fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool;
 
     /// Pull the current text content of the buffer backed by the
@@ -4834,12 +4847,14 @@ mod tests {
             // already filtered by `matches!` before calling.
             true
         }
+        #[cfg(target_os = "windows")]
         fn shortcut_for_cmd_id(&self, _cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey> {
             // FakeUi has no accelerator table — tests that
             // exercise the lookup path exercise the dispatcher
             // mock instead.
             None
         }
+        #[cfg(target_os = "windows")]
         fn remove_shortcut_for_cmd_id(&mut self, _cmd_id: i32) -> bool {
             // Same rationale as `shortcut_for_cmd_id` above —
             // FakeUi has nothing to remove from. Always reports
