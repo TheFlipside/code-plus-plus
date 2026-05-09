@@ -1,0 +1,19 @@
+[package]
+name = "codepp-build-helpers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Build-script helpers for the Code++ workspace: locate rc.exe, compile a generated .rc to a .res, and emit the linker arg. Used as a [build-dependencies] entry by app/build.rs and the in-tree plugin build.rs files. Windows-only — every helper is a no-op on other targets so cross-platform CI build steps don't fail."
+
+[lints]
+workspace = true
+
+[lib]
+# Plain library used exclusively from build scripts. The lib has no
+# runtime users; production crates compile this only because their
+# `[build-dependencies]` table mentions it. Keeping it as a normal
+# `lib` (no proc-macro, no cdylib) means the rest of the build
+# graph can ignore it entirely.

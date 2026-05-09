@@ -36,6 +36,7 @@ all = { level = "warn", priority = -1 }
 # version, update both `[workspace.package].version` and the version
 # field of each entry below.
 [workspace.dependencies]
+codepp-build-helpers = { version = "0.1.0", path = "crates/build-helpers" }
 codepp-core = { version = "0.1.0", path = "crates/core" }
 codepp-editor = { version = "0.1.0", path = "crates/editor" }
 codepp-platform = { version = "0.1.0", path = "crates/platform" }

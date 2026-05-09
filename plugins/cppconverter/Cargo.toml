@@ -21,3 +21,8 @@ name = "cppconverter"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 codepp-plugin-sdk = { workspace = true }
+
+[build-dependencies]
+# Embeds `VS_VERSION_INFO` into the cdylib so the Plugin Manager
+# dialog reads the version straight from this manifest.
+codepp-build-helpers = { workspace = true }

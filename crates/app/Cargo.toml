@@ -17,3 +17,9 @@ path = "src/main.rs"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 codepp-ui-win32 = { workspace = true }
+
+[build-dependencies]
+# Shared resource-compiler plumbing. The build script uses
+# `embed_app_icon` to turn `assets/code++.ico` into a `.res` Windows
+# Explorer can read. Plain build-dep — never linked into the binary.
+codepp-build-helpers = { workspace = true }
