@@ -255,6 +255,17 @@ pub const SCI_SETEMPTYSELECTION: u32 = 2556;
 /// suffices for "open file at match" navigation without a
 /// follow-up `SCI_SCROLLCARET`.
 pub const SCI_SETSEL: u32 = 2160;
+/// Selection anchor — the "other" end of the selection (`SCI_GETCURRENTPOS`
+/// is the caret end). For a collapsed selection the two are equal.
+/// Snapshotted alongside the caret position when swapping Scintilla
+/// document pointers via `SCI_SETDOCPOINTER`, so the user's
+/// pre-swap selection state can be restored on the swap-back.
+pub const SCI_GETANCHOR: u32 = 2009;
+/// Horizontal scroll offset in pixels — paired with
+/// `SCI_GETFIRSTVISIBLELINE` to fully snapshot the view's scroll
+/// position around a doc-pointer swap.
+pub const SCI_GETXOFFSET: u32 = 2398;
+pub const SCI_SETXOFFSET: u32 = 2397;
 /// Scroll the view so the caret is visible. `SCI_SEARCHNEXT/PREV`
 /// move the selection but don't bring it into view; the Find
 /// dialog issues this after every successful hit.

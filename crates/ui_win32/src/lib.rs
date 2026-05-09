@@ -37,19 +37,20 @@ use codepp_scintilla_sys::{
     SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC,
     SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
     SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT,
-    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETCOLUMN, SCI_GETCURRENTPOS,
-    SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
-    SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
-    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
-    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
-    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_PASTE,
-    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT,
-    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
-    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
-    SCI_SETWRAPMODE, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_UPDATEUI,
-    SC_DOCUMENTOPTION_DEFAULT, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_TEXT, SC_MOD_DELETETEXT,
-    SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN,
+    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER,
+    SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT,
+    SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT,
+    SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GOTOLINE,
+    SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE,
+    SCI_MARGINSETTEXT, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
+    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
+    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
+    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
+    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
+    SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_UPDATEUI, SC_DOCUMENTOPTION_DEFAULT,
+    SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_TEXT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
+    SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
@@ -745,6 +746,19 @@ impl UiPlatform for Win32Ui {
         self.editor.send(SCI_EMPTYUNDOBUFFER, 0, 0);
         self.editor.send(SCI_SETSAVEPOINT, 0, 0);
         self.editor.send(SCI_GOTOPOS, cursor as usize, 0);
+        // Refresh the line-number margin against the new content.
+        // The SCN_MODIFIED notification fired by SCI_SETTEXT also
+        // calls into this populate, but only when the WM_NOTIFY
+        // dispatch finds a live `state_from_hwnd` — which is
+        // *not* the case during the session-restore loop, where
+        // the UI is mid-`state.split()` and the re-entrance guard
+        // returns None. Calling here directly makes the populate
+        // deterministic for every `set_buffer_text` caller
+        // (file load, untitled restore, dirty restore, reload).
+        // Cheap to double-fire on the SCN_MODIFIED-driven path
+        // since `populate_visible_line_numbers` is bounded by
+        // viewport height, not file size.
+        populate_visible_line_numbers(&self.editor);
     }
 
     fn get_buffer_text(&mut self) -> String {
@@ -1233,11 +1247,6 @@ impl UiPlatform for Win32Ui {
             // Scintilla to dereference a null doc pointer.
             return String::new();
         }
-        // Snapshot the currently-bound document so we can restore
-        // it after the read. `SCI_GETDOCPOINTER` returns the active
-        // doc; a 0 return would mean Scintilla has nothing bound,
-        // which shouldn't happen in our flow but we treat it as
-        // "leave the swap-back as a no-op".
         let prior_doc = self.editor.send(SCI_GETDOCPOINTER, 0, 0);
         if prior_doc == scintilla_doc {
             // Already bound — read directly without round-tripping
@@ -1245,19 +1254,18 @@ impl UiPlatform for Win32Ui {
             // active tab.
             return <Self as UiPlatform>::get_buffer_text(self);
         }
-        // Bind the target doc, read its text, restore the prior
-        // doc. The view will paint the target document briefly;
-        // since this is called from `save_session` (which fires on
-        // shutdown — immediately followed by window destruction —
-        // and from the auto-save timer where the swap completes
-        // in microseconds well below any visible-frame budget),
-        // the user never sees the flicker. `lparam` is `sptr_t`
-        // (isize) — pass the doc pointer through verbatim, no
-        // cast.
+        // Snapshot the prior doc's view state BEFORE the swap.
+        // Scintilla's `Editor::SetDocPointer` (Editor.cxx:5464)
+        // calls `sel.Clear()` on every doc swap — including the
+        // swap-back to the prior doc — so without this snapshot
+        // the active tab's caret and scroll get reset to (0, 0)
+        // every auto-save tick.
+        let view = self.snapshot_active_view();
         self.editor.send(SCI_SETDOCPOINTER, 0, scintilla_doc);
         let text = <Self as UiPlatform>::get_buffer_text(self);
         if prior_doc != 0 {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
+            self.restore_active_view(view);
         }
         text
     }
@@ -1266,21 +1274,72 @@ impl UiPlatform for Win32Ui {
         if scintilla_doc == 0 {
             return false;
         }
-        // Same doc-pointer-swap dance as `capture_text_from_doc`:
-        // snapshot the active doc, swap to the target, query the
-        // modified flag, restore the original. `SCI_GETMODIFY` is
-        // a pure read of an internal flag — no side effects on
-        // Scintilla state — so the swap-and-restore is sound.
         let prior_doc = self.editor.send(SCI_GETDOCPOINTER, 0, 0);
         if prior_doc == scintilla_doc {
             return self.editor.send(SCI_GETMODIFY, 0, 0) != 0;
         }
+        // Same view-snapshot dance as `capture_text_from_doc`.
+        let view = self.snapshot_active_view();
         self.editor.send(SCI_SETDOCPOINTER, 0, scintilla_doc);
         let dirty = self.editor.send(SCI_GETMODIFY, 0, 0) != 0;
         if prior_doc != 0 {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
+            self.restore_active_view(view);
         }
         dirty
+    }
+}
+
+/// Snapshot of the editor's view state — the bits Scintilla wipes
+/// on `SCI_SETDOCPOINTER` (selection, caret, scroll). Captured
+/// before a document-pointer swap by `capture_text_from_doc` and
+/// `is_doc_dirty` so that swapping out and back doesn't reset the
+/// user's caret to position 0 every auto-save tick.
+#[derive(Clone, Copy)]
+struct ScintillaViewState {
+    /// `SCI_GETCURRENTPOS` — caret end of the selection.
+    caret: isize,
+    /// `SCI_GETANCHOR` — opposite end of the selection. Equal to
+    /// `caret` for a collapsed selection.
+    anchor: isize,
+    /// `SCI_GETFIRSTVISIBLELINE` — top line of the viewport. Used
+    /// with a `SCI_LINESCROLL` delta to restore vertical scroll.
+    top_line: isize,
+    /// `SCI_GETXOFFSET` — horizontal scroll in pixels. Restored
+    /// directly via `SCI_SETXOFFSET`.
+    x_offset: isize,
+}
+
+impl Win32Ui {
+    /// Capture every piece of view state that `SCI_SETDOCPOINTER`
+    /// would wipe on the swap-back. See `ScintillaViewState`.
+    fn snapshot_active_view(&self) -> ScintillaViewState {
+        ScintillaViewState {
+            caret: self.editor.send(SCI_GETCURRENTPOS, 0, 0),
+            anchor: self.editor.send(SCI_GETANCHOR, 0, 0),
+            top_line: self.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0),
+            x_offset: self.editor.send(SCI_GETXOFFSET, 0, 0),
+        }
+    }
+
+    /// Restore the snapshotted view state on the currently-bound
+    /// document. Caller must have already swapped back to the
+    /// document the snapshot belongs to. Selection is restored
+    /// via `SCI_SETSEL`; vertical scroll via the delta between
+    /// the now-zero `firstvisibleline` and the snapshotted one;
+    /// horizontal scroll via `SCI_SETXOFFSET`.
+    fn restore_active_view(&self, snap: ScintillaViewState) {
+        // SCI_SETSEL takes (anchor, caret) in (wparam, lparam).
+        self.editor
+            .send(SCI_SETSEL, snap.anchor.max(0) as usize, snap.caret);
+        let cur_top = self.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
+        let delta = snap.top_line - cur_top;
+        if delta != 0 {
+            // SCI_LINESCROLL takes (column_delta, line_delta).
+            self.editor.send(SCI_LINESCROLL, 0, delta);
+        }
+        self.editor
+            .send(SCI_SETXOFFSET, snap.x_offset.max(0) as usize, 0);
     }
 }
 
