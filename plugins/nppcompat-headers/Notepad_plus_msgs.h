@@ -84,8 +84,28 @@
  *     whose plugin-allocated pointer is NULL is logged and
  *     skipped, and the return reflects the gap. */
 #define NPPM_GETOPENFILENAMES             (NPPMSG + 8)
-/* v2: enable/disable Code++'s modeless-dialog forwarding. */
+/* v3: register or unregister a plugin-owned modeless-dialog
+ *     HWND with the host's message pump. The pump consults each
+ *     registered HWND via `IsDialogMessageW` so Tab / Enter /
+ *     Esc / mnemonic handling works inside the dialog.
+ *     wParam: MODELESSDIALOGADD (0) or MODELESSDIALOGREMOVE (1).
+ *     lParam: HWND of the dialog.
+ *     Returns: lParam on success (the upstream "echo HWND back
+ *             so the call can chain" idiom), 0 on bad args.
+ *     CONTRACT: the plugin owns the dialog's lifetime and MUST
+ *     call REMOVE before destroying the HWND. The pump's
+ *     `IsWindow` guard before each `IsDialogMessageW` call
+ *     turns a forgotten REMOVE into a clean miss instead of
+ *     UB on a freed handle, but plugins should not rely on
+ *     that defensive backstop. */
 #define NPPM_MODELESSDIALOG               (NPPMSG + 12)
+/* Selectors for NPPM_MODELESSDIALOG's wParam. */
+#ifndef MODELESSDIALOGADD
+#define MODELESSDIALOGADD     0
+#endif
+#ifndef MODELESSDIALOGREMOVE
+#define MODELESSDIALOGREMOVE  1
+#endif
 
 /*
  * Plugin-supplied session-write payload. Used by NPPM_SAVESESSION:

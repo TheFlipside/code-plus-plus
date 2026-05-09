@@ -363,6 +363,15 @@ pub trait UiPlatform {
     #[cfg(target_os = "windows")]
     fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool;
 
+    /// Register or unregister a plugin-owned modeless-dialog
+    /// HWND with the host's message pump. `register == true`
+    /// adds the HWND so each pump iteration calls
+    /// `IsDialogMessageW` against it; `register == false`
+    /// removes it. Same `cfg(windows)` gate rationale as the
+    /// shortcut methods — `Hwnd` comes from `plugin-host`.
+    #[cfg(target_os = "windows")]
+    fn register_modeless_dialog(&mut self, dlg: codepp_plugin_host::Hwnd, register: bool) -> bool;
+
     /// Pull the current text content of the buffer backed by the
     /// Scintilla document at `scintilla_doc`. The implementation may
     /// briefly bind that document to the editor view to read it
@@ -4312,6 +4321,10 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.ui.remove_shortcut_for_cmd_id(cmd_id)
     }
 
+    fn register_modeless_dialog(&mut self, dlg: codepp_plugin_host::Hwnd, register: bool) -> bool {
+        self.ui.register_modeless_dialog(dlg, register)
+    }
+
     fn trigger_tab_context_menu(&mut self, view: i32, tab_idx: i32) -> bool {
         // Code++'s tab strip doesn't yet ship a context menu (no
         // Close / Close-Others / Rename / Move-to-other-view
@@ -4902,6 +4915,18 @@ mod tests {
             // FakeUi has nothing to remove from. Always reports
             // "nothing was removed."
             false
+        }
+        #[cfg(target_os = "windows")]
+        fn register_modeless_dialog(
+            &mut self,
+            _dlg: codepp_plugin_host::Hwnd,
+            _register: bool,
+        ) -> bool {
+            // FakeUi has no message pump — modeless-dialog
+            // registration is a no-op. The dispatcher mock in
+            // `dispatch.rs` exercises the registration list
+            // shape without involving the shell layer.
+            true
         }
         fn capture_text_from_doc(&mut self, _scintilla_doc: isize) -> String {
             // Tests don't model per-doc text storage — they share

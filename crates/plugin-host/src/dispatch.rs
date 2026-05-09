@@ -69,6 +69,7 @@ pub const NPPM_GETCURRENTLANGTYPE: u32 = NPPMSG + 5;
 pub const NPPM_SETCURRENTLANGTYPE: u32 = NPPMSG + 6;
 pub const NPPM_GETNBOPENFILES: u32 = NPPMSG + 7;
 pub const NPPM_GETOPENFILENAMES: u32 = NPPMSG + 8;
+pub const NPPM_MODELESSDIALOG: u32 = NPPMSG + 12;
 pub const NPPM_GETNBSESSIONFILES: u32 = NPPMSG + 13;
 pub const NPPM_GETSESSIONFILES: u32 = NPPMSG + 14;
 pub const NPPM_SAVESESSION: u32 = NPPMSG + 15;
@@ -189,6 +190,16 @@ pub const NPPMAINMENU: i32 = 1;
 pub const ALL_OPEN_FILES: i32 = 0;
 pub const PRIMARY_VIEW: i32 = 1;
 pub const SECOND_VIEW: i32 = 2;
+
+/// Selectors for [`NPPM_MODELESSDIALOG`] (`wparam`).
+/// `MODELESSDIALOGADD` registers the plugin's modeless-dialog
+/// HWND with the host so the message pump consults it via
+/// `IsDialogMessageW` before falling through to the
+/// accelerator translator. `MODELESSDIALOGREMOVE` unregisters
+/// it (the plugin owns the dialog's lifetime; it MUST call
+/// REMOVE before destroying the HWND).
+pub const MODELESSDIALOGADD: usize = 0;
+pub const MODELESSDIALOGREMOVE: usize = 1;
 
 /// Encoding values returned by [`NPPM_GETBUFFERENCODING`]. Numeric
 /// values match Notepad++'s public `UniMode` enum so plugins
@@ -917,6 +928,18 @@ pub trait HostServices {
     /// return value already see the right "menu didn't open"
     /// answer.
     fn trigger_tab_context_menu(&mut self, view: i32, tab_idx: i32) -> bool;
+
+    /// Register or unregister a plugin-owned modeless-dialog
+    /// HWND with the host's message pump. Drives
+    /// [`NPPM_MODELESSDIALOG`]. `register == true` adds the
+    /// HWND so each pump iteration calls `IsDialogMessageW`
+    /// against it (so Tab / Enter / Esc / mnemonic handling
+    /// works inside the dialog); `register == false` removes
+    /// it. The plugin owns the dialog's lifetime; the host
+    /// MUST be told to unregister BEFORE the plugin destroys
+    /// the HWND, otherwise the pump will pass a freed handle
+    /// to `IsDialogMessageW`. Returns `true` on success.
+    fn register_modeless_dialog(&mut self, dlg: crate::ffi::Hwnd, register: bool) -> bool;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -1082,6 +1105,33 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 written_slots += 1;
             }
             written_slots as isize
+        }
+
+        NPPM_MODELESSDIALOG => {
+            // wparam: MODELESSDIALOGADD (0) or
+            //         MODELESSDIALOGREMOVE (1).
+            // lparam: HWND of the plugin's modeless dialog.
+            // Returns: lparam on success, 0 on bad args. The
+            // upstream contract is "echo the HWND back" so a
+            // plugin can chain calls; matches what N++ does.
+            //
+            // Reject NULL / negative lparam up front — same
+            // kernel-mode-pointer guard the allocator pair and
+            // shortcut messages already use.
+            if lparam <= 0 {
+                return Some(0);
+            }
+            let register = match wparam {
+                MODELESSDIALOGADD => true,
+                MODELESSDIALOGREMOVE => false,
+                _ => return Some(0),
+            };
+            let dlg = lparam as crate::ffi::Hwnd;
+            if services.register_modeless_dialog(dlg, register) {
+                lparam
+            } else {
+                0
+            }
         }
 
         NPPM_GETCURRENTDOCINDEX => {
@@ -2335,6 +2385,11 @@ mod tests {
         /// "no menu opened" path), matching the production
         /// HostBridge today.
         tab_context_menu_opens: bool,
+        /// Plugin-registered modeless-dialog HWNDs. Stored as
+        /// `usize` to keep the mock free of `windows`-crate
+        /// types — the production HostBridge translates back to
+        /// `HWND` at the trait boundary.
+        modeless_dialogs: Vec<usize>,
         // recorded mutations
         log: RefCell<Vec<String>>,
     }
@@ -2808,6 +2863,18 @@ mod tests {
         fn trigger_tab_context_menu(&mut self, view: i32, tab_idx: i32) -> bool {
             self.record(format!("trigger_tab_context_menu({view},{tab_idx})"));
             self.tab_context_menu_opens
+        }
+        fn register_modeless_dialog(&mut self, dlg: crate::ffi::Hwnd, register: bool) -> bool {
+            self.record(format!(
+                "register_modeless_dialog(0x{:x},{register})",
+                dlg as usize
+            ));
+            if register {
+                self.modeless_dialogs.push(dlg as usize);
+            } else {
+                self.modeless_dialogs.retain(|&h| h != dlg as usize);
+            }
+            true
         }
     }
 
@@ -4584,6 +4651,68 @@ mod tests {
         // The existing binding is untouched on a no-match
         // request.
         assert_eq!(s.shortcuts.len(), 1);
+    }
+
+    // --- NPPM_MODELESSDIALOG ---
+
+    #[test]
+    fn modeless_dialog_add_registers_hwnd() {
+        let mut s = MockServices::default();
+        let dummy_hwnd: usize = 0xDEAD_BEEF;
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_MODELESSDIALOG,
+                MODELESSDIALOGADD,
+                dummy_hwnd as isize,
+            )
+        };
+        // Returns lparam (the HWND) on success — same "echo
+        // back" idiom N++ uses for chainable calls.
+        assert_eq!(r, Some(dummy_hwnd as isize));
+        assert_eq!(s.modeless_dialogs, vec![dummy_hwnd]);
+    }
+
+    #[test]
+    fn modeless_dialog_remove_unregisters_hwnd() {
+        let mut s = MockServices {
+            modeless_dialogs: vec![0xCAFE, 0xBEEF],
+            ..Default::default()
+        };
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_MODELESSDIALOG,
+                MODELESSDIALOGREMOVE,
+                0xCAFE_isize,
+            )
+        };
+        assert_eq!(r, Some(0xCAFE_isize));
+        assert_eq!(s.modeless_dialogs, vec![0xBEEF]);
+    }
+
+    #[test]
+    fn modeless_dialog_unknown_selector_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_MODELESSDIALOG, 99, 0xDEAD_BEEF_isize) };
+        assert_eq!(r, Some(0));
+        assert!(s.modeless_dialogs.is_empty());
+    }
+
+    #[test]
+    fn modeless_dialog_null_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_MODELESSDIALOG, MODELESSDIALOGADD, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn modeless_dialog_negative_lparam_returns_zero() {
+        // Same kernel-mode-pointer guard the allocator pair
+        // and shortcut messages use.
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_MODELESSDIALOG, MODELESSDIALOGADD, -1isize) };
+        assert_eq!(r, Some(0));
     }
 
     #[test]

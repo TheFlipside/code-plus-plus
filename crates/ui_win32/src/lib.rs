@@ -610,6 +610,17 @@ struct WindowState {
     /// loop reads this in `IsDialogMessageW(dlg, &msg)` so Tab /
     /// Enter / Esc work inside the dialog while it's open.
     find_replace_dlg: Option<HWND>,
+    /// Plugin-registered modeless-dialog HWNDs. Plugins call
+    /// `NPPM_MODELESSDIALOG(MODELESSDIALOGADD, hwnd)` to add a
+    /// dialog so the message pump consults it via
+    /// `IsDialogMessageW` (Tab / Enter / Esc / mnemonic
+    /// handling); `MODELESSDIALOGREMOVE` removes it. Plugins own
+    /// the dialog lifetime — they're contracted to call REMOVE
+    /// before destroying the HWND. Stored as a Vec because
+    /// multiple plugins can each register their own dialogs
+    /// (unlike `find_replace_dlg`, which is host-owned and
+    /// single-instance).
+    plugin_modeless_dialogs: Vec<HWND>,
     /// FIF results dock (Phase 4 m4 step 3). Hidden until a search
     /// completes and step 4b populates the listview.
     fif_dock_hwnd: HWND,
@@ -701,6 +712,7 @@ impl WindowState {
             // in scope — see the `accel_handle` field doc on
             // `Win32Ui` for the full safety argument.
             accel_handle: &raw mut self.accel_handle,
+            plugin_modeless_dialogs: &raw mut self.plugin_modeless_dialogs,
             editor: self.editor,
         };
         (&mut self.shell, ui)
@@ -764,6 +776,15 @@ struct Win32Ui {
     /// thread, and `state_from_hwnd` refuses re-entrant borrows
     /// via `PluginCallGuard`.
     accel_handle: *mut HACCEL,
+    /// Pointer to `WindowState.plugin_modeless_dialogs` so
+    /// `NPPM_MODELESSDIALOG` dispatch can register and
+    /// unregister plugin-owned dialogs. Carries the same
+    /// "Win32Ui stays Copy, UI-thread-only access" invariant
+    /// as `accel_handle`. Multiple plugins can each register
+    /// their own dialogs; the Vec is iterated by the message
+    /// pump once per `GetMessageW` to call `IsDialogMessageW`
+    /// against each.
+    plugin_modeless_dialogs: *mut Vec<HWND>,
     editor: EditorHandle,
 }
 
@@ -1504,6 +1525,39 @@ impl UiPlatform for Win32Ui {
         Some(decode_accel_to_shortcut_key(entry))
     }
 
+    fn register_modeless_dialog(&mut self, dlg: codepp_plugin_host::Hwnd, register: bool) -> bool {
+        // The plugin's `Hwnd` opaque pointer is the same
+        // `*mut c_void` Win32 ABI uses for `HWND` — wrap it
+        // back into windows-rs's newtype here. We never
+        // dereference it; we only feed it to
+        // `IsDialogMessageW` from the message pump (and even
+        // that is the plugin's responsibility to keep valid via
+        // the contract that REMOVE precedes destroy).
+        let hwnd = HWND(dlg);
+        if hwnd.is_invalid() {
+            return false;
+        }
+        // SAFETY: same Win32Ui field invariants as `accel_handle`
+        // — the pointer addresses `WindowState.plugin_modeless_dialogs`
+        // which is alive for the window's lifetime, dereferenced
+        // only on the UI thread, and not aliased while Win32Ui
+        // is in scope.
+        let dialogs = unsafe { &mut *self.plugin_modeless_dialogs };
+        if register {
+            // De-duplicate: a plugin that registers the same
+            // HWND twice should not double-iterate it in the
+            // pump (would cause `IsDialogMessageW` to fire
+            // twice per keystroke, breaking Tab/Enter
+            // semantics inside the dialog).
+            if !dialogs.iter().any(|h| h.0 == hwnd.0) {
+                dialogs.push(hwnd);
+            }
+        } else {
+            dialogs.retain(|h| h.0 != hwnd.0);
+        }
+        true
+    }
+
     fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool {
         // Win32 has no in-place mutation API for accelerator
         // tables, so "remove a binding" is implemented as
@@ -2196,6 +2250,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
                 // `WindowState`, dereferenced on the UI thread
                 // only.
                 accel_handle: &raw mut state.accel_handle,
+                plugin_modeless_dialogs: &raw mut state.plugin_modeless_dialogs,
                 editor: state.editor,
             };
             <Win32Ui as UiPlatform>::update_status(
@@ -2269,6 +2324,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
                     toolbar_hwnd: state.toolbar_hwnd,
                     main_menu: state.main_menu,
                     accel_handle: &raw mut state.accel_handle,
+                    plugin_modeless_dialogs: &raw mut state.plugin_modeless_dialogs,
                     editor: state.editor,
                 };
                 <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
@@ -2384,6 +2440,7 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
         toolbar_hwnd: state.toolbar_hwnd,
         main_menu: state.main_menu,
         accel_handle: &raw mut state.accel_handle,
+        plugin_modeless_dialogs: &raw mut state.plugin_modeless_dialogs,
         editor: state.editor,
     };
     // Re-apply the new tab's lexer/theme. Each tab carries its own
@@ -9335,6 +9392,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             language_menu: menus.language_menu,
             window_menu: menus.window_menu,
             find_replace_dlg: None,
+            plugin_modeless_dialogs: Vec::new(),
             fif_dock_hwnd,
             fif_listview_hwnd,
             fif_dock_status,
@@ -9644,13 +9702,92 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                     // the message loop — the handle on
                     // `WindowState` is the one the recreate path
                     // updates.
-                    let (dlg_handle, haccel): (Option<HWND>, HACCEL) = state_from_hwnd(main_hwnd)
-                        .map(|s| (s.find_replace_dlg, s.accel_handle))
-                        .unwrap_or((None, HACCEL::default()));
+                    // Pull the dialog handles, the live HACCEL,
+                    // AND a snapshot of the plugin-registered
+                    // modeless dialogs out of `WindowState` in
+                    // the same `&mut` borrow scope, then drop
+                    // the borrow before any synchronous re-entry.
+                    // The Vec is `clone()`-d (cheap — typically
+                    // 0..2 entries) so the iteration below holds
+                    // no borrow on `WindowState`; an
+                    // `IsDialogMessageW` call that re-enters
+                    // wnd_proc and triggers a NPPM dispatch is
+                    // free to mutate `plugin_modeless_dialogs`
+                    // without aliasing the local snapshot.
+                    let (dlg_handle, haccel, plugin_dlgs): (Option<HWND>, HACCEL, Vec<HWND>) =
+                        state_from_hwnd(main_hwnd)
+                            .map(|s| {
+                                (
+                                    s.find_replace_dlg,
+                                    s.accel_handle,
+                                    s.plugin_modeless_dialogs.clone(),
+                                )
+                            })
+                            .unwrap_or((None, HACCEL::default(), Vec::new()));
                     let mut handled = false;
                     if let Some(dlg) = dlg_handle {
                         if IsWindow(Some(dlg)).as_bool() && IsDialogMessageW(dlg, &msg).as_bool() {
                             handled = true;
+                        }
+                    }
+                    // Plugin-registered modeless dialogs after
+                    // the host's Find/Replace dialog so a plugin
+                    // can't shadow the host's keyboard handling
+                    // by registering a wrapper HWND. Each dialog
+                    // is checked for `IsWindow` before
+                    // `IsDialogMessageW` because plugins might
+                    // forget to REMOVE before destroying — the
+                    // guard turns a freed-handle race into a
+                    // clean miss instead of a UB read.
+                    //
+                    // Track which dialogs are dead so we can
+                    // evict them from `plugin_modeless_dialogs`
+                    // after iteration. Without eviction, a
+                    // misbehaving plugin that ADDs without
+                    // REMOVE causes the Vec to grow without
+                    // bound — each leaked HWND adds one extra
+                    // `IsWindow` call per keystroke. The
+                    // eviction is best-effort: a recycled
+                    // handle that `IsWindow` reports as alive
+                    // (a known Win32 hazard the upstream contract
+                    // also inherits) stays in the Vec.
+                    let mut dead_indices: Vec<usize> = Vec::new();
+                    if !handled {
+                        for (idx, dlg) in plugin_dlgs.iter().enumerate() {
+                            if !IsWindow(Some(*dlg)).as_bool() {
+                                dead_indices.push(idx);
+                                continue;
+                            }
+                            if IsDialogMessageW(*dlg, &msg).as_bool() {
+                                handled = true;
+                                break;
+                            }
+                        }
+                    } else {
+                        // Even on the host-Find/Replace-handled
+                        // path, run the dead-handle scan so a
+                        // single iteration where the host dialog
+                        // consumed the message still cleans up
+                        // any orphans the plugin Vec accumulated.
+                        for (idx, dlg) in plugin_dlgs.iter().enumerate() {
+                            if !IsWindow(Some(*dlg)).as_bool() {
+                                dead_indices.push(idx);
+                            }
+                        }
+                    }
+                    if !dead_indices.is_empty() {
+                        if let Some(state) = state_from_hwnd(main_hwnd) {
+                            // Evict by HWND value (the indices
+                            // are local to `plugin_dlgs`, but the
+                            // live Vec on `state` may have been
+                            // mutated by a re-entrant
+                            // NPPM_MODELESSDIALOG dispatch
+                            // between the snapshot and now).
+                            let dead_hwnds: Vec<HWND> =
+                                dead_indices.iter().map(|i| plugin_dlgs[*i]).collect();
+                            state
+                                .plugin_modeless_dialogs
+                                .retain(|h| !dead_hwnds.iter().any(|d| d.0 == h.0));
                         }
                     }
                     if !handled && TranslateAcceleratorW(main_hwnd, haccel, &msg) == 0 {
@@ -11538,6 +11675,8 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                         toolbar_hwnd: state.toolbar_hwnd,
                                         main_menu: state.main_menu,
                                         accel_handle: &raw mut state.accel_handle,
+                                        plugin_modeless_dialogs: &raw mut state
+                                            .plugin_modeless_dialogs,
                                         editor: state.editor,
                                     };
                                     <Win32Ui as UiPlatform>::update_status(
