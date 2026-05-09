@@ -177,6 +177,35 @@ pub type MessageProcFn = unsafe extern "C" fn(u32, usize, isize) -> isize;
 /// `isUnicode() -> BOOL`. Win32 `BOOL` is a 4-byte int.
 pub type IsUnicodeFn = unsafe extern "C" fn() -> i32;
 
+/// Mirror of Notepad++'s `sessionInfo` struct used by
+/// `NPPM_SAVESESSION`. The plugin populates the three fields and
+/// passes a pointer to this struct in `lParam`.
+///
+/// Layout follows the upstream C declaration:
+///   `TCHAR* sessionFilePathName; int nbFile; TCHAR** files;`
+/// — pointer, int, pointer. `#[repr(C)]` keeps Rust from reordering
+/// fields so the Rust struct read by the dispatcher matches what
+/// a plugin compiled against `Notepad_plus_msgs.h` writes.
+///
+/// Pointers are read with `read_unaligned` on the dispatch side
+/// because plugin allocations may not be aligned to the
+/// pointer-width boundary Rust would otherwise require for an
+/// aligned dereference.
+#[repr(C)]
+pub struct SessionInfo {
+    /// Wide-char path of the session-XML file to write. Must be
+    /// non-null and null-terminated.
+    pub session_file_path_name: *mut u16,
+    /// Number of valid entries in `files`. Negative values are
+    /// rejected by the dispatcher; a hard cap (`MAX_SESSION_FILES`)
+    /// also bounds it against unreasonably large allocations.
+    pub nb_file: i32,
+    /// Array of `nb_file` wide-char pointers; each points at a
+    /// null-terminated path. Null entries are skipped (defensive
+    /// behaviour against partially-populated arrays).
+    pub files: *mut *mut u16,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +263,29 @@ mod tests {
     fn funcitem_total_size_x86() {
         // 128 (item_name) + 4 (fn ptr) + 4 (cmd_id) + 4 (init2) + 4 (sh_key ptr) = 144
         assert_eq!(core::mem::size_of::<FuncItem>(), 144);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn session_info_total_size_x64() {
+        // 8 (session_file_path_name: *mut u16)
+        // + 4 (nb_file: i32)
+        // + 4 (padding to align the next pointer)
+        // + 8 (files: *mut *mut u16)
+        // = 24 bytes. Mirror the upstream C `sessionInfo` layout
+        // exactly so plugin allocations parse correctly.
+        assert_eq!(
+            core::mem::size_of::<SessionInfo>(),
+            24,
+            "SessionInfo layout regressed; plugins reading the upstream sessionInfo struct would parse garbage",
+        );
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn session_info_total_size_x86() {
+        // 4 (path) + 4 (nb_file) + 4 (files) = 12 bytes; no
+        // alignment padding needed when pointers are 4 bytes.
+        assert_eq!(core::mem::size_of::<SessionInfo>(), 12);
     }
 }

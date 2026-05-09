@@ -55,10 +55,10 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_GETNBOPENFILES` | ✅ | v2 | wparam selector: `ALL_OPEN_FILES` / `PRIMARY_VIEW` / `SECOND_VIEW`. Phase 4 single-view: `ALL` and `PRIMARY` agree, `SECOND` is always 0. |
 | `NPPM_GETOPENFILENAMES` | ✅ | v2 | Probe (wparam = NULL) returns the count without writing; otherwise writes up to `lparam` paths into the caller's TCHAR** array, capped at MAX_PATH per slot. Returns the number of slots actually written so the plugin can detect under-allocation. Untitled tabs (no on-disk path) are excluded — the array contract requires real paths. |
 | `NPPM_MODELESSDIALOG` | ⚫ | v2 | |
-| `NPPM_GETNBSESSIONFILES` | ⚫ | v2 | |
-| `NPPM_GETSESSIONFILES` | ⚫ | v2 | |
-| `NPPM_SAVESESSION` | ⚫ | v2 | |
-| `NPPM_SAVECURRENTSESSION` | ⚫ | v2 | |
+| `NPPM_GETNBSESSIONFILES` | ✅ | v2 | wparam: unused; lparam: TCHAR* path to a session-XML file. Returns the titled-file count (untitled tabs excluded — the message contract is "files"), or 0 on read / parse failure. Code++ reads its own session schema (`core::session::Session`); cross-tool reads of Notepad++'s `<NotepadPlus><Session>` shape are Phase 5 polish. |
+| `NPPM_GETSESSIONFILES` | ✅ | v2 | wparam: TCHAR** array of plugin-allocated wide buffers; lparam: TCHAR* path to a session file. Each path is written into the corresponding slot via `write_path_array` — capped at MAX_PATH_TCHARS, NUL-terminated, slots whose pointer is NULL are skipped with a warn-log. Returns 1 on success, 0 on bad args / parse failure. Plugins should call `GETNBSESSIONFILES` first to size the array. |
+| `NPPM_SAVESESSION` | ✅ | v2 | lparam: pointer to a `SessionInfo` struct (`{ path, nb_file, files }`). The host iterates `files`, skipping null entries, and writes a session-XML at `path` containing every supplied path. Bounded at 1024 files (defensive cap against malformed plugin allocations). Returns lparam unchanged on success (matches N++'s "chain the call" idiom), 0 on bad args / negative count / write failure. |
+| `NPPM_SAVECURRENTSESSION` | ✅ | v2 | wparam: unused; lparam: TCHAR* destination path. Writes a session-XML containing every currently-open titled buffer. Untitled tabs are excluded. Returns 1 on success, 0 on I/O failure. |
 | `NPPM_GETOPENFILENAMESPRIMARY` | ✅ | v2 | Selector-fixed alias of `NPPM_GETOPENFILENAMES` against `PRIMARY_VIEW`. |
 | `NPPM_GETOPENFILENAMESSECOND` | ✅ | v2 | Selector-fixed alias against `SECOND_VIEW` — always returns 0 / writes nothing in single-view Code++ (Phase 4). Real semantics land alongside split-view in Phase 5. |
 | `NPPM_CREATESCINTILLAHANDLE` | ⚫ | v3 | Plugins that need their own Scintilla. |
@@ -72,7 +72,7 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_ACTIVATEDOC` | 🟡 | v1 | Returns `TRUE` (single-tab fast path holds; multi-tab Phase 3 routes through `SWITCHTOFILE` so this remains a no-op true). |
 | `NPPM_LAUNCHFINDINFILESDLG` | ✅ | v2 | Opens the FIF tab in the Find/Replace dialog. `wparam` (wide path, optional) pre-fills the Directory combobox; `lparam` (wide string, optional) pre-fills Filters. Empty / NULL pointers leave the controls at their current values. |
 | `NPPM_DMMSHOW` / `DMMHIDE` / `DMMUPDATEDISPINFO` / `DMMREGASDCKDLG` / `DMMVIEWOTHERTAB` / `DMMGETPLUGINHWNDBYNAME` | ⚫ | v3 | Docking-manager API, full set lands v3. |
-| `NPPM_LOADSESSION` | ⚫ | v2 | |
+| `NPPM_LOADSESSION` | ✅ | v2 | wparam: unused; lparam: TCHAR* session-XML path. Routes every titled entry through `Shell::open_file` — same code path as the menu-driven session-restore. The recorded active-tab is honoured implicitly (each `open_file` promotes the new tab to active). Untitled-tab entries and `WindowGeometry` are intentionally ignored — those describe the recording tool's state, not state plugins ask Code++ to adopt. Returns 1 on a successful parse, 0 on read / parse failure. |
 | `NPPM_RELOADFILE` | ✅ | v1 | Routes through the same reload path the file-watcher uses; null `lparam` reloads the current buffer. |
 | `NPPM_SWITCHTOFILE` | ✅ | v1 | Activates an already-open path; falls through to `open_file` if the path is not yet a tab. |
 | `NPPM_SAVECURRENTFILE` | ✅ | v1 | Routes through `Shell::save_current_to_disk`. |
@@ -107,7 +107,7 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_HIDESTATUSBAR` / `ISSTATUSBARHIDDEN` | ⚫ | v3 | |
 | `NPPM_GETSHORTCUTBYCMDID` | ⚫ | v3 | |
 | `NPPM_DOOPEN` | ✅ | v1 | Routes through `Shell::open_file`; same code path as the File→Open menu. |
-| `NPPM_SAVECURRENTFILEAS` | ⚫ | v2 | |
+| `NPPM_SAVECURRENTFILEAS` | ✅ | v2 | wparam: BOOL — TRUE writes a copy without re-pointing the active tab (`Shell::save_active_as_copy` — encode + atomic-rename, no tab-metadata mutation, no `NPPN_FILESAVED`); FALSE renames the active tab to the new path (`Shell::save_buffer_as` — full re-derivation including new lang from extension, file-watcher rebind, FILESAVED queue push). Bad-surrogate / null-path lparam returns 0 the same way `NPPM_DOOPEN` rejects them. |
 | `NPPM_GETLANGUAGENAME` | ✅ | v1 | Wide-string write (probe-then-write protocol). Returns the short menu name for known langs ("C", "C++", "Rust", "Normal Text"); zero on unknown lang. |
 | `NPPM_GETLANGUAGEDESC` | ✅ | v1 | Same shape as `NPPM_GETLANGUAGENAME`; returns the long human-readable description. |
 | Long tail (`NPPM_ALLOCATESUPPORTED` … `NPPM_GETZOOMLEVEL`) | ⚫ | v3 | |

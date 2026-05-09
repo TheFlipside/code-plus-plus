@@ -87,11 +87,67 @@
 /* v2: enable/disable Code++'s modeless-dialog forwarding. */
 #define NPPM_MODELESSDIALOG               (NPPMSG + 12)
 
+/*
+ * Plugin-supplied session-write payload. Used by NPPM_SAVESESSION:
+ * the plugin allocates this struct, fills in the destination path
+ * and the file list, then sends a pointer to it as lParam.
+ *
+ * Layout matches Notepad++'s `sessionInfo` struct verbatim — same
+ * field order, same C types — so a plugin that includes both this
+ * header and the upstream N++ header sees the same wire format.
+ *
+ * Field semantics:
+ *   - sessionFilePathName: wide path of the destination XML file.
+ *     Must be non-null and null-terminated.
+ *   - nbFile: count of valid entries in `files`. Negative values
+ *     are rejected by the host; positive values are bounded at
+ *     1024 (defensive cap against malformed plugin input).
+ *   - files: array of `nbFile` wide-string pointers. Null entries
+ *     are skipped without aborting the iteration.
+ */
+#ifndef NPP_SESSION_INFO_DEFINED
+#define NPP_SESSION_INFO_DEFINED
+typedef struct sessionInfo_ {
+    TCHAR* sessionFilePathName;
+    int    nbFile;
+    TCHAR** files;
+} sessionInfo;
+#endif
+
 /* Session ----------------------------------------------------------- */
 
+/* v2: count of files in a session-XML at lParam.
+ *     wParam: unused. lParam: TCHAR* path to a session file.
+ *     Returns: file count, or 0 on parse failure (or for an empty
+ *     session). The session schema is Code++'s `core::session`
+ *     format; cross-tool reads of N++'s session.xml schema are
+ *     Phase 5 polish. Untitled tabs are excluded — the message
+ *     contract is "files," and untitled has no on-disk file. */
 #define NPPM_GETNBSESSIONFILES            (NPPMSG + 13)
+/* v2: write file paths from a session-XML into a plugin-allocated
+ *     TCHAR** array.
+ *     wParam: TCHAR** array of plugin-allocated buffers, each at
+ *             least MAX_PATH wide chars.
+ *     lParam: TCHAR* path to the session file.
+ *     Returns: 1 on success, 0 on bad arguments / parse failure.
+ *     Plugins should call NPPM_GETNBSESSIONFILES first to size the
+ *     array. */
 #define NPPM_GETSESSIONFILES              (NPPMSG + 14)
+/* v2: write a session-XML containing the supplied file list.
+ *     wParam: unused.
+ *     lParam: pointer to a `sessionInfo` struct (path + count +
+ *             TCHAR** array of file paths).
+ *     Returns: lParam (the original pointer) on success — same
+ *     "you can chain the call" idiom Notepad++ uses; 0 on bad
+ *     args or write failure. The host enforces a count cap of
+ *     1024 to bound the per-call allocation. */
 #define NPPM_SAVESESSION                  (NPPMSG + 15)
+/* v2: write a session-XML at lParam containing every currently-
+ *     open titled buffer. Untitled tabs are excluded.
+ *     wParam: unused. lParam: TCHAR* destination path.
+ *     Returns: 1 on success, 0 on I/O failure. Foreign-tool
+ *     readers (N++) won't pick the file up until cross-tool
+ *     schema support lands as Phase 5 polish. */
 #define NPPM_SAVECURRENTSESSION           (NPPMSG + 16)
 
 /* Multi-view (split-view) — primary / secondary --------------------- */
@@ -158,6 +214,15 @@
 #define NPPM_DMMHIDE                      (NPPMSG + 31)
 #define NPPM_DMMUPDATEDISPINFO            (NPPMSG + 32)
 #define NPPM_DMMREGASDCKDLG               (NPPMSG + 33)
+/* v2: open every titled file listed in a session-XML at lParam,
+ *     in the order they appear. The recorded active-tab is
+ *     honoured implicitly (each open promotes the new tab to
+ *     active). `WindowGeometry` and untitled-tab entries are
+ *     ignored — those describe the recording tool's state, not
+ *     state plugins are asking Code++ to adopt.
+ *     wParam: unused. lParam: TCHAR* session path.
+ *     Returns: 1 on a successful parse, 0 on read / parse
+ *     failure. */
 #define NPPM_LOADSESSION                  (NPPMSG + 34)
 #define NPPM_DMMVIEWOTHERTAB              (NPPMSG + 35)
 
@@ -277,6 +342,13 @@
 #define NPPM_GETSHORTCUTBYCMDID           (NPPMSG + 76)
 /* v1: open the file at lParam (TCHAR*). */
 #define NPPM_DOOPEN                       (NPPMSG + 77)
+/* v2: save the active buffer to a new path.
+ *     wParam: BOOL — TRUE writes a copy without re-pointing the
+ *             active tab; FALSE renames the active tab to the new
+ *             path and subsequent saves write there.
+ *     lParam: TCHAR* destination path.
+ *     Returns: 1 on success, 0 on I/O / encoding failure or when
+ *             there is no active buffer. */
 #define NPPM_SAVECURRENTFILEAS            (NPPMSG + 78)
 #define NPPM_GETCURRENTNATIVELANGENCODING (NPPMSG + 79)
 #define NPPM_ALLOCATESUPPORTED            (NPPMSG + 80)

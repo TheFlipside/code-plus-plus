@@ -1463,6 +1463,54 @@ impl Shell {
         write_result
     }
 
+    /// Save a copy of the active buffer to `path` without
+    /// re-pointing the active tab. The in-memory buffer continues
+    /// tracking its original on-disk path (or stays untitled).
+    /// Drives `NPPM_SAVECURRENTFILEAS(asCopy=TRUE)`.
+    ///
+    /// No file watcher dance because the destination path is not
+    /// being adopted by Code++ as a tracked file. No
+    /// `NPPN_FILESAVED` because the active buffer's "last save"
+    /// state did not change — N++'s ABI only fires FILESAVED for
+    /// the rename variant. No tab metadata mutation.
+    ///
+    /// Same atomic-write pattern as `save_current_to_disk` /
+    /// `save_buffer_as`: write to a sibling tempfile, fsync, atomic
+    /// rename. Power-loss safe — the destination is either the
+    /// pre-call bytes (or absent) or fully the new bytes.
+    pub fn save_active_as_copy<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        path: &Path,
+    ) -> Result<(), ShellError> {
+        use std::io::Write;
+
+        let encoding = self
+            .active()
+            .map(|t| t.encoding.clone())
+            .ok_or(ShellError::NoActivePath)?;
+        let text = ui.get_buffer_text();
+        let bytes = codepp_core::encoding::encode(&text, &encoding)
+            .map_err(|e| ShellError::Encoding(e.to_string()))?;
+
+        let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
+        let parent_dir = parent.unwrap_or_else(|| Path::new("."));
+
+        let mut tmp = tempfile::Builder::new()
+            .prefix(".codepp-savecopy-")
+            .suffix(".tmp")
+            .tempfile_in(parent_dir)
+            .map_err(|e| ShellError::Io(e.to_string()))?;
+        tmp.write_all(&bytes)
+            .map_err(|e| ShellError::Io(e.to_string()))?;
+        tmp.as_file_mut()
+            .sync_all()
+            .map_err(|e| ShellError::Io(e.to_string()))?;
+        tmp.persist(path)
+            .map_err(|e| ShellError::Io(e.error.to_string()))?;
+        Ok(())
+    }
+
     pub fn open_file(&mut self, path: PathBuf) {
         // De-duplicate: if the path is already open in some tab,
         // switch to that tab rather than allocating a fresh one.
@@ -3974,6 +4022,134 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         }
         let pos = pos as usize;
         self.shell.tabs.get(pos).map(|t| t.id as isize).unwrap_or(0)
+    }
+
+    fn save_current_as(&mut self, path: PathBuf, as_copy: bool) -> bool {
+        if as_copy {
+            // Save a copy: encode + atomic-rename to `path` without
+            // touching the active tab's metadata. The buffer keeps
+            // tracking its original on-disk path, matching N++'s
+            // `NPPM_SAVECURRENTFILEAS(asCopy=TRUE)` contract.
+            //
+            // Edge case: if `path` happens to equal the active tab's
+            // own path, the "copy without state mutation" semantic
+            // collapses to an in-place save. Routing through
+            // `save_active_as_copy` would skip the file-watcher
+            // unwatch/rewatch dance — Win32's `notify` translates
+            // the atomic temp+rename to `Modify(Name)` which our
+            // mapping classifies as `FileChange::Removed`, popping
+            // a false "file deleted externally" prompt. Detect the
+            // same-path case and reroute through
+            // `save_current_to_disk`, which already handles the
+            // watcher dance + the `NPPN_FILEBEFORESAVE` /
+            // `NPPN_FILESAVED` queue pushes the tab expects when
+            // its own bytes are being rewritten.
+            let same_path = self
+                .shell
+                .active()
+                .and_then(|t| t.path.as_ref())
+                .is_some_and(|p| p == &path);
+            if same_path {
+                return matches!(self.shell.save_current_to_disk(self.ui), Ok(()));
+            }
+            match self.shell.save_active_as_copy(self.ui, &path) {
+                Ok(()) => true,
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %path.display(),
+                        "NPPM_SAVECURRENTFILEAS(asCopy=TRUE) failed");
+                    false
+                }
+            }
+        } else {
+            match self.shell.save_buffer_as(self.ui, path.clone()) {
+                Ok(()) => true,
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %path.display(),
+                        "NPPM_SAVECURRENTFILEAS(asCopy=FALSE) failed");
+                    false
+                }
+            }
+        }
+    }
+
+    fn load_session(&mut self, path: PathBuf) -> bool {
+        // Read the foreign session-XML, then route every titled
+        // file through the regular open_file path — same as a user
+        // who manually re-opened each tab. The session's recorded
+        // active-tab is honoured (the *last* successful open
+        // becomes the active tab anyway, because each open_file
+        // promotes the new tab to active). Untitled-tab entries
+        // and `WindowGeometry` are ignored: those describe the
+        // *recording tool's* state, not state plugins are asking
+        // Code++ to adopt.
+        let session = match codepp_core::session::Session::load_from_xml(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.display(),
+                    "NPPM_LOADSESSION: failed to read session file");
+                return false;
+            }
+        };
+        for tab in session.tabs.iter() {
+            if let Some(p) = tab.path.clone() {
+                self.shell.open_file(p);
+            }
+        }
+        true
+    }
+
+    fn save_current_session(&self, path: PathBuf) -> bool {
+        let files: Vec<PathBuf> = self
+            .shell
+            .tabs
+            .iter()
+            .filter_map(|t| t.path.clone())
+            .collect();
+        write_session_files(&path, &files)
+    }
+
+    fn save_session_with_files(&self, path: PathBuf, files: Vec<PathBuf>) -> bool {
+        write_session_files(&path, &files)
+    }
+
+    fn read_session_file_paths(&self, path: PathBuf) -> Option<Vec<PathBuf>> {
+        let session = codepp_core::session::Session::load_from_xml(&path)
+            .map_err(|e| {
+                tracing::warn!(error = %e, path = %path.display(),
+                    "NPPM_GETSESSIONFILES: failed to read session file");
+                e
+            })
+            .ok()?;
+        Some(session.tabs.into_iter().filter_map(|t| t.path).collect())
+    }
+}
+
+/// Helper for the two NPPM_SAVE*SESSION paths. Builds a minimal
+/// `Session` with one `Tab` per file (no encoding / EOL / cursor
+/// metadata — plugins are saving a *file list*, not a fidelity-
+/// preserving snapshot of the editor state) and writes it via
+/// `Session::save_to_xml`. Returns `true` on success, `false` on
+/// any I/O / serialization failure (the dispatcher reports the
+/// boolean back to the plugin via the message return value).
+fn write_session_files(path: &Path, files: &[PathBuf]) -> bool {
+    let session = codepp_core::session::Session {
+        active: None,
+        window: None,
+        tabs: files
+            .iter()
+            .map(|p| codepp_core::session::Tab {
+                path: Some(p.clone()),
+                ..Default::default()
+            })
+            .collect(),
+    };
+    match session.save_to_xml(path) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, path = %path.display(),
+                "NPPM_SAVE*SESSION: failed to write session file");
+            false
+        }
     }
 }
 

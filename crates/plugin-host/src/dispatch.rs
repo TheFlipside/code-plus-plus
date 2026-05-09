@@ -69,6 +69,10 @@ pub const NPPM_GETCURRENTLANGTYPE: u32 = NPPMSG + 5;
 pub const NPPM_SETCURRENTLANGTYPE: u32 = NPPMSG + 6;
 pub const NPPM_GETNBOPENFILES: u32 = NPPMSG + 7;
 pub const NPPM_GETOPENFILENAMES: u32 = NPPMSG + 8;
+pub const NPPM_GETNBSESSIONFILES: u32 = NPPMSG + 13;
+pub const NPPM_GETSESSIONFILES: u32 = NPPMSG + 14;
+pub const NPPM_SAVESESSION: u32 = NPPMSG + 15;
+pub const NPPM_SAVECURRENTSESSION: u32 = NPPMSG + 16;
 pub const NPPM_GETOPENFILENAMESPRIMARY: u32 = NPPMSG + 17;
 pub const NPPM_GETOPENFILENAMESSECOND: u32 = NPPMSG + 18;
 pub const NPPM_GETCURRENTDOCINDEX: u32 = NPPMSG + 23;
@@ -82,6 +86,7 @@ pub const NPPM_ACTIVATEDOC: u32 = NPPMSG + 28;
 /// string). Both pointers may be NULL — N++'s ABI treats them as
 /// "use the dialog's current values".
 pub const NPPM_LAUNCHFINDINFILESDLG: u32 = NPPMSG + 29;
+pub const NPPM_LOADSESSION: u32 = NPPMSG + 34;
 pub const NPPM_RELOADFILE: u32 = NPPMSG + 36;
 pub const NPPM_SWITCHTOFILE: u32 = NPPMSG + 37;
 pub const NPPM_SAVECURRENTFILE: u32 = NPPMSG + 38;
@@ -106,6 +111,7 @@ pub const NPPM_SETBUFFERENCODING: u32 = NPPMSG + 67;
 pub const NPPM_GETBUFFERFORMAT: u32 = NPPMSG + 68;
 pub const NPPM_SETBUFFERFORMAT: u32 = NPPMSG + 69;
 pub const NPPM_DOOPEN: u32 = NPPMSG + 77;
+pub const NPPM_SAVECURRENTFILEAS: u32 = NPPMSG + 78;
 pub const NPPM_GETLANGUAGENAME: u32 = NPPMSG + 83;
 pub const NPPM_GETLANGUAGEDESC: u32 = NPPMSG + 84;
 
@@ -192,6 +198,16 @@ pub const CODEPP_PLUGIN_API_VERSION: isize = 0x0000_0001;
 /// scribbles past it" bug — undefined behaviour we cannot detect from
 /// the call site since the buffer size isn't carried in the message.
 pub const MAX_PATH_TCHARS: usize = 260;
+
+/// Cap on the file count a single `NPPM_SAVESESSION` call accepts.
+/// A malformed plugin claiming `nb_file = i32::MAX` would otherwise
+/// force the host into a multi-gigabyte allocation; this cap turns
+/// that into a clean rejection. The number itself matches the
+/// editor's `MAX_OPEN_TABS` order of magnitude — a session with
+/// more than 1024 entries is well outside any reasonable plugin's
+/// scope and the plugin contract has no way to signal partial
+/// success on truncation.
+pub const MAX_SESSION_FILES: usize = 1024;
 
 // --- Outbound: NPPN_* notifications ----------------------------------
 
@@ -561,6 +577,48 @@ pub trait HostServices {
     /// single-view Code++ — `view == 1`. Drives
     /// [`NPPM_GETBUFFERIDFROMPOS`].
     fn buffer_id_at(&self, view: i32, pos: i32) -> isize;
+
+    /// Save the active buffer to `path`. `as_copy == true` writes a
+    /// copy without re-pointing the active tab (the in-memory
+    /// buffer continues to track its original on-disk path);
+    /// `as_copy == false` is a rename — the tab moves to the new
+    /// path and subsequent saves write there. Drives
+    /// [`NPPM_SAVECURRENTFILEAS`]. Returns `true` on a successful
+    /// write, `false` on any I/O / encoding failure or when there
+    /// is no active buffer.
+    fn save_current_as(&mut self, path: PathBuf, as_copy: bool) -> bool;
+
+    /// Open every file listed in the session-XML at `path`, in
+    /// order. Untitled tabs and the saved active-tab index inside
+    /// the session file are honoured exactly as the file-watcher /
+    /// menu-driven session restore would. Drives
+    /// [`NPPM_LOADSESSION`]. Returns `true` on a successful parse
+    /// (even for an empty session — that's "load nothing"),
+    /// `false` on I/O / parse failure.
+    fn load_session(&mut self, path: PathBuf) -> bool;
+
+    /// Write the currently-open titled tabs to a session-XML at
+    /// `path`. Untitled tabs are excluded — they have no
+    /// reproducible on-disk path and the foreign-session protocol
+    /// has no slot for them. Drives [`NPPM_SAVECURRENTSESSION`].
+    /// Returns `true` on a successful write, `false` on I/O
+    /// failure.
+    fn save_current_session(&self, path: PathBuf) -> bool;
+
+    /// Write a session-XML at `path` containing the supplied
+    /// `files`. Used by [`NPPM_SAVESESSION`], where the plugin
+    /// supplies the file list rather than the host's current state.
+    /// Returns `true` on success, `false` on I/O failure.
+    fn save_session_with_files(&self, path: PathBuf, files: Vec<PathBuf>) -> bool;
+
+    /// Read the session-XML at `path` and return its file list.
+    /// `None` when the file can't be read or doesn't parse as
+    /// Code++'s session schema. Drives both
+    /// [`NPPM_GETNBSESSIONFILES`] (count returned) and
+    /// [`NPPM_GETSESSIONFILES`] (paths written into the plugin's
+    /// TCHAR** array). Untitled tabs (no on-disk path) are filtered
+    /// out — the message contracts both expect file paths only.
+    fn read_session_file_paths(&self, path: PathBuf) -> Option<Vec<PathBuf>>;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -1051,6 +1109,237 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             }
         }
 
+        NPPM_SAVECURRENTFILEAS => {
+            // wparam: BOOL — TRUE means "save a copy" (the active
+            // tab keeps tracking its original path), FALSE means
+            // rename the active tab to the new path.
+            // lparam: TCHAR* target path.
+            //
+            // Empty wide / bad surrogates rejected the same way
+            // NPPM_DOOPEN rejects them: a substituted U+FFFD on a
+            // path-typed payload could route the write to a
+            // different file than the plugin intended.
+            if lparam == 0 {
+                return Some(0);
+            }
+            let as_copy = wparam != 0;
+            // SAFETY: plugin promises lparam is a valid wide path.
+            let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
+            if decoded.is_empty() {
+                return Some(0);
+            }
+            services.save_current_as(PathBuf::from(decoded), as_copy) as isize
+        }
+
+        NPPM_LOADSESSION => {
+            // wparam: unused.
+            // lparam: TCHAR* path to a session-XML file.
+            //
+            // The session schema is Code++'s `core::session::Session`
+            // (not Notepad++'s session.xml format). A session file
+            // written by N++ won't load until cross-tool schema
+            // support lands as Phase 5 polish.
+            if lparam == 0 {
+                return Some(0);
+            }
+            let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
+            if decoded.is_empty() {
+                return Some(0);
+            }
+            services.load_session(PathBuf::from(decoded)) as isize
+        }
+
+        NPPM_SAVECURRENTSESSION => {
+            // wparam: unused.
+            // lparam: TCHAR* destination path. Code++ writes its own
+            // session schema; foreign-tool readers (N++) will not
+            // pick the file up until cross-tool schema support
+            // lands.
+            if lparam == 0 {
+                return Some(0);
+            }
+            let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
+            if decoded.is_empty() {
+                return Some(0);
+            }
+            services.save_current_session(PathBuf::from(decoded)) as isize
+        }
+
+        NPPM_GETNBSESSIONFILES => {
+            // wparam: unused.
+            // lparam: TCHAR* path to a session-XML file.
+            // Returns the number of titled files in the session, or
+            // 0 on read / parse failure (or for an empty session).
+            // Untitled tabs are not counted — the message contract
+            // is "files," and untitled has no on-disk file.
+            if lparam == 0 {
+                return Some(0);
+            }
+            let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
+            if decoded.is_empty() {
+                return Some(0);
+            }
+            services
+                .read_session_file_paths(PathBuf::from(decoded))
+                .map(|v| v.len() as isize)
+                .unwrap_or(0)
+        }
+
+        NPPM_GETSESSIONFILES => {
+            // wparam: TCHAR** array of plugin-allocated buffers,
+            //         each at least MAX_PATH wide chars.
+            // lparam: TCHAR* path to the session-XML file.
+            // Returns 1 on success, 0 on bad arguments or parse
+            // failure.
+            //
+            // **ABI gap (parity with N++):** the message contract
+            // does NOT carry the slot count the plugin allocated.
+            // Plugins are expected to call
+            // `NPPM_GETNBSESSIONFILES` first and allocate exactly
+            // that many slots. The session file the host reads
+            // here can in principle have grown between the two
+            // calls (race against an external session writer); if
+            // it has, the host writes past the plugin's allocation
+            // and corrupts plugin memory. This is an upstream-N++
+            // hazard plugins inherit; closing it would require an
+            // ABI-extension message that carries the count
+            // explicitly (`NPPM_GETSESSIONFILES_BOUNDED` or the
+            // like). Documented as a known limitation rather than
+            // worked around.
+            if lparam == 0 || wparam == 0 {
+                return Some(0);
+            }
+            let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
+            if decoded.is_empty() {
+                return Some(0);
+            }
+            let Some(mut paths) = services.read_session_file_paths(PathBuf::from(decoded)) else {
+                return Some(0);
+            };
+            // Defence-in-depth: cap the number of slots we write
+            // at `MAX_SESSION_FILES`. The plugin sized its array
+            // from a prior `NPPM_GETNBSESSIONFILES` call, so the
+            // session file's count at that time was already
+            // bounded by whatever the host reported. The race
+            // window between the count and the write call could
+            // see the file change to one with more entries; the
+            // cap turns "unbounded plugin-heap overwrite" into
+            // "bounded write of at most 1024 slots." Plugins
+            // allocating 1024 slots based on the count call would
+            // already be carrying a host-side commitment to that
+            // size; truncating beyond that is the host's worst-
+            // case bound.
+            if paths.len() > MAX_SESSION_FILES {
+                tracing::warn!(
+                    nb = paths.len(),
+                    cap = MAX_SESSION_FILES,
+                    "NPPM_GETSESSIONFILES: truncating to cap to bound plugin write",
+                );
+                paths.truncate(MAX_SESSION_FILES);
+            }
+            // SAFETY: plugin promises wparam is a TCHAR** of at
+            // least `paths.len()` slots, each pointing at a buffer
+            // of at least MAX_PATH wide chars. The host writes one
+            // wide string per slot, capped at MAX_PATH_TCHARS.
+            unsafe {
+                write_path_array(wparam as *mut *mut u16, &paths);
+            }
+            1
+        }
+
+        NPPM_SAVESESSION => {
+            // wparam: unused.
+            // lparam: pointer to a `SessionInfo` struct (see
+            //         `crate::ffi::SessionInfo`). Plugins fill in
+            //         the path + file list before sending; the host
+            //         writes that list into a session-XML at the
+            //         requested path.
+            // Returns: lParam (the session path pointer) on
+            // success, 0 on bad arguments or write failure — that's
+            // the upstream contract (`saveSession()` returns the
+            // input pointer so plugins can chain the call).
+            if lparam == 0 {
+                return Some(0);
+            }
+            let info = lparam as *const crate::ffi::SessionInfo;
+            // SAFETY: plugin promises `info` points to a valid
+            // SessionInfo it owns for the duration of the call.
+            // Each pointer field is read via `addr_of!` +
+            // `read_unaligned` so we never form an aligned
+            // intermediate reference to a potentially-unaligned
+            // field — the explicit form removes any ambiguity
+            // about an LLVM optimisation pass interpreting
+            // `&(*info).field` as a guarantee of natural
+            // alignment.
+            let (session_path_ptr, nb_file, files_ptr) = unsafe {
+                (
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*info).session_file_path_name)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*info).nb_file)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*info).files)),
+                )
+            };
+            if session_path_ptr.is_null() || nb_file < 0 {
+                return Some(0);
+            }
+            let path_str = unsafe { wide_ptr_to_string(session_path_ptr) };
+            if path_str.is_empty() {
+                return Some(0);
+            }
+            let count = nb_file as usize;
+            // Bound the per-call allocation. A malformed plugin
+            // claiming `nb_file = i32::MAX` would otherwise force
+            // the host to attempt a multi-gigabyte alloc.
+            // MAX_OPEN_TABS-class bound is appropriate — the file
+            // list a session can hold is the same as the editor's
+            // open-tab cap.
+            if count > MAX_SESSION_FILES {
+                tracing::warn!(
+                    nb_file = nb_file,
+                    cap = MAX_SESSION_FILES,
+                    "NPPM_SAVESESSION: rejecting unreasonable file count",
+                );
+                return Some(0);
+            }
+            // Reject `nb_file > 0 && files == NULL` before entering
+            // the loop. `files_ptr.add(i)` on a null pointer is UB
+            // even with `read_unaligned`; the prior `nb_file < 0`
+            // guard does not cover this (a plugin can claim a
+            // positive count and supply a null array). For
+            // `count == 0` the loop body never runs, so a null
+            // pointer is harmless — accept it as a degenerate
+            // "save an empty session" call.
+            if count > 0 && files_ptr.is_null() {
+                tracing::warn!(
+                    nb_file = nb_file,
+                    "NPPM_SAVESESSION: nb_file > 0 but files pointer is NULL",
+                );
+                return Some(0);
+            }
+            let mut files: Vec<PathBuf> = Vec::with_capacity(count);
+            // SAFETY: plugin promises `files_ptr` points to an
+            // array of `count` wide-string pointers. Each entry is
+            // read with `read_unaligned`; null entries are skipped
+            // (same defensive shape as `NPPM_GETOPENFILENAMES`'s
+            // host-side iteration).
+            for i in 0..count {
+                let p = unsafe { core::ptr::read_unaligned(files_ptr.add(i)) };
+                if p.is_null() {
+                    continue;
+                }
+                let s = unsafe { wide_ptr_to_string(p) };
+                if !s.is_empty() {
+                    files.push(PathBuf::from(s));
+                }
+            }
+            if services.save_session_with_files(PathBuf::from(path_str), files) {
+                // Mirror N++: return lParam unchanged on success so
+                // the plugin can chain the call.
+                lparam
+            } else {
+                0
+            }
+        }
+
         NPPM_LAUNCHFINDINFILESDLG => {
             // wparam: directory (TCHAR*) — optional pre-fill.
             // lparam: filters (TCHAR*) — optional pre-fill.
@@ -1277,6 +1566,44 @@ unsafe fn write_wide_path(dst: *mut u16, cap: usize, path: &std::path::Path) -> 
         core::ptr::copy_nonoverlapping(units.as_ptr(), dst, units.len());
     }
     units.len()
+}
+
+/// Write each path in `paths` into the corresponding slot of a
+/// plugin-allocated TCHAR** array. Each slot is assumed to point at
+/// a buffer of at least `MAX_PATH_TCHARS` wide chars — the documented
+/// contract for `NPPM_GETSESSIONFILES` (and its peer
+/// `NPPM_GETOPENFILENAMES`). Slots whose pointer is null are skipped
+/// without aborting the iteration; null is a plugin bug we keep
+/// non-fatal because there is no way to signal partial success
+/// through this message's return type.
+///
+/// # Safety
+///
+/// `array` must point to at least `paths.len()` `*mut u16` slots.
+/// Each non-null slot must point to a writable buffer of at least
+/// `MAX_PATH_TCHARS` wide chars.
+unsafe fn write_path_array(array: *mut *mut u16, paths: &[std::path::PathBuf]) {
+    if array.is_null() {
+        return;
+    }
+    for (i, path) in paths.iter().enumerate() {
+        // SAFETY: caller promises `array` has at least `paths.len()`
+        // slots. `read_unaligned` because the plugin's TCHAR** is
+        // not guaranteed to be aligned (rare, but defensible).
+        let slot = unsafe { core::ptr::read_unaligned(array.add(i)) };
+        if slot.is_null() {
+            tracing::warn!(
+                slot = i,
+                "NPPM_GETSESSIONFILES: plugin slot is null; skipping",
+            );
+            continue;
+        }
+        // SAFETY: per the message ABI, each slot points at a wide
+        // buffer of at least MAX_PATH_TCHARS units.
+        unsafe {
+            write_wide_path(slot, MAX_PATH_TCHARS, path);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1591,6 +1918,49 @@ mod tests {
                 .find(|(_, p)| p == path)
                 .map(|(i, _)| *i)
                 .unwrap_or(0)
+        }
+        fn save_current_as(&mut self, path: PathBuf, as_copy: bool) -> bool {
+            self.record(format!("save_as={} copy={as_copy}", path.display()));
+            true
+        }
+        fn load_session(&mut self, path: PathBuf) -> bool {
+            self.record(format!("load_session={}", path.display()));
+            true
+        }
+        fn save_current_session(&self, path: PathBuf) -> bool {
+            self.record(format!("save_current_session={}", path.display()));
+            true
+        }
+        fn save_session_with_files(&self, path: PathBuf, files: Vec<PathBuf>) -> bool {
+            let files_str = files
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join("|");
+            self.record(format!(
+                "save_session_with_files={} files=[{files_str}]",
+                path.display()
+            ));
+            true
+        }
+        fn read_session_file_paths(&self, path: PathBuf) -> Option<Vec<PathBuf>> {
+            // Test surface: the path's filename is read as a
+            // semicolon-separated list of "fake" paths the test
+            // wants to pretend the session file contains. Lets us
+            // exercise the dispatcher's array-write logic without
+            // touching the filesystem. An empty filename means
+            // "no session file there" and returns None.
+            let fname = path.file_name()?.to_string_lossy().to_string();
+            if fname.is_empty() || fname == "MISSING" {
+                return None;
+            }
+            Some(
+                fname
+                    .split(';')
+                    .filter(|s| !s.is_empty())
+                    .map(PathBuf::from)
+                    .collect(),
+            )
         }
     }
 
@@ -2663,5 +3033,255 @@ mod tests {
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, RUNCOMMAND_USER + RUNCOMMAND_RANGE + 1, 0, 0) };
         assert!(r.is_none());
+    }
+
+    // --- Session messages + Save As ---
+
+    #[test]
+    fn save_current_file_as_routes_path_and_copy_flag() {
+        let mut s = MockServices::default();
+        let target = make_wide("D:/copy.txt");
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_SAVECURRENTFILEAS,
+                1, // asCopy = TRUE
+                target.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["save_as=D:/copy.txt copy=true"]);
+    }
+
+    #[test]
+    fn save_current_file_as_rename_clears_copy_flag() {
+        let mut s = MockServices::default();
+        let target = make_wide("D:/renamed.txt");
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_SAVECURRENTFILEAS,
+                0, // asCopy = FALSE — rename
+                target.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["save_as=D:/renamed.txt copy=false"]);
+    }
+
+    #[test]
+    fn save_current_file_as_null_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVECURRENTFILEAS, 0, 0) };
+        assert_eq!(r, Some(0));
+        assert!(s.calls().is_empty());
+    }
+
+    #[test]
+    fn load_session_routes_path_to_services() {
+        let mut s = MockServices::default();
+        let p = make_wide("D:/sess.xml");
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_LOADSESSION, 0, p.as_ptr() as isize) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["load_session=D:/sess.xml"]);
+    }
+
+    #[test]
+    fn load_session_null_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_LOADSESSION, 0, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn save_current_session_routes_path_to_services() {
+        let mut s = MockServices::default();
+        let p = make_wide("D:/save.xml");
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVECURRENTSESSION, 0, p.as_ptr() as isize) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["save_current_session=D:/save.xml"]);
+    }
+
+    #[test]
+    fn get_nb_session_files_returns_count() {
+        let mut s = MockServices::default();
+        // The mock parses the path's filename as a `;`-separated
+        // file list — see `read_session_file_paths` impl above.
+        let p = make_wide("D:/a.txt;b.txt;c.txt");
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETNBSESSIONFILES, 0, p.as_ptr() as isize) };
+        assert_eq!(r, Some(3));
+    }
+
+    #[test]
+    fn get_nb_session_files_missing_returns_zero() {
+        let mut s = MockServices::default();
+        let p = make_wide("D:/MISSING");
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETNBSESSIONFILES, 0, p.as_ptr() as isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn get_session_files_writes_paths_into_array() {
+        let mut s = MockServices::default();
+        // 2 slots, each MAX_PATH_TCHARS u16 wide.
+        let mut slot_a: Vec<u16> = vec![0; MAX_PATH_TCHARS];
+        let mut slot_b: Vec<u16> = vec![0; MAX_PATH_TCHARS];
+        let mut array: Vec<*mut u16> = vec![slot_a.as_mut_ptr(), slot_b.as_mut_ptr()];
+        let session_path = make_wide("D:/x.txt;y.txt");
+
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETSESSIONFILES,
+                array.as_mut_ptr() as usize,
+                session_path.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+
+        let nul_a = slot_a.iter().position(|&u| u == 0).unwrap();
+        let nul_b = slot_b.iter().position(|&u| u == 0).unwrap();
+        assert_eq!(String::from_utf16(&slot_a[..nul_a]).unwrap(), "x.txt");
+        assert_eq!(String::from_utf16(&slot_b[..nul_b]).unwrap(), "y.txt");
+    }
+
+    #[test]
+    fn get_session_files_null_array_returns_zero() {
+        let mut s = MockServices::default();
+        let p = make_wide("D:/x.txt;y.txt");
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETSESSIONFILES, 0, p.as_ptr() as isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn save_session_with_struct_writes_file_list() {
+        use crate::ffi::SessionInfo;
+        let mut s = MockServices::default();
+        let mut path = make_wide("D:/out.xml");
+        let mut f0 = make_wide("D:/foo.txt");
+        let mut f1 = make_wide("D:/bar.txt");
+        let mut files_arr: Vec<*mut u16> = vec![f0.as_mut_ptr(), f1.as_mut_ptr()];
+        let info = SessionInfo {
+            session_file_path_name: path.as_mut_ptr(),
+            nb_file: 2,
+            files: files_arr.as_mut_ptr(),
+        };
+        let info_ptr = &info as *const SessionInfo as isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, info_ptr) };
+        // Success returns lParam unchanged so the plugin can chain.
+        assert_eq!(r, Some(info_ptr));
+        assert_eq!(
+            s.calls(),
+            vec!["save_session_with_files=D:/out.xml files=[D:/foo.txt|D:/bar.txt]"]
+        );
+    }
+
+    #[test]
+    fn save_session_with_null_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn save_session_with_negative_count_returns_zero() {
+        use crate::ffi::SessionInfo;
+        let mut s = MockServices::default();
+        let mut path = make_wide("D:/out.xml");
+        let info = SessionInfo {
+            session_file_path_name: path.as_mut_ptr(),
+            nb_file: -1,
+            files: core::ptr::null_mut(),
+        };
+        let info_ptr = &info as *const SessionInfo as isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, info_ptr) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn save_session_with_positive_count_and_null_files_returns_zero() {
+        // The dispatcher must reject `nb_file > 0 && files == NULL`
+        // before entering the loop — `read_unaligned(files.add(i))`
+        // is UB on a null pointer regardless of the unaligned
+        // form. Without this guard, a plugin sending the malformed
+        // pair would crash the host.
+        use crate::ffi::SessionInfo;
+        let mut s = MockServices::default();
+        let mut path = make_wide("D:/out.xml");
+        let info = SessionInfo {
+            session_file_path_name: path.as_mut_ptr(),
+            nb_file: 5,
+            files: core::ptr::null_mut(),
+        };
+        let info_ptr = &info as *const SessionInfo as isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, info_ptr) };
+        assert_eq!(r, Some(0));
+        // No `save_session_with_files` call recorded — the
+        // dispatcher rejected before reaching the trait method.
+        assert!(s.calls().is_empty());
+    }
+
+    #[test]
+    fn save_session_with_zero_count_and_null_files_succeeds() {
+        // `count == 0` makes the loop a no-op, so a null `files`
+        // pointer is harmless — accept it as a degenerate "save an
+        // empty session" call.
+        use crate::ffi::SessionInfo;
+        let mut s = MockServices::default();
+        let mut path = make_wide("D:/empty.xml");
+        let info = SessionInfo {
+            session_file_path_name: path.as_mut_ptr(),
+            nb_file: 0,
+            files: core::ptr::null_mut(),
+        };
+        let info_ptr = &info as *const SessionInfo as isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, info_ptr) };
+        assert_eq!(r, Some(info_ptr));
+        assert_eq!(
+            s.calls(),
+            vec!["save_session_with_files=D:/empty.xml files=[]"]
+        );
+    }
+
+    #[test]
+    fn save_session_with_count_above_cap_returns_zero() {
+        // A plugin claiming `nb_file = i32::MAX` would otherwise
+        // force the host into a multi-GB allocation. The cap
+        // (`MAX_SESSION_FILES`) turns that into a clean rejection.
+        use crate::ffi::SessionInfo;
+        let mut s = MockServices::default();
+        let mut path = make_wide("D:/huge.xml");
+        let info = SessionInfo {
+            session_file_path_name: path.as_mut_ptr(),
+            nb_file: i32::MAX,
+            files: core::ptr::null_mut(),
+        };
+        let info_ptr = &info as *const SessionInfo as isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, info_ptr) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn save_session_skips_null_file_entries() {
+        use crate::ffi::SessionInfo;
+        let mut s = MockServices::default();
+        let mut path = make_wide("D:/out.xml");
+        let mut f0 = make_wide("D:/foo.txt");
+        // Middle slot is NULL; the dispatcher skips it without
+        // aborting iteration.
+        let mut files_arr: Vec<*mut u16> = vec![f0.as_mut_ptr(), core::ptr::null_mut()];
+        let info = SessionInfo {
+            session_file_path_name: path.as_mut_ptr(),
+            nb_file: 2,
+            files: files_arr.as_mut_ptr(),
+        };
+        let info_ptr = &info as *const SessionInfo as isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, info_ptr) };
+        assert_eq!(r, Some(info_ptr));
+        // Only the one real path made it into the recorded list.
+        assert_eq!(
+            s.calls(),
+            vec!["save_session_with_files=D:/out.xml files=[D:/foo.txt]"]
+        );
     }
 }
