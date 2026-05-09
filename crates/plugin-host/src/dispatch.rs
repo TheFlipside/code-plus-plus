@@ -138,6 +138,7 @@ pub const NPPM_SETSMOOTHFONT: u32 = NPPMSG + 92;
 pub const NPPM_SETEDITORBORDEREDGE: u32 = NPPMSG + 93;
 pub const NPPM_SAVEFILE: u32 = NPPMSG + 94;
 pub const NPPM_DISABLEAUTOUPDATE: u32 = NPPMSG + 95;
+pub const NPPM_REMOVESHORTCUTBYCMDID: u32 = NPPMSG + 96;
 pub const NPPM_GETPLUGINHOMEPATH: u32 = NPPMSG + 97;
 pub const NPPM_GETSETTINGSCLOUDPATH: u32 = NPPMSG + 98;
 pub const NPPM_SETLINENUMBERWIDTHMODE: u32 = NPPMSG + 99;
@@ -855,6 +856,19 @@ pub trait HostServices {
     /// the host's accelerator table has a binding; `None` when
     /// the cmd id is unknown to the host or has no accelerator.
     fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<crate::ffi::ShortcutKey>;
+
+    /// Remove every accelerator-table binding for `cmd_id`.
+    /// Drives [`NPPM_REMOVESHORTCUTBYCMDID`]. Returns `true` if
+    /// at least one binding was found and removed; `false` if
+    /// the cmd id had no binding (the table is left unchanged
+    /// in that case). Win32 has no in-place mutation API, so
+    /// the impl reads the table out via `CopyAcceleratorTableW`,
+    /// filters, and rebuilds via `CreateAcceleratorTableW` —
+    /// the new HACCEL replaces the old one and the old one is
+    /// destroyed. Other platforms (GTK / Cocoa, Phase 5) mutate
+    /// their action maps in place; the trait just reports the
+    /// outcome.
+    fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool;
 
     /// Show the tab-bar context menu for the active tab. Drives
     /// [`NPPM_TRIGGERTABBARCONTEXTMENU`]. Code++ does not yet
@@ -1932,6 +1946,16 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             services.trigger_tab_context_menu(wparam as i32, lparam as i32) as isize
         }
 
+        NPPM_REMOVESHORTCUTBYCMDID => {
+            // wparam: cmd id whose binding to remove.
+            // lparam: unused.
+            // Returns: TRUE if a binding existed and was
+            // removed, FALSE otherwise. Same `wparam as i32`
+            // truncation parity with N++ — cmd ids are u16 in
+            // Win32, well below i32::MAX.
+            services.remove_shortcut_for_cmd_id(wparam as i32) as isize
+        }
+
         NPPM_GETSHORTCUTBYCMDID => {
             // wparam: cmd id whose binding the plugin wants.
             // lparam: ShortcutKey* OUT (4 bytes — see ffi.rs).
@@ -2729,6 +2753,19 @@ mod tests {
                 .iter()
                 .find(|(c, _)| *c == cmd_id)
                 .map(|(_, k)| *k)
+        }
+        fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool {
+            // Same lookup as the read path; if a binding exists,
+            // drop it and report success. The recreate dance the
+            // production HostBridge performs is invisible at
+            // this layer — the mock just mutates its `shortcuts`
+            // Vec directly, which is the abstract operation the
+            // dispatcher contract observes.
+            let before = self.shortcuts.len();
+            self.shortcuts.retain(|(c, _)| *c != cmd_id);
+            let removed = self.shortcuts.len() != before;
+            self.record(format!("remove_shortcut_for_cmd_id({cmd_id})={removed}"));
+            removed
         }
         fn trigger_tab_context_menu(&mut self, view: i32, tab_idx: i32) -> bool {
             self.record(format!("trigger_tab_context_menu({view},{tab_idx})"));
@@ -4451,6 +4488,105 @@ mod tests {
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, NPPM_GETSHORTCUTBYCMDID, 1003, 0) };
         assert_eq!(r, Some(0));
+    }
+
+    // --- NPPM_REMOVESHORTCUTBYCMDID ---
+
+    #[test]
+    fn remove_shortcut_by_cmd_id_drops_existing_binding() {
+        use crate::ffi::ShortcutKey;
+        let mut s = MockServices {
+            shortcuts: vec![
+                (
+                    1003,
+                    ShortcutKey {
+                        is_ctrl: 1,
+                        is_alt: 0,
+                        is_shift: 0,
+                        key: b'N',
+                    },
+                ),
+                (
+                    1004,
+                    ShortcutKey {
+                        is_ctrl: 1,
+                        is_alt: 0,
+                        is_shift: 0,
+                        key: b'O',
+                    },
+                ),
+            ],
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_REMOVESHORTCUTBYCMDID, 1003, 0) };
+        assert_eq!(r, Some(1));
+        // The other binding stays intact — REMOVE only filters
+        // out the matching cmd id.
+        assert_eq!(s.shortcuts.len(), 1);
+        assert_eq!(s.shortcuts[0].0, 1004);
+    }
+
+    #[test]
+    fn remove_shortcut_by_cmd_id_unknown_returns_zero_and_leaves_table_intact() {
+        use crate::ffi::ShortcutKey;
+        let mut s = MockServices {
+            shortcuts: vec![(
+                1003,
+                ShortcutKey {
+                    is_ctrl: 1,
+                    is_alt: 0,
+                    is_shift: 0,
+                    key: b'N',
+                },
+            )],
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_REMOVESHORTCUTBYCMDID, 9999, 0) };
+        assert_eq!(r, Some(0));
+        // The existing binding is untouched on a no-match
+        // request.
+        assert_eq!(s.shortcuts.len(), 1);
+    }
+
+    #[test]
+    fn remove_then_get_shortcut_returns_zero() {
+        // End-to-end consistency check: after a successful
+        // REMOVE, a subsequent GETSHORTCUTBYCMDID for the same
+        // cmd id must report "no binding."
+        use crate::ffi::ShortcutKey;
+        let mut s = MockServices {
+            shortcuts: vec![(
+                1003,
+                ShortcutKey {
+                    is_ctrl: 1,
+                    is_alt: 0,
+                    is_shift: 0,
+                    key: b'N',
+                },
+            )],
+            ..Default::default()
+        };
+        unsafe {
+            dispatch_nppm(&mut s, NPPM_REMOVESHORTCUTBYCMDID, 1003, 0);
+        }
+        let mut out = ShortcutKey {
+            is_ctrl: 0xFF,
+            is_alt: 0xFF,
+            is_shift: 0xFF,
+            key: 0xFF,
+        };
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETSHORTCUTBYCMDID,
+                1003,
+                &mut out as *mut ShortcutKey as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+        // Out-buffer untouched on miss (same invariant the
+        // GETSHORTCUTBYCMDID-only test pinned).
+        assert_eq!(out.key, 0xFF);
     }
 
     #[test]

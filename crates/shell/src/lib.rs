@@ -343,6 +343,13 @@ pub trait UiPlatform {
     /// `NPPM_GETSHORTCUTBYCMDID`.
     fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey>;
 
+    /// Remove every accelerator-table binding for `cmd_id`.
+    /// Returns `true` if at least one binding was removed,
+    /// `false` if the cmd id had no binding (table left
+    /// unchanged in that case). Drives
+    /// `NPPM_REMOVESHORTCUTBYCMDID`.
+    fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool;
+
     /// Pull the current text content of the buffer backed by the
     /// Scintilla document at `scintilla_doc`. The implementation may
     /// briefly bind that document to the editor view to read it
@@ -4246,6 +4253,10 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.ui.shortcut_for_cmd_id(cmd_id)
     }
 
+    fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool {
+        self.ui.remove_shortcut_for_cmd_id(cmd_id)
+    }
+
     fn trigger_tab_context_menu(&mut self, view: i32, tab_idx: i32) -> bool {
         // Code++'s tab strip doesn't yet ship a context menu (no
         // Close / Close-Others / Rename / Move-to-other-view
@@ -4828,6 +4839,12 @@ mod tests {
             // exercise the lookup path exercise the dispatcher
             // mock instead.
             None
+        }
+        fn remove_shortcut_for_cmd_id(&mut self, _cmd_id: i32) -> bool {
+            // Same rationale as `shortcut_for_cmd_id` above —
+            // FakeUi has nothing to remove from. Always reports
+            // "nothing was removed."
+            false
         }
         fn capture_text_from_doc(&mut self, _scintilla_doc: isize) -> String {
             // Tests don't model per-doc text storage — they share

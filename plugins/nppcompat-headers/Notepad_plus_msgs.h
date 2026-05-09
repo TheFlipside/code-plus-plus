@@ -476,6 +476,21 @@ typedef struct CommunicationInfo_ {
  *     wParam / lParam: unused. Code++ has no auto-update; the
  *     call is unconditionally a no-op. */
 #define NPPM_DISABLEAUTOUPDATE            (NPPMSG + 95)
+/* v3: remove every accelerator-table binding for the given
+ *     cmd id.
+ *     wParam: cmd id whose binding to drop.
+ *     lParam: unused.
+ *     Returns: TRUE if a binding existed and was removed, FALSE
+ *             otherwise (unknown cmd id, or no binding to
+ *             remove). After a successful REMOVE, calling
+ *             NPPM_GETSHORTCUTBYCMDID for the same cmd id
+ *             returns FALSE — the binding is gone from the live
+ *             accelerator table. Win32 has no in-place mutation
+ *             API, so the host implements REMOVE as
+ *             copy → filter → create-new → destroy-old → swap
+ *             on the HACCEL it stores; the message pump reads
+ *             the live handle on every iteration so the change
+ *             takes effect on the very next keystroke. */
 #define NPPM_REMOVESHORTCUTBYCMDID        (NPPMSG + 96)
 /* v3: returns the per-user plugins directory (parent of every
  *     plugin subdirectory) into a plugin-allocated wide buffer.

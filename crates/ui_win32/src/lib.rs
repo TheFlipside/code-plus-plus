@@ -99,28 +99,28 @@ use windows::Win32::UI::Shell::{
     HDROP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CreateAcceleratorTableW,
-    CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyIcon,
-    DestroyMenu, DestroyWindow, DispatchMessageW, DrawIconEx, DrawMenuBar, GetClientRect,
-    GetCursorPos, GetDlgItem, GetMenu, GetMenuItemCount, GetMessageW, GetParent, GetSubMenu,
-    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW,
-    IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW,
-    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetCursor, SetMenu,
-    SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
-    TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
-    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
-    CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
-    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID, ES_AUTOHSCROLL,
-    ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, GWL_EXSTYLE, HACCEL, HICON,
-    HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR,
-    MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
-    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SHOW_WINDOW_CMD,
-    SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED,
-    SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND,
-    WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS,
-    WM_SETFONT, WM_SETREDRAW, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CopyAcceleratorTableW,
+    CreateAcceleratorTableW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
+    DeleteMenu, DestroyAcceleratorTable, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
+    DrawIconEx, DrawMenuBar, GetClientRect, GetCursorPos, GetDlgItem, GetMenu, GetMenuItemCount,
+    GetMessageW, GetParent, GetSubMenu, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+    GetWindowTextW, IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW,
+    LoadImageW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
+    SendMessageW, SetCursor, SetMenu, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
+    ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK,
+    BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX,
+    BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL,
+    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID,
+    ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
+    GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDOK, IDYES,
+    IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND,
+    MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG,
+    SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
+    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED,
+    WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
+    WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR,
+    WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
     WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP,
     WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
@@ -573,6 +573,19 @@ struct WindowState {
     /// Plugins query this via `NPPM_GETMENUHANDLE(NPPMAINMENU)` to
     /// install accelerator-bound items at the top level.
     main_menu: HMENU,
+    /// Accelerator table the message pump consults via
+    /// `TranslateAcceleratorW`. Lives on `WindowState` (rather
+    /// than as a `run()`-local) so plugin-driven mutations
+    /// (`NPPM_REMOVESHORTCUTBYCMDID` and the future
+    /// `NPPM_SHORTCUT*` write paths) can replace the handle:
+    /// Win32 has no in-place accelerator-table mutation API, so
+    /// "remove a binding" is implemented as
+    /// "copy → filter → create new → destroy old → swap." The
+    /// pump reads this slot fresh on every iteration so a
+    /// recreate inside a `WM_COMMAND` / NPPM dispatch takes
+    /// effect on the very next keystroke. Cleaned up via
+    /// `DestroyAcceleratorTable` in `WM_DESTROY`.
+    accel_handle: HACCEL,
     /// HMENU for the per-plugin submenu under "Plugins". Plugins query
     /// this via `NPPM_GETMENUHANDLE(NPPPLUGINMENU)` to add their menu
     /// items. Populated lazily on the first `WM_INITMENUPOPUP` for
@@ -680,6 +693,14 @@ impl WindowState {
             tab_hwnd: self.tab_hwnd,
             toolbar_hwnd: self.toolbar_hwnd,
             main_menu: self.main_menu,
+            // SAFETY: `&raw mut` on a field of `*self` produces
+            // a pointer valid for the lifetime of `WindowState`
+            // (heap-allocated, pinned via `GWLP_USERDATA` for
+            // the window's lifetime). The pointer is only
+            // dereferenced on the UI thread while `Win32Ui` is
+            // in scope — see the `accel_handle` field doc on
+            // `Win32Ui` for the full safety argument.
+            accel_handle: &raw mut self.accel_handle,
             editor: self.editor,
         };
         (&mut self.shell, ui)
@@ -722,6 +743,27 @@ struct Win32Ui {
     /// main window's menu between this and NULL via `SetMenu` /
     /// `DrawMenuBar`. Read-only after window creation.
     main_menu: HMENU,
+    /// Pointer to `WindowState.accel_handle` so the dispatcher
+    /// can both read (via `CopyAcceleratorTableW`, used by
+    /// `NPPM_GETSHORTCUTBYCMDID`) and write (via the
+    /// recreate-and-swap dance, used by
+    /// `NPPM_REMOVESHORTCUTBYCMDID`) the live accelerator
+    /// table. Win32Ui stays Copy by carrying the raw pointer
+    /// rather than a borrow.
+    ///
+    /// # Safety
+    ///
+    /// The pointer is dereferenced on the UI thread only, while
+    /// the containing `WindowState` (which holds the slot the
+    /// pointer addresses) is alive. `WindowState` is heap-
+    /// allocated and pinned via `GWLP_USERDATA` for the life of
+    /// the main window; `Win32Ui` instances are produced by
+    /// `WindowState::split` and never outlive that scope. No
+    /// other code mutates `accel_handle` while a `Win32Ui` is in
+    /// use — Win32 dispatches messages serially on the owning
+    /// thread, and `state_from_hwnd` refuses re-entrant borrows
+    /// via `PluginCallGuard`.
+    accel_handle: *mut HACCEL,
     editor: EditorHandle,
 }
 
@@ -1428,85 +1470,99 @@ impl UiPlatform for Win32Ui {
     }
 
     fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey> {
-        // Mirrors the accelerator table built in `run()`.
-        // Hardcoded as a `match` because:
-        //   1. The HACCEL is created in a function-local scope
-        //      and not stored on `WindowState`, so a runtime
-        //      `CopyAcceleratorTableW` introspection would
-        //      require plumbing the handle through every
-        //      `Win32Ui` construction site.
-        //   2. The accelerator table is fixed at startup and
-        //      cannot mutate at runtime today
-        //      (`NPPM_REMOVESHORTCUTBYCMDID` is still ⚫). When
-        //      that lands, switch to live introspection so the
-        //      removed binding stops appearing here.
+        // Live introspection of the current accelerator table —
+        // reads the same HACCEL the message pump consults via
+        // `TranslateAcceleratorW`. When
+        // `NPPM_REMOVESHORTCUTBYCMDID` rebuilds the table the
+        // change shows up here on the next call without any
+        // cache invalidation: there's no cache.
         //
-        // Single source of truth: `run()`'s ACCEL[] literal. A
-        // new accelerator means updating BOTH places — caught
-        // by code review since the two sites match on the same
-        // ID_* constants.
+        // SAFETY: `self.accel_handle` was set by
+        // `WindowState::split` (or the wnd_proc construction
+        // sites) to point at `WindowState.accel_handle`. The
+        // dereference reads the live HACCEL on the UI thread.
+        // See `Win32Ui.accel_handle` field doc for the full
+        // safety argument. `CopyAcceleratorTableW` is a
+        // read-only Win32 query that doesn't re-enter
+        // wnd_proc.
+        let haccel = unsafe { *self.accel_handle };
+        if haccel.is_invalid() {
+            return None;
+        }
+        let count = unsafe { CopyAcceleratorTableW(haccel, None) };
+        if count <= 0 {
+            return None;
+        }
+        let mut entries: Vec<ACCEL> = vec![ACCEL::default(); count as usize];
+        let written = unsafe { CopyAcceleratorTableW(haccel, Some(&mut entries)) };
+        if written <= 0 {
+            return None;
+        }
+        entries.truncate(written as usize);
+        let needle = cmd_id as u16;
+        let entry = entries.iter().find(|a| a.cmd == needle)?;
+        Some(decode_accel_to_shortcut_key(entry))
+    }
+
+    fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool {
+        // Win32 has no in-place mutation API for accelerator
+        // tables, so "remove a binding" is implemented as
+        // copy → filter → create-new → destroy-old → swap.
+        // The new HACCEL is written through `self.accel_handle`
+        // back to `WindowState`; the message pump reads the
+        // slot fresh on every iteration so the removed binding
+        // stops translating on the very next keystroke.
         //
-        // ShortcutKey field semantics: Win32 `ACCEL.fVirt` flags
-        // (FCONTROL/FALT/FSHIFT/FVIRTKEY) decompose into the
-        // is_ctrl / is_alt / is_shift bits; `ACCEL.key` is the
-        // virtual-key code, truncated to u8 since N++'s ABI
-        // declares ShortcutKey.key as a single byte.
-        let cmd = cmd_id as u16;
-        // Convenience constructors keep each row on one line.
-        fn ctrl(key: u8) -> codepp_plugin_host::ShortcutKey {
-            codepp_plugin_host::ShortcutKey {
-                is_ctrl: 1,
-                is_alt: 0,
-                is_shift: 0,
-                key,
+        // SAFETY: same UI-thread, single-mutator invariant as
+        // `shortcut_for_cmd_id` above. The destroy-old step
+        // happens AFTER the new HACCEL is written, so the
+        // pump (which can in principle race the recreate on a
+        // future async-dispatched plugin call) never reads a
+        // freshly-destroyed handle.
+        let old_haccel = unsafe { *self.accel_handle };
+        if old_haccel.is_invalid() {
+            return false;
+        }
+        let count = unsafe { CopyAcceleratorTableW(old_haccel, None) };
+        if count <= 0 {
+            return false;
+        }
+        let mut entries: Vec<ACCEL> = vec![ACCEL::default(); count as usize];
+        let written = unsafe { CopyAcceleratorTableW(old_haccel, Some(&mut entries)) };
+        if written <= 0 {
+            return false;
+        }
+        entries.truncate(written as usize);
+        let needle = cmd_id as u16;
+        let before = entries.len();
+        entries.retain(|a| a.cmd != needle);
+        if entries.len() == before {
+            // Nothing matched — the cmd id had no binding in
+            // the table, return `false` so the plugin sees
+            // "no removal happened" rather than a misleading
+            // success.
+            return false;
+        }
+        // Build the new HACCEL. If creation fails (extremely
+        // rare — only possible on resource exhaustion), keep
+        // the old one so the host stays in a known-good state.
+        let new_haccel = match unsafe { CreateAcceleratorTableW(&entries) } {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(error = %e, "NPPM_REMOVESHORTCUTBYCMDID: CreateAcceleratorTableW failed, keeping old HACCEL");
+                return false;
             }
+        };
+        // Order matters: write the new handle through the
+        // pointer FIRST, then destroy the old one. The pump
+        // can read the slot at any time; write-then-destroy
+        // ensures the read either sees the old (still valid)
+        // handle or the new one — never a destroyed one.
+        unsafe {
+            *self.accel_handle = new_haccel;
         }
-        fn ctrl_shift(key: u8) -> codepp_plugin_host::ShortcutKey {
-            codepp_plugin_host::ShortcutKey {
-                is_ctrl: 1,
-                is_alt: 0,
-                is_shift: 1,
-                key,
-            }
-        }
-        fn plain(key: u8) -> codepp_plugin_host::ShortcutKey {
-            codepp_plugin_host::ShortcutKey {
-                is_ctrl: 0,
-                is_alt: 0,
-                is_shift: 0,
-                key,
-            }
-        }
-        fn shift(key: u8) -> codepp_plugin_host::ShortcutKey {
-            codepp_plugin_host::ShortcutKey {
-                is_ctrl: 0,
-                is_alt: 0,
-                is_shift: 1,
-                key,
-            }
-        }
-        match cmd {
-            // File
-            ID_FILE_NEW => Some(ctrl(VK_N.0 as u8)),
-            ID_FILE_OPEN => Some(ctrl(VK_O.0 as u8)),
-            ID_FILE_SAVE => Some(ctrl(VK_S.0 as u8)),
-            ID_FILE_SAVE_AS => Some(ctrl_shift(VK_S.0 as u8)),
-            ID_FILE_CLOSE => Some(ctrl(VK_W.0 as u8)),
-            // Search
-            ID_SEARCH_FIND => Some(ctrl(VK_F.0 as u8)),
-            ID_SEARCH_REPLACE => Some(ctrl(VK_H.0 as u8)),
-            ID_SEARCH_FINDINFILES => Some(ctrl_shift(VK_F.0 as u8)),
-            ID_SEARCH_GOTOLINE => Some(ctrl(VK_G.0 as u8)),
-            ID_SEARCH_FINDNEXT => Some(plain(VK_F3.0 as u8)),
-            ID_SEARCH_FINDPREV => Some(shift(VK_F3.0 as u8)),
-            // View
-            ID_VIEW_ZOOMIN => Some(ctrl(VK_OEM_PLUS.0 as u8)),
-            ID_VIEW_ZOOMOUT => Some(ctrl(VK_OEM_MINUS.0 as u8)),
-            ID_VIEW_ZOOMRESET => Some(ctrl(VK_0.0 as u8)),
-            // Help
-            ID_HELP_ABOUT => Some(plain(VK_F1.0 as u8)),
-            _ => None,
-        }
+        let _ = unsafe { DestroyAcceleratorTable(old_haccel) };
+        true
     }
 
     fn capture_text_from_doc(&mut self, scintilla_doc: isize) -> String {
@@ -2135,6 +2191,11 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
                 tab_hwnd: state.tab_hwnd,
                 toolbar_hwnd: state.toolbar_hwnd,
                 main_menu: state.main_menu,
+                // SAFETY: see the `accel_handle` field doc on
+                // `Win32Ui` — pointer valid for the life of
+                // `WindowState`, dereferenced on the UI thread
+                // only.
+                accel_handle: &raw mut state.accel_handle,
                 editor: state.editor,
             };
             <Win32Ui as UiPlatform>::update_status(
@@ -2207,6 +2268,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
                     tab_hwnd: state.tab_hwnd,
                     toolbar_hwnd: state.toolbar_hwnd,
                     main_menu: state.main_menu,
+                    accel_handle: &raw mut state.accel_handle,
                     editor: state.editor,
                 };
                 <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
@@ -2321,6 +2383,7 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
         tab_hwnd: state.tab_hwnd,
         toolbar_hwnd: state.toolbar_hwnd,
         main_menu: state.main_menu,
+        accel_handle: &raw mut state.accel_handle,
         editor: state.editor,
     };
     // Re-apply the new tab's lexer/theme. Each tab carries its own
@@ -8719,6 +8782,145 @@ fn track_window_geometry(hwnd: HWND, shell: &mut Shell, wparam_size_state: u32) 
 
 /// Run the Code++ Win32 event loop. Blocks until the user exits.
 ///
+/// Decode a Win32 `ACCEL` entry into the plugin-visible
+/// `ShortcutKey` shape. The `fVirt` byte packs the modifier
+/// flags (`FCONTROL` / `FSHIFT` / `FALT`) plus `FVIRTKEY`; the
+/// modifier bits map 1:1 to N++'s `ShortcutKey.is_*` fields.
+/// `ACCEL.key` is the virtual-key code as `u16`; `ShortcutKey`
+/// declares the field as `u8`, so we truncate — virtual-key
+/// codes fit in a byte (the entire `VK_*` namespace is below
+/// 0xFF).
+fn decode_accel_to_shortcut_key(a: &ACCEL) -> codepp_plugin_host::ShortcutKey {
+    let bits = a.fVirt.0;
+    if a.key > 0xFF {
+        // Today's `VK_*` namespace tops out at 0xFE, so this
+        // branch is unreachable. The warn-log is for the
+        // hypothetical future-Microsoft-expansion case —
+        // without it the `as u8` truncation below would
+        // silently drop the high byte and a plugin would read
+        // a wrong `ShortcutKey.key` with no diagnostic.
+        tracing::warn!(
+            cmd = a.cmd,
+            key = a.key,
+            "ACCEL.key exceeds u8 range; ShortcutKey.key truncates to low byte"
+        );
+    }
+    codepp_plugin_host::ShortcutKey {
+        is_ctrl: u8::from((bits & FCONTROL.0) != 0),
+        is_alt: u8::from((bits & FALT.0) != 0),
+        is_shift: u8::from((bits & FSHIFT.0) != 0),
+        key: a.key as u8,
+    }
+}
+
+/// Build the host's default accelerator table — the keyboard
+/// shortcuts the message pump consults via `TranslateAcceleratorW`.
+/// Single source of truth for both the initial `HACCEL` creation
+/// and `Win32Ui::shortcut_for_cmd_id`'s live introspection: the
+/// `WM_KEYDOWN` path consults this table via the live HACCEL on
+/// `WindowState`, and `NPPM_GETSHORTCUTBYCMDID` reads from the
+/// same handle through `CopyAcceleratorTableW`. When
+/// `NPPM_REMOVESHORTCUTBYCMDID` removes a binding the recreate
+/// path filters this set and rebuilds; subsequent calls observe
+/// the updated set automatically.
+///
+/// The covered set is exactly the commands Scintilla doesn't
+/// already bind natively (Ctrl+X / C / V / Z / Y / A live
+/// inside Scintilla's own keyboard table — duplicating them as
+/// host-level accelerators caused a "Ctrl+V sometimes doesn't
+/// paste" bug we traced and removed). See the message-pump
+/// commentary in `run()` for the full rationale.
+fn build_default_accel_table() -> Vec<ACCEL> {
+    let ctrl = ACCEL_VIRT_FLAGS(FCONTROL.0 | FVIRTKEY.0);
+    let ctrl_shift = ACCEL_VIRT_FLAGS(FCONTROL.0 | FSHIFT.0 | FVIRTKEY.0);
+    vec![
+        // File
+        ACCEL {
+            fVirt: ctrl,
+            key: VK_N.0,
+            cmd: ID_FILE_NEW,
+        },
+        ACCEL {
+            fVirt: ctrl,
+            key: VK_O.0,
+            cmd: ID_FILE_OPEN,
+        },
+        ACCEL {
+            fVirt: ctrl,
+            key: VK_S.0,
+            cmd: ID_FILE_SAVE,
+        },
+        ACCEL {
+            fVirt: ctrl_shift,
+            key: VK_S.0,
+            cmd: ID_FILE_SAVE_AS,
+        },
+        ACCEL {
+            fVirt: ctrl,
+            key: VK_W.0,
+            cmd: ID_FILE_CLOSE,
+        },
+        // Search
+        ACCEL {
+            fVirt: ctrl,
+            key: VK_F.0,
+            cmd: ID_SEARCH_FIND,
+        },
+        ACCEL {
+            fVirt: ctrl,
+            key: VK_H.0,
+            cmd: ID_SEARCH_REPLACE,
+        },
+        ACCEL {
+            fVirt: ctrl_shift,
+            key: VK_F.0,
+            cmd: ID_SEARCH_FINDINFILES,
+        },
+        ACCEL {
+            fVirt: ctrl,
+            key: VK_G.0,
+            cmd: ID_SEARCH_GOTOLINE,
+        },
+        // Find Next / Find Previous repeat shortcuts.
+        ACCEL {
+            fVirt: ACCEL_VIRT_FLAGS(FVIRTKEY.0),
+            key: VK_F3.0,
+            cmd: ID_SEARCH_FINDNEXT,
+        },
+        ACCEL {
+            fVirt: ACCEL_VIRT_FLAGS(FSHIFT.0 | FVIRTKEY.0),
+            key: VK_F3.0,
+            cmd: ID_SEARCH_FINDPREV,
+        },
+        // View
+        ACCEL {
+            fVirt: ctrl,
+            key: VK_OEM_PLUS.0,
+            cmd: ID_VIEW_ZOOMIN,
+        },
+        ACCEL {
+            fVirt: ctrl,
+            key: VK_OEM_MINUS.0,
+            cmd: ID_VIEW_ZOOMOUT,
+        },
+        ACCEL {
+            fVirt: ctrl,
+            key: VK_0.0,
+            cmd: ID_VIEW_ZOOMRESET,
+        },
+        // Help — F1 opens the About dialog. Plain virtual key
+        // (no modifier bits) so any F1 press from the main
+        // window dispatches `ID_HELP_ABOUT`. Scintilla doesn't
+        // bind F1 natively so there's no contention with the
+        // editor's keyboard table.
+        ACCEL {
+            fVirt: ACCEL_VIRT_FLAGS(FVIRTKEY.0),
+            key: VK_F1.0,
+            cmd: ID_HELP_ABOUT,
+        },
+    ]
+}
+
 /// `initial_path` (if `Some`) is queued for opening immediately after
 /// the window is shown — same code path as drag-and-drop and as
 /// session-restore. Used for Phase 2 demo verification and for
@@ -9101,6 +9303,15 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             }
         }
 
+        // Build the initial accelerator table. Lives on
+        // WindowState (rather than a `run()`-local) so plugin-
+        // driven mutations (`NPPM_REMOVESHORTCUTBYCMDID`) can
+        // replace the handle. The pump reads the slot fresh on
+        // every iteration so a recreate inside a NPPM dispatch
+        // takes effect on the very next keystroke.
+        let initial_accels = build_default_accel_table();
+        let initial_accel_handle: HACCEL = CreateAcceleratorTableW(&initial_accels)?;
+
         // Heap-allocate the WindowState. We resolve and queue the
         // initial-open path while we still own the box (i.e.
         // BEFORE installing it in `GWLP_USERDATA`), so there's
@@ -9141,6 +9352,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             tab_drag: None,
             editor,
             shell,
+            accel_handle: initial_accel_handle,
         });
 
         // Resolve the initial files:
@@ -9390,95 +9602,13 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         //     Save As (Ctrl+Shift+S), Close (Ctrl+W).
         //   - Search: Find / Replace / Find-in-Files / Goto Line.
         //   - View: Zoom In / Zoom Out / Restore Zoom.
-        let ctrl = ACCEL_VIRT_FLAGS(FCONTROL.0 | FVIRTKEY.0);
-        let ctrl_shift = ACCEL_VIRT_FLAGS(FCONTROL.0 | FSHIFT.0 | FVIRTKEY.0);
-        let accels = [
-            // File
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_N.0,
-                cmd: ID_FILE_NEW,
-            },
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_O.0,
-                cmd: ID_FILE_OPEN,
-            },
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_S.0,
-                cmd: ID_FILE_SAVE,
-            },
-            ACCEL {
-                fVirt: ctrl_shift,
-                key: VK_S.0,
-                cmd: ID_FILE_SAVE_AS,
-            },
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_W.0,
-                cmd: ID_FILE_CLOSE,
-            },
-            // Search
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_F.0,
-                cmd: ID_SEARCH_FIND,
-            },
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_H.0,
-                cmd: ID_SEARCH_REPLACE,
-            },
-            ACCEL {
-                fVirt: ctrl_shift,
-                key: VK_F.0,
-                cmd: ID_SEARCH_FINDINFILES,
-            },
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_G.0,
-                cmd: ID_SEARCH_GOTOLINE,
-            },
-            // Find Next / Find Previous repeat shortcuts.
-            ACCEL {
-                fVirt: ACCEL_VIRT_FLAGS(FVIRTKEY.0),
-                key: VK_F3.0,
-                cmd: ID_SEARCH_FINDNEXT,
-            },
-            ACCEL {
-                fVirt: ACCEL_VIRT_FLAGS(FSHIFT.0 | FVIRTKEY.0),
-                key: VK_F3.0,
-                cmd: ID_SEARCH_FINDPREV,
-            },
-            // View
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_OEM_PLUS.0,
-                cmd: ID_VIEW_ZOOMIN,
-            },
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_OEM_MINUS.0,
-                cmd: ID_VIEW_ZOOMOUT,
-            },
-            ACCEL {
-                fVirt: ctrl,
-                key: VK_0.0,
-                cmd: ID_VIEW_ZOOMRESET,
-            },
-            // Help — F1 opens the About dialog. Plain virtual key
-            // (no modifier bits) so any F1 press from the main
-            // window dispatches `ID_HELP_ABOUT`. Scintilla doesn't
-            // bind F1 natively so there's no contention with the
-            // editor's keyboard table.
-            ACCEL {
-                fVirt: ACCEL_VIRT_FLAGS(FVIRTKEY.0),
-                key: VK_F1.0,
-                cmd: ID_HELP_ABOUT,
-            },
-        ];
-        let haccel: HACCEL = CreateAcceleratorTableW(&accels)?;
+        //
+        // The pump reads `state.accel_handle` fresh on every
+        // iteration so plugin-driven mutations
+        // (`NPPM_REMOVESHORTCUTBYCMDID` and friends) take effect
+        // on the very next keystroke. The handle stored on
+        // `WindowState` is the one updated when the table is
+        // rebuilt; this initial creation seeds it.
 
         // Standard message loop with accelerator translation.
         // The Find/Replace dialog is modeless, so its messages must
@@ -9503,8 +9633,20 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                     // the outer borrow were still alive at that
                     // point we'd produce two `&mut WindowState`
                     // referring to the same slot — aliasing UB.
-                    let dlg_handle: Option<HWND> =
-                        state_from_hwnd(main_hwnd).and_then(|s| s.find_replace_dlg);
+                    // Pull the dialog handle AND the live HACCEL
+                    // out of `WindowState` in the same `&mut`
+                    // borrow scope, then drop the borrow before
+                    // any synchronous re-entry. Reading the
+                    // accel_handle fresh each iteration is what
+                    // makes plugin-driven mutations
+                    // (`NPPM_REMOVESHORTCUTBYCMDID`) take effect
+                    // on the next keystroke without restarting
+                    // the message loop — the handle on
+                    // `WindowState` is the one the recreate path
+                    // updates.
+                    let (dlg_handle, haccel): (Option<HWND>, HACCEL) = state_from_hwnd(main_hwnd)
+                        .map(|s| (s.find_replace_dlg, s.accel_handle))
+                        .unwrap_or((None, HACCEL::default()));
                     let mut handled = false;
                     if let Some(dlg) = dlg_handle {
                         if IsWindow(Some(dlg)).as_bool() && IsDialogMessageW(dlg, &msg).as_bool() {
@@ -11395,6 +11537,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                         tab_hwnd: state.tab_hwnd,
                                         toolbar_hwnd: state.toolbar_hwnd,
                                         main_menu: state.main_menu,
+                                        accel_handle: &raw mut state.accel_handle,
                                         editor: state.editor,
                                     };
                                     <Win32Ui as UiPlatform>::update_status(
@@ -11895,6 +12038,29 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     let _ = windows::Win32::UI::Controls::ImageList_Destroy(Some(
                         state.toolbar_image_list,
                     ));
+                }
+
+                // Free the accelerator table. Same "OS would
+                // reclaim it at process exit anyway, but explicit
+                // teardown matches the project's leak-nothing
+                // pattern" rationale as the imagelist above. The
+                // message pump already exited (we're in the
+                // wnd_proc reachable only after `GetMessageW`
+                // returns 0 from `WM_QUIT`), so no
+                // `TranslateAcceleratorW` call can race the
+                // destroy.
+                if let Some(state) = state_from_hwnd(hwnd) {
+                    let h = state.accel_handle;
+                    if !h.is_invalid() {
+                        let _ = DestroyAcceleratorTable(h);
+                        // Zero the slot so a buggy late call
+                        // path (e.g. a stray `Win32Ui` that
+                        // somehow outlived `WindowState`) reads
+                        // an invalid handle and cleanly
+                        // short-circuits rather than passing a
+                        // freed HACCEL to a Win32 API.
+                        state.accel_handle = HACCEL::default();
+                    }
                 }
 
                 // Reclaim the WindowState box. After this point, any
