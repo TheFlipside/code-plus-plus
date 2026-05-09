@@ -164,6 +164,31 @@ pub const NPPM_SETLINENUMBERWIDTHMODE: u32 = NPPMSG + 99;
 pub const NPPM_GETLINENUMBERWIDTHMODE: u32 = NPPMSG + 100;
 pub const NPPM_GETBOOKMARKID: u32 = NPPMSG + 101;
 pub const NPPM_GETZOOMLEVEL: u32 = NPPMSG + 102;
+// +103..+109 are unimplemented upstream offsets — Code++ does
+// not declare those names because plugins compiled against a
+// future N++ header that adds them would still link via the
+// dispatcher's "unknown in-range NPPM" handler (returns 0 +
+// trace-warn).
+/// Returns `BOOL` — TRUE iff the host is currently rendering its
+/// own chrome in dark mode. Plugins watch the system theme via
+/// [`NPPN_DARKMODECHANGED`] then re-read this value to know
+/// whether the host is actually following the system flip (the
+/// user can override host-level dark mode independently of the
+/// system setting). Code++ returns FALSE today — Phase 5 wires
+/// up the host-side dark-mode rendering.
+pub const NPPM_ISDARKMODEENABLED: u32 = NPPMSG + 110;
+/// wparam: size of the plugin's `NppDarkModeColors` struct
+///         (host validates against `sizeof(NppDarkModeColors)`).
+/// lparam: pointer to the plugin's `NppDarkModeColors`.
+/// Returns `BOOL` — TRUE if the host wrote 12 `COLORREF`s into
+/// the buffer, FALSE otherwise.
+///
+/// Code++ today returns FALSE because the host has no dark-mode
+/// palette to share (no dark mode rendering yet; Phase 5 polish).
+/// Plugins that gate on [`NPPM_ISDARKMODEENABLED`] (which also
+/// returns FALSE) skip the call entirely and never observe the
+/// gap.
+pub const NPPM_GETDARKMODECOLORS: u32 = NPPMSG + 111;
 
 /// `NPPM_SETLINENUMBERWIDTHMODE` / `GETLINENUMBERWIDTHMODE`
 /// values. Match the upstream `LineNumberWidthMode` enum so
@@ -1187,6 +1212,23 @@ pub trait HostServices {
     /// Returns `true` on success; `false` for null `hicon`,
     /// imagelist-add failure, or `TB_ADDBUTTONS` failure.
     fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: crate::ffi::Hwnd) -> bool;
+
+    /// Returns `true` iff the host is currently rendering its
+    /// own chrome in dark mode. Drives
+    /// [`NPPM_ISDARKMODEENABLED`]. Code++ Phase 4 returns
+    /// `false` unconditionally — host-side dark-mode rendering
+    /// is Phase 5 polish (DESIGN.md §7.4). Once Phase 5 lands
+    /// the impl reads the host's live theme state.
+    fn is_dark_mode_enabled(&self) -> bool;
+
+    /// Write the host's live dark-mode palette into `out` if
+    /// dark mode is active, otherwise return `false` without
+    /// touching `out`. Drives [`NPPM_GETDARKMODECOLORS`].
+    /// Code++ Phase 4 returns `false` — host has no dark-mode
+    /// palette to share (no dark mode rendering yet). Plugins
+    /// gating on [`Self::is_dark_mode_enabled`] (which also
+    /// returns `false`) never reach this call in production.
+    fn dark_mode_colors(&self, out: &mut crate::ffi::NppDarkModeColors) -> bool;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -2409,6 +2451,73 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 
         NPPM_GETZOOMLEVEL => services.editor_zoom_level() as isize,
 
+        NPPM_ISDARKMODEENABLED => {
+            // No args. Returns BOOL — TRUE iff the host renders
+            // its own chrome in dark mode. Code++ Phase 4 has
+            // no dark-mode rendering, so this always returns
+            // FALSE; plugins watching `NPPN_DARKMODECHANGED`
+            // and gating on this query gracefully skip their
+            // dark-mode code paths.
+            services.is_dark_mode_enabled() as isize
+        }
+
+        NPPM_GETDARKMODECOLORS => {
+            // wparam: size of the plugin's `NppDarkModeColors`
+            //         struct (must equal `sizeof(NppDarkModeColors)`).
+            // lparam: pointer to the plugin's
+            //         `NppDarkModeColors` buffer.
+            // Returns: TRUE if 12 COLORREFs were written,
+            //         FALSE for bad args / dark mode not active.
+            //
+            // Reject NULL / negative lparam (kernel-mode pointer
+            // guard), then validate `wparam` against the
+            // expected struct size before dereferencing — a
+            // mismatched size means the plugin and host disagree
+            // on the layout; writing fewer or more fields than
+            // the plugin allocated is undefined behaviour
+            // either way. The size match keeps the layout
+            // contract enforced at the FFI boundary.
+            if lparam <= 0 {
+                return Some(0);
+            }
+            let expected_size = core::mem::size_of::<crate::ffi::NppDarkModeColors>();
+            // Exact-size match required — both "too small" and
+            // "too big" are rejected. Matches upstream N++
+            // behaviour and stops a plugin compiled against a
+            // future header (with a wider struct) from coaxing
+            // the host into reading-past or writing-past its
+            // actual buffer.
+            if wparam != expected_size {
+                tracing::warn!(
+                    plugin_size = wparam,
+                    host_size = expected_size,
+                    "NPPM_GETDARKMODECOLORS: struct size mismatch — refusing to write"
+                );
+                return Some(0);
+            }
+            let out = lparam as *mut crate::ffi::NppDarkModeColors;
+            // SAFETY: plugin promises `out` is a non-null
+            // pointer to a writable `NppDarkModeColors`-sized
+            // allocation that lives for the duration of this
+            // call. Alignment is NOT required — `write_unaligned`
+            // accepts any pointer valid for writes, regardless of
+            // alignment. We use it specifically because plugin
+            // C-struct allocations may end up packed (the
+            // plugin may declare its struct inside a `#pragma
+            // pack(1)` region or on a non-aligned heap), so an
+            // aligned `write` would be UB. The wparam-size guard
+            // above narrows "valid for writes of T-many bytes" to
+            // exactly the right size.
+            let mut staging = crate::ffi::NppDarkModeColors::default();
+            if !services.dark_mode_colors(&mut staging) {
+                return Some(0);
+            }
+            unsafe {
+                core::ptr::write_unaligned(out, staging);
+            }
+            1
+        }
+
         NPPM_GETEDITORDEFAULTFOREGROUNDCOLOR => {
             // Returns COLORREF (0x00BBGGRR) of STYLE_DEFAULT.
             services.editor_default_fg_color() as isize
@@ -2880,6 +2989,21 @@ mod tests {
         /// this to a non-zero sentinel and assert it lands in
         /// the dispatcher's return value.
         plugin_scintilla_return: usize,
+        /// `NPPM_ISDARKMODEENABLED` mock state. Defaults to
+        /// `false` (matches production: Code++ Phase 4 has no
+        /// dark mode); tests that exercise the TRUE branch
+        /// flip it.
+        dark_mode_enabled: bool,
+        /// Palette `NPPM_GETDARKMODECOLORS` writes when the
+        /// `dark_mode_colors_succeeds` flag is set. Defaults
+        /// to all zeros; tests that need to verify the write
+        /// path set distinct values per field.
+        dark_mode_palette: crate::ffi::NppDarkModeColors,
+        /// Whether the mock's `dark_mode_colors` reports
+        /// success (writes the palette) or failure (no write).
+        /// Defaults to `false` matching production's
+        /// "FALSE because no dark mode active" path.
+        dark_mode_colors_succeeds: bool,
         /// Registered dock-dialog entries from
         /// `NPPM_DMMREGASDCKDLG`. Each tuple is
         /// `(h_client_usize, name, module_name, visible)`. The
@@ -3387,6 +3511,17 @@ mod tests {
             self.toolbar_icons.push((cmd_id, hicon as usize));
             self.toolbar_icon_succeeds
         }
+        fn is_dark_mode_enabled(&self) -> bool {
+            self.dark_mode_enabled
+        }
+        fn dark_mode_colors(&self, out: &mut crate::ffi::NppDarkModeColors) -> bool {
+            if self.dark_mode_colors_succeeds {
+                *out = self.dark_mode_palette;
+                true
+            } else {
+                false
+            }
+        }
         fn create_plugin_scintilla(&mut self, parent: crate::ffi::Hwnd) -> crate::ffi::Hwnd {
             self.record(format!(
                 "create_plugin_scintilla(parent=0x{:x})",
@@ -3851,6 +3986,153 @@ mod tests {
         let n = Notification::BeforeShutdown;
         let default = 0xDEAD_BEEF_usize as Hwnd;
         assert_eq!(n.hwnd_from(default), default);
+    }
+
+    // --- NPPM_ISDARKMODEENABLED / NPPM_GETDARKMODECOLORS ---------
+
+    #[test]
+    fn is_dark_mode_enabled_returns_zero_when_disabled() {
+        // Production default: Code++ Phase 4 has no host-side
+        // dark-mode rendering, so the trait reports false and
+        // the dispatcher echoes 0.
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ISDARKMODEENABLED, 0, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn is_dark_mode_enabled_returns_one_when_enabled() {
+        // Phase-5 path: host-side dark mode active. Trait
+        // reports true; dispatcher echoes 1.
+        let mut s = MockServices {
+            dark_mode_enabled: true,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ISDARKMODEENABLED, 0, 0) };
+        assert_eq!(r, Some(1));
+    }
+
+    #[test]
+    fn get_dark_mode_colors_writes_palette_on_success() {
+        use crate::ffi::NppDarkModeColors;
+        // Phase-5 path: dark mode active and a palette is
+        // available. Distinct values per field so we can
+        // assert the dispatcher wrote each through to the
+        // plugin's buffer.
+        let palette = NppDarkModeColors {
+            background: 0x111111,
+            ctrl_background: 0x222222,
+            hot_background: 0x333333,
+            dlg_background: 0x444444,
+            error_background: 0x555555,
+            text: 0x666666,
+            darker_text: 0x777777,
+            disabled_text: 0x888888,
+            link_text: 0x999999,
+            edge: 0xAAAAAA,
+            hot_edge: 0xBBBBBB,
+            disabled_edge: 0xCCCCCC,
+        };
+        let mut s = MockServices {
+            dark_mode_colors_succeeds: true,
+            dark_mode_palette: palette,
+            ..Default::default()
+        };
+        let mut out = NppDarkModeColors::default();
+        let size = core::mem::size_of::<NppDarkModeColors>();
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETDARKMODECOLORS,
+                size,
+                &mut out as *mut NppDarkModeColors as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(out, palette);
+    }
+
+    #[test]
+    fn get_dark_mode_colors_returns_zero_on_disabled() {
+        // Code++ Phase 4 default: no dark mode → trait reports
+        // false → dispatcher echoes 0 and the plugin's buffer
+        // is left untouched.
+        use crate::ffi::NppDarkModeColors;
+        let mut s = MockServices::default();
+        let mut out = NppDarkModeColors {
+            background: 0xDEAD_BEEF,
+            ..NppDarkModeColors::default()
+        };
+        let pre = out;
+        let size = core::mem::size_of::<NppDarkModeColors>();
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETDARKMODECOLORS,
+                size,
+                &mut out as *mut NppDarkModeColors as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+        // The buffer must not have been touched on the
+        // failure path — proves the dispatcher gates the
+        // write on the trait's return value.
+        assert_eq!(out, pre);
+    }
+
+    #[test]
+    fn get_dark_mode_colors_null_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let size = core::mem::size_of::<crate::ffi::NppDarkModeColors>();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETDARKMODECOLORS, size, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn get_dark_mode_colors_negative_lparam_returns_zero() {
+        // Same kernel-mode-pointer guard as the rest of the
+        // pointer-payload messages.
+        let mut s = MockServices::default();
+        let size = core::mem::size_of::<crate::ffi::NppDarkModeColors>();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETDARKMODECOLORS, size, -1isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn get_dark_mode_colors_size_mismatch_returns_zero() {
+        // wparam-size disagreement → dispatcher refuses to
+        // write. Defends against plugin/host layout drift.
+        // Both "too small" and "too big" hit the `!=` branch
+        // — exact-match is the contract. The buffer must NOT
+        // have been touched on either path; the sentinel
+        // assertion below proves the early-return runs before
+        // any write.
+        use crate::ffi::NppDarkModeColors;
+        let mut s = MockServices {
+            dark_mode_colors_succeeds: true,
+            ..Default::default()
+        };
+        let correct = core::mem::size_of::<NppDarkModeColors>();
+        let sentinel = NppDarkModeColors {
+            background: 0xDEAD_BEEF,
+            ..NppDarkModeColors::default()
+        };
+        for bad_size in [correct - 4, correct + 4] {
+            let mut out = sentinel;
+            let r = unsafe {
+                dispatch_nppm(
+                    &mut s,
+                    NPPM_GETDARKMODECOLORS,
+                    bad_size,
+                    &mut out as *mut NppDarkModeColors as isize,
+                )
+            };
+            assert_eq!(r, Some(0), "bad_size = {bad_size}");
+            assert_eq!(
+                out, sentinel,
+                "size-mismatch path must leave the buffer untouched (bad_size = {bad_size})"
+            );
+        }
     }
 
     #[test]

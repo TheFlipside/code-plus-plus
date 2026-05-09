@@ -380,6 +380,20 @@ pub trait UiPlatform {
     #[cfg(target_os = "windows")]
     fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: codepp_plugin_host::Hwnd) -> bool;
 
+    /// Whether the host is currently rendering its own chrome
+    /// in dark mode. Drives `NPPM_ISDARKMODEENABLED`. Code++
+    /// Phase 4 returns `false` (no host-side dark mode); Phase
+    /// 5 wires the live theme state. Same `cfg(windows)` gate
+    /// as the other plugin-host-typed methods.
+    #[cfg(target_os = "windows")]
+    fn is_dark_mode_enabled(&self) -> bool;
+
+    /// Write the host's dark-mode palette into `out` if dark
+    /// mode is active. Drives `NPPM_GETDARKMODECOLORS`. Code++
+    /// Phase 4 returns `false` without touching `out`.
+    #[cfg(target_os = "windows")]
+    fn dark_mode_colors(&self, out: &mut codepp_plugin_host::NppDarkModeColors) -> bool;
+
     /// Create a fresh Scintilla control as a child of the
     /// plugin-supplied `parent` HWND. Drives
     /// `NPPM_CREATESCINTILLAHANDLE`. Returns the new HWND on
@@ -4420,6 +4434,14 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.ui.add_toolbar_icon(cmd_id, hicon)
     }
 
+    fn is_dark_mode_enabled(&self) -> bool {
+        self.ui.is_dark_mode_enabled()
+    }
+
+    fn dark_mode_colors(&self, out: &mut codepp_plugin_host::NppDarkModeColors) -> bool {
+        self.ui.dark_mode_colors(out)
+    }
+
     fn create_plugin_scintilla(
         &mut self,
         parent: codepp_plugin_host::Hwnd,
@@ -5056,6 +5078,17 @@ mod tests {
             // modeless-dialog mock above. The dispatcher mock
             // exercises the success/failure surface.
             true
+        }
+        #[cfg(target_os = "windows")]
+        fn is_dark_mode_enabled(&self) -> bool {
+            // FakeUi has no theme state — matches production:
+            // Code++ Phase 4 has no host-side dark mode.
+            false
+        }
+        #[cfg(target_os = "windows")]
+        fn dark_mode_colors(&self, _out: &mut codepp_plugin_host::NppDarkModeColors) -> bool {
+            // No palette to share when dark mode is off.
+            false
         }
         #[cfg(target_os = "windows")]
         fn create_plugin_scintilla(

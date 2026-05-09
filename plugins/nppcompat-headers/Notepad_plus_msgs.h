@@ -643,6 +643,56 @@ typedef struct CommunicationInfo_ {
  *     `SCI_GETZOOM`). Range is approximately [-10, 20]. */
 #define NPPM_GETZOOMLEVEL                 (NPPMSG + 102)
 
+/* Dark-mode query family. Plugins observe a system theme flip
+ * via `NPPN_DARKMODECHANGED` then re-read the live host state
+ * via these two queries. Code++ Phase 4 has no host-side dark
+ * mode yet (DESIGN.md §7.4), so both queries return FALSE; the
+ * notifications still fire so dark-mode-aware plugins can react
+ * to the system flip immediately. */
+
+/* v3: returns BOOL — TRUE iff the host is currently rendering
+ *     its own chrome in dark mode. The user can override the
+ *     system theme independently of the system setting, so
+ *     plugins should re-read this on every NPPN_DARKMODECHANGED
+ *     rather than caching from the system signal alone.
+ *     Code++ Phase 4: always FALSE. */
+#define NPPM_ISDARKMODEENABLED            (NPPMSG + 110)
+
+/* Plugin-side payload struct for NPPM_GETDARKMODECOLORS — 12 ×
+ * COLORREF (each `0x00BBGGRR`, 4 bytes), 48 bytes total on
+ * every platform. Plugins allocate one instance and pass its
+ * size + pointer in wParam / lParam. */
+#ifndef NPP_DARK_MODE_COLORS_DEFINED
+#define NPP_DARK_MODE_COLORS_DEFINED
+typedef struct NppDarkModeColors_ {
+    COLORREF background;
+    COLORREF ctrlBackground;
+    COLORREF hotBackground;
+    COLORREF dlgBackground;
+    COLORREF errorBackground;
+    COLORREF text;
+    COLORREF darkerText;
+    COLORREF disabledText;
+    COLORREF linkText;
+    COLORREF edge;
+    COLORREF hotEdge;
+    COLORREF disabledEdge;
+} NppDarkModeColors;
+#endif
+
+/* v3: write the host's dark-mode palette into the plugin's
+ *     `NppDarkModeColors` buffer.
+ *     wParam: sizeof(NppDarkModeColors) — the host validates
+ *             against its own `sizeof` and refuses to write
+ *             on mismatch (layout-drift defence).
+ *     lParam: pointer to the plugin's NppDarkModeColors.
+ *     Returns: BOOL — TRUE if 12 COLORREFs were written,
+ *             FALSE otherwise. Code++ Phase 4: always FALSE
+ *             (no dark mode active → no palette to share).
+ *             Plugins that gate on NPPM_ISDARKMODEENABLED
+ *             skip the call and never observe the gap. */
+#define NPPM_GETDARKMODECOLORS            (NPPMSG + 111)
+
 /*
  * RUNCOMMAND_USER family. Notepad++ split a handful of host-state-
  * as-environment queries (the application's directory, the running

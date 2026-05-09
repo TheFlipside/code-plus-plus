@@ -281,6 +281,37 @@ pub struct TbRect {
     pub bottom: i32,
 }
 
+/// Mirror of upstream Notepad++'s `NppDarkMode::Colors`. The
+/// payload struct for `NPPM_GETDARKMODECOLORS`: 12 × Win32
+/// `COLORREF` (each `0x00BBGGRR`, packed as `u32`), totalling
+/// 48 bytes on every platform regardless of pointer width.
+///
+/// Field order matches upstream verbatim — plugins compiled
+/// against the public ABI parse the fields by offset, so any
+/// reorder here is an ABI break.
+///
+/// The host writes the 12 colours through this struct when
+/// dark mode is active. Code++ today returns FALSE from
+/// `NPPM_ISDARKMODEENABLED` and `NPPM_GETDARKMODECOLORS` —
+/// the host has no dark-mode rendering yet (Phase 5 polish,
+/// DESIGN.md §7.4) — so the buffer is never written.
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct NppDarkModeColors {
+    pub background: u32,
+    pub ctrl_background: u32,
+    pub hot_background: u32,
+    pub dlg_background: u32,
+    pub error_background: u32,
+    pub text: u32,
+    pub darker_text: u32,
+    pub disabled_text: u32,
+    pub link_text: u32,
+    pub edge: u32,
+    pub hot_edge: u32,
+    pub disabled_edge: u32,
+}
+
 /// Mirror of Notepad++'s `tTbData` — the registration payload for
 /// `NPPM_DMMREGASDCKDLG`. Layout matches the public ABI declared
 /// in `plugins/nppcompat-headers/Docking.h`:
@@ -538,5 +569,17 @@ mod tests {
     #[test]
     fn tb_rect_is_four_i32() {
         assert_eq!(core::mem::size_of::<TbRect>(), 16);
+    }
+
+    #[test]
+    fn npp_dark_mode_colors_is_48_bytes() {
+        // 12 × COLORREF (each u32, 4 bytes) = 48. The struct's
+        // size is the same on x86 and x64 because all fields are
+        // primitives, so no per-arch test pair is needed.
+        assert_eq!(
+            core::mem::size_of::<NppDarkModeColors>(),
+            48,
+            "NppDarkModeColors layout regressed; plugins reading the upstream struct would parse garbage",
+        );
     }
 }
