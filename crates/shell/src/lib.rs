@@ -380,6 +380,20 @@ pub trait UiPlatform {
     #[cfg(target_os = "windows")]
     fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: codepp_plugin_host::Hwnd) -> bool;
 
+    /// Create a fresh Scintilla control as a child of the
+    /// plugin-supplied `parent` HWND. Drives
+    /// `NPPM_CREATESCINTILLAHANDLE`. Returns the new HWND on
+    /// success, NULL on failure. The plugin owns the new
+    /// control's lifetime (must `DestroyWindow` before the
+    /// parent goes away). Same `cfg(windows)` gate rationale
+    /// as the other plugin-HWND methods — `Hwnd` comes from
+    /// `plugin-host`.
+    #[cfg(target_os = "windows")]
+    fn create_plugin_scintilla(
+        &mut self,
+        parent: codepp_plugin_host::Hwnd,
+    ) -> codepp_plugin_host::Hwnd;
+
     /// Pull the current text content of the buffer backed by the
     /// Scintilla document at `scintilla_doc`. The implementation may
     /// briefly bind that document to the editor view to read it
@@ -4337,6 +4351,13 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.ui.add_toolbar_icon(cmd_id, hicon)
     }
 
+    fn create_plugin_scintilla(
+        &mut self,
+        parent: codepp_plugin_host::Hwnd,
+    ) -> codepp_plugin_host::Hwnd {
+        self.ui.create_plugin_scintilla(parent)
+    }
+
     fn trigger_tab_context_menu(&mut self, view: i32, tab_idx: i32) -> bool {
         // Code++'s tab strip doesn't yet ship a context menu (no
         // Close / Close-Others / Rename / Move-to-other-view
@@ -4946,6 +4967,20 @@ mod tests {
             // modeless-dialog mock above. The dispatcher mock
             // exercises the success/failure surface.
             true
+        }
+        #[cfg(target_os = "windows")]
+        fn create_plugin_scintilla(
+            &mut self,
+            _parent: codepp_plugin_host::Hwnd,
+        ) -> codepp_plugin_host::Hwnd {
+            // FakeUi can't create a real Scintilla — returns
+            // NULL (the documented "creation failed" sentinel).
+            // The dispatcher mock in `dispatch.rs` exercises
+            // the success/failure return-routing surface; this
+            // path only matters for shell-level integration
+            // tests, which don't yet drive plugin Scintilla
+            // creation.
+            core::ptr::null_mut()
         }
         fn capture_text_from_doc(&mut self, _scintilla_doc: isize) -> String {
             // Tests don't model per-doc text storage — they share

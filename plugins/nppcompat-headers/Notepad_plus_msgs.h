@@ -183,6 +183,17 @@ typedef struct sessionInfo_ {
 
 /* Scintilla handle management -------------------------------------- */
 
+/* v3: create a fresh Scintilla control as a child of the
+ *     plugin-supplied parent HWND (lParam). wParam is unused.
+ *     Returns the new HWND as LRESULT, or 0 on failure (NULL /
+ *     dead parent, CreateWindowExW failure). Plugin owns the
+ *     new control's lifetime — it MUST DestroyWindow before
+ *     the parent goes away. The control is initialised with
+ *     SCI_SETCODEPAGE = SC_CP_UTF8 so it inherits the host's
+ *     UTF-8-internal invariant; plugins are free to override
+ *     that and any other Scintilla setting via direct
+ *     SendMessage calls (or via SCI_GETDIRECTFUNCTION /
+ *     SCI_GETDIRECTPOINTER for the hot-path direct-call API). */
 #define NPPM_CREATESCINTILLAHANDLE        (NPPMSG + 20)
 #define NPPM_DESTROYSCINTILLAHANDLE       (NPPMSG + 21)  /* deprecated upstream */
 /* v3: number of user-defined languages (UDL) currently

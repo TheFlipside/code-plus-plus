@@ -76,6 +76,7 @@ pub const NPPM_SAVESESSION: u32 = NPPMSG + 15;
 pub const NPPM_SAVECURRENTSESSION: u32 = NPPMSG + 16;
 pub const NPPM_GETOPENFILENAMESPRIMARY: u32 = NPPMSG + 17;
 pub const NPPM_GETOPENFILENAMESSECOND: u32 = NPPMSG + 18;
+pub const NPPM_CREATESCINTILLAHANDLE: u32 = NPPMSG + 20;
 pub const NPPM_GETNBUSERLANG: u32 = NPPMSG + 22;
 pub const NPPM_GETCURRENTDOCINDEX: u32 = NPPMSG + 23;
 pub const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
@@ -942,6 +943,27 @@ pub trait HostServices {
     /// to `IsDialogMessageW`. Returns `true` on success.
     fn register_modeless_dialog(&mut self, dlg: crate::ffi::Hwnd, register: bool) -> bool;
 
+    /// Create a fresh Scintilla control as a child of the
+    /// plugin-supplied `parent` HWND. Drives
+    /// [`NPPM_CREATESCINTILLAHANDLE`]. Returns the new HWND on
+    /// success, NULL on failure (NULL parent, dead parent
+    /// HWND, `CreateWindowExW` failure, …).
+    ///
+    /// The plugin owns the new control's lifetime; it MUST
+    /// `DestroyWindow` the HWND before its parent goes away.
+    /// (Win32 will destroy children when the parent dies, but
+    /// plugins typically host the new Scintilla in a dialog
+    /// they create separately and they're responsible for
+    /// destroying both in tandem.)
+    ///
+    /// The new control is initialised with `SCI_SETCODEPAGE
+    /// = SC_CP_UTF8` so it matches the host's UTF-8-internal
+    /// invariant. Plugins are free to override that and any
+    /// other Scintilla setting via direct `SendMessage` calls
+    /// (or via `SCI_GETDIRECTFUNCTION` / `SCI_GETDIRECTPOINTER`
+    /// for the hot-path direct-call API).
+    fn create_plugin_scintilla(&mut self, parent: crate::ffi::Hwnd) -> crate::ffi::Hwnd;
+
     /// Add a plugin-supplied icon to the host toolbar bound to
     /// the given `cmd_id`. Drives [`NPPM_ADDTOOLBARICON`]. The
     /// icon is added to the toolbar's HIMAGELIST via
@@ -1154,6 +1176,32 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             } else {
                 0
             }
+        }
+
+        NPPM_CREATESCINTILLAHANDLE => {
+            // wparam: unused (upstream ABI). lparam: parent HWND
+            // the plugin wants the new Scintilla parented to —
+            // typically a dialog or container the plugin
+            // created. Returns: HWND of the new Scintilla
+            // control as `isize`, or 0 on failure (NULL parent,
+            // dead parent, `CreateWindowExW` failure).
+            //
+            // Plugin owns the new control's lifetime; it MUST
+            // `DestroyWindow` the HWND before its parent goes
+            // away. Win32 will tear it down with the parent if
+            // the plugin forgets, but the plugin is on the hook
+            // for orderly cleanup.
+            //
+            // Reject NULL / negative lparam up front — same
+            // kernel-mode-pointer guard MODELESSDIALOG /
+            // ADDTOOLBARICON / allocator messages use. A NULL
+            // parent would create a top-level Scintilla, which
+            // isn't what the upstream ABI promises.
+            if lparam <= 0 {
+                return Some(0);
+            }
+            let parent = lparam as crate::ffi::Hwnd;
+            services.create_plugin_scintilla(parent) as isize
         }
 
         NPPM_GETCURRENTDOCINDEX => {
@@ -2451,6 +2499,18 @@ mod tests {
         /// to `true`; tests that exercise the failure path flip
         /// it to simulate `ImageList_ReplaceIcon` returning -1.
         toolbar_icon_succeeds: bool,
+        /// Parent HWNDs the mock has been asked to create a
+        /// plugin-owned Scintilla under, in call order. Stored
+        /// as `usize` for the same reason as `modeless_dialogs`
+        /// — the production HostBridge translates back to
+        /// `HWND` at the trait boundary.
+        plugin_scintilla_parents: Vec<usize>,
+        /// HWND the mock returns from `create_plugin_scintilla`.
+        /// `0` (the default) simulates a `CreateWindowExW`
+        /// failure; tests that exercise the success path set
+        /// this to a non-zero sentinel and assert it lands in
+        /// the dispatcher's return value.
+        plugin_scintilla_return: usize,
         // recorded mutations
         log: RefCell<Vec<String>>,
     }
@@ -2944,6 +3004,14 @@ mod tests {
             ));
             self.toolbar_icons.push((cmd_id, hicon as usize));
             self.toolbar_icon_succeeds
+        }
+        fn create_plugin_scintilla(&mut self, parent: crate::ffi::Hwnd) -> crate::ffi::Hwnd {
+            self.record(format!(
+                "create_plugin_scintilla(parent=0x{:x})",
+                parent as usize
+            ));
+            self.plugin_scintilla_parents.push(parent as usize);
+            self.plugin_scintilla_return as crate::ffi::Hwnd
         }
     }
 
@@ -4859,6 +4927,58 @@ mod tests {
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_001, -1isize) };
         assert_eq!(r, Some(0));
+    }
+
+    // --- NPPM_CREATESCINTILLAHANDLE ---
+
+    #[test]
+    fn create_scintilla_handle_returns_host_hwnd_on_success() {
+        // Plugin sends a non-null parent HWND; host returns a
+        // freshly created Scintilla HWND. Dispatcher echoes the
+        // host's HWND back as `isize`.
+        let mut s = MockServices {
+            plugin_scintilla_return: 0xDEAD_BEEF_usize,
+            ..Default::default()
+        };
+        let parent = 0x1234_5678_isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_CREATESCINTILLAHANDLE, 0, parent) };
+        assert_eq!(r, Some(0xDEAD_BEEF_isize));
+        assert_eq!(s.plugin_scintilla_parents, vec![0x1234_5678_usize]);
+    }
+
+    #[test]
+    fn create_scintilla_handle_relays_host_failure_as_zero() {
+        // Host failure (CreateWindowExW returned NULL) ->
+        // mock's default `plugin_scintilla_return = 0` ->
+        // dispatcher returns 0. Trait was still called.
+        let mut s = MockServices::default();
+        let parent = 0xCAFE_isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_CREATESCINTILLAHANDLE, 0, parent) };
+        assert_eq!(r, Some(0));
+        assert_eq!(s.plugin_scintilla_parents, vec![0xCAFE_usize]);
+    }
+
+    #[test]
+    fn create_scintilla_handle_null_lparam_returns_zero() {
+        // NULL parent rejected up front — would create a
+        // top-level Scintilla, which isn't what the upstream
+        // ABI promises. Trait must NOT be called.
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_CREATESCINTILLAHANDLE, 0, 0) };
+        assert_eq!(r, Some(0));
+        assert!(s.plugin_scintilla_parents.is_empty());
+    }
+
+    #[test]
+    fn create_scintilla_handle_negative_lparam_returns_zero() {
+        // Same kernel-mode-pointer guard as MODELESSDIALOG /
+        // ADDTOOLBARICON / allocators / shortcut messages. A
+        // negative `lparam` on Win64 is a kernel-mode pointer;
+        // we never let it reach the host.
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_CREATESCINTILLAHANDLE, 0, -1isize) };
+        assert_eq!(r, Some(0));
+        assert!(s.plugin_scintilla_parents.is_empty());
     }
 
     #[test]

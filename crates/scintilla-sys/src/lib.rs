@@ -332,6 +332,16 @@ pub const SCI_SETKEYWORDS: u32 = 4005;
 // Style colour controls — set per style-index. Phase 4 m1 uses the
 // SetFore/SetBack pair to install a minimal default theme so the
 // demo gate ("open a .cpp, see colours") is visible.
+/// Set the buffer's codepage for byte-to-character mapping.
+/// The only value Code++ uses is `SC_CP_UTF8` — Scintilla treats
+/// the buffer as UTF-8, which lets the lexer / display / search
+/// machinery handle multi-byte characters correctly. Set on every
+/// Scintilla view at creation time, including plugin-owned ones
+/// surfaced via `NPPM_CREATESCINTILLAHANDLE`.
+pub const SCI_SETCODEPAGE: u32 = 2037;
+/// `SCI_SETCODEPAGE` value selecting UTF-8. Numeric value 65001
+/// (the same Win32 codepage id Microsoft assigns to UTF-8).
+pub const SC_CP_UTF8: u32 = 65001;
 pub const SCI_STYLESETFORE: u32 = 2051;
 pub const SCI_STYLESETBACK: u32 = 2052;
 pub const SCI_STYLESETBOLD: u32 = 2053;

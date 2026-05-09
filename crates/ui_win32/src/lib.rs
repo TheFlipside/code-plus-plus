@@ -48,12 +48,12 @@ use codepp_scintilla_sys::{
     SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM,
     SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN,
     SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER,
-    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETDOCPOINTER,
-    SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT,
-    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND,
-    SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL,
-    SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
-    SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_UPDATEUI,
+    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE,
+    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES,
+    SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
+    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
+    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
+    SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_UPDATEUI, SC_CP_UTF8,
     SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
     SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_TEXT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
     SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
@@ -122,7 +122,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR,
     WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
     WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP,
-    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -1643,6 +1643,142 @@ impl UiPlatform for Win32Ui {
             SendMessageW(self.toolbar_hwnd, TB_AUTOSIZE, None, None);
         }
         true
+    }
+
+    fn create_plugin_scintilla(
+        &mut self,
+        parent: codepp_plugin_host::Hwnd,
+    ) -> codepp_plugin_host::Hwnd {
+        // Create a Scintilla control as a child of the
+        // plugin-supplied `parent`. The Scintilla window class
+        // is already registered (`Scintilla_RegisterClasses`
+        // runs at startup), so `CreateWindowExW` against
+        // `SCINTILLA_CLASS` produces a fresh control with its
+        // own document, undo stack, and direct-call function
+        // pointer. The plugin owns the new HWND's lifetime.
+        //
+        // SAFETY: every Win32 call here runs on the UI thread
+        // (the trait method is invoked from a NPPM dispatch).
+        // The plugin's `Hwnd` opaque pointer is the same
+        // `*mut c_void` Win32 ABI uses for `HWND` — we wrap it
+        // back into windows-rs's newtype here. We never
+        // dereference it; we only feed it to `IsWindow` and
+        // pass it as the parent to `CreateWindowExW`.
+        //
+        // The returned HWND escapes into plugin address space:
+        // the plugin holds it past this function's lifetime
+        // and is contractually obliged to `DestroyWindow` it
+        // before the parent dies. The host has no lifetime
+        // hook to detect a misbehaving plugin's use-after-
+        // destroy; this is the same in-process "trust the
+        // plugin not to crash us" model Notepad++ uses (and
+        // documented in DESIGN.md §6.5).
+        let parent_hwnd = HWND(parent);
+        // Belt-and-suspenders null check. The dispatcher's
+        // `lparam <= 0` guard already rejects NULL via the
+        // NPPM path, but the `HostServices` trait is `pub` —
+        // a future direct caller (e.g. a Phase-5 GTK/Cocoa
+        // NPPM bridge) could bypass the dispatcher.
+        // `is_invalid()` is the canonical windows-rs null
+        // test; the `IsWindow` call below catches dead-but-
+        // non-null parents.
+        if parent_hwnd.is_invalid() {
+            return core::ptr::null_mut();
+        }
+        unsafe {
+            // Defensive: a plugin that passes a HWND it has
+            // already destroyed would otherwise feed a dead
+            // HWND to `CreateWindowExW`, which Win32 reports as
+            // a confusing "invalid window handle" error. Reject
+            // up front instead. `IsWindow` also rejects the
+            // `HWND_BROADCAST` pseudo-HWND (0xFFFF), the only
+            // positive Win32 pseudo-HWND value that would
+            // survive the dispatcher's `lparam <= 0` guard.
+            //
+            // TOCTOU note: Win32 has no atomic "create only if
+            // parent is live" syscall, so a plugin that
+            // destroys `parent_hwnd` from a worker thread
+            // between this `IsWindow` check and the
+            // `CreateWindowExW` call can race the host into
+            // either a `CreateWindowExW` failure (benign,
+            // logged below) or a child whose parent is
+            // garbage-collected indeterminately. The plugin is
+            // contractually responsible for not racing
+            // destroy-against-create on its own HWNDs; the
+            // host stays UI-thread-only for its own state, so
+            // it cannot itself introduce the race.
+            if !IsWindow(Some(parent_hwnd)).as_bool() {
+                tracing::warn!(
+                    parent = parent_hwnd.0 as usize,
+                    "NPPM_CREATESCINTILLAHANDLE: parent HWND is not a live window"
+                );
+                return core::ptr::null_mut();
+            }
+            // The host's executable module handle is the right
+            // hInstance for `CreateWindowExW` here — Scintilla's
+            // window class was registered against this module
+            // by `Scintilla_RegisterClasses` at startup. Using
+            // the plugin's DLL hInstance here would be wrong;
+            // the class is host-owned, not plugin-owned.
+            let instance = match GetModuleHandleW(None) {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "NPPM_CREATESCINTILLAHANDLE: GetModuleHandleW failed"
+                    );
+                    return core::ptr::null_mut();
+                }
+            };
+            // WS_CHILD: parented control, no caption / no system menu.
+            // No WS_VISIBLE: the plugin decides when to show — typical
+            // pattern is to size + show inside the plugin's own
+            // dialog/container after creation. WS_CLIPCHILDREN keeps
+            // any future child redraws (Scintilla itself doesn't add
+            // any in this configuration, but plugins occasionally
+            // overlay tooltips) from flickering. WS_VSCROLL /
+            // WS_HSCROLL match the styles N++ uses for plugin-owned
+            // Scintillas so plugin scroll messages have a real bar to
+            // drive.
+            let new_hwnd = match CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                SCINTILLA_CLASS,
+                PCWSTR::null(),
+                WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL | WS_HSCROLL,
+                0,
+                0,
+                0,
+                0,
+                Some(parent_hwnd),
+                None,
+                Some(instance.into()),
+                None,
+            ) {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        parent = parent_hwnd.0 as usize,
+                        "NPPM_CREATESCINTILLAHANDLE: CreateWindowExW failed"
+                    );
+                    return core::ptr::null_mut();
+                }
+            };
+            // Initialise the codepage to UTF-8 so plugin-owned
+            // Scintillas inherit the host's UTF-8-internal
+            // invariant. Scintilla 5.x defaults to SC_CP_UTF8
+            // already, but setting it explicitly is robust to
+            // a future Scintilla version flipping the default.
+            // Plugins that need a different codepage can
+            // override after the call returns.
+            SendMessageW(
+                new_hwnd,
+                SCI_SETCODEPAGE,
+                Some(WPARAM(SC_CP_UTF8 as usize)),
+                None,
+            );
+            new_hwnd.0
+        }
     }
 
     fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool {
