@@ -946,6 +946,15 @@ impl Shell {
         // a save-and-relaunch immediately after a drag picks up the
         // new active position even before any other state changes.
         self.session.active = self.active_tab;
+        // Queue NPPN_DOCORDERCHANGED so plugins that maintain
+        // per-tab UI state can re-sync from
+        // `NPPM_GETOPENFILENAMES`. Fired on real reorders only —
+        // the early `from == to` short-circuit above filters
+        // out no-op drags that "land back where they started"
+        // so plugins don't see a spurious "list changed" event.
+        #[cfg(target_os = "windows")]
+        self.pending_notifications
+            .push(Notification::DocOrderChanged);
         true
     }
 
@@ -1646,6 +1655,16 @@ impl Shell {
             .push(Notification::FileBeforeOpen);
 
         let Some(req_id) = self.loader.open(path.clone()) else {
+            // The loader's worker channel rejected the request
+            // (worker thread shut down, or the channel buffer
+            // is full). Pair the just-queued `FileBeforeOpen`
+            // with `FileLoadFailed` so a plugin tracking
+            // in-flight opens via BEFORE/AFTER doesn't leak
+            // state — same contract as the
+            // `apply_load_result` Err arm.
+            #[cfg(target_os = "windows")]
+            self.pending_notifications
+                .push(Notification::FileLoadFailed);
             return;
         };
         // Decide where the load result will land. If the active
@@ -1998,6 +2017,15 @@ impl Shell {
                     title: "Open failed".to_string(),
                     message: format!("{}: {}", err.path.display(), err.error),
                 });
+                // Pair every `FileBeforeOpen` issued by `open_file`
+                // with one of `FileOpened` / `FileLoadFailed`.
+                // Plugins that audit-log file activity rely on the
+                // pairing — without `FileLoadFailed` they'd never
+                // hear back about a failed open and would track
+                // an in-flight open forever.
+                #[cfg(target_os = "windows")]
+                self.pending_notifications
+                    .push(Notification::FileLoadFailed);
             }
         }
     }
@@ -3029,6 +3057,20 @@ impl Shell {
                 ),
             });
         }
+        // Queue NPPN_SNAPSHOTDIRTYFILELOADED so plugins that
+        // audit-log file activity treat this restore the same
+        // way they treat a fresh `FileOpened` — but with the
+        // distinct event code that signals "this came from the
+        // backup file, not a clean disk-load." Carries the
+        // freshly-allocated `id` so plugins can correlate with
+        // subsequent buffer-id-keyed events. Drained after
+        // the `&mut Shell` borrow ends, same pattern as the
+        // other lifecycle notifications.
+        #[cfg(target_os = "windows")]
+        self.pending_notifications
+            .push(Notification::SnapshotDirtyFileLoaded {
+                buffer_id: id as isize,
+            });
         new_idx
     }
 
@@ -7420,6 +7462,40 @@ mod tests {
         let mut shell = shell_with_synthetic_tabs(3, None);
         assert!(shell.move_tab(0, 2));
         assert_eq!(shell.active_tab, None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn move_tab_queues_doc_order_changed() {
+        // A real reorder must fire NPPN_DOCORDERCHANGED so plugins
+        // tracking per-tab UI state can re-sync from
+        // NPPM_GETOPENFILENAMES.
+        let mut shell = shell_with_synthetic_tabs(3, Some(0));
+        // Discard any setup notifications so the next drain
+        // unambiguously belongs to the move.
+        let _ = shell.take_notifications();
+        assert!(shell.move_tab(0, 2));
+        let n = shell.take_notifications();
+        assert!(
+            n.iter().any(|x| matches!(x, Notification::DocOrderChanged)),
+            "expected NPPN_DOCORDERCHANGED in {n:?}"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn move_tab_no_op_does_not_queue_doc_order_changed() {
+        // The early `from == to` short-circuit must not queue a
+        // notification — plugins shouldn't see a "list changed"
+        // event when nothing actually moved.
+        let mut shell = shell_with_synthetic_tabs(3, Some(1));
+        let _ = shell.take_notifications();
+        assert!(!shell.move_tab(1, 1));
+        let n = shell.take_notifications();
+        assert!(
+            !n.iter().any(|x| matches!(x, Notification::DocOrderChanged)),
+            "no-op move must not queue NPPN_DOCORDERCHANGED; got {n:?}"
+        );
     }
 
     #[test]

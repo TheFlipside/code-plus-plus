@@ -730,9 +730,31 @@ typedef enum LangType_ {
 #define NPPN_WORDSTYLESUPDATED     (NPPN_FIRST + 12)
 #define NPPN_SHORTCUTREMAPPED      (NPPN_FIRST + 13)
 #define NPPN_FILEBEFORELOAD        (NPPN_FIRST + 14)
+/* v3: a previously-issued open did not complete successfully —
+ *     load worker reported an error or the file was missing /
+ *     unreadable. Pairs with `NPPN_FILEBEFOREOPEN` (every BEFORE
+ *     gets exactly one of FILEOPENED / FILELOADFAILED). Carries
+ *     a buffer id of 0 — the load failed before a tab id was
+ *     assigned. */
 #define NPPN_FILELOADFAILED        (NPPN_FIRST + 15)
 #define NPPN_READONLYCHANGED       (NPPN_FIRST + 16)
+/* v3: tab order changed via the user's drag-to-reorder gesture
+ *     or via `NPPM_*` paths that route through `Shell::move_tab`.
+ *     Plugins that maintain per-tab UI state can re-sync from
+ *     `NPPM_GETOPENFILENAMES`. No per-tab id — N++'s ABI fires
+ *     this as a global "the list shape changed" event.
+ *     No-op moves (drag-and-drop back to the same slot) are
+ *     filtered out by the host — plugins only see real
+ *     reorders. */
 #define NPPN_DOCORDERCHANGED       (NPPN_FIRST + 17)
+/* v3: a session-restored buffer was rehydrated from its dirty
+ *     backup file (untitled `new N` or a saved file whose
+ *     last-edit was unsaved). Fires once per restored tab,
+ *     after the buffer text is populated and the tab's metadata
+ *     is in place. Carries the freshly-allocated buffer id.
+ *     Plugins that audit-log file activity treat this like a
+ *     `FILEOPENED` for the "what happened to last session's
+ *     unsaved work" path. */
 #define NPPN_SNAPSHOTDIRTYFILELOADED (NPPN_FIRST + 18)
 #define NPPN_BEFORESHUTDOWN        (NPPN_FIRST + 19)
 #define NPPN_CANCELSHUTDOWN        (NPPN_FIRST + 20)

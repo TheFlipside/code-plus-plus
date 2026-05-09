@@ -145,7 +145,10 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPN_SHUTDOWN` | ✅ | v1 | Fired by `ui_win32`'s `WM_DESTROY` handler before unload. |
 | `NPPN_BUFFERACTIVATED` | ✅ | v1 | Queued on tab open, tab switch, tab close (when the new active tab differs), and `NPPM_SWITCHTOFILE` to a different open tab. Switch-to-already-active is suppressed. |
 | `NPPN_LANGCHANGED` | ✅ | v1 | Queued by `HostBridge::set_buffer_lang_type` on a real change (no-op same-lang sets are filtered out). Drained after the `&mut Shell` borrow drops, same pattern as the other lifecycle notifications. |
-| Other (`WORDSTYLESUPDATED`, `SHORTCUTREMAPPED`, … `GLOBALMODIFIED`) | ⚫ | v3 | |
+| `NPPN_FILELOADFAILED` | ✅ | v3 | Queued by `Shell::apply_load_result` on the error branch — paired with `FILEBEFOREOPEN` so every issued open completes with one of `FILEOPENED` or `FILELOADFAILED`. Plugins that audit-log file activity now hear back about failed opens instead of tracking an in-flight open forever. Carries a buffer id of 0 (the load failed before a tab id was assigned). |
+| `NPPN_DOCORDERCHANGED` | ✅ | v3 | Queued by `Shell::move_tab` on a real reorder. The `from == to` no-op short-circuit filters out drags that "land back where they started" so plugins don't see spurious "list changed" events. |
+| `NPPN_SNAPSHOTDIRTYFILELOADED` | ✅ | v3 | Queued by `Shell::restore_dirty_with_text` after the backup-restored tab is fully populated and its metadata is in place. Carries the freshly-allocated buffer id. Plugins that audit-log file activity treat this like a `FILEOPENED` for the "last session's unsaved work" path. |
+| Other (`WORDSTYLESUPDATED`, `SHORTCUTREMAPPED`, `BEFORESHUTDOWN`, file rename/delete family, `DARKMODECHANGED`, `CMDLINEPLUGINMSG`, `EXTERNALLEXERBUFFER`, `GLOBALMODIFIED`) | ⚫ | v3 | |
 
 ## How to update this matrix
 

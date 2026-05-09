@@ -227,6 +227,9 @@ pub const NPPN_FILESAVED: u32 = NPPN_FIRST + 8;
 pub const NPPN_SHUTDOWN: u32 = NPPN_FIRST + 9;
 pub const NPPN_BUFFERACTIVATED: u32 = NPPN_FIRST + 10;
 pub const NPPN_LANGCHANGED: u32 = NPPN_FIRST + 11;
+pub const NPPN_FILELOADFAILED: u32 = NPPN_FIRST + 15;
+pub const NPPN_DOCORDERCHANGED: u32 = NPPN_FIRST + 17;
+pub const NPPN_SNAPSHOTDIRTYFILELOADED: u32 = NPPN_FIRST + 18;
 
 /// Code++'s self-reported plugin-API version. Matches the encoding
 /// plugins expect from `NPPM_GETNPPVERSION`: HIWORD = major, LOWORD =
@@ -298,6 +301,32 @@ pub enum Notification {
     LangChanged {
         buffer_id: isize,
     },
+    /// A previously-issued open did not complete successfully —
+    /// the load worker reported an error or the file was missing
+    /// / unreadable. Plugins that observed `FileBeforeOpen`
+    /// expecting a matching `FileOpened` should pair it with
+    /// this variant instead. Carries a buffer id of 0 (no tab
+    /// was bound — the load failed before
+    /// `apply_load_result` populated `tab.id`).
+    FileLoadFailed,
+    /// Tab order changed via the user's drag-to-reorder gesture
+    /// or via `Shell::move_tab` (which the same gesture routes
+    /// through). Plugins that maintain per-tab UI state can
+    /// re-sync from `NPPM_GETOPENFILENAMES` on receipt. Carries
+    /// no per-tab id — N++'s ABI fires this as a global "the
+    /// list shape changed" event.
+    DocOrderChanged,
+    /// A session-restored buffer was rehydrated from its dirty
+    /// backup file (untitled `new N` or a saved file whose
+    /// last-edit was unsaved). Fires once per restored tab,
+    /// after the buffer text is populated and the tab's
+    /// metadata (encoding, EOL, cursor) is in place. Carries
+    /// the freshly-allocated `buffer_id`. Plugins that audit-
+    /// log file activity treat this like a `FileOpened` for the
+    /// "what happened to last session's unsaved work" path.
+    SnapshotDirtyFileLoaded {
+        buffer_id: isize,
+    },
     /// App is about to exit. Fired before any DLL unload.
     Shutdown,
 }
@@ -315,6 +344,9 @@ impl Notification {
             Self::FileSaved { .. } => NPPN_FILESAVED,
             Self::BufferActivated { .. } => NPPN_BUFFERACTIVATED,
             Self::LangChanged { .. } => NPPN_LANGCHANGED,
+            Self::FileLoadFailed => NPPN_FILELOADFAILED,
+            Self::DocOrderChanged => NPPN_DOCORDERCHANGED,
+            Self::SnapshotDirtyFileLoaded { .. } => NPPN_SNAPSHOTDIRTYFILELOADED,
             Self::Shutdown => NPPN_SHUTDOWN,
         }
     }
@@ -327,8 +359,14 @@ impl Notification {
             | Self::FileBeforeSave { buffer_id }
             | Self::FileSaved { buffer_id }
             | Self::BufferActivated { buffer_id }
-            | Self::LangChanged { buffer_id } => *buffer_id,
-            Self::Ready | Self::TbModification | Self::FileBeforeOpen | Self::Shutdown => 0,
+            | Self::LangChanged { buffer_id }
+            | Self::SnapshotDirtyFileLoaded { buffer_id } => *buffer_id,
+            Self::Ready
+            | Self::TbModification
+            | Self::FileBeforeOpen
+            | Self::FileLoadFailed
+            | Self::DocOrderChanged
+            | Self::Shutdown => 0,
         }
     }
 }
