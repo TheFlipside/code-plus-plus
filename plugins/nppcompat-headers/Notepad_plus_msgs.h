@@ -400,7 +400,14 @@ typedef struct CommunicationInfo_ {
 #define NPPM_ALLOCATEMARKER               (NPPMSG + 82)
 #define NPPM_GETLANGUAGENAME              (NPPMSG + 83)
 #define NPPM_GETLANGUAGEDESC              (NPPMSG + 84)
+/* v3: show or hide the doc-switcher panel.
+ *     wParam: BOOL (TRUE shows, FALSE hides).
+ *     Returns: previous shown state.
+ *     Code++ has no doc-switcher panel; the call is a no-op and
+ *     always returns FALSE. */
 #define NPPM_SHOWDOCSWITCHER              (NPPMSG + 85)
+/* v3: BOOL — doc-switcher currently shown? Code++ has no panel,
+ *     so this is permanently FALSE. */
 #define NPPM_ISDOCSWITCHERSHOWN           (NPPMSG + 86)
 /* v3: BOOL — `TRUE` when plugins installed under
  *     `%APPDATA%\Code++\plugins` are honoured (per-user, no admin
@@ -410,12 +417,35 @@ typedef struct CommunicationInfo_ {
 /* v3: returns the active view index (0 = primary, 1 = secondary).
  *     Code++ is single-view through Phase 4 → always 0. */
 #define NPPM_GETCURRENTVIEW               (NPPMSG + 88)
+/* v3: disable a column in the doc-switcher's listview.
+ *     wParam: column index. lParam: BOOL disable flag.
+ *     Code++ has no doc-switcher panel; the call is a no-op and
+ *     always returns 0. */
 #define NPPM_DOCSWITCHERDISABLECOLUMN     (NPPMSG + 89)
+/* v3: returns the editor's default foreground colour as a Win32
+ *     `COLORREF` (`0x00BBGGRR`). Reads
+ *     `SCI_STYLEGETFORE(STYLE_DEFAULT)` on the active editor. */
 #define NPPM_GETEDITORDEFAULTFOREGROUNDCOLOR (NPPMSG + 90)
+/* v3: returns the editor's default background colour. Same
+ *     `COLORREF` layout as the foreground peer. */
 #define NPPM_GETEDITORDEFAULTBACKGROUNDCOLOR (NPPMSG + 91)
+/* v3: toggle Scintilla's font-rendering quality.
+ *     wParam: BOOL (TRUE = LCD-optimised / ClearType,
+ *             FALSE = non-antialiased).
+ *     Returns: previous state. */
 #define NPPM_SETSMOOTHFONT                (NPPMSG + 92)
+/* v3: toggle the Scintilla view's `WS_EX_CLIENTEDGE` border.
+ *     wParam: BOOL. Returns previous state. */
 #define NPPM_SETEDITORBORDEREDGE          (NPPMSG + 93)
+/* v3: save the buffer matching `lParam` (TCHAR* path) to disk.
+ *     Returns 1 on success, 0 on bad args / unknown path / write
+ *     failure. **Phase 4 limitation:** Code++ saves only the
+ *     ACTIVE tab through this path; cross-tab save needs
+ *     doc-pointer-swap UI cooperation tracked in DESIGN.md §7.4. */
 #define NPPM_SAVEFILE                     (NPPMSG + 94)
+/* v3: tell the host to suppress auto-update prompts.
+ *     wParam / lParam: unused. Code++ has no auto-update; the
+ *     call is unconditionally a no-op. */
 #define NPPM_DISABLEAUTOUPDATE            (NPPMSG + 95)
 #define NPPM_REMOVESHORTCUTBYCMDID        (NPPMSG + 96)
 /* v3: returns the per-user plugins directory (parent of every
@@ -432,8 +462,25 @@ typedef struct CommunicationInfo_ {
  *     itself didn't fail; the user simply has no cloud sync
  *     configured). */
 #define NPPM_GETSETTINGSCLOUDPATH         (NPPMSG + 98)
+/* v3: set the line-number margin width mode (DYNAMIC / CONSTANT).
+ *     wParam: one of `LINENUMWIDTH_DYNAMIC` (0) or
+ *             `LINENUMWIDTH_CONSTANT` (1).
+ *     Returns 1 on accepted value, 0 on unknown. **Phase 4
+ *     polish:** Code++ records the request but the visible
+ *     margin always uses dynamic width until the constant-mode
+ *     pin lands. */
 #define NPPM_SETLINENUMBERWIDTHMODE       (NPPMSG + 99)
+/* v3: returns the current line-number margin width mode. Code++
+ *     reports `LINENUMWIDTH_DYNAMIC` until the constant-mode pin
+ *     lands. */
 #define NPPM_GETLINENUMBERWIDTHMODE       (NPPMSG + 100)
+
+#ifndef LINENUMWIDTH_DYNAMIC
+#define LINENUMWIDTH_DYNAMIC  0
+#endif
+#ifndef LINENUMWIDTH_CONSTANT
+#define LINENUMWIDTH_CONSTANT 1
+#endif
 /* v3: returns the Scintilla marker number reserved for bookmarks.
  *     Code++ uses N++'s convention of marker 24, so plugins that
  *     install a bookmark via `SCI_MARKERADD(line, 24)` work the

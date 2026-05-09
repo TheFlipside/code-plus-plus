@@ -122,12 +122,38 @@ pub const NPPM_SAVECURRENTFILEAS: u32 = NPPMSG + 78;
 pub const NPPM_ALLOCATESUPPORTED: u32 = NPPMSG + 80;
 pub const NPPM_GETLANGUAGENAME: u32 = NPPMSG + 83;
 pub const NPPM_GETLANGUAGEDESC: u32 = NPPMSG + 84;
+pub const NPPM_SHOWDOCSWITCHER: u32 = NPPMSG + 85;
+pub const NPPM_ISDOCSWITCHERSHOWN: u32 = NPPMSG + 86;
 pub const NPPM_GETAPPDATAPLUGINSALLOWED: u32 = NPPMSG + 87;
 pub const NPPM_GETCURRENTVIEW: u32 = NPPMSG + 88;
+pub const NPPM_DOCSWITCHERDISABLECOLUMN: u32 = NPPMSG + 89;
+pub const NPPM_GETEDITORDEFAULTFOREGROUNDCOLOR: u32 = NPPMSG + 90;
+pub const NPPM_GETEDITORDEFAULTBACKGROUNDCOLOR: u32 = NPPMSG + 91;
+pub const NPPM_SETSMOOTHFONT: u32 = NPPMSG + 92;
+pub const NPPM_SETEDITORBORDEREDGE: u32 = NPPMSG + 93;
+pub const NPPM_SAVEFILE: u32 = NPPMSG + 94;
+pub const NPPM_DISABLEAUTOUPDATE: u32 = NPPMSG + 95;
 pub const NPPM_GETPLUGINHOMEPATH: u32 = NPPMSG + 97;
 pub const NPPM_GETSETTINGSCLOUDPATH: u32 = NPPMSG + 98;
+pub const NPPM_SETLINENUMBERWIDTHMODE: u32 = NPPMSG + 99;
+pub const NPPM_GETLINENUMBERWIDTHMODE: u32 = NPPMSG + 100;
 pub const NPPM_GETBOOKMARKID: u32 = NPPMSG + 101;
 pub const NPPM_GETZOOMLEVEL: u32 = NPPMSG + 102;
+
+/// `NPPM_SETLINENUMBERWIDTHMODE` / `GETLINENUMBERWIDTHMODE`
+/// values. Match the upstream `LineNumberWidthMode` enum so
+/// plugins compiled against either header use the same wire
+/// codes.
+///
+/// `LINENUMWIDTH_DYNAMIC` (0) — the margin auto-grows as the line
+/// count crosses each decimal-digit boundary. The modern default
+/// and Code++'s only currently-implemented mode.
+pub const LINENUMWIDTH_DYNAMIC: i32 = 0;
+/// `LINENUMWIDTH_CONSTANT` (1) — the margin stays at a fixed
+/// width sized for the current line count. Plugins requesting
+/// this in Code++ today get the request recorded but the Win32
+/// backend does not yet flip Scintilla's mode (Phase 4 polish).
+pub const LINENUMWIDTH_CONSTANT: i32 = 1;
 
 /// `RUNCOMMAND_USER` family — see [`RUNCOMMAND_USER`].
 ///
@@ -730,6 +756,69 @@ pub trait HostServices {
         internal_msg: i32,
         info_ptr: usize,
     ) -> isize;
+
+    /// Default foreground colour of the active editor. Drives
+    /// [`NPPM_GETEDITORDEFAULTFOREGROUNDCOLOR`]. Returns Win32
+    /// `COLORREF` (`0x00BBGGRR`) — Scintilla and Win32 share the
+    /// layout, so the value passes through verbatim.
+    fn editor_default_fg_color(&self) -> i32;
+
+    /// Default background colour of the active editor. Drives
+    /// [`NPPM_GETEDITORDEFAULTBACKGROUNDCOLOR`]. Same `COLORREF`
+    /// layout as [`Self::editor_default_fg_color`].
+    fn editor_default_bg_color(&self) -> i32;
+
+    /// Toggle Scintilla's font-rendering quality between
+    /// LCD-optimised (`smooth == true`, the modern Win32
+    /// default) and non-antialiased (`smooth == false`). Drives
+    /// [`NPPM_SETSMOOTHFONT`]. Returns the *previous* state — same
+    /// "did I change anything?" contract as the chrome toggles.
+    fn set_smooth_font(&mut self, smooth: bool) -> bool;
+
+    /// Toggle the `WS_EX_CLIENTEDGE` extended style on the
+    /// Scintilla view's HWND. Drives [`NPPM_SETEDITORBORDEREDGE`].
+    /// Returns the previous state.
+    fn set_editor_border_edge(&mut self, enable: bool) -> bool;
+
+    /// Save the buffer matching `path` to disk. Drives
+    /// [`NPPM_SAVEFILE`]. Returns `true` on a successful write,
+    /// `false` if the path does not match any open tab or the
+    /// write itself failed. **Phase 4 limitation:** only the
+    /// active tab can be saved through this path — saving a
+    /// background tab needs the doc-pointer-swap dance tracked in
+    /// DESIGN.md §7.4 alongside the `SCI_CONVERTEOLS` deferral.
+    fn save_file(&mut self, path: PathBuf) -> bool;
+
+    /// `true` when the doc-switcher panel is currently shown.
+    /// Code++ does not yet implement a doc-switcher, so this is
+    /// permanently `false`. Drives [`NPPM_ISDOCSWITCHERSHOWN`].
+    fn is_doc_switcher_shown(&self) -> bool;
+
+    /// Show / hide the doc-switcher panel. Drives
+    /// [`NPPM_SHOWDOCSWITCHER`]. Code++ has no doc-switcher
+    /// panel; the call is a no-op and the return is always
+    /// `false` (the previous state, since the panel is never
+    /// shown). The honest "we don't have it" answer matches
+    /// `NPPM_ALLOCATESUPPORTED`'s pattern — plugins gating on
+    /// `IS*SHOWN` already see the right answer.
+    fn set_doc_switcher_shown(&mut self, shown: bool) -> bool;
+
+    /// Disable a column in the doc-switcher's listview. Drives
+    /// [`NPPM_DOCSWITCHERDISABLECOLUMN`]. Code++'s no-op
+    /// equivalent — there's no listview to mutate.
+    fn doc_switcher_disable_column(&mut self, column_idx: i32, disable: bool);
+
+    /// Current line-number margin width mode (`DYNAMIC` or
+    /// `CONSTANT`). Drives [`NPPM_GETLINENUMBERWIDTHMODE`].
+    /// Code++ uses `LINENUMWIDTH_DYNAMIC` everywhere right now.
+    fn line_number_width_mode(&self) -> i32;
+
+    /// Set the line-number margin width mode. Drives
+    /// [`NPPM_SETLINENUMBERWIDTHMODE`]. Code++ accepts
+    /// `LINENUMWIDTH_DYNAMIC` and records `LINENUMWIDTH_CONSTANT`
+    /// without rejecting (UI-side mode flip is a Phase 4 polish
+    /// item). Returns `false` for unknown values.
+    fn set_line_number_width_mode(&mut self, mode: i32) -> bool;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -1641,6 +1730,79 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 
         NPPM_GETZOOMLEVEL => services.editor_zoom_level() as isize,
 
+        NPPM_GETEDITORDEFAULTFOREGROUNDCOLOR => {
+            // Returns COLORREF (0x00BBGGRR) of STYLE_DEFAULT.
+            services.editor_default_fg_color() as isize
+        }
+
+        NPPM_GETEDITORDEFAULTBACKGROUNDCOLOR => services.editor_default_bg_color() as isize,
+
+        NPPM_SETSMOOTHFONT => {
+            // wparam: BOOL — TRUE picks LCD-optimised, FALSE picks
+            // non-antialiased. Returns previous state.
+            services.set_smooth_font(wparam != 0) as isize
+        }
+
+        NPPM_SETEDITORBORDEREDGE => {
+            // wparam: BOOL — TRUE adds `WS_EX_CLIENTEDGE`, FALSE
+            // removes. Returns previous state.
+            services.set_editor_border_edge(wparam != 0) as isize
+        }
+
+        NPPM_SAVEFILE => {
+            // wparam: unused. lparam: TCHAR* path of buffer to
+            // save. Returns 1 on success, 0 on bad args / unknown
+            // path / write failure.
+            if lparam == 0 {
+                return Some(0);
+            }
+            let decoded = unsafe { wide_ptr_to_string(lparam as *const u16) };
+            if decoded.is_empty() {
+                return Some(0);
+            }
+            services.save_file(PathBuf::from(decoded)) as isize
+        }
+
+        NPPM_DISABLEAUTOUPDATE => {
+            // wparam / lparam: unused. Plugins call this to opt
+            // out of the host's auto-update prompt. Code++ has no
+            // auto-update, so the call is unconditionally a
+            // no-op — but we accept it cleanly so plugins
+            // compiled against the latest header link and run
+            // without surfacing an "unhandled NPPM_*" warning at
+            // every call.
+            tracing::trace!("NPPM_DISABLEAUTOUPDATE: no-op (Code++ has no auto-update)");
+            0
+        }
+
+        NPPM_ISDOCSWITCHERSHOWN => services.is_doc_switcher_shown() as isize,
+
+        NPPM_SHOWDOCSWITCHER => {
+            // wparam: BOOL — TRUE shows, FALSE hides. Returns the
+            // *previous* shown state. Code++'s impl is a no-op
+            // returning `false` (panel never shown).
+            services.set_doc_switcher_shown(wparam != 0) as isize
+        }
+
+        NPPM_DOCSWITCHERDISABLECOLUMN => {
+            // wparam: column index. lparam: BOOL disable flag.
+            // Code++ has no doc-switcher columns; the call is a
+            // no-op and returns 0 (the column couldn't be
+            // disabled because it doesn't exist).
+            services.doc_switcher_disable_column(wparam as i32, lparam != 0);
+            0
+        }
+
+        NPPM_GETLINENUMBERWIDTHMODE => services.line_number_width_mode() as isize,
+
+        NPPM_SETLINENUMBERWIDTHMODE => {
+            // wparam: `LINENUMWIDTH_DYNAMIC` (0) or
+            // `LINENUMWIDTH_CONSTANT` (1). Returns 1 on success,
+            // 0 on unknown mode. The cast to i32 is safe: valid
+            // values are tightly bounded.
+            services.set_line_number_width_mode(wparam as i32) as isize
+        }
+
         // RUNCOMMAND_USER family. The two host-environment queries
         // share an out-buffer protocol: wparam = capacity in TCHARs,
         // lparam = TCHAR* OUT. Bad pointer / zero capacity returns 0
@@ -1916,6 +2078,16 @@ mod tests {
         /// Defaults to 0 (the "target plugin not found" sentinel),
         /// matching the upstream contract.
         forward_plugin_return: isize,
+        /// Editor default fg/bg colours for the editor-color
+        /// queries. `0x00BBGGRR` (Win32 / Scintilla `COLORREF`).
+        editor_default_fg_color: i32,
+        editor_default_bg_color: i32,
+        /// Smooth-font / border-edge / line-number-width-mode
+        /// shadow state. The setters report the previous value
+        /// and update; getters read the shadow.
+        smooth_font: bool,
+        editor_border_edge: bool,
+        line_number_width_mode: i32,
         // recorded mutations
         log: RefCell<Vec<String>>,
     }
@@ -2282,6 +2454,57 @@ mod tests {
                 "forward_plugin_message[name={target_name},msg={internal_msg},info=0x{info_ptr:x}]"
             ));
             self.forward_plugin_return
+        }
+        fn editor_default_fg_color(&self) -> i32 {
+            self.editor_default_fg_color
+        }
+        fn editor_default_bg_color(&self) -> i32 {
+            self.editor_default_bg_color
+        }
+        fn set_smooth_font(&mut self, smooth: bool) -> bool {
+            let prev = self.smooth_font;
+            self.smooth_font = smooth;
+            self.record(format!("set_smooth_font({smooth})"));
+            prev
+        }
+        fn set_editor_border_edge(&mut self, enable: bool) -> bool {
+            let prev = self.editor_border_edge;
+            self.editor_border_edge = enable;
+            self.record(format!("set_editor_border_edge({enable})"));
+            prev
+        }
+        fn save_file(&mut self, path: PathBuf) -> bool {
+            // Mock: a path equal to one of `buffer_paths` saves
+            // successfully; anything else fails. Mirrors the
+            // production HostBridge's "active-tab-only" rule
+            // without modelling the active-vs-background distinction.
+            let known = self.buffer_paths.iter().any(|(_, p)| p == &path);
+            self.record(format!("save_file[{}={known}]", path.display()));
+            known
+        }
+        fn is_doc_switcher_shown(&self) -> bool {
+            false
+        }
+        fn set_doc_switcher_shown(&mut self, shown: bool) -> bool {
+            self.record(format!("set_doc_switcher_shown({shown})"));
+            // Always reports "previously not shown".
+            false
+        }
+        fn doc_switcher_disable_column(&mut self, column_idx: i32, disable: bool) {
+            self.record(format!(
+                "doc_switcher_disable_column({column_idx},{disable})"
+            ));
+        }
+        fn line_number_width_mode(&self) -> i32 {
+            self.line_number_width_mode
+        }
+        fn set_line_number_width_mode(&mut self, mode: i32) -> bool {
+            if !matches!(mode, LINENUMWIDTH_DYNAMIC | LINENUMWIDTH_CONSTANT) {
+                return false;
+            }
+            self.line_number_width_mode = mode;
+            self.record(format!("set_line_number_width_mode({mode})"));
+            true
         }
     }
 
@@ -3939,5 +4162,160 @@ mod tests {
         };
         assert_eq!(r, Some(0));
         assert!(s.calls().is_empty());
+    }
+
+    // --- Editor colour queries ---
+
+    #[test]
+    fn editor_default_fg_color_passes_through() {
+        let mut s = MockServices {
+            editor_default_fg_color: 0x00112233,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETEDITORDEFAULTFOREGROUNDCOLOR, 0, 0) };
+        assert_eq!(r, Some(0x00112233));
+    }
+
+    #[test]
+    fn editor_default_bg_color_passes_through() {
+        let mut s = MockServices {
+            editor_default_bg_color: 0x00FFFFFF,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETEDITORDEFAULTBACKGROUNDCOLOR, 0, 0) };
+        assert_eq!(r, Some(0x00FFFFFF));
+    }
+
+    // --- SETSMOOTHFONT / SETEDITORBORDEREDGE ---
+
+    #[test]
+    fn set_smooth_font_returns_previous_and_flips() {
+        let mut s = MockServices::default();
+        // First SET TRUE: previous was FALSE (default).
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_SETSMOOTHFONT, 1, 0) },
+            Some(0)
+        );
+        assert!(s.smooth_font);
+        // Second SET TRUE: previous was TRUE.
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_SETSMOOTHFONT, 1, 0) },
+            Some(1)
+        );
+        // SET FALSE: previous was TRUE, flips off.
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_SETSMOOTHFONT, 0, 0) },
+            Some(1)
+        );
+        assert!(!s.smooth_font);
+    }
+
+    #[test]
+    fn set_editor_border_edge_returns_previous_and_flips() {
+        let mut s = MockServices::default();
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_SETEDITORBORDEREDGE, 1, 0) },
+            Some(0)
+        );
+        assert!(s.editor_border_edge);
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_SETEDITORBORDEREDGE, 0, 0) },
+            Some(1)
+        );
+        assert!(!s.editor_border_edge);
+    }
+
+    // --- SAVEFILE ---
+
+    #[test]
+    fn savefile_routes_known_path_to_services() {
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from("D:/known.txt"))],
+            ..Default::default()
+        };
+        let p = make_wide("D:/known.txt");
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVEFILE, 0, p.as_ptr() as isize) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["save_file[D:/known.txt=true]"]);
+    }
+
+    #[test]
+    fn savefile_unknown_path_returns_zero() {
+        let mut s = MockServices::default();
+        let p = make_wide("D:/missing.txt");
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVEFILE, 0, p.as_ptr() as isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn savefile_null_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVEFILE, 0, 0) };
+        assert_eq!(r, Some(0));
+        assert!(s.calls().is_empty());
+    }
+
+    // --- DISABLEAUTOUPDATE / Doc switcher trio ---
+
+    #[test]
+    fn disable_autoupdate_is_noop_returning_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DISABLEAUTOUPDATE, 0, 0) };
+        assert_eq!(r, Some(0));
+        // No HostServices call recorded — the dispatcher handles
+        // the no-op directly.
+        assert!(s.calls().is_empty());
+    }
+
+    #[test]
+    fn is_doc_switcher_shown_returns_false() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ISDOCSWITCHERSHOWN, 0, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn show_doc_switcher_is_noop_returning_false() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SHOWDOCSWITCHER, 1, 0) };
+        // Mock returns false (panel never shown). Dispatcher
+        // converts to 0.
+        assert_eq!(r, Some(0));
+        assert_eq!(s.calls(), vec!["set_doc_switcher_shown(true)"]);
+    }
+
+    #[test]
+    fn doc_switcher_disable_column_routes_args() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_DOCSWITCHERDISABLECOLUMN, 2, 1) };
+        assert_eq!(r, Some(0));
+        assert_eq!(s.calls(), vec!["doc_switcher_disable_column(2,true)"]);
+    }
+
+    // --- Line-number width mode ---
+
+    #[test]
+    fn get_line_number_width_mode_returns_dynamic_default() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETLINENUMBERWIDTHMODE, 0, 0) };
+        assert_eq!(r, Some(LINENUMWIDTH_DYNAMIC as isize));
+    }
+
+    #[test]
+    fn set_line_number_width_mode_accepts_dynamic_and_constant() {
+        let mut s = MockServices::default();
+        for mode in [LINENUMWIDTH_DYNAMIC, LINENUMWIDTH_CONSTANT] {
+            let r = unsafe { dispatch_nppm(&mut s, NPPM_SETLINENUMBERWIDTHMODE, mode as usize, 0) };
+            assert_eq!(r, Some(1), "mode={mode}");
+        }
+    }
+
+    #[test]
+    fn set_line_number_width_mode_rejects_unknown_value() {
+        let mut s = MockServices::default();
+        // 99 is outside the {DYNAMIC, CONSTANT} set; the mock
+        // (and the production HostBridge) reject it.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SETLINENUMBERWIDTHMODE, 99, 0) };
+        assert_eq!(r, Some(0));
     }
 }

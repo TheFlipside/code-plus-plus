@@ -336,6 +336,30 @@ pub const SCI_STYLESETFORE: u32 = 2051;
 pub const SCI_STYLESETBACK: u32 = 2052;
 pub const SCI_STYLESETBOLD: u32 = 2053;
 pub const SCI_STYLESETITALIC: u32 = 2054;
+/// Read the foreground colour for a Scintilla style. Returns the
+/// colour in the same `0x00BBGGRR` Win32 `COLORREF` layout
+/// `STYLESETFORE` writes — the bit pattern is symmetric, so a
+/// plugin that calls `STYLEGETFORE(STYLE_DEFAULT)` reads back the
+/// editor's default text colour without conversion. Drives the
+/// host-side `NPPM_GETEDITORDEFAULTFOREGROUNDCOLOR` query.
+pub const SCI_STYLEGETFORE: u32 = 2481;
+/// Read the background colour for a Scintilla style — peer of
+/// `SCI_STYLESETBACK`. Same `COLORREF` return layout as
+/// `SCI_STYLEGETFORE`. Drives `NPPM_GETEDITORDEFAULTBACKGROUNDCOLOR`.
+pub const SCI_STYLEGETBACK: u32 = 2482;
+/// Set the editor's font-rendering quality. Accepts one of the
+/// `SC_EFF_QUALITY_*` constants below. Drives the host-side
+/// `NPPM_SETSMOOTHFONT` toggle (Code++'s impl flips between
+/// `LCD_OPTIMIZED` and `NON_ANTIALIASED` based on the BOOL the
+/// plugin supplied).
+pub const SCI_SETFONTQUALITY: u32 = 2611;
+/// Non-antialiased rendering. Code++'s `NPPM_SETSMOOTHFONT(FALSE)`
+/// path uses this so a plugin that "turns smoothing off" gets an
+/// observable on-screen change.
+pub const SC_EFF_QUALITY_NON_ANTIALIASED: u32 = 1;
+/// ClearType / LCD-optimised rendering — the modern Windows
+/// default and Code++'s `NPPM_SETSMOOTHFONT(TRUE)` choice.
+pub const SC_EFF_QUALITY_LCD_OPTIMIZED: u32 = 3;
 /// Apply STYLE_DEFAULT to all other styles. Useful as the first call
 /// after switching lexers so the previous lexer's per-style colours
 /// don't bleed through.

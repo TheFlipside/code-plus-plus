@@ -309,6 +309,33 @@ pub trait UiPlatform {
     /// signed int in `[-10, 20]`.
     fn editor_zoom_level(&self) -> i32;
 
+    /// Default foreground colour of the active editor. `COLORREF`
+    /// (`0x00BBGGRR`). Reads `SCI_STYLEGETFORE(STYLE_DEFAULT)` on
+    /// Win32. Drives `NPPM_GETEDITORDEFAULTFOREGROUNDCOLOR`.
+    fn editor_default_fg_color(&self) -> i32;
+
+    /// Default background colour of the active editor. Drives
+    /// `NPPM_GETEDITORDEFAULTBACKGROUNDCOLOR`.
+    fn editor_default_bg_color(&self) -> i32;
+
+    /// Toggle Scintilla's font-rendering quality.
+    /// `smooth == true` → `SC_EFF_QUALITY_LCD_OPTIMIZED`;
+    /// `smooth == false` → `SC_EFF_QUALITY_NON_ANTIALIASED`.
+    /// Drives `NPPM_SETSMOOTHFONT`. Returns the *previous* state
+    /// (true = was-smooth, false = was-not).
+    fn set_smooth_font(&mut self, smooth: bool) -> bool;
+
+    /// Toggle the `WS_EX_CLIENTEDGE` extended style on the
+    /// Scintilla view's HWND. Drives `NPPM_SETEDITORBORDEREDGE`.
+    /// Returns the previous state.
+    fn set_editor_border_edge(&mut self, enable: bool) -> bool;
+
+    /// Set the line-number margin width mode. Drives
+    /// `NPPM_SETLINENUMBERWIDTHMODE`. Returns `true` on accepted
+    /// modes (`LINENUMWIDTH_DYNAMIC` for now). Phase 4 polish
+    /// adds the constant-width path.
+    fn set_line_number_width_mode(&mut self, mode: i32) -> bool;
+
     /// Pull the current text content of the buffer backed by the
     /// Scintilla document at `scintilla_doc`. The implementation may
     /// briefly bind that document to the editor view to read it
@@ -4093,6 +4120,106 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.ui.editor_zoom_level()
     }
 
+    fn editor_default_fg_color(&self) -> i32 {
+        self.ui.editor_default_fg_color()
+    }
+
+    fn editor_default_bg_color(&self) -> i32 {
+        self.ui.editor_default_bg_color()
+    }
+
+    fn set_smooth_font(&mut self, smooth: bool) -> bool {
+        self.ui.set_smooth_font(smooth)
+    }
+
+    fn set_editor_border_edge(&mut self, enable: bool) -> bool {
+        self.ui.set_editor_border_edge(enable)
+    }
+
+    fn save_file(&mut self, path: PathBuf) -> bool {
+        // Phase 4 limitation: only the active tab can be saved
+        // through this path. Saving a background tab requires the
+        // doc-pointer-swap dance tracked in DESIGN.md §7.4. If the
+        // requested path matches the active tab, route through
+        // `save_current_to_disk`; otherwise log and report 0.
+        let active_path = self.shell.active().and_then(|t| t.path.clone());
+        if active_path.as_ref() == Some(&path) {
+            match self.shell.save_current_to_disk(self.ui) {
+                Ok(()) => true,
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "NPPM_SAVEFILE: write failed"
+                    );
+                    false
+                }
+            }
+        } else {
+            // Path doesn't match the active tab. Either it's a
+            // known background tab (deferred to Phase 5 polish)
+            // or unknown to Code++ entirely. The honest answer is
+            // 0 in either case; the warn-log distinguishes the
+            // two for diagnostic purposes.
+            let known_background = self
+                .shell
+                .tabs
+                .iter()
+                .any(|t| t.path.as_deref() == Some(path.as_path()));
+            if known_background {
+                tracing::warn!(
+                    path = %path.display(),
+                    "NPPM_SAVEFILE: cross-tab save not yet supported (Phase 5)",
+                );
+            } else {
+                tracing::trace!(
+                    path = %path.display(),
+                    "NPPM_SAVEFILE: path does not match any open tab",
+                );
+            }
+            false
+        }
+    }
+
+    fn is_doc_switcher_shown(&self) -> bool {
+        // Code++ has no doc-switcher panel.
+        false
+    }
+
+    fn set_doc_switcher_shown(&mut self, shown: bool) -> bool {
+        // No-op. Code++ has no panel to show; report
+        // "previously not shown" so a plugin gating on the
+        // return-value-as-prev-state contract behaves correctly.
+        tracing::trace!(
+            shown = shown,
+            "NPPM_SHOWDOCSWITCHER: no-op (Code++ has no doc-switcher panel)"
+        );
+        false
+    }
+
+    fn doc_switcher_disable_column(&mut self, column_idx: i32, disable: bool) {
+        tracing::trace!(
+            column_idx = column_idx,
+            disable = disable,
+            "NPPM_DOCSWITCHERDISABLECOLUMN: no-op (Code++ has no doc-switcher panel)"
+        );
+    }
+
+    fn line_number_width_mode(&self) -> i32 {
+        // Code++ uses dynamic line-number margins everywhere.
+        codepp_plugin_host::LINENUMWIDTH_DYNAMIC
+    }
+
+    fn set_line_number_width_mode(&mut self, mode: i32) -> bool {
+        if !matches!(
+            mode,
+            codepp_plugin_host::LINENUMWIDTH_DYNAMIC | codepp_plugin_host::LINENUMWIDTH_CONSTANT
+        ) {
+            return false;
+        }
+        self.ui.set_line_number_width_mode(mode)
+    }
+
     fn forward_plugin_message(
         &mut self,
         target_name: &str,
@@ -4630,6 +4757,25 @@ mod tests {
             // zoom-level surface explicitly are out of scope for
             // this fake.
             0
+        }
+        fn editor_default_fg_color(&self) -> i32 {
+            // Default Win32 black-on-white text colour: 0x000000.
+            0
+        }
+        fn editor_default_bg_color(&self) -> i32 {
+            // Default Win32 white background: 0xFFFFFF.
+            0x00FFFFFF
+        }
+        fn set_smooth_font(&mut self, _smooth: bool) -> bool {
+            false
+        }
+        fn set_editor_border_edge(&mut self, _enable: bool) -> bool {
+            false
+        }
+        fn set_line_number_width_mode(&mut self, _mode: i32) -> bool {
+            // FakeUi accepts every supported mode; the dispatcher
+            // already filtered by `matches!` before calling.
+            true
         }
         fn capture_text_from_doc(&mut self, _scintilla_doc: isize) -> String {
             // Tests don't model per-doc text storage — they share

@@ -49,12 +49,14 @@ use codepp_scintilla_sys::{
     SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN,
     SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER,
     SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETDOCPOINTER,
-    SCI_SETEMPTYSELECTION, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
-    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
-    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
-    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SCN_UPDATEUI, SC_DOCUMENTOPTION_DEFAULT, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_TEXT,
-    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT,
+    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND,
+    SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL,
+    SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
+    SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_UPDATEUI,
+    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
+    SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_TEXT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
+    SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
@@ -109,18 +111,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
     BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
     CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID, ES_AUTOHSCROLL,
-    ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL, HICON, HMENU,
-    IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR,
+    ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, GWL_EXSTYLE, HACCEL, HICON,
+    HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR,
     MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
-    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SHOW_WINDOW_CMD, SWP_NOMOVE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
-    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND,
-    WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY,
-    WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SIZE, WM_TIMER,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
-    WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
-    WS_VISIBLE, WS_VSCROLL,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SHOW_WINDOW_CMD,
+    SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED,
+    SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND,
+    WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS,
+    WM_SETFONT, WM_SETREDRAW, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -1326,6 +1328,103 @@ impl UiPlatform for Win32Ui {
         // pump — same hot-path shape as every other Scintilla
         // query.
         self.editor.send(SCI_GETZOOM, 0, 0) as i32
+    }
+
+    fn editor_default_fg_color(&self) -> i32 {
+        // `SCI_STYLEGETFORE(STYLE_DEFAULT)` returns Win32
+        // `COLORREF` (`0x00BBGGRR`). The `as i32` cast is the
+        // identity bit pattern — Scintilla's return is `intptr_t`
+        // (`isize`), but only the low 24 bits of the COLORREF
+        // are populated.
+        self.editor.send(SCI_STYLEGETFORE, STYLE_DEFAULT, 0) as i32
+    }
+
+    fn editor_default_bg_color(&self) -> i32 {
+        self.editor.send(SCI_STYLEGETBACK, STYLE_DEFAULT, 0) as i32
+    }
+
+    fn set_smooth_font(&mut self, smooth: bool) -> bool {
+        // `SCI_SETFONTQUALITY` accepts one of the
+        // `SC_EFF_QUALITY_*` enum values; LCD-optimised matches
+        // the modern Win32 ClearType default for `smooth == true`,
+        // and non-antialiased gives "smoothing off" an
+        // observable on-screen effect.
+        //
+        // Scintilla doesn't expose a `SCI_GETFONTQUALITY` peer in
+        // the public message set, so we shadow the state in a
+        // process-wide atomic. Single-view Code++ has one editor
+        // — the shadow is correct as long as the chrome doesn't
+        // race the plugin call (UI-thread-only invariant, same
+        // as the chrome toggles).
+        let prev = SMOOTH_FONT_STATE.load(std::sync::atomic::Ordering::Relaxed);
+        let quality = if smooth {
+            SC_EFF_QUALITY_LCD_OPTIMIZED
+        } else {
+            SC_EFF_QUALITY_NON_ANTIALIASED
+        };
+        self.editor.send(SCI_SETFONTQUALITY, quality as usize, 0);
+        SMOOTH_FONT_STATE.store(smooth, std::sync::atomic::Ordering::Relaxed);
+        prev
+    }
+
+    fn set_editor_border_edge(&mut self, enable: bool) -> bool {
+        // Read the current `WS_EX_CLIENTEDGE` flag, mutate, then
+        // tell the window the non-client area changed via
+        // `SetWindowPos(SWP_FRAMECHANGED)` so the chrome repaints.
+        // SAFETY: `self.editor.hwnd()` is the live editor HWND
+        // owned by `WindowState` for the window's lifetime —
+        // `EditorHandle::hwnd()` exposes it as `*mut c_void` to
+        // keep `editor` free of `windows`-crate types, so we wrap
+        // it back into a `HWND` newtype here.
+        //
+        // `GetWindowLongPtrW` returns `isize` (pointer-width) —
+        // not `u32`. On 64-bit Windows the extended-style word is
+        // returned through the full 64 bits, so a `as u32` cast
+        // here would silently drop bits 32+ before the round-trip
+        // through `SetWindowLongPtrW`, clearing whatever flags
+        // future Microsoft expansions might add. Stay in `isize`
+        // throughout the read-modify-write; widen the
+        // `WS_EX_CLIENTEDGE` mask (declared `u32` in windows-rs)
+        // to `isize` for the bit ops.
+        let scintilla = HWND(self.editor.hwnd());
+        let prev_ex = unsafe { GetWindowLongPtrW(scintilla, GWL_EXSTYLE) };
+        let edge_mask = WS_EX_CLIENTEDGE.0 as isize;
+        let prev_has_edge = (prev_ex & edge_mask) != 0;
+        if prev_has_edge != enable {
+            let new_ex = if enable {
+                prev_ex | edge_mask
+            } else {
+                prev_ex & !edge_mask
+            };
+            unsafe {
+                SetWindowLongPtrW(scintilla, GWL_EXSTYLE, new_ex);
+                let _ = SetWindowPos(
+                    scintilla,
+                    None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                );
+            }
+        }
+        prev_has_edge
+    }
+
+    fn set_line_number_width_mode(&mut self, mode: i32) -> bool {
+        // Code++'s line-number margin uses dynamic width by
+        // default. The constant-mode path is a Phase 4 polish
+        // item — the dispatcher accepts the request and the
+        // host records it, but the visible width does not yet
+        // stop growing. Returning `true` means the host
+        // accepted the value; the GET side reports DYNAMIC
+        // unconditionally until the polish lands.
+        tracing::trace!(
+            mode,
+            "NPPM_SETLINENUMBERWIDTHMODE: recorded (CONSTANT-mode pin is Phase 4 polish)"
+        );
+        true
     }
 
     fn capture_text_from_doc(&mut self, scintilla_doc: isize) -> String {
@@ -12033,6 +12132,20 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
 /// process-wide static is sufficient — there's no second thread that
 /// could reasonably observe a different value.
 static PLUGIN_CALL_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Shadow of Scintilla's font-quality state. Scintilla's public
+/// message set lacks a `SCI_GETFONTQUALITY` peer, so the previous
+/// value `NPPM_SETSMOOTHFONT` reports has to be tracked here.
+/// Single-view Code++ has one editor and the chrome runs on the UI
+/// thread, so a process-wide atomic is sufficient — same model as
+/// `PLUGIN_CALL_ACTIVE`. Default `true` matches Scintilla's
+/// `SC_EFF_QUALITY_DEFAULT` start state, which on modern Windows
+/// resolves to LCD-optimised / ClearType — the same pixel
+/// rendering the user sees before any plugin call runs. A plugin
+/// that calls `NPPM_SETSMOOTHFONT(TRUE)` on a fresh launch
+/// therefore reads back the correct previous-state TRUE rather
+/// than a misleading FALSE.
+static SMOOTH_FONT_STATE: AtomicBool = AtomicBool::new(true);
 
 /// RAII guard that flips [`PLUGIN_CALL_ACTIVE`] on for the duration
 /// of a plugin call. Drop unconditionally clears the flag, including
