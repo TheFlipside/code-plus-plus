@@ -336,6 +336,13 @@ pub trait UiPlatform {
     /// adds the constant-width path.
     fn set_line_number_width_mode(&mut self, mode: i32) -> bool;
 
+    /// Look up the keyboard shortcut bound to `cmd_id` in the
+    /// host's accelerator table. Returns the `ShortcutKey`
+    /// (Ctrl/Alt/Shift bits + virtual key) when a binding
+    /// exists; `None` for unbound cmd ids. Drives
+    /// `NPPM_GETSHORTCUTBYCMDID`.
+    fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey>;
+
     /// Pull the current text content of the buffer backed by the
     /// Scintilla document at `scintilla_doc`. The implementation may
     /// briefly bind that document to the editor view to read it
@@ -4228,6 +4235,37 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.ui.set_line_number_width_mode(mode)
     }
 
+    fn user_lang_count(&self) -> i32 {
+        // Code++ does not yet implement user-defined languages
+        // (UDL). The honest count is 0; plugins gating on
+        // `if (NPPM_GETNBUSERLANG())` skip their UDL-aware path.
+        0
+    }
+
+    fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey> {
+        self.ui.shortcut_for_cmd_id(cmd_id)
+    }
+
+    fn trigger_tab_context_menu(&mut self, view: i32, tab_idx: i32) -> bool {
+        // Code++'s tab strip doesn't yet ship a context menu (no
+        // Close / Close-Others / Rename / Move-to-other-view
+        // entries — Phase 4 polish). Returns `true` to signal
+        // "request accepted" rather than `false` ("rejected"):
+        // a plugin gating `if (NPPM_TRIGGERTABBARCONTEXTMENU)`
+        // on the return for control flow (timer reset, audit
+        // log, etc.) sees the host received its trigger
+        // correctly. When the actual menu lands the return
+        // continues to be `true` on success — no plugin
+        // behaviour change. The trace-log surfaces requests so
+        // the future implementation can verify the call sites.
+        tracing::trace!(
+            view,
+            tab_idx,
+            "NPPM_TRIGGERTABBARCONTEXTMENU: no-op (Code++ has no tab context menu yet)"
+        );
+        true
+    }
+
     fn forward_plugin_message(
         &mut self,
         target_name: &str,
@@ -4784,6 +4822,12 @@ mod tests {
             // FakeUi accepts every supported mode; the dispatcher
             // already filtered by `matches!` before calling.
             true
+        }
+        fn shortcut_for_cmd_id(&self, _cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey> {
+            // FakeUi has no accelerator table — tests that
+            // exercise the lookup path exercise the dispatcher
+            // mock instead.
+            None
         }
         fn capture_text_from_doc(&mut self, _scintilla_doc: isize) -> String {
             // Tests don't model per-doc text storage — they share

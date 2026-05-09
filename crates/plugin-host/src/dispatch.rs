@@ -75,6 +75,7 @@ pub const NPPM_SAVESESSION: u32 = NPPMSG + 15;
 pub const NPPM_SAVECURRENTSESSION: u32 = NPPMSG + 16;
 pub const NPPM_GETOPENFILENAMESPRIMARY: u32 = NPPMSG + 17;
 pub const NPPM_GETOPENFILENAMESSECOND: u32 = NPPMSG + 18;
+pub const NPPM_GETNBUSERLANG: u32 = NPPMSG + 22;
 pub const NPPM_GETCURRENTDOCINDEX: u32 = NPPMSG + 23;
 pub const NPPM_SETSTATUSBAR: u32 = NPPMSG + 24;
 pub const NPPM_GETMENUHANDLE: u32 = NPPMSG + 25;
@@ -97,6 +98,7 @@ pub const NPPM_MAKECURRENTBUFFERDIRTY: u32 = NPPMSG + 44;
 pub const NPPM_GETPLUGINSCONFIGDIR: u32 = NPPMSG + 46;
 pub const NPPM_MSGTOPLUGIN: u32 = NPPMSG + 47;
 pub const NPPM_MENUCOMMAND: u32 = NPPMSG + 48;
+pub const NPPM_TRIGGERTABBARCONTEXTMENU: u32 = NPPMSG + 49;
 pub const NPPM_GETNPPVERSION: u32 = NPPMSG + 50;
 pub const NPPM_HIDETABBAR: u32 = NPPMSG + 51;
 pub const NPPM_ISTABBARHIDDEN: u32 = NPPMSG + 52;
@@ -117,6 +119,7 @@ pub const NPPM_HIDEMENU: u32 = NPPMSG + 72;
 pub const NPPM_ISMENUHIDDEN: u32 = NPPMSG + 73;
 pub const NPPM_HIDESTATUSBAR: u32 = NPPMSG + 74;
 pub const NPPM_ISSTATUSBARHIDDEN: u32 = NPPMSG + 75;
+pub const NPPM_GETSHORTCUTBYCMDID: u32 = NPPMSG + 76;
 pub const NPPM_DOOPEN: u32 = NPPMSG + 77;
 pub const NPPM_SAVECURRENTFILEAS: u32 = NPPMSG + 78;
 pub const NPPM_ALLOCATESUPPORTED: u32 = NPPMSG + 80;
@@ -836,6 +839,32 @@ pub trait HostServices {
     /// without rejecting (UI-side mode flip is a Phase 4 polish
     /// item). Returns `false` for unknown values.
     fn set_line_number_width_mode(&mut self, mode: i32) -> bool;
+
+    /// Number of user-defined languages currently registered.
+    /// Drives [`NPPM_GETNBUSERLANG`]. Code++ does not yet
+    /// implement UDL — there is no menu, no XML parser, no
+    /// runtime registry — so this is permanently 0 until the
+    /// UDL system lands. The honest count answers the contract;
+    /// plugins gating on `if (NPPM_GETNBUSERLANG())` see "no
+    /// UDLs" and skip their UDL-aware code path.
+    fn user_lang_count(&self) -> i32;
+
+    /// Look up the keyboard shortcut for a built-in command id.
+    /// Drives [`NPPM_GETSHORTCUTBYCMDID`]. Returns the matching
+    /// `ShortcutKey` (Ctrl/Alt/Shift bits + virtual key) when
+    /// the host's accelerator table has a binding; `None` when
+    /// the cmd id is unknown to the host or has no accelerator.
+    fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<crate::ffi::ShortcutKey>;
+
+    /// Show the tab-bar context menu for the active tab. Drives
+    /// [`NPPM_TRIGGERTABBARCONTEXTMENU`]. Code++ does not yet
+    /// ship a tab-bar context menu (a Phase 4 polish item — N++
+    /// surfaces Close / Close Others / Move-to-other-view /
+    /// Rename / Delete-from-disk on right-click); for now this
+    /// is a no-op returning `false`. Plugins that gate on the
+    /// return value already see the right "menu didn't open"
+    /// answer.
+    fn trigger_tab_context_menu(&mut self, view: i32, tab_idx: i32) -> bool;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -1881,6 +1910,60 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             services.set_line_number_width_mode(wparam as i32) as isize
         }
 
+        NPPM_GETNBUSERLANG => {
+            // No args. Returns the count of user-defined
+            // languages registered with the host. Code++ has no
+            // UDL system yet — this is permanently 0 until that
+            // lands.
+            services.user_lang_count() as isize
+        }
+
+        NPPM_TRIGGERTABBARCONTEXTMENU => {
+            // wparam: view (0 = primary, 1 = secondary).
+            // lparam: tab index (or `-1` for "use the active
+            // tab"). Returns BOOL — TRUE if the menu opened.
+            //
+            // Code++ doesn't ship a tab-bar context menu yet
+            // (Phase 4 polish), so this is a no-op returning
+            // FALSE. The dispatcher still routes the call
+            // through `services` so the host gets the chance
+            // to log / record the request, and so a future
+            // implementation has a single place to wire up.
+            services.trigger_tab_context_menu(wparam as i32, lparam as i32) as isize
+        }
+
+        NPPM_GETSHORTCUTBYCMDID => {
+            // wparam: cmd id whose binding the plugin wants.
+            // lparam: ShortcutKey* OUT (4 bytes — see ffi.rs).
+            // Returns: TRUE if a binding exists, FALSE
+            // otherwise. The out-buffer is left untouched on
+            // FALSE so a plugin can't read a misleading value
+            // from a partial write.
+            //
+            // Reject NULL / negative lparam up front — a
+            // negative isize would cast to a high-address
+            // kernel-mode pointer on Win64 and crash the host
+            // on `write_unaligned`. Same kernel-mode-pointer
+            // guard the cmd-id allocator and `NPPM_MSGTOPLUGIN`
+            // already use.
+            if lparam <= 0 {
+                return Some(0);
+            }
+            let Some(shortcut) = services.shortcut_for_cmd_id(wparam as i32) else {
+                return Some(0);
+            };
+            // SAFETY: plugin promises lparam is a valid
+            // `ShortcutKey*` it owns for the duration of the
+            // call. `ShortcutKey` is `#[repr(C)]` with four
+            // 1-byte fields — total 4 bytes, no alignment
+            // concerns. `write_unaligned` defends against a
+            // buggy plugin's misaligned pointer.
+            unsafe {
+                core::ptr::write_unaligned(lparam as *mut crate::ffi::ShortcutKey, shortcut);
+            }
+            1
+        }
+
         // RUNCOMMAND_USER family. The two host-environment queries
         // share an out-buffer protocol: wparam = capacity in TCHARs,
         // lparam = TCHAR* OUT. Bad pointer / zero capacity returns 0
@@ -2179,6 +2262,17 @@ mod tests {
         alloc_cmd_id_limit: i32,
         next_alloc_marker: i32,
         alloc_marker_limit: i32,
+        /// Static count for `NPPM_GETNBUSERLANG`. Tests that
+        /// pretend Code++ has UDL set this manually.
+        user_lang_count: i32,
+        /// Lookup table for `NPPM_GETSHORTCUTBYCMDID`. Pairs
+        /// `(cmd_id, ShortcutKey)`.
+        shortcuts: Vec<(i32, crate::ffi::ShortcutKey)>,
+        /// Return value the mock reports from
+        /// `trigger_tab_context_menu`. Defaults to `false` (the
+        /// "no menu opened" path), matching the production
+        /// HostBridge today.
+        tab_context_menu_opens: bool,
         // recorded mutations
         log: RefCell<Vec<String>>,
     }
@@ -2626,6 +2720,19 @@ mod tests {
             self.line_number_width_mode = mode;
             self.record(format!("set_line_number_width_mode({mode})"));
             true
+        }
+        fn user_lang_count(&self) -> i32 {
+            self.user_lang_count
+        }
+        fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<crate::ffi::ShortcutKey> {
+            self.shortcuts
+                .iter()
+                .find(|(c, _)| *c == cmd_id)
+                .map(|(_, k)| *k)
+        }
+        fn trigger_tab_context_menu(&mut self, view: i32, tab_idx: i32) -> bool {
+            self.record(format!("trigger_tab_context_menu({view},{tab_idx})"));
+            self.tab_context_menu_opens
         }
     }
 
@@ -4218,6 +4325,132 @@ mod tests {
         let r = unsafe { dispatch_nppm(&mut s, NPPM_ALLOCATEMARKER, 1, -1isize) };
         assert_eq!(r, Some(0));
         assert_eq!(s.next_alloc_marker, 25);
+    }
+
+    // --- NPPM_GETNBUSERLANG / TRIGGERTABBARCONTEXTMENU / GETSHORTCUTBYCMDID ---
+
+    #[test]
+    fn user_lang_count_passes_through() {
+        let mut s = MockServices::default();
+        // Default 0 — Code++ ships no UDLs.
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_GETNBUSERLANG, 0, 0) },
+            Some(0)
+        );
+        // Mock can pretend a UDL count for tests that exercise
+        // the contract once the UDL system lands.
+        s.user_lang_count = 7;
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_GETNBUSERLANG, 0, 0) },
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn trigger_tab_context_menu_routes_args() {
+        let mut s = MockServices::default();
+        // Default mock returns false (menu didn't open) — the
+        // honest "Code++ doesn't have a tab context menu yet"
+        // answer.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_TRIGGERTABBARCONTEXTMENU, 0, 5) };
+        assert_eq!(r, Some(0));
+        assert_eq!(s.calls(), vec!["trigger_tab_context_menu(0,5)"]);
+
+        // When the host *does* open a menu (future Phase 4
+        // polish), the dispatcher relays the TRUE return.
+        s.tab_context_menu_opens = true;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_TRIGGERTABBARCONTEXTMENU, 1, -1) };
+        assert_eq!(r, Some(1));
+    }
+
+    #[test]
+    fn get_shortcut_by_cmd_id_writes_struct_on_hit() {
+        use crate::ffi::ShortcutKey;
+        let mut s = MockServices {
+            shortcuts: vec![
+                (
+                    1003,
+                    ShortcutKey {
+                        is_ctrl: 1,
+                        is_alt: 0,
+                        is_shift: 0,
+                        key: b'N',
+                    },
+                ),
+                (
+                    1005,
+                    ShortcutKey {
+                        is_ctrl: 1,
+                        is_alt: 0,
+                        is_shift: 1,
+                        key: b'S',
+                    },
+                ),
+            ],
+            ..Default::default()
+        };
+        let mut out = ShortcutKey {
+            is_ctrl: 0xFF,
+            is_alt: 0xFF,
+            is_shift: 0xFF,
+            key: 0xFF,
+        };
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETSHORTCUTBYCMDID,
+                1003,
+                &mut out as *mut ShortcutKey as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(out.is_ctrl, 1);
+        assert_eq!(out.is_alt, 0);
+        assert_eq!(out.is_shift, 0);
+        assert_eq!(out.key, b'N');
+    }
+
+    #[test]
+    fn get_shortcut_by_cmd_id_unknown_returns_zero_without_writing() {
+        use crate::ffi::ShortcutKey;
+        let mut s = MockServices::default();
+        // Sentinel out-buffer so we can verify it's untouched.
+        let mut out = ShortcutKey {
+            is_ctrl: 0xAA,
+            is_alt: 0xAA,
+            is_shift: 0xAA,
+            key: 0xAA,
+        };
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETSHORTCUTBYCMDID,
+                9999, // unbound cmd id
+                &mut out as *mut ShortcutKey as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+        // Out-buffer must not be partially overwritten on miss.
+        assert_eq!(out.is_ctrl, 0xAA);
+        assert_eq!(out.is_alt, 0xAA);
+        assert_eq!(out.is_shift, 0xAA);
+        assert_eq!(out.key, 0xAA);
+    }
+
+    #[test]
+    fn get_shortcut_by_cmd_id_negative_lparam_returns_zero() {
+        // Same kernel-mode-pointer guard the allocator pair and
+        // MSGTOPLUGIN already use.
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETSHORTCUTBYCMDID, 1003, -1isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn get_shortcut_by_cmd_id_null_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETSHORTCUTBYCMDID, 1003, 0) };
+        assert_eq!(r, Some(0));
     }
 
     #[test]

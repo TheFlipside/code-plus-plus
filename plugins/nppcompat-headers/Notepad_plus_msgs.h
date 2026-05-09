@@ -165,6 +165,12 @@ typedef struct sessionInfo_ {
 
 #define NPPM_CREATESCINTILLAHANDLE        (NPPMSG + 20)
 #define NPPM_DESTROYSCINTILLAHANDLE       (NPPMSG + 21)  /* deprecated upstream */
+/* v3: number of user-defined languages (UDL) currently
+ *     registered with the host. Code++ does not yet implement
+ *     UDL — the menu, the XML parser, and the runtime registry
+ *     are all Phase 4+ polish — so this is permanently 0 until
+ *     UDL lands. Plugins gating on `if (NPPM_GETNBUSERLANG())`
+ *     skip their UDL-aware code paths. */
 #define NPPM_GETNBUSERLANG                (NPPMSG + 22)
 /* v2: returns the active tab index in the requested view
  *     (wParam: 0 = primary, 1 = secondary). Returns -1 when the
@@ -283,6 +289,14 @@ typedef struct CommunicationInfo_ {
 #endif
 /* v1: invoke the menu command identified by lParam (cmdID). */
 #define NPPM_MENUCOMMAND                  (NPPMSG + 48)
+/* v3: open the tab-bar context menu programmatically.
+ *     wParam: view (0 = primary, 1 = secondary).
+ *     lParam: tab index (or -1 for "use the active tab").
+ *     Returns: BOOL — TRUE if the menu opened.
+ *     **Phase 4 polish (DESIGN.md §7.4):** Code++'s tab strip
+ *     has no context menu yet (no Close / Close-Others /
+ *     Move-to-other-view / Rename / Delete-from-disk entries),
+ *     so this is currently a no-op returning FALSE. */
 #define NPPM_TRIGGERTABBARCONTEXTMENU     (NPPMSG + 49)
 /* v1: returns Code++'s self-reported version, encoded high-word major,
  *     low-word minor — chosen to be range-compatible with Notepad++ for
@@ -377,6 +391,11 @@ typedef struct CommunicationInfo_ {
 /* v2: BOOL — current status bar hidden state. */
 #define NPPM_ISSTATUSBARHIDDEN            (NPPMSG + 75)
 
+/* v3: look up the keyboard shortcut bound to a built-in command
+ *     id. wParam: cmd id. lParam: ShortcutKey* OUT — host
+ *     writes the binding's Ctrl/Alt/Shift bits + virtual key.
+ *     Returns: BOOL — TRUE if a binding exists, FALSE
+ *     otherwise (out-buffer untouched on FALSE). */
 #define NPPM_GETSHORTCUTBYCMDID           (NPPMSG + 76)
 /* v1: open the file at lParam (TCHAR*). */
 #define NPPM_DOOPEN                       (NPPMSG + 77)

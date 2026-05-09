@@ -1427,6 +1427,88 @@ impl UiPlatform for Win32Ui {
         true
     }
 
+    fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey> {
+        // Mirrors the accelerator table built in `run()`.
+        // Hardcoded as a `match` because:
+        //   1. The HACCEL is created in a function-local scope
+        //      and not stored on `WindowState`, so a runtime
+        //      `CopyAcceleratorTableW` introspection would
+        //      require plumbing the handle through every
+        //      `Win32Ui` construction site.
+        //   2. The accelerator table is fixed at startup and
+        //      cannot mutate at runtime today
+        //      (`NPPM_REMOVESHORTCUTBYCMDID` is still ⚫). When
+        //      that lands, switch to live introspection so the
+        //      removed binding stops appearing here.
+        //
+        // Single source of truth: `run()`'s ACCEL[] literal. A
+        // new accelerator means updating BOTH places — caught
+        // by code review since the two sites match on the same
+        // ID_* constants.
+        //
+        // ShortcutKey field semantics: Win32 `ACCEL.fVirt` flags
+        // (FCONTROL/FALT/FSHIFT/FVIRTKEY) decompose into the
+        // is_ctrl / is_alt / is_shift bits; `ACCEL.key` is the
+        // virtual-key code, truncated to u8 since N++'s ABI
+        // declares ShortcutKey.key as a single byte.
+        let cmd = cmd_id as u16;
+        // Convenience constructors keep each row on one line.
+        fn ctrl(key: u8) -> codepp_plugin_host::ShortcutKey {
+            codepp_plugin_host::ShortcutKey {
+                is_ctrl: 1,
+                is_alt: 0,
+                is_shift: 0,
+                key,
+            }
+        }
+        fn ctrl_shift(key: u8) -> codepp_plugin_host::ShortcutKey {
+            codepp_plugin_host::ShortcutKey {
+                is_ctrl: 1,
+                is_alt: 0,
+                is_shift: 1,
+                key,
+            }
+        }
+        fn plain(key: u8) -> codepp_plugin_host::ShortcutKey {
+            codepp_plugin_host::ShortcutKey {
+                is_ctrl: 0,
+                is_alt: 0,
+                is_shift: 0,
+                key,
+            }
+        }
+        fn shift(key: u8) -> codepp_plugin_host::ShortcutKey {
+            codepp_plugin_host::ShortcutKey {
+                is_ctrl: 0,
+                is_alt: 0,
+                is_shift: 1,
+                key,
+            }
+        }
+        match cmd {
+            // File
+            ID_FILE_NEW => Some(ctrl(VK_N.0 as u8)),
+            ID_FILE_OPEN => Some(ctrl(VK_O.0 as u8)),
+            ID_FILE_SAVE => Some(ctrl(VK_S.0 as u8)),
+            ID_FILE_SAVE_AS => Some(ctrl_shift(VK_S.0 as u8)),
+            ID_FILE_CLOSE => Some(ctrl(VK_W.0 as u8)),
+            // Search
+            ID_SEARCH_FIND => Some(ctrl(VK_F.0 as u8)),
+            ID_SEARCH_REPLACE => Some(ctrl(VK_H.0 as u8)),
+            ID_SEARCH_FINDINFILES => Some(ctrl_shift(VK_F.0 as u8)),
+            ID_SEARCH_GOTOLINE => Some(ctrl(VK_G.0 as u8)),
+            ID_SEARCH_FINDNEXT => Some(plain(VK_F3.0 as u8)),
+            ID_SEARCH_FINDPREV => Some(shift(VK_F3.0 as u8)),
+            // View
+            ID_VIEW_ZOOMIN => Some(ctrl(VK_OEM_PLUS.0 as u8)),
+            ID_VIEW_ZOOMOUT => Some(ctrl(VK_OEM_MINUS.0 as u8)),
+            ID_VIEW_ZOOMRESET => Some(ctrl(VK_0.0 as u8)),
+            // Help
+            ID_HELP_ABOUT => Some(plain(VK_F1.0 as u8)),
+            _ => None,
+        }
+    }
+
     fn capture_text_from_doc(&mut self, scintilla_doc: isize) -> String {
         if scintilla_doc == 0 {
             // Sentinel for "no document attached yet" — there's
