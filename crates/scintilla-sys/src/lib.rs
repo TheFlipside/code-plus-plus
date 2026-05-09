@@ -266,6 +266,11 @@ pub const SCI_GETANCHOR: u32 = 2009;
 /// position around a doc-pointer swap.
 pub const SCI_GETXOFFSET: u32 = 2398;
 pub const SCI_SETXOFFSET: u32 = 2397;
+/// Wipe every line's margin text in one call. Used when replacing
+/// the entire buffer (e.g. `SCI_SETTEXT` during session restore)
+/// so per-line annotations from the doc's previous state can't
+/// leak through onto the new content.
+pub const SCI_MARGINTEXTCLEARALL: u32 = 2536;
 /// Scroll the view so the caret is visible. `SCI_SEARCHNEXT/PREV`
 /// move the selection but don't bring it into view; the Find
 /// dialog issues this after every successful hit.

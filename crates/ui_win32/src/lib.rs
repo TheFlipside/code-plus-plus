@@ -43,14 +43,14 @@ use codepp_scintilla_sys::{
     SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT,
     SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GOTOLINE,
     SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE,
-    SCI_MARGINSETTEXT, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
-    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
-    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
-    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
-    SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_UPDATEUI, SC_DOCUMENTOPTION_DEFAULT,
-    SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_TEXT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
-    SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO,
+    SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETDOCPOINTER,
+    SCI_SETEMPTYSELECTION, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
+    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
+    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
+    SCN_UPDATEUI, SC_DOCUMENTOPTION_DEFAULT, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_TEXT,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
@@ -746,19 +746,22 @@ impl UiPlatform for Win32Ui {
         self.editor.send(SCI_EMPTYUNDOBUFFER, 0, 0);
         self.editor.send(SCI_SETSAVEPOINT, 0, 0);
         self.editor.send(SCI_GOTOPOS, cursor as usize, 0);
-        // Refresh the line-number margin against the new content.
-        // The SCN_MODIFIED notification fired by SCI_SETTEXT also
-        // calls into this populate, but only when the WM_NOTIFY
-        // dispatch finds a live `state_from_hwnd` — which is
-        // *not* the case during the session-restore loop, where
-        // the UI is mid-`state.split()` and the re-entrance guard
-        // returns None. Calling here directly makes the populate
-        // deterministic for every `set_buffer_text` caller
-        // (file load, untitled restore, dirty restore, reload).
-        // Cheap to double-fire on the SCN_MODIFIED-driven path
-        // since `populate_visible_line_numbers` is bounded by
-        // viewport height, not file size.
-        populate_visible_line_numbers(&self.editor);
+        // Wipe any per-line margin text the doc carried from its
+        // previous state — `SCI_SETTEXT` replaces text but Scintilla
+        // keeps `SCI_MARGINSETTEXT` annotations on per-line storage,
+        // and they end up landing on lines of the *new* content
+        // (the bug: `activate_tab`'s populate set "1" on line 0 of
+        // the empty starter doc; after `SCI_SETTEXT`-with-multiline
+        // that "1" surfaced on the last line of the new content).
+        self.editor.send(SCI_MARGINTEXTCLEARALL, 0, 0);
+        // Populate the full document. The visible-only populate
+        // would miss off-screen lines during session restore
+        // (where this method runs *before* the window is laid out
+        // and `SCI_LINESONSCREEN` reports 0). Bounded by the
+        // doc's line count — fine for a once-per-load operation.
+        // Incremental edits still go through the cheaper
+        // `populate_visible_line_numbers` path on `SCN_MODIFIED`.
+        populate_all_line_numbers(&self.editor);
     }
 
     fn get_buffer_text(&mut self) -> String {
@@ -1515,6 +1518,30 @@ fn populate_line_numbers_range(editor: &EditorHandle, start: u64, end: u64, widt
 /// right level of write — it survives `SCI_SETDOCPOINTER` cycles
 /// and only needs re-running when content changes or the visible
 /// range shifts.
+/// Populate every line in the document with its margin number.
+/// Bounded by document line count, not viewport — used after a
+/// bulk content replace (`SCI_SETTEXT` in `set_buffer_text`)
+/// when the visible-only populate would miss off-screen lines.
+///
+/// Cost: ~2 direct-call invocations per line. For typical
+/// untitled buffers (a few hundred lines) this is sub-millisecond;
+/// for a 100k-line file it's around 100 ms — acceptable on a
+/// once-per-load operation. The lazy `SCN_UPDATEUI`-driven path
+/// is still the right choice for incremental edits.
+///
+/// Used specifically because session-restore calls
+/// `set_buffer_text` *before* the window has been laid out, so
+/// `SCI_LINESONSCREEN` returns 0 / 1 and the visible-only
+/// populate covers only the first few lines — leaving the rest
+/// blank (or worse, with stale margin text from the previous
+/// doc state, e.g. line 0's "1" from `activate_tab`'s populate
+/// of the empty starter doc).
+fn populate_all_line_numbers(editor: &EditorHandle) {
+    let total = editor.send(SCI_GETLINECOUNT, 0, 0).max(1) as u64;
+    let width = line_number_width(total);
+    populate_line_numbers_range(editor, 0, total, width);
+}
+
 fn populate_visible_line_numbers(editor: &EditorHandle) {
     // Scintilla guarantees `SCI_GETLINECOUNT >= 1` for any document
     // (an empty document still has line 0); clamp to 1 so the
@@ -10750,10 +10777,42 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // across the `extern "system"` frame.
                 if wparam.0 == AUTOSAVE_TIMER_ID {
                     if let Some(state) = state_from_hwnd(hwnd) {
+                        // Freeze the editor's WM_PAINT delivery
+                        // around the save pass. `save_session`
+                        // walks every tab and round-trips through
+                        // `SCI_SETDOCPOINTER` for non-active dirty
+                        // tabs; each swap pair invalidates the
+                        // editor and (without this freeze) Scintilla
+                        // paints the intermediate state — a
+                        // visible-and-irritating flicker every 7
+                        // seconds. `WM_SETREDRAW(false)` queues
+                        // invalidations without painting; the
+                        // matching `(true)` re-enables painting,
+                        // and an explicit `InvalidateRect` forces
+                        // ONE clean repaint of the final
+                        // (active-doc, restored-view) state.
+                        let scintilla_hwnd = state.scintilla_hwnd;
+                        let _ = SendMessageW(
+                            scintilla_hwnd,
+                            WM_SETREDRAW,
+                            Some(WPARAM(0)),
+                            Some(LPARAM(0)),
+                        );
                         let (shell, mut ui) = state.split();
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             shell.save_session(&mut ui)
                         }));
+                        let _ = SendMessageW(
+                            scintilla_hwnd,
+                            WM_SETREDRAW,
+                            Some(WPARAM(1)),
+                            Some(LPARAM(0)),
+                        );
+                        // Force a single fresh paint of the
+                        // restored-view state. Without this the
+                        // editor stays visually frozen until the
+                        // next user-driven invalidation.
+                        let _ = InvalidateRect(Some(scintilla_hwnd), None, false);
                         match result {
                             Ok(Ok(())) => {}
                             Ok(Err(e)) => {
