@@ -1,2 +1,5 @@
 # Claude
 .claude/** linguist-vendored
+
+# Tools
+tools/** linguist-vendored
