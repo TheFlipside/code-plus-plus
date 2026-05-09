@@ -26,7 +26,9 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use codepp_core::file::{Loader, LoaderShutdown};
 use codepp_core::lang::L_TEXT;
-use codepp_core::{Encoding, Eol, FindHistory, LangType, LoadResult, RequestId, Session};
+use codepp_core::{
+    Encoding, Eol, FindHistory, LangType, LoadResult, RequestId, Session, WindowGeometry,
+};
 use codepp_platform::watch::{FileChange, FileWatcher};
 #[cfg(target_os = "windows")]
 use codepp_plugin_host::{
@@ -2091,6 +2093,12 @@ impl Shell {
             return Ok(());
         };
         let mut session = Session::new();
+        // Persist the current window geometry alongside the tab list
+        // so the next launch can restore the user's preferred size.
+        // The UI is responsible for keeping `self.session.window`
+        // in sync via `set_window_geometry` on `WM_SIZE` /
+        // maximize-restore; we just snapshot the latest value here.
+        session.window = self.session.window;
         for (idx, tab) in self.tabs.iter().enumerate() {
             let Some(tab_path) = &tab.path else {
                 continue; // unsaved/empty tab
@@ -2194,6 +2202,27 @@ impl Shell {
     /// `&self.session` borrowed across mutations.
     pub fn session_active_index(&self) -> Option<usize> {
         self.session.active
+    }
+
+    /// Window geometry recorded in the most recently parsed
+    /// session.xml, or `None` if the session predates the feature
+    /// or was missing. The UI reads this *after*
+    /// `load_session_paths` and uses it to size the main window
+    /// before the first `ShowWindow`. Stored separately from the
+    /// runtime-tracked geometry below so a missing file is
+    /// distinguishable from "loaded; nothing has changed yet".
+    pub fn saved_window_geometry(&self) -> Option<WindowGeometry> {
+        self.session.window
+    }
+
+    /// Update the cached window geometry from the UI on every
+    /// observed change (`WM_SIZE` non-maximized, maximize/restore
+    /// transitions). The next `save_session` writes this through
+    /// to disk; UI is responsible for only feeding restored
+    /// (non-maximized) sizes into `width`/`height` so a maximized
+    /// + close cycle remembers the right "small" fallback.
+    pub fn set_window_geometry(&mut self, geometry: WindowGeometry) {
+        self.session.window = Some(geometry);
     }
 }
 
@@ -4697,6 +4726,7 @@ mod tests {
         let xml_path = dir.path().join("session.xml");
         let original = CoreSession {
             active: Some(1),
+            window: None,
             tabs: vec![
                 CoreTab {
                     path: PathBuf::from("/tmp/first.txt"),

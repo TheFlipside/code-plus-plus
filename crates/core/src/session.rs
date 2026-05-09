@@ -15,10 +15,20 @@
 //! ```xml
 //! <?xml version="1.0" encoding="UTF-8"?>
 //! <session active="0">
+//!   <window width="1280" height="720" maximized="false"/>
 //!   <tab path="C:\path\to\file.txt" cursor="42"
 //!        encoding="UTF-8" eol="LF"/>
 //! </session>
 //! ```
+//!
+//! The `<window>` element is optional. A session.xml written before
+//! the window-geometry feature shipped, or by a future build that
+//! drops it, parses cleanly with `window: None` and the UI falls
+//! back to its built-in default size. Width/height are pixel
+//! dimensions of the *restored* (non-maximized) outer window —
+//! storing the restored geometry alongside the maximized flag is
+//! what lets the next launch start maximized but still know the
+//! "small" size to fall back to when the user un-maximizes.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -52,6 +62,51 @@ pub struct Tab {
     pub eol: Eol,
 }
 
+/// Persisted main-window geometry. Pixel dimensions are positive in
+/// practice; signed `i32` matches the Win32 / GTK / Cocoa native
+/// types so the UI can pass values straight through without
+/// arithmetic on unsigned widths producing surprising results when
+/// the OS reports negative work-area coordinates on multi-monitor
+/// setups (a left-of-primary monitor has negative `x`).
+///
+/// Position (`x`, `y`) is intentionally not stored in this initial
+/// cut — the user's request was about size. Adding position later
+/// is purely additive (new `Option<i32>` fields default to `None`
+/// and existing session.xml files round-trip unchanged).
+///
+/// `Default` produces `{ width: None, height: None, maximized: false }`
+/// — which is *load-bearing*: the UI's runtime tracking calls
+/// `Shell::saved_window_geometry().unwrap_or_default()` on every
+/// `WM_SIZE`, so flipping any field to a non-zero default would
+/// silently rewrite the saved state on every interaction. Keep
+/// the all-zero default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowGeometry {
+    /// Restored (non-maximized) outer width in pixels. The UI is
+    /// expected to clamp against the actual screen size and any
+    /// minimum-width floor (e.g. "wide enough to show every
+    /// toolbar button") before applying.
+    #[serde(rename = "@width", skip_serializing_if = "Option::is_none", default)]
+    pub width: Option<i32>,
+    /// Restored outer height in pixels. Same UI-side clamp
+    /// expectation as `width`.
+    #[serde(rename = "@height", skip_serializing_if = "Option::is_none", default)]
+    pub height: Option<i32>,
+    /// True iff the window was maximized at the moment session.xml
+    /// was last written. The UI restores this by showing
+    /// maximized while still using the `width`/`height` as the
+    /// "un-maximize back to this size" fallback.
+    #[serde(rename = "@maximized", default, skip_serializing_if = "is_false")]
+    pub maximized: bool,
+}
+
+/// `skip_serializing_if` predicate for the maximized flag — so the
+/// common `maximized="false"` case isn't serialized at all,
+/// matching how the other `Option` fields elide their default.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// The whole session. The active-tab index is `Option<usize>` rather
 /// than `usize` so an empty session round-trips cleanly (no spurious
 /// `active="0"` when there are no tabs).
@@ -62,6 +117,11 @@ pub struct Session {
     /// no tabs are open.
     #[serde(rename = "@active", skip_serializing_if = "Option::is_none", default)]
     pub active: Option<usize>,
+    /// Persisted main-window geometry. `None` on a session.xml
+    /// written before this feature shipped (or by a build that
+    /// drops it) — UI falls back to its built-in default size.
+    #[serde(rename = "window", skip_serializing_if = "Option::is_none", default)]
+    pub window: Option<WindowGeometry>,
     /// All open tabs, in the order they appear in the tab strip.
     #[serde(rename = "tab", default)]
     pub tabs: Vec<Tab>,
@@ -196,6 +256,7 @@ mod tests {
         let (_dir, path) = temp_session_path();
         let session = Session {
             active: Some(1),
+            window: None,
             tabs: vec![
                 Tab {
                     path: PathBuf::from(r"C:\users\alice\hello.txt"),
@@ -221,6 +282,7 @@ mod tests {
         let (_dir, path) = temp_session_path();
         let session = Session {
             active: Some(0),
+            window: None,
             tabs: vec![Tab {
                 path: PathBuf::from("legacy.txt"),
                 cursor: 0,
@@ -231,6 +293,77 @@ mod tests {
         session.save_to_xml(&path).unwrap();
         let loaded = Session::load_from_xml(&path).unwrap();
         assert_eq!(session, loaded);
+    }
+
+    #[test]
+    fn round_trip_window_geometry() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            active: None,
+            window: Some(WindowGeometry {
+                width: Some(1440),
+                height: Some(900),
+                maximized: false,
+            }),
+            tabs: vec![],
+        };
+        session.save_to_xml(&path).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(session, loaded);
+    }
+
+    #[test]
+    fn round_trip_window_geometry_maximized() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            active: None,
+            window: Some(WindowGeometry {
+                width: Some(1280),
+                height: Some(720),
+                maximized: true,
+            }),
+            tabs: vec![],
+        };
+        session.save_to_xml(&path).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(session, loaded);
+    }
+
+    /// A session.xml written before the window-geometry feature
+    /// shipped must still parse — the UI is expected to fall back
+    /// to its built-in default size when `window` is `None`.
+    #[test]
+    fn pre_window_session_xml_loads_without_geometry() {
+        let (_dir, path) = temp_session_path();
+        // Verbatim shape of the old schema (no <window> element).
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
+        std::fs::write(&path, xml).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(loaded.active, Some(0));
+        assert_eq!(loaded.window, None);
+        assert_eq!(loaded.tabs.len(), 1);
+    }
+
+    /// Default `WindowGeometry` (all `None` / `false`) shouldn't
+    /// emit any `<window>` element — `skip_serializing_if` on the
+    /// outer `Session.window` field handles that, but only when
+    /// the field is `None`. Confirm the elision so a future change
+    /// that swaps the field type is caught.
+    #[test]
+    fn empty_window_geometry_not_serialized() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            active: None,
+            window: None,
+            tabs: vec![],
+        };
+        session.save_to_xml(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("<window"),
+            "<window> element should be elided when None: {text}"
+        );
     }
 
     #[test]

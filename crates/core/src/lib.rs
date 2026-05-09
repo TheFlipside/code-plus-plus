@@ -23,4 +23,4 @@ pub use file::{
 };
 pub use find_history::{FindHistory, FindHistoryError};
 pub use lang::LangType;
-pub use session::{Session, SessionError, Tab};
+pub use session::{Session, SessionError, Tab, WindowGeometry};

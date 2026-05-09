@@ -396,6 +396,46 @@ pub fn toolbar_height_px(bitmap_px: i32) -> i32 {
     bitmap_px + TOOLBAR_VERTICAL_CHROME_PX
 }
 
+/// Natural minimum width (in pixels) of the toolbar laid out as a
+/// single horizontal strip — the smallest width at which every
+/// button and separator is fully visible. Sent via `TB_GETMAXSIZE`,
+/// which the common-controls toolbar fills with the rectangle
+/// needed to display all `TBBUTTON` entries currently registered;
+/// the call has no side effects.
+///
+/// Used by `Win32Ui::run` as the floor on the main window's inner
+/// width so the user never has to manually widen the window to
+/// reveal toolbar buttons that were cut off by the default
+/// 900-pixel size.
+///
+/// # Safety
+///
+/// `toolbar_hwnd` must be a live HWND created by `create_toolbar`,
+/// past the `TB_ADDBUTTONS`/`TB_AUTOSIZE` calls that finalise the
+/// button layout — caller invariant since `create_toolbar` returns
+/// the HWND only after both messages have been sent.
+pub fn natural_min_width_px(toolbar_hwnd: HWND) -> i32 {
+    use windows::Win32::Foundation::SIZE;
+    // `TB_GETMAXSIZE = WM_USER + 53`. windows-rs does not export it
+    // (the constant lives behind a feature gate that's not currently
+    // wired in for `Win32::UI::Controls`); the numeric value is
+    // stable SDK ABI. Fills `lparam` (a `*mut SIZE`) with the
+    // minimum width × button-row height required for the current
+    // button set. Plain `//` because rustdoc silently drops doc
+    // comments on local `const` items inside function bodies.
+    const TB_GETMAXSIZE: u32 = 0x400 + 53;
+    let mut size = SIZE::default();
+    unsafe {
+        SendMessageW(
+            toolbar_hwnd,
+            TB_GETMAXSIZE,
+            None,
+            Some(LPARAM(&mut size as *mut SIZE as isize)),
+        );
+    }
+    size.cx.max(0)
+}
+
 // --- PNG decode -> HBITMAP ---------------------------------------------------
 
 /// Decode `png_bytes` to a `width * height * 4` BGRA buffer with

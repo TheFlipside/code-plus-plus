@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use codepp_core::lang::{CPP_KEYWORDS, C_KEYWORDS, L_C, L_CPP, L_RUST, RUST_KEYWORDS};
-use codepp_core::{Encoding, Eol, LangType};
+use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
 use codepp_plugin_host::ffi::SCNotification;
 use codepp_plugin_host::{Notification, NppData, NPPMSG, NPPMSG_RANGE, PLUGIN_CMD_ID_BASE};
@@ -57,9 +57,10 @@ use windows::Win32::Foundation::{
     COLORREF, E_FAIL, HWND, LPARAM, LRESULT, MAX_PATH, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateFontIndirectW, CreateSolidBrush, DeleteObject, FillRect, GetStockObject,
-    GetSysColorBrush, InvalidateRect, SetBkColor, SetBkMode, SetTextColor, COLOR_WINDOW,
-    DEFAULT_GUI_FONT, FW_BOLD, HBRUSH, HDC, HFONT, LOGFONTW, NULL_BRUSH, TRANSPARENT,
+    CreateFontIndirectW, CreateSolidBrush, DeleteObject, FillRect, GetMonitorInfoW, GetStockObject,
+    GetSysColorBrush, InvalidateRect, MonitorFromWindow, SetBkColor, SetBkMode, SetTextColor,
+    COLOR_WINDOW, DEFAULT_GUI_FONT, FW_BOLD, HBRUSH, HDC, HFONT, LOGFONTW, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST, NULL_BRUSH, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::{
@@ -91,21 +92,22 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW,
     IsWindow, IsWindowVisible, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, MoveWindow,
     PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW,
-    SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
-    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
-    BS_GROUPBOX, BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT,
-    CB_SETEDITSEL, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL,
-    DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
-    HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDOK, IDYES, IMAGE_ICON,
-    LR_DEFAULTCOLOR, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION,
-    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SW_HIDE, SW_SHOW,
-    SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND,
-    WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS,
-    WM_SETFONT, WM_SETREDRAW, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW,
-    WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL,
+    ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON,
+    BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING,
+    CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
+    DC_HASDEFID, DI_NORMAL, DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT,
+    FVIRTKEY, GWLP_USERDATA, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDOK,
+    IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO,
+    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, SHOW_WINDOW_CMD, SWP_NOMOVE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
+    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED,
+    WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
+    WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR,
+    WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -7322,6 +7324,251 @@ unsafe fn handle_window_menu_click_inner(hwnd: HWND, tab_idx: usize) {
     }
 }
 
+// --- Window-geometry persistence -------------------------------------
+//
+// Cross-launch persistence of the main window's size lives in
+// `core::Session.window` (a `WindowGeometry`); on shutdown
+// `Shell::save_session` writes the cached value, on startup
+// `Shell::saved_window_geometry` returns it. The Win32 plumbing
+// below sits between those two points: it reads the saved size at
+// app start (clamping against screen + toolbar minimum) and feeds
+// every `WM_SIZE` back into the shell so the next save captures
+// the user's latest preference.
+
+/// Default outer window dimensions used on a fresh install when
+/// session.xml carries no `<window>` element. Wider than the prior
+/// `900` so the toolbar's full button strip is visible at standard
+/// DPI without the user having to manually widen the window —
+/// 1280 is the smallest "common laptop" width that comfortably
+/// holds every M3 toolbar button + chrome.
+const DEFAULT_WINDOW_WIDTH_PX: i32 = 1280;
+const DEFAULT_WINDOW_HEIGHT_PX: i32 = 720;
+
+/// Hard floor on the height we'll restore to. A maliciously- or
+/// accidentally-tiny saved height (e.g. user dragged the bottom edge
+/// to one pixel before closing) would otherwise reopen the window
+/// with no usable editor area.
+const MIN_WINDOW_HEIGHT_PX: i32 = 400;
+
+/// Hard ceiling on either window dimension. Belt-and-braces against
+/// a tampered or corrupted session.xml carrying an `i32::MAX` width
+/// or height — the screen-clamp normally enforces a tight bound,
+/// but on a degenerate monitor query (zero work-area dimensions)
+/// the screen clamp is skipped, so an unconditional ceiling is
+/// also applied. 32 767 is the historical Win32 GDI coordinate
+/// limit and is comfortably larger than any real display.
+const MAX_WINDOW_DIMENSION_PX: i32 = 32_767;
+
+/// Work-area rectangle of the monitor closest to `hwnd` (the
+/// "screen minus taskbar" rect). Used to clamp the restored window
+/// size so a session.xml carrying a width/height larger than the
+/// current display doesn't open the window with content off-screen.
+unsafe fn nearest_monitor_work_area(hwnd: HWND) -> RECT {
+    unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(monitor, &mut info).as_bool() {
+            info.rcWork
+        } else {
+            // Fallback when the monitor query fails (extremely rare —
+            // would require a yanked display while the call was in
+            // flight). 1920×1040 = 1080p minus a typical 40-pixel
+            // taskbar, so the screen-clamp on the saved geometry
+            // doesn't accidentally collapse the window during this
+            // edge case.
+            const FALLBACK_WORK_W: i32 = 1920;
+            const FALLBACK_WORK_H: i32 = 1040;
+            RECT {
+                left: 0,
+                top: 0,
+                right: FALLBACK_WORK_W,
+                bottom: FALLBACK_WORK_H,
+            }
+        }
+    }
+}
+
+/// Outer-width floor below which the toolbar would clip its
+/// rightmost buttons. `toolbar::natural_min_width_px` returns the
+/// inner-strip width; we add the non-client frame chrome via
+/// `AdjustWindowRectEx` (matching the main window's style + menu)
+/// so the result is comparable to the outer width that
+/// `SetWindowPos` and the saved geometry both use.
+unsafe fn toolbar_min_outer_width(toolbar_hwnd: HWND) -> i32 {
+    unsafe {
+        let inner = toolbar::natural_min_width_px(toolbar_hwnd);
+        if inner <= 0 {
+            // Toolbar not yet laid out (TB_GETMAXSIZE returned 0) —
+            // fall back to the default width so we don't accidentally
+            // collapse the window during early init.
+            return DEFAULT_WINDOW_WIDTH_PX;
+        }
+        let mut frame = RECT {
+            left: 0,
+            top: 0,
+            right: inner,
+            bottom: 0,
+        };
+        // `AdjustWindowRectEx(rect, style, has_menu, ex_style)`
+        // expands `rect` from a desired client area to the outer
+        // window rect that produces it — same style flags the main
+        // window was created with, `bMenu = true` because the main
+        // window has a menu bar. On failure (invalid style flags or
+        // a future API change) the rect is left untouched, which
+        // would silently understate the floor by the non-client
+        // chrome — fall through to the safe default instead.
+        if AdjustWindowRectEx(
+            &mut frame,
+            WS_OVERLAPPEDWINDOW,
+            true,
+            WINDOW_EX_STYLE::default(),
+        )
+        .is_err()
+        {
+            return DEFAULT_WINDOW_WIDTH_PX;
+        }
+        frame.right - frame.left
+    }
+}
+
+/// Apply the saved window geometry — or a sensible default when no
+/// session.xml is present — to `main_hwnd`. Sets the *restored*
+/// (non-maximized) outer rectangle via `SetWindowPos(SWP_NOMOVE)`
+/// and returns the `ShowWindow` command the caller should use:
+/// `SW_SHOWMAXIMIZED` if the saved state was maximized, otherwise
+/// `SW_SHOW`.
+///
+/// Layered constraints, applied in order:
+///   1. **Saved width/height** from `session.xml` if present,
+///      otherwise the [`DEFAULT_WINDOW_WIDTH_PX`] /
+///      [`DEFAULT_WINDOW_HEIGHT_PX`] defaults.
+///   2. **Toolbar minimum**: width is `max`'d against
+///      `toolbar_min_outer_width` so the user never launches into
+///      a state where rightmost toolbar buttons are clipped — the
+///      bug this whole change is meant to address.
+///   3. **Hard height floor** so a tampered-or-accidentally-tiny
+///      saved height can't reopen the window at one-pixel-tall.
+///   4. **Screen clamp** against the current monitor's work area
+///      so a saved geometry from a larger display doesn't push
+///      content off-screen.
+unsafe fn apply_initial_window_size(
+    main_hwnd: HWND,
+    toolbar_hwnd: HWND,
+    saved: Option<WindowGeometry>,
+) -> SHOW_WINDOW_CMD {
+    unsafe {
+        let toolbar_floor = toolbar_min_outer_width(toolbar_hwnd);
+        let work = nearest_monitor_work_area(main_hwnd);
+        let work_w = (work.right - work.left).max(0);
+        let work_h = (work.bottom - work.top).max(0);
+
+        let (mut width, mut height, maximized) = match saved {
+            Some(g) => (
+                g.width.unwrap_or(DEFAULT_WINDOW_WIDTH_PX),
+                g.height.unwrap_or(DEFAULT_WINDOW_HEIGHT_PX),
+                g.maximized,
+            ),
+            None => (DEFAULT_WINDOW_WIDTH_PX, DEFAULT_WINDOW_HEIGHT_PX, false),
+        };
+
+        // Toolbar floor takes precedence over the saved width.
+        width = width.max(toolbar_floor);
+        // Hard height floor.
+        height = height.max(MIN_WINDOW_HEIGHT_PX);
+        // Hard ceiling — applied unconditionally so a degenerate
+        // monitor query (which skips the screen clamp below) can't
+        // forward an `i32::MAX` saved value straight to
+        // `SetWindowPos`. The Win32 GDI coordinate limit is 32 767;
+        // anything larger has no use and risks integer issues
+        // downstream.
+        width = width.min(MAX_WINDOW_DIMENSION_PX);
+        height = height.min(MAX_WINDOW_DIMENSION_PX);
+        // Screen clamp — only when the work area is non-degenerate.
+        if work_w > 0 {
+            width = width.min(work_w);
+        }
+        if work_h > 0 {
+            height = height.min(work_h);
+        }
+
+        // SWP_NOMOVE keeps whatever position `CreateWindowExW(...,
+        // CW_USEDEFAULT, CW_USEDEFAULT, ...)` chose; SWP_NOZORDER
+        // leaves the z-order alone (no need to re-stack a window
+        // that hasn't been shown yet). The result is suppressed
+        // because the HWND was just created by the surrounding
+        // `run()` and is guaranteed live — the only realistic
+        // failure (an invalid flag combination) is a coding bug,
+        // not a recoverable runtime condition.
+        let _ = SetWindowPos(
+            main_hwnd,
+            None,
+            0,
+            0,
+            width,
+            height,
+            SWP_NOMOVE | SWP_NOZORDER,
+        );
+
+        if maximized {
+            SW_SHOWMAXIMIZED
+        } else {
+            SW_SHOW
+        }
+    }
+}
+
+/// Update the shell's cached window geometry from a `WM_SIZE`
+/// observation. Called from the main wnd_proc's `WM_SIZE` arm so
+/// the next `save_session` writes through whatever the user last
+/// set. `wparam_size_state` is the raw `wparam` from the message.
+///
+/// Behaviour by state:
+///   - **Restored**: capture the current outer rect and stamp it
+///     into width/height; clear the maximized flag.
+///   - **Maximized**: leave width/height alone (preserves the
+///     un-maximize-back-to-this fallback) and set the maximized
+///     flag.
+///   - **Minimized / sibling-window maximize transitions**
+///     (`SIZE_MAXSHOW`/`SIZE_MAXHIDE`): ignored. Persisting
+///     minimized would surprise the user on next launch, and the
+///     `MAXSHOW`/`MAXHIDE` codes report on *another* window and
+///     carry no useful size for ours.
+fn track_window_geometry(hwnd: HWND, shell: &mut Shell, wparam_size_state: u32) {
+    // Numeric values of `SIZE_*` from `winuser.h`. windows-rs hides
+    // these behind a feature gate that's not currently enabled in
+    // our dependency manifest; the values are stable SDK ABI.
+    const SIZE_RESTORED: u32 = 0;
+    const SIZE_MAXIMIZED: u32 = 2;
+
+    // Match exhaustively on the two states we care about and bail
+    // on everything else. Folding the dispatch into one match
+    // keeps an unrecognised state from accidentally landing in a
+    // path that re-writes the cache with stale values.
+    let (maximized, capture_size) = match wparam_size_state {
+        SIZE_RESTORED => (false, true),
+        SIZE_MAXIMIZED => (true, false),
+        _ => return,
+    };
+
+    let mut geom = shell.saved_window_geometry().unwrap_or_default();
+    geom.maximized = maximized;
+    if capture_size {
+        let mut outer = RECT::default();
+        // SAFETY: hwnd is the main window currently dispatching
+        // WM_SIZE. GetWindowRect on a live HWND is sound; on
+        // failure we leave width/height unchanged (the prior
+        // saved values stay).
+        if unsafe { GetWindowRect(hwnd, &mut outer) }.is_ok() {
+            geom.width = Some(outer.right - outer.left);
+            geom.height = Some(outer.bottom - outer.top);
+        }
+    }
+    shell.set_window_geometry(geom);
+}
+
 /// Run the Code++ Win32 event loop. Blocks until the user exits.
 ///
 /// `initial_path` (if `Some`) is queued for opening immediately after
@@ -7781,6 +8028,24 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         let initial_dock_visible = state.fif_dock_visible;
         let initial_dock_height = state.fif_dock_height;
 
+        // Apply the saved window geometry (or defaults) before
+        // installing GWLP_USERDATA + showing. `apply_initial_window_size`
+        // walks the saved-or-default → toolbar-floor → screen-clamp
+        // chain and decides whether to show normally or maximized.
+        // Doing this *before* the GWLP_USERDATA install means the
+        // resulting `WM_SIZE` finds an empty `state_from_hwnd` and
+        // skips layout — matches the existing "explicit
+        // layout_children after ShowWindow" pattern.
+        let saved_geom = state.shell.saved_window_geometry();
+        let show_cmd = apply_initial_window_size(main_hwnd, toolbar_hwnd, saved_geom);
+        // Seed the shell's runtime cache from the saved geometry so
+        // that `WM_SIZE` (which runs `track_window_geometry`) doesn't
+        // wipe a perfectly-good saved value if the user closes the
+        // app without resizing.
+        if let Some(g) = saved_geom {
+            state.shell.set_window_geometry(g);
+        }
+
         // Box now finalized. Install the raw pointer in GWLP_USERDATA;
         // the Box is reclaimed in WM_DESTROY.
         let state_ptr = Box::into_raw(state);
@@ -7790,7 +8055,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         DragAcceptFiles(main_hwnd, true);
 
         // Show + size + focus.
-        let _ = ShowWindow(main_hwnd, SW_SHOW);
+        let _ = ShowWindow(main_hwnd, show_cmd);
         let mut rect = RECT::default();
         GetClientRect(main_hwnd, &mut rect)?;
         layout_children(
@@ -9964,6 +10229,10 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // `refresh_status_dynamic_parts` lands in the
                     // same slots regardless of window width.
                     setup_status_parts(state.status_hwnd, width);
+                    // Persist the latest geometry into the shell's
+                    // session cache so the next clean shutdown
+                    // writes the size the user actually wants.
+                    track_window_geometry(hwnd, &mut state.shell, wparam.0 as u32);
                 }
                 LRESULT(0)
             }
