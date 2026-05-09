@@ -2657,25 +2657,67 @@ unsafe fn fire_queued_notifications(hwnd: HWND) {
 /// code never runs here, so the wrap is purely a defense
 /// against host-internal panics.
 ///
+/// Outcome of one close-active-tab attempt — drives the
+/// Close-All loop's continue-vs-break decision.
+///
+///   * `Closed` — the active tab was successfully removed.
+///   * `NothingToClose` — there was no active tab to begin
+///     with (workspace was empty), or `state_from_hwnd`
+///     returned `None` (re-entrant plugin call active).
+///   * `Aborted` — the close did not happen because the user
+///     dismissed the save-confirm dialog with Cancel, OR
+///     because the Save / Save-As path failed (and the
+///     error dialog was shown). In a Close-All context this
+///     means "stop the loop": closing the next tab is not
+///     what the user asked for after they aborted this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseOutcome {
+    Closed,
+    NothingToClose,
+    Aborted,
+}
+
 /// # Safety
 ///
 /// Caller must invoke from the UI thread that owns `hwnd`.
 unsafe fn handle_close_active_tab(hwnd: HWND) {
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        // SAFETY: caller's UI-thread contract carries.
-        unsafe {
-            handle_close_active_tab_inner(hwnd);
-        }
-    }));
+    // Single-tab close discards the outcome — Ctrl+W / File→Close
+    // / future right-click → Close don't need to know whether the
+    // user cancelled. Close-All uses the with-outcome variant.
+    //
+    // SAFETY: caller's UI-thread contract carries.
+    let _ = unsafe { handle_close_active_tab_with_outcome(hwnd) };
 }
 
-/// Body of [`handle_close_active_tab`], factored out so the
-/// caller can wrap it in a single `catch_unwind`.
+/// Same close-active-tab flow as [`handle_close_active_tab`],
+/// but returns the [`CloseOutcome`] so the Close-All loop can
+/// stop on `Aborted` instead of re-prompting the same tab on
+/// every iteration.
 ///
 /// # Safety
 ///
 /// Caller must invoke from the UI thread that owns `hwnd`.
-unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
+unsafe fn handle_close_active_tab_with_outcome(hwnd: HWND) -> CloseOutcome {
+    // The `catch_unwind` wraps the inner so a host-internal
+    // panic (allocation failure, tracing-subscriber misbehaviour,
+    // ...) doesn't unwind across the `extern "system"` wnd_proc
+    // frame. On a caught panic we report `Aborted` so a
+    // Close-All loop stops rather than spinning on a poisoned
+    // close path.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: caller's UI-thread contract carries.
+        unsafe { handle_close_active_tab_inner(hwnd) }
+    }))
+    .unwrap_or(CloseOutcome::Aborted)
+}
+
+/// Body of [`handle_close_active_tab_with_outcome`], factored
+/// out so the caller can wrap it in a single `catch_unwind`.
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
     // Phase 0: dirty-check gate. If the active tab's buffer has
     // unsaved changes, prompt the user with Save / Don't Save /
     // Cancel before any data-model mutation. Cancel aborts the
@@ -2694,14 +2736,14 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
             (name, has_path, dirty)
         })
     } else {
-        return;
+        return CloseOutcome::NothingToClose;
     };
     let Some((display_name, has_path, dirty)) = prelude else {
-        return; // nothing open
+        return CloseOutcome::NothingToClose;
     };
     if dirty {
         match show_save_confirm_dialog(hwnd, &display_name) {
-            SaveConfirmResult::Cancel => return,
+            SaveConfirmResult::Cancel => return CloseOutcome::Aborted,
             SaveConfirmResult::No => {
                 // Proceed to the close without saving. The
                 // buffer's edits are discarded with the doc
@@ -2745,11 +2787,11 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
                             Err(e) => Some(e.to_string()),
                         }
                     } else {
-                        return;
+                        return CloseOutcome::Aborted;
                     };
                     if let Some(msg) = save_error {
                         show_error_dialog(hwnd, "Save failed", &msg);
-                        return;
+                        return CloseOutcome::Aborted;
                     }
                 } else {
                     // Untitled tab — route through the Save As
@@ -2765,10 +2807,10 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
                     let still_dirty = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
                         state.editor.send(SCI_GETMODIFY, 0, 0) != 0
                     } else {
-                        return;
+                        return CloseOutcome::Aborted;
                     };
                     if still_dirty {
-                        return;
+                        return CloseOutcome::Aborted;
                     }
                 }
             }
@@ -2782,10 +2824,10 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
     let closed = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
         state.shell.close_active_tab()
     } else {
-        return;
+        return CloseOutcome::NothingToClose;
     };
     let Some(closed) = closed else {
-        return; // nothing was open
+        return CloseOutcome::NothingToClose;
     };
 
     // Defense in depth: a refactor that ever produced
@@ -3012,6 +3054,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
         }
         fire_queued_notifications(hwnd);
     }
+    CloseOutcome::Closed
 }
 
 /// Handle a tab-strip selection change (`TCN_SELCHANGE`). Reads the
@@ -12382,21 +12425,51 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         fire_queued_notifications(hwnd);
                     }
                     ID_FILE_CLOSE_ALL => {
-                        // Loop the existing single-tab close path
-                        // until no tabs remain. Each iteration
-                        // does one shell-side close + one UI rebind
-                        // / SCI_RELEASEDOCUMENT, exactly as a
-                        // user-driven Ctrl+W does. The loop bound
-                        // is `tabs.len()` rather than `while
-                        // !is_empty()` so a misbehaving close path
-                        // that fails to remove a tab can't spin
-                        // forever — surface as a stuck tab the user
-                        // can complain about, not a hang.
+                        // Loop the single-tab close path until no
+                        // tabs remain — each iteration does one
+                        // shell-side close + UI rebind /
+                        // SCI_RELEASEDOCUMENT, exactly as a
+                        // user-driven Ctrl+W does. The single-tab
+                        // path now includes the
+                        // Save/Don't Save/Cancel modal for dirty
+                        // buffers, so Close All naturally inherits
+                        // per-tab prompting: dirty tabs get the
+                        // dialog, clean ones close silently.
+                        //
+                        // Two important details vs. the previous
+                        // close-all-and-discard implementation:
+                        //
+                        //   1. The loop honours the
+                        //      `CloseOutcome::Aborted` signal — a
+                        //      User-Cancel (or a Save / Save-As
+                        //      failure with the error already
+                        //      shown) breaks the loop instead of
+                        //      re-prompting the same tab on the
+                        //      next iteration. Tabs that have
+                        //      already been closed in earlier
+                        //      iterations stay closed; the user
+                        //      committed to those decisions.
+                        //
+                        //   2. `ensure_one_tab` only runs if the
+                        //      loop actually emptied the
+                        //      workspace. If the user aborted
+                        //      partway through, we leave the
+                        //      remaining tabs alone — pushing a
+                        //      fresh "new 1" placeholder when
+                        //      tabs already exist would be
+                        //      surprising.
+                        //
+                        // The loop bound is `tabs.len()` rather
+                        // than `while !is_empty()` so a
+                        // misbehaving close path that fails to
+                        // remove a tab can't spin forever —
+                        // surface as a stuck tab, not a hang.
                         let initial = if let Some(state) = state_from_hwnd(hwnd) {
                             state.shell.tabs.len()
                         } else {
                             0
                         };
+                        let mut ran_to_completion = true;
                         for _ in 0..initial {
                             let still_open = state_from_hwnd(hwnd)
                                 .map(|s| !s.shell.tabs.is_empty())
@@ -12404,14 +12477,40 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             if !still_open {
                                 break;
                             }
-                            handle_close_active_tab(hwnd);
+                            match handle_close_active_tab_with_outcome(hwnd) {
+                                CloseOutcome::Closed => {}
+                                CloseOutcome::NothingToClose => {
+                                    // The `still_open` guard
+                                    // above already filters the
+                                    // empty-workspace case, so
+                                    // hitting `NothingToClose`
+                                    // mid-loop means
+                                    // `state_from_hwnd` returned
+                                    // `None` — a re-entrant
+                                    // plugin call is on the
+                                    // stack and we can't safely
+                                    // mutate state. Tabs remain;
+                                    // suppress `ensure_one_tab`
+                                    // so we don't push a
+                                    // placeholder onto a
+                                    // non-empty strip.
+                                    ran_to_completion = false;
+                                    break;
+                                }
+                                CloseOutcome::Aborted => {
+                                    ran_to_completion = false;
+                                    break;
+                                }
+                            }
                         }
-                        // The "always at least one tab" invariant:
-                        // Close All leaves the workspace empty; pop a
-                        // fresh untitled buffer so the user sees a
-                        // visible tab to type into instead of an
-                        // empty editor chrome.
-                        ensure_one_tab(hwnd);
+                        if ran_to_completion {
+                            // Workspace is empty — restore the
+                            // "always at least one tab" invariant
+                            // with a fresh untitled buffer so the
+                            // user sees a visible tab to type into
+                            // instead of an empty editor chrome.
+                            ensure_one_tab(hwnd);
+                        }
                         fire_queued_notifications(hwnd);
                     }
                     ID_FILE_RELOAD => {
