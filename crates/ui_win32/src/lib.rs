@@ -21,6 +21,7 @@
 mod toolbar;
 
 use core::ffi::c_void;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -29,7 +30,9 @@ use codepp_core::lang::{CPP_KEYWORDS, C_KEYWORDS, L_C, L_CPP, L_RUST, RUST_KEYWO
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
 use codepp_plugin_host::ffi::SCNotification;
-use codepp_plugin_host::{Notification, NppData, NPPMSG, NPPMSG_RANGE, PLUGIN_CMD_ID_BASE};
+use codepp_plugin_host::{
+    Notification, NppData, PluginAdminEntry, NPPMSG, NPPMSG_RANGE, PLUGIN_CMD_ID_BASE,
+};
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_C_CHARACTER, SCE_C_COMMENT,
     SCE_C_COMMENTDOC, SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR,
@@ -65,6 +68,9 @@ use windows::Win32::Graphics::Gdi::{
     COLOR_WINDOW, DEFAULT_GUI_FONT, FW_BOLD, HBRUSH, HDC, HFONT, LOGFONTW, MONITORINFO,
     MONITOR_DEFAULTTONEAREST, NULL_BRUSH, TRANSPARENT,
 };
+use windows::Win32::Storage::FileSystem::{
+    GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, GetSaveFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY,
@@ -73,10 +79,11 @@ use windows::Win32::UI::Controls::Dialogs::{
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT,
     ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT,
-    LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_TEXT, LVITEMW, LVM_DELETEALLITEMS,
-    LVM_GETITEMCOUNT, LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE,
-    LVM_SETITEMTEXTW, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS,
-    LVS_SINGLESEL, NMHDR, NMITEMACTIVATE, NM_DBLCLK, TCHITTESTINFO, TCIF_TEXT, TCITEMW,
+    LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_STATE, LVIF_TEXT, LVIS_STATEIMAGEMASK,
+    LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
+    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVM_SETITEMTEXTW, LVN_ITEMCHANGED,
+    LVS_EX_CHECKBOXES, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS,
+    LVS_SINGLESEL, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NM_DBLCLK, TCHITTESTINFO, TCIF_TEXT, TCITEMW,
     TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_HITTEST, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW,
     TCN_SELCHANGE, WC_COMBOBOX, WC_LISTVIEWW, WC_TABCONTROL,
 };
@@ -218,6 +225,11 @@ const ID_HELP_ABOUT: u16 = 1800;
 // command space so the toolbar's button table is complete.
 const ID_TOOLS_DEFINE_LANG: u16 = 1900;
 const ID_TOOLS_MONITORING: u16 = 1901;
+/// Plugins → Plugin Manager... menu item. Opens the modal admin
+/// dialog that lists installed plugins and lets the user toggle
+/// the per-plugin enabled flag (persisted to
+/// `<plugins_config_dir>/disabled.txt`).
+const ID_PLUGINS_ADMIN: u16 = 1910;
 
 // Macro (2000-2099) — toolbar-only entries; same M2 status.
 const ID_MACRO_RECORD: u16 = 2000;
@@ -3309,6 +3321,21 @@ unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
             tracing::warn!(plugin = %plugin_name, error = %e, "AppendMenuW (popup) failed");
         }
     }
+    // Append the Plugin Manager entry at the bottom of the menu,
+    // separated from the per-plugin submenus by a divider —
+    // matches Notepad++'s layout (per-plugin entries on top, then
+    // separator, then "Plugin Admin..."). Always appended, even
+    // when no plugins are loaded, so the user can reach the
+    // manager to re-enable plugins they previously disabled.
+    let _ = unsafe { AppendMenuW(plugin_menu, MF_SEPARATOR, 0, PCWSTR::null()) };
+    let _ = unsafe {
+        AppendMenuW(
+            plugin_menu,
+            MF_STRING,
+            ID_PLUGINS_ADMIN as usize,
+            w!("&Plugin Manager..."),
+        )
+    };
 }
 
 /// Write `text` into status-bar part `part_index`. Centralizes the
@@ -4382,6 +4409,609 @@ fn show_about_dialog(main_hwnd: HWND) {
         // Title-font cleanup, owner re-enable, and dialog HWND
         // destroy are all handled by RAII guards (`GdiObjectGuard`,
         // `OwnerEnableGuard`, `DlgDestroyGuard`) on scope exit.
+    }
+}
+
+// --- Plugin Manager dialog -------------------------------------------
+//
+// Modal dialog reached via Plugins → Plugin Manager.... Lists every
+// discovered plugin (loaded, pending, failed) with a per-row Enabled
+// checkbox; toggling the checkbox flips the disabled flag in the
+// plugin host and writes the change through to
+// `<plugins_config_dir>/disabled.txt`. Disabled plugins skip the
+// lazy-load path on the *next* launch — currently-loaded plugins
+// stay loaded for the rest of the session, matching Notepad++'s
+// "restart required" semantics.
+//
+// Layout follows N++'s Plugin Admin: a single tab control labelled
+// "Installed" across the top, a `LVS_REPORT` listview filling the
+// body with `LVS_EX_CHECKBOXES + LVS_EX_FULLROWSELECT`, a small
+// hint static under the listview, and a Close button bottom-right.
+// Future tabs (Updates, Available, Incompatible) slot in alongside
+// "Installed" without changing this scaffolding.
+
+const PLUGIN_ADMIN_CLASS: PCWSTR = w!("CodePlusPlusPluginAdminDialog");
+
+const IDC_PLUGIN_ADMIN_TAB: u16 = 700;
+const IDC_PLUGIN_ADMIN_LIST: u16 = 701;
+const IDC_PLUGIN_ADMIN_HINT: u16 = 702;
+const IDC_PLUGIN_ADMIN_CLOSE: u16 = 703;
+
+/// `LVM_INSERTITEMW`-side flag value for "checked" in the
+/// `LVS_EX_CHECKBOXES` state-image slot. The state-image index
+/// occupies bits 12-15 of the item state; index 1 = unchecked,
+/// index 2 = checked. `INDEXTOSTATEIMAGEMASK(i)` is just `i << 12`.
+const LIST_CHECKED_STATE: u32 = 2 << 12;
+const LIST_UNCHECKED_STATE: u32 = 1 << 12;
+
+/// Heap-allocated dialog state. The wnd_proc looks it up via
+/// `GWLP_USERDATA`; the box is owned by `show_plugin_admin_dialog`'s
+/// stack frame for the dialog's lifetime.
+struct PluginAdminDialogState {
+    /// Snapshot taken at dialog open. Listview rows map 1:1 to this
+    /// vec — `entries[row].index` is what gets passed back to
+    /// `Shell::set_plugin_disabled` on toggle.
+    entries: Vec<PluginAdminEntry>,
+    /// Owner HWND. The IDOK / WM_CLOSE handler re-enables the
+    /// owner *before* `DestroyWindow` so window activation
+    /// transfers naturally back to the editor (same fix as the
+    /// About / Goto dialogs).
+    owner_hwnd: HWND,
+    /// Listview HWND, captured after creation so the WM_NOTIFY
+    /// arm can match `nmhdr.hwndFrom` against it.
+    list_hwnd: HWND,
+}
+
+extern "system" fn plugin_admin_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        match msg {
+            WM_NCCREATE => {
+                let cs = lparam.0 as *const CREATESTRUCTW;
+                if !cs.is_null() {
+                    let state_ptr = (*cs).lpCreateParams as isize;
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_COMMAND => {
+                let cmd = (wparam.0 & 0xFFFF) as i32;
+                if cmd == IDOK.0 || cmd == IDCANCEL.0 || cmd == IDC_PLUGIN_ADMIN_CLOSE as i32 {
+                    let state_ptr =
+                        GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const PluginAdminDialogState;
+                    if !state_ptr.is_null() {
+                        let _ = EnableWindow((*state_ptr).owner_hwnd, true);
+                    }
+                    let _ = DestroyWindow(hwnd);
+                    LRESULT(0)
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+            }
+            WM_NOTIFY => {
+                // Listview check-state change — fired once when
+                // the user clicks the checkbox in front of a row.
+                // Compare the check state in `uOldState` and
+                // `uNewState`; if it flipped, push the change
+                // through to the shell and persist disabled.txt.
+                let nmhdr_ptr = lparam.0 as *const NMHDR;
+                if !nmhdr_ptr.is_null() {
+                    let nmhdr = &*nmhdr_ptr;
+                    let state_ptr =
+                        GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut PluginAdminDialogState;
+                    if !state_ptr.is_null()
+                        && nmhdr.hwndFrom == (*state_ptr).list_hwnd
+                        && nmhdr.code == LVN_ITEMCHANGED
+                    {
+                        let nmlv_ptr = lparam.0 as *const NMLISTVIEW;
+                        let nmlv = &*nmlv_ptr;
+                        let old_check = nmlv.uOldState & LVIS_STATEIMAGEMASK.0;
+                        let new_check = nmlv.uNewState & LVIS_STATEIMAGEMASK.0;
+                        // Filter on actual check-state changes —
+                        // LVN_ITEMCHANGED also fires on selection/
+                        // focus changes that we don't care about
+                        // here. `old_check == 0` means the
+                        // listview hasn't recorded a state-image
+                        // value yet (the very first state set);
+                        // skipping that prevents our own
+                        // populate-time `LVM_SETITEMSTATE` from
+                        // looking like a user toggle.
+                        if old_check != 0 && old_check != new_check && nmlv.iItem >= 0 {
+                            // `iItem >= 0` guard: an LVN_ITEMCHANGED
+                            // for a *non-item* event (e.g. group
+                            // header click on a future grouped
+                            // listview) carries `iItem == -1`. The
+                            // wrap-to-`usize::MAX` would still bounds-
+                            // check safely on `entries.get_mut`, but
+                            // making the intent explicit at the
+                            // filter is worth the one extra
+                            // comparison.
+                            let row = nmlv.iItem as usize;
+                            // Explicit reborrow on the entries Vec
+                            // — rustc 1.95 forbids implicit autorefs
+                            // through a raw `*mut`, and going via
+                            // `&mut (*state_ptr).entries` makes the
+                            // mutability intent clear at the call
+                            // site.
+                            let entries = &mut (*state_ptr).entries;
+                            if let Some(entry) = entries.get_mut(row) {
+                                let now_enabled = new_check == LIST_CHECKED_STATE;
+                                let new_disabled = !now_enabled;
+                                if entry.disabled != new_disabled {
+                                    entry.disabled = new_disabled;
+                                    // Reach back into the main
+                                    // window's state to push the
+                                    // change through. We're on the
+                                    // UI thread; the dialog blocks
+                                    // the owner so no other code
+                                    // is touching `Shell` right
+                                    // now.
+                                    if let Some(parent_state) =
+                                        state_from_hwnd((*state_ptr).owner_hwnd)
+                                    {
+                                        parent_state
+                                            .shell
+                                            .set_plugin_disabled(entry.index, new_disabled);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_CLOSE => {
+                let state_ptr =
+                    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const PluginAdminDialogState;
+                if !state_ptr.is_null() {
+                    let _ = EnableWindow((*state_ptr).owner_hwnd, true);
+                }
+                let _ = DestroyWindow(hwnd);
+                LRESULT(0)
+            }
+            WM_NCDESTROY => {
+                // Defensive: zero `GWLP_USERDATA` so any stray
+                // message between `DestroyWindow` returning and
+                // the modal pump's `IsWindow` break can't deref
+                // a dangling pointer (matches the About dialog's
+                // pattern).
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_ERASEBKGND => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let mut rect = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rect);
+                FillRect(hdc, &rect, dialog_bg_brush());
+                LRESULT(1)
+            }
+            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }));
+    match result {
+        Ok(lr) => lr,
+        Err(_) => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// Read the PE `VS_FIXEDFILEINFO` resource at `path` and format the
+/// file version as `"X.Y.Z.W"` (or `"X.Y.Z"` when revision is 0,
+/// `"X.Y"` when both build and revision are 0). Returns `None` for
+/// any failure path — a DLL without a version resource is the
+/// common case for hand-rolled plugins, and the caller falls back
+/// to "—".
+fn read_pe_file_version(path: &Path) -> Option<String> {
+    let path_w: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let path_pcwstr = PCWSTR(path_w.as_ptr());
+    // SAFETY: `path_w` is a NUL-terminated UTF-16 string; the
+    // pointer is valid for the duration of the call.
+    let size = unsafe { GetFileVersionInfoSizeW(path_pcwstr, None) };
+    if size == 0 {
+        return None;
+    }
+    // Cap the allocation. `GetFileVersionInfoSizeW` returns the
+    // size of the resource block as the DLL's PE header reports
+    // it; a maliciously-crafted DLL placed in the plugins
+    // directory could specify a multi-MB block to wedge the UI
+    // thread into a giant allocation at dialog open. 4 MiB is
+    // more than two orders of magnitude above any real-world
+    // version block (typical: 1-2 KiB) and well below any
+    // memory-pressure threshold.
+    const MAX_VERSION_INFO_BYTES: u32 = 4 * 1024 * 1024;
+    if size > MAX_VERSION_INFO_BYTES {
+        return None;
+    }
+    let mut buf: Vec<u8> = vec![0; size as usize];
+    // SAFETY: `path_w` outlives the call; `buf` has `size` bytes
+    // of writable space.
+    let ok =
+        unsafe { GetFileVersionInfoW(path_pcwstr, None, size, buf.as_mut_ptr() as *mut c_void) };
+    if ok.is_err() {
+        return None;
+    }
+    let mut info_ptr: *mut c_void = core::ptr::null_mut();
+    let mut info_len: u32 = 0;
+    let root_query: Vec<u16> = "\\".encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: `buf` is alive; `info_ptr`/`info_len` are out-params.
+    let ok = unsafe {
+        VerQueryValueW(
+            buf.as_ptr() as *const c_void,
+            PCWSTR(root_query.as_ptr()),
+            &mut info_ptr,
+            &mut info_len,
+        )
+    };
+    if !ok.as_bool()
+        || info_ptr.is_null()
+        || (info_len as usize) < std::mem::size_of::<VS_FIXEDFILEINFO>()
+    {
+        return None;
+    }
+    // SAFETY: `info_ptr` points inside `buf`; the pointed-to
+    // `VS_FIXEDFILEINFO` is a `#[repr(C)]` POD struct that
+    // `VerQueryValueW` filled in.
+    let info = unsafe { *(info_ptr as *const VS_FIXEDFILEINFO) };
+    // `dwSignature` is the canonical magic 0xFEEF04BD on every
+    // valid `VS_FIXEDFILEINFO`. A malformed or zero-padded
+    // resource block can pass the byte-length check above with a
+    // garbage signature, in which case the version fields are
+    // undefined — surface as `None` so the UI shows "—" rather
+    // than an arbitrary number.
+    if info.dwSignature != 0xFEEF_04BD {
+        return None;
+    }
+    let major = (info.dwFileVersionMS >> 16) & 0xFFFF;
+    let minor = info.dwFileVersionMS & 0xFFFF;
+    let build = (info.dwFileVersionLS >> 16) & 0xFFFF;
+    let rev = info.dwFileVersionLS & 0xFFFF;
+    if rev != 0 {
+        Some(format!("{major}.{minor}.{build}.{rev}"))
+    } else if build != 0 {
+        Some(format!("{major}.{minor}.{build}"))
+    } else {
+        Some(format!("{major}.{minor}"))
+    }
+}
+
+/// Show the modal Plugin Manager dialog. Same scaffolding as the
+/// other modal dialogs in this file — `OwnerEnableGuard` +
+/// `DlgDestroyGuard`, panic-catch wnd_proc, nested `GetMessageW`
+/// pump with `IsDialogMessageW`. `main_hwnd` is the owner;
+/// `Shell::installed_plugins` is consulted at open time for the
+/// row data, and `Shell::set_plugin_disabled` is called as the
+/// user toggles checkboxes.
+fn show_plugin_admin_dialog(main_hwnd: HWND) {
+    use std::sync::OnceLock;
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+
+    unsafe {
+        let instance = match GetModuleHandleW(None) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+
+        REGISTERED.get_or_init(|| {
+            let class = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(plugin_admin_wnd_proc),
+                hInstance: instance.into(),
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                hbrBackground: dialog_bg_brush(),
+                lpszClassName: PLUGIN_ADMIN_CLASS,
+                ..Default::default()
+            };
+            let _ = RegisterClassExW(&class);
+        });
+
+        // Snapshot the registry under a brief borrow on the main
+        // window's state — the `Vec` we get back is owned, so no
+        // borrow lasts past this block.
+        let entries: Vec<PluginAdminEntry> = if let Some(state) = state_from_hwnd(main_hwnd) {
+            state.shell.installed_plugins()
+        } else {
+            return;
+        };
+
+        // --- Layout (CLIENT coordinates) --------------------------
+        const CLIENT_W: i32 = 600;
+        const CLIENT_H: i32 = 420;
+        const PAD: i32 = 14;
+        const TAB_Y: i32 = PAD;
+        const TAB_H: i32 = 26;
+        const LIST_Y: i32 = TAB_Y + TAB_H + 8;
+        const LIST_H: i32 = CLIENT_H - LIST_Y - 88;
+        const HINT_Y: i32 = LIST_Y + LIST_H + 8;
+        const HINT_H: i32 = 32;
+        const BTN_W: i32 = 96;
+        const BTN_H: i32 = 28;
+        const BTN_X: i32 = CLIENT_W - PAD - BTN_W;
+        const BTN_Y: i32 = CLIENT_H - PAD - BTN_H;
+
+        let mut window_rect = RECT {
+            left: 0,
+            top: 0,
+            right: CLIENT_W,
+            bottom: CLIENT_H,
+        };
+        let _ = AdjustWindowRectEx(
+            &mut window_rect,
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            false,
+            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+        );
+        let dlg_w = window_rect.right - window_rect.left;
+        let dlg_h = window_rect.bottom - window_rect.top;
+
+        let mut owner_rect = RECT::default();
+        let _ = GetWindowRect(main_hwnd, &mut owner_rect);
+        let owner_w = owner_rect.right - owner_rect.left;
+        let owner_h = owner_rect.bottom - owner_rect.top;
+        let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
+        let dlg_y = owner_rect.top + (owner_h - dlg_h) / 2;
+
+        let mut state = Box::new(PluginAdminDialogState {
+            entries,
+            owner_hwnd: main_hwnd,
+            list_hwnd: HWND::default(),
+        });
+        let state_ptr: *mut PluginAdminDialogState = &mut *state;
+
+        let dlg = match CreateWindowExW(
+            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+            PLUGIN_ADMIN_CLASS,
+            w!("Plugin Manager"),
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            dlg_x,
+            dlg_y,
+            dlg_w,
+            dlg_h,
+            Some(main_hwnd),
+            None,
+            Some(instance.into()),
+            Some(state_ptr as *mut c_void),
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        let _dlg_guard = DlgDestroyGuard(dlg);
+
+        // Tab control with a single "Installed" tab. Future tabs
+        // (Updates, Available, Incompatible) slot in via additional
+        // `TCM_INSERTITEMW` calls; the body shape doesn't change.
+        let tab_ctrl = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            WC_TABCONTROL,
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            PAD,
+            TAB_Y,
+            CLIENT_W - 2 * PAD,
+            TAB_H,
+            Some(dlg),
+            Some(HMENU(IDC_PLUGIN_ADMIN_TAB as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        // Add the "Installed" tab.
+        let mut installed_label: Vec<u16> = "Installed"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let tab_item = TCITEMW {
+            mask: TCIF_TEXT,
+            pszText: PWSTR(installed_label.as_mut_ptr()),
+            ..Default::default()
+        };
+        SendMessageW(
+            tab_ctrl,
+            TCM_INSERTITEMW,
+            Some(WPARAM(0)),
+            Some(LPARAM(&tab_item as *const TCITEMW as isize)),
+        );
+
+        // Listview filling the body. `LVS_EX_CHECKBOXES` puts a
+        // checkbox before column 0, `LVS_EX_FULLROWSELECT` makes
+        // the whole row clickable, `LVS_EX_DOUBLEBUFFER` removes
+        // flicker on scroll.
+        let list_hwnd = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            WC_LISTVIEWW,
+            PCWSTR::null(),
+            WS_CHILD
+                | WS_VISIBLE
+                | WS_TABSTOP
+                | style_bits((LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL) as i32),
+            PAD,
+            LIST_Y,
+            CLIENT_W - 2 * PAD,
+            LIST_H,
+            Some(dlg),
+            Some(HMENU(IDC_PLUGIN_ADMIN_LIST as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        SendMessageW(
+            list_hwnd,
+            LVM_SETEXTENDEDLISTVIEWSTYLE,
+            Some(WPARAM(0)),
+            Some(LPARAM(
+                (LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER) as isize,
+            )),
+        );
+
+        // Two columns: "Plugin" (with implicit checkbox before it
+        // via `LVS_EX_CHECKBOXES`) and "Version".
+        let columns: [(&str, i32); 2] = [("Plugin", 380), ("Version", 160)];
+        for (i, (title, width)) in columns.iter().enumerate() {
+            let mut text: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+            let col = LVCOLUMNW {
+                mask: LVCF_FMT | LVCF_TEXT | LVCF_WIDTH,
+                fmt: LVCFMT_LEFT,
+                cx: *width,
+                pszText: PWSTR(text.as_mut_ptr()),
+                ..Default::default()
+            };
+            SendMessageW(
+                list_hwnd,
+                LVM_INSERTCOLUMNW,
+                Some(WPARAM(i)),
+                Some(LPARAM(&col as *const LVCOLUMNW as isize)),
+            );
+        }
+
+        // Populate one row per plugin. The state-image set
+        // (`LVM_SETITEMSTATE` with `LVIF_STATE` + `LIST_CHECKED_STATE`/
+        // `LIST_UNCHECKED_STATE`) seeds the checkbox; the LVN_ITEMCHANGED
+        // arm filters on `old_check == 0` to suppress reacting to
+        // these populate-time sets.
+        for (row, entry) in state.entries.iter().enumerate() {
+            let mut name_w: Vec<u16> = entry
+                .display_label
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            let item = LVITEMW {
+                mask: LVIF_TEXT,
+                iItem: row as i32,
+                iSubItem: 0,
+                pszText: PWSTR(name_w.as_mut_ptr()),
+                ..Default::default()
+            };
+            SendMessageW(
+                list_hwnd,
+                LVM_INSERTITEMW,
+                Some(WPARAM(0)),
+                Some(LPARAM(&item as *const LVITEMW as isize)),
+            );
+            // Subitem 1: version. Read once per row; an empty
+            // `read_pe_file_version` result renders as an em-dash
+            // so the column still reads cleanly.
+            let version = read_pe_file_version(&entry.path).unwrap_or_else(|| "—".to_string());
+            let mut version_w: Vec<u16> =
+                version.encode_utf16().chain(std::iter::once(0)).collect();
+            let sub = LVITEMW {
+                iSubItem: 1,
+                pszText: PWSTR(version_w.as_mut_ptr()),
+                ..Default::default()
+            };
+            SendMessageW(
+                list_hwnd,
+                LVM_SETITEMTEXTW,
+                Some(WPARAM(row)),
+                Some(LPARAM(&sub as *const LVITEMW as isize)),
+            );
+            // Seed the checkbox: enabled = !disabled.
+            let check_state = if entry.disabled {
+                LIST_UNCHECKED_STATE
+            } else {
+                LIST_CHECKED_STATE
+            };
+            let state_item = LVITEMW {
+                mask: LVIF_STATE,
+                state: windows::Win32::UI::Controls::LIST_VIEW_ITEM_STATE_FLAGS(check_state),
+                stateMask: LVIS_STATEIMAGEMASK,
+                ..Default::default()
+            };
+            SendMessageW(
+                list_hwnd,
+                LVM_SETITEMSTATE,
+                Some(WPARAM(row)),
+                Some(LPARAM(&state_item as *const LVITEMW as isize)),
+            );
+        }
+
+        // Hint static + Close button.
+        let hint = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Tick to enable, untick to disable. Changes take effect on the next launch."),
+            WS_CHILD | WS_VISIBLE,
+            PAD,
+            HINT_Y,
+            CLIENT_W - 2 * PAD - BTN_W - 8,
+            HINT_H,
+            Some(dlg),
+            Some(HMENU(IDC_PLUGIN_ADMIN_HINT as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        let close_btn = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Close"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_DEFPUSHBUTTON),
+            BTN_X,
+            BTN_Y,
+            BTN_W,
+            BTN_H,
+            Some(dlg),
+            Some(HMENU(IDC_PLUGIN_ADMIN_CLOSE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+
+        // Apply the default GUI font to all text-bearing children.
+        let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
+        for child in [tab_ctrl, list_hwnd, hint, close_btn] {
+            apply_dialog_font(child, font);
+        }
+
+        // Stash the listview HWND so the WM_NOTIFY arm can match
+        // against it.
+        state.list_hwnd = list_hwnd;
+
+        // Modal pump.
+        let _ = EnableWindow(main_hwnd, false);
+        let _owner_guard = OwnerEnableGuard(main_hwnd);
+        let _ = ShowWindow(dlg, SW_SHOW);
+        let _ = SetFocus(Some(close_btn));
+
+        let mut msg_buf = MSG::default();
+        loop {
+            if !IsWindow(Some(dlg)).as_bool() {
+                break;
+            }
+            let ret = GetMessageW(&mut msg_buf, None, 0, 0);
+            match ret.0 {
+                0 => {
+                    let _ = PostMessageW(None, WM_QUIT, msg_buf.wParam, msg_buf.lParam);
+                    break;
+                }
+                -1 => break,
+                _ => {
+                    if !IsDialogMessageW(dlg, &msg_buf).as_bool() {
+                        let _ = TranslateMessage(&msg_buf);
+                        DispatchMessageW(&msg_buf);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -10465,6 +11095,18 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // info. Modal pump runs after the borrow drops.
                     ID_HELP_ABOUT => {
                         show_about_dialog(hwnd);
+                    }
+                    // Plugins → Plugin Manager. Modal dialog listing
+                    // every discovered plugin with a per-row Enabled
+                    // checkbox; toggling persists to
+                    // `<plugins_config_dir>/disabled.txt`. Same
+                    // borrow-then-drop pattern as the About dialog
+                    // — `show_plugin_admin_dialog` only takes
+                    // `main_hwnd`, runs its own modal pump, and
+                    // re-acquires `state_from_hwnd` for the toggle
+                    // hooks under fresh borrows.
+                    ID_PLUGINS_ADMIN => {
+                        show_plugin_admin_dialog(hwnd);
                     }
                     // Go to... (m3b1). Pull the caret's line + offset
                     // and the document's line count + length off the

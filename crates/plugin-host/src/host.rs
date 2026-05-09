@@ -34,6 +34,17 @@ pub struct PluginInfo {
     pub name: Option<String>,
     /// Lifecycle state.
     state: PluginState,
+    /// `true` if the user has marked this plugin as disabled via the
+    /// Plugin Manager. Disabled plugins are still surfaced in the
+    /// manager UI (so the user can re-enable them) but the lazy-load
+    /// path skips them — `LoadLibraryW` is never called.
+    ///
+    /// Persisted across launches in `<plugins_config_dir>/disabled.txt`
+    /// (one filename per line). Toggling the flag at runtime takes
+    /// effect on the *next* launch — already-loaded plugins stay
+    /// loaded for the rest of the session, matching Notepad++'s
+    /// "restart required" semantics.
+    pub disabled: bool,
 }
 
 impl PluginInfo {
@@ -274,6 +285,12 @@ impl PluginHost {
                     path,
                     name: None,
                     state: PluginState::Pending,
+                    // Default to enabled at discovery time. The
+                    // shell sweeps `apply_disabled_list` over the
+                    // registry once enumeration finishes, flipping
+                    // `disabled = true` for any DLL whose filename
+                    // appears in `disabled.txt`.
+                    disabled: false,
                 });
                 *found += 1;
             } else if path.is_dir() && depth < max_depth {
@@ -298,6 +315,75 @@ impl PluginHost {
         self.plugins.iter()
     }
 
+    /// Apply the on-disk "disabled plugins" list to the registry.
+    /// `disabled_filenames` is the set of DLL filenames (basename
+    /// only, case-insensitive on Windows) that should be marked
+    /// disabled. Any plugin whose filename matches gets
+    /// `disabled = true`; anything not on the list is left alone
+    /// (so toggling at runtime persists across the next discover).
+    ///
+    /// Called by the shell once after `discover` completes, with
+    /// the contents of `<plugins_config_dir>/disabled.txt`. Empty
+    /// or missing file → empty set → all plugins enabled.
+    pub fn apply_disabled_list(&mut self, disabled_filenames: &[String]) {
+        for plugin in &mut self.plugins {
+            let basename = plugin
+                .path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            plugin.disabled = disabled_filenames.iter().any(|d| filenames_eq(d, basename));
+        }
+    }
+
+    /// Mark the plugin at index `idx` as disabled or enabled.
+    /// Returns `true` if the state actually changed (caller can
+    /// use this to skip writing `disabled.txt` when nothing
+    /// moved). Out-of-range index is a silent no-op returning
+    /// `false`.
+    pub fn set_disabled(&mut self, idx: usize, disabled: bool) -> bool {
+        let Some(plugin) = self.plugins.get_mut(idx) else {
+            return false;
+        };
+        if plugin.disabled == disabled {
+            return false;
+        }
+        plugin.disabled = disabled;
+        true
+    }
+
+    /// Snapshot the registry as a list of `(index, basename,
+    /// display_label, disabled)` tuples — the shape the Plugin
+    /// Manager UI consumes. Sorted by display label so the
+    /// listview shows a stable, alphabetised view.
+    pub fn snapshot_for_admin(&self) -> Vec<PluginAdminEntry> {
+        let mut out: Vec<PluginAdminEntry> = self
+            .plugins
+            .iter()
+            .enumerate()
+            .map(|(idx, p)| PluginAdminEntry {
+                index: idx,
+                filename: p
+                    .path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string(),
+                display_label: p.display_label(),
+                path: p.path.clone(),
+                disabled: p.disabled,
+                loaded: p.is_loaded(),
+                failed_reason: p.failed_reason().map(|s| s.to_string()),
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            a.display_label
+                .to_ascii_lowercase()
+                .cmp(&b.display_label.to_ascii_lowercase())
+        });
+        out
+    }
+
     /// Load the plugin at index `idx` if it is currently `Pending`.
     /// Calls `setInfo(npp_data)` and `getFuncsArray` as part of the
     /// load — same order Notepad++ uses, so existing plugins observe
@@ -311,6 +397,13 @@ impl PluginHost {
             return Err(format!("plugin index {idx} out of range"));
         };
         if plugin.is_loaded() {
+            return Ok(());
+        }
+        if plugin.disabled {
+            // Disabled plugins stay in `Pending` state forever —
+            // `LoadLibraryW` is never called. The Plugin Manager UI
+            // flags them as enabled=false; toggling re-enables on
+            // next launch.
             return Ok(());
         }
 
@@ -429,6 +522,46 @@ impl PluginHost {
         }
         None
     }
+}
+
+/// One row's worth of data for the Plugin Manager UI. Decoupled
+/// from `PluginInfo` so the UI doesn't take a borrow on the host
+/// across the modal pump (we'd otherwise hold `&PluginHost`
+/// through `IsDialogMessageW` and break the standard re-entrance
+/// rule).
+#[derive(Clone, Debug)]
+pub struct PluginAdminEntry {
+    /// Index into `PluginHost.plugins` — the Plugin Manager
+    /// passes this back via `set_disabled` when the user toggles
+    /// a row. Stable for the lifetime of the host (we never
+    /// remove plugins from the registry).
+    pub index: usize,
+    /// DLL filename (basename, including `.dll` extension). The
+    /// canonical key written into `disabled.txt`.
+    pub filename: String,
+    /// User-facing label — `getName()` for loaded plugins, file
+    /// stem for unloaded ones.
+    pub display_label: String,
+    /// Full path to the DLL — UI uses this to read the PE
+    /// VERSIONINFO resource for the version column.
+    pub path: PathBuf,
+    /// Current disabled flag. Snapshot only; the UI writes
+    /// changes through `Shell::set_plugin_disabled`.
+    pub disabled: bool,
+    /// True iff the plugin's DLL is currently mapped into the
+    /// process. UI shows a hint that disabling a loaded plugin
+    /// requires a restart for the change to fully take effect.
+    pub loaded: bool,
+    /// `Some(reason)` if a load attempt failed; `None` otherwise.
+    /// UI surfaces the reason as a tooltip on the row.
+    pub failed_reason: Option<String>,
+}
+
+/// Case-insensitive filename comparison — matches Windows' NTFS
+/// behaviour so a `disabled.txt` entry of `ComparePlus.dll`
+/// matches a DLL file `compareplus.dll` on disk.
+fn filenames_eq(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
 }
 
 /// Resolve the six entry points and run the initial setInfo +

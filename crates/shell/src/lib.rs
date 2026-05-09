@@ -976,13 +976,72 @@ impl Shell {
     /// A non-existent directory is not an error (first-run case).
     #[cfg(target_os = "windows")]
     pub fn discover_plugins(&mut self, dir: &Path) -> std::io::Result<usize> {
-        self.plugins.discover(dir)
+        let count = self.plugins.discover(dir)?;
+        // Apply the user's disabled-plugin list right after
+        // enumeration so any DLL named in `disabled.txt` is
+        // marked `disabled = true` *before* anything tries to
+        // lazy-load it. Reading is best-effort: a missing file
+        // is the first-run case (everyone enabled), a parse
+        // error logs and falls back to "everyone enabled" so a
+        // corrupted config can't lock the user out of plugins.
+        let disabled = read_disabled_plugins_list();
+        self.plugins.apply_disabled_list(&disabled);
+        Ok(count)
     }
 
     /// Total plugins known to the host (any lifecycle state).
     #[cfg(target_os = "windows")]
     pub fn plugin_count(&self) -> usize {
         self.plugins.len()
+    }
+
+    /// Snapshot of every discovered plugin shaped for the Plugin
+    /// Manager UI — see [`PluginAdminEntry`]. Caller takes
+    /// ownership; no borrow on `Shell.plugins` is held across
+    /// the modal pump.
+    #[cfg(target_os = "windows")]
+    pub fn installed_plugins(&self) -> Vec<codepp_plugin_host::PluginAdminEntry> {
+        self.plugins.snapshot_for_admin()
+    }
+
+    /// Toggle a plugin's disabled flag and write the change
+    /// through to `<plugins_config_dir>/disabled.txt`. Called by
+    /// the Plugin Manager UI when the user clicks the per-row
+    /// Enabled checkbox. Returns `true` iff the in-memory state
+    /// actually changed (an idempotent re-set returns `false`,
+    /// which the caller can use to skip the disk write — though
+    /// the writer below also short-circuits on a no-op).
+    ///
+    /// Toggling an already-loaded plugin doesn't unload it; the
+    /// new disabled state takes effect on the next launch. This
+    /// matches Notepad++'s "restart required" semantics —
+    /// unloading a live plugin mid-session would yank function
+    /// pointers the host (and other plugins) might still hold.
+    #[cfg(target_os = "windows")]
+    pub fn set_plugin_disabled(&mut self, idx: usize, disabled: bool) -> bool {
+        let changed = self.plugins.set_disabled(idx, disabled);
+        if changed {
+            // Re-derive the on-disk list from the (now-mutated)
+            // registry rather than mutating the file in place —
+            // simpler and the file stays canonical (one entry
+            // per disabled plugin, no stale entries for plugins
+            // that have since been removed from disk).
+            let disabled_filenames: Vec<String> = self
+                .plugins
+                .iter()
+                .filter(|p| p.disabled)
+                .filter_map(|p| {
+                    p.path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.to_string())
+                })
+                .collect();
+            if let Err(e) = write_disabled_plugins_list(&disabled_filenames) {
+                tracing::warn!(error = %e, "failed to persist disabled plugins list");
+            }
+        }
+        changed
     }
 
     /// Broadcast `notification` to every loaded plugin's `beNotified`.
@@ -3029,6 +3088,79 @@ fn is_backup_modified_externally(backup_path: &Path, backup_filename: &str) -> b
         Err(_) => return false,
     };
     mtime_secs > written_secs + 5
+}
+
+/// Read the user's disabled-plugin list from
+/// `<plugins_config_dir>/disabled.txt`. Returns each non-empty,
+/// non-comment line trimmed of whitespace; the resulting `Vec`
+/// is the canonical "disable this DLL" key set fed to
+/// [`PluginHost::apply_disabled_list`]. Missing file → empty
+/// list (first-run case). Read failure → empty list with a
+/// warn-level log, so a corrupted file never locks the user out
+/// of every plugin.
+#[cfg(target_os = "windows")]
+fn read_disabled_plugins_list() -> Vec<String> {
+    let Some(path) = codepp_platform::disabled_plugins_path() else {
+        return Vec::new();
+    };
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "disabled-plugins read failed");
+            return Vec::new();
+        }
+    };
+    contents
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.to_string())
+        .collect()
+}
+
+/// Write the disabled-plugin list back to disk atomically (sibling
+/// temp file + rename, same recipe as session.xml). Empty
+/// `filenames` writes an empty file rather than removing — keeps
+/// the file's existence as a marker that the feature is wired up.
+/// Creates the parent directory on first use.
+#[cfg(target_os = "windows")]
+fn write_disabled_plugins_list(filenames: &[String]) -> std::io::Result<()> {
+    let Some(path) = codepp_platform::disabled_plugins_path() else {
+        return Ok(());
+    };
+    let mut body = String::new();
+    body.push_str(
+        "# Plugins disabled by Code++'s Plugin Manager. One DLL filename per line.\n\
+         # Lines starting with `#` are comments; blank lines are ignored.\n",
+    );
+    for f in filenames {
+        // NTFS technically allows embedded `\n` / `\r` in filenames
+        // (extremely rare in practice). Writing one verbatim would
+        // inject an extra line into `disabled.txt` and could
+        // disable a different plugin than intended on the next
+        // launch. Skip + log; one-line-per-record is the file
+        // format's invariant.
+        if f.contains('\n') || f.contains('\r') {
+            tracing::warn!(filename = %f, "skipping disabled-plugin entry with embedded newline");
+            continue;
+        }
+        body.push_str(f);
+        body.push('\n');
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    use std::io::Write;
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".disabled-")
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    tmp.write_all(body.as_bytes())?;
+    tmp.as_file_mut().sync_all()?;
+    tmp.persist(&path).map_err(|e| e.error)?;
+    Ok(())
 }
 
 /// `true` iff the on-disk file at `disk_path` has a more recent

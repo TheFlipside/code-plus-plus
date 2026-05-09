@@ -118,6 +118,17 @@ pub fn plugins_config_dir() -> Option<PathBuf> {
     plugins_dir().map(|d| d.join("config"))
 }
 
+/// Path to the plain-text list of disabled plugin filenames at
+/// `config_dir/plugins/config/disabled.txt`. One DLL filename per
+/// line (basename only — no directory components); empty lines and
+/// `#`-prefixed comment lines are ignored. The Plugin Manager UI
+/// writes this file when the user toggles the per-plugin Enabled
+/// checkbox; `Shell::discover_plugins` reads it after enumeration
+/// to mark matching entries as disabled.
+pub fn disabled_plugins_path() -> Option<PathBuf> {
+    plugins_config_dir().map(|d| d.join("disabled.txt"))
+}
+
 /// Path to `config.xml` under [`config_dir`]. Phase 4 wires this in
 /// for user settings; Phase 2 only references it for the path layout.
 pub fn config_xml_path() -> Option<PathBuf> {
