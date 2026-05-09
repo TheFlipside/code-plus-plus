@@ -12780,6 +12780,32 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // race the shutdown save (or arrive after the box
                 // is reclaimed below).
                 let _ = KillTimer(Some(hwnd), AUTOSAVE_TIMER_ID);
+                // Fire NPPN_BEFORESHUTDOWN before any host-side
+                // teardown. Plugins use this hook to save their
+                // own state alongside the host's session save.
+                // Code++'s queue-deferred delivery model means a
+                // plugin response cannot veto shutdown (the
+                // upstream contract allows that, but the queue
+                // is one-way), so this is informational only.
+                //
+                // Dispatched synchronously (via `notify_plugins`,
+                // not `fire_queued_notifications`) so a plugin's
+                // `beNotified(BEFORESHUTDOWN)` handler can still
+                // call back into NPPM messages that need live
+                // session data — `Shell.tabs`, the
+                // file-watcher state, the editor handle. Any
+                // notifications a plugin queues from inside its
+                // BEFORESHUTDOWN handler land in
+                // `pending_notifications` and get drained by the
+                // `fire_queued_notifications` call further down.
+                if let Some(state) = state_from_hwnd(hwnd) {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _guard = PluginCallGuard::enter();
+                        state
+                            .shell
+                            .notify_plugins(Notification::BeforeShutdown, hwnd.0);
+                    }));
+                }
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let (shell, mut ui) = state.split();
                     // catch_unwind for the same reason as

@@ -835,6 +835,15 @@ typedef enum LangType_ {
 #define NPPN_LANGCHANGED           (NPPN_FIRST + 11)
 
 #define NPPN_WORDSTYLESUPDATED     (NPPN_FIRST + 12)
+/* v3: a plugin's command-shortcut binding was changed.
+ *     `nmhdr.idFrom` is the cmd id whose binding moved.
+ *     `nmhdr.hwndFrom` carries a `ShortcutKey*` for an
+ *     add/remap, NULL for a removal. Code++ today only
+ *     fires this on the removal path (`NPPM_REMOVESHORTCUTBYCMDID`
+ *     success); the add/remap path lands with
+ *     `NPPM_SETSHORTCUTBYCMDID` in Phase 5. Plugins watching
+ *     their own bindings see "the user removed your
+ *     shortcut" by matching cmd id + NULL hwndFrom. */
 #define NPPN_SHORTCUTREMAPPED      (NPPN_FIRST + 13)
 #define NPPN_FILEBEFORELOAD        (NPPN_FIRST + 14)
 /* v3: a previously-issued open did not complete successfully —
@@ -863,6 +872,14 @@ typedef enum LangType_ {
  *     `FILEOPENED` for the "what happened to last session's
  *     unsaved work" path. */
 #define NPPN_SNAPSHOTDIRTYFILELOADED (NPPN_FIRST + 18)
+/* v3: app is about to commit to shutdown — fired before
+ *     NPPN_SHUTDOWN so plugins can save their own state
+ *     alongside the host's session save. Upstream allows
+ *     plugins to *veto* shutdown by responding to this in
+ *     `beNotified`; Code++'s queue-deferred delivery means
+ *     a veto cannot stop teardown that is already in
+ *     progress, so the notification is informational only.
+ *     Carries no buffer id; `nmhdr.idFrom` is 0. */
 #define NPPN_BEFORESHUTDOWN        (NPPN_FIRST + 19)
 #define NPPN_CANCELSHUTDOWN        (NPPN_FIRST + 20)
 #define NPPN_FILEBEFORERENAME      (NPPN_FIRST + 21)

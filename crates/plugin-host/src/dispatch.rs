@@ -256,9 +256,24 @@ pub const NPPN_FILESAVED: u32 = NPPN_FIRST + 8;
 pub const NPPN_SHUTDOWN: u32 = NPPN_FIRST + 9;
 pub const NPPN_BUFFERACTIVATED: u32 = NPPN_FIRST + 10;
 pub const NPPN_LANGCHANGED: u32 = NPPN_FIRST + 11;
+/// A plugin's command shortcut binding was changed. Code++ today
+/// fires this only on the *removal* path (`NPPM_REMOVESHORTCUTBYCMDID`);
+/// the upstream contract also covers add/remap, but Code++ has no
+/// add path yet (Phase 5 will add `NPPM_SETSHORTCUTBYCMDID`). Per
+/// upstream ABI: `nmhdr.idFrom = cmdID`; `nmhdr.hwndFrom = ShortcutKey*`
+/// for an add/remap, `NULL` for a removal — Code++ always sends
+/// NULL `hwndFrom` for now (matches upstream's REMOVE shape).
+pub const NPPN_SHORTCUTREMAPPED: u32 = NPPN_FIRST + 13;
 pub const NPPN_FILELOADFAILED: u32 = NPPN_FIRST + 15;
 pub const NPPN_DOCORDERCHANGED: u32 = NPPN_FIRST + 17;
 pub const NPPN_SNAPSHOTDIRTYFILELOADED: u32 = NPPN_FIRST + 18;
+/// App is about to commit to shutdown. Plugins use this to save
+/// their own state alongside the host's session save. Upstream
+/// allows plugins to *veto* shutdown by responding to this in
+/// `beNotified`; Code++'s queue-deferred delivery model means a
+/// veto cannot stop teardown that is already in progress, so this
+/// is informational only. Fired before [`NPPN_SHUTDOWN`].
+pub const NPPN_BEFORESHUTDOWN: u32 = NPPN_FIRST + 19;
 
 /// Code++'s self-reported plugin-API version. Matches the encoding
 /// plugins expect from `NPPM_GETNPPVERSION`: HIWORD = major, LOWORD =
@@ -381,8 +396,25 @@ pub enum Notification {
     SnapshotDirtyFileLoaded {
         buffer_id: isize,
     },
+    /// App is about to commit to shutdown — fired before
+    /// [`Self::Shutdown`] so plugins can save their own state
+    /// alongside the host's session save. Code++'s queue-
+    /// deferred delivery model means plugins cannot veto
+    /// shutdown by responding to `beNotified`; the notification
+    /// is informational only. Carries no buffer id.
+    BeforeShutdown,
     /// App is about to exit. Fired before any DLL unload.
     Shutdown,
+    /// A plugin's command-shortcut binding was changed. Carries
+    /// the cmd id whose binding moved. Today fired only on
+    /// the *removal* path (Code++ has no `NPPM_SETSHORTCUTBYCMDID`
+    /// yet); upstream's `nmhdr.hwndFrom` carries a `ShortcutKey*`
+    /// for add/remap, `NULL` for removal — Code++ sends NULL
+    /// because every dispatch through this variant is a
+    /// removal in Phase 4.
+    ShortcutRemapped {
+        cmd_id: i32,
+    },
 }
 
 impl Notification {
@@ -401,7 +433,9 @@ impl Notification {
             Self::FileLoadFailed => NPPN_FILELOADFAILED,
             Self::DocOrderChanged => NPPN_DOCORDERCHANGED,
             Self::SnapshotDirtyFileLoaded { .. } => NPPN_SNAPSHOTDIRTYFILELOADED,
+            Self::BeforeShutdown => NPPN_BEFORESHUTDOWN,
             Self::Shutdown => NPPN_SHUTDOWN,
+            Self::ShortcutRemapped { .. } => NPPN_SHORTCUTREMAPPED,
         }
     }
 
@@ -415,12 +449,41 @@ impl Notification {
             | Self::BufferActivated { buffer_id }
             | Self::LangChanged { buffer_id }
             | Self::SnapshotDirtyFileLoaded { buffer_id } => *buffer_id,
+            // SHORTCUTREMAPPED's `nmhdr.idFrom` carries the cmd id —
+            // we reuse the `buffer_id` slot as the generic
+            // "id_from" payload. The cast chain `i32 → isize →
+            // usize` (the second cast happens in `notify_all`'s
+            // `id_from: ... as usize`) sign-extends negative
+            // values, matching upstream Notepad++'s
+            // `static_cast<uintptr_t>(cmdID)` on MSVC/GCC. In
+            // practice cmd ids always come from the positive
+            // `PLUGIN_ALLOC_CMD_BASE` range so the
+            // sign-extension never fires; the chain stays
+            // upstream-faithful for the negative case anyway.
+            Self::ShortcutRemapped { cmd_id } => *cmd_id as isize,
             Self::Ready
             | Self::TbModification
             | Self::FileBeforeOpen
             | Self::FileLoadFailed
             | Self::DocOrderChanged
+            | Self::BeforeShutdown
             | Self::Shutdown => 0,
+        }
+    }
+
+    /// Per-variant override of `nmhdr.hwndFrom`. The default is
+    /// the host's main HWND (so plugins identify the host). A
+    /// few notifications repurpose `hwndFrom` as a typed pointer
+    /// (e.g. `NPPN_SHORTCUTREMAPPED` carries a `ShortcutKey*`
+    /// in `hwndFrom` for add/remap, NULL for removal); those
+    /// override here.
+    fn hwnd_from(&self, default: Hwnd) -> Hwnd {
+        match self {
+            // Code++ has no add/remap path yet — every
+            // SHORTCUTREMAPPED is a removal, so `hwndFrom` is
+            // always NULL per the upstream removal contract.
+            Self::ShortcutRemapped { .. } => core::ptr::null_mut(),
+            _ => default,
         }
     }
 }
@@ -435,7 +498,11 @@ impl Notification {
 pub fn notify_all(host: &PluginHost, notification: &Notification, npp_hwnd: Hwnd) {
     let sci = SCNotification {
         nmhdr: crate::ffi::SciNotifyHeader {
-            hwnd_from: npp_hwnd,
+            // Default `hwndFrom = npp_hwnd` lets plugins identify
+            // the host. A few variants override this to carry a
+            // typed pointer (NULL for the SHORTCUTREMAPPED
+            // removal contract — see `Notification::hwnd_from`).
+            hwnd_from: notification.hwnd_from(npp_hwnd),
             // `id_from` is `uintptr_t` upstream; we carry the buffer id
             // as `isize` and reinterpret the bits — plugins read it
             // back as a buffer id without sign concerns.
@@ -3690,6 +3757,36 @@ mod tests {
         assert_eq!(Notification::Shutdown.code(), 1009);
         assert_eq!(Notification::BufferActivated { buffer_id: 0 }.code(), 1010);
         assert_eq!(Notification::LangChanged { buffer_id: 0 }.code(), 1011);
+        assert_eq!(Notification::ShortcutRemapped { cmd_id: 0 }.code(), 1013);
+        assert_eq!(Notification::BeforeShutdown.code(), 1019);
+    }
+
+    #[test]
+    fn shortcut_remapped_carries_cmd_id_in_id_from() {
+        // `nmhdr.idFrom` is repurposed to carry the cmd id for
+        // SHORTCUTREMAPPED — the upstream contract.
+        let n = Notification::ShortcutRemapped { cmd_id: 41_006 };
+        assert_eq!(n.buffer_id(), 41_006);
+    }
+
+    #[test]
+    fn shortcut_remapped_zeros_hwnd_from() {
+        // Upstream's REMOVE contract: nmhdr.hwndFrom = NULL.
+        // Code++'s only ShortcutRemapped path is removal, so
+        // every dispatch zeros hwndFrom — we never hand a
+        // ShortcutKey* the plugin shouldn't dereference.
+        let n = Notification::ShortcutRemapped { cmd_id: 1 };
+        let default = 0xDEAD_BEEF_usize as Hwnd;
+        assert!(n.hwnd_from(default).is_null());
+    }
+
+    #[test]
+    fn before_shutdown_keeps_default_hwnd_from() {
+        // BEFORESHUTDOWN doesn't repurpose hwndFrom; default
+        // (npp_hwnd) reaches plugins so they identify the host.
+        let n = Notification::BeforeShutdown;
+        let default = 0xDEAD_BEEF_usize as Hwnd;
+        assert_eq!(n.hwnd_from(default), default);
     }
 
     #[test]

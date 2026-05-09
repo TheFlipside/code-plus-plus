@@ -4378,7 +4378,19 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool {
-        self.ui.remove_shortcut_for_cmd_id(cmd_id)
+        let removed = self.ui.remove_shortcut_for_cmd_id(cmd_id);
+        // Queue NPPN_SHORTCUTREMAPPED only on a real removal —
+        // a no-op call (cmd_id had no binding) is silent. The
+        // notification drains after `&mut Shell` releases, same
+        // pattern as DocOrderChanged. `nmhdr.hwndFrom` is set
+        // to NULL by `Notification::hwnd_from` for this variant
+        // (the upstream removal contract).
+        if removed {
+            self.shell
+                .pending_notifications
+                .push(Notification::ShortcutRemapped { cmd_id });
+        }
+        removed
     }
 
     fn register_modeless_dialog(&mut self, dlg: codepp_plugin_host::Hwnd, register: bool) -> bool {
