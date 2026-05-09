@@ -100,11 +100,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CreateAcceleratorTableW,
     CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DeleteMenu, DestroyIcon,
     DestroyMenu, DestroyWindow, DispatchMessageW, DrawIconEx, DrawMenuBar, GetClientRect,
-    GetCursorPos, GetDlgItem, GetMenuItemCount, GetMessageW, GetParent, GetSubMenu,
+    GetCursorPos, GetDlgItem, GetMenu, GetMenuItemCount, GetMessageW, GetParent, GetSubMenu,
     GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW,
     IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW,
-    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetCursor, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
+    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetCursor, SetMenu,
+    SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
     TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
     BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
     CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
@@ -676,6 +676,8 @@ impl WindowState {
         let ui = Win32Ui {
             status_hwnd: self.status_hwnd,
             tab_hwnd: self.tab_hwnd,
+            toolbar_hwnd: self.toolbar_hwnd,
+            main_menu: self.main_menu,
             editor: self.editor,
         };
         (&mut self.shell, ui)
@@ -709,6 +711,15 @@ impl WindowState {
 struct Win32Ui {
     status_hwnd: HWND,
     tab_hwnd: HWND,
+    /// Toolbar control HWND. Carried alongside `tab_hwnd` /
+    /// `status_hwnd` so the chrome-toggle messages
+    /// (`NPPM_HIDETOOLBAR` and friends) can `ShowWindow` it
+    /// without re-resolving from `WindowState`.
+    toolbar_hwnd: HWND,
+    /// Main menu bar HMENU. The chrome-toggle messages flip the
+    /// main window's menu between this and NULL via `SetMenu` /
+    /// `DrawMenuBar`. Read-only after window creation.
+    main_menu: HMENU,
     editor: EditorHandle,
 }
 
@@ -1227,31 +1238,84 @@ impl UiPlatform for Win32Ui {
         let cmd = if hidden { SW_HIDE } else { SW_SHOW };
         unsafe {
             let _ = ShowWindow(self.tab_hwnd, cmd);
-            // Derive the main window from the tab control's parent
-            // — Win32Ui carries the tab HWND but not the main one,
-            // and GetParent is a cheap read with no message pump.
-            if let Ok(parent) = GetParent(self.tab_hwnd) {
-                let mut rect = RECT::default();
-                if GetClientRect(parent, &mut rect).is_ok() {
-                    let w = (rect.right - rect.left).max(0);
-                    let h = (rect.bottom - rect.top).max(0);
-                    // WM_SIZE's lparam packs (height << 16 | width).
-                    // Width and height fit in u16 by the Win32
-                    // contract on a single screen; clamp explicitly
-                    // so a future multi-monitor edge case doesn't
-                    // produce a garbage lparam.
-                    let w16 = (w as u32 & 0xFFFF) as isize;
-                    let h16 = ((h as u32 & 0xFFFF) << 16) as isize;
-                    // `wparam = 0` synthesizes `SIZE_RESTORED`. The
-                    // main wnd_proc's WM_SIZE handler ignores wparam
-                    // entirely, so this is benign today; if it ever
-                    // branches on the value (e.g. to skip layout on
-                    // `SIZE_MINIMIZED`), revisit this caller so a
-                    // hidden-tabs trigger doesn't produce a spurious
-                    // "restored" event.
-                    let _ = PostMessageW(Some(parent), WM_SIZE, WPARAM(0), LPARAM(h16 | w16));
-                }
-            }
+            relayout_main_window_via_post(self.tab_hwnd);
+        }
+        prev
+    }
+
+    fn is_toolbar_hidden(&self) -> bool {
+        // Same INVARIANT note as `is_tabbar_hidden` — UI-thread-only,
+        // reads `WS_VISIBLE` on the toolbar HWND. Returns FALSE for
+        // an invalid HWND, surfaced as "not hidden".
+        !unsafe { IsWindowVisible(self.toolbar_hwnd).as_bool() }
+    }
+
+    fn set_toolbar_hidden(&mut self, hidden: bool) -> bool {
+        let prev = self.is_toolbar_hidden();
+        let cmd = if hidden { SW_HIDE } else { SW_SHOW };
+        unsafe {
+            let _ = ShowWindow(self.toolbar_hwnd, cmd);
+            // Same deferred-relayout pattern as `set_tabbar_hidden`:
+            // PostMessage(WM_SIZE) so the editor area refills the
+            // freed band without re-entering wnd_proc under
+            // `PluginCallGuard`.
+            relayout_main_window_via_post(self.toolbar_hwnd);
+        }
+        prev
+    }
+
+    fn is_menu_hidden(&self) -> bool {
+        // GetMenu returns NULL when the main window has no menu —
+        // i.e. the menu is currently hidden. Cheap UI-thread read.
+        // SAFETY: every call site is on the UI thread; the parent
+        // HWND is derived from `tab_hwnd`, owned by us for the
+        // window's lifetime.
+        unsafe {
+            let Ok(parent) = GetParent(self.tab_hwnd) else {
+                return false;
+            };
+            GetMenu(parent).is_invalid()
+        }
+    }
+
+    fn set_menu_hidden(&mut self, hidden: bool) -> bool {
+        let prev = self.is_menu_hidden();
+        // SAFETY: UI-thread-only; parent HWND derived from
+        // `tab_hwnd` (owned by us). `SetMenu(parent, None)` removes
+        // the menu without destroying it; `DrawMenuBar` repaints
+        // the non-client area so the freed / re-added band is
+        // visible immediately. `None` (rather than
+        // `Some(HMENU::default())`) is the documented windows-rs
+        // 0.62 idiom for "remove menu" — both happen to produce a
+        // zero handle today, but `None` is what the binding's
+        // `Option<HMENU>` parameter is meant for and won't break
+        // if a future windows-rs minor version stops zeroing
+        // handles on `unwrap_or`.
+        unsafe {
+            let Ok(parent) = GetParent(self.tab_hwnd) else {
+                return prev;
+            };
+            let _ = SetMenu(parent, if hidden { None } else { Some(self.main_menu) });
+            let _ = DrawMenuBar(parent);
+            // Force a full relayout: removing / restoring the menu
+            // changes the client-area height by one menu's worth
+            // of pixels, which `WM_SIZE` propagates to the
+            // editor / toolbar / status-bar stack.
+            relayout_main_window_via_post(self.tab_hwnd);
+        }
+        prev
+    }
+
+    fn is_statusbar_hidden(&self) -> bool {
+        !unsafe { IsWindowVisible(self.status_hwnd).as_bool() }
+    }
+
+    fn set_statusbar_hidden(&mut self, hidden: bool) -> bool {
+        let prev = self.is_statusbar_hidden();
+        let cmd = if hidden { SW_HIDE } else { SW_SHOW };
+        unsafe {
+            let _ = ShowWindow(self.status_hwnd, cmd);
+            relayout_main_window_via_post(self.status_hwnd);
         }
         prev
     }
@@ -1880,6 +1944,8 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
             let mut win32_ui = Win32Ui {
                 status_hwnd: state.status_hwnd,
                 tab_hwnd: state.tab_hwnd,
+                toolbar_hwnd: state.toolbar_hwnd,
+                main_menu: state.main_menu,
                 editor: state.editor,
             };
             <Win32Ui as UiPlatform>::update_status(
@@ -1950,6 +2016,8 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) {
                 let mut win32_ui = Win32Ui {
                     status_hwnd: state.status_hwnd,
                     tab_hwnd: state.tab_hwnd,
+                    toolbar_hwnd: state.toolbar_hwnd,
+                    main_menu: state.main_menu,
                     editor: state.editor,
                 };
                 <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
@@ -2062,6 +2130,8 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
     let mut win32_ui = Win32Ui {
         status_hwnd: state.status_hwnd,
         tab_hwnd: state.tab_hwnd,
+        toolbar_hwnd: state.toolbar_hwnd,
+        main_menu: state.main_menu,
         editor: state.editor,
     };
     // Re-apply the new tab's lexer/theme. Each tab carries its own
@@ -3343,6 +3413,61 @@ unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
 /// SB_SETTEXTW idiom so the regular status updates (encoding/EOL/size)
 /// and the plugin-driven `NPPM_SETSTATUSBAR` overrides share one
 /// implementation — the only thing that varies is the source string.
+/// Trigger a relayout of the main window by posting a `WM_SIZE`
+/// to it with its current client rect. Used by every chrome-toggle
+/// path (`set_tabbar_hidden`, `set_toolbar_hidden`,
+/// `set_menu_hidden`, `set_statusbar_hidden`) so the editor area
+/// expands / shrinks to fill the freed / regained band.
+///
+/// Posts (via `PostMessageW`) rather than sends synchronously: the
+/// chrome-toggle messages can be dispatched from inside a plugin's
+/// `messageProc`, which is already running under `PluginCallGuard`.
+/// A synchronous `SendMessage` would re-enter the main wnd_proc on
+/// this thread, and `state_from_hwnd` would refuse the re-borrow
+/// because the guard is held — the layout would silently no-op.
+/// Posting queues the size message until after the guard drops,
+/// at which point the normal message-pump dequeue can run `WM_SIZE`
+/// with full state access.
+///
+/// `child_hwnd` is any descendant of the main window — typically
+/// the chrome control we just toggled. The function derives the
+/// main window from `GetParent`. The handle is read-only.
+///
+/// # Safety
+///
+/// `child_hwnd` must be a valid HWND owned by the same window
+/// hierarchy `Win32Ui` was constructed against. UI-thread-only:
+/// `GetParent` and `GetClientRect` are not documented as
+/// thread-safe with concurrent window-style mutations.
+unsafe fn relayout_main_window_via_post(child_hwnd: HWND) {
+    // SAFETY: `GetParent` is a cheap UI-thread read with no
+    // message pump; the caller's contract guarantees `child_hwnd`
+    // is valid.
+    unsafe {
+        let Ok(parent) = GetParent(child_hwnd) else {
+            return;
+        };
+        let mut rect = RECT::default();
+        if GetClientRect(parent, &mut rect).is_err() {
+            return;
+        }
+        let w = (rect.right - rect.left).max(0);
+        let h = (rect.bottom - rect.top).max(0);
+        // WM_SIZE's lparam packs (height << 16 | width). Width
+        // and height fit in u16 by the Win32 contract on a single
+        // screen; clamp explicitly so a future multi-monitor
+        // edge case doesn't produce a garbage lparam.
+        let w16 = (w as u32 & 0xFFFF) as isize;
+        let h16 = ((h as u32 & 0xFFFF) << 16) as isize;
+        // `wparam = 0` synthesizes `SIZE_RESTORED`. The main
+        // wnd_proc's WM_SIZE handler ignores wparam today; if it
+        // ever branches on the value (e.g. to skip layout on
+        // `SIZE_MINIMIZED`), revisit each caller so a chrome
+        // toggle doesn't produce a spurious "restored" event.
+        let _ = PostMessageW(Some(parent), WM_SIZE, WPARAM(0), LPARAM(h16 | w16));
+    }
+}
+
 fn write_status_part(status_hwnd: HWND, part_index: usize, text: &str) {
     // Strip embedded NUL characters before building the wide buffer.
     // SB_SETTEXTW reads up to the first U+0000 unit; an embedded NUL
@@ -11079,6 +11204,8 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                     let mut win32_ui = Win32Ui {
                                         status_hwnd: state.status_hwnd,
                                         tab_hwnd: state.tab_hwnd,
+                                        toolbar_hwnd: state.toolbar_hwnd,
+                                        main_menu: state.main_menu,
                                         editor: state.editor,
                                     };
                                     <Win32Ui as UiPlatform>::update_status(

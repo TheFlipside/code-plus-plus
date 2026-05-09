@@ -332,11 +332,23 @@ typedef struct sessionInfo_ {
 
 /* UI chrome toggles ------------------------------------------------ */
 
+/* v2: hide / show the toolbar.
+ *     wParam: BOOL (TRUE hides, FALSE shows).
+ *     Returns: the *previous* hidden state — same contract shape
+ *     as `NPPM_HIDETABBAR`. The editor area auto-relayouts to fill
+ *     the freed band (Win32 routes via deferred `WM_SIZE`). */
 #define NPPM_HIDETOOLBAR                  (NPPMSG + 70)
+/* v2: BOOL — current toolbar hidden state. */
 #define NPPM_ISTOOLBARHIDDEN              (NPPMSG + 71)
+/* v2: hide / show the main menu bar. Win32 swaps via
+ *     `SetMenu(NULL)` / `SetMenu(main_menu)` + `DrawMenuBar`.
+ *     Same wParam / return contract as `NPPM_HIDETOOLBAR`. */
 #define NPPM_HIDEMENU                     (NPPMSG + 72)
+/* v2: BOOL — current menu bar hidden state. */
 #define NPPM_ISMENUHIDDEN                 (NPPMSG + 73)
+/* v2: hide / show the status bar. Same wParam / return contract. */
 #define NPPM_HIDESTATUSBAR                (NPPMSG + 74)
+/* v2: BOOL — current status bar hidden state. */
 #define NPPM_ISSTATUSBARHIDDEN            (NPPMSG + 75)
 
 #define NPPM_GETSHORTCUTBYCMDID           (NPPMSG + 76)

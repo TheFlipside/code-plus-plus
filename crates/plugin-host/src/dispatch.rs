@@ -110,6 +110,12 @@ pub const NPPM_GETBUFFERENCODING: u32 = NPPMSG + 66;
 pub const NPPM_SETBUFFERENCODING: u32 = NPPMSG + 67;
 pub const NPPM_GETBUFFERFORMAT: u32 = NPPMSG + 68;
 pub const NPPM_SETBUFFERFORMAT: u32 = NPPMSG + 69;
+pub const NPPM_HIDETOOLBAR: u32 = NPPMSG + 70;
+pub const NPPM_ISTOOLBARHIDDEN: u32 = NPPMSG + 71;
+pub const NPPM_HIDEMENU: u32 = NPPMSG + 72;
+pub const NPPM_ISMENUHIDDEN: u32 = NPPMSG + 73;
+pub const NPPM_HIDESTATUSBAR: u32 = NPPMSG + 74;
+pub const NPPM_ISSTATUSBARHIDDEN: u32 = NPPMSG + 75;
 pub const NPPM_DOOPEN: u32 = NPPMSG + 77;
 pub const NPPM_SAVECURRENTFILEAS: u32 = NPPMSG + 78;
 pub const NPPM_GETLANGUAGENAME: u32 = NPPMSG + 83;
@@ -535,6 +541,31 @@ pub trait HostServices {
     /// the plugin.
     fn set_tabbar_hidden(&mut self, hidden: bool) -> bool;
 
+    /// `true` if the toolbar is currently hidden, `false` if
+    /// visible. Drives [`NPPM_ISTOOLBARHIDDEN`].
+    fn is_toolbar_hidden(&self) -> bool;
+    /// Toggle the toolbar's visibility. Same return contract as
+    /// [`Self::set_tabbar_hidden`] — returns the *previous*
+    /// hidden state. Drives [`NPPM_HIDETOOLBAR`].
+    fn set_toolbar_hidden(&mut self, hidden: bool) -> bool;
+
+    /// `true` if the main menu bar is currently hidden, `false`
+    /// if visible. Drives [`NPPM_ISMENUHIDDEN`].
+    fn is_menu_hidden(&self) -> bool;
+    /// Toggle the main menu bar's visibility. `SetMenu(NULL)` to
+    /// hide; `SetMenu(main_menu)` + `DrawMenuBar` to show. Same
+    /// return contract — previous hidden state. Drives
+    /// [`NPPM_HIDEMENU`].
+    fn set_menu_hidden(&mut self, hidden: bool) -> bool;
+
+    /// `true` if the status bar is currently hidden, `false` if
+    /// visible. Drives [`NPPM_ISSTATUSBARHIDDEN`].
+    fn is_statusbar_hidden(&self) -> bool;
+    /// Toggle the status bar's visibility. Same return contract
+    /// as the other chrome toggles. Drives
+    /// [`NPPM_HIDESTATUSBAR`].
+    fn set_statusbar_hidden(&mut self, hidden: bool) -> bool;
+
     /// Save every dirty titled tab to disk in one batch. Drives
     /// [`NPPM_SAVEALLFILES`]; matches `Shell::save_all`'s contract:
     /// untitled tabs are skipped (no on-disk path to save to);
@@ -813,6 +844,17 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         NPPM_GETMENUHANDLE => services.menu_handle(wparam as i32) as isize,
 
         NPPM_ACTIVATEDOC => {
+            // wparam: view selector (0 = primary, 1 = secondary).
+            // lparam: tab position in that view.
+            //
+            // Range-check `wparam` *before* the `usize -> i32`
+            // truncation: a plugin sending `wparam = 0x1_0000_0000`
+            // would truncate to 0 and silently be accepted as
+            // "primary view". Same shape as the pre-cast guard on
+            // `NPPM_ENCODESCI` / `NPPM_DECODESCI`.
+            if wparam > 1 {
+                return Some(0);
+            }
             let view = wparam as i32;
             let pos = lparam as i32;
             if services.activate_doc(view, pos) {
@@ -976,6 +1018,31 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // No args. Returns BOOL — current hidden state.
             services.is_tabbar_hidden() as isize
         }
+
+        NPPM_HIDETOOLBAR => {
+            // wparam: BOOL — TRUE hides, FALSE shows. Returns the
+            // *previous* hidden state. Same contract shape as
+            // `NPPM_HIDETABBAR`.
+            services.set_toolbar_hidden(wparam != 0) as isize
+        }
+
+        NPPM_ISTOOLBARHIDDEN => services.is_toolbar_hidden() as isize,
+
+        NPPM_HIDEMENU => {
+            // wparam: BOOL. Returns previous hidden state. The host
+            // implementation flips between `SetMenu(main_hwnd, NULL)`
+            // and `SetMenu(main_hwnd, main_menu)` + `DrawMenuBar`.
+            services.set_menu_hidden(wparam != 0) as isize
+        }
+
+        NPPM_ISMENUHIDDEN => services.is_menu_hidden() as isize,
+
+        NPPM_HIDESTATUSBAR => {
+            // wparam: BOOL. Returns previous hidden state.
+            services.set_statusbar_hidden(wparam != 0) as isize
+        }
+
+        NPPM_ISSTATUSBARHIDDEN => services.is_statusbar_hidden() as isize,
 
         NPPM_GETFULLPATHFROMBUFFERID => {
             // wParam: buffer id. lParam: TCHAR* OUT (caller-allocated).
@@ -1636,6 +1703,14 @@ mod tests {
         /// `NPPM_ISTABBARHIDDEN`. `false` (visible) by default,
         /// matching the host's startup state.
         tabbar_hidden: bool,
+        /// Toolbar / main-menu / status-bar visibility flags for
+        /// `NPPM_HIDETOOLBAR` / `NPPM_HIDEMENU` /
+        /// `NPPM_HIDESTATUSBAR` and their `IS*HIDDEN` peers. All
+        /// `false` (visible) by default — matches the host's
+        /// startup chrome.
+        toolbar_hidden: bool,
+        menu_hidden: bool,
+        statusbar_hidden: bool,
         /// Per-buffer encoding (UniMode integer). Looked up by
         /// buffer id; missing entries return `-1` matching the
         /// dispatcher's "unknown id" contract.
@@ -1874,6 +1949,33 @@ mod tests {
             let prev = self.tabbar_hidden;
             self.tabbar_hidden = hidden;
             self.record(format!("set_tabbar_hidden({hidden})"));
+            prev
+        }
+        fn is_toolbar_hidden(&self) -> bool {
+            self.toolbar_hidden
+        }
+        fn set_toolbar_hidden(&mut self, hidden: bool) -> bool {
+            let prev = self.toolbar_hidden;
+            self.toolbar_hidden = hidden;
+            self.record(format!("set_toolbar_hidden({hidden})"));
+            prev
+        }
+        fn is_menu_hidden(&self) -> bool {
+            self.menu_hidden
+        }
+        fn set_menu_hidden(&mut self, hidden: bool) -> bool {
+            let prev = self.menu_hidden;
+            self.menu_hidden = hidden;
+            self.record(format!("set_menu_hidden({hidden})"));
+            prev
+        }
+        fn is_statusbar_hidden(&self) -> bool {
+            self.statusbar_hidden
+        }
+        fn set_statusbar_hidden(&mut self, hidden: bool) -> bool {
+            let prev = self.statusbar_hidden;
+            self.statusbar_hidden = hidden;
+            self.record(format!("set_statusbar_hidden({hidden})"));
             prev
         }
         fn save_all_files(&mut self) {
@@ -3283,5 +3385,131 @@ mod tests {
             s.calls(),
             vec!["save_session_with_files=D:/out.xml files=[D:/foo.txt]"]
         );
+    }
+
+    // --- Chrome toggles: HIDETOOLBAR / HIDEMENU / HIDESTATUSBAR ---
+
+    #[test]
+    fn is_toolbar_hidden_reports_state() {
+        let mut s = MockServices::default();
+        // Default visible.
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_ISTOOLBARHIDDEN, 0, 0) },
+            Some(0)
+        );
+        s.toolbar_hidden = true;
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_ISTOOLBARHIDDEN, 0, 0) },
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn hide_toolbar_returns_previous_and_flips() {
+        let mut s = MockServices::default();
+        // First hide: previous was visible (0). Same return-value
+        // contract as `NPPM_HIDETABBAR` — the *previous* state.
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_HIDETOOLBAR, 1, 0) },
+            Some(0)
+        );
+        assert!(s.toolbar_hidden);
+        // Second hide: previous was hidden (1) — confirms the
+        // contract reports prior state, not the new state.
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_HIDETOOLBAR, 1, 0) },
+            Some(1)
+        );
+        // Show: prior was hidden (1), flips to visible.
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_HIDETOOLBAR, 0, 0) },
+            Some(1)
+        );
+        assert!(!s.toolbar_hidden);
+    }
+
+    #[test]
+    fn is_menu_hidden_reports_state() {
+        let mut s = MockServices::default();
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_ISMENUHIDDEN, 0, 0) },
+            Some(0)
+        );
+        s.menu_hidden = true;
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_ISMENUHIDDEN, 0, 0) },
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn hide_menu_returns_previous_and_flips() {
+        let mut s = MockServices::default();
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_HIDEMENU, 1, 0) },
+            Some(0)
+        );
+        assert!(s.menu_hidden);
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_HIDEMENU, 0, 0) },
+            Some(1)
+        );
+        assert!(!s.menu_hidden);
+    }
+
+    #[test]
+    fn is_statusbar_hidden_reports_state() {
+        let mut s = MockServices::default();
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_ISSTATUSBARHIDDEN, 0, 0) },
+            Some(0)
+        );
+        s.statusbar_hidden = true;
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_ISSTATUSBARHIDDEN, 0, 0) },
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn hide_statusbar_returns_previous_and_flips() {
+        let mut s = MockServices::default();
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_HIDESTATUSBAR, 1, 0) },
+            Some(0)
+        );
+        assert!(s.statusbar_hidden);
+        assert_eq!(
+            unsafe { dispatch_nppm(&mut s, NPPM_HIDESTATUSBAR, 0, 0) },
+            Some(1)
+        );
+        assert!(!s.statusbar_hidden);
+    }
+
+    // --- ACTIVATEDOC: real per-index activation ---
+
+    #[test]
+    fn activate_doc_routes_view_and_pos_to_services() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ACTIVATEDOC, 0, 3) };
+        // The mock's `activate_doc` always succeeds; the dispatcher
+        // forwards (view, pos) verbatim and turns the bool into 1.
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["activate[0,3]"]);
+    }
+
+    #[test]
+    fn activate_doc_out_of_range_wparam_returns_zero() {
+        // Pre-cast guard: a wparam outside [0, 1] is rejected
+        // before the `usize -> i32` truncation. Without this, a
+        // plugin sending `wparam = 0x1_0000_0000` would truncate
+        // to 0 and silently be accepted as "primary view". Same
+        // shape as the guard on `NPPM_ENCODESCI`.
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ACTIVATEDOC, 2, 0) };
+        assert_eq!(r, Some(0));
+        // Mock should not have been called — the dispatcher arm
+        // short-circuited before reaching it.
+        assert!(s.calls().is_empty());
     }
 }

@@ -280,6 +280,29 @@ pub trait UiPlatform {
     /// `PluginCallGuard`).
     fn set_tabbar_hidden(&mut self, hidden: bool) -> bool;
 
+    /// Toolbar visibility (`NPPM_ISTOOLBARHIDDEN`).
+    fn is_toolbar_hidden(&self) -> bool;
+    /// Toggle toolbar visibility. Same return contract as
+    /// [`Self::set_tabbar_hidden`] (previous hidden state).
+    /// Implementations should trigger an editor-area relayout so
+    /// the Scintilla view fills / yields the freed space, same
+    /// `PluginCallGuard`-safe deferral note as the tabbar variant.
+    fn set_toolbar_hidden(&mut self, hidden: bool) -> bool;
+
+    /// Main menu bar visibility (`NPPM_ISMENUHIDDEN`).
+    fn is_menu_hidden(&self) -> bool;
+    /// Toggle menu bar visibility. Win32 swaps via `SetMenu(NULL)`
+    /// / `SetMenu(main_menu)` + `DrawMenuBar`; the GTK / Cocoa
+    /// backends do their own thing once Phase 5 lands. Same
+    /// previous-state return contract.
+    fn set_menu_hidden(&mut self, hidden: bool) -> bool;
+
+    /// Status bar visibility (`NPPM_ISSTATUSBARHIDDEN`).
+    fn is_statusbar_hidden(&self) -> bool;
+    /// Toggle status bar visibility. Same previous-state return
+    /// contract.
+    fn set_statusbar_hidden(&mut self, hidden: bool) -> bool;
+
     /// Pull the current text content of the buffer backed by the
     /// Scintilla document at `scintilla_doc`. The implementation may
     /// briefly bind that document to the editor view to read it
@@ -3744,14 +3767,30 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn activate_doc(&mut self, view: i32, pos: i32) -> bool {
-        // Phase 3 single-tab: success is the only valid answer (only
-        // one document exists, so "activate it" is always true).
-        // Multi-tab milestone 6 will route to the per-tab id.
-        tracing::trace!(
-            view = view,
-            pos = pos,
-            "NPPM_ACTIVATEDOC (no-op, single-tab Phase 3)"
-        );
+        // wparam: view selector (0 = primary, 1 = secondary).
+        // lparam: tab position in that view.
+        //
+        // Single-view through Phase 4: only `view == 0` resolves to
+        // a real tab list; secondary view is reserved for split-
+        // view (Phase 5). Out-of-range pos returns false.
+        //
+        // Same metadata-only pattern as `switch_to_file`'s
+        // activate-existing-tab branch: flip `active_tab`, queue
+        // `NPPN_BUFFERACTIVATED`, leave the visible Scintilla
+        // re-binding to the wnd_proc's normal sync cycle. Plugin-
+        // driven activation of a non-current tab is rare and the
+        // existing dispatch path treats this the same way.
+        if view != 0 || pos < 0 {
+            return false;
+        }
+        let idx = pos as usize;
+        if idx >= self.shell.tabs.len() {
+            return false;
+        }
+        if self.shell.active_tab != Some(idx) {
+            self.shell.active_tab = Some(idx);
+            self.shell.queue_buffer_activated();
+        }
         true
     }
 
@@ -3976,6 +4015,25 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
 
     fn set_tabbar_hidden(&mut self, hidden: bool) -> bool {
         self.ui.set_tabbar_hidden(hidden)
+    }
+
+    fn is_toolbar_hidden(&self) -> bool {
+        self.ui.is_toolbar_hidden()
+    }
+    fn set_toolbar_hidden(&mut self, hidden: bool) -> bool {
+        self.ui.set_toolbar_hidden(hidden)
+    }
+    fn is_menu_hidden(&self) -> bool {
+        self.ui.is_menu_hidden()
+    }
+    fn set_menu_hidden(&mut self, hidden: bool) -> bool {
+        self.ui.set_menu_hidden(hidden)
+    }
+    fn is_statusbar_hidden(&self) -> bool {
+        self.ui.is_statusbar_hidden()
+    }
+    fn set_statusbar_hidden(&mut self, hidden: bool) -> bool {
+        self.ui.set_statusbar_hidden(hidden)
     }
 
     fn save_all_files(&mut self) {
@@ -4246,6 +4304,13 @@ mod tests {
         /// Tab-strip visibility shadow. Default `false` (visible)
         /// matches the real UI's startup state.
         tabbar_hidden: bool,
+        /// Toolbar / main-menu / status-bar visibility shadows for
+        /// the chrome-toggle messages (`NPPM_HIDETOOLBAR` etc.).
+        /// All `false` (visible) by default — matches the real
+        /// UI's startup chrome.
+        toolbar_hidden: bool,
+        menu_hidden: bool,
+        statusbar_hidden: bool,
         /// Single-buffer dirty flag the test fixture maintains.
         /// `is_doc_dirty` returns this verbatim — tests that exercise
         /// the dirty-aware save path flip the flag manually.
@@ -4417,6 +4482,30 @@ mod tests {
         fn set_tabbar_hidden(&mut self, hidden: bool) -> bool {
             let prev = self.tabbar_hidden;
             self.tabbar_hidden = hidden;
+            prev
+        }
+        fn is_toolbar_hidden(&self) -> bool {
+            self.toolbar_hidden
+        }
+        fn set_toolbar_hidden(&mut self, hidden: bool) -> bool {
+            let prev = self.toolbar_hidden;
+            self.toolbar_hidden = hidden;
+            prev
+        }
+        fn is_menu_hidden(&self) -> bool {
+            self.menu_hidden
+        }
+        fn set_menu_hidden(&mut self, hidden: bool) -> bool {
+            let prev = self.menu_hidden;
+            self.menu_hidden = hidden;
+            prev
+        }
+        fn is_statusbar_hidden(&self) -> bool {
+            self.statusbar_hidden
+        }
+        fn set_statusbar_hidden(&mut self, hidden: bool) -> bool {
+            let prev = self.statusbar_hidden;
+            self.statusbar_hidden = hidden;
             prev
         }
         fn capture_text_from_doc(&mut self, _scintilla_doc: isize) -> String {
