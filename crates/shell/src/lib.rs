@@ -297,12 +297,26 @@ pub trait UiPlatform {
     /// backup files so untitled and dirty buffers survive a clean
     /// shutdown.
     fn capture_text_from_doc(&mut self, scintilla_doc: isize) -> String;
+
+    /// Query the modified flag (`SCI_GETMODIFY`) of the Scintilla
+    /// document at `scintilla_doc`. Same doc-pointer-swap pattern
+    /// as [`Self::capture_text_from_doc`] for non-active docs.
+    /// Returns `false` for the `scintilla_doc == 0` sentinel
+    /// (no document, nothing to be dirty).
+    ///
+    /// `Shell::save_session` consults this to decide whether a
+    /// path-bound tab needs a backup file written on this save
+    /// pass — clean tabs (their text is on disk verbatim) skip
+    /// the backup write entirely, dirty tabs get one so the
+    /// user's unsaved edits survive a restart.
+    fn is_doc_dirty(&mut self, scintilla_doc: isize) -> bool;
 }
 
 /// One restored tab from `Shell::load_session_entries`. Tells the UI
 /// exactly how to bring a tab back to life: open a real file from
-/// disk, or seed an untitled buffer with text loaded from its
-/// backup file. Iterated in the same order the tabs appeared in
+/// disk, seed an untitled buffer with text loaded from a backup,
+/// or recreate a dirty saved-file with the user's last unsaved
+/// edits in place. Iterated in the same order the tabs appeared in
 /// the previous session so the user's tab arrangement (saved files
 /// interleaved with untitled buffers) round-trips faithfully.
 pub enum SessionRestoreEntry {
@@ -324,6 +338,26 @@ pub enum SessionRestoreEntry {
         /// Encoding the buffer would target on first save.
         encoding: Encoding,
         /// EOL style the buffer would target on first save.
+        eol: Eol,
+    },
+    /// Re-create a tab that was bound to `path` but had unsaved
+    /// edits at session-save time. The tab opens with `path`
+    /// associated (so File→Save writes there) but its Scintilla
+    /// document is seeded with the *backup* text — i.e. the
+    /// user's last in-memory state, not the on-disk state. The
+    /// buffer is left dirty so the user knows there are unsaved
+    /// changes; File→Save flushes them to `path`.
+    DirtyFromBackup {
+        /// File path the buffer was bound to.
+        path: PathBuf,
+        /// Buffer content from the backup file (the user's last
+        /// unsaved edits).
+        text: String,
+        /// Caret position the user had when they last closed.
+        cursor: u64,
+        /// Encoding the buffer carried.
+        encoding: Encoding,
+        /// EOL style the buffer carried.
         eol: Eol,
     },
 }
@@ -2224,20 +2258,39 @@ impl Shell {
                 0
             };
 
-            // Decide whether this tab needs a backup file. Untitled
-            // buffers always do — they have no file on disk to fall
-            // back on. Saved files don't (yet) — a future iteration
-            // will also back up dirty saved-files so the user's
-            // unsaved edits survive a restart even when there's a
-            // path on disk; for now they are persisted by reference
-            // only, matching prior behaviour.
+            // Decide whether this tab needs a backup file. Two
+            // cases write backups:
+            //   1. Untitled buffer (`tab.path.is_none()`) — always
+            //      backed up; there's no file on disk to fall back
+            //      to and unsaved-buffer survival is the whole
+            //      point.
+            //   2. Saved file with unsaved edits
+            //      (`SCI_GETMODIFY != 0`) — backed up so the
+            //      user's in-memory edits survive a crash or
+            //      close-without-save. The on-disk file's
+            //      content stays intact (we don't touch the real
+            //      path during this write); on next launch the
+            //      backup overlays the buffer and the tab opens
+            //      dirty.
+            //
+            // Clean saved files (path-bound, no edits) skip the
+            // backup write entirely — the disk file IS the
+            // authoritative state.
             let mut backup_filename: Option<String> = None;
-            if tab.path.is_none() {
+            let needs_backup = tab.path.is_none() || ui.is_doc_dirty(tab.scintilla_doc);
+            if needs_backup {
                 if let Some(dir) = &backups_dir {
-                    let display = tab
-                        .untitled_seq
-                        .map(|n| format!("new {n}"))
-                        .unwrap_or_else(|| format!("untitled-{}", tab.id.max(0)));
+                    let display = if let Some(seq) = tab.untitled_seq {
+                        format!("new {seq}")
+                    } else if let Some(p) = &tab.path {
+                        // Use the file's basename so the backup
+                        // dir is human-readable. Sanitised so the
+                        // backup we write is also one we can
+                        // later read past `is_safe_backup_filename`.
+                        sanitize_basename_for_backup(p)
+                    } else {
+                        format!("untitled-{}", tab.id)
+                    };
                     let filename = format!("{display}@{timestamp}");
                     let abs_path = dir.join(&filename);
                     let text = ui.capture_text_from_doc(tab.scintilla_doc);
@@ -2247,28 +2300,33 @@ impl Shell {
                             written_backups.push(filename);
                         }
                         Err(e) => {
-                            // A failed backup write must not lose
-                            // the user's other tabs. Log + skip
-                            // this tab from the persisted list so
-                            // `restore_unsaved_buffers` doesn't
-                            // later look for a file that isn't
-                            // there. The user's untitled tab is
-                            // gone for the next launch; the rest
-                            // of the session is intact.
+                            // For untitled tabs a failed backup
+                            // means the tab is lost on next
+                            // launch — log + skip from the
+                            // persisted list. For saved files we
+                            // still have the on-disk version, so
+                            // degrade gracefully: keep the tab in
+                            // session.xml without a backup
+                            // reference. The user loses unsaved
+                            // edits but not the open-tab record.
                             tracing::warn!(
+                                path = ?tab.path,
                                 untitled_seq = ?tab.untitled_seq,
                                 error = %e,
-                                "failed to write backup file for untitled tab; tab will not be restored",
+                                "failed to write backup file; unsaved edits not protected",
                             );
-                            continue;
+                            if tab.path.is_none() {
+                                continue;
+                            }
                         }
                     }
-                } else {
+                } else if tab.path.is_none() {
                     // No backups directory available (sandboxed
-                    // environment) — skip the untitled tab the
-                    // same way the old code did, so we don't
-                    // persist a `<tab>` referencing a backup we
-                    // can't write.
+                    // environment) — untitled tabs can't be
+                    // persisted, so drop them silently the same
+                    // way the old code did. Saved-file tabs flow
+                    // through (their disk content is the source
+                    // of truth).
                     continue;
                 }
             }
@@ -2368,45 +2426,63 @@ impl Shell {
             .iter()
             .take(MAX_SESSION_TABS)
             .filter_map(|t| {
-                if let Some(path) = &t.path {
-                    Some(SessionRestoreEntry::OpenFile(path.clone()))
-                } else if let Some(backup_name) = &t.backup {
-                    // Untitled buffer with a backup file. Read the
-                    // backup synchronously — files are normally
-                    // small (single-buffer text). Cap reads at
-                    // `MAX_BACKUP_FILE_BYTES` so a tampered backup
-                    // can't allocate gigabytes at startup.
-                    if !is_safe_backup_filename(backup_name) {
+                // Three branches by the (path, backup) shape:
+                //   * (Some, Some) → saved file with unsaved
+                //     edits at last save; restore as dirty using
+                //     the backup text.
+                //   * (Some, None) → clean saved file; queue a
+                //     normal async open from disk.
+                //   * (None, Some) → untitled buffer; create with
+                //     backup text already in place.
+                //   * (None, None) → corrupt entry; skip.
+                let backup_text = t.backup.as_deref().and_then(|name| {
+                    if !is_safe_backup_filename(name) {
                         tracing::warn!(
-                            backup = %backup_name,
-                            "session.xml backup name failed safety check; tab will not be restored",
+                            backup = %name,
+                            "session.xml backup name failed safety check; backup ignored",
                         );
                         return None;
                     }
                     let dir = backups_dir.as_ref()?;
-                    let abs_path = dir.join(backup_name);
+                    let abs_path = dir.join(name);
                     match read_backup_file(dir, &abs_path) {
-                        Ok(text) => Some(SessionRestoreEntry::UntitledFromBackup {
-                            untitled_seq: t.untitled_seq,
-                            text,
-                            cursor: t.cursor,
-                            encoding: t.encoding.clone(),
-                            eol: t.eol,
-                        }),
+                        Ok(text) => Some(text),
                         Err(e) => {
                             tracing::warn!(
                                 backup = %abs_path.display(),
                                 error = %e,
-                                "failed to read backup file; untitled tab will not be restored",
+                                "failed to read backup file; falling back to disk content if path-bound",
                             );
                             None
                         }
                     }
+                });
+                if let Some(path) = &t.path {
+                    if let Some(text) = backup_text {
+                        Some(SessionRestoreEntry::DirtyFromBackup {
+                            path: path.clone(),
+                            text,
+                            cursor: t.cursor,
+                            encoding: t.encoding.clone(),
+                            eol: t.eol,
+                        })
+                    } else {
+                        Some(SessionRestoreEntry::OpenFile(path.clone()))
+                    }
                 } else {
-                    // <tab> with neither path nor backup — corrupt
-                    // entry. Skip rather than restoring an empty
+                    // No `path` → must be an untitled buffer. Map
+                    // the optional backup text directly into the
+                    // optional restore entry; a missing backup is
+                    // a corrupt session entry (`None`-`None`) that
+                    // we skip rather than restoring as an empty
                     // tab.
-                    None
+                    backup_text.map(|text| SessionRestoreEntry::UntitledFromBackup {
+                        untitled_seq: t.untitled_seq,
+                        text,
+                        cursor: t.cursor,
+                        encoding: t.encoding.clone(),
+                        eol: t.eol,
+                    })
                 }
             })
             .collect();
@@ -2425,6 +2501,11 @@ impl Shell {
             .into_iter()
             .filter_map(|e| match e {
                 SessionRestoreEntry::OpenFile(p) => Some(p),
+                // Dirty saved-file tabs surface as a path so callers
+                // who only consume `load_session_paths` still get
+                // the file opened (without the unsaved overlay,
+                // which only `load_session_entries` carries).
+                SessionRestoreEntry::DirtyFromBackup { path, .. } => Some(path),
                 SessionRestoreEntry::UntitledFromBackup { .. } => None,
             })
             .collect()
@@ -2480,6 +2561,80 @@ impl Shell {
         // (backup-)disk, even though there's no real file path.
         ui.mark_saved();
         ui.update_status(codepp_core::lang::L_TEXT, &encoding, eol, byte_len);
+        new_idx
+    }
+
+    /// Re-create a saved-file tab whose buffer had unsaved edits at
+    /// the previous session's save time. The tab is bound to `path`
+    /// (so File→Save writes there) but its Scintilla document is
+    /// seeded with `text` from the backup file — i.e. the user's
+    /// last in-memory state, *not* the on-disk state. The buffer
+    /// stays dirty so the user sees the unsaved-edits glyph and
+    /// knows to save (or reload to drop them).
+    ///
+    /// Returns the new tab's index in `self.tabs`. Companion to
+    /// [`Self::restore_untitled_with_text`] for the
+    /// `SessionRestoreEntry::DirtyFromBackup` variant.
+    ///
+    /// **Known polish item (tracked for a follow-up):** if the
+    /// on-disk file was modified externally between the previous
+    /// session-save and this restore (e.g. by another tool while
+    /// the app was crash-killed), the user is not yet warned —
+    /// they only see their own unsaved edits, and a subsequent
+    /// File→Save would silently overwrite the external write.
+    /// The fix is a stat+mtime compare here that queues a
+    /// `PendingDialog::ConfirmReload(path)` when the disk
+    /// timestamp is newer than the backup file's; landing
+    /// alongside the rest of the recovery-dialog work since the
+    /// pending-dialog plumbing is shaped for the existing
+    /// file-watcher reload path.
+    pub fn restore_dirty_with_text<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        path: PathBuf,
+        text: String,
+        cursor: u64,
+        encoding: Encoding,
+        eol: Eol,
+    ) -> usize {
+        let id = self.allocate_buffer_id();
+        let new_idx = self.tabs.len();
+        let byte_len = text.len() as u64;
+        // Derive language from the path extension — same logic
+        // `apply_load_result` runs after a fresh disk load.
+        let lang = LangType::from_path(&path);
+        self.tabs.push(Tab {
+            id,
+            path: Some(path.clone()),
+            encoding: encoding.clone(),
+            eol,
+            byte_len,
+            text: text.clone(),
+            pending_load: None,
+            scintilla_doc: 0,
+            lang,
+            untitled_seq: None,
+        });
+        self.active_tab = Some(new_idx);
+        let new_doc = ui.activate_tab(new_idx, 0);
+        if let Some(tab) = self.tabs.get_mut(new_idx) {
+            tab.scintilla_doc = new_doc;
+        }
+        // Seed the buffer with the backup text + cursor. We
+        // deliberately do NOT call `mark_saved` here — that's the
+        // whole point of this code path. `set_buffer_text` leaves
+        // Scintilla's modified flag set, so the dirty glyph
+        // appears and the user knows there's unsaved work.
+        ui.set_buffer_text(&text, cursor);
+        ui.apply_lang(lang);
+        ui.update_status(lang, &encoding, eol, byte_len);
+        // Watch the file so a future external edit prompts a
+        // reload, matching the behaviour of a fresh disk-load
+        // open. A failed watch is non-fatal — the tab still
+        // works, just without external-change detection.
+        if let Err(e) = self.file_watcher.watch(&path) {
+            tracing::debug!(error = %e, path = ?path, "watch on dirty restore");
+        }
         new_idx
     }
 
@@ -2568,6 +2723,64 @@ fn backup_timestamp() -> String {
         minute = minute,
         second = second,
     )
+}
+
+/// Build the human-readable display portion of a backup filename
+/// for a saved-file tab. Strips the directory component, keeps only
+/// the basename, and replaces any character that
+/// `is_safe_backup_filename` would later reject (path separators,
+/// `:`, leading `.`, …) with `_`. Empty / pure-dot input falls back
+/// to a stable placeholder so the filename is always non-empty and
+/// safely round-trippable.
+///
+/// Examples:
+///   `C:\Users\Max\notes.txt` → `notes.txt`
+///   `/etc/hosts`             → `hosts`
+///   `:weird:`                → `_weird_`
+///   `..`                     → `untitled` (after fallback)
+fn sanitize_basename_for_backup(path: &Path) -> String {
+    let raw = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    if raw.is_empty() || raw == "." || raw == ".." {
+        return "untitled".into();
+    }
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        // Mirror the rejection grammar in `is_safe_backup_filename`:
+        // drop path separators, drive-letter `:`, the `@`
+        // separator we use ourselves, and control bytes. Every
+        // other printable character (including spaces and
+        // non-ASCII letters) survives — modern filesystems all
+        // handle the latter cleanly.
+        if c == '/' || c == '\\' || c == ':' || c == '@' || c.is_control() {
+            out.push('_');
+        } else {
+            out.push(c);
+        }
+    }
+    // Neutralise any `..` substring — `is_safe_backup_filename`
+    // rejects it at restore time as a path-traversal guard, and
+    // a basename like `foo..bar.txt` is legal on every modern
+    // filesystem. Without this pass the backup would be written
+    // successfully but silently dropped on the next launch,
+    // losing the user's unsaved edits. `replace("..", "__")` is
+    // non-overlapping, so an input of `"..."` becomes `"_."`
+    // after one pass — leaving a single dot, which is fine. The
+    // `while` keeps iterating until no `..` remains, handling
+    // arbitrary dot-runs cleanly.
+    while out.contains("..") {
+        out = out.replace("..", "__");
+    }
+    // A name starting with `.` would later trip the dotfile guard.
+    // Prefix with `_` instead of stripping so the user can still
+    // tell which file the backup came from.
+    if out.starts_with('.') {
+        out.insert(0, '_');
+    }
+    out
 }
 
 /// Reject backup filenames that contain a path separator, parent-
@@ -3346,6 +3559,10 @@ mod tests {
         /// Tab-strip visibility shadow. Default `false` (visible)
         /// matches the real UI's startup state.
         tabbar_hidden: bool,
+        /// Single-buffer dirty flag the test fixture maintains.
+        /// `is_doc_dirty` returns this verbatim — tests that exercise
+        /// the dirty-aware save path flip the flag manually.
+        dirty: bool,
     }
 
     impl UiPlatform for FakeUi {
@@ -3519,6 +3736,12 @@ mod tests {
             // Tests don't model per-doc text storage — they share
             // one buffer. Return whatever the active buffer holds.
             self.buffer_text.clone()
+        }
+        fn is_doc_dirty(&mut self, _scintilla_doc: isize) -> bool {
+            // Tests use the global `dirty` flag — sufficient for
+            // the current single-buffer test fixtures. Per-doc
+            // tracking can be added when a test needs it.
+            self.dirty
         }
     }
 
@@ -6057,5 +6280,67 @@ mod tests {
         let mut shell = shell_with_synthetic_tabs(3, None);
         assert!(shell.move_tab(0, 2));
         assert_eq!(shell.active_tab, None);
+    }
+
+    #[test]
+    fn sanitize_basename_normal_case() {
+        assert_eq!(
+            sanitize_basename_for_backup(Path::new("notes.txt")),
+            "notes.txt"
+        );
+        assert_eq!(
+            sanitize_basename_for_backup(Path::new("/etc/hosts")),
+            "hosts"
+        );
+        assert_eq!(
+            sanitize_basename_for_backup(Path::new(r"C:\Users\Max\foo.bar.baz")),
+            "foo.bar.baz"
+        );
+    }
+
+    /// `..` substring must be neutralised so the resulting
+    /// `<basename>@<timestamp>` filename round-trips through
+    /// `is_safe_backup_filename` at restore time. Without the
+    /// neutralisation, a file named `foo..txt` would silently
+    /// drop its backup on next launch — the data-loss bug the
+    /// reviewer caught.
+    #[test]
+    fn sanitize_basename_neutralises_dot_dot() {
+        let s = sanitize_basename_for_backup(Path::new("foo..bar.txt"));
+        assert!(!s.contains(".."), "dot-dot survived sanitization: {s}");
+        assert!(is_safe_backup_filename(&format!("{s}@2026-01-01_000000")));
+
+        let s = sanitize_basename_for_backup(Path::new("..important.txt"));
+        assert!(!s.contains(".."), "leading dot-dot survived: {s}");
+        assert!(is_safe_backup_filename(&format!("{s}@2026-01-01_000000")));
+
+        // Three dots collapse to a single dot via one replace pass.
+        let s = sanitize_basename_for_backup(Path::new("a...b.txt"));
+        assert!(!s.contains(".."), "triple-dot survived: {s}");
+        assert!(is_safe_backup_filename(&format!("{s}@2026-01-01_000000")));
+
+        // Pure dot-runs need to round-trip too — a basename of
+        // `"..."` (literal three dots) ought to fall back to the
+        // `"untitled"` placeholder via the empty-or-pure-dot
+        // guard. Caught here to lock in the boundary case the
+        // security audit flagged.
+        let s = sanitize_basename_for_backup(Path::new("..."));
+        assert!(!s.contains(".."), "pure dot-run survived: {s}");
+        assert!(is_safe_backup_filename(&format!("{s}@2026-01-01_000000")));
+    }
+
+    #[test]
+    fn sanitize_basename_replaces_special_chars() {
+        // Spaces survive; `:`, `@`, separators get replaced with `_`.
+        let s = sanitize_basename_for_backup(Path::new("weird:name@here.txt"));
+        assert_eq!(s, "weird_name_here.txt");
+        assert!(is_safe_backup_filename(&format!("{s}@2026-01-01_000000")));
+    }
+
+    #[test]
+    fn sanitize_basename_empty_falls_back() {
+        assert_eq!(sanitize_basename_for_backup(Path::new("")), "untitled");
+        assert_eq!(sanitize_basename_for_backup(Path::new(".")), "untitled");
+        assert_eq!(sanitize_basename_for_backup(Path::new("..")), "untitled");
     }
 }

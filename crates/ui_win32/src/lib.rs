@@ -93,24 +93,25 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DestroyMenu, DestroyWindow, DispatchMessageW, DrawIconEx, DrawMenuBar, GetClientRect,
     GetCursorPos, GetDlgItem, GetMenuItemCount, GetMessageW, GetParent, GetSubMenu,
     GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW,
-    IsWindow, IsWindowVisible, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, MoveWindow,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetCursor, SetWindowLongPtrW,
-    SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL,
-    ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON,
-    BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING,
-    CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
-    DC_HASDEFID, DI_NORMAL, DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT,
-    FVIRTKEY, GWLP_USERDATA, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDOK,
-    IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO,
-    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    MF_UNCHECKED, MSG, SHOW_WINDOW_CMD, SWP_NOMOVE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
-    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED,
-    WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
-    WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_SETCURSOR,
-    WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP,
-    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW,
+    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetCursor, SetTimer,
+    SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
+    TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
+    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
+    CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID, ES_AUTOHSCROLL,
+    ES_NUMBER, ES_READONLY, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, HACCEL, HICON, HMENU,
+    IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR,
+    MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SHOW_WINDOW_CMD, SWP_NOMOVE,
+    SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
+    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND,
+    WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY,
+    WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SIZE, WM_TIMER,
+    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
+    WS_EX_DLGMODALFRAME, WS_GROUP, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -228,6 +229,21 @@ const ID_MACRO_SAVE: u16 = 2004;
 /// this to drag the UI thread out of its `GetMessageW` idle and into
 /// the `Shell::drain` path.
 const WM_APP_WAKE: u32 = WM_APP + 1;
+
+/// Timer id used by `SetTimer` for the periodic session auto-save.
+/// The value is local to the main window's timer table; any
+/// non-zero `usize` distinct from other timers on the same HWND
+/// works. We have only one timer on the main window, so `1` is
+/// fine.
+const AUTOSAVE_TIMER_ID: usize = 1;
+
+/// Auto-save period in milliseconds. 7 s matches Notepad++'s
+/// default for its "auto-save unsaved buffers" backup loop —
+/// short enough that a crash loses at most a few seconds of work,
+/// long enough that the per-tick capture (one `SCI_GETMODIFY` per
+/// tab plus a `SCI_GETTEXT` for each dirty tab) doesn't introduce
+/// perceptible cost during normal use.
+const AUTOSAVE_INTERVAL_MS: u32 = 7_000;
 
 const MAIN_CLASS: PCWSTR = w!("CodePlusPlusMainWindow");
 const SCINTILLA_CLASS: PCWSTR = w!("Scintilla");
@@ -1231,16 +1247,40 @@ impl UiPlatform for Win32Ui {
         }
         // Bind the target doc, read its text, restore the prior
         // doc. The view will paint the target document briefly;
-        // since this is called from `save_session` (only fires on
-        // shutdown, which immediately destroys the window), the
-        // user never sees the flicker. `lparam` is `sptr_t` (isize)
-        // — pass the doc pointer through verbatim, no cast.
+        // since this is called from `save_session` (which fires on
+        // shutdown — immediately followed by window destruction —
+        // and from the auto-save timer where the swap completes
+        // in microseconds well below any visible-frame budget),
+        // the user never sees the flicker. `lparam` is `sptr_t`
+        // (isize) — pass the doc pointer through verbatim, no
+        // cast.
         self.editor.send(SCI_SETDOCPOINTER, 0, scintilla_doc);
         let text = <Self as UiPlatform>::get_buffer_text(self);
         if prior_doc != 0 {
             self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
         }
         text
+    }
+
+    fn is_doc_dirty(&mut self, scintilla_doc: isize) -> bool {
+        if scintilla_doc == 0 {
+            return false;
+        }
+        // Same doc-pointer-swap dance as `capture_text_from_doc`:
+        // snapshot the active doc, swap to the target, query the
+        // modified flag, restore the original. `SCI_GETMODIFY` is
+        // a pure read of an internal flag — no side effects on
+        // Scintilla state — so the swap-and-restore is sound.
+        let prior_doc = self.editor.send(SCI_GETDOCPOINTER, 0, 0);
+        if prior_doc == scintilla_doc {
+            return self.editor.send(SCI_GETMODIFY, 0, 0) != 0;
+        }
+        self.editor.send(SCI_SETDOCPOINTER, 0, scintilla_doc);
+        let dirty = self.editor.send(SCI_GETMODIFY, 0, 0) != 0;
+        if prior_doc != 0 {
+            self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
+        }
+        dirty
     }
 }
 
@@ -8121,6 +8161,21 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                             eol,
                         );
                     }
+                    SessionRestoreEntry::DirtyFromBackup {
+                        path,
+                        text,
+                        cursor,
+                        encoding,
+                        eol,
+                    } => {
+                        // Same shape as the Untitled branch: split
+                        // off a UiPlatform handle, seed the new
+                        // tab with the backup text, leave the
+                        // buffer dirty so the user sees the
+                        // unsaved-edits glyph.
+                        let (shell, mut ui) = state.split();
+                        shell.restore_dirty_with_text(&mut ui, path, text, cursor, encoding, eol);
+                    }
                 }
             }
             if let Some(idx) = state.shell.session_active_index() {
@@ -8177,6 +8232,26 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
 
         // Drag-drop: tell Windows our window accepts files.
         DragAcceptFiles(main_hwnd, true);
+
+        // Periodic auto-save timer. Fires `WM_TIMER` every
+        // `AUTOSAVE_INTERVAL_MS` on the main window's message queue;
+        // the wnd_proc's `WM_TIMER` arm dispatches a full
+        // `Shell::save_session` so unsaved buffers and dirty saved-
+        // file edits are persisted continuously, not only on clean
+        // shutdown. `WM_DESTROY` calls `KillTimer` to release the
+        // timer slot before the window goes away. A `0` return from
+        // `SetTimer` means failure (out of timer handles — extremely
+        // rare); we log and carry on, since the shutdown save is
+        // still in place as a fallback.
+        if SetTimer(
+            Some(main_hwnd),
+            AUTOSAVE_TIMER_ID,
+            AUTOSAVE_INTERVAL_MS,
+            None,
+        ) == 0
+        {
+            tracing::warn!("SetTimer for auto-save failed; relying on shutdown save only");
+        }
 
         // Show + size + focus.
         let _ = ShowWindow(main_hwnd, show_cmd);
@@ -10571,6 +10646,36 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 }
                 LRESULT(0)
             }
+            WM_TIMER => {
+                // Auto-save tick. `wparam` carries the timer id we
+                // passed to `SetTimer` — gate on it so an unrelated
+                // common-control timer (e.g., a third-party plugin
+                // that started its own timer on this HWND) doesn't
+                // accidentally trigger a save pass. `state.split()`
+                // mirrors the wnd_proc's standard "fresh UiPlatform
+                // view" pattern; `catch_unwind` matches `WM_DESTROY`
+                // so a panic in shell bookkeeping can't unwind
+                // across the `extern "system"` frame.
+                if wparam.0 == AUTOSAVE_TIMER_ID {
+                    if let Some(state) = state_from_hwnd(hwnd) {
+                        let (shell, mut ui) = state.split();
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            shell.save_session(&mut ui)
+                        }));
+                        match result {
+                            Ok(Ok(())) => {}
+                            Ok(Err(e)) => {
+                                tracing::warn!(error = %e, "auto-save failed");
+                            }
+                            Err(_) => {
+                                tracing::warn!("auto-save panicked");
+                            }
+                        }
+                    }
+                    return LRESULT(0);
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
             WM_ERASEBKGND => {
                 // Paint the entire client area with the editor-
                 // border colour. Child windows (tabs, Scintilla,
@@ -10599,6 +10704,11 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // text/cursor through the editor while it still
                 // exists — once we PostQuitMessage the message pump
                 // unwinds and the Scintilla window is destroyed.
+                //
+                // Kill the auto-save timer first so a tick can't
+                // race the shutdown save (or arrive after the box
+                // is reclaimed below).
+                let _ = KillTimer(Some(hwnd), AUTOSAVE_TIMER_ID);
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let (shell, mut ui) = state.split();
                     // catch_unwind for the same reason as
