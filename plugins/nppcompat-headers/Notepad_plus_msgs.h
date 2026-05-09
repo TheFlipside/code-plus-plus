@@ -392,11 +392,21 @@ typedef struct CommunicationInfo_ {
 /* v3: BOOL — `TRUE` when the host supports
  *     `NPPM_ALLOCATECMDID` / `NPPM_ALLOCATEMARKER` (the
  *     plugin-driven id reservation messages). Plugins gate
- *     `if (NPPM_ALLOCATESUPPORTED) { … }` on this. Code++ returns
- *     `FALSE` until those allocators land in v3 — plugins that
- *     check fall back to their non-allocating path. */
+ *     `if (NPPM_ALLOCATESUPPORTED) { … }` on this. Code++ now
+ *     supports both allocators — this returns `TRUE`. */
 #define NPPM_ALLOCATESUPPORTED            (NPPMSG + 80)
+/* v3: reserve `wParam` consecutive plugin-command IDs.
+ *     wParam: count requested.
+ *     lParam: int* OUT — host writes the starting id.
+ *     Returns: TRUE on success (plugin then uses ids
+ *             `*lParam .. *lParam + wParam`),
+ *             FALSE on bad args (count <= 0, NULL out) or pool
+ *             exhaustion. Code++ pool: 60_000..65_500 (5500 ids).
+ *             Allocations are durable for the host's lifetime. */
 #define NPPM_ALLOCATECMDID                (NPPMSG + 81)
+/* v3: reserve `wParam` consecutive Scintilla marker numbers.
+ *     Same shape as `NPPM_ALLOCATECMDID`. Code++ pool: 25..=31
+ *     (seven markers above the bookmark slot at 24). */
 #define NPPM_ALLOCATEMARKER               (NPPMSG + 82)
 #define NPPM_GETLANGUAGENAME              (NPPMSG + 83)
 #define NPPM_GETLANGUAGEDESC              (NPPMSG + 84)

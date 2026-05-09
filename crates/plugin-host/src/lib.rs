@@ -31,4 +31,7 @@ pub use dispatch::{
 };
 
 #[cfg(target_os = "windows")]
-pub use host::{PluginAdminEntry, PluginHost, PluginInfo, PLUGIN_CMD_ID_BASE};
+pub use host::{
+    PluginAdminEntry, PluginHost, PluginInfo, PLUGIN_ALLOC_CMD_BASE, PLUGIN_ALLOC_CMD_LIMIT,
+    PLUGIN_ALLOC_MARKER_BASE, PLUGIN_ALLOC_MARKER_LIMIT, PLUGIN_CMD_ID_BASE,
+};

@@ -4070,12 +4070,20 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn alloc_supported(&self) -> bool {
-        // Code++ doesn't yet implement `NPPM_ALLOCATECMDID` /
-        // `NPPM_ALLOCATEMARKER`, so plugins that gate on this
-        // value should fall back to their non-allocating path.
-        // Returning `false` is honest; it lets plugins compile
-        // against the latest header but degrade gracefully.
-        false
+        // Code++ implements `NPPM_ALLOCATECMDID` and
+        // `NPPM_ALLOCATEMARKER` — the cmd-id pool is
+        // 60_000..65_500 (5500 ids), the marker pool is 25..32
+        // (seven markers above the bookmark slot). Plugins
+        // gating on this can take the allocating path.
+        true
+    }
+
+    fn allocate_cmd_id(&mut self, count: i32) -> Option<i32> {
+        self.shell.plugins.allocate_cmd_id(count)
+    }
+
+    fn allocate_marker(&mut self, count: i32) -> Option<i32> {
+        self.shell.plugins.allocate_marker(count)
     }
 
     fn appdata_plugins_allowed(&self) -> bool {

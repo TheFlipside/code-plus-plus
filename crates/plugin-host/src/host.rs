@@ -193,6 +193,36 @@ struct LoadedPlugin {
 /// handlers in either ABI.
 pub const PLUGIN_CMD_ID_BASE: i32 = 50_000;
 
+/// First plugin-allocatable command id. Distinct from
+/// [`PLUGIN_CMD_ID_BASE`] so menu-driven plugin commands and
+/// programmatically-allocated ones can't collide. Drives
+/// `NPPM_ALLOCATECMDID`. The 10 000-id gap above
+/// `PLUGIN_CMD_ID_BASE` accommodates 500+ plugins each
+/// contributing 20 menu items before the FuncItem range would
+/// reach the allocator base.
+pub const PLUGIN_ALLOC_CMD_BASE: i32 = 60_000;
+
+/// First id past the plugin-allocatable command range. Sized so
+/// `PLUGIN_ALLOC_CMD_LIMIT - PLUGIN_ALLOC_CMD_BASE` (5500 ids)
+/// is comfortably above any plausible plugin's needs and stays
+/// well clear of `u16::MAX` where Win32 `WM_COMMAND` IDs live.
+pub const PLUGIN_ALLOC_CMD_LIMIT: i32 = 65_500;
+
+/// First plugin-allocatable Scintilla marker number. Marker 24
+/// is reserved for bookmarks (`NPPM_GETBOOKMARKID`); markers
+/// 0..=23 are reserved for built-in editor decorations
+/// (line-change indicators, breakpoints, error glyphs in future
+/// phases). Plugin allocations therefore start at 25.
+pub const PLUGIN_ALLOC_MARKER_BASE: i32 = 25;
+
+/// First marker number past the plugin-allocatable range.
+/// Scintilla supports markers 0..=31, so the allocatable pool
+/// runs 25..=31 — seven markers total. Plugins requesting more
+/// in a single call (or once the pool is partially drained) get
+/// a clean `false` return; the upstream contract makes no
+/// guarantee about pool size, so plugins must handle failure.
+pub const PLUGIN_ALLOC_MARKER_LIMIT: i32 = 32;
+
 /// Top-level plugin registry. Owned by the shell; UI crates poke it
 /// through `Shell` to enumerate, load, dispatch.
 pub struct PluginHost {
@@ -202,6 +232,18 @@ pub struct PluginHost {
     /// fails to load cannot leak its allocated cmds onto a later
     /// plugin's items.
     next_cmd_id: i32,
+    /// Next id to hand out for `NPPM_ALLOCATECMDID`. Distinct
+    /// from `next_cmd_id` so plugin menu commands and
+    /// programmatically-allocated ids can't collide. Bumped by
+    /// the requested count on each successful allocation; never
+    /// rolled back (allocations are durable for the host's
+    /// lifetime — the upstream contract does not define a
+    /// deallocate path).
+    next_alloc_cmd_id: i32,
+    /// Next Scintilla marker number to hand out for
+    /// `NPPM_ALLOCATEMARKER`. Same monotonic, never-reused
+    /// semantics as `next_alloc_cmd_id`.
+    next_alloc_marker: i32,
 }
 
 impl Default for PluginHost {
@@ -209,6 +251,8 @@ impl Default for PluginHost {
         Self {
             plugins: Vec::new(),
             next_cmd_id: PLUGIN_CMD_ID_BASE,
+            next_alloc_cmd_id: PLUGIN_ALLOC_CMD_BASE,
+            next_alloc_marker: PLUGIN_ALLOC_MARKER_BASE,
         }
     }
 }
@@ -218,6 +262,60 @@ impl PluginHost {
     /// populate.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Reserve `count` consecutive menu-command IDs for the
+    /// calling plugin. Drives `NPPM_ALLOCATECMDID`. Returns the
+    /// starting id on success, `None` on:
+    ///   - `count <= 0` (malformed plugin input);
+    ///   - `start + count > PLUGIN_ALLOC_CMD_LIMIT` (pool
+    ///     exhausted or single allocation too large to fit);
+    ///   - integer overflow on the bound calculation (handled
+    ///     via `checked_add`).
+    ///
+    /// Allocations are durable for the host's lifetime — the
+    /// upstream contract does not define a deallocate path.
+    pub fn allocate_cmd_id(&mut self, count: i32) -> Option<i32> {
+        if count <= 0 {
+            return None;
+        }
+        let start = self.next_alloc_cmd_id;
+        let end = start.checked_add(count)?;
+        if end > PLUGIN_ALLOC_CMD_LIMIT {
+            tracing::warn!(
+                requested = count,
+                next_id = start,
+                limit = PLUGIN_ALLOC_CMD_LIMIT,
+                "NPPM_ALLOCATECMDID: pool exhausted"
+            );
+            return None;
+        }
+        self.next_alloc_cmd_id = end;
+        Some(start)
+    }
+
+    /// Reserve `count` consecutive Scintilla marker numbers for
+    /// the calling plugin. Drives `NPPM_ALLOCATEMARKER`. Same
+    /// success / failure shape as [`Self::allocate_cmd_id`]; the
+    /// pool is much smaller (seven markers, 25..=31) so even
+    /// modest plugins can exhaust it.
+    pub fn allocate_marker(&mut self, count: i32) -> Option<i32> {
+        if count <= 0 {
+            return None;
+        }
+        let start = self.next_alloc_marker;
+        let end = start.checked_add(count)?;
+        if end > PLUGIN_ALLOC_MARKER_LIMIT {
+            tracing::warn!(
+                requested = count,
+                next_id = start,
+                limit = PLUGIN_ALLOC_MARKER_LIMIT,
+                "NPPM_ALLOCATEMARKER: pool exhausted"
+            );
+            return None;
+        }
+        self.next_alloc_marker = end;
+        Some(start)
     }
 
     /// Enumerate plugin candidates in `dir`. Each `*.dll` becomes a
@@ -982,5 +1080,82 @@ mod tests {
         };
         let result = host.load(99, npp_data);
         assert!(result.is_err());
+    }
+
+    // --- Plugin-id allocator (NPPM_ALLOCATECMDID / NPPM_ALLOCATEMARKER) ---
+
+    #[test]
+    fn allocate_cmd_id_starts_at_pool_base() {
+        let mut host = PluginHost::new();
+        assert_eq!(host.allocate_cmd_id(1), Some(PLUGIN_ALLOC_CMD_BASE));
+        // Next call hands out the slot right after the previous
+        // allocation — no overlap.
+        assert_eq!(host.allocate_cmd_id(3), Some(PLUGIN_ALLOC_CMD_BASE + 1));
+        assert_eq!(host.allocate_cmd_id(2), Some(PLUGIN_ALLOC_CMD_BASE + 4));
+    }
+
+    #[test]
+    fn allocate_cmd_id_rejects_zero_and_negative_count() {
+        let mut host = PluginHost::new();
+        assert_eq!(host.allocate_cmd_id(0), None);
+        assert_eq!(host.allocate_cmd_id(-5), None);
+        // Counter unchanged — a malformed call must not leak the
+        // base slot.
+        assert_eq!(host.allocate_cmd_id(1), Some(PLUGIN_ALLOC_CMD_BASE));
+    }
+
+    #[test]
+    fn allocate_cmd_id_pool_exhaustion_keeps_counter_intact() {
+        let mut host = PluginHost::new();
+        // Eat the whole pool in one big chunk.
+        let pool_size = PLUGIN_ALLOC_CMD_LIMIT - PLUGIN_ALLOC_CMD_BASE;
+        assert_eq!(host.allocate_cmd_id(pool_size), Some(PLUGIN_ALLOC_CMD_BASE));
+        // Pool is now empty — any further request fails without
+        // mutating state.
+        assert_eq!(host.allocate_cmd_id(1), None);
+        // Even a request that "exactly fits" but starts past the
+        // limit fails the same way.
+        assert_eq!(host.allocate_cmd_id(0), None);
+    }
+
+    #[test]
+    fn allocate_cmd_id_request_too_large_for_pool_returns_none() {
+        let mut host = PluginHost::new();
+        // Single allocation larger than the entire pool fails;
+        // the counter stays at the base.
+        let pool_size = PLUGIN_ALLOC_CMD_LIMIT - PLUGIN_ALLOC_CMD_BASE;
+        assert_eq!(host.allocate_cmd_id(pool_size + 1), None);
+        // Subsequent normal request succeeds — the failed call
+        // didn't burn the base slot.
+        assert_eq!(host.allocate_cmd_id(1), Some(PLUGIN_ALLOC_CMD_BASE));
+    }
+
+    #[test]
+    fn allocate_marker_starts_above_bookmark_slot() {
+        let mut host = PluginHost::new();
+        // Marker 24 is reserved for `NPPM_GETBOOKMARKID`; the
+        // allocator pool starts at 25.
+        assert_eq!(host.allocate_marker(1), Some(25));
+        assert_eq!(host.allocate_marker(1), Some(26));
+    }
+
+    #[test]
+    fn allocate_marker_pool_seven_markers_then_exhausts() {
+        // Pool runs 25..=31 (seven markers). The eighth single
+        // allocation must fail.
+        let mut host = PluginHost::new();
+        for i in 0..7 {
+            assert_eq!(host.allocate_marker(1), Some(25 + i));
+        }
+        assert_eq!(host.allocate_marker(1), None);
+    }
+
+    #[test]
+    fn allocate_marker_oversized_request_fails_atomically() {
+        let mut host = PluginHost::new();
+        // Request larger than the entire pool fails without
+        // burning any markers — the alloc is atomic.
+        assert_eq!(host.allocate_marker(8), None);
+        assert_eq!(host.allocate_marker(1), Some(25));
     }
 }

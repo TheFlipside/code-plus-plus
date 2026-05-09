@@ -120,6 +120,8 @@ pub const NPPM_ISSTATUSBARHIDDEN: u32 = NPPMSG + 75;
 pub const NPPM_DOOPEN: u32 = NPPMSG + 77;
 pub const NPPM_SAVECURRENTFILEAS: u32 = NPPMSG + 78;
 pub const NPPM_ALLOCATESUPPORTED: u32 = NPPMSG + 80;
+pub const NPPM_ALLOCATECMDID: u32 = NPPMSG + 81;
+pub const NPPM_ALLOCATEMARKER: u32 = NPPMSG + 82;
 pub const NPPM_GETLANGUAGENAME: u32 = NPPMSG + 83;
 pub const NPPM_GETLANGUAGEDESC: u32 = NPPMSG + 84;
 pub const NPPM_SHOWDOCSWITCHER: u32 = NPPMSG + 85;
@@ -691,6 +693,21 @@ pub trait HostServices {
     /// this to gate `if (NPPM_ALLOCATESUPPORTED) { … }`. Code++
     /// returns `false` until those messages land in v3.
     fn alloc_supported(&self) -> bool;
+
+    /// Reserve `count` consecutive plugin-command IDs. Drives
+    /// [`NPPM_ALLOCATECMDID`]. Returns the starting id on success
+    /// (the plugin then uses ids `start..start+count`), `None` on
+    /// pool exhaustion or malformed `count` (≤ 0). Allocations
+    /// are durable for the host's lifetime; the upstream contract
+    /// does not define a deallocate path.
+    fn allocate_cmd_id(&mut self, count: i32) -> Option<i32>;
+
+    /// Reserve `count` consecutive Scintilla marker numbers.
+    /// Drives [`NPPM_ALLOCATEMARKER`]. Same shape as
+    /// [`Self::allocate_cmd_id`]; the marker pool is much
+    /// smaller (markers 25..=31 — seven total) so even modest
+    /// plugins can exhaust it.
+    fn allocate_marker(&mut self, count: i32) -> Option<i32>;
 
     /// `true` when plugins installed under `%APPDATA%\Code++\plugins`
     /// (per-user, no admin rights) are honoured. Drives
@@ -1683,6 +1700,67 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
 
         NPPM_ALLOCATESUPPORTED => services.alloc_supported() as isize,
 
+        NPPM_ALLOCATECMDID => {
+            // wparam: count of consecutive ids requested.
+            // lparam: int* OUT — the host writes the starting id.
+            // Returns: 1 on success, 0 on bad args or pool
+            // exhaustion. The plugin then uses ids
+            // `*lparam .. *lparam + wparam`.
+            //
+            // Reject NULL out-pointer up front: writing the start
+            // id is the whole point, and a plugin that passes
+            // NULL has no way to learn what it was allocated.
+            //
+            // `lparam <= 0` (not just `== 0`) closes the "negative
+            // lparam casts to a high-address kernel-mode pointer
+            // on Win64" hole — same shape as the
+            // `NPPM_MSGTOPLUGIN` guard. A `write_unaligned`
+            // through such a pointer would target kernel space
+            // and crash the host process; the explicit guard
+            // turns that into a clean reject.
+            if lparam <= 0 {
+                return Some(0);
+            }
+            // `wparam as i32` truncates the upper 32 bits — same
+            // parity with N++'s `static_cast<int>(wParam)`. A
+            // plugin sending a wparam outside i32's range is
+            // malformed; the pool's `count <= 0` guard inside
+            // `allocate_cmd_id` rejects the wrapped value
+            // cleanly.
+            let count = wparam as i32;
+            let Some(start) = services.allocate_cmd_id(count) else {
+                return Some(0);
+            };
+            // SAFETY: plugin promises lparam is a valid `int*` it
+            // owns for the duration of this call.
+            // `write_unaligned` because a malicious or buggy
+            // plugin can pass an unaligned pointer; an aligned
+            // store would be UB.
+            unsafe {
+                core::ptr::write_unaligned(lparam as *mut i32, start);
+            }
+            1
+        }
+
+        NPPM_ALLOCATEMARKER => {
+            // Same shape as `NPPM_ALLOCATECMDID`, separate pool.
+            // `wparam as i32` truncation is parity with N++ and
+            // `lparam <= 0` is the same kernel-mode-pointer
+            // guard the cmd-id arm above documents.
+            if lparam <= 0 {
+                return Some(0);
+            }
+            let count = wparam as i32;
+            let Some(start) = services.allocate_marker(count) else {
+                return Some(0);
+            };
+            // SAFETY: same contract as the cmd-id arm above.
+            unsafe {
+                core::ptr::write_unaligned(lparam as *mut i32, start);
+            }
+            1
+        }
+
         NPPM_GETAPPDATAPLUGINSALLOWED => services.appdata_plugins_allowed() as isize,
 
         NPPM_GETCURRENTVIEW => services.current_view() as isize,
@@ -2088,6 +2166,19 @@ mod tests {
         smooth_font: bool,
         editor_border_edge: bool,
         line_number_width_mode: i32,
+        /// Allocator state for the `NPPM_ALLOCATECMDID` /
+        /// `NPPM_ALLOCATEMARKER` mock branches. The defaults
+        /// match the production constants
+        /// (`PLUGIN_ALLOC_CMD_BASE` / `PLUGIN_ALLOC_MARKER_BASE`
+        /// for the bases, `PLUGIN_ALLOC_CMD_LIMIT` /
+        /// `PLUGIN_ALLOC_MARKER_LIMIT` for the caps); tests set
+        /// `next_alloc_*` and `alloc_*_limit` directly to
+        /// exercise the boundary cases.
+        alloc_supported: bool,
+        next_alloc_cmd_id: i32,
+        alloc_cmd_id_limit: i32,
+        next_alloc_marker: i32,
+        alloc_marker_limit: i32,
         // recorded mutations
         log: RefCell<Vec<String>>,
     }
@@ -2424,7 +2515,37 @@ mod tests {
             )
         }
         fn alloc_supported(&self) -> bool {
-            false
+            self.alloc_supported
+        }
+        fn allocate_cmd_id(&mut self, count: i32) -> Option<i32> {
+            // Mock surface: same monotonic counter shape as
+            // production. Pool exhaustion uses the same upper
+            // bound (`u32::MAX as i32`)-style cap; tests pin
+            // specific values via the `next_alloc_cmd_id` field.
+            if count <= 0 {
+                return None;
+            }
+            let start = self.next_alloc_cmd_id;
+            let end = start.checked_add(count)?;
+            if end > self.alloc_cmd_id_limit {
+                return None;
+            }
+            self.next_alloc_cmd_id = end;
+            self.record(format!("alloc_cmd_id[count={count}]={start}"));
+            Some(start)
+        }
+        fn allocate_marker(&mut self, count: i32) -> Option<i32> {
+            if count <= 0 {
+                return None;
+            }
+            let start = self.next_alloc_marker;
+            let end = start.checked_add(count)?;
+            if end > self.alloc_marker_limit {
+                return None;
+            }
+            self.next_alloc_marker = end;
+            self.record(format!("alloc_marker[count={count}]={start}"));
+            Some(start)
         }
         fn appdata_plugins_allowed(&self) -> bool {
             true
@@ -3959,10 +4080,188 @@ mod tests {
 
     #[test]
     fn alloc_supported_passes_through() {
+        // Default mock has alloc_supported=false → relayed as 0.
         let mut s = MockServices::default();
-        // Mock returns false; dispatcher relays it as 0.
         let r = unsafe { dispatch_nppm(&mut s, NPPM_ALLOCATESUPPORTED, 0, 0) };
         assert_eq!(r, Some(0));
+
+        // Plugins that gate on `if (NPPM_ALLOCATESUPPORTED)` see
+        // the right TRUE answer once the host opts in.
+        s.alloc_supported = true;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ALLOCATESUPPORTED, 0, 0) };
+        assert_eq!(r, Some(1));
+    }
+
+    #[test]
+    fn allocate_cmd_id_writes_start_and_returns_one() {
+        let mut s = MockServices {
+            next_alloc_cmd_id: 60_000,
+            alloc_cmd_id_limit: 65_500,
+            ..Default::default()
+        };
+        let mut start: i32 = -1;
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_ALLOCATECMDID,
+                4, // request 4 ids
+                &mut start as *mut i32 as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(start, 60_000);
+        // Mock counter advanced by the requested count.
+        assert_eq!(s.next_alloc_cmd_id, 60_004);
+    }
+
+    #[test]
+    fn allocate_cmd_id_consecutive_calls_advance_counter() {
+        // Two back-to-back allocations must hand out
+        // non-overlapping ranges so two plugins don't collide on
+        // the same id.
+        let mut s = MockServices {
+            next_alloc_cmd_id: 60_000,
+            alloc_cmd_id_limit: 65_500,
+            ..Default::default()
+        };
+        let mut a: i32 = -1;
+        let mut b: i32 = -1;
+        unsafe {
+            dispatch_nppm(&mut s, NPPM_ALLOCATECMDID, 3, &mut a as *mut i32 as isize);
+            dispatch_nppm(&mut s, NPPM_ALLOCATECMDID, 5, &mut b as *mut i32 as isize);
+        }
+        assert_eq!(a, 60_000);
+        assert_eq!(b, 60_003);
+        assert_eq!(s.next_alloc_cmd_id, 60_008);
+    }
+
+    #[test]
+    fn allocate_cmd_id_pool_exhausted_returns_zero() {
+        // Pool one short of fitting the request — the host
+        // returns 0 without advancing the counter.
+        let mut s = MockServices {
+            next_alloc_cmd_id: 65_499,
+            alloc_cmd_id_limit: 65_500,
+            ..Default::default()
+        };
+        let mut start: i32 = -1;
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_ALLOCATECMDID,
+                2,
+                &mut start as *mut i32 as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+        assert_eq!(start, -1, "out-pointer must not be touched on failure");
+        assert_eq!(s.next_alloc_cmd_id, 65_499, "counter unchanged on failure");
+    }
+
+    #[test]
+    fn allocate_cmd_id_zero_count_returns_zero() {
+        let mut s = MockServices {
+            next_alloc_cmd_id: 60_000,
+            alloc_cmd_id_limit: 65_500,
+            ..Default::default()
+        };
+        let mut start: i32 = -1;
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_ALLOCATECMDID,
+                0,
+                &mut start as *mut i32 as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn allocate_cmd_id_null_lparam_returns_zero() {
+        let mut s = MockServices {
+            next_alloc_cmd_id: 60_000,
+            alloc_cmd_id_limit: 65_500,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ALLOCATECMDID, 4, 0) };
+        assert_eq!(r, Some(0));
+        // Counter must not advance — the dispatcher rejects
+        // before reaching the trait method.
+        assert_eq!(s.next_alloc_cmd_id, 60_000);
+    }
+
+    #[test]
+    fn allocate_cmd_id_negative_lparam_returns_zero() {
+        // A negative `lparam` casts to a high-address kernel-mode
+        // pointer on Win64. `write_unaligned` through that
+        // address would crash the host. The dispatcher's
+        // `lparam <= 0` guard rejects up front.
+        let mut s = MockServices {
+            next_alloc_cmd_id: 60_000,
+            alloc_cmd_id_limit: 65_500,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ALLOCATECMDID, 4, -1isize) };
+        assert_eq!(r, Some(0));
+        assert_eq!(s.next_alloc_cmd_id, 60_000);
+    }
+
+    #[test]
+    fn allocate_marker_negative_lparam_returns_zero() {
+        // Same kernel-mode-pointer guard as the cmd-id peer.
+        let mut s = MockServices {
+            next_alloc_marker: 25,
+            alloc_marker_limit: 32,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ALLOCATEMARKER, 1, -1isize) };
+        assert_eq!(r, Some(0));
+        assert_eq!(s.next_alloc_marker, 25);
+    }
+
+    #[test]
+    fn allocate_marker_writes_start_and_advances() {
+        let mut s = MockServices {
+            next_alloc_marker: 25,
+            alloc_marker_limit: 32,
+            ..Default::default()
+        };
+        let mut start: i32 = -1;
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_ALLOCATEMARKER,
+                3,
+                &mut start as *mut i32 as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(start, 25);
+        assert_eq!(s.next_alloc_marker, 28);
+    }
+
+    #[test]
+    fn allocate_marker_pool_exhausted_returns_zero() {
+        // Marker pool is small (25..=31 = 7 markers). A request
+        // that wouldn't fit fails cleanly.
+        let mut s = MockServices {
+            next_alloc_marker: 25,
+            alloc_marker_limit: 32,
+            ..Default::default()
+        };
+        let mut start: i32 = -1;
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_ALLOCATEMARKER,
+                10, // way more than the 7 available
+                &mut start as *mut i32 as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+        assert_eq!(start, -1);
+        assert_eq!(s.next_alloc_marker, 25);
     }
 
     #[test]
