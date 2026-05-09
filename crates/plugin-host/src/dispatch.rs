@@ -94,6 +94,7 @@ pub const NPPM_SWITCHTOFILE: u32 = NPPMSG + 37;
 pub const NPPM_SAVECURRENTFILE: u32 = NPPMSG + 38;
 pub const NPPM_SAVEALLFILES: u32 = NPPMSG + 39;
 pub const NPPM_SETMENUITEMCHECK: u32 = NPPMSG + 40;
+pub const NPPM_ADDTOOLBARICON: u32 = NPPMSG + 41;
 pub const NPPM_GETWINDOWSVERSION: u32 = NPPMSG + 42;
 pub const NPPM_MAKECURRENTBUFFERDIRTY: u32 = NPPMSG + 44;
 pub const NPPM_GETPLUGINSCONFIGDIR: u32 = NPPMSG + 46;
@@ -940,6 +941,27 @@ pub trait HostServices {
     /// the HWND, otherwise the pump will pass a freed handle
     /// to `IsDialogMessageW`. Returns `true` on success.
     fn register_modeless_dialog(&mut self, dlg: crate::ffi::Hwnd, register: bool) -> bool;
+
+    /// Add a plugin-supplied icon to the host toolbar bound to
+    /// the given `cmd_id`. Drives [`NPPM_ADDTOOLBARICON`]. The
+    /// icon is added to the toolbar's HIMAGELIST via
+    /// `ImageList_ReplaceIcon` and a new `TBBUTTON` is appended
+    /// to the toolbar with `idCommand = cmd_id` so a click on
+    /// the new button posts `WM_COMMAND` with the plugin's id —
+    /// the same path Code++'s built-in toolbar buttons use.
+    ///
+    /// `hicon` is the plugin's `HICON` (Win32 32-bpp icon, the
+    /// modern half of the upstream `toolbarIcons` struct). The
+    /// legacy `hToolbarBmp` field is logged-and-ignored; modern
+    /// plugins ship the HICON. A null `hicon` returns `false`.
+    /// Plugin owns the HICON lifetime; Code++ does not destroy
+    /// it (the `ImageList_ReplaceIcon` call internally copies
+    /// the bits, so the plugin's handle can be freed
+    /// immediately after the call returns).
+    ///
+    /// Returns `true` on success; `false` for null `hicon`,
+    /// imagelist-add failure, or `TB_ADDBUTTONS` failure.
+    fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: crate::ffi::Hwnd) -> bool;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -1275,6 +1297,37 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         NPPM_SETMENUITEMCHECK => {
             services.set_menu_item_check(wparam as i32, lparam != 0);
             1
+        }
+
+        NPPM_ADDTOOLBARICON => {
+            // wparam: cmd id the new toolbar button posts as
+            //         `WM_COMMAND` on click.
+            // lparam: pointer to a `ToolbarIcons` struct
+            //         (`{ h_toolbar_bmp, h_toolbar_icon }`).
+            // Returns: 1 on success, 0 on bad args / null
+            //         icon / toolbar-add failure.
+            //
+            // Reject NULL / negative lparam up front — same
+            // kernel-mode-pointer guard the allocator pair and
+            // shortcut/modeless messages use.
+            if lparam <= 0 {
+                return Some(0);
+            }
+            let icons = lparam as *const crate::ffi::ToolbarIcons;
+            // SAFETY: plugin promises `icons` is a valid
+            // ToolbarIcons it owns for the duration of the call.
+            // `addr_of!` + `read_unaligned` for each field —
+            // the struct may live on a packed plugin allocation.
+            let h_icon =
+                unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*icons).h_toolbar_icon)) };
+            if h_icon.is_null() {
+                tracing::trace!(
+                    cmd = wparam,
+                    "NPPM_ADDTOOLBARICON: null h_toolbar_icon (legacy h_toolbar_bmp ignored)"
+                );
+                return Some(0);
+            }
+            services.add_toolbar_icon(wparam as i32, h_icon as crate::ffi::Hwnd) as isize
         }
 
         NPPM_GETWINDOWSVERSION => {
@@ -2390,6 +2443,14 @@ mod tests {
         /// types — the production HostBridge translates back to
         /// `HWND` at the trait boundary.
         modeless_dialogs: Vec<usize>,
+        /// `(cmd_id, hicon)` pairs the mock has accepted via
+        /// `NPPM_ADDTOOLBARICON`. `hicon` stored as `usize` for
+        /// the same reason as `modeless_dialogs`.
+        toolbar_icons: Vec<(i32, usize)>,
+        /// Whether `add_toolbar_icon` reports success. Defaults
+        /// to `true`; tests that exercise the failure path flip
+        /// it to simulate `ImageList_ReplaceIcon` returning -1.
+        toolbar_icon_succeeds: bool,
         // recorded mutations
         log: RefCell<Vec<String>>,
     }
@@ -2875,6 +2936,14 @@ mod tests {
                 self.modeless_dialogs.retain(|&h| h != dlg as usize);
             }
             true
+        }
+        fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: crate::ffi::Hwnd) -> bool {
+            self.record(format!(
+                "add_toolbar_icon(cmd={cmd_id},hicon=0x{:x})",
+                hicon as usize
+            ));
+            self.toolbar_icons.push((cmd_id, hicon as usize));
+            self.toolbar_icon_succeeds
         }
     }
 
@@ -4712,6 +4781,83 @@ mod tests {
         // and shortcut messages use.
         let mut s = MockServices::default();
         let r = unsafe { dispatch_nppm(&mut s, NPPM_MODELESSDIALOG, MODELESSDIALOGADD, -1isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    // --- NPPM_ADDTOOLBARICON ---
+
+    #[test]
+    fn add_toolbar_icon_routes_cmd_and_icon_when_both_present() {
+        use crate::ffi::ToolbarIcons;
+        let mut s = MockServices {
+            toolbar_icon_succeeds: true,
+            ..Default::default()
+        };
+        let icons = ToolbarIcons {
+            h_toolbar_bmp: core::ptr::null_mut(),
+            h_toolbar_icon: 0xCAFE_BABE_usize as *mut core::ffi::c_void,
+        };
+        let icons_ptr = &icons as *const ToolbarIcons as isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_001, icons_ptr) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.toolbar_icons, vec![(60_001, 0xCAFE_BABE_usize)]);
+    }
+
+    #[test]
+    fn add_toolbar_icon_null_icon_returns_zero() {
+        // Plugin supplied only the legacy `h_toolbar_bmp`. Code++
+        // ignores the legacy field; the dispatcher rejects
+        // before calling the trait so the toolbar never sees a
+        // null HICON.
+        use crate::ffi::ToolbarIcons;
+        let mut s = MockServices {
+            toolbar_icon_succeeds: true,
+            ..Default::default()
+        };
+        let icons = ToolbarIcons {
+            h_toolbar_bmp: 0xDEAD_BEEF_usize as *mut core::ffi::c_void,
+            h_toolbar_icon: core::ptr::null_mut(),
+        };
+        let icons_ptr = &icons as *const ToolbarIcons as isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_001, icons_ptr) };
+        assert_eq!(r, Some(0));
+        // Mock should not have been called — the dispatcher
+        // short-circuited on the null-icon check.
+        assert!(s.toolbar_icons.is_empty());
+    }
+
+    #[test]
+    fn add_toolbar_icon_relays_failure_from_host() {
+        // The host can fail (ImageList_ReplaceIcon → -1, or
+        // TB_ADDBUTTONS rejection). Mock returns false →
+        // dispatcher returns 0.
+        use crate::ffi::ToolbarIcons;
+        let mut s = MockServices {
+            toolbar_icon_succeeds: false,
+            ..Default::default()
+        };
+        let icons = ToolbarIcons {
+            h_toolbar_bmp: core::ptr::null_mut(),
+            h_toolbar_icon: 0xBEEF_usize as *mut core::ffi::c_void,
+        };
+        let icons_ptr = &icons as *const ToolbarIcons as isize;
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_002, icons_ptr) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn add_toolbar_icon_null_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_001, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn add_toolbar_icon_negative_lparam_returns_zero() {
+        // Same kernel-mode-pointer guard as MODELESSDIALOG /
+        // allocators / shortcut messages.
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_001, -1isize) };
         assert_eq!(r, Some(0));
     }
 

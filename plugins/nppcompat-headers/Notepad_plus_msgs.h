@@ -267,7 +267,33 @@ typedef struct sessionInfo_ {
 #define NPPM_SAVEALLFILES                 (NPPMSG + 39)
 
 #define NPPM_SETMENUITEMCHECK             (NPPMSG + 40)
+/* v3: add a plugin-supplied icon to the host toolbar bound to
+ *     `wParam` (cmd id). A click on the new toolbar button
+ *     posts WM_COMMAND with the plugin's cmd id — same path
+ *     Code++'s built-in toolbar buttons use.
+ *     wParam: cmd id.
+ *     lParam: pointer to a `toolbarIcons` struct
+ *             ({ HBITMAP hToolbarBmp; HICON hToolbarIcon; }).
+ *     Returns: TRUE on success, FALSE on null icon / imagelist
+ *             failure / TB_ADDBUTTONS rejection.
+ *     **Code++ uses `hToolbarIcon` only.** The legacy
+ *     `hToolbarBmp` (16x16 16-color bitmap, kept for old
+ *     Win9x-era N++) is logged-and-ignored — modern plugins
+ *     ship the 32-bpp HICON. Plugins owning only the legacy
+ *     bitmap get a FALSE return and should fall back to
+ *     installing a menu-only command. The plugin owns the
+ *     HICON's lifetime; `ImageList_ReplaceIcon` internally
+ *     copies the bits, so the plugin can free its handle
+ *     immediately after this call returns. */
 #define NPPM_ADDTOOLBARICON               (NPPMSG + 41)
+/* Plugin-supplied icon payload for `NPPM_ADDTOOLBARICON`. */
+#ifndef NPP_TOOLBAR_ICONS_DEFINED
+#define NPP_TOOLBAR_ICONS_DEFINED
+typedef struct toolbarIcons_ {
+    HBITMAP hToolbarBmp;     /* legacy 16-color bitmap (ignored by Code++) */
+    HICON   hToolbarIcon;    /* 32-bpp icon (preferred) */
+} toolbarIcons;
+#endif
 /* v1: returns Notepad++'s `winVer` enum value for the running OS
  *     (... WV_WIN10 = 16, WV_WIN11 = 17). Probed via `RtlGetVersion`
  *     so the binary doesn't need a manifest declaring Win11 support

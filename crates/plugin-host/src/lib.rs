@@ -18,7 +18,7 @@ pub mod host;
 pub use ffi::{
     BeNotifiedFn, CommunicationInfo, FuncItem, GetFuncsArrayFn, GetNameFn, Hwnd, IsUnicodeFn,
     MessageProcFn, NppData, PluginCmd, SCNotification, SciNotifyHeader, SessionInfo, SetInfoFn,
-    ShortcutKey, MENU_TITLE_LENGTH,
+    ShortcutKey, ToolbarIcons, MENU_TITLE_LENGTH,
 };
 
 #[cfg(target_os = "windows")]

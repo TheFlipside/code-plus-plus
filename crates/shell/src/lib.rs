@@ -372,6 +372,14 @@ pub trait UiPlatform {
     #[cfg(target_os = "windows")]
     fn register_modeless_dialog(&mut self, dlg: codepp_plugin_host::Hwnd, register: bool) -> bool;
 
+    /// Add a plugin-supplied icon (HICON) to the host toolbar
+    /// bound to `cmd_id`. Drives `NPPM_ADDTOOLBARICON`. Same
+    /// `cfg(windows)` gate rationale as the shortcut messages
+    /// — `Hwnd` (the plugin's HICON shape) comes from
+    /// `plugin-host`.
+    #[cfg(target_os = "windows")]
+    fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: codepp_plugin_host::Hwnd) -> bool;
+
     /// Pull the current text content of the buffer backed by the
     /// Scintilla document at `scintilla_doc`. The implementation may
     /// briefly bind that document to the editor view to read it
@@ -4325,6 +4333,10 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         self.ui.register_modeless_dialog(dlg, register)
     }
 
+    fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: codepp_plugin_host::Hwnd) -> bool {
+        self.ui.add_toolbar_icon(cmd_id, hicon)
+    }
+
     fn trigger_tab_context_menu(&mut self, view: i32, tab_idx: i32) -> bool {
         // Code++'s tab strip doesn't yet ship a context menu (no
         // Close / Close-Others / Rename / Move-to-other-view
@@ -4926,6 +4938,13 @@ mod tests {
             // registration is a no-op. The dispatcher mock in
             // `dispatch.rs` exercises the registration list
             // shape without involving the shell layer.
+            true
+        }
+        #[cfg(target_os = "windows")]
+        fn add_toolbar_icon(&mut self, _cmd_id: i32, _hicon: codepp_plugin_host::Hwnd) -> bool {
+            // FakeUi has no toolbar — same rationale as the
+            // modeless-dialog mock above. The dispatcher mock
+            // exercises the success/failure surface.
             true
         }
         fn capture_text_from_doc(&mut self, _scintilla_doc: isize) -> String {

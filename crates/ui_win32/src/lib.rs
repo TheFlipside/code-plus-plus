@@ -1558,6 +1558,93 @@ impl UiPlatform for Win32Ui {
         true
     }
 
+    fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: codepp_plugin_host::Hwnd) -> bool {
+        // Add the plugin's HICON to the toolbar's HIMAGELIST,
+        // then append a TBBUTTON bound to `cmd_id` so a click
+        // posts `WM_COMMAND` with the plugin's id — the same
+        // path Code++'s built-in toolbar buttons use.
+        //
+        // SAFETY: every Win32 call here runs on the UI thread
+        // (the trait method is invoked from a NPPM dispatch).
+        // `self.toolbar_hwnd` is the live toolbar HWND owned by
+        // `WindowState`. The plugin's HICON is read-only here;
+        // `ImageList_ReplaceIcon` internally copies the bits,
+        // so the plugin can free its handle immediately after
+        // the call returns.
+        use windows::Win32::UI::Controls::{
+            ImageList_ReplaceIcon, HIMAGELIST, TBBUTTON, TBSTATE_ENABLED, TBSTYLE_BUTTON,
+            TB_ADDBUTTONS, TB_AUTOSIZE, TB_GETIMAGELIST,
+        };
+        let icon_hwnd = HICON(hicon);
+        if icon_hwnd.is_invalid() {
+            return false;
+        }
+        unsafe {
+            // Pull the toolbar's imagelist via TB_GETIMAGELIST.
+            // wparam = imagelist index (0 — the toolbar's
+            // primary list, the one `build_image_list`
+            // populated at startup); lparam unused.
+            let himl_raw =
+                SendMessageW(self.toolbar_hwnd, TB_GETIMAGELIST, Some(WPARAM(0)), None).0;
+            if himl_raw == 0 {
+                tracing::warn!(
+                    cmd = cmd_id,
+                    "NPPM_ADDTOOLBARICON: TB_GETIMAGELIST returned NULL"
+                );
+                return false;
+            }
+            let himl = HIMAGELIST(himl_raw);
+            // `ImageList_ReplaceIcon(himl, -1, hicon)` appends
+            // the icon and returns its new index. -1 on failure
+            // (out of memory / bad icon).
+            let new_idx = ImageList_ReplaceIcon(himl, -1, icon_hwnd);
+            if new_idx < 0 {
+                tracing::warn!(
+                    cmd = cmd_id,
+                    "NPPM_ADDTOOLBARICON: ImageList_ReplaceIcon returned -1"
+                );
+                return false;
+            }
+            // Build the TBBUTTON. `iBitmap` is the imagelist
+            // index just returned; `idCommand` is the plugin's
+            // cmd id; `fsState` enables the button; `fsStyle` is
+            // BTNS_BUTTON (a plain push button — no check, no
+            // separator). `iString` and `dwData` are unused
+            // (plugin-driven tooltips arrive via TBN_GETINFOTIP
+            // notifications, a future polish item handles).
+            let btn = TBBUTTON {
+                iBitmap: new_idx,
+                idCommand: cmd_id,
+                fsState: TBSTATE_ENABLED as u8,
+                fsStyle: TBSTYLE_BUTTON as u8,
+                bReserved: [0; 6],
+                dwData: 0,
+                iString: 0,
+            };
+            let added = SendMessageW(
+                self.toolbar_hwnd,
+                TB_ADDBUTTONS,
+                Some(WPARAM(1)),
+                Some(LPARAM(&btn as *const TBBUTTON as isize)),
+            );
+            if added.0 == 0 {
+                tracing::warn!(
+                    cmd = cmd_id,
+                    "NPPM_ADDTOOLBARICON: TB_ADDBUTTONS rejected the new TBBUTTON"
+                );
+                return false;
+            }
+            // Refresh layout so the new button is visible
+            // immediately. No relayout-via-post needed: the
+            // toolbar's own auto-size handles the chrome
+            // refresh and the parent's WM_SIZE-driven layout
+            // picks up the new toolbar height (if any) on the
+            // next paint cycle.
+            SendMessageW(self.toolbar_hwnd, TB_AUTOSIZE, None, None);
+        }
+        true
+    }
+
     fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool {
         // Win32 has no in-place mutation API for accelerator
         // tables, so "remove a binding" is implemented as

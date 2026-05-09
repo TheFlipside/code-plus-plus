@@ -177,6 +177,36 @@ pub type MessageProcFn = unsafe extern "C" fn(u32, usize, isize) -> isize;
 /// `isUnicode() -> BOOL`. Win32 `BOOL` is a 4-byte int.
 pub type IsUnicodeFn = unsafe extern "C" fn() -> i32;
 
+/// Mirror of Notepad++'s `toolbarIcons` struct used by
+/// `NPPM_ADDTOOLBARICON`. The plugin populates the two icon
+/// handles and passes a pointer to this struct in `lParam`.
+///
+/// Layout matches the upstream C declaration:
+///   `HBITMAP hToolbarBmp; HICON hToolbarIcon;`
+/// — two pointer-sized handles. `#[repr(C)]` keeps Rust from
+/// reordering, so a plugin compiled against
+/// `Notepad_plus_msgs.h` reads/writes the same bytes Code++
+/// does.
+///
+/// **Code++ uses `h_toolbar_icon` only.** The legacy
+/// `h_toolbar_bmp` (16×16 16-color bitmap, kept for old
+/// Win9x-era N++) is logged-and-ignored: modern plugins ship
+/// the 32-bpp HICON, and the imagelist Code++ attaches to its
+/// toolbar is sized for icon — not bitmap — input. A plugin
+/// that supplied only `h_toolbar_bmp` (NULL HICON) gets a
+/// `false` return from the dispatcher.
+#[repr(C)]
+pub struct ToolbarIcons {
+    /// Legacy 16-color bitmap. **Ignored by Code++.** Kept in
+    /// the struct for ABI compatibility with plugins compiled
+    /// against the upstream header.
+    pub h_toolbar_bmp: *mut c_void,
+    /// 32-bpp icon Code++ adds to the toolbar's HIMAGELIST via
+    /// `ImageList_ReplaceIcon`. Must be non-null; the
+    /// dispatcher rejects with `false` otherwise.
+    pub h_toolbar_icon: *mut c_void,
+}
+
 /// Mirror of Notepad++'s `CommunicationInfo` struct used by
 /// `NPPM_MSGTOPLUGIN` for inter-plugin messaging. The source
 /// plugin populates this and passes a pointer to it in `lParam`;
@@ -342,5 +372,26 @@ mod tests {
     fn communication_info_total_size_x86() {
         // 4 (internal_msg) + 4 (src_module_name) + 4 (info) = 12.
         assert_eq!(core::mem::size_of::<CommunicationInfo>(), 12);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn toolbar_icons_total_size_x64() {
+        // Two pointer-sized handles back-to-back; no padding.
+        // x64: 8 + 8 = 16. Catches a future field-type
+        // regression that would break ABI compat with the
+        // upstream `toolbarIcons` struct.
+        assert_eq!(
+            core::mem::size_of::<ToolbarIcons>(),
+            16,
+            "ToolbarIcons layout regressed; plugins reading the upstream toolbarIcons struct would parse garbage",
+        );
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn toolbar_icons_total_size_x86() {
+        // 4 + 4 = 8 bytes; pointer-sized handles, no padding.
+        assert_eq!(core::mem::size_of::<ToolbarIcons>(), 8);
     }
 }
