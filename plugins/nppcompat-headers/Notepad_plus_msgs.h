@@ -899,6 +899,18 @@ typedef enum LangType_ {
  *     the notification for files they could have observed open.
  *     `nmhdr.idFrom` carries the deleted file's buffer id. */
 #define NPPN_FILEDELETED           (NPPN_FIRST + 26)
+/* v3: the OS-level dark/light theme preference changed.
+ *     On Windows the host detects this via `WM_SETTINGCHANGE`
+ *     with `lparam` pointing at the wide string
+ *     `"ImmersiveColorSet"`. Plugins that paint their own
+ *     chrome (a docked panel, a custom dialog, themed
+ *     tooltips) re-read the system colour state and repaint
+ *     when they observe this notification. Code++ does not
+ *     yet ship its own dark-mode rendering — the
+ *     notification is forwarded as informational only so
+ *     dark-mode-aware plugins can light up without the host
+ *     holding them up. Carries no payload; `nmhdr.idFrom`
+ *     is 0. */
 #define NPPN_DARKMODECHANGED       (NPPN_FIRST + 27)
 #define NPPN_CMDLINEPLUGINMSG      (NPPN_FIRST + 28)
 #define NPPN_EXTERNALLEXERBUFFER   (NPPN_FIRST + 29)

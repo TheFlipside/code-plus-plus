@@ -120,8 +120,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
     WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT,
-    WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SIZE, WM_TIMER, WNDCLASSEXW,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
+    WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER,
+    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
     WS_EX_DLGMODALFRAME, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP,
     WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
@@ -6698,6 +6698,71 @@ fn editor_border_brush() -> HBRUSH {
     HBRUSH(raw as *mut c_void)
 }
 
+/// Compare a null-terminated wide string at `wide` against the
+/// ASCII bytes of `expected`. Returns true iff the wide buffer
+/// holds exactly those code units followed by a NUL terminator.
+/// Bounded read at `WIDE_COMPARE_CAP` units so a malformed /
+/// missing terminator can't run off the end of an arbitrary
+/// pointer the OS hands us via `WM_SETTINGCHANGE.lparam`.
+///
+/// Used for the WM_SETTINGCHANGE → NPPN_DARKMODECHANGED route:
+/// Windows posts the message with `lparam` pointing at a wide
+/// setting key (e.g. `"ImmersiveColorSet"`) and we need to
+/// match exactly without paying the cost of an allocation per
+/// uninteresting setting flip.
+///
+/// # Safety
+///
+/// Caller must ensure either:
+///   - `wide` is NULL (defensively handled — returns false), OR
+///   - `wide` is `u16`-aligned AND points at a sequence of
+///     `u16` units, terminated by a NUL within
+///     `WIDE_COMPARE_CAP` units of the start.
+///
+/// In particular `wide` must be `u16`-aligned (2-byte
+/// alignment) — `*wide.add(i)` is an aligned read. The
+/// wnd_proc call site rejects mis-aligned pointers via
+/// `lparam.0 % 2 != 0` before invoking. The OS itself only
+/// produces aligned wide strings for `WM_SETTINGCHANGE`, so
+/// the alignment guard exists only to harden against an
+/// in-process plugin synthesising a misaligned
+/// `SendMessage(WM_SETTINGCHANGE)` (DESIGN.md §6.5: in-process
+/// plugin threat model).
+const WIDE_COMPARE_CAP: usize = 64;
+unsafe fn wide_string_equals(wide: *const u16, expected: &str) -> bool {
+    if wide.is_null() {
+        return false;
+    }
+    if !expected.is_ascii() {
+        return false;
+    }
+    let expected_bytes = expected.as_bytes();
+    if expected_bytes.len() >= WIDE_COMPARE_CAP {
+        return false;
+    }
+    // SAFETY: caller's contract guarantees `wide` is u16-aligned
+    // and the buffer is readable for up to WIDE_COMPARE_CAP
+    // units. Loop indices are 0..expected_bytes.len() (< 64),
+    // and the post-loop read at `expected_bytes.len()` is
+    // also < WIDE_COMPARE_CAP — every dereference is in-bounds.
+    unsafe {
+        for (i, &b) in expected_bytes.iter().enumerate() {
+            let c = *wide.add(i);
+            if c == 0 || c != u16::from(b) {
+                return false;
+            }
+        }
+        // The unit immediately after the expected bytes must
+        // be the NUL terminator — otherwise the wide string is
+        // longer than `expected` and the match is a false
+        // positive (e.g. `"ImmersiveColorSetX"` vs the target
+        // `"ImmersiveColorSet"`). Index is at most
+        // `WIDE_COMPARE_CAP - 1` since the length cap above
+        // ensures `expected_bytes.len() < WIDE_COMPARE_CAP`.
+        *wide.add(expected_bytes.len()) == 0
+    }
+}
+
 /// Cached brush for the bottom status strip — see
 /// [`dialog_bg_brush`] for the lifetime rationale.
 fn status_bg_brush() -> HBRUSH {
@@ -12685,6 +12750,58 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 }
                 LRESULT(0)
             }
+            WM_SETTINGCHANGE => {
+                // Windows posts WM_SETTINGCHANGE on system-wide
+                // setting changes. The dark/light theme flip is
+                // identified by `lparam` pointing at the wide
+                // string "ImmersiveColorSet" — match that and
+                // re-broadcast as NPPN_DARKMODECHANGED so plugins
+                // that paint their own chrome can re-read the
+                // system colour state. Other settings (fonts,
+                // accessibility, regional) reach DefWindowProcW
+                // unchanged.
+                //
+                // `lparam` may be NULL — a generic "something
+                // changed" broadcast that does not name a
+                // specific setting key. The wide-string compare
+                // below returns false on NULL, so we naturally
+                // skip those. (The main window is registered
+                // via `RegisterClassExW`, so Windows always
+                // delivers the wide-string flavour — no ANSI /
+                // cross-encoding case to worry about.)
+                //
+                // The `lparam.0 % 2 != 0` guard rejects
+                // misaligned pointers up front — the OS itself
+                // always hands us `u16`-aligned strings, but an
+                // in-process plugin doing
+                // `SendMessage(WM_SETTINGCHANGE, 0, &one_byte)`
+                // could otherwise feed `wide_string_equals` a
+                // misaligned pointer and trigger UB on the
+                // first aligned read. Cheap defense-in-depth.
+                let lp = lparam.0;
+                // SAFETY: enclosing `main_wnd_proc` body is one
+                // big `unsafe { match … }` (windows-rs API
+                // surface). `wide_string_equals` is `unsafe fn`
+                // for u16-alignment + bounded-read contract;
+                // the `lp % 2 == 0` guard above satisfies the
+                // alignment side of the contract, the
+                // `WIDE_COMPARE_CAP = 64` cap inside the helper
+                // satisfies the bounded-read side.
+                if lp != 0
+                    && lp % 2 == 0
+                    && wide_string_equals(lp as *const u16, "ImmersiveColorSet")
+                {
+                    if let Some(state) = state_from_hwnd(hwnd) {
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let _guard = PluginCallGuard::enter();
+                            state
+                                .shell
+                                .notify_plugins(Notification::DarkModeChanged, hwnd.0);
+                        }));
+                    }
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
             WM_TIMER => {
                 // Auto-save tick. `wparam` carries the timer id we
                 // passed to `SetTimer` — gate on it so an unrelated
@@ -13448,5 +13565,71 @@ mod status_bar_format_tests {
         // ~2 GiB — Scintilla's document-size ceiling. The actual
         // upper bound `format_thousands` could see in production.
         assert_eq!(format_thousands(2_147_483_647), "2,147,483,647");
+    }
+}
+
+#[cfg(test)]
+mod wide_string_equals_tests {
+    use super::wide_string_equals;
+
+    fn make_wide(s: &str) -> Vec<u16> {
+        let mut v: Vec<u16> = s.encode_utf16().collect();
+        v.push(0);
+        v
+    }
+
+    #[test]
+    fn null_pointer_returns_false() {
+        // SAFETY: NULL is the documented input — the function
+        // is defensively NULL-safe and short-circuits.
+        assert!(!unsafe { wide_string_equals(core::ptr::null(), "anything") });
+    }
+
+    #[test]
+    fn exact_match_is_true() {
+        let w = make_wide("ImmersiveColorSet");
+        // SAFETY: `w` is a properly-aligned, NUL-terminated
+        // Vec<u16> living for the duration of the call.
+        assert!(unsafe { wide_string_equals(w.as_ptr(), "ImmersiveColorSet") });
+    }
+
+    #[test]
+    fn longer_wide_string_is_false() {
+        // Defensive: "ImmersiveColorSetX" must not match
+        // "ImmersiveColorSet" — the post-prefix NUL check rejects.
+        let w = make_wide("ImmersiveColorSetX");
+        assert!(!unsafe { wide_string_equals(w.as_ptr(), "ImmersiveColorSet") });
+    }
+
+    #[test]
+    fn shorter_wide_string_is_false() {
+        // Wide string is a strict prefix of the expected — the
+        // mid-loop NUL check rejects.
+        let w = make_wide("Immersive");
+        assert!(!unsafe { wide_string_equals(w.as_ptr(), "ImmersiveColorSet") });
+    }
+
+    #[test]
+    fn different_string_is_false() {
+        let w = make_wide("Environment");
+        assert!(!unsafe { wide_string_equals(w.as_ptr(), "ImmersiveColorSet") });
+    }
+
+    #[test]
+    fn empty_wide_against_empty_expected_is_true() {
+        // An empty wide string (just the NUL) matches an empty
+        // expected — the post-prefix check passes immediately.
+        let w = make_wide("");
+        assert!(unsafe { wide_string_equals(w.as_ptr(), "") });
+    }
+
+    #[test]
+    fn non_ascii_expected_is_false() {
+        // The compare path only handles ASCII expected strings —
+        // a multi-byte UTF-8 expected character would compare
+        // byte-by-byte against u16 code units which is wrong.
+        // The fn returns false up front to avoid the trap.
+        let w = make_wide("résumé");
+        assert!(!unsafe { wide_string_equals(w.as_ptr(), "résumé") });
     }
 }
