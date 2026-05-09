@@ -7,6 +7,7 @@
 
 pub mod config;
 pub mod dynlib;
+pub mod host_env;
 pub mod watch;
 
 pub use config::{
@@ -14,4 +15,5 @@ pub use config::{
     plugins_config_dir, plugins_dir, session_xml_path,
 };
 pub use dynlib::{has_plugin_extension, DynLib, PLUGIN_EXTENSION};
+pub use host_env::{program_dir, program_path, windows_version_npp};
 pub use watch::{FileChange, FileWatcher};

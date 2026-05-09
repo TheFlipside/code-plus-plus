@@ -169,10 +169,19 @@
 #define NPPM_SWITCHTOFILE                 (NPPMSG + 37)
 /* v1: save the active buffer. */
 #define NPPM_SAVECURRENTFILE              (NPPMSG + 38)
+/* v2: save every dirty titled buffer in one batch. Untitled tabs
+ *     (no on-disk path) are skipped; per-tab errors are logged but
+ *     don't abort the batch. Returns 1 unconditionally — per-file
+ *     failures surface via the live error UI, not the ABI return. */
 #define NPPM_SAVEALLFILES                 (NPPMSG + 39)
 
 #define NPPM_SETMENUITEMCHECK             (NPPMSG + 40)
 #define NPPM_ADDTOOLBARICON               (NPPMSG + 41)
+/* v1: returns Notepad++'s `winVer` enum value for the running OS
+ *     (... WV_WIN10 = 16, WV_WIN11 = 17). Probed via `RtlGetVersion`
+ *     so the binary doesn't need a manifest declaring Win11 support
+ *     to read the real kernel version. Falls back to `WV_WIN10` if
+ *     the probe fails. */
 #define NPPM_GETWINDOWSVERSION            (NPPMSG + 42)
 #define NPPM_DMMGETPLUGINHWNDBYNAME       (NPPMSG + 43)
 #define NPPM_MAKECURRENTBUFFERDIRTY       (NPPMSG + 44)
@@ -203,10 +212,23 @@
 
 /* Buffer-id queries ------------------------------------------------ */
 
+/* v1: tab-strip position of the buffer whose id is in wParam.
+ *     wParam: buffer id.
+ *     lParam: priority view selector (0 = main, 1 = sub) — advisory
+ *             in single-view Code++; Phase 5 split-view will honour
+ *             it.
+ *     Returns the tab index, with bit 0x40000000 set if the buffer
+ *     lives in the secondary view. -1 if the buffer id is unknown. */
 #define NPPM_GETPOSFROMBUFFERID           (NPPMSG + 57)
 /* v1: lParam (TCHAR*) is filled with the full path of the buffer
  *     whose id is in wParam. */
 #define NPPM_GETFULLPATHFROMBUFFERID      (NPPMSG + 58)
+/* v1: buffer id of the tab at the requested view-relative position.
+ *     wParam: tab position (0-based index into the view's tab list).
+ *     lParam: view selector (0 = main, 1 = sub).
+ *     Returns the buffer id, or 0 (N++'s "no buffer" sentinel) if
+ *     the position is out of range, the view is unknown, or — in
+ *     single-view Code++ — `view == 1`. */
 #define NPPM_GETBUFFERIDFROMPOS           (NPPMSG + 59)
 /* v1: returns the active buffer's id (LRESULT). */
 #define NPPM_GETCURRENTBUFFERID           (NPPMSG + 60)
@@ -280,6 +302,28 @@
 #define NPPM_GETLINENUMBERWIDTHMODE       (NPPMSG + 100)
 #define NPPM_GETBOOKMARKID                (NPPMSG + 101)
 #define NPPM_GETZOOMLEVEL                 (NPPMSG + 102)
+
+/*
+ * RUNCOMMAND_USER family. Notepad++ split a handful of host-state-
+ * as-environment queries (the application's directory, the running
+ * executable's full path, ...) into a separate base at WM_USER+3000
+ * rather than tucking them inside the main NPPMSG range. Code++
+ * mirrors the base value so plugins compiled against the upstream
+ * header reach the right routing.
+ */
+#define RUNCOMMAND_USER                   (WM_USER + 3000)
+/* v1: returns the host's installation directory (the directory
+ *     containing the running executable) into a plugin-allocated
+ *     wide buffer.
+ *     wParam: capacity in TCHARs.
+ *     lParam: TCHAR* OUT.
+ *     Returns 1 on success, 0 on bad arguments or unresolvable
+ *     executable path. */
+#define NPPM_GETNPPDIRECTORY              (RUNCOMMAND_USER + 23)
+/* v1: returns the full path of the running executable (the
+ *     installation directory plus the binary's filename).
+ *     Same wParam/lParam contract as NPPM_GETNPPDIRECTORY. */
+#define NPPM_GETNPPFULLFILEPATH           (RUNCOMMAND_USER + 42)
 
 /*
  * Selectors for NPPM_GETMENUHANDLE — Notepad++ has historically
@@ -429,7 +473,17 @@ typedef enum LangType_ {
 #define NPPN_FILEOPENED            (NPPN_FIRST + 4)
 /* v1: a file was closed. */
 #define NPPN_FILECLOSED            (NPPN_FIRST + 5)
+/* v2: fired before the host begins reading a file from disk.
+ *     Code++'s notifications are queue-deferred — by the time the
+ *     plugin runs, the load is already in flight — but the queue
+ *     ordering matches "BEFORE_OPEN before FILEOPENED" which is
+ *     the contract plugins gate on. Carries no buffer id (the tab
+ *     hasn't been allocated yet); N++ uses the same convention. */
 #define NPPN_FILEBEFOREOPEN        (NPPN_FIRST + 6)
+/* v2: fired before the host writes a buffer to disk. Pairs with
+ *     NPPN_FILESAVED so plugins observing the buffer's pre-save
+ *     state on BEFORE_SAVE can compare against the post-save
+ *     observation on FILESAVED. */
 #define NPPN_FILEBEFORESAVE        (NPPN_FIRST + 7)
 /* v1: a file was saved. */
 #define NPPN_FILESAVED             (NPPN_FIRST + 8)

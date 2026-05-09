@@ -1500,6 +1500,20 @@ impl Shell {
             return;
         }
 
+        // Queue NPPN_FILEBEFOREOPEN before the load is enqueued.
+        // N++'s ABI fires this right before the file is read so
+        // plugins can pre-process / log the open intent — Code++'s
+        // notification model defers delivery, so the plugin runs
+        // after the load is in flight, but the queue ordering still
+        // matches "BEFORE_OPEN before FILEOPENED" which is the
+        // contract plugins read for. Carries no buffer id (the tab
+        // hasn't been allocated yet) — N++ uses the same convention.
+        // Skipped on dedupe (already-open path) above; that's a
+        // tab activation, not a file open.
+        #[cfg(target_os = "windows")]
+        self.pending_notifications
+            .push(Notification::FileBeforeOpen);
+
         let Some(req_id) = self.loader.open(path.clone()) else {
             return;
         };
@@ -1914,14 +1928,39 @@ impl Shell {
 
         // Snapshot what we need from the active tab so we can release
         // its borrow before calling the watcher and the I/O helpers
-        // (which take their own &mut self).
-        let (path, encoding) = {
+        // (which take their own &mut self). `buffer_id` is captured
+        // here too so the `FileBeforeSave` notification below uses
+        // the same id this method's success path also reports
+        // through `FileSaved` — without that, a second `self.active()`
+        // call could in principle produce a different value (e.g. if
+        // the active tab were re-bound between the two reads). The
+        // contract holds today because this method is fully
+        // synchronous on the UI thread, but binding once removes the
+        // implicit invariant.
+        #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+        let (path, encoding, buffer_id) = {
             let tab = self.active().ok_or(ShellError::NoActivePath)?;
             (
                 tab.path.as_ref().ok_or(ShellError::NoActivePath)?.clone(),
                 tab.encoding.clone(),
+                tab.id as isize,
             )
         };
+
+        // Queue NPPN_FILEBEFORESAVE for the loaded plugins. Fired
+        // *before* the encoding pass so plugins observing the
+        // notification still see the buffer in its pre-save state
+        // (relevant for plugins that snapshot the buffer text on
+        // BEFORE_SAVE and compare against FILESAVED). Code++'s
+        // notifications are queue-deferred — by the time the plugin
+        // runs, the save has already happened — but the BEFORE-pair
+        // ordering matches Notepad++'s ABI and lets a future
+        // synchronous-delivery wiring (DESIGN.md §7.4) honour the
+        // contract correctly without rearranging this code.
+        #[cfg(target_os = "windows")]
+        self.pending_notifications
+            .push(Notification::FileBeforeSave { buffer_id });
+
         let text = ui.get_buffer_text();
         let bytes = codepp_core::encoding::encode(&text, &encoding)
             .map_err(|e| ShellError::Encoding(e.to_string()))?;
@@ -1975,12 +2014,14 @@ impl Shell {
         // diagnose. Pushing first means the worst case is "saved
         // file still shows the dirty glyph", which the user can
         // notice and fix with another Ctrl+S.
+        // Reuses the `buffer_id` captured at the top of the method
+        // alongside `path` / `encoding` — pairs with the
+        // `FileBeforeSave` queue push so both notifications agree
+        // on the id even in the edge case where a future refactor
+        // moves the active-tab change inside this method.
         #[cfg(target_os = "windows")]
-        {
-            let buffer_id = self.active().map(|t| t.id as isize).unwrap_or(0);
-            self.pending_notifications
-                .push(Notification::FileSaved { buffer_id });
-        }
+        self.pending_notifications
+            .push(Notification::FileSaved { buffer_id });
 
         // Clear Scintilla's dirty glyph for the just-saved buffer.
         // Done here so every save path (single Save, Save As, the
@@ -3888,6 +3929,52 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     fn set_tabbar_hidden(&mut self, hidden: bool) -> bool {
         self.ui.set_tabbar_hidden(hidden)
     }
+
+    fn save_all_files(&mut self) {
+        // `save_all` returns a Vec of per-tab errors. Each error is
+        // already surfaced via `ShellError`'s display path elsewhere
+        // in the UI; the plugin contract is "always success" so we
+        // discard the per-tab result here. A `tracing::warn!` per
+        // failure matches the same logging cadence the menu-driven
+        // Save All path produces.
+        let errors = self.shell.save_all(self.ui);
+        for (tab_idx, err) in errors {
+            tracing::warn!(tab_idx, error = %err, "plugin-triggered save_all: per-tab failure");
+        }
+    }
+
+    fn program_dir(&self) -> Option<PathBuf> {
+        codepp_platform::program_dir()
+    }
+
+    fn program_path(&self) -> Option<PathBuf> {
+        codepp_platform::program_path()
+    }
+
+    fn windows_version(&self) -> i32 {
+        codepp_platform::windows_version_npp()
+    }
+
+    fn buffer_position(&self, id: isize) -> Option<(i32, i32)> {
+        // Single-view through Phase 4: every known buffer lives in
+        // the primary view (0). Untitled tabs *are* addressable here
+        // — unlike `open_buffer_paths`, the position lookup just
+        // wants a tab index, so the lack of an on-disk path doesn't
+        // exclude the tab.
+        let idx = self.shell.tabs.iter().position(|t| t.id as isize == id)?;
+        Some((0, idx as i32))
+    }
+
+    fn buffer_id_at(&self, view: i32, pos: i32) -> isize {
+        // Single-view: only view 0 has buffers. Out-of-range index
+        // (negative or beyond the open count) returns 0 — N++'s
+        // documented "no buffer" sentinel.
+        if view != 0 || pos < 0 {
+            return 0;
+        }
+        let pos = pos as usize;
+        self.shell.tabs.get(pos).map(|t| t.id as isize).unwrap_or(0)
+    }
 }
 
 /// Spawn a forwarder thread that pumps items from `src` into `dst`
@@ -4897,17 +4984,19 @@ mod tests {
         // the contract is "the active tab's id," not "always 1."
         let expected_id = shell.active().expect("active tab").id as isize;
         let notifications = shell.take_notifications();
-        // A successful open queues NPPN_FILEOPENED followed by
-        // NPPN_BUFFERACTIVATED (matches Notepad++'s canonical
-        // ordering: file-open before buffer-activation on the
-        // same load).
-        assert_eq!(notifications.len(), 2);
+        // A successful open queues, in order: NPPN_FILEBEFOREOPEN
+        // (no buffer id — the tab hasn't been allocated yet),
+        // NPPN_FILEOPENED, then NPPN_BUFFERACTIVATED. Matches
+        // Notepad++'s canonical "BEFORE_OPEN → FILEOPENED →
+        // BUFFERACTIVATED" sequence on the same load.
+        assert_eq!(notifications.len(), 3);
+        assert!(matches!(notifications[0], Notification::FileBeforeOpen));
         assert!(matches!(
-            notifications[0],
+            notifications[1],
             Notification::FileOpened { buffer_id } if buffer_id == expected_id
         ));
         assert!(matches!(
-            notifications[1],
+            notifications[2],
             Notification::BufferActivated { buffer_id } if buffer_id == expected_id
         ));
 
@@ -4945,8 +5034,16 @@ mod tests {
         // Bind the active tab's id rather than asserting the literal.
         let expected_id = shell.active().expect("active tab").id as isize;
         let notifications = shell.take_notifications();
-        assert_eq!(notifications.len(), 1);
+        // BEFORE_SAVE then FILESAVED — N++'s ABI orders the pair so
+        // plugins observing the buffer's pre-save state on
+        // BEFORE_SAVE can compare against the post-save observation
+        // on FILESAVED.
+        assert_eq!(notifications.len(), 2);
         match &notifications[0] {
+            Notification::FileBeforeSave { buffer_id } => assert_eq!(*buffer_id, expected_id),
+            other => panic!("expected FileBeforeSave, got {other:?}"),
+        }
+        match &notifications[1] {
             Notification::FileSaved { buffer_id } => assert_eq!(*buffer_id, expected_id),
             other => panic!("expected FileSaved, got {other:?}"),
         }
@@ -5108,16 +5205,17 @@ mod tests {
 
         let expected_id = shell.active().expect("active tab").id as isize;
         let notifications = shell.take_notifications();
-        // Two queued: FileOpened + BufferActivated, both for the
-        // active tab's id. Order: FileOpened first (queued before
-        // the activate notification in apply_load_result).
-        assert_eq!(notifications.len(), 2);
+        // Three queued: FileBeforeOpen, then FileOpened, then
+        // BufferActivated. Order matches Notepad++'s canonical
+        // pre-load → loaded → activated sequence.
+        assert_eq!(notifications.len(), 3);
+        assert!(matches!(notifications[0], Notification::FileBeforeOpen));
         assert!(matches!(
-            notifications[0],
+            notifications[1],
             Notification::FileOpened { buffer_id } if buffer_id == expected_id
         ));
         assert!(matches!(
-            notifications[1],
+            notifications[2],
             Notification::BufferActivated { buffer_id } if buffer_id == expected_id
         ));
     }

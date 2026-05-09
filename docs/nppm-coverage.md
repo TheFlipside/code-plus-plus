@@ -76,10 +76,10 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_RELOADFILE` | ✅ | v1 | Routes through the same reload path the file-watcher uses; null `lparam` reloads the current buffer. |
 | `NPPM_SWITCHTOFILE` | ✅ | v1 | Activates an already-open path; falls through to `open_file` if the path is not yet a tab. |
 | `NPPM_SAVECURRENTFILE` | ✅ | v1 | Routes through `Shell::save_current_to_disk`. |
-| `NPPM_SAVEALLFILES` | ⚫ | v2 | |
+| `NPPM_SAVEALLFILES` | ✅ | v2 | Routes through `Shell::save_all`. Untitled tabs (no on-disk path) are skipped; per-tab errors are logged but don't abort the batch. Returns 1 unconditionally — per-file failures surface via the live error UI, not the ABI return. |
 | `NPPM_SETMENUITEMCHECK` | 🟡 | v1 | Trace-logged; the full menu set (Edit/Search/View/…) lands in Phase 4, at which point this gets the real `CheckMenuItem` call. |
 | `NPPM_ADDTOOLBARICON` | ⚫ | v2 | |
-| `NPPM_GETWINDOWSVERSION` | 🟡 | v1 | Hardcoded `WV_WIN10 (16)`. Most plugins gate on `>= WV_WIN10`; Phase 4 swaps in `RtlGetVersion`. |
+| `NPPM_GETWINDOWSVERSION` | ✅ | v1 | Probes the running kernel via `ntdll!RtlGetVersion` (the documented escape hatch around `GetVersionEx`'s compat shim) and maps `(major, minor, build)` to N++'s `winVer` enum: Win11 (build ≥ 22000) → 17, Win10 → 16, …, falling back to `WV_WIN10` on probe failure or an unrecognised major.minor. |
 | `NPPM_MAKECURRENTBUFFERDIRTY` | 🟡 | v1 | Tracking lives in Scintilla (`SCI_GETMODIFY`); this currently just trace-logs. Title-bar dirty glyph is a Phase 4 concern. |
 | `NPPM_GETENABLETHEMETEXTUREFUNC` | ⏸ | — | |
 | `NPPM_GETPLUGINSCONFIGDIR` | ✅ | v1 | Wide-path write into the plugin's buffer, capped at `MAX_PATH` TCHARs. |
@@ -87,11 +87,12 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_MENUCOMMAND` | 🟡 | v1 | Trace-logged; the dispatch table for built-in commands (IDM_FILE_OPEN etc.) lands alongside the full menu set in Phase 4. |
 | `NPPM_TRIGGERTABBARCONTEXTMENU` | ⚫ | v3 | |
 | `NPPM_GETNPPVERSION` | ✅ | v1 | Returns `CODEPP_PLUGIN_API_VERSION` (0.1, packed `(major << 16) \| minor`). Deliberately *below* any real Notepad++ release so version-gated N++ features (`if (NPPM_GETNPPVERSION() >= 0x00080000)` and the like) correctly fail their gate checks until Code++ implements those features. |
-| `NPPM_GETNPPDIRECTORY` | ⚫ | v1 | Not yet in `dispatch.rs` constants; needs `HostServices::program_dir`. |
-| `NPPM_GETNPPFULLFILEPATH` | ⚫ | v1 | Not yet in `dispatch.rs` constants; needs `HostServices::program_path`. |
+| `NPPM_GETNPPDIRECTORY` | ✅ | v1 | RUNCOMMAND_USER+23. wParam: capacity in TCHARs. lParam: TCHAR* OUT. Returns 1 on success, 0 on bad args or when `current_exe()` can't be resolved (sandboxed runner, denied `/proc/self/exe`). The dispatcher writes through the same `write_wide_path` helper as the other path-shaped messages — capped at MAX_PATH_TCHARS, NUL-terminated. |
+| `NPPM_GETNPPFULLFILEPATH` | ✅ | v1 | RUNCOMMAND_USER+42. Same wParam/lParam contract as `NPPM_GETNPPDIRECTORY`; writes the full executable path (`<dir>/codepp.exe` on Windows). |
 | `NPPM_HIDETABBAR` | ✅ | v2 | wparam = `BOOL`. Hides/shows the Win32 tab strip via `ShowWindow(SW_HIDE/SHOW)` and triggers an editor-area relayout via `PostMessageW(WM_SIZE)` (deferred so the wnd_proc isn't re-entered while `PluginCallGuard` is active). The Scintilla view fills the freed space when hidden. Returns the previous hidden state — N++'s contract for plugin-detected toggle changes. |
 | `NPPM_ISTABBARHIDDEN` | ✅ | v2 | Returns `BOOL` — current tab-strip hidden state, queried via `IsWindowVisible`. |
-| `NPPM_GETPOSFROMBUFFERID` / `GETBUFFERIDFROMPOS` | ⚫ | v1 | Pending; not yet in `dispatch.rs`. |
+| `NPPM_GETPOSFROMBUFFERID` | ✅ | v1 | wparam = buffer id; lparam = priority view selector (0 = main, 1 = sub) — advisory in single-view Code++ until Phase 5 split-view. Returns the tab index, with bit `0x40000000` set for secondary-view buffers (always clear in Phase 4 single-view). `-1` for unknown id. |
+| `NPPM_GETBUFFERIDFROMPOS` | ✅ | v1 | wparam = tab position; lparam = view selector. Returns the buffer id at that index, or 0 (N++'s "no buffer" sentinel) for an out-of-range index, an unknown view, or — in single-view Code++ — `view == 1`. |
 | `NPPM_GETFULLPATHFROMBUFFERID` | ✅ | v1 | Wide-path write capped at `MAX_PATH_TCHARS` (260); probe call (`lparam == 0`) always returns `MAX_PATH_TCHARS`, never the actual path length, so a plugin can't under-allocate based on the probe and overflow on the second call. |
 | `NPPM_GETCURRENTBUFFERID` | ✅ | v1 | Returns the active tab's `BufferID` (sequential `i32`, base 1). |
 | `NPPM_RELOADBUFFERID` | ✅ | v2 | wparam = buffer id, lparam = `BOOL` "alert before reload". Returns 1 on success, 0 for unknown id or no on-disk path. **Limitation:** `with_alert == true` reloads silently (without the user-confirmation prompt N++ shows), discarding any unsaved in-memory edits. Plugin-author warning: a workflow that relies on the alert to let the user abort (e.g. "discard and reload from VCS") will silently destroy unsaved work in Code++ until the dialog-routing wiring lands; a `tracing::warn!` fires in the host log when this code path is taken. |
@@ -119,9 +120,9 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPN_TBMODIFICATION` | ✅ | v2 | Fired by `PluginHost::load` immediately after `NPPN_READY` for each just-loaded plugin — N++'s "READY then TBMODIFICATION" sequence. Code++ doesn't ship a toolbar yet, so any `NPPM_ADDTOOLBARICON` from inside the handler is currently a no-op (returns 0 with a tracing warn). Firing the notification at the ABI-correct timing means a future toolbar implementation can wire `ADDTOOLBARICON` without breaking plugin-author expectations about ordering. |
 | `NPPN_FILEBEFORECLOSE` | 🟡 | v1 | Fired by `Shell::close_active_tab` ahead of `FILECLOSED` (N++ ordering). **Timing divergence (Phase 5 polish):** Code++'s notifications are queue-deferred — by the time a plugin's `beNotified(NPPN_FILEBEFORECLOSE)` runs, the tab has already been removed from `Shell.tabs`, so a callback into `NPPM_GETFULLPATHFROMBUFFERID(id)` returns -1 (unknown id). N++ delivers this notification synchronously while the buffer is still alive. Plugins that need the path at close time should cache it from the prior BUFFERACTIVATED. Synchronous-delivery wiring is tracked in DESIGN.md §7.4. |
 | `NPPN_FILECLOSED` | ✅ | v1 | Queued by `Shell::close_active_tab` after the data-model snapshot, fired after the `&mut Shell` borrow drops. |
-| `NPPN_FILEBEFOREOPEN` | ⚫ | v2 | |
+| `NPPN_FILEBEFOREOPEN` | ✅ | v2 | Queued by `Shell::open_file` right before the loader is told about the path. Carries no buffer id (the tab hasn't been allocated yet) — N++ uses the same convention. Skipped on the dedupe / activate-existing-tab branch since that's not a fresh open. Same queue-deferral trade-off as `FILEBEFORECLOSE`: by the time the plugin's `beNotified` runs, the load is already in flight; synchronous-delivery wiring is the Phase 5 polish item tracked in DESIGN.md §7.4. |
 | `NPPN_FILEOPENED` | ✅ | v1 | Queued by `Shell::apply_load_result` on first successful load; deferred until after the borrow drops. |
-| `NPPN_FILEBEFORESAVE` | ⚫ | v2 | |
+| `NPPN_FILEBEFORESAVE` | ✅ | v2 | Queued by `Shell::save_current_to_disk` immediately before the encoding pass. Pairs with `FILESAVED` so plugins observing the buffer's pre-save state can compare against the post-save observation. Same queue-deferral note as `FILEBEFOREOPEN`: the save is in flight by the time the plugin runs. |
 | `NPPN_FILESAVED` | ✅ | v1 | Queued by `Shell::save_current_to_disk`. |
 | `NPPN_SHUTDOWN` | ✅ | v1 | Fired by `ui_win32`'s `WM_DESTROY` handler before unload. |
 | `NPPN_BUFFERACTIVATED` | ✅ | v1 | Queued on tab open, tab switch, tab close (when the new active tab differs), and `NPPM_SWITCHTOFILE` to a different open tab. Switch-to-already-active is suppressed. |

@@ -32,6 +32,7 @@ use codepp_editor::EditorHandle;
 use codepp_plugin_host::ffi::SCNotification;
 use codepp_plugin_host::{
     Notification, NppData, PluginAdminEntry, NPPMSG, NPPMSG_RANGE, PLUGIN_CMD_ID_BASE,
+    RUNCOMMAND_RANGE, RUNCOMMAND_USER,
 };
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_C_CHARACTER, SCE_C_COMMENT,
@@ -11599,12 +11600,17 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
             // return `None` and we fall through to the default
             // handler.
             //
-            // The range guard here matches the dispatcher's own
-            // (NPPMSG..NPPMSG+200). Pre-filtering at the wnd_proc
-            // layer keeps `dispatch_plugin_message` (and the
-            // `state_from_hwnd` traversal it requires) off the hot
-            // path for every non-plugin WM_USER message.
-            m if (NPPMSG..NPPMSG + NPPMSG_RANGE).contains(&m) => {
+            // The range guard here matches the dispatcher's two
+            // ranges: NPPMSG..NPPMSG+200 for the mainline NPPM_*
+            // family, and RUNCOMMAND_USER..+100 for the handful of
+            // host-environment queries (`NPPM_GETNPPDIRECTORY`,
+            // `NPPM_GETNPPFULLFILEPATH`). Pre-filtering at the
+            // wnd_proc layer keeps `dispatch_plugin_message` (and
+            // the `state_from_hwnd` traversal it requires) off the
+            // hot path for every non-plugin WM_USER message.
+            m if (NPPMSG..NPPMSG + NPPMSG_RANGE).contains(&m)
+                || (RUNCOMMAND_USER..RUNCOMMAND_USER + RUNCOMMAND_RANGE).contains(&m) =>
+            {
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let handles = state.host_handles(hwnd);
                     let (shell, mut ui) = state.split();

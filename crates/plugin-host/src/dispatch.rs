@@ -47,6 +47,21 @@ pub const NPPMSG: u32 = WM_USER + 1000;
 /// is otherwise a footgun when the bound is bumped.
 pub const NPPMSG_RANGE: u32 = 200;
 
+/// Notepad++ split a handful of "host-state-as-environment" queries
+/// (the application's own directory, the running executable's full
+/// path, …) into a separate `RUNCOMMAND_USER` family at
+/// `WM_USER + 3000` rather than tucking them inside the main NPPM
+/// range. Mirroring the same base value is the only way plugins
+/// compiled against the upstream header hit the right wParam → host
+/// route.
+pub const RUNCOMMAND_USER: u32 = WM_USER + 3000;
+
+/// Width of the RUNCOMMAND_USER range the dispatcher claims.
+/// Upstream tops out at +49 today; +100 gives parallel headroom to
+/// `NPPMSG_RANGE`. Same wnd_proc-pre-filter / dispatcher-internal
+/// constraint applies — keep the two range checks in sync.
+pub const RUNCOMMAND_RANGE: u32 = 100;
+
 // --- v1 NPPM_* set ---------------------------------------------------
 
 pub const NPPM_GETCURRENTSCINTILLA: u32 = NPPMSG + 4;
@@ -70,6 +85,7 @@ pub const NPPM_LAUNCHFINDINFILESDLG: u32 = NPPMSG + 29;
 pub const NPPM_RELOADFILE: u32 = NPPMSG + 36;
 pub const NPPM_SWITCHTOFILE: u32 = NPPMSG + 37;
 pub const NPPM_SAVECURRENTFILE: u32 = NPPMSG + 38;
+pub const NPPM_SAVEALLFILES: u32 = NPPMSG + 39;
 pub const NPPM_SETMENUITEMCHECK: u32 = NPPMSG + 40;
 pub const NPPM_GETWINDOWSVERSION: u32 = NPPMSG + 42;
 pub const NPPM_MAKECURRENTBUFFERDIRTY: u32 = NPPMSG + 44;
@@ -78,7 +94,9 @@ pub const NPPM_MENUCOMMAND: u32 = NPPMSG + 48;
 pub const NPPM_GETNPPVERSION: u32 = NPPMSG + 50;
 pub const NPPM_HIDETABBAR: u32 = NPPMSG + 51;
 pub const NPPM_ISTABBARHIDDEN: u32 = NPPMSG + 52;
+pub const NPPM_GETPOSFROMBUFFERID: u32 = NPPMSG + 57;
 pub const NPPM_GETFULLPATHFROMBUFFERID: u32 = NPPMSG + 58;
+pub const NPPM_GETBUFFERIDFROMPOS: u32 = NPPMSG + 59;
 pub const NPPM_GETCURRENTBUFFERID: u32 = NPPMSG + 60;
 pub const NPPM_RELOADBUFFERID: u32 = NPPMSG + 61;
 pub const NPPM_GETBUFFERLANGTYPE: u32 = NPPMSG + 64;
@@ -90,6 +108,20 @@ pub const NPPM_SETBUFFERFORMAT: u32 = NPPMSG + 69;
 pub const NPPM_DOOPEN: u32 = NPPMSG + 77;
 pub const NPPM_GETLANGUAGENAME: u32 = NPPMSG + 83;
 pub const NPPM_GETLANGUAGEDESC: u32 = NPPMSG + 84;
+
+/// `RUNCOMMAND_USER` family — see [`RUNCOMMAND_USER`].
+///
+/// Returns the host's installation directory (the one containing
+/// the running executable) into a plugin-allocated wide buffer.
+/// `wparam` carries the buffer capacity in TCHARs; `lparam` the
+/// `TCHAR*` OUT pointer. Returns 1 on success, 0 on bad arguments
+/// or unresolvable executable path.
+pub const NPPM_GETNPPDIRECTORY: u32 = RUNCOMMAND_USER + 23;
+/// Returns the full path of the running executable (the
+/// installation directory plus `code++.exe` filename) into a
+/// plugin-allocated wide buffer. Same wparam/lparam contract as
+/// `NPPM_GETNPPDIRECTORY`.
+pub const NPPM_GETNPPFULLFILEPATH: u32 = RUNCOMMAND_USER + 42;
 
 /// Selectors for [`NPPM_GETMENUHANDLE`].
 pub const NPPPLUGINMENU: i32 = 0;
@@ -137,6 +169,8 @@ pub const NPPN_TBMODIFICATION: u32 = NPPN_FIRST + 2;
 pub const NPPN_FILEBEFORECLOSE: u32 = NPPN_FIRST + 3;
 pub const NPPN_FILEOPENED: u32 = NPPN_FIRST + 4;
 pub const NPPN_FILECLOSED: u32 = NPPN_FIRST + 5;
+pub const NPPN_FILEBEFOREOPEN: u32 = NPPN_FIRST + 6;
+pub const NPPN_FILEBEFORESAVE: u32 = NPPN_FIRST + 7;
 pub const NPPN_FILESAVED: u32 = NPPN_FIRST + 8;
 pub const NPPN_SHUTDOWN: u32 = NPPN_FIRST + 9;
 pub const NPPN_BUFFERACTIVATED: u32 = NPPN_FIRST + 10;
@@ -173,10 +207,24 @@ pub enum Notification {
     FileBeforeClose {
         buffer_id: isize,
     },
+    /// Plugins about to be told a file is being opened. Fired before
+    /// `Shell` even attempts disk I/O — useful for plugins wanting to
+    /// veto / pre-process based on path. Code++ does not honour a
+    /// veto (deferred-queue model means the open is in flight by
+    /// the time the plugin runs); the notification is informational
+    /// only. Carries a buffer id of 0 because the buffer hasn't
+    /// been allocated yet — N++ uses the same convention.
+    FileBeforeOpen,
     FileOpened {
         buffer_id: isize,
     },
     FileClosed {
+        buffer_id: isize,
+    },
+    /// Plugins about to be told a file is being saved. Fired right
+    /// before the host writes the buffer text to disk — paired with
+    /// `FileSaved` for the post-write notification.
+    FileBeforeSave {
         buffer_id: isize,
     },
     FileSaved {
@@ -198,8 +246,10 @@ impl Notification {
             Self::Ready => NPPN_READY,
             Self::TbModification => NPPN_TBMODIFICATION,
             Self::FileBeforeClose { .. } => NPPN_FILEBEFORECLOSE,
+            Self::FileBeforeOpen => NPPN_FILEBEFOREOPEN,
             Self::FileOpened { .. } => NPPN_FILEOPENED,
             Self::FileClosed { .. } => NPPN_FILECLOSED,
+            Self::FileBeforeSave { .. } => NPPN_FILEBEFORESAVE,
             Self::FileSaved { .. } => NPPN_FILESAVED,
             Self::BufferActivated { .. } => NPPN_BUFFERACTIVATED,
             Self::LangChanged { .. } => NPPN_LANGCHANGED,
@@ -212,10 +262,11 @@ impl Notification {
             Self::FileBeforeClose { buffer_id }
             | Self::FileOpened { buffer_id }
             | Self::FileClosed { buffer_id }
+            | Self::FileBeforeSave { buffer_id }
             | Self::FileSaved { buffer_id }
             | Self::BufferActivated { buffer_id }
             | Self::LangChanged { buffer_id } => *buffer_id,
-            Self::Ready | Self::TbModification | Self::Shutdown => 0,
+            Self::Ready | Self::TbModification | Self::FileBeforeOpen | Self::Shutdown => 0,
         }
     }
 }
@@ -467,6 +518,49 @@ pub trait HostServices {
     /// guard). The previous-state return is the sole signal to
     /// the plugin.
     fn set_tabbar_hidden(&mut self, hidden: bool) -> bool;
+
+    /// Save every dirty titled tab to disk in one batch. Drives
+    /// [`NPPM_SAVEALLFILES`]; matches `Shell::save_all`'s contract:
+    /// untitled tabs are skipped (no on-disk path to save to);
+    /// per-tab errors are logged but do not abort the batch. The
+    /// dispatcher returns 1 unconditionally — N++'s ABI documents
+    /// the return as "always TRUE" because the per-file failure
+    /// mode is reported via the live error UI, not the message
+    /// return.
+    fn save_all_files(&mut self);
+
+    /// Directory containing the host executable — drives
+    /// [`NPPM_GETNPPDIRECTORY`]. Returns `None` when the running
+    /// binary's path can't be resolved (sandboxed runners,
+    /// `/proc/self/exe` denied, …); the dispatcher then reports
+    /// failure to the plugin rather than handing back a guessed
+    /// path.
+    fn program_dir(&self) -> Option<PathBuf>;
+
+    /// Full path of the running executable — drives
+    /// [`NPPM_GETNPPFULLFILEPATH`]. Same `None` semantics as
+    /// [`Self::program_dir`].
+    fn program_path(&self) -> Option<PathBuf>;
+
+    /// Notepad++'s `winVer` enum value for the current OS. Drives
+    /// [`NPPM_GETWINDOWSVERSION`]. The dispatcher trusts the impl to
+    /// stay within the canonical N++ enum (… `WV_WIN10 = 16`,
+    /// `WV_WIN11 = 17`, …) so plugins gating on `>= WV_WIN10`
+    /// behave the same as in N++.
+    fn windows_version(&self) -> i32;
+
+    /// Tab-strip position of the buffer with id `id`. Returns
+    /// `Some((view, idx))` when the buffer exists, `None`
+    /// otherwise. Drives [`NPPM_GETPOSFROMBUFFERID`]; the
+    /// dispatcher is responsible for the `(idx | view_bit)`
+    /// encoding the N++ ABI documents.
+    fn buffer_position(&self, id: isize) -> Option<(i32, i32)>;
+
+    /// Buffer id of the tab at index `pos` in `view`. Returns 0
+    /// for an out-of-range index, an unknown view, or — in
+    /// single-view Code++ — `view == 1`. Drives
+    /// [`NPPM_GETBUFFERIDFROMPOS`].
+    fn buffer_id_at(&self, view: i32, pos: i32) -> isize;
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -494,12 +588,16 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
     wparam: usize,
     lparam: isize,
 ) -> Option<isize> {
-    // Stay inside a generous NPPM_* range; out-of-range falls back to
-    // the default wnd_proc so non-plugin WM_USER+N messages from the
-    // host's own UI continue to dispatch normally. See `NPPMSG_RANGE`
-    // for the bound's rationale and the wnd_proc pre-filter that
-    // shares the same constant.
-    if !(NPPMSG..NPPMSG + NPPMSG_RANGE).contains(&msg) {
+    // Stay inside the two ranges N++ owns: NPPMSG_RANGE for the
+    // mainline NPPM_* family (NPPMSG..NPPMSG+200) and the
+    // RUNCOMMAND_USER family (WM_USER+3000..+3100) for the handful of
+    // host-environment queries — `NPPM_GETNPPDIRECTORY`,
+    // `NPPM_GETNPPFULLFILEPATH`. Out-of-range falls back to the
+    // default wnd_proc so non-plugin WM_USER+N messages from the
+    // host's own UI continue to dispatch normally.
+    let in_nppm = (NPPMSG..NPPMSG + NPPMSG_RANGE).contains(&msg);
+    let in_runcmd = (RUNCOMMAND_USER..RUNCOMMAND_USER + RUNCOMMAND_RANGE).contains(&msg);
+    if !in_nppm && !in_runcmd {
         return None;
     }
 
@@ -710,18 +808,67 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             1
         }
 
+        NPPM_SAVEALLFILES => {
+            // No args. Saves every dirty titled buffer. Untitled
+            // tabs (no on-disk path) are skipped; per-tab errors
+            // are logged but don't abort the batch — same contract
+            // as `Shell::save_all`. Always reports success: per-
+            // file failures surface via the live error UI, not the
+            // ABI return.
+            services.save_all_files();
+            1
+        }
+
+        NPPM_GETPOSFROMBUFFERID => {
+            // wparam: buffer id. lparam: priority view selector
+            // (0 = main, 1 = sub) — currently advisory in single-
+            // view Code++; the impl always returns the position in
+            // the primary view. Returns the tab index, with the
+            // 0x40000000 bit set if the buffer lives in the
+            // secondary view (always clear in Phase 4 single-view).
+            // Returns -1 if the buffer doesn't exist anywhere.
+            let id = wparam as isize;
+            match services.buffer_position(id) {
+                Some((view, idx)) => {
+                    // N++'s ABI: bit 0x40000000 means "secondary
+                    // view"; lower bits are the tab index. Plugins
+                    // mask the view bit then read the index.
+                    let view_bit = if view == 1 { 0x4000_0000_isize } else { 0 };
+                    (idx as isize) | view_bit
+                }
+                None => -1,
+            }
+        }
+
+        NPPM_GETBUFFERIDFROMPOS => {
+            // wparam: tab position. lparam: view selector
+            // (0 = main, 1 = sub). Returns the buffer id, or 0
+            // for an out-of-range index, an unknown view, or
+            // (in single-view Code++) `view == 1`.
+            //
+            // `wparam as i32` truncates the upper bits; positions
+            // are bounded by the open-files count, well below
+            // i32::MAX, so no real plugin sends a wparam that
+            // would suffer from the truncation.
+            let view = lparam as i32;
+            let pos = wparam as i32;
+            services.buffer_id_at(view, pos)
+        }
+
         NPPM_SETMENUITEMCHECK => {
             services.set_menu_item_check(wparam as i32, lparam != 0);
             1
         }
 
         NPPM_GETWINDOWSVERSION => {
-            // Notepad++'s `winVer` enum has `WV_WIN10 = 16`,
-            // `WV_WIN11 = 17`. Code++ doesn't yet sniff the OS
-            // version; reporting WV_WIN10 keeps plugins that gate on
-            // `>= WV_WIN10` happy without claiming features we don't
-            // probe. Phase 4 may upgrade this via RtlGetVersion.
-            16
+            // Notepad++'s `winVer` enum maps Windows release codes
+            // (… `WV_WIN10 = 16`, `WV_WIN11 = 17`). The shell-side
+            // impl probes the running kernel via `RtlGetVersion` and
+            // returns the matching enum value; failures fall back to
+            // `WV_WIN10` (16) so plugins gating on `>= WV_WIN10`
+            // continue to work in environments where the version
+            // probe is unavailable.
+            services.windows_version() as isize
         }
 
         NPPM_MAKECURRENTBUFFERDIRTY => {
@@ -963,6 +1110,35 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             write_lang_string_with_probe(services.language_desc(wparam as i32), lparam)
         }
 
+        // RUNCOMMAND_USER family. The two host-environment queries
+        // share an out-buffer protocol: wparam = capacity in TCHARs,
+        // lparam = TCHAR* OUT. Bad pointer / zero capacity returns 0
+        // (failure); successful write returns 1.
+        NPPM_GETNPPDIRECTORY | NPPM_GETNPPFULLFILEPATH => {
+            if lparam == 0 || wparam == 0 {
+                return Some(0);
+            }
+            let resolved = if msg == NPPM_GETNPPDIRECTORY {
+                services.program_dir()
+            } else {
+                services.program_path()
+            };
+            let Some(path) = resolved else {
+                // Couldn't probe `current_exe()` at all (sandboxed
+                // runner, denied `/proc/self/exe`, …). Report
+                // failure rather than handing back a guessed path.
+                return Some(0);
+            };
+            let cap = wparam.min(MAX_PATH_TCHARS);
+            // SAFETY: plugin promises lparam points to a wide buffer
+            // of at least `wparam` TCHARs (we further cap at
+            // MAX_PATH_TCHARS).
+            unsafe {
+                write_wide_path(lparam as *mut u16, cap, &path);
+            }
+            1
+        }
+
         // Known NPPM_* range, but no v1 implementation. Plugins that
         // depend on the real semantics of these messages will see
         // sensible defaults (zero) and a log entry.
@@ -1140,6 +1316,17 @@ mod tests {
         /// Per-buffer EOL format (EolType integer). Same lookup
         /// shape as `buffer_encodings`.
         buffer_formats: Vec<(isize, i32)>,
+        /// Where the host program reports its install dir from. Set
+        /// to a known path so the dispatcher tests can assert against
+        /// the wide-string write without needing a real
+        /// `current_exe()` resolution.
+        program_dir: Option<PathBuf>,
+        program_path: Option<PathBuf>,
+        /// `winVer` enum value to report from `windows_version`.
+        /// Defaults to `0` so a test that doesn't care about the
+        /// upgraded WV path gets a deterministic, distinct-from-
+        /// production-default value.
+        windows_version: i32,
         // recorded mutations
         log: RefCell<Vec<String>>,
     }
@@ -1361,6 +1548,49 @@ mod tests {
             self.tabbar_hidden = hidden;
             self.record(format!("set_tabbar_hidden({hidden})"));
             prev
+        }
+        fn save_all_files(&mut self) {
+            self.record("save_all");
+        }
+        fn program_dir(&self) -> Option<PathBuf> {
+            self.program_dir.clone()
+        }
+        fn program_path(&self) -> Option<PathBuf> {
+            self.program_path.clone()
+        }
+        fn windows_version(&self) -> i32 {
+            self.windows_version
+        }
+        fn buffer_position(&self, id: isize) -> Option<(i32, i32)> {
+            // Mirror the production HostBridge: tab position is the
+            // index in `open_files_primary` of the path bound to
+            // `id` via `buffer_paths`. Untitled tabs (no path) are
+            // therefore not addressable here, same as production.
+            let path = self
+                .buffer_paths
+                .iter()
+                .find(|(i, _)| *i == id)
+                .map(|(_, p)| p.clone())?;
+            self.open_files_primary
+                .iter()
+                .position(|p| p == &path)
+                .map(|idx| (0, idx as i32))
+        }
+        fn buffer_id_at(&self, view: i32, pos: i32) -> isize {
+            // Single-view: only view 0 yields a valid id. Out-of-
+            // range index returns 0 (N++'s "no buffer" sentinel).
+            if view != 0 || pos < 0 {
+                return 0;
+            }
+            let pos = pos as usize;
+            let Some(path) = self.open_files_primary.get(pos) else {
+                return 0;
+            };
+            self.buffer_paths
+                .iter()
+                .find(|(_, p)| p == path)
+                .map(|(i, _)| *i)
+                .unwrap_or(0)
         }
     }
 
@@ -2254,5 +2484,184 @@ mod tests {
         let r = unsafe { dispatch_nppm(&mut s, NPPM_HIDETABBAR, 0, 0) };
         assert_eq!(r, Some(1));
         assert!(!s.tabbar_hidden);
+    }
+
+    // --- NPPM_SAVEALLFILES, NPPM_GETPOSFROMBUFFERID,
+    //     NPPM_GETBUFFERIDFROMPOS, NPPM_GETWINDOWSVERSION,
+    //     NPPM_GETNPPDIRECTORY, NPPM_GETNPPFULLFILEPATH ---
+
+    #[test]
+    fn save_all_files_dispatches_to_services() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVEALLFILES, 0, 0) };
+        assert_eq!(r, Some(1));
+        assert_eq!(s.calls(), vec!["save_all"]);
+    }
+
+    #[test]
+    fn pos_from_buffer_id_returns_index_when_known() {
+        let mut s = MockServices {
+            buffer_paths: vec![
+                (7, PathBuf::from("D:/a.txt")),
+                (8, PathBuf::from("D:/b.txt")),
+            ],
+            open_files_primary: vec![PathBuf::from("D:/a.txt"), PathBuf::from("D:/b.txt")],
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETPOSFROMBUFFERID, 7, 0) };
+        assert_eq!(r, Some(0));
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETPOSFROMBUFFERID, 8, 0) };
+        assert_eq!(r, Some(1));
+    }
+
+    #[test]
+    fn pos_from_buffer_id_unknown_returns_minus_one() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETPOSFROMBUFFERID, 999, 0) };
+        assert_eq!(r, Some(-1));
+    }
+
+    #[test]
+    fn buffer_id_from_pos_returns_id_when_in_range() {
+        let mut s = MockServices {
+            buffer_paths: vec![
+                (7, PathBuf::from("D:/a.txt")),
+                (8, PathBuf::from("D:/b.txt")),
+            ],
+            open_files_primary: vec![PathBuf::from("D:/a.txt"), PathBuf::from("D:/b.txt")],
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERIDFROMPOS, 0, 0) };
+        assert_eq!(r, Some(7));
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERIDFROMPOS, 1, 0) };
+        assert_eq!(r, Some(8));
+    }
+
+    #[test]
+    fn buffer_id_from_pos_out_of_range_returns_zero() {
+        let mut s = MockServices {
+            buffer_paths: vec![(7, PathBuf::from("D:/a.txt"))],
+            open_files_primary: vec![PathBuf::from("D:/a.txt")],
+            ..Default::default()
+        };
+        // pos beyond the open count.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERIDFROMPOS, 99, 0) };
+        assert_eq!(r, Some(0));
+        // Secondary view in single-view Code++.
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETBUFFERIDFROMPOS, 0, 1) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn windows_version_passes_through() {
+        // 17 is N++'s `WV_WIN11`; the dispatcher returns whatever the
+        // impl reports without re-mapping.
+        let mut s = MockServices {
+            windows_version: 17,
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETWINDOWSVERSION, 0, 0) };
+        assert_eq!(r, Some(17));
+    }
+
+    #[test]
+    fn npp_directory_writes_wide_path_and_returns_one() {
+        let mut s = MockServices {
+            program_dir: Some(PathBuf::from("C:/Program Files/Code++")),
+            ..Default::default()
+        };
+        let mut buf = vec![0u16; MAX_PATH_TCHARS];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETNPPDIRECTORY,
+                MAX_PATH_TCHARS,
+                buf.as_mut_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        // Find the NUL and decode the prefix.
+        let nul = buf.iter().position(|&u| u == 0).unwrap();
+        let s = String::from_utf16(&buf[..nul]).unwrap();
+        assert_eq!(s, "C:/Program Files/Code++");
+    }
+
+    #[test]
+    fn npp_directory_zero_capacity_returns_zero() {
+        let mut s = MockServices {
+            program_dir: Some(PathBuf::from("C:/Program Files/Code++")),
+            ..Default::default()
+        };
+        let mut buf = vec![0u16; MAX_PATH_TCHARS];
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_GETNPPDIRECTORY, 0, buf.as_mut_ptr() as isize) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn npp_directory_null_pointer_returns_zero() {
+        let mut s = MockServices {
+            program_dir: Some(PathBuf::from("C:/Program Files/Code++")),
+            ..Default::default()
+        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_GETNPPDIRECTORY, MAX_PATH_TCHARS, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn npp_directory_unresolvable_returns_zero() {
+        // Sandboxed runner: program_dir is None.
+        let mut s = MockServices::default();
+        let mut buf = vec![0u16; MAX_PATH_TCHARS];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETNPPDIRECTORY,
+                MAX_PATH_TCHARS,
+                buf.as_mut_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn npp_full_file_path_writes_wide_path_and_returns_one() {
+        let mut s = MockServices {
+            program_path: Some(PathBuf::from("C:/Program Files/Code++/codepp.exe")),
+            ..Default::default()
+        };
+        let mut buf = vec![0u16; MAX_PATH_TCHARS];
+        let r = unsafe {
+            dispatch_nppm(
+                &mut s,
+                NPPM_GETNPPFULLFILEPATH,
+                MAX_PATH_TCHARS,
+                buf.as_mut_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        let nul = buf.iter().position(|&u| u == 0).unwrap();
+        let s = String::from_utf16(&buf[..nul]).unwrap();
+        assert_eq!(s, "C:/Program Files/Code++/codepp.exe");
+    }
+
+    #[test]
+    fn runcmd_range_falls_through_for_unknown_offset() {
+        // RUNCOMMAND_USER + 1 is in-range but unmapped — the
+        // dispatcher's match-arm fallthrough hits the catch-all and
+        // returns Some(0). (The catch-all branch is shared with the
+        // NPPMSG family's "unhandled" arm.)
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, RUNCOMMAND_USER + 1, 0, 0) };
+        assert_eq!(r, Some(0));
+    }
+
+    #[test]
+    fn runcmd_out_of_range_returns_none() {
+        // Outside both ranges — falls through to the default
+        // wnd_proc per the dispatcher's contract.
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, RUNCOMMAND_USER + RUNCOMMAND_RANGE + 1, 0, 0) };
+        assert!(r.is_none());
     }
 }
