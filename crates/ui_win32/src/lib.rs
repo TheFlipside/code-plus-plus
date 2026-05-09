@@ -8143,6 +8143,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                         cursor,
                         encoding,
                         eol,
+                        backup_modified_externally,
                     } => {
                         // `restore_untitled_with_text` needs a
                         // `&mut UiPlatform` to allocate the Scintilla
@@ -8159,6 +8160,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                             cursor,
                             encoding,
                             eol,
+                            backup_modified_externally,
                         );
                     }
                     SessionRestoreEntry::DirtyFromBackup {
@@ -8168,17 +8170,21 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                         encoding,
                         eol,
                         disk_changed_externally,
+                        backup_modified_externally,
                     } => {
                         // Same shape as the Untitled branch: split
                         // off a UiPlatform handle, seed the new
                         // tab with the backup text, leave the
                         // buffer dirty so the user sees the
-                        // unsaved-edits glyph. The
-                        // `disk_changed_externally` flag triggers
-                        // an external-edit reload prompt via
+                        // unsaved-edits glyph. The two flags
+                        // route independent warnings through
                         // `Shell.deferred_dialogs` →
                         // `Shell::drain` on the next pump
-                        // iteration.
+                        // iteration: `disk_changed_externally`
+                        // triggers a reload prompt; the new
+                        // `backup_modified_externally` triggers
+                        // an Error dialog when the recovery file
+                        // itself was edited.
                         let (shell, mut ui) = state.split();
                         shell.restore_dirty_with_text(
                             &mut ui,
@@ -8188,6 +8194,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                             encoding,
                             eol,
                             disk_changed_externally,
+                            backup_modified_externally,
                         );
                     }
                 }

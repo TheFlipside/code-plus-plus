@@ -339,6 +339,14 @@ pub enum SessionRestoreEntry {
         encoding: Encoding,
         /// EOL style the buffer would target on first save.
         eol: Eol,
+        /// `true` iff the backup file's mtime is meaningfully
+        /// later than the timestamp embedded in its filename —
+        /// i.e. another program edited the recovery file between
+        /// our last save and this restore. The buffer still
+        /// shows the (modified) content, but the user gets a
+        /// `PendingDialog::Error` so they're not silently
+        /// presented with text they didn't type.
+        backup_modified_externally: bool,
     },
     /// Re-create a tab that was bound to `path` but had unsaved
     /// edits at session-save time. The tab opens with `path`
@@ -369,6 +377,15 @@ pub enum SessionRestoreEntry {
         /// overlay). Without this signal the user's first save
         /// would silently overwrite the external edit.
         disk_changed_externally: bool,
+        /// `true` iff the backup file *itself* was modified by
+        /// another program (mtime later than the timestamp in
+        /// its filename). Independent of `disk_changed_externally`
+        /// — both can fire for the same tab if both the on-disk
+        /// file *and* the recovery file were touched while the
+        /// app was dead. Surfaces a separate
+        /// `PendingDialog::Error` so the user knows the buffer
+        /// content shown isn't the one they typed.
+        backup_modified_externally: bool,
     },
 }
 
@@ -2491,6 +2508,11 @@ impl Shell {
                             }
                         }
                     });
+                // Capture the backup's filename for the mtime check
+                // below — `backup_loaded` carries the *absolute*
+                // path; the filename portion is what
+                // `parse_backup_timestamp` operates on.
+                let backup_filename = t.backup.clone();
                 if let Some(path) = &t.path {
                     if let Some((text, backup_path)) = backup_loaded {
                         // Detect external edits during the
@@ -2505,6 +2527,14 @@ impl Shell {
                         // (dropping the backup overlay).
                         let disk_changed_externally =
                             is_disk_newer_than_backup(path, &backup_path);
+                        // Independent: did *the backup itself*
+                        // get edited? Compares the file's mtime
+                        // against the timestamp encoded in its
+                        // filename.
+                        let backup_modified_externally = backup_filename
+                            .as_deref()
+                            .map(|name| is_backup_modified_externally(&backup_path, name))
+                            .unwrap_or(false);
                         Some(SessionRestoreEntry::DirtyFromBackup {
                             path: path.clone(),
                             text,
@@ -2512,6 +2542,7 @@ impl Shell {
                             encoding: t.encoding.clone(),
                             eol: t.eol,
                             disk_changed_externally,
+                            backup_modified_externally,
                         })
                     } else {
                         Some(SessionRestoreEntry::OpenFile(path.clone()))
@@ -2523,12 +2554,19 @@ impl Shell {
                     // a corrupt session entry (`None`-`None`) that
                     // we skip rather than restoring as an empty
                     // tab.
-                    backup_loaded.map(|(text, _)| SessionRestoreEntry::UntitledFromBackup {
-                        untitled_seq: t.untitled_seq,
-                        text,
-                        cursor: t.cursor,
-                        encoding: t.encoding.clone(),
-                        eol: t.eol,
+                    backup_loaded.map(|(text, backup_path)| {
+                        let backup_modified_externally = backup_filename
+                            .as_deref()
+                            .map(|name| is_backup_modified_externally(&backup_path, name))
+                            .unwrap_or(false);
+                        SessionRestoreEntry::UntitledFromBackup {
+                            untitled_seq: t.untitled_seq,
+                            text,
+                            cursor: t.cursor,
+                            encoding: t.encoding.clone(),
+                            eol: t.eol,
+                            backup_modified_externally,
+                        }
                     })
                 }
             })
@@ -2567,6 +2605,11 @@ impl Shell {
     ///
     /// Used by the UI's session-restore loop. Returns the new tab's
     /// index in `self.tabs`.
+    // Seven parameters is over the clippy default. They model one
+    // logical thing (an untitled tab being restored from backup);
+    // bundling into a struct would just shuffle the noise since
+    // they're consumed once.
+    #[allow(clippy::too_many_arguments)]
     pub fn restore_untitled_with_text<U: UiPlatform>(
         &mut self,
         ui: &mut U,
@@ -2575,6 +2618,7 @@ impl Shell {
         cursor: u64,
         encoding: Encoding,
         eol: Eol,
+        backup_modified_externally: bool,
     ) -> usize {
         let id = self.allocate_buffer_id();
         let new_idx = self.tabs.len();
@@ -2608,6 +2652,28 @@ impl Shell {
         // (backup-)disk, even though there's no real file path.
         ui.mark_saved();
         ui.update_status(codepp_core::lang::L_TEXT, &encoding, eol, byte_len);
+        // External-edit detection on the backup file itself. If
+        // another program touched the recovery file between our
+        // last save and this restore, the buffer content the
+        // user is now looking at isn't what they typed — they
+        // need to know.
+        if backup_modified_externally {
+            let label = untitled_seq
+                .map(|n| format!("new {n}"))
+                .unwrap_or_else(|| format!("untitled-{}", self.tabs[new_idx].id));
+            tracing::warn!(
+                untitled = %label,
+                "backup file modified externally; surfacing warning",
+            );
+            self.deferred_dialogs.push(PendingDialog::Error {
+                title: "Backup modified externally".to_string(),
+                message: format!(
+                    "The recovery file for unsaved buffer '{label}' was changed by another \
+                     program since Code++ last saved. The content shown is the modified \
+                     version — save it (File → Save As) if you want to keep it.",
+                ),
+            });
+        }
         new_idx
     }
 
@@ -2649,6 +2715,7 @@ impl Shell {
         encoding: Encoding,
         eol: Eol,
         disk_changed_externally: bool,
+        backup_modified_externally: bool,
     ) -> usize {
         let id = self.allocate_buffer_id();
         let new_idx = self.tabs.len();
@@ -2705,7 +2772,33 @@ impl Shell {
                 "on-disk file modified during recovery window; queuing reload prompt",
             );
             self.deferred_dialogs
-                .push(PendingDialog::ConfirmReload(path));
+                .push(PendingDialog::ConfirmReload(path.clone()));
+        }
+        // Independent: did the *backup file itself* get edited?
+        // Even if `disk_changed_externally` already prompted, the
+        // user might pick "No, keep my edits" — in which case
+        // they need to know the backup overlay isn't necessarily
+        // their own work. One Error dialog per case so the
+        // user's mental model of which file changed how stays
+        // accurate.
+        if backup_modified_externally {
+            let label = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            tracing::warn!(
+                path = ?path,
+                "backup file modified externally; surfacing warning",
+            );
+            self.deferred_dialogs.push(PendingDialog::Error {
+                title: "Backup modified externally".to_string(),
+                message: format!(
+                    "The recovery file for '{label}' was changed by another program \
+                     since Code++ last saved. The buffer shows the modified backup \
+                     content — save it if you want to keep it.",
+                ),
+            });
         }
         new_idx
     }
@@ -2853,6 +2946,91 @@ fn sanitize_basename_for_backup(path: &Path) -> String {
         out.insert(0, '_');
     }
     out
+}
+
+/// Parse a backup filename's `@YYYY-MM-DD_HHMMSS` suffix into a
+/// UNIX timestamp (seconds since epoch). Returns `None` if the
+/// filename doesn't contain `@` or the suffix doesn't match the
+/// fixed `backup_timestamp` format. Used to detect external edits
+/// to backup files: comparing the file's actual `mtime` against
+/// the time we wrote it (encoded directly in the filename) lets
+/// us notice when *another program* touched the backup between
+/// session-save and session-restore.
+fn parse_backup_timestamp(filename: &str) -> Option<u64> {
+    // Format: `<name>@YYYY-MM-DD_HHMMSS` (suffix is exactly 17
+    // chars). `rfind` so a stray `@` in the display portion (the
+    // sanitiser already replaces it with `_` but be defensive)
+    // doesn't break parsing.
+    let at_idx = filename.rfind('@')?;
+    let ts = filename.get(at_idx + 1..)?;
+    if ts.len() != 17 {
+        return None;
+    }
+    let b = ts.as_bytes();
+    if b[4] != b'-' || b[7] != b'-' || b[10] != b'_' {
+        return None;
+    }
+    let year: i64 = std::str::from_utf8(&b[0..4]).ok()?.parse().ok()?;
+    let month: u32 = std::str::from_utf8(&b[5..7]).ok()?.parse().ok()?;
+    let day: u32 = std::str::from_utf8(&b[8..10]).ok()?.parse().ok()?;
+    let hour: u32 = std::str::from_utf8(&b[11..13]).ok()?.parse().ok()?;
+    let minute: u32 = std::str::from_utf8(&b[13..15]).ok()?.parse().ok()?;
+    let second: u32 = std::str::from_utf8(&b[15..17]).ok()?.parse().ok()?;
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour >= 24
+        || minute >= 60
+        || second >= 60
+    {
+        return None;
+    }
+    // Howard Hinnant's days_from_civil — exact inverse of the
+    // civil-from-days conversion in `backup_timestamp`. Converts
+    // (year, month, day) to days-since-1970-01-01.
+    let y_adj = if month <= 2 { year - 1 } else { year };
+    let era = y_adj.div_euclid(400);
+    let yoe = (y_adj - era * 400) as u64;
+    // Parenthesised so the `as u64` cast unambiguously applies to
+    // the result of the whole `if`.
+    let m_offset = (if month > 2 { month - 3 } else { month + 9 }) as u64;
+    let doy = (153 * m_offset + 2) / 5 + day as u64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days_signed = era * 146_097 + doe as i64 - 719_468;
+    if days_signed < 0 {
+        return None;
+    }
+    let secs =
+        (days_signed as u64) * 86_400 + hour as u64 * 3600 + minute as u64 * 60 + second as u64;
+    Some(secs)
+}
+
+/// `true` iff the backup file's `mtime` is meaningfully later than
+/// the timestamp embedded in its own filename — which means
+/// another program edited the file between when we last wrote it
+/// and now. Used at restore time to surface a "your backup was
+/// modified externally" warning so the user isn't silently
+/// presented with content they didn't type.
+///
+/// Defaults to `false` (no warning) on any I/O error, missing
+/// timestamp suffix, or unsupported `mtime` API. The `+ 5`
+/// tolerance covers FAT-style 1-second mtime resolution plus the
+/// small gap between forming the timestamp string and the
+/// `sync_all + persist` rename returning.
+fn is_backup_modified_externally(backup_path: &Path, backup_filename: &str) -> bool {
+    let Some(written_secs) = parse_backup_timestamp(backup_filename) else {
+        return false;
+    };
+    let Ok(meta) = std::fs::metadata(backup_path) else {
+        return false;
+    };
+    let Ok(mtime) = meta.modified() else {
+        return false;
+    };
+    let mtime_secs = match mtime.duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_secs(),
+        Err(_) => return false,
+    };
+    mtime_secs > written_secs + 5
 }
 
 /// `true` iff the on-disk file at `disk_path` has a more recent
@@ -6481,7 +6659,8 @@ mod tests {
             0,
             Encoding::Utf8,
             Eol::Lf,
-            true, // disk file changed externally
+            true,  // disk file changed externally
+            false, // backup file untouched
         );
 
         let pending = shell.drain(&mut ui);
@@ -6492,6 +6671,137 @@ mod tests {
         assert_eq!(
             confirm_reload_count, 1,
             "expected one ConfirmReload for the conflict path; got {pending:?}"
+        );
+    }
+
+    /// `parse_backup_timestamp` is the exact inverse of
+    /// `backup_timestamp` — we lean on that to verify the parser
+    /// without hardcoding the civil-from-days arithmetic in the
+    /// test as well. Generate a timestamp string, parse it, and
+    /// confirm the round-trip lands inside our 5-second
+    /// tolerance window.
+    #[test]
+    fn parse_backup_timestamp_round_trip() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let ts = backup_timestamp();
+        let filename = format!("new 1@{ts}");
+        let parsed = parse_backup_timestamp(&filename).expect("parse");
+        // Allow ±2 s slop for the seconds boundary the
+        // timestamp formatter rounds to.
+        assert!(
+            parsed.abs_diff(now) <= 2,
+            "round-trip drift too large: now={now} parsed={parsed}",
+        );
+    }
+
+    /// Malformed inputs return `None` — no panic, no spurious
+    /// "modified" flag. Covers the cases an attacker-controlled
+    /// session.xml could provide.
+    #[test]
+    fn parse_backup_timestamp_rejects_malformed() {
+        assert!(parse_backup_timestamp("no-at-sign").is_none());
+        assert!(parse_backup_timestamp("name@too-short").is_none());
+        assert!(parse_backup_timestamp("name@2026-XX-04_215750").is_none());
+        // Bad month / hour / minute / second values are rejected
+        // by the explicit range checks. We deliberately do *not*
+        // validate per-month day counts or leap-year rules — the
+        // worst case from a "Feb 30"-style entry is a slightly-
+        // shifted UNIX timestamp comparison, which doesn't
+        // matter for the "is this file newer than its embedded
+        // mark by > 5 seconds?" check.
+        assert!(parse_backup_timestamp("name@2026-13-01_120000").is_none());
+        assert!(parse_backup_timestamp("name@2026-01-01_250000").is_none());
+        assert!(parse_backup_timestamp("name@").is_none());
+    }
+
+    /// `is_backup_modified_externally` flags a backup whose mtime
+    /// is meaningfully later than the timestamp embedded in its
+    /// own filename. Uses `std::fs::set_modified` (stable since
+    /// 1.75) to fast-forward the file's mtime past the
+    /// embedded-timestamp + 5-second tolerance.
+    #[test]
+    fn detects_externally_modified_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        // Pick a fixed timestamp well in the past so we can set
+        // an mtime even further past while staying ahead by
+        // > 5 s.
+        let filename = "new 1@2026-01-01_120000";
+        let backup_path = dir.path().join(filename);
+        std::fs::write(&backup_path, b"some content").unwrap();
+        // Embedded timestamp = 2026-01-01_120000 UTC. Set the
+        // file's mtime to one minute later — well past the 5 s
+        // tolerance window.
+        let written_secs = parse_backup_timestamp(filename).expect("parse");
+        let later = std::time::UNIX_EPOCH + std::time::Duration::from_secs(written_secs + 60);
+        // `set_modified` on Windows requires the file to be opened
+        // with write access (`File::open` defaults to read-only).
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&backup_path)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert!(
+            is_backup_modified_externally(&backup_path, filename),
+            "backup with mtime > embedded ts + tolerance must be flagged",
+        );
+    }
+
+    /// A backup file whose mtime sits within the tolerance
+    /// window of its embedded timestamp is *not* flagged — that's
+    /// the normal "we just wrote this" case.
+    #[test]
+    fn untouched_backup_not_flagged_as_external() {
+        let dir = tempfile::tempdir().unwrap();
+        let filename = "new 1@2026-01-01_120000";
+        let backup_path = dir.path().join(filename);
+        std::fs::write(&backup_path, b"some content").unwrap();
+        let written_secs = parse_backup_timestamp(filename).expect("parse");
+        // Bump mtime by 2 s — well inside the 5 s tolerance.
+        let close_in_time =
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(written_secs + 2);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&backup_path)
+            .unwrap()
+            .set_modified(close_in_time)
+            .unwrap();
+        assert!(
+            !is_backup_modified_externally(&backup_path, filename),
+            "in-tolerance mtime must NOT be flagged",
+        );
+    }
+
+    /// `restore_untitled_with_text` with `backup_modified_externally
+    /// = true` queues a `PendingDialog::Error` so the user knows
+    /// they're looking at content they didn't type. Buffer still
+    /// shows the modified content (the user can save it if they
+    /// want); the dialog is purely informational.
+    #[test]
+    fn restore_untitled_with_modified_backup_queues_error_dialog() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.restore_untitled_with_text(
+            &mut ui,
+            Some(7),
+            "altered content".into(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            true, // backup was modified externally
+        );
+        let pending = shell.drain(&mut ui);
+        let n = pending
+            .iter()
+            .filter(|d| matches!(d, PendingDialog::Error { .. }))
+            .count();
+        assert_eq!(
+            n, 1,
+            "expected one Error dialog for the externally-modified backup; got {pending:?}"
         );
     }
 
@@ -6511,7 +6821,8 @@ mod tests {
             0,
             Encoding::Utf8,
             Eol::Lf,
-            false,
+            false, // disk untouched
+            false, // backup untouched
         );
 
         let pending = shell.drain(&mut ui);
