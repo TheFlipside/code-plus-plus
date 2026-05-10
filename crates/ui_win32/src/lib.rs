@@ -12516,6 +12516,26 @@ const TAB_FG_ACTIVE: u32 = 0x00_00_00_00;
 /// secondary without becoming illegible.
 const TAB_FG_INACTIVE: u32 = 0x00_60_60_60;
 
+/// Orange strip painted along the top edge of the active tab as a
+/// "this is the focused buffer" indicator. RGB(255,167,38) — the
+/// Material `orange 400` shade. Lighter than the toolbar palette's
+/// `ORANGE` (`orange 600`, used for the paste icon) so the strip
+/// reads as an accent rather than competing with the chrome. The
+/// system tab control paints a hairline themed outline on top of
+/// the cell after `WM_DRAWITEM` returns, eating ~1 px from the top
+/// of the strip — `TAB_ACTIVE_INDICATOR_HEIGHT_PX_LO` accounts for
+/// that so the visible portion is ~3 px. COLORREF is BGR.
+const TAB_ACTIVE_INDICATOR: u32 = 0x00_26_A7_FF;
+/// Pixel height of the active-tab indicator strip at standard DPI.
+/// 6 px painted ≈ 5 px visible after the system's themed-outline
+/// overdraw; reads as a deliberate accent without dominating the
+/// cell.
+const TAB_ACTIVE_INDICATOR_HEIGHT_PX_LO: i32 = 6;
+/// HiDPI counterpart — kept proportional to the LO value (1.5x) so
+/// the strip retains the same visual weight at higher pixel
+/// densities without looking chunky.
+const TAB_ACTIVE_INDICATOR_HEIGHT_PX_HIDPI: i32 = 9;
+
 /// Background fill for the close-X box on the active tab in its
 /// resting state — a deep red. COLORREF (BBGGRR) for RGB(183,28,28),
 /// the `red 900` Material-like shade. The white X glyph is drawn on
@@ -12688,6 +12708,38 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
         if !bg_brush.is_invalid() {
             FillRect(dis.hDC, &dis.rcItem, bg_brush);
             let _ = DeleteObject(bg_brush.into());
+        }
+    }
+
+    // Active-tab indicator: an orange strip along the top edge of
+    // the active cell. See `TAB_ACTIVE_INDICATOR_HEIGHT_PX_LO` /
+    // `_HIDPI` for the painted-vs-visible-px rationale (the system
+    // tab control's themed-outline overdraw eats ~1 px from the
+    // top). Painted after the background fill (so the strip sits on
+    // top of any system theme paint) and before the icon (so it
+    // never bleeds across the icon's pixels). Inactive tabs get
+    // nothing — the strip is the visual cue that says "this is the
+    // focused buffer".
+    if active {
+        let strip_h = if state.tab_bitmap_px == TAB_BITMAP_PX_HIDPI {
+            TAB_ACTIVE_INDICATOR_HEIGHT_PX_HIDPI
+        } else {
+            TAB_ACTIVE_INDICATOR_HEIGHT_PX_LO
+        };
+        let strip_rc = RECT {
+            left: dis.rcItem.left,
+            top: dis.rcItem.top,
+            right: dis.rcItem.right,
+            bottom: dis.rcItem.top + strip_h,
+        };
+        // SAFETY: same WM_DRAWITEM lifetime contract as the bg
+        // brush above; null-handle guard mirrored from there.
+        unsafe {
+            let strip_brush = CreateSolidBrush(COLORREF(TAB_ACTIVE_INDICATOR));
+            if !strip_brush.is_invalid() {
+                FillRect(dis.hDC, &strip_rc, strip_brush);
+                let _ = DeleteObject(strip_brush.into());
+            }
         }
     }
 
