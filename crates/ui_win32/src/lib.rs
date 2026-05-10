@@ -54,10 +54,11 @@ use codepp_scintilla_sys::{
     SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
     SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
     SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT,
-    SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
-    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE,
-    SC_MARGIN_TEXT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT,
-    STYLE_LINENUMBER,
+    SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS,
+    SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
+    SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
+    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MOD_DELETETEXT,
+    SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
@@ -917,15 +918,26 @@ impl UiPlatform for Win32Ui {
         // doesn't free either — Scintilla keeps the previous
         // document alive as long as anyone holds a refcount or
         // it's still pointed at.
-        let doc = if scintilla_doc != 0 {
-            scintilla_doc
+        let (doc, freshly_created) = if scintilla_doc != 0 {
+            (scintilla_doc, false)
         } else {
-            self.editor
-                .send(SCI_CREATEDOCUMENT, 0, SC_DOCUMENTOPTION_DEFAULT)
+            (
+                self.editor
+                    .send(SCI_CREATEDOCUMENT, 0, SC_DOCUMENTOPTION_DEFAULT),
+                true,
+            )
         };
         // Bind the resolved document to the single Scintilla view.
         // wparam is unused; lparam is the doc pointer.
         self.editor.send(SCI_SETDOCPOINTER, 0, doc);
+        // Change-history is per-document state — enable on every
+        // freshly-minted doc so its lines start tracking edits
+        // against the save-point. Bound docs that already existed
+        // (the `scintilla_doc != 0` branch) had history enabled at
+        // their own creation site, so the call would be a no-op.
+        if freshly_created {
+            enable_change_history(&self.editor);
+        }
         // Always refresh the visible window's line numbers on
         // attach: a brand-new doc needs line 0 seeded; an existing
         // doc may have been edited off-screen since last populate
@@ -2423,6 +2435,98 @@ fn apply_caret_line_highlight(editor: &EditorHandle) {
     editor.set_caret_line_visible(true);
 }
 
+/// Margin index for the change-history strip — the narrow vertical
+/// orange bar that flags lines edited since the last save. Skips
+/// the conventionally-reserved indices (1 = symbols/bookmarks,
+/// 2 = fold markers, 3 = future use) so a future plugin-installed
+/// marker margin can't collide with it.
+const CHANGE_HISTORY_MARGIN: u32 = 4;
+/// Pixel width of [`CHANGE_HISTORY_MARGIN`] when populated. 4 px
+/// is wide enough for a strip to read at every supported DPI
+/// without competing with the line-number column to its left.
+const CHANGE_HISTORY_MARGIN_PX: i32 = 4;
+/// Marker bitmask for [`CHANGE_HISTORY_MARGIN`]. Includes only the
+/// `SC_MARKNUM_HISTORY_MODIFIED` slot so a plugin marker assigned
+/// to a different number can't bleed into the strip. Built as
+/// `1 << SC_MARKNUM_HISTORY_MODIFIED`; the const-fn shape is
+/// preferred over a raw literal so the relationship to the marker
+/// number stays auditable.
+const CHANGE_HISTORY_MARGIN_MASK: u32 = 1 << SC_MARKNUM_HISTORY_MODIFIED;
+/// Stroke colour for the change-history strip — same Material
+/// `orange 400` shade [`TAB_ACTIVE_INDICATOR`] uses for the
+/// active-tab indicator. Reusing the colour ties the two
+/// "you're editing this" cues into one visual language.
+const CHANGE_HISTORY_COLOR: u32 = 0x00_26_A7_FF;
+
+/// Configure the change-history margin: type, width, mask, and the
+/// `SC_MARKNUM_HISTORY_MODIFIED` marker's symbol + colour. The
+/// marker symbol is `SC_MARK_FULLRECT` so it fills the full margin
+/// column for any line Scintilla flags as modified. The margin
+/// settings are stored on the **view** (not the document), so this
+/// one call is enough — surviving every `SCI_SETDOCPOINTER` cycle
+/// the tab strip drives. Per-document change-history *enablement*
+/// is a separate per-doc setting (see [`enable_change_history`]).
+///
+/// Critical detail: Scintilla's default mask for margin 1 is
+/// `~SC_MASK_FOLDERS` — covering markers 0-24, which *includes*
+/// the history-marker family at 21-24. With
+/// `SC_CHANGE_HISTORY_MARKERS` enabled, every margin whose mask
+/// matches the marker bit renders it. So without explicit cleanup,
+/// the history strip would also render in margin 1 at margin 1's
+/// width — visually a strip much wider than the 4-px slice we want.
+/// Defensively clear margins 1-3's masks (and zero their widths in
+/// case a Scintilla update bumps the default) so the strip is
+/// confined to margin 4. A future bookmarks/folder-marker feature
+/// claiming one of those indices will reconfigure both sides.
+fn apply_change_history_margin(editor: &EditorHandle) {
+    for unused in 1..=3u32 {
+        editor.set_margin_mask(unused, 0);
+        editor.set_margin_width(unused, 0);
+    }
+    // Silence the three sibling history markers we don't want to
+    // visualise. Scintilla 5.x's `SC_CHANGE_HISTORY_MARKERS` flag
+    // *auto-applies* every member of the family
+    // (`REVERTED_TO_ORIGIN`, `SAVED`, `MODIFIED`,
+    // `REVERTED_TO_MODIFIED`) to the lines they describe — and
+    // each marker carries Scintilla's default symbol/colour until
+    // overridden. In particular `SC_MARKNUM_HISTORY_SAVED` paints
+    // a green line-background under every line that was modified
+    // before the last save (i.e. essentially every line of the
+    // file at first display, since the SCI_SETSAVEPOINT after
+    // load reclassifies all inserted lines as "saved"). Setting
+    // those three to `SC_MARK_EMPTY` makes them no-op visually
+    // while preserving Scintilla's internal tracking, so a future
+    // feature can light them up without re-enabling the history
+    // engine.
+    use codepp_scintilla_sys::{
+        SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
+        SC_MARKNUM_HISTORY_SAVED,
+    };
+    for silenced in [
+        SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
+        SC_MARKNUM_HISTORY_SAVED,
+        SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED,
+    ] {
+        editor.marker_define(silenced, SC_MARK_EMPTY);
+    }
+    editor.set_margin_type(CHANGE_HISTORY_MARGIN, SC_MARGIN_SYMBOL);
+    editor.set_margin_mask(CHANGE_HISTORY_MARGIN, CHANGE_HISTORY_MARGIN_MASK);
+    editor.marker_define(SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_FULLRECT);
+    editor.marker_set_back(SC_MARKNUM_HISTORY_MODIFIED, CHANGE_HISTORY_COLOR);
+    editor.set_margin_width(CHANGE_HISTORY_MARGIN, CHANGE_HISTORY_MARGIN_PX);
+}
+
+/// Enable Scintilla's change-history tracking on the **currently
+/// bound** document. Per-document setting — every fresh document
+/// minted via `SCI_CREATEDOCUMENT` starts with history disabled,
+/// so this must be called on each new doc immediately after
+/// binding it via `SCI_SETDOCPOINTER`. Margin configuration lives
+/// on the view ([`apply_change_history_margin`]); only the
+/// per-doc enablement is repeated here.
+fn enable_change_history(editor: &EditorHandle) {
+    editor.set_change_history(SC_CHANGE_HISTORY_ENABLED | SC_CHANGE_HISTORY_MARKERS);
+}
+
 /// Number of lines beyond the visible window's bottom edge to
 /// pre-populate. A small overscan covers the gap between
 /// `SCI_LINESONSCREEN`'s integer-truncated row count and a partial
@@ -2991,6 +3095,14 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                 // line-number bar shows "1" instead of blank
                 // chrome on the empty editor.
                 populate_visible_line_numbers(&state.editor);
+                // Deliberately no `enable_change_history` here:
+                // the placeholder is bound for one paint cycle,
+                // immediately released, and write-protected by
+                // the no-active-tab UI state (Ctrl+S, paste, and
+                // every other text-mutating command short-circuit
+                // when `Shell.active_tab` is `None`). A history
+                // tracker on this doc would never observe an
+                // edit before the doc is freed.
                 state.editor.send(SCI_RELEASEDOCUMENT, 0, placeholder);
             }
             // Refresh chrome to the empty state — status bar should
@@ -3038,6 +3150,11 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                     .editor
                     .send(SCI_CREATEDOCUMENT, 0, SC_DOCUMENTOPTION_DEFAULT);
                 state.editor.send(SCI_SETDOCPOINTER, 0, new_doc);
+                // Per-doc state — every fresh document needs
+                // change-history enabled; the view-side margin
+                // already exists from `apply_change_history_margin`
+                // at editor creation.
+                enable_change_history(&state.editor);
                 let mut bytes = Vec::with_capacity(text.len() + 1);
                 bytes.extend_from_slice(text.as_bytes());
                 bytes.push(0);
@@ -3179,6 +3296,14 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
             .editor
             .send(SCI_CREATEDOCUMENT, 0, SC_DOCUMENTOPTION_DEFAULT);
         state.editor.send(SCI_SETDOCPOINTER, 0, doc);
+        // Per-doc state — every fresh document needs change-history
+        // enabled. Margin configuration was applied once at editor
+        // creation and lives on the view, so it carries through
+        // every doc swap; only the per-doc enable repeats here.
+        // Critical to call BEFORE `SCI_SETTEXT` so the initial
+        // text-insert is treated as the document's starting state
+        // (not as edits to track).
+        enable_change_history(&state.editor);
         let mut bytes = Vec::with_capacity(text.len() + 1);
         bytes.extend_from_slice(text.as_bytes());
         bytes.push(0);
@@ -10290,6 +10415,17 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // `SCI_STYLECLEARALL` and the per-language re-styling
         // that `apply_default_styles` triggers.
         apply_caret_line_highlight(&editor);
+
+        // Change-history strip: configure the dedicated narrow
+        // margin (type/width/mask + the `SC_MARKNUM_HISTORY_MODIFIED`
+        // marker's symbol + colour). Margin settings live on the
+        // view, so this single call covers every tab. The
+        // per-document enable below covers the implicit doc the
+        // Scintilla control creates at construction; subsequent
+        // documents minted via `SCI_CREATEDOCUMENT` get the same
+        // treatment at their respective creation sites.
+        apply_change_history_margin(&editor);
+        enable_change_history(&editor);
 
         // Wake closure: PostMessage ourselves WM_APP_WAKE.
         // PostMessage is thread-safe — it just enqueues a message for

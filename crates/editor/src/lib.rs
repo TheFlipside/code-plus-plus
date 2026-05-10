@@ -11,10 +11,11 @@ use core::ffi::c_void;
 
 use codepp_scintilla_sys::{
     sptr_t, uptr_t, CreateLexer, ScintillaDirectFunction, SCI_GETTARGETEND, SCI_GETTARGETSTART,
-    SCI_REPLACETARGET, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT, SCI_SEARCHPREV,
-    SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE, SCI_SETILEXER, SCI_SETKEYWORDS,
-    SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETSEARCHFLAGS, SCI_SETTARGETRANGE,
-    SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFORE, SCI_STYLESETITALIC,
+    SCI_MARKERDEFINE, SCI_MARKERSETBACK, SCI_REPLACETARGET, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET,
+    SCI_SEARCHNEXT, SCI_SEARCHPREV, SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE,
+    SCI_SETCHANGEHISTORY, SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN, SCI_SETMARGINTYPEN,
+    SCI_SETMARGINWIDTHN, SCI_SETSEARCHFLAGS, SCI_SETTARGETRANGE, SCI_STYLECLEARALL,
+    SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFORE, SCI_STYLESETITALIC,
 };
 
 /// Opaque handle to a Scintilla editor control.
@@ -209,6 +210,46 @@ impl EditorHandle {
     /// flip between a configured width and `0`.
     pub fn set_margin_width(&self, margin: u32, pixels: i32) {
         self.send(SCI_SETMARGINWIDTHN, margin as uptr_t, pixels as sptr_t);
+    }
+
+    /// Set the marker bitmask for margin `n`. Each margin only
+    /// renders markers whose id appears in its mask. Used by the
+    /// change-history strip to ensure that margin shows the
+    /// `SC_MARKNUM_HISTORY_*` markers and *only* those — without
+    /// this filter, a future plugin-installed bookmark in margin 1
+    /// could leak into the edit-indicator strip.
+    pub fn set_margin_mask(&self, margin: u32, mask: u32) {
+        self.send(SCI_SETMARGINMASKN, margin as uptr_t, mask as sptr_t);
+    }
+
+    /// Configure the symbol drawn for marker number `marker_num`
+    /// (one of `SC_MARKNUM_*`). `symbol` is one of the `SC_MARK_*`
+    /// shape constants — `SC_MARK_FULLRECT` fills the margin
+    /// column, the right shape for the change-history strip.
+    pub fn marker_define(&self, marker_num: u32, symbol: u32) {
+        self.send(SCI_MARKERDEFINE, marker_num as uptr_t, symbol as sptr_t);
+    }
+
+    /// Configure the background colour drawn for marker number
+    /// `marker_num`. `colour` uses the same `0x00BBGGRR` encoding
+    /// as [`Self::style_set_fore`]. Markers fill their bounding
+    /// rectangle with this colour, which is what makes
+    /// `SC_MARK_FULLRECT` paint as a solid bar in a narrow margin.
+    pub fn marker_set_back(&self, marker_num: u32, colour: u32) {
+        self.send(SCI_MARKERSETBACK, marker_num as uptr_t, colour as sptr_t);
+    }
+
+    /// Enable Scintilla's built-in change-history tracking on the
+    /// **currently bound** document. `flags` is a bitmask of
+    /// `SC_CHANGE_HISTORY_*` values (`ENABLED | MARKERS` is the
+    /// pair Code++'s edit-indicator strip uses). Per-document
+    /// setting — must be re-applied after every
+    /// `SCI_CREATEDOCUMENT`. Once enabled, Scintilla auto-applies
+    /// `SC_MARKNUM_HISTORY_MODIFIED` to lines that diverge from the
+    /// last save-point and clears them when `SCI_SETSAVEPOINT`
+    /// advances the baseline.
+    pub fn set_change_history(&self, flags: u32) {
+        self.send(SCI_SETCHANGEHISTORY, flags as uptr_t, 0);
     }
 
     /// Reset every style index to the current `STYLE_DEFAULT`. The

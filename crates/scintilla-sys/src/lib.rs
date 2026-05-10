@@ -448,8 +448,83 @@ pub const STYLE_LINENUMBER: usize = 33;
 // change line count.
 pub const SCI_SETMARGINTYPEN: u32 = 2240;
 pub const SCI_SETMARGINWIDTHN: u32 = 2242;
+/// Set the marker bitmask for margin `n`. Each margin renders a
+/// marker only if the marker's id is set in the margin's mask;
+/// without this filter every plugin-installed marker would appear
+/// in every margin. Code++'s line-number margin keeps its mask at
+/// the default (no markers); the change-history margin's mask
+/// includes only the `SC_MARKNUM_HISTORY_*` set so plugin markers
+/// from a future bookmark/fold-marker margin can't bleed into the
+/// edit-indicator strip.
+pub const SCI_SETMARGINMASKN: u32 = 2244;
 pub const SCI_MARGINSETTEXT: u32 = 2530;
 pub const SCI_MARGINSETSTYLE: u32 = 2532;
+/// Configure the symbol drawn for marker number `wparam`. Used to
+/// pick from `SC_MARK_*` shape constants — `SC_MARK_FULLRECT`
+/// fills the margin column for the line, which (in a 4-px-wide
+/// dedicated margin) reads as a vertical bar.
+pub const SCI_MARKERDEFINE: u32 = 2040;
+/// Configure the background colour drawn for marker number
+/// `wparam`. `lparam` is a `COLORREF` (`0x00BBGGRR`).
+pub const SCI_MARKERSETBACK: u32 = 2042;
+/// Enable Scintilla's built-in change-history tracking on the
+/// currently bound document. `wparam` is a bitmask of
+/// `SC_CHANGE_HISTORY_*` flags. Per-document setting — must be
+/// re-applied after every `SCI_CREATEDOCUMENT`. The matching
+/// `SC_MARKNUM_HISTORY_*` markers fire automatically once
+/// `SC_CHANGE_HISTORY_MARKERS` is set; the host configures their
+/// colour + symbol via `SCI_MARKERDEFINE` / `SCI_MARKERSETBACK`.
+pub const SCI_SETCHANGEHISTORY: u32 = 2780;
+/// `SC_CHANGE_HISTORY_ENABLED = 1` — turn change tracking on. OR
+/// with `SC_CHANGE_HISTORY_MARKERS` to surface modifications as
+/// margin markers (the path Code++'s tab strip uses) or
+/// `SC_CHANGE_HISTORY_INDICATORS` to surface them as inline text
+/// indicators (not used today; the inline path collides visually
+/// with selection highlighting).
+pub const SC_CHANGE_HISTORY_ENABLED: u32 = 1;
+/// `SC_CHANGE_HISTORY_MARKERS = 2` — render history transitions
+/// via the `SC_MARKNUM_HISTORY_*` marker family. Combined with
+/// `SC_CHANGE_HISTORY_ENABLED` to drive Code++'s
+/// "modified-line indicator strip" (DESIGN.md §7.4 follow-up).
+pub const SC_CHANGE_HISTORY_MARKERS: u32 = 2;
+/// `SC_MARK_FULLRECT = 26` — marker symbol that fills the entire
+/// margin-column rectangle for the line. In a dedicated narrow
+/// margin this reads as a solid vertical bar; in a wider margin
+/// it would conflict with line-number text. Pair with a 4-px
+/// margin for the change-history strip.
+pub const SC_MARK_FULLRECT: u32 = 26;
+/// `SC_MARK_EMPTY = 5` — marker symbol that renders nothing.
+/// Used to silence the unused members of the change-history
+/// marker family (`SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN`,
+/// `SC_MARKNUM_HISTORY_SAVED`, `SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED`)
+/// when the host only wants to surface modified-since-save
+/// (`SC_MARKNUM_HISTORY_MODIFIED`). Without this, Scintilla's
+/// default symbol + colour for the auto-applied markers would
+/// surface as visible artifacts (e.g. coloured line backgrounds
+/// for `SC_MARKNUM_HISTORY_SAVED`).
+pub const SC_MARK_EMPTY: u32 = 5;
+/// `SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN = 21` — marker auto-set
+/// on lines that were edited then undone back to the original
+/// state (pre-first-save). Visualised by Code++ as `SC_MARK_EMPTY`
+/// (no glyph) so it doesn't compete with the modified-line strip.
+pub const SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN: u32 = 21;
+/// `SC_MARKNUM_HISTORY_SAVED = 22` — marker auto-set on lines that
+/// were edited and then made part of a save. Without explicit
+/// silencing this renders as a green line-background by default
+/// in Scintilla 5.5+, which collides badly with light-theme syntax
+/// highlighting; Code++ sets its symbol to `SC_MARK_EMPTY`.
+pub const SC_MARKNUM_HISTORY_SAVED: u32 = 22;
+/// `SC_MARKNUM_HISTORY_MODIFIED = 23` — marker number Scintilla
+/// auto-applies to lines that have unsaved modifications relative
+/// to the document's last save-point. Cleared on `SCI_SETSAVEPOINT`
+/// (which advances the saved baseline). The only history marker
+/// Code++'s strip visualises today.
+pub const SC_MARKNUM_HISTORY_MODIFIED: u32 = 23;
+/// `SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED = 24` — marker for
+/// lines that were modified, saved, then re-edited back to the
+/// post-first-save state. Silenced via `SC_MARK_EMPTY` for the
+/// same reasons as the other two siblings.
+pub const SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED: u32 = 24;
 /// `SC_MARGIN_TEXT = 4` — the *type constant* that, when passed as
 /// the `lparam` of `SCI_SETMARGINTYPEN`, makes the addressed margin
 /// render per-line text supplied via `SCI_MARGINSETTEXT`, styled by
@@ -458,6 +533,12 @@ pub const SCI_MARGINSETSTYLE: u32 = 2532;
 /// the host formats each line's text with leading spaces so the
 /// rightmost digit lands in the same column for every line.
 pub const SC_MARGIN_TEXT: u32 = 4;
+/// `SC_MARGIN_SYMBOL = 0` — type constant for a margin that
+/// renders only markers (the `SC_MARKNUM_*` family). Code++ uses
+/// this for the change-history strip: a 4-px margin whose only
+/// content is the `SC_MARKNUM_HISTORY_MODIFIED` marker, painted
+/// as a `SC_MARK_FULLRECT` orange bar.
+pub const SC_MARGIN_SYMBOL: u32 = 0;
 
 // LexCPP style indices used by the Phase 4 m1 default theme. The
 // full set lives in `vendor/lexilla/include/SciLexer.h`; only those
