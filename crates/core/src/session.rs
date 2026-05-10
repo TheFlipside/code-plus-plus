@@ -93,6 +93,21 @@ pub struct Tab {
     /// they eventually save to a real path.
     #[serde(rename = "@backup", skip_serializing_if = "Option::is_none", default)]
     pub backup: Option<String>,
+    /// User-chosen display name for an untitled buffer, set via
+    /// File → Rename... and persisted so a renamed "new 3"
+    /// (relabelled e.g. "release notes") comes back with that
+    /// label rather than reverting to its sequence number after a
+    /// restart. Always `None` for path-bound buffers — those
+    /// derive their display name from `path` and the rename UI
+    /// routes them to Save-As instead. Older session.xml files
+    /// (written before this field shipped) round-trip cleanly
+    /// thanks to `default`.
+    #[serde(
+        rename = "@custom_name",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub custom_name: Option<String>,
 }
 
 /// Persisted main-window geometry. Pixel dimensions are positive in
@@ -298,6 +313,7 @@ mod tests {
                     eol: Eol::Lf,
                     untitled_seq: None,
                     backup: None,
+                    custom_name: None,
                 },
                 Tab {
                     path: Some(PathBuf::from(r"C:\users\alice\config.toml")),
@@ -306,6 +322,7 @@ mod tests {
                     eol: Eol::CrLf,
                     untitled_seq: None,
                     backup: None,
+                    custom_name: None,
                 },
             ],
         };
@@ -327,6 +344,7 @@ mod tests {
                 eol: Eol::CrLf,
                 untitled_seq: None,
                 backup: None,
+                custom_name: None,
             }],
         };
         session.save_to_xml(&path).unwrap();
@@ -350,6 +368,7 @@ mod tests {
                 eol: Eol::Lf,
                 untitled_seq: Some(1),
                 backup: Some("new 1@2026-05-04_215750".into()),
+                custom_name: None,
             }],
         };
         session.save_to_xml(&path).unwrap();
@@ -375,6 +394,7 @@ mod tests {
                     eol: Eol::Lf,
                     untitled_seq: None,
                     backup: None,
+                    custom_name: None,
                 },
                 Tab {
                     path: None,
@@ -383,6 +403,7 @@ mod tests {
                     eol: Eol::Lf,
                     untitled_seq: Some(1),
                     backup: Some("new 1@2026-05-04_215800".into()),
+                    custom_name: None,
                 },
                 Tab {
                     path: None,
@@ -391,12 +412,40 @@ mod tests {
                     eol: Eol::Lf,
                     untitled_seq: Some(2),
                     backup: Some("new 2@2026-05-04_215800".into()),
+                    custom_name: None,
                 },
             ],
         };
         session.save_to_xml(&path).unwrap();
         let loaded = Session::load_from_xml(&path).unwrap();
         assert_eq!(session, loaded);
+    }
+
+    /// `custom_name` round-trips on an untitled buffer. Verifies the
+    /// File → Rename... label survives a session save/load cycle so
+    /// a user-renamed `new 1` (relabelled e.g. "release notes")
+    /// comes back with the chosen name rather than reverting to the
+    /// sequence number.
+    #[test]
+    fn round_trip_untitled_with_custom_name() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            active: Some(0),
+            window: None,
+            tabs: vec![Tab {
+                path: None,
+                cursor: 0,
+                encoding: Encoding::Utf8,
+                eol: Eol::Lf,
+                untitled_seq: Some(3),
+                backup: Some("new 3@2026-05-09_141500".into()),
+                custom_name: Some("release notes".into()),
+            }],
+        };
+        session.save_to_xml(&path).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(session, loaded);
+        assert_eq!(loaded.tabs[0].custom_name.as_deref(), Some("release notes"));
     }
 
     /// A session.xml written before the untitled-buffer feature

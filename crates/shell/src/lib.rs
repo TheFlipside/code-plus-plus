@@ -511,6 +511,11 @@ pub enum SessionRestoreEntry {
         /// `PendingDialog::Error` so they're not silently
         /// presented with text they didn't type.
         backup_modified_externally: bool,
+        /// User-chosen rename label persisted across the session
+        /// boundary. `None` if the user never renamed this
+        /// untitled buffer (the default `new N` label is
+        /// rebuilt from `untitled_seq` instead).
+        custom_name: Option<String>,
     },
     /// Re-create a tab that was bound to `path` but had unsaved
     /// edits at session-save time. The tab opens with `path`
@@ -634,6 +639,16 @@ pub struct Tab {
     /// resets in save paths are belt-and-braces for code that
     /// short-circuits before the notification fires).
     pub dirty: bool,
+    /// User-chosen display name for an untitled buffer, set via
+    /// File → Rename... and rendered by the tab strip and window
+    /// title in place of the default `new N`. Stays `None` for
+    /// path-bound buffers (their display name comes from `path`)
+    /// and for untitled buffers the user has not renamed; the UI's
+    /// label-resolution helper falls through this in priority
+    /// order: `custom_name` → `path` basename → `untitled_seq`.
+    /// Cleared (`None`) when an untitled buffer is saved with a
+    /// real path — the on-disk filename takes over.
+    pub custom_name: Option<String>,
 }
 
 impl Default for Tab {
@@ -650,6 +665,7 @@ impl Default for Tab {
             lang: L_TEXT,
             untitled_seq: None,
             dirty: false,
+            custom_name: None,
         }
     }
 }
@@ -1613,8 +1629,13 @@ impl Shell {
                     // sequence number so the tab strip switches
                     // from "new N" to the file's basename, and so
                     // a future File→New can reuse the now-freed
-                    // sequence value.
+                    // sequence value. The user-chosen
+                    // `custom_name` (set via File → Rename...) is
+                    // also cleared here: once the buffer has a
+                    // real path, the on-disk filename is the
+                    // canonical display name.
                     tab.untitled_seq = None;
+                    tab.custom_name = None;
                 }
                 if let Err(e) = self.file_watcher.watch(&new_path) {
                     tracing::warn!(error = %e, path = ?new_path, "failed to watch new path after Save As");
@@ -2759,6 +2780,13 @@ impl Shell {
                 eol: tab.eol,
                 untitled_seq: tab.untitled_seq,
                 backup: backup_filename,
+                // Round-trip the user-chosen rename label. `None`
+                // for path-bound buffers (their display name comes
+                // from `path`); for untitled buffers, this is the
+                // value File → Rename... wrote, so the next session
+                // restores the same label rather than reverting to
+                // `new N`.
+                custom_name: tab.custom_name.clone(),
             });
         }
         session.active = self.active_tab.and_then(|active_idx| {
@@ -2942,6 +2970,7 @@ impl Shell {
                             encoding: t.encoding.clone(),
                             eol: t.eol,
                             backup_modified_externally,
+                            custom_name: t.custom_name.clone(),
                         }
                     })
                 }
@@ -2995,6 +3024,7 @@ impl Shell {
         encoding: Encoding,
         eol: Eol,
         backup_modified_externally: bool,
+        custom_name: Option<String>,
     ) -> usize {
         let id = self.allocate_buffer_id();
         let new_idx = self.tabs.len();
@@ -3017,6 +3047,7 @@ impl Shell {
             // shows the clean icon; visible only on a paint that
             // races the load completion (rarely observable).
             dirty: false,
+            custom_name,
         });
         self.active_tab = Some(new_idx);
         // Bind a fresh Scintilla document; matches `new_untitled`'s
@@ -3125,6 +3156,7 @@ impl Shell {
             // model is "this still needs saving", regardless of
             // whether the underlying doc has yet been touched.
             dirty: true,
+            custom_name: None,
         });
         self.active_tab = Some(new_idx);
         let new_doc = ui.activate_tab(new_idx, 0);
@@ -6912,6 +6944,7 @@ mod tests {
                     eol: Eol::default(),
                     untitled_seq: None,
                     backup: None,
+                    custom_name: None,
                 },
                 CoreTab {
                     path: Some(PathBuf::from("/tmp/second.txt")),
@@ -6920,6 +6953,7 @@ mod tests {
                     eol: Eol::default(),
                     untitled_seq: None,
                     backup: None,
+                    custom_name: None,
                 },
             ],
         };
@@ -8036,6 +8070,7 @@ mod tests {
             Encoding::Utf8,
             Eol::Lf,
             true, // backup was modified externally
+            None, // no custom rename label
         );
         let pending = shell.drain(&mut ui);
         let n = pending

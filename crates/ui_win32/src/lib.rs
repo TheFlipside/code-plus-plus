@@ -97,8 +97,8 @@ use windows::Win32::UI::Controls::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
-    TRACKMOUSEEVENT, VK_0, VK_F, VK_F1, VK_F3, VK_G, VK_H, VK_N, VK_O, VK_OEM_MINUS, VK_OEM_PLUS,
-    VK_S, VK_W,
+    TRACKMOUSEEVENT, VK_0, VK_F, VK_F1, VK_F2, VK_F3, VK_G, VK_H, VK_N, VK_O, VK_OEM_MINUS,
+    VK_OEM_PLUS, VK_S, VK_W,
 };
 use windows::Win32::UI::Shell::{
     DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW, SetWindowSubclass, ShellExecuteW,
@@ -156,6 +156,7 @@ const ID_FILE_SAVE_ALL: u16 = 1006;
 const ID_FILE_CLOSE_ALL: u16 = 1007;
 const ID_FILE_RELOAD: u16 = 1008;
 const ID_FILE_PRINT: u16 = 1009;
+const ID_FILE_RENAME: u16 = 1010;
 
 // Edit (1100-1199) — most route directly to Scintilla via SCI_*.
 const ID_EDIT_UNDO: u16 = 1100;
@@ -360,6 +361,15 @@ const IDC_GOTO_RADIO_OFFSET: u16 = 101;
 const IDC_GOTO_HERE: u16 = 102;
 const IDC_GOTO_TARGET: u16 = 103;
 const IDC_GOTO_MAX: u16 = 104;
+
+/// Rename dialog window class. Registered once on the first
+/// `show_rename_dialog`; modal text-input dialog used by File →
+/// Rename... to relabel an untitled buffer.
+const RENAME_CLASS: PCWSTR = w!("CodePlusPlusRenameDialog");
+
+/// Rename dialog control id for the EDIT field carrying the new
+/// name. IDOK / IDCANCEL are reused for the standard buttons.
+const IDC_RENAME_EDIT: u16 = 110;
 
 /// Find/Replace dialog window class. Registered once on the first
 /// `show_find_replace_dialog`. Modeless: the dialog persists across
@@ -3423,14 +3433,13 @@ fn sanitize_filename_for_display(name: &str) -> String {
 ///
 /// Caller must invoke from the UI thread that owns `hwnd`.
 unsafe fn update_window_title(hwnd: HWND, shell: &Shell) {
+    // Reuse `tab_display_name` so the title reflects the same
+    // resolution order the tab label uses (custom_name → path
+    // basename → `new N`). Without this the title would still
+    // show the on-disk filename or "Untitled" even after a
+    // File → Rename..., creating a visual mismatch with the tab.
     let title = match shell.active() {
-        Some(tab) => match tab.path.as_ref().and_then(|p| p.file_name()) {
-            Some(name) => {
-                let sanitized = sanitize_filename_for_display(&name.to_string_lossy());
-                format!("{sanitized} - Code++")
-            }
-            None => "Untitled - Code++".to_string(),
-        },
+        Some(tab) => format!("{} - Code++", tab_display_name(tab)),
         None => "Code++".to_string(),
     };
     let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
@@ -3726,18 +3735,27 @@ const TAB_LABEL_MAX_TCHARS: usize = 260;
 /// [`tab_label_for`] wraps it for the Win32 tab-strip API which
 /// needs a NUL-terminated UTF-16 buffer.
 fn tab_display_name(tab: &Tab) -> String {
-    let owned = tab.path.as_ref().and_then(|p| {
-        p.file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
-    });
-    let owned = match owned {
-        Some(s) => s,
-        None => match tab.untitled_seq {
+    // Resolution order: user-chosen `custom_name` (set via File →
+    // Rename...) wins over both the on-disk filename and the
+    // `new N` sequence so the renamed buffer keeps its label
+    // through tab switches and session restores. `custom_name` is
+    // cleared by `save_buffer_as` once the buffer gains a real
+    // path, so a Saved-As-then-renamed flow correctly picks up
+    // the on-disk filename.
+    let owned = tab
+        .custom_name
+        .clone()
+        .or_else(|| {
+            tab.path.as_ref().and_then(|p| {
+                p.file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string())
+            })
+        })
+        .unwrap_or_else(|| match tab.untitled_seq {
             Some(n) => format!("new {n}"),
             None => "Untitled".to_string(),
-        },
-    };
+        });
     sanitize_filename_for_display(&owned)
 }
 
@@ -3819,6 +3837,12 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             MF_STRING,
             ID_FILE_SAVE_ALL as usize,
             w!("Sav&e All"),
+        )?;
+        AppendMenuW(
+            file_menu,
+            MF_STRING,
+            ID_FILE_RENAME as usize,
+            w!("Re&name...\tF2"),
         )?;
         AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
         AppendMenuW(
@@ -7092,6 +7116,410 @@ fn show_goto_dialog(
     }
 }
 
+// --- Rename dialog ----------------------------------------------------------
+//
+// Modal text-input dialog used by File → Rename... to set the
+// `Tab.custom_name` for an untitled buffer. Path-bound buffers
+// route to the Save-As flow instead — see the WM_COMMAND handler
+// for `ID_FILE_RENAME` in `main_wnd_proc`.
+
+/// State carried through the rename dialog's wnd_proc — the
+/// returned `result` is read after the message pump unwinds and
+/// is `Some` only on a confirmed OK with non-empty text.
+struct RenameDialogState {
+    result: Option<String>,
+    edit_hwnd: HWND,
+    ok_hwnd: HWND,
+    /// Disabled-while-modal owner. Stored on the state so the
+    /// wnd_proc can `EnableWindow(owner, true)` *before* every
+    /// `DestroyWindow` — destroying the dialog while the owner is
+    /// still disabled lets activation leak to the next window in
+    /// z-order (often another app), so this re-enable is what
+    /// keeps focus inside our process. Same pattern the About
+    /// dialog uses (`AboutDialogState.owner_hwnd`).
+    owner_hwnd: HWND,
+    controls_ready: bool,
+}
+
+/// Re-enable the modal dialog's owner and tear down the dialog
+/// window. Centralised so every `DestroyWindow` call site (IDOK
+/// commit, IDCANCEL, WM_CLOSE) does both halves in the same order
+/// — re-enable first, then destroy — without each branch
+/// duplicating the comment + the `EnableWindow` call.
+unsafe fn close_rename_dialog(hwnd: HWND, owner_hwnd: HWND) {
+    unsafe {
+        let _ = EnableWindow(owner_hwnd, true);
+        let _ = DestroyWindow(hwnd);
+    }
+}
+
+extern "system" fn rename_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    // Same `catch_unwind` pattern as `goto_wnd_proc`: a panic
+    // crossing the `extern "system"` frame is UB, and
+    // `String::from_utf16_lossy` / `SetWindowTextW` / `SetFocus`
+    // can all panic on OOM. On panic we fall through to
+    // `DefWindowProcW`, which keeps the dialog responsive enough
+    // for the user to Cancel out.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        match msg {
+            WM_NCCREATE => {
+                let cs = lparam.0 as *const CREATESTRUCTW;
+                if !cs.is_null() {
+                    let state_ptr = (*cs).lpCreateParams as isize;
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_COMMAND => {
+                let cmd = (wparam.0 & 0xFFFF) as i32;
+                let notif = ((wparam.0 >> 16) & 0xFFFF) as u32;
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RenameDialogState;
+                let state = if !state_ptr.is_null() && (*state_ptr).controls_ready {
+                    Some(&mut *state_ptr)
+                } else {
+                    None
+                };
+                if cmd == IDOK.0 {
+                    if let Some(state) = state {
+                        if let Some(text) = read_rename_value(state.edit_hwnd) {
+                            state.result = Some(text);
+                            close_rename_dialog(hwnd, state.owner_hwnd);
+                        } else {
+                            // Empty — re-focus the edit so a retry
+                            // is one keystroke away. Should be
+                            // unreachable because the OK button is
+                            // disabled when the edit is empty, but
+                            // defensive in case `IsDialogMessageW`
+                            // funnels an Enter through some other
+                            // path.
+                            let _ = SetFocus(Some(state.edit_hwnd));
+                        }
+                    }
+                    LRESULT(0)
+                } else if cmd == IDCANCEL.0 {
+                    if let Some(state) = state {
+                        close_rename_dialog(hwnd, state.owner_hwnd);
+                    } else {
+                        // No state — defensive fallback: best
+                        // effort by reading owner via GetWindow.
+                        let owner = windows::Win32::UI::WindowsAndMessaging::GetWindow(
+                            hwnd,
+                            windows::Win32::UI::WindowsAndMessaging::GW_OWNER,
+                        )
+                        .unwrap_or_default();
+                        close_rename_dialog(hwnd, owner);
+                    }
+                    LRESULT(0)
+                } else if cmd == IDC_RENAME_EDIT as i32
+                    && notif == windows::Win32::UI::WindowsAndMessaging::EN_CHANGE
+                {
+                    // Enable / disable the OK button as the edit
+                    // gains or loses content. Per the user's
+                    // sign-off, an empty rename is rejected — OK
+                    // stays greyed until a non-whitespace
+                    // character is present.
+                    if let Some(state) = state {
+                        let has_text = read_rename_value(state.edit_hwnd).is_some();
+                        let _ = EnableWindow(state.ok_hwnd, has_text);
+                    }
+                    LRESULT(0)
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+            }
+            WM_CLOSE => {
+                // Title-bar X / Alt-F4. Re-enable the owner before
+                // destroying so activation returns to it instead
+                // of leaking out of the app — same fix as the
+                // IDOK / IDCANCEL paths above.
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RenameDialogState;
+                let owner = if !state_ptr.is_null() && (*state_ptr).controls_ready {
+                    (*state_ptr).owner_hwnd
+                } else {
+                    windows::Win32::UI::WindowsAndMessaging::GetWindow(
+                        hwnd,
+                        windows::Win32::UI::WindowsAndMessaging::GW_OWNER,
+                    )
+                    .unwrap_or_default()
+                };
+                close_rename_dialog(hwnd, owner);
+                LRESULT(0)
+            }
+            // Same Win11 themed-paint workaround as `goto_wnd_proc`:
+            // override `WM_ERASEBKGND` so the dialog body is our
+            // `dialog_bg_brush` shade rather than whatever
+            // UxTheme paints over the class brush.
+            WM_ERASEBKGND => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let mut rect = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rect);
+                FillRect(hdc, &rect, dialog_bg_brush());
+                LRESULT(1)
+            }
+            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
+            }
+            WM_CTLCOLOREDIT => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }));
+    match result {
+        Ok(lr) => lr,
+        Err(_) => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// Read the rename edit's text, trim whitespace, and return
+/// `None` if the result is empty. The trim matches the
+/// "OK is disabled while empty" UX — a buffer of pure spaces is
+/// treated as empty input rather than as a valid name.
+unsafe fn read_rename_value(edit: HWND) -> Option<String> {
+    // 256 UTF-16 units is plenty for a tab label — well within
+    // the `TAB_LABEL_MAX_TCHARS` cap downstream.
+    let mut buf = [0u16; 256];
+    let len = unsafe { GetWindowTextW(edit, &mut buf) };
+    if len <= 0 {
+        return None;
+    }
+    let text = String::from_utf16_lossy(&buf[..len as usize]);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Show the modal Rename dialog with `current_name` pre-filled and
+/// selected. Returns the user's new name on OK, or `None` on
+/// Cancel / window-close. Must be called from the UI thread that
+/// owns `owner`.
+fn show_rename_dialog(owner: HWND, current_name: &str) -> Option<String> {
+    use std::sync::OnceLock;
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+
+    unsafe {
+        let instance = GetModuleHandleW(None).ok()?;
+
+        REGISTERED.get_or_init(|| {
+            let class = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(rename_wnd_proc),
+                hInstance: instance.into(),
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                hbrBackground: dialog_bg_brush(),
+                lpszClassName: RENAME_CLASS,
+                ..Default::default()
+            };
+            let _ = RegisterClassExW(&class);
+        });
+
+        let mut state = Box::new(RenameDialogState {
+            result: None,
+            edit_hwnd: HWND::default(),
+            ok_hwnd: HWND::default(),
+            owner_hwnd: owner,
+            controls_ready: false,
+        });
+        let state_ptr: *mut RenameDialogState = &mut *state;
+
+        // Layout: tighter than the Goto dialog because the rename
+        // dialog has only three controls (label, edit, two
+        // buttons). Same coordinate convention — CLIENT
+        // dimensions, then `AdjustWindowRectEx` to the window
+        // size so the chrome doesn't eat into the right padding.
+        const CLIENT_W: i32 = 380;
+        const CLIENT_H: i32 = 120;
+        const X_PAD: i32 = 14;
+        const LABEL_Y: i32 = 12;
+        const EDIT_Y: i32 = 36;
+        const BTN_Y: i32 = 78;
+        const LABEL_W: i32 = CLIENT_W - 2 * X_PAD;
+        const LABEL_H: i32 = 18;
+        const EDIT_W: i32 = CLIENT_W - 2 * X_PAD;
+        const EDIT_H: i32 = 24;
+        const BTN_W: i32 = 90;
+        const BTN_H: i32 = 26;
+        const OK_X: i32 = CLIENT_W - X_PAD - BTN_W * 2 - 8;
+        const CANCEL_X: i32 = CLIENT_W - X_PAD - BTN_W;
+
+        let mut window_rect = RECT {
+            left: 0,
+            top: 0,
+            right: CLIENT_W,
+            bottom: CLIENT_H,
+        };
+        let _ = AdjustWindowRectEx(
+            &mut window_rect,
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            false,
+            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+        );
+        let dlg_w = window_rect.right - window_rect.left;
+        let dlg_h = window_rect.bottom - window_rect.top;
+
+        let mut owner_rect = RECT::default();
+        let _ = GetWindowRect(owner, &mut owner_rect);
+        let owner_w = owner_rect.right - owner_rect.left;
+        let owner_h = owner_rect.bottom - owner_rect.top;
+        let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
+        let dlg_y = owner_rect.top + (owner_h - dlg_h) / 2;
+
+        let dlg = CreateWindowExW(
+            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+            RENAME_CLASS,
+            w!("Rename"),
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            dlg_x,
+            dlg_y,
+            dlg_w,
+            dlg_h,
+            Some(owner),
+            None,
+            Some(instance.into()),
+            Some(state_ptr as *mut c_void),
+        )
+        .ok()?;
+        let _dlg_guard = DlgDestroyGuard(dlg);
+
+        let label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("&New name:"),
+            WS_CHILD | WS_VISIBLE,
+            X_PAD,
+            LABEL_Y,
+            LABEL_W,
+            LABEL_H,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let edit = CreateWindowExW(
+            WS_EX_CLIENTEDGE,
+            w!("EDIT"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(ES_AUTOHSCROLL),
+            X_PAD,
+            EDIT_Y,
+            EDIT_W,
+            EDIT_H,
+            Some(dlg),
+            Some(HMENU(IDC_RENAME_EDIT as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let ok_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("&OK"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_DEFPUSHBUTTON),
+            OK_X,
+            BTN_Y,
+            BTN_W,
+            BTN_H,
+            Some(dlg),
+            Some(HMENU(IDOK.0 as u16 as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let cancel_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("&Cancel"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_PUSHBUTTON),
+            CANCEL_X,
+            BTN_Y,
+            BTN_W,
+            BTN_H,
+            Some(dlg),
+            Some(HMENU(IDCANCEL.0 as u16 as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        state.edit_hwnd = edit;
+        state.ok_hwnd = ok_btn;
+        state.controls_ready = true;
+
+        // Cap the EDIT control's character buffer at the same size
+        // `read_rename_value` truncates at (255 + a NUL slot in
+        // `GetWindowTextW`'s 256-unit buffer). Without this Win32
+        // EDITs default to a 30k / 64k char limit; a long paste
+        // would balloon the control's internal buffer for text
+        // we'd silently discard at read time. `EM_SETLIMITTEXT`
+        // makes the dialog reject keystrokes/pastes past 255
+        // up front so the input UX matches what we'll store.
+        SendMessageW(
+            edit,
+            windows::Win32::UI::Controls::EM_SETLIMITTEXT,
+            Some(WPARAM(255)),
+            Some(LPARAM(0)),
+        );
+
+        let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
+        for child in [label, edit, ok_btn, cancel_btn] {
+            apply_dialog_font(child, font);
+        }
+
+        // Pre-fill the edit with the current display name and
+        // select all so the user's first keystroke replaces it.
+        // OK starts disabled iff the prefill is empty (defensive
+        // — `tab_display_name` always returns a non-empty string,
+        // but a future change there shouldn't quietly regress
+        // this UX).
+        let prefill = HSTRING::from(current_name);
+        let _ = SetWindowTextW(edit, &prefill);
+        let _ = EnableWindow(ok_btn, !current_name.trim().is_empty());
+
+        let _ = EnableWindow(owner, false);
+        let _owner_guard = OwnerEnableGuard(owner);
+        let _ = ShowWindow(dlg, SW_SHOW);
+        let _ = SetFocus(Some(edit));
+        SendMessageW(edit, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+
+        let mut msg = MSG::default();
+        loop {
+            if !IsWindow(Some(dlg)).as_bool() {
+                break;
+            }
+            let ret = GetMessageW(&mut msg, None, 0, 0);
+            match ret.0 {
+                0 => {
+                    let _ = PostMessageW(None, WM_QUIT, msg.wParam, msg.lParam);
+                    break;
+                }
+                -1 => break,
+                _ => {
+                    if !IsDialogMessageW(dlg, &msg).as_bool() {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                }
+            }
+        }
+
+        state.result.take()
+    }
+}
+
 /// Lift a control-style bitmask (ES_*/BS_*) into the `WINDOW_STYLE`
 /// newtype that windows-rs models WS_* flags with. The two are
 /// bitwise-compatible by Win32 design, but Rust requires the type
@@ -10040,6 +10468,16 @@ fn build_default_accel_table() -> Vec<ACCEL> {
             key: VK_F1.0,
             cmd: ID_HELP_ABOUT,
         },
+        // File → Rename... — F2 is the conventional rename
+        // shortcut across Windows shells, IDEs, and Notepad++.
+        // Plain virtual key, no modifier bits, matching F1's
+        // contract. Scintilla doesn't bind F2 either, so there's
+        // no contention with the editor.
+        ACCEL {
+            fVirt: ACCEL_VIRT_FLAGS(FVIRTKEY.0),
+            key: VK_F2.0,
+            cmd: ID_FILE_RENAME,
+        },
     ]
 }
 
@@ -10588,6 +11026,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                         encoding,
                         eol,
                         backup_modified_externally,
+                        custom_name,
                     } => {
                         // `restore_untitled_with_text` needs a
                         // `&mut UiPlatform` to allocate the Scintilla
@@ -10605,6 +11044,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                             encoding,
                             eol,
                             backup_modified_externally,
+                            custom_name,
                         );
                     }
                     SessionRestoreEntry::DirtyFromBackup {
@@ -13287,6 +13727,80 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // run_save_as_flow refreshes the tab strip.
                         fire_queued_notifications(hwnd);
                     }
+                    ID_FILE_RENAME => {
+                        // Two-branch behaviour:
+                        //   - untitled buffer (no path): show the
+                        //     modal Rename dialog and update
+                        //     `Tab.custom_name` on confirm.
+                        //   - path-bound buffer: route to Save-As,
+                        //     letting the user pick a new on-disk
+                        //     location (matches Notepad++'s
+                        //     File→Rename semantics for saved files).
+                        //
+                        // The dialog opens its own message pump,
+                        // so any `&mut WindowState` borrow MUST be
+                        // dropped before `show_rename_dialog` is
+                        // called — re-entrant `state_from_hwnd`
+                        // during the dialog would alias. We also
+                        // capture the buffer id (not just the
+                        // index) so the post-dialog write hits the
+                        // right tab even if a `WM_APP_WAKE` mid-
+                        // pump shifted the tabs vector underneath
+                        // us — buffer ids are stable across closes
+                        // and reorders (assigned once at creation,
+                        // never reused within a session).
+                        enum RenameAction {
+                            None,
+                            ShowDialog {
+                                current_name: String,
+                                buffer_id: i32,
+                            },
+                            RouteToSaveAs,
+                        }
+                        let action = if let Some(state) = state_from_hwnd(hwnd) {
+                            match state.shell.active_tab {
+                                Some(idx) if idx < state.shell.tabs.len() => {
+                                    let tab = &state.shell.tabs[idx];
+                                    if tab.path.is_some() {
+                                        RenameAction::RouteToSaveAs
+                                    } else {
+                                        RenameAction::ShowDialog {
+                                            current_name: tab_display_name(tab),
+                                            buffer_id: tab.id,
+                                        }
+                                    }
+                                }
+                                _ => RenameAction::None,
+                            }
+                        } else {
+                            RenameAction::None
+                        };
+                        match action {
+                            RenameAction::None => {}
+                            RenameAction::RouteToSaveAs => {
+                                run_save_as_flow(hwnd);
+                                fire_queued_notifications(hwnd);
+                            }
+                            RenameAction::ShowDialog {
+                                current_name,
+                                buffer_id,
+                            } => {
+                                if let Some(new_name) = show_rename_dialog(hwnd, &current_name) {
+                                    if let Some(state) = state_from_hwnd(hwnd) {
+                                        if let Some(tab) =
+                                            state.shell.tabs.iter_mut().find(|t| t.id == buffer_id)
+                                        {
+                                            tab.custom_name = Some(new_name);
+                                        }
+                                    }
+                                    refresh_tab_chrome(hwnd);
+                                    if let Some(state) = state_from_hwnd(hwnd) {
+                                        update_window_title(hwnd, &state.shell);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     ID_FILE_SAVE_ALL => {
                         // Iterate every titled tab, save each, then
                         // restore the original active. Errors are
@@ -14959,6 +15473,38 @@ mod tab_display_name_tests {
             ..Tab::default()
         };
         assert_eq!(tab_display_name(&tab), "Untitled");
+    }
+
+    #[test]
+    fn custom_name_overrides_untitled_seq() {
+        // File → Rename... on `new 3` produces a tab with
+        // `untitled_seq = Some(3)` AND `custom_name = Some(...)`.
+        // The display label must be the user-chosen name, not
+        // the sequence number — that's the entire point of the
+        // feature.
+        let tab = Tab {
+            path: None,
+            untitled_seq: Some(3),
+            custom_name: Some("scratchpad".to_string()),
+            ..Tab::default()
+        };
+        assert_eq!(tab_display_name(&tab), "scratchpad");
+    }
+
+    #[test]
+    fn custom_name_overrides_path_basename() {
+        // Defensive priority test: even if a tab has both a path
+        // and a `custom_name` (which shouldn't normally happen
+        // because `save_buffer_as` clears `custom_name`), the
+        // custom name still wins so the tab strip honours the
+        // documented priority order. Catches a regression where
+        // the `or_else` arms in `tab_display_name` get reordered.
+        let tab = Tab {
+            path: Some(PathBuf::from("/tmp/notes.txt")),
+            custom_name: Some("renamed".to_string()),
+            ..Tab::default()
+        };
+        assert_eq!(tab_display_name(&tab), "renamed");
     }
 
     #[test]
