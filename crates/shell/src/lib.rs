@@ -618,6 +618,22 @@ pub struct Tab {
     /// untitled tabs, so closing `new 1` then creating a new
     /// untitled buffer gives `new 1` again.
     pub untitled_seq: Option<u32>,
+    /// Cached "buffer has unsaved changes" flag for the tab strip's
+    /// owner-draw paint. Mirrors Scintilla's `SCI_GETMODIFY` for the
+    /// tab's document, but readable without binding the editor to
+    /// that doc — paint runs once per tab per repaint, so reading
+    /// the live modify bit (which requires the expensive
+    /// doc-pointer-swap dance) on every inactive tab is not viable.
+    /// Updated by the UI on `SCN_SAVEPOINTREACHED` / `SCN_SAVEPOINTLEFT`
+    /// for the active tab and on tab activation for the previously
+    /// active tab. Always false on tab creation; flips true on the
+    /// first user edit. Save paths that drive `SCI_SETSAVEPOINT`
+    /// flip it back to false (Scintilla also fires
+    /// `SCN_SAVEPOINTREACHED` from inside that message, so the
+    /// notification arm is the canonical write site — explicit
+    /// resets in save paths are belt-and-braces for code that
+    /// short-circuits before the notification fires).
+    pub dirty: bool,
 }
 
 impl Default for Tab {
@@ -633,6 +649,7 @@ impl Default for Tab {
             scintilla_doc: 0,
             lang: L_TEXT,
             untitled_seq: None,
+            dirty: false,
         }
     }
 }
@@ -2993,6 +3010,13 @@ impl Shell {
             scintilla_doc: 0,
             lang: codepp_core::lang::L_TEXT,
             untitled_seq,
+            // Initial value — Scintilla's `SCN_SAVEPOINTLEFT` fires
+            // when the UI populates the new doc with the backup
+            // text, which flips this to `true` synchronously. The
+            // brief paint window before the notification arrives
+            // shows the clean icon; visible only on a paint that
+            // races the load completion (rarely observable).
+            dirty: false,
         });
         self.active_tab = Some(new_idx);
         // Bind a fresh Scintilla document; matches `new_untitled`'s
@@ -3093,6 +3117,14 @@ impl Shell {
             scintilla_doc: 0,
             lang,
             untitled_seq: None,
+            // Backup-restored buffers carry edits the user never
+            // committed to disk — paint them as dirty (red icon)
+            // from the very first frame, even before Scintilla
+            // fires SCN_SAVEPOINTLEFT in response to set_buffer_text
+            // re-injecting the backup content. The user's mental
+            // model is "this still needs saving", regardless of
+            // whether the underlying doc has yet been touched.
+            dirty: true,
         });
         self.active_tab = Some(new_idx);
         let new_doc = ui.activate_tab(new_idx, 0);

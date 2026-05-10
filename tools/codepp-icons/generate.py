@@ -84,6 +84,36 @@ ICONS["save"] = (
     f'<path d="M9 16 H16 M9 18.5 H14" stroke="{INK}" stroke-width="1.2"/>'
 )
 
+ICONS["tab-save"] = (
+    # Tab-strip floppy: same geometry family as ICONS["save"] (above)
+    # but rendered at 16/32 px for the tab strip rather than 24/48 for
+    # the toolbar. Drawn over a slightly tighter 24-unit viewBox so the
+    # strokes don't dissolve when the rasteriser scales down to 16 px.
+    f'<path d="M4 3 H18 L21 6 V21 H4 Z" fill="{BLUE}" '
+    f'stroke="{INK}" stroke-width="1.5"/>'
+    f'<rect x="7" y="3" width="9" height="6" fill="{PAPER}" '
+    f'stroke="{INK}" stroke-width="1.5"/>'
+    f'<rect x="13" y="4.5" width="2" height="3" fill="{INK}"/>'
+    f'<rect x="7" y="13" width="11" height="8" fill="{PAPER}" '
+    f'stroke="{INK}" stroke-width="1.5"/>'
+    f'<path d="M9 16 H16 M9 18.5 H14" stroke="{INK}" stroke-width="1.2"/>'
+)
+
+ICONS["tab-save-dirty"] = (
+    # Same geometry as `tab-save` with the floppy body recoloured red
+    # so a glance at the tab strip shows which buffers have unsaved
+    # changes. The stroke / sticker / label / write-protect-tab all
+    # stay identical to the saved variant for visual continuity.
+    f'<path d="M4 3 H18 L21 6 V21 H4 Z" fill="{RED}" '
+    f'stroke="{INK}" stroke-width="1.5"/>'
+    f'<rect x="7" y="3" width="9" height="6" fill="{PAPER}" '
+    f'stroke="{INK}" stroke-width="1.5"/>'
+    f'<rect x="13" y="4.5" width="2" height="3" fill="{INK}"/>'
+    f'<rect x="7" y="13" width="11" height="8" fill="{PAPER}" '
+    f'stroke="{INK}" stroke-width="1.5"/>'
+    f'<path d="M9 16 H16 M9 18.5 H14" stroke="{INK}" stroke-width="1.2"/>'
+)
+
 ICONS["save-all"] = (
     # back disk
     f'<path d="M2 6 H14 L17 9 V19 H2 Z" fill="{GRAY}" '
@@ -489,6 +519,16 @@ PNG_SIZES = (
     ("@2x", 48),  # foo@2x.png
 )
 
+# Tab-strip icons live next to the toolbar set but at half the pixel
+# count — the strip is too short for a 24-px icon. Names prefixed
+# `tab-` get this size pair instead of `PNG_SIZES`. `Win32Ui` picks
+# 16 vs 32 at runtime via `pick_tab_bitmap_size()` (mirrors the
+# toolbar's HiDPI threshold).
+TAB_PNG_SIZES = (
+    ("", 16),  # foo.png
+    ("@2x", 32),  # foo@2x.png
+)
+
 
 def render_png(svg_text: str, size: int) -> bytes:
     """Rasterise an SVG string to a PNG byte-string at `size`x`size`,
@@ -562,10 +602,12 @@ def main() -> int:
     for name, body in ICONS.items():
         (icons_dir / f"{name}.svg").write_text(wrap(body), encoding="utf-8")
 
-    # PNGs at every size in PNG_SIZES, named <name>.png and <name>@2x.png.
+    # PNGs at every size in PNG_SIZES (toolbar) or TAB_PNG_SIZES (tab
+    # strip — names prefixed `tab-`), named <name>.png and <name>@2x.png.
     for name, body in ICONS.items():
         svg_text = wrap(body)
-        for suffix, px in PNG_SIZES:
+        sizes = TAB_PNG_SIZES if name.startswith("tab-") else PNG_SIZES
+        for suffix, px in sizes:
             (icons_dir / f"{name}{suffix}.png").write_bytes(render_png(svg_text, px))
 
     # sprite sheet using <symbol id="icon-name">
@@ -583,8 +625,15 @@ def main() -> int:
     (icons_dir / "sprite.svg").write_text(sprite, encoding="utf-8")
 
     n = len(ICONS)
+    n_tab = sum(1 for name in ICONS if name.startswith("tab-"))
+    n_toolbar = n - n_tab
+    n_pngs = n_toolbar * len(PNG_SIZES) + n_tab * len(TAB_PNG_SIZES)
     sizes = " + ".join(f"{px}px" for _, px in PNG_SIZES)
-    print(f"wrote {n} SVGs and {n * len(PNG_SIZES)} PNGs ({sizes}) to {icons_dir}")
+    tab_sizes = " + ".join(f"{px}px" for _, px in TAB_PNG_SIZES)
+    print(
+        f"wrote {n} SVGs and {n_pngs} PNGs "
+        f"({n_toolbar} toolbar @ {sizes}, {n_tab} tab @ {tab_sizes}) to {icons_dir}"
+    )
     return 0
 
 

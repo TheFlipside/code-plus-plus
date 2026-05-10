@@ -71,7 +71,11 @@ pub const BITMAP_PX_HIDPI: i32 = 48;
 /// set to the 48px set. 144 DPI is 150% scaling. Below that the 24px
 /// set scales acceptably; at-or-above we want the higher-resolution
 /// source so the toolbar doesn't look soft.
-const HIDPI_DPI_THRESHOLD: i32 = 144;
+/// DPI breakpoint that flips the toolbar (and tab strip) between
+/// their LO and HIDPI bitmap sizes. `pub(crate)` so the tab-strip
+/// owner-draw path can pick its own 16/32 vs the toolbar's 24/48
+/// from the same threshold.
+pub(crate) const HIDPI_DPI_THRESHOLD: i32 = 144;
 
 /// Per-button vertical chrome (top + bottom padding inside the
 /// toolbar's window). Combined with the bitmap height to produce
@@ -363,7 +367,7 @@ const BUTTONS: &[ButtonDef] = &[
 /// dots-per-inch (typically 96, 120, 144, 192). Falls back to 96 if
 /// the DC probe fails — a sane default that picks the 24px bitmap
 /// set, the conservative branch.
-fn system_dpi_y() -> i32 {
+pub(crate) fn system_dpi_y() -> i32 {
     // SAFETY: GetDC(None)/ReleaseDC is the standard "get a screen-
     // wide DC for one read" pattern; both calls are paired.
     unsafe {
@@ -527,9 +531,19 @@ fn map_png_err<E: std::fmt::Display>(e: E) -> windows::core::Error {
 }
 
 /// Wrap a PNG byte slice into a top-down 32bpp DIB section
-/// `HBITMAP`. The bitmap owns the bits — caller must `DeleteObject`
-/// after `ImageList_Add` copies them in.
-unsafe fn png_to_hbitmap(png_bytes: &[u8]) -> Result<HBITMAP> {
+/// `HBITMAP` with premultiplied BGRA pixels. The caller owns the
+/// returned `HBITMAP` and is responsible for `DeleteObject`.
+///
+/// `pub(crate)` so the tab-strip owner-draw path (in `lib.rs`) can
+/// share the same decode logic — both the toolbar and the tab strip
+/// load PNGs from `assets/icons/` at startup, and duplicating the
+/// 60-line PNG → BGRA → DIB pipeline would drift over time.
+///
+/// # Safety
+///
+/// `CreateDIBSection` is the only intrinsically `unsafe` step; the
+/// caller takes on the bitmap ownership contract documented above.
+pub(crate) unsafe fn png_to_hbitmap(png_bytes: &[u8]) -> Result<HBITMAP> {
     let (bgra, w, h) = decode_png_to_bgra(png_bytes)?;
 
     // BITMAPINFOHEADER: 32bpp, BI_RGB, NEGATIVE biHeight for top-

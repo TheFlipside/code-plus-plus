@@ -53,10 +53,11 @@ use codepp_scintilla_sys::{
     SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
     SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
     SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
-    SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_UPDATEUI, SC_CP_UTF8,
-    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
-    SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_TEXT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
-    SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT,
+    SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
+    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE,
+    SC_MARGIN_TEXT, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT,
+    STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
@@ -66,10 +67,12 @@ use windows::Win32::Foundation::{
     COLORREF, E_FAIL, HWND, LPARAM, LRESULT, MAX_PATH, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateFontIndirectW, CreateSolidBrush, DeleteObject, FillRect, GetMonitorInfoW, GetStockObject,
-    GetSysColorBrush, InvalidateRect, MonitorFromWindow, SetBkColor, SetBkMode, SetTextColor,
-    COLOR_WINDOW, DEFAULT_GUI_FONT, FW_BOLD, HBRUSH, HDC, HFONT, LOGFONTW, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST, NULL_BRUSH, TRANSPARENT,
+    AlphaBlend, CreateCompatibleDC, CreateFontIndirectW, CreatePen, CreateSolidBrush, DeleteDC,
+    DeleteObject, DrawTextW, FillRect, GetMonitorInfoW, GetStockObject, GetSysColorBrush,
+    InvalidateRect, LineTo, MonitorFromWindow, MoveToEx, SelectObject, SetBkColor, SetBkMode,
+    SetTextColor, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, COLOR_WINDOW, DEFAULT_GUI_FONT,
+    DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT,
+    HGDIOBJ, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH, PS_SOLID, TRANSPARENT,
 };
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
@@ -86,13 +89,15 @@ use windows::Win32::UI::Controls::{
     LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
     LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVM_SETITEMTEXTW, LVN_ITEMCHANGED,
     LVS_EX_CHECKBOXES, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS,
-    LVS_SINGLESEL, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NM_DBLCLK, TCHITTESTINFO, TCIF_TEXT, TCITEMW,
-    TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_HITTEST, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW,
-    TCN_SELCHANGE, WC_COMBOBOX, WC_LISTVIEWW, WC_TABCONTROL,
+    LVS_SINGLESEL, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NM_DBLCLK, ODT_TAB, TCHITTESTINFO, TCIF_TEXT,
+    TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW,
+    TCM_SETCURSEL, TCM_SETITEMW, TCM_SETPADDING, TCN_SELCHANGE, TCS_OWNERDRAWFIXED, WC_COMBOBOX,
+    WC_LISTVIEWW, WC_TABCONTROL, WM_MOUSELEAVE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, ReleaseCapture, SetCapture, SetFocus, VK_0, VK_F, VK_F1, VK_F3, VK_G, VK_H, VK_N,
-    VK_O, VK_OEM_MINUS, VK_OEM_PLUS, VK_S, VK_W,
+    EnableWindow, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
+    TRACKMOUSEEVENT, VK_0, VK_F, VK_F1, VK_F3, VK_G, VK_H, VK_N, VK_O, VK_OEM_MINUS, VK_OEM_PLUS,
+    VK_S, VK_W,
 };
 use windows::Win32::UI::Shell::{
     DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW, SetWindowSubclass, ShellExecuteW,
@@ -753,6 +758,45 @@ struct WindowState {
     /// `state_from_hwnd(GetParent(...))`, mirroring the FIF
     /// splitter's drag-state pattern.
     tab_drag: Option<TabDrag>,
+    /// 32bpp premultiplied-BGRA `HBITMAP` rendered from
+    /// `assets/icons/tab-save.png` (and `@2x.png` for HiDPI).
+    /// Painted into each tab cell's left margin by
+    /// [`paint_tab_item`] when the buffer is clean; the dirty
+    /// variant is in [`Self::tab_save_red_hbm`]. Owned by
+    /// `WindowState`; freed in `WM_DESTROY` alongside the toolbar
+    /// image list.
+    tab_save_blue_hbm: HBITMAP,
+    /// Companion to [`Self::tab_save_blue_hbm`] — same icon recoloured
+    /// red for the dirty-buffer state. Same lifetime contract.
+    tab_save_red_hbm: HBITMAP,
+    /// 16 or 32 — edge length of the loaded tab icons in pixels.
+    /// Picked once at construction via [`pick_tab_bitmap_size`]
+    /// based on the system DPI, mirroring the toolbar's 24/48 split.
+    tab_bitmap_px: i32,
+    /// Index of the tab the cursor is currently over, or `None` when
+    /// the cursor is outside the tab strip. Tracked via
+    /// `WM_MOUSEMOVE` / `WM_MOUSELEAVE` in the tab subclass proc and
+    /// read by [`paint_tab_item`] to decide whether to render the
+    /// close-X (visible on hover for inactive tabs).
+    tab_hover_idx: Option<usize>,
+    /// True iff the cursor sits over the close-X clickable rect of
+    /// the tab in [`Self::tab_hover_idx`]. Drives the colour swap
+    /// (grey → light red) regardless of which tab is active. Always
+    /// `false` when [`Self::tab_hover_idx`] is `None`.
+    tab_hover_close_x: bool,
+    /// True iff `TrackMouseEvent(TME_LEAVE)` is armed for the tab
+    /// strip. Win32 expects the call to be re-armed once per hover
+    /// session; without the flag we'd re-arm on every mousemove (a
+    /// bound on TrackMouseEvent calls per second is documented as
+    /// "implementation-defined" — being explicit is safer).
+    tab_mouse_tracking: bool,
+    /// `Some(idx)` while the user is mid-click on a close-X glyph
+    /// (mouse pressed but not yet released). The close fires on the
+    /// matching `WM_LBUTTONUP` only if the cursor is still over the
+    /// same X — Win32 button convention. Clears on `WM_CAPTURECHANGED`
+    /// so a click-and-drag-away pattern cancels the close instead of
+    /// firing it on a release outside the X.
+    tab_close_armed: Option<usize>,
     editor: EditorHandle,
     shell: Shell,
 }
@@ -3194,6 +3238,22 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
     // its last use here (the queue method), before
     // `fire_queued_notifications` re-acquires a fresh borrow.
     state.shell.queue_buffer_activated();
+    // Repaint the entire tab strip so both the previously-active
+    // and newly-active cells redraw with their correct active /
+    // inactive styling. The system tab control invalidates only
+    // the cells it knows about (the new selection's cell on
+    // `TCM_SETCURSEL`), but our owner-draw paint reads
+    // `state.shell.active_tab` per cell — that membership flips
+    // for two cells on every selection change, so without this
+    // both the outgoing and incoming styles can lag until an
+    // unrelated event (mouse hover, window expose) forces a
+    // repaint.
+    let tab_hwnd = state.tab_hwnd;
+    // SAFETY: tab_hwnd is the live tab control we own; passing
+    // None for the rect invalidates the whole client area.
+    unsafe {
+        let _ = InvalidateRect(Some(tab_hwnd), None, false);
+    }
     // SAFETY: caller's UI-thread contract carries.
     unsafe {
         fire_queued_notifications(hwnd);
@@ -6915,6 +6975,16 @@ const fn style_bits(bits: i32) -> WINDOW_STYLE {
     WINDOW_STYLE(bits as u32)
 }
 
+/// Pack two `i32`s into a Win32 `LPARAM`-shaped `u32`: low word from
+/// `lo`, high word from `hi`. Both inputs are clamped to `i16` range
+/// (Win32's MAKELONG semantics treat each half as 16-bit). Used by
+/// `TCM_SETPADDING` (LOWORD = horizontal padding, HIWORD = vertical
+/// padding) and any other Win32 message that follows the same packed-
+/// 16-bit convention.
+const fn makelong(lo: i32, hi: i32) -> u32 {
+    ((lo as u32) & 0xFFFF) | (((hi as u32) & 0xFFFF) << 16)
+}
+
 /// COLORREF used by the in-dialog elements that DO route
 /// through our paint code (the BS_GROUPBOX title clear via
 /// `WM_CTLCOLORBTN`, anything else that needs a fill). On
@@ -9992,7 +10062,15 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             WINDOW_EX_STYLE::default(),
             WC_TABCONTROL,
             PCWSTR::null(),
-            WS_CHILD | WS_VISIBLE,
+            // `TCS_OWNERDRAWFIXED` makes the parent receive
+            // `WM_DRAWITEM` per tab cell so we paint each item
+            // ourselves: background + save icon + label + close-X.
+            // This is the only path on Win10/11 that reliably
+            // shows custom icons + per-tab hover state inside a
+            // themed tab control — UxTheme intercepts
+            // `NM_CUSTOMDRAW` for the system tab strip but leaves
+            // `WM_DRAWITEM` alone.
+            WS_CHILD | WS_VISIBLE | style_bits(TCS_OWNERDRAWFIXED as i32),
             0,
             0,
             0,
@@ -10003,8 +10081,24 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             None,
         )?;
 
+        // Reserve horizontal room either side of the tab text for
+        // the save icon (left) and the close-X (right).
+        // `TCM_SETPADDING` adds the wparam padding either side of
+        // the system-calculated text width. The vertical padding
+        // bumps the tab height a touch so the 16-px icon doesn't
+        // crowd the top/bottom borders.
+        SendMessageW(
+            tab_hwnd,
+            TCM_SETPADDING,
+            Some(WPARAM(0)),
+            Some(LPARAM(
+                makelong(TAB_TEXT_PADDING_X_PX, TAB_TEXT_PADDING_Y_PX) as isize,
+            )),
+        );
+
         // Subclass the tab control so left-button mouse messages
-        // can drive drag-to-reorder. `tab_subclass_proc` removes
+        // can drive drag-to-reorder, hover state for the close-X,
+        // and click-to-close-tab. `tab_subclass_proc` removes
         // itself from the subclass chain on `WM_NCDESTROY` so the
         // subclass storage doesn't leak when the window dies.
         // `SetWindowSubclass` returns BOOL — failure is extremely
@@ -10246,6 +10340,34 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         let initial_accels = build_default_accel_table();
         let initial_accel_handle: HACCEL = CreateAcceleratorTableW(&initial_accels)?;
 
+        // Load the tab-strip save icons (blue = clean, red = dirty)
+        // into 32bpp premultiplied DIB sections. Both bitmaps stay
+        // alive on `WindowState` for the life of the window and are
+        // freed in `WM_DESTROY`. A failure here would mean broken
+        // tab paint — `is_invalid()` on a returned HBITMAP gates
+        // every paint site, so a partial failure shows blank icons
+        // rather than crashing.
+        let tab_bitmap_px = pick_tab_bitmap_size();
+        let (tab_save_blue_png, tab_save_red_png) = if tab_bitmap_px == TAB_BITMAP_PX_HIDPI {
+            (PNG_TAB_SAVE_HIDPI, PNG_TAB_SAVE_DIRTY_HIDPI)
+        } else {
+            (PNG_TAB_SAVE_LO, PNG_TAB_SAVE_DIRTY_LO)
+        };
+        let tab_save_blue_hbm = match toolbar::png_to_hbitmap(tab_save_blue_png) {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(error = %e, "tab-save (clean) icon decode failed; tab strip will paint without it");
+                HBITMAP(core::ptr::null_mut())
+            }
+        };
+        let tab_save_red_hbm = match toolbar::png_to_hbitmap(tab_save_red_png) {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(error = %e, "tab-save (dirty) icon decode failed; tab strip will paint without it");
+                HBITMAP(core::ptr::null_mut())
+            }
+        };
+
         // Heap-allocate the WindowState. We resolve and queue the
         // initial-open path while we still own the box (i.e.
         // BEFORE installing it in `GWLP_USERDATA`), so there's
@@ -10286,6 +10408,13 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             fif_pending_jumps: Vec::new(),
             fif_in_buffer_counts: None,
             tab_drag: None,
+            tab_save_blue_hbm,
+            tab_save_red_hbm,
+            tab_bitmap_px,
+            tab_hover_idx: None,
+            tab_hover_close_x: false,
+            tab_mouse_tracking: false,
+            tab_close_armed: None,
             editor,
             shell,
             accel_handle: initial_accel_handle,
@@ -12042,6 +12171,28 @@ extern "system" fn tab_subclass_proc(
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 let parent = GetParent(hwnd).unwrap_or_default();
+                // Close-X click takes priority over drag detection.
+                // If the press lands on a tab's X, arm the close
+                // (committed on the matching WM_LBUTTONUP only if
+                // the cursor is still on the same X — Win32 button
+                // convention) and let DefSubclassProc activate the
+                // clicked tab via the usual `TCN_SELCHANGE` path so
+                // the queued `ID_FILE_CLOSE` operates on the right
+                // buffer when it fires.
+                let close_hit = tab_close_x_hit_test(hwnd, x, y);
+                if let Some(idx) = close_hit {
+                    if let Some(state) = state_from_hwnd(parent) {
+                        state.tab_close_armed = Some(idx);
+                        // Clear any drag the previous click might
+                        // have left armed. Belt-and-braces — drag
+                        // is only set when the press is over a tab
+                        // body (handled below), but a bug in that
+                        // path would otherwise stick.
+                        state.tab_drag = None;
+                    }
+                    let _ = SetCapture(hwnd);
+                    return DefSubclassProc(hwnd, msg, wparam, lparam);
+                }
                 let hit = tab_hit_test(hwnd, x, y);
                 if let Some(state) = state_from_hwnd(parent) {
                     if let Some(idx) = hit {
@@ -12061,14 +12212,53 @@ extern "system" fn tab_subclass_proc(
                 DefSubclassProc(hwnd, msg, wparam, lparam)
             }
             WM_MOUSEMOVE => {
-                // Only act when we're holding capture for this
-                // drag — `state.tab_drag` is the source-of-truth
-                // since `WM_MOUSEMOVE` fires constantly even
-                // without a button held.
+                // WM_MOUSEMOVE fires constantly while the cursor is
+                // over the tab strip, with or without a button held.
+                // We use it for two things: drag-to-reorder (when
+                // `tab_drag` is set) and hover state for the close-X
+                // glyphs (always tracked so the X reveals on inactive
+                // tabs while the cursor is over them).
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 let parent = GetParent(hwnd).unwrap_or_default();
                 let hit = tab_hit_test(hwnd, x, y);
+                let close_hit = tab_close_x_hit_test(hwnd, x, y).is_some();
+                // Hover-state update + TrackMouseEvent arming. Done
+                // outside the drag branch so plain hover (no button
+                // held) updates the visible X glyphs immediately.
+                if let Some(state) = state_from_hwnd(parent) {
+                    let prev_idx = state.tab_hover_idx;
+                    let prev_on_x = state.tab_hover_close_x;
+                    state.tab_hover_idx = hit;
+                    state.tab_hover_close_x = close_hit;
+                    if !state.tab_mouse_tracking {
+                        let mut tme = TRACKMOUSEEVENT {
+                            cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                            dwFlags: TME_LEAVE,
+                            hwndTrack: hwnd,
+                            dwHoverTime: 0,
+                        };
+                        // SAFETY: `tme` is a stack binding alive
+                        // across the synchronous TrackMouseEvent
+                        // call; the call writes nothing back and
+                        // arms a one-shot WM_MOUSELEAVE.
+                        let _ = TrackMouseEvent(&mut tme);
+                        state.tab_mouse_tracking = true;
+                    }
+                    // Repaint affected cells on transitions. We
+                    // invalidate two indices (old + new) to cover
+                    // moves between adjacent tabs; for an X-state
+                    // change on the same tab, the old==new path
+                    // collapses to one InvalidateRect.
+                    if prev_idx != hit || prev_on_x != close_hit {
+                        if let Some(prev) = prev_idx {
+                            invalidate_tab(hwnd, prev);
+                        }
+                        if let Some(now) = hit {
+                            invalidate_tab(hwnd, now);
+                        }
+                    }
+                }
                 if let Some(state) = state_from_hwnd(parent) {
                     if let Some(mut drag) = state.tab_drag {
                         // Defensive: another input path could
@@ -12131,21 +12321,105 @@ extern "system" fn tab_subclass_proc(
                 DefSubclassProc(hwnd, msg, wparam, lparam)
             }
             WM_LBUTTONUP => {
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let parent = GetParent(hwnd).unwrap_or_default();
+                // Commit the close-X arm if the release lands on the
+                // same X the press did — Win32 button convention
+                // ("click and drag away to cancel"). The arm clears
+                // unconditionally so a release outside the X (or on
+                // a different tab's X) just dismisses without firing.
+                let release_close_hit = tab_close_x_hit_test(hwnd, x, y);
+                let armed = if let Some(state) = state_from_hwnd(parent) {
+                    let armed = state.tab_close_armed.take();
+                    state.tab_drag = None;
+                    armed
+                } else {
+                    None
+                };
+                let _ = ReleaseCapture();
+                if let Some(armed_idx) = armed {
+                    if release_close_hit == Some(armed_idx) {
+                        // Activate the clicked tab if it wasn't
+                        // already, then post the close. The
+                        // activation runs synchronously via
+                        // `TCM_SETCURSEL` + a synthesised
+                        // `TCN_SELCHANGE`; the close runs after
+                        // we return so any per-tab close prompt
+                        // appears against the just-activated
+                        // buffer.
+                        let cur = SendMessageW(hwnd, TCM_GETCURSEL, None, None).0 as i32;
+                        if cur != armed_idx as i32 {
+                            SendMessageW(
+                                hwnd,
+                                TCM_SETCURSEL,
+                                Some(WPARAM(armed_idx)),
+                                Some(LPARAM(0)),
+                            );
+                            // TCM_SETCURSEL doesn't fire
+                            // TCN_SELCHANGE — synthesise it so
+                            // `handle_tab_selchange` runs the
+                            // SCI_SETDOCPOINTER swap and the
+                            // close path operates on the right
+                            // buffer.
+                            handle_tab_selchange(parent);
+                        }
+                        let _ = PostMessageW(
+                            Some(parent),
+                            WM_COMMAND,
+                            WPARAM(ID_FILE_CLOSE as usize),
+                            LPARAM(0),
+                        );
+                    }
+                }
+                DefSubclassProc(hwnd, msg, wparam, lparam)
+            }
+            WM_MOUSELEAVE => {
+                // Cursor left the tab strip: clear hover state,
+                // disarm the leave tracker (Win32 fires once per
+                // arm), and repaint the previously-hovered cell so
+                // its close-X disappears (for inactive tabs) or
+                // returns to non-hover colour (for the active tab).
                 let parent = GetParent(hwnd).unwrap_or_default();
                 if let Some(state) = state_from_hwnd(parent) {
-                    state.tab_drag = None;
+                    let prev = state.tab_hover_idx;
+                    state.tab_hover_idx = None;
+                    state.tab_hover_close_x = false;
+                    state.tab_mouse_tracking = false;
+                    if let Some(idx) = prev {
+                        invalidate_tab(hwnd, idx);
+                    }
                 }
-                let _ = ReleaseCapture();
                 DefSubclassProc(hwnd, msg, wparam, lparam)
             }
             WM_CAPTURECHANGED => {
                 // Same rationale as `splitter_wnd_proc`: if capture
                 // is taken away mid-drag (alt-tab, parent destroy,
                 // …), drop the drag state so the next mouse-move
-                // doesn't reorder tabs without a held button.
+                // doesn't reorder tabs without a held button. Same
+                // logic for the close-X arm: capture loss = cancel.
+                //
+                // Hover state piggy-backs on the same teardown:
+                // without this, an Alt-Tab while the cursor sits over
+                // a tab leaves the previously-hovered cell painted
+                // with its hover-shaded background and visible close-X
+                // until the cursor next moves over the strip. Reset
+                // the trackers and invalidate the affected cell so
+                // the next paint reflects "no tab is hovered".
                 let parent = GetParent(hwnd).unwrap_or_default();
-                if let Some(state) = state_from_hwnd(parent) {
+                let prev_hover = if let Some(state) = state_from_hwnd(parent) {
                     state.tab_drag = None;
+                    state.tab_close_armed = None;
+                    let prev = state.tab_hover_idx;
+                    state.tab_hover_idx = None;
+                    state.tab_hover_close_x = false;
+                    state.tab_mouse_tracking = false;
+                    prev
+                } else {
+                    None
+                };
+                if let Some(idx) = prev_hover {
+                    invalidate_tab(hwnd, idx);
                 }
                 DefSubclassProc(hwnd, msg, wparam, lparam)
             }
@@ -12176,6 +12450,424 @@ extern "system" fn tab_subclass_proc(
 /// Only one subclass is installed on the tab control today, so the
 /// value is arbitrary — the constant just gives it a name.
 const TAB_SUBCLASS_ID: usize = 1;
+
+// --- Tab strip owner-draw paint ---------------------------------------------
+//
+// `TCS_OWNERDRAWFIXED` makes the parent receive `WM_DRAWITEM` per tab
+// cell. We paint everything ourselves: background fill, the dirty/clean
+// floppy icon (left), the tab text (centre), and the close-X (right).
+// This is the only path on Win10/11 that reliably renders custom icons +
+// hover state inside tab cells — UxTheme paints over `NM_CUSTOMDRAW`
+// callbacks for tabs and steals the cell, but it does not intercept
+// `WM_DRAWITEM`.
+
+/// Tab-strip icon edge length at standard DPI. Half the toolbar's
+/// 24-px choice because the strip is too short for a 24-px icon.
+const TAB_BITMAP_PX_LO: i32 = 16;
+/// Tab-strip icon edge length at HiDPI. Picked between LO and HIDPI
+/// via [`pick_tab_bitmap_size`] using the same threshold the toolbar
+/// uses (`toolbar::HIDPI_DPI_THRESHOLD`).
+const TAB_BITMAP_PX_HIDPI: i32 = 32;
+
+/// Pixel inset from the tab cell's left edge to the save icon, and
+/// from the tab cell's right edge to the close-X glyph. Generous
+/// enough that the icons don't crowd the cell border on either side.
+const TAB_PAD_X_PX: i32 = 6;
+/// Pixel gap between the save icon and the start of the tab text.
+const TAB_ICON_TEXT_GAP_PX: i32 = 4;
+/// Pixel gap between the tab text and the close-X glyph.
+const TAB_TEXT_CLOSEX_GAP_PX: i32 = 4;
+/// Edge length of the close-X clickable area inside a tab cell.
+/// 12 px is roughly the size of the toolbar close-X glyph and reads
+/// at every supported DPI without dominating the tab cell.
+const TAB_CLOSEX_SIZE_PX: i32 = 12;
+/// Pixel padding to feed `TCM_SETPADDING` so the tab control reserves
+/// room either side of the tab text for the save icon (left) and
+/// close-X (right). Left-side reservation must accommodate
+/// `TAB_PAD_X_PX` (6) + icon width (16 at LO DPI; 32 at HiDPI but the
+/// padding is computed against LO since `TCM_SETPADDING` has no DPI
+/// awareness) + `TAB_ICON_TEXT_GAP_PX` (4) = 26 px. Right-side reuses
+/// the same value to balance the close-X glyph + gap.
+const TAB_TEXT_PADDING_X_PX: i32 = 26;
+/// Vertical padding fed to `TCM_SETPADDING` alongside [`TAB_TEXT_PADDING_X_PX`].
+/// 4 keeps the tab a touch taller than the system default so the
+/// 16-px icon doesn't crowd the top/bottom borders.
+const TAB_TEXT_PADDING_Y_PX: i32 = 4;
+
+/// SourceConstantAlpha (0..255) `AlphaBlend` applies when blitting an
+/// inactive tab's save icon. 128 ≈ 50% opacity — readable but visibly
+/// dimmer than the active tab's full-opacity icon.
+const TAB_INACTIVE_ICON_ALPHA: u8 = 128;
+
+/// Tab cell background colour when the tab is active. White, matching
+/// the editor body so the active tab reads as a continuous extension
+/// of the document area below it.
+const TAB_BG_ACTIVE: u32 = 0x00_FF_FF_FF;
+/// Tab cell background for inactive tabs. A subtle near-white grey
+/// (~RGB 240,240,240) that distinguishes inactive cells from the
+/// active one without competing with the tab strip's own backdrop.
+const TAB_BG_INACTIVE: u32 = 0x00_F0_F0_F0;
+/// Same as [`TAB_BG_INACTIVE`] but slightly brighter, used while the
+/// cursor hovers over an inactive tab. RGB ~248,248,248.
+const TAB_BG_INACTIVE_HOVER: u32 = 0x00_F8_F8_F8;
+/// Foreground (text) colour for the active tab's label.
+const TAB_FG_ACTIVE: u32 = 0x00_00_00_00;
+/// Foreground for inactive tabs — medium grey so they read as
+/// secondary without becoming illegible.
+const TAB_FG_INACTIVE: u32 = 0x00_60_60_60;
+
+/// Background fill for the close-X box on the active tab in its
+/// resting state — a deep red. COLORREF (BBGGRR) for RGB(183,28,28),
+/// the `red 900` Material-like shade. The white X glyph is drawn on
+/// top so the box reads as a familiar "close" affordance at a glance.
+const TAB_CLOSEX_BOX_DARK: u32 = 0x00_1C_1C_B7;
+/// Background fill for the close-X box when the cursor sits directly
+/// over the box, on any tab (active or inactive). RGB(229,57,53) —
+/// the same `red 600` shade the toolbar palette uses, picked for
+/// visual continuity with the rest of the chrome.
+const TAB_CLOSEX_BOX_LIGHT: u32 = 0x00_35_39_E5;
+/// Greyed-out box fill used on inactive tabs the cursor is hovering
+/// but not specifically over the X glyph. RGB(136,136,136).
+const TAB_CLOSEX_BOX_GREY: u32 = 0x00_88_88_88;
+/// Stroke colour of the X glyph drawn inside every close-box
+/// regardless of active/inactive/hover state. White (RGB 255,255,255).
+const TAB_CLOSEX_GLYPH: u32 = 0x00_FF_FF_FF;
+
+/// Compile-time-embedded PNG bytes for the tab-strip save icons. The
+/// LO / HIDPI pairs are 16-px / 32-px renders of the same SVG sources
+/// generated by `tools/codepp-icons/generate.py`. Decoded once at
+/// `WindowState` construction via `toolbar::png_to_hbitmap` and stored
+/// as `HBITMAP`s on `WindowState` for the life of the window.
+const PNG_TAB_SAVE_LO: &[u8] = include_bytes!("../../../assets/icons/tab-save.png");
+const PNG_TAB_SAVE_HIDPI: &[u8] = include_bytes!("../../../assets/icons/tab-save@2x.png");
+const PNG_TAB_SAVE_DIRTY_LO: &[u8] = include_bytes!("../../../assets/icons/tab-save-dirty.png");
+const PNG_TAB_SAVE_DIRTY_HIDPI: &[u8] =
+    include_bytes!("../../../assets/icons/tab-save-dirty@2x.png");
+
+/// Pick the tab-strip icon edge length based on the system DPI.
+/// Mirrors `toolbar::pick_bitmap_size` (24 vs 48) but for the tab
+/// strip's half-size icon set (16 vs 32).
+fn pick_tab_bitmap_size() -> i32 {
+    if toolbar::system_dpi_y() >= toolbar::HIDPI_DPI_THRESHOLD {
+        TAB_BITMAP_PX_HIDPI
+    } else {
+        TAB_BITMAP_PX_LO
+    }
+}
+
+/// Compute the screen-space rect of the close-X clickable area within
+/// a tab cell whose item rect is `item_rect`. The X sits flush-right
+/// inside the cell, vertically centred.
+///
+/// Pure function so the hit-test path (`tab_close_x_hit_test`) and the
+/// paint path (`paint_tab_item`) both compute the same rect from the
+/// same input — drift between them would mean clicks land in the wrong
+/// place relative to the painted glyph.
+fn tab_close_x_rect(item_rect: RECT) -> RECT {
+    let cy = (item_rect.top + item_rect.bottom) / 2;
+    let half = TAB_CLOSEX_SIZE_PX / 2;
+    let right = item_rect.right - TAB_PAD_X_PX;
+    let left = right - TAB_CLOSEX_SIZE_PX;
+    RECT {
+        left,
+        top: cy - half,
+        right,
+        bottom: cy - half + TAB_CLOSEX_SIZE_PX,
+    }
+}
+
+/// Compute the rect inside a tab cell where the save icon is painted.
+/// The icon sits flush-left, vertically centred. `bitmap_px` is the
+/// edge length of the source bitmap (16 or 32).
+fn tab_save_icon_rect(item_rect: RECT, bitmap_px: i32) -> RECT {
+    let cy = (item_rect.top + item_rect.bottom) / 2;
+    let half = bitmap_px / 2;
+    let left = item_rect.left + TAB_PAD_X_PX;
+    RECT {
+        left,
+        top: cy - half,
+        right: left + bitmap_px,
+        bottom: cy - half + bitmap_px,
+    }
+}
+
+/// Hit-test the close-X glyphs of every visible tab. Returns the
+/// index of the tab whose close-X rect contains `(x, y)`, or `None`
+/// otherwise. Called from `tab_subclass_proc::WM_LBUTTONDOWN` so a
+/// click on the X intercepts before drag-detect / activation.
+unsafe fn tab_close_x_hit_test(tab_hwnd: HWND, x: i32, y: i32) -> Option<usize> {
+    // Walk every tab item — tab counts are small (typical session has
+    // < 20 open buffers) so a linear scan is faster than the alternative
+    // of caching rects on every paint and invalidating them on every
+    // move/insert/delete.
+    let n = unsafe {
+        SendMessageW(
+            tab_hwnd,
+            windows::Win32::UI::Controls::TCM_GETITEMCOUNT,
+            None,
+            None,
+        )
+        .0 as i32
+    };
+    if n <= 0 {
+        return None;
+    }
+    for i in 0..n {
+        let mut rc = RECT::default();
+        let ok = unsafe {
+            SendMessageW(
+                tab_hwnd,
+                TCM_GETITEMRECT,
+                Some(WPARAM(i as usize)),
+                Some(LPARAM(&mut rc as *mut RECT as isize)),
+            )
+        };
+        if ok.0 == 0 {
+            continue;
+        }
+        let close_rc = tab_close_x_rect(rc);
+        if x >= close_rc.left && x < close_rc.right && y >= close_rc.top && y < close_rc.bottom {
+            return Some(i as usize);
+        }
+    }
+    None
+}
+
+/// Owner-draw paint for one tab cell. Called from the parent's
+/// `WM_DRAWITEM` handler after dispatching on `dis.CtlType == ODT_TAB`.
+///
+/// Painting order: background fill → save icon (with AlphaBlend if
+/// inactive) → tab text → close-X. Each piece is computed from the
+/// shared rect helpers above so click hit-testing stays in lockstep.
+unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
+    let idx = dis.itemID as usize;
+    let active = matches!(state.shell.active_tab, Some(a) if a == idx);
+    let hovered = matches!(state.tab_hover_idx, Some(h) if h == idx);
+    // Read the dirty bit off the cached `Tab.dirty` field rather
+    // than off Scintilla's live `SCI_GETMODIFY`. Live read only
+    // works for whichever tab the editor is currently bound to;
+    // for inactive tabs the bound doc is the active tab's, not
+    // this one. The cache is kept in sync via SCN_SAVEPOINT*
+    // notifications (see the WM_NOTIFY arm in `main_wnd_proc`)
+    // and by `handle_tab_selchange` snapshotting the outgoing
+    // tab's modify state before the doc-pointer swap.
+    //
+    // Untitled buffers (`untitled_seq.is_some()`) are *always*
+    // treated as dirty regardless of the cache: they have no
+    // on-disk representation, so the user's mental model is
+    // "this needs saving" from the moment the tab appears, even
+    // before any text has been typed. SCI_SETSAVEPOINT (which
+    // would normally clear dirty) is only meaningful against an
+    // on-disk file; a clean modify bit on an untitled buffer is
+    // misleading.
+    let dirty = idx < state.shell.tabs.len()
+        && (state.shell.tabs[idx].untitled_seq.is_some() || state.shell.tabs[idx].dirty);
+
+    // Background fill: pick the right shade for active / inactive
+    // (with a subtle bump for inactive-hovered).
+    let bg_color = if active {
+        TAB_BG_ACTIVE
+    } else if hovered {
+        TAB_BG_INACTIVE_HOVER
+    } else {
+        TAB_BG_INACTIVE
+    };
+    // SAFETY: `dis.hDC` is supplied by Windows for this message and
+    // valid for the duration of the WM_DRAWITEM dispatch. The brush
+    // we create here is selected for FillRect and immediately
+    // deleted; no other thread can observe the GDI objects we're
+    // touching since we're on the UI thread. `CreateSolidBrush`
+    // returning null under GDI exhaustion is the only failure mode
+    // — we skip the FillRect in that case (DeleteObject(NULL) is a
+    // documented safe no-op, but we still gate to keep the intent
+    // explicit). A skipped fill leaves the tab cell with whatever
+    // the system painted before WM_DRAWITEM fired; not pretty, but
+    // it avoids passing a null HBRUSH to FillRect, which is UB.
+    unsafe {
+        let bg_brush = CreateSolidBrush(COLORREF(bg_color));
+        if !bg_brush.is_invalid() {
+            FillRect(dis.hDC, &dis.rcItem, bg_brush);
+            let _ = DeleteObject(bg_brush.into());
+        }
+    }
+
+    // Save icon (left). Pick blue for clean buffers, red for dirty.
+    // `AlphaBlend` with `SourceConstantAlpha = 128` dims inactive
+    // tabs to ~50% opacity — one bitmap per state instead of four.
+    let icon_hbm = if dirty {
+        state.tab_save_red_hbm
+    } else {
+        state.tab_save_blue_hbm
+    };
+    if !icon_hbm.is_invalid() {
+        let icon_rc = tab_save_icon_rect(dis.rcItem, state.tab_bitmap_px);
+        let icon_w = icon_rc.right - icon_rc.left;
+        let icon_h = icon_rc.bottom - icon_rc.top;
+        let alpha = if active { 255 } else { TAB_INACTIVE_ICON_ALPHA };
+        // SAFETY: CreateCompatibleDC for a hwnd-supplied HDC, and
+        // SelectObject the source HBITMAP into it. The mem DC and
+        // the HBITMAP we own; the AlphaBlend pixel format requires
+        // the source to be a 32bpp DIB section with premultiplied
+        // BGRA — which is exactly what `toolbar::png_to_hbitmap`
+        // produces for our two `tab-save*.png` assets. Mem DC is
+        // deleted at the end of the block; the HBITMAP stays alive
+        // on `WindowState` for the next paint.
+        unsafe {
+            let mem_dc = CreateCompatibleDC(Some(dis.hDC));
+            if !mem_dc.is_invalid() {
+                let prev = SelectObject(mem_dc, HGDIOBJ(icon_hbm.0));
+                let blend = BLENDFUNCTION {
+                    BlendOp: AC_SRC_OVER as u8,
+                    BlendFlags: 0,
+                    SourceConstantAlpha: alpha,
+                    AlphaFormat: AC_SRC_ALPHA as u8,
+                };
+                let _ = AlphaBlend(
+                    dis.hDC,
+                    icon_rc.left,
+                    icon_rc.top,
+                    icon_w,
+                    icon_h,
+                    mem_dc,
+                    0,
+                    0,
+                    state.tab_bitmap_px,
+                    state.tab_bitmap_px,
+                    blend,
+                );
+                let _ = SelectObject(mem_dc, prev);
+                let _ = DeleteDC(mem_dc);
+            }
+        }
+    }
+
+    // Tab text. Reserve a strip between the save icon and the close-X
+    // for the label; let `DT_END_ELLIPSIS` clip long names with "…".
+    if idx < state.shell.tabs.len() {
+        let text_left =
+            tab_save_icon_rect(dis.rcItem, state.tab_bitmap_px).right + TAB_ICON_TEXT_GAP_PX;
+        let text_right = tab_close_x_rect(dis.rcItem).left - TAB_TEXT_CLOSEX_GAP_PX;
+        if text_right > text_left {
+            let mut text_rc = RECT {
+                left: text_left,
+                top: dis.rcItem.top,
+                right: text_right,
+                bottom: dis.rcItem.bottom,
+            };
+            let label = tab_display_name(&state.shell.tabs[idx]);
+            let mut wide: Vec<u16> = label.encode_utf16().collect();
+            let fg = if active {
+                TAB_FG_ACTIVE
+            } else {
+                TAB_FG_INACTIVE
+            };
+            // SAFETY: `dis.hDC` is the WM_DRAWITEM-supplied DC; the
+            // wide buffer outlives the call (lives in the parent
+            // stack frame).
+            unsafe {
+                SetBkMode(dis.hDC, TRANSPARENT);
+                let _ = SetTextColor(dis.hDC, COLORREF(fg));
+                DrawTextW(
+                    dis.hDC,
+                    wide.as_mut_slice(),
+                    &mut text_rc,
+                    DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
+                );
+            }
+        }
+    }
+
+    // Close-X. Visibility rules:
+    //   - active tab: always shown.
+    //   - inactive tab: shown only while the cursor hovers over the
+    //     same tab cell (at which point the box is grey by default
+    //     and red when the cursor is specifically over it).
+    //
+    // Render a filled colour box with a white X drawn over the top —
+    // a familiar "close" affordance on every modern tab strip.
+    // Plain coloured strokes alone (an earlier iteration) read as
+    // ambient text rather than as a clickable button.
+    let show_x = active || hovered;
+    if show_x {
+        let on_x = hovered && state.tab_hover_close_x;
+        let box_color = if on_x {
+            TAB_CLOSEX_BOX_LIGHT
+        } else if active {
+            TAB_CLOSEX_BOX_DARK
+        } else {
+            TAB_CLOSEX_BOX_GREY
+        };
+        let close_rc = tab_close_x_rect(dis.rcItem);
+        // Stroke thickness: 2 px at HiDPI for legibility, 1 at
+        // standard DPI. Inset by 3 px so the X doesn't touch the box
+        // edges and reads as a glyph rather than as noise.
+        let pen_width = if state.tab_bitmap_px == TAB_BITMAP_PX_HIDPI {
+            2
+        } else {
+            1
+        };
+        let inset = 3;
+        // SAFETY: brush + pen are created locally and released at
+        // the end of the block. The DC and rect are valid for the
+        // duration of the WM_DRAWITEM dispatch; FillRect is the
+        // standard idiom for a flat-coloured rectangle. Each
+        // `Create*` is gated on `!is_invalid()` — `CreateSolidBrush`
+        // / `CreatePen` can return null under GDI exhaustion, and
+        // passing a null `HBRUSH` to `FillRect` or `HGDIOBJ(null)` to
+        // `SelectObject` is documented UB on Win32.
+        unsafe {
+            let bg_brush = CreateSolidBrush(COLORREF(box_color));
+            if !bg_brush.is_invalid() {
+                FillRect(dis.hDC, &close_rc, bg_brush);
+                let _ = DeleteObject(bg_brush.into());
+            }
+
+            let pen = CreatePen(PS_SOLID, pen_width, COLORREF(TAB_CLOSEX_GLYPH));
+            if !pen.is_invalid() {
+                let prev = SelectObject(dis.hDC, HGDIOBJ(pen.0));
+                let mut prev_pt = POINT { x: 0, y: 0 };
+                let _ = MoveToEx(
+                    dis.hDC,
+                    close_rc.left + inset,
+                    close_rc.top + inset,
+                    Some(&mut prev_pt),
+                );
+                let _ = LineTo(dis.hDC, close_rc.right - inset, close_rc.bottom - inset);
+                let _ = MoveToEx(
+                    dis.hDC,
+                    close_rc.right - inset,
+                    close_rc.top + inset,
+                    Some(&mut prev_pt),
+                );
+                let _ = LineTo(dis.hDC, close_rc.left + inset, close_rc.bottom - inset);
+                let _ = SelectObject(dis.hDC, prev);
+                let _ = DeleteObject(HGDIOBJ(pen.0));
+            }
+        }
+    }
+}
+
+/// Invalidate one tab cell so the next `WM_PAINT` cycle re-fires
+/// `WM_DRAWITEM` for it. Called from hover-state transitions and from
+/// the dirty-bit hook so the icon/X repaints don't wait for an
+/// incidental refresh.
+unsafe fn invalidate_tab(tab_hwnd: HWND, idx: usize) {
+    let mut rc = RECT::default();
+    // SAFETY: `tab_hwnd` is our owned tab control HWND on this thread;
+    // `rc` is a stack binding alive across the synchronous SendMessage.
+    let ok = unsafe {
+        SendMessageW(
+            tab_hwnd,
+            TCM_GETITEMRECT,
+            Some(WPARAM(idx)),
+            Some(LPARAM(&mut rc as *mut RECT as isize)),
+        )
+    };
+    if ok.0 != 0 {
+        // SAFETY: rc was filled by TCM_GETITEMRECT; tab_hwnd is live.
+        let _ = unsafe { InvalidateRect(Some(tab_hwnd), Some(&rc), false) };
+    }
+}
 
 /// Hit-test the tab control: return the index of the tab at client
 /// coords `(x, y)`, or `None` if the cursor isn't over a tab cell.
@@ -13328,6 +14020,18 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     let _ = windows::Win32::UI::Controls::ImageList_Destroy(Some(
                         state.toolbar_image_list,
                     ));
+                    // Free the two tab-strip save icons. Same
+                    // "OS would reclaim at process exit, but the
+                    // project's leak-nothing pattern wants explicit
+                    // teardown" rationale as the toolbar imagelist
+                    // above. `is_invalid()` skips the call when
+                    // the icon failed to decode at startup.
+                    if !state.tab_save_blue_hbm.is_invalid() {
+                        let _ = DeleteObject(state.tab_save_blue_hbm.into());
+                    }
+                    if !state.tab_save_red_hbm.is_invalid() {
+                        let _ = DeleteObject(state.tab_save_red_hbm.into());
+                    }
                 }
 
                 // Free the accelerator table. Same "OS would
@@ -13556,6 +14260,38 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 }
                             }
                         }
+                    } else if nmhdr.code == SCN_SAVEPOINTREACHED || nmhdr.code == SCN_SAVEPOINTLEFT
+                    {
+                        // Scintilla emits these whenever the bound
+                        // document's modify state flips between
+                        // "matches last saved" (REACHED) and "has
+                        // unsaved edits" (LEFT). Our tab-strip paint
+                        // reads `Tab.dirty` rather than calling
+                        // `SCI_GETMODIFY` per cell (the live read
+                        // requires an expensive doc-pointer-swap
+                        // dance for any non-active tab), so this is
+                        // the canonical hook that keeps the cache
+                        // in sync. Filter on `hwndFrom` so a
+                        // plugin-owned Scintilla can't write into
+                        // our active tab's dirty bit.
+                        let dirty = nmhdr.code == SCN_SAVEPOINTLEFT;
+                        let (active, tab_hwnd) = if let Some(state) = state_from_hwnd(hwnd) {
+                            if nmhdr.hwndFrom != state.scintilla_hwnd {
+                                (None, state.tab_hwnd)
+                            } else {
+                                (state.shell.active_tab, state.tab_hwnd)
+                            }
+                        } else {
+                            (None, HWND::default())
+                        };
+                        if let Some(idx) = active {
+                            if let Some(state) = state_from_hwnd(hwnd) {
+                                if idx < state.shell.tabs.len() {
+                                    state.shell.tabs[idx].dirty = dirty;
+                                }
+                            }
+                            invalidate_tab(tab_hwnd, idx);
+                        }
                     } else if nmhdr.code == SCN_UPDATEUI {
                         // SCN_UPDATEUI fires on caret movement,
                         // selection change, scrolling, and most
@@ -13643,6 +14379,42 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             toolbar::fill_info_tip(
                                 lparam.0 as *mut windows::Win32::UI::Controls::NMTBGETINFOTIPW,
                             );
+                        }
+                    }
+                }
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_DRAWITEM => {
+                // Owner-draw paint dispatch. The tab control is the
+                // only owner-draw control parented under the main
+                // window; filter on `CtlType == ODT_TAB` so a future
+                // owner-draw button or list doesn't crosstalk.
+                //
+                // Wrap `paint_tab_item` in `catch_unwind` so a panic
+                // (e.g. an OOM in `encode_utf16().collect()` for a
+                // tab label, or a future GDI-binding panic on a
+                // malformed handle) does not unwind across the
+                // `extern "system"` frame — that's UB at the FFI
+                // boundary, mirroring the catch_unwind treatment in
+                // `tab_subclass_proc` and the dialog wnd-procs.
+                // On panic we fall through to `DefWindowProcW` so
+                // the system supplies a default fill, and `state` is
+                // `None` for the same fall-through reason (PluginCallGuard
+                // active, or pre-init).
+                let dis_ptr = lparam.0 as *const DRAWITEMSTRUCT;
+                if !dis_ptr.is_null() {
+                    let dis = &*dis_ptr;
+                    if dis.CtlType == ODT_TAB {
+                        let painted = if let Some(state) = state_from_hwnd(hwnd) {
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                paint_tab_item(state, dis);
+                            }))
+                            .is_ok()
+                        } else {
+                            false
+                        };
+                        if painted {
+                            return LRESULT(1);
                         }
                     }
                 }

@@ -195,6 +195,19 @@ pub const SCN_MODIFIED: u32 = 2008;
 /// SCN_UPDATEUI so they track the live caret without needing a
 /// separate timer.
 pub const SCN_UPDATEUI: u32 = 2007;
+/// Notification fired when the bound document transitions back to
+/// the save-point state — typically because `SCI_SETSAVEPOINT` was
+/// called (after a successful save) or the user undid every edit
+/// since the last save. Carries no payload beyond the standard
+/// `SCNotification.nmhdr`. Pair: [`SCN_SAVEPOINTLEFT`].
+pub const SCN_SAVEPOINTREACHED: u32 = 2002;
+/// Notification fired the moment the bound document leaves the
+/// save-point state — i.e. on the first user edit after a save (or
+/// after document creation, if no save has happened yet). Pair:
+/// [`SCN_SAVEPOINTREACHED`]. Together these two are the canonical
+/// notifications for tracking "buffer has unsaved changes" without
+/// polling `SCI_GETMODIFY` on every keystroke.
+pub const SCN_SAVEPOINTLEFT: u32 = 2003;
 
 // `SCNotification.modificationType` flags for SCN_MODIFIED. The
 // host filters on the text-changing flags (insert / delete) for
