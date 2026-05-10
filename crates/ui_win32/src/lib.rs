@@ -2899,25 +2899,36 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
     // Cancel before any data-model mutation. Cancel aborts the
     // entire close — the buffer stays open.
     //
-    // We sample (display name, has_path, dirty) under a brief
-    // read-only borrow, drop it before the modal pump runs (the
-    // borrow can't outlive the modal — the Win32 message pump
-    // re-enters our wnd_proc, which would alias-UB the
+    // Empty-untitled exception: a brand-new untitled tab the user
+    // typed-then-erased still reports SCI_GETMODIFY non-zero (the
+    // savepoint never moved past the initial empty state), but
+    // there's nothing meaningful to save — asking "Save 'new 1' ?"
+    // for a buffer with zero characters is friction, not safety.
+    // The exception is scoped to `!has_path` so titled files are
+    // not affected: a "Select All + Delete + close" on a path-bound
+    // tab still prompts, letting the user explicitly choose between
+    // truncate-and-save and discard.
+    //
+    // We sample (display name, has_path, dirty, length) under a
+    // brief read-only borrow, drop it before the modal pump runs
+    // (the borrow can't outlive the modal — the Win32 message
+    // pump re-enters our wnd_proc, which would alias-UB the
     // `WindowState`), then act on the user's choice.
     let prelude = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
         state.shell.active().map(|tab| {
             let name = tab_display_name(tab);
             let has_path = tab.path.is_some();
             let dirty = state.editor.send(SCI_GETMODIFY, 0, 0) != 0;
-            (name, has_path, dirty)
+            let length = state.editor.send(SCI_GETLENGTH, 0, 0);
+            (name, has_path, dirty, length)
         })
     } else {
         return CloseOutcome::NothingToClose;
     };
-    let Some((display_name, has_path, dirty)) = prelude else {
+    let Some((display_name, has_path, dirty, length)) = prelude else {
         return CloseOutcome::NothingToClose;
     };
-    if dirty {
+    if dirty && (has_path || length > 0) {
         match show_save_confirm_dialog(hwnd, &display_name) {
             SaveConfirmResult::Cancel => return CloseOutcome::Aborted,
             SaveConfirmResult::No => {
