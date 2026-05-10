@@ -346,6 +346,17 @@ pub const SCI_STYLESETFORE: u32 = 2051;
 pub const SCI_STYLESETBACK: u32 = 2052;
 pub const SCI_STYLESETBOLD: u32 = 2053;
 pub const SCI_STYLESETITALIC: u32 = 2054;
+/// Toggle caret-line background highlighting. `wparam` is a BOOL
+/// (0/1). When enabled, Scintilla paints the line containing the
+/// caret with the colour set via `SCI_SETCARETLINEBACK`. The
+/// setting lives on the view (not on a style index), so it
+/// survives `SCI_STYLECLEARALL` — set it once at editor creation.
+pub const SCI_SETCARETLINEVISIBLE: u32 = 2096;
+/// Set the background colour Scintilla uses when caret-line
+/// highlighting is enabled (see `SCI_SETCARETLINEVISIBLE`).
+/// `wparam` is a `COLORREF` (`0x00BBGGRR`) — same encoding as
+/// `SCI_STYLESETBACK`.
+pub const SCI_SETCARETLINEBACK: u32 = 2098;
 /// Read the foreground colour for a Scintilla style. Returns the
 /// colour in the same `0x00BBGGRR` Win32 `COLORREF` layout
 /// `STYLESETFORE` writes — the bit pattern is symmetric, so a

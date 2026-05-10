@@ -12,9 +12,9 @@ use core::ffi::c_void;
 use codepp_scintilla_sys::{
     sptr_t, uptr_t, CreateLexer, ScintillaDirectFunction, SCI_GETTARGETEND, SCI_GETTARGETSTART,
     SCI_REPLACETARGET, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT, SCI_SEARCHPREV,
-    SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETSEARCHFLAGS,
-    SCI_SETTARGETRANGE, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFORE,
-    SCI_STYLESETITALIC,
+    SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE, SCI_SETILEXER, SCI_SETKEYWORDS,
+    SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETSEARCHFLAGS, SCI_SETTARGETRANGE,
+    SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFORE, SCI_STYLESETITALIC,
 };
 
 /// Opaque handle to a Scintilla editor control.
@@ -170,6 +170,26 @@ impl EditorHandle {
     /// Toggle the italic attribute for a style.
     pub fn style_set_italic(&self, style: usize, italic: bool) {
         self.send(SCI_STYLESETITALIC, style as uptr_t, italic as sptr_t);
+    }
+
+    // --- Caret-line highlight ---------------------------------------------
+
+    /// Toggle caret-line background highlighting. When enabled,
+    /// Scintilla paints the line containing the caret with the
+    /// colour set via [`Self::set_caret_line_back`]. The setting is
+    /// view state (not a per-style colour), so it survives
+    /// `SCI_STYLECLEARALL` and only needs to be applied once at
+    /// editor creation.
+    pub fn set_caret_line_visible(&self, visible: bool) {
+        self.send(SCI_SETCARETLINEVISIBLE, visible as uptr_t, 0);
+    }
+
+    /// Set the background colour for the caret line. `colour` uses
+    /// the same `0x00BBGGRR` `COLORREF` encoding as
+    /// [`Self::style_set_back`]. Has no visible effect unless
+    /// [`Self::set_caret_line_visible`] is also enabled.
+    pub fn set_caret_line_back(&self, colour: u32) {
+        self.send(SCI_SETCARETLINEBACK, colour as uptr_t, 0);
     }
 
     // --- Margins -----------------------------------------------------------

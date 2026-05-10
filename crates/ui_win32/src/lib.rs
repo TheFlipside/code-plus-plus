@@ -2306,6 +2306,13 @@ const FG_MACRO: u32 = 0x00_80_30_80; // violet
 const BG_LINE_NUMBER: u32 = 0x00_E4_E4_E4; // ~RGB(228,228,228) near-white
 const FG_LINE_NUMBER: u32 = 0x00_70_70_70; // ~RGB(112,112,112) medium grey
 
+/// Background tint Scintilla paints behind the caret's line so the
+/// user always sees which line is active. `0x00FAE8D6` is BGR for
+/// RGB(214, 232, 250) — a soft pale blue that's clearly distinct
+/// from [`BG_DEFAULT`] (white) without compromising the contrast of
+/// black foreground text.
+const BG_CARET_LINE: u32 = 0x00_FA_E8_D6;
+
 /// Margin index for line numbers. Scintilla exposes 5 margins;
 /// margin 0 is the conventional line-number slot, with margin 1
 /// reserved for symbols/bookmarks and margin 2 for fold markers
@@ -2359,6 +2366,17 @@ fn apply_line_number_margin(editor: &EditorHandle) {
     editor.style_set_fore(STYLE_LINENUMBER, FG_LINE_NUMBER);
     editor.style_set_back(STYLE_LINENUMBER, BG_LINE_NUMBER);
     editor.set_margin_width(LINE_NUMBER_MARGIN, LINE_NUMBER_MARGIN_PX);
+}
+
+/// Enable caret-line background highlighting and paint the active
+/// line with [`BG_CARET_LINE`]. The visibility flag and back colour
+/// are view state (not a style index), so unlike
+/// [`apply_line_number_margin`] this does not need to be re-applied
+/// after `SCI_STYLECLEARALL` — one call at editor creation is
+/// enough.
+fn apply_caret_line_highlight(editor: &EditorHandle) {
+    editor.set_caret_line_back(BG_CARET_LINE);
+    editor.set_caret_line_visible(true);
 }
 
 /// Number of lines beyond the visible window's bottom edge to
@@ -10171,6 +10189,13 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // width is a fixed `LINE_NUMBER_MARGIN_PX` and doesn't
         // change between calls.
         apply_line_number_margin(&editor);
+
+        // Caret-line highlight: paints the line containing the
+        // caret in `BG_CARET_LINE`. Lives on view state, not on
+        // a style index, so one call here is enough — survives
+        // `SCI_STYLECLEARALL` and the per-language re-styling
+        // that `apply_default_styles` triggers.
+        apply_caret_line_highlight(&editor);
 
         // Wake closure: PostMessage ourselves WM_APP_WAKE.
         // PostMessage is thread-safe — it just enqueues a message for
