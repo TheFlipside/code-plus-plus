@@ -486,7 +486,12 @@ pub trait UiPlatform {
 pub enum SessionRestoreEntry {
     /// Open `path` from disk via the loader (async). The eventual
     /// load result populates the tab's text + encoding + EOL
-    /// just like a fresh user-initiated open.
+    /// just like a fresh user-initiated open. The persisted
+    /// language override (if any) is looked up from
+    /// `Shell.session` inside `apply_load_result` by path, so no
+    /// dedicated field is needed on this variant — same pattern
+    /// `apply_load_result` already uses for the restored cursor
+    /// position.
     OpenFile(PathBuf),
     /// Re-create an untitled buffer at the next slot with the
     /// pre-loaded text from its backup file. The UI calls
@@ -516,6 +521,15 @@ pub enum SessionRestoreEntry {
         /// untitled buffer (the default `new N` label is
         /// rebuilt from `untitled_seq` instead).
         custom_name: Option<String>,
+        /// Persisted language override (the raw N++-ABI id, as
+        /// stored in `core::session::Tab.lang`). `None` means
+        /// "no stored choice" — the buffer restores at `L_TEXT`
+        /// since untitled buffers have no extension to detect
+        /// from. The Language menu's user-set value comes back
+        /// through this attribute, so a renamed-then-Rust-lexed
+        /// untitled buffer keeps its highlighting across
+        /// relaunches.
+        lang: Option<i32>,
     },
     /// Re-create a tab that was bound to `path` but had unsaved
     /// edits at session-save time. The tab opens with `path`
@@ -555,6 +569,12 @@ pub enum SessionRestoreEntry {
         /// `PendingDialog::Error` so the user knows the buffer
         /// content shown isn't the one they typed.
         backup_modified_externally: bool,
+        /// Persisted language override (raw N++-ABI id from
+        /// `core::session::Tab.lang`). `None` falls back to
+        /// extension-based detection from `path`; `Some` wins
+        /// so a Language-menu choice the user made during the
+        /// previous session reapplies on restore.
+        lang: Option<i32>,
     },
 }
 
@@ -2033,11 +2053,26 @@ impl Shell {
                 tab.eol = loaded.eol;
                 tab.byte_len = loaded.byte_len;
                 tab.text = loaded.text.clone();
-                // Derive lang from the path extension. Plugins may
-                // override later via NPPM_SETBUFFERLANGTYPE; for the
-                // first-load default the extension is the only signal
-                // we have.
-                tab.lang = LangType::from_path(&loaded.path);
+                // Lang resolution order:
+                //   1. Persisted session override (the user's
+                //      Language-menu choice from a previous run)
+                //      — looked up by path in `self.session.tabs`,
+                //      same pattern this method already uses for
+                //      `cursor`.
+                //   2. Extension-based auto-detection.
+                // Plugins may still override later via
+                // NPPM_SETBUFFERLANGTYPE; the precedence above is
+                // about the load-time default before any plugin
+                // gets to react.
+                let stored_lang_override = self
+                    .session
+                    .tabs
+                    .iter()
+                    .find(|t| t.path.as_deref() == Some(loaded.path.as_path()))
+                    .and_then(|t| t.lang)
+                    .map(LangType);
+                tab.lang =
+                    stored_lang_override.unwrap_or_else(|| LangType::from_path(&loaded.path));
                 let stored_doc = tab.scintilla_doc;
                 let lang = tab.lang;
                 #[cfg(target_os = "windows")]
@@ -2787,6 +2822,28 @@ impl Shell {
                 // restores the same label rather than reverting to
                 // `new N`.
                 custom_name: tab.custom_name.clone(),
+                // Persist the per-buffer language. Skip the
+                // `L_TEXT` default for path-bound tabs whose
+                // extension would auto-detect to `L_TEXT` anyway
+                // — no information is lost, and older session.xml
+                // files don't get rewritten with a no-op
+                // attribute. Untitled buffers and any tab whose
+                // current lang differs from the extension-derived
+                // default get an explicit `@lang` written so the
+                // user's Language-menu choice survives the
+                // restart.
+                lang: {
+                    let extension_default = tab
+                        .path
+                        .as_deref()
+                        .map(codepp_core::lang::LangType::from_path)
+                        .unwrap_or(codepp_core::lang::L_TEXT);
+                    if tab.lang == extension_default {
+                        None
+                    } else {
+                        Some(tab.lang.as_npp_id())
+                    }
+                },
             });
         }
         session.active = self.active_tab.and_then(|active_idx| {
@@ -2947,6 +3004,7 @@ impl Shell {
                             eol: t.eol,
                             disk_changed_externally,
                             backup_modified_externally,
+                            lang: t.lang,
                         })
                     } else {
                         Some(SessionRestoreEntry::OpenFile(path.clone()))
@@ -2971,6 +3029,7 @@ impl Shell {
                             eol: t.eol,
                             backup_modified_externally,
                             custom_name: t.custom_name.clone(),
+                            lang: t.lang,
                         }
                     })
                 }
@@ -3010,7 +3069,7 @@ impl Shell {
     ///
     /// Used by the UI's session-restore loop. Returns the new tab's
     /// index in `self.tabs`.
-    // Seven parameters is over the clippy default. They model one
+    // Many parameters is over the clippy default. They model one
     // logical thing (an untitled tab being restored from backup);
     // bundling into a struct would just shuffle the noise since
     // they're consumed once.
@@ -3025,10 +3084,17 @@ impl Shell {
         eol: Eol,
         backup_modified_externally: bool,
         custom_name: Option<String>,
+        lang: Option<i32>,
     ) -> usize {
         let id = self.allocate_buffer_id();
         let new_idx = self.tabs.len();
         let byte_len = text.len() as u64;
+        // Untitled buffers have no extension to detect from, so
+        // the persisted `@lang` is the only signal — fall back to
+        // `L_TEXT` only when nothing is stored.
+        let resolved_lang = lang
+            .map(codepp_core::lang::LangType)
+            .unwrap_or(codepp_core::lang::L_TEXT);
         self.tabs.push(Tab {
             id,
             path: None,
@@ -3038,7 +3104,7 @@ impl Shell {
             text: text.clone(),
             pending_load: None,
             scintilla_doc: 0,
-            lang: codepp_core::lang::L_TEXT,
+            lang: resolved_lang,
             untitled_seq,
             // Initial value — Scintilla's `SCN_SAVEPOINTLEFT` fires
             // when the UI populates the new doc with the backup
@@ -3065,7 +3131,14 @@ impl Shell {
         // dirty glyph immediately — the buffer matches what's on
         // (backup-)disk, even though there's no real file path.
         ui.mark_saved();
-        ui.update_status(codepp_core::lang::L_TEXT, &encoding, eol, byte_len);
+        // Apply the resolved language to the Scintilla view so a
+        // restored untitled buffer with a persisted lang override
+        // (e.g. user picked Rust on a renamed `new 1`) actually
+        // renders with that highlighting on first paint instead
+        // of waiting for a tab switch. Symmetric with
+        // `restore_dirty_with_text`'s `ui.apply_lang(lang)` call.
+        ui.apply_lang(resolved_lang);
+        ui.update_status(resolved_lang, &encoding, eol, byte_len);
         // External-edit detection on the backup file itself. If
         // another program touched the recovery file between our
         // last save and this restore, the buffer content the
@@ -3114,7 +3187,7 @@ impl Shell {
     /// the disk version). Without this signal the user's first
     /// File→Save would silently overwrite an external edit made
     /// during the recovery window.
-    // Seven parameters is over the clippy default (7 max). They
+    // Many parameters is over the clippy default (7 max). They
     // all model a single logical thing — the state of one tab
     // being restored from backup — but bundling them into a
     // struct would just shuffle the noise; they're consumed
@@ -3130,13 +3203,17 @@ impl Shell {
         eol: Eol,
         disk_changed_externally: bool,
         backup_modified_externally: bool,
+        stored_lang: Option<i32>,
     ) -> usize {
         let id = self.allocate_buffer_id();
         let new_idx = self.tabs.len();
         let byte_len = text.len() as u64;
-        // Derive language from the path extension — same logic
-        // `apply_load_result` runs after a fresh disk load.
-        let lang = LangType::from_path(&path);
+        // Lang resolution mirrors `apply_load_result`: the
+        // persisted Language-menu choice wins; otherwise fall
+        // back to extension-based auto-detection.
+        let lang = stored_lang
+            .map(LangType)
+            .unwrap_or_else(|| LangType::from_path(&path));
         self.tabs.push(Tab {
             id,
             path: Some(path.clone()),
@@ -6945,6 +7022,7 @@ mod tests {
                     untitled_seq: None,
                     backup: None,
                     custom_name: None,
+                    lang: None,
                 },
                 CoreTab {
                     path: Some(PathBuf::from("/tmp/second.txt")),
@@ -6954,6 +7032,7 @@ mod tests {
                     untitled_seq: None,
                     backup: None,
                     custom_name: None,
+                    lang: None,
                 },
             ],
         };
@@ -7938,6 +8017,7 @@ mod tests {
             Eol::Lf,
             true,  // disk file changed externally
             false, // backup file untouched
+            None,  // no persisted lang override — extension-detect
         );
 
         let pending = shell.drain(&mut ui);
@@ -8071,6 +8151,7 @@ mod tests {
             Eol::Lf,
             true, // backup was modified externally
             None, // no custom rename label
+            None, // no persisted lang override — defaults to L_TEXT
         );
         let pending = shell.drain(&mut ui);
         let n = pending
@@ -8101,6 +8182,7 @@ mod tests {
             Eol::Lf,
             false, // disk untouched
             false, // backup untouched
+            None,  // no persisted lang override
         );
 
         let pending = shell.drain(&mut ui);
@@ -8111,6 +8193,84 @@ mod tests {
         assert_eq!(
             confirm_reload_count, 0,
             "no reload prompt expected; got {pending:?}"
+        );
+    }
+
+    /// `restore_dirty_with_text` honours a persisted language
+    /// override — when the session.xml entry carries `@lang`, the
+    /// restored tab's `lang` is the stored value, not the
+    /// extension-derived default, AND the editor's lexer is
+    /// applied so first-paint highlighting matches the override.
+    /// This is the round-trip property the user relies on for
+    /// "the language I picked last session is the one I see this
+    /// session."
+    #[test]
+    fn restore_dirty_honours_persisted_lang_override() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        // `.txt` would auto-detect to L_TEXT. The stored override
+        // is L_RUST (id 81) — what the user picked via the
+        // Language menu. The restore must pick the override.
+        shell.restore_dirty_with_text(
+            &mut ui,
+            PathBuf::from("/tmp/notes.txt"),
+            "fn main() {}".into(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            false,
+            Some(81),
+        );
+
+        let idx = shell.active_tab.expect("a tab was just restored");
+        assert_eq!(shell.tabs[idx].lang, codepp_core::lang::L_RUST);
+        // The data field would pass even if the UI path silently
+        // skipped `apply_lang` — assert the editor was actually
+        // told about the new lexer too. Without this assertion a
+        // future change that drops the `ui.apply_lang(...)` call
+        // would leave the buffer rendered with the previous tab's
+        // lexer and the test would still pass, masking a visual
+        // regression.
+        assert_eq!(
+            ui.apply_lang_calls.last().copied(),
+            Some(codepp_core::lang::L_RUST),
+            "restore_dirty must apply the resolved lang to the editor"
+        );
+    }
+
+    /// Symmetric coverage for `restore_untitled_with_text`:
+    /// untitled buffers have no extension to detect from, so the
+    /// stored override is the only signal that survives a
+    /// rename-and-set-language flow. Same data-vs-UI assertion
+    /// pair — without the `apply_lang_calls` check, a regression
+    /// that skips the UI path is invisible.
+    #[test]
+    fn restore_untitled_honours_persisted_lang_override() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        shell.restore_untitled_with_text(
+            &mut ui,
+            Some(1),
+            "fn main() {}".into(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            None,
+            Some(81),
+        );
+
+        let idx = shell.active_tab.expect("a tab was just restored");
+        assert_eq!(shell.tabs[idx].lang, codepp_core::lang::L_RUST);
+        assert_eq!(
+            ui.apply_lang_calls.last().copied(),
+            Some(codepp_core::lang::L_RUST),
+            "restore_untitled must apply the resolved lang to the editor"
         );
     }
 }

@@ -329,6 +329,14 @@ pub const SC_DOCUMENTOPTION_DEFAULT: isize = 0;
 // the lexer is replaced or the document is destroyed.
 pub const SCI_SETILEXER: u32 = 4033;
 pub const SCI_GETLEXER: u32 = 4002;
+/// Force the lexer to (re-)style a byte range. `wparam = start`,
+/// `lparam = end` (signed; `-1` means "end of document"). Used
+/// after a mid-buffer lexer change so existing text picks up the
+/// new lexer's classification — Scintilla doesn't auto-restyle
+/// on `SCI_SETILEXER`, only on edit/scroll, so without this call
+/// the user has to scroll or type before any new highlighting
+/// fires. Causes a redraw as a side effect.
+pub const SCI_COLOURISE: u32 = 4003;
 /// Wide-form `SCI_GETLEXERLANGUAGE` — out-writes the lexer's name
 /// (e.g. `"cpp"`) into the caller's `char*` buffer.
 pub const SCI_GETLEXERLANGUAGE: u32 = 4012;
@@ -571,6 +579,126 @@ pub const SCE_RUST_OPERATOR: usize = 16;
 pub const SCE_RUST_IDENTIFIER: usize = 17;
 pub const SCE_RUST_LIFETIME: usize = 18;
 pub const SCE_RUST_MACRO: usize = 19;
+
+// LexPython style indices — the "P" prefix is upstream's choice for
+// LexPython's enum. Style numbers verified against
+// `vendor/lexilla/include/SciLexer.h` SCE_P_*.
+pub const SCE_P_COMMENTLINE: usize = 1;
+pub const SCE_P_NUMBER: usize = 2;
+pub const SCE_P_STRING: usize = 3;
+pub const SCE_P_CHARACTER: usize = 4;
+pub const SCE_P_WORD: usize = 5;
+pub const SCE_P_TRIPLE: usize = 6;
+pub const SCE_P_TRIPLEDOUBLE: usize = 7;
+pub const SCE_P_CLASSNAME: usize = 8;
+pub const SCE_P_DEFNAME: usize = 9;
+pub const SCE_P_OPERATOR: usize = 10;
+pub const SCE_P_COMMENTBLOCK: usize = 12;
+pub const SCE_P_STRINGEOL: usize = 13;
+pub const SCE_P_WORD2: usize = 14;
+pub const SCE_P_DECORATOR: usize = 15;
+pub const SCE_P_FSTRING: usize = 16;
+pub const SCE_P_FCHARACTER: usize = 17;
+pub const SCE_P_FTRIPLE: usize = 18;
+pub const SCE_P_FTRIPLEDOUBLE: usize = 19;
+
+// LexJSON style indices.
+pub const SCE_JSON_NUMBER: usize = 1;
+pub const SCE_JSON_STRING: usize = 2;
+pub const SCE_JSON_STRINGEOL: usize = 3;
+pub const SCE_JSON_PROPERTYNAME: usize = 4;
+pub const SCE_JSON_ESCAPESEQUENCE: usize = 5;
+pub const SCE_JSON_LINECOMMENT: usize = 6;
+pub const SCE_JSON_BLOCKCOMMENT: usize = 7;
+pub const SCE_JSON_OPERATOR: usize = 8;
+pub const SCE_JSON_KEYWORD: usize = 11;
+pub const SCE_JSON_ERROR: usize = 13;
+
+// LexBash (SH) style indices.
+pub const SCE_SH_ERROR: usize = 1;
+pub const SCE_SH_COMMENTLINE: usize = 2;
+pub const SCE_SH_NUMBER: usize = 3;
+pub const SCE_SH_WORD: usize = 4;
+pub const SCE_SH_STRING: usize = 5;
+pub const SCE_SH_CHARACTER: usize = 6;
+pub const SCE_SH_OPERATOR: usize = 7;
+pub const SCE_SH_SCALAR: usize = 9;
+pub const SCE_SH_PARAM: usize = 10;
+pub const SCE_SH_BACKTICKS: usize = 11;
+pub const SCE_SH_HERE_DELIM: usize = 12;
+pub const SCE_SH_HERE_Q: usize = 13;
+
+// LexLua style indices.
+pub const SCE_LUA_COMMENT: usize = 1;
+pub const SCE_LUA_COMMENTLINE: usize = 2;
+pub const SCE_LUA_COMMENTDOC: usize = 3;
+pub const SCE_LUA_NUMBER: usize = 4;
+pub const SCE_LUA_WORD: usize = 5;
+pub const SCE_LUA_STRING: usize = 6;
+pub const SCE_LUA_CHARACTER: usize = 7;
+pub const SCE_LUA_LITERALSTRING: usize = 8;
+pub const SCE_LUA_PREPROCESSOR: usize = 9;
+pub const SCE_LUA_OPERATOR: usize = 10;
+pub const SCE_LUA_STRINGEOL: usize = 12;
+pub const SCE_LUA_LABEL: usize = 20;
+
+// LexSQL style indices.
+pub const SCE_SQL_COMMENT: usize = 1;
+pub const SCE_SQL_COMMENTLINE: usize = 2;
+pub const SCE_SQL_COMMENTDOC: usize = 3;
+pub const SCE_SQL_NUMBER: usize = 4;
+pub const SCE_SQL_WORD: usize = 5;
+pub const SCE_SQL_STRING: usize = 6;
+pub const SCE_SQL_CHARACTER: usize = 7;
+pub const SCE_SQL_OPERATOR: usize = 10;
+pub const SCE_SQL_QUOTEDIDENTIFIER: usize = 23;
+
+// LexYAML style indices.
+pub const SCE_YAML_COMMENT: usize = 1;
+pub const SCE_YAML_IDENTIFIER: usize = 2;
+pub const SCE_YAML_KEYWORD: usize = 3;
+pub const SCE_YAML_NUMBER: usize = 4;
+pub const SCE_YAML_REFERENCE: usize = 5;
+pub const SCE_YAML_DOCUMENT: usize = 6;
+pub const SCE_YAML_TEXT: usize = 7;
+pub const SCE_YAML_ERROR: usize = 8;
+pub const SCE_YAML_OPERATOR: usize = 9;
+
+// LexTOML style indices. The upstream enum also defines
+// `SCE_TOML_ERROR` (7), `SCE_TOML_STRINGEOL` (15), and
+// `SCE_TOML_ESCAPECHAR` (13) — those are intentionally omitted
+// from the scaffolding because Phase 4.5's TOML theme will not
+// colour them differently from the surrounding string / default
+// styles. A future contributor wiring a custom error/EOL theme
+// can add them back at their numeric values verbatim.
+pub const SCE_TOML_COMMENT: usize = 1;
+pub const SCE_TOML_IDENTIFIER: usize = 2;
+pub const SCE_TOML_KEYWORD: usize = 3;
+pub const SCE_TOML_NUMBER: usize = 4;
+pub const SCE_TOML_TABLE: usize = 5;
+pub const SCE_TOML_KEY: usize = 6;
+pub const SCE_TOML_OPERATOR: usize = 8;
+pub const SCE_TOML_STRING_SQ: usize = 9;
+pub const SCE_TOML_STRING_DQ: usize = 10;
+pub const SCE_TOML_TRIPLE_STRING_SQ: usize = 11;
+pub const SCE_TOML_TRIPLE_STRING_DQ: usize = 12;
+pub const SCE_TOML_DATETIME: usize = 14;
+
+// LexCSS style indices.
+pub const SCE_CSS_TAG: usize = 1;
+pub const SCE_CSS_CLASS: usize = 2;
+pub const SCE_CSS_PSEUDOCLASS: usize = 3;
+pub const SCE_CSS_OPERATOR: usize = 5;
+pub const SCE_CSS_IDENTIFIER: usize = 6;
+pub const SCE_CSS_VALUE: usize = 8;
+pub const SCE_CSS_COMMENT: usize = 9;
+pub const SCE_CSS_ID: usize = 10;
+pub const SCE_CSS_IMPORTANT: usize = 11;
+pub const SCE_CSS_DIRECTIVE: usize = 12;
+pub const SCE_CSS_DOUBLESTRING: usize = 13;
+pub const SCE_CSS_SINGLESTRING: usize = 14;
+pub const SCE_CSS_ATTRIBUTE: usize = 16;
+pub const SCE_CSS_VARIABLE: usize = 23;
 
 // SCN_* notification codes (delivered via WM_NOTIFY's NMHDR.code) are added
 // when Phase 2+ first dispatches them. Each constant must be cross-checked

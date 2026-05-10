@@ -40,22 +40,22 @@ use codepp_scintilla_sys::{
     SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_RUST_CHARACTER,
     SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC,
     SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
-    SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COPY, SCI_CREATEDOCUMENT,
-    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN,
-    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER,
-    SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT,
-    SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT,
-    SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM,
-    SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN,
-    SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER,
-    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE,
-    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES,
-    SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
-    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
-    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
-    SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT,
-    SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS,
-    SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
+    SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY,
+    SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
+    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
+    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
+    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
+    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
+    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
+    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
+    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
+    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
+    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
+    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
+    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED,
+    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
     SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
     SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MOD_DELETETEXT,
     SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
@@ -1097,6 +1097,11 @@ impl UiPlatform for Win32Ui {
             // whatever style indices Scintilla picks for unstyled
             // text, producing visual contamination on tab switch.
             apply_default_styles(&self.editor);
+            // Force the now-clear lexer state to repaint immediately
+            // — without a colourise call, residual style bytes from
+            // the previous lexer linger until the user scrolls or
+            // edits.
+            self.editor.send(SCI_COLOURISE, 0, -1);
             return;
         };
         if !self.editor.set_lexer_by_name(name) {
@@ -1106,6 +1111,7 @@ impl UiPlatform for Win32Ui {
             tracing::warn!(lexer = name, "CreateLexer returned NULL");
             self.editor.clear_lexer();
             apply_default_styles(&self.editor);
+            self.editor.send(SCI_COLOURISE, 0, -1);
             return;
         }
         // Per-language theming + keywords. The set is small enough
@@ -1133,6 +1139,22 @@ impl UiPlatform for Win32Ui {
             apply_default_styles(&self.editor);
             apply_rust_theme(&self.editor);
         }
+        // Trigger a full re-style of the buffer through the now-set
+        // lexer. Scintilla doesn't auto-restyle on `SCI_SETILEXER`
+        // — it only re-styles regions on edit / scroll / explicit
+        // colourise. Without this call, switching the language on
+        // a buffer that already has text (e.g. via the Language
+        // menu or a session restore that picked up a persisted
+        // override) leaves the existing text rendered with the
+        // previous lexer's classification (or unstyled, if there
+        // was no previous lexer) until the user scrolls or types.
+        // `lparam = -1` styles to end-of-document; the redraw is
+        // implicit. Runs even on lexers without a configured theme
+        // (anything outside the C / C++ / Rust branches above) —
+        // those still apply their default Scintilla styles, which
+        // is the "best-effort highlighting" the user expects when
+        // pointing an arbitrary file at a known lexer.
+        self.editor.send(SCI_COLOURISE, 0, -1);
     }
 
     fn search_next(&mut self, query: &str, flags: SearchFlags) -> Option<u64> {
@@ -11038,6 +11060,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                         eol,
                         backup_modified_externally,
                         custom_name,
+                        lang,
                     } => {
                         // `restore_untitled_with_text` needs a
                         // `&mut UiPlatform` to allocate the Scintilla
@@ -11056,6 +11079,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                             eol,
                             backup_modified_externally,
                             custom_name,
+                            lang,
                         );
                     }
                     SessionRestoreEntry::DirtyFromBackup {
@@ -11066,6 +11090,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                         eol,
                         disk_changed_externally,
                         backup_modified_externally,
+                        lang,
                     } => {
                         // Same shape as the Untitled branch: split
                         // off a UiPlatform handle, seed the new
@@ -11090,6 +11115,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                             eol,
                             disk_changed_externally,
                             backup_modified_externally,
+                            lang,
                         );
                     }
                 }

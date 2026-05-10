@@ -108,6 +108,20 @@ pub struct Tab {
         default
     )]
     pub custom_name: Option<String>,
+    /// N++-compatible `LangType` id for this buffer. Persisted as
+    /// the raw `i32` so the wire format matches what plugins see
+    /// over `NPPM_GETBUFFERLANGTYPE` — including unknown future
+    /// values that Code++'s `LANG_TABLE` doesn't recognise yet.
+    /// `None` means "no stored override" — the load path falls
+    /// back to extension-based auto-detection for path-bound tabs
+    /// or `L_TEXT` for untitled. On save the value comes from
+    /// `shell::Tab.lang`, which the Language menu writes when the
+    /// user picks a different language; the next restore brings
+    /// the choice back so manual overrides survive relaunches.
+    /// Older session.xml files round-trip cleanly thanks to
+    /// `default`.
+    #[serde(rename = "@lang", skip_serializing_if = "Option::is_none", default)]
+    pub lang: Option<i32>,
 }
 
 /// Persisted main-window geometry. Pixel dimensions are positive in
@@ -314,6 +328,7 @@ mod tests {
                     untitled_seq: None,
                     backup: None,
                     custom_name: None,
+                    lang: None,
                 },
                 Tab {
                     path: Some(PathBuf::from(r"C:\users\alice\config.toml")),
@@ -323,6 +338,7 @@ mod tests {
                     untitled_seq: None,
                     backup: None,
                     custom_name: None,
+                    lang: None,
                 },
             ],
         };
@@ -345,6 +361,7 @@ mod tests {
                 untitled_seq: None,
                 backup: None,
                 custom_name: None,
+                lang: None,
             }],
         };
         session.save_to_xml(&path).unwrap();
@@ -369,6 +386,7 @@ mod tests {
                 untitled_seq: Some(1),
                 backup: Some("new 1@2026-05-04_215750".into()),
                 custom_name: None,
+                lang: None,
             }],
         };
         session.save_to_xml(&path).unwrap();
@@ -395,6 +413,7 @@ mod tests {
                     untitled_seq: None,
                     backup: None,
                     custom_name: None,
+                    lang: None,
                 },
                 Tab {
                     path: None,
@@ -404,6 +423,7 @@ mod tests {
                     untitled_seq: Some(1),
                     backup: Some("new 1@2026-05-04_215800".into()),
                     custom_name: None,
+                    lang: None,
                 },
                 Tab {
                     path: None,
@@ -413,6 +433,7 @@ mod tests {
                     untitled_seq: Some(2),
                     backup: Some("new 2@2026-05-04_215800".into()),
                     custom_name: None,
+                    lang: None,
                 },
             ],
         };
@@ -440,12 +461,59 @@ mod tests {
                 untitled_seq: Some(3),
                 backup: Some("new 3@2026-05-09_141500".into()),
                 custom_name: Some("release notes".into()),
+                lang: None,
             }],
         };
         session.save_to_xml(&path).unwrap();
         let loaded = Session::load_from_xml(&path).unwrap();
         assert_eq!(session, loaded);
         assert_eq!(loaded.tabs[0].custom_name.as_deref(), Some("release notes"));
+    }
+
+    /// `lang` round-trips on a saved-file tab. Verifies a user's
+    /// Language-menu override (`tab.lang` written by
+    /// `NPPM_SETBUFFERLANGTYPE`) survives the session save/load
+    /// cycle so the manual choice persists across relaunches
+    /// instead of reverting to extension-based auto-detection.
+    #[test]
+    fn round_trip_tab_with_manual_lang() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            active: Some(0),
+            window: None,
+            tabs: vec![Tab {
+                path: Some(PathBuf::from("notes.txt")),
+                cursor: 0,
+                encoding: Encoding::Utf8,
+                eol: Eol::Lf,
+                untitled_seq: None,
+                backup: None,
+                custom_name: None,
+                // 81 is L_RUST. The point of the test is that the
+                // user manually picked Rust for a `.txt` file —
+                // extension-based detection would yield Text, so
+                // the persisted override must dominate on restore.
+                lang: Some(81),
+            }],
+        };
+        session.save_to_xml(&path).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(session, loaded);
+        assert_eq!(loaded.tabs[0].lang, Some(81));
+    }
+
+    /// A session.xml written before the `@lang` attribute shipped
+    /// must still parse — the load path falls back to extension
+    /// detection (or `L_TEXT` for untitled) when `lang` is `None`.
+    #[test]
+    fn pre_lang_session_xml_loads_with_none_lang() {
+        let (_dir, path) = temp_session_path();
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
+        std::fs::write(&path, xml).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(loaded.tabs.len(), 1);
+        assert_eq!(loaded.tabs[0].lang, None);
     }
 
     /// A session.xml written before the untitled-buffer feature
