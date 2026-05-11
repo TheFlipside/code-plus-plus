@@ -15,7 +15,8 @@ use codepp_scintilla_sys::{
     SCI_SEARCHNEXT, SCI_SEARCHPREV, SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE,
     SCI_SETCHANGEHISTORY, SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN, SCI_SETMARGINTYPEN,
     SCI_SETMARGINWIDTHN, SCI_SETSEARCHFLAGS, SCI_SETTARGETRANGE, SCI_STYLECLEARALL,
-    SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFORE, SCI_STYLESETITALIC,
+    SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC,
+    SCI_STYLESETSIZE, SCI_STYLESETUNDERLINE,
 };
 
 /// Opaque handle to a Scintilla editor control.
@@ -171,6 +172,42 @@ impl EditorHandle {
     /// Toggle the italic attribute for a style.
     pub fn style_set_italic(&self, style: usize, italic: bool) {
         self.send(SCI_STYLESETITALIC, style as uptr_t, italic as sptr_t);
+    }
+
+    /// Toggle the underline attribute for a style.
+    pub fn style_set_underline(&self, style: usize, underline: bool) {
+        self.send(SCI_STYLESETUNDERLINE, style as uptr_t, underline as sptr_t);
+    }
+
+    /// Set the font point size for a style. `points` is the integer
+    /// point size — Scintilla also supports fractional point sizes
+    /// via `SCI_STYLESETSIZEFRACTIONAL`, not exposed here yet.
+    pub fn style_set_size(&self, style: usize, points: i32) {
+        self.send(SCI_STYLESETSIZE, style as uptr_t, points as sptr_t);
+    }
+
+    /// Set the typeface name for a style. Scintilla expects a
+    /// UTF-8 C-string and copies the bytes into its own state, so
+    /// the caller's `&str` can be dropped immediately after.
+    /// An interior NUL byte degrades to "no font name" (Scintilla
+    /// falls back to its built-in default) with a trace so the
+    /// failure is observable; XML-deserialised values can't carry
+    /// NUL but a programmatic caller could.
+    pub fn style_set_font(&self, style: usize, name: &str) {
+        // SCI_STYLESETFONT requires a NUL-terminated UTF-8 string;
+        // build a `CString` so the trailing NUL is guaranteed.
+        let cname = match std::ffi::CString::new(name) {
+            Ok(c) => c,
+            Err(_) => {
+                tracing::warn!(
+                    style = style,
+                    name = name,
+                    "style_set_font: font name contains interior NUL; using Scintilla default"
+                );
+                std::ffi::CString::default()
+            }
+        };
+        self.send(SCI_STYLESETFONT, style as uptr_t, cname.as_ptr() as sptr_t);
     }
 
     // --- Caret-line highlight ---------------------------------------------

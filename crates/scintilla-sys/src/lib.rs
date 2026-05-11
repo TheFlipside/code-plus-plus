@@ -367,6 +367,18 @@ pub const SCI_STYLESETFORE: u32 = 2051;
 pub const SCI_STYLESETBACK: u32 = 2052;
 pub const SCI_STYLESETBOLD: u32 = 2053;
 pub const SCI_STYLESETITALIC: u32 = 2054;
+/// Set the font point size for a style. `wparam = style index`,
+/// `lparam = point size (int)`. Phase 5 may add the fractional
+/// variant `SCI_STYLESETSIZEFRACTIONAL` (2061) for sub-point
+/// sizing; for now whole-point sizes are fine.
+pub const SCI_STYLESETSIZE: u32 = 2055;
+/// Set the typeface name for a style. `wparam = style index`,
+/// `lparam = const char* (UTF-8)`. Scintilla copies the string
+/// internally; the caller can drop the buffer immediately after.
+pub const SCI_STYLESETFONT: u32 = 2056;
+/// Toggle underline on a style. `wparam = style index`, `lparam =
+/// 1 / 0`.
+pub const SCI_STYLESETUNDERLINE: u32 = 2059;
 /// Toggle caret-line background highlighting. `wparam` is a BOOL
 /// (0/1). When enabled, Scintilla paints the line containing the
 /// caret with the colour set via `SCI_SETCARETLINEBACK`. The

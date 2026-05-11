@@ -142,6 +142,16 @@ pub fn find_history_xml_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("find_history.xml"))
 }
 
+/// Path to `styles.xml` under [`config_dir`] — the editor's
+/// default-style configuration (font face / size / bold / italic /
+/// underline / fg / bg / transparency) the Style Configurator
+/// dialog reads and writes. Separate file from `session.xml` so a
+/// user resetting their session doesn't lose their visual prefs
+/// (and vice versa).
+pub fn styles_xml_path() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("styles.xml"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -112,23 +112,24 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW, GetParent, GetSubMenu, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
     GetWindowTextW, IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW,
     LoadImageW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SendMessageW, SetCursor, SetMenu, SetParent, SetTimer, SetWindowLongPtrW, SetWindowPos,
-    SetWindowTextW, ShowWindow, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
-    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
-    BS_GROUPBOX, BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT,
-    CB_SETEDITSEL, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL,
-    DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY,
-    GWLP_USERDATA, GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS,
-    IDNO, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
-    MB_YESNO, MB_YESNOCANCEL, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
-    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND,
-    WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY,
-    WM_NOTIFY, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE,
-    WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
-    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL,
+    SendMessageW, SetCursor, SetLayeredWindowAttributes, SetMenu, SetParent, SetTimer,
+    SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
+    TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
+    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
+    CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID, ES_AUTOHSCROLL,
+    ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, GWL_EXSTYLE, HACCEL,
+    HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO, IDOK, IDYES, IMAGE_ICON,
+    LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MB_YESNOCANCEL,
+    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    MF_UNCHECKED, MSG, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+    WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
+    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT,
+    WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER,
+    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
+    WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL,
     WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
@@ -220,6 +221,7 @@ const ID_LANGUAGE_CAP: usize = (ID_LANGUAGE_END - ID_LANGUAGE_BASE + 1) as usize
 
 // Settings / Tools / Macro / Run (1600-1699) — disabled stubs.
 const ID_SETTINGS_PREFERENCES: u16 = 1600;
+const ID_SETTINGS_STYLECONFIGURATOR: u16 = 1601;
 
 // Window (1700-1799) — *dynamic*: cmd id = ID_WINDOW_BASE + tab idx.
 // 100-wide window caps the visible-by-shortcut tab list. `_END` is
@@ -1173,6 +1175,76 @@ impl UiPlatform for Win32Ui {
         // still classifies tokens, which is the "best-effort
         // highlighting" the user expects when pointing an arbitrary
         // file at a known lexer.
+        self.editor.send(SCI_COLOURISE, 0, -1);
+    }
+
+    fn apply_default_style(&mut self, styles: &codepp_core::styles::Styles) {
+        let entry = styles.effective_default();
+        let transparency = styles.effective_transparency();
+
+        // Resolve fg / bg. Malformed hex (impossible from a
+        // round-tripped doc but possible if a user hand-edits
+        // styles.xml) falls back to the built-in default so the
+        // editor stays readable rather than rendering invisible
+        // text on the user's mistake.
+        let fg_rgb = codepp_core::styles::parse_rgb_hex(&entry.fg).unwrap_or((0, 0, 0));
+        let bg_rgb = codepp_core::styles::parse_rgb_hex(&entry.bg).unwrap_or((0xFF, 0xFF, 0xFF));
+        let fg_cref = rgb_to_colorref(fg_rgb);
+        let bg_cref = rgb_to_colorref(bg_rgb);
+
+        // Configure STYLE_DEFAULT first — `SCI_STYLECLEARALL`
+        // copies STYLE_DEFAULT to every other style index, so
+        // the font / size / colours seed every per-lexer style
+        // before the per-lexer overrides re-paint over them.
+        self.editor.style_set_font(STYLE_DEFAULT, &entry.font_name);
+        self.editor
+            .style_set_size(STYLE_DEFAULT, entry.font_size as i32);
+        self.editor.style_set_fore(STYLE_DEFAULT, fg_cref);
+        self.editor.style_set_back(STYLE_DEFAULT, bg_cref);
+        self.editor.style_set_bold(STYLE_DEFAULT, entry.bold);
+        self.editor.style_set_italic(STYLE_DEFAULT, entry.italic);
+        self.editor
+            .style_set_underline(STYLE_DEFAULT, entry.underline);
+
+        // Propagate STYLE_DEFAULT to every other style index, then
+        // re-apply the line-number margin (which SCI_STYLECLEARALL
+        // resets to STYLE_DEFAULT, losing its margin-specific
+        // colour pair and the per-doc width).
+        self.editor.style_clear_all();
+        apply_line_number_margin(&self.editor);
+
+        // Transparency. WS_EX_LAYERED is required for
+        // `SetLayeredWindowAttributes` to take effect; when
+        // disabled, we strip the bit so the editor doesn't pay
+        // the layered-window compositing cost. The conversion
+        // from "opacity percent" to the alpha byte is
+        // `percent * 255 / 100` (so 100% → 255 fully opaque).
+        let main_hwnd = unsafe { GetParent(self.tab_hwnd).unwrap_or_default() };
+        if !main_hwnd.is_invalid() {
+            unsafe {
+                apply_window_transparency(main_hwnd, &transparency);
+            }
+        } else {
+            // The tab strip is always a child of the main window
+            // by construction (see `run`); reaching this branch
+            // means `GetParent` failed unexpectedly. Log so the
+            // missing transparency is observable rather than a
+            // silent skip — the alternative is the user wondering
+            // why their checked-on transparency setting has no
+            // visible effect.
+            tracing::warn!(
+                "apply_default_style: GetParent on tab_hwnd returned invalid HWND; transparency not applied"
+            );
+        }
+
+        // The current lexer's classifications need to be re-applied
+        // on top of the new STYLE_DEFAULT (which `style_clear_all`
+        // has just propagated to every style index). Without a
+        // forced re-styling, comments / keywords / strings would
+        // all render with the new default colour until the user
+        // scrolls or edits. The lexer's keyword classes survive
+        // SCI_STYLECLEARALL, so a single colourise repaints
+        // correctly.
         self.editor.send(SCI_COLOURISE, 0, -1);
     }
 
@@ -2394,8 +2466,12 @@ impl Win32Ui {
 // switch schemes; the inline approach here is the smallest thing that
 // makes the demo gate ("open .cpp, see colour") visible.
 
-const FG_DEFAULT: u32 = 0x00_00_00_00; // black
-const BG_DEFAULT: u32 = 0x00_FF_FF_FF; // white
+// The pre-Phase-4.5 `FG_DEFAULT` / `BG_DEFAULT` constants are
+// gone: STYLE_DEFAULT's fore / back are now owned by the user-
+// configurable Style Configurator (via `Win32Ui::apply_default_style`
+// reading `styles.xml`), not by hardcoded host values. The lexer
+// theme palette below carries on as before — those colours overlay
+// the user's STYLE_DEFAULT through `LangTheme.styles` mappings.
 const FG_COMMENT: u32 = 0x00_00_80_00; // green (BBGGRR)
 const FG_KEYWORD: u32 = 0x00_FF_00_00; // blue
 const FG_KEYWORD2: u32 = 0x00_C0_60_00; // steel blue
@@ -2441,8 +2517,22 @@ const LINE_NUMBER_MARGIN_PX: i32 = 50;
 /// on lexer switch. Editor must already be bound to the document the
 /// caller wants to style.
 fn apply_default_styles(editor: &EditorHandle) {
-    editor.style_set_fore(STYLE_DEFAULT, FG_DEFAULT);
-    editor.style_set_back(STYLE_DEFAULT, BG_DEFAULT);
+    // Propagate the current `STYLE_DEFAULT` to every other style
+    // index, then re-apply the line-number margin.
+    //
+    // **`STYLE_DEFAULT` is deliberately not reset here.** That state
+    // is owned by `Win32Ui::apply_default_style` (the trait method
+    // applying the user's `styles.xml` configuration) — it's called
+    // at startup and on every Save & Close from the Style
+    // Configurator dialog. Resetting STYLE_DEFAULT here on every
+    // language switch would clobber the user's font / colour
+    // choices the next time `apply_lang` fired (Phase 4.5
+    // framework path), which is the exact bug that bit us when this
+    // function used to call `style_set_fore` / `style_set_back`.
+    // `style_clear_all` copies the *current* STYLE_DEFAULT (font,
+    // size, fore, back) to every other style; the per-lexer theme
+    // then layers its own fore-colour overrides on top via the
+    // `LangTheme.styles` table.
     editor.style_clear_all();
     // SCI_STYLECLEARALL also clobbers STYLE_LINENUMBER (and the rest
     // of the 32–39 predefined styles), so the line-number margin's
@@ -2909,6 +2999,75 @@ const CPP_STYLES: &[(usize, StyleSlot)] = &[
 // well (where the omission mirrors).
 const CPP_ITALIC: &[usize] = &[SCE_C_COMMENT, SCE_C_COMMENTLINE];
 const CPP_BOLD: &[usize] = &[SCE_C_WORD];
+
+/// Convert `(r, g, b)` (display order) to a Win32 `COLORREF`
+/// (`0x00BBGGRR`). The same packing Scintilla expects for its
+/// style colour messages.
+fn rgb_to_colorref((r, g, b): (u8, u8, u8)) -> u32 {
+    ((b as u32) << 16) | ((g as u32) << 8) | (r as u32)
+}
+
+/// Apply the user's transparency settings to the main window.
+///
+/// Enabling transparency:
+///   - Adds `WS_EX_LAYERED` to the window's extended style
+///     (required for `SetLayeredWindowAttributes`).
+///   - Converts opacity-percent (20..=100) to an 8-bit alpha
+///     value: `255 * percent / 100`.
+///   - Issues `SetLayeredWindowAttributes(..., alpha, LWA_ALPHA)`.
+///
+/// Disabling transparency:
+///   - Strips `WS_EX_LAYERED` so the window stops paying the
+///     compositing cost. A no-op when the bit wasn't set (e.g.
+///     first call at startup with `enabled=false`).
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+unsafe fn apply_window_transparency(hwnd: HWND, t: &codepp_core::styles::Transparency) {
+    // Keep the extended-style word in `isize` throughout to
+    // avoid a u32 narrowing of `GetWindowLongPtrW`'s 64-bit
+    // return value on 64-bit Windows. Win32 currently fits
+    // every extended style bit into the low 32 bits, but the
+    // signature is `isize` and the rest of this codebase (e.g.
+    // the Scintilla border-style toggle around line 1694)
+    // already follows the keep-it-signed pattern.
+    let cur_ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let layered = WS_EX_LAYERED.0 as isize;
+    if t.enabled {
+        let want_ex = cur_ex | layered;
+        if want_ex != cur_ex {
+            unsafe {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want_ex);
+            }
+        }
+        // Clamp percent into the documented 20..=100 range. The
+        // dialog's slider enforces the same bounds, but a
+        // hand-edited styles.xml could carry anything; treating
+        // out-of-range values as "snap to the nearest endpoint"
+        // is the safest graceful-degradation choice (the
+        // alternative for values below 20 would be the editor
+        // becoming barely-visible or invisible). The trace below
+        // makes the snap observable so a debugger / log reader
+        // can tell that the on-disk value didn't survive verbatim.
+        if !(20..=100).contains(&t.percent) {
+            tracing::warn!(
+                percent = t.percent,
+                "transparency percent outside 20..=100; clamping"
+            );
+        }
+        let percent = t.percent.clamp(20, 100) as u32;
+        let alpha = ((255u32 * percent) / 100) as u8;
+        let _ = unsafe { SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA) };
+    } else {
+        let want_ex = cur_ex & !layered;
+        if want_ex != cur_ex {
+            unsafe {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want_ex);
+            }
+        }
+    }
+}
 
 const C_THEME: LangTheme = LangTheme {
     keywords: &[(0, C_KEYWORDS)],
@@ -4287,13 +4446,19 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         let language_menu = build_language_menu()?;
         AppendMenuW(bar, MF_POPUP, language_menu.0 as usize, w!("&Language"))?;
 
-        // ----- Settings ----- (stubs.)
+        // ----- Settings -----
         let settings_menu = CreateMenu()?;
         AppendMenuW(
             settings_menu,
             MF_STRING | MF_GRAYED,
             ID_SETTINGS_PREFERENCES as usize,
             w!("&Preferences..."),
+        )?;
+        AppendMenuW(
+            settings_menu,
+            MF_STRING,
+            ID_SETTINGS_STYLECONFIGURATOR as usize,
+            w!("&Style Configurator..."),
         )?;
         AppendMenuW(bar, MF_POPUP, settings_menu.0 as usize, w!("Se&ttings"))?;
 
@@ -5700,6 +5865,50 @@ const ABOUT_ARCH: &str = if cfg!(target_pointer_width = "64") {
 } else {
     "32-bit"
 };
+
+/// Phase A placeholder for the Style Configurator dialog
+/// (Settings → Style Configurator...). Surfaces the active
+/// style values as a MessageBox so the user can observe what
+/// the round-trip through `styles.xml` is producing. Phase B
+/// (follow-on commit) replaces this with the real dialog that
+/// edits theme / language / style / font / colour / transparency
+/// interactively. Until that lands, the placeholder makes the
+/// menu entry honest about state without pretending to be the
+/// final UX.
+fn show_style_config_placeholder(main_hwnd: HWND) {
+    let snapshot = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        let s = &state.shell.styles;
+        let d = s.effective_default();
+        let t = s.effective_transparency();
+        let bold = if d.bold { "yes" } else { "no" };
+        let italic = if d.italic { "yes" } else { "no" };
+        let underline = if d.underline { "yes" } else { "no" };
+        let transparency = if t.enabled {
+            format!("on ({}%)", t.percent)
+        } else {
+            "off".into()
+        };
+        format!(
+            "Current Default Style (from styles.xml):\n\n\
+             Font:        {} ({} pt)\n\
+             Bold:        {bold}\n\
+             Italic:      {italic}\n\
+             Underline:   {underline}\n\
+             Foreground:  #{}\n\
+             Background:  #{}\n\
+             Transparency: {transparency}\n\n\
+             The interactive Style Configurator dialog is a follow-up commit.",
+            d.font_name, d.font_size, d.fg, d.bg,
+        )
+    } else {
+        "Style state unavailable (host state not registered).".to_string()
+    };
+    let title = HSTRING::from("Style Configurator");
+    let message = HSTRING::from(snapshot);
+    unsafe {
+        MessageBoxW(Some(main_hwnd), &message, &title, MB_OK);
+    }
+}
 
 /// Show the "About Code++" dialog modally. `main_hwnd` is the
 /// owner; the dialog disables the owner for the duration of the
@@ -11367,6 +11576,23 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             state.shell.set_window_geometry(g);
         }
 
+        // Seed STYLE_DEFAULT from styles.xml (font face, size,
+        // bold / italic / underline, fg, bg) and apply transparency
+        // *after* session restore has populated tabs but *before*
+        // the GWLP_USERDATA install + window show. This way the
+        // very first paint already reflects the user's configured
+        // appearance — without it, a saved Consolas / dark-grey-on-
+        // light-grey config would briefly flash as Scintilla's
+        // built-in defaults before settling. SCI_STYLECLEARALL
+        // inside `apply_default_style` propagates STYLE_DEFAULT to
+        // every style index, so the restored tabs' active lexer
+        // styles get refreshed by the trailing `SCI_COLOURISE`
+        // (per the trait doc).
+        {
+            let (shell, mut ui) = state.split();
+            ui.apply_default_style(&shell.styles);
+        }
+
         // Box now finalized. Install the raw pointer in GWLP_USERDATA;
         // the Box is reclaimed in WM_DESTROY.
         let state_ptr = Box::into_raw(state);
@@ -14398,6 +14624,15 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // info. Modal pump runs after the borrow drops.
                     ID_HELP_ABOUT => {
                         show_about_dialog(hwnd);
+                    }
+                    // Settings → Style Configurator. Phase A (this
+                    // commit): the dialog itself is a follow-up; for
+                    // now the menu entry surfaces a MessageBox with
+                    // the active style values so the round-trip
+                    // through `styles.xml` is observable end-to-end.
+                    // Phase B replaces this with the real dialog.
+                    ID_SETTINGS_STYLECONFIGURATOR => {
+                        show_style_config_placeholder(hwnd);
                     }
                     // Plugins → Plugin Manager. Modal dialog listing
                     // every discovered plugin with a per-row Enabled

@@ -11,6 +11,7 @@ pub mod file;
 pub mod find_history;
 pub mod lang;
 pub mod session;
+pub mod styles;
 
 pub use encoding::{Encoding, EncodingError};
 pub use eol::Eol;
@@ -24,3 +25,4 @@ pub use file::{
 pub use find_history::{FindHistory, FindHistoryError};
 pub use lang::LangType;
 pub use session::{Session, SessionError, Tab, WindowGeometry};
+pub use styles::{format_rgb_hex, parse_rgb_hex, StyleEntry, Styles, StylesError, Transparency};

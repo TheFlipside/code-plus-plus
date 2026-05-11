@@ -185,6 +185,29 @@ pub trait UiPlatform {
     /// follow the user's tab moves.
     fn apply_lang(&mut self, lang: LangType);
 
+    /// Apply the editor's default-style configuration (font face,
+    /// size, bold / italic / underline, foreground / background
+    /// colour, and window transparency) to the live Scintilla
+    /// view. Called by the host after `Shell::new` to seed the
+    /// initial appearance from `styles.xml`, and again whenever
+    /// the Style Configurator dialog's Save & Close fires through
+    /// `Shell::set_styles`. The implementation:
+    ///
+    /// 1. Configures `STYLE_DEFAULT` (font + size + colours + font
+    ///    modifiers) on the editor.
+    /// 2. Calls `SCI_STYLECLEARALL` so every other style index
+    ///    inherits the new baseline.
+    /// 3. Re-applies the line-number margin (clobbered by
+    ///    `SCI_STYLECLEARALL`).
+    /// 4. Applies the transparency setting to the main window.
+    /// 5. Triggers a re-style of any active lexer's classifications
+    ///    so per-language theme colours (the Phase 4.5 framework's
+    ///    style table) re-overlay on top of the new default —
+    ///    `STYLE_DEFAULT` provides the base font / size; lexers'
+    ///    per-style `style_set_fore` calls layer the keyword /
+    ///    string / number / etc. colours on top.
+    fn apply_default_style(&mut self, styles: &codepp_core::styles::Styles);
+
     // --- Search / replace -----------------------------------------
     //
     // The four trait methods below are unconditionally part of the
@@ -854,6 +877,13 @@ pub struct Shell {
     /// UI's existing dialog-presentation path picks them up
     /// without a new code path.
     deferred_dialogs: Vec<PendingDialog>,
+    /// Editor visual configuration persisted in `styles.xml` and
+    /// edited via the Style Configurator dialog. Read at startup
+    /// (`Shell::new`); written by [`Self::set_styles`] when the
+    /// dialog's Save & Close fires. The UI is expected to call
+    /// `UiPlatform::apply_default_style` on this value after the
+    /// editor is up to seed the visible appearance.
+    pub styles: codepp_core::styles::Styles,
 }
 
 /// Search-option bitset matching Scintilla's `SCFIND_*` flags. Held
@@ -943,7 +973,21 @@ impl Shell {
             #[cfg(target_os = "windows")]
             pending_fif_launch: None,
             deferred_dialogs: Vec::new(),
+            styles: load_styles(),
         })
+    }
+
+    /// Persist a new editor-style configuration. Replaces
+    /// `self.styles` in memory and writes the new value out to
+    /// `styles.xml`. Errors during persistence are logged and
+    /// swallowed — the in-memory change still takes effect so the
+    /// active session sees the new colours / font, and the dialog
+    /// has no useful recovery path for a write failure other than
+    /// re-prompting the user (which would be more disruptive than
+    /// the silent log).
+    pub fn set_styles(&mut self, styles: codepp_core::styles::Styles) {
+        self.styles = styles;
+        save_styles(&self.styles);
     }
 
     /// Read access to the currently-active tab, or `None` if no
@@ -4906,6 +4950,36 @@ fn save_find_history(history: &FindHistory) {
     }
 }
 
+/// Load `styles.xml` at startup. Mirrors `load_find_history` —
+/// missing file → defaults, parse failure → log + defaults so a
+/// corrupt styles.xml doesn't block startup.
+fn load_styles() -> codepp_core::styles::Styles {
+    let Some(path) = codepp_platform::styles_xml_path() else {
+        return codepp_core::styles::Styles::default();
+    };
+    match codepp_core::styles::Styles::load_from_xml(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "styles.xml load failed; starting with defaults");
+            codepp_core::styles::Styles::default()
+        }
+    }
+}
+
+/// Save `styles.xml`. Errors are logged + swallowed for the
+/// same reason as [`save_find_history`]: the dialog has no
+/// useful recovery path for a write failure, and the in-memory
+/// state is already updated so the session reflects the user's
+/// choice regardless of whether disk write succeeded.
+fn save_styles(styles: &codepp_core::styles::Styles) {
+    let Some(path) = codepp_platform::styles_xml_path() else {
+        return;
+    };
+    if let Err(e) = styles.save_to_xml(&path) {
+        tracing::warn!(path = %path.display(), error = %e, "styles.xml save failed");
+    }
+}
+
 fn spawn_forwarder<T: Send + 'static>(
     src: Receiver<T>,
     dst: Sender<T>,
@@ -4947,6 +5021,7 @@ mod tests {
         /// distinct value.
         next_fake_doc: isize,
         apply_lang_calls: Vec<LangType>,
+        apply_default_style_calls: Vec<codepp_core::styles::Styles>,
         search_calls: Vec<(String, SearchFlags, String)>,
         replace_calls: Vec<(String, String, SearchFlags, String)>,
         /// Counter incremented each time `mark_saved` is called —
@@ -5017,6 +5092,9 @@ mod tests {
         }
         fn apply_lang(&mut self, lang: LangType) {
             self.apply_lang_calls.push(lang);
+        }
+        fn apply_default_style(&mut self, styles: &codepp_core::styles::Styles) {
+            self.apply_default_style_calls.push(styles.clone());
         }
         fn search_next(&mut self, query: &str, flags: SearchFlags) -> Option<u64> {
             // Naive in-test substring search over the fake buffer.
