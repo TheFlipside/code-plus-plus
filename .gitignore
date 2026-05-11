@@ -5,6 +5,13 @@
 **/*.rs.bk
 Cargo.lock.bak
 
+# Stray rustc outputs at the repo root — `rustc foo.rs` without an
+# explicit `-o` writes `rust_out.exe` / `rust_out.pdb` on Windows.
+# All real binaries live under `target/`; anything at the repo root
+# is a transcription mistake.
+/rust_out.exe
+/rust_out.pdb
+
 # IDE
 .vscode/
 .idea/
