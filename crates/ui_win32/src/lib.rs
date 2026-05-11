@@ -1114,30 +1114,50 @@ impl UiPlatform for Win32Ui {
             self.editor.send(SCI_COLOURISE, 0, -1);
             return;
         }
-        // Per-language theming + keywords. The set is small enough
-        // that an inline branch is clearer than a per-language
-        // table; it grows as Phase 4 adds lexers.
-        // Order: keywords → reset-then-restyle. `set_keywords` only
-        // mutates the lexer's internal word list (no style state),
-        // so it doesn't matter that `apply_default_styles` runs
-        // after — the keyword list survives the style reset. Listed
-        // first to keep this method's logical order
-        // (lexer-data-then-paint) clearer at the call site.
-        if lang == L_C || lang == L_CPP {
-            self.editor.set_keywords(
-                0,
-                if lang == L_C {
-                    C_KEYWORDS
-                } else {
-                    CPP_KEYWORDS
-                },
-            );
+        // Dispatch to the per-language theme table. The framework
+        // (see `lang_theme` below) returns `Some(&theme)` for any
+        // language with explicit keyword classes + style mappings
+        // wired on the host side; `None` for languages whose
+        // Lexilla lexer is attached but doesn't yet have host
+        // configuration (the 🟡 rows in `docs/lexers-coverage.md`).
+        //
+        // Order for the themed branch:
+        //   1. Install keyword classes — these mutate only the
+        //      lexer's internal word lists, not the visual styles.
+        //   2. `apply_default_styles` — resets every style index
+        //      back to STYLE_DEFAULT, clearing the previous lexer's
+        //      per-style fore/back colours.
+        //   3. Per-style fore colours from the theme's `styles`
+        //      table — each (SCE_*_INDEX, StyleSlot) pair sets one
+        //      style's foreground via the shared palette.
+        //   4. Per-style italic / bold flags from the theme's
+        //      `italic` / `bold` lists (typically comments → italic
+        //      and primary keywords → bold).
+        //
+        // For the unthemed branch (Lexilla lexer attached but no
+        // host theme yet), we still call `apply_default_styles` so
+        // the previous lexer's per-style colours don't bleed
+        // through onto the now-different style indices the new
+        // lexer emits. The lexer still tokenises correctly; comments
+        // / strings / numbers just render at the default colour
+        // until a Phase 4.5 follow-on commit adds this language's
+        // row to the table.
+        if let Some(theme) = lang_theme(lang) {
+            for &(class, words) in theme.keywords {
+                self.editor.set_keywords(class, words);
+            }
             apply_default_styles(&self.editor);
-            apply_cpp_theme(&self.editor);
-        } else if lang == L_RUST {
-            self.editor.set_keywords(0, RUST_KEYWORDS);
+            for &(style, slot) in theme.styles {
+                self.editor.style_set_fore(style, slot_color(slot));
+            }
+            for &style in theme.italic {
+                self.editor.style_set_italic(style, true);
+            }
+            for &style in theme.bold {
+                self.editor.style_set_bold(style, true);
+            }
+        } else {
             apply_default_styles(&self.editor);
-            apply_rust_theme(&self.editor);
         }
         // Trigger a full re-style of the buffer through the now-set
         // lexer. Scintilla doesn't auto-restyle on `SCI_SETILEXER`
@@ -1149,11 +1169,10 @@ impl UiPlatform for Win32Ui {
         // previous lexer's classification (or unstyled, if there
         // was no previous lexer) until the user scrolls or types.
         // `lparam = -1` styles to end-of-document; the redraw is
-        // implicit. Runs even on lexers without a configured theme
-        // (anything outside the C / C++ / Rust branches above) —
-        // those still apply their default Scintilla styles, which
-        // is the "best-effort highlighting" the user expects when
-        // pointing an arbitrary file at a known lexer.
+        // implicit. Runs even for the unthemed branch — the lexer
+        // still classifies tokens, which is the "best-effort
+        // highlighting" the user expects when pointing an arbitrary
+        // file at a known lexer.
         self.editor.send(SCI_COLOURISE, 0, -1);
     }
 
@@ -2741,44 +2760,225 @@ fn center_caret_impl(editor: &EditorHandle, force: bool) {
     }
 }
 
-/// LexCPP per-style overrides. Both C and C++ buffers share this
-/// theme; the only thing that varies is the keyword list installed
-/// via `SCI_SETKEYWORDS`.
-fn apply_cpp_theme(editor: &EditorHandle) {
-    editor.style_set_fore(SCE_C_COMMENT, FG_COMMENT);
-    editor.style_set_fore(SCE_C_COMMENTLINE, FG_COMMENT);
-    editor.style_set_fore(SCE_C_COMMENTDOC, FG_COMMENT);
-    editor.style_set_fore(SCE_C_COMMENTLINEDOC, FG_COMMENT);
-    editor.style_set_italic(SCE_C_COMMENT, true);
-    editor.style_set_italic(SCE_C_COMMENTLINE, true);
-    editor.style_set_fore(SCE_C_WORD, FG_KEYWORD);
-    editor.style_set_bold(SCE_C_WORD, true);
-    editor.style_set_fore(SCE_C_WORD2, FG_KEYWORD2);
-    editor.style_set_fore(SCE_C_STRING, FG_STRING);
-    editor.style_set_fore(SCE_C_CHARACTER, FG_STRING);
-    editor.style_set_fore(SCE_C_NUMBER, FG_NUMBER);
-    editor.style_set_fore(SCE_C_PREPROCESSOR, FG_PREPROC);
-    editor.style_set_fore(SCE_C_OPERATOR, FG_OPERATOR);
+// ---------------------------------------------------------------------------
+// Phase 4.5 — table-driven language theme framework
+//
+// Adding a language is mechanical:
+//   1. Confirm the lexer's `SCE_*_*` style constants are declared
+//      in `crates/scintilla-sys/src/lib.rs`. The Phase 4.5 starter
+//      set (Python, JSON, Bash, Lua, SQL, YAML, TOML, CSS) is
+//      already there; new lexers append a batch.
+//   2. Add a `<LANG>_KEYWORDS` const for the language's primary
+//      keyword list (and additional `_KEYWORDS2`, `_KEYWORDS3`
+//      consts if the lexer uses more than one keyword class).
+//      Keep these in `core::lang` so any future tool (test
+//      harnesses, lang inspector plugins) can reuse them.
+//   3. Build a `<LANG>_STYLES: &[(usize, StyleSlot)]` table
+//      mapping each style index the lexer emits onto a palette
+//      slot.
+//   4. Build `<LANG>_ITALIC` / `<LANG>_BOLD` lists for the style
+//      indices that want those font modifiers (typically
+//      comments → italic, primary keywords → bold).
+//   5. Build a `<LANG>_THEME: LangTheme` const wiring all of the
+//      above together.
+//   6. Add an `else if lang == L_<LANG> { Some(&<LANG>_THEME) }`
+//      branch to `lang_theme()`. The dispatch is an `if/else if`
+//      chain (not a `match`) because `LangType`'s const-pattern
+//      story is fiddly across compiler versions; the chain is
+//      explicit and bulletproof.
+//   7. Update the corresponding row in `docs/lexers-coverage.md`
+//      from 🟡 to ✅.
+//
+// See DESIGN.md §7.2 Phase 4.5 for the binding completion gate.
+// ---------------------------------------------------------------------------
+
+/// One slot in the shared per-language palette. Each variant maps
+/// to a single `0x00BBGGRR` colour via [`slot_color`]; the colour
+/// constants themselves live above this block alongside the rest
+/// of the theme palette so a future redesign of the editor's
+/// visual scheme is a single coordinated edit.
+///
+/// Slots are deliberately coarser than the full Scintilla style
+/// vocabulary — Lexilla emits 10–25 SCE_* indices per lexer, but
+/// only a handful of *visual* categories matter for readable
+/// highlighting. Two lexers' "comment" indices both map to
+/// [`StyleSlot::Comment`] and pick up the same green; that's the
+/// design.
+///
+/// New slots are added here as new languages need them. Don't
+/// invent a new slot per language; reuse what fits semantically
+/// (e.g. a regex literal in Perl is still a [`StyleSlot::String`];
+/// HTML's tag names are [`StyleSlot::Keyword`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StyleSlot {
+    /// Block / line / doc comments. Rendered italic green.
+    Comment,
+    /// Primary keyword class (the language's reserved words).
+    /// Rendered bold blue.
+    Keyword,
+    /// Secondary keyword class — typically types (`int`,
+    /// `String`), built-in constants (`true`, `nil`), or stdlib
+    /// identifiers. Rendered steel-blue.
+    Keyword2,
+    /// String and character literals.
+    String,
+    /// Numeric literals.
+    Number,
+    /// Preprocessor directives (`#include`, `#define`) — also
+    /// reused for HTML / XML doctype and processing instructions.
+    Preprocessor,
+    /// Operators (`+`, `==`, `->`, …).
+    Operator,
+    /// Rust lifetimes (`'a`). Distinct slot because no other
+    /// language has this exact concept; reuse for similar
+    /// "scoped binding" highlights if applicable.
+    Lifetime,
+    /// Rust macros (`println!`). Distinct slot for the same
+    /// reason as [`StyleSlot::Lifetime`].
+    Macro,
 }
 
-/// LexRust per-style overrides. Style indices differ from LexCPP — see
-/// `vendor/lexilla/include/SciLexer.h` `SCE_RUST_*`.
-fn apply_rust_theme(editor: &EditorHandle) {
-    editor.style_set_fore(SCE_RUST_COMMENTBLOCK, FG_COMMENT);
-    editor.style_set_fore(SCE_RUST_COMMENTLINE, FG_COMMENT);
-    editor.style_set_fore(SCE_RUST_COMMENTBLOCKDOC, FG_COMMENT);
-    editor.style_set_fore(SCE_RUST_COMMENTLINEDOC, FG_COMMENT);
-    editor.style_set_italic(SCE_RUST_COMMENTBLOCK, true);
-    editor.style_set_italic(SCE_RUST_COMMENTLINE, true);
-    editor.style_set_fore(SCE_RUST_WORD, FG_KEYWORD);
-    editor.style_set_bold(SCE_RUST_WORD, true);
-    editor.style_set_fore(SCE_RUST_WORD2, FG_KEYWORD2);
-    editor.style_set_fore(SCE_RUST_STRING, FG_STRING);
-    editor.style_set_fore(SCE_RUST_CHARACTER, FG_STRING);
-    editor.style_set_fore(SCE_RUST_NUMBER, FG_NUMBER);
-    editor.style_set_fore(SCE_RUST_OPERATOR, FG_OPERATOR);
-    editor.style_set_fore(SCE_RUST_LIFETIME, FG_LIFETIME);
-    editor.style_set_fore(SCE_RUST_MACRO, FG_MACRO);
+/// Resolve a [`StyleSlot`] to its `0x00BBGGRR` colour. The
+/// individual `FG_*` constants are defined above with the rest
+/// of the editor's visual palette so a coordinated theme change
+/// is a single edit. Marked `const` so a future palette refactor
+/// to compile-time table lookup is mechanical.
+const fn slot_color(slot: StyleSlot) -> u32 {
+    match slot {
+        StyleSlot::Comment => FG_COMMENT,
+        StyleSlot::Keyword => FG_KEYWORD,
+        StyleSlot::Keyword2 => FG_KEYWORD2,
+        StyleSlot::String => FG_STRING,
+        StyleSlot::Number => FG_NUMBER,
+        StyleSlot::Preprocessor => FG_PREPROC,
+        StyleSlot::Operator => FG_OPERATOR,
+        StyleSlot::Lifetime => FG_LIFETIME,
+        StyleSlot::Macro => FG_MACRO,
+    }
+}
+
+/// One row of the per-language theme table. Carries everything
+/// the host needs to install for a given language's editor
+/// configuration: keyword classes (each (class_index, words))
+/// and style mappings (each (SCE_*_INDEX, palette slot)) plus
+/// font-modifier lists.
+struct LangTheme {
+    /// Keyword classes to install via `SCI_SETKEYWORDS`. Each
+    /// tuple is `(class_index, words)`; most lexers use just
+    /// class 0, some (Lua, SQL, HTML) use multiple classes. An
+    /// empty list is legal — the lexer still tokenises by
+    /// syntax, just without keyword discrimination.
+    keywords: &'static [(u32, &'static str)],
+    /// Per-style foreground colour assignments. Each tuple is
+    /// `(SCE_*_INDEX, slot)`. Applied after `apply_default_styles`
+    /// resets every style to STYLE_DEFAULT.
+    styles: &'static [(usize, StyleSlot)],
+    /// Style indices to render in italic (typically comments).
+    italic: &'static [usize],
+    /// Style indices to render in bold (typically the primary
+    /// keyword class).
+    bold: &'static [usize],
+}
+
+// --- LexCPP family ---
+// `LexCPP` covers C, C++, C#, Java, JavaScript, TypeScript,
+// Objective-C, Swift, Go, Resource file. The style indices are
+// identical (LexCPP emits the same SCE_C_* enum regardless of
+// the language family member); only the keyword list differs.
+// CPP_STYLES / CPP_ITALIC / CPP_BOLD are shared across every
+// future LexCPP-family theme row.
+
+const CPP_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_C_COMMENT, StyleSlot::Comment),
+    (SCE_C_COMMENTLINE, StyleSlot::Comment),
+    (SCE_C_COMMENTDOC, StyleSlot::Comment),
+    (SCE_C_COMMENTLINEDOC, StyleSlot::Comment),
+    (SCE_C_WORD, StyleSlot::Keyword),
+    (SCE_C_WORD2, StyleSlot::Keyword2),
+    (SCE_C_STRING, StyleSlot::String),
+    (SCE_C_CHARACTER, StyleSlot::String),
+    (SCE_C_NUMBER, StyleSlot::Number),
+    (SCE_C_PREPROCESSOR, StyleSlot::Preprocessor),
+    (SCE_C_OPERATOR, StyleSlot::Operator),
+];
+// Doc-comment styles (`SCE_C_COMMENTDOC`, `SCE_C_COMMENTLINEDOC`)
+// are deliberately *not* italicised — preserves the pre-refactor
+// behaviour where only plain `/* */` and `//` were italic. A
+// future visual rebalancing pass could italicise doc comments
+// too, but it should be a coordinated decision across Rust as
+// well (where the omission mirrors).
+const CPP_ITALIC: &[usize] = &[SCE_C_COMMENT, SCE_C_COMMENTLINE];
+const CPP_BOLD: &[usize] = &[SCE_C_WORD];
+
+const C_THEME: LangTheme = LangTheme {
+    keywords: &[(0, C_KEYWORDS)],
+    styles: CPP_STYLES,
+    italic: CPP_ITALIC,
+    bold: CPP_BOLD,
+};
+const CPP_THEME: LangTheme = LangTheme {
+    keywords: &[(0, CPP_KEYWORDS)],
+    styles: CPP_STYLES,
+    italic: CPP_ITALIC,
+    bold: CPP_BOLD,
+};
+
+// --- LexRust ---
+// LexRust's SCE_RUST_* enum is distinct from LexCPP's SCE_C_*.
+// Notably LexRust splits CHARACTER and STRING the same way LexCPP
+// does, but adds LIFETIME and MACRO slots that LexCPP lacks.
+
+const RUST_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_RUST_COMMENTBLOCK, StyleSlot::Comment),
+    (SCE_RUST_COMMENTLINE, StyleSlot::Comment),
+    (SCE_RUST_COMMENTBLOCKDOC, StyleSlot::Comment),
+    (SCE_RUST_COMMENTLINEDOC, StyleSlot::Comment),
+    (SCE_RUST_WORD, StyleSlot::Keyword),
+    (SCE_RUST_WORD2, StyleSlot::Keyword2),
+    (SCE_RUST_STRING, StyleSlot::String),
+    (SCE_RUST_CHARACTER, StyleSlot::String),
+    (SCE_RUST_NUMBER, StyleSlot::Number),
+    (SCE_RUST_OPERATOR, StyleSlot::Operator),
+    (SCE_RUST_LIFETIME, StyleSlot::Lifetime),
+    (SCE_RUST_MACRO, StyleSlot::Macro),
+];
+const RUST_ITALIC: &[usize] = &[SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTLINE];
+const RUST_BOLD: &[usize] = &[SCE_RUST_WORD];
+
+const RUST_THEME: LangTheme = LangTheme {
+    keywords: &[(0, RUST_KEYWORDS)],
+    styles: RUST_STYLES,
+    italic: RUST_ITALIC,
+    bold: RUST_BOLD,
+};
+
+/// Per-language theme dispatch. Returns `Some(&theme)` for any
+/// language whose keyword classes + style mappings have been
+/// wired on the host side; `None` for languages whose Lexilla
+/// lexer is attached but doesn't yet have host configuration.
+///
+/// The `None` path is **not** a bug — it's the explicit signal
+/// to `apply_lang` that the buffer should render at default
+/// colours (best-effort tokenisation, no host-side colour
+/// scheme). The 🟡 rows in `docs/lexers-coverage.md` correspond
+/// to this branch.
+///
+/// Adding a language: insert one `else if lang == L_<LANG> {
+/// Some(&<LANG>_THEME) }` branch into the chain below. The
+/// comparison is `==` on the `LangType` newtype's derived
+/// `PartialEq` — a `match` would also work in principle but
+/// `LangType`'s const-pattern story is fiddly across compiler
+/// versions, so we keep the chain explicit.
+fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
+    if lang == L_C {
+        Some(&C_THEME)
+    } else if lang == L_CPP {
+        Some(&CPP_THEME)
+    } else if lang == L_RUST {
+        Some(&RUST_THEME)
+    } else {
+        None
+    }
 }
 
 /// Fire every queued NPPN_* notification through `Shell::notify_plugins`,
@@ -15616,5 +15816,105 @@ mod save_confirm_result_tests {
             save_confirm_from_message_box(IDOK),
             SaveConfirmResult::Cancel
         );
+    }
+}
+
+#[cfg(test)]
+mod lang_theme_tests {
+    //! Tests for the Phase 4.5 table-driven theme framework. The
+    //! tests don't drive Scintilla (no editor handle in
+    //! unit-test context); they verify the **shape** of each
+    //! wired theme so a regression that drops a keyword class,
+    //! reorders a style entry, or stops returning a theme for a
+    //! known language fails loudly rather than silently rendering
+    //! a buffer at default colours.
+    use super::{lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO};
+    use codepp_core::lang::{L_C, L_CPP, L_JAVASCRIPT, L_PYTHON, L_RUST, L_TEXT, RUST_KEYWORDS};
+
+    /// Every wired language must:
+    ///   - Return `Some(&theme)`.
+    ///   - Install at least one keyword class.
+    ///   - Have at least 8 style mappings (the floor: any C-family
+    ///     or Rust-like lexer needs comment / keyword / string /
+    ///     number / operator at minimum, plus a few more — anything
+    ///     dramatically thinner is almost certainly an incomplete
+    ///     wiring).
+    #[test]
+    fn wired_languages_have_complete_themes() {
+        for (lang, name) in [(L_C, "C"), (L_CPP, "C++"), (L_RUST, "Rust")] {
+            let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
+            assert!(
+                !theme.keywords.is_empty(),
+                "{name} theme has no keyword classes"
+            );
+            assert!(
+                theme.styles.len() >= 8,
+                "{name} theme has only {} style mappings",
+                theme.styles.len()
+            );
+        }
+    }
+
+    /// C and C++ share LexCPP and therefore share the styles /
+    /// italic / bold lists. Only the keyword class 0 content
+    /// differs. Pin both halves of that contract so a future
+    /// edit that lets the two languages drift in their style
+    /// mapping gets flagged.
+    ///
+    /// Value-equality (not pointer-equality) is the right
+    /// assertion here: Rust does not guarantee a unique address
+    /// for `const` slice items, so the LLVM dedup that would
+    /// make `std::ptr::eq` pass today is an optimisation, not a
+    /// language guarantee. Deep-equality catches accidental
+    /// divergence in content, which is the failure mode we
+    /// actually care about — if a future contributor
+    /// copy-pastes CPP_STYLES into e.g. JS_STYLES with identical
+    /// content, the runtime behaviour is identical and no
+    /// defect exists.
+    #[test]
+    fn c_and_cpp_share_lexcpp_style_table() {
+        let c = lang_theme(L_C).expect("C wired");
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        assert_eq!(c.styles, cpp.styles);
+        assert_eq!(c.italic, cpp.italic);
+        assert_eq!(c.bold, cpp.bold);
+        // But the keyword content differs.
+        assert_ne!(c.keywords[0].1, cpp.keywords[0].1);
+    }
+
+    /// Rust's keyword class 0 must match the canonical
+    /// `RUST_KEYWORDS` const from `core::lang`. A regression that
+    /// silently swapped in a different keyword list would leave
+    /// the editor highlighting the wrong set of words; this
+    /// pinning makes the data-source explicit.
+    #[test]
+    fn rust_theme_uses_canonical_keyword_list() {
+        let rust = lang_theme(L_RUST).expect("Rust wired");
+        assert_eq!(rust.keywords.len(), 1, "Rust theme uses class 0 only");
+        assert_eq!(rust.keywords[0].0, 0);
+        assert_eq!(rust.keywords[0].1, RUST_KEYWORDS);
+    }
+
+    /// Unwired language → `None`. The `apply_lang` caller treats
+    /// this as the "best-effort tokenisation, default colours"
+    /// path; if a wiring is added later, this assertion needs
+    /// updating in the same commit — same as for `L_C` / `L_CPP`
+    /// / `L_RUST` above.
+    #[test]
+    fn unwired_languages_have_no_theme() {
+        assert!(lang_theme(L_PYTHON).is_none(), "Python not wired yet");
+        assert!(lang_theme(L_JAVASCRIPT).is_none(), "JS not wired yet");
+        assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");
+    }
+
+    /// The palette resolver is a pure mapping; pin a handful of
+    /// slot → colour pairs so a future palette rebalancing has
+    /// to update the test alongside the constants. Failure means
+    /// the constants and the resolver disagree.
+    #[test]
+    fn slot_color_resolves_through_palette() {
+        assert_eq!(slot_color(StyleSlot::Comment), FG_COMMENT);
+        assert_eq!(slot_color(StyleSlot::Keyword), FG_KEYWORD);
+        assert_eq!(slot_color(StyleSlot::Macro), FG_MACRO);
     }
 }

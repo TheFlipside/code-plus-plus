@@ -39,32 +39,81 @@ residual rows formally tracked).
 
 ## How to mark a row ✅
 
-The Phase 4.5 framework in `Win32Ui::apply_lang` reads a
-`LangTheme` table entry per language. Adding one row means:
+The Phase 4.5 framework lives in
+[`crates/ui_win32/src/lib.rs`](../crates/ui_win32/src/lib.rs)
+under the "Phase 4.5 — table-driven language theme framework"
+banner. `Win32Ui::apply_lang` dispatches through
+`lang_theme(LangType) -> Option<&'static LangTheme>` — adding
+a row means one `else if` branch in that function plus a small
+data block of consts (keywords, styles, italic, bold, theme).
 
-1. Confirm the language's `SCE_*_*` style constants are
-   declared in `crates/scintilla-sys/src/lib.rs`. The starter
-   set (Python, JSON, Bash, Lua, SQL, YAML, TOML, CSS) is
-   already there as scaffolding; new lexers add their batch
-   of constants with a comment citing the upstream
+For each new language:
+
+1. **SCE_* constants.** Confirm the lexer's `SCE_*_*` style
+   constants are declared in
+   [`crates/scintilla-sys/src/lib.rs`](../crates/scintilla-sys/src/lib.rs).
+   The Phase 4.5 starter set (Python, JSON, Bash, Lua, SQL,
+   YAML, TOML, CSS) is already there as scaffolding; new
+   lexers append a batch with a comment citing the upstream
    `vendor/lexilla/include/SciLexer.h` line range.
-2. Author a `&str` keyword list (or several, for lexers with
-   multiple keyword classes — primary keywords, types,
-   built-ins, etc.).
-3. Author a `&[(SCE_*_INDEX, StyleSlot)]` table that maps
-   each style index the lexer emits onto a slot in the shared
-   palette (Comment / String / Number / Keyword / Operator /
-   …).
-4. Add the row to `lang_theme()`'s match.
-5. Verify by opening a sample file, picking the language, and
-   confirming colours are visible.
-6. Update the row below from 🟡 to ✅.
+2. **Keyword list.** Author a `<LANG>_KEYWORDS: &str` const in
+   `core::lang` next to the existing `C_KEYWORDS` /
+   `CPP_KEYWORDS` / `RUST_KEYWORDS`. (If the lexer uses
+   multiple keyword classes — Lua / SQL / HTML — add
+   `<LANG>_KEYWORDS2` / `_KEYWORDS3` for the secondary
+   classes.) These stay in `core::lang` so a future tool or
+   plugin can read them without depending on `ui_win32`.
+3. **Style mapping.** In `crates/ui_win32/src/lib.rs`,
+   underneath the existing `CPP_STYLES` / `RUST_STYLES` blocks,
+   author `<LANG>_STYLES: &[(usize, StyleSlot)]` listing every
+   `SCE_*_INDEX` the lexer emits paired with its palette slot
+   (`Comment` / `Keyword` / `String` / `Number` / …).
+   Cross-reference the lexer's source in
+   `vendor/lexilla/lexers/Lex<Lang>.cxx` so no SCE_* index is
+   accidentally skipped. New `StyleSlot` variants are added to
+   the enum + `slot_color` if a slot the existing palette
+   doesn't cover is genuinely needed (Type? Function? Tag?) —
+   reuse over invention, but add when warranted.
+4. **Font modifiers.** Author `<LANG>_ITALIC` / `<LANG>_BOLD:
+   &[usize]` lists for the SCE_* indices that want those
+   modifiers (typically `SCE_*_COMMENT*` → italic and
+   `SCE_*_WORD` → bold).
+5. **Theme const.** Build `<LANG>_THEME: LangTheme { ... }`
+   wiring all four pieces.
+6. **Dispatch.** Add an `else if lang == L_<LANG> { Some(&<LANG>_THEME) }`
+   arm to `lang_theme()`. For LexCPP-family languages (Java,
+   JS, TS, Go, C#, Obj-C, Swift, RC) the per-language theme
+   reuses `CPP_STYLES` / `CPP_ITALIC` / `CPP_BOLD` — only the
+   keyword list differs.
+7. **Coverage row.** Update this matrix's row from 🟡 to ✅,
+   bump the total at the top.
+8. **Verify.** Open a sample file, pick the language from the
+   Language menu, and confirm comments / strings / numbers /
+   keywords pick up visibly distinct colours. (No automated
+   test gates this — `lang_theme_tests` covers framework shape
+   but visual correctness is a manual demo step. The Phase 4
+   demo gate already requires opening a `.cpp` and `.rs` to
+   confirm highlighting; Phase 4.5 extends that to every ✅
+   row.)
 
-## Coverage as of 2026-05-10
+The framework itself has its own unit tests
+(`lang_theme_tests` in `ui_win32`) verifying that wired
+languages return a `Some(&theme)` with a non-empty keyword
+list and a substantive style mapping, that LexCPP-family
+languages share their style table by reference, and that
+unwired languages correctly return `None`. Adding a row
+extends these tests as appropriate.
 
-Three rows ✅ today (C, C++, Rust — wired in the original
-Phase 4 m1 inline branches). Every other row with a Lexilla
-lexer is 🟡 pending Phase 4.5. `Normal Text` is ⚫ by design.
+## Coverage as of 2026-05-11
+
+Phase 4.5 framework has landed; the table-driven
+`lang_theme()` dispatch in `ui_win32` is wired and three rows
+(C, C++, Rust) are migrated onto it as the no-op verification.
+The framework's unit tests (in the `lang_theme_tests` module)
+pin the contract going forward.
+
+Subsequent commits add rows row-by-row. The matrix's
+percentage updates per ✅ promotion.
 
 Total: 89 rows. ✅ 3 / 🟡 85 / ⚫ 1.
 
