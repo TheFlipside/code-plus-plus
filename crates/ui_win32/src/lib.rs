@@ -6407,6 +6407,23 @@ unsafe fn handle_style_config_menu(main_hwnd: HWND) {
         let (shell, mut ui) = state.split();
         shell.set_styles(new_styles);
         ui.apply_default_style(&shell.styles);
+        // `apply_default_style`'s `style_clear_all` propagates
+        // the new STYLE_DEFAULT (font, size, fg, bg) to every
+        // style index — which also wipes the per-style fg
+        // colours the active lexer installs (comment-green,
+        // keyword-blue, etc.). Without a follow-up `apply_lang`,
+        // the user sees a uniformly-coloured buffer until they
+        // switch tabs (which re-fires `apply_lang` via the
+        // tab-switch dispatch). Re-applying lang here layers
+        // the lexer's per-style theme back on top of the new
+        // default colour scheme — keyword classes survive
+        // `style_clear_all` so this only repaints colours, no
+        // re-lex work.
+        let active_lang = shell
+            .active()
+            .map(|t| t.lang)
+            .unwrap_or(codepp_core::lang::L_TEXT);
+        ui.apply_lang(active_lang);
     }
 }
 
@@ -13040,14 +13057,29 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // very first paint already reflects the user's configured
         // appearance — without it, a saved Consolas / dark-grey-on-
         // light-grey config would briefly flash as Scintilla's
-        // built-in defaults before settling. SCI_STYLECLEARALL
-        // inside `apply_default_style` propagates STYLE_DEFAULT to
-        // every style index, so the restored tabs' active lexer
-        // styles get refreshed by the trailing `SCI_COLOURISE`
-        // (per the trait doc).
+        // built-in defaults before settling.
+        //
+        // `apply_default_style`'s `style_clear_all` propagates
+        // STYLE_DEFAULT to every style index, which also wipes
+        // any per-style fg colours an earlier synchronous
+        // `apply_lang` installed (via
+        // `restore_dirty_with_text` for DirtyFromBackup tabs or
+        // `restore_untitled_with_text` for UntitledFromBackup
+        // tabs — both call `apply_lang` synchronously during
+        // session restore). Re-apply lang for the active tab so
+        // the lexer's theme layers back on top of the new
+        // default. For OpenFile tabs the later async load
+        // completion will call `apply_lang` again — harmless
+        // redundancy, no visible flicker since we haven't
+        // shown the window yet.
         {
             let (shell, mut ui) = state.split();
             ui.apply_default_style(&shell.styles);
+            let active_lang = shell
+                .active()
+                .map(|t| t.lang)
+                .unwrap_or(codepp_core::lang::L_TEXT);
+            ui.apply_lang(active_lang);
         }
 
         // Box now finalized. Install the raw pointer in GWLP_USERDATA;
