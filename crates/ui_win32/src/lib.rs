@@ -69,19 +69,21 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Gdi::{
     AlphaBlend, CreateCompatibleDC, CreateFontIndirectW, CreatePen, CreateSolidBrush, DeleteDC,
-    DeleteObject, DrawTextW, FillRect, GetMonitorInfoW, GetStockObject, GetSysColorBrush,
-    InvalidateRect, LineTo, MonitorFromWindow, MoveToEx, SelectObject, SetBkColor, SetBkMode,
-    SetTextColor, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, COLOR_WINDOW, DEFAULT_GUI_FONT,
-    DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT,
-    HGDIOBJ, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH, PS_SOLID, TRANSPARENT,
+    DeleteObject, DrawTextW, EnumFontFamiliesExW, FillRect, GetDC, GetMonitorInfoW, GetStockObject,
+    GetSysColorBrush, InvalidateRect, LineTo, MonitorFromWindow, MoveToEx, ReleaseDC, SelectObject,
+    SetBkColor, SetBkMode, SetTextColor, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, COLOR_WINDOW,
+    DEFAULT_CHARSET, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
+    FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    NULL_BRUSH, PS_SOLID, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::{
-    GetOpenFileNameW, GetSaveFileNameW, OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY,
-    OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    ChooseColorW, GetOpenFileNameW, GetSaveFileNameW, CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW,
+    OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT,
+    OFN_PATHMUSTEXIST, OPENFILENAMEW,
 };
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT,
@@ -115,22 +117,23 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SendMessageW, SetCursor, SetLayeredWindowAttributes, SetMenu, SetParent, SetTimer,
     SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
     TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
-    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
-    CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
-    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID, ES_AUTOHSCROLL,
-    ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, GWL_EXSTYLE, HACCEL,
-    HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO, IDOK, IDYES, IMAGE_ICON,
-    LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MB_YESNOCANCEL,
-    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    MF_UNCHECKED, MSG, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
-    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_INITMENUPOPUP,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT,
-    WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
-    WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL,
-    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_OWNERDRAW,
+    BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL,
+    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID,
+    ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
+    GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO, IDOK,
+    IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
+    MB_YESNO, MB_YESNOCANCEL, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP,
+    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
+    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND,
+    WM_HSCROLL, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
+    WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT,
+    WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION,
+    WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
+    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -413,6 +416,14 @@ const IDC_FR_FIF_REPLACE_IN_FILES: u16 = 223;
 
 /// About dialog window class.
 const ABOUT_CLASS: PCWSTR = w!("CodePlusPlusAboutDialog");
+
+/// Style Configurator dialog window class.
+const STYLE_CONFIG_CLASS: PCWSTR = w!("CodePlusPlusStyleConfigDialog");
+
+/// Colour-picker preset popup window class — the small
+/// floating frame that opens when the user clicks one of the
+/// dialog's colour swatches.
+const COLOR_PICKER_POPUP_CLASS: PCWSTR = w!("CodePlusPlusColorPickerPopup");
 
 /// About dialog control ids. The URL link is the only interactive
 /// child besides the OK button (`IDOK`); STN_CLICKED on it opens
@@ -5866,47 +5877,1466 @@ const ABOUT_ARCH: &str = if cfg!(target_pointer_width = "64") {
     "32-bit"
 };
 
-/// Phase A placeholder for the Style Configurator dialog
-/// (Settings → Style Configurator...). Surfaces the active
-/// style values as a MessageBox so the user can observe what
-/// the round-trip through `styles.xml` is producing. Phase B
-/// (follow-on commit) replaces this with the real dialog that
-/// edits theme / language / style / font / colour / transparency
-/// interactively. Until that lands, the placeholder makes the
-/// menu entry honest about state without pretending to be the
-/// final UX.
-fn show_style_config_placeholder(main_hwnd: HWND) {
-    let snapshot = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-        let s = &state.shell.styles;
-        let d = s.effective_default();
-        let t = s.effective_transparency();
-        let bold = if d.bold { "yes" } else { "no" };
-        let italic = if d.italic { "yes" } else { "no" };
-        let underline = if d.underline { "yes" } else { "no" };
-        let transparency = if t.enabled {
-            format!("on ({}%)", t.percent)
-        } else {
-            "off".into()
-        };
-        format!(
-            "Current Default Style (from styles.xml):\n\n\
-             Font:        {} ({} pt)\n\
-             Bold:        {bold}\n\
-             Italic:      {italic}\n\
-             Underline:   {underline}\n\
-             Foreground:  #{}\n\
-             Background:  #{}\n\
-             Transparency: {transparency}\n\n\
-             The interactive Style Configurator dialog is a follow-up commit.",
-            d.font_name, d.font_size, d.fg, d.bg,
-        )
-    } else {
-        "Style state unavailable (host state not registered).".to_string()
-    };
-    let title = HSTRING::from("Style Configurator");
-    let message = HSTRING::from(snapshot);
+/// Preset colour palette shown in the colour-picker popup —
+/// 40 swatches in an 8-wide × 5-tall grid. Same kind of palette
+/// Notepad++ uses on its colour buttons. Each tuple is
+/// `(R, G, B)`; the grid row-major ordering is:
+///
+///   Row 0: greyscale ramp (black → white)
+///   Rows 1–4: hue circle with two saturation / brightness
+///     variants per hue
+///
+/// Hand-picked to give a decent spread without trying to
+/// reproduce a colour theory; the "More Colours..." button is
+/// the escape hatch for anything not in this set.
+const PRESET_COLOURS: &[(u8, u8, u8)] = &[
+    // Row 0 — greys
+    (0x00, 0x00, 0x00),
+    (0x33, 0x33, 0x33),
+    (0x4D, 0x4D, 0x4D),
+    (0x66, 0x66, 0x66),
+    (0x80, 0x80, 0x80),
+    (0x99, 0x99, 0x99),
+    (0xB3, 0xB3, 0xB3),
+    (0xFF, 0xFF, 0xFF),
+    // Row 1 — saturated primaries
+    (0x99, 0x00, 0x00),
+    (0xCC, 0x00, 0x00),
+    (0xCC, 0x66, 0x00),
+    (0xFF, 0xCC, 0x00),
+    (0x33, 0x99, 0x00),
+    (0x00, 0x66, 0x66),
+    (0x00, 0x33, 0x99),
+    (0x66, 0x00, 0x99),
+    // Row 2 — bright variants
+    (0xFF, 0x00, 0x00),
+    (0xFF, 0x66, 0x66),
+    (0xFF, 0x99, 0x00),
+    (0xFF, 0xFF, 0x00),
+    (0x66, 0xCC, 0x00),
+    (0x00, 0xCC, 0xCC),
+    (0x33, 0x66, 0xFF),
+    (0x99, 0x33, 0xFF),
+    // Row 3 — light tints
+    (0xFF, 0x99, 0x99),
+    (0xFF, 0xCC, 0xCC),
+    (0xFF, 0xCC, 0x99),
+    (0xFF, 0xFF, 0x99),
+    (0xCC, 0xFF, 0x99),
+    (0x99, 0xFF, 0xFF),
+    (0x99, 0xCC, 0xFF),
+    (0xCC, 0x99, 0xFF),
+    // Row 4 — neutral / web-safe set
+    (0xCC, 0x33, 0x33),
+    (0xCC, 0x99, 0x66),
+    (0xCC, 0xCC, 0x33),
+    (0x99, 0xCC, 0x33),
+    (0x33, 0x99, 0x33),
+    (0x33, 0xCC, 0x99),
+    (0x33, 0x66, 0xCC),
+    (0x66, 0x33, 0xCC),
+];
+
+/// Layout constants for the colour-picker popup. The swatch
+/// grid is `SWATCH_COLS × SWATCH_ROWS` swatches of
+/// `SWATCH_SIZE_PX` each with a `SWATCH_GAP_PX` gap between
+/// them, plus a `MORE_BUTTON_H_PX`-tall button at the bottom.
+const SWATCH_SIZE_PX: i32 = 22;
+const SWATCH_GAP_PX: i32 = 2;
+const SWATCH_COLS: i32 = 8;
+const SWATCH_ROWS: i32 = 5;
+const POPUP_PAD_PX: i32 = 6;
+const MORE_BUTTON_H_PX: i32 = 26;
+const POPUP_INNER_W_PX: i32 = SWATCH_COLS * SWATCH_SIZE_PX + (SWATCH_COLS - 1) * SWATCH_GAP_PX;
+const POPUP_INNER_H_PX: i32 = SWATCH_ROWS * SWATCH_SIZE_PX + (SWATCH_ROWS - 1) * SWATCH_GAP_PX;
+const POPUP_CLIENT_W_PX: i32 = POPUP_INNER_W_PX + 2 * POPUP_PAD_PX;
+const POPUP_CLIENT_H_PX: i32 = POPUP_INNER_H_PX + 3 * POPUP_PAD_PX + MORE_BUTTON_H_PX;
+
+/// Result of the colour-picker popup — `Some(rgb)` if the user
+/// clicked a swatch or `ChooseColorW`'d a custom colour; `None`
+/// if they dismissed (Esc, click outside, X). Stored on the
+/// popup's state and retrieved after the modal pump returns.
+#[derive(Clone, Copy)]
+enum ColorPickResult {
+    /// User picked a colour by clicking a swatch or returning
+    /// from `ChooseColorW`.
+    Picked((u8, u8, u8)),
+    /// User wants to escalate to `ChooseColorW`. The popup
+    /// closes itself first; the caller then opens the system
+    /// dialog and stores its result.
+    MoreColours,
+}
+
+/// State passed into the colour-picker popup's wnd_proc via
+/// CREATESTRUCT.lpCreateParams. Holds the working result —
+/// initial colour seeding stays on the calling site (the host
+/// dialog) and is forwarded to `ChooseColorW` only on the
+/// "More Colours..." escalation path.
+struct ColorPickerPopupState {
+    result: Option<ColorPickResult>,
+}
+
+/// Show the colour-picker preset popup just below `(screen_x,
+/// screen_y)`, modal to `owner`. Returns `Some(rgb)` if the
+/// user picked a colour (either a swatch or via the "More
+/// Colours..." escalation to `ChooseColorW`), or `None` on
+/// dismissal.
+///
+/// `initial` is the currently-bound colour for the calling
+/// square — passed through to `ChooseColorW` so the system
+/// dialog opens with that swatch pre-selected; the preset
+/// grid itself doesn't highlight it (matches N++'s UX).
+fn show_color_picker_popup(
+    owner: HWND,
+    screen_x: i32,
+    screen_y: i32,
+    initial: (u8, u8, u8),
+) -> Option<(u8, u8, u8)> {
+    use std::sync::OnceLock;
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+
     unsafe {
-        MessageBoxW(Some(main_hwnd), &message, &title, MB_OK);
+        let instance = GetModuleHandleW(None).ok()?;
+        REGISTERED.get_or_init(|| {
+            let class = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(color_picker_popup_wnd_proc),
+                hInstance: instance.into(),
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                hbrBackground: dialog_bg_brush(),
+                lpszClassName: COLOR_PICKER_POPUP_CLASS,
+                ..Default::default()
+            };
+            let _ = RegisterClassExW(&class);
+        });
+
+        let mut state = Box::new(ColorPickerPopupState { result: None });
+        let state_ptr: *mut ColorPickerPopupState = &mut *state;
+
+        let mut window_rect = RECT {
+            left: 0,
+            top: 0,
+            right: POPUP_CLIENT_W_PX,
+            bottom: POPUP_CLIENT_H_PX,
+        };
+        let _ = AdjustWindowRectEx(
+            &mut window_rect,
+            WS_POPUP | WS_BORDER,
+            false,
+            WS_EX_TOOLWINDOW,
+        );
+        let popup_w = window_rect.right - window_rect.left;
+        let popup_h = window_rect.bottom - window_rect.top;
+
+        let popup = CreateWindowExW(
+            WS_EX_TOOLWINDOW,
+            COLOR_PICKER_POPUP_CLASS,
+            PCWSTR::null(), // no caption shown — WS_POPUP has no NC chrome
+            WS_POPUP | WS_BORDER,
+            screen_x,
+            screen_y,
+            popup_w,
+            popup_h,
+            Some(owner),
+            None,
+            Some(instance.into()),
+            Some(state_ptr as *mut c_void),
+        )
+        .ok()?;
+        let _dlg_guard = DlgDestroyGuard(popup);
+
+        // Swatch buttons. Each gets a unique command id in the
+        // `IDC_COLOR_POPUP_SWATCH_BASE..` block so WM_COMMAND
+        // can route by id without HWND chasing.
+        for row in 0..SWATCH_ROWS {
+            for col in 0..SWATCH_COLS {
+                let idx = (row * SWATCH_COLS + col) as usize;
+                let x = POPUP_PAD_PX + col * (SWATCH_SIZE_PX + SWATCH_GAP_PX);
+                let y = POPUP_PAD_PX + row * (SWATCH_SIZE_PX + SWATCH_GAP_PX);
+                let id = IDC_COLOR_POPUP_SWATCH_BASE + idx as u16;
+                let _ = CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    w!("BUTTON"),
+                    PCWSTR::null(),
+                    WS_CHILD | WS_VISIBLE | style_bits(BS_OWNERDRAW),
+                    x,
+                    y,
+                    SWATCH_SIZE_PX,
+                    SWATCH_SIZE_PX,
+                    Some(popup),
+                    Some(HMENU(id as usize as *mut c_void)),
+                    Some(instance.into()),
+                    None,
+                );
+            }
+        }
+
+        // "More Colours..." button.
+        let more_y = POPUP_PAD_PX + POPUP_INNER_H_PX + POPUP_PAD_PX;
+        let more = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("More Colours..."),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_PUSHBUTTON),
+            POPUP_PAD_PX,
+            more_y,
+            POPUP_INNER_W_PX,
+            MORE_BUTTON_H_PX,
+            Some(popup),
+            Some(HMENU(IDC_COLOR_POPUP_MORE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
+        apply_dialog_font(more, font);
+
+        let _ = ShowWindow(popup, SW_SHOW);
+        let _ = SetFocus(Some(more));
+
+        let mut msg = MSG::default();
+        loop {
+            if !IsWindow(Some(popup)).as_bool() {
+                break;
+            }
+            let ret = GetMessageW(&mut msg, None, 0, 0);
+            match ret.0 {
+                0 => {
+                    let _ = PostMessageW(None, WM_QUIT, msg.wParam, msg.lParam);
+                    break;
+                }
+                -1 => break,
+                _ => {
+                    // Click outside the popup → dismiss. The
+                    // popup doesn't disable its owner (it's not
+                    // a true modal — same shape as a context
+                    // menu), so the user can click back into
+                    // the parent dialog without going through
+                    // an explicit close.
+                    if msg.message == WM_LBUTTONDOWN || msg.message == WM_RBUTTONDOWN {
+                        let mut hit_pt = POINT {
+                            x: msg.pt.x,
+                            y: msg.pt.y,
+                        };
+                        let mut popup_rect = RECT::default();
+                        let _ = GetWindowRect(popup, &mut popup_rect);
+                        let inside = hit_pt.x >= popup_rect.left
+                            && hit_pt.x < popup_rect.right
+                            && hit_pt.y >= popup_rect.top
+                            && hit_pt.y < popup_rect.bottom;
+                        // `hit_pt` shows the GetMessage hot
+                        // path uses screen coords already; the
+                        // local binding lets us reuse it for a
+                        // future "did the click land on a
+                        // specific swatch?" follow-up if we
+                        // ever need it. Silence the unused-
+                        // assignment warning.
+                        let _ = &mut hit_pt;
+                        if !inside {
+                            // Dismiss without picking.
+                            let _ = DestroyWindow(popup);
+                            break;
+                        }
+                    }
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+        }
+
+        match state.result.take() {
+            Some(ColorPickResult::Picked(rgb)) => Some(rgb),
+            Some(ColorPickResult::MoreColours) => pick_color_via_choose_color(owner, initial),
+            None => None,
+        }
+    }
+}
+
+/// Window procedure for the colour-picker preset popup.
+/// Handles WM_DRAWITEM for the swatch buttons (fills them with
+/// their `PRESET_COLOURS` entry plus a 1px border) and
+/// WM_COMMAND for swatch / "More Colours..." clicks.
+unsafe extern "system" fn color_picker_popup_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    // Wrap the dispatch in `catch_unwind` so a host-internal
+    // panic (allocation failure, indexing slip, tracing
+    // misbehaviour, ...) can't unwind across the `extern "system"`
+    // wnd_proc frame — that's documented UB. On a caught panic
+    // we fall back to `DefWindowProcW` so the popup dismisses
+    // gracefully rather than corrupting the process. Same
+    // pattern every other wnd_proc in this file uses.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        color_picker_popup_wnd_proc_inner(hwnd, msg, wparam, lparam)
+    })) {
+        Ok(lr) => lr,
+        Err(_) => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+unsafe extern "system" fn color_picker_popup_wnd_proc_inner(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_NCCREATE => unsafe {
+            let cs = lparam.0 as *const CREATESTRUCTW;
+            if !cs.is_null() {
+                let state_ptr = (*cs).lpCreateParams as isize;
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        },
+        WM_DRAWITEM => unsafe {
+            let dis = lparam.0 as *const DRAWITEMSTRUCT;
+            if !dis.is_null() {
+                let cid = (*dis).CtlID;
+                if (IDC_COLOR_POPUP_SWATCH_BASE as u32..).contains(&cid)
+                    && cid < (IDC_COLOR_POPUP_SWATCH_BASE as u32 + PRESET_COLOURS.len() as u32)
+                {
+                    let idx = (cid - IDC_COLOR_POPUP_SWATCH_BASE as u32) as usize;
+                    let (r, g, b) = PRESET_COLOURS[idx];
+                    let rect = (*dis).rcItem;
+                    let hdc = (*dis).hDC;
+                    let brush = CreateSolidBrush(COLORREF(rgb_to_colorref((r, g, b))));
+                    if !brush.is_invalid() {
+                        FillRect(hdc, &rect, brush);
+                        let _ = DeleteObject(brush.into());
+                    }
+                    // 1px dark border so light swatches stay
+                    // visually distinct from the popup
+                    // background.
+                    let border = CreatePen(PS_SOLID, 1, COLORREF(0x00_30_30_30));
+                    if !border.is_invalid() {
+                        let prev = SelectObject(hdc, border.into());
+                        let mut last = POINT::default();
+                        let _ = MoveToEx(hdc, rect.left, rect.top, Some(&mut last));
+                        let _ = LineTo(hdc, rect.right - 1, rect.top);
+                        let _ = LineTo(hdc, rect.right - 1, rect.bottom - 1);
+                        let _ = LineTo(hdc, rect.left, rect.bottom - 1);
+                        let _ = LineTo(hdc, rect.left, rect.top);
+                        SelectObject(hdc, prev);
+                        let _ = DeleteObject(border.into());
+                    }
+                }
+            }
+            LRESULT(1)
+        },
+        WM_COMMAND => unsafe {
+            let cid = (wparam.0 & 0xFFFF) as u16;
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ColorPickerPopupState;
+            if !state_ptr.is_null() {
+                if cid == IDC_COLOR_POPUP_MORE {
+                    (*state_ptr).result = Some(ColorPickResult::MoreColours);
+                    let _ = DestroyWindow(hwnd);
+                } else if (IDC_COLOR_POPUP_SWATCH_BASE..).contains(&cid)
+                    && cid < (IDC_COLOR_POPUP_SWATCH_BASE + PRESET_COLOURS.len() as u16)
+                {
+                    let idx = (cid - IDC_COLOR_POPUP_SWATCH_BASE) as usize;
+                    (*state_ptr).result = Some(ColorPickResult::Picked(PRESET_COLOURS[idx]));
+                    let _ = DestroyWindow(hwnd);
+                }
+            }
+            LRESULT(0)
+        },
+        WM_NCDESTROY => unsafe {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        },
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// Open the Windows `ChooseColorW` common dialog. Returns
+/// `Some(rgb)` on OK, `None` on Cancel. `initial` seeds the
+/// dialog's initial colour so the user starts from where they
+/// were instead of black.
+fn pick_color_via_choose_color(owner: HWND, initial: (u8, u8, u8)) -> Option<(u8, u8, u8)> {
+    // A 16-entry custom-colour palette is required by Win32 —
+    // the dialog reads/writes these slots when the user
+    // "Adds to Custom Colors". We don't currently persist
+    // them, so a fresh white palette every open is the
+    // graceful-degradation behaviour.
+    let mut custom: [COLORREF; 16] = [COLORREF(0x00_FF_FF_FF); 16];
+    let mut cc = CHOOSECOLORW {
+        lStructSize: std::mem::size_of::<CHOOSECOLORW>() as u32,
+        hwndOwner: owner,
+        rgbResult: COLORREF(rgb_to_colorref(initial)),
+        lpCustColors: custom.as_mut_ptr(),
+        Flags: CC_RGBINIT | CC_FULLOPEN,
+        ..Default::default()
+    };
+    let ok = unsafe { ChooseColorW(&mut cc) };
+    if !ok.as_bool() {
+        return None;
+    }
+    let cref = cc.rgbResult.0;
+    let r = (cref & 0xFF) as u8;
+    let g = ((cref >> 8) & 0xFF) as u8;
+    let b = ((cref >> 16) & 0xFF) as u8;
+    Some((r, g, b))
+}
+
+/// Enumerate every distinct font face installed on the system.
+/// Returns the names sorted case-insensitively. Skips Windows'
+/// "@"-prefixed vertical font duplicates (they're variants of
+/// the regular face, not their own face).
+fn enumerate_system_fonts() -> Vec<String> {
+    use std::collections::BTreeSet;
+    let mut fonts: BTreeSet<String> = BTreeSet::new();
+    let lf = LOGFONTW {
+        lfCharSet: DEFAULT_CHARSET,
+        ..Default::default()
+    };
+    unsafe {
+        let dc = GetDC(None);
+        if dc.is_invalid() {
+            return Vec::new();
+        }
+        let fonts_ptr: *mut BTreeSet<String> = &mut fonts;
+        EnumFontFamiliesExW(dc, &lf, Some(font_enum_proc), LPARAM(fonts_ptr as isize), 0);
+        ReleaseDC(None, dc);
+    }
+    fonts.into_iter().collect()
+}
+
+/// EnumFontFamiliesEx callback — extracts the face name from
+/// `LOGFONTW.lfFaceName`, skips "@"-prefixed vertical
+/// duplicates, and inserts unique names into the
+/// caller-supplied `BTreeSet<String>` (so the result is sorted
+/// and deduplicated on the way out).
+///
+/// Wrapped in `catch_unwind` for FFI panic safety — the body
+/// allocates (`String::from_utf16_lossy`, `BTreeSet::insert`),
+/// so an OOM or any other panic must not unwind across the
+/// `extern "system"` boundary into GDI's enumeration loop. On
+/// a caught panic we return `1` so GDI keeps enumerating; the
+/// font that triggered the panic is dropped, the rest of the
+/// list still populates.
+unsafe extern "system" fn font_enum_proc(
+    logfont: *const LOGFONTW,
+    _tm: *const TEXTMETRICW,
+    _font_type: u32,
+    lparam: LPARAM,
+) -> i32 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if logfont.is_null() || lparam.0 == 0 {
+            return 1;
+        }
+        unsafe {
+            let fonts = &mut *(lparam.0 as *mut std::collections::BTreeSet<String>);
+            let face = &(*logfont).lfFaceName;
+            let len = face.iter().position(|&c| c == 0).unwrap_or(face.len());
+            let name = String::from_utf16_lossy(&face[..len]);
+            if !name.is_empty() && !name.starts_with('@') {
+                fonts.insert(name);
+            }
+        }
+        1
+    }))
+    .unwrap_or(1)
+}
+
+/// Working state for the Style Configurator dialog. Stored
+/// inside the dialog's `Box` and reached via GWLP_USERDATA from
+/// the wnd_proc. Carries every control HWND the dispatch
+/// touches and the working-copy `Styles` value the user is
+/// editing; `result` is set on Save & Close so the modal-pump
+/// caller can return it to the host.
+struct StyleConfigDialogState {
+    owner_hwnd: HWND,
+    /// Set to `Some(new)` on Save & Close, left `None` on
+    /// Cancel / X / Esc. The driver returns this after the
+    /// modal pump.
+    result: Option<codepp_core::styles::Styles>,
+    /// Live working copy edited by every control mutation. On
+    /// Save & Close this becomes `result`.
+    working: codepp_core::styles::StyleEntry,
+    working_transparency: codepp_core::styles::Transparency,
+    /// Control HWNDs. Owned by the dialog window; child
+    /// windows are destroyed automatically when the parent
+    /// dies, so no explicit cleanup is required.
+    fg_button: HWND,
+    bg_button: HWND,
+    font_combo: HWND,
+    size_combo: HWND,
+    bold_check: HWND,
+    italic_check: HWND,
+    underline_check: HWND,
+    transparency_check: HWND,
+    transparency_slider: HWND,
+}
+
+/// Trackbar messages — `msctls_trackbar32` doesn't have a
+/// dedicated windows-rs newtype the way listview / treeview
+/// do, so we use the documented `WM_USER + n` literals.
+const WM_USER_TBM: u32 = 0x0400;
+const TBM_GETPOS: u32 = WM_USER_TBM;
+const TBM_SETPOS: u32 = WM_USER_TBM + 5;
+const TBM_SETRANGE: u32 = WM_USER_TBM + 6;
+/// `TBS_AUTOTICKS` (1). `TBS_HORZ` is 0 so we just write the
+/// auto-ticks bit directly.
+const TBS_HORZ_AUTOTICKS: u32 = 0x0001;
+
+/// Menu-click entry point. Snapshots the current styles, opens
+/// the modal dialog, and on a non-None return persists via
+/// `Shell::set_styles` and re-applies the live editor through
+/// `Win32Ui::apply_default_style`. Run on the UI thread.
+///
+/// # Safety
+///
+/// `main_hwnd` must be the host's main window on the calling
+/// thread; same contract as the rest of the wnd_proc dispatch.
+unsafe fn handle_style_config_menu(main_hwnd: HWND) {
+    // Snapshot under a brief borrow, then drop it before the
+    // modal pump runs (the message loop re-enters the wnd_proc).
+    let current = match unsafe { state_from_hwnd(main_hwnd) } {
+        Some(s) => s.shell.styles.clone(),
+        None => return,
+    };
+    let Some(new_styles) = show_style_config_dialog(main_hwnd, current) else {
+        return;
+    };
+    if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        let (shell, mut ui) = state.split();
+        shell.set_styles(new_styles);
+        ui.apply_default_style(&shell.styles);
+    }
+}
+
+/// Open the Style Configurator dialog modally over `owner`.
+/// Returns `Some(styles)` if the user clicked Save & Close,
+/// `None` on Cancel / X / Esc.
+fn show_style_config_dialog(
+    owner: HWND,
+    initial: codepp_core::styles::Styles,
+) -> Option<codepp_core::styles::Styles> {
+    use std::sync::OnceLock;
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+
+    unsafe {
+        let instance = GetModuleHandleW(None).ok()?;
+        REGISTERED.get_or_init(|| {
+            let class = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(style_config_wnd_proc),
+                hInstance: instance.into(),
+                hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+                hbrBackground: dialog_bg_brush(),
+                lpszClassName: STYLE_CONFIG_CLASS,
+                ..Default::default()
+            };
+            let _ = RegisterClassExW(&class);
+        });
+
+        let initial_default = initial.effective_default();
+        let initial_transparency = initial.effective_transparency();
+        let mut state = Box::new(StyleConfigDialogState {
+            owner_hwnd: owner,
+            result: None,
+            working: initial_default.clone(),
+            working_transparency: initial_transparency.clone(),
+            fg_button: HWND::default(),
+            bg_button: HWND::default(),
+            font_combo: HWND::default(),
+            size_combo: HWND::default(),
+            bold_check: HWND::default(),
+            italic_check: HWND::default(),
+            underline_check: HWND::default(),
+            transparency_check: HWND::default(),
+            transparency_slider: HWND::default(),
+        });
+        let state_ptr: *mut StyleConfigDialogState = &mut *state;
+
+        // Layout. CLIENT-space; we AdjustWindowRectEx once to
+        // get the outer window size for `CreateWindowExW`.
+        const CLIENT_W: i32 = 680;
+        const CLIENT_H: i32 = 380;
+
+        let mut window_rect = RECT {
+            left: 0,
+            top: 0,
+            right: CLIENT_W,
+            bottom: CLIENT_H,
+        };
+        let _ = AdjustWindowRectEx(
+            &mut window_rect,
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            false,
+            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+        );
+        let dlg_w = window_rect.right - window_rect.left;
+        let dlg_h = window_rect.bottom - window_rect.top;
+        let mut owner_rect = RECT::default();
+        let _ = GetWindowRect(owner, &mut owner_rect);
+        let owner_w = owner_rect.right - owner_rect.left;
+        let owner_h = owner_rect.bottom - owner_rect.top;
+        let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
+        let dlg_y = owner_rect.top + (owner_h - dlg_h) / 2;
+
+        let dlg = CreateWindowExW(
+            WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
+            STYLE_CONFIG_CLASS,
+            w!("Style Configurator"),
+            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            dlg_x,
+            dlg_y,
+            dlg_w,
+            dlg_h,
+            Some(owner),
+            None,
+            Some(instance.into()),
+            Some(state_ptr as *mut c_void),
+        )
+        .ok()?;
+        let _dlg_guard = DlgDestroyGuard(dlg);
+
+        let font = HFONT(GetStockObject(DEFAULT_GUI_FONT).0);
+
+        // === Top row: Select theme ===
+        let theme_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Select theme:"),
+            WS_CHILD | WS_VISIBLE,
+            20,
+            16,
+            85,
+            18,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let theme_combo = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("COMBOBOX"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x3), // CBS_DROPDOWNLIST
+            110,
+            14,
+            240,
+            22,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_THEME_COMBO as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let theme_default = HSTRING::from("Default (stylers.xml)");
+        SendMessageW(
+            theme_combo,
+            CB_ADDSTRING,
+            Some(WPARAM(0)),
+            Some(LPARAM(theme_default.as_ptr() as isize)),
+        );
+        SendMessageW(
+            theme_combo,
+            CB_SETCURSEL_MSG,
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
+        );
+        let _ = EnableWindow(theme_combo, false); // greyed — out of scope
+
+        // === Left column: Language + Style listbox ===
+        let lang_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Language:"),
+            WS_CHILD | WS_VISIBLE,
+            20,
+            54,
+            85,
+            18,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let lang_combo = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("COMBOBOX"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x3), // CBS_DROPDOWNLIST
+            20,
+            74,
+            200,
+            22,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_LANG_COMBO as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let global_styles_label = HSTRING::from("Global Styles");
+        SendMessageW(
+            lang_combo,
+            CB_ADDSTRING,
+            Some(WPARAM(0)),
+            Some(LPARAM(global_styles_label.as_ptr() as isize)),
+        );
+        SendMessageW(
+            lang_combo,
+            CB_SETCURSEL_MSG,
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
+        );
+        let _ = EnableWindow(lang_combo, false); // greyed
+
+        let style_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Style:"),
+            WS_CHILD | WS_VISIBLE,
+            20,
+            108,
+            85,
+            18,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let style_list = CreateWindowExW(
+            WS_EX_CLIENTEDGE,
+            w!("LISTBOX"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | WINDOW_STYLE(0x1), // LBS_NOTIFY
+            20,
+            128,
+            200,
+            186,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_STYLE_LIST as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let default_style_label = HSTRING::from("Default Style");
+        SendMessageW(
+            style_list,
+            LB_ADDSTRING_MSG,
+            Some(WPARAM(0)),
+            Some(LPARAM(default_style_label.as_ptr() as isize)),
+        );
+        SendMessageW(
+            style_list,
+            LB_SETCURSEL_MSG,
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
+        );
+
+        // === Colour Style group ===
+        let colour_group = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Colour Style"),
+            WS_CHILD | WS_VISIBLE | style_bits(BS_GROUPBOX),
+            240,
+            50,
+            200,
+            130,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let fg_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Foreground colour"),
+            WS_CHILD | WS_VISIBLE,
+            260,
+            80,
+            140,
+            18,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let fg_button = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_OWNERDRAW),
+            400,
+            78,
+            30,
+            22,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_FG_BUTTON as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let bg_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Background colour"),
+            WS_CHILD | WS_VISIBLE,
+            260,
+            124,
+            140,
+            18,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let bg_button = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_OWNERDRAW),
+            400,
+            122,
+            30,
+            22,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_BG_BUTTON as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        // === Font Style group ===
+        let font_group = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Font Style"),
+            WS_CHILD | WS_VISIBLE | style_bits(BS_GROUPBOX),
+            460,
+            50,
+            200,
+            200,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let font_name_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Font name:"),
+            WS_CHILD | WS_VISIBLE,
+            478,
+            74,
+            80,
+            18,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let font_combo = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("COMBOBOX"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(0x3), // CBS_DROPDOWNLIST
+            478,
+            94,
+            165,
+            200,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_FONT_COMBO as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        // Populate the font dropdown. Enumerate once at dialog
+        // open — sorted alphabetically. If the configured font
+        // isn't in the list (uninstalled since last save), it's
+        // appended so the dropdown can still display the user's
+        // current choice rather than silently falling back.
+        let mut font_names = enumerate_system_fonts();
+        if !initial_default.font_name.is_empty()
+            && !font_names
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(&initial_default.font_name))
+        {
+            font_names.push(initial_default.font_name.clone());
+        }
+        let mut configured_idx = None;
+        for (idx, name) in font_names.iter().enumerate() {
+            let hname = HSTRING::from(name);
+            SendMessageW(
+                font_combo,
+                CB_ADDSTRING,
+                Some(WPARAM(0)),
+                Some(LPARAM(hname.as_ptr() as isize)),
+            );
+            if name.eq_ignore_ascii_case(&initial_default.font_name) {
+                configured_idx = Some(idx);
+            }
+        }
+        if let Some(idx) = configured_idx {
+            SendMessageW(
+                font_combo,
+                CB_SETCURSEL_MSG,
+                Some(WPARAM(idx)),
+                Some(LPARAM(0)),
+            );
+        }
+
+        let font_size_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("Font size:"),
+            WS_CHILD | WS_VISIBLE,
+            478,
+            122,
+            80,
+            18,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let size_combo = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("COMBOBOX"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(0x3), // CBS_DROPDOWNLIST
+            478,
+            142,
+            80,
+            200,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_SIZE_COMBO as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        // Sizes 6..=72, configured-or-12 selected.
+        let mut configured_size_idx = None;
+        for (idx, sz) in (6u16..=72).enumerate() {
+            let hsz = HSTRING::from(sz.to_string());
+            SendMessageW(
+                size_combo,
+                CB_ADDSTRING,
+                Some(WPARAM(0)),
+                Some(LPARAM(hsz.as_ptr() as isize)),
+            );
+            if sz == initial_default.font_size {
+                configured_size_idx = Some(idx);
+            }
+        }
+        if let Some(idx) = configured_size_idx {
+            SendMessageW(
+                size_combo,
+                CB_SETCURSEL_MSG,
+                Some(WPARAM(idx)),
+                Some(LPARAM(0)),
+            );
+        }
+
+        let bold_check = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Bold"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_AUTOCHECKBOX),
+            478,
+            174,
+            120,
+            20,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_BOLD as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let italic_check = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Italic"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_AUTOCHECKBOX),
+            478,
+            196,
+            120,
+            20,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_ITALIC as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let underline_check = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Underline"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_AUTOCHECKBOX),
+            478,
+            218,
+            120,
+            20,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_UNDERLINE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        SendMessageW(
+            bold_check,
+            BM_SETCHECK,
+            Some(WPARAM(if initial_default.bold { 1 } else { 0 })),
+            Some(LPARAM(0)),
+        );
+        SendMessageW(
+            italic_check,
+            BM_SETCHECK,
+            Some(WPARAM(if initial_default.italic { 1 } else { 0 })),
+            Some(LPARAM(0)),
+        );
+        SendMessageW(
+            underline_check,
+            BM_SETCHECK,
+            Some(WPARAM(if initial_default.underline { 1 } else { 0 })),
+            Some(LPARAM(0)),
+        );
+
+        // === Transparency ===
+        let transparency_check = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("Transparency"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_AUTOCHECKBOX),
+            400,
+            325,
+            110,
+            22,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_TRANSPARENCY_CHECK as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        SendMessageW(
+            transparency_check,
+            BM_SETCHECK,
+            Some(WPARAM(if initial_transparency.enabled { 1 } else { 0 })),
+            Some(LPARAM(0)),
+        );
+        let transparency_slider = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("msctls_trackbar32"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(TBS_HORZ_AUTOTICKS),
+            520,
+            323,
+            140,
+            26,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_TRANSPARENCY_SLIDER as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        // Range 20..=100 matches the model's invariant.
+        SendMessageW(
+            transparency_slider,
+            TBM_SETRANGE,
+            Some(WPARAM(1)),
+            Some(LPARAM(((20u32 as i64) | ((100u32 as i64) << 16)) as isize)),
+        );
+        SendMessageW(
+            transparency_slider,
+            TBM_SETPOS,
+            Some(WPARAM(1)),
+            Some(LPARAM(initial_transparency.percent as isize)),
+        );
+        let _ = EnableWindow(transparency_slider, initial_transparency.enabled);
+
+        // === Save & Close / Cancel ===
+        let save_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("&Save && Close"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_DEFPUSHBUTTON),
+            20,
+            330,
+            120,
+            28,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_SAVE_CLOSE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let cancel_btn = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("BUTTON"),
+            w!("&Cancel"),
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | style_bits(BS_PUSHBUTTON),
+            150,
+            330,
+            100,
+            28,
+            Some(dlg),
+            Some(HMENU(IDC_STYLE_CANCEL as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+
+        // Apply the dialog font to every child so they pick up
+        // the standard system look instead of the OEM bitmap
+        // default that Win32 hands new controls.
+        for child in [
+            theme_label,
+            theme_combo,
+            lang_label,
+            lang_combo,
+            style_label,
+            style_list,
+            colour_group,
+            fg_label,
+            fg_button,
+            bg_label,
+            bg_button,
+            font_group,
+            font_name_label,
+            font_combo,
+            font_size_label,
+            size_combo,
+            bold_check,
+            italic_check,
+            underline_check,
+            transparency_check,
+            transparency_slider,
+            save_btn,
+            cancel_btn,
+        ] {
+            apply_dialog_font(child, font);
+        }
+
+        // Stash control HWNDs onto the state so the wnd_proc
+        // can read/update them.
+        state.fg_button = fg_button;
+        state.bg_button = bg_button;
+        state.font_combo = font_combo;
+        state.size_combo = size_combo;
+        state.bold_check = bold_check;
+        state.italic_check = italic_check;
+        state.underline_check = underline_check;
+        state.transparency_check = transparency_check;
+        state.transparency_slider = transparency_slider;
+
+        // Disable the owner so the dialog is genuinely modal,
+        // then guard the re-enable so a Win32 destruction path
+        // never leaves the parent inert.
+        let _ = EnableWindow(owner, false);
+        let _owner_guard = OwnerEnableGuard(owner);
+        let _ = ShowWindow(dlg, SW_SHOW);
+        let _ = SetFocus(Some(save_btn));
+
+        let mut msg = MSG::default();
+        loop {
+            if !IsWindow(Some(dlg)).as_bool() {
+                break;
+            }
+            let ret = GetMessageW(&mut msg, None, 0, 0);
+            match ret.0 {
+                0 => {
+                    let _ = PostMessageW(None, WM_QUIT, msg.wParam, msg.lParam);
+                    break;
+                }
+                -1 => break,
+                _ => {
+                    if !IsDialogMessageW(dlg, &msg).as_bool() {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                }
+            }
+        }
+
+        state.result.take()
+    }
+}
+
+/// Listbox messages. The Win32 names are `LB_ADDSTRING` /
+/// `LB_SETCURSEL`; values come from the Win32 SDK (not WM_USER-
+/// based — the LB_* range lives in the standard WM_ message
+/// allocation around 0x0180). windows-rs doesn't re-export
+/// them, so we keep them as local constants.
+const LB_ADDSTRING_MSG: u32 = 0x0180;
+const LB_SETCURSEL_MSG: u32 = 0x0186;
+
+/// `CB_SETCURSEL` — combobox "set current selection" message.
+/// Lives in the standard WM_ message range (0x014E); windows-rs
+/// doesn't re-export it. Used by the Style Configurator dialog
+/// to seed dropdowns with the persisted value on open.
+const CB_SETCURSEL_MSG: u32 = 0x014E;
+
+/// Read a combobox's selected text into a Rust `String`.
+/// Returns `None` if no selection. Generic for both font and
+/// size combos — the caller decides how to interpret the text.
+unsafe fn combobox_selected_text(combo: HWND) -> Option<String> {
+    // Combo-message constants kept local since `windows-rs`
+    // doesn't re-export them and they're only used inside this
+    // helper. Values verified against the Win32 SDK.
+    const CB_GETCURSEL: u32 = 0x0147;
+    const CB_GETLBTEXT: u32 = 0x0148;
+    const CB_GETLBTEXTLEN: u32 = 0x0149;
+    unsafe {
+        let sel = SendMessageW(combo, CB_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0;
+        if sel < 0 {
+            return None;
+        }
+        // `CB_GETLBTEXTLEN` returns `CB_ERR` (= -1, signed) on
+        // failure. Casting `-1isize` straight to `usize` via
+        // `as` would produce `usize::MAX` and trip a multi-
+        // exabyte allocation in the `vec![0; len + 1]` below.
+        // Range-check first so the error path returns `None`
+        // (graceful skip) rather than aborting the process.
+        let len_raw = SendMessageW(
+            combo,
+            CB_GETLBTEXTLEN,
+            Some(WPARAM(sel as usize)),
+            Some(LPARAM(0)),
+        )
+        .0;
+        if len_raw < 0 {
+            return None;
+        }
+        let len = len_raw as usize;
+        if len == 0 {
+            return Some(String::new());
+        }
+        let mut buf: Vec<u16> = vec![0; len + 1];
+        SendMessageW(
+            combo,
+            CB_GETLBTEXT,
+            Some(WPARAM(sel as usize)),
+            Some(LPARAM(buf.as_mut_ptr() as isize)),
+        );
+        let written = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        Some(String::from_utf16_lossy(&buf[..written]))
+    }
+}
+
+/// Paint a colour-square button. The `cid` decides whether the
+/// fg or bg colour is rendered; the working state carries the
+/// RGB values to fill with.
+unsafe fn paint_color_square(state: &StyleConfigDialogState, dis: *const DRAWITEMSTRUCT) {
+    unsafe {
+        let dis_ref = &*dis;
+        let cid = dis_ref.CtlID as u16;
+        let rgb_hex = if cid == IDC_STYLE_FG_BUTTON {
+            &state.working.fg
+        } else if cid == IDC_STYLE_BG_BUTTON {
+            &state.working.bg
+        } else {
+            return;
+        };
+        let rgb = codepp_core::styles::parse_rgb_hex(rgb_hex).unwrap_or((0, 0, 0));
+        let cref = COLORREF(rgb_to_colorref(rgb));
+        let brush = CreateSolidBrush(cref);
+        if !brush.is_invalid() {
+            FillRect(dis_ref.hDC, &dis_ref.rcItem, brush);
+            let _ = DeleteObject(brush.into());
+        }
+        // 1px border for legibility (a white BG on a white
+        // dialog disappears without it).
+        let pen = CreatePen(PS_SOLID, 1, COLORREF(0x00_30_30_30));
+        if !pen.is_invalid() {
+            let prev = SelectObject(dis_ref.hDC, pen.into());
+            let r = dis_ref.rcItem;
+            let mut last = POINT::default();
+            let _ = MoveToEx(dis_ref.hDC, r.left, r.top, Some(&mut last));
+            let _ = LineTo(dis_ref.hDC, r.right - 1, r.top);
+            let _ = LineTo(dis_ref.hDC, r.right - 1, r.bottom - 1);
+            let _ = LineTo(dis_ref.hDC, r.left, r.bottom - 1);
+            let _ = LineTo(dis_ref.hDC, r.left, r.top);
+            SelectObject(dis_ref.hDC, prev);
+            let _ = DeleteObject(pen.into());
+        }
+    }
+}
+
+/// Window procedure for the Style Configurator dialog. Handles
+/// the typical create / draw / command / destroy lifecycle plus
+/// WM_HSCROLL for the transparency slider.
+unsafe extern "system" fn style_config_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    // FFI panic safety: same `catch_unwind` wrap every other
+    // wnd_proc in this file uses. A panic inside the inner
+    // dispatch would otherwise unwind across the
+    // `extern "system"` boundary (documented UB).
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        style_config_wnd_proc_inner(hwnd, msg, wparam, lparam)
+    })) {
+        Ok(lr) => lr,
+        Err(_) => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+unsafe extern "system" fn style_config_wnd_proc_inner(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_NCCREATE => unsafe {
+            let cs = lparam.0 as *const CREATESTRUCTW;
+            if !cs.is_null() {
+                let state_ptr = (*cs).lpCreateParams as isize;
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        },
+        WM_DRAWITEM => unsafe {
+            let dis = lparam.0 as *const DRAWITEMSTRUCT;
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const StyleConfigDialogState;
+            if !dis.is_null() && !state_ptr.is_null() {
+                paint_color_square(&*state_ptr, dis);
+            }
+            LRESULT(1)
+        },
+        WM_HSCROLL => unsafe {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut StyleConfigDialogState;
+            if !state_ptr.is_null() {
+                let slider = (*state_ptr).transparency_slider;
+                if lparam.0 as *mut c_void == slider.0 {
+                    let pos = SendMessageW(slider, TBM_GETPOS, None, None).0;
+                    let clamped = (pos as i32).clamp(20, 100) as u8;
+                    (*state_ptr).working_transparency.percent = clamped;
+                }
+            }
+            LRESULT(0)
+        },
+        WM_COMMAND => unsafe {
+            let cid = (wparam.0 & 0xFFFF) as u16;
+            let notif = ((wparam.0 >> 16) & 0xFFFF) as u16;
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut StyleConfigDialogState;
+            if state_ptr.is_null() {
+                return LRESULT(0);
+            }
+            let state = &mut *state_ptr;
+            match cid {
+                IDC_STYLE_FG_BUTTON | IDC_STYLE_BG_BUTTON if notif == BN_CLICKED as u16 => {
+                    // Resolve current colour for ChooseColor seeding.
+                    let initial = if cid == IDC_STYLE_FG_BUTTON {
+                        codepp_core::styles::parse_rgb_hex(&state.working.fg).unwrap_or((0, 0, 0))
+                    } else {
+                        codepp_core::styles::parse_rgb_hex(&state.working.bg)
+                            .unwrap_or((0xFF, 0xFF, 0xFF))
+                    };
+                    // Position the popup just below the button.
+                    let button_hwnd = if cid == IDC_STYLE_FG_BUTTON {
+                        state.fg_button
+                    } else {
+                        state.bg_button
+                    };
+                    let mut rect = RECT::default();
+                    let _ = GetWindowRect(button_hwnd, &mut rect);
+                    let picked = show_color_picker_popup(hwnd, rect.left, rect.bottom, initial);
+                    if let Some(rgb) = picked {
+                        let hex = codepp_core::styles::format_rgb_hex(rgb.0, rgb.1, rgb.2);
+                        if cid == IDC_STYLE_FG_BUTTON {
+                            state.working.fg = hex;
+                        } else {
+                            state.working.bg = hex;
+                        }
+                        // Trigger a repaint of the now-changed
+                        // square so the user sees the new colour
+                        // immediately.
+                        let _ = InvalidateRect(Some(button_hwnd), None, false);
+                    }
+                }
+                IDC_STYLE_BOLD if notif == BN_CLICKED as u16 => {
+                    state.working.bold = button_checked(state.bold_check);
+                }
+                IDC_STYLE_ITALIC if notif == BN_CLICKED as u16 => {
+                    state.working.italic = button_checked(state.italic_check);
+                }
+                IDC_STYLE_UNDERLINE if notif == BN_CLICKED as u16 => {
+                    state.working.underline = button_checked(state.underline_check);
+                }
+                IDC_STYLE_TRANSPARENCY_CHECK if notif == BN_CLICKED as u16 => {
+                    let checked = button_checked(state.transparency_check);
+                    state.working_transparency.enabled = checked;
+                    let _ = EnableWindow(state.transparency_slider, checked);
+                }
+                // CBN_SELCHANGE = 1.
+                IDC_STYLE_FONT_COMBO if notif == 1 => {
+                    if let Some(name) = combobox_selected_text(state.font_combo) {
+                        state.working.font_name = name;
+                    }
+                }
+                IDC_STYLE_SIZE_COMBO if notif == 1 => {
+                    if let Some(Ok(n)) =
+                        combobox_selected_text(state.size_combo).map(|s| s.parse::<u16>())
+                    {
+                        state.working.font_size = n;
+                    }
+                }
+                // The explicit `EnableWindow(owner, true)` calls in
+                // these handlers are intentional alongside the
+                // outer `OwnerEnableGuard`. The guard fires when
+                // the function returns (after the modal pump
+                // exits) — but Win32 dispatches the next
+                // foreground-window decision the moment
+                // `DestroyWindow` runs, which is *before* the
+                // outer function unwinds. Without the explicit
+                // pre-destroy enable, the next window in z-order
+                // briefly receives focus before the guard's
+                // re-enable fixes it on return. The double
+                // `EnableWindow(true)` is idempotent (Win32
+                // documents it as a no-op when the state is
+                // already enabled) so the redundancy is cheap.
+                IDC_STYLE_SAVE_CLOSE => {
+                    state.result = Some(codepp_core::styles::Styles {
+                        default: Some(state.working.clone()),
+                        transparency: Some(state.working_transparency.clone()),
+                    });
+                    let _ = EnableWindow(state.owner_hwnd, true);
+                    let _ = DestroyWindow(hwnd);
+                }
+                IDC_STYLE_CANCEL => {
+                    state.result = None;
+                    let _ = EnableWindow(state.owner_hwnd, true);
+                    let _ = DestroyWindow(hwnd);
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        },
+        WM_CLOSE => unsafe {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut StyleConfigDialogState;
+            if !state_ptr.is_null() {
+                let _ = EnableWindow((*state_ptr).owner_hwnd, true);
+            }
+            let _ = DestroyWindow(hwnd);
+            LRESULT(0)
+        },
+        WM_NCDESTROY => unsafe {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        },
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
 
@@ -6327,6 +7757,33 @@ const IDC_PLUGIN_ADMIN_TAB: u16 = 700;
 const IDC_PLUGIN_ADMIN_LIST: u16 = 701;
 const IDC_PLUGIN_ADMIN_HINT: u16 = 702;
 const IDC_PLUGIN_ADMIN_CLOSE: u16 = 703;
+
+// Style Configurator dialog (Settings → Style Configurator...).
+// Each control gets a stable id in the 800..=899 block so
+// WM_COMMAND / WM_DRAWITEM can route by command id without
+// HWND chasing. The dialog stores HWNDs on its state for
+// repaint / readback, but the command-id route is what the
+// wnd_proc dispatch is built around.
+const IDC_STYLE_THEME_COMBO: u16 = 800; // greyed out (out of scope today)
+const IDC_STYLE_LANG_COMBO: u16 = 801; // greyed out
+const IDC_STYLE_STYLE_LIST: u16 = 802;
+const IDC_STYLE_FG_BUTTON: u16 = 803;
+const IDC_STYLE_BG_BUTTON: u16 = 804;
+const IDC_STYLE_FONT_COMBO: u16 = 805;
+const IDC_STYLE_SIZE_COMBO: u16 = 806;
+const IDC_STYLE_BOLD: u16 = 807;
+const IDC_STYLE_ITALIC: u16 = 808;
+const IDC_STYLE_UNDERLINE: u16 = 809;
+const IDC_STYLE_SAVE_CLOSE: u16 = 810;
+const IDC_STYLE_CANCEL: u16 = 811;
+const IDC_STYLE_TRANSPARENCY_CHECK: u16 = 812;
+const IDC_STYLE_TRANSPARENCY_SLIDER: u16 = 813;
+const IDC_COLOR_POPUP_MORE: u16 = 820;
+// Swatches in the colour-picker popup occupy ids 830..=869 (40
+// preset colours). Click on any of them is a `BN_CLICKED` whose
+// command id minus `IDC_COLOR_POPUP_SWATCH_BASE` is the swatch
+// index into `PRESET_COLOURS`.
+const IDC_COLOR_POPUP_SWATCH_BASE: u16 = 830;
 
 /// `LVM_INSERTITEMW`-side flag value for "checked" in the
 /// `LVS_EX_CHECKBOXES` state-image slot. The state-image index
@@ -14625,14 +16082,14 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     ID_HELP_ABOUT => {
                         show_about_dialog(hwnd);
                     }
-                    // Settings → Style Configurator. Phase A (this
-                    // commit): the dialog itself is a follow-up; for
-                    // now the menu entry surfaces a MessageBox with
-                    // the active style values so the round-trip
-                    // through `styles.xml` is observable end-to-end.
-                    // Phase B replaces this with the real dialog.
+                    // Settings → Style Configurator. Opens the
+                    // modal style editor. On Save & Close the
+                    // returned `Styles` is persisted via
+                    // `Shell::set_styles` and applied to the live
+                    // Scintilla view through `apply_default_style`
+                    // (the same path the startup seeder uses).
                     ID_SETTINGS_STYLECONFIGURATOR => {
-                        show_style_config_placeholder(hwnd);
+                        handle_style_config_menu(hwnd);
                     }
                     // Plugins → Plugin Manager. Modal dialog listing
                     // every discovered plugin with a per-row Enabled
