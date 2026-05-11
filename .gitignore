@@ -12,6 +12,18 @@ Cargo.lock.bak
 /rust_out.exe
 /rust_out.pdb
 
+# Stray subagent temp-file leakage at the repo root. Agents that
+# write `git diff` to a Windows temp path like
+# `C:\Users\<user>\AppData\Local\Temp\foo.txt` and then run the
+# command from a POSIX-shell context produce a mojibaked
+# filename at the repo root (the `:` and backslashes are
+# preserved verbatim in a UTF-8 filesystem entry). Match any
+# such accidental capture: a top-level entry whose name starts
+# with a drive letter colon (`C:` etc.) or that came from a
+# Temp directory.
+/C\357\200\272*
+/*UsersMaxAppDataLocalTemp*
+
 # IDE
 .vscode/
 .idea/
