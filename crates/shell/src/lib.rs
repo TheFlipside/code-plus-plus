@@ -1,7 +1,7 @@
 //! Glue layer between `core` and the platform UI crates.
 //!
 //! The `Shell` owns the application's mutable state (Session, Loader,
-//! FileWatcher, the active EditorHandle, the in-memory text buffer
+//! `FileWatcher`, the active `EditorHandle`, the in-memory text buffer
 //! shadow) and exposes high-level operations the UI calls in response
 //! to user actions: `open_file`, `save_file`, `apply_load_result`,
 //! `apply_file_change`. UI crates implement [`UiPlatform`] for the
@@ -9,12 +9,63 @@
 //! status-bar text, pushing buffer contents into the active Scintilla
 //! control via `EditorHandle::send`).
 //!
+//! # Allowed pedantic lints, with rationale
+//!
+//! - `clippy::cast_possible_truncation`
+//! - `clippy::cast_possible_wrap`
+//! - `clippy::cast_sign_loss`
+//!
+//! Shell does FFI-shaped value handling (buffer offsets, byte
+//! lengths, NPPM ids) that goes through deliberate `as` casts
+//! between Rust's integer widths and Win32 / Scintilla / N++-ABI
+//! shapes (`isize` / `usize` / `i32` / `u64`). Marking each cast
+//! individually would add ~25 attribute lines for no
+//! reader-defence value; the inner attribute documents the
+//! trade-off once.
+//!
+//! - `clippy::similar_names`
+//!
+//! Test scaffolding pairs like `loader`/`loaded`, `path`/`paths`,
+//! `tab`/`tabs` are semantically distinct but trip the lint.
+//! Allowed crate-wide.
+//!
 //! Cross-thread marshaling (DESIGN.md §5.4): worker threads (Loader,
-//! FileWatcher) post their typed results into per-source channels and
+//! `FileWatcher`) post their typed results into per-source channels and
 //! call a wake closure that the UI crate hands the `Shell` at startup.
 //! On Win32 the wake closure is `PostMessage(hwnd, WM_APP_WAKE, 0, 0)`.
 //! The UI thread's wake handler drains both channels and applies each
 //! item to the shell.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::similar_names,
+    // Worker / handler patterns in this crate's UI-thread
+    // helpers take owned `PathBuf`, `Arc`, `String` etc. by
+    // value because the calling context consumes them
+    // (channel sends, struct field moves, owned closures).
+    // Clippy's `needless_pass_by_value` lint fires anyway —
+    // misfires across the broader codebase.
+    clippy::needless_pass_by_value,
+    // Helpers and tests declare locally-scoped `const`s and
+    // `fn` items at the relevant call site rather than
+    // hoisting them above every initialisation expression.
+    // `items_after_statements` is informative on a tiny
+    // function, distracting on the larger handlers here.
+    clippy::items_after_statements,
+    // `missing_errors_doc` fires on every `Result`-returning
+    // public method. Shell is an internal-to-the-workspace
+    // crate (no external API contract); the error variants
+    // each method propagates are visible at the type level
+    // via `ShellError` / `SessionError` / `StylesError` etc.,
+    // and the inline doc comments describe the failure modes
+    // alongside the success contract. Marking each one with
+    // a separate `# Errors` section would duplicate already-
+    // documented behaviour at the cost of per-method
+    // boilerplate.
+    clippy::missing_errors_doc
+)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -62,9 +113,9 @@ pub const PRIMARY_BUFFER_ID: isize = 1;
 
 /// Upper bound on tabs restored from session.xml. Caps the work
 /// triggered by a corrupted or tampered session file (a runaway
-/// session-save bug or an attacker with write access to AppData
+/// session-save bug or an attacker with write access to `AppData`
 /// could otherwise queue thousands of async loads at startup, each
-/// allocating a Tab + decoded buffer text — a local DoS for the
+/// allocating a Tab + decoded buffer text — a local `DoS` for the
 /// invoking user's account). Set well above any realistic open-tab
 /// count.
 pub const MAX_SESSION_TABS: usize = 512;
@@ -81,13 +132,13 @@ const MAX_BACKUP_FILE_BYTES: u64 = 64 * 1024 * 1024;
 /// `Shell::open_file` and `Shell::new_untitled` refuse to allocate
 /// past this bound and log a `tracing::warn!` instead of crashing.
 ///
-/// Bounds the CPU-time DoS surface for a hostile in-process plugin
+/// Bounds the CPU-time `DoS` surface for a hostile in-process plugin
 /// that calls `NPPM_DOOPEN` (or any path-opening NPPM message) in
 /// a tight loop. Without a cap, the loop would push `Shell.tabs`
 /// indefinitely until `next_buffer_id` overflowed at `i32::MAX`
 /// (~2 billion iterations) — a panic the `catch_unwind` boundary
 /// would catch, but only after burning ~10s of minutes of pegged
-/// CPU. Capping at a generous-but-finite value cuts that DoS
+/// CPU. Capping at a generous-but-finite value cuts that `DoS`
 /// window from billions of iterations to thousands.
 ///
 /// 1024 is well above any realistic human workflow (Notepad++
@@ -110,7 +161,7 @@ pub const MAX_OPEN_TABS: usize = 1024;
 /// **Important:** none of these methods may run a nested message pump
 /// (i.e. show a modal dialog). They are called while the shell holds
 /// internal state borrows, and a nested pump would let other messages
-/// re-enter the wnd_proc, producing aliasing UB. Modal interactions
+/// re-enter the `wnd_proc`, producing aliasing UB. Modal interactions
 /// are deferred via [`PendingDialog`] — `Shell::drain` returns a list
 /// the UI consumes *after* the drain's borrow ends.
 pub trait UiPlatform {
@@ -299,7 +350,7 @@ pub trait UiPlatform {
     /// should also trigger an editor-area relayout so the
     /// Scintilla view grows / shrinks to fill the freed / lost
     /// space, but the relayout may be deferred (e.g. via
-    /// PostMessage to avoid re-entering wnd_proc under
+    /// `PostMessage` to avoid re-entering `wnd_proc` under
     /// `PluginCallGuard`).
     fn set_tabbar_hidden(&mut self, hidden: bool) -> bool;
 
@@ -642,7 +693,7 @@ pub struct Tab {
     /// Most recent decoded text. Held so `save_file` can re-encode
     /// without round-tripping through Scintilla. Phase 3 milestone 6b
     /// pulls the latest text from Scintilla via the direct-call API
-    /// (SCI_GETTEXT) at save time, since the user may have edited it.
+    /// (`SCI_GETTEXT`) at save time, since the user may have edited it.
     pub text: String,
     /// Pending request id from the loader, so we know which load
     /// result actually pertains to this tab (vs. a stale one if
@@ -751,18 +802,18 @@ pub struct ClosedTab {
 /// Per-call platform handles the UI hands the dispatcher when
 /// routing an inbound NPPM_* message. The host crate is platform-
 /// agnostic; the UI fills these with whatever opaque pointer types
-/// it owns (HWND/HMENU on Win32, GtkWidget* on GTK, NSView*/NSMenu*
+/// it owns (HWND/HMENU on Win32, `GtkWidget`* on GTK, `NSView`*/`NSMenu`*
 /// on Cocoa). All five fields are pointer-sized — `*mut c_void` —
 /// so the same struct works on every backend without conditional
 /// compilation in `shell`.
 ///
-/// The struct is `Copy` so the wnd_proc can build it on the stack
+/// The struct is `Copy` so the `wnd_proc` can build it on the stack
 /// per call without any allocation cost.
 #[cfg(target_os = "windows")]
 #[derive(Clone, Copy)]
 pub struct HostHandles {
     /// Main host window — `nmhdr.hwndFrom` for outbound notifications,
-    /// the SendMessage target plugins call into for `NPPM_*`.
+    /// the `SendMessage` target plugins call into for `NPPM_*`.
     pub npp_hwnd: Hwnd,
     /// Primary Scintilla view's HWND.
     pub scintilla_main: Hwnd,
@@ -782,6 +833,7 @@ impl HostHandles {
     /// Production code must supply real handles before any plugin
     /// menu interaction: a plugin querying `NPPM_GETMENUHANDLE` against
     /// a NULL HMENU will likely crash on the receiving side.
+    #[must_use]
     pub fn null() -> Self {
         Self {
             npp_hwnd: core::ptr::null_mut(),
@@ -794,7 +846,7 @@ impl HostHandles {
 }
 
 /// Application-wide state. Owned by the UI crate's `run()` function;
-/// the wnd_proc / event handler reaches into it on every interesting
+/// the `wnd_proc` / event handler reaches into it on every interesting
 /// message. On Windows, also owns the `PluginHost` registry — plugins
 /// are lazy-loaded, so no DLL is mapped until first menu touch
 /// (DESIGN.md §6.4).
@@ -823,7 +875,7 @@ pub struct Shell {
     /// [`Self::take_notifications`] drain. The UI fires each one
     /// **after** dropping any `&mut Shell` borrow, since `beNotified`
     /// runs synchronous plugin code that may `SendMessage(NPPM_*)`
-    /// back into the wnd_proc.
+    /// back into the `wnd_proc`.
     #[cfg(target_os = "windows")]
     pending_notifications: Vec<Notification>,
     loader: Loader,
@@ -905,15 +957,17 @@ impl SearchFlags {
     /// as a C++11 regex. Without `CXX11REGEX`, Scintilla falls
     /// back to its older POSIX engine, which is missing common
     /// shorthands (`\d`, `\w`, lookarounds).
-    pub const REGEX: SearchFlags = SearchFlags(0x00200000 | 0x00800000);
+    pub const REGEX: SearchFlags = SearchFlags(0x0020_0000 | 0x0080_0000);
 
     /// OR two flag sets. Caller-friendly bit-combine without
     /// exposing the underlying u32.
+    #[must_use]
     pub const fn union(self, other: SearchFlags) -> SearchFlags {
         SearchFlags(self.0 | other.0)
     }
 
     /// Raw bits, ready for `SCI_SETSEARCHFLAGS`'s wparam.
+    #[must_use]
     pub const fn bits(self) -> u32 {
         self.0
     }
@@ -993,6 +1047,7 @@ impl Shell {
     /// Read access to the currently-active tab, or `None` if no
     /// file is open. The UI uses this to populate the title bar
     /// and status fields.
+    #[must_use]
     pub fn active(&self) -> Option<&Tab> {
         self.active_tab.and_then(|i| self.tabs.get(i))
     }
@@ -1012,13 +1067,13 @@ impl Shell {
     ///
     /// Uses `checked_add` rather than `saturating_add`: saturation
     /// would silently start handing out colliding ids at
-    /// `i32::MAX`, breaking the per-tab plugin-ABI BufferID
+    /// `i32::MAX`, breaking the per-tab plugin-ABI `BufferID`
     /// contract. Two billion tab opens in a single session is
     /// unreachable in practice, but a hostile in-process plugin
     /// could in principle call `NPPM_DOOPEN` in a tight loop —
-    /// the panic here turns that DoS path into a clean abort
+    /// the panic here turns that `DoS` path into a clean abort
     /// rather than a silent ABI break. The panic is caught by the
-    /// wnd_proc's `catch_unwind` wrappers.
+    /// `wnd_proc`'s `catch_unwind` wrappers.
     fn allocate_buffer_id(&mut self) -> i32 {
         let id = self.next_buffer_id;
         self.next_buffer_id = self
@@ -1056,7 +1111,7 @@ impl Shell {
     /// notification) — the UI fires each one through
     /// [`Self::notify_plugins`] **after** dropping the `&mut Shell`
     /// borrow, since `beNotified` runs synchronous plugin code that
-    /// may re-enter the wnd_proc.
+    /// may re-enter the `wnd_proc`.
     #[cfg(target_os = "windows")]
     pub fn take_notifications(&mut self) -> Vec<Notification> {
         std::mem::take(&mut self.pending_notifications)
@@ -1187,8 +1242,7 @@ impl Shell {
 
         let new_active_doc = new_active
             .and_then(|i| self.tabs.get(i))
-            .map(|t| t.scintilla_doc)
-            .unwrap_or(0);
+            .map_or(0, |t| t.scintilla_doc);
 
         // Queue notifications in the same order N++ delivers them:
         //   1. NPPN_FILEBEFORECLOSE
@@ -1263,6 +1317,7 @@ impl Shell {
 
     /// Total plugins known to the host (any lifecycle state).
     #[cfg(target_os = "windows")]
+    #[must_use]
     pub fn plugin_count(&self) -> usize {
         self.plugins.len()
     }
@@ -1272,6 +1327,7 @@ impl Shell {
     /// ownership; no borrow on `Shell.plugins` is held across
     /// the modal pump.
     #[cfg(target_os = "windows")]
+    #[must_use]
     pub fn installed_plugins(&self) -> Vec<codepp_plugin_host::PluginAdminEntry> {
         self.plugins.snapshot_for_admin()
     }
@@ -1306,7 +1362,7 @@ impl Shell {
                     p.path
                         .file_name()
                         .and_then(|s| s.to_str())
-                        .map(|s| s.to_string())
+                        .map(std::string::ToString::to_string)
                 })
                 .collect();
             if let Err(e) = write_disabled_plugins_list(&disabled_filenames) {
@@ -1349,11 +1405,11 @@ impl Shell {
         }
     }
 
-    /// Iterate the (display name, FuncItem array) pairs of every
+    /// Iterate the (display name, `FuncItem` array) pairs of every
     /// loaded plugin. The UI uses this to populate the per-plugin
     /// submenu after [`Self::ensure_plugins_loaded`].
     ///
-    /// Plugins with zero FuncItems are skipped — they're loaded but
+    /// Plugins with zero `FuncItems` are skipped — they're loaded but
     /// contribute no menu items (typically `beNotified`-only plugins).
     #[cfg(target_os = "windows")]
     pub fn loaded_plugin_funcs(&self) -> impl Iterator<Item = (String, &[FuncItem])> {
@@ -1375,19 +1431,20 @@ impl Shell {
     /// the caller can invoke it after dropping any `&mut Shell`
     /// borrow — invoking the callback while a borrow is alive
     /// would be aliasing UB if the plugin synchronously
-    /// `SendMessage`s an `NPPM_*` back into our wnd_proc.
+    /// `SendMessage`s an `NPPM_*` back into our `wnd_proc`.
     ///
     /// The returned pointer is valid as long as the plugin's DLL
     /// stays loaded (i.e. for the lifetime of `self`).
     #[cfg(target_os = "windows")]
+    #[must_use]
     pub fn lookup_plugin_command(&self, cmd_id: i32) -> Option<PluginCmd> {
         self.plugins.lookup_cmd(cmd_id)
     }
 
     /// Route a wnd_proc-received NPPM_* message into the plugin
     /// dispatcher. Returns `Some(lresult)` if the message was handled
-    /// (the wnd_proc returns this from `WindowProc`), or `None` if
-    /// the message is outside the NPPM_* range and the wnd_proc
+    /// (the `wnd_proc` returns this from `WindowProc`), or `None` if
+    /// the message is outside the NPPM_* range and the `wnd_proc`
     /// should fall through to its default handler.
     ///
     /// # Safety
@@ -1398,7 +1455,7 @@ impl Shell {
     /// * invoke this only from the UI thread that owns
     ///   `handles.npp_hwnd`,
     /// * pass `(msg, wparam, lparam)` triples received from a real
-    ///   wnd_proc dispatch (synthesizing calls outside that flow is
+    ///   `wnd_proc` dispatch (synthesizing calls outside that flow is
     ///   undefined behaviour on the plugin's behalf),
     /// * supply a `handles` struct whose five fields all belong to
     ///   the same top-level window that received `msg` — mixing
@@ -1525,8 +1582,7 @@ impl Shell {
             let skip = self
                 .tabs
                 .get(idx)
-                .map(|t| t.path.is_none() || t.pending_load.is_some())
-                .unwrap_or(true);
+                .is_none_or(|t| t.path.is_none() || t.pending_load.is_some());
             if skip {
                 continue;
             }
@@ -1552,7 +1608,7 @@ impl Shell {
             // ask to be on. Treating the panic as a per-tab error
             // keeps the loop bounded and the active-tab restore
             // unconditional.
-            let id = self.tabs.get(idx).map(|t| t.id).unwrap_or(0);
+            let id = self.tabs.get(idx).map_or(0, |t| t.id);
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.save_current_to_disk(ui)
             }));
@@ -1658,8 +1714,7 @@ impl Shell {
         // path and the old file is no longer ours.
         let was_watching_old = old_path
             .as_ref()
-            .map(|p| self.file_watcher.unwatch(p).is_ok())
-            .unwrap_or(false);
+            .is_some_and(|p| self.file_watcher.unwatch(p).is_ok());
 
         let write_result = (|| -> Result<(), ShellError> {
             let mut tmp = tempfile::Builder::new()
@@ -1708,7 +1763,7 @@ impl Shell {
                 // see save_current_to_disk for the ordering rationale.
                 #[cfg(target_os = "windows")]
                 {
-                    let buffer_id = self.active().map(|t| t.id as isize).unwrap_or(0);
+                    let buffer_id = self.active().map_or(0, |t| t.id as isize);
                     self.pending_notifications
                         .push(Notification::FileSaved { buffer_id });
                 }
@@ -1879,13 +1934,9 @@ impl Shell {
         // for future paths that might need an internal placeholder.
         let target_idx = match self.active_tab {
             Some(i)
-                if self
-                    .tabs
-                    .get(i)
-                    .map(|t| {
-                        t.path.is_none() && t.pending_load.is_none() && t.untitled_seq.is_none()
-                    })
-                    .unwrap_or(false) =>
+                if self.tabs.get(i).is_some_and(|t| {
+                    t.path.is_none() && t.pending_load.is_none() && t.untitled_seq.is_none()
+                }) =>
             {
                 i
             }
@@ -1903,11 +1954,7 @@ impl Shell {
         };
         // Reusing an empty tab — assign an id if it didn't have one
         // and set the pending-load marker.
-        let needs_id = self
-            .tabs
-            .get(target_idx)
-            .map(|t| t.id == 0)
-            .unwrap_or(false);
+        let needs_id = self.tabs.get(target_idx).is_some_and(|t| t.id == 0);
         let new_id = if needs_id {
             Some(self.allocate_buffer_id())
         } else {
@@ -1935,7 +1982,7 @@ impl Shell {
     /// any dialogs the UI must show *after* this call returns — the
     /// `&mut Shell` borrow ends with the function, so a nested message
     /// pump (e.g. `MessageBoxW`) inside the dialog code can't re-enter
-    /// the wnd_proc and produce aliasing UB on the per-window state.
+    /// the `wnd_proc` and produce aliasing UB on the per-window state.
     pub fn drain<U: UiPlatform>(&mut self, ui: &mut U) -> Vec<PendingDialog> {
         let mut pending = Vec::new();
         while let Ok(result) = self.load_rx.try_recv() {
@@ -2082,8 +2129,7 @@ impl Shell {
                     .tabs
                     .iter()
                     .find(|t| t.path.as_deref() == Some(loaded.path.as_path()))
-                    .map(|t| t.cursor)
-                    .unwrap_or(0);
+                    .map_or(0, |t| t.cursor);
 
                 // Write the tab fields first so any UI calls below
                 // observe a tab in its post-load state. The borrow
@@ -2093,10 +2139,10 @@ impl Shell {
                 };
                 tab.pending_load = None;
                 tab.path = Some(loaded.path.clone());
-                tab.encoding = loaded.encoding.clone();
+                tab.encoding.clone_from(&loaded.encoding);
                 tab.eol = loaded.eol;
                 tab.byte_len = loaded.byte_len;
-                tab.text = loaded.text.clone();
+                tab.text.clone_from(&loaded.text);
                 // Lang resolution order:
                 //   1. Persisted session override (the user's
                 //      Language-menu choice from a previous run)
@@ -2650,7 +2696,7 @@ impl Shell {
 
     /// Count occurrences of `query` in the active buffer. The
     /// Find dialog's "Count" button surfaces the result; does
-    /// not affect selection or last_search state (matching N++).
+    /// not affect selection or `last_search` state (matching N++).
     #[cfg(target_os = "windows")]
     pub fn count_matches<U: UiPlatform>(
         &mut self,
@@ -2877,11 +2923,10 @@ impl Shell {
                 // user's Language-menu choice survives the
                 // restart.
                 lang: {
-                    let extension_default = tab
-                        .path
-                        .as_deref()
-                        .map(codepp_core::lang::LangType::from_path)
-                        .unwrap_or(codepp_core::lang::L_TEXT);
+                    let extension_default = tab.path.as_deref().map_or(
+                        codepp_core::lang::L_TEXT,
+                        codepp_core::lang::LangType::from_path,
+                    );
                     if tab.lang == extension_default {
                         None
                     } else {
@@ -3038,8 +3083,7 @@ impl Shell {
                         // filename.
                         let backup_modified_externally = backup_filename
                             .as_deref()
-                            .map(|name| is_backup_modified_externally(&backup_path, name))
-                            .unwrap_or(false);
+                            .is_some_and(|name| is_backup_modified_externally(&backup_path, name));
                         Some(SessionRestoreEntry::DirtyFromBackup {
                             path: path.clone(),
                             text,
@@ -3063,8 +3107,7 @@ impl Shell {
                     backup_loaded.map(|(text, backup_path)| {
                         let backup_modified_externally = backup_filename
                             .as_deref()
-                            .map(|name| is_backup_modified_externally(&backup_path, name))
-                            .unwrap_or(false);
+                            .is_some_and(|name| is_backup_modified_externally(&backup_path, name));
                         SessionRestoreEntry::UntitledFromBackup {
                             untitled_seq: t.untitled_seq,
                             text,
@@ -3136,9 +3179,7 @@ impl Shell {
         // Untitled buffers have no extension to detect from, so
         // the persisted `@lang` is the only signal — fall back to
         // `L_TEXT` only when nothing is stored.
-        let resolved_lang = lang
-            .map(codepp_core::lang::LangType)
-            .unwrap_or(codepp_core::lang::L_TEXT);
+        let resolved_lang = lang.map_or(codepp_core::lang::L_TEXT, codepp_core::lang::LangType);
         self.tabs.push(Tab {
             id,
             path: None,
@@ -3189,9 +3230,10 @@ impl Shell {
         // user is now looking at isn't what they typed — they
         // need to know.
         if backup_modified_externally {
-            let label = untitled_seq
-                .map(|n| format!("new {n}"))
-                .unwrap_or_else(|| format!("untitled-{}", self.tabs[new_idx].id));
+            let label = untitled_seq.map_or_else(
+                || format!("untitled-{}", self.tabs[new_idx].id),
+                |n| format!("new {n}"),
+            );
             tracing::warn!(
                 untitled = %label,
                 "backup file modified externally; surfacing warning",
@@ -3255,9 +3297,7 @@ impl Shell {
         // Lang resolution mirrors `apply_load_result`: the
         // persisted Language-menu choice wins; otherwise fall
         // back to extension-based auto-detection.
-        let lang = stored_lang
-            .map(LangType)
-            .unwrap_or_else(|| LangType::from_path(&path));
+        let lang = stored_lang.map_or_else(|| LangType::from_path(&path), LangType);
         self.tabs.push(Tab {
             id,
             path: Some(path.clone()),
@@ -3366,6 +3406,7 @@ impl Shell {
     /// a separate accessor so the UI can read it after the
     /// `load_session_paths` + `open_file` loop without keeping
     /// `&self.session` borrowed across mutations.
+    #[must_use]
     pub fn session_active_index(&self) -> Option<usize> {
         self.session.active
     }
@@ -3377,6 +3418,7 @@ impl Shell {
     /// before the first `ShowWindow`. Stored separately from the
     /// runtime-tracked geometry below so a missing file is
     /// distinguishable from "loaded; nothing has changed yet".
+    #[must_use]
     pub fn saved_window_geometry(&self) -> Option<WindowGeometry> {
         self.session.window
     }
@@ -3410,8 +3452,7 @@ fn backup_timestamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     // Approximate local time using `chrono`-style arithmetic on a
     // raw u64. We're not adding a chrono dep just for the
     // backup-filename timestamp; UTC is acceptable here because
@@ -3437,15 +3478,7 @@ fn backup_timestamp() -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{year:04}-{m:02}-{d:02}_{hour:02}{minute:02}{second:02}",
-        year = year,
-        m = m,
-        d = d,
-        hour = hour,
-        minute = minute,
-        second = second,
-    )
+    format!("{year:04}-{m:02}-{d:02}_{hour:02}{minute:02}{second:02}",)
 }
 
 /// Build the human-readable display portion of a backup filename
@@ -3550,15 +3583,17 @@ fn parse_backup_timestamp(filename: &str) -> Option<u64> {
     let yoe = (y_adj - era * 400) as u64;
     // Parenthesised so the `as u64` cast unambiguously applies to
     // the result of the whole `if`.
-    let m_offset = (if month > 2 { month - 3 } else { month + 9 }) as u64;
-    let doy = (153 * m_offset + 2) / 5 + day as u64 - 1;
+    let m_offset = u64::from(if month > 2 { month - 3 } else { month + 9 });
+    let doy = (153 * m_offset + 2) / 5 + u64::from(day) - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days_signed = era * 146_097 + doe as i64 - 719_468;
     if days_signed < 0 {
         return None;
     }
-    let secs =
-        (days_signed as u64) * 86_400 + hour as u64 * 3600 + minute as u64 * 60 + second as u64;
+    let secs = (days_signed as u64) * 86_400
+        + u64::from(hour) * 3600
+        + u64::from(minute) * 60
+        + u64::from(second);
     Some(secs)
 }
 
@@ -3614,9 +3649,9 @@ fn read_disabled_plugins_list() -> Vec<String> {
     };
     contents
         .lines()
-        .map(|l| l.trim())
+        .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| l.to_string())
+        .map(std::string::ToString::to_string)
         .collect()
 }
 
@@ -3825,11 +3860,10 @@ fn read_backup_file(expected_dir: &Path, path: &Path) -> std::io::Result<String>
 /// returning an error here would mask a *successful* session.xml
 /// write higher up.
 fn prune_unreferenced_backups(dir: &Path, keep: &[String]) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        // No backup directory yet (first save with no untitled
-        // tabs) — nothing to prune.
-        Err(_) => return,
+    // No backup directory yet (first save with no untitled
+    // tabs) — nothing to prune.
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
     for entry in entries.flatten() {
         let Ok(file_type) = entry.file_type() else {
@@ -3961,7 +3995,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // pending also reports its id (the buffer exists; only the
         // contents are still arriving), so plugins can address
         // newly-opened tabs without waiting for the load to finish.
-        self.shell.active().map(|t| t.id as isize).unwrap_or(0)
+        self.shell.active().map_or(0, |t| t.id as isize)
     }
 
     fn buffer_path(&self, id: isize) -> Option<PathBuf> {
@@ -3985,8 +4019,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             .tabs
             .iter()
             .find(|t| t.id as isize == id)
-            .map(|t| t.lang.as_npp_id())
-            .unwrap_or(L_TEXT.as_npp_id())
+            .map_or(L_TEXT.as_npp_id(), |t| t.lang.as_npp_id())
     }
 
     fn plugins_config_dir(&self) -> PathBuf {
@@ -4212,7 +4245,9 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
                 .iter()
                 .filter_map(|t| t.path.clone())
                 .collect(),
-            codepp_plugin_host::SECOND_VIEW => Vec::new(),
+            // SECOND_VIEW and any unknown selector both map to
+            // empty — split-view is Phase 5, so the secondary
+            // slot has nothing today.
             _ => Vec::new(),
         }
     }
@@ -4224,7 +4259,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // The `i as i32` cast is safe: `MAX_SESSION_TABS = 512`,
         // well below `i32::MAX`.
         match view {
-            0 => self.shell.active_tab.map(|i| i as i32).unwrap_or(-1),
+            0 => self.shell.active_tab.map_or(-1, |i| i as i32),
             _ => -1,
         }
     }
@@ -4691,7 +4726,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             .plugins
             .iter()
             .find(|p| p.name.as_deref() == Some(target_name))
-            .and_then(|p| p.message_proc_fn())
+            .and_then(codepp_plugin_host::PluginInfo::message_proc_fn)
         else {
             tracing::trace!(
                 target = target_name,
@@ -4720,16 +4755,15 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             // `messageProc` signature's first parameter is `UINT`.
             unsafe { proc(internal_msg as u32, info_ptr, 0) }
         }));
-        match result {
-            Ok(lresult) => lresult,
-            Err(_) => {
-                tracing::warn!(
-                    target = target_name,
-                    msg = internal_msg,
-                    "NPPM_MSGTOPLUGIN: target plugin panicked in messageProc",
-                );
-                0
-            }
+        if let Ok(lresult) = result {
+            lresult
+        } else {
+            tracing::warn!(
+                target = target_name,
+                msg = internal_msg,
+                "NPPM_MSGTOPLUGIN: target plugin panicked in messageProc",
+            );
+            0
         }
     }
 
@@ -4776,7 +4810,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             return 0;
         }
         let pos = pos as usize;
-        self.shell.tabs.get(pos).map(|t| t.id as isize).unwrap_or(0)
+        self.shell.tabs.get(pos).map_or(0, |t| t.id as isize)
     }
 
     fn save_current_as(&mut self, path: PathBuf, as_copy: bool) -> bool {
@@ -4845,7 +4879,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
                 return false;
             }
         };
-        for tab in session.tabs.iter() {
+        for tab in &session.tabs {
             if let Some(p) = tab.path.clone() {
                 self.shell.open_file(p);
             }
@@ -4879,7 +4913,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 }
 
-/// Helper for the two NPPM_SAVE*SESSION paths. Builds a minimal
+/// Helper for the two `NPPM_SAVE`*SESSION paths. Builds a minimal
 /// `Session` with one `Tab` per file (no encoding / EOL / cursor
 /// metadata — plugins are saving a *file list*, not a fidelity-
 /// preserving snapshot of the editor state) and writes it via
@@ -5005,18 +5039,24 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    /// Test UiPlatform that records calls — lets us assert the shell
+    /// Test `UiPlatform` that records calls — lets us assert the shell
     /// reaches the right operations without needing real Win32.
+    ///
+    /// Has more than three bool fields by design — each one
+    /// gates a distinct branch the tests configure
+    /// independently. Refactoring to a bitset / enum would
+    /// obscure the test scaffolding's intent.
     #[derive(Default)]
+    #[allow(clippy::struct_excessive_bools)]
     struct FakeUi {
         buffer_text: String,
         cursor: u64,
         set_text_calls: Vec<(String, u64)>,
         status_calls: Vec<(LangType, String, String, u64)>,
         plugin_status_calls: Vec<(usize, String)>,
-        /// (tab_idx, in_doc, returned_doc) per `activate_tab` call.
+        /// (`tab_idx`, `in_doc`, `returned_doc`) per `activate_tab` call.
         activate_tab_calls: Vec<(usize, isize, isize)>,
-        /// Stand-in for SCI_CREATEDOCUMENT — hand out monotonically
+        /// Stand-in for `SCI_CREATEDOCUMENT` — hand out monotonically
         /// increasing fake "doc pointers" so each tab gets a
         /// distinct value.
         next_fake_doc: isize,
@@ -5026,7 +5066,7 @@ mod tests {
         replace_calls: Vec<(String, String, SearchFlags, String)>,
         /// Counter incremented each time `mark_saved` is called —
         /// lets tests assert that every successful per-tab save in
-        /// Save All cleared its dirty glyph (one mark_saved per
+        /// Save All cleared its dirty glyph (one `mark_saved` per
         /// successful tab).
         mark_saved_calls: usize,
         /// Tab-strip visibility shadow. Default `false` (visible)
@@ -5252,7 +5292,7 @@ mod tests {
         }
         fn editor_default_bg_color(&self) -> i32 {
             // Default Win32 white background: 0xFFFFFF.
-            0x00FFFFFF
+            0x00FF_FFFF
         }
         fn set_smooth_font(&mut self, _smooth: bool) -> bool {
             false

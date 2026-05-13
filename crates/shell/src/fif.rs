@@ -1,3 +1,19 @@
+// Worker-thread entry functions (`walker_main`, `worker_main`,
+// `coordinator_main`) take their handles by value because each
+// thread *owns* its inputs for the entire scope — they're
+// genuinely consumed (the `move` closure that spawns the thread
+// captures by-value). clippy's `needless_pass_by_value` lint
+// would prefer `&PathBuf` / `&Arc<...>`, which is wrong here
+// because the closure that becomes the thread body must take
+// ownership. Applied at the module level so the worker
+// signatures stay readable.
+//
+// `items_after_statements` is also allowed here: the worker
+// functions declare named helper closures and locally-scoped
+// `const`s mid-body for clarity at the use site rather than
+// hoisting them above every initialisation expression.
+#![allow(clippy::needless_pass_by_value, clippy::items_after_statements)]
+
 //! Find-in-Files orchestration.
 //!
 //! Phase 4 m4 step 2. Glues the pure search engine in
@@ -19,7 +35,7 @@
 //!   one path at a time, opens it, runs [`is_binary`] on the prefix
 //!   probe, decodes via [`encoding::detect`] + [`encoding::decode`],
 //!   and posts a [`FifEvent::FileMatches`] for every file that hits.
-//!   Higher fan-out than 16 is counter-productive on typical NVMe
+//!   Higher fan-out than 16 is counter-productive on typical `NVMe`
 //!   storage; the cap is also a defence-in-depth ceiling on resource
 //!   use.
 //! - **Coordinator** (1 thread). Joins the walker and all workers
@@ -92,6 +108,7 @@ pub struct FifJobId(u64);
 
 impl FifJobId {
     /// Raw counter value, useful for `tracing` spans and diagnostics.
+    #[must_use]
     pub fn raw(self) -> u64 {
         self.0
     }
@@ -320,8 +337,7 @@ impl FifOrchestrator {
             Arc::new(request.open_tab_paths.into_iter().collect());
 
         let n_workers = available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
+            .map_or(4, std::num::NonZero::get)
             .clamp(1, MAX_FIF_WORKERS);
 
         let (path_tx, path_rx) = bounded::<PathBuf>(PATH_CHANNEL_DEPTH);
@@ -357,7 +373,7 @@ impl FifOrchestrator {
                         stats,
                         replacement,
                         open_paths,
-                    )
+                    );
                 })
                 .map_err(FifError::SpawnFailed)?;
             worker_handles.push(h);
@@ -665,13 +681,11 @@ fn worker_main(
             continue;
         }
         let (enc, body) = encoding::detect(&bytes);
-        let text = match encoding::decode(body, &enc) {
-            Ok(t) => t,
-            Err(_) => {
-                // Decode failure (e.g. corrupted UTF-8 body without a
-                // BOM). Skip silently — N++'s FIF behaves the same.
-                continue;
-            }
+        let Ok(text) = encoding::decode(body, &enc) else {
+            // Decode failure (e.g. corrupted UTF-8 body without a
+            // BOM). Skip silently — N++'s FIF behaves the same.
+            stats.files_skipped_binary.fetch_add(1, Ordering::Relaxed);
+            continue;
         };
         let outcome = search_in_text(&query, &text);
         stats.files_scanned.fetch_add(1, Ordering::Relaxed);
@@ -811,7 +825,7 @@ fn atomic_write(target: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     let tmp = {
         let mut name = target
             .file_name()
-            .map(|n| n.to_os_string())
+            .map(std::ffi::OsStr::to_os_string)
             .unwrap_or_default();
         name.push(".codepp-fif.tmp");
         parent.join(name)
@@ -901,12 +915,11 @@ mod tests {
                     return out;
                 }
             }
-            if start.elapsed() > deadline {
-                panic!(
-                    "timed out waiting for FIF terminal event after {:?}",
-                    start.elapsed()
-                );
-            }
+            assert!(
+                start.elapsed() <= deadline,
+                "timed out waiting for FIF terminal event after {:?}",
+                start.elapsed()
+            );
         }
     }
 
@@ -1158,7 +1171,11 @@ mod tests {
                             id2_terminal = Some(matches!(ev, FifEvent::Cancelled { .. }));
                         }
                     }
-                    _ => {}
+                    // Non-terminal events (FileMatches and any
+                    // future intermediate variants) — the test
+                    // only cares about per-job terminal
+                    // arrival.
+                    FifEvent::FileMatches { .. } => {}
                 }
             }
         }
