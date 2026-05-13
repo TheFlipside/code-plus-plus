@@ -91,7 +91,7 @@ jobs:
         uses: https://github.com/actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           submodules: recursive
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -W clippy::pedantic -D warnings
 
   deny:
     name: cargo-deny
