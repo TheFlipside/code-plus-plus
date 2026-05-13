@@ -6,8 +6,8 @@
 //! single-tab session restore. The cross-thread marshaling pattern
 //! from §5.4 is wired in as `WM_APP_WAKE`: producer threads in
 //! `core::file::Loader` and `platform::watch::FileWatcher` post to
-//! their channels and PostMessage the main HWND, which on the next
-//! GetMessage iteration runs `Shell::drain` — that's where every
+//! their channels and `PostMessage` the main HWND, which on the next
+//! `GetMessage` iteration runs `Shell::drain` — that's where every
 //! worker-loaded buffer is pushed into Scintilla via the direct-call
 //! API.
 //!
@@ -17,6 +17,80 @@
 //! the standard idiom that scales to multi-window in Phase 3+.
 
 #![cfg(target_os = "windows")]
+// `ui_win32` is the project's Win32 backend — by construction
+// the entire file translates between Rust integer widths and
+// Win32 / Scintilla / N++-ABI shapes (`isize` / `usize` /
+// `LRESULT` / `LPARAM` / `WPARAM` / `LONG` / `BYTE` / RGB
+// channels). Every `as` cast is a deliberate translation
+// whose value-range invariants come from the Win32 / Scintilla
+// ABI, not from Rust's type system. Marking each individually
+// would add hundreds of attributes; the inner attribute
+// documents the trade-off once.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    // wnd_proc bodies and dialog handlers declare scope-local
+    // `const`s (control ids, message offsets) at the call site
+    // rather than hoisting them above the first statement.
+    // Informative on a small fn, distracting on the 16k-line
+    // dispatch this crate is.
+    clippy::items_after_statements,
+    // UI / dialog helpers take owned `PathBuf` / `String` /
+    // `Vec<u16>` etc. by value because they're consumed across
+    // the modal pump or stashed into `Box<WindowState>`. The
+    // lint misfires across the codebase.
+    clippy::needless_pass_by_value,
+    // Test scaffolding and dialog-state structs pair similar
+    // names (`tab`/`tabs`, `path`/`paths`, `dlg`/`dlgs`); the
+    // lint fires across the file with no win for the reader.
+    clippy::similar_names,
+    // The UI is the workspace's main internal-API surface;
+    // every `Result`-returning wnd_proc helper is internal
+    // plumbing. Error variants are visible at the type level
+    // via `windows::core::Result` / `ShellError` / `SessionError`,
+    // and the inline doc comments describe the failure modes.
+    clippy::missing_errors_doc,
+    // wnd_proc bodies match a small subset of `WM_*` messages
+    // and bail to `DefWindowProcW` on everything else — the
+    // `_ =>` wildcard arm genuinely matches dozens of variants
+    // by design.
+    clippy::match_wildcard_for_single_variants,
+    clippy::wildcard_enum_match_arm,
+    // `out += &format!(...)` is the natural form for the
+    // status-line / title-bar string builders.
+    clippy::format_push_string,
+    // `manual_let_else` reads more clearly as an explicit
+    // match for the WindowState-resolution-and-early-return
+    // patterns this crate uses heavily.
+    clippy::manual_let_else,
+    // wnd_procs and dialog `show_*` constructors are
+    // intentionally long — each consolidates layout / control
+    // creation / message dispatch in one place. Splitting
+    // them into per-message helpers (the clippy hint) would
+    // shuffle the call structure without improving
+    // readability.
+    clippy::too_many_lines,
+    // `WindowState` (and a couple of dialog state structs)
+    // intentionally carry many bool fields, each gating a
+    // distinct UI-state branch (tab-mouse-tracking,
+    // fif-dock-visible, plugins-menu-initialized, …).
+    // Refactoring into a bitset / enum would obscure intent
+    // without changing semantics.
+    clippy::struct_excessive_bools,
+    // The wnd_proc match dispatch occasionally has two `WM_*`
+    // arms with the same handler body (e.g. WM_LBUTTONUP and
+    // WM_CAPTURECHANGED both clearing a drag state). Merging
+    // them via `|` would lose the per-arm comment that
+    // documents *why* each message takes the same action;
+    // we keep them separate for the call-site clarity.
+    clippy::match_same_arms,
+    // A few small `Copy` structs (3-8 bytes) are passed by
+    // `&self` for consistency with their by-ref siblings.
+    // Local-fn taste; not worth restructuring.
+    clippy::trivially_copy_pass_by_ref
+)]
 
 mod toolbar;
 
@@ -280,8 +354,8 @@ const STATUSBAR_CLASS: PCWSTR = w!("msctls_statusbar32");
 
 /// Window classes for the find-in-files bottom dock and its draggable
 /// splitter. Both are registered lazily on first `run()` invocation.
-/// The dock is a plain WS_CHILD container; the splitter owns a tiny
-/// wnd_proc that sets the resize cursor and forwards drag events to
+/// The dock is a plain `WS_CHILD` container; the splitter owns a tiny
+/// `wnd_proc` that sets the resize cursor and forwards drag events to
 /// the parent's `WindowState`.
 const FIF_DOCK_CLASS: PCWSTR = w!("CodePlusPlusFifDock");
 /// Window class for the host-owned floating frame that wraps a
@@ -300,7 +374,7 @@ const IDC_FIF_PROGRESS_STATS: u16 = 301;
 const IDC_FIF_PROGRESS_CANCEL: u16 = 302;
 
 /// Control id for the dock's close-X button. Local to the dock's
-/// own wndproc — never reaches `main_wnd_proc`'s WM_COMMAND switch.
+/// own wndproc — never reaches `main_wnd_proc`'s `WM_COMMAND` switch.
 const IDC_FIF_DOCK_CLOSE: u16 = 303;
 
 /// Height of the FIF dock's header band (status label on the
@@ -351,7 +425,7 @@ const MIN_SCINTILLA_HEIGHT_PX: i32 = 60;
 
 /// Window class for the "Go to..." modal popup. Registered once on
 /// first `show_goto_dialog`. The dialog is a plain top-level
-/// `WS_POPUP`/`WS_CAPTION`/`WS_SYSMENU` window with our own wnd_proc;
+/// `WS_POPUP`/`WS_CAPTION`/`WS_SYSMENU` window with our own `wnd_proc`;
 /// `IsDialogMessageW` in the modal pump still handles Tab navigation
 /// and the IDOK/IDCANCEL keyboard contract because the window has
 /// `WS_EX_CONTROLPARENT` and the controls have `WS_TABSTOP`.
@@ -378,7 +452,7 @@ const IDC_RENAME_EDIT: u16 = 110;
 
 /// Find/Replace dialog window class. Registered once on the first
 /// `show_find_replace_dialog`. Modeless: the dialog persists across
-/// open/close cycles via ShowWindow(SW_HIDE) so the typed query and
+/// open/close cycles via `ShowWindow(SW_HIDE)` so the typed query and
 /// flag state survive between Find sessions.
 const FIND_REPLACE_CLASS: PCWSTR = w!("CodePlusPlusFindReplaceDialog");
 
@@ -426,7 +500,7 @@ const STYLE_CONFIG_CLASS: PCWSTR = w!("CodePlusPlusStyleConfigDialog");
 const COLOR_PICKER_POPUP_CLASS: PCWSTR = w!("CodePlusPlusColorPickerPopup");
 
 /// About dialog control ids. The URL link is the only interactive
-/// child besides the OK button (`IDOK`); STN_CLICKED on it opens
+/// child besides the OK button (`IDOK`); `STN_CLICKED` on it opens
 /// the home URL via `ShellExecuteW`. The icon STATIC carries the
 /// owner-draw style and is identified by id in `WM_DRAWITEM`'s
 /// `DRAWITEMSTRUCT.CtlID`.
@@ -522,7 +596,7 @@ struct FifListviewRow {
 /// Drag-tracking state captured on `WM_LBUTTONDOWN` over the FIF
 /// splitter and consumed on each `WM_MOUSEMOVE` until the matching
 /// `WM_LBUTTONUP`. Stored on `WindowState` rather than the splitter
-/// itself so the splitter wnd_proc stays a thin forwarder; reading
+/// itself so the splitter `wnd_proc` stays a thin forwarder; reading
 /// the parent's state is one `state_from_hwnd(GetParent(...))` away.
 #[derive(Debug, Clone, Copy)]
 struct SplitterDrag {
@@ -609,7 +683,7 @@ struct DockEntry {
     module_name: String,
     /// `tTbData.dlg_id` — carried in `nmhdr.idFrom` for any
     /// future `DMN_*` notification routed back to the plugin
-    /// (DMN_CLOSE in particular, deferred to Phase 5).
+    /// (`DMN_CLOSE` in particular, deferred to Phase 5).
     #[allow(dead_code)]
     dlg_id: i32,
     /// Snapshot of `tTbData.u_mask` at registration time.
@@ -620,9 +694,9 @@ struct DockEntry {
 }
 
 /// Per-window state. Box-allocated, pointer stashed in
-/// `GWLP_USERDATA`. wnd_proc reads it back via
+/// `GWLP_USERDATA`. `wnd_proc` reads it back via
 /// `GetWindowLongPtrW(GWLP_USERDATA)` on every message. The main
-/// window's own HWND is passed to wnd_proc on every dispatch, so we
+/// window's own HWND is passed to `wnd_proc` on every dispatch, so we
 /// don't store it here.
 struct WindowState {
     scintilla_hwnd: HWND,
@@ -717,7 +791,7 @@ struct WindowState {
     /// FIF results dock (Phase 4 m4 step 3). Hidden until a search
     /// completes and step 4b populates the listview.
     fif_dock_hwnd: HWND,
-    /// SysListView32 child of `fif_dock_hwnd`. Three columns: File
+    /// `SysListView32` child of `fif_dock_hwnd`. Three columns: File
     /// / Line / Match. Cleared on each new search; populated on
     /// the terminal `FifEvent::Done` event.
     fif_listview_hwnd: HWND,
@@ -783,7 +857,7 @@ struct WindowState {
     /// splitter's drag-state pattern.
     tab_drag: Option<TabDrag>,
     /// 32bpp premultiplied-BGRA `HBITMAP` rendered from
-    /// `assets/icons/tab-save.png` (and `@2x.png` for HiDPI).
+    /// `assets/icons/tab-save.png` (and `@2x.png` for `HiDPI`).
     /// Painted into each tab cell's left margin by
     /// [`paint_tab_item`] when the buffer is clean; the dirty
     /// variant is in [`Self::tab_save_red_hbm`]. Owned by
@@ -811,7 +885,7 @@ struct WindowState {
     /// True iff `TrackMouseEvent(TME_LEAVE)` is armed for the tab
     /// strip. Win32 expects the call to be re-armed once per hover
     /// session; without the flag we'd re-arm on every mousemove (a
-    /// bound on TrackMouseEvent calls per second is documented as
+    /// bound on `TrackMouseEvent` calls per second is documented as
     /// "implementation-defined" — being explicit is safer).
     tab_mouse_tracking: bool,
     /// `Some(idx)` while the user is mid-click on a close-X glyph
@@ -828,7 +902,7 @@ struct WindowState {
 impl WindowState {
     /// Split into a (shell, ui-platform) pair so we can call
     /// `shell.drain(ui)` without aliasing `&mut self`. `Win32Ui` is
-    /// Copy-cheap (two pointer-sized values + EditorHandle) so we just
+    /// Copy-cheap (two pointer-sized values + `EditorHandle`) so we just
     /// produce a fresh one per call.
     fn split(&mut self) -> (&mut Shell, Win32Ui) {
         let ui = Win32Ui {
@@ -871,7 +945,7 @@ impl WindowState {
 /// `UiPlatform` impl. Lightweight — just carries the HWND values
 /// `Shell::drain` needs to reach the editor, status bar, and tab
 /// strip. The main HWND is intentionally absent: dialogs that
-/// need it are deferred (`PendingDialog`) and shown by wnd_proc
+/// need it are deferred (`PendingDialog`) and shown by `wnd_proc`
 /// using its own HWND parameter; methods that need to post back
 /// to the main window (e.g. `set_tabbar_hidden`'s deferred
 /// relayout) derive it via `GetParent(self.tab_hwnd)`.
@@ -893,7 +967,7 @@ struct Win32Ui {
     /// `NPPM_GETSHORTCUTBYCMDID`) and write (via the
     /// recreate-and-swap dance, used by
     /// `NPPM_REMOVESHORTCUTBYCMDID`) the live accelerator
-    /// table. Win32Ui stays Copy by carrying the raw pointer
+    /// table. `Win32Ui` stays Copy by carrying the raw pointer
     /// rather than a borrow.
     ///
     /// # Safety
@@ -912,7 +986,7 @@ struct Win32Ui {
     /// Pointer to `WindowState.plugin_modeless_dialogs` so
     /// `NPPM_MODELESSDIALOG` dispatch can register and
     /// unregister plugin-owned dialogs. Carries the same
-    /// "Win32Ui stays Copy, UI-thread-only access" invariant
+    /// "`Win32Ui` stays Copy, UI-thread-only access" invariant
     /// as `accel_handle`. Multiple plugins can each register
     /// their own dialogs; the Vec is iterated by the message
     /// pump once per `GetMessageW` to call `IsDialogMessageW`
@@ -920,7 +994,7 @@ struct Win32Ui {
     plugin_modeless_dialogs: *mut Vec<HWND>,
     /// Pointer to `WindowState.dock_dialogs` so the
     /// `NPPM_DMM*` family can register / show / hide / look up
-    /// floating frames. Same "Win32Ui stays Copy, UI-thread-only
+    /// floating frames. Same "`Win32Ui` stays Copy, UI-thread-only
     /// access" invariant as `accel_handle` and
     /// `plugin_modeless_dialogs`. The Vec is mutated by
     /// `register_dock_dialog` (push) and read by every other
@@ -1209,7 +1283,7 @@ impl UiPlatform for Win32Ui {
         // before the per-lexer overrides re-paint over them.
         self.editor.style_set_font(STYLE_DEFAULT, &entry.font_name);
         self.editor
-            .style_set_size(STYLE_DEFAULT, entry.font_size as i32);
+            .style_set_size(STYLE_DEFAULT, i32::from(entry.font_size));
         self.editor.style_set_fore(STYLE_DEFAULT, fg_cref);
         self.editor.style_set_back(STYLE_DEFAULT, bg_cref);
         self.editor.style_set_bold(STYLE_DEFAULT, entry.bold);
@@ -1231,11 +1305,7 @@ impl UiPlatform for Win32Ui {
         // from "opacity percent" to the alpha byte is
         // `percent * 255 / 100` (so 100% → 255 fully opaque).
         let main_hwnd = unsafe { GetParent(self.tab_hwnd).unwrap_or_default() };
-        if !main_hwnd.is_invalid() {
-            unsafe {
-                apply_window_transparency(main_hwnd, &transparency);
-            }
-        } else {
+        if main_hwnd.is_invalid() {
             // The tab strip is always a child of the main window
             // by construction (see `run`); reaching this branch
             // means `GetParent` failed unexpectedly. Log so the
@@ -1246,6 +1316,10 @@ impl UiPlatform for Win32Ui {
             tracing::warn!(
                 "apply_default_style: GetParent on tab_hwnd returned invalid HWND; transparency not applied"
             );
+        } else {
+            unsafe {
+                apply_window_transparency(main_hwnd, &transparency);
+            }
         }
 
         // The current lexer's classifications need to be re-applied
@@ -1327,7 +1401,7 @@ impl UiPlatform for Win32Ui {
         // SEARCHINTARGET narrows the target to the match; replace
         // exactly that. Then re-anchor selection on the inserted
         // text so a subsequent Find Next walks past it.
-        self.editor.replace_target(replacement);
+        let _ = self.editor.replace_target(replacement);
         let new_end = self.editor.target_end();
         self.editor
             .send(SCI_SETSELECTIONSTART, sel_start as usize, 0);
@@ -1358,7 +1432,7 @@ impl UiPlatform for Win32Ui {
             if hit < 0 {
                 break;
             }
-            self.editor.replace_target(replacement);
+            let _ = self.editor.replace_target(replacement);
             // Resume just past the inserted replacement; without
             // this, replacing "a" with "ab" would re-match the
             // newly-inserted "a" and loop forever.
@@ -1506,7 +1580,7 @@ impl UiPlatform for Win32Ui {
             }
             let match_start = self.editor.target_start();
             let match_end = self.editor.target_end();
-            self.editor.replace_target(replacement);
+            let _ = self.editor.replace_target(replacement);
             // The actual byte length inserted is read back from
             // `target_end()` after `replace_target` — using
             // `replacement.len()` would be wrong under regex
@@ -1888,7 +1962,7 @@ impl UiPlatform for Win32Ui {
                 self.toolbar_hwnd,
                 TB_ADDBUTTONS,
                 Some(WPARAM(1)),
-                Some(LPARAM(&btn as *const TBBUTTON as isize)),
+                Some(LPARAM(&raw const btn as isize)),
             );
             if added.0 == 0 {
                 tracing::warn!(
@@ -2172,7 +2246,7 @@ impl UiPlatform for Win32Ui {
                 // Plugin's h_client passed via lpCreateParams;
                 // dock_frame_wnd_proc stashes it in
                 // GWLP_USERDATA at WM_NCCREATE.
-                Some(h_client.0 as *const core::ffi::c_void),
+                Some(h_client.0.cast_const()),
             ) {
                 Ok(h) => h,
                 Err(e) => {
@@ -2215,7 +2289,7 @@ impl UiPlatform for Win32Ui {
             // the client area; subsequent WM_SIZE on the frame
             // does the same via dock_frame_wnd_proc.
             let mut rc = RECT::default();
-            if GetClientRect(frame, &mut rc).is_ok() {
+            if GetClientRect(frame, &raw mut rc).is_ok() {
                 let _ = MoveWindow(h_client, 0, 0, rc.right, rc.bottom, true);
             }
             // Make the plugin's dialog visible inside the frame.
@@ -2522,7 +2596,7 @@ const LINE_NUMBER_MARGIN: u32 = 0;
 /// styles).
 const LINE_NUMBER_MARGIN_PX: i32 = 50;
 
-/// Initialise STYLE_DEFAULT then reset every other style to it. This is
+/// Initialise `STYLE_DEFAULT` then reset every other style to it. This is
 /// Scintilla's idiomatic "blank slate before lexer-specific styling"
 /// sequence and stops the previous lexer's colours from leaking through
 /// on lexer switch. Editor must already be bound to the document the
@@ -2842,7 +2916,7 @@ fn center_caret(editor: &EditorHandle) {
 /// Shared centring math. With `force = false` we early-return if
 /// the caret line is already on-screen (Find Next behaviour: don't
 /// jump the viewport on every successful match); with `force = true`
-/// we always re-scroll (FIF dblclk behaviour: SCI_SETSEL has just
+/// we always re-scroll (FIF dblclk behaviour: `SCI_SETSEL` has just
 /// pulled the line edge-visible, so "already on-screen" means "at
 /// the bottom edge under the dock" — which is what we're trying to
 /// avoid).
@@ -2960,7 +3034,7 @@ const fn slot_color(slot: StyleSlot) -> u32 {
 
 /// One row of the per-language theme table. Carries everything
 /// the host needs to install for a given language's editor
-/// configuration: keyword classes (each (class_index, words))
+/// configuration: keyword classes (each (`class_index`, words))
 /// and style mappings (each (SCE_*_INDEX, palette slot)) plus
 /// font-modifier lists.
 struct LangTheme {
@@ -2972,7 +3046,7 @@ struct LangTheme {
     keywords: &'static [(u32, &'static str)],
     /// Per-style foreground colour assignments. Each tuple is
     /// `(SCE_*_INDEX, slot)`. Applied after `apply_default_styles`
-    /// resets every style to STYLE_DEFAULT.
+    /// resets every style to `STYLE_DEFAULT`.
     styles: &'static [(usize, StyleSlot)],
     /// Style indices to render in italic (typically comments).
     italic: &'static [usize],
@@ -3015,7 +3089,7 @@ const CPP_BOLD: &[usize] = &[SCE_C_WORD];
 /// (`0x00BBGGRR`). The same packing Scintilla expects for its
 /// style colour messages.
 fn rgb_to_colorref((r, g, b): (u8, u8, u8)) -> u32 {
-    ((b as u32) << 16) | ((g as u32) << 8) | (r as u32)
+    (u32::from(b) << 16) | (u32::from(g) << 8) | u32::from(r)
 }
 
 /// Apply the user's transparency settings to the main window.
@@ -3067,7 +3141,7 @@ unsafe fn apply_window_transparency(hwnd: HWND, t: &codepp_core::styles::Transpa
                 "transparency percent outside 20..=100; clamping"
             );
         }
-        let percent = t.percent.clamp(20, 100) as u32;
+        let percent = u32::from(t.percent.clamp(20, 100));
         let alpha = ((255u32 * percent) / 100) as u8;
         let _ = unsafe { SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA) };
     } else {
@@ -3154,13 +3228,13 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
 /// Fire every queued NPPN_* notification through `Shell::notify_plugins`,
 /// each call wrapped in `PluginCallGuard` (re-entrance guard) and
 /// `catch_unwind` (host-internal panics must not unwind across the
-/// `extern "system"` wnd_proc frame).
+/// `extern "system"` `wnd_proc` frame).
 ///
 /// Each notification grabs a fresh `&mut WindowState` borrow, calls
-/// notify_plugins (which iterates plugins through `&Shell`), then
+/// `notify_plugins` (which iterates plugins through `&Shell`), then
 /// drops the borrow before the next iteration. A plugin's beNotified
 /// that `SendMessage(NPPM_*)`s back hits `state_from_hwnd → None`
-/// while the guard is set; the inner wnd_proc returns 0 and the
+/// while the guard is set; the inner `wnd_proc` returns 0 and the
 /// outer borrow stays sound.
 ///
 /// # Safety
@@ -3221,7 +3295,7 @@ unsafe fn fire_queued_notifications(hwnd: HWND) {
 /// internal panic (allocation failure inside `Vec::push` or
 /// `String::clone`, a misbehaving `tracing` subscriber, the
 /// `allocate_buffer_id` overflow assert) doesn't unwind across
-/// the `extern "system"` wnd_proc frame — that's UB. Plugin
+/// the `extern "system"` `wnd_proc` frame — that's UB. Plugin
 /// code never runs here, so the wrap is purely a defense
 /// against host-internal panics.
 ///
@@ -3804,7 +3878,7 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
 ///
 ///   - An embedded U+0000 (legal on some network filesystems,
 ///     trivially injectable via `NPPM_DOOPEN` from a plugin)
-///     truncates `SetWindowTextW`/SB_SETTEXTW silently — the
+///     truncates `SetWindowTextW`/`SB_SETTEXTW` silently — the
 ///     chrome no longer reflects the real open file, confusing
 ///     users into acting on the wrong file.
 ///   - CR/LF/TAB render as glyph noise on tab strips and may
@@ -3859,7 +3933,7 @@ unsafe fn update_window_title(hwnd: HWND, shell: &Shell) {
 /// the strip already knows about, using the file's basename (or
 /// "Untitled" if the tab has no path yet) as the label. Then
 /// snaps the tab control's selection to `state.shell.active_tab`
-/// so a click elsewhere or a programmatic switch (NPPM_SWITCHTOFILE)
+/// so a click elsewhere or a programmatic switch (`NPPM_SWITCHTOFILE`)
 /// is reflected visually.
 ///
 /// # Safety
@@ -3877,8 +3951,8 @@ unsafe fn update_window_title(hwnd: HWND, shell: &Shell) {
 /// # Safety
 ///
 /// Caller must hold the UI thread's `&mut WindowState` borrow and
-/// not be in the middle of a plugin callback (sync_tab_strip
-/// sends synchronous TCM_* messages but doesn't re-enter wnd_proc
+/// not be in the middle of a plugin callback (`sync_tab_strip`
+/// sends synchronous TCM_* messages but doesn't re-enter `wnd_proc`
 /// for them).
 /// Run the Save As flow: prompt for a destination path (pre-filled
 /// with the active tab's current basename), then route through
@@ -3899,7 +3973,7 @@ unsafe fn run_save_as_flow(hwnd: HWND) {
             .and_then(|t| t.path.as_ref())
             .and_then(|p| p.file_name())
             .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
     } else {
         None
     };
@@ -4010,8 +4084,8 @@ unsafe fn refresh_tab_chrome(hwnd: HWND) {
 /// # Safety
 ///
 /// Caller must hold the UI thread's `&mut WindowState` borrow. The
-/// SendMessageW calls dispatch synchronously into the common-
-/// control's WndProc and don't re-enter our wnd_proc.
+/// `SendMessageW` calls dispatch synchronously into the common-
+/// control's `WndProc` and don't re-enter our `wnd_proc`.
 unsafe fn force_tab_strip_resync(state: &mut WindowState) {
     // SAFETY: tab_hwnd is a valid HWND created in `run`; both
     // messages take no pointer arguments.
@@ -4050,7 +4124,7 @@ unsafe fn sync_tab_strip(state: &mut WindowState) {
                 state.tab_hwnd,
                 TCM_INSERTITEMW,
                 Some(WPARAM(idx)),
-                Some(LPARAM(&mut item as *mut TCITEMW as isize)),
+                Some(LPARAM(&raw mut item as isize)),
             );
         }
         state.synced_tab_count += 1;
@@ -4088,7 +4162,7 @@ unsafe fn sync_tab_strip(state: &mut WindowState) {
                 state.tab_hwnd,
                 TCM_SETITEMW,
                 Some(WPARAM(idx)),
-                Some(LPARAM(&mut item as *mut TCITEMW as isize)),
+                Some(LPARAM(&raw mut item as isize)),
             );
         }
     }
@@ -4152,7 +4226,7 @@ fn tab_display_name(tab: &Tab) -> String {
             tab.path.as_ref().and_then(|p| {
                 p.file_name()
                     .and_then(|s| s.to_str())
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
             })
         })
         .unwrap_or_else(|| match tab.untitled_seq {
@@ -4169,7 +4243,7 @@ fn tab_label_for(tab: &Tab) -> Vec<u16> {
         .collect()
 }
 
-/// Bundle of HMENUs the wnd_proc and `WindowState` need to keep
+/// Bundle of HMENUs the `wnd_proc` and `WindowState` need to keep
 /// addressable after `build_main_menu` returns. The bar itself is
 /// what `CreateWindowExW` consumes; the four named popups need
 /// dynamic refresh on `WM_INITMENUPOPUP` (state-driven check marks
@@ -4197,7 +4271,7 @@ struct BuiltMenuBar {
 /// # Safety
 ///
 /// `CreateMenu` / `AppendMenuW` are pure heap operations; they
-/// don't re-enter our wnd_proc. The returned handles are owned by
+/// don't re-enter our `wnd_proc`. The returned handles are owned by
 /// the host process for the window's lifetime.
 fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
     unsafe {
@@ -4563,7 +4637,7 @@ unsafe fn refresh_view_menu(view_menu: HMENU, editor: &EditorHandle) {
         // failure here just means the check mark is wrong on this
         // open, never a process-stability issue.
         unsafe {
-            let _ = CheckMenuItem(view_menu, id as u32, flags);
+            let _ = CheckMenuItem(view_menu, u32::from(id), flags);
         }
     };
     mark(ID_VIEW_WORDWRAP, wrap_on);
@@ -4595,7 +4669,7 @@ unsafe fn refresh_language_menu(language_menu: HMENU, lang: LangType) {
     if lang_id < 0 || lang_id as usize >= ID_LANGUAGE_CAP {
         return;
     }
-    let target = ID_LANGUAGE_BASE as u32 + lang_id as u32;
+    let target = u32::from(ID_LANGUAGE_BASE) + lang_id as u32;
     // CheckMenuRadioItem only marks items in the menu it's called
     // on. With m6's first-letter submenus the active item may live
     // inside a child popup, so we apply the call to the top-level
@@ -4606,8 +4680,8 @@ unsafe fn refresh_language_menu(language_menu: HMENU, lang: LangType) {
     unsafe {
         let _ = CheckMenuRadioItem(
             language_menu,
-            ID_LANGUAGE_BASE as u32,
-            ID_LANGUAGE_END as u32,
+            u32::from(ID_LANGUAGE_BASE),
+            u32::from(ID_LANGUAGE_END),
             target,
             MF_BYCOMMAND.0,
         );
@@ -4617,8 +4691,8 @@ unsafe fn refresh_language_menu(language_menu: HMENU, lang: LangType) {
             if !sub.is_invalid() {
                 let _ = CheckMenuRadioItem(
                     sub,
-                    ID_LANGUAGE_BASE as u32,
-                    ID_LANGUAGE_END as u32,
+                    u32::from(ID_LANGUAGE_BASE),
+                    u32::from(ID_LANGUAGE_END),
                     target,
                     MF_BYCOMMAND.0,
                 );
@@ -4667,7 +4741,7 @@ fn build_language_menu() -> Result<HMENU> {
         AppendMenuW(
             menu.handle(),
             MF_STRING,
-            (ID_LANGUAGE_BASE as i32 + LANG_TABLE[0].lang.as_npp_id()) as usize,
+            (i32::from(ID_LANGUAGE_BASE) + LANG_TABLE[0].lang.as_npp_id()) as usize,
             PCWSTR(text_label.as_ptr()),
         )?;
         AppendMenuW(menu.handle(), MF_SEPARATOR, 0, PCWSTR::null())?;
@@ -4704,7 +4778,7 @@ fn build_language_menu() -> Result<HMENU> {
                 AppendMenuW(
                     menu.handle(),
                     MF_STRING,
-                    (ID_LANGUAGE_BASE as i32 + run[0].lang.as_npp_id()) as usize,
+                    (i32::from(ID_LANGUAGE_BASE) + run[0].lang.as_npp_id()) as usize,
                     PCWSTR(label.as_ptr()),
                 )?;
             }
@@ -4721,14 +4795,12 @@ fn build_language_menu() -> Result<HMENU> {
                     AppendMenuW(
                         sub.handle(),
                         MF_STRING,
-                        (ID_LANGUAGE_BASE as i32 + entry.lang.as_npp_id()) as usize,
+                        (i32::from(ID_LANGUAGE_BASE) + entry.lang.as_npp_id()) as usize,
                         PCWSTR(label.as_ptr()),
                     )?;
                 }
             }
-            let letter = first_letter
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "?".to_string());
+            let letter = first_letter.map_or_else(|| "?".to_string(), |c| c.to_string());
             let letter_w = wide_terminated(&letter);
             // Attach: ownership of the submenu transfers to `menu`
             // on success. Defuse the submenu guard *only* after
@@ -4899,9 +4971,9 @@ unsafe fn refresh_encoding_menu(encoding_menu: HMENU, encoding: &Encoding) {
         unsafe {
             let _ = CheckMenuRadioItem(
                 encoding_menu,
-                ID_ENCODING_ANSI as u32,
-                ID_ENCODING_UTF16_BE as u32,
-                id as u32,
+                u32::from(ID_ENCODING_ANSI),
+                u32::from(ID_ENCODING_UTF16_BE),
+                u32::from(id),
                 MF_BYCOMMAND.0,
             );
         }
@@ -4976,7 +5048,7 @@ unsafe fn refresh_window_menu(window_menu: HMENU, shell: &Shell) {
         // 0..ID_WINDOW_CAP range would silently overflow the u32
         // addition; bounded check keeps the target id well-formed.
         if active < ID_WINDOW_CAP {
-            let id = ID_WINDOW_BASE as u32 + active as u32;
+            let id = u32::from(ID_WINDOW_BASE) + active as u32;
             unsafe {
                 let _ = CheckMenuItem(window_menu, id, MF_BYCOMMAND.0 | MF_CHECKED.0);
             }
@@ -4984,7 +5056,7 @@ unsafe fn refresh_window_menu(window_menu: HMENU, shell: &Shell) {
     }
 }
 
-/// Append loaded-plugin FuncItems onto the per-plugin submenu after
+/// Append loaded-plugin `FuncItems` onto the per-plugin submenu after
 /// a successful lazy-load round. Each plugin gets its own popup
 /// submenu under the top-level "Plugins" entry, with the plugin's
 /// own getName output as the label.
@@ -4992,7 +5064,7 @@ unsafe fn refresh_window_menu(window_menu: HMENU, shell: &Shell) {
 /// # Safety
 ///
 /// Caller must invoke this on the UI thread that owns `plugin_menu`.
-/// `CreateMenu`/`AppendMenuW` do not re-enter our wnd_proc.
+/// `CreateMenu`/`AppendMenuW` do not re-enter our `wnd_proc`.
 unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
     for (plugin_name, funcs) in shell.loaded_plugin_funcs() {
         // One popup submenu per plugin so users see "Plugins → MyPlugin
@@ -5069,7 +5141,7 @@ unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
 }
 
 /// Write `text` into status-bar part `part_index`. Centralizes the
-/// SB_SETTEXTW idiom so the regular status updates (encoding/EOL/size)
+/// `SB_SETTEXTW` idiom so the regular status updates (encoding/EOL/size)
 /// and the plugin-driven `NPPM_SETSTATUSBAR` overrides share one
 /// implementation — the only thing that varies is the source string.
 /// Trigger a relayout of the main window by posting a `WM_SIZE`
@@ -5081,7 +5153,7 @@ unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
 /// Posts (via `PostMessageW`) rather than sends synchronously: the
 /// chrome-toggle messages can be dispatched from inside a plugin's
 /// `messageProc`, which is already running under `PluginCallGuard`.
-/// A synchronous `SendMessage` would re-enter the main wnd_proc on
+/// A synchronous `SendMessage` would re-enter the main `wnd_proc` on
 /// this thread, and `state_from_hwnd` would refuse the re-borrow
 /// because the guard is held — the layout would silently no-op.
 /// Posting queues the size message until after the guard drops,
@@ -5107,7 +5179,7 @@ unsafe fn relayout_main_window_via_post(child_hwnd: HWND) {
             return;
         };
         let mut rect = RECT::default();
-        if GetClientRect(parent, &mut rect).is_err() {
+        if GetClientRect(parent, &raw mut rect).is_err() {
             return;
         }
         let w = (rect.right - rect.left).max(0);
@@ -5210,7 +5282,7 @@ const SB_SETPARTS: u32 = 0x0404;
 
 /// Compute right-edge x-coordinates for the 7-part status bar
 /// layout and apply them via `SB_SETPARTS`. Called at status-bar
-/// creation time and from every WM_SIZE so the spring (part 1)
+/// creation time and from every `WM_SIZE` so the spring (part 1)
 /// absorbs the width delta while every other part keeps its
 /// designed width.
 ///
@@ -5503,7 +5575,7 @@ fn prompt_open_path(owner: HWND) -> Option<PathBuf> {
     // dialog blocks until the user clicks OK or Cancel; on
     // success Windows writes the chosen path into `path` and we
     // truncate at the first NUL.
-    let ok = unsafe { GetOpenFileNameW(&mut ofn) }.as_bool();
+    let ok = unsafe { GetOpenFileNameW(&raw mut ofn) }.as_bool();
     if !ok {
         return None;
     }
@@ -5567,7 +5639,7 @@ fn prompt_save_path(owner: HWND, default_name: Option<&str>) -> Option<PathBuf> 
 
     // SAFETY: same contract as `prompt_open_path` — fully-init
     // struct, buffers outlive the call.
-    let ok = unsafe { GetSaveFileNameW(&mut ofn) }.as_bool();
+    let ok = unsafe { GetSaveFileNameW(&raw mut ofn) }.as_bool();
     if !ok {
         return None;
     }
@@ -5614,7 +5686,7 @@ fn prompt_save_path(owner: HWND, default_name: Option<&str>) -> Option<PathBuf> 
 /// The bold title `HFONT` is owned by a separate `GdiObjectGuard`
 /// because it's only ever read by Win32's message dispatch (via
 /// `WM_SETFONT` plumbed through `apply_dialog_font`) and never by
-/// our wnd_proc, so threading it through state would be noise.
+/// our `wnd_proc`, so threading it through state would be noise.
 ///
 /// The chameleon `HICON` *is* tracked here and freed by the
 /// `Drop` impl below — that makes the icon's lifetime
@@ -5624,13 +5696,13 @@ fn prompt_save_path(owner: HWND, default_name: Option<&str>) -> Option<PathBuf> 
 /// `WM_DRAWITEM` read a freed icon between the guard's drop and
 /// the box's drop).
 struct AboutDialogState {
-    /// HWND of the URL link STATIC. The wnd_proc compares `wparam`
+    /// HWND of the URL link STATIC. The `wnd_proc` compares `wparam`
     /// against this on `WM_SETCURSOR` to switch to `IDC_HAND`, and
     /// against `lparam` on `WM_CTLCOLORSTATIC` to paint the link
     /// text blue.
     link_hwnd: HWND,
     /// HWND of the owner (main editor) window. The IDOK/IDCANCEL
-    /// and WM_CLOSE handlers re-enable the owner *before*
+    /// and `WM_CLOSE` handlers re-enable the owner *before*
     /// `DestroyWindow(dlg)` so window activation transfers
     /// naturally back to the editor instead of falling through
     /// z-order to whatever other app happened to be running — a
@@ -5643,7 +5715,7 @@ struct AboutDialogState {
     /// alive across the call.
     home_url: HSTRING,
     /// Chameleon `HICON` for the owner-draw STATIC. Loaded once
-    /// by `show_about_dialog`; the wnd_proc reads it on every
+    /// by `show_about_dialog`; the `wnd_proc` reads it on every
     /// `WM_DRAWITEM` for the icon control. Drawn via `DrawIconEx`
     /// with `DI_NORMAL` so the icon's 32bpp alpha channel is
     /// honoured rather than masked to black (the bug that
@@ -5702,7 +5774,7 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                     let _ = DestroyWindow(hwnd);
                     LRESULT(0)
-                } else if cmd == IDC_ABOUT_HOME_LINK as i32 && notif == STN_CLICKED {
+                } else if cmd == i32::from(IDC_ABOUT_HOME_LINK) && notif == STN_CLICKED {
                     // URL static was clicked — open the home page
                     // in the user's default browser.
                     let state_ptr =
@@ -5735,7 +5807,7 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let dis = lparam.0 as *const DRAWITEMSTRUCT;
                 if !dis.is_null() {
                     let dis = &*dis;
-                    if dis.CtlID == IDC_ABOUT_ICON as u32 {
+                    if dis.CtlID == u32::from(IDC_ABOUT_ICON) {
                         // Always return "handled" for our control
                         // id, even if `state_ptr` is unexpectedly
                         // null or the icon failed to load. Windows
@@ -5746,7 +5818,7 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         let state_ptr =
                             GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
                         if !state_ptr.is_null() {
-                            FillRect(dis.hDC, &dis.rcItem, dialog_bg_brush());
+                            FillRect(dis.hDC, &raw const dis.rcItem, dialog_bg_brush());
                             let icon = (*state_ptr).app_icon;
                             if !icon.is_invalid() {
                                 let w = dis.rcItem.right - dis.rcItem.left;
@@ -5823,8 +5895,8 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             WM_ERASEBKGND => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let mut rect = RECT::default();
-                let _ = GetClientRect(hwnd, &mut rect);
-                FillRect(hdc, &rect, dialog_bg_brush());
+                let _ = GetClientRect(hwnd, &raw mut rect);
+                FillRect(hdc, &raw const rect, dialog_bg_brush());
                 LRESULT(1)
             }
             WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
@@ -5839,7 +5911,7 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     && msg == WM_CTLCOLORSTATIC
                     && target == (*state_ptr).link_hwnd
                 {
-                    let _ = SetTextColor(hdc, COLORREF(0x00EE0000));
+                    let _ = SetTextColor(hdc, COLORREF(0x00EE_0000));
                 }
                 LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
             }
@@ -5967,7 +6039,7 @@ enum ColorPickResult {
     MoreColours,
 }
 
-/// State passed into the colour-picker popup's wnd_proc via
+/// State passed into the colour-picker popup's `wnd_proc` via
 /// CREATESTRUCT.lpCreateParams. Holds the working result —
 /// initial colour seeding stays on the calling site (the host
 /// dialog) and is forwarded to `ChooseColorW` only on the
@@ -6008,11 +6080,11 @@ fn show_color_picker_popup(
                 lpszClassName: COLOR_PICKER_POPUP_CLASS,
                 ..Default::default()
             };
-            let _ = RegisterClassExW(&class);
+            let _ = RegisterClassExW(&raw const class);
         });
 
         let mut state = Box::new(ColorPickerPopupState { result: None });
-        let state_ptr: *mut ColorPickerPopupState = &mut *state;
+        let state_ptr: *mut ColorPickerPopupState = &raw mut *state;
 
         let mut window_rect = RECT {
             left: 0,
@@ -6021,7 +6093,7 @@ fn show_color_picker_popup(
             bottom: POPUP_CLIENT_H_PX,
         };
         let _ = AdjustWindowRectEx(
-            &mut window_rect,
+            &raw mut window_rect,
             WS_POPUP | WS_BORDER,
             false,
             WS_EX_TOOLWINDOW,
@@ -6041,7 +6113,7 @@ fn show_color_picker_popup(
             Some(owner),
             None,
             Some(instance.into()),
-            Some(state_ptr as *mut c_void),
+            Some(state_ptr.cast::<c_void>()),
         )
         .ok()?;
         let _dlg_guard = DlgDestroyGuard(popup);
@@ -6100,7 +6172,7 @@ fn show_color_picker_popup(
             if !IsWindow(Some(popup)).as_bool() {
                 break;
             }
-            let ret = GetMessageW(&mut msg, None, 0, 0);
+            let ret = GetMessageW(&raw mut msg, None, 0, 0);
             match ret.0 {
                 0 => {
                     let _ = PostMessageW(None, WM_QUIT, msg.wParam, msg.lParam);
@@ -6120,7 +6192,7 @@ fn show_color_picker_popup(
                             y: msg.pt.y,
                         };
                         let mut popup_rect = RECT::default();
-                        let _ = GetWindowRect(popup, &mut popup_rect);
+                        let _ = GetWindowRect(popup, &raw mut popup_rect);
                         let inside = hit_pt.x >= popup_rect.left
                             && hit_pt.x < popup_rect.right
                             && hit_pt.y >= popup_rect.top
@@ -6139,8 +6211,8 @@ fn show_color_picker_popup(
                             break;
                         }
                     }
-                    let _ = TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
+                    let _ = TranslateMessage(&raw const msg);
+                    DispatchMessageW(&raw const msg);
                 }
             }
         }
@@ -6154,9 +6226,9 @@ fn show_color_picker_popup(
 }
 
 /// Window procedure for the colour-picker preset popup.
-/// Handles WM_DRAWITEM for the swatch buttons (fills them with
+/// Handles `WM_DRAWITEM` for the swatch buttons (fills them with
 /// their `PRESET_COLOURS` entry plus a 1px border) and
-/// WM_COMMAND for swatch / "More Colours..." clicks.
+/// `WM_COMMAND` for swatch / "More Colours..." clicks.
 unsafe extern "system" fn color_picker_popup_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -6197,16 +6269,16 @@ unsafe extern "system" fn color_picker_popup_wnd_proc_inner(
             let dis = lparam.0 as *const DRAWITEMSTRUCT;
             if !dis.is_null() {
                 let cid = (*dis).CtlID;
-                if (IDC_COLOR_POPUP_SWATCH_BASE as u32..).contains(&cid)
-                    && cid < (IDC_COLOR_POPUP_SWATCH_BASE as u32 + PRESET_COLOURS.len() as u32)
+                if (u32::from(IDC_COLOR_POPUP_SWATCH_BASE)..).contains(&cid)
+                    && cid < (u32::from(IDC_COLOR_POPUP_SWATCH_BASE) + PRESET_COLOURS.len() as u32)
                 {
-                    let idx = (cid - IDC_COLOR_POPUP_SWATCH_BASE as u32) as usize;
+                    let idx = (cid - u32::from(IDC_COLOR_POPUP_SWATCH_BASE)) as usize;
                     let (r, g, b) = PRESET_COLOURS[idx];
                     let rect = (*dis).rcItem;
                     let hdc = (*dis).hDC;
                     let brush = CreateSolidBrush(COLORREF(rgb_to_colorref((r, g, b))));
                     if !brush.is_invalid() {
-                        FillRect(hdc, &rect, brush);
+                        FillRect(hdc, &raw const rect, brush);
                         let _ = DeleteObject(brush.into());
                     }
                     // 1px dark border so light swatches stay
@@ -6216,7 +6288,7 @@ unsafe extern "system" fn color_picker_popup_wnd_proc_inner(
                     if !border.is_invalid() {
                         let prev = SelectObject(hdc, border.into());
                         let mut last = POINT::default();
-                        let _ = MoveToEx(hdc, rect.left, rect.top, Some(&mut last));
+                        let _ = MoveToEx(hdc, rect.left, rect.top, Some(&raw mut last));
                         let _ = LineTo(hdc, rect.right - 1, rect.top);
                         let _ = LineTo(hdc, rect.right - 1, rect.bottom - 1);
                         let _ = LineTo(hdc, rect.left, rect.bottom - 1);
@@ -6272,7 +6344,7 @@ fn pick_color_via_choose_color(owner: HWND, initial: (u8, u8, u8)) -> Option<(u8
         Flags: CC_RGBINIT | CC_FULLOPEN,
         ..Default::default()
     };
-    let ok = unsafe { ChooseColorW(&mut cc) };
+    let ok = unsafe { ChooseColorW(&raw mut cc) };
     if !ok.as_bool() {
         return None;
     }
@@ -6299,14 +6371,20 @@ fn enumerate_system_fonts() -> Vec<String> {
         if dc.is_invalid() {
             return Vec::new();
         }
-        let fonts_ptr: *mut BTreeSet<String> = &mut fonts;
-        EnumFontFamiliesExW(dc, &lf, Some(font_enum_proc), LPARAM(fonts_ptr as isize), 0);
+        let fonts_ptr: *mut BTreeSet<String> = &raw mut fonts;
+        EnumFontFamiliesExW(
+            dc,
+            &raw const lf,
+            Some(font_enum_proc),
+            LPARAM(fonts_ptr as isize),
+            0,
+        );
         ReleaseDC(None, dc);
     }
     fonts.into_iter().collect()
 }
 
-/// EnumFontFamiliesEx callback — extracts the face name from
+/// `EnumFontFamiliesEx` callback — extracts the face name from
 /// `LOGFONTW.lfFaceName`, skips "@"-prefixed vertical
 /// duplicates, and inserts unique names into the
 /// caller-supplied `BTreeSet<String>` (so the result is sorted
@@ -6344,8 +6422,8 @@ unsafe extern "system" fn font_enum_proc(
 }
 
 /// Working state for the Style Configurator dialog. Stored
-/// inside the dialog's `Box` and reached via GWLP_USERDATA from
-/// the wnd_proc. Carries every control HWND the dispatch
+/// inside the dialog's `Box` and reached via `GWLP_USERDATA` from
+/// the `wnd_proc`. Carries every control HWND the dispatch
 /// touches and the working-copy `Styles` value the user is
 /// editing; `result` is set on Save & Close so the modal-pump
 /// caller can return it to the host.
@@ -6392,7 +6470,7 @@ const TBS_HORZ_AUTOTICKS: u32 = 0x0001;
 /// # Safety
 ///
 /// `main_hwnd` must be the host's main window on the calling
-/// thread; same contract as the rest of the wnd_proc dispatch.
+/// thread; same contract as the rest of the `wnd_proc` dispatch.
 unsafe fn handle_style_config_menu(main_hwnd: HWND) {
     // Snapshot under a brief borrow, then drop it before the
     // modal pump runs (the message loop re-enters the wnd_proc).
@@ -6419,10 +6497,7 @@ unsafe fn handle_style_config_menu(main_hwnd: HWND) {
         // default colour scheme — keyword classes survive
         // `style_clear_all` so this only repaints colours, no
         // re-lex work.
-        let active_lang = shell
-            .active()
-            .map(|t| t.lang)
-            .unwrap_or(codepp_core::lang::L_TEXT);
+        let active_lang = shell.active().map_or(codepp_core::lang::L_TEXT, |t| t.lang);
         ui.apply_lang(active_lang);
     }
 }
@@ -6450,7 +6525,7 @@ fn show_style_config_dialog(
                 lpszClassName: STYLE_CONFIG_CLASS,
                 ..Default::default()
             };
-            let _ = RegisterClassExW(&class);
+            let _ = RegisterClassExW(&raw const class);
         });
 
         let initial_default = initial.effective_default();
@@ -6470,7 +6545,7 @@ fn show_style_config_dialog(
             transparency_check: HWND::default(),
             transparency_slider: HWND::default(),
         });
-        let state_ptr: *mut StyleConfigDialogState = &mut *state;
+        let state_ptr: *mut StyleConfigDialogState = &raw mut *state;
 
         // Layout. CLIENT-space; we AdjustWindowRectEx once to
         // get the outer window size for `CreateWindowExW`.
@@ -6484,7 +6559,7 @@ fn show_style_config_dialog(
             bottom: CLIENT_H,
         };
         let _ = AdjustWindowRectEx(
-            &mut window_rect,
+            &raw mut window_rect,
             WS_POPUP | WS_CAPTION | WS_SYSMENU,
             false,
             WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
@@ -6492,7 +6567,7 @@ fn show_style_config_dialog(
         let dlg_w = window_rect.right - window_rect.left;
         let dlg_h = window_rect.bottom - window_rect.top;
         let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(owner, &mut owner_rect);
+        let _ = GetWindowRect(owner, &raw mut owner_rect);
         let owner_w = owner_rect.right - owner_rect.left;
         let owner_h = owner_rect.bottom - owner_rect.top;
         let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
@@ -6510,7 +6585,7 @@ fn show_style_config_dialog(
             Some(owner),
             None,
             Some(instance.into()),
-            Some(state_ptr as *mut c_void),
+            Some(state_ptr.cast::<c_void>()),
         )
         .ok()?;
         let _dlg_guard = DlgDestroyGuard(dlg);
@@ -6912,19 +6987,19 @@ fn show_style_config_dialog(
         SendMessageW(
             bold_check,
             BM_SETCHECK,
-            Some(WPARAM(if initial_default.bold { 1 } else { 0 })),
+            Some(WPARAM(usize::from(initial_default.bold))),
             Some(LPARAM(0)),
         );
         SendMessageW(
             italic_check,
             BM_SETCHECK,
-            Some(WPARAM(if initial_default.italic { 1 } else { 0 })),
+            Some(WPARAM(usize::from(initial_default.italic))),
             Some(LPARAM(0)),
         );
         SendMessageW(
             underline_check,
             BM_SETCHECK,
-            Some(WPARAM(if initial_default.underline { 1 } else { 0 })),
+            Some(WPARAM(usize::from(initial_default.underline))),
             Some(LPARAM(0)),
         );
 
@@ -6947,7 +7022,7 @@ fn show_style_config_dialog(
         SendMessageW(
             transparency_check,
             BM_SETCHECK,
-            Some(WPARAM(if initial_transparency.enabled { 1 } else { 0 })),
+            Some(WPARAM(usize::from(initial_transparency.enabled))),
             Some(LPARAM(0)),
         );
         let transparency_slider = CreateWindowExW(
@@ -6970,7 +7045,9 @@ fn show_style_config_dialog(
             transparency_slider,
             TBM_SETRANGE,
             Some(WPARAM(1)),
-            Some(LPARAM(((20u32 as i64) | ((100u32 as i64) << 16)) as isize)),
+            Some(LPARAM(
+                (i64::from(20u32) | (i64::from(100u32) << 16)) as isize,
+            )),
         );
         SendMessageW(
             transparency_slider,
@@ -7068,7 +7145,7 @@ fn show_style_config_dialog(
             if !IsWindow(Some(dlg)).as_bool() {
                 break;
             }
-            let ret = GetMessageW(&mut msg, None, 0, 0);
+            let ret = GetMessageW(&raw mut msg, None, 0, 0);
             match ret.0 {
                 0 => {
                     let _ = PostMessageW(None, WM_QUIT, msg.wParam, msg.lParam);
@@ -7076,9 +7153,9 @@ fn show_style_config_dialog(
                 }
                 -1 => break,
                 _ => {
-                    if !IsDialogMessageW(dlg, &msg).as_bool() {
-                        let _ = TranslateMessage(&msg);
-                        DispatchMessageW(&msg);
+                    if !IsDialogMessageW(dlg, &raw const msg).as_bool() {
+                        let _ = TranslateMessage(&raw const msg);
+                        DispatchMessageW(&raw const msg);
                     }
                 }
             }
@@ -7089,7 +7166,7 @@ fn show_style_config_dialog(
 }
 
 /// Listbox messages. The Win32 names are `LB_ADDSTRING` /
-/// `LB_SETCURSEL`; values come from the Win32 SDK (not WM_USER-
+/// `LB_SETCURSEL`; values come from the Win32 SDK (not `WM_USER`-
 /// based — the LB_* range lives in the standard WM_ message
 /// allocation around 0x0180). windows-rs doesn't re-export
 /// them, so we keep them as local constants.
@@ -7167,7 +7244,7 @@ unsafe fn paint_color_square(state: &StyleConfigDialogState, dis: *const DRAWITE
         let cref = COLORREF(rgb_to_colorref(rgb));
         let brush = CreateSolidBrush(cref);
         if !brush.is_invalid() {
-            FillRect(dis_ref.hDC, &dis_ref.rcItem, brush);
+            FillRect(dis_ref.hDC, &raw const dis_ref.rcItem, brush);
             let _ = DeleteObject(brush.into());
         }
         // 1px border for legibility (a white BG on a white
@@ -7177,7 +7254,7 @@ unsafe fn paint_color_square(state: &StyleConfigDialogState, dis: *const DRAWITE
             let prev = SelectObject(dis_ref.hDC, pen.into());
             let r = dis_ref.rcItem;
             let mut last = POINT::default();
-            let _ = MoveToEx(dis_ref.hDC, r.left, r.top, Some(&mut last));
+            let _ = MoveToEx(dis_ref.hDC, r.left, r.top, Some(&raw mut last));
             let _ = LineTo(dis_ref.hDC, r.right - 1, r.top);
             let _ = LineTo(dis_ref.hDC, r.right - 1, r.bottom - 1);
             let _ = LineTo(dis_ref.hDC, r.left, r.bottom - 1);
@@ -7190,7 +7267,7 @@ unsafe fn paint_color_square(state: &StyleConfigDialogState, dis: *const DRAWITE
 
 /// Window procedure for the Style Configurator dialog. Handles
 /// the typical create / draw / command / destroy lifecycle plus
-/// WM_HSCROLL for the transparency slider.
+/// `WM_HSCROLL` for the transparency slider.
 unsafe extern "system" fn style_config_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -7268,7 +7345,7 @@ unsafe extern "system" fn style_config_wnd_proc_inner(
                         state.bg_button
                     };
                     let mut rect = RECT::default();
-                    let _ = GetWindowRect(button_hwnd, &mut rect);
+                    let _ = GetWindowRect(button_hwnd, &raw mut rect);
                     let picked = show_color_picker_popup(hwnd, rect.left, rect.bottom, initial);
                     if let Some(rgb) = picked {
                         let hex = codepp_core::styles::format_rgb_hex(rgb.0, rgb.1, rgb.2);
@@ -7381,7 +7458,7 @@ fn show_about_dialog(main_hwnd: HWND) {
                 lpszClassName: ABOUT_CLASS,
                 ..Default::default()
             };
-            let _ = RegisterClassExW(&class);
+            let _ = RegisterClassExW(&raw const class);
         });
 
         // --- Layout (CLIENT coordinates) --------------------------
@@ -7448,7 +7525,7 @@ fn show_about_dialog(main_hwnd: HWND) {
             bottom: CLIENT_H,
         };
         let _ = AdjustWindowRectEx(
-            &mut window_rect,
+            &raw mut window_rect,
             WS_POPUP | WS_CAPTION | WS_SYSMENU,
             false,
             WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
@@ -7457,7 +7534,7 @@ fn show_about_dialog(main_hwnd: HWND) {
         let dlg_h = window_rect.bottom - window_rect.top;
 
         let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(main_hwnd, &mut owner_rect);
+        let _ = GetWindowRect(main_hwnd, &raw mut owner_rect);
         let owner_w = owner_rect.right - owner_rect.left;
         let owner_h = owner_rect.bottom - owner_rect.top;
         let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
@@ -7485,7 +7562,7 @@ fn show_about_dialog(main_hwnd: HWND) {
         let utf16: Vec<u16> = face.encode_utf16().collect();
         let n = utf16.len().min(title_lf.lfFaceName.len() - 1);
         title_lf.lfFaceName[..n].copy_from_slice(&utf16[..n]);
-        let title_font = CreateFontIndirectW(&title_lf);
+        let title_font = CreateFontIndirectW(&raw const title_lf);
         // RAII free for the title font — covers every exit path
         // including the child-creation `Err(_) => return` arms below.
         let _title_font_guard = GdiObjectGuard(title_font);
@@ -7525,7 +7602,7 @@ fn show_about_dialog(main_hwnd: HWND) {
             home_url: home_url.clone(),
             app_icon,
         });
-        let state_ptr: *mut AboutDialogState = &mut *state;
+        let state_ptr: *mut AboutDialogState = &raw mut *state;
 
         let dlg = match CreateWindowExW(
             WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
@@ -7539,7 +7616,7 @@ fn show_about_dialog(main_hwnd: HWND) {
             Some(main_hwnd),
             None,
             Some(instance.into()),
-            Some(state_ptr as *mut c_void),
+            Some(state_ptr.cast::<c_void>()),
         ) {
             Ok(h) => h,
             Err(_) => return,
@@ -7728,7 +7805,7 @@ fn show_about_dialog(main_hwnd: HWND) {
             if !IsWindow(Some(dlg)).as_bool() {
                 break;
             }
-            let ret = GetMessageW(&mut msg_buf, None, 0, 0);
+            let ret = GetMessageW(&raw mut msg_buf, None, 0, 0);
             match ret.0 {
                 0 => {
                     let _ = PostMessageW(None, WM_QUIT, msg_buf.wParam, msg_buf.lParam);
@@ -7736,9 +7813,9 @@ fn show_about_dialog(main_hwnd: HWND) {
                 }
                 -1 => break,
                 _ => {
-                    if !IsDialogMessageW(dlg, &msg_buf).as_bool() {
-                        let _ = TranslateMessage(&msg_buf);
-                        DispatchMessageW(&msg_buf);
+                    if !IsDialogMessageW(dlg, &raw const msg_buf).as_bool() {
+                        let _ = TranslateMessage(&raw const msg_buf);
+                        DispatchMessageW(&raw const msg_buf);
                     }
                 }
             }
@@ -7809,7 +7886,7 @@ const IDC_COLOR_POPUP_SWATCH_BASE: u16 = 830;
 const LIST_CHECKED_STATE: u32 = 2 << 12;
 const LIST_UNCHECKED_STATE: u32 = 1 << 12;
 
-/// Heap-allocated dialog state. The wnd_proc looks it up via
+/// Heap-allocated dialog state. The `wnd_proc` looks it up via
 /// `GWLP_USERDATA`; the box is owned by `show_plugin_admin_dialog`'s
 /// stack frame for the dialog's lifetime.
 struct PluginAdminDialogState {
@@ -7817,12 +7894,12 @@ struct PluginAdminDialogState {
     /// vec — `entries[row].index` is what gets passed back to
     /// `Shell::set_plugin_disabled` on toggle.
     entries: Vec<PluginAdminEntry>,
-    /// Owner HWND. The IDOK / WM_CLOSE handler re-enables the
+    /// Owner HWND. The IDOK / `WM_CLOSE` handler re-enables the
     /// owner *before* `DestroyWindow` so window activation
     /// transfers naturally back to the editor (same fix as the
     /// About / Goto dialogs).
     owner_hwnd: HWND,
-    /// Listview HWND, captured after creation so the WM_NOTIFY
+    /// Listview HWND, captured after creation so the `WM_NOTIFY`
     /// arm can match `nmhdr.hwndFrom` against it.
     list_hwnd: HWND,
 }
@@ -7845,7 +7922,7 @@ extern "system" fn plugin_admin_wnd_proc(
             }
             WM_COMMAND => {
                 let cmd = (wparam.0 & 0xFFFF) as i32;
-                if cmd == IDOK.0 || cmd == IDCANCEL.0 || cmd == IDC_PLUGIN_ADMIN_CLOSE as i32 {
+                if cmd == IDOK.0 || cmd == IDCANCEL.0 || cmd == i32::from(IDC_PLUGIN_ADMIN_CLOSE) {
                     let state_ptr =
                         GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const PluginAdminDialogState;
                     if !state_ptr.is_null() {
@@ -7950,8 +8027,8 @@ extern "system" fn plugin_admin_wnd_proc(
             WM_ERASEBKGND => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let mut rect = RECT::default();
-                let _ = GetClientRect(hwnd, &mut rect);
-                FillRect(hdc, &rect, dialog_bg_brush());
+                let _ = GetClientRect(hwnd, &raw mut rect);
+                FillRect(hdc, &raw const rect, dialog_bg_brush());
                 LRESULT(1)
             }
             WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
@@ -8003,7 +8080,7 @@ fn read_pe_file_version(path: &Path) -> Option<String> {
     // SAFETY: `path_w` outlives the call; `buf` has `size` bytes
     // of writable space.
     let ok =
-        unsafe { GetFileVersionInfoW(path_pcwstr, None, size, buf.as_mut_ptr() as *mut c_void) };
+        unsafe { GetFileVersionInfoW(path_pcwstr, None, size, buf.as_mut_ptr().cast::<c_void>()) };
     if ok.is_err() {
         return None;
     }
@@ -8013,10 +8090,10 @@ fn read_pe_file_version(path: &Path) -> Option<String> {
     // SAFETY: `buf` is alive; `info_ptr`/`info_len` are out-params.
     let ok = unsafe {
         VerQueryValueW(
-            buf.as_ptr() as *const c_void,
+            buf.as_ptr().cast::<c_void>(),
             PCWSTR(root_query.as_ptr()),
-            &mut info_ptr,
-            &mut info_len,
+            &raw mut info_ptr,
+            &raw mut info_len,
         )
     };
     if !ok.as_bool()
@@ -8053,7 +8130,7 @@ fn read_pe_file_version(path: &Path) -> Option<String> {
 
 /// Show the modal Plugin Manager dialog. Same scaffolding as the
 /// other modal dialogs in this file — `OwnerEnableGuard` +
-/// `DlgDestroyGuard`, panic-catch wnd_proc, nested `GetMessageW`
+/// `DlgDestroyGuard`, panic-catch `wnd_proc`, nested `GetMessageW`
 /// pump with `IsDialogMessageW`. `main_hwnd` is the owner;
 /// `Shell::installed_plugins` is consulted at open time for the
 /// row data, and `Shell::set_plugin_disabled` is called as the
@@ -8079,7 +8156,7 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
                 lpszClassName: PLUGIN_ADMIN_CLASS,
                 ..Default::default()
             };
-            let _ = RegisterClassExW(&class);
+            let _ = RegisterClassExW(&raw const class);
         });
 
         // Snapshot the registry under a brief borrow on the main
@@ -8113,7 +8190,7 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
             bottom: CLIENT_H,
         };
         let _ = AdjustWindowRectEx(
-            &mut window_rect,
+            &raw mut window_rect,
             WS_POPUP | WS_CAPTION | WS_SYSMENU,
             false,
             WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
@@ -8122,7 +8199,7 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
         let dlg_h = window_rect.bottom - window_rect.top;
 
         let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(main_hwnd, &mut owner_rect);
+        let _ = GetWindowRect(main_hwnd, &raw mut owner_rect);
         let owner_w = owner_rect.right - owner_rect.left;
         let owner_h = owner_rect.bottom - owner_rect.top;
         let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
@@ -8133,7 +8210,7 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
             owner_hwnd: main_hwnd,
             list_hwnd: HWND::default(),
         });
-        let state_ptr: *mut PluginAdminDialogState = &mut *state;
+        let state_ptr: *mut PluginAdminDialogState = &raw mut *state;
 
         let dlg = match CreateWindowExW(
             WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
@@ -8147,7 +8224,7 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
             Some(main_hwnd),
             None,
             Some(instance.into()),
-            Some(state_ptr as *mut c_void),
+            Some(state_ptr.cast::<c_void>()),
         ) {
             Ok(h) => h,
             Err(_) => return,
@@ -8188,7 +8265,7 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
             tab_ctrl,
             TCM_INSERTITEMW,
             Some(WPARAM(0)),
-            Some(LPARAM(&tab_item as *const TCITEMW as isize)),
+            Some(LPARAM(&raw const tab_item as isize)),
         );
 
         // Listview filling the body. `LVS_EX_CHECKBOXES` puts a
@@ -8240,7 +8317,7 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
                 list_hwnd,
                 LVM_INSERTCOLUMNW,
                 Some(WPARAM(i)),
-                Some(LPARAM(&col as *const LVCOLUMNW as isize)),
+                Some(LPARAM(&raw const col as isize)),
             );
         }
 
@@ -8266,7 +8343,7 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
                 list_hwnd,
                 LVM_INSERTITEMW,
                 Some(WPARAM(0)),
-                Some(LPARAM(&item as *const LVITEMW as isize)),
+                Some(LPARAM(&raw const item as isize)),
             );
             // Subitem 1: version. Read once per row; an empty
             // `read_pe_file_version` result renders as an em-dash
@@ -8283,7 +8360,7 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
                 list_hwnd,
                 LVM_SETITEMTEXTW,
                 Some(WPARAM(row)),
-                Some(LPARAM(&sub as *const LVITEMW as isize)),
+                Some(LPARAM(&raw const sub as isize)),
             );
             // Seed the checkbox: enabled = !disabled.
             let check_state = if entry.disabled {
@@ -8301,7 +8378,7 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
                 list_hwnd,
                 LVM_SETITEMSTATE,
                 Some(WPARAM(row)),
-                Some(LPARAM(&state_item as *const LVITEMW as isize)),
+                Some(LPARAM(&raw const state_item as isize)),
             );
         }
 
@@ -8362,7 +8439,7 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
             if !IsWindow(Some(dlg)).as_bool() {
                 break;
             }
-            let ret = GetMessageW(&mut msg_buf, None, 0, 0);
+            let ret = GetMessageW(&raw mut msg_buf, None, 0, 0);
             match ret.0 {
                 0 => {
                     let _ = PostMessageW(None, WM_QUIT, msg_buf.wParam, msg_buf.lParam);
@@ -8370,9 +8447,9 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
                 }
                 -1 => break,
                 _ => {
-                    if !IsDialogMessageW(dlg, &msg_buf).as_bool() {
-                        let _ = TranslateMessage(&msg_buf);
-                        DispatchMessageW(&msg_buf);
+                    if !IsDialogMessageW(dlg, &raw const msg_buf).as_bool() {
+                        let _ = TranslateMessage(&raw const msg_buf);
+                        DispatchMessageW(&raw const msg_buf);
                     }
                 }
             }
@@ -8424,11 +8501,11 @@ enum GotoTarget {
     Offset(u32),
 }
 
-/// Heap-allocated dialog state. The wnd_proc reads/writes through
+/// Heap-allocated dialog state. The `wnd_proc` reads/writes through
 /// `GWLP_USERDATA`; the outer `show_goto_dialog` owns the
 /// `Box<GotoDialogState>` and reads `result` after the modal pump
 /// exits (the dialog window is already destroyed at that point so
-/// no wnd_proc can race the read).
+/// no `wnd_proc` can race the read).
 struct GotoDialogState {
     /// `Some(target)` iff the user clicked OK with valid input.
     /// Stays `None` on Cancel/Esc/X-button close.
@@ -8444,14 +8521,14 @@ struct GotoDialogState {
     /// 0-based document length in bytes.
     max_offset: u32,
     /// Control HWNDs, set by `show_goto_dialog` after the children
-    /// are created; the wnd_proc reads them on radio click and
+    /// are created; the `wnd_proc` reads them on radio click and
     /// IDOK to update the readonly boxes and parse the user's
     /// input.
     here_hwnd: HWND,
     target_hwnd: HWND,
     max_hwnd: HWND,
     /// Set to `true` once `show_goto_dialog` has populated the
-    /// three control HWNDs above. The wnd_proc gates on this so a
+    /// three control HWNDs above. The `wnd_proc` gates on this so a
     /// `WM_COMMAND` delivered between `WM_NCCREATE` and the end of
     /// child setup (e.g. via `SendMessage` from another thread, or
     /// a plugin synthesizing input) doesn't dereference null HWNDs.
@@ -8537,11 +8614,12 @@ extern "system" fn goto_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 } else if cmd == IDCANCEL.0 {
                     let _ = DestroyWindow(hwnd);
                     LRESULT(0)
-                } else if (cmd == IDC_GOTO_RADIO_LINE as i32 || cmd == IDC_GOTO_RADIO_OFFSET as i32)
+                } else if (cmd == i32::from(IDC_GOTO_RADIO_LINE)
+                    || cmd == i32::from(IDC_GOTO_RADIO_OFFSET))
                     && notif == BN_CLICKED
                 {
                     if let Some(state) = state {
-                        let new_mode = if cmd == IDC_GOTO_RADIO_LINE as i32 {
+                        let new_mode = if cmd == i32::from(IDC_GOTO_RADIO_LINE) {
                             GotoMode::Line
                         } else {
                             GotoMode::Offset
@@ -8577,8 +8655,8 @@ extern "system" fn goto_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
             WM_ERASEBKGND => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let mut rect = RECT::default();
-                let _ = GetClientRect(hwnd, &mut rect);
-                FillRect(hdc, &rect, dialog_bg_brush());
+                let _ = GetClientRect(hwnd, &raw mut rect);
+                FillRect(hdc, &raw const rect, dialog_bg_brush());
                 LRESULT(1)
             }
             // STATIC + group-box BTN return NULL_BRUSH so the
@@ -8642,7 +8720,7 @@ unsafe fn read_target_value(edit: HWND, max: u32) -> Option<u32> {
 /// `BS_AUTORADIOBUTTON`, and `BS_GROUPBOX` whose themed paint
 /// produces a slightly-darker rectangle around the control that
 /// doesn't match the dialog's `hbrBackground`. Classic-painted
-/// buttons honour `WM_CTLCOLORBTN`'s NULL_BRUSH return and let
+/// buttons honour `WM_CTLCOLORBTN`'s `NULL_BRUSH` return and let
 /// the dialog's actual background show through, giving a clean
 /// flush look. Visual style on push buttons (Find Next, Close,
 /// etc.) is left intact so they keep their rounded Win11 look.
@@ -8701,7 +8779,7 @@ fn show_goto_dialog(
                 lpszClassName: GOTO_CLASS,
                 ..Default::default()
             };
-            let _ = RegisterClassExW(&class);
+            let _ = RegisterClassExW(&raw const class);
         });
 
         // Heap-allocate the state so the wnd_proc can mutate it
@@ -8722,7 +8800,7 @@ fn show_goto_dialog(
             max_hwnd: HWND::default(),
             controls_ready: false,
         });
-        let state_ptr: *mut GotoDialogState = &mut *state;
+        let state_ptr: *mut GotoDialogState = &raw mut *state;
 
         // Layout is computed in CLIENT coordinates and the actual
         // window size is derived via AdjustWindowRectEx so the
@@ -8756,7 +8834,7 @@ fn show_goto_dialog(
             bottom: CLIENT_H,
         };
         let _ = AdjustWindowRectEx(
-            &mut window_rect,
+            &raw mut window_rect,
             WS_POPUP | WS_CAPTION | WS_SYSMENU,
             false,
             WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
@@ -8765,7 +8843,7 @@ fn show_goto_dialog(
         let dlg_h = window_rect.bottom - window_rect.top;
 
         let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(owner, &mut owner_rect);
+        let _ = GetWindowRect(owner, &raw mut owner_rect);
         let owner_w = owner_rect.right - owner_rect.left;
         let owner_h = owner_rect.bottom - owner_rect.top;
         let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
@@ -8783,7 +8861,7 @@ fn show_goto_dialog(
             Some(owner),
             None,
             Some(instance.into()),
-            Some(state_ptr as *mut c_void),
+            Some(state_ptr.cast::<c_void>()),
         )
         .ok()?;
         let _dlg_guard = DlgDestroyGuard(dlg);
@@ -9012,7 +9090,7 @@ fn show_goto_dialog(
             if !IsWindow(Some(dlg)).as_bool() {
                 break;
             }
-            let ret = GetMessageW(&mut msg, None, 0, 0);
+            let ret = GetMessageW(&raw mut msg, None, 0, 0);
             match ret.0 {
                 0 => {
                     let _ = PostMessageW(None, WM_QUIT, msg.wParam, msg.lParam);
@@ -9020,9 +9098,9 @@ fn show_goto_dialog(
                 }
                 -1 => break,
                 _ => {
-                    if !IsDialogMessageW(dlg, &msg).as_bool() {
-                        let _ = TranslateMessage(&msg);
-                        DispatchMessageW(&msg);
+                    if !IsDialogMessageW(dlg, &raw const msg).as_bool() {
+                        let _ = TranslateMessage(&raw const msg);
+                        DispatchMessageW(&raw const msg);
                     }
                 }
             }
@@ -9039,7 +9117,7 @@ fn show_goto_dialog(
 // route to the Save-As flow instead — see the WM_COMMAND handler
 // for `ID_FILE_RENAME` in `main_wnd_proc`.
 
-/// State carried through the rename dialog's wnd_proc — the
+/// State carried through the rename dialog's `wnd_proc` — the
 /// returned `result` is read after the message pump unwinds and
 /// is `Some` only on a confirmed OK with non-empty text.
 struct RenameDialogState {
@@ -9047,7 +9125,7 @@ struct RenameDialogState {
     edit_hwnd: HWND,
     ok_hwnd: HWND,
     /// Disabled-while-modal owner. Stored on the state so the
-    /// wnd_proc can `EnableWindow(owner, true)` *before* every
+    /// `wnd_proc` can `EnableWindow(owner, true)` *before* every
     /// `DestroyWindow` — destroying the dialog while the owner is
     /// still disabled lets activation leak to the next window in
     /// z-order (often another app), so this re-enable is what
@@ -9059,7 +9137,7 @@ struct RenameDialogState {
 
 /// Re-enable the modal dialog's owner and tear down the dialog
 /// window. Centralised so every `DestroyWindow` call site (IDOK
-/// commit, IDCANCEL, WM_CLOSE) does both halves in the same order
+/// commit, IDCANCEL, `WM_CLOSE`) does both halves in the same order
 /// — re-enable first, then destroy — without each branch
 /// duplicating the comment + the `EnableWindow` call.
 unsafe fn close_rename_dialog(hwnd: HWND, owner_hwnd: HWND) {
@@ -9131,7 +9209,7 @@ extern "system" fn rename_wnd_proc(
                         close_rename_dialog(hwnd, owner);
                     }
                     LRESULT(0)
-                } else if cmd == IDC_RENAME_EDIT as i32
+                } else if cmd == i32::from(IDC_RENAME_EDIT)
                     && notif == windows::Win32::UI::WindowsAndMessaging::EN_CHANGE
                 {
                     // Enable / disable the OK button as the edit
@@ -9173,8 +9251,8 @@ extern "system" fn rename_wnd_proc(
             WM_ERASEBKGND => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let mut rect = RECT::default();
-                let _ = GetClientRect(hwnd, &mut rect);
-                FillRect(hdc, &rect, dialog_bg_brush());
+                let _ = GetClientRect(hwnd, &raw mut rect);
+                FillRect(hdc, &raw const rect, dialog_bg_brush());
                 LRESULT(1)
             }
             WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
@@ -9239,7 +9317,7 @@ fn show_rename_dialog(owner: HWND, current_name: &str) -> Option<String> {
                 lpszClassName: RENAME_CLASS,
                 ..Default::default()
             };
-            let _ = RegisterClassExW(&class);
+            let _ = RegisterClassExW(&raw const class);
         });
 
         let mut state = Box::new(RenameDialogState {
@@ -9249,7 +9327,7 @@ fn show_rename_dialog(owner: HWND, current_name: &str) -> Option<String> {
             owner_hwnd: owner,
             controls_ready: false,
         });
-        let state_ptr: *mut RenameDialogState = &mut *state;
+        let state_ptr: *mut RenameDialogState = &raw mut *state;
 
         // Layout: tighter than the Goto dialog because the rename
         // dialog has only three controls (label, edit, two
@@ -9278,7 +9356,7 @@ fn show_rename_dialog(owner: HWND, current_name: &str) -> Option<String> {
             bottom: CLIENT_H,
         };
         let _ = AdjustWindowRectEx(
-            &mut window_rect,
+            &raw mut window_rect,
             WS_POPUP | WS_CAPTION | WS_SYSMENU,
             false,
             WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
@@ -9287,7 +9365,7 @@ fn show_rename_dialog(owner: HWND, current_name: &str) -> Option<String> {
         let dlg_h = window_rect.bottom - window_rect.top;
 
         let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(owner, &mut owner_rect);
+        let _ = GetWindowRect(owner, &raw mut owner_rect);
         let owner_w = owner_rect.right - owner_rect.left;
         let owner_h = owner_rect.bottom - owner_rect.top;
         let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
@@ -9305,7 +9383,7 @@ fn show_rename_dialog(owner: HWND, current_name: &str) -> Option<String> {
             Some(owner),
             None,
             Some(instance.into()),
-            Some(state_ptr as *mut c_void),
+            Some(state_ptr.cast::<c_void>()),
         )
         .ok()?;
         let _dlg_guard = DlgDestroyGuard(dlg);
@@ -9416,7 +9494,7 @@ fn show_rename_dialog(owner: HWND, current_name: &str) -> Option<String> {
             if !IsWindow(Some(dlg)).as_bool() {
                 break;
             }
-            let ret = GetMessageW(&mut msg, None, 0, 0);
+            let ret = GetMessageW(&raw mut msg, None, 0, 0);
             match ret.0 {
                 0 => {
                     let _ = PostMessageW(None, WM_QUIT, msg.wParam, msg.lParam);
@@ -9424,9 +9502,9 @@ fn show_rename_dialog(owner: HWND, current_name: &str) -> Option<String> {
                 }
                 -1 => break,
                 _ => {
-                    if !IsDialogMessageW(dlg, &msg).as_bool() {
-                        let _ = TranslateMessage(&msg);
-                        DispatchMessageW(&msg);
+                    if !IsDialogMessageW(dlg, &raw const msg).as_bool() {
+                        let _ = TranslateMessage(&raw const msg);
+                        DispatchMessageW(&raw const msg);
                     }
                 }
             }
@@ -9455,7 +9533,7 @@ const fn makelong(lo: i32, hi: i32) -> u32 {
 }
 
 /// COLORREF used by the in-dialog elements that DO route
-/// through our paint code (the BS_GROUPBOX title clear via
+/// through our paint code (the `BS_GROUPBOX` title clear via
 /// `WM_CTLCOLORBTN`, anything else that needs a fill). On
 /// Win11 the actual rendered dialog client area is painted
 /// by the theme service via DWM/UxTheme — outside the
@@ -9464,10 +9542,10 @@ const fn makelong(lo: i32, hi: i32) -> u32 {
 /// constant to the same shade Win11 paints (`#F9F9F9`)
 /// makes the rectangles we DO control blend with the
 /// system-painted dialog instead of standing out.
-const DIALOG_BG: u32 = 0x00F9F9F9;
+const DIALOG_BG: u32 = 0x00F9_F9F9;
 /// COLORREF for the bottom status strip — a step darker than
 /// the dialog background so it still reads as a distinct band.
-const STATUS_BG: u32 = 0x00E8E8E8;
+const STATUS_BG: u32 = 0x00E8_E8E8;
 /// COLORREF for the 1-pixel delimiter strips around the editor
 /// (top / bottom / left / right). Mid-gray that reads cleanly
 /// against both the white Scintilla content and the lighter
@@ -9475,14 +9553,14 @@ const STATUS_BG: u32 = 0x00E8E8E8;
 /// "edge" tone (`COLOR_3DSHADOW` adjacent) without the OS-theme
 /// drift that comes with using `GetSysColor(COLOR_3DSHADOW)`
 /// directly.
-const EDITOR_BORDER: u32 = 0x00A0A0A0;
+const EDITOR_BORDER: u32 = 0x00A0_A0A0;
 
 /// Cached brush for the dialog background (Goto + Find/Replace
-/// hbrBackground, plus WM_CTLCOLORBTN's clear brush). Created
+/// hbrBackground, plus `WM_CTLCOLORBTN`'s clear brush). Created
 /// lazily once on first use; the leaked HBRUSH lives for the
 /// app's lifetime, which is fine — the alternative is owning
-/// the brush in WindowState and threading it through every
-/// dialog wnd_proc.
+/// the brush in `WindowState` and threading it through every
+/// dialog `wnd_proc`.
 fn dialog_bg_brush() -> HBRUSH {
     use std::sync::OnceLock;
     static BRUSH: OnceLock<isize> = OnceLock::new();
@@ -9510,7 +9588,7 @@ fn editor_border_brush() -> HBRUSH {
 /// missing terminator can't run off the end of an arbitrary
 /// pointer the OS hands us via `WM_SETTINGCHANGE.lparam`.
 ///
-/// Used for the WM_SETTINGCHANGE → NPPN_DARKMODECHANGED route:
+/// Used for the `WM_SETTINGCHANGE` → `NPPN_DARKMODECHANGED` route:
 /// Windows posts the message with `lparam` pointing at a wide
 /// setting key (e.g. `"ImmersiveColorSet"`) and we need to
 /// match exactly without paying the cost of an allocation per
@@ -9526,7 +9604,7 @@ fn editor_border_brush() -> HBRUSH {
 ///
 /// In particular `wide` must be `u16`-aligned (2-byte
 /// alignment) — `*wide.add(i)` is an aligned read. The
-/// wnd_proc call site rejects mis-aligned pointers via
+/// `wnd_proc` call site rejects mis-aligned pointers via
 /// `lparam.0 % 2 != 0` before invoking. The OS itself only
 /// produces aligned wide strings for `WM_SETTINGCHANGE`, so
 /// the alignment guard exists only to harden against an
@@ -9593,7 +9671,7 @@ impl Drop for OwnerEnableGuard {
 
 /// RAII guard that destroys a dialog HWND on drop if it's still
 /// alive. Pairs with `OwnerEnableGuard` to make every exit path —
-/// `?` propagation, panic, WM_QUIT mid-pump, or `GetMessageW` error —
+/// `?` propagation, panic, `WM_QUIT` mid-pump, or `GetMessageW` error —
 /// correctly tear down both the dialog window and the disabled-owner
 /// state. The `IsWindow` check covers the happy path where the user
 /// already clicked OK/Cancel: the dialog is already destroyed and
@@ -9652,12 +9730,12 @@ enum FindReplaceTab {
     FindInFiles,
 }
 
-/// Heap-allocated dialog state. The wnd_proc reads/writes through
+/// Heap-allocated dialog state. The `wnd_proc` reads/writes through
 /// `GWLP_USERDATA`. Lifetime is tied to the dialog window — when
-/// the dialog is destroyed (on app shutdown), the wnd_proc's
-/// WM_NCDESTROY drops this Box.
+/// the dialog is destroyed (on app shutdown), the `wnd_proc`'s
+/// `WM_NCDESTROY` drops this Box.
 struct FindReplaceState {
-    /// HWND of the main host window — needed so the wnd_proc can
+    /// HWND of the main host window — needed so the `wnd_proc` can
     /// route Find Next / Replace / Replace All into the host's
     /// `Shell` (which lives in `WindowState` on the main HWND).
     main_hwnd: HWND,
@@ -9867,7 +9945,7 @@ extern "system" fn find_replace_wnd_proc(
                 } else {
                     IDC_FR_FIND_NEXT
                 };
-                let val = (DC_HASDEFID << 16) | (id as u32);
+                let val = (DC_HASDEFID << 16) | u32::from(id);
                 LRESULT(val as isize)
             }
             // Themed STATIC and EDIT controls paint their own
@@ -9889,8 +9967,8 @@ extern "system" fn find_replace_wnd_proc(
             WM_ERASEBKGND => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let mut rect = RECT::default();
-                let _ = GetClientRect(hwnd, &mut rect);
-                FillRect(hdc, &rect, dialog_bg_brush());
+                let _ = GetClientRect(hwnd, &raw mut rect);
+                FillRect(hdc, &raw const rect, dialog_bg_brush());
                 LRESULT(1)
             }
             // STATIC controls return NULL_BRUSH so the dialog's
@@ -9911,9 +9989,9 @@ extern "system" fn find_replace_wnd_proc(
                     // 0x00FF0000 (blue, info); RGB(220, 0, 0) =
                     // 0x000000DC (red, error).
                     let color = if (*state_ptr).status_is_error {
-                        COLORREF(0x000000DC)
+                        COLORREF(0x0000_00DC)
                     } else {
-                        COLORREF(0x00FF0000)
+                        COLORREF(0x00FF_0000)
                     };
                     let _ = SetTextColor(hdc, color);
                     LRESULT(status_bg_brush().0 as isize)
@@ -9986,7 +10064,7 @@ unsafe fn combobox_select_all(combo: HWND) {
             combo,
             CB_SETEDITSEL,
             None,
-            Some(LPARAM(0xFFFF0000u32 as i32 as isize)),
+            Some(LPARAM(0xFFFF_0000u32 as i32 as isize)),
         );
     }
 }
@@ -9999,7 +10077,7 @@ unsafe fn button_checked(btn: HWND) -> bool {
 }
 
 /// Read the current Find/Replace flag state from the checkboxes
-/// and Search Mode radios into a SearchFlags bitmask.
+/// and Search Mode radios into a `SearchFlags` bitmask.
 unsafe fn find_replace_flags(state: &FindReplaceState) -> SearchFlags {
     let mut f = SearchFlags::NONE;
     unsafe {
@@ -10220,7 +10298,7 @@ unsafe fn set_info_status(state: &mut FindReplaceState, msg: &str) {
 }
 
 /// Same shape as [`set_info_status`] but flags the message as
-/// an error so the WM_CTLCOLORSTATIC handler paints it red.
+/// an error so the `WM_CTLCOLORSTATIC` handler paints it red.
 unsafe fn set_error_status(state: &mut FindReplaceState, msg: &str) {
     state.status_is_error = true;
     unsafe {
@@ -10330,7 +10408,7 @@ unsafe fn handle_replace(state: &mut FindReplaceState) {
 /// active buffer (or in the snapshotted "In selection" range) in
 /// one undo group, then writes a count message to the status
 /// STATIC at the bottom of the dialog (blue, painted by
-/// WM_CTLCOLORSTATIC). When restricted to a range, the
+/// `WM_CTLCOLORSTATIC`). When restricted to a range, the
 /// `replace_all_in_range` returns the new end so we can keep
 /// `state.in_selection_range` in sync as replacements grow or
 /// shrink the affected window.
@@ -10418,7 +10496,7 @@ unsafe fn apply_fif_prefill(dlg: HWND, prefill: &codepp_shell::FifLaunchPrefill)
 }
 
 /// Frozen snapshot of the FIF tab's input controls. Captured once
-/// before any modal pump (e.g. the Replace in Files MessageBoxW)
+/// before any modal pump (e.g. the Replace in Files `MessageBoxW`)
 /// and reused for both the confirmation prompt and the orchestrator
 /// request — guarantees the user runs exactly the search they
 /// confirmed, not whatever the controls said after the pump.
@@ -10923,7 +11001,7 @@ unsafe fn handle_fif_browse(state: &FindReplaceState) {
         }),
         ..Default::default()
     };
-    let pidl = unsafe { SHBrowseForFolderW(&bi) };
+    let pidl = unsafe { SHBrowseForFolderW(&raw const bi) };
     if pidl.is_null() {
         return;
     }
@@ -11096,7 +11174,7 @@ fn show_find_replace_dialog(
                 lpszClassName: FIND_REPLACE_CLASS,
                 ..Default::default()
             };
-            let _ = RegisterClassExW(&class);
+            let _ = RegisterClassExW(&raw const class);
         });
 
         let mut state = Box::new(FindReplaceState {
@@ -11136,7 +11214,7 @@ fn show_find_replace_dialog(
             in_selection_range: None,
             controls_ready: false,
         });
-        let state_ptr: *mut FindReplaceState = &mut *state;
+        let state_ptr: *mut FindReplaceState = &raw mut *state;
 
         // Layout (client coords). Tab control across the top, then
         // a left column with edit fields + checkboxes + Search Mode
@@ -11206,7 +11284,7 @@ fn show_find_replace_dialog(
             bottom: CLIENT_H,
         };
         let _ = AdjustWindowRectEx(
-            &mut window_rect,
+            &raw mut window_rect,
             WS_POPUP | WS_CAPTION | WS_SYSMENU,
             false,
             WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,
@@ -11215,7 +11293,7 @@ fn show_find_replace_dialog(
         let dlg_h = window_rect.bottom - window_rect.top;
 
         let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(main_hwnd, &mut owner_rect);
+        let _ = GetWindowRect(main_hwnd, &raw mut owner_rect);
         let owner_w = owner_rect.right - owner_rect.left;
         let owner_h = owner_rect.bottom - owner_rect.top;
         let dlg_x = owner_rect.left + (owner_w - dlg_w) / 2;
@@ -11233,7 +11311,7 @@ fn show_find_replace_dialog(
             Some(main_hwnd),
             None,
             Some(instance.into()),
-            Some(state_ptr as *mut c_void),
+            Some(state_ptr.cast::<c_void>()),
         )
         .ok()?;
         // If any child creation below `?`-fails, the dialog HWND
@@ -11287,7 +11365,7 @@ fn show_find_replace_dialog(
                 tab_ctrl,
                 TCM_INSERTITEMW,
                 Some(WPARAM(idx)),
-                Some(LPARAM(&item as *const _ as isize)),
+                Some(LPARAM(&raw const item as isize)),
             );
         }
 
@@ -11905,7 +11983,7 @@ fn show_find_replace_dialog(
 }
 
 /// Handle a Language-menu click — flip the active tab's lang to the
-/// supplied LangType id. Routes through the same `set_buffer_lang_type`
+/// supplied `LangType` id. Routes through the same `set_buffer_lang_type`
 /// the plugin ABI uses, so the code path covers re-applying the lexer
 /// for the active tab and queueing `NPPN_LANGCHANGED`.
 ///
@@ -12047,7 +12125,7 @@ unsafe fn nearest_monitor_work_area(hwnd: HWND) -> RECT {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
-        if GetMonitorInfoW(monitor, &mut info).as_bool() {
+        if GetMonitorInfoW(monitor, &raw mut info).as_bool() {
             info.rcWork
         } else {
             // Fallback when the monitor query fails (extremely rare —
@@ -12098,7 +12176,7 @@ unsafe fn toolbar_min_outer_width(toolbar_hwnd: HWND) -> i32 {
         // would silently understate the floor by the non-client
         // chrome — fall through to the safe default instead.
         if AdjustWindowRectEx(
-            &mut frame,
+            &raw mut frame,
             WS_OVERLAPPEDWINDOW,
             true,
             WINDOW_EX_STYLE::default(),
@@ -12198,7 +12276,7 @@ unsafe fn apply_initial_window_size(
 }
 
 /// Update the shell's cached window geometry from a `WM_SIZE`
-/// observation. Called from the main wnd_proc's `WM_SIZE` arm so
+/// observation. Called from the main `wnd_proc`'s `WM_SIZE` arm so
 /// the next `save_session` writes through whatever the user last
 /// set. `wparam_size_state` is the raw `wparam` from the message.
 ///
@@ -12238,7 +12316,7 @@ fn track_window_geometry(hwnd: HWND, shell: &mut Shell, wparam_size_state: u32) 
         // WM_SIZE. GetWindowRect on a live HWND is sound; on
         // failure we leave width/height unchanged (the prior
         // saved values stay).
-        if unsafe { GetWindowRect(hwnd, &mut outer) }.is_ok() {
+        if unsafe { GetWindowRect(hwnd, &raw mut outer) }.is_ok() {
             geom.width = Some(outer.right - outer.left);
             geom.height = Some(outer.bottom - outer.top);
         }
@@ -12411,7 +12489,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
             dwICC: ICC_BAR_CLASSES | ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES,
         };
-        InitCommonControlsEx(&icc).ok()?;
+        InitCommonControlsEx(&raw const icc).ok()?;
 
         // Register Scintilla's window classes.
         if Scintilla_RegisterClasses(instance.0) == 0 {
@@ -12454,7 +12532,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             lpszClassName: MAIN_CLASS,
             ..Default::default()
         };
-        if RegisterClassExW(&main_class) == 0 {
+        if RegisterClassExW(&raw const main_class) == 0 {
             return Err(windows::core::Error::from_thread());
         }
 
@@ -12509,7 +12587,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // tracks the current width.
         {
             let mut client = RECT::default();
-            let initial_width = if GetClientRect(main_hwnd, &mut client).is_ok() {
+            let initial_width = if GetClientRect(main_hwnd, &raw mut client).is_ok() {
                 client.right
             } else {
                 // Fallback: the window-creation `CreateWindowExW`
@@ -12725,7 +12803,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                 fif_listview_hwnd,
                 LVM_INSERTCOLUMNW,
                 Some(WPARAM(i)),
-                Some(LPARAM(&col as *const _ as isize)),
+                Some(LPARAM(&raw const col as isize)),
             );
         }
 
@@ -13075,10 +13153,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         {
             let (shell, mut ui) = state.split();
             ui.apply_default_style(&shell.styles);
-            let active_lang = shell
-                .active()
-                .map(|t| t.lang)
-                .unwrap_or(codepp_core::lang::L_TEXT);
+            let active_lang = shell.active().map_or(codepp_core::lang::L_TEXT, |t| t.lang);
             ui.apply_lang(active_lang);
         }
 
@@ -13125,7 +13200,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // Show + size + focus.
         let _ = ShowWindow(main_hwnd, show_cmd);
         let mut rect = RECT::default();
-        GetClientRect(main_hwnd, &mut rect)?;
+        GetClientRect(main_hwnd, &raw mut rect)?;
         layout_children(
             toolbar_hwnd,
             toolbar::toolbar_height_px(toolbar_bitmap_px),
@@ -13212,7 +13287,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // the dialog's controls.
         let mut msg = MSG::default();
         loop {
-            let ret = GetMessageW(&mut msg, None, 0, 0);
+            let ret = GetMessageW(&raw mut msg, None, 0, 0);
             match ret.0 {
                 0 => break,
                 -1 => return Err(windows::core::Error::from_thread()),
@@ -13250,18 +13325,21 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                     // free to mutate `plugin_modeless_dialogs`
                     // without aliasing the local snapshot.
                     let (dlg_handle, haccel, plugin_dlgs): (Option<HWND>, HACCEL, Vec<HWND>) =
-                        state_from_hwnd(main_hwnd)
-                            .map(|s| {
+                        state_from_hwnd(main_hwnd).map_or(
+                            (None, HACCEL::default(), Vec::new()),
+                            |s| {
                                 (
                                     s.find_replace_dlg,
                                     s.accel_handle,
                                     s.plugin_modeless_dialogs.clone(),
                                 )
-                            })
-                            .unwrap_or((None, HACCEL::default(), Vec::new()));
+                            },
+                        );
                     let mut handled = false;
                     if let Some(dlg) = dlg_handle {
-                        if IsWindow(Some(dlg)).as_bool() && IsDialogMessageW(dlg, &msg).as_bool() {
+                        if IsWindow(Some(dlg)).as_bool()
+                            && IsDialogMessageW(dlg, &raw const msg).as_bool()
+                        {
                             handled = true;
                         }
                     }
@@ -13287,18 +13365,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                     // (a known Win32 hazard the upstream contract
                     // also inherits) stays in the Vec.
                     let mut dead_indices: Vec<usize> = Vec::new();
-                    if !handled {
-                        for (idx, dlg) in plugin_dlgs.iter().enumerate() {
-                            if !IsWindow(Some(*dlg)).as_bool() {
-                                dead_indices.push(idx);
-                                continue;
-                            }
-                            if IsDialogMessageW(*dlg, &msg).as_bool() {
-                                handled = true;
-                                break;
-                            }
-                        }
-                    } else {
+                    if handled {
                         // Even on the host-Find/Replace-handled
                         // path, run the dead-handle scan so a
                         // single iteration where the host dialog
@@ -13307,6 +13374,17 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                         for (idx, dlg) in plugin_dlgs.iter().enumerate() {
                             if !IsWindow(Some(*dlg)).as_bool() {
                                 dead_indices.push(idx);
+                            }
+                        }
+                    } else {
+                        for (idx, dlg) in plugin_dlgs.iter().enumerate() {
+                            if !IsWindow(Some(*dlg)).as_bool() {
+                                dead_indices.push(idx);
+                                continue;
+                            }
+                            if IsDialogMessageW(*dlg, &raw const msg).as_bool() {
+                                handled = true;
+                                break;
                             }
                         }
                     }
@@ -13325,9 +13403,9 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                                 .retain(|h| !dead_hwnds.iter().any(|d| d.0 == h.0));
                         }
                     }
-                    if !handled && TranslateAcceleratorW(main_hwnd, haccel, &msg) == 0 {
-                        let _ = TranslateMessage(&msg);
-                        DispatchMessageW(&msg);
+                    if !handled && TranslateAcceleratorW(main_hwnd, haccel, &raw const msg) == 0 {
+                        let _ = TranslateMessage(&raw const msg);
+                        DispatchMessageW(&raw const msg);
                     }
                 }
             }
@@ -13487,7 +13565,7 @@ unsafe fn register_fif_classes() {
             lpszClassName: FIF_DOCK_CLASS,
             ..Default::default()
         };
-        let _ = RegisterClassExW(&dock_class);
+        let _ = RegisterClassExW(&raw const dock_class);
 
         // Splitter: thin band that owns the resize cursor and the
         // mouse-capture drag protocol. Its background brush
@@ -13509,7 +13587,7 @@ unsafe fn register_fif_classes() {
             lpszClassName: FIF_SPLITTER_CLASS,
             ..Default::default()
         };
-        let _ = RegisterClassExW(&splitter_class);
+        let _ = RegisterClassExW(&raw const splitter_class);
 
         // FIF progress dialog: modeless top-level window shown
         // while a search is running. Standard arrow cursor; system
@@ -13525,7 +13603,7 @@ unsafe fn register_fif_classes() {
             lpszClassName: FIF_PROGRESS_CLASS,
             ..Default::default()
         };
-        let _ = RegisterClassExW(&progress_class);
+        let _ = RegisterClassExW(&raw const progress_class);
     });
 }
 
@@ -13533,8 +13611,8 @@ unsafe fn register_fif_classes() {
 /// that calls `NPPM_DMMREGASDCKDLG` in a loop with fresh HWNDs
 /// would otherwise allocate an unbounded number of frames (each a
 /// GDI / USER object — Win32's per-process default cap is around
-/// 10000). 64 is well above any reasonable plugin's needs (NppExec,
-/// NppFTP, etc. each register one) while leaving room for power
+/// 10000). 64 is well above any reasonable plugin's needs (`NppExec`,
+/// `NppFTP`, etc. each register one) while leaving room for power
 /// users running many docked plugins simultaneously.
 const DOCK_DIALOG_REGISTRATION_CAP: usize = 64;
 
@@ -13560,7 +13638,7 @@ const DOCK_FRAME_DEFAULT_Y: i32 = 200;
 /// overflow on the `right - left` subtraction (debug panic, release
 /// silent wrap). Saturation produces `i32::MAX` which is then
 /// rejected by the `<= 0` post-check (well — `i32::MAX > 0`, but
-/// CreateWindowExW would silently clamp the window to monitor
+/// `CreateWindowExW` would silently clamp the window to monitor
 /// bounds). The subsequent dimension-positivity check is the real
 /// guard.
 fn compute_dock_frame_position(rc_float: &codepp_plugin_host::TbRect) -> (i32, i32, i32, i32) {
@@ -13579,7 +13657,7 @@ fn compute_dock_frame_position(rc_float: &codepp_plugin_host::TbRect) -> (i32, i
     )
 }
 
-/// Register the dock-frame window class. Idempotent via OnceLock —
+/// Register the dock-frame window class. Idempotent via `OnceLock` —
 /// safe to call from `register_dock_dialog` immediately before each
 /// frame's `CreateWindowExW`. The class wndproc is
 /// `dock_frame_wnd_proc` which handles `WM_SIZE` (resize the
@@ -13601,15 +13679,15 @@ unsafe fn register_dock_frame_class() {
             lpszClassName: DOCK_FRAME_CLASS,
             ..Default::default()
         };
-        let _ = RegisterClassExW(&class);
+        let _ = RegisterClassExW(&raw const class);
     });
 }
 
-/// Wnd_proc for the host-owned floating frame that wraps a
+/// `Wnd_proc` for the host-owned floating frame that wraps a
 /// plugin's docking dialog (registered via `NPPM_DMMREGASDCKDLG`).
 /// The plugin's `h_client` HWND is stashed in the frame's
 /// `GWLP_USERDATA` at `WM_NCCREATE` so `WM_SIZE` can resize it to
-/// fill the client area without going through the WindowState
+/// fill the client area without going through the `WindowState`
 /// registry.
 ///
 /// `WM_CLOSE` hides the frame rather than destroying it — the
@@ -13645,7 +13723,7 @@ extern "system" fn dock_frame_wnd_proc(
                     // catches that without a Vec lookup.
                     if IsWindow(Some(h_client)).as_bool() {
                         let mut rc = RECT::default();
-                        if GetClientRect(hwnd, &mut rc).is_ok() {
+                        if GetClientRect(hwnd, &raw mut rc).is_ok() {
                             let _ = MoveWindow(h_client, 0, 0, rc.right, rc.bottom, true);
                         }
                     }
@@ -13681,7 +13759,7 @@ unsafe fn cancel_via_owner(progress: HWND) {
     }
 }
 
-/// Wnd_proc for the FIF progress dialog. Owns nothing — Cancel
+/// `Wnd_proc` for the FIF progress dialog. Owns nothing — Cancel
 /// clicks route to `Shell::cancel_fif` via the parent's
 /// `WindowState`, and the window is destroyed by the search-
 /// completion drain in `main_wnd_proc`.
@@ -13725,8 +13803,8 @@ extern "system" fn fif_progress_wnd_proc(
             WM_ERASEBKGND => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let mut rect = RECT::default();
-                let _ = GetClientRect(hwnd, &mut rect);
-                FillRect(hdc, &rect, dialog_bg_brush());
+                let _ = GetClientRect(hwnd, &raw mut rect);
+                FillRect(hdc, &raw const rect, dialog_bg_brush());
                 LRESULT(1)
             }
             WM_CTLCOLORSTATIC => LRESULT(dialog_bg_brush().0 as isize),
@@ -13744,7 +13822,7 @@ unsafe fn show_fif_progress(owner: HWND, query: &str) -> Option<HWND> {
         const W: i32 = 460;
         const H: i32 = 140;
         let mut owner_rect = RECT::default();
-        let _ = GetWindowRect(owner, &mut owner_rect);
+        let _ = GetWindowRect(owner, &raw mut owner_rect);
         let owner_w = owner_rect.right - owner_rect.left;
         let owner_h = owner_rect.bottom - owner_rect.top;
         let x = owner_rect.left + (owner_w - W) / 2;
@@ -13872,15 +13950,14 @@ unsafe fn fif_progress_set_path(progress: HWND, path: &Path) {
             .char_indices()
             .rev()
             .nth(MAX_DISPLAY_CHARS - 2)
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+            .map_or(0, |(i, _)| i);
         format!("…{}", &display[start..])
     } else {
         display.into_owned()
     };
     let mut buf: Vec<u16> = truncated.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
-        if let Ok(child) = GetDlgItem(Some(progress), IDC_FIF_PROGRESS_PATH as i32) {
+        if let Ok(child) = GetDlgItem(Some(progress), i32::from(IDC_FIF_PROGRESS_PATH)) {
             let _ = SetWindowTextW(child, PCWSTR(buf.as_mut_ptr()));
         }
     }
@@ -13895,7 +13972,7 @@ unsafe fn fif_progress_set_stats(progress: HWND, hits: usize, files: usize) {
     );
     let mut buf: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
-        if let Ok(child) = GetDlgItem(Some(progress), IDC_FIF_PROGRESS_STATS as i32) {
+        if let Ok(child) = GetDlgItem(Some(progress), i32::from(IDC_FIF_PROGRESS_STATS)) {
             let _ = SetWindowTextW(child, PCWSTR(buf.as_mut_ptr()));
         }
     }
@@ -13943,7 +14020,7 @@ unsafe fn fif_listview_append(
             listview,
             LVM_INSERTITEMW,
             Some(WPARAM(0)),
-            Some(LPARAM(&item as *const _ as isize)),
+            Some(LPARAM(&raw const item as isize)),
         )
         .0 as i32;
         if new_idx < 0 {
@@ -13965,7 +14042,7 @@ unsafe fn fif_listview_append(
             listview,
             LVM_SETITEMTEXTW,
             Some(WPARAM(new_idx as usize)),
-            Some(LPARAM(&line_item as *const _ as isize)),
+            Some(LPARAM(&raw const line_item as isize)),
         );
         let mut match_buf: Vec<u16> = match_text
             .encode_utf16()
@@ -13983,7 +14060,7 @@ unsafe fn fif_listview_append(
             listview,
             LVM_SETITEMTEXTW,
             Some(WPARAM(new_idx as usize)),
-            Some(LPARAM(&match_item as *const _ as isize)),
+            Some(LPARAM(&raw const match_item as isize)),
         );
         new_idx
     }
@@ -14276,7 +14353,7 @@ unsafe fn apply_pending_fif_jumps(main_hwnd: HWND) {
     let Some(active) = state.shell.active() else {
         return;
     };
-    let Some(active_path) = active.path.as_ref().cloned() else {
+    let Some(active_path) = active.path.clone() else {
         return;
     };
     if active.pending_load.is_some() {
@@ -14299,9 +14376,9 @@ unsafe fn apply_pending_fif_jumps(main_hwnd: HWND) {
         editor.send(codepp_scintilla_sys::SCI_GOTOLINE, line_zero_based, 0);
         let line_start = editor.send(codepp_scintilla_sys::SCI_GETCURRENTPOS, 0, 0);
         let start_pos =
-            (line_start as i64 + jump.col_start as i64).max(0) as codepp_scintilla_sys::uptr_t;
+            (line_start as i64 + i64::from(jump.col_start)).max(0) as codepp_scintilla_sys::uptr_t;
         let end_pos =
-            (line_start as i64 + jump.col_end as i64).max(0) as codepp_scintilla_sys::sptr_t;
+            (line_start as i64 + i64::from(jump.col_end)).max(0) as codepp_scintilla_sys::sptr_t;
         editor.send(codepp_scintilla_sys::SCI_SETSEL, start_pos, end_pos);
         applied_any = true;
         false // remove this entry
@@ -14356,7 +14433,7 @@ unsafe fn show_fif_dock(main_hwnd: HWND) {
         let _ = ShowWindow(splitter, SW_SHOW);
         let _ = ShowWindow(dock, SW_SHOW);
         let mut rect = RECT::default();
-        if GetClientRect(main_hwnd, &mut rect).is_ok() {
+        if GetClientRect(main_hwnd, &raw mut rect).is_ok() {
             // Read current tab-strip visibility — `IsWindowVisible`
             // is the source of truth (toggled by `NPPM_HIDETABBAR`).
             let tab_hidden = !IsWindowVisible(tabs).as_bool();
@@ -14417,7 +14494,7 @@ unsafe fn hide_fif_dock(main_hwnd: HWND) {
         let _ = ShowWindow(splitter, SW_HIDE);
         let _ = ShowWindow(dock, SW_HIDE);
         let mut rect = RECT::default();
-        if GetClientRect(main_hwnd, &mut rect).is_ok() {
+        if GetClientRect(main_hwnd, &raw mut rect).is_ok() {
             let tab_hidden = !IsWindowVisible(tabs).as_bool();
             layout_children(
                 toolbar_hwnd,
@@ -14437,7 +14514,7 @@ unsafe fn hide_fif_dock(main_hwnd: HWND) {
     }
 }
 
-/// Wnd_proc for the FIF dock container. Owns the layout of its
+/// `Wnd_proc` for the FIF dock container. Owns the layout of its
 /// own children (status STATIC, close-X button, listview) on
 /// `WM_SIZE`, forwards `WM_NOTIFY` from the listview up to
 /// `main_wnd_proc` (so `NM_DBLCLK` reaches the file-open routing),
@@ -14511,7 +14588,7 @@ extern "system" fn fif_dock_wnd_proc(
     }
 }
 
-/// Wnd_proc for the FIF splitter handle. Stays small — captures
+/// `Wnd_proc` for the FIF splitter handle. Stays small — captures
 /// drag state on `WM_LBUTTONDOWN`, applies the new dock height on
 /// each `WM_MOUSEMOVE`, releases on `WM_LBUTTONUP`. Reads/writes
 /// the parent `WindowState` via `state_from_hwnd(GetParent(...))`
@@ -14537,7 +14614,7 @@ extern "system" fn splitter_wnd_proc(
                 let parent = GetParent(hwnd).unwrap_or_default();
                 if let Some(state) = state_from_hwnd(parent) {
                     let mut pt = POINT::default();
-                    if GetCursorPos(&mut pt).is_ok() {
+                    if GetCursorPos(&raw mut pt).is_ok() {
                         state.fif_splitter_drag = Some(SplitterDrag {
                             start_screen_y: pt.y,
                             dock_height_at_start: state.fif_dock_height,
@@ -14591,11 +14668,11 @@ extern "system" fn splitter_wnd_proc(
                 };
                 let toolbar_height = toolbar::toolbar_height_px(toolbar_bitmap_px);
                 let mut pt = POINT::default();
-                if GetCursorPos(&mut pt).is_err() {
+                if GetCursorPos(&raw mut pt).is_err() {
                     return LRESULT(0);
                 }
                 let mut rect = RECT::default();
-                if GetClientRect(parent, &mut rect).is_err() {
+                if GetClientRect(parent, &raw mut rect).is_err() {
                     return LRESULT(0);
                 }
                 // Dragging up grows the dock; dragging down shrinks
@@ -14667,7 +14744,7 @@ extern "system" fn splitter_wnd_proc(
 /// system tab control via `DefSubclassProc` so default behaviour is
 /// preserved verbatim.
 ///
-/// State lives on `WindowState.tab_drag` (the parent's GWLP_USERDATA),
+/// State lives on `WindowState.tab_drag` (the parent's `GWLP_USERDATA`),
 /// reached via `state_from_hwnd(GetParent(hwnd))`. Same pattern as
 /// `splitter_wnd_proc` — keeps the subclass function thin and lets
 /// the rest of the codebase reach drag state without a new global.
@@ -14696,8 +14773,8 @@ extern "system" fn tab_subclass_proc(
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         match msg {
             WM_LBUTTONDOWN => {
-                let x = (lparam.0 & 0xFFFF) as i16 as i32;
-                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let x = i32::from((lparam.0 & 0xFFFF) as i16);
+                let y = i32::from(((lparam.0 >> 16) & 0xFFFF) as i16);
                 let parent = GetParent(hwnd).unwrap_or_default();
                 // Close-X click takes priority over drag detection.
                 // If the press lands on a tab's X, arm the close
@@ -14746,8 +14823,8 @@ extern "system" fn tab_subclass_proc(
                 // `tab_drag` is set) and hover state for the close-X
                 // glyphs (always tracked so the X reveals on inactive
                 // tabs while the cursor is over them).
-                let x = (lparam.0 & 0xFFFF) as i16 as i32;
-                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let x = i32::from((lparam.0 & 0xFFFF) as i16);
+                let y = i32::from(((lparam.0 >> 16) & 0xFFFF) as i16);
                 let parent = GetParent(hwnd).unwrap_or_default();
                 let hit = tab_hit_test(hwnd, x, y);
                 let close_hit = tab_close_x_hit_test(hwnd, x, y).is_some();
@@ -14770,7 +14847,7 @@ extern "system" fn tab_subclass_proc(
                         // across the synchronous TrackMouseEvent
                         // call; the call writes nothing back and
                         // arms a one-shot WM_MOUSELEAVE.
-                        let _ = TrackMouseEvent(&mut tme);
+                        let _ = TrackMouseEvent(&raw mut tme);
                         state.tab_mouse_tracking = true;
                     }
                     // Repaint affected cells on transitions. We
@@ -14849,8 +14926,8 @@ extern "system" fn tab_subclass_proc(
                 DefSubclassProc(hwnd, msg, wparam, lparam)
             }
             WM_LBUTTONUP => {
-                let x = (lparam.0 & 0xFFFF) as i16 as i32;
-                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let x = i32::from((lparam.0 & 0xFFFF) as i16);
+                let y = i32::from(((lparam.0 >> 16) & 0xFFFF) as i16);
                 let parent = GetParent(hwnd).unwrap_or_default();
                 // Commit the close-X arm if the release lands on the
                 // same X the press did — Win32 button convention
@@ -14992,7 +15069,7 @@ const TAB_SUBCLASS_ID: usize = 1;
 /// Tab-strip icon edge length at standard DPI. Half the toolbar's
 /// 24-px choice because the strip is too short for a 24-px icon.
 const TAB_BITMAP_PX_LO: i32 = 16;
-/// Tab-strip icon edge length at HiDPI. Picked between LO and HIDPI
+/// Tab-strip icon edge length at `HiDPI`. Picked between LO and HIDPI
 /// via [`pick_tab_bitmap_size`] using the same threshold the toolbar
 /// uses (`toolbar::HIDPI_DPI_THRESHOLD`).
 const TAB_BITMAP_PX_HIDPI: i32 = 32;
@@ -15012,7 +15089,7 @@ const TAB_CLOSEX_SIZE_PX: i32 = 12;
 /// Pixel padding to feed `TCM_SETPADDING` so the tab control reserves
 /// room either side of the tab text for the save icon (left) and
 /// close-X (right). Left-side reservation must accommodate
-/// `TAB_PAD_X_PX` (6) + icon width (16 at LO DPI; 32 at HiDPI but the
+/// `TAB_PAD_X_PX` (6) + icon width (16 at LO DPI; 32 at `HiDPI` but the
 /// padding is computed against LO since `TCM_SETPADDING` has no DPI
 /// awareness) + `TAB_ICON_TEXT_GAP_PX` (4) = 26 px. Right-side reuses
 /// the same value to balance the close-X glyph + gap.
@@ -15022,7 +15099,7 @@ const TAB_TEXT_PADDING_X_PX: i32 = 26;
 /// 16-px icon doesn't crowd the top/bottom borders.
 const TAB_TEXT_PADDING_Y_PX: i32 = 4;
 
-/// SourceConstantAlpha (0..255) `AlphaBlend` applies when blitting an
+/// `SourceConstantAlpha` (0..255) `AlphaBlend` applies when blitting an
 /// inactive tab's save icon. 128 ≈ 50% opacity — readable but visibly
 /// dimmer than the active tab's full-opacity icon.
 const TAB_INACTIVE_ICON_ALPHA: u8 = 128;
@@ -15059,7 +15136,7 @@ const TAB_ACTIVE_INDICATOR: u32 = 0x00_26_A7_FF;
 /// overdraw; reads as a deliberate accent without dominating the
 /// cell.
 const TAB_ACTIVE_INDICATOR_HEIGHT_PX_LO: i32 = 6;
-/// HiDPI counterpart — kept proportional to the LO value (1.5x) so
+/// `HiDPI` counterpart — kept proportional to the LO value (1.5x) so
 /// the strip retains the same visual weight at higher pixel
 /// densities without looking chunky.
 const TAB_ACTIVE_INDICATOR_HEIGHT_PX_HIDPI: i32 = 9;
@@ -15112,7 +15189,7 @@ fn pick_tab_bitmap_size() -> i32 {
 /// same input — drift between them would mean clicks land in the wrong
 /// place relative to the painted glyph.
 fn tab_close_x_rect(item_rect: RECT) -> RECT {
-    let cy = (item_rect.top + item_rect.bottom) / 2;
+    let cy = i32::midpoint(item_rect.top, item_rect.bottom);
     let half = TAB_CLOSEX_SIZE_PX / 2;
     let right = item_rect.right - TAB_PAD_X_PX;
     let left = right - TAB_CLOSEX_SIZE_PX;
@@ -15128,7 +15205,7 @@ fn tab_close_x_rect(item_rect: RECT) -> RECT {
 /// The icon sits flush-left, vertically centred. `bitmap_px` is the
 /// edge length of the source bitmap (16 or 32).
 fn tab_save_icon_rect(item_rect: RECT, bitmap_px: i32) -> RECT {
-    let cy = (item_rect.top + item_rect.bottom) / 2;
+    let cy = i32::midpoint(item_rect.top, item_rect.bottom);
     let half = bitmap_px / 2;
     let left = item_rect.left + TAB_PAD_X_PX;
     RECT {
@@ -15167,7 +15244,7 @@ unsafe fn tab_close_x_hit_test(tab_hwnd: HWND, x: i32, y: i32) -> Option<usize> 
                 tab_hwnd,
                 TCM_GETITEMRECT,
                 Some(WPARAM(i as usize)),
-                Some(LPARAM(&mut rc as *mut RECT as isize)),
+                Some(LPARAM(&raw mut rc as isize)),
             )
         };
         if ok.0 == 0 {
@@ -15184,7 +15261,7 @@ unsafe fn tab_close_x_hit_test(tab_hwnd: HWND, x: i32, y: i32) -> Option<usize> 
 /// Owner-draw paint for one tab cell. Called from the parent's
 /// `WM_DRAWITEM` handler after dispatching on `dis.CtlType == ODT_TAB`.
 ///
-/// Painting order: background fill → save icon (with AlphaBlend if
+/// Painting order: background fill → save icon (with `AlphaBlend` if
 /// inactive) → tab text → close-X. Each piece is computed from the
 /// shared rect helpers above so click hit-testing stays in lockstep.
 unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
@@ -15234,7 +15311,7 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
     unsafe {
         let bg_brush = CreateSolidBrush(COLORREF(bg_color));
         if !bg_brush.is_invalid() {
-            FillRect(dis.hDC, &dis.rcItem, bg_brush);
+            FillRect(dis.hDC, &raw const dis.rcItem, bg_brush);
             let _ = DeleteObject(bg_brush.into());
         }
     }
@@ -15265,7 +15342,7 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
         unsafe {
             let strip_brush = CreateSolidBrush(COLORREF(TAB_ACTIVE_INDICATOR));
             if !strip_brush.is_invalid() {
-                FillRect(dis.hDC, &strip_rc, strip_brush);
+                FillRect(dis.hDC, &raw const strip_rc, strip_brush);
                 let _ = DeleteObject(strip_brush.into());
             }
         }
@@ -15350,7 +15427,7 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
                 DrawTextW(
                     dis.hDC,
                     wide.as_mut_slice(),
-                    &mut text_rc,
+                    &raw mut text_rc,
                     DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
                 );
             }
@@ -15398,7 +15475,7 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
         unsafe {
             let bg_brush = CreateSolidBrush(COLORREF(box_color));
             if !bg_brush.is_invalid() {
-                FillRect(dis.hDC, &close_rc, bg_brush);
+                FillRect(dis.hDC, &raw const close_rc, bg_brush);
                 let _ = DeleteObject(bg_brush.into());
             }
 
@@ -15410,14 +15487,14 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
                     dis.hDC,
                     close_rc.left + inset,
                     close_rc.top + inset,
-                    Some(&mut prev_pt),
+                    Some(&raw mut prev_pt),
                 );
                 let _ = LineTo(dis.hDC, close_rc.right - inset, close_rc.bottom - inset);
                 let _ = MoveToEx(
                     dis.hDC,
                     close_rc.right - inset,
                     close_rc.top + inset,
-                    Some(&mut prev_pt),
+                    Some(&raw mut prev_pt),
                 );
                 let _ = LineTo(dis.hDC, close_rc.left + inset, close_rc.bottom - inset);
                 let _ = SelectObject(dis.hDC, prev);
@@ -15440,12 +15517,12 @@ unsafe fn invalidate_tab(tab_hwnd: HWND, idx: usize) {
             tab_hwnd,
             TCM_GETITEMRECT,
             Some(WPARAM(idx)),
-            Some(LPARAM(&mut rc as *mut RECT as isize)),
+            Some(LPARAM(&raw mut rc as isize)),
         )
     };
     if ok.0 != 0 {
         // SAFETY: rc was filled by TCM_GETITEMRECT; tab_hwnd is live.
-        let _ = unsafe { InvalidateRect(Some(tab_hwnd), Some(&rc), false) };
+        let _ = unsafe { InvalidateRect(Some(tab_hwnd), Some(&raw const rc), false) };
     }
 }
 
@@ -15469,7 +15546,7 @@ unsafe fn tab_hit_test(tab_hwnd: HWND, x: i32, y: i32) -> Option<usize> {
             tab_hwnd,
             TCM_HITTEST,
             None,
-            Some(LPARAM(&mut info as *mut TCHITTESTINFO as isize)),
+            Some(LPARAM(&raw mut info as isize)),
         )
     };
     let idx = result.0 as i32;
@@ -15568,7 +15645,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
             }
             WM_COMMAND => {
                 let cmd_u16 = (wparam.0 & 0xFFFF) as u16;
-                let cmd_i32 = cmd_u16 as i32;
+                let cmd_i32 = i32::from(cmd_u16);
                 match cmd_u16 {
                     ID_FILE_SAVE => {
                         // Save inside the borrow; if it fails, capture
@@ -15842,9 +15919,8 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         };
                         let mut ran_to_completion = true;
                         for _ in 0..initial {
-                            let still_open = state_from_hwnd(hwnd)
-                                .map(|s| !s.shell.tabs.is_empty())
-                                .unwrap_or(false);
+                            let still_open =
+                                state_from_hwnd(hwnd).is_some_and(|s| !s.shell.tabs.is_empty());
                             if !still_open {
                                 break;
                             }
@@ -15968,7 +16044,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             let editor = state.editor;
                             let toolbar_hwnd = state.toolbar_hwnd;
                             let on = editor.send(SCI_GETWRAPMODE, 0, 0) != 0;
-                            editor.send(SCI_SETWRAPMODE, if on { 0 } else { 1 }, 0);
+                            editor.send(SCI_SETWRAPMODE, usize::from(!on), 0);
                             // SCI_SETWRAPMODE doesn't fire SCN_UPDATEUI,
                             // so push the new check state onto the
                             // toolbar explicitly.
@@ -15981,7 +16057,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             let toolbar_hwnd = state.toolbar_hwnd;
                             let on = editor.send(SCI_GETVIEWWS, 0, 0) != 0;
                             // SCWS_INVISIBLE = 0, SCWS_VISIBLEALWAYS = 1.
-                            editor.send(SCI_SETVIEWWS, if on { 0 } else { 1 }, 0);
+                            editor.send(SCI_SETVIEWWS, usize::from(!on), 0);
                             toolbar::refresh_state(toolbar_hwnd, &editor);
                         }
                     }
@@ -15990,7 +16066,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             let editor = state.editor;
                             let toolbar_hwnd = state.toolbar_hwnd;
                             let on = editor.send(SCI_GETVIEWEOL, 0, 0) != 0;
-                            editor.send(SCI_SETVIEWEOL, if on { 0 } else { 1 }, 0);
+                            editor.send(SCI_SETVIEWEOL, usize::from(!on), 0);
                             toolbar::refresh_state(toolbar_hwnd, &editor);
                         }
                     }
@@ -16011,7 +16087,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             // both on → both off; otherwise → both on.
                             // That makes the click semantics agree
                             // with the button's check indicator.
-                            let target = if ws_on && eol_on { 0 } else { 1 };
+                            let target = usize::from(!(ws_on && eol_on));
                             editor.send(SCI_SETVIEWWS, target, 0);
                             editor.send(SCI_SETVIEWEOL, target, 0);
                             toolbar::refresh_state(toolbar_hwnd, &editor);
@@ -16226,7 +16302,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // value (lang-id or tab-idx) rather than a
                         // single fixed constant.
                         if (ID_LANGUAGE_BASE..=ID_LANGUAGE_END).contains(&cmd_u16) {
-                            let lang_id = (cmd_u16 - ID_LANGUAGE_BASE) as i32;
+                            let lang_id = i32::from(cmd_u16 - ID_LANGUAGE_BASE);
                             handle_language_menu_click(hwnd, lang_id);
                             return LRESULT(0);
                         }
@@ -16567,8 +16643,8 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // the class brush.
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let mut rect = RECT::default();
-                let _ = GetClientRect(hwnd, &mut rect);
-                FillRect(hdc, &rect, editor_border_brush());
+                let _ = GetClientRect(hwnd, &raw mut rect);
+                FillRect(hdc, &raw const rect, editor_border_brush());
                 LRESULT(1)
             }
             WM_DESTROY => {
@@ -16939,10 +17015,10 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // our active tab's dirty bit.
                         let dirty = nmhdr.code == SCN_SAVEPOINTLEFT;
                         let (active, tab_hwnd) = if let Some(state) = state_from_hwnd(hwnd) {
-                            if nmhdr.hwndFrom != state.scintilla_hwnd {
-                                (None, state.tab_hwnd)
-                            } else {
+                            if nmhdr.hwndFrom == state.scintilla_hwnd {
                                 (state.shell.active_tab, state.tab_hwnd)
+                            } else {
+                                (None, state.tab_hwnd)
                             }
                         } else {
                             (None, HWND::default())
@@ -17090,13 +17166,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
 
 /// Set while a plugin entry-point call is in flight from this UI
 /// thread. The flag protects [`state_from_hwnd`] against Win32's
-/// re-entrant SendMessage: a plugin's `setInfo` (or any synchronous
+/// re-entrant `SendMessage`: a plugin's `setInfo` (or any synchronous
 /// plugin callback) can `SendMessage(npp_handle, NPPM_*, ...)` back
-/// into our wnd_proc on the same call stack. Without the flag, the
-/// re-entrant wnd_proc would materialize a second `&mut WindowState`
+/// into our `wnd_proc` on the same call stack. Without the flag, the
+/// re-entrant `wnd_proc` would materialize a second `&mut WindowState`
 /// from the same raw pointer while the outer borrow was still live —
 /// aliasing UB. With the flag, the inner `state_from_hwnd` returns
-/// `None` and the inner wnd_proc handles the message with no host
+/// `None` and the inner `wnd_proc` handles the message with no host
 /// state (the dispatcher returns 0, which plugins read as "feature
 /// unavailable" — same fallback Notepad++ produces when its own
 /// state is mid-mutation).
@@ -17113,7 +17189,7 @@ static PLUGIN_CALL_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// thread, so a process-wide atomic is sufficient — same model as
 /// `PLUGIN_CALL_ACTIVE`. Default `true` matches Scintilla's
 /// `SC_EFF_QUALITY_DEFAULT` start state, which on modern Windows
-/// resolves to LCD-optimised / ClearType — the same pixel
+/// resolves to LCD-optimised / `ClearType` — the same pixel
 /// rendering the user sees before any plugin call runs. A plugin
 /// that calls `NPPM_SETSMOOTHFONT(TRUE)` on a fresh launch
 /// therefore reads back the correct previous-state TRUE rather
@@ -17155,11 +17231,11 @@ impl Drop for PluginCallGuard {
 }
 
 /// SAFETY: the returned reference borrows from the `Box<WindowState>`
-/// stashed in `GWLP_USERDATA`. wnd_proc invocations are serialized
+/// stashed in `GWLP_USERDATA`. `wnd_proc` invocations are serialized
 /// per-window (Win32 dispatches one at a time on the owning thread),
 /// so concurrent mutable aliasing across messages cannot occur — but
-/// see [`PLUGIN_CALL_ACTIVE`] for re-entrant SendMessage from inside
-/// plugin code, which IS a path that can produce nested wnd_proc
+/// see [`PLUGIN_CALL_ACTIVE`] for re-entrant `SendMessage` from inside
+/// plugin code, which IS a path that can produce nested `wnd_proc`
 /// calls on the same stack. The flag check refuses the inner
 /// borrow when one is already in flight.
 unsafe fn state_from_hwnd<'a>(hwnd: HWND) -> Option<&'a mut WindowState> {
@@ -17187,7 +17263,7 @@ const MAX_PATH_TCHARS: u32 = 32_767;
 /// SAFETY: `hdrop` must be a valid HDROP handed to us by `WM_DROPFILES`.
 unsafe fn handle_dropped_files(state: &mut WindowState, hdrop: HDROP) {
     // DragQueryFileW with iFile=0xFFFFFFFF returns the count.
-    let count = unsafe { DragQueryFileW(hdrop, 0xFFFFFFFF, None) };
+    let count = unsafe { DragQueryFileW(hdrop, 0xFFFF_FFFF, None) };
     for i in 0..count {
         // First call: required-buffer size (TCHARs, exclusive of null).
         let needed = unsafe { DragQueryFileW(hdrop, i, None) };
@@ -17579,7 +17655,7 @@ mod lang_theme_tests {
         }
     }
 
-    /// C and C++ share LexCPP and therefore share the styles /
+    /// C and C++ share `LexCPP` and therefore share the styles /
     /// italic / bold lists. Only the keyword class 0 content
     /// differs. Pin both halves of that contract so a future
     /// edit that lets the two languages drift in their style
@@ -17592,7 +17668,7 @@ mod lang_theme_tests {
     /// language guarantee. Deep-equality catches accidental
     /// divergence in content, which is the failure mode we
     /// actually care about — if a future contributor
-    /// copy-pastes CPP_STYLES into e.g. JS_STYLES with identical
+    /// copy-pastes `CPP_STYLES` into e.g. `JS_STYLES` with identical
     /// content, the runtime behaviour is identical and no
     /// defect exists.
     #[test]

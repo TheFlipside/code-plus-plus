@@ -9,6 +9,17 @@
 //! See DESIGN.md §6.6 for the rationale (default-set parity for users
 //! coming from N++, plus a stronger ABI smoke test than `example-hello`
 //! alone).
+//!
+//! # Allowed pedantic lints
+//!
+//! Same FFI cast pattern as the other in-tree plugins — see
+//! `plugins/cppexport/src/lib.rs` for the shared rationale.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
 
 #[cfg(target_os = "windows")]
 mod imp;

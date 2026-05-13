@@ -7,7 +7,7 @@
 //! — the toolbar adds zero new command-dispatch logic. Buttons whose
 //! commands aren't implemented yet (Sync V/H Scroll, Define Language,
 //! the macro family, etc.) get a unique ID anyway so the spec layout
-//! is complete, but the WM_COMMAND falls through the switch with no
+//! is complete, but the `WM_COMMAND` falls through the switch with no
 //! handler.
 //!
 //! ## Bitmap pipeline
@@ -29,6 +29,20 @@
 //! functions that take those handles in. The button table itself is
 //! a `&'static` array — adding or reordering buttons is one edit
 //! here, no per-button scaffolding elsewhere.
+
+// Same FFI / cast rationale as `lib.rs` — this is the Win32
+// toolbar control wrapper. PNG decoding and DIB construction
+// use short single-character bindings (`r`, `g`, `b`, `a`,
+// `w`, `h`) at tight numeric loops where descriptive names
+// would clutter; allowed at module scope so the inner loops
+// stay readable.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::many_single_char_names
+)]
 
 use core::ffi::c_void;
 use std::io::Cursor;
@@ -118,10 +132,10 @@ struct ButtonDef {
     /// Initial enabled state. Greyed buttons (`enabled = false`) are
     /// the ones whose underlying feature isn't implemented yet —
     /// Sync V/H Scroll, Monitoring. Clicking them does nothing
-    /// because the WM_COMMAND falls through, but greyed is the
+    /// because the `WM_COMMAND` falls through, but greyed is the
     /// honest visual cue.
     enabled: bool,
-    /// Toggle-style (TBSTYLE_CHECK) vs. push-style (TBSTYLE_BUTTON).
+    /// Toggle-style (`TBSTYLE_CHECK`) vs. push-style (`TBSTYLE_BUTTON`).
     is_check: bool,
 }
 
@@ -434,7 +448,7 @@ pub fn natural_min_width_px(toolbar_hwnd: HWND) -> i32 {
             toolbar_hwnd,
             TB_GETMAXSIZE,
             None,
-            Some(LPARAM(&mut size as *mut SIZE as isize)),
+            Some(LPARAM(&raw mut size as isize)),
         );
     }
     size.cx.max(0)
@@ -444,7 +458,7 @@ pub fn natural_min_width_px(toolbar_hwnd: HWND) -> i32 {
 
 /// Decode `png_bytes` to a `width * height * 4` BGRA buffer with
 /// premultiplied alpha. Premultiplication is what
-/// `ILC_COLOR32`-flagged image lists expect for AlphaBlend
+/// `ILC_COLOR32`-flagged image lists expect for `AlphaBlend`
 /// rendering during draw — without it, anti-aliased edges of the
 /// SVG renders pick up dark fringes when blended over the toolbar
 /// background.
@@ -517,7 +531,7 @@ fn decode_png_to_bgra(png_bytes: &[u8]) -> Result<(Vec<u8>, u32, u32)> {
         let (r, g, b, a) = (px[0], px[1], px[2], px[3]);
         // Premultiply: c' = c * a / 255 — exact division to keep
         // black anti-aliased edges from drifting.
-        let pm = |c: u8| -> u8 { ((c as u32 * a as u32 + 127) / 255) as u8 };
+        let pm = |c: u8| -> u8 { ((u32::from(c) * u32::from(a) + 127) / 255) as u8 };
         bgra.extend_from_slice(&[pm(b), pm(g), pm(r), a]);
     }
     Ok((bgra, w, h))
@@ -577,7 +591,8 @@ pub(crate) unsafe fn png_to_hbitmap(png_bytes: &[u8]) -> Result<HBITMAP> {
     // a standalone (non-shared) bitmap; offset is unused when
     // section is None. The bits pointer it writes through is valid
     // while the bitmap is alive.
-    let hbm = unsafe { CreateDIBSection(None, &bmi, DIB_RGB_COLORS, &mut bits, None, 0)? };
+    let hbm =
+        unsafe { CreateDIBSection(None, &raw const bmi, DIB_RGB_COLORS, &raw mut bits, None, 0)? };
     if hbm.is_invalid() || bits.is_null() {
         return Err(windows::core::Error::new(
             windows::Win32::Foundation::E_FAIL,
@@ -605,7 +620,7 @@ pub(crate) unsafe fn png_to_hbitmap(png_bytes: &[u8]) -> Result<HBITMAP> {
     // the explicit length check immediately above; `bgra.as_ptr()`
     // remains valid through the call since the Vec is live until
     // function return).
-    unsafe { core::ptr::copy_nonoverlapping(bgra.as_ptr(), bits as *mut u8, byte_len) };
+    unsafe { core::ptr::copy_nonoverlapping(bgra.as_ptr(), bits.cast::<u8>(), byte_len) };
 
     Ok(hbm)
 }
@@ -763,7 +778,7 @@ pub unsafe fn create_toolbar(parent: HWND, instance: HMODULE) -> Result<ToolbarH
             };
             tb_buttons.push(TBBUTTON {
                 iBitmap: bitmap_idx,
-                idCommand: btn.cmd_id as i32,
+                idCommand: i32::from(btn.cmd_id),
                 fsState: state,
                 fsStyle: style,
                 // iString = 0 → no inline label; tooltip text is

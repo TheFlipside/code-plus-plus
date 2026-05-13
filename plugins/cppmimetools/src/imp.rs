@@ -191,7 +191,7 @@ fn base64_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut chunks = bytes.chunks_exact(3);
     for c in &mut chunks {
-        let v = ((c[0] as u32) << 16) | ((c[1] as u32) << 8) | (c[2] as u32);
+        let v = (u32::from(c[0]) << 16) | (u32::from(c[1]) << 8) | u32::from(c[2]);
         s.push(B64_ALPHABET[((v >> 18) & 0x3f) as usize] as char);
         s.push(B64_ALPHABET[((v >> 12) & 0x3f) as usize] as char);
         s.push(B64_ALPHABET[((v >> 6) & 0x3f) as usize] as char);
@@ -201,14 +201,14 @@ fn base64_encode(bytes: &[u8]) -> String {
     match rem.len() {
         0 => {}
         1 => {
-            let v = (rem[0] as u32) << 16;
+            let v = u32::from(rem[0]) << 16;
             s.push(B64_ALPHABET[((v >> 18) & 0x3f) as usize] as char);
             s.push(B64_ALPHABET[((v >> 12) & 0x3f) as usize] as char);
             s.push('=');
             s.push('=');
         }
         2 => {
-            let v = ((rem[0] as u32) << 16) | ((rem[1] as u32) << 8);
+            let v = (u32::from(rem[0]) << 16) | (u32::from(rem[1]) << 8);
             s.push(B64_ALPHABET[((v >> 18) & 0x3f) as usize] as char);
             s.push(B64_ALPHABET[((v >> 12) & 0x3f) as usize] as char);
             s.push(B64_ALPHABET[((v >> 6) & 0x3f) as usize] as char);
@@ -252,7 +252,7 @@ fn base64_decode(bytes: &[u8]) -> Result<Vec<u8>, &'static str> {
                     return Err("base64 non-pad after padding");
                 }
                 let d = b64_digit(c).ok_or("invalid base64 character")?;
-                v = (v << 6) | (d as u32);
+                v = (v << 6) | u32::from(d);
             }
         }
         // Always 3 bytes available in `v`; emit 3 minus pad count.

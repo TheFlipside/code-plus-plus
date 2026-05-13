@@ -14,7 +14,7 @@
 //!     directly.
 //!   * **Export to RTF...** — same as Export to HTML but emits
 //!     RTF (Rich Text Format) for paste into Word, Outlook,
-//!     WordPad, or LibreOffice.
+//!     `WordPad`, or `LibreOffice`.
 //!   * **Copy RTF to Clipboard** — same RTF, but to the
 //!     registered `Rich Text Format` clipboard type that
 //!     RTF-aware editors prefer.
@@ -27,6 +27,19 @@
 //! `<span>` per run, not one per character.
 
 #![cfg(target_os = "windows")]
+// HTML emission builds output via repeated `out += &format!(...)`
+// — clippy prefers `write!(out, ...).unwrap()`, but for HTML
+// scaffolding the `+=` form reads more naturally and the
+// builder closures don't gain anything from going through the
+// `Write` trait. Allowed at module scope to keep the emitter
+// readable.
+//
+// `manual_let_else` is also allowed: the FFI-validation `match`
+// patterns in this file (resolve handle / read length / decode
+// styled-text) read more clearly as explicit matches than as
+// `let ... else` because each arm carries a different error
+// path (early return, log + return, ignore, …).
+#![allow(clippy::format_push_string, clippy::manual_let_else)]
 
 use core::ffi::{c_char, c_void};
 
@@ -73,8 +86,8 @@ const SCI_STYLEGETSIZE: u32 = 2485;
 const SCI_STYLEGETFONT: u32 = 2486;
 const STYLE_DEFAULT: u32 = 32;
 
-/// Mirror of Scintilla's `Sci_CharacterRangeFull` (Sci_Position
-/// = ptrdiff_t, so two pointer-sized signed integers).
+/// Mirror of Scintilla's `Sci_CharacterRangeFull` (`Sci_Position`
+/// = `ptrdiff_t`, so two pointer-sized signed integers).
 #[repr(C)]
 struct SciCharacterRangeFull {
     cp_min: isize,
@@ -222,10 +235,10 @@ pub extern "C" fn isUnicode() -> i32 {
 ///
 /// **Performance:** the prior implementation called `SCI_GETSTYLEAT`
 /// once per byte — N round-trips for an N-byte buffer. On a 200KB
-/// source file that's 200,000 SendMessage calls; cppexport users
+/// source file that's 200,000 `SendMessage` calls; cppexport users
 /// reported export-button latency. `SCI_GETSTYLEDTEXTFULL` returns
 /// the same data in one call by writing alternating
-/// (text_byte, style_byte) pairs into a caller-supplied buffer.
+/// (`text_byte`, `style_byte`) pairs into a caller-supplied buffer.
 ///
 /// **Layout:** Scintilla writes `2 * (cp_max - cp_min) + 2` bytes —
 /// one text byte plus one style byte per character in the range,
@@ -268,12 +281,7 @@ fn collect_text_and_styles(sci: Hwnd, len: usize) -> (Vec<u8>, Vec<u8>) {
     // between the SCI_GETLENGTH that produced `len` and the fill
     // call here).
     unsafe {
-        sdk::SendMessageW(
-            sci,
-            SCI_GETSTYLEDTEXTFULL,
-            0,
-            &mut range as *mut SciTextRangeFull as isize,
-        );
+        sdk::SendMessageW(sci, SCI_GETSTYLEDTEXTFULL, 0, &raw mut range as isize);
     }
 
     // Split interleaved (text, style) pairs into two byte streams.
@@ -324,7 +332,7 @@ fn query_style_attrs(sci: Hwnd, style: u8) -> StyleAttrs {
 }
 
 /// `SCI_STYLEGETFONT(style, char *font)` writes a NUL-terminated
-/// ASCII (or UTF-8) font name. Two-phase like SCI_GETSELTEXT: pass
+/// ASCII (or UTF-8) font name. Two-phase like `SCI_GETSELTEXT`: pass
 /// null first to get length, then alloc and call again. Empty name
 /// (Scintilla returns 0) means "use the default font" — we surface
 /// the empty string and the consumer falls back to the body's CSS.
@@ -453,16 +461,18 @@ fn rgb_to_css(rgb: u32) -> String {
 fn build_html(runs: &[StyleRun], style_attrs: &[(u8, StyleAttrs)]) -> String {
     let default = style_attrs
         .iter()
-        .find(|(s, _)| *s as u32 == STYLE_DEFAULT)
-        .map(|(_, a)| a.clone())
-        .unwrap_or(StyleAttrs {
-            fore_rgb: 0x00_00_00_00,
-            back_rgb: 0x00_FF_FF_FF,
-            bold: false,
-            italic: false,
-            size_pts: 11,
-            font_name: String::from("Consolas"),
-        });
+        .find(|(s, _)| u32::from(*s) == STYLE_DEFAULT)
+        .map_or(
+            StyleAttrs {
+                fore_rgb: 0x00_00_00_00,
+                back_rgb: 0x00_FF_FF_FF,
+                bold: false,
+                italic: false,
+                size_pts: 11,
+                font_name: String::from("Consolas"),
+            },
+            |(_, a)| a.clone(),
+        );
 
     let mut html =
         String::with_capacity(1024 + runs.iter().map(|r| r.bytes.len() * 2).sum::<usize>());
@@ -494,10 +504,10 @@ fn build_html(runs: &[StyleRun], style_attrs: &[(u8, StyleAttrs)]) -> String {
     // doesn't duplicate the body styling; non-default styles get
     // their own class.
     for (style, attrs) in style_attrs {
-        if *style as u32 == STYLE_DEFAULT {
+        if u32::from(*style) == STYLE_DEFAULT {
             continue;
         }
-        html.push_str(&format!(".s{} {{ ", style));
+        html.push_str(&format!(".s{style} {{ "));
         html.push_str(&format!("color: {};", rgb_to_css(attrs.fore_rgb)));
         if attrs.back_rgb != default.back_rgb {
             html.push_str(&format!(
@@ -517,7 +527,7 @@ fn build_html(runs: &[StyleRun], style_attrs: &[(u8, StyleAttrs)]) -> String {
     html.push_str("</style>\n</head>\n<body>");
 
     for run in runs {
-        if run.style as u32 == STYLE_DEFAULT {
+        if u32::from(run.style) == STYLE_DEFAULT {
             // No class needed — body styling already applies. Just
             // wrap in <span> for symmetry so a future restyling pass
             // can target each run uniformly.
@@ -596,16 +606,18 @@ fn rtf_escape_char_into(out: &mut String, c: char) {
 fn build_rtf(runs: &[StyleRun], style_attrs: &[(u8, StyleAttrs)]) -> String {
     let default = style_attrs
         .iter()
-        .find(|(s, _)| *s as u32 == STYLE_DEFAULT)
-        .map(|(_, a)| a.clone())
-        .unwrap_or(StyleAttrs {
-            fore_rgb: 0x00_00_00_00,
-            back_rgb: 0x00_FF_FF_FF,
-            bold: false,
-            italic: false,
-            size_pts: 11,
-            font_name: String::from("Consolas"),
-        });
+        .find(|(s, _)| u32::from(*s) == STYLE_DEFAULT)
+        .map_or(
+            StyleAttrs {
+                fore_rgb: 0x00_00_00_00,
+                back_rgb: 0x00_FF_FF_FF,
+                bold: false,
+                italic: false,
+                size_pts: 11,
+                font_name: String::from("Consolas"),
+            },
+            |(_, a)| a.clone(),
+        );
 
     // Build the colour table. RTF's `\colortbl;` starts with an
     // implicit empty "auto" entry (index 0) before any
@@ -673,12 +685,12 @@ fn build_rtf(runs: &[StyleRun], style_attrs: &[(u8, StyleAttrs)]) -> String {
             .and_then(|a| color_index.get(&a.fore_rgb))
             .copied()
             .unwrap_or(0);
-        let bold = attrs.map(|a| a.bold).unwrap_or(false);
-        let italic = attrs.map(|a| a.italic).unwrap_or(false);
+        let bold = attrs.is_some_and(|a| a.bold);
+        let italic = attrs.is_some_and(|a| a.italic);
         rtf.push_str(&format!(
             "\\cf{cf_idx}\\b{}\\i{} ",
-            if bold { 1 } else { 0 },
-            if italic { 1 } else { 0 },
+            i32::from(bold),
+            i32::from(italic),
         ));
         let s = String::from_utf8_lossy(&run.bytes);
         for c in s.chars() {
@@ -746,7 +758,7 @@ fn copy_to_clipboard(s: &str) -> bool {
         Some(n) => n,
         None => return false,
     };
-    let wide_bytes = unsafe { core::slice::from_raw_parts(wide.as_ptr() as *const u8, bytes) };
+    let wide_bytes = unsafe { core::slice::from_raw_parts(wide.as_ptr().cast::<u8>(), bytes) };
     set_clipboard_format(CF_UNICODETEXT, wide_bytes, false)
 }
 
@@ -807,7 +819,7 @@ fn prompt_save_path(filter_label: &str, filter_glob: &str, default_ext: &str) ->
     // struct fully initialized above. All buffers it references are
     // owned in this scope and outlive the call. Returns 0 on
     // user-cancel or error; non-zero on success.
-    let ok = unsafe { GetSaveFileNameW(&mut ofn) };
+    let ok = unsafe { GetSaveFileNameW(&raw mut ofn) };
     if ok == 0 {
         return None;
     }
@@ -878,8 +890,8 @@ extern "C" fn cmd_copy_rtf() {
 }
 
 /// Render the active buffer in **all three** clipboard formats —
-/// CF_UNICODETEXT (plain), CF_HTML (styled HTML wrapped per the
-/// CF_HTML byte-offset spec), and the registered "Rich Text
+/// `CF_UNICODETEXT` (plain), `CF_HTML` (styled HTML wrapped per the
+/// `CF_HTML` byte-offset spec), and the registered "Rich Text
 /// Format" — so the receiving app can pick whichever it understands
 /// best. Notepad++'s upstream `NppExport` ships the same item
 /// under the same label.
@@ -949,7 +961,7 @@ fn export_rtf_for_active() -> String {
 /// Copy `rtf` (a plain ASCII RTF document — non-ASCII codepoints
 /// are encoded as `\uN?` escapes inside the RTF body) onto the
 /// clipboard under the registered "Rich Text Format" type. Word,
-/// Outlook, WordPad, and other RTF-aware editors paste from this
+/// Outlook, `WordPad`, and other RTF-aware editors paste from this
 /// format with formatting preserved.
 fn copy_rtf_to_clipboard(rtf: &str) -> bool {
     let cf_rtf = register_rtf_format();
@@ -959,12 +971,12 @@ fn copy_rtf_to_clipboard(rtf: &str) -> bool {
     set_clipboard_format(cf_rtf, rtf.as_bytes(), true)
 }
 
-/// Copy three formats — plain text (CF_UNICODETEXT), CF_HTML, and
+/// Copy three formats — plain text (`CF_UNICODETEXT`), `CF_HTML`, and
 /// "Rich Text Format" — onto the clipboard in a single
 /// Open/Empty/Close sequence. The receiving app picks whichever
-/// format it understands (Word/Outlook prefer CF_HTML or RTF;
-/// browser-based editors that paste-as-HTML get the CF_HTML; plain
-/// editors fall back to the unicode text). Mirrors NppExport's
+/// format it understands (Word/Outlook prefer `CF_HTML` or RTF;
+/// browser-based editors that paste-as-HTML get the `CF_HTML`; plain
+/// editors fall back to the unicode text). Mirrors `NppExport`'s
 /// "Copy all formats" flow.
 ///
 /// Returns `true` if at least one of the three formats was
@@ -1003,7 +1015,7 @@ fn copy_all_formats_to_clipboard(plain: &str, html: &str, rtf: &str) -> bool {
     // non-null) or fails (we free).
     unsafe {
         let plain_wide_bytes =
-            core::slice::from_raw_parts(plain_wide.as_ptr() as *const u8, plain_byte_len);
+            core::slice::from_raw_parts(plain_wide.as_ptr().cast::<u8>(), plain_byte_len);
         let plain_hmem = global_alloc_copy(plain_wide_bytes, false);
         // Skip the HTML / RTF allocations entirely if their
         // registered format ids are zero — no point allocating
@@ -1038,20 +1050,20 @@ fn copy_all_formats_to_clipboard(plain: &str, html: &str, rtf: &str) -> bool {
         }
         EmptyClipboard();
 
-        let r_plain = if !plain_hmem.is_null() {
+        let r_plain = if plain_hmem.is_null() {
+            core::ptr::null_mut()
+        } else {
             SetClipboardData(CF_UNICODETEXT, plain_hmem)
-        } else {
-            core::ptr::null_mut()
         };
-        let r_html = if !html_hmem.is_null() {
+        let r_html = if html_hmem.is_null() {
+            core::ptr::null_mut()
+        } else {
             SetClipboardData(cf_html, html_hmem)
-        } else {
-            core::ptr::null_mut()
         };
-        let r_rtf = if !rtf_hmem.is_null() {
-            SetClipboardData(cf_rtf, rtf_hmem)
-        } else {
+        let r_rtf = if rtf_hmem.is_null() {
             core::ptr::null_mut()
+        } else {
+            SetClipboardData(cf_rtf, rtf_hmem)
         };
 
         CloseClipboard();
@@ -1085,7 +1097,7 @@ fn register_rtf_format() -> u32 {
 
 /// Same shape as [`register_rtf_format`] but for the `CF_HTML`
 /// registered format. The exact name "HTML Format" is canonical
-/// per Microsoft's CF_HTML spec; Word, Outlook, and Chromium-
+/// per Microsoft's `CF_HTML` spec; Word, Outlook, and Chromium-
 /// based editors all key on this string.
 fn register_html_format() -> u32 {
     use std::sync::OnceLock;
@@ -1093,11 +1105,11 @@ fn register_html_format() -> u32 {
     *CACHED.get_or_init(|| unsafe { RegisterClipboardFormatA(c"HTML Format".as_ptr()) })
 }
 
-/// Wrap an HTML document in CF_HTML's documented byte-offset
+/// Wrap an HTML document in `CF_HTML`'s documented byte-offset
 /// header so Word, Outlook, and CF_HTML-aware browsers can paste
 /// it as styled HTML rather than raw markup.
 ///
-/// CF_HTML's spec (Microsoft):
+/// `CF_HTML`'s spec (Microsoft):
 /// ```text
 /// Version:0.9
 /// StartHTML:NNNNNNNNNN
@@ -1110,7 +1122,7 @@ fn register_html_format() -> u32 {
 /// </body></html>
 /// ```
 /// Each `NNNNNNNNNN` is a 10-digit zero-padded byte offset into
-/// the entire CF_HTML payload (header included). The receiving
+/// the entire `CF_HTML` payload (header included). The receiving
 /// app reads the offsets to extract the "interesting" content
 /// without parsing the surrounding `<html>` shell.
 ///
@@ -1184,7 +1196,7 @@ fn build_cf_html(full_html: &str) -> String {
     format!("{header}{html_with_markers}")
 }
 
-/// Format a CF_HTML header with the four offset fields. Used by
+/// Format a `CF_HTML` header with the four offset fields. Used by
 /// [`build_cf_html`] to size and to emit, ensuring both passes
 /// share one format-string source of truth.
 fn cf_html_header(
@@ -1241,12 +1253,12 @@ unsafe fn global_alloc_copy(bytes: &[u8], nul_terminate: bool) -> *mut c_void {
         // SAFETY: `dest` is valid for `alloc_size` bytes; `bytes`
         // is valid for `bytes.len()` bytes which is ≤ alloc_size.
         unsafe {
-            core::ptr::copy_nonoverlapping(bytes.as_ptr(), dest as *mut u8, bytes.len());
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), dest.cast::<u8>(), bytes.len());
         }
     }
     if nul_terminate {
         // SAFETY: `dest + bytes.len()` is in-bounds (alloc_size = bytes.len() + 1).
-        unsafe { *(dest as *mut u8).add(bytes.len()) = 0 };
+        unsafe { *dest.cast::<u8>().add(bytes.len()) = 0 };
     }
     // SAFETY: pairs with the GlobalLock above. After unlock the
     // lock count returns to zero, which SetClipboardData requires.
@@ -1260,7 +1272,7 @@ unsafe fn global_alloc_copy(bytes: &[u8], nul_terminate: bool) -> *mut c_void {
 /// allocation is freed. Returns `true` on success.
 ///
 /// Known limitation (inherited from Win32): `EmptyClipboard` runs
-/// before `SetClipboardData`, so a SetClipboardData failure
+/// before `SetClipboardData`, so a `SetClipboardData` failure
 /// (extremely rare — only OOM or resource exhaustion) loses the
 /// user's previous clipboard content. There's no API path to set
 /// without first emptying.
@@ -1825,7 +1837,7 @@ mod tests {
         let end_fragment = parse_offset("EndFragment:");
 
         // StartHTML lands at the first byte of `<` in `<!DOCTYPE`.
-        assert_eq!(&payload.as_bytes()[start_html..start_html + 1], b"<");
+        assert_eq!(&payload.as_bytes()[start_html..=start_html], b"<");
         // EndHTML is the total payload length.
         assert_eq!(end_html, payload.len());
         // StartFragment lands immediately after the marker.

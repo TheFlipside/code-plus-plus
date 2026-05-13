@@ -5,7 +5,7 @@
 //!   `messageProc`, `isUnicode`.
 //!
 //! Most of the FFI scaffolding lives in `codepp-plugin-sdk`
-//! (handle storage, `SyncCell`, the SendMessageW link, common
+//! (handle storage, `SyncCell`, the `SendMessageW` link, common
 //! NPPM constants). This file keeps only the example-specific
 //! bits: the plugin name, the one-item `FUNCS` array, and the
 //! menu callback that inserts "Hello from plugin" via
@@ -95,16 +95,19 @@ pub extern "C" fn isUnicode() -> i32 {
 /// Menu callback. Invoked by the host (single-threaded UI dispatch)
 /// when the user clicks our "Insert Hello" menu item.
 extern "C" fn plugin_cmd_insert_hello() {
+    // SCI_INSERTTEXT(pos, text). `pos == -1` means the current
+    // caret; wparam is `Sci_Position` (signed `intptr_t`) — we pass
+    // the 2's-complement bit pattern of -1 as `usize`. The lparam
+    // is a null-terminated UTF-8 byte string.
+    // Hoisted above the first statement so clippy's
+    // `items_after_statements` rule is satisfied.
+    const HELLO: &[u8] = b"Hello from plugin\0";
+
     let sci = sdk::active_scintilla();
     if sci.is_null() {
         return;
     }
 
-    // SCI_INSERTTEXT(pos, text). `pos == -1` means the current
-    // caret; wparam is `Sci_Position` (signed `intptr_t`) — we pass
-    // the 2's-complement bit pattern of -1 as `usize`. The lparam
-    // is a null-terminated UTF-8 byte string.
-    const HELLO: &[u8] = b"Hello from plugin\0";
     let neg_one = (-1isize) as usize;
     // SAFETY: `HELLO` is static and outlives the SendMessage call;
     // SCI_INSERTTEXT does not retain the pointer past the call.

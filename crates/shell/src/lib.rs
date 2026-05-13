@@ -3478,7 +3478,7 @@ fn backup_timestamp() -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if m <= 2 { y + 1 } else { y };
-    format!("{year:04}-{m:02}-{d:02}_{hour:02}{minute:02}{second:02}",)
+    format!("{year:04}-{m:02}-{d:02}_{hour:02}{minute:02}{second:02}")
 }
 
 /// Build the human-readable display portion of a backup filename
