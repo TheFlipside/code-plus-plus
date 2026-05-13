@@ -15,8 +15,22 @@
 //   `crates/scintilla-sys/build.rs`. Adding a lexer is a two-step
 //   change: append the file in build.rs AND append `extern const
 //   LexerModule lmXxx;` plus `&lmXxx,` here. Removing a lexer is the
-//   reverse. The `cargo build` link step is the enforcement gate —
-//   miss either side and the build fails fast.
+//   reverse.
+//
+//   **Asymmetric failure mode (read this).** Build-step asymmetry:
+//
+//     - Referenced here but NOT compiled in build.rs → link fails
+//       fast with an unresolved-symbol error (good — easy to catch).
+//     - Compiled in build.rs but NOT referenced here → build
+//       succeeds, but `CreateLexer("foo")` returns nullptr at
+//       runtime because the catalog never sees `lmFoo`. The lexer
+//       is silently disabled (bad — looks linked, isn't usable).
+//
+//   The second case is the one that bit us: lexers added to
+//   build.rs without their `extern const LexerModule` + catalog
+//   entry here behave as `🟡 lexer attached, no host theme` in
+//   `docs/lexers-coverage.md`'s sense even though they're not
+//   actually attached. Cross-check both sides on every lexer add.
 //
 //   No other source is copied from upstream. The C entry-point
 //   bodies are written here from scratch but mirror the public ABI
@@ -48,9 +62,21 @@ using namespace Lexilla;
 // inside `namespace Lexilla`, so the forward declarations here also
 // live at global scope to match. Adding a new one here also requires
 // the matching `Lex*.cxx` in build.rs's lexer list — see file header.
+//
+// Important: a Lex*.cxx file may register **multiple** `LexerModule`
+// globals. `LexHTML.cxx` is the prime example — it defines `lmHTML`
+// (name "hypertext"), `lmXML` (name "xml"), and `lmPHPSCRIPT` (name
+// "phpscript"). Each named lexer needs its own forward-decl + catalog
+// entry below; missing one silently disables that lexer at runtime
+// even though `Lex*.cxx` is in the compile list (the `lm*` global is
+// defined but the catalog never sees it, so `CreateLexer(name)`
+// returns `nullptr` and the host falls through to `clear_lexer`).
 extern const LexerModule lmCPP;
+extern const LexerModule lmHTML;        // "hypertext" — HTML / ASP / JSP / PHP
 extern const LexerModule lmNull;
+extern const LexerModule lmPHPSCRIPT;   // "phpscript" — pure PHP (no HTML wrapper)
 extern const LexerModule lmRust;
+extern const LexerModule lmXML;         // "xml"
 
 static CatalogueModules catalogueLexilla;
 
@@ -60,8 +86,11 @@ static void AddEachLexer() {
     }
     catalogueLexilla.AddLexerModules({
         &lmCPP,
+        &lmHTML,
         &lmNull,
+        &lmPHPSCRIPT,
         &lmRust,
+        &lmXML,
     });
 }
 

@@ -712,6 +712,59 @@ pub const SCE_CSS_SINGLESTRING: usize = 14;
 pub const SCE_CSS_ATTRIBUTE: usize = 16;
 pub const SCE_CSS_VARIABLE: usize = 23;
 
+// LexHTML (hypertext) style indices — the `H` prefix is upstream's
+// for the HTML portion of the multi-mode lexer. The hypertext lexer
+// also emits SCE_HJ_* (embedded JavaScript), SCE_HB_* (VBScript),
+// SCE_HP_* (Python), and SCE_HPHP_* (PHP) when inside the matching
+// `<script>` / `<%...%>` / `<?php ?>` block. Phase 4.5 wires the
+// HTML + PHP subsets first; the embedded-script ranges come in with
+// later language rows. Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 267-298.
+// `SCE_H_DEFAULT` and `SCE_H_SCRIPT` are intentionally *not* assigned
+// a slot in `ui_win32`'s `HYPERTEXT_STYLES`: `_DEFAULT` is the
+// inherit-from-`STYLE_DEFAULT` fallback for unclassified text (the
+// user's chosen default fg/bg shows through), and `_SCRIPT` is
+// internal lexer transition state that should never reach a rendered
+// token. Same omission rationale applies to `SCE_HPHP_DEFAULT` below.
+pub const SCE_H_DEFAULT: usize = 0;
+pub const SCE_H_TAG: usize = 1;
+pub const SCE_H_TAGUNKNOWN: usize = 2;
+pub const SCE_H_ATTRIBUTE: usize = 3;
+pub const SCE_H_ATTRIBUTEUNKNOWN: usize = 4;
+pub const SCE_H_NUMBER: usize = 5;
+pub const SCE_H_DOUBLESTRING: usize = 6;
+pub const SCE_H_SINGLESTRING: usize = 7;
+pub const SCE_H_OTHER: usize = 8;
+pub const SCE_H_COMMENT: usize = 9;
+pub const SCE_H_ENTITY: usize = 10;
+pub const SCE_H_TAGEND: usize = 11;
+pub const SCE_H_XMLSTART: usize = 12;
+pub const SCE_H_XMLEND: usize = 13;
+pub const SCE_H_SCRIPT: usize = 14; // internal transition state — see banner above
+pub const SCE_H_ASP: usize = 15;
+pub const SCE_H_ASPAT: usize = 16;
+pub const SCE_H_CDATA: usize = 17;
+pub const SCE_H_QUESTION: usize = 18;
+pub const SCE_H_VALUE: usize = 19;
+pub const SCE_H_XCCOMMENT: usize = 20;
+
+// LexHTML — PHP-mode style indices. Emitted when the lexer is
+// inside a `<?php ... ?>` block. `SCE_HPHP_COMPLEX_VARIABLE` lives
+// at 104 historically; the rest are a contiguous 118..=127 range.
+// Cross-referenced against `vendor/lexilla/include/SciLexer.h`
+// lines 356 and 370-379.
+pub const SCE_HPHP_COMPLEX_VARIABLE: usize = 104;
+pub const SCE_HPHP_DEFAULT: usize = 118;
+pub const SCE_HPHP_HSTRING: usize = 119;
+pub const SCE_HPHP_SIMPLESTRING: usize = 120;
+pub const SCE_HPHP_WORD: usize = 121;
+pub const SCE_HPHP_NUMBER: usize = 122;
+pub const SCE_HPHP_VARIABLE: usize = 123;
+pub const SCE_HPHP_COMMENT: usize = 124;
+pub const SCE_HPHP_COMMENTLINE: usize = 125;
+pub const SCE_HPHP_HSTRING_VARIABLE: usize = 126;
+pub const SCE_HPHP_OPERATOR: usize = 127;
+
 // SCN_* notification codes (delivered via WM_NOTIFY's NMHDR.code) are added
 // when Phase 2+ first dispatches them. Each constant must be cross-checked
 // against `vendor/scintilla/include/Scintilla.h` at the time of addition;

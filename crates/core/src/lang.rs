@@ -967,6 +967,75 @@ pub const RUST_KEYWORDS: &str = concat!(
     "static struct super trait true try type union unsafe use where while"
 );
 
+/// Space-separated HTML tag-name list installed via the hypertext
+/// lexer's `SCI_SETKEYWORDS(0, ...)`. Without this list every tag
+/// renders as `SCE_H_TAGUNKNOWN`; with it, known tags render as
+/// `SCE_H_TAG` so the theme can colour real markup distinctly from
+/// arbitrary identifiers a user might write inside angle brackets.
+///
+/// HTML 5 tag set (current WHATWG/W3C published vocabulary plus the
+/// `<a>`/`<b>`/etc. legacy tags that the spec keeps for back-compat).
+/// Shared across HTML / ASP / JSP / PHP — all four use the same
+/// lexer and the same class 0 list. Adding a new HTML element here
+/// lights it up across every hypertext-driven language at once.
+pub const HTML_KEYWORDS: &str = concat!(
+    "a abbr address area article aside audio b base bdi bdo blockquote body br ",
+    "button canvas caption cite code col colgroup data datalist dd del details ",
+    "dfn dialog div dl dt em embed fieldset figcaption figure footer form h1 h2 ",
+    "h3 h4 h5 h6 head header hgroup hr html i iframe img input ins kbd label ",
+    "legend li link main map mark menu meta meter nav noscript object ol ",
+    "optgroup option output p param picture pre progress q rb rp rt rtc ruby s ",
+    "samp script search section select slot small source span strong style sub ",
+    "summary sup svg table tbody td template textarea tfoot th thead time title ",
+    "tr track u ul var video wbr"
+);
+
+/// Space-separated PHP reserved-word list installed via the hypertext
+/// lexer's `SCI_SETKEYWORDS(4, ...)`. The hypertext lexer reserves
+/// class 4 for PHP keywords; classes 0/1/2/3 are HTML / `JavaScript`
+/// / `VBScript` / Python (one class per embedded language).
+///
+/// Covers PHP 8.x reserved words (matching the canonical list at
+/// <https://www.php.net/manual/en/reserved.keywords.php>) plus the
+/// language constants (`true`/`false`/`null`) and the type
+/// pseudo-keywords (`int`/`string`/...) that real PHP code reads as
+/// keyword-coloured. Magic constants (`__CLASS__`/`__DIR__`/etc.) are
+/// included so they pick up the same colour as `class` / `function`
+/// — they're not strictly reserved words but render that way in
+/// every PHP-aware editor.
+///
+/// **All entries must be lowercase.** The hypertext lexer's PHP
+/// classifier (`classifyWordHTPHP` in `LexHTML.cxx`) calls
+/// `styler.GetRangeLowered(...)` on every candidate token before the
+/// `keywords.InList(s)` lookup. Class 4 storage is **not** normalised
+/// (only class 0, HTML tags, gets `lowerCase = true` in the
+/// `WordListSet` switch), so a literal `__CLASS__` here would never
+/// match against the lexer's lowercased `__class__` query.
+/// Conventional PHP magic constants are written uppercase in source
+/// (`__CLASS__`, `__DIR__`), but the wordlist must store the
+/// lowercased form for the lookup to succeed.
+pub const PHP_KEYWORDS: &str = concat!(
+    "__halt_compiler abstract and array as break callable case catch class ",
+    "clone const continue declare default die do echo else elseif empty ",
+    "enddeclare endfor endforeach endif endswitch endwhile enum eval exit ",
+    "extends final finally fn for foreach function global goto if implements ",
+    "include include_once instanceof insteadof interface isset list match ",
+    "namespace new or print private protected public readonly require ",
+    "require_once return static switch throw trait try unset use var while ",
+    "xor yield ",
+    // language constants
+    "true false null ",
+    // type pseudo-keywords (PHP 7+ type declarations). `array` is
+    // intentionally not duplicated here — it already appears in the
+    // reserved-word section above; `WordList::Set` would dedupe it
+    // anyway, but listing once keeps this const honest against the
+    // PHP reference.
+    "void int float string bool object mixed iterable never self parent this ",
+    // magic constants — stored lowercase per the docstring above.
+    "__class__ __dir__ __file__ __function__ __line__ __method__ ",
+    "__namespace__ __trait__"
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

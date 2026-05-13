@@ -104,18 +104,26 @@ languages share their style table by reference, and that
 unwired languages correctly return `None`. Adding a row
 extends these tests as appropriate.
 
-## Coverage as of 2026-05-11
+## Coverage as of 2026-05-13
 
-Phase 4.5 framework has landed; the table-driven
-`lang_theme()` dispatch in `ui_win32` is wired and three rows
-(C, C++, Rust) are migrated onto it as the no-op verification.
-The framework's unit tests (in the `lang_theme_tests` module)
-pin the contract going forward.
+Phase 4.5 framework landed in an earlier commit; the table-driven
+`lang_theme()` dispatch in `ui_win32` is wired. C, C++, and Rust
+were migrated onto it as the no-op verification; PHP is the first
+language added on top of the new framework. The framework's unit
+tests (in the `lang_theme_tests` module) pin the contract going
+forward.
+
+PHP brings in a shared `HYPERTEXT_STYLES` table covering both
+`SCE_H_*` (HTML wrapper) and `SCE_HPHP_*` (PHP code inside
+`<?php ... ?>`). The hypertext lexer is shared across PHP / HTML
+/ ASP / JSP — once those rows are wired, each will reuse
+`HYPERTEXT_STYLES` and only differ in their per-language keyword
+list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 3 / 🟡 85 / ⚫ 1.
+Total: 89 rows. ✅ 4 / 🟡 84 / ⚫ 1.
 
 ## Languages
 
@@ -177,7 +185,7 @@ Total: 89 rows. ✅ 3 / 🟡 85 / ⚫ 1.
 | OScript | 78 | `oscript` | ⚫ | ⚫ | 🟡 |
 | Pascal | 11 | `pascal` | ⚫ | ⚫ | 🟡 |
 | Perl | 21 | `perl` | ⚫ | ⚫ | 🟡 |
-| PHP | 1 | `hypertext` | ⚫ | ⚫ | 🟡 |
+| PHP | 1 | `hypertext` | ✅ | ✅ | ✅ |
 | PostScript | 35 | `ps` | ⚫ | ⚫ | 🟡 |
 | PowerShell | 53 | `powershell` | ⚫ | ⚫ | 🟡 |
 | Properties | 34 | `props` | ⚫ | ⚫ | 🟡 |

@@ -100,7 +100,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use codepp_core::lang::{CPP_KEYWORDS, C_KEYWORDS, L_C, L_CPP, L_RUST, RUST_KEYWORDS};
+use codepp_core::lang::{
+    CPP_KEYWORDS, C_KEYWORDS, HTML_KEYWORDS, L_C, L_CPP, L_PHP, L_RUST, PHP_KEYWORDS, RUST_KEYWORDS,
+};
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
 use codepp_plugin_host::ffi::SCNotification;
@@ -111,25 +113,31 @@ use codepp_plugin_host::{
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_C_CHARACTER, SCE_C_COMMENT,
     SCE_C_COMMENTDOC, SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR,
-    SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_RUST_CHARACTER,
-    SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC,
-    SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
-    SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY,
-    SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
-    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
-    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
-    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
-    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
-    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
-    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
-    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
-    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
-    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
-    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED,
-    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
+    SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_HPHP_COMMENT,
+    SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE,
+    SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD,
+    SCE_H_ASP, SCE_H_ASPAT, SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT,
+    SCE_H_DOUBLESTRING, SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION,
+    SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND, SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT,
+    SCE_H_XMLEND, SCE_H_XMLSTART, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK,
+    SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME,
+    SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD,
+    SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT,
+    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN,
+    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER,
+    SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT,
+    SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT,
+    SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM,
+    SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN,
+    SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER,
+    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE,
+    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES,
+    SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
+    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
+    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
+    SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT,
+    SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS,
+    SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
     SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
     SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MOD_DELETETEXT,
     SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
@@ -3005,7 +3013,10 @@ enum StyleSlot {
     /// Numeric literals.
     Number,
     /// Preprocessor directives (`#include`, `#define`) — also
-    /// reused for HTML / XML doctype and processing instructions.
+    /// reused for HTML / XML doctype, processing instructions, and
+    /// HTML entities (`&amp;` / `&#160;`): all categories the user's
+    /// eye reads as "out-of-band syntax marker" rather than content,
+    /// which is the slot's visual meaning.
     Preprocessor,
     /// Operators (`+`, `==`, `->`, …).
     Operator,
@@ -3201,6 +3212,88 @@ const RUST_THEME: LangTheme = LangTheme {
     bold: RUST_BOLD,
 };
 
+// --- LexHTML (hypertext) family ---
+// `LexHTML` is a multi-mode lexer: emits SCE_H_* for the HTML
+// portion, SCE_HPHP_* inside `<?php ?>`, SCE_HJ_* inside `<script>`,
+// SCE_HB_* inside VBScript blocks, SCE_HP_* inside Python blocks.
+// Phase 4.5 wires HTML + PHP first. The style table below covers
+// both ranges so any language sharing the lexer — HTML, ASP, JSP,
+// PHP — can ride this exact mapping; only the per-language keyword
+// list differs. This mirrors how `CPP_STYLES` is shared across all
+// LexCPP-family languages.
+//
+// PHP variables (`$foo`, `${...}`, and `$foo`-inside-strings) map to
+// `StyleSlot::Keyword2`. They're not keywords proper but they're the
+// most visually distinctive PHP token; the steel-blue colour reads
+// as "special identifier" and matches conventional editor themes.
+
+const HYPERTEXT_STYLES: &[(usize, StyleSlot)] = &[
+    // HTML range — `<tag attr="value">text<!-- comment --></tag>`.
+    // `*UNKNOWN` (custom elements, non-standard attrs like Web
+    // Components) intentionally share the slot of their known
+    // counterparts — Code++'s palette is deliberately coarse, and
+    // a separate "unknown" visual today would imply judgement
+    // (warning? error?) the host can't substantiate. Revisit if a
+    // future palette redesign adds a neutral "unknown identifier"
+    // slot.
+    (SCE_H_TAG, StyleSlot::Keyword),
+    (SCE_H_TAGUNKNOWN, StyleSlot::Keyword),
+    (SCE_H_TAGEND, StyleSlot::Keyword),
+    (SCE_H_ATTRIBUTE, StyleSlot::Keyword2),
+    (SCE_H_ATTRIBUTEUNKNOWN, StyleSlot::Keyword2),
+    (SCE_H_DOUBLESTRING, StyleSlot::String),
+    (SCE_H_SINGLESTRING, StyleSlot::String),
+    (SCE_H_VALUE, StyleSlot::String),
+    (SCE_H_NUMBER, StyleSlot::Number),
+    (SCE_H_COMMENT, StyleSlot::Comment),
+    (SCE_H_ENTITY, StyleSlot::Preprocessor),
+    (SCE_H_OTHER, StyleSlot::Operator),
+    (SCE_H_QUESTION, StyleSlot::Preprocessor), // `<?` / `<?php`
+    (SCE_H_XMLSTART, StyleSlot::Preprocessor), // `<?xml`
+    (SCE_H_XMLEND, StyleSlot::Preprocessor),   // `?>` of XML decl
+    (SCE_H_ASP, StyleSlot::Preprocessor),      // `<%`
+    (SCE_H_ASPAT, StyleSlot::Preprocessor),    // `<%@`
+    (SCE_H_CDATA, StyleSlot::String),
+    (SCE_H_XCCOMMENT, StyleSlot::Comment),
+    // PHP range — code inside `<?php ?>`
+    (SCE_HPHP_WORD, StyleSlot::Keyword),
+    (SCE_HPHP_HSTRING, StyleSlot::String),
+    (SCE_HPHP_SIMPLESTRING, StyleSlot::String),
+    (SCE_HPHP_NUMBER, StyleSlot::Number),
+    (SCE_HPHP_VARIABLE, StyleSlot::Keyword2),
+    (SCE_HPHP_HSTRING_VARIABLE, StyleSlot::Keyword2),
+    (SCE_HPHP_COMPLEX_VARIABLE, StyleSlot::Keyword2),
+    (SCE_HPHP_COMMENT, StyleSlot::Comment),
+    (SCE_HPHP_COMMENTLINE, StyleSlot::Comment),
+    (SCE_HPHP_OPERATOR, StyleSlot::Operator),
+];
+const HYPERTEXT_ITALIC: &[usize] = &[
+    SCE_H_COMMENT,
+    SCE_H_XCCOMMENT,
+    SCE_HPHP_COMMENT,
+    SCE_HPHP_COMMENTLINE,
+];
+const HYPERTEXT_BOLD: &[usize] = &[SCE_H_TAG, SCE_HPHP_WORD];
+
+const PHP_THEME: LangTheme = LangTheme {
+    // Hypertext lexer keyword classes:
+    //   class 0 = HTML tag names (so `<div>` lexes as SCE_H_TAG,
+    //             not SCE_H_TAGUNKNOWN — both share the Keyword
+    //             slot today but the distinction is preserved for
+    //             a future palette tweak)
+    //   class 4 = PHP reserved words (drives SCE_HPHP_WORD)
+    // Classes 1/2/3 (JavaScript / VBScript / Python) and class 5
+    // (SGML) are left unset for this row; the embedded-script
+    // ranges those classes drive aren't styled by the PHP theme
+    // (`SCE_HJ_*`, `SCE_HB_*`, `SCE_HP_*` aren't in
+    // `HYPERTEXT_STYLES` today), so installing keyword words for
+    // them would have no visible effect anyway.
+    keywords: &[(0, HTML_KEYWORDS), (4, PHP_KEYWORDS)],
+    styles: HYPERTEXT_STYLES,
+    italic: HYPERTEXT_ITALIC,
+    bold: HYPERTEXT_BOLD,
+};
+
 /// Per-language theme dispatch. Returns `Some(&theme)` for any
 /// language whose keyword classes + style mappings have been
 /// wired on the host side; `None` for languages whose Lexilla
@@ -3225,6 +3318,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&CPP_THEME)
     } else if lang == L_RUST {
         Some(&RUST_THEME)
+    } else if lang == L_PHP {
+        Some(&PHP_THEME)
     } else {
         None
     }
@@ -17711,7 +17806,10 @@ mod lang_theme_tests {
     //! known language fails loudly rather than silently rendering
     //! a buffer at default colours.
     use super::{lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO};
-    use codepp_core::lang::{L_C, L_CPP, L_JAVASCRIPT, L_PYTHON, L_RUST, L_TEXT, RUST_KEYWORDS};
+    use codepp_core::lang::{
+        HTML_KEYWORDS, L_C, L_CPP, L_JAVASCRIPT, L_PHP, L_PYTHON, L_RUST, L_TEXT, PHP_KEYWORDS,
+        RUST_KEYWORDS,
+    };
 
     /// Every wired language must:
     ///   - Return `Some(&theme)`.
@@ -17723,7 +17821,7 @@ mod lang_theme_tests {
     ///     wiring).
     #[test]
     fn wired_languages_have_complete_themes() {
-        for (lang, name) in [(L_C, "C"), (L_CPP, "C++"), (L_RUST, "Rust")] {
+        for (lang, name) in [(L_C, "C"), (L_CPP, "C++"), (L_RUST, "Rust"), (L_PHP, "PHP")] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
                 !theme.keywords.is_empty(),
@@ -17777,11 +17875,34 @@ mod lang_theme_tests {
         assert_eq!(rust.keywords[0].1, RUST_KEYWORDS);
     }
 
+    /// PHP rides the hypertext lexer's class 0 (HTML tag names) and
+    /// class 4 (PHP reserved words). Pin both classes to the
+    /// canonical `core::lang` consts so a regression that swaps
+    /// them, drops a class, or reassigns class indices fails
+    /// loudly. The class indices are dictated by Lexilla's
+    /// `LexHTML.cxx` (class 4 = PHP), not arbitrary.
+    #[test]
+    fn php_theme_installs_html_class_0_and_php_class_4() {
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        assert_eq!(
+            php.keywords.len(),
+            2,
+            "PHP theme installs HTML (class 0) + PHP (class 4)"
+        );
+        // First entry: HTML tags on class 0.
+        assert_eq!(php.keywords[0].0, 0);
+        assert_eq!(php.keywords[0].1, HTML_KEYWORDS);
+        // Second entry: PHP reserved words on class 4 (the
+        // hypertext lexer's PHP slot).
+        assert_eq!(php.keywords[1].0, 4);
+        assert_eq!(php.keywords[1].1, PHP_KEYWORDS);
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
     /// updating in the same commit — same as for `L_C` / `L_CPP`
-    /// / `L_RUST` above.
+    /// / `L_RUST` / `L_PHP` above.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_PYTHON).is_none(), "Python not wired yet");
