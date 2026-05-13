@@ -188,8 +188,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW, GetParent, GetSubMenu, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
     GetWindowTextW, IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW,
     LoadImageW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SendMessageW, SetCursor, SetLayeredWindowAttributes, SetMenu, SetParent, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
+    SendMessageW, SetCursor, SetLayeredWindowAttributes, SetMenu, SetMenuItemInfoW, SetParent,
+    SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
     TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
     BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_OWNERDRAW,
     BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL,
@@ -197,17 +197,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
     ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
     GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO, IDOK,
     IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
-    MB_YESNO, MB_YESNOCANCEL, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
-    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND,
-    WM_HSCROLL, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
-    WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT,
-    WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION,
-    WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
-    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MFT_RIGHTJUSTIFY, MF_BYCOMMAND, MF_BYPOSITION,
+    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MSG,
+    SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
+    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED,
+    WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
+    WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL, WM_INITMENUPOPUP,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT,
+    WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE,
+    WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
+    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP,
+    WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -762,6 +762,11 @@ struct WindowState {
     encoding_menu: HMENU,
     language_menu: HMENU,
     window_menu: HMENU,
+    /// Right-edge open-tabs `▼` popup. Same content as `window_menu`
+    /// — rebuilt on `WM_INITMENUPOPUP` by `refresh_window_menu`.
+    /// Kept as a separate HMENU so the menu-bar match in the popup
+    /// dispatcher can identify which one is opening.
+    right_shortcuts_menu: HMENU,
     /// HWND of the modeless Find/Replace dialog, lazily created on
     /// the first Ctrl+F / Ctrl+H / menu click. The main message
     /// loop reads this in `IsDialogMessageW(dlg, &msg)` so Tab /
@@ -4258,6 +4263,13 @@ struct BuiltMenuBar {
     encoding_menu: HMENU,
     language_menu: HMENU,
     window_menu: HMENU,
+    /// Popup HMENU for the right-shortcuts `▼` dropdown — the open-
+    /// tabs switcher pinned to the right edge of the menu bar.
+    /// Rebuilt on `WM_INITMENUPOPUP` by the same `refresh_window_menu`
+    /// helper as the regular Window menu, so its items use the same
+    /// `ID_WINDOW_BASE + idx` cmd ids and existing tab-switch
+    /// handler.
+    right_shortcuts_menu: HMENU,
 }
 
 /// Construct the full N++-shaped main menu: File, Edit, Search,
@@ -4606,6 +4618,68 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         )?;
         AppendMenuW(bar, MF_POPUP, help_menu.0 as usize, w!("&?"))?;
 
+        // ----- Right shortcuts -----
+        // Three single-glyph top-level entries pinned to the right
+        // edge of the menu bar: `+` (new untitled), `▼` (open-tabs
+        // switcher), `X` (close active tab). They form the "right
+        // shortcuts" UI group; a future Settings toggle will hide
+        // the group as a whole, but for now it's always shown.
+        //
+        // `+` and `X` reuse `ID_FILE_NEW` / `ID_FILE_CLOSE` so the
+        // existing WM_COMMAND handlers light up unchanged. `▼` is a
+        // popup populated on `WM_INITMENUPOPUP` by the same
+        // `refresh_window_menu` helper as the regular Window menu,
+        // so the entries use the same `ID_WINDOW_BASE + idx` cmd
+        // ids and the same tab-switch handler.
+        //
+        // Right-justification: `MFT_RIGHTJUSTIFY` on the first of
+        // the three items right-aligns it and every subsequent
+        // top-level item — so the three appear `+ ▼ X` left-to-right
+        // hugging the menu bar's right edge.
+        // U+FF0B FULLWIDTH PLUS SIGN — drawn at the menu font's full
+        // em-square height, so the cross visually matches the `X`
+        // letter to its right. ASCII `+` sits at x-height and looks
+        // half the size of the neighbouring glyphs.
+        AppendMenuW(bar, MF_STRING, ID_FILE_NEW as usize, w!("\u{FF0B}"))?;
+        // RAII-wrap the freshly-allocated popup so a `?`-propagated
+        // failure on the upcoming attach `AppendMenuW(MF_POPUP)` —
+        // before Win32 takes ownership — frees the orphan instead
+        // of leaking a kernel object. The same pattern is used in
+        // `build_language_menu`. No construction-time placeholder
+        // item is needed: `refresh_window_menu` clears and rebuilds
+        // the popup's contents on every `WM_INITMENUPOPUP`.
+        let right_shortcuts_guard = MenuGuard::wrap(CreateMenu()?);
+        AppendMenuW(
+            bar,
+            MF_POPUP,
+            right_shortcuts_guard.handle().0 as usize,
+            w!("\u{25BC}"),
+        )?;
+        // Attach succeeded — defuse the guard so the bar's destroy
+        // cascade becomes the sole owner of the popup HMENU.
+        let right_shortcuts_menu = right_shortcuts_guard.take();
+        AppendMenuW(bar, MF_STRING, ID_FILE_CLOSE as usize, w!("X"))?;
+
+        // Flip the `+` item to right-justified. `GetMenuItemCount`
+        // returns the post-append total; the `+` we just appended is
+        // at position `count - 3`. A failure here only affects
+        // alignment (the three entries still work, they just appear
+        // mixed with the left-justified menu items) — log and carry
+        // on rather than failing the menu build.
+        let item_count = GetMenuItemCount(Some(bar));
+        if item_count >= 3 {
+            let plus_pos = (item_count - 3) as u32;
+            let mut mii = MENUITEMINFOW {
+                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                fMask: MIIM_FTYPE,
+                fType: MFT_RIGHTJUSTIFY,
+                ..Default::default()
+            };
+            if let Err(e) = SetMenuItemInfoW(bar, plus_pos, true, &raw mut mii) {
+                tracing::warn!(error = %e, "SetMenuItemInfoW(MFT_RIGHTJUSTIFY) failed");
+            }
+        }
+
         Ok(BuiltMenuBar {
             bar,
             plugin_menu,
@@ -4613,6 +4687,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             encoding_menu,
             language_menu,
             window_menu,
+            right_shortcuts_menu,
         })
     }
 }
@@ -12958,6 +13033,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             encoding_menu: menus.encoding_menu,
             language_menu: menus.language_menu,
             window_menu: menus.window_menu,
+            right_shortcuts_menu: menus.right_shortcuts_menu,
             find_replace_dlg: None,
             plugin_modeless_dialogs: Vec::new(),
             dock_dialogs: Vec::new(),
@@ -16466,6 +16542,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         }
                     } else if popup_hmenu_value == state.window_menu.0 as usize {
                         refresh_window_menu(state.window_menu, &state.shell);
+                    } else if popup_hmenu_value == state.right_shortcuts_menu.0 as usize {
+                        // Right-edge `▼` open-tabs switcher. Same
+                        // content shape as the Window menu — reuse
+                        // the helper so the entry list, cmd ids, and
+                        // active-tab check mark stay in sync.
+                        refresh_window_menu(state.right_shortcuts_menu, &state.shell);
                     }
                 }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
