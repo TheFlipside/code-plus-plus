@@ -154,7 +154,7 @@ pub struct Styles {
 /// row, each with a handful of attributes), so any healthy file
 /// is well under 1 KiB. Capping at 4 KiB still leaves an order-
 /// of-magnitude headroom for future schema growth without
-/// inviting a DoS via a maliciously-large pre-planted file.
+/// inviting a `DoS` via a maliciously-large pre-planted file.
 /// Hitting the cap surfaces as a `StylesError::Io` which
 /// `load_styles` in the shell maps to defaults — same fallback
 /// as a parse error.
@@ -178,9 +178,8 @@ pub const FONT_NAME_MAX_LEN: usize = 256;
 /// the result is always valid UTF-8 with length ≤ the cap.
 fn truncate_font_name(name: &mut String) {
     let mut indices = name.char_indices();
-    let cap_byte = match indices.nth(FONT_NAME_MAX_LEN) {
-        Some((idx, _)) => idx,
-        None => return, // already within the cap
+    let Some((cap_byte, _)) = indices.nth(FONT_NAME_MAX_LEN) else {
+        return; // already within the cap
     };
     name.truncate(cap_byte);
 }
@@ -190,12 +189,14 @@ impl Styles {
     /// present, otherwise the built-in defaults. Callers should
     /// use this rather than `.default.unwrap_or_default()` so the
     /// fallback rule is single-sourced.
+    #[must_use]
     pub fn effective_default(&self) -> StyleEntry {
         self.default.clone().unwrap_or_default()
     }
 
     /// Return the active transparency settings — same single-
     /// source contract as [`Self::effective_default`].
+    #[must_use]
     pub fn effective_transparency(&self) -> Transparency {
         self.transparency.clone().unwrap_or_default()
     }
@@ -212,6 +213,15 @@ impl Styles {
     /// truncated to [`FONT_NAME_MAX_LEN`] characters as a
     /// second-layer defence against pathological input that
     /// slipped under the file-size cap.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StylesError::Io` on filesystem errors (other than
+    /// "not found", which yields the empty default), oversized
+    /// files, or a UTF-8 boundary failure on the bytes. Returns
+    /// `StylesError::Parse` when the XML doesn't match the
+    /// `<styles>` schema. Returns `StylesError::Utf8` if the file
+    /// isn't valid UTF-8.
     pub fn load_from_xml(path: &Path) -> Result<Self, StylesError> {
         let meta = match std::fs::metadata(path) {
             Ok(m) => m,
@@ -258,6 +268,14 @@ impl Styles {
     /// that lived here before was prone to leaving zero-byte
     /// or torn files if interrupted between truncate and the
     /// completion of the body write.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StylesError::Serialize` if quick-xml fails to
+    /// serialise (effectively impossible for this finite
+    /// schema); `StylesError::Io` for parent-directory create
+    /// failures, temp-file creation/write/sync failures, or
+    /// the final atomic rename failing.
     pub fn save_to_xml(&self, path: &Path) -> Result<(), StylesError> {
         let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         let body =
@@ -291,6 +309,7 @@ impl Styles {
 /// digits (length, character class, or both). Tolerates any
 /// case. Strips an optional leading `#` so values pasted from a
 /// browser colour picker work without manual editing.
+#[must_use]
 pub fn parse_rgb_hex(s: &str) -> Option<(u8, u8, u8)> {
     let trimmed = s.strip_prefix('#').unwrap_or(s);
     if trimmed.len() != 6 {
@@ -305,6 +324,7 @@ pub fn parse_rgb_hex(s: &str) -> Option<(u8, u8, u8)> {
 /// Format `(r, g, b)` as `RRGGBB` (upper-case, no leading `#`).
 /// The inverse of [`parse_rgb_hex`] for the canonical persisted
 /// form.
+#[must_use]
 pub fn format_rgb_hex(r: u8, g: u8, b: u8) -> String {
     format!("{r:02X}{g:02X}{b:02X}")
 }
@@ -434,7 +454,7 @@ mod tests {
         // file-size cap should reject it before parsing kicks in,
         // proving the guard fires regardless of the content's
         // shape.
-        let filler: String = " ".repeat(STYLES_XML_MAX_BYTES as usize + 1);
+        let filler: String = " ".repeat(usize::try_from(STYLES_XML_MAX_BYTES).unwrap() + 1);
         let xml =
             format!(r#"<?xml version="1.0"?><styles><default font_name="X"/></styles>{filler}"#);
         std::fs::write(&path, xml).unwrap();
@@ -467,7 +487,7 @@ mod tests {
     /// at the byte offset would panic for a font name in CJK or
     /// other multi-byte-per-char scripts; the char-aware helper
     /// finds the codepoint boundary correctly so the result is
-    /// always valid UTF-8 with length ≤ FONT_NAME_MAX_LEN chars.
+    /// always valid UTF-8 with length ≤ `FONT_NAME_MAX_LEN` chars.
     #[test]
     fn oversized_font_name_truncation_is_codepoint_safe() {
         let (_dir, path) = temp_path();

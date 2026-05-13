@@ -96,6 +96,13 @@ impl FindHistory {
     /// Read the XML file at `path`. Returns an empty history if
     /// the file does not exist; surfaces I/O / parse errors for
     /// any other failure mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FindHistoryError::Io` for filesystem errors other
+    /// than "not found", and `FindHistoryError::Parse` if the
+    /// file is present but doesn't deserialise into the
+    /// `FindHistory` schema.
     pub fn load(path: &Path) -> Result<Self, FindHistoryError> {
         let raw = match std::fs::read_to_string(path) {
             Ok(s) => s,
@@ -122,6 +129,13 @@ impl FindHistory {
     ///     and owner-only, so a local actor can't pre-create a
     ///     symlink at a guessable sibling path to redirect the
     ///     write.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FindHistoryError::Serialize` for the (effectively
+    /// impossible) quick-xml emit failure, and `FindHistoryError::Io`
+    /// for any filesystem failure during the create-dirs /
+    /// tempfile / write / sync / rename pipeline.
     pub fn save(&self, path: &Path) -> Result<(), FindHistoryError> {
         let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         quick_xml::se::to_writer(&mut xml, self).map_err(FindHistoryError::Serialize)?;

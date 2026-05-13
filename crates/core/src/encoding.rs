@@ -43,6 +43,7 @@ pub enum Encoding {
 
 impl Encoding {
     /// Human-readable label for the status bar and `session.xml`.
+    #[must_use]
     pub fn label(&self) -> &str {
         match self {
             Encoding::Utf8 => "UTF-8",
@@ -59,6 +60,7 @@ impl Encoding {
     /// to `Other`, preserving whatever the input was — so a hand-edited
     /// `session.xml` with an unrecognised encoding name doesn't crash
     /// the editor.
+    #[must_use]
     pub fn from_label(s: &str) -> Encoding {
         match s {
             "UTF-8" => Encoding::Utf8,
@@ -96,6 +98,7 @@ impl From<String> for Encoding {
 /// Detect the encoding of `bytes` and return `(encoding, body)` where
 /// `body` is the slice with any BOM stripped — i.e. the bytes a decoder
 /// should consume.
+#[must_use]
 pub fn detect(bytes: &[u8]) -> (Encoding, &[u8]) {
     // 1. BOM-prefixed cases. Order matters: UTF-32 BOMs share a prefix
     //    with UTF-16 LE BOMs, so check UTF-32 first. Phase 2 doesn't
@@ -174,10 +177,12 @@ pub fn detect(bytes: &[u8]) -> (Encoding, &[u8]) {
 /// Decode `body` (BOM-stripped per `detect`) into a Rust `String` using
 /// the supplied encoding.
 ///
+/// # Errors
+///
 /// Returns `EncodingError::Malformed` if any byte sequence is invalid
-/// for the encoding (encoding_rs's strict mode), or `UnknownLabel` if
+/// for the encoding (`encoding_rs`'s strict mode), or `UnknownLabel` if
 /// `Encoding::Other(label)` does not name an encoding `encoding_rs`
-/// knows about. encoding_rs does not surface a byte offset for the
+/// knows about. `encoding_rs` does not surface a byte offset for the
 /// failing position; the caller surfaces a generic dialog and aborts
 /// the open. A future opt-in lossy-decode path may relax this.
 pub fn decode(body: &[u8], encoding: &Encoding) -> Result<String, EncodingError> {
@@ -210,6 +215,14 @@ pub fn decode(body: &[u8], encoding: &Encoding) -> Result<String, EncodingError>
 /// does not support them as encode targets (the WHATWG Encoding Standard
 /// it implements defines UTF-16 only for decoding; for encoding only
 /// UTF-8 is in scope). Decoding still goes through `encoding_rs`.
+///
+/// # Errors
+///
+/// Returns `EncodingError::UnknownLabel` for an
+/// `Encoding::Other(label)` whose label `encoding_rs` doesn't
+/// recognise, and `EncodingError::Lossy` when a target encoding
+/// can't represent every character in `text` (e.g. a non-ASCII
+/// char to ISO-8859-1).
 pub fn encode(text: &str, encoding: &Encoding) -> Result<Vec<u8>, EncodingError> {
     match encoding {
         Encoding::Utf8 => Ok(text.as_bytes().to_vec()),
@@ -356,7 +369,7 @@ mod tests {
         // byte is zero.
         let bytes: Vec<u8> = "hello world\nhello world\n"
             .encode_utf16()
-            .flat_map(|u| u.to_le_bytes())
+            .flat_map(u16::to_le_bytes)
             .collect();
         let (enc, _) = detect(&bytes);
         assert_eq!(enc, Encoding::Utf16Le);
@@ -366,7 +379,7 @@ mod tests {
     fn detects_utf16_be_no_bom() {
         let bytes: Vec<u8> = "hello world\nhello world\n"
             .encode_utf16()
-            .flat_map(|u| u.to_be_bytes())
+            .flat_map(u16::to_be_bytes)
             .collect();
         let (enc, _) = detect(&bytes);
         assert_eq!(enc, Encoding::Utf16Be);
@@ -452,7 +465,7 @@ mod tests {
         // non-zero but the parity heuristic should still fire because
         // every second byte (the high byte for BMP) is zero.
         let s = "α α α α α α α α α α α α α α α α";
-        let bytes: Vec<u8> = s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+        let bytes: Vec<u8> = s.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let (enc, _) = detect(&bytes);
         assert_eq!(enc, Encoding::Utf16Le);
     }

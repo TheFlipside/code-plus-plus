@@ -164,9 +164,9 @@ pub const SCI_REPLACETARGET: u32 = 2194;
 pub const SCFIND_NONE: u32 = 0x0;
 pub const SCFIND_WHOLEWORD: u32 = 0x2;
 pub const SCFIND_MATCHCASE: u32 = 0x4;
-pub const SCFIND_WORDSTART: u32 = 0x00100000;
-pub const SCFIND_REGEXP: u32 = 0x00200000;
-pub const SCFIND_CXX11REGEX: u32 = 0x00800000;
+pub const SCFIND_WORDSTART: u32 = 0x0010_0000;
+pub const SCFIND_REGEXP: u32 = 0x0020_0000;
+pub const SCFIND_CXX11REGEX: u32 = 0x0080_0000;
 
 // Undo grouping. Wrap a batch of edits (e.g. Replace All) between
 // `SCI_BEGINUNDOACTION` and `SCI_ENDUNDOACTION` and the user can
@@ -192,7 +192,7 @@ pub const SCN_MODIFIED: u32 = 2008;
 /// Scintilla notification fired whenever the caret moves, the
 /// selection changes, or any other UI-relevant state shifts. The
 /// status bar's cursor / column / pos slots refresh on each
-/// SCN_UPDATEUI so they track the live caret without needing a
+/// `SCN_UPDATEUI` so they track the live caret without needing a
 /// separate timer.
 pub const SCN_UPDATEUI: u32 = 2007;
 /// Notification fired when the bound document transitions back to
@@ -411,10 +411,10 @@ pub const SCI_SETFONTQUALITY: u32 = 2611;
 /// path uses this so a plugin that "turns smoothing off" gets an
 /// observable on-screen change.
 pub const SC_EFF_QUALITY_NON_ANTIALIASED: u32 = 1;
-/// ClearType / LCD-optimised rendering — the modern Windows
+/// `ClearType` / LCD-optimised rendering — the modern Windows
 /// default and Code++'s `NPPM_SETSMOOTHFONT(TRUE)` choice.
 pub const SC_EFF_QUALITY_LCD_OPTIMIZED: u32 = 3;
-/// Apply STYLE_DEFAULT to all other styles. Useful as the first call
+/// Apply `STYLE_DEFAULT` to all other styles. Useful as the first call
 /// after switching lexers so the previous lexer's per-style colours
 /// don't bleed through.
 ///

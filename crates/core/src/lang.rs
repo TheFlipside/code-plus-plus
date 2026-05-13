@@ -34,6 +34,7 @@ pub struct LangType(pub i32);
 impl LangType {
     /// The numeric id N++ plugins observe via `NPPM_GETCURRENTLANGTYPE`.
     #[inline]
+    #[must_use]
     pub fn as_npp_id(self) -> i32 {
         self.0
     }
@@ -41,6 +42,7 @@ impl LangType {
     /// Resolve a file extension (without the leading dot, lower-cased
     /// or not — we lower-case internally) to a known `LangType`. Falls
     /// back to [`L_TEXT`] for anything we don't recognise.
+    #[must_use]
     pub fn from_extension(ext: &str) -> Self {
         // ASCII-lowercasing avoids allocating for the common case of
         // already-lowercase extensions; collect to String for the rest.
@@ -61,6 +63,7 @@ impl LangType {
 
     /// Resolve a path to a `LangType` by inspecting its extension.
     /// Files with no extension (or an empty one) return [`L_TEXT`].
+    #[must_use]
     pub fn from_path(path: &Path) -> Self {
         match path.extension().and_then(|s| s.to_str()) {
             Some(ext) => Self::from_extension(ext),
@@ -70,9 +73,10 @@ impl LangType {
 
     /// The string Lexilla expects in `CreateLexer(name)`. Returns
     /// `None` for [`L_TEXT`] (no lexer attached — Scintilla renders
-    /// the buffer in the default style) and for any LangType not in
+    /// the buffer in the default style) and for any `LangType` not in
     /// the table (a plugin might set a future N++ enum value via
     /// `NPPM_SETBUFFERLANGTYPE`).
+    #[must_use]
     pub fn lexer_name(self) -> Option<&'static str> {
         LANG_TABLE
             .iter()
@@ -85,6 +89,7 @@ impl LangType {
     /// ("C", "C++", "Rust", "Normal Text"). Returns `None` for variants
     /// not in the table; the dispatch arm translates that into a
     /// zero-length write so plugins observe "no name available".
+    #[must_use]
     pub fn language_name(self) -> Option<&'static str> {
         LANG_TABLE
             .iter()
@@ -95,6 +100,7 @@ impl LangType {
     /// Long human-readable description returned by `NPPM_GETLANGUAGEDESC`.
     /// Notepad++ uses the longer phrasing here ("C++ source file");
     /// plugins display it in language-pickers and about-dialogs.
+    #[must_use]
     pub fn language_desc(self) -> Option<&'static str> {
         LANG_TABLE.iter().find(|e| e.lang == self).map(|e| e.desc)
     }
@@ -114,7 +120,7 @@ pub struct LangEntry {
     /// Long description for `NPPM_GETLANGUAGEDESC` ("C++ source file").
     pub desc: &'static str,
     /// String to pass to Lexilla's `CreateLexer(name)`. `None` means
-    /// either L_TEXT (we want no lexer) or "no Lexilla lexer is the
+    /// either `L_TEXT` (we want no lexer) or "no Lexilla lexer is the
     /// right match" (the lang is in the menu and round-trips through
     /// the plugin ABI, but the buffer renders without highlighting).
     /// The static-link set in `crates/scintilla-sys/build.rs` must
@@ -927,7 +933,7 @@ pub const L_JSON5: LangType = LangType(94);
 
 /// Space-separated keyword list installed via `SCI_SETKEYWORDS(0, ...)`
 /// when the active language is C. Keeps the demo-gate `.c` file showing
-/// keywords coloured even though LexCPP's default keyword set is
+/// keywords coloured even though `LexCPP`'s default keyword set is
 /// empty. Includes C99/C11 keywords; not exhaustive but covers the
 /// "see colour on `int`/`return`/`if`" case.
 pub const C_KEYWORDS: &str = concat!(
@@ -953,7 +959,7 @@ pub const CPP_KEYWORDS: &str = concat!(
     "volatile wchar_t while xor xor_eq"
 );
 
-/// Space-separated primary-keyword list for Rust. LexRust's keyword
+/// Space-separated primary-keyword list for Rust. `LexRust`'s keyword
 /// classes 0 = primary, 1 = secondary; we install just primary at m1.
 pub const RUST_KEYWORDS: &str = concat!(
     "as async await break const continue crate dyn else enum extern false fn ",
@@ -1096,7 +1102,7 @@ mod tests {
         // duplicate would make the second row unreachable and
         // silently lose its data.
         let mut ids: Vec<i32> = LANG_TABLE.iter().map(|e| e.lang.0).collect();
-        ids.sort();
+        ids.sort_unstable();
         for window in ids.windows(2) {
             assert!(
                 window[0] != window[1],

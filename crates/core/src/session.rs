@@ -165,6 +165,12 @@ pub struct WindowGeometry {
 /// `skip_serializing_if` predicate for the maximized flag — so the
 /// common `maximized="false"` case isn't serialized at all,
 /// matching how the other `Option` fields elide their default.
+///
+/// serde calls predicates via `&T`, so the signature must be
+/// `&bool`. The clippy `trivially_copy_pass_by_ref` lint would
+/// prefer `bool`-by-value for a 1-byte type; the by-ref shape
+/// is mandated by serde here, not the API's choice.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -222,6 +228,7 @@ impl From<std::io::Error> for SessionError {
 
 impl Session {
     /// Convenience constructor for an empty session.
+    #[must_use]
     pub fn new() -> Self {
         Session::default()
     }
@@ -229,6 +236,14 @@ impl Session {
     /// Read `session.xml` from `path`. A missing file is **not** an
     /// error — it returns an empty `Session`, matching the "first
     /// launch, nothing to restore" UX.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SessionError::Io` on any read failure other than
+    /// "not found"; returns `SessionError::Parse` when the bytes
+    /// are present but don't deserialise into the
+    /// `Session`/`Tab` shape (e.g. corrupt or hand-edited
+    /// session.xml).
     pub fn load_from_xml(path: &Path) -> Result<Self, SessionError> {
         let contents = match std::fs::read_to_string(path) {
             Ok(s) => s,
@@ -260,6 +275,13 @@ impl Session {
     ///   - **No TOCTOU substitution:** a local attacker can't replace
     ///     the temp file between write and rename — the file has
     ///     restrictive permissions and a randomized name.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SessionError::Serialize` if quick-xml fails to
+    /// emit the document; `SessionError::Io` on parent-directory
+    /// creation, temp-file creation/write/sync, or the final
+    /// atomic rename failing.
     pub fn save_to_xml(&self, path: &Path) -> Result<(), SessionError> {
         let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         quick_xml::se::to_writer(&mut xml, self).map_err(SessionError::Serialize)?;
@@ -645,7 +667,7 @@ mod tests {
         // not left it behind.
         let entries: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .map(|e| e.file_name())
             .collect();
         assert_eq!(entries.len(), 1, "stray files left in dir: {entries:?}");

@@ -139,13 +139,21 @@ impl Loader {
     ///   - the cloneable `Loader` for queuing reads,
     ///   - the result `Receiver` for the UI thread to drain,
     ///   - a `LoaderShutdown` whose drop joins the worker.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `thread::Builder::spawn` fails (out of memory or
+    /// an OS-side thread-creation refusal). Surfacing this as a
+    /// panic matches the "first call at app startup, can't proceed
+    /// without it" gate the loader represents.
+    #[must_use]
     pub fn spawn() -> (Loader, Receiver<LoadResult>, LoaderShutdown) {
         let (req_tx, req_rx) = unbounded::<Request>();
         let (res_tx, res_rx) = unbounded::<LoadResult>();
 
         let join = thread::Builder::new()
             .name("codepp-file-loader".into())
-            .spawn(move || worker_loop(req_rx, res_tx))
+            .spawn(move || worker_loop(&req_rx, &res_tx))
             .expect("file loader thread spawn");
 
         let next_id = Arc::new(AtomicU64::new(1));
@@ -176,7 +184,7 @@ impl Loader {
     }
 }
 
-fn worker_loop(req_rx: Receiver<Request>, res_tx: Sender<LoadResult>) {
+fn worker_loop(req_rx: &Receiver<Request>, res_tx: &Sender<LoadResult>) {
     while let Ok(req) = req_rx.recv() {
         match req {
             Request::Shutdown => break,
@@ -260,6 +268,12 @@ fn read_and_decode(id: RequestId, path: &Path) -> LoadResult {
 }
 
 #[cfg(test)]
+// Tests bind `loader` and `loaded` (the LoadResult) in close
+// proximity — semantically distinct but clippy's pedantic
+// `similar_names` lint flags them as a typo hazard. Allowed at
+// module level so we don't have to invent uglier names just to
+// satisfy the lint in test scaffolding.
+#[allow(clippy::similar_names)]
 mod tests {
     use super::*;
     use std::io::Write;

@@ -4,8 +4,28 @@
 //! `(fn_ptr, instance_ptr)` pair captured once at construction. Hot
 //! operations route through `send` (the direct call); window-managed
 //! ones still use `SendMessage` from the UI crate. See DESIGN.md §4.2.
+//!
+//! # Allowed pedantic lints, with rationale
+//!
+//! - `clippy::cast_possible_truncation`
+//! - `clippy::cast_possible_wrap`
+//! - `clippy::cast_sign_loss`
+//!
+//! This crate's job is to translate between Rust types and
+//! Scintilla's `wparam`/`lparam`/`sptr_t` shapes — every one of
+//! those is a deliberate `as` cast between integer widths, and
+//! the Scintilla ABI semantics (documented in `Scintilla.h`)
+//! gate the value range, not Rust's type system. Marking each
+//! cast `#[allow(...)]` individually would add ~30 attribute
+//! lines to a thin wrapper crate with no real reader-defence
+//! value; the inner attributes here document the trade-off once.
 
 #![cfg(target_os = "windows")]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
 
 use core::ffi::c_void;
 
@@ -79,7 +99,17 @@ impl EditorHandle {
 
     /// Direct-call into Scintilla. The hot path — every keystroke, every
     /// selection update, every style query goes through this.
+    ///
+    /// `send` is intentionally NOT `#[must_use]` even though it
+    /// returns `sptr_t`: Scintilla messages are dual-purpose — query
+    /// messages (e.g. `SCI_GETLENGTH`) consume the return, but
+    /// setter / action messages (`SCI_SETTEXT`, `SCI_INSERTTEXT`,
+    /// `SCI_COLOURISE`, …) ignore it. Marking it must-use would
+    /// force `let _ = self.send(...)` at every setter call site
+    /// across the editor / `ui_win32` hot path — code-churn for no
+    /// real reader-defence value.
     #[inline]
+    #[allow(clippy::must_use_candidate)]
     pub fn send(&self, msg: u32, wparam: uptr_t, lparam: sptr_t) -> sptr_t {
         // SAFETY: `direct_fn` and `direct_ptr` were captured together from a
         // real Scintilla control via `SCI_GETDIRECTFUNCTION` /
@@ -90,6 +120,7 @@ impl EditorHandle {
     /// The underlying Scintilla `HWND` (as `*mut c_void` to keep this crate
     /// free of `windows`-crate types).
     #[inline]
+    #[must_use]
     pub fn hwnd(&self) -> *mut c_void {
         self.hwnd
     }
@@ -106,6 +137,7 @@ impl EditorHandle {
     /// **not** the way to detach a lexer; use [`Self::clear_lexer`]
     /// instead, which sends `SCI_SETILEXER(0, 0)` per the documented
     /// Scintilla contract.
+    #[must_use]
     pub fn set_lexer_by_name(&self, name: &str) -> bool {
         // CreateLexer needs a NUL-terminated `char*`. Build the buffer
         // on the stack for short names (every lexer name in Lexilla
@@ -120,7 +152,7 @@ impl EditorHandle {
         // bytes). `CreateLexer` is a pure function that reads the C string
         // and returns either a valid `ILexer5*` we then hand to
         // `SCI_SETILEXER`, or null if the name isn't registered.
-        let ilexer = unsafe { CreateLexer(buf.as_ptr() as *const core::ffi::c_char) };
+        let ilexer = unsafe { CreateLexer(buf.as_ptr().cast::<core::ffi::c_char>()) };
         if ilexer.is_null() {
             return false;
         }
@@ -138,7 +170,7 @@ impl EditorHandle {
     }
 
     /// Install a space-separated keyword list under `set_index`.
-    /// LexCPP's class 0 is "primary keywords"; LexRust uses 0 for
+    /// `LexCPP`'s class 0 is "primary keywords"; `LexRust` uses 0 for
     /// the language's reserved words.
     pub fn set_keywords(&self, set_index: u32, words: &str) {
         let mut buf = Vec::with_capacity(words.len() + 1);
@@ -166,17 +198,21 @@ impl EditorHandle {
 
     /// Toggle the bold attribute for a style.
     pub fn style_set_bold(&self, style: usize, bold: bool) {
-        self.send(SCI_STYLESETBOLD, style as uptr_t, bold as sptr_t);
+        self.send(SCI_STYLESETBOLD, style as uptr_t, sptr_t::from(bold));
     }
 
     /// Toggle the italic attribute for a style.
     pub fn style_set_italic(&self, style: usize, italic: bool) {
-        self.send(SCI_STYLESETITALIC, style as uptr_t, italic as sptr_t);
+        self.send(SCI_STYLESETITALIC, style as uptr_t, sptr_t::from(italic));
     }
 
     /// Toggle the underline attribute for a style.
     pub fn style_set_underline(&self, style: usize, underline: bool) {
-        self.send(SCI_STYLESETUNDERLINE, style as uptr_t, underline as sptr_t);
+        self.send(
+            SCI_STYLESETUNDERLINE,
+            style as uptr_t,
+            sptr_t::from(underline),
+        );
     }
 
     /// Set the font point size for a style. `points` is the integer
@@ -196,16 +232,15 @@ impl EditorHandle {
     pub fn style_set_font(&self, style: usize, name: &str) {
         // SCI_STYLESETFONT requires a NUL-terminated UTF-8 string;
         // build a `CString` so the trailing NUL is guaranteed.
-        let cname = match std::ffi::CString::new(name) {
-            Ok(c) => c,
-            Err(_) => {
-                tracing::warn!(
-                    style = style,
-                    name = name,
-                    "style_set_font: font name contains interior NUL; using Scintilla default"
-                );
-                std::ffi::CString::default()
-            }
+        let cname = if let Ok(c) = std::ffi::CString::new(name) {
+            c
+        } else {
+            tracing::warn!(
+                style = style,
+                name = name,
+                "style_set_font: font name contains interior NUL; using Scintilla default"
+            );
+            std::ffi::CString::default()
         };
         self.send(SCI_STYLESETFONT, style as uptr_t, cname.as_ptr() as sptr_t);
     }
@@ -219,7 +254,7 @@ impl EditorHandle {
     /// `SCI_STYLECLEARALL` and only needs to be applied once at
     /// editor creation.
     pub fn set_caret_line_visible(&self, visible: bool) {
-        self.send(SCI_SETCARETLINEVISIBLE, visible as uptr_t, 0);
+        self.send(SCI_SETCARETLINEVISIBLE, uptr_t::from(visible), 0);
     }
 
     /// Set the background colour for the caret line. `colour` uses
@@ -333,6 +368,7 @@ impl EditorHandle {
     /// selection to the match, which doubles as the new anchor for
     /// the next `search_next` so Find Next walks through the
     /// buffer.
+    #[must_use]
     pub fn search_next(&self, needle: &str, flags: u32) -> isize {
         let mut buf = Vec::with_capacity(needle.len() + 1);
         buf.extend_from_slice(needle.as_bytes());
@@ -342,6 +378,7 @@ impl EditorHandle {
 
     /// Search backward from the anchor for `needle`. Same flags
     /// + return shape as [`Self::search_next`].
+    #[must_use]
     pub fn search_prev(&self, needle: &str, flags: u32) -> isize {
         let mut buf = Vec::with_capacity(needle.len() + 1);
         buf.extend_from_slice(needle.as_bytes());
@@ -362,6 +399,7 @@ impl EditorHandle {
     /// target to the match's byte range so a subsequent
     /// `replace_target` substitutes only the match. Returns the
     /// byte offset of the match, or `-1` on miss.
+    #[must_use]
     pub fn search_in_target(&self, needle: &str) -> isize {
         // SCI_SEARCHINTARGET takes the length in wparam and a
         // *non-NUL-terminated* pointer in lparam — but a
@@ -386,6 +424,7 @@ impl EditorHandle {
     /// the target range is reset to point at the inserted text so
     /// the next `search_in_target` resumes from just past the
     /// substitution. Returns the byte length of the replacement.
+    #[must_use]
     pub fn replace_target(&self, replacement: &str) -> isize {
         // Scintilla's `ViewFromParams(lParam, wParam)` treats
         // `wParam == usize::MAX` as a sentinel meaning "use strlen
@@ -408,12 +447,14 @@ impl EditorHandle {
 
     /// Read the byte offset of the current target's start. After a
     /// `search_in_target` hit, this equals the match's start.
+    #[must_use]
     pub fn target_start(&self) -> u64 {
         self.send(SCI_GETTARGETSTART, 0, 0).max(0) as u64
     }
 
     /// Read the byte offset of the current target's end. After a
     /// `search_in_target` hit, this equals the match's end.
+    #[must_use]
     pub fn target_end(&self) -> u64 {
         self.send(SCI_GETTARGETEND, 0, 0).max(0) as u64
     }

@@ -31,16 +31,22 @@ impl Eol {
     /// The byte sequence for this EOL when writing a new line.
     /// `Mixed` falls back to LF — the per-line preservation is a higher-
     /// level concern when re-emitting an existing file.
+    #[must_use]
     pub const fn bytes(self) -> &'static [u8] {
         match self {
-            Eol::Lf => b"\n",
+            // Mixed defers to LF as the "preserve original on
+            // re-write, but if we need to pick one here, use LF"
+            // contract. Same body as `Lf`, kept as a separate
+            // arm so the rationale stays at the call-site rather
+            // than relying on `_` to swallow the variant.
+            Eol::Lf | Eol::Mixed => b"\n",
             Eol::CrLf => b"\r\n",
             Eol::Cr => b"\r",
-            Eol::Mixed => b"\n",
         }
     }
 
     /// Human-readable label for the status bar and `session.xml`.
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Eol::Lf => "LF",
@@ -56,6 +62,7 @@ impl Eol {
     /// long form (the file uses more than one EOL); we surface
     /// "Mixed" as-is so the user sees the unusual state without
     /// being told it's a specific OS convention.
+    #[must_use]
     pub const fn long_label(self) -> &'static str {
         match self {
             Eol::Lf => "Unix (LF)",
@@ -104,6 +111,7 @@ impl From<String> for Eol {
 /// The 64 KiB cap is to keep detection bounded for huge files; it is
 /// extremely rare for the first 64 KiB to disagree with the rest of the
 /// file on dominant EOL.
+#[must_use]
 pub fn detect(bytes: &[u8]) -> Eol {
     let scan = if bytes.len() > 65_536 {
         &bytes[..65_536]

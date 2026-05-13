@@ -147,6 +147,16 @@ impl FifQuery {
     /// chosen so each composes with the next without re-parsing:
     /// the literal escape happens first because `(?i)` and `\b`
     /// don't care about metacharacter status.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FifQueryError::Empty` when `query` is empty;
+    /// `FifQueryError::Compile` if the underlying `Regex::new`
+    /// fails (malformed regex syntax, or a literal that becomes
+    /// invalid regex after the `\b` whole-word wrap); and
+    /// `FifQueryError::SizeLimit` if the compiled pattern's
+    /// memory footprint exceeds the safety cap (rejected before
+    /// any further work).
     pub fn compile(query: &str, opts: FifQueryOpts) -> Result<Self, FifQueryError> {
         if query.is_empty() {
             return Err(FifQueryError::Empty);
@@ -234,6 +244,7 @@ pub struct FileSearchOutcome {
 /// practice because [`DEFAULT_MAX_FILE_BYTES`] (32 MiB) is well
 /// below the 2 GiB ceiling, but the guard makes the contract local
 /// and self-defending.
+#[must_use]
 pub fn search_in_text(query: &FifQuery, text: &str) -> FileSearchOutcome {
     let mut out = FileSearchOutcome::default();
     if text.is_empty() || text.len() > MAX_TEXT_BYTES {
@@ -268,10 +279,20 @@ pub fn search_in_text(query: &FifQuery, text: &str) -> FileSearchOutcome {
         let without_lf = raw_line.strip_suffix('\n').unwrap_or(raw_line);
         let trimmed = without_lf.strip_suffix('\r').unwrap_or(without_lf);
         let line_text = clip_line(trimmed);
+        // FIF column / line-number numerics fit in u32 by
+        // construction: the file-size cap (~MAX_BYTES) keeps
+        // both byte offsets within `text` well below `u32::MAX`.
+        // The narrowing casts are intentional; the lint is
+        // suppressed locally so a future cap change re-checks
+        // the assumption.
+        #[allow(clippy::cast_possible_truncation)]
         let col_start = (m.start() - line_start) as u32;
+        #[allow(clippy::cast_possible_truncation)]
         let col_end = (m.end() - line_start) as u32;
+        #[allow(clippy::cast_possible_truncation)]
+        let line_no = (line_no_zero as u32) + 1;
         out.matches.push(FifMatch {
-            line_no: (line_no_zero as u32) + 1,
+            line_no,
             col_start,
             col_end,
             line_text,
@@ -326,6 +347,7 @@ fn clip_line(line: &str) -> String {
 /// 32 MiB `DEFAULT_MAX_FILE_BYTES` upstream bound makes oversize
 /// impossible from the worker), and lets the no-substitutions
 /// case skip allocating altogether.
+#[must_use]
 pub fn replace_in_text<'t>(
     query: &FifQuery,
     text: &'t str,
@@ -378,6 +400,7 @@ pub fn replace_in_text<'t>(
 ///   without the BOM either, so skipping is the right call.
 /// - Files with NUL inside the first 8 KiB but text past it
 ///   (uncommon — usually saved-game state, sqlite3 headers, etc.).
+#[must_use]
 pub fn is_binary(prefix: &[u8]) -> bool {
     if prefix.is_empty() {
         return false;
@@ -488,6 +511,13 @@ impl std::error::Error for FifWalkOptsError {}
 impl FifWalkOpts {
     /// Replace the include set with the supplied patterns. Empty
     /// vector restores the "include everything" default.
+    ///
+    /// # Errors
+    ///
+    /// Propagates `FifWalkOptsError::BadGlob`,
+    /// `PatternTooLong`, or `TooManyPatterns` from
+    /// `build_globset` when the input patterns violate the
+    /// safety bounds or fail to compile.
     pub fn set_includes(&mut self, patterns: &[&str]) -> Result<(), FifWalkOptsError> {
         self.includes = build_globset(patterns)?;
         Ok(())
@@ -496,6 +526,11 @@ impl FifWalkOpts {
     /// Replace the exclude set with the supplied patterns. Empty
     /// vector clears all excludes (including the defaults — caller
     /// is responsible for re-adding `.git` etc. if they want them).
+    ///
+    /// # Errors
+    ///
+    /// Same set of `FifWalkOptsError` variants as
+    /// [`Self::set_includes`].
     pub fn set_excludes(&mut self, patterns: &[&str]) -> Result<(), FifWalkOptsError> {
         self.excludes = build_globset(patterns)?;
         Ok(())
@@ -506,6 +541,7 @@ impl FifWalkOpts {
     ///
     ///  - includes is empty OR the path matches an include pattern, AND
     ///  - the path does NOT match an exclude pattern.
+    #[must_use]
     pub fn path_matches(&self, path: &Path) -> bool {
         if !self.excludes.is_empty() && self.excludes.is_match(path) {
             return false;
