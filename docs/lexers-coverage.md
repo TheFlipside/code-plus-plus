@@ -33,7 +33,7 @@ residual rows formally tracked).
 | Glyph | Meaning |
 | --- | --- |
 | ✅ | Keywords + theme both wired in `Win32Ui::apply_lang`'s table. Pick this language from the Language menu and a sample file picks up visibly distinct colours for comments, strings, numbers, and keywords. |
-| 🟡 | Lexer attached and tokenising; no host keyword list and no host theme. Buffer renders uniformly black-on-white because every `SCE_*_*` style resolves to `STYLE_DEFAULT` after `SCI_STYLECLEARALL`. |
+| 🟡 | Lexer attached and tokenising; no host keyword list and no host theme. Buffer renders uniformly black-on-white because every `SCE_*_*` style resolves to `STYLE_DEFAULT` after `SCI_STYLECLEARALL`. (Pre-2026-05-13: this row also covered "lexer compiled but unregistered in `LexillaShim.cxx`'s catalog"; that gap is now closed for every `LANG_TABLE` row with a non-`None` lexer.) |
 | ⚫ | No Lexilla lexer (`LANG_TABLE` row has `lexer: None`). Either by design (`L_TEXT` — plain text never highlights) or because no Lexilla lexer matches the language. Effectively a permanent state for the named row. |
 | ⏸ | Reserved for future host-side opt-out (e.g. a lexer the host deliberately leaves off the menu pending review). None today. |
 
@@ -124,6 +124,16 @@ Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
 Total: 89 rows. ✅ 4 / 🟡 84 / ⚫ 1.
+
+**Follow-up landed 2026-05-13:** every `Lex*.cxx` already in
+`crates/scintilla-sys/build.rs`'s compile list is now registered
+in the lexer catalog (`LexillaShim.cxx`). Prior to this, only
+`lmCPP` / `lmHTML` / `lmNull` / `lmPHPSCRIPT` / `lmRust` / `lmXML`
+were catalog entries — the remaining ~70 `Lex*.cxx` were
+compiled into the binary but `CreateLexer(name)` returned
+nullptr for them at runtime. Wiring any 🟡 row going forward is
+now purely a host-theme change (keyword list + style table); no
+further shim work needed.
 
 ## Languages
 
