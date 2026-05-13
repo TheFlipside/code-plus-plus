@@ -75,7 +75,7 @@ mod imp {
 
 #[cfg(not(target_os = "windows"))]
 mod imp {
-    use super::*;
+    use super::Path;
 
     pub struct DynLibInner;
 

@@ -85,6 +85,7 @@ pub fn windows_version_npp() -> i32 {
 /// future GTK / Cocoa hosts that still want a deterministic
 /// answer.
 #[cfg(not(target_os = "windows"))]
+#[must_use]
 pub fn windows_version_npp() -> i32 {
     16 // WV_WIN10
 }
