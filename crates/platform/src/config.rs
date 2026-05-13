@@ -32,6 +32,7 @@ const APP_DIR: &str = "Code++";
 /// Per-user config directory. May not yet exist; callers writing to
 /// it must `create_dir_all` first (or use a writer that does — e.g.
 /// `core::session::Session::save_to_xml` handles the create).
+#[must_use]
 pub fn config_dir() -> Option<PathBuf> {
     config_base_dir().map(|d| d.join(APP_DIR))
 }
@@ -85,6 +86,7 @@ fn config_base_dir_from(xdg: Option<OsString>, home: Option<OsString>) -> Option
 }
 
 /// Path to `session.xml` under [`config_dir`].
+#[must_use]
 pub fn session_xml_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("session.xml"))
 }
@@ -99,6 +101,7 @@ pub fn session_xml_path() -> Option<PathBuf> {
 ///
 /// May not exist yet on first launch — callers that write here are
 /// responsible for `create_dir_all` before persisting.
+#[must_use]
 pub fn backups_dir() -> Option<PathBuf> {
     config_dir().map(|d| d.join("backup"))
 }
@@ -106,6 +109,7 @@ pub fn backups_dir() -> Option<PathBuf> {
 /// Plugin directory: `config_dir/plugins/`. Phase 3's plugin host
 /// enumerates `*.dll` (Windows) / `*.so` (Linux) / `*.dylib` (macOS)
 /// here. May not yet exist.
+#[must_use]
 pub fn plugins_dir() -> Option<PathBuf> {
     config_dir().map(|d| d.join("plugins"))
 }
@@ -114,6 +118,7 @@ pub fn plugins_dir() -> Option<PathBuf> {
 /// path returned to plugins via `NPPM_GETPLUGINSCONFIGDIR` — plugins
 /// store user-specific data files here (matches the Notepad++ layout
 /// so existing plugins find their settings without modification).
+#[must_use]
 pub fn plugins_config_dir() -> Option<PathBuf> {
     plugins_dir().map(|d| d.join("config"))
 }
@@ -125,12 +130,14 @@ pub fn plugins_config_dir() -> Option<PathBuf> {
 /// writes this file when the user toggles the per-plugin Enabled
 /// checkbox; `Shell::discover_plugins` reads it after enumeration
 /// to mark matching entries as disabled.
+#[must_use]
 pub fn disabled_plugins_path() -> Option<PathBuf> {
     plugins_config_dir().map(|d| d.join("disabled.txt"))
 }
 
 /// Path to `config.xml` under [`config_dir`]. Phase 4 wires this in
 /// for user settings; Phase 2 only references it for the path layout.
+#[must_use]
 pub fn config_xml_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("config.xml"))
 }
@@ -138,6 +145,7 @@ pub fn config_xml_path() -> Option<PathBuf> {
 /// Path to `find_history.xml` under [`config_dir`] — the rolling
 /// list of recent Find Next / Replace queries the dialog populates
 /// its combobox dropdowns from.
+#[must_use]
 pub fn find_history_xml_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("find_history.xml"))
 }
@@ -148,6 +156,7 @@ pub fn find_history_xml_path() -> Option<PathBuf> {
 /// dialog reads and writes. Separate file from `session.xml` so a
 /// user resetting their session doesn't lose their visual prefs
 /// (and vice versa).
+#[must_use]
 pub fn styles_xml_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("styles.xml"))
 }

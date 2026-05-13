@@ -12,6 +12,7 @@ use std::path::PathBuf;
 /// `/proc/self/exe` (containerised CI runners), and on macOS /
 /// Windows the call should always succeed for an unprivileged
 /// user-launched binary.
+#[must_use]
 pub fn program_path() -> Option<PathBuf> {
     std::env::current_exe().ok()
 }
@@ -34,6 +35,7 @@ pub fn program_dir() -> Option<PathBuf> {
 /// for plugin gating because every modern feature plugins probe
 /// for ships in Win10+.
 #[cfg(target_os = "windows")]
+#[must_use]
 pub fn windows_version_npp() -> i32 {
     // Mirror Notepad++'s `winVer` enum from `Common.h`. Only the
     // values plugins typically gate on are listed; the older
@@ -71,7 +73,7 @@ pub fn windows_version_npp() -> i32 {
         (6, 1) => WV_WIN7,
         (6, 0) => WV_VISTA,
         (5, 2) => WV_WS2003,
-        (5, 1) | (5, 0) => WV_UNKNOWN,
+        (5, 1 | 0) => WV_UNKNOWN,
         _ => WV_WIN10,
     }
 }
@@ -120,7 +122,6 @@ fn read_rtl_get_version() -> Option<(u32, u32, u32)> {
             w_reserved: u8,
         }
 
-        let ntdll = GetModuleHandleA(s!("ntdll.dll")).ok()?;
         // `RtlGetVersion(PRTL_OSVERSIONINFOEXW)` returns NTSTATUS;
         // on success, fills the struct with the *real* kernel
         // version (no compatibility shim).
@@ -135,11 +136,20 @@ fn read_rtl_get_version() -> Option<(u32, u32, u32)> {
         // here is the standard pattern every Windows app uses to
         // type-erase exported symbols.
         type RtlGetVersionFn = unsafe extern "system" fn(*mut OsVersionInfoExW) -> i32;
+
+        let ntdll = GetModuleHandleA(s!("ntdll.dll")).ok()?;
         let proc = GetProcAddress(ntdll, s!("RtlGetVersion"))?;
         let rtl_get_version: RtlGetVersionFn = std::mem::transmute(proc);
 
+        // `OSVERSIONINFOEXW`'s dw_size field is documented as the
+        // struct size in bytes; the struct is well under 4 KiB, so
+        // the usize→u32 narrowing is provably safe at compile time
+        // — proven by the `size_of` being part of a fixed-layout
+        // type, not a runtime computation.
+        #[allow(clippy::cast_possible_truncation)]
+        let dw_size = std::mem::size_of::<OsVersionInfoExW>() as u32;
         let mut info = OsVersionInfoExW {
-            dw_size: std::mem::size_of::<OsVersionInfoExW>() as u32,
+            dw_size,
             dw_major: 0,
             dw_minor: 0,
             dw_build: 0,
@@ -152,7 +162,7 @@ fn read_rtl_get_version() -> Option<(u32, u32, u32)> {
             w_reserved: 0,
         };
         // STATUS_SUCCESS is 0; any other value indicates an error.
-        if rtl_get_version(&mut info) != 0 {
+        if rtl_get_version(&raw mut info) != 0 {
             return None;
         }
         Some((info.dw_major, info.dw_minor, info.dw_build))

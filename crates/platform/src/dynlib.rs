@@ -15,7 +15,7 @@ use std::path::Path;
 
 #[cfg(target_os = "windows")]
 mod imp {
-    use super::*;
+    use super::Path;
     use std::ffi::CString;
     use windows::core::HSTRING;
     use windows::Win32::Foundation::{FreeLibrary, HMODULE};
@@ -101,6 +101,15 @@ impl DynLib {
     /// message if the OS rejects the load (file missing, wrong
     /// architecture, missing dependency, sandboxed runner without
     /// permission).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `String` describing the load failure. The text is
+    /// the platform's own error message (`GetLastError`'s
+    /// `FormatMessage` on Windows, `dlerror()` on Unix) so the user
+    /// sees the same diagnostic they'd get from any other native
+    /// loader — wrong architecture, missing dependency DLL,
+    /// missing file, permission denied, etc.
     pub fn load(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref();
         let inner = imp::load(path)?;
@@ -121,6 +130,7 @@ impl DynLib {
     /// to a function signature that matches the C ABI of the
     /// exported symbol. A wrong signature (different argument types,
     /// different calling convention) is undefined behaviour.
+    #[must_use]
     pub unsafe fn resolve_raw(&self, symbol: &str) -> Option<*mut core::ffi::c_void> {
         imp::resolve(&self.inner, symbol)
     }
@@ -133,6 +143,7 @@ impl DynLib {
     ///
     /// `F` must be the correct signature for the symbol — same
     /// argument types, same return type, same calling convention.
+    #[must_use]
     pub unsafe fn resolve<F: Sized>(&self, symbol: &str) -> Option<F> {
         // SAFETY: forwarded to caller; documented above.
         let ptr = unsafe { self.resolve_raw(symbol)? };
@@ -151,6 +162,7 @@ impl DynLib {
     /// The path the library was loaded from. Useful for diagnostics
     /// and for the `tracing` spans the plugin host wraps every plugin
     /// call in.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -173,8 +185,7 @@ pub const PLUGIN_EXTENSION: &str = "dylib";
 pub fn has_plugin_extension(path: &Path) -> bool {
     path.extension()
         .and_then(OsStr::to_str)
-        .map(|ext| ext.eq_ignore_ascii_case(PLUGIN_EXTENSION))
-        .unwrap_or(false)
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(PLUGIN_EXTENSION))
 }
 
 #[cfg(test)]

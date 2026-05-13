@@ -36,20 +36,18 @@ fn main() {
 
     // Sanity check: submodules must be initialised. The error message tells
     // the developer exactly what to run.
-    if !scintilla.join("src/Editor.cxx").exists() {
-        panic!(
-            "Scintilla submodule missing at {}. Run \
-             `git submodule update --init --recursive`.",
-            scintilla.display()
-        );
-    }
-    if !lexilla.join("src/Lexilla.cxx").exists() {
-        panic!(
-            "Lexilla submodule missing at {}. Run \
-             `git submodule update --init --recursive`.",
-            lexilla.display()
-        );
-    }
+    assert!(
+        scintilla.join("src/Editor.cxx").exists(),
+        "Scintilla submodule missing at {}. Run \
+         `git submodule update --init --recursive`.",
+        scintilla.display()
+    );
+    assert!(
+        lexilla.join("src/Lexilla.cxx").exists(),
+        "Lexilla submodule missing at {}. Run \
+         `git submodule update --init --recursive`.",
+        lexilla.display()
+    );
 
     println!("cargo:rerun-if-changed=vendor/scintilla/src");
     println!("cargo:rerun-if-changed=vendor/scintilla/win32");

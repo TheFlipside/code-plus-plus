@@ -56,6 +56,15 @@ fn is_windows_target() -> bool {
 /// rights, but a plausible target post-LPE or via a tampered SDK
 /// installer) doesn't redirect the build to an attacker-controlled
 /// binary.
+///
+/// # Panics
+///
+/// Panics with an actionable message when neither PATH nor the
+/// standard Windows Kits install root yields a usable `rc.exe`.
+/// Build-time only — the panic surfaces in `cargo build` output
+/// and tells the contributor to install the Windows 10 SDK or
+/// launch a Developer Command Prompt (DEVELOPMENT.md §2.4).
+#[must_use]
 pub fn locate_rc_exe() -> PathBuf {
     // PATH branch. Canonicalise the candidate before returning so a
     // later swap (rc.exe replaced between this check and the
@@ -90,7 +99,7 @@ pub fn locate_rc_exe() -> PathBuf {
     let kits_root = PathBuf::from("C:/Program Files (x86)/Windows Kits/10/bin");
     if let Ok(entries) = std::fs::read_dir(&kits_root) {
         let mut versions: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok())
+            .filter_map(Result::ok)
             .map(|e| e.path())
             .filter(|p| {
                 p.is_dir()
@@ -130,6 +139,14 @@ pub fn locate_rc_exe() -> PathBuf {
 /// `stem` is purely a filename hint to keep multiple `.rc` files in
 /// the same `OUT_DIR` distinct (the app/build.rs uses `app`, plugins
 /// use `version-info`).
+///
+/// # Panics
+///
+/// Build-time panics when any of the following hold: `OUT_DIR` is
+/// unset (Cargo always sets it for build scripts); the `.rc` file
+/// can't be written; `rc.exe` can't be launched; or `rc.exe`
+/// exits non-zero. Each message names the offending path so the
+/// contributor can see what went wrong.
 pub fn compile_and_link_rc(rc_text: &str, stem: &str, target: LinkTarget) {
     if !is_windows_target() {
         return;
@@ -153,12 +170,11 @@ pub fn compile_and_link_rc(rc_text: &str, stem: &str, target: LinkTarget) {
                 rc_exe.display()
             )
         });
-    if !status.success() {
-        panic!(
-            "rc.exe exited with {status} compiling {}",
-            rc_path.display()
-        );
-    }
+    assert!(
+        status.success(),
+        "rc.exe exited with {status} compiling {}",
+        rc_path.display()
+    );
 
     // Pass the .res file to the linker. Quoting note inherited from
     // the previous app/build.rs: rustc/Command-arg already handles
@@ -181,17 +197,23 @@ pub fn compile_and_link_rc(rc_text: &str, stem: &str, target: LinkTarget) {
 /// `tools/codepp-app-icon/generate.py`.
 ///
 /// No-op on non-Windows targets.
+///
+/// # Panics
+///
+/// Build-time panic when `ico_path` doesn't exist on the build
+/// machine. The message names the missing path and the generator
+/// command so the contributor can self-serve. Also propagates the
+/// downstream panics from [`compile_and_link_rc`].
 pub fn embed_app_icon(ico_path: &Path) {
     if !is_windows_target() {
         return;
     }
-    if !ico_path.is_file() {
-        panic!(
-            "missing app icon at {} — regenerate via \
-             `python tools/codepp-app-icon/generate.py`",
-            ico_path.display()
-        );
-    }
+    assert!(
+        ico_path.is_file(),
+        "missing app icon at {} — regenerate via \
+         `python tools/codepp-app-icon/generate.py`",
+        ico_path.display()
+    );
     println!("cargo:rerun-if-changed={}", ico_path.display());
 
     // RC parses `\` inside double-quoted strings as a C-style escape,
@@ -316,13 +338,21 @@ fn parse_version_quad(version: &str) -> (u16, u16, u16, u16) {
 /// saturating because a build counter that briefly overshoots 65535
 /// should clamp rather than appear as 0.
 fn parse_u16_lenient(s: &str) -> u16 {
-    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits
-        .parse::<u32>()
-        .map(|v| v.min(u16::MAX as u32) as u16)
-        .unwrap_or(0)
+    let digits: String = s.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse::<u32>().map_or(0, |v| {
+        // Saturate at u16::MAX. `u16::try_from(...)` after the
+        // `.min(...)` would always succeed but reads less
+        // directly than the saturating cast — clippy's
+        // cast_possible_truncation rule is intentionally
+        // allowed here because the `.min` proves the precondition.
+        let capped = v.min(u32::from(u16::MAX));
+        #[allow(clippy::cast_possible_truncation)]
+        let narrowed = capped as u16;
+        narrowed
+    })
 }
 
+#[derive(Clone, Copy)]
 struct BuildVersionInfo<'a> {
     major: u16,
     minor: u16,

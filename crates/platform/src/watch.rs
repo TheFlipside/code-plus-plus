@@ -7,8 +7,8 @@
 //! receiving a `FileChange::Modified` the UI shows the "external
 //! change — reload?" prompt described in DESIGN.md §5.3.
 //!
-//! Cross-platform: Windows uses ReadDirectoryChangesW, Linux uses
-//! inotify, macOS uses FSEvents — all transparently via `notify`.
+//! Cross-platform: Windows uses `ReadDirectoryChangesW`, Linux uses
+//! inotify, macOS uses `FSEvents` — all transparently via `notify`.
 
 use std::path::{Path, PathBuf};
 
@@ -43,6 +43,13 @@ impl FileWatcher {
     /// `sender`. The `notify` callback runs on a worker thread inside
     /// `notify`; receivers must therefore be on a different thread or
     /// drained from a UI-thread wake handler (DESIGN.md §5.4).
+    ///
+    /// # Errors
+    ///
+    /// Propagates `notify::Error` from `recommended_watcher` — the
+    /// underlying backend (`inotify` on Linux,
+    /// `ReadDirectoryChangesW` on Windows, `FSEvents` on macOS) can
+    /// fail to initialise on a sandboxed or resource-exhausted host.
     pub fn new(sender: Sender<FileChange>) -> notify::Result<Self> {
         let inner =
             notify::recommended_watcher(move |result: notify::Result<Event>| match result {
@@ -64,11 +71,24 @@ impl FileWatcher {
     /// Start watching `path` non-recursively. Subsequent modifications
     /// to the file (or removal) will be reported on the sender given
     /// to [`Self::new`].
+    ///
+    /// # Errors
+    ///
+    /// Propagates `notify::Error` — the underlying watcher backend
+    /// can reject a path (does not exist, permission denied, too
+    /// many active watches for the user's inotify limit, etc.).
     pub fn watch(&mut self, path: &Path) -> notify::Result<()> {
         self.inner.watch(path, RecursiveMode::NonRecursive)
     }
 
     /// Stop watching `path`. Idempotent within `notify`'s contract.
+    ///
+    /// # Errors
+    ///
+    /// Propagates `notify::Error` — the underlying backend can
+    /// reject an unwatch (path was never watched, watch already
+    /// removed by the kernel, …). All variants are safe to log
+    /// and ignore.
     pub fn unwatch(&mut self, path: &Path) -> notify::Result<()> {
         self.inner.unwatch(path)
     }
@@ -84,10 +104,10 @@ impl FileWatcher {
 ///     `Modify(Data(Any))`; chmod/touch arrives as
 ///     `Modify(Metadata(Permissions))` and must be filtered out
 ///     (otherwise a `chmod 644` produces a spurious "reload?" prompt).
-///   - **Windows ReadDirectoryChangesW:** content writes arrive as
+///   - **Windows `ReadDirectoryChangesW`:** content writes arrive as
 ///     `Modify(Any)` because the API does not distinguish data from
 ///     metadata at the granularity inotify does.
-///   - **macOS FSEvents:** content writes arrive as
+///   - **macOS `FSEvents`:** content writes arrive as
 ///     `Modify(Data(Content))` typically, sometimes as `Modify(Any)`.
 fn translate(event: &Event) -> Option<FileChange> {
     let path = event.paths.first()?.clone();
@@ -96,14 +116,16 @@ fn translate(event: &Event) -> Option<FileChange> {
         // (ReadDirectoryChangesW doesn't split data/metadata) and for
         // some FSEvents flavours; `Data(_)` covers Linux inotify and
         // most macOS cases.
-        EventKind::Modify(ModifyKind::Data(_)) | EventKind::Modify(ModifyKind::Any) => {
+        EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Any) => {
             Some(FileChange::Modified(path))
         }
-        // Rename out of (or move from) the watched path — from the
-        // tab's perspective, the file at this path is gone.
-        EventKind::Modify(ModifyKind::Name(_)) => Some(FileChange::Removed(path)),
-        // Outright deletion.
-        EventKind::Remove(_) => Some(FileChange::Removed(path)),
+        // Rename-out (Modify(Name)) and outright deletion
+        // (Remove) both look the same to a tab: the file at this
+        // path is gone. Same branch body, merged per clippy's
+        // match_same_arms.
+        EventKind::Modify(ModifyKind::Name(_)) | EventKind::Remove(_) => {
+            Some(FileChange::Removed(path))
+        }
         // Metadata-only Modify (chmod, touch), Access events, Create
         // events, and Other are intentionally dropped — they don't
         // change the bytes a tab would re-read.
