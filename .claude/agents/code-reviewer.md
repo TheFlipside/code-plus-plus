@@ -62,6 +62,7 @@ suppresses an unrelated warning, or the justification contradicts the code).
 - [ ] `defer` used correctly (not in a loop without intent)
 
 ### Rust
+- [ ] clippy is always run with the options `-W clippy::pedantic -D warnings`
 - [ ] No `.unwrap()` in library code without a comment proving it can't panic
 - [ ] No unguarded `unsafe` blocks
 - [ ] All `#[allow(clippy::...)]` suppressions have an explanatory comment

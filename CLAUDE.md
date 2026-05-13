@@ -29,12 +29,12 @@ tools/               → plugin compat harness, perf scripts
 ## Essential Commands
 
 ```powershell
-git submodule update --init --recursive   # required: Scintilla + Lexilla source
-cargo build --workspace                   # builds everything
-cargo run -p app                          # launches Code++ (current phase's demo)
-cargo test --workspace                    # runs all tests
-cargo fmt --check                         # must pass
-cargo clippy --workspace -- -D warnings   # must pass
+git submodule update --init --recursive   		  # required: Scintilla + Lexilla source
+cargo build --workspace                   		  # builds everything
+cargo run -p app                          		  # launches Code++ (current phase's demo)
+cargo test --workspace                    		  # runs all tests
+cargo fmt --check                        		  # must pass
+cargo clippy -- -W clippy::pedantic -D warnings   # must pass
 ```
 
 ## Project-Specific Rules
