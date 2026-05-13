@@ -57,7 +57,7 @@ pub type Hwnd = *mut c_void;
 #[link(name = "user32")]
 extern "system" {
     /// Win32 `SendMessageW`. Synchronous round-trip into the target
-    /// window's wnd_proc; returns whatever the message handler
+    /// window's `wnd_proc`; returns whatever the message handler
     /// produced.
     pub fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
 }
@@ -93,7 +93,7 @@ impl<T> SyncCell<T> {
     }
 
     /// Returns a raw mutable pointer to the inner value. The host's
-    /// loader writes into the FuncItem array via this pointer.
+    /// loader writes into the `FuncItem` array via this pointer.
     pub fn get(&self) -> *mut T {
         self.0.get()
     }
@@ -116,6 +116,14 @@ impl<T> SyncCell<T> {
 /// non-ASCII labels would need a separate non-const helper that
 /// does proper UTF-8 → UTF-16 conversion; we don't ship one yet
 /// because every in-tree plugin's labels are ASCII.
+///
+/// # Panics
+///
+/// Compile-time panic via `const_panic` when any input byte is
+/// `>= 128` (non-ASCII). Build-time only; never reaches runtime
+/// because `menu_label` is invoked from `const` contexts at the
+/// plugin authoring site.
+#[must_use]
 pub const fn menu_label(bytes: &[u8]) -> [u16; MENU_TITLE_LENGTH] {
     let mut buf = [0u16; MENU_TITLE_LENGTH];
     let mut i = 0;
@@ -250,12 +258,7 @@ pub fn active_scintilla() -> Hwnd {
     // call. NPPM_GETCURRENTSCINTILLA is documented to write through
     // it (the host's dispatcher implements that contract).
     unsafe {
-        SendMessageW(
-            npp,
-            NPPM_GETCURRENTSCINTILLA,
-            0,
-            &mut which as *mut i32 as isize,
-        );
+        SendMessageW(npp, NPPM_GETCURRENTSCINTILLA, 0, &raw mut which as isize);
     }
     // Clamp to the documented range. A buggy or hostile host
     // dispatcher could write a garbage value through `which`;
@@ -282,7 +285,7 @@ pub fn active_scintilla() -> Hwnd {
 /// Hardened with `usize::try_from` + `checked_add` so a
 /// pathological `isize::MAX` return on a 32-bit target can't
 /// underflow into an undersized buffer — defense in depth, since
-/// Code++ targets x86_64 today and Scintilla returns sane values
+/// Code++ targets `x86_64` today and Scintilla returns sane values
 /// for any real document.
 ///
 /// **No TOCTOU between length and fill.** The two-phase
@@ -291,7 +294,7 @@ pub fn active_scintilla() -> Hwnd {
 /// something edited the buffer in between), but Scintilla and
 /// the SDK both run on the host's single UI thread *and* this
 /// helper is invoked only from menu callbacks the host
-/// dispatches synchronously inside its own wnd_proc. No other
+/// dispatches synchronously inside its own `wnd_proc`. No other
 /// code path can mutate the selection mid-call. If a future
 /// path ever calls this off the UI thread or across an `await`
 /// boundary, the assumption breaks and the fill could overflow
@@ -307,13 +310,11 @@ pub fn get_selection_bytes(sci: Hwnd) -> Vec<u8> {
     if len <= 0 {
         return Vec::new();
     }
-    let len_us = match usize::try_from(len) {
-        Ok(n) => n,
-        Err(_) => return Vec::new(),
+    let Ok(len_us) = usize::try_from(len) else {
+        return Vec::new();
     };
-    let alloc = match len_us.checked_add(1) {
-        Some(n) => n,
-        None => return Vec::new(),
+    let Some(alloc) = len_us.checked_add(1) else {
+        return Vec::new();
     };
     let mut buf = vec![0u8; alloc];
     // SAFETY: `buf.as_mut_ptr()` is valid for `alloc` bytes
@@ -351,9 +352,14 @@ pub fn replace_selection(sci: Hwnd, bytes: &[u8]) {
         )
     };
     // SAFETY: SCI_SETTARGETRANGE takes wparam=start, lparam=end as
-    // document positions. No pointer arguments.
+    // document positions. No pointer arguments. The
+    // `start as usize` cast is intentional — Scintilla document
+    // positions are non-negative isize values; the lint
+    // suppression is local.
+    #[allow(clippy::cast_sign_loss)]
+    let start_usize = start as usize;
     unsafe {
-        SendMessageW(sci, SCI_SETTARGETRANGE, start as usize, end);
+        SendMessageW(sci, SCI_SETTARGETRANGE, start_usize, end);
     }
     // SAFETY: SCI_REPLACETARGET reads `wparam` bytes from `lparam`.
     // `bytes.as_ptr()` is valid for `bytes.len()` bytes for the
@@ -370,7 +376,7 @@ pub fn replace_selection(sci: Hwnd, bytes: &[u8]) {
 /// "wrote /path/foo.html", etc.); the host's own status update
 /// repaints the standard fields on the next chrome refresh.
 ///
-/// No-op if `setInfo` hasn't run yet (NPP_HANDLE is null).
+/// No-op if `setInfo` hasn't run yet (`NPP_HANDLE` is null).
 pub fn set_status(text: &str) {
     let npp = NPP_HANDLE.load(Ordering::Acquire);
     if npp.is_null() {

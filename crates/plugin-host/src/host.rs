@@ -1,12 +1,12 @@
 //! Plugin discovery, loading, and lifecycle.
 //!
 //! Phase 3 milestone 2 ships:
-//!   - directory enumeration (record paths, no LoadLibrary yet — DESIGN.md
+//!   - directory enumeration (record paths, no `LoadLibrary` yet — DESIGN.md
 //!     §6.4 mandates "loading is deferred"),
 //!   - lazy load on first user touch (resolve six entry points, call
 //!     `setInfo`, call `getFuncsArray`),
 //!   - plugin lifecycle state machine (Pending → Loaded / Failed →
-//!     ShuttingDown).
+//!     `ShuttingDown`).
 //!
 //! NPPM_*/NPPN_* dispatching, menu integration, and the actual
 //! example-hello DLL land in subsequent milestones.
@@ -48,13 +48,15 @@ pub struct PluginInfo {
 }
 
 impl PluginInfo {
-    /// True if the plugin has been loaded (LoadLibrary'd, six entry
+    /// True if the plugin has been loaded (`LoadLibrary`'d, six entry
     /// points resolved, getFuncsArray called).
+    #[must_use]
     pub fn is_loaded(&self) -> bool {
         matches!(self.state, PluginState::Loaded(_))
     }
 
     /// True if a load attempt failed. `reason` carries the diagnostic.
+    #[must_use]
     pub fn failed_reason(&self) -> Option<&str> {
         if let PluginState::Failed(r) = &self.state {
             Some(r.as_str())
@@ -66,19 +68,20 @@ impl PluginInfo {
     /// Best-effort display label for the UI. Loaded plugins use their
     /// `getName` return value; unloaded plugins fall back to the
     /// filename stem ("convert-tabs-spaces" for "convert-tabs-spaces.dll").
+    #[must_use]
     pub fn display_label(&self) -> String {
         if let Some(n) = &self.name {
             return n.clone();
         }
-        self.path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "<unnamed plugin>".to_string())
+        self.path.file_stem().and_then(|s| s.to_str()).map_or_else(
+            || "<unnamed plugin>".to_string(),
+            std::string::ToString::to_string,
+        )
     }
 
     /// Functions the plugin contributed to the Plugins menu, if it has
     /// been loaded.
+    #[must_use]
     pub fn func_items(&self) -> Option<&[FuncItem]> {
         if let PluginState::Loaded(p) = &self.state {
             Some(&p.funcs)
@@ -89,7 +92,8 @@ impl PluginInfo {
 
     /// `beNotified` entry point if loaded. The dispatcher (next
     /// milestone) iterates plugins and calls this with each
-    /// SCNotification it wants to deliver.
+    /// `SCNotification` it wants to deliver.
+    #[must_use]
     pub fn be_notified_fn(&self) -> Option<BeNotifiedFn> {
         if let PluginState::Loaded(p) = &self.state {
             Some(p.be_notified)
@@ -102,6 +106,7 @@ impl PluginInfo {
     /// wants to send a custom message to a specific plugin (NPPM
     /// inter-plugin messaging is a Phase 4 concern; the accessor lives
     /// here so the dispatcher can call it from Phase 3 onward).
+    #[must_use]
     pub fn message_proc_fn(&self) -> Option<MessageProcFn> {
         if let PluginState::Loaded(p) = &self.state {
             Some(p.message_proc)
@@ -114,6 +119,7 @@ impl PluginInfo {
     /// Unicode plugins (ANSI conversion is out of scope), but the
     /// accessor lets the dispatcher refuse to forward wide-char
     /// payloads to a plugin that returned FALSE.
+    #[must_use]
     pub fn is_unicode_fn(&self) -> Option<IsUnicodeFn> {
         if let PluginState::Loaded(p) = &self.state {
             Some(p.is_unicode)
@@ -125,6 +131,7 @@ impl PluginInfo {
     /// `setInfo` entry point if loaded. Exposed for diagnostic
     /// re-injection of `NppData` (Phase 3 calls it once at load time;
     /// later phases may re-call after split-view changes).
+    #[must_use]
     pub fn set_info_fn(&self) -> Option<SetInfoFn> {
         if let PluginState::Loaded(p) = &self.state {
             Some(p.set_info)
@@ -136,6 +143,7 @@ impl PluginInfo {
     /// `getName` entry point if loaded. The cached `name` field is
     /// the typical access path; this accessor is for plugins that
     /// rename themselves at runtime.
+    #[must_use]
     pub fn get_name_fn(&self) -> Option<GetNameFn> {
         if let PluginState::Loaded(p) = &self.state {
             Some(p.get_name)
@@ -146,6 +154,7 @@ impl PluginInfo {
 
     /// `getFuncsArray` entry point if loaded. Re-callable for plugins
     /// that mutate their menu set after init (rare; mostly Phase 4+).
+    #[must_use]
     pub fn get_funcs_array_fn(&self) -> Option<GetFuncsArrayFn> {
         if let PluginState::Loaded(p) = &self.state {
             Some(p.get_funcs_array)
@@ -161,11 +170,11 @@ enum PluginState {
     Failed(String),
 }
 
-/// State of a successfully loaded plugin. Holds the DynLib (drops
-/// FreeLibrary at shutdown), the resolved entry-point function
-/// pointers, and the cached FuncItem array.
+/// State of a successfully loaded plugin. Holds the `DynLib` (drops
+/// `FreeLibrary` at shutdown), the resolved entry-point function
+/// pointers, and the cached `FuncItem` array.
 struct LoadedPlugin {
-    /// The DynLib's job is to keep the underlying DLL mapped: when
+    /// The `DynLib`'s job is to keep the underlying DLL mapped: when
     /// `LoadedPlugin` drops, `lib` drops, which calls `FreeLibrary`
     /// and unloads the plugin. Clippy does not count `Drop` as a
     /// field-read, so the field appears unread to dead-code analysis;
@@ -178,15 +187,15 @@ struct LoadedPlugin {
     be_notified: BeNotifiedFn,
     message_proc: MessageProcFn,
     is_unicode: IsUnicodeFn,
-    /// Snapshot of the FuncItem array the plugin returned. Each
-    /// FuncItem is `Copy` (no heap pointers we own — `p_sh_key` is
+    /// Snapshot of the `FuncItem` array the plugin returned. Each
+    /// `FuncItem` is `Copy` (no heap pointers we own — `p_sh_key` is
     /// owned by the plugin), so cloning is safe.
     funcs: Vec<FuncItem>,
     /// Plugin's getName return value, decoded to UTF-8.
     name: String,
 }
 
-/// First menu-command id assigned to a plugin's FuncItem. The
+/// First menu-command id assigned to a plugin's `FuncItem`. The
 /// numeric range starts well above any plausible host-built-in id
 /// (Code++'s File menu uses 1000-series ids; Notepad++'s `IDM_BASE`
 /// is 40000) so plugin cmds never collide with the host's `WM_COMMAND`
@@ -198,7 +207,7 @@ pub const PLUGIN_CMD_ID_BASE: i32 = 50_000;
 /// programmatically-allocated ones can't collide. Drives
 /// `NPPM_ALLOCATECMDID`. The 10 000-id gap above
 /// `PLUGIN_CMD_ID_BASE` accommodates 500+ plugins each
-/// contributing 20 menu items before the FuncItem range would
+/// contributing 20 menu items before the `FuncItem` range would
 /// reach the allocator base.
 pub const PLUGIN_ALLOC_CMD_BASE: i32 = 60_000;
 
@@ -260,6 +269,7 @@ impl Default for PluginHost {
 impl PluginHost {
     /// Construct an empty registry. Call [`PluginHost::discover`] to
     /// populate.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -320,7 +330,7 @@ impl PluginHost {
 
     /// Enumerate plugin candidates in `dir`. Each `*.dll` becomes a
     /// `PluginInfo` in the `Pending` state — the file is **not** yet
-    /// LoadLibrary'd. Returns the count discovered.
+    /// `LoadLibrary`'d. Returns the count discovered.
     ///
     /// A non-existent directory is not an error; it's the first-run
     /// case. The scan walks **two** subdirectory levels deep so all
@@ -330,13 +340,13 @@ impl PluginHost {
     ///   plugins/<name>/<name>.dll                (depth 1, the
     ///                                             Notepad++ default)
     ///   plugins/<name>/<archdir>/<name>.dll      (depth 2, the
-    ///                                             NppExec /
-    ///                                             ComparePlus
+    ///                                             `NppExec` /
+    ///                                             `ComparePlus`
     ///                                             64-bit layout)
     ///
     /// At depth ≥ 1 the candidate's filename stem must match the
     /// plugin's directory name (`is_plugin_dll`). Without that filter
-    /// a plugin's bundled dependencies (e.g. ComparePlus shipping
+    /// a plugin's bundled dependencies (e.g. `ComparePlus` shipping
     /// `git2.dll` and `sqlite3.dll` under `libs/`) would be picked up
     /// as plugins themselves, fed to `LoadLibraryW` at first-touch
     /// load, and either fail entry-point resolution noisily (best
@@ -346,10 +356,18 @@ impl PluginHost {
     ///
     /// Symlinks: `is_dir()`/`is_file()` follow symlinks, so a
     /// directory symlink in the plugins folder is enumerated. On
-    /// Windows symlink creation requires SeCreateSymbolicLinkPrivilege
+    /// Windows symlink creation requires `SeCreateSymbolicLinkPrivilege`
     /// by default, so this is low-severity. Phase 5 (Linux/macOS,
     /// where symlink creation is unprivileged) will need to validate
     /// resolved paths stay within `dir` or use `O_NOFOLLOW`.
+    ///
+    /// # Errors
+    ///
+    /// Currently the recursive `discover_walk` absorbs every
+    /// read-dir failure (matching the "no plugins folder yet"
+    /// first-run case), so this signature is `Result` mostly for
+    /// forward-compat with a future stricter mode. Today it
+    /// always returns `Ok`.
     pub fn discover(&mut self, dir: &Path) -> std::io::Result<usize> {
         // No `exists()` pre-check: a separate stat-then-open opens a
         // TOCTOU window where an attacker who can swap `dir` for a
@@ -361,20 +379,13 @@ impl PluginHost {
         // (matching the first-run case), so the redundant pre-check
         // adds the race without buying anything.
         let mut found = 0usize;
-        self.discover_walk(dir, 0, 2, &mut found)?;
+        self.discover_walk(dir, 0, 2, &mut found);
         Ok(found)
     }
 
-    fn discover_walk(
-        &mut self,
-        dir: &Path,
-        depth: u32,
-        max_depth: u32,
-        found: &mut usize,
-    ) -> std::io::Result<()> {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return Ok(()),
+    fn discover_walk(&mut self, dir: &Path, depth: u32, max_depth: u32, found: &mut usize) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
@@ -392,18 +403,19 @@ impl PluginHost {
                 });
                 *found += 1;
             } else if path.is_dir() && depth < max_depth {
-                let _ = self.discover_walk(&path, depth + 1, max_depth, found);
+                self.discover_walk(&path, depth + 1, max_depth, found);
             }
         }
-        Ok(())
     }
 
     /// Total number of plugins (any state).
+    #[must_use]
     pub fn len(&self) -> usize {
         self.plugins.len()
     }
 
     /// True if no plugins are registered.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.plugins.is_empty()
     }
@@ -454,6 +466,7 @@ impl PluginHost {
     /// display_label, disabled)` tuples — the shape the Plugin
     /// Manager UI consumes. Sorted by display label so the
     /// listview shows a stable, alphabetised view.
+    #[must_use]
     pub fn snapshot_for_admin(&self) -> Vec<PluginAdminEntry> {
         let mut out: Vec<PluginAdminEntry> = self
             .plugins
@@ -471,7 +484,7 @@ impl PluginHost {
                 path: p.path.clone(),
                 disabled: p.disabled,
                 loaded: p.is_loaded(),
-                failed_reason: p.failed_reason().map(|s| s.to_string()),
+                failed_reason: p.failed_reason().map(std::string::ToString::to_string),
             })
             .collect();
         out.sort_by(|a, b| {
@@ -490,6 +503,15 @@ impl PluginHost {
     /// On error the plugin moves to `Failed(reason)` and `Err(reason)`
     /// is returned. The plugin entry stays in the registry for
     /// diagnostic display; the host doesn't retry automatically.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `String` describing the failure: index out of
+    /// range, DLL load failure, missing required entry point
+    /// (`isUnicode`, `setInfo`, `getName`, `getFuncsArray`,
+    /// `beNotified`, `messageProc`), or a `setInfo` /
+    /// `getFuncsArray` call that panicked across the
+    /// `catch_unwind` boundary.
     pub fn load(&mut self, idx: usize, npp_data: NppData) -> Result<(), String> {
         let Some(plugin) = self.plugins.get_mut(idx) else {
             return Err(format!("plugin index {idx} out of range"));
@@ -545,7 +567,7 @@ impl PluginHost {
                     // resolve in `load_inner`; SCNotification is
                     // #[repr(C)] and lives on this stack frame
                     // through the synchronous call.
-                    unsafe { be_notified(&sci as *const SCNotification) }
+                    unsafe { be_notified(&raw const sci) }
                 }));
                 if result.is_err() {
                     // Match the warn-on-panic pattern in
@@ -586,7 +608,7 @@ impl PluginHost {
                     // `be_notified` came from a successful resolve;
                     // SCNotification is `#[repr(C)]` and lives on
                     // the stack through the synchronous call.
-                    unsafe { be_notified(&tbmod_sci as *const SCNotification) }
+                    unsafe { be_notified(&raw const tbmod_sci) }
                 }));
                 if tbmod_result.is_err() {
                     tracing::warn!(
@@ -603,11 +625,12 @@ impl PluginHost {
         }
     }
 
-    /// Find the FuncItem matching `cmd_id` across all loaded plugins
+    /// Find the `FuncItem` matching `cmd_id` across all loaded plugins
     /// and return its callback. The callback is a plain C function
     /// pointer; the caller must invoke it from the UI thread (parity
     /// with Notepad++) and may want to wrap the call in
     /// `catch_unwind` to keep panics from unwinding across the FFI.
+    #[must_use]
     pub fn lookup_cmd(&self, cmd_id: i32) -> Option<crate::ffi::PluginCmd> {
         for plugin in &self.plugins {
             if let Some(funcs) = plugin.func_items() {
@@ -665,10 +688,18 @@ fn filenames_eq(a: &str, b: &str) -> bool {
 /// Resolve the six entry points and run the initial setInfo +
 /// getFuncsArray dance. Returns a fully-populated `LoadedPlugin` on
 /// success. `cmd_id_base` is the first menu-command id assigned to
-/// the plugin's FuncItems — incremented by one per item, written
+/// the plugin's `FuncItems` — incremented by one per item, written
 /// back through the plugin's pointer so the plugin's own copy of
 /// `_cmdID` matches the value the host installs in the menu.
 fn load_inner(path: &Path, npp_data: NppData, cmd_id_base: i32) -> Result<LoadedPlugin, String> {
+    // Cap on the FuncItem count a plugin can contribute. Hoisted
+    // above all statements (clippy's `items_after_statements`)
+    // so the constant declaration sits with the function's
+    // documentation rather than appearing mid-body. The cap is
+    // a DoS guard — `i32::MAX` from a hostile or broken plugin
+    // would otherwise trigger a ~17 GB `Vec::with_capacity`.
+    const MAX_FUNCITEMS: i32 = 1024;
+
     let lib = DynLib::load(path)?;
 
     // SAFETY: each resolve call casts the GetProcAddress result to
@@ -739,17 +770,11 @@ fn load_inner(path: &Path, npp_data: NppData, cmd_id_base: i32) -> Result<Loaded
     let raw = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: get_funcs_array signature declared in ffi; count
         // is a valid out-pointer.
-        unsafe { get_funcs_array(&mut count as *mut i32) }
+        unsafe { get_funcs_array(&raw mut count) }
     }))
     .map_err(|_| "plugin panicked in getFuncsArray".to_string())?;
-    // Cap implausible counts. A malicious or broken plugin returning
-    // i32::MAX would cause `Vec::with_capacity` to request ~17 GB and
-    // abort the host process — a denial-of-service against a
-    // first-touch plugin load. No real Notepad++ plugin contributes
-    // hundreds of menu items, let alone a thousand; the cap is
-    // generous-but-finite to bound the blast radius without rejecting
-    // any legitimate plugin.
-    const MAX_FUNCITEMS: i32 = 1024;
+    // Cap implausible counts (see `MAX_FUNCITEMS` at the top of
+    // this function for rationale).
     if count > MAX_FUNCITEMS {
         return Err(format!(
             "getFuncsArray returned implausible count {count}; cap is {MAX_FUNCITEMS}"
@@ -826,15 +851,14 @@ fn load_inner(path: &Path, npp_data: NppData, cmd_id_base: i32) -> Result<Loaded
 /// * **depth 2** (`plugins/X/<arch>/Y.dll`): plugin only when `Y == X`,
 ///   i.e. the stem must match the *grandparent* directory (the
 ///   plugin name), not the immediate `<arch>` parent. This is the
-///   NppExec / ComparePlus 64-bit layout.
+///   `NppExec` / `ComparePlus` 64-bit layout.
 ///
 /// Returns false on any path that lacks the parent / grandparent
 /// component the rule needs (defensive — `read_dir` shouldn't produce
 /// such paths but the parent component is `Option`-typed).
 fn is_plugin_dll(path: &Path, depth: u32) -> bool {
-    let stem = match path.file_stem().and_then(|s| s.to_str()) {
-        Some(s) => s,
-        None => return false,
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return false;
     };
     // Case-insensitive comparison: NTFS is case-insensitive by
     // default, so a plugin named "ComparePlus" might be returned by
@@ -846,8 +870,7 @@ fn is_plugin_dll(path: &Path, depth: u32) -> bool {
     let dir_matches_stem = |dir: Option<&Path>| -> bool {
         dir.and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
-            .map(|n| n.eq_ignore_ascii_case(stem))
-            .unwrap_or(false)
+            .is_some_and(|n| n.eq_ignore_ascii_case(stem))
     };
     match depth {
         0 => true,

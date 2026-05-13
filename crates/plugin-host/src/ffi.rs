@@ -39,7 +39,7 @@ pub struct ShortcutKey {
     pub key: u8,
 }
 
-/// Maximum FuncItem name length in TCHARs (UTF-16 code units on
+/// Maximum `FuncItem` name length in TCHARs (UTF-16 code units on
 /// Windows). Matches `MENU_TITLE_LENGTH` from PluginInterface.h.
 pub const MENU_TITLE_LENGTH: usize = 64;
 
@@ -360,7 +360,7 @@ pub struct TbData {
     /// Preferred floating position. `(0,0,0,0)` falls back to a
     /// default offset from the host window.
     pub rc_float: TbRect,
-    /// Previous-container id (CONT_LEFT/RIGHT/TOP/BOTTOM = 0..=3).
+    /// Previous-container id (`CONT_LEFT/RIGHT/TOP/BOTTOM` = 0..=3).
     /// Stored verbatim; floating-only mode does not act on it.
     pub i_prev_cont: i32,
     /// Plugin DLL filename without extension. Used by

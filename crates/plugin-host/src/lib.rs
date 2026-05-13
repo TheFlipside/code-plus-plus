@@ -6,6 +6,28 @@
 //! the v1 NPPM_* set and a notify-all path for NPPN_* delivery.
 //! Menu integration and the in-tree `example-hello` plugin land in
 //! the next milestone. See DESIGN.md §6.
+//!
+//! # Allowed pedantic lints, with rationale
+//!
+//! - `clippy::cast_possible_truncation`
+//! - `clippy::cast_possible_wrap`
+//! - `clippy::cast_sign_loss`
+//!
+//! Plugin-host is the NPPM/NPPN dispatcher — every public
+//! handler in this crate translates between Win32 plugin ABI
+//! types (`isize`, `i32`, `usize`, `LRESULT`) and Rust types,
+//! and the value-range invariants come from Notepad++'s
+//! documented ABI (and from `Notepad_plus_msgs.h` in
+//! `plugins/nppcompat-headers/`), not from Rust's type
+//! system. Marking each cast `#[allow(...)]` individually
+//! would add 75+ attribute lines to the dispatch routes; the
+//! inner attributes here document the trade-off once.
+
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
 
 #[cfg(target_os = "windows")]
 pub mod dispatch;

@@ -9,7 +9,7 @@
 //! across the C ABI (see DESIGN.md §6.5).
 //!
 //! **Inbound** ([`dispatch_nppm`]): plugins call `SendMessage(npp_handle,
-//! NPPM_*, wParam, lParam)`. The Win32 wnd_proc routes those messages
+//! NPPM_*, wParam, lParam)`. The Win32 `wnd_proc` routes those messages
 //! into this function. The dispatcher pulls live state from the
 //! [`HostServices`] trait — implemented by `shell` so the plugin host
 //! crate stays free of `Session` / `EditorHandle` knowledge.
@@ -42,7 +42,7 @@ pub const NPPMSG: u32 = WM_USER + 1000;
 /// Width of the NPPM_* numeric range the dispatcher claims. The
 /// compat header currently tops out at NPPMSG+102; +200 gives
 /// headroom for v3 additions before this guard needs revisiting.
-/// Exposed publicly so wnd_proc pre-filters use the same bound as
+/// Exposed publicly so `wnd_proc` pre-filters use the same bound as
 /// the dispatcher's internal range check — keeping the two in sync
 /// is otherwise a footgun when the bound is bumped.
 pub const NPPMSG_RANGE: u32 = 200;
@@ -56,7 +56,7 @@ pub const NPPMSG_RANGE: u32 = 200;
 /// route.
 pub const RUNCOMMAND_USER: u32 = WM_USER + 3000;
 
-/// Width of the RUNCOMMAND_USER range the dispatcher claims.
+/// Width of the `RUNCOMMAND_USER` range the dispatcher claims.
 /// Upstream tops out at +49 today; +100 gives parallel headroom to
 /// `NPPMSG_RANGE`. Same wnd_proc-pre-filter / dispatcher-internal
 /// constraint applies — keep the two range checks in sync.
@@ -590,7 +590,7 @@ pub fn notify_all(host: &PluginHost, notification: &Notification, npp_hwnd: Hwnd
             // PluginInterface.h; `&sci` points to a valid #[repr(C)]
             // SCNotification and stays live for the duration of the
             // call (no thread spawning, no async).
-            unsafe { be_notified(&sci as *const SCNotification) }
+            unsafe { be_notified(&raw const sci) }
         }));
         if result.is_err() {
             tracing::warn!(
@@ -610,7 +610,7 @@ pub fn notify_all(host: &PluginHost, notification: &Notification, npp_hwnd: Hwnd
 /// Trait methods are split into *queries* (immutable `&self`) and
 /// *commands* (mutating `&mut self`) so most of the dispatcher's
 /// branches can take only a shared borrow — useful for the future
-/// case where a wnd_proc handler wants to query state without giving
+/// case where a `wnd_proc` handler wants to query state without giving
 /// the dispatcher the right to mutate.
 ///
 /// **Phase 3 stubs are explicit:** methods that return `0` / `L_TEXT`
@@ -686,13 +686,13 @@ pub trait HostServices {
     /// secondary path produces in single-view Code++).
     fn current_doc_index(&self, view: i32) -> i32;
 
-    /// Encoding (UniMode) of the buffer with id `id`. Return values
+    /// Encoding (`UniMode`) of the buffer with id `id`. Return values
     /// match Notepad++'s `UniMode` enum: see [`UNI_8BIT`] /
     /// [`UNI_UTF8`] / [`UNI_UTF16BE`] / [`UNI_UTF16LE`] /
     /// [`UNI_COOKIE`] / [`UNI_7BIT`] / [`UNI_UTF16BE_NO_BOM`] /
     /// [`UNI_UTF16LE_NO_BOM`]. Returns `-1` when `id` is unknown so
     /// plugins can distinguish "unknown buffer" from "valid 8-bit
-    /// buffer" (UniMode 0).
+    /// buffer" (`UniMode` 0).
     fn buffer_encoding(&self, id: isize) -> i32;
 
     /// EOL format of the buffer with id `id`. Returns one of
@@ -736,7 +736,7 @@ pub trait HostServices {
     /// for "ASCII". A plugin asking for it likely wants `UNI_COOKIE`
     /// (UTF-8 without BOM) which is the natural superset.
     ///
-    /// Returns `false` for unknown buffer id, unknown UniMode value,
+    /// Returns `false` for unknown buffer id, unknown `UniMode` value,
     /// or `UNI_7BIT` per the rule above.
     fn set_buffer_encoding(&mut self, id: isize, unimode: i32) -> bool;
 
@@ -755,7 +755,7 @@ pub trait HostServices {
     /// dance to reach a non-active buffer) tracked in DESIGN.md
     /// §7.4.
     ///
-    /// Returns `false` for unknown buffer id or unknown EolType.
+    /// Returns `false` for unknown buffer id or unknown `EolType`.
     fn set_buffer_format(&mut self, id: isize, eoltype: i32) -> bool;
 
     /// Convert the active buffer of `view` (0 = primary,
@@ -765,7 +765,7 @@ pub trait HostServices {
     /// is *always* UTF-8 internally (we set `SC_CP_UTF8` at create
     /// time), so the byte representation needs no work — the only
     /// observable change is `tab.encoding` flipping to
-    /// [`codepp_core::Encoding::Utf8`] (UNI_COOKIE), which is
+    /// [`codepp_core::Encoding::Utf8`] (`UNI_COOKIE`), which is
     /// what the next save will produce.
     ///
     /// Returns the new encoding numeric ([`UNI_COOKIE`]) on
@@ -990,7 +990,7 @@ pub trait HostServices {
     /// both hosts perform the same implicit signed-to-unsigned
     /// cast at the messageProc call.
     ///
-    /// `info_ptr` is the verbatim CommunicationInfo pointer the
+    /// `info_ptr` is the verbatim `CommunicationInfo` pointer the
     /// source plugin supplied; the host does not dereference it
     /// past reading `internal_msg`.
     fn forward_plugin_message(
@@ -1233,7 +1233,7 @@ pub trait HostServices {
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
 /// message is in the NPPM_* numeric range, or `None` if it should
-/// fall through to the host's default wnd_proc.
+/// fall through to the host's default `wnd_proc`.
 ///
 /// Unknown messages **inside** the NPPM_* range return `Some(0)` and
 /// log a `tracing::warn!`. That's the documented contract: plugins
@@ -1250,6 +1250,15 @@ pub trait HostServices {
 /// passes a smaller buffer or NULL invokes UB on its own behalf —
 /// same as Notepad++. We bound writes at `MAX_PATH_TCHARS` to keep
 /// the host's blast radius constant.
+///
+/// The function intentionally has many lines: it's the single
+/// dispatch chokepoint for the entire NPPM message family
+/// (~80 messages today), and splitting it into per-message
+/// helpers would only shuffle the call structure without
+/// improving readability — every arm is already one branch of
+/// the central match. Clippy's `too_many_lines` lint is
+/// suppressed here on that basis.
+#[allow(clippy::too_many_lines)]
 pub unsafe fn dispatch_nppm<S: HostServices>(
     services: &mut S,
     msg: u32,
@@ -1310,11 +1319,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         NPPM_SETCURRENTLANGTYPE => {
             let lang = lparam as i32;
             let id = services.current_buffer_id();
-            if services.set_buffer_lang_type(id, lang) {
-                1
-            } else {
-                0
-            }
+            isize::from(services.set_buffer_lang_type(id, lang))
         }
 
         NPPM_GETNBOPENFILES => {
@@ -1489,11 +1494,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             }
             let view = wparam as i32;
             let pos = lparam as i32;
-            if services.activate_doc(view, pos) {
-                1
-            } else {
-                0
-            }
+            isize::from(services.activate_doc(view, pos))
         }
 
         NPPM_RELOADFILE => {
@@ -1527,11 +1528,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 if decoded.is_empty() {
                     return Some(0);
                 }
-                if services.switch_to_file(PathBuf::from(decoded)) {
-                    1
-                } else {
-                    0
-                }
+                isize::from(services.switch_to_file(PathBuf::from(decoded)))
             }
         }
 
@@ -1620,7 +1617,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 );
                 return Some(0);
             }
-            services.add_toolbar_icon(wparam as i32, h_icon as crate::ffi::Hwnd) as isize
+            isize::from(services.add_toolbar_icon(wparam as i32, h_icon as crate::ffi::Hwnd))
         }
 
         NPPM_GETWINDOWSVERSION => {
@@ -1720,38 +1717,38 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // (return != hidden) vs. "it was already in this state"
             // (return == hidden).
             let hidden = wparam != 0;
-            services.set_tabbar_hidden(hidden) as isize
+            isize::from(services.set_tabbar_hidden(hidden))
         }
 
         NPPM_ISTABBARHIDDEN => {
             // No args. Returns BOOL — current hidden state.
-            services.is_tabbar_hidden() as isize
+            isize::from(services.is_tabbar_hidden())
         }
 
         NPPM_HIDETOOLBAR => {
             // wparam: BOOL — TRUE hides, FALSE shows. Returns the
             // *previous* hidden state. Same contract shape as
             // `NPPM_HIDETABBAR`.
-            services.set_toolbar_hidden(wparam != 0) as isize
+            isize::from(services.set_toolbar_hidden(wparam != 0))
         }
 
-        NPPM_ISTOOLBARHIDDEN => services.is_toolbar_hidden() as isize,
+        NPPM_ISTOOLBARHIDDEN => isize::from(services.is_toolbar_hidden()),
 
         NPPM_HIDEMENU => {
             // wparam: BOOL. Returns previous hidden state. The host
             // implementation flips between `SetMenu(main_hwnd, NULL)`
             // and `SetMenu(main_hwnd, main_menu)` + `DrawMenuBar`.
-            services.set_menu_hidden(wparam != 0) as isize
+            isize::from(services.set_menu_hidden(wparam != 0))
         }
 
-        NPPM_ISMENUHIDDEN => services.is_menu_hidden() as isize,
+        NPPM_ISMENUHIDDEN => isize::from(services.is_menu_hidden()),
 
         NPPM_HIDESTATUSBAR => {
             // wparam: BOOL. Returns previous hidden state.
-            services.set_statusbar_hidden(wparam != 0) as isize
+            isize::from(services.set_statusbar_hidden(wparam != 0))
         }
 
-        NPPM_ISSTATUSBARHIDDEN => services.is_statusbar_hidden() as isize,
+        NPPM_ISSTATUSBARHIDDEN => isize::from(services.is_statusbar_hidden()),
 
         NPPM_GETFULLPATHFROMBUFFERID => {
             // wParam: buffer id. lParam: TCHAR* OUT (caller-allocated).
@@ -1790,11 +1787,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // re-applying the same lexer would visibly flicker the
             // colours and the notification would be a false-positive.
             // The trait impl is responsible for that idempotence.
-            if services.set_buffer_lang_type(wparam as isize, lparam as i32) {
-                1
-            } else {
-                0
-            }
+            isize::from(services.set_buffer_lang_type(wparam as isize, lparam as i32))
         }
 
         NPPM_GETBUFFERENCODING => {
@@ -1821,7 +1814,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // unknown id / unknown UniMode / UNI_7BIT (no exact
             // `Encoding` variant — see the trait doc-comment for
             // the rationale).
-            services.set_buffer_encoding(wparam as isize, lparam as i32) as isize
+            isize::from(services.set_buffer_encoding(wparam as isize, lparam as i32))
         }
 
         NPPM_ENCODESCI => {
@@ -1854,7 +1847,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // semantics as SETBUFFERENCODING), 0 on unknown id or
             // unknown EolType. Phase 4 metadata-only — see the
             // trait doc-comment for the SCI_CONVERTEOLS deferral.
-            services.set_buffer_format(wparam as isize, lparam as i32) as isize
+            isize::from(services.set_buffer_format(wparam as isize, lparam as i32))
         }
 
         NPPM_RELOADBUFFERID => {
@@ -1864,11 +1857,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // reload was issued), 0 if the id is unknown.
             let id = wparam as isize;
             let with_alert = lparam != 0;
-            if services.reload_buffer_id(id, with_alert) {
-                1
-            } else {
-                0
-            }
+            isize::from(services.reload_buffer_id(id, with_alert))
         }
 
         NPPM_DOOPEN => {
@@ -1904,7 +1893,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             if decoded.is_empty() {
                 return Some(0);
             }
-            services.save_current_as(PathBuf::from(decoded), as_copy) as isize
+            isize::from(services.save_current_as(PathBuf::from(decoded), as_copy))
         }
 
         NPPM_LOADSESSION => {
@@ -1922,7 +1911,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             if decoded.is_empty() {
                 return Some(0);
             }
-            services.load_session(PathBuf::from(decoded)) as isize
+            isize::from(services.load_session(PathBuf::from(decoded)))
         }
 
         NPPM_SAVECURRENTSESSION => {
@@ -1938,7 +1927,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             if decoded.is_empty() {
                 return Some(0);
             }
-            services.save_current_session(PathBuf::from(decoded)) as isize
+            isize::from(services.save_current_session(PathBuf::from(decoded)))
         }
 
         NPPM_GETNBSESSIONFILES => {
@@ -1957,8 +1946,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             }
             services
                 .read_session_file_paths(PathBuf::from(decoded))
-                .map(|v| v.len() as isize)
-                .unwrap_or(0)
+                .map_or(0, |v| v.len() as isize)
         }
 
         NPPM_GETSESSIONFILES => {
@@ -2225,7 +2213,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 dlg_id,
                 i_prev_cont,
             };
-            services.register_dock_dialog(params) as isize
+            isize::from(services.register_dock_dialog(params))
         }
 
         NPPM_DMMSHOW => {
@@ -2237,7 +2225,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 return Some(0);
             }
             let h_client = lparam as crate::ffi::Hwnd;
-            services.show_dock_dialog(h_client) as isize
+            isize::from(services.show_dock_dialog(h_client))
         }
 
         NPPM_DMMHIDE => {
@@ -2248,7 +2236,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 return Some(0);
             }
             let h_client = lparam as crate::ffi::Hwnd;
-            services.hide_dock_dialog(h_client) as isize
+            isize::from(services.hide_dock_dialog(h_client))
         }
 
         NPPM_DMMUPDATEDISPINFO => {
@@ -2264,7 +2252,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
                 return Some(0);
             }
             let h_client = lparam as crate::ffi::Hwnd;
-            services.update_dock_disp_info(h_client) as isize
+            isize::from(services.update_dock_disp_info(h_client))
         }
 
         NPPM_DMMVIEWOTHERTAB => {
@@ -2341,7 +2329,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             write_lang_string_with_probe(services.language_desc(wparam as i32), lparam)
         }
 
-        NPPM_ALLOCATESUPPORTED => services.alloc_supported() as isize,
+        NPPM_ALLOCATESUPPORTED => isize::from(services.alloc_supported()),
 
         NPPM_ALLOCATECMDID => {
             // wparam: count of consecutive ids requested.
@@ -2404,7 +2392,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             1
         }
 
-        NPPM_GETAPPDATAPLUGINSALLOWED => services.appdata_plugins_allowed() as isize,
+        NPPM_GETAPPDATAPLUGINSALLOWED => isize::from(services.appdata_plugins_allowed()),
 
         NPPM_GETCURRENTVIEW => services.current_view() as isize,
 
@@ -2458,7 +2446,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // FALSE; plugins watching `NPPN_DARKMODECHANGED`
             // and gating on this query gracefully skip their
             // dark-mode code paths.
-            services.is_dark_mode_enabled() as isize
+            isize::from(services.is_dark_mode_enabled())
         }
 
         NPPM_GETDARKMODECOLORS => {
@@ -2528,13 +2516,13 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         NPPM_SETSMOOTHFONT => {
             // wparam: BOOL — TRUE picks LCD-optimised, FALSE picks
             // non-antialiased. Returns previous state.
-            services.set_smooth_font(wparam != 0) as isize
+            isize::from(services.set_smooth_font(wparam != 0))
         }
 
         NPPM_SETEDITORBORDEREDGE => {
             // wparam: BOOL — TRUE adds `WS_EX_CLIENTEDGE`, FALSE
             // removes. Returns previous state.
-            services.set_editor_border_edge(wparam != 0) as isize
+            isize::from(services.set_editor_border_edge(wparam != 0))
         }
 
         NPPM_SAVEFILE => {
@@ -2548,7 +2536,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             if decoded.is_empty() {
                 return Some(0);
             }
-            services.save_file(PathBuf::from(decoded)) as isize
+            isize::from(services.save_file(PathBuf::from(decoded)))
         }
 
         NPPM_DISABLEAUTOUPDATE => {
@@ -2563,13 +2551,13 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             0
         }
 
-        NPPM_ISDOCSWITCHERSHOWN => services.is_doc_switcher_shown() as isize,
+        NPPM_ISDOCSWITCHERSHOWN => isize::from(services.is_doc_switcher_shown()),
 
         NPPM_SHOWDOCSWITCHER => {
             // wparam: BOOL — TRUE shows, FALSE hides. Returns the
             // *previous* shown state. Code++'s impl is a no-op
             // returning `false` (panel never shown).
-            services.set_doc_switcher_shown(wparam != 0) as isize
+            isize::from(services.set_doc_switcher_shown(wparam != 0))
         }
 
         NPPM_DOCSWITCHERDISABLECOLUMN => {
@@ -2588,7 +2576,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // `LINENUMWIDTH_CONSTANT` (1). Returns 1 on success,
             // 0 on unknown mode. The cast to i32 is safe: valid
             // values are tightly bounded.
-            services.set_line_number_width_mode(wparam as i32) as isize
+            isize::from(services.set_line_number_width_mode(wparam as i32))
         }
 
         NPPM_GETNBUSERLANG => {
@@ -2610,7 +2598,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // through `services` so the host gets the chance
             // to log / record the request, and so a future
             // implementation has a single place to wire up.
-            services.trigger_tab_context_menu(wparam as i32, lparam as i32) as isize
+            isize::from(services.trigger_tab_context_menu(wparam as i32, lparam as i32))
         }
 
         NPPM_REMOVESHORTCUTBYCMDID => {
@@ -2620,7 +2608,7 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
             // removed, FALSE otherwise. Same `wparam as i32`
             // truncation parity with N++ — cmd ids are u16 in
             // Win32, well below i32::MAX.
-            services.remove_shortcut_for_cmd_id(wparam as i32) as isize
+            isize::from(services.remove_shortcut_for_cmd_id(wparam as i32))
         }
 
         NPPM_GETSHORTCUTBYCMDID => {
@@ -2871,7 +2859,15 @@ mod tests {
     /// In-memory `HostServices` that records mutations and returns
     /// configured query values. Lets us exercise every dispatcher
     /// branch without a real shell or window.
+    ///
+    /// The mock has more than three boolean fields by design —
+    /// each one represents a discrete dispatcher branch that
+    /// tests configure independently. Refactoring them into a
+    /// bitset or enum would obscure the test scaffolding's
+    /// intent; clippy's `struct_excessive_bools` is allowed
+    /// here on that basis.
     #[derive(Default)]
+    #[allow(clippy::struct_excessive_bools)]
     struct MockServices {
         active_scintilla: usize,
         secondary_scintilla: usize,
@@ -2900,11 +2896,11 @@ mod tests {
         toolbar_hidden: bool,
         menu_hidden: bool,
         statusbar_hidden: bool,
-        /// Per-buffer encoding (UniMode integer). Looked up by
+        /// Per-buffer encoding (`UniMode` integer). Looked up by
         /// buffer id; missing entries return `-1` matching the
         /// dispatcher's "unknown id" contract.
         buffer_encodings: Vec<(isize, i32)>,
-        /// Per-buffer EOL format (EolType integer). Same lookup
+        /// Per-buffer EOL format (`EolType` integer). Same lookup
         /// shape as `buffer_encodings`.
         buffer_formats: Vec<(isize, i32)>,
         /// Where the host program reports its install dir from. Set
@@ -2962,11 +2958,11 @@ mod tests {
         /// Return value the mock reports from
         /// `trigger_tab_context_menu`. Defaults to `false` (the
         /// "no menu opened" path), matching the production
-        /// HostBridge today.
+        /// `HostBridge` today.
         tab_context_menu_opens: bool,
         /// Plugin-registered modeless-dialog HWNDs. Stored as
         /// `usize` to keep the mock free of `windows`-crate
-        /// types — the production HostBridge translates back to
+        /// types — the production `HostBridge` translates back to
         /// `HWND` at the trait boundary.
         modeless_dialogs: Vec<usize>,
         /// `(cmd_id, hicon)` pairs the mock has accepted via
@@ -2980,7 +2976,7 @@ mod tests {
         /// Parent HWNDs the mock has been asked to create a
         /// plugin-owned Scintilla under, in call order. Stored
         /// as `usize` for the same reason as `modeless_dialogs`
-        /// — the production HostBridge translates back to
+        /// — the production `HostBridge` translates back to
         /// `HWND` at the trait boundary.
         plugin_scintilla_parents: Vec<usize>,
         /// HWND the mock returns from `create_plugin_scintilla`.
@@ -3088,8 +3084,7 @@ mod tests {
         fn reload_file(&mut self, path: Option<PathBuf>) {
             self.record(format!(
                 "reload={}",
-                path.map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "<current>".into())
+                path.map_or_else(|| "<current>".into(), |p| p.display().to_string())
             ));
         }
         fn save_current_file(&mut self) {
@@ -3123,9 +3118,7 @@ mod tests {
         ) {
             self.record(format!(
                 "fif_launch[dir={},filters={}]",
-                directory
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "<none>".into()),
+                directory.map_or_else(|| "<none>".into(), |p| p.display().to_string()),
                 filters.unwrap_or_else(|| "<none>".into())
             ));
         }
@@ -3136,7 +3129,9 @@ mod tests {
             // paths plugins will hit in release.
             match selector {
                 ALL_OPEN_FILES | PRIMARY_VIEW => self.open_files_primary.clone(),
-                SECOND_VIEW => Vec::new(),
+                // SECOND_VIEW and any unknown selector both
+                // map to empty — Phase 4 single-view mock has
+                // nothing in the secondary slot.
                 _ => Vec::new(),
             }
         }
@@ -3150,15 +3145,13 @@ mod tests {
             self.buffer_encodings
                 .iter()
                 .find(|(i, _)| *i == id)
-                .map(|(_, e)| *e)
-                .unwrap_or(-1)
+                .map_or(-1, |(_, e)| *e)
         }
         fn buffer_format(&self, id: isize) -> i32 {
             self.buffer_formats
                 .iter()
                 .find(|(i, _)| *i == id)
-                .map(|(_, f)| *f)
-                .unwrap_or(-1)
+                .map_or(-1, |(_, f)| *f)
         }
         fn reload_buffer_id(&mut self, id: isize, with_alert: bool) -> bool {
             // Look up the path from the same `buffer_paths` map the
@@ -3306,8 +3299,7 @@ mod tests {
             self.buffer_paths
                 .iter()
                 .find(|(_, p)| p == path)
-                .map(|(i, _)| *i)
-                .unwrap_or(0)
+                .map_or(0, |(i, _)| *i)
         }
         fn save_current_as(&mut self, path: PathBuf, as_copy: bool) -> bool {
             self.record(format!("save_as={} copy={as_copy}", path.display()));
@@ -3558,7 +3550,7 @@ mod tests {
         }
         fn show_dock_dialog(&mut self, h_client: crate::ffi::Hwnd) -> bool {
             self.record(format!("show_dock_dialog(h=0x{:x})", h_client as usize));
-            for entry in self.dock_dialogs.iter_mut() {
+            for entry in &mut self.dock_dialogs {
                 if entry.0 == h_client as usize {
                     entry.3 = true;
                     return true;
@@ -3568,7 +3560,7 @@ mod tests {
         }
         fn hide_dock_dialog(&mut self, h_client: crate::ffi::Hwnd) -> bool {
             self.record(format!("hide_dock_dialog(h=0x{:x})", h_client as usize));
-            for entry in self.dock_dialogs.iter_mut() {
+            for entry in &mut self.dock_dialogs {
                 if entry.0 == h_client as usize {
                     entry.3 = false;
                     return true;
@@ -3624,14 +3616,8 @@ mod tests {
             ..Default::default()
         };
         let mut view: i32 = -1;
-        let r = unsafe {
-            dispatch_nppm(
-                &mut s,
-                NPPM_GETCURRENTSCINTILLA,
-                0,
-                &mut view as *mut i32 as isize,
-            )
-        };
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTSCINTILLA, 0, &raw mut view as isize) };
         // LRESULT is the view index (0 for Phase 3 single-view), not
         // the HWND — plugins read the HWND from NppData.
         assert_eq!(r, Some(0));
@@ -3646,14 +3632,8 @@ mod tests {
             ..Default::default()
         };
         let mut lang: i32 = -1;
-        let r = unsafe {
-            dispatch_nppm(
-                &mut s,
-                NPPM_GETCURRENTLANGTYPE,
-                0,
-                &mut lang as *mut i32 as isize,
-            )
-        };
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_GETCURRENTLANGTYPE, 0, &raw mut lang as isize) };
         assert_eq!(r, Some(1));
         assert_eq!(lang, 5);
     }
@@ -4020,18 +4000,18 @@ mod tests {
         // assert the dispatcher wrote each through to the
         // plugin's buffer.
         let palette = NppDarkModeColors {
-            background: 0x111111,
-            ctrl_background: 0x222222,
-            hot_background: 0x333333,
-            dlg_background: 0x444444,
-            error_background: 0x555555,
-            text: 0x666666,
-            darker_text: 0x777777,
-            disabled_text: 0x888888,
-            link_text: 0x999999,
-            edge: 0xAAAAAA,
-            hot_edge: 0xBBBBBB,
-            disabled_edge: 0xCCCCCC,
+            background: 0x0011_1111,
+            ctrl_background: 0x0022_2222,
+            hot_background: 0x0033_3333,
+            dlg_background: 0x0044_4444,
+            error_background: 0x0055_5555,
+            text: 0x0066_6666,
+            darker_text: 0x0077_7777,
+            disabled_text: 0x0088_8888,
+            link_text: 0x0099_9999,
+            edge: 0x00AA_AAAA,
+            hot_edge: 0x00BB_BBBB,
+            disabled_edge: 0x00CC_CCCC,
         };
         let mut s = MockServices {
             dark_mode_colors_succeeds: true,
@@ -4040,14 +4020,8 @@ mod tests {
         };
         let mut out = NppDarkModeColors::default();
         let size = core::mem::size_of::<NppDarkModeColors>();
-        let r = unsafe {
-            dispatch_nppm(
-                &mut s,
-                NPPM_GETDARKMODECOLORS,
-                size,
-                &mut out as *mut NppDarkModeColors as isize,
-            )
-        };
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_GETDARKMODECOLORS, size, &raw mut out as isize) };
         assert_eq!(r, Some(1));
         assert_eq!(out, palette);
     }
@@ -4065,14 +4039,8 @@ mod tests {
         };
         let pre = out;
         let size = core::mem::size_of::<NppDarkModeColors>();
-        let r = unsafe {
-            dispatch_nppm(
-                &mut s,
-                NPPM_GETDARKMODECOLORS,
-                size,
-                &mut out as *mut NppDarkModeColors as isize,
-            )
-        };
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_GETDARKMODECOLORS, size, &raw mut out as isize) };
         assert_eq!(r, Some(0));
         // The buffer must not have been touched on the
         // failure path — proves the dispatcher gates the
@@ -4124,7 +4092,7 @@ mod tests {
                     &mut s,
                     NPPM_GETDARKMODECOLORS,
                     bad_size,
-                    &mut out as *mut NppDarkModeColors as isize,
+                    &raw mut out as isize,
                 )
             };
             assert_eq!(r, Some(0), "bad_size = {bad_size}");
@@ -5000,7 +4968,7 @@ mod tests {
             nb_file: 2,
             files: files_arr.as_mut_ptr(),
         };
-        let info_ptr = &info as *const SessionInfo as isize;
+        let info_ptr = &raw const info as isize;
         let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, info_ptr) };
         // Success returns lParam unchanged so the plugin can chain.
         assert_eq!(r, Some(info_ptr));
@@ -5027,7 +4995,7 @@ mod tests {
             nb_file: -1,
             files: core::ptr::null_mut(),
         };
-        let info_ptr = &info as *const SessionInfo as isize;
+        let info_ptr = &raw const info as isize;
         let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, info_ptr) };
         assert_eq!(r, Some(0));
     }
@@ -5047,7 +5015,7 @@ mod tests {
             nb_file: 5,
             files: core::ptr::null_mut(),
         };
-        let info_ptr = &info as *const SessionInfo as isize;
+        let info_ptr = &raw const info as isize;
         let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, info_ptr) };
         assert_eq!(r, Some(0));
         // No `save_session_with_files` call recorded — the
@@ -5068,7 +5036,7 @@ mod tests {
             nb_file: 0,
             files: core::ptr::null_mut(),
         };
-        let info_ptr = &info as *const SessionInfo as isize;
+        let info_ptr = &raw const info as isize;
         let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, info_ptr) };
         assert_eq!(r, Some(info_ptr));
         assert_eq!(
@@ -5090,7 +5058,7 @@ mod tests {
             nb_file: i32::MAX,
             files: core::ptr::null_mut(),
         };
-        let info_ptr = &info as *const SessionInfo as isize;
+        let info_ptr = &raw const info as isize;
         let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, info_ptr) };
         assert_eq!(r, Some(0));
     }
@@ -5109,7 +5077,7 @@ mod tests {
             nb_file: 2,
             files: files_arr.as_mut_ptr(),
         };
-        let info_ptr = &info as *const SessionInfo as isize;
+        let info_ptr = &raw const info as isize;
         let r = unsafe { dispatch_nppm(&mut s, NPPM_SAVESESSION, 0, info_ptr) };
         assert_eq!(r, Some(info_ptr));
         // Only the one real path made it into the recorded list.
@@ -5274,7 +5242,7 @@ mod tests {
                 &mut s,
                 NPPM_ALLOCATECMDID,
                 4, // request 4 ids
-                &mut start as *mut i32 as isize,
+                &raw mut start as isize,
             )
         };
         assert_eq!(r, Some(1));
@@ -5296,8 +5264,8 @@ mod tests {
         let mut a: i32 = -1;
         let mut b: i32 = -1;
         unsafe {
-            dispatch_nppm(&mut s, NPPM_ALLOCATECMDID, 3, &mut a as *mut i32 as isize);
-            dispatch_nppm(&mut s, NPPM_ALLOCATECMDID, 5, &mut b as *mut i32 as isize);
+            dispatch_nppm(&mut s, NPPM_ALLOCATECMDID, 3, &raw mut a as isize);
+            dispatch_nppm(&mut s, NPPM_ALLOCATECMDID, 5, &raw mut b as isize);
         }
         assert_eq!(a, 60_000);
         assert_eq!(b, 60_003);
@@ -5314,14 +5282,7 @@ mod tests {
             ..Default::default()
         };
         let mut start: i32 = -1;
-        let r = unsafe {
-            dispatch_nppm(
-                &mut s,
-                NPPM_ALLOCATECMDID,
-                2,
-                &mut start as *mut i32 as isize,
-            )
-        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ALLOCATECMDID, 2, &raw mut start as isize) };
         assert_eq!(r, Some(0));
         assert_eq!(start, -1, "out-pointer must not be touched on failure");
         assert_eq!(s.next_alloc_cmd_id, 65_499, "counter unchanged on failure");
@@ -5335,14 +5296,7 @@ mod tests {
             ..Default::default()
         };
         let mut start: i32 = -1;
-        let r = unsafe {
-            dispatch_nppm(
-                &mut s,
-                NPPM_ALLOCATECMDID,
-                0,
-                &mut start as *mut i32 as isize,
-            )
-        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ALLOCATECMDID, 0, &raw mut start as isize) };
         assert_eq!(r, Some(0));
     }
 
@@ -5457,14 +5411,8 @@ mod tests {
             is_shift: 0xFF,
             key: 0xFF,
         };
-        let r = unsafe {
-            dispatch_nppm(
-                &mut s,
-                NPPM_GETSHORTCUTBYCMDID,
-                1003,
-                &mut out as *mut ShortcutKey as isize,
-            )
-        };
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_GETSHORTCUTBYCMDID, 1003, &raw mut out as isize) };
         assert_eq!(r, Some(1));
         assert_eq!(out.is_ctrl, 1);
         assert_eq!(out.is_alt, 0);
@@ -5488,7 +5436,7 @@ mod tests {
                 &mut s,
                 NPPM_GETSHORTCUTBYCMDID,
                 9999, // unbound cmd id
-                &mut out as *mut ShortcutKey as isize,
+                &raw mut out as isize,
             )
         };
         assert_eq!(r, Some(0));
@@ -5648,7 +5596,7 @@ mod tests {
             h_toolbar_bmp: core::ptr::null_mut(),
             h_toolbar_icon: 0xCAFE_BABE_usize as *mut core::ffi::c_void,
         };
-        let icons_ptr = &icons as *const ToolbarIcons as isize;
+        let icons_ptr = &raw const icons as isize;
         let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_001, icons_ptr) };
         assert_eq!(r, Some(1));
         assert_eq!(s.toolbar_icons, vec![(60_001, 0xCAFE_BABE_usize)]);
@@ -5669,7 +5617,7 @@ mod tests {
             h_toolbar_bmp: 0xDEAD_BEEF_usize as *mut core::ffi::c_void,
             h_toolbar_icon: core::ptr::null_mut(),
         };
-        let icons_ptr = &icons as *const ToolbarIcons as isize;
+        let icons_ptr = &raw const icons as isize;
         let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_001, icons_ptr) };
         assert_eq!(r, Some(0));
         // Mock should not have been called — the dispatcher
@@ -5691,7 +5639,7 @@ mod tests {
             h_toolbar_bmp: core::ptr::null_mut(),
             h_toolbar_icon: 0xBEEF_usize as *mut core::ffi::c_void,
         };
-        let icons_ptr = &icons as *const ToolbarIcons as isize;
+        let icons_ptr = &raw const icons as isize;
         let r = unsafe { dispatch_nppm(&mut s, NPPM_ADDTOOLBARICON, 60_002, icons_ptr) };
         assert_eq!(r, Some(0));
     }
@@ -5794,7 +5742,7 @@ mod tests {
         let name = make_wide("Console");
         let module = make_wide("NppExec");
         let td = build_tb_data(0xCAFE_F00D, &name, &module, crate::ffi::DWS_DF_FLOATING);
-        let td_ptr = &td as *const _ as isize;
+        let td_ptr = &raw const td as isize;
         let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMREGASDCKDLG, 0, td_ptr) };
         assert_eq!(r, Some(1));
         assert_eq!(s.dock_dialogs.len(), 1);
@@ -5813,7 +5761,7 @@ mod tests {
         let name = make_wide("Console");
         let module = make_wide("NppExec");
         let td = build_tb_data(0, &name, &module, 0);
-        let td_ptr = &td as *const _ as isize;
+        let td_ptr = &raw const td as isize;
         let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMREGASDCKDLG, 0, td_ptr) };
         assert_eq!(r, Some(0));
         assert!(s.dock_dialogs.is_empty());
@@ -5844,7 +5792,7 @@ mod tests {
         let name = make_wide("Console");
         let module = make_wide("NppExec");
         let td = build_tb_data(0xBEEF, &name, &module, 0);
-        let td_ptr = &td as *const _ as isize;
+        let td_ptr = &raw const td as isize;
         let r = unsafe { dispatch_nppm(&mut s, NPPM_DMMREGASDCKDLG, 0, td_ptr) };
         assert_eq!(r, Some(0));
     }
@@ -6035,14 +5983,8 @@ mod tests {
             is_shift: 0xFF,
             key: 0xFF,
         };
-        let r = unsafe {
-            dispatch_nppm(
-                &mut s,
-                NPPM_GETSHORTCUTBYCMDID,
-                1003,
-                &mut out as *mut ShortcutKey as isize,
-            )
-        };
+        let r =
+            unsafe { dispatch_nppm(&mut s, NPPM_GETSHORTCUTBYCMDID, 1003, &raw mut out as isize) };
         assert_eq!(r, Some(0));
         // Out-buffer untouched on miss (same invariant the
         // GETSHORTCUTBYCMDID-only test pinned).
@@ -6057,14 +5999,7 @@ mod tests {
             ..Default::default()
         };
         let mut start: i32 = -1;
-        let r = unsafe {
-            dispatch_nppm(
-                &mut s,
-                NPPM_ALLOCATEMARKER,
-                3,
-                &mut start as *mut i32 as isize,
-            )
-        };
+        let r = unsafe { dispatch_nppm(&mut s, NPPM_ALLOCATEMARKER, 3, &raw mut start as isize) };
         assert_eq!(r, Some(1));
         assert_eq!(start, 25);
         assert_eq!(s.next_alloc_marker, 28);
@@ -6085,7 +6020,7 @@ mod tests {
                 &mut s,
                 NPPM_ALLOCATEMARKER,
                 10, // way more than the 7 available
-                &mut start as *mut i32 as isize,
+                &raw mut start as isize,
             )
         };
         assert_eq!(r, Some(0));
@@ -6208,7 +6143,7 @@ mod tests {
             src_module_name: src.as_mut_ptr(),
             info: core::ptr::null_mut(),
         };
-        let info_ptr = &info as *const CommunicationInfo as isize;
+        let info_ptr = &raw const info as isize;
         let r =
             unsafe { dispatch_nppm(&mut s, NPPM_MSGTOPLUGIN, target.as_ptr() as usize, info_ptr) };
         assert_eq!(r, Some(42));
@@ -6297,21 +6232,21 @@ mod tests {
     #[test]
     fn editor_default_fg_color_passes_through() {
         let mut s = MockServices {
-            editor_default_fg_color: 0x00112233,
+            editor_default_fg_color: 0x0011_2233,
             ..Default::default()
         };
         let r = unsafe { dispatch_nppm(&mut s, NPPM_GETEDITORDEFAULTFOREGROUNDCOLOR, 0, 0) };
-        assert_eq!(r, Some(0x00112233));
+        assert_eq!(r, Some(0x0011_2233));
     }
 
     #[test]
     fn editor_default_bg_color_passes_through() {
         let mut s = MockServices {
-            editor_default_bg_color: 0x00FFFFFF,
+            editor_default_bg_color: 0x00FF_FFFF,
             ..Default::default()
         };
         let r = unsafe { dispatch_nppm(&mut s, NPPM_GETEDITORDEFAULTBACKGROUNDCOLOR, 0, 0) };
-        assert_eq!(r, Some(0x00FFFFFF));
+        assert_eq!(r, Some(0x00FF_FFFF));
     }
 
     // --- SETSMOOTHFONT / SETEDITORBORDEREDGE ---

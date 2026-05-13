@@ -7,6 +7,13 @@
 //! + load via `PluginHost`, then assert name + menu-item layout.
 
 #![cfg(target_os = "windows")]
+// Integration tests cast usize lengths into the C-ABI's i32
+// shape — the values come from short literal arrays in the
+// test, well below i32::MAX, but clippy's pedantic
+// `cast_possible_truncation` / `cast_possible_wrap` flags
+// every such `as i32` regardless. Mirrors the file-level allow
+// in `plugin-host/src/lib.rs`.
+#![allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 
 use std::path::PathBuf;
 
