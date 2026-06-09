@@ -959,6 +959,50 @@ pub const CPP_KEYWORDS: &str = concat!(
     "volatile wchar_t while xor xor_eq"
 );
 
+/// Space-separated keyword list for C#. Installed via the `LexCPP`
+/// lexer's `SCI_SETKEYWORDS(0, ...)`. Covers the C# 12 reserved
+/// words, contextual keywords, LINQ query vocabulary, modern
+/// pattern-match operators (`and`/`or`/`not`/`when`), record-related
+/// modifiers (`record`/`init`/`required`/`with`/`scoped`), and the
+/// built-in primitive type aliases (`int`/`string`/`bool`/`nint`/
+/// `nuint`/...).
+///
+/// Deliberately excluded:
+///   - **Preprocessor directive names** (`define`, `region`, `pragma`,
+///     `nullable`, ...): Lexilla styles `#`-prefixed directives via
+///     `SCE_C_PREPROCESSOR`, independent of class 0. Including them
+///     here would cause double-styling.
+///   - **`args`**: not a C# keyword. It's the conventional parameter
+///     name for top-level statements (the synthesised `Main(string[]
+///     args)`). Colouring it would mis-render every user variable
+///     named `args` (extremely common in real code) as a keyword.
+///   - **`field`** (C# 13 contextual): keyword only inside property
+///     accessors and `[field: ...]` attribute targets; `LexCPP` can't
+///     distinguish those contexts at class-0 lookup time, so the
+///     identifier sense (a `var field = ...` declaration) is the more
+///     common case to honour.
+///   - **`extension`** (C# 14 preview): not shipped yet and a common
+///     identifier name (`var extension = path.GetExtension(...)`).
+///   - **Library identifiers** (`Console`, `String` capitalised,
+///     `Task`, `Math`, `IEnumerable`, ...): library types, not
+///     language vocabulary.
+///
+/// Sourced and adversarially verified across three lenses (Microsoft
+/// Learn reference / production-repo frequency / editor baselines).
+pub const CS_KEYWORDS: &str = concat!(
+    "abstract add alias allows and as ascending async await base bool break by ",
+    "byte case catch char checked class const continue decimal default delegate ",
+    "descending do double dynamic else enum equals event explicit extern false ",
+    "file finally fixed float for foreach from get global goto group if implicit ",
+    "in init int interface internal into is join let lock long managed nameof ",
+    "namespace new nint not notnull nuint null object on operator or orderby ",
+    "out override params partial private protected public readonly record ref ",
+    "remove required return sbyte scoped sealed select set short sizeof ",
+    "stackalloc static string struct switch this throw true try typeof uint ",
+    "ulong unchecked unmanaged unsafe ushort using value var virtual void ",
+    "volatile when where while with yield"
+);
+
 /// Space-separated primary-keyword list for Rust. `LexRust`'s keyword
 /// classes 0 = primary, 1 = secondary; we install just primary at m1.
 pub const RUST_KEYWORDS: &str = concat!(

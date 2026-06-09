@@ -123,7 +123,21 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 4 / 🟡 84 / ⚫ 1.
+Total: 89 rows. ✅ 5 / 🟡 83 / ⚫ 1.
+
+**C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
+`CPP_BOLD` table from the LexCPP family — only the keyword list
+differs from C / C++. The 120-entry `CS_KEYWORDS` const in
+`core::lang` covers C# 12 reserved words, contextual keywords
+(`async` / `await` / `var` / `dynamic` / `partial` / `record` /
+`init` / `required` / `scoped` / `file` / `global` / `with` /
+`and` / `or` / `not` / `when` / ...), LINQ query vocabulary
+(`from` / `where` / `select` / `group` / `into` / `orderby` /
+`join` / `let` / `on` / `equals` / `by` / `ascending` /
+`descending`), and primitive type aliases (`nint` / `nuint`
+included). Authored by a 7-agent research-and-adversarial-verify
+workflow; preprocessor directives, `args`, `extension`, and
+`field` deliberately omitted (rationale in `CS_KEYWORDS` docstring).
 
 **Follow-up landed 2026-05-13:** every `Lex*.cxx` already in
 `crates/scintilla-sys/build.rs`'s compile list is now registered
@@ -150,7 +164,7 @@ further shim work needed.
 | Batch | 12 | `batch` | ⚫ | ⚫ | 🟡 |
 | Blitzbasic | 67 | `blitzbasic` | ⚫ | ⚫ | 🟡 |
 | C | 2 | `cpp` | ✅ | ✅ | ✅ |
-| C# | 4 | `cpp` | ⚫ | ⚫ | 🟡 |
+| C# | 4 | `cpp` | ✅ | ✅ | ✅ |
 | C++ | 3 | `cpp` | ✅ | ✅ | ✅ |
 | Caml | 41 | `caml` | ⚫ | ⚫ | 🟡 |
 | CMake | 48 | `cmake` | ⚫ | ⚫ | 🟡 |

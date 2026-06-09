@@ -101,7 +101,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use codepp_core::lang::{
-    CPP_KEYWORDS, C_KEYWORDS, HTML_KEYWORDS, L_C, L_CPP, L_PHP, L_RUST, PHP_KEYWORDS, RUST_KEYWORDS,
+    CPP_KEYWORDS, CS_KEYWORDS, C_KEYWORDS, HTML_KEYWORDS, L_C, L_CPP, L_CS, L_PHP, L_RUST,
+    PHP_KEYWORDS, RUST_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -3182,6 +3183,16 @@ const CPP_THEME: LangTheme = LangTheme {
     italic: CPP_ITALIC,
     bold: CPP_BOLD,
 };
+// C# rides LexCPP just like C and C++; only the keyword list differs.
+// Same `CPP_STYLES` / `CPP_ITALIC` / `CPP_BOLD` reuse pattern. Adding
+// Java / JS / TS / Go / Obj-C / Swift / RC later follows the same
+// three-line addition (one const + one dispatch arm).
+const CS_THEME: LangTheme = LangTheme {
+    keywords: &[(0, CS_KEYWORDS)],
+    styles: CPP_STYLES,
+    italic: CPP_ITALIC,
+    bold: CPP_BOLD,
+};
 
 // --- LexRust ---
 // LexRust's SCE_RUST_* enum is distinct from LexCPP's SCE_C_*.
@@ -3316,6 +3327,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&C_THEME)
     } else if lang == L_CPP {
         Some(&CPP_THEME)
+    } else if lang == L_CS {
+        Some(&CS_THEME)
     } else if lang == L_RUST {
         Some(&RUST_THEME)
     } else if lang == L_PHP {
@@ -17807,8 +17820,8 @@ mod lang_theme_tests {
     //! a buffer at default colours.
     use super::{lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO};
     use codepp_core::lang::{
-        HTML_KEYWORDS, L_C, L_CPP, L_JAVASCRIPT, L_PHP, L_PYTHON, L_RUST, L_TEXT, PHP_KEYWORDS,
-        RUST_KEYWORDS,
+        CS_KEYWORDS, HTML_KEYWORDS, L_C, L_CPP, L_CS, L_JAVASCRIPT, L_PHP, L_PYTHON, L_RUST,
+        L_TEXT, PHP_KEYWORDS, RUST_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -17821,7 +17834,13 @@ mod lang_theme_tests {
     ///     wiring).
     #[test]
     fn wired_languages_have_complete_themes() {
-        for (lang, name) in [(L_C, "C"), (L_CPP, "C++"), (L_RUST, "Rust"), (L_PHP, "PHP")] {
+        for (lang, name) in [
+            (L_C, "C"),
+            (L_CPP, "C++"),
+            (L_CS, "C#"),
+            (L_RUST, "Rust"),
+            (L_PHP, "PHP"),
+        ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
                 !theme.keywords.is_empty(),
@@ -17860,6 +17879,33 @@ mod lang_theme_tests {
         assert_eq!(c.bold, cpp.bold);
         // But the keyword content differs.
         assert_ne!(c.keywords[0].1, cpp.keywords[0].1);
+    }
+
+    /// C# uses `LexCPP` just like C and C++ — same style indices, same
+    /// italic/bold lists. Only the class-0 keyword content differs.
+    /// Pin that share so a future contributor copy-pasting an
+    /// override into a `CS_STYLES` const trips the test rather than
+    /// silently drifting the C# theme away from its siblings.
+    ///
+    /// Also pin the canonical `CS_KEYWORDS` link via class 0 —
+    /// regression that swapped in a different list (or, worse,
+    /// re-installed `CPP_KEYWORDS` for C#) would silently mis-colour
+    /// every C#-specific keyword. The next several LexCPP-family
+    /// additions (Java / JS / TS / Go / Obj-C / Swift / RC) should
+    /// each pick up a sibling test of this exact shape.
+    #[test]
+    fn cs_reuses_lexcpp_style_table_and_canonical_keywords() {
+        let c = lang_theme(L_C).expect("C wired");
+        let cs = lang_theme(L_CS).expect("C# wired");
+        assert_eq!(cs.styles, c.styles, "C# must reuse CPP_STYLES");
+        assert_eq!(cs.italic, c.italic, "C# must reuse CPP_ITALIC");
+        assert_eq!(cs.bold, c.bold, "C# must reuse CPP_BOLD");
+        assert_eq!(cs.keywords.len(), 1, "C# theme uses class 0 only");
+        assert_eq!(cs.keywords[0].0, 0);
+        assert_eq!(cs.keywords[0].1, CS_KEYWORDS);
+        // C#'s keyword content must differ from C's — `args`, `await`,
+        // `class` vs C's smaller set — same divergence rule as C/C++.
+        assert_ne!(cs.keywords[0].1, c.keywords[0].1);
     }
 
     /// Rust's keyword class 0 must match the canonical
@@ -17902,7 +17948,7 @@ mod lang_theme_tests {
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
     /// updating in the same commit — same as for `L_C` / `L_CPP`
-    /// / `L_RUST` / `L_PHP` above.
+    /// / `L_CS` / `L_RUST` / `L_PHP` above.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_PYTHON).is_none(), "Python not wired yet");
