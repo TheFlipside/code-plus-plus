@@ -101,8 +101,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use codepp_core::lang::{
-    CPP_KEYWORDS, CS_KEYWORDS, C_KEYWORDS, HTML_KEYWORDS, L_C, L_CPP, L_CS, L_PHP, L_RUST,
-    PHP_KEYWORDS, RUST_KEYWORDS,
+    CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
+    HTML_KEYWORDS, L_C, L_CPP, L_CS, L_PHP, L_RUST, PHP_KEYWORDS, RUST_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -3171,24 +3171,37 @@ unsafe fn apply_window_transparency(hwnd: HWND, t: &codepp_core::styles::Transpa
     }
 }
 
+// LexCPP-family themes install **two** keyword classes:
+//   - class 0 (`SCE_C_WORD`)  → `StyleSlot::Keyword`  (blue)
+//   - class 1 (`SCE_C_WORD2`) → `StyleSlot::Keyword2` (steel blue)
+//
+// Primitive types live in class 1 so they render distinctly from
+// control-flow / modifier keywords — matches Notepad++'s default
+// blue-vs-steel-blue C / C++ / C# rendering. The `CPP_STYLES` table
+// at the top of this section already maps `SCE_C_WORD2` to
+// `StyleSlot::Keyword2`; adding the second `(class_index, list)`
+// tuple here is what makes the colour actually fire.
+//
+// Java / JS / TS / Go / Obj-C / Swift follow the same two-class
+// shape when wired (one keyword list const, one type list const, one
+// `else if` arm). RC (Windows resource scripts) likely stays single-
+// class — the lexer's `SCE_C_WORD2` colour is only meaningful for
+// languages with a distinct primitive-type vocabulary, which `.rc`
+// resource statements don't have in any conventional sense.
 const C_THEME: LangTheme = LangTheme {
-    keywords: &[(0, C_KEYWORDS)],
+    keywords: &[(0, C_KEYWORDS), (1, C_KEYWORDS_2)],
     styles: CPP_STYLES,
     italic: CPP_ITALIC,
     bold: CPP_BOLD,
 };
 const CPP_THEME: LangTheme = LangTheme {
-    keywords: &[(0, CPP_KEYWORDS)],
+    keywords: &[(0, CPP_KEYWORDS), (1, CPP_KEYWORDS_2)],
     styles: CPP_STYLES,
     italic: CPP_ITALIC,
     bold: CPP_BOLD,
 };
-// C# rides LexCPP just like C and C++; only the keyword list differs.
-// Same `CPP_STYLES` / `CPP_ITALIC` / `CPP_BOLD` reuse pattern. Adding
-// Java / JS / TS / Go / Obj-C / Swift / RC later follows the same
-// three-line addition (one const + one dispatch arm).
 const CS_THEME: LangTheme = LangTheme {
-    keywords: &[(0, CS_KEYWORDS)],
+    keywords: &[(0, CS_KEYWORDS), (1, CS_KEYWORDS_2)],
     styles: CPP_STYLES,
     italic: CPP_ITALIC,
     bold: CPP_BOLD,
@@ -17820,8 +17833,8 @@ mod lang_theme_tests {
     //! a buffer at default colours.
     use super::{lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO};
     use codepp_core::lang::{
-        CS_KEYWORDS, HTML_KEYWORDS, L_C, L_CPP, L_CS, L_JAVASCRIPT, L_PHP, L_PYTHON, L_RUST,
-        L_TEXT, PHP_KEYWORDS, RUST_KEYWORDS,
+        CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, L_C, L_CPP, L_CS,
+        L_JAVASCRIPT, L_PHP, L_PYTHON, L_RUST, L_TEXT, PHP_KEYWORDS, RUST_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -17882,17 +17895,17 @@ mod lang_theme_tests {
     }
 
     /// C# uses `LexCPP` just like C and C++ — same style indices, same
-    /// italic/bold lists. Only the class-0 keyword content differs.
+    /// italic/bold lists. Only the keyword content differs.
     /// Pin that share so a future contributor copy-pasting an
     /// override into a `CS_STYLES` const trips the test rather than
     /// silently drifting the C# theme away from its siblings.
     ///
-    /// Also pin the canonical `CS_KEYWORDS` link via class 0 —
-    /// regression that swapped in a different list (or, worse,
-    /// re-installed `CPP_KEYWORDS` for C#) would silently mis-colour
-    /// every C#-specific keyword. The next several LexCPP-family
-    /// additions (Java / JS / TS / Go / Obj-C / Swift / RC) should
-    /// each pick up a sibling test of this exact shape.
+    /// Also pin the canonical `CS_KEYWORDS` / `CS_KEYWORDS_2` links
+    /// via classes 0 and 1 — regression that swapped either list (or,
+    /// worse, re-installed `CPP_KEYWORDS` for C#) would silently
+    /// mis-colour every C#-specific keyword. The next several
+    /// LexCPP-family additions (Java / JS / TS / Go / Obj-C / Swift /
+    /// RC) should each pick up a sibling test of this exact shape.
     #[test]
     fn cs_reuses_lexcpp_style_table_and_canonical_keywords() {
         let c = lang_theme(L_C).expect("C wired");
@@ -17900,12 +17913,52 @@ mod lang_theme_tests {
         assert_eq!(cs.styles, c.styles, "C# must reuse CPP_STYLES");
         assert_eq!(cs.italic, c.italic, "C# must reuse CPP_ITALIC");
         assert_eq!(cs.bold, c.bold, "C# must reuse CPP_BOLD");
-        assert_eq!(cs.keywords.len(), 1, "C# theme uses class 0 only");
+        // Two keyword classes: class 0 = control/modifier reserved
+        // words, class 1 = primitive type aliases. Matches every
+        // LexCPP-family theme after the WORD2 split.
+        assert_eq!(cs.keywords.len(), 2, "C# installs class 0 + class 1");
         assert_eq!(cs.keywords[0].0, 0);
         assert_eq!(cs.keywords[0].1, CS_KEYWORDS);
-        // C#'s keyword content must differ from C's — `args`, `await`,
-        // `class` vs C's smaller set — same divergence rule as C/C++.
+        assert_eq!(cs.keywords[1].0, 1);
+        assert_eq!(cs.keywords[1].1, CS_KEYWORDS_2);
+        // C#'s class-0 content must differ from C's — `await`, `class`,
+        // pattern-match operators vs C's smaller set.
         assert_ne!(cs.keywords[0].1, c.keywords[0].1);
+    }
+
+    /// Every LexCPP-family theme must install BOTH class 0 (primary
+    /// keywords) and class 1 (primitive types). Without the class-1
+    /// install, primitive types render at `STYLE_DEFAULT` after
+    /// `SCI_STYLECLEARALL` — visually flat against control-flow
+    /// keywords, the exact regression the WORD2 split exists to fix.
+    /// Pinning the two-class shape on the family means a future
+    /// Java / JS / TS / Go / Obj-C / Swift / RC theme that forgets
+    /// the type list fails this test rather than silently mis-rendering
+    /// in production.
+    #[test]
+    fn lexcpp_family_installs_class_0_and_class_1() {
+        for (lang, name, expected_kw2) in [
+            (L_C, "C", C_KEYWORDS_2),
+            (L_CPP, "C++", CPP_KEYWORDS_2),
+            (L_CS, "C#", CS_KEYWORDS_2),
+        ] {
+            let theme = lang_theme(lang).unwrap_or_else(|| panic!("{name} not wired"));
+            assert_eq!(
+                theme.keywords.len(),
+                2,
+                "{name} must install two keyword classes (class 0 + class 1)"
+            );
+            assert_eq!(theme.keywords[0].0, 0, "{name} class-0 index");
+            assert_eq!(theme.keywords[1].0, 1, "{name} class-1 index");
+            assert_eq!(
+                theme.keywords[1].1, expected_kw2,
+                "{name} class 1 must equal its canonical _KEYWORDS_2 const"
+            );
+            assert!(
+                !theme.keywords[1].1.trim().is_empty(),
+                "{name} class 1 list must be non-empty"
+            );
+        }
     }
 
     /// Rust's keyword class 0 must match the canonical

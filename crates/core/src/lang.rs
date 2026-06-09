@@ -931,41 +931,99 @@ pub const L_EXTERNAL: LangType = LangType(93);
 /// `NPPM_SETBUFFERLANGTYPE`.
 pub const L_JSON5: LangType = LangType(94);
 
-/// Space-separated keyword list installed via `SCI_SETKEYWORDS(0, ...)`
-/// when the active language is C. Keeps the demo-gate `.c` file showing
-/// keywords coloured even though `LexCPP`'s default keyword set is
-/// empty. Includes C99/C11 keywords; not exhaustive but covers the
-/// "see colour on `int`/`return`/`if`" case.
+/// Space-separated primary keyword list for C, installed via
+/// `SCI_SETKEYWORDS(0, ...)` (the `LexCPP` lexer's `SCE_C_WORD` class).
+/// Control-flow keywords, storage-class specifiers, and other
+/// non-type reserved words. Primitive type names (`int`, `char`,
+/// `float`, etc.) live in [`C_KEYWORDS_2`] so they pick up the
+/// distinct steel-blue `SCE_C_WORD2` colour matching Notepad++'s
+/// default rendering.
+///
+/// Covers C89 through C23 reserved words: the original C89/C99/C11
+/// set, the `_`-prefixed C99/C11 forms (`_Alignas`, `_Atomic`, ...),
+/// and the C23 lowercase aliases (`alignas`, `static_assert`,
+/// `thread_local`) plus the C23 additions `constexpr`, `nullptr`,
+/// `true`, `false`, `typeof`, `typeof_unqual`.
+///
+/// **A word in both class 0 and class 1 takes class 0's colour** —
+/// `LexCPP`'s classifier checks class 0 first. So primitives must be
+/// moved here only if they should NOT pick up the secondary colour;
+/// any word in both lists is wasted bytes.
 pub const C_KEYWORDS: &str = concat!(
-    "auto break case char const continue default do double else enum extern ",
-    "float for goto if inline int long register restrict return short signed ",
-    "sizeof static struct switch typedef union unsigned void volatile while ",
-    "_Bool _Complex _Imaginary _Alignas _Alignof _Atomic _Generic _Noreturn ",
-    "_Static_assert _Thread_local"
+    "auto break case const continue default do else enum extern for goto if ",
+    "inline register restrict return sizeof static struct switch typedef ",
+    "union volatile while ",
+    // C99/C11 underscore-prefixed forms.
+    "_Alignas _Alignof _Atomic _Generic _Noreturn _Static_assert _Thread_local ",
+    // C23 additions: language constants, type-introspection, and the
+    // lowercase aliases for the older `_`-prefixed keywords (the
+    // underscored forms above remain valid; both render the same
+    // because the lexer matches whole tokens).
+    "alignas alignof constexpr false nullptr static_assert thread_local true ",
+    "typeof typeof_unqual"
 );
 
-/// Space-separated keyword list for C++. Superset of [`C_KEYWORDS`]
-/// plus the C++23-and-earlier reserved words.
+/// Space-separated secondary (type) keyword list for C, installed via
+/// `SCI_SETKEYWORDS(1, ...)` (`LexCPP`'s `SCE_C_WORD2` class). Primitive
+/// type names and type modifiers. Mapped to `StyleSlot::Keyword2`
+/// (steel blue) in the host theme so types render distinctly from
+/// control-flow keywords — same as Notepad++'s C / C++ default.
+pub const C_KEYWORDS_2: &str = concat!(
+    "char double float int long short signed unsigned void ",
+    // C99 underscore-prefixed primitive types.
+    "_Bool _Complex _Imaginary ",
+    // C23 additions: `bool` (the lowercase alias for `_Bool`, now a
+    // proper keyword), and `_BitInt` (bit-precise integer type, e.g.
+    // `_BitInt(7)`).
+    "bool _BitInt"
+);
+
+/// Space-separated primary keyword list for C++. Reserved words
+/// through C++23 minus the primitive type aliases. The same class-0
+/// vs class-1 split as [`C_KEYWORDS`] / [`C_KEYWORDS_2`]; primitive
+/// types live in [`CPP_KEYWORDS_2`] so they pick up `SCE_C_WORD2`'s
+/// distinct colour.
+///
+/// Includes the C++20 module declarators `import` / `module`, the
+/// C++20 coroutine keywords (`co_await` / `co_return` / `co_yield`),
+/// the C++20 concepts vocabulary (`concept` / `requires`), and the
+/// C++20 immediate / persistent function specifiers (`consteval` /
+/// `constinit`).
 pub const CPP_KEYWORDS: &str = concat!(
-    "alignas alignof and and_eq asm auto bitand bitor bool break case catch ",
-    "char char8_t char16_t char32_t class compl concept const consteval ",
-    "constexpr constinit const_cast continue co_await co_return co_yield ",
-    "decltype default delete do double dynamic_cast else enum explicit export ",
-    "extern false float for friend goto if inline int long mutable namespace ",
-    "new noexcept not not_eq nullptr operator or or_eq private protected ",
-    "public register reinterpret_cast requires return short signed sizeof ",
+    "alignas alignof and and_eq asm auto bitand bitor break case catch class ",
+    "compl concept const consteval constexpr constinit const_cast continue ",
+    "co_await co_return co_yield decltype default delete do dynamic_cast else ",
+    "enum explicit export extern false for friend goto if import inline module ",
+    "mutable namespace new noexcept not not_eq nullptr operator or or_eq ",
+    "private protected public register reinterpret_cast requires return sizeof ",
     "static static_assert static_cast struct switch template this thread_local ",
-    "throw true try typedef typeid typename union unsigned using virtual void ",
-    "volatile wchar_t while xor xor_eq"
+    "throw true try typedef typeid typename union using virtual volatile while ",
+    "xor xor_eq"
 );
 
-/// Space-separated keyword list for C#. Installed via the `LexCPP`
-/// lexer's `SCI_SETKEYWORDS(0, ...)`. Covers the C# 12 reserved
-/// words, contextual keywords, LINQ query vocabulary, modern
-/// pattern-match operators (`and`/`or`/`not`/`when`), record-related
-/// modifiers (`record`/`init`/`required`/`with`/`scoped`), and the
-/// built-in primitive type aliases (`int`/`string`/`bool`/`nint`/
-/// `nuint`/...).
+/// Space-separated secondary (type) keyword list for C++. Primitive
+/// type names — superset of [`C_KEYWORDS_2`] adding `bool` (proper
+/// C++ keyword, unlike C's `_Bool`-with-`<stdbool.h>` story),
+/// `wchar_t`, and the C++20 UTF character types
+/// (`char8_t` / `char16_t` / `char32_t`). Installed via
+/// `SCI_SETKEYWORDS(1, ...)` for `SCE_C_WORD2` colouring.
+pub const CPP_KEYWORDS_2: &str = concat!(
+    "bool char char8_t char16_t char32_t double float int long short signed ",
+    "unsigned void wchar_t"
+);
+
+/// Space-separated primary keyword list for C#. Installed via the
+/// `LexCPP` lexer's `SCI_SETKEYWORDS(0, ...)` for `SCE_C_WORD` (the
+/// blue "Keyword" slot). Covers C# 12 reserved words, contextual
+/// keywords, LINQ query vocabulary, modern pattern-match operators
+/// (`and`/`or`/`not`/`when`), and record-related modifiers
+/// (`record`/`init`/`required`/`with`/`scoped`).
+///
+/// Primitive type aliases (`int`/`string`/`bool`/`nint`/`nuint`/...)
+/// plus the type-related contextual keywords `var` and `dynamic`
+/// live in [`CS_KEYWORDS_2`], which installs to class 1 / `SCE_C_WORD2`
+/// for the steel-blue "Keyword2" slot — same blue-vs-steel-blue split
+/// Notepad++ uses for C# by default.
 ///
 /// Deliberately excluded:
 ///   - **Preprocessor directive names** (`define`, `region`, `pragma`,
@@ -990,17 +1048,25 @@ pub const CPP_KEYWORDS: &str = concat!(
 /// Sourced and adversarially verified across three lenses (Microsoft
 /// Learn reference / production-repo frequency / editor baselines).
 pub const CS_KEYWORDS: &str = concat!(
-    "abstract add alias allows and as ascending async await base bool break by ",
-    "byte case catch char checked class const continue decimal default delegate ",
-    "descending do double dynamic else enum equals event explicit extern false ",
-    "file finally fixed float for foreach from get global goto group if implicit ",
-    "in init int interface internal into is join let lock long managed nameof ",
-    "namespace new nint not notnull nuint null object on operator or orderby ",
-    "out override params partial private protected public readonly record ref ",
-    "remove required return sbyte scoped sealed select set short sizeof ",
-    "stackalloc static string struct switch this throw true try typeof uint ",
-    "ulong unchecked unmanaged unsafe ushort using value var virtual void ",
-    "volatile when where while with yield"
+    "abstract add alias allows and as ascending async await base break by case ",
+    "catch checked class const continue default delegate descending do else ",
+    "enum equals event explicit extern false file finally fixed for foreach ",
+    "from get global goto group if implicit in init interface internal into is ",
+    "join let lock managed nameof namespace new not notnull null on operator or ",
+    "orderby out override params partial private protected public readonly ",
+    "record ref remove required return scoped sealed select set sizeof ",
+    "stackalloc static struct switch this throw true try typeof unchecked ",
+    "unmanaged unsafe using value virtual volatile when where while with yield"
+);
+
+/// Space-separated secondary (type) keyword list for C#. Installed
+/// via `SCI_SETKEYWORDS(1, ...)` for `SCE_C_WORD2` colouring. Built-in
+/// primitive type aliases plus the type-inference / dynamic-typing
+/// contextual keywords (`var`, `dynamic`) that every mainstream C#
+/// editor visually groups with types.
+pub const CS_KEYWORDS_2: &str = concat!(
+    "bool byte char decimal double dynamic float int long nint nuint object ",
+    "sbyte short string uint ulong ushort var void"
 );
 
 /// Space-separated primary-keyword list for Rust. `LexRust`'s keyword
@@ -1222,6 +1288,49 @@ mod tests {
                 "duplicate LangType in LANG_TABLE: {}",
                 window[0]
             );
+        }
+    }
+
+    /// Whitespace-token membership — split, not substring. Avoids
+    /// false positives like "int" matching inside "interface".
+    fn contains_word(list: &str, word: &str) -> bool {
+        list.split_whitespace().any(|w| w == word)
+    }
+
+    /// The LexCPP-family `*_KEYWORDS_2` split is load-bearing: words
+    /// present in both class 0 and class 1 take class 0's colour
+    /// (`LexCPP`'s classifier checks class 0 first). Pin that every
+    /// type in `*_KEYWORDS_2` is absent from `*_KEYWORDS`, so all
+    /// primitives actually pick up the `SCE_C_WORD2` steel-blue
+    /// rendering. A regression that copy-pastes a type back into
+    /// class 0 silently downgrades the colour without breaking any
+    /// other test — this assertion catches it.
+    ///
+    /// Data-driven shape: iterates `*_KEYWORDS_2` directly rather
+    /// than a hardcoded array. A future contributor adding a new
+    /// primitive to `C_KEYWORDS_2` automatically extends the test's
+    /// coverage; a future contributor accidentally re-adding the
+    /// same word to `C_KEYWORDS` fails the test without needing to
+    /// touch the test body.
+    #[test]
+    fn lexcpp_family_primitive_types_live_in_class_1_only() {
+        for (kw1_list, kw1_name, kw2_list, kw2_name) in [
+            (C_KEYWORDS, "C_KEYWORDS", C_KEYWORDS_2, "C_KEYWORDS_2"),
+            (
+                CPP_KEYWORDS,
+                "CPP_KEYWORDS",
+                CPP_KEYWORDS_2,
+                "CPP_KEYWORDS_2",
+            ),
+            (CS_KEYWORDS, "CS_KEYWORDS", CS_KEYWORDS_2, "CS_KEYWORDS_2"),
+        ] {
+            for primitive in kw2_list.split_whitespace() {
+                assert!(
+                    !contains_word(kw1_list, primitive),
+                    "{kw1_name} contains `{primitive}` (also in {kw2_name}) — \
+                     class 0 masks the SCE_C_WORD2 colour"
+                );
+            }
         }
     }
 }

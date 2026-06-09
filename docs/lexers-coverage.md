@@ -127,17 +127,30 @@ Total: 89 rows. ✅ 5 / 🟡 83 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
-differs from C / C++. The 120-entry `CS_KEYWORDS` const in
-`core::lang` covers C# 12 reserved words, contextual keywords
-(`async` / `await` / `var` / `dynamic` / `partial` / `record` /
-`init` / `required` / `scoped` / `file` / `global` / `with` /
-`and` / `or` / `not` / `when` / ...), LINQ query vocabulary
-(`from` / `where` / `select` / `group` / `into` / `orderby` /
-`join` / `let` / `on` / `equals` / `by` / `ascending` /
-`descending`), and primitive type aliases (`nint` / `nuint`
-included). Authored by a 7-agent research-and-adversarial-verify
+differs from C / C++. `CS_KEYWORDS` (class 0, blue) carries C# 12
+reserved words, contextual keywords (`async` / `await` / `partial`
+/ `record` / `init` / `required` / `scoped` / `file` / `global` /
+`with` / `and` / `or` / `not` / `when` / ...), and LINQ query
+vocabulary (`from` / `where` / `select` / `group` / `into` /
+`orderby` / `join` / `let` / `on` / `equals` / `by` / `ascending`
+/ `descending`). Authored by a 7-agent research-and-adversarial-verify
 workflow; preprocessor directives, `args`, `extension`, and
 `field` deliberately omitted (rationale in `CS_KEYWORDS` docstring).
+
+**LexCPP-family WORD2 split (2026-05-13 follow-up):** C / C++ / C#
+now install **two** keyword classes — class 0 for control-flow /
+modifier reserved words (blue, `SCE_C_WORD`), class 1 for
+primitive type aliases (steel blue, `SCE_C_WORD2`). Matches
+Notepad++'s default blue-vs-steel-blue rendering. Class-1 consts:
+`C_KEYWORDS_2` (`char` / `double` / `float` / `int` / `long` /
+`short` / `signed` / `unsigned` / `void` plus the `_Bool` /
+`_Complex` / `_Imaginary` C99 set), `CPP_KEYWORDS_2` (adds `bool`
+/ `wchar_t` / `char8_t` / `char16_t` / `char32_t`), `CS_KEYWORDS_2`
+(`bool` / `byte` / `char` / `decimal` / `double` / `dynamic` /
+`float` / `int` / `long` / `nint` / `nuint` / `object` / `sbyte` /
+`short` / `string` / `uint` / `ulong` / `ushort` / `var` / `void`).
+Future Java / JS / TS / Go / Obj-C / Swift / RC rows follow the
+same two-class shape.
 
 **Follow-up landed 2026-05-13:** every `Lex*.cxx` already in
 `crates/scintilla-sys/build.rs`'s compile list is now registered
