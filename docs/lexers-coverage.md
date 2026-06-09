@@ -123,7 +123,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 8 / 🟡 80 / ⚫ 1.
+Total: 89 rows. ✅ 9 / 🟡 79 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -160,6 +160,29 @@ the full C primitive set. Authored by a 7-agent
 research-and-adversarial-verify workflow; library typedefs
 (`NSInteger` / `NSString` / `CGFloat` / ...) and Apple framework
 class names deliberately omitted.
+
+**HTML (2026-05-14):** rides the same hypertext lexer and the same
+shared `HYPERTEXT_STYLES` / `HYPERTEXT_ITALIC` / `HYPERTEXT_BOLD`
+tables already wired during the PHP commit. Single class 0 install
+of the canonical `HTML_KEYWORDS` list — same shared wordlist PHP
+uses for the HTML wrapper around its `<?php ?>` blocks. The list
+was expanded as part of this commit from ~115 to 140 entries:
+adds the full deprecated-but-still-supported HTML4 / Netscape-era
+tag set (`acronym` / `applet` / `basefont` / `big` / `blink` /
+`center` / `dir` / `font` / `frame` / `frameset` / `isindex` /
+`keygen` / `listing` / `marquee` / `menuitem` / `nobr` / `noembed`
+/ `noframes` / `param` / `plaintext` / `rb` / `rtc` / `spacer` /
+`strike` / `tt` / `xmp`) plus `math` (MathML root, sibling of
+`svg` as a foreign-content entry point). The expansion benefits
+PHP files containing legacy HTML too. HTML attribute names
+deliberately excluded — `SCE_H_ATTRIBUTE` and
+`SCE_H_ATTRIBUTEUNKNOWN` both map to `StyleSlot::Keyword2` today,
+so adding ~330 attribute identifiers would have no visible effect.
+Embedded `<script>` JavaScript and `<style>` CSS deferred until
+`L_JAVASCRIPT` / `L_CSS` rows are wired (same scope discipline as
+PHP's `SCE_HJ_*` / `SCE_HB_*` deferral). Authored by a 7-agent
+research-and-adversarial-verify workflow; all three verifiers
+APPROVE with no blockers or warnings.
 
 **Resource file / `.rc` (2026-05-14):** Win32 resource scripts —
 declarative syntax for dialogs / menus / string tables / version
@@ -263,7 +286,7 @@ further shim work needed.
 | Gui4Cli | 51 | `gui4cli` | ⚫ | ⚫ | 🟡 |
 | Haskell | 45 | `haskell` | ⚫ | ⚫ | 🟡 |
 | Hollywood | 87 | `hollywood` | ⚫ | ⚫ | 🟡 |
-| HTML | 8 | `hypertext` | ⚫ | ⚫ | 🟡 |
+| HTML | 8 | `hypertext` | ✅ | ✅ | ✅ |
 | INI file | 13 | `props` | ⚫ | ⚫ | 🟡 |
 | Inno Setup | 46 | `inno` | ⚫ | ⚫ | 🟡 |
 | Intel HEX | 62 | `ihex` | ⚫ | ⚫ | 🟡 |

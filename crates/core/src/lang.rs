@@ -1363,21 +1363,77 @@ pub const RUST_KEYWORDS: &str = concat!(
 /// `SCE_H_TAG` so the theme can colour real markup distinctly from
 /// arbitrary identifiers a user might write inside angle brackets.
 ///
-/// HTML 5 tag set (current WHATWG/W3C published vocabulary plus the
-/// `<a>`/`<b>`/etc. legacy tags that the spec keeps for back-compat).
-/// Shared across HTML / ASP / JSP / PHP — all four use the same
-/// lexer and the same class 0 list. Adding a new HTML element here
-/// lights it up across every hypertext-driven language at once.
+/// **Shared across HTML / ASP / JSP / PHP.** All four use the same
+/// hypertext lexer and the same class 0 wordlist. Adding a new
+/// element here lights it up across every hypertext-driven language
+/// at once.
+///
+/// **140 tag names** covering three categories:
+///
+///   1. **Current WHATWG Living Standard** (~112 entries) — every
+///      element in today's published HTML spec. Includes the modern
+///      additions: `dialog` (HTML 5.2+), `hgroup` (removed 2013,
+///      re-added 2022), `search` (2022), `slot` / `template` (Web
+///      Components), `picture` / `source` / `track` (responsive
+///      media), `output` / `progress` / `meter` (form widgets),
+///      `details` / `summary` (disclosure), `data` (machine-readable
+///      values), and the full Ruby annotation set (`ruby` / `rp` /
+///      `rt`).
+///   2. **Foreign-content entry points** — `svg` (SVG root) and
+///      `math` (`MathML` root). The nested SVG / `MathML` element
+///      vocabularies (`g` / `path` / `circle` / `mrow` / `mfrac` /
+///      etc.) are deliberately NOT included — those are separate
+///      lexers' territory; Code++ colours only the HTML-side entry
+///      tags.
+///   3. **Deprecated-but-still-supported HTML4 / Netscape-era**
+///      (26 entries) — `acronym` / `applet` / `basefont` / `big` /
+///      `blink` / `center` / `dir` / `font` / `frame` / `frameset` /
+///      `isindex` / `keygen` / `listing` / `marquee` / `menuitem` /
+///      `nobr` / `noembed` / `noframes` / `param` / `plaintext` /
+///      `rb` / `rtc` / `spacer` / `strike` / `tt` / `xmp`. None
+///      are in the current spec but every browser still parses them
+///      and CMS-generated content / email templates / legacy
+///      codebases use them. Notepad++ / VS Code / Sublime all
+///      colour them. Code++ follows that baseline so maintainers of
+///      old codebases see consistent highlighting instead of the
+///      surprise of `SCE_H_TAGUNKNOWN`.
+///
+/// **Deliberately excluded:**
+///   - **Hyphenated tokens** (`aria-*` / `data-*` / `accept-charset`
+///     / `http-equiv` / `xml:lang`): Lexilla's wordlist matcher
+///     tokenises on identifier boundaries — the hyphen / colon would
+///     prevent any match.
+///   - **HTML attribute names** (`class` / `id` / `href` / `src` /
+///     event handlers `onclick` / etc.): the hypertext lexer's
+///     class 0 is documented as "HTML elements and attributes" so
+///     attributes WOULD distinguish `SCE_H_ATTRIBUTE` from
+///     `SCE_H_ATTRIBUTEUNKNOWN`, but today `HYPERTEXT_STYLES` maps
+///     both to the same `StyleSlot::Keyword2`. Adding ~330 attribute
+///     entries here has no visible effect until a future palette
+///     change splits the two slots. The same scope discipline was
+///     used in the PHP commit when `SCE_HJ_*` / `SCE_HB_*` /
+///     `SCE_HP_*` were deferred from `HYPERTEXT_STYLES` until those
+///     embedded-language rows ship.
+///   - **SGML / DTD markup** (`!DOCTYPE` / `!ENTITY` / `!ELEMENT`):
+///     the lexer handles those via `SCE_H_SGML_*` (class 5),
+///     independent of class 0.
+///   - **CSS property names** and **JavaScript identifiers**: owned
+///     by the `L_CSS` and embedded-script rows when those land.
+///
+/// Sourced and adversarially verified across three lenses (WHATWG /
+/// W3C spec / production HTML corpora / editor baselines).
 pub const HTML_KEYWORDS: &str = concat!(
-    "a abbr address area article aside audio b base bdi bdo blockquote body br ",
-    "button canvas caption cite code col colgroup data datalist dd del details ",
-    "dfn dialog div dl dt em embed fieldset figcaption figure footer form h1 h2 ",
-    "h3 h4 h5 h6 head header hgroup hr html i iframe img input ins kbd label ",
-    "legend li link main map mark menu meta meter nav noscript object ol ",
-    "optgroup option output p param picture pre progress q rb rp rt rtc ruby s ",
-    "samp script search section select slot small source span strong style sub ",
-    "summary sup svg table tbody td template textarea tfoot th thead time title ",
-    "tr track u ul var video wbr"
+    "a abbr acronym address applet area article aside audio b base basefont ",
+    "bdi bdo big blink blockquote body br button canvas caption center cite ",
+    "code col colgroup data datalist dd del details dfn dialog dir div dl dt ",
+    "em embed fieldset figcaption figure font footer form frame frameset h1 h2 ",
+    "h3 h4 h5 h6 head header hgroup hr html i iframe img input ins isindex kbd ",
+    "keygen label legend li link listing main map mark marquee math menu ",
+    "menuitem meta meter nav nobr noembed noframes noscript object ol optgroup ",
+    "option output p param picture plaintext pre progress q rb rp rt rtc ruby s ",
+    "samp script search section select slot small source spacer span strike ",
+    "strong style sub summary sup svg table tbody td template textarea tfoot ",
+    "th thead time title tr track tt u ul var video wbr xmp"
 );
 
 /// Space-separated PHP reserved-word list installed via the hypertext

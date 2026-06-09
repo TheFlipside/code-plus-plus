@@ -102,8 +102,8 @@ use std::sync::Arc;
 
 use codepp_core::lang::{
     CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
-    HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_JAVA, L_OBJC, L_PHP, L_RC,
-    L_RUST, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS,
+    HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_HTML, L_JAVA, L_OBJC, L_PHP,
+    L_RC, L_RUST, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -3325,6 +3325,27 @@ const HYPERTEXT_ITALIC: &[usize] = &[
 ];
 const HYPERTEXT_BOLD: &[usize] = &[SCE_H_TAG, SCE_HPHP_WORD];
 
+// HTML rides the same hypertext lexer as PHP — same shared
+// `HYPERTEXT_STYLES` / `HYPERTEXT_ITALIC` / `HYPERTEXT_BOLD` tables
+// already wired during the PHP commit. Single class 0 install:
+// `HTML_KEYWORDS` (tag names). The PHP-specific class 4 keyword
+// install only applies inside `<?php ?>` blocks, which won't appear
+// in a `.html` file — installing it for L_HTML would be harmless but
+// is omitted for clarity.
+//
+// Embedded `<script>` JavaScript and `<style>` CSS inside HTML files
+// tokenise as `SCE_HJ_*` / `SCE_CSS_*` but those style indices aren't
+// in `HYPERTEXT_STYLES` today (deferred to when the `L_JAVASCRIPT`
+// and `L_CSS` rows are wired). Until then a `<script>` block inside
+// an HTML file shows its content uncoloured — same behaviour PHP
+// gets for embedded JS today.
+const HTML_THEME: LangTheme = LangTheme {
+    keywords: &[(0, HTML_KEYWORDS)],
+    styles: HYPERTEXT_STYLES,
+    italic: HYPERTEXT_ITALIC,
+    bold: HYPERTEXT_BOLD,
+};
+
 const PHP_THEME: LangTheme = LangTheme {
     // Hypertext lexer keyword classes:
     //   class 0 = HTML tag names (so `<div>` lexes as SCE_H_TAG,
@@ -3378,6 +3399,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&RUST_THEME)
     } else if lang == L_PHP {
         Some(&PHP_THEME)
+    } else if lang == L_HTML {
+        Some(&HTML_THEME)
     } else {
         None
     }
@@ -17866,8 +17889,9 @@ mod lang_theme_tests {
     use super::{lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO};
     use codepp_core::lang::{
         CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVA_KEYWORDS,
-        JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_JAVA, L_JAVASCRIPT, L_OBJC, L_PHP, L_PYTHON, L_RC,
-        L_RUST, L_TEXT, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS,
+        JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_HTML, L_JAVA, L_JAVASCRIPT, L_OBJC, L_PHP, L_PYTHON,
+        L_RC, L_RUST, L_TEXT, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RC_KEYWORDS,
+        RUST_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -17889,6 +17913,7 @@ mod lang_theme_tests {
             (L_RC, "Resource file"),
             (L_RUST, "Rust"),
             (L_PHP, "PHP"),
+            (L_HTML, "HTML"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -18102,6 +18127,50 @@ mod lang_theme_tests {
         assert_eq!(rust.keywords.len(), 1, "Rust theme uses class 0 only");
         assert_eq!(rust.keywords[0].0, 0);
         assert_eq!(rust.keywords[0].1, RUST_KEYWORDS);
+    }
+
+    /// HTML rides the same shared `HYPERTEXT_STYLES` /
+    /// `HYPERTEXT_ITALIC` / `HYPERTEXT_BOLD` tables as PHP — both
+    /// use Lexilla's `LexHTML` lexer. The difference between the two
+    /// themes is purely the keyword class set: PHP installs class 0
+    /// (HTML tag names) AND class 4 (PHP reserved words), while HTML
+    /// installs class 0 only. This test pins HTML's single-class
+    /// shape, the style-table share with PHP, and the canonical
+    /// `HTML_KEYWORDS` link via class 0.
+    #[test]
+    fn html_uses_hypertext_lexer_with_just_class_0() {
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let html = lang_theme(L_HTML).expect("HTML wired");
+        // HTML reuses the same hypertext-family style tables.
+        assert_eq!(html.styles, php.styles, "HTML must reuse HYPERTEXT_STYLES");
+        assert_eq!(html.italic, php.italic, "HTML must reuse HYPERTEXT_ITALIC");
+        assert_eq!(html.bold, php.bold, "HTML must reuse HYPERTEXT_BOLD");
+        // Single class 0 — embedded JS / VBScript / Python in
+        // <script> blocks would need their own keyword classes when
+        // wired; for now HTML is class 0 only.
+        assert_eq!(
+            html.keywords.len(),
+            1,
+            "HTML installs class 0 only (no embedded-script keyword classes today)"
+        );
+        assert_eq!(html.keywords[0].0, 0);
+        assert_eq!(html.keywords[0].1, HTML_KEYWORDS);
+        // HTML's class-0 content is shared with PHP — both install
+        // the same HTML tag list. Pin that they reference the same
+        // canonical const rather than diverging.
+        assert_eq!(
+            html.keywords[0].1, php.keywords[0].1,
+            "HTML and PHP install the same HTML tag wordlist"
+        );
+        // PHP additionally installs class 4 (PHP keywords); HTML
+        // does not. Pin this structurally rather than by length:
+        // every wired class on HTML_THEME must be class 0. A
+        // regression that added a class-4 install to HTML (or any
+        // non-zero class) fails this assertion directly.
+        assert!(
+            html.keywords.iter().all(|(class, _)| *class == 0),
+            "HTML must install class 0 only — no PHP class 4 or other class entries"
+        );
     }
 
     /// PHP rides the hypertext lexer's class 0 (HTML tag names) and
