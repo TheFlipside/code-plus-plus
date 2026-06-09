@@ -123,7 +123,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 5 / 🟡 83 / ⚫ 1.
+Total: 89 rows. ✅ 6 / 🟡 82 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -137,10 +137,34 @@ vocabulary (`from` / `where` / `select` / `group` / `into` /
 workflow; preprocessor directives, `args`, `extension`, and
 `field` deliberately omitted (rationale in `CS_KEYWORDS` docstring).
 
+**Objective-C (2026-05-14):** rides the same shared `CPP_STYLES` /
+`CPP_ITALIC` / `CPP_BOLD` table — Objective-C is a strict C
+superset, so the LexCPP style indices map identically. Class 0
+(`OBJC_KEYWORDS`) covers ObjC directives without the leading `@`
+(`interface`, `implementation`, `end`, `protocol`, `property`,
+`synthesize`, `try`, `catch`, `throw`, `autoreleasepool`,
+`synchronized`, etc. — LexCPP tokenises `@` as an operator
+separately, so the bare identifier is what the wordlist matches),
+ARC ownership and bridge-cast qualifiers (`__weak` / `__strong` /
+`__bridge` family / `__autoreleasing` / `__unsafe_unretained`),
+the `__block` capture annotation, Distributed Objects method
+qualifiers (`in` / `out` / `inout` / `oneway` / `bycopy` /
+`byref`), constants (`YES` / `NO` / `nil` / `Nil` / `NULL` /
+`true` / `false`), and `self` / `super`. Class 1
+(`OBJC_KEYWORDS_2`) carries ObjC type vocabulary (`id` / `Class` /
+`SEL` / `IMP` / `BOOL` / `instancetype` / `Method` / `Ivar` /
+`Protocol`), Clang nullability qualifiers (`_Nullable` /
+`_Nonnull` / `_Null_unspecified`), lightweight-generics variance
+qualifiers (`__kindof` / `__covariant` / `__contravariant`), and
+the full C primitive set. Authored by a 7-agent
+research-and-adversarial-verify workflow; library typedefs
+(`NSInteger` / `NSString` / `CGFloat` / ...) and Apple framework
+class names deliberately omitted.
+
 **LexCPP-family WORD2 split (2026-05-13 follow-up):** C / C++ / C#
-now install **two** keyword classes — class 0 for control-flow /
-modifier reserved words (blue, `SCE_C_WORD`), class 1 for
-primitive type aliases (steel blue, `SCE_C_WORD2`). Matches
+/ Objective-C all install **two** keyword classes — class 0 for
+control-flow / modifier reserved words (blue, `SCE_C_WORD`),
+class 1 for primitive type aliases (steel blue, `SCE_C_WORD2`). Matches
 Notepad++'s default blue-vs-steel-blue rendering. Class-1 consts:
 `C_KEYWORDS_2` (`char` / `double` / `float` / `int` / `long` /
 `short` / `signed` / `unsigned` / `void` plus the `_Bool` /
@@ -218,7 +242,7 @@ further shim work needed.
 | Nim | 76 | `nim` | ⚫ | ⚫ | 🟡 |
 | Nncrontab | 77 | `nncrontab` | ⚫ | ⚫ | 🟡 |
 | NSIS | 28 | `nsis` | ⚫ | ⚫ | 🟡 |
-| Objective-C | 5 | `cpp` | ⚫ | ⚫ | 🟡 |
+| Objective-C | 5 | `cpp` | ✅ | ✅ | ✅ |
 | OScript | 78 | `oscript` | ⚫ | ⚫ | 🟡 |
 | Pascal | 11 | `pascal` | ⚫ | ⚫ | 🟡 |
 | Perl | 21 | `perl` | ⚫ | ⚫ | 🟡 |

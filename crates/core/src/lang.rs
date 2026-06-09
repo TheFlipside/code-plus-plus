@@ -1012,6 +1012,110 @@ pub const CPP_KEYWORDS_2: &str = concat!(
     "unsigned void wchar_t"
 );
 
+/// Space-separated primary keyword list for Objective-C. Installed
+/// via the `LexCPP` lexer's `SCI_SETKEYWORDS(0, ...)` for `SCE_C_WORD`
+/// (the blue "Keyword" slot). Pair with [`OBJC_KEYWORDS_2`] in class 1
+/// for the type vocabulary.
+///
+/// Objective-C is a strict superset of C, so class 0 includes the
+/// full C control-flow / storage-class / qualifier vocabulary plus
+/// C11 underscore-prefixed keywords (`_Alignas` / `_Atomic` / etc.).
+/// The Objective-C-specific additions split into seven categories:
+///
+///   1. **Directive identifiers** — `interface` / `implementation` /
+///      `end` / `class` / `protocol` / `property` / `synthesize` /
+///      `dynamic` / `selector` / `encode` / `defs` /
+///      `compatibility_alias` / `try` / `catch` / `throw` /
+///      `finally` / `synchronized` / `autoreleasepool` / `public` /
+///      `protected` / `private` / `package` / `optional` / `required`
+///      / `import` / `available`. Listed **without** the leading `@`
+///      because `LexCPP` doesn't treat `@` as an identifier char —
+///      `@interface` tokenises as two tokens (the `@` styled as
+///      `SCE_C_OPERATOR`, the identifier `interface` looked up against
+///      the wordlist). Same approach Notepad++'s `objc` row uses.
+///   2. **Method parameter qualifiers** (Distributed Objects
+///      vocabulary) — `in` / `out` / `inout` / `oneway` / `bycopy` /
+///      `byref`. Niche in modern code but every Objective-C-aware
+///      editor still colours them.
+///   3. **ARC ownership qualifiers** — `__strong` / `__weak` /
+///      `__unsafe_unretained` / `__autoreleasing` and the bridge-cast
+///      family `__bridge` / `__bridge_transfer` / `__bridge_retained`.
+///      The leading underscores are identifier characters in `LexCPP`
+///      so each tokenises as a single identifier.
+///   4. **Block specifier** — `__block` (captured-variable annotation
+///      in block expressions).
+///   5. **Constants** — `YES` / `NO` / `nil` / `Nil` / `NULL` /
+///      `true` / `false`. Casing matters (`LexCPP` is case-sensitive;
+///      `yes` would not match `YES`).
+///   6. **Contextual identifiers coloured keyword-blue by every
+///      editor** — `self` / `super`. Technically `self` is an
+///      implicit method parameter and `super` is a contextual message
+///      receiver, but Xcode / Notepad++ / VS Code all paint them as
+///      keywords.
+///   7. **Type-introspection operator** — `__typeof` / `__typeof__`
+///      (GCC/Clang extensions widely used in `weakify`/`strongify`
+///      macros). Sit alongside `sizeof` / `_Alignof` as type-query
+///      operators.
+///
+/// Library identifiers (`NSObject` / `NSString` / `UIView` /
+/// `NSInteger` / `CGFloat` / ...) are deliberately omitted — they are
+/// framework vocabulary, not language vocabulary.
+///
+/// Accepted false-positive risk: `in` / `out` / `available` /
+/// `property` are valid bare variable names in real Objective-C code
+/// (e.g. `NSError **out = nil;`, `BOOL available = ...`). Notepad++
+/// and Xcode accept the trade-off — they colour the directive form
+/// at the cost of mis-colouring rare same-named variables. Code++
+/// follows that established baseline rather than under-colouring the
+/// directives which are far more common.
+///
+/// Sourced and adversarially verified across three lenses (Apple
+/// spec / production iOS+macOS code / editor baselines).
+pub const OBJC_KEYWORDS: &str = concat!(
+    "__autoreleasing __block __bridge __bridge_retained __bridge_transfer ",
+    "__strong __typeof __typeof__ __unsafe_unretained __weak NO NULL Nil YES ",
+    "_Alignas _Alignof _Atomic _Generic _Noreturn _Static_assert _Thread_local ",
+    "auto autoreleasepool available break bycopy byref case catch class ",
+    "compatibility_alias const continue default defs do dynamic else encode ",
+    "end enum extern false finally for goto if implementation import in inline ",
+    "inout interface nil oneway optional out package private property protected ",
+    "protocol public register required restrict return selector self sizeof ",
+    "static struct super switch synchronized synthesize throw true try typedef ",
+    "union volatile while"
+);
+
+/// Space-separated secondary (type) keyword list for Objective-C.
+/// Installed via `SCI_SETKEYWORDS(1, ...)` for `SCE_C_WORD2` colouring.
+/// Four categories:
+///
+///   1. **Objective-C type vocabulary** — `id` (any object), `Class`
+///      (class object), `SEL` (selector), `IMP` (method
+///      implementation function pointer), `BOOL` (boolean),
+///      `instancetype` (return-self type, Modern Objective-C),
+///      `Method` (`<objc/runtime.h>` opaque), `Ivar`
+///      (`<objc/runtime.h>` opaque), `Protocol` (runtime protocol
+///      class).
+///   2. **Nullability qualifiers** (clang 3.7+) — `_Nullable` /
+///      `_Nonnull` / `_Null_unspecified`. Underscore-prefix forms;
+///      the macro spellings (`nullable` / `nonnull` /
+///      `null_unspecified`) are intentionally NOT listed here
+///      because they would mis-colour user-named identifiers.
+///   3. **Lightweight-generics variance qualifiers** (Modern
+///      Objective-C, iOS 9+) — `__kindof` (covariant-allowing-
+///      subclass), `__covariant`, `__contravariant`.
+///   4. **C primitive types** — `char` / `short` / `int` / `long` /
+///      `float` / `double` / `signed` / `unsigned` / `void` / `bool`
+///      / `_Bool` / `_Complex` / `_Imaginary` / `_BitInt`.
+///      Objective-C is a strict C superset, so the full C primitive
+///      vocabulary applies. Mirrors the [`C_KEYWORDS_2`] / [`CPP_KEYWORDS_2`]
+///      class-1 contents — same blue-vs-steel-blue rendering as the
+///      rest of the `LexCPP` family.
+pub const OBJC_KEYWORDS_2: &str = concat!(
+    "BOOL Class IMP Ivar Method Protocol SEL _BitInt _Bool _Complex _Imaginary ",
+    "_Nonnull _Null_unspecified _Nullable __contravariant __covariant __kindof ",
+    "bool char double float id instancetype int long short signed unsigned void"
+);
+
 /// Space-separated primary keyword list for C#. Installed via the
 /// `LexCPP` lexer's `SCI_SETKEYWORDS(0, ...)` for `SCE_C_WORD` (the
 /// blue "Keyword" slot). Covers C# 12 reserved words, contextual
@@ -1323,6 +1427,12 @@ mod tests {
                 "CPP_KEYWORDS_2",
             ),
             (CS_KEYWORDS, "CS_KEYWORDS", CS_KEYWORDS_2, "CS_KEYWORDS_2"),
+            (
+                OBJC_KEYWORDS,
+                "OBJC_KEYWORDS",
+                OBJC_KEYWORDS_2,
+                "OBJC_KEYWORDS_2",
+            ),
         ] {
             for primitive in kw2_list.split_whitespace() {
                 assert!(

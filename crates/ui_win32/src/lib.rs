@@ -102,7 +102,8 @@ use std::sync::Arc;
 
 use codepp_core::lang::{
     CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
-    HTML_KEYWORDS, L_C, L_CPP, L_CS, L_PHP, L_RUST, PHP_KEYWORDS, RUST_KEYWORDS,
+    HTML_KEYWORDS, L_C, L_CPP, L_CS, L_OBJC, L_PHP, L_RUST, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    PHP_KEYWORDS, RUST_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -3206,6 +3207,12 @@ const CS_THEME: LangTheme = LangTheme {
     italic: CPP_ITALIC,
     bold: CPP_BOLD,
 };
+const OBJC_THEME: LangTheme = LangTheme {
+    keywords: &[(0, OBJC_KEYWORDS), (1, OBJC_KEYWORDS_2)],
+    styles: CPP_STYLES,
+    italic: CPP_ITALIC,
+    bold: CPP_BOLD,
+};
 
 // --- LexRust ---
 // LexRust's SCE_RUST_* enum is distinct from LexCPP's SCE_C_*.
@@ -3342,6 +3349,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&CPP_THEME)
     } else if lang == L_CS {
         Some(&CS_THEME)
+    } else if lang == L_OBJC {
+        Some(&OBJC_THEME)
     } else if lang == L_RUST {
         Some(&RUST_THEME)
     } else if lang == L_PHP {
@@ -17834,7 +17843,8 @@ mod lang_theme_tests {
     use super::{lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO};
     use codepp_core::lang::{
         CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, L_C, L_CPP, L_CS,
-        L_JAVASCRIPT, L_PHP, L_PYTHON, L_RUST, L_TEXT, PHP_KEYWORDS, RUST_KEYWORDS,
+        L_JAVASCRIPT, L_OBJC, L_PHP, L_PYTHON, L_RUST, L_TEXT, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+        PHP_KEYWORDS, RUST_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -17851,6 +17861,7 @@ mod lang_theme_tests {
             (L_C, "C"),
             (L_CPP, "C++"),
             (L_CS, "C#"),
+            (L_OBJC, "Objective-C"),
             (L_RUST, "Rust"),
             (L_PHP, "PHP"),
         ] {
@@ -17924,6 +17935,10 @@ mod lang_theme_tests {
         // C#'s class-0 content must differ from C's — `await`, `class`,
         // pattern-match operators vs C's smaller set.
         assert_ne!(cs.keywords[0].1, c.keywords[0].1);
+        // C#'s class-1 content must differ from C's — `string`, `nint`,
+        // `nuint`, `var`, `dynamic` are not in C_KEYWORDS_2. Mirrors the
+        // same class-1 assertion in the Objective-C sibling test.
+        assert_ne!(cs.keywords[1].1, c.keywords[1].1);
     }
 
     /// Every LexCPP-family theme must install BOTH class 0 (primary
@@ -17941,6 +17956,7 @@ mod lang_theme_tests {
             (L_C, "C", C_KEYWORDS_2),
             (L_CPP, "C++", CPP_KEYWORDS_2),
             (L_CS, "C#", CS_KEYWORDS_2),
+            (L_OBJC, "Objective-C", OBJC_KEYWORDS_2),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("{name} not wired"));
             assert_eq!(
@@ -17959,6 +17975,38 @@ mod lang_theme_tests {
                 "{name} class 1 list must be non-empty"
             );
         }
+    }
+
+    /// Objective-C uses `LexCPP` (it's a strict C superset). Same
+    /// style indices and italic/bold sharing as C / C++ / C#; only
+    /// the keyword content differs. Pins the share + canonical
+    /// `OBJC_KEYWORDS` / `OBJC_KEYWORDS_2` linkage so a regression
+    /// that re-installs `C_KEYWORDS` for `L_OBJC` (or drops the
+    /// class-1 install) fails loudly.
+    #[test]
+    fn objc_reuses_lexcpp_style_table_and_canonical_keywords() {
+        let c = lang_theme(L_C).expect("C wired");
+        let objc = lang_theme(L_OBJC).expect("Objective-C wired");
+        assert_eq!(objc.styles, c.styles, "Objective-C must reuse CPP_STYLES");
+        assert_eq!(objc.italic, c.italic, "Objective-C must reuse CPP_ITALIC");
+        assert_eq!(objc.bold, c.bold, "Objective-C must reuse CPP_BOLD");
+        assert_eq!(
+            objc.keywords.len(),
+            2,
+            "Objective-C installs class 0 + class 1"
+        );
+        assert_eq!(objc.keywords[0].0, 0);
+        assert_eq!(objc.keywords[0].1, OBJC_KEYWORDS);
+        assert_eq!(objc.keywords[1].0, 1);
+        assert_eq!(objc.keywords[1].1, OBJC_KEYWORDS_2);
+        // Objective-C's class-0 content must differ from C's —
+        // directives (`interface` / `protocol` / ARC qualifiers) are
+        // not in C_KEYWORDS.
+        assert_ne!(objc.keywords[0].1, c.keywords[0].1);
+        // Objective-C's class-1 content must differ from C's —
+        // type aliases (`id` / `BOOL` / `SEL`) are not in
+        // C_KEYWORDS_2.
+        assert_ne!(objc.keywords[1].1, c.keywords[1].1);
     }
 
     /// Rust's keyword class 0 must match the canonical
