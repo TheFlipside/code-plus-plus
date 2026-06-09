@@ -1116,6 +1116,84 @@ pub const OBJC_KEYWORDS_2: &str = concat!(
     "bool char double float id instancetype int long short signed unsigned void"
 );
 
+/// Space-separated primary keyword list for Java. Installed via the
+/// `LexCPP` lexer's `SCI_SETKEYWORDS(0, ...)` for `SCE_C_WORD` (the
+/// blue "Keyword" slot). Pair with [`JAVA_KEYWORDS_2`] in class 1
+/// for the primitive types + `var`.
+///
+/// Four categories:
+///
+///   1. **JLS §3.9 reserved words** (41) — control-flow (`if`/`else`/
+///      `switch`/`case`/`break`/`continue`/`return`/`for`/`while`/`do`/
+///      `try`/`catch`/`finally`/`throw`/`throws`), declarations
+///      (`class`/`interface`/`enum`/`package`/`import`/`extends`/
+///      `implements`/`this`/`super`), modifiers (`abstract`/`final`/
+///      `native`/`private`/`protected`/`public`/`static`/`strictfp`/
+///      `synchronized`/`transient`/`volatile`), operators (`new`/
+///      `instanceof`/`assert`/`default`), and the never-implemented-
+///      but-still-reserved `const` / `goto` (JLS §3.9 reserves them
+///      so they can't be used as identifiers).
+///   2. **Modern contextual keywords** (5) — `yield` (Java 14 switch
+///      expressions), `record` (Java 14), `sealed` / `permits`
+///      (Java 17), `when` (Java 21 pattern guards). Contextual per
+///      the JLS but coloured globally by every editor.
+///   3. **Java 9+ module-system restricted identifiers** (9) —
+///      `module` / `exports` / `requires` / `opens` / `uses` /
+///      `provides` / `to` / `with` / `transitive`. Reserved only
+///      inside `module-info.java` but coloured globally by Notepad++
+///      / `IntelliJ` / Eclipse / VS Code.
+///   4. **Literal constants** (3) — `true` / `false` / `null`.
+///      JLS classifies these as `BooleanLiteral` / `NullLiteral`
+///      rather than keywords, but every editor renders them
+///      keyword-blue.
+///
+/// **Deliberately excluded:**
+///   - **`non-sealed`** (Java 17 hyphenated keyword): the hyphen
+///     breaks identifier-shape tokenisation — Lexilla wordlists
+///     match identifier tokens only, so the lexer would never match
+///     it. Real Java code with `non-sealed` will see `non` lexed as
+///     an identifier and `sealed` as a keyword; same trade-off
+///     Notepad++ accepts.
+///   - **Library identifiers** (`String`, `Object`, `System`, `List`,
+///     `ArrayList`, `Math`, `Integer`, ...): standard-library
+///     vocabulary, not language vocabulary.
+///
+/// **Accepted false-positive risk:** all nine module-system
+/// identifiers (`module` / `exports` / `requires` / `opens` /
+/// `uses` / `provides` / `to` / `with` / `transitive`) and the
+/// contextual keywords (`yield` / `when`) are legal identifiers
+/// outside their reserved context. Colouring them globally would
+/// mis-render a `String with = ...;` variable declaration as a
+/// partly-keyword line. Notepad++ / `IntelliJ` / Eclipse all accept
+/// this trade-off — the directive form is far more common than the
+/// identifier form. Code++ follows that baseline.
+///
+/// Sourced and adversarially verified across three lenses
+/// (JLS spec / production code / editor baselines).
+pub const JAVA_KEYWORDS: &str = concat!(
+    "abstract assert break case catch class const continue default do else ",
+    "enum exports extends false final finally for goto if implements import ",
+    "instanceof interface module native new null opens package permits private ",
+    "protected provides public record requires return sealed static strictfp ",
+    "super switch synchronized this throw throws to transient transitive true ",
+    "try uses volatile when while with yield"
+);
+
+/// Space-separated secondary (type) keyword list for Java. Installed
+/// via `SCI_SETKEYWORDS(1, ...)` for `SCE_C_WORD2` (the steel-blue
+/// "Keyword2" slot). Two categories:
+///
+///   1. **Primitive types + `void`** (9) — `boolean` / `byte` /
+///      `short` / `char` / `int` / `long` / `float` / `double` /
+///      `void` (JLS §4.2 primitives + the §8.4.5 void return type).
+///      Steel-blue rendering matches Notepad++'s `type1` row for
+///      Java.
+///   2. **Type-inference contextual keyword** — `var` (Java 10).
+///      Classed with types because it visually represents a type at
+///      the inference site, mirroring the C# precedent for `var` /
+///      `dynamic` in [`CS_KEYWORDS_2`].
+pub const JAVA_KEYWORDS_2: &str = "boolean byte char double float int long short var void";
+
 /// Space-separated primary keyword list for C#. Installed via the
 /// `LexCPP` lexer's `SCI_SETKEYWORDS(0, ...)` for `SCE_C_WORD` (the
 /// blue "Keyword" slot). Covers C# 12 reserved words, contextual
@@ -1432,6 +1510,12 @@ mod tests {
                 "OBJC_KEYWORDS",
                 OBJC_KEYWORDS_2,
                 "OBJC_KEYWORDS_2",
+            ),
+            (
+                JAVA_KEYWORDS,
+                "JAVA_KEYWORDS",
+                JAVA_KEYWORDS_2,
+                "JAVA_KEYWORDS_2",
             ),
         ] {
             for primitive in kw2_list.split_whitespace() {

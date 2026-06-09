@@ -102,8 +102,8 @@ use std::sync::Arc;
 
 use codepp_core::lang::{
     CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
-    HTML_KEYWORDS, L_C, L_CPP, L_CS, L_OBJC, L_PHP, L_RUST, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-    PHP_KEYWORDS, RUST_KEYWORDS,
+    HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_JAVA, L_OBJC, L_PHP, L_RUST,
+    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RUST_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -3213,6 +3213,12 @@ const OBJC_THEME: LangTheme = LangTheme {
     italic: CPP_ITALIC,
     bold: CPP_BOLD,
 };
+const JAVA_THEME: LangTheme = LangTheme {
+    keywords: &[(0, JAVA_KEYWORDS), (1, JAVA_KEYWORDS_2)],
+    styles: CPP_STYLES,
+    italic: CPP_ITALIC,
+    bold: CPP_BOLD,
+};
 
 // --- LexRust ---
 // LexRust's SCE_RUST_* enum is distinct from LexCPP's SCE_C_*.
@@ -3351,6 +3357,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&CS_THEME)
     } else if lang == L_OBJC {
         Some(&OBJC_THEME)
+    } else if lang == L_JAVA {
+        Some(&JAVA_THEME)
     } else if lang == L_RUST {
         Some(&RUST_THEME)
     } else if lang == L_PHP {
@@ -17842,9 +17850,9 @@ mod lang_theme_tests {
     //! a buffer at default colours.
     use super::{lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO};
     use codepp_core::lang::{
-        CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, L_C, L_CPP, L_CS,
-        L_JAVASCRIPT, L_OBJC, L_PHP, L_PYTHON, L_RUST, L_TEXT, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-        PHP_KEYWORDS, RUST_KEYWORDS,
+        CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVA_KEYWORDS,
+        JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_JAVA, L_JAVASCRIPT, L_OBJC, L_PHP, L_PYTHON, L_RUST,
+        L_TEXT, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RUST_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -17862,6 +17870,7 @@ mod lang_theme_tests {
             (L_CPP, "C++"),
             (L_CS, "C#"),
             (L_OBJC, "Objective-C"),
+            (L_JAVA, "Java"),
             (L_RUST, "Rust"),
             (L_PHP, "PHP"),
         ] {
@@ -17957,6 +17966,7 @@ mod lang_theme_tests {
             (L_CPP, "C++", CPP_KEYWORDS_2),
             (L_CS, "C#", CS_KEYWORDS_2),
             (L_OBJC, "Objective-C", OBJC_KEYWORDS_2),
+            (L_JAVA, "Java", JAVA_KEYWORDS_2),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("{name} not wired"));
             assert_eq!(
@@ -17975,6 +17985,32 @@ mod lang_theme_tests {
                 "{name} class 1 list must be non-empty"
             );
         }
+    }
+
+    /// Java uses `LexCPP` (same lexer name, different keyword
+    /// content). Pins the style-table reuse + canonical keyword
+    /// link via classes 0 and 1 — a regression that swapped the
+    /// list (or, worse, re-installed `CPP_KEYWORDS` for Java) would
+    /// silently mis-colour every Java-specific keyword.
+    #[test]
+    fn java_reuses_lexcpp_style_table_and_canonical_keywords() {
+        let c = lang_theme(L_C).expect("C wired");
+        let java = lang_theme(L_JAVA).expect("Java wired");
+        assert_eq!(java.styles, c.styles, "Java must reuse CPP_STYLES");
+        assert_eq!(java.italic, c.italic, "Java must reuse CPP_ITALIC");
+        assert_eq!(java.bold, c.bold, "Java must reuse CPP_BOLD");
+        assert_eq!(java.keywords.len(), 2, "Java installs class 0 + class 1");
+        assert_eq!(java.keywords[0].0, 0);
+        assert_eq!(java.keywords[0].1, JAVA_KEYWORDS);
+        assert_eq!(java.keywords[1].0, 1);
+        assert_eq!(java.keywords[1].1, JAVA_KEYWORDS_2);
+        // Java's class-0 content must differ from C's — `class`,
+        // `interface`, `extends`, module directives are not in
+        // C_KEYWORDS.
+        assert_ne!(java.keywords[0].1, c.keywords[0].1);
+        // Java's class-1 content must differ from C's — `boolean`
+        // and `var` aren't C primitive types.
+        assert_ne!(java.keywords[1].1, c.keywords[1].1);
     }
 
     /// Objective-C uses `LexCPP` (it's a strict C superset). Same

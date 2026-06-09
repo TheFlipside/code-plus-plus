@@ -123,7 +123,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 6 / 🟡 82 / ⚫ 1.
+Total: 89 rows. ✅ 7 / 🟡 81 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -161,9 +161,24 @@ research-and-adversarial-verify workflow; library typedefs
 (`NSInteger` / `NSString` / `CGFloat` / ...) and Apple framework
 class names deliberately omitted.
 
+**Java (2026-05-14):** rides the same shared `CPP_STYLES` /
+`CPP_ITALIC` / `CPP_BOLD` table from the LexCPP family. Class 0
+(`JAVA_KEYWORDS`, 58 entries) covers JLS §3.9 reserved words
+(41, including the never-implemented `const` / `goto`), modern
+contextual keywords (`yield` / `record` / `sealed` / `permits` /
+`when`), the full Java 9+ module-system directive set (`module`
+/ `exports` / `requires` / `opens` / `uses` / `provides` / `to` /
+`with` / `transitive`), and the literal constants (`true` /
+`false` / `null`). Class 1 (`JAVA_KEYWORDS_2`, 10 entries) covers
+the 8 primitives plus `void` and `var` (Java 10 type-inference
+contextual keyword, classed with types per the C# precedent).
+Authored by a 7-agent research-and-adversarial-verify workflow;
+`non-sealed` deliberately excluded (hyphen breaks Lexilla's
+identifier tokenisation, same trade-off Notepad++ accepts).
+
 **LexCPP-family WORD2 split (2026-05-13 follow-up):** C / C++ / C#
-/ Objective-C all install **two** keyword classes — class 0 for
-control-flow / modifier reserved words (blue, `SCE_C_WORD`),
+/ Objective-C / Java all install **two** keyword classes — class 0
+for control-flow / modifier reserved words (blue, `SCE_C_WORD`),
 class 1 for primitive type aliases (steel blue, `SCE_C_WORD2`). Matches
 Notepad++'s default blue-vs-steel-blue rendering. Class-1 consts:
 `C_KEYWORDS_2` (`char` / `double` / `float` / `int` / `long` /
@@ -173,7 +188,7 @@ Notepad++'s default blue-vs-steel-blue rendering. Class-1 consts:
 (`bool` / `byte` / `char` / `decimal` / `double` / `dynamic` /
 `float` / `int` / `long` / `nint` / `nuint` / `object` / `sbyte` /
 `short` / `string` / `uint` / `ulong` / `ushort` / `var` / `void`).
-Future Java / JS / TS / Go / Obj-C / Swift / RC rows follow the
+Future JS / TS / Go / Swift / RC rows follow the
 same two-class shape.
 
 **Follow-up landed 2026-05-13:** every `Lex*.cxx` already in
@@ -227,7 +242,7 @@ further shim work needed.
 | INI file | 13 | `props` | ⚫ | ⚫ | 🟡 |
 | Inno Setup | 46 | `inno` | ⚫ | ⚫ | 🟡 |
 | Intel HEX | 62 | `ihex` | ⚫ | ⚫ | 🟡 |
-| Java | 6 | `cpp` | ⚫ | ⚫ | 🟡 |
+| Java | 6 | `cpp` | ✅ | ✅ | ✅ |
 | Javascript | 58 | `cpp` | ⚫ | ⚫ | 🟡 |
 | JSON | 57 | `json` | ⚫ | ⚫ | 🟡 |
 | JSON5 | 94 | `json` | ⚫ | ⚫ | 🟡 |
