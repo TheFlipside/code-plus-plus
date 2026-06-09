@@ -1436,6 +1436,65 @@ pub const HTML_KEYWORDS: &str = concat!(
     "th thead time title tr track tt u ul var video wbr xmp"
 );
 
+/// Space-separated SGML / DTD keyword list for XML. Installed via
+/// the `xml` lexer's `SCI_SETKEYWORDS(5, ...)` — the hypertext-family
+/// lexers reserve class 5 for "SGML and DTD keywords" (the wordlist
+/// descriptor in `LexHTML.cxx`). Class 5 is matched against
+/// `SCE_H_SGML_COMMAND` tokens — the keyword opening a markup
+/// declaration like `<!ELEMENT foo (...)>` or `<!ENTITY % bar
+/// "baz">`. Casing matters: SGML/DTD keywords are conventionally
+/// UPPERCASE and the lexer is case-sensitive.
+///
+/// **Class 0 is deliberately left empty** for XML — every XML
+/// document defines its own element vocabulary via DTD or schema,
+/// so there is no canonical tag list to seed class 0 with. Notepad++
+/// / Visual Studio / `IntelliJ` / VS Code all ship empty class-0
+/// wordlists for the XML lexer for the same reason. Adding
+/// speculative entries would mis-colour arbitrary user-defined
+/// element names as known tags.
+///
+/// **Three categories** of class-5 entries:
+///
+///   1. **Markup-declaration keywords** (5) — the `<!KEYWORD ...>`
+///      openers: `DOCTYPE` / `ELEMENT` / `ATTLIST` / `ENTITY` /
+///      `NOTATION`.
+///   2. **Content-model + attribute-type keywords** (12 dual-use
+///      with category 1; the installed wordlist holds each
+///      identifier once — `ENTITY` and `NOTATION` are listed in
+///      both categories below because they appear in both grammar
+///      positions, not because they're stored twice) — used inside
+///      `<!ELEMENT body>` and `<!ATTLIST body>` content: `EMPTY` /
+///      `ANY` (element content models); `CDATA` / `ID` / `IDREF` /
+///      `IDREFS` / `NMTOKEN` / `NMTOKENS` / `ENTITY` (also a
+///      markup-decl keyword; single entry) / `ENTITIES` / `NOTATION`
+///      (also a markup-decl keyword; single entry) / `NUTOKEN`
+///      (SGML breadth — not strictly XML 1.0 but Lexilla's wordlist
+///      is labeled "SGML and DTD keywords" and `NUTOKEN` ships in
+///      Notepad++'s default wordlist).
+///   3. **External identifier + conditional section keywords** (5)
+///      — `PUBLIC` / `SYSTEM` (external entity references), `NDATA`
+///      (notation data), `INCLUDE` / `IGNORE` (conditional section
+///      markers in SGML).
+///
+/// **Deliberately excluded:**
+///   - **Hash-prefixed special words** — `#PCDATA` / `#REQUIRED` /
+///     `#IMPLIED` / `#FIXED`: the lexer styles these via
+///     `SCE_H_SGML_SPECIAL` (the `#` triggers a lexer state
+///     transition, not a class-5 wordlist match). Including the
+///     bare identifiers here would have no effect because the
+///     lexer's state machine has already routed them.
+///   - **XML namespace prefixes** (`xs:` / `xsl:` / `soap:` /
+///     `xsi:`): these are part of tag/attribute identifier
+///     spellings, not language keywords.
+///   - **Library payload vocabularies** (SOAP element names, XSD
+///     element names, RSS / Atom tag names): every XML format
+///     defines its own schema; the lexer can't know which one's
+///     active in a given file.
+pub const XML_KEYWORDS: &str = concat!(
+    "ANY ATTLIST CDATA DOCTYPE ELEMENT EMPTY ENTITIES ENTITY ID IDREF IDREFS ",
+    "IGNORE INCLUDE NDATA NMTOKEN NMTOKENS NOTATION NUTOKEN PUBLIC SYSTEM"
+);
+
 /// Space-separated PHP reserved-word list installed via the hypertext
 /// lexer's `SCI_SETKEYWORDS(4, ...)`. The hypertext lexer reserves
 /// class 4 for PHP keywords; classes 0/1/2/3 are HTML / `JavaScript`

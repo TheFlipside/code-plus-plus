@@ -103,7 +103,8 @@ use std::sync::Arc;
 use codepp_core::lang::{
     CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
     HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_HTML, L_JAVA, L_OBJC, L_PHP,
-    L_RC, L_RUST, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS,
+    L_RC, L_RUST, L_XML, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS,
+    XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -120,26 +121,27 @@ use codepp_scintilla_sys::{
     SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD,
     SCE_H_ASP, SCE_H_ASPAT, SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT,
     SCE_H_DOUBLESTRING, SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION,
-    SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND, SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT,
-    SCE_H_XMLEND, SCE_H_XMLSTART, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK,
-    SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME,
-    SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD,
-    SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT,
-    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN,
-    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER,
-    SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT,
-    SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT,
-    SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM,
-    SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN,
-    SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER,
-    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE,
-    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES,
-    SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
-    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
-    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
-    SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT,
-    SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS,
-    SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
+    SCE_H_SGML_1ST_PARAM, SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING,
+    SCE_H_SGML_ENTITY, SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG,
+    SCE_H_TAGEND, SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART,
+    SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE,
+    SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR,
+    SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE,
+    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
+    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
+    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
+    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
+    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
+    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
+    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
+    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
+    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
+    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
+    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
+    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED,
+    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
     SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
     SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MOD_DELETETEXT,
     SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
@@ -3316,14 +3318,47 @@ const HYPERTEXT_STYLES: &[(usize, StyleSlot)] = &[
     (SCE_HPHP_COMMENT, StyleSlot::Comment),
     (SCE_HPHP_COMMENTLINE, StyleSlot::Comment),
     (SCE_HPHP_OPERATOR, StyleSlot::Operator),
+    // SGML / DTD sub-language range — fires inside `<!DOCTYPE [ ... ]>`
+    // blocks. Benefits every hypertext-family theme: every HTML file
+    // with a `<!DOCTYPE html>` declaration gets the DTD-keyword
+    // styling, every XML file with an internal DTD subset highlights
+    // its `<!ELEMENT>` / `<!ATTLIST>` / `<!ENTITY>` declarations.
+    //
+    // Four indices are intentionally NOT mapped here:
+    //   - `SCE_H_SGML_DEFAULT` (21) and `SCE_H_SGML_BLOCK_DEFAULT`
+    //     (31): match the existing `SCE_H_DEFAULT` / `SCE_HPHP_DEFAULT`
+    //     omission pattern — fall through to `STYLE_DEFAULT` so the
+    //     user's chosen body-text colour shows through.
+    //   - `SCE_H_SGML_ERROR` (26): the lexer-detected DTD syntax
+    //     error indicator. Unmapped pending a future
+    //     `StyleSlot::Error` palette addition — Code++'s current
+    //     palette has no Error/Warning slot, and `Operator` or
+    //     `Macro` would visually misrepresent the error as
+    //     intentional syntax.
+    //   - `SCE_H_SGML_1ST_PARAM_COMMENT` (30): Lexilla documents this
+    //     state at `LexHTML.cxx:888` as "error comment — lexer
+    //     internal. It is an error if any text is in this style."
+    //     Same rationale as ERROR — styling it as `Comment` (italic
+    //     green) would visually present malformed-input parse
+    //     content as intentional commentary. Unmapped so it falls
+    //     through to STYLE_DEFAULT alongside `ERROR`, joining the
+    //     same future `StyleSlot::Error` migration.
+    (SCE_H_SGML_COMMAND, StyleSlot::Keyword),
+    (SCE_H_SGML_1ST_PARAM, StyleSlot::Keyword2),
+    (SCE_H_SGML_DOUBLESTRING, StyleSlot::String),
+    (SCE_H_SGML_SIMPLESTRING, StyleSlot::String),
+    (SCE_H_SGML_SPECIAL, StyleSlot::Preprocessor),
+    (SCE_H_SGML_ENTITY, StyleSlot::Preprocessor),
+    (SCE_H_SGML_COMMENT, StyleSlot::Comment),
 ];
 const HYPERTEXT_ITALIC: &[usize] = &[
     SCE_H_COMMENT,
     SCE_H_XCCOMMENT,
     SCE_HPHP_COMMENT,
     SCE_HPHP_COMMENTLINE,
+    SCE_H_SGML_COMMENT,
 ];
-const HYPERTEXT_BOLD: &[usize] = &[SCE_H_TAG, SCE_HPHP_WORD];
+const HYPERTEXT_BOLD: &[usize] = &[SCE_H_TAG, SCE_HPHP_WORD, SCE_H_SGML_COMMAND];
 
 // HTML rides the same hypertext lexer as PHP — same shared
 // `HYPERTEXT_STYLES` / `HYPERTEXT_ITALIC` / `HYPERTEXT_BOLD` tables
@@ -3339,6 +3374,23 @@ const HYPERTEXT_BOLD: &[usize] = &[SCE_H_TAG, SCE_HPHP_WORD];
 // and `L_CSS` rows are wired). Until then a `<script>` block inside
 // an HTML file shows its content uncoloured — same behaviour PHP
 // gets for embedded JS today.
+// XML uses Lexilla's `xml` lexer (`lmXML` — same factory family as
+// `hypertext` but constructed with `isXml=true`). The lexer reserves
+// class 5 for SGML / DTD vocabulary. XML's class 0 is empty by
+// design: XML has no canonical element vocabulary, every document
+// defines its own via DTD or schema. The shared `HYPERTEXT_STYLES`
+// table covers `SCE_H_*` (XML markup), `SCE_HPHP_*` (irrelevant for
+// XML but harmless — PHP code doesn't appear in `.xml` files), AND
+// the new `SCE_H_SGML_*` range added in this commit — DTD blocks
+// inside `<!DOCTYPE [ ... ]>` highlight uniformly across XML and
+// HTML files.
+const XML_THEME: LangTheme = LangTheme {
+    keywords: &[(5, XML_KEYWORDS)],
+    styles: HYPERTEXT_STYLES,
+    italic: HYPERTEXT_ITALIC,
+    bold: HYPERTEXT_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -3401,6 +3453,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&PHP_THEME)
     } else if lang == L_HTML {
         Some(&HTML_THEME)
+    } else if lang == L_XML {
+        Some(&XML_THEME)
     } else {
         None
     }
@@ -17890,8 +17944,8 @@ mod lang_theme_tests {
     use codepp_core::lang::{
         CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVA_KEYWORDS,
         JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_HTML, L_JAVA, L_JAVASCRIPT, L_OBJC, L_PHP, L_PYTHON,
-        L_RC, L_RUST, L_TEXT, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RC_KEYWORDS,
-        RUST_KEYWORDS,
+        L_RC, L_RUST, L_TEXT, L_XML, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RC_KEYWORDS,
+        RUST_KEYWORDS, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -17914,6 +17968,7 @@ mod lang_theme_tests {
             (L_RUST, "Rust"),
             (L_PHP, "PHP"),
             (L_HTML, "HTML"),
+            (L_XML, "XML"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -18127,6 +18182,45 @@ mod lang_theme_tests {
         assert_eq!(rust.keywords.len(), 1, "Rust theme uses class 0 only");
         assert_eq!(rust.keywords[0].0, 0);
         assert_eq!(rust.keywords[0].1, RUST_KEYWORDS);
+    }
+
+    /// XML uses Lexilla's `xml` lexer — same factory family as the
+    /// `hypertext` lexer used by HTML / PHP. Shares the same
+    /// `HYPERTEXT_STYLES` / `HYPERTEXT_ITALIC` / `HYPERTEXT_BOLD`
+    /// tables but installs ONLY class 5 (SGML / DTD vocabulary) —
+    /// no class 0 install because XML has no canonical element
+    /// vocabulary. This test pins that single-class-5 shape, the
+    /// canonical `XML_KEYWORDS` link, and the style-table share
+    /// with the rest of the hypertext family.
+    ///
+    /// Critical: assert NO class 0 (or any other non-class-5)
+    /// install. A regression that copied PHP's `(0, HTML_KEYWORDS)`
+    /// onto XML would silently mis-colour every user-defined XML
+    /// element name as a known HTML tag.
+    #[test]
+    fn xml_uses_hypertext_lexer_with_class_5_only() {
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let xml = lang_theme(L_XML).expect("XML wired");
+        // Style tables shared with the rest of the hypertext family.
+        assert_eq!(xml.styles, php.styles, "XML must reuse HYPERTEXT_STYLES");
+        assert_eq!(xml.italic, php.italic, "XML must reuse HYPERTEXT_ITALIC");
+        assert_eq!(xml.bold, php.bold, "XML must reuse HYPERTEXT_BOLD");
+        // Single keyword class — class 5 only.
+        assert_eq!(xml.keywords.len(), 1, "XML installs class 5 only");
+        assert_eq!(
+            xml.keywords[0].0, 5,
+            "XML uses the hypertext lexer's class 5 slot (SGML / DTD vocabulary)"
+        );
+        assert_eq!(xml.keywords[0].1, XML_KEYWORDS);
+        // Structurally pin "no class 0" so a regression that
+        // copy-pasted PHP's `(0, HTML_KEYWORDS)` install onto XML
+        // would fail this test. Every wired class on XML_THEME must
+        // be class 5.
+        assert!(
+            xml.keywords.iter().all(|(class, _)| *class == 5),
+            "XML must install class 5 ONLY — no class 0 (would mis-colour user element names) \
+             and no PHP class 4 (no PHP in .xml files)"
+        );
     }
 
     /// HTML rides the same shared `HYPERTEXT_STYLES` /

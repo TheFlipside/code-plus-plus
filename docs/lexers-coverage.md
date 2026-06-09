@@ -123,7 +123,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 9 / 🟡 79 / ⚫ 1.
+Total: 89 rows. ✅ 10 / 🟡 78 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -160,6 +160,42 @@ the full C primitive set. Authored by a 7-agent
 research-and-adversarial-verify workflow; library typedefs
 (`NSInteger` / `NSString` / `CGFloat` / ...) and Apple framework
 class names deliberately omitted.
+
+**XML (2026-05-14):** uses Lexilla's `xml` lexer (`lmXML` — same
+factory family as `hypertext`, constructed with `isXml=true`).
+Shares the same `HYPERTEXT_STYLES` / `HYPERTEXT_ITALIC` /
+`HYPERTEXT_BOLD` tables as PHP / HTML. **Class 0 is empty by
+design** — XML has no canonical element vocabulary, every
+document defines its own via DTD or schema. Adding speculative
+HTML tag entries would mis-colour user-defined elements as
+known tags. Matches what Notepad++ / Visual Studio / IntelliJ /
+VS Code all ship for XML. **Class 5** (`XML_KEYWORDS`, 20
+entries, all-UPPERCASE) is the SGML / DTD vocabulary that
+appears inside `<!DOCTYPE [ ... ]>` blocks: markup-declaration
+keywords (`DOCTYPE` / `ELEMENT` / `ATTLIST` / `ENTITY` /
+`NOTATION`), content-model + attribute-type keywords (`EMPTY` /
+`ANY` / `CDATA` / `ID` / `IDREF` / `IDREFS` / `NMTOKEN` /
+`NMTOKENS` / `ENTITIES` / `NUTOKEN`), external identifier +
+conditional section keywords (`PUBLIC` / `SYSTEM` / `NDATA` /
+`INCLUDE` / `IGNORE`). Hash-prefixed forms (`#PCDATA` /
+`#REQUIRED` / `#IMPLIED` / `#FIXED`) deliberately excluded —
+the lexer styles them via `SCE_H_SGML_SPECIAL`.
+
+**`HYPERTEXT_STYLES` extended with the SGML range** in the same
+commit: 8 new `SCE_H_SGML_*` mappings cover the DTD-block
+sub-language (COMMAND → Keyword, 1ST_PARAM → Keyword2,
+DOUBLESTRING / SIMPLESTRING → String, SPECIAL / ENTITY →
+Preprocessor, COMMENT / 1ST_PARAM_COMMENT → Comment). DEFAULT
+(21), ERROR (26), and BLOCK_DEFAULT (31) intentionally
+unmapped — matches the existing `SCE_H_DEFAULT` /
+`SCE_HPHP_DEFAULT` omission pattern (fall through to
+STYLE_DEFAULT) plus pending future `StyleSlot::Error`. The
+extension benefits HTML too — every `<!DOCTYPE html>` line at
+the top of HTML files now gets DTD-keyword styling. Authored
+by a 7-agent research-and-adversarial-verify workflow; all
+three verifiers APPROVE (correctness with one info-level
+warn about `NUTOKEN` being SGML-only rather than XML 1.0, kept
+for Notepad++ baseline parity).
 
 **HTML (2026-05-14):** rides the same hypertext lexer and the same
 shared `HYPERTEXT_STYLES` / `HYPERTEXT_ITALIC` / `HYPERTEXT_BOLD`
@@ -340,7 +376,7 @@ further shim work needed.
 | VHDL | 38 | `vhdl` | ⚫ | ⚫ | 🟡 |
 | Visual Basic | 18 | `vb` | ⚫ | ⚫ | 🟡 |
 | Visual Prolog | 84 | `visualprolog` | ⚫ | ⚫ | 🟡 |
-| XML | 9 | `xml` | ⚫ | ⚫ | 🟡 |
+| XML | 9 | `xml` | ✅ | ✅ | ✅ |
 | YAML | 49 | `yaml` | ⚫ | ⚫ | 🟡 |
 
 ## Notes

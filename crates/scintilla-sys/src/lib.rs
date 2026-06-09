@@ -748,6 +748,33 @@ pub const SCE_H_QUESTION: usize = 18;
 pub const SCE_H_VALUE: usize = 19;
 pub const SCE_H_XCCOMMENT: usize = 20;
 
+// LexHTML — SGML / DTD sub-language style indices. Fired inside the
+// `<!DOCTYPE ... [ ... ]>` block: markup declarations like
+// `<!ELEMENT foo (...)>`, `<!ENTITY % bar "baz">`, attribute lists,
+// external identifiers, etc. The `xml` and `hypertext` lexers both
+// emit these style numbers when processing a DOCTYPE block, so
+// mapping them in `HYPERTEXT_STYLES` benefits HTML / ASP / JSP /
+// PHP / XML simultaneously.
+//
+// Cross-referenced against `vendor/lexilla/include/SciLexer.h`
+// lines 288-298. `BLOCK_DEFAULT` is the per-block fallback; both
+// `DEFAULT` (21) and `BLOCK_DEFAULT` (31) are intentionally left
+// out of `HYPERTEXT_STYLES` so they fall through to STYLE_DEFAULT
+// (matches the existing `SCE_H_DEFAULT` / `SCE_HPHP_DEFAULT`
+// omission pattern). `ERROR` (26) is also unmapped pending a
+// future `StyleSlot::Error` palette addition.
+pub const SCE_H_SGML_DEFAULT: usize = 21;
+pub const SCE_H_SGML_COMMAND: usize = 22;
+pub const SCE_H_SGML_1ST_PARAM: usize = 23;
+pub const SCE_H_SGML_DOUBLESTRING: usize = 24;
+pub const SCE_H_SGML_SIMPLESTRING: usize = 25;
+pub const SCE_H_SGML_ERROR: usize = 26;
+pub const SCE_H_SGML_SPECIAL: usize = 27;
+pub const SCE_H_SGML_ENTITY: usize = 28;
+pub const SCE_H_SGML_COMMENT: usize = 29;
+pub const SCE_H_SGML_1ST_PARAM_COMMENT: usize = 30;
+pub const SCE_H_SGML_BLOCK_DEFAULT: usize = 31;
+
 // LexHTML — PHP-mode style indices. Emitted when the lexer is
 // inside a `<?php ... ?>` block. `SCE_HPHP_COMPLEX_VARIABLE` lives
 // at 104 historically; the rest are a contiguous 118..=127 range.
