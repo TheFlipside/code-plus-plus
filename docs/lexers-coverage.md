@@ -123,7 +123,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 7 / 🟡 81 / ⚫ 1.
+Total: 89 rows. ✅ 8 / 🟡 80 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -160,6 +160,31 @@ the full C primitive set. Authored by a 7-agent
 research-and-adversarial-verify workflow; library typedefs
 (`NSInteger` / `NSString` / `CGFloat` / ...) and Apple framework
 class names deliberately omitted.
+
+**Resource file / `.rc` (2026-05-14):** Win32 resource scripts —
+declarative syntax for dialogs / menus / string tables / version
+info / icons / etc. Uses the same `LexCPP` lexer and the same
+shared `CPP_STYLES` / `CPP_ITALIC` / `CPP_BOLD` table as the rest
+of the family, but is the **first single-class** LexCPP-family
+theme: RC has no primitive-type vocabulary worth splitting, so
+class 1 is intentionally unset. `RC_KEYWORDS` (class 0, 84
+entries, all-UPPERCASE per RC convention) covers eight categories:
+resource-type declarators (`DIALOG` / `DIALOGEX` / `MENU` /
+`MENUEX` / `STRINGTABLE` / `VERSIONINFO` / `TOOLBAR` /
+`DESIGNINFO` / etc.), block delimiters (`BEGIN` / `END`), 19
+dialog control statements (`DEFPUSHBUTTON` / `LTEXT` /
+`EDITTEXT` / etc.), dialog/resource attributes (`CAPTION` /
+`STYLE` / `LANGUAGE` / etc.), menu words (`MENUITEM` / `POPUP`
+/ `CHECKED` / `GRAYED` / etc.), accelerator flags (`VIRTKEY` /
+`ASCII` / `ALT` / etc.), VERSIONINFO sub-statements
+(`FILEVERSION` / `PRODUCTVERSION` / etc.), and legacy memory
+attributes (`DISCARDABLE` / `MOVEABLE` / etc.). Library
+constants from `windows.h` (`WS_*` / `DS_*` / `IDOK` / etc.)
+deliberately omitted — they're identifiers, not RC keywords.
+Authored by a 7-agent research-and-adversarial-verify workflow;
+the correctness verifier flagged `USER` and `DLGINIT` (dropped
+— not real source-level keywords), and the completeness
+verifier added `DESIGNINFO` / `TOOLBAR` / `BUTTON`.
 
 **Java (2026-05-14):** rides the same shared `CPP_STYLES` /
 `CPP_ITALIC` / `CPP_BOLD` table from the LexCPP family. Class 0
@@ -271,7 +296,7 @@ further shim work needed.
 | Raku | 89 | `raku` | ⚫ | ⚫ | 🟡 |
 | REBOL | 79 | `rebol` | ⚫ | ⚫ | 🟡 |
 | Registry | 80 | `registry` | ⚫ | ⚫ | 🟡 |
-| Resource file | 7 | `cpp` | ⚫ | ⚫ | 🟡 |
+| Resource file | 7 | `cpp` | ✅ | ✅ | ✅ |
 | Ruby | 36 | `ruby` | ⚫ | ⚫ | 🟡 |
 | Rust | 81 | `rust` | ✅ | ✅ | ✅ |
 | S-Record | 61 | `srec` | ⚫ | ⚫ | 🟡 |

@@ -102,8 +102,8 @@ use std::sync::Arc;
 
 use codepp_core::lang::{
     CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
-    HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_JAVA, L_OBJC, L_PHP, L_RUST,
-    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RUST_KEYWORDS,
+    HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_JAVA, L_OBJC, L_PHP, L_RC,
+    L_RUST, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -3219,6 +3219,19 @@ const JAVA_THEME: LangTheme = LangTheme {
     italic: CPP_ITALIC,
     bold: CPP_BOLD,
 };
+// RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
+// theme — RC has no primitive-type vocabulary worth a class-1 split,
+// so it installs only class 0. The rest of the family (C / C++ /
+// C# / Objective-C / Java) install both. `lexcpp_family_installs_class_0_and_class_1`
+// deliberately does NOT include `L_RC` in its iteration; the
+// dedicated `rc_uses_single_class_lexcpp_theme` test pins this
+// language's single-class shape.
+const RC_THEME: LangTheme = LangTheme {
+    keywords: &[(0, RC_KEYWORDS)],
+    styles: CPP_STYLES,
+    italic: CPP_ITALIC,
+    bold: CPP_BOLD,
+};
 
 // --- LexRust ---
 // LexRust's SCE_RUST_* enum is distinct from LexCPP's SCE_C_*.
@@ -3359,6 +3372,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&OBJC_THEME)
     } else if lang == L_JAVA {
         Some(&JAVA_THEME)
+    } else if lang == L_RC {
+        Some(&RC_THEME)
     } else if lang == L_RUST {
         Some(&RUST_THEME)
     } else if lang == L_PHP {
@@ -17851,8 +17866,8 @@ mod lang_theme_tests {
     use super::{lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO};
     use codepp_core::lang::{
         CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVA_KEYWORDS,
-        JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_JAVA, L_JAVASCRIPT, L_OBJC, L_PHP, L_PYTHON, L_RUST,
-        L_TEXT, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RUST_KEYWORDS,
+        JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_JAVA, L_JAVASCRIPT, L_OBJC, L_PHP, L_PYTHON, L_RC,
+        L_RUST, L_TEXT, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -17871,6 +17886,7 @@ mod lang_theme_tests {
             (L_CS, "C#"),
             (L_OBJC, "Objective-C"),
             (L_JAVA, "Java"),
+            (L_RC, "Resource file"),
             (L_RUST, "Rust"),
             (L_PHP, "PHP"),
         ] {
@@ -17956,9 +17972,12 @@ mod lang_theme_tests {
     /// `SCI_STYLECLEARALL` — visually flat against control-flow
     /// keywords, the exact regression the WORD2 split exists to fix.
     /// Pinning the two-class shape on the family means a future
-    /// Java / JS / TS / Go / Obj-C / Swift / RC theme that forgets
-    /// the type list fails this test rather than silently mis-rendering
-    /// in production.
+    /// JS / TS / Go / Swift theme that forgets the type list fails
+    /// this test rather than silently mis-rendering in production.
+    /// (RC is the family's one single-class member; see the
+    /// dedicated `rc_uses_single_class_lexcpp_theme` test for its
+    /// shape pinning. Java / Obj-C are already wired and included
+    /// in the iteration below.)
     #[test]
     fn lexcpp_family_installs_class_0_and_class_1() {
         for (lang, name, expected_kw2) in [
@@ -18011,6 +18030,33 @@ mod lang_theme_tests {
         // Java's class-1 content must differ from C's — `boolean`
         // and `var` aren't C primitive types.
         assert_ne!(java.keywords[1].1, c.keywords[1].1);
+    }
+
+    /// Win32 resource scripts (`.rc`) — the first SINGLE-class
+    /// LexCPP-family theme. Pins the one-keyword-class shape (vs
+    /// every other LexCPP-family row, which installs two classes)
+    /// plus the canonical `RC_KEYWORDS` link, plus style-table
+    /// reuse with the rest of the family. A regression that
+    /// accidentally added a class 1 (or installed the wrong list)
+    /// fails this test.
+    #[test]
+    fn rc_uses_single_class_lexcpp_theme() {
+        let c = lang_theme(L_C).expect("C wired");
+        let rc = lang_theme(L_RC).expect("Resource file wired");
+        assert_eq!(rc.styles, c.styles, "RC must reuse CPP_STYLES");
+        assert_eq!(rc.italic, c.italic, "RC must reuse CPP_ITALIC");
+        assert_eq!(rc.bold, c.bold, "RC must reuse CPP_BOLD");
+        assert_eq!(
+            rc.keywords.len(),
+            1,
+            "RC is single-class (no primitive-type vocabulary)"
+        );
+        assert_eq!(rc.keywords[0].0, 0);
+        assert_eq!(rc.keywords[0].1, RC_KEYWORDS);
+        // RC vocabulary is entirely distinct from C — UPPERCASE
+        // resource-type declarators, dialog controls, menu words,
+        // etc. share no overlap with C's lowercase reserved words.
+        assert_ne!(rc.keywords[0].1, c.keywords[0].1);
     }
 
     /// Objective-C uses `LexCPP` (it's a strict C superset). Same

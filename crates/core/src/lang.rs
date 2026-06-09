@@ -1194,6 +1194,104 @@ pub const JAVA_KEYWORDS: &str = concat!(
 ///      `dynamic` in [`CS_KEYWORDS_2`].
 pub const JAVA_KEYWORDS_2: &str = "boolean byte char double float int long short var void";
 
+/// Space-separated keyword list for Win32 Resource Scripts (`.rc`).
+/// Installed via the `LexCPP` lexer's `SCI_SETKEYWORDS(0, ...)` for
+/// `SCE_C_WORD` (the blue "Keyword" slot).
+///
+/// **Single-class theme.** RC has no primitive-type vocabulary worth
+/// splitting into class 1 — every keyword here is a structural,
+/// declarative, or attribute word. RC is the first single-class
+/// LexCPP-family theme; the rest (C / C++ / C# / Objective-C / Java)
+/// install both class 0 and class 1.
+///
+/// **All-uppercase by convention.** Real-world `.rc` files use
+/// uppercase keywords almost universally — rc.exe accepts
+/// case-insensitive but Notepad++, Visual Studio's resource editor,
+/// and our case-sensitive `lmCPP` factory only highlight the
+/// uppercase form. A `dialog` (lowercase) declaration would render
+/// uncoloured.
+///
+/// Eight logical categories:
+///
+///   1. **Resource type declarators** — `ACCELERATORS` / `ANICURSOR`
+///      / `ANIICON` / `BITMAP` / `CURSOR` / `DESIGNINFO` / `DIALOG`
+///      / `DIALOGEX` / `FONT` / `HTML` / `ICON` / `MENU` / `MENUEX`
+///      / `MESSAGETABLE` / `PLUGPLAY` / `RCDATA` / `STRINGTABLE` /
+///      `TEXTINCLUDE` / `TOOLBAR` / `TYPELIB` / `VERSIONINFO` /
+///      `VXD`.
+///   2. **Block delimiters** — `BEGIN` / `END`.
+///   3. **Dialog control statements** — `AUTO3STATE` /
+///      `AUTOCHECKBOX` / `AUTORADIOBUTTON` / `CHECKBOX` / `COMBOBOX`
+///      / `CONTROL` / `CTEXT` / `DEFPUSHBUTTON` / `EDITTEXT` /
+///      `GROUPBOX` / `LISTBOX` / `LTEXT` / `PUSHBOX` / `PUSHBUTTON`
+///      / `RADIOBUTTON` / `RTEXT` / `SCROLLBAR` / `STATE3` /
+///      `USERBUTTON` (plus `ICON` shared with category 1).
+///   4. **Dialog / resource attributes** — `CAPTION` /
+///      `CHARACTERISTICS` / `CLASS` / `EXSTYLE` / `LANGUAGE` /
+///      `STYLE` / `VERSION` (plus `FONT` / `MENU` shared with
+///      category 1).
+///   5. **Menu structure + state flags** — `MENUITEM` / `POPUP` /
+///      `SEPARATOR` / `CHECKED` / `GRAYED` / `HELP` / `INACTIVE` /
+///      `MENUBARBREAK` / `MENUBREAK`.
+///   6. **Accelerator flags** — `VIRTKEY` / `ASCII` / `NOINVERT` /
+///      `ALT` / `SHIFT` (plus `CONTROL` shared with category 3).
+///   7. **VERSIONINFO sub-statements** — `FILEVERSION` /
+///      `PRODUCTVERSION` / `FILEFLAGSMASK` / `FILEFLAGS` / `FILEOS`
+///      / `FILETYPE` / `FILESUBTYPE` / `BLOCK` / `VALUE`.
+///   8. **Legacy memory attributes** (16-bit-era; rc.exe still
+///      accepts them and long-lived `.rc` codebases like Wine /
+///      `ReactOS` still contain them) — `DISCARDABLE` / `MOVEABLE`
+///      / `FIXED` / `PURE` / `IMPURE` / `PRELOAD` / `LOADONCALL` /
+///      `SHARED` / `NONSHARED`. Plus the style-expression operator
+///      `NOT` and the toolbar item word `BUTTON`.
+///
+/// **Deliberately excluded:**
+///   - **Library constants** from `windows.h` — `WS_*` / `DS_*` /
+///     `BS_*` / `ES_*` / `IDOK` / `IDCANCEL` / `IDS_*` / `IDD_*` /
+///     `IDC_*` / `IDM_*` and all other `#define`d symbols. They are
+///     identifiers, not RC vocabulary; Lexilla routes them through
+///     `SCE_C_IDENTIFIER` (uncoloured) which matches every other
+///     `.rc`-aware editor.
+///   - **Preprocessor directives** (`#include` / `#define` / `#ifdef`
+///     / etc.) — Lexilla styles `#`-prefixed forms via
+///     `SCE_C_PREPROCESSOR`.
+///   - **Resource-ID-style symbols** (`IDR_MAIN_MENU` / `IDD_ABOUT`
+///     / etc.) — user-defined identifiers, not RC keywords.
+///   - **`USER`** — sometimes listed in informal RC references but
+///     not a documented rc.exe statement keyword. Including it would
+///     mis-colour any variable named `USER`. Distinct from
+///     `USERBUTTON` (which IS a documented control statement).
+///   - **`DLGINIT`** — internal Visual Studio resource-editor type
+///     emitted into compiled `.res` output for dialog-initialisation
+///     data; not a source-level `.rc` keyword.
+///
+/// **Accepted false-positive risk:** several short RC keywords
+/// (`VALUE` / `VERSION` / `LANGUAGE` / `STYLE` / `CLASS` / `BLOCK`
+/// / `NOT` / `SHARED` / `FIXED` / `PURE`) are also legal identifier
+/// names that could appear in a hand-rolled `#define` block or
+/// `#include`d header at the top of a `.rc` file. Notepad++ /
+/// Visual Studio's resource editor accept the trade-off — the
+/// keyword form dominates in real `.rc` content. Code++ follows
+/// that baseline rather than under-colouring the keywords, which
+/// are far more common in practice. The theme only applies to
+/// `.rc` files (gated by `L_RC` in `lang_theme`), so a `style`
+/// variable in a `.c` file is unaffected.
+///
+/// Sourced and adversarially verified across three lenses (MSDN
+/// spec / production `.rc` corpora / editor baselines).
+pub const RC_KEYWORDS: &str = concat!(
+    "ACCELERATORS ALT ANICURSOR ANIICON ASCII AUTO3STATE AUTOCHECKBOX ",
+    "AUTORADIOBUTTON BEGIN BITMAP BLOCK BUTTON CAPTION CHARACTERISTICS CHECKBOX ",
+    "CHECKED CLASS COMBOBOX CONTROL CTEXT CURSOR DEFPUSHBUTTON DESIGNINFO DIALOG ",
+    "DIALOGEX DISCARDABLE EDITTEXT END EXSTYLE FILEFLAGS FILEFLAGSMASK FILEOS ",
+    "FILESUBTYPE FILETYPE FILEVERSION FIXED FONT GRAYED GROUPBOX HELP HTML ICON ",
+    "IMPURE INACTIVE LANGUAGE LISTBOX LOADONCALL LTEXT MENU MENUBARBREAK ",
+    "MENUBREAK MENUEX MENUITEM MESSAGETABLE MOVEABLE NOINVERT NONSHARED NOT ",
+    "PLUGPLAY POPUP PRELOAD PRODUCTVERSION PURE PUSHBOX PUSHBUTTON RADIOBUTTON ",
+    "RCDATA RTEXT SCROLLBAR SEPARATOR SHARED SHIFT STATE3 STRINGTABLE STYLE ",
+    "TEXTINCLUDE TOOLBAR TYPELIB USERBUTTON VALUE VERSION VERSIONINFO VIRTKEY VXD"
+);
+
 /// Space-separated primary keyword list for C#. Installed via the
 /// `LexCPP` lexer's `SCI_SETKEYWORDS(0, ...)` for `SCE_C_WORD` (the
 /// blue "Keyword" slot). Covers C# 12 reserved words, contextual
