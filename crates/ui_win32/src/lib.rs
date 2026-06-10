@@ -103,8 +103,8 @@ use std::sync::Arc;
 use codepp_core::lang::{
     CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
     HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_HTML, L_JAVA, L_MAKEFILE,
-    L_OBJC, L_PHP, L_RC, L_RUST, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-    PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, XML_KEYWORDS,
+    L_OBJC, L_PASCAL, L_PHP, L_RC, L_RUST, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS,
+    OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -125,27 +125,30 @@ use codepp_scintilla_sys::{
     SCE_H_SGML_ENTITY, SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG,
     SCE_H_TAGEND, SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART,
     SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR,
-    SCE_MAKE_TARGET, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC,
-    SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO,
-    SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2,
-    SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT,
-    SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS,
-    SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
-    SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
-    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
-    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS,
-    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
-    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
-    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
-    SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
-    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
-    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
-    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO,
-    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
-    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
-    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE,
-    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT,
-    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCE_MAKE_TARGET, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2,
+    SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER,
+    SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD,
+    SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE,
+    SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR,
+    SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE,
+    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
+    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
+    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
+    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
+    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
+    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
+    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
+    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
+    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
+    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
+    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
+    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED,
+    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
+    SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
+    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MOD_DELETETEXT,
+    SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
@@ -3424,6 +3427,49 @@ const MAKEFILE_THEME: LangTheme = LangTheme {
     bold: MAKEFILE_BOLD,
 };
 
+// --- LexPascal ---
+// Pascal has a substantial 13-mapping style table — three syntactic
+// comment forms ({...} / (*...*) / //...) all map to Comment; two
+// preprocessor dialects ({$...} and (*$...*) both Delphi/FPC
+// directives) both to Preprocessor; decimal and `$`-hex numbers
+// both to Number; single-quoted strings, `#nn` character literals,
+// and Delphi-11+ triple-quoted multiline strings all to String;
+// `SCE_PAS_WORD` to Keyword (bold blue, matched against
+// `PASCAL_KEYWORDS`); `SCE_PAS_OPERATOR` to Operator; and
+// `SCE_PAS_ASM` to Keyword2 (steel blue — the inline-assembler
+// block content between `asm` and `end` deserves a distinct visual
+// treatment, matching Notepad++'s Pascal scheme).
+//
+// `SCE_PAS_DEFAULT` (0) / `SCE_PAS_IDENTIFIER` (1) intentionally
+// unmapped — mirrors the `SCE_C_DEFAULT` / `SCE_C_IDENTIFIER`
+// omission pattern in `CPP_STYLES`. `SCE_PAS_STRINGEOL` (11) also
+// unmapped, pending the future `StyleSlot::Error` palette
+// addition (same deferral as `SCE_H_SGML_ERROR` / `SCE_MAKE_IDEOL`).
+const PASCAL_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_PAS_COMMENT, StyleSlot::Comment),
+    (SCE_PAS_COMMENT2, StyleSlot::Comment),
+    (SCE_PAS_COMMENTLINE, StyleSlot::Comment),
+    (SCE_PAS_PREPROCESSOR, StyleSlot::Preprocessor),
+    (SCE_PAS_PREPROCESSOR2, StyleSlot::Preprocessor),
+    (SCE_PAS_NUMBER, StyleSlot::Number),
+    (SCE_PAS_HEXNUMBER, StyleSlot::Number),
+    (SCE_PAS_WORD, StyleSlot::Keyword),
+    (SCE_PAS_STRING, StyleSlot::String),
+    (SCE_PAS_CHARACTER, StyleSlot::String),
+    (SCE_PAS_OPERATOR, StyleSlot::Operator),
+    (SCE_PAS_ASM, StyleSlot::Keyword2),
+    (SCE_PAS_MULTILINESTRING, StyleSlot::String),
+];
+const PASCAL_ITALIC: &[usize] = &[SCE_PAS_COMMENT, SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE];
+const PASCAL_BOLD: &[usize] = &[SCE_PAS_WORD];
+
+const PASCAL_THEME: LangTheme = LangTheme {
+    keywords: &[(0, PASCAL_KEYWORDS)],
+    styles: PASCAL_STYLES,
+    italic: PASCAL_ITALIC,
+    bold: PASCAL_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -3490,6 +3536,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&XML_THEME)
     } else if lang == L_MAKEFILE {
         Some(&MAKEFILE_THEME)
+    } else if lang == L_PASCAL {
+        Some(&PASCAL_THEME)
     } else {
         None
     }
@@ -17978,9 +18026,9 @@ mod lang_theme_tests {
     use super::{lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO};
     use codepp_core::lang::{
         CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVA_KEYWORDS,
-        JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_HTML, L_JAVA, L_JAVASCRIPT, L_MAKEFILE, L_OBJC, L_PHP,
-        L_PYTHON, L_RC, L_RUST, L_TEXT, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-        PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, XML_KEYWORDS,
+        JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_HTML, L_JAVA, L_JAVASCRIPT, L_MAKEFILE, L_OBJC,
+        L_PASCAL, L_PHP, L_PYTHON, L_RC, L_RUST, L_TEXT, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -18004,6 +18052,7 @@ mod lang_theme_tests {
             (L_PHP, "PHP"),
             (L_HTML, "HTML"),
             (L_XML, "XML"),
+            (L_PASCAL, "Pascal"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -18217,6 +18266,40 @@ mod lang_theme_tests {
         assert_eq!(rust.keywords.len(), 1, "Rust theme uses class 0 only");
         assert_eq!(rust.keywords[0].0, 0);
         assert_eq!(rust.keywords[0].1, RUST_KEYWORDS);
+    }
+
+    /// Pascal uses Lexilla's `pascal` lexer (`LexPascal.cxx`). Single
+    /// keyword class, substantial 13-mapping style table covering
+    /// three comment forms (`{...}` / `(*...*)` / `//`), two
+    /// preprocessor dialects (`{$...}` / `(*$...*)`), decimal+hex
+    /// numbers, words, three string forms (single-quoted + `#nn`
+    /// character + Delphi-11+ triple-quoted multiline), operators,
+    /// and the `SCE_PAS_ASM` inline-assembler distinct slot. Pins
+    /// the canonical `PASCAL_KEYWORDS` link via class 0, that
+    /// `PASCAL_STYLES` is its own table (does NOT reuse
+    /// `CPP_STYLES`), and that the class-0-only shape holds.
+    #[test]
+    fn pascal_uses_lexpascal_dedicated_theme() {
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let c = lang_theme(L_C).expect("C wired");
+        assert_eq!(
+            pas.styles.len(),
+            13,
+            "Pascal theme has {} style mappings; expected 13",
+            pas.styles.len()
+        );
+        assert_ne!(
+            pas.styles, c.styles,
+            "Pascal must NOT reuse CPP_STYLES (it has its own PASCAL_STYLES)"
+        );
+        assert_eq!(pas.keywords.len(), 1, "Pascal installs class 0 only");
+        assert_eq!(pas.keywords[0].0, 0);
+        assert_eq!(pas.keywords[0].1, PASCAL_KEYWORDS);
+        // Structural guard: only class 0.
+        assert!(
+            pas.keywords.iter().all(|(class, _)| *class == 0),
+            "Pascal installs class 0 only — LexPascal exposes no other classes"
+        );
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a

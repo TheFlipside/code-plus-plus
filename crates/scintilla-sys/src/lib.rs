@@ -795,6 +795,36 @@ pub const SCE_MAKE_OPERATOR: usize = 4;
 pub const SCE_MAKE_TARGET: usize = 5;
 pub const SCE_MAKE_IDEOL: usize = 9;
 
+// LexPascal style indices. 16 total emission slots covering all of
+// Pascal's lexical surface (three comment forms, two preprocessor
+// dialects, decimal+hex numbers, word/operator/string trio, character
+// literals, inline assembler, and Delphi 11+ triple-quoted
+// multiline strings). Cross-referenced against
+// `vendor/lexilla/lexers/LexPascal.cxx` lines 171-186.
+//
+// `SCE_PAS_DEFAULT` (0) and `SCE_PAS_IDENTIFIER` (1) are intentionally
+// left unmapped in `PASCAL_STYLES` so they fall through to
+// STYLE_DEFAULT — same omission pattern as `SCE_C_DEFAULT` /
+// `SCE_C_IDENTIFIER` in `CPP_STYLES`. `SCE_PAS_STRINGEOL` (11),
+// the unterminated-string error indicator, is also unmapped pending
+// the future `StyleSlot::Error` palette addition.
+pub const SCE_PAS_DEFAULT: usize = 0;
+pub const SCE_PAS_IDENTIFIER: usize = 1;
+pub const SCE_PAS_COMMENT: usize = 2;
+pub const SCE_PAS_COMMENT2: usize = 3;
+pub const SCE_PAS_COMMENTLINE: usize = 4;
+pub const SCE_PAS_PREPROCESSOR: usize = 5;
+pub const SCE_PAS_PREPROCESSOR2: usize = 6;
+pub const SCE_PAS_NUMBER: usize = 7;
+pub const SCE_PAS_HEXNUMBER: usize = 8;
+pub const SCE_PAS_WORD: usize = 9;
+pub const SCE_PAS_STRING: usize = 10;
+pub const SCE_PAS_STRINGEOL: usize = 11;
+pub const SCE_PAS_CHARACTER: usize = 12;
+pub const SCE_PAS_OPERATOR: usize = 13;
+pub const SCE_PAS_ASM: usize = 14;
+pub const SCE_PAS_MULTILINESTRING: usize = 15;
+
 // LexHTML — PHP-mode style indices. Emitted when the lexer is
 // inside a `<?php ... ?>` block. `SCE_HPHP_COMPLEX_VARIABLE` lives
 // at 104 historically; the rest are a contiguous 118..=127 range.

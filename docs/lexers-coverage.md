@@ -123,7 +123,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 11 / 🟡 77 / ⚫ 1.
+Total: 89 rows. ✅ 12 / 🟡 76 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -160,6 +160,50 @@ the full C primitive set. Authored by a 7-agent
 research-and-adversarial-verify workflow; library typedefs
 (`NSInteger` / `NSString` / `CGFloat` / ...) and Apple framework
 class names deliberately omitted.
+
+**Pascal (2026-05-14):** uses Lexilla's `pascal` lexer
+(`LexPascal.cxx`). Substantial 13-mapping `PASCAL_STYLES` table
+covering three syntactic comment forms (`{...}` / `(*...*)` /
+`//`), two preprocessor dialects (`{$...}` and `(*$...*)`
+Delphi/FPC directives), decimal + `$`-prefixed hex numbers,
+words, single-quoted strings + `#nn` character literals +
+Delphi-11+ triple-quoted multiline strings, operators, and
+`SCE_PAS_ASM` → `Keyword2` for inline-assembler block content
+(distinct steel-blue treatment, matches Notepad++'s Pascal
+scheme). `PASCAL_KEYWORDS` (172 entries, all-lowercase) covers
+the union of ISO Pascal + Delphi (Object Pascal) + Free Pascal
+dialects.
+
+**Critical: lexer lowercases the source.** `LexPascal.cxx:278`
+calls `sc.GetCurrentLowered` before wordlist lookup, so the
+wordlist MUST be all-lowercase. Pascal source code can use any
+casing (`Begin` / `BEGIN` / `begin` all match `begin`) — the
+case-insensitive convention is honoured transparently.
+
+Authored by a 7-agent workflow. The correctness verifier
+flagged `break` / `continue` / `exit` / `halt` / `new` /
+`dispose` as blockers (technically System-unit intrinsic
+procedures, not reserved words). Compromise applied: kept
+`break` / `continue` / `exit` (universal editor convention for
+control-flow words; matches Notepad++ and upstream Lexilla
+default), dropped `halt` / `new` / `dispose` (closer to pure
+procedure calls). Override documented in `PASCAL_KEYWORDS`
+docstring.
+
+Context-sensitive accessors (`index` / `name` / `read` /
+`write` / `default` / `nodefault` / `stored` / `implements` /
+`readonly` / `writeonly` / `add` / `remove`) included —
+`LexPascal.cxx:296-306` handles property/exports-block
+suppression internally. Predefined types (`integer` /
+`boolean` / `string` / `byte` / `word` / `cardinal` /
+`ansistring` / etc.) included for editor-baseline consistency.
+
+`DEFAULT` (0), `IDENTIFIER` (1), `STRINGEOL` (11)
+intentionally unmapped — DEFAULT / IDENTIFIER mirror the
+`SCE_C_*` omission pattern; STRINGEOL pending future
+`StyleSlot::Error`. `pascal_uses_lexpascal_dedicated_theme`
+test pins the 13-mapping shape + class-0-only structure +
+canonical wiring + non-reuse of `CPP_STYLES`.
 
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
@@ -374,7 +418,7 @@ further shim work needed.
 | NSIS | 28 | `nsis` | ⚫ | ⚫ | 🟡 |
 | Objective-C | 5 | `cpp` | ✅ | ✅ | ✅ |
 | OScript | 78 | `oscript` | ⚫ | ⚫ | 🟡 |
-| Pascal | 11 | `pascal` | ⚫ | ⚫ | 🟡 |
+| Pascal | 11 | `pascal` | ✅ | ✅ | ✅ |
 | Perl | 21 | `perl` | ⚫ | ⚫ | 🟡 |
 | PHP | 1 | `hypertext` | ✅ | ✅ | ✅ |
 | PostScript | 35 | `ps` | ⚫ | ⚫ | 🟡 |

@@ -1585,6 +1585,128 @@ pub const HTML_KEYWORDS: &str = concat!(
     "th thead time title tr track tt u ul var video wbr xmp"
 );
 
+/// Space-separated Pascal keyword list for the `LexPascal` lexer.
+/// Installed via `SCI_SETKEYWORDS(0, ...)` — the lexer's only
+/// keyword class, descriptor "Keywords".
+///
+/// **All-lowercase by lexer mandate.** `LexPascal.cxx:278` calls
+/// `sc.GetCurrentLowered(s, sizeof(s))` before `keywords.InList(s)`,
+/// so source tokens are normalised to lowercase before lookup. The
+/// wordlist MUST be all-lowercase; uppercase entries would never
+/// match. Pascal source code can use any casing (`Begin` / `BEGIN`
+/// / `begin` all match `begin` here) — the universal Pascal
+/// convention of case-insensitive identifiers is honoured
+/// transparently by the lexer.
+///
+/// Covers the union of three Pascal dialects:
+///
+///   1. **ISO Pascal (1990)** — control-flow keywords (`if` / `then`
+///      / `else` / `for` / `while` / `repeat` / etc.), declarations
+///      (`program` / `var` / `const` / `type` / `procedure` /
+///      `function`), logical operators (`and` / `or` / `not` /
+///      `div` / `mod` / `in`), structural type keywords (`array` /
+///      `record` / `set` / `file` / `packed`), constants (`true` /
+///      `false` / `nil`).
+///   2. **Delphi / Object Pascal** — OOP (`class` / `object` /
+///      `inherited` / `override` / `virtual` / `dynamic` /
+///      `abstract` / `private` / `protected` / `public` /
+///      `published` / `strict` / `property`), exception handling
+///      (`try` / `except` / `finally` / `raise` / `on`),
+///      typecasting (`is` / `as`), units / packages (`unit` /
+///      `uses` / `interface` / `implementation` / `initialization`
+///      / `finalization` / `library` / `package`), calling
+///      conventions (`cdecl` / `stdcall` / `safecall` / `pascal` /
+///      `register` / `winapi`).
+///   3. **Free Pascal (FPC)** — operator overloading
+///      (`operator`), generics (`generic` / `specialize`), helper
+///      types (`helper`), Objective-C bridge (`objccategory` /
+///      `objcclass` / `objcprotocol`), additional calling
+///      conventions (`cppdecl` / `mwpascal` / `syscall` /
+///      `vectorcall` / `ms_abi_*` / `sysv_abi_*`), parameter
+///      modifiers (`out` / `constref`), procedure attributes
+///      (`iocheck` / `nostackframe` / `saveregisters` / `softfloat`
+///      / `noreturn` / `local` / `unimplemented`).
+///
+/// **Context-sensitive property accessors** (`index` / `name` /
+/// `read` / `write` / `default` / `nodefault` / `stored` /
+/// `implements` / `readonly` / `writeonly` / `add` / `remove`) are
+/// included — `LexPascal.cxx:296-306` handles the suppression
+/// internally (these are styled as identifiers when NOT inside a
+/// `property` or `exports` declaration). The wordlist is the
+/// universe; the lexer decides when to apply.
+///
+/// **Predefined types** (`integer` / `boolean` / `char` / `string`
+/// / `byte` / `word` / `cardinal` / `real` / `extended` /
+/// `pointer` / `pchar` / `ansistring` / `widestring` /
+/// `unicodestring` / etc.) are included even though they are
+/// technically predeclared identifiers in the `System` unit rather
+/// than reserved words. Every Pascal editor — Notepad++ / Lazarus
+/// IDE / RAD Studio / VS Code Pascal extension — paints them
+/// keyword-blue, and matching that baseline is more important than
+/// strict ISO-grammar pedantry.
+///
+/// **Control-flow primitives kept despite being predeclared
+/// procedures** — `break` / `continue` / `exit` are System-unit
+/// procedures (`break;` / `continue;` / `exit;` invoke procedures
+/// rather than executing reserved-word control flow), but every
+/// mainstream Pascal editor and the upstream Lexilla default
+/// Pascal config paint them as keywords because users perceive
+/// them semantically as control-flow. We follow that convention.
+/// (Adversarial workflow verifier flagged this as a blocker for
+/// strict reserved-word interpretation; the override is explicit
+/// here.)
+///
+/// **Deliberately excluded:**
+///   - **Pure RTL intrinsics** — `length` / `sizeof` / `inc` /
+///     `dec` / `writeln` / `readln` / `ord` / `chr` / `pred` /
+///     `succ`: standard-library functions, not language vocabulary.
+///     Dialect-specific signatures. NOTE: `read` and `write` ARE
+///     in the wordlist because they double as the Delphi property
+///     accessor keywords; the lexer's smart-highlighting block
+///     suppresses the keyword styling for both tokens when they
+///     appear outside `property` declarations (see context-sensitive
+///     section above), so a `WriteLn` call still renders as an
+///     identifier in normal code.
+///   - **Memory primitives** — `new` / `dispose` / `halt`:
+///     System-unit predeclared procedures. Looking like procedure
+///     calls (`new(p)` / `dispose(p)` / `halt;`), not control
+///     keywords. Less universally highlighted than the
+///     break/continue/exit trio.
+///   - **Library class names** — `TObject` / `TStrings` / `TList`
+///     / `TComponent` / etc.: VCL / LCL / RTL types, not language
+///     vocabulary. The lexer styles them as `SCE_PAS_IDENTIFIER`.
+///   - **Operator punctuation** (`:=` / `<` / `>` / `+` / `-` /
+///     etc.): styled via `SCE_PAS_OPERATOR`, not via the wordlist.
+///     Word operators (`and` / `or` / `not` / `xor` / `shl` /
+///     `shr` / `div` / `mod` / `in` / `is` / `as`) ARE in the
+///     wordlist because the lexer matches them through the
+///     keyword path and emits `SCE_PAS_WORD`.
+///
+/// Sourced and adversarially verified across three lenses (ISO +
+/// Delphi + FPC spec / production Pascal corpora / editor
+/// baselines).
+pub const PASCAL_KEYWORDS: &str = concat!(
+    "absolute abstract add and ansistring array as asm assembler automated ",
+    "begin boolean break byte cardinal case cdecl char class comp const ",
+    "constref constructor contains continue cppdecl currency default delayed ",
+    "deprecated destructor dispid dispinterface div do double downto dynamic ",
+    "else end except exit experimental export exports extended external false ",
+    "far file final finalization finally for forward function generic goto ",
+    "helper if implementation implements in index inherited initialization ",
+    "inline int64 integer interface interrupt iocheck is label library local ",
+    "longint longword message mod ms_abi_cdecl ms_abi_default mwpascal name ",
+    "near nil nodefault noreturn nostackframe not objccategory objcclass ",
+    "objcprotocol object of olevariant on operator or out overload override ",
+    "package packed pascal pchar platform pointer private procedure program ",
+    "property protected public published qword raise read readonly real ",
+    "record reference register reintroduce remove repeat requires ",
+    "resourcestring safecall saveregisters sealed set shl shortint shr single ",
+    "smallint softfloat specialize static stdcall stored strict string syscall ",
+    "sysv_abi_cdecl sysv_abi_default then threadvar to true try type ",
+    "unicodestring unimplemented unit unsafe until uses var varargs variant ",
+    "vectorcall virtual while widestring winapi with word write writeonly xor"
+);
+
 /// Space-separated GNU Make directive list for the `LexMake` lexer.
 /// Installed via `SCI_SETKEYWORDS(0, ...)` — the lexer's single
 /// keyword class, descriptor "Directives".
