@@ -6,7 +6,7 @@ description: |
   hardcoded secrets, and other OWASP Top 10 issues. Covers Python, C/C++, Bash,
   Go, Rust, JavaScript/TypeScript, Flutter/Dart, and PHP. Runs on Sonnet for
   balanced cost/quality — escalates critical findings to the main session.
-model: sonnet
+model: fable
 tools: Read, Bash
 permissionMode: plan
 ---
