@@ -2043,6 +2043,201 @@ pub const PHP_KEYWORDS: &str = concat!(
     "__namespace__ __trait__"
 );
 
+/// Space-separated JavaScript reserved-word list installed via the
+/// hypertext lexer's `SCI_SETKEYWORDS(1, ...)`. Class 1 of
+/// `htmlWordListDesc[]` drives both `SCE_HJ_WORD` and the legacy
+/// `SCE_HJ_KEYWORD` class (`LexHTML` keeps both for backward
+/// compatibility — same wordlist powers both), plus their ASP
+/// server-side twins `SCE_HJA_WORD` / `SCE_HJA_KEYWORD`.
+///
+/// **Case sensitive.** JavaScript is case-sensitive and `LexHTML`
+/// does NOT lowercase JS tokens before lookup. Every entry must
+/// match source exactly as written — ECMAScript convention is
+/// all-lowercase for reserved words.
+///
+/// **Categories** (49 entries):
+///
+/// 1. **ES5 reserved words** — the historical core, in every JS
+///    engine since 1999: `break` / `case` / `catch` / `class` /
+///    `const` / `continue` / `debugger` / `default` / `delete` /
+///    `do` / `else` / `enum` / `export` / `extends` / `finally` /
+///    `for` / `function` / `if` / `import` / `in` / `instanceof` /
+///    `new` / `return` / `super` / `switch` / `this` / `throw` /
+///    `try` / `typeof` / `var` / `void` / `while` / `with` / `yield`.
+/// 2. **ES2015+ block-scoped bindings** — `let` / `static` (the new
+///    additions; `class` / `const` / `import` / `export` / `extends`
+///    / `super` are ES2015 promotions of ES5-future-reserved words
+///    already covered above).
+/// 3. **ES2017+ coroutines and contextual `of`** — `async` / `await`
+///    / `of`. `of` is not formally reserved but every JS-aware editor
+///    highlights it as part of `for-of`.
+/// 4. **Strict-mode future-reserved** — `implements` / `interface` /
+///    `package` / `private` / `protected` / `public`.
+/// 5. **Language literals** — `true` / `false` / `null` / `undefined`.
+///    `undefined` is technically a global identifier rather than a
+///    reserved word, but reassigning it is a strict-mode error and
+///    every JS-aware editor treats it as keyword-coloured.
+///
+/// **Deliberate exclusions:**
+///
+/// - Global objects and host APIs (`console`, `window`, `document`,
+///   `Math`, `Object`, `Array`, `JSON`, `Promise`, `Date`, `RegExp`,
+///   `Error`, `NaN`, `Infinity`) — these are identifiers bound at
+///   runtime, not keywords. Highlighting them would mis-colour a
+///   user's local `const Math = ...` shadow.
+/// - DOM methods (`getElementById`, `addEventListener`,
+///   `querySelector`) — methods on host objects, not language tokens.
+/// - jQuery `$` and library-specific globals.
+/// - `arguments` / `eval` — special identifiers but not reserved.
+/// - Contextual keywords other than `of` (`from`, `as`, `get`, `set`,
+///   `target`) — not reserved; meaningful only inside specific
+///   syntactic positions the lexer doesn't track.
+///
+/// Sourced and adversarially verified across three lenses (ECMAScript
+/// 2024 spec / Notepad++ baseline / hypertext-lexer source).
+pub const JAVASCRIPT_KEYWORDS: &str = concat!(
+    // ES5 reserved words
+    "break case catch class const continue debugger default delete do ",
+    "else enum export extends finally for function if import in ",
+    "instanceof new return super switch this throw try typeof var ",
+    "void while with yield ",
+    // ES2015+ block-scoped bindings
+    "let static ",
+    // ES2017+ coroutines and contextual for-of
+    "async await of ",
+    // Strict-mode future-reserved
+    "implements interface package private protected public ",
+    // Language literals
+    "true false null undefined",
+);
+
+/// Space-separated `VBScript` reserved-word list installed via the
+/// hypertext lexer's `SCI_SETKEYWORDS(2, ...)`. Class 2 of
+/// `htmlWordListDesc[]` drives both `SCE_HB_WORD` (client-side
+/// `<script language=VBScript>`) and the dominant Classic ASP case
+/// `SCE_HBA_WORD` (server-side `<% %>` blocks).
+///
+/// **All entries must be lowercase.** The hypertext lexer's
+/// `VBScript` classifier (`classifyWordHTVB` in `LexHTML.cxx`) calls
+/// `styler.GetRangeLowered(...)` on every candidate token before
+/// `keywords.InList(s)`. Class 2's `WordListSet` entry also sets
+/// `lowerCase = true` so wordlist storage is lowercased internally —
+/// but writing the source as lowercase keeps this constant honest
+/// against the runtime lookup shape.
+///
+/// **Compound forms are NOT compound tokens.** `End If`, `End Sub`,
+/// `Loop While`, `Exit For`, `On Error Resume Next`, `Option Explicit`
+/// — each constituent word is looked up individually and must appear
+/// in this list. The lexer just renders two adjacent keyword-styled
+/// tokens; no special handling needed.
+///
+/// **`rem` is required, not defensive.** `VBScript`'s `Rem ...`
+/// statement is a line comment — `LexHTML`'s classifier explicitly
+/// tests for `rem` inside `classifyWordHTVB` and switches the
+/// remainder of the line to `SCE_HB_COMMENTLINE` only if the lookup
+/// succeeds. Removing `rem` from the wordlist would render
+/// `Rem this is a comment` as `SCE_HB_IDENTIFIER` followed by
+/// default-styled body text, NOT as a comment. Keep `rem` in.
+///
+/// **Categories** (133 entries):
+///
+/// 1. **Control flow** (`if` / `then` / `else` / `elseif` / `end` /
+///    `select` / `case` / `for` / `each` / `next` / `to` / `step` /
+///    `do` / `loop` / `while` / `wend` / `until` / `exit`).
+/// 2. **Procedure / variable declaration** (`sub` / `function` /
+///    `call` / `return` / `dim` / `const` / `redim` / `preserve` /
+///    `set` / `let` / `byval` / `byref`).
+/// 3. **Sentinel values and literals** (`true` / `false` / `nothing`
+///    / `null` / `empty`).
+/// 4. **Logical operators (real `VBScript` keywords)** — `and` /
+///    `or` / `not` / `xor` / `eqv` / `imp` / `mod` / `is` / `new`.
+///    Unlike C-family languages where operators are punctuation,
+///    these are reserved words and tokenise as `SCE_HB_WORD`.
+/// 5. **Class / property / module syntax** (`class` / `public` /
+///    `private` / `property` / `get` / `friend` / `default` / `me` /
+///    `with`).
+/// 6. **Error handling** — `on` / `error` / `resume` / `goto`. The
+///    `Resume Next` and `On Error Goto 0` forms tokenise as separate
+///    words (`next` already covered above).
+/// 7. **Option directive** (`option` / `explicit`).
+/// 8. **Miscellaneous statements** (`stop` / `randomize` / `rem`).
+/// 9. **Type-conversion and message intrinsics** (`msgbox` / `inputbox`
+///    / `chr` / `asc` / `cstr` / `cint` / `clng` / `cdbl` / `cdate` /
+///    `cbool` / `cbyte` / `cdec` / `ccur` / `csng`).
+/// 10. **String / math / array / type intrinsics** — conservative
+///     baseline drawn from Notepad++ default langs.model.xml.
+/// 11. **Object / date / time intrinsics** (`createobject` /
+///     `getobject` / `now` / `date` / `time` / etc.).
+///
+/// **Scope is `VBScript` specifically** (the ASP/WSH dialect), not
+/// full VB.NET. VB.NET-only tokens (`module` / `namespace` /
+/// `imports` / `inherits` / `mybase` / `mustinherit` /
+/// `notinheritable` / `overrides` / `shadows` / `shared` /
+/// `withevents` / `handles` / `directcast` / `trycast` / `addressof`
+/// / `addhandler` / `removehandler` / `raiseevent` / `partial` /
+/// `lib` / `alias` / `declare` / `structure` / `interface` /
+/// `implements` / `optional` / `paramarray` / `try` / `catch` /
+/// `finally` / `throw` / `continue` / `andalso` / `orelse` /
+/// `gettype`) are deliberately excluded — they don't exist in
+/// `VBScript` and including them would mis-colour a user identifier
+/// of the same name. The `L_ASP` row scopes to `.asp` (Classic ASP)
+/// only; `.aspx` (ASP.NET) is a separate language not covered here.
+///
+/// **Intrinsic functions are included** (the type-conversion `c*`
+/// family, `msgbox` / `inputbox`, common string/math/date builtins).
+/// `VBScript` has no module / import system so the runtime is
+/// always available, and Notepad++'s canonical `langs.model.xml`
+/// "vb" instance lists them inline with the reserved words. They
+/// render as keywords in every VB-aware editor (Visual Studio, the
+/// VBA IDE, `SciTE`'s `vb.properties`, Notepad++) and Code++
+/// matches.
+///
+/// **ASP intrinsic objects are deliberately excluded** (`request` /
+/// `response` / `server` / `session` / `application` /
+/// `objectcontext`). They are host-provided `ActiveX` objects
+/// supplied by IIS, not `VBScript` language constructs — they don't
+/// exist in a `.vbs` file run under WSH. Notepad++'s default does
+/// not include them either. Including them would mis-colour a
+/// user's local `Dim response` variable in a non-ASP context.
+///
+/// Sourced and adversarially verified across three lenses
+/// (`VBScript` language reference / Notepad++ baseline /
+/// hypertext-lexer source).
+pub const VBSCRIPT_KEYWORDS: &str = concat!(
+    // control flow
+    "if then else elseif end select case for each next to step ",
+    "do loop while wend until exit ",
+    // procedure / variable declaration
+    "sub function call return dim const redim preserve set let ",
+    "byval byref ",
+    // sentinel values and literals
+    "true false nothing null empty ",
+    // logical / comparison operators (real VBScript keywords)
+    "and or not xor eqv imp mod is new ",
+    // class / property / module syntax
+    "class public private property get friend default me with ",
+    // error handling
+    "on error resume goto ",
+    // option directive
+    "option explicit ",
+    // miscellaneous statements (`rem` is required — see docstring)
+    "stop randomize rem ",
+    // type-conversion and message intrinsics (Notepad++ default)
+    "msgbox inputbox chr asc cstr cint clng cdbl cdate cbool ",
+    "cbyte cdec ccur csng ",
+    // string / math / array / type intrinsics
+    "len mid left right trim ltrim rtrim ucase lcase ",
+    "instr instrrev replace split join space string strreverse ",
+    "abs int fix sgn sqr round rnd ",
+    "isarray isdate isempty isnull isnumeric isobject ",
+    "typename vartype array erase lbound ubound ",
+    // object / date / time intrinsics
+    "createobject getobject ",
+    "now date time year month day hour minute second weekday ",
+    "dateadd datediff datepart dateserial datevalue timeserial ",
+    "timevalue monthname weekdayname",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 15 / 🟡 73 / ⚫ 1.
+Total: 89 rows. ✅ 16 / 🟡 72 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -349,6 +349,113 @@ fewer emission categories). Dedicated
 the canonical wiring instead, including the zero-wordlist
 invariant.
 
+**ASP (2026-06-10):** Classic ASP rides the same hypertext lexer
+as HTML / PHP / XML — same `lmHTML` ("hypertext") factory, just
+with the `lexer.html.allow.asp` property defaulting to true so
+`<% %>` block parsing fires. `ASP_THEME` installs THREE wordlist
+classes per LexHTML's `htmlWordListDesc[]`: class 0 = HTML tags
+(reuses canonical `HTML_KEYWORDS`), class 1 = JavaScript reserved
+words (`JAVASCRIPT_KEYWORDS`, 49 entries), class 2 = VBScript
+reserved words (`VBSCRIPT_KEYWORDS`, 133 entries, all-lowercase).
+
+**Headline infrastructure win: `HYPERTEXT_STYLES` gains four new
+embedded-script ranges in the same commit** — `SCE_HJ_*`
+(client-side JS, indices 40-53), `SCE_HJA_*` (ASP-server-side
+JS, 55-68), `SCE_HB_*` (client-side VBScript, 70-77), `SCE_HBA_*`
+(ASP-server-side VBScript, 80-87). The extension is wired once
+into the shared table so every hypertext-family theme benefits:
+HTML / PHP files with `<script>` blocks now style comments,
+strings, numbers, and operators correctly inside the script
+tags. Keyword highlighting on those blocks is the only piece
+that still requires per-theme follow-up (HTML / PHP themes don't
+yet install class 1 / class 2; tracked as a one-line follow-up
+on the HTML and PHP rows). Same future infrastructure also
+covers JSP and the future `L_JAVASCRIPT` row.
+
+**VBScript-specific lexer quirks** documented in the new SCE
+constant block in `scintilla-sys`:
+
+- VBScript has only `_COMMENTLINE` (single-line via `'` or
+  `Rem`, no block-comment form) where JavaScript has three
+  comment classes (`_COMMENT` / `_COMMENTLINE` / `_COMMENTDOC`).
+  Both `SCE_HB_COMMENTLINE` (72) and `SCE_HBA_COMMENTLINE` (82)
+  retain the upstream naming — getting that name wrong is a
+  build-breaking bug the synthesis stage of the research
+  workflow caught.
+- VBScript has only one `_STRING` class (no single-quoted
+  strings — `'` starts a comment).
+- VBScript has its own `_IDENTIFIER` class (76 / 86) that JS
+  lacks; intentionally unmapped per the `SCE_C_IDENTIFIER`
+  omission pattern.
+
+**`rem` is required in `VBSCRIPT_KEYWORDS`, not defensive.**
+`LexHTML`'s `classifyWordHTVB` explicitly tests for `rem`
+inside the VB classifier and only fires the
+`SCE_HB_COMMENTLINE` styling if the wordlist lookup succeeds.
+Removing `rem` would render `Rem this is a comment` as an
+identifier followed by default-styled body text. The wordlist
+docstring documents this requirement so a future "cleanup"
+commit doesn't strip it.
+
+**Compound forms tokenise as separate words.** `End If`,
+`Loop While`, `Exit For`, `On Error Resume Next`, `Option
+Explicit` — every constituent word is looked up individually
+by the lexer and must appear in `VBSCRIPT_KEYWORDS`. The lexer
+renders adjacent keyword-styled tokens; no special handling
+needed.
+
+**STRINGEOL indices (51 / 66 / 77 / 87) intentionally
+unmapped** — pending the future `StyleSlot::Error` palette
+addition. Mapping them to `String` would visually present
+malformed input as intentional syntax. This brings the
+codebase's deferred `Error`-slot migration list to 8 entries
+(SGML_ERROR, SGML_1ST_PARAM_COMMENT, MAKE_IDEOL, PAS_STRINGEOL,
+plus the four embedded-script STRINGEOLs added here).
+
+**Deliberate scope exclusions:**
+
+- **VB.NET-only tokens** (`module` / `namespace` / `imports` /
+  `inherits` / `mybase` / `mustinherit` / `notinheritable` /
+  `overrides` / `shadows` / `shared` / `withevents` / `handles`
+  / `try` / `catch` / `finally` / `throw` / `continue` /
+  `andalso` / `orelse` / `gettype` / ...) — don't exist in
+  VBScript-under-WSH. The `L_ASP` row scopes to `.asp` (Classic
+  ASP) only; `.aspx` (ASP.NET) is a separate language not
+  covered here. Including them would mis-colour a user identifier
+  of the same name.
+- **ASP intrinsic objects** (`Request` / `Response` / `Server` /
+  `Session` / `Application` / `ObjectContext`) — host-provided
+  ActiveX objects supplied by IIS, not VBScript language
+  constructs. Notepad++'s default doesn't list them either.
+  Users who want them highlighted can extend via the substyle
+  mechanism `LexHTML` exposes (`SCE_HB_WORD` is in
+  `styleSubable[]`); UI for substyle configuration is a
+  pre-Phase-5 polish item.
+- **JS global objects / DOM APIs** (`console` / `window` /
+  `document` / `Math` / `Object` / `Array` / jQuery `$` / ...)
+  — identifiers bound at runtime, not keywords.
+- **Class 3 (Python / PythonASP)** — defer until `L_PYTHON`
+  needs the `SCE_HP_*` range wired.
+
+Authored by a 7-agent research-and-adversarial-verify workflow.
+The correctness verifier caught the build-breaking
+`SCE_HB_COMMENT` / `SCE_HBA_COMMENT` typo (upstream defines
+those indices as `*_COMMENTLINE` — VBScript has no block comment
+class). The format verifier caught synthesis token-count
+inflations (claimed 53 JS / 160 VB; actual 49 / 133). The
+completeness verifier flagged VB.NET tokens missing — scope
+decision documented above (Classic ASP only; ASP.NET is its own
+language). The spurious `continue` token (VB.NET 8+ only) was
+dropped from the VBScript list during synthesis review.
+
+`asp_theme_installs_html_js_vbscript_classes` test pins the
+canonical 3-class shape (HTML/JS/VBScript), reuse of the shared
+`HYPERTEXT_*` tables, the structural "no class 3/4/5" guard, the
+HTML wordlist-share with `HTML_THEME`, and the all-lowercase
+invariant on both class 1 and class 2 (LexHTML lowercases VB
+source before lookup, and ECMAScript convention has all
+reserved words lowercase anyway).
+
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
 5-style table and a single keyword class. `MAKEFILE_KEYWORDS`
@@ -511,7 +618,7 @@ further shim work needed.
 | Normal Text | 0 | — | — | — | ⚫ |
 | Ada | 42 | `ada` | ⚫ | ⚫ | 🟡 |
 | ASN.1 | 65 | `asn1` | ⚫ | ⚫ | 🟡 |
-| ASP | 16 | `hypertext` | ⚫ | ⚫ | 🟡 |
+| ASP | 16 | `hypertext` | ✅ | ✅ | ✅ |
 | Assembly | 32 | `asm` | ⚫ | ⚫ | 🟡 |
 | AutoIt | 40 | `au3` | ⚫ | ⚫ | 🟡 |
 | AviSynth | 66 | `avs` | ⚫ | ⚫ | 🟡 |

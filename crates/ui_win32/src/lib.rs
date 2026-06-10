@@ -102,10 +102,10 @@ use std::sync::Arc;
 
 use codepp_core::lang::{
     BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2,
-    C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_BATCH, L_C, L_CPP,
-    L_CS, L_HTML, L_INI, L_JAVA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP, L_PROPS, L_RC, L_RUST, L_XML,
-    MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS,
-    RUST_KEYWORDS, XML_KEYWORDS,
+    C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
+    L_ASP, L_BATCH, L_C, L_CPP, L_CS, L_HTML, L_INI, L_JAVA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP,
+    L_PROPS, L_RC, L_RUST, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, VBSCRIPT_KEYWORDS, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -118,10 +118,16 @@ use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_BAT_AFTER_LABEL, SCE_BAT_COMMAND,
     SCE_BAT_COMMENT, SCE_BAT_HIDE, SCE_BAT_LABEL, SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_C_CHARACTER,
     SCE_C_COMMENT, SCE_C_COMMENTDOC, SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER,
-    SCE_C_OPERATOR, SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_HPHP_COMMENT,
-    SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE,
-    SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD,
-    SCE_H_ASP, SCE_H_ASPAT, SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT,
+    SCE_C_OPERATOR, SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_HBA_COMMENTLINE,
+    SCE_HBA_NUMBER, SCE_HBA_STRING, SCE_HBA_WORD, SCE_HB_COMMENTLINE, SCE_HB_NUMBER, SCE_HB_STRING,
+    SCE_HB_WORD, SCE_HJA_COMMENT, SCE_HJA_COMMENTDOC, SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING,
+    SCE_HJA_KEYWORD, SCE_HJA_NUMBER, SCE_HJA_REGEX, SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS,
+    SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD, SCE_HJ_COMMENT, SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE,
+    SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD, SCE_HJ_NUMBER, SCE_HJ_REGEX, SCE_HJ_SINGLESTRING,
+    SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL, SCE_HJ_WORD, SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE,
+    SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER,
+    SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP,
+    SCE_H_ASPAT, SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT,
     SCE_H_DOUBLESTRING, SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION,
     SCE_H_SGML_1ST_PARAM, SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING,
     SCE_H_SGML_ENTITY, SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG,
@@ -3357,6 +3363,81 @@ const HYPERTEXT_STYLES: &[(usize, StyleSlot)] = &[
     (SCE_H_SGML_SPECIAL, StyleSlot::Preprocessor),
     (SCE_H_SGML_ENTITY, StyleSlot::Preprocessor),
     (SCE_H_SGML_COMMENT, StyleSlot::Comment),
+    // ----------------------------------------------------------------
+    // Embedded-script ranges — fire inside `<script>` (client-side)
+    // and `<% %>` (ASP server-side) blocks of any hypertext-family
+    // document. Wired here once; every theme riding `HYPERTEXT_STYLES`
+    // benefits. `ASP_THEME` (added in the same commit) is the
+    // primary motivation, but `HTML_THEME` / `XML_THEME` / `PHP_THEME`
+    // and the future `L_JSP` / `L_JAVASCRIPT` rows pick up correct
+    // embedded-script colouring at zero incremental cost.
+    //
+    // Naming: the `A` infix means "ASP" upstream — `SCE_HJA_*` is the
+    // ASP-block twin of `SCE_HJ_*`, `SCE_HBA_*` the ASP-block twin of
+    // `SCE_HB_*`. The lexer drives whichever variant fires based on
+    // whether the block boundary is `<script>` or `<% %>`; both are
+    // wired so a single `.asp` file with mixed `<script>` blocks AND
+    // `<% %>` blocks colours uniformly.
+    //
+    // Slot mapping rationale: each non-ASP range and its ASP twin
+    // share the same slot — there is no visual reason to colour a
+    // client-side string differently from a server-side string. The
+    // duplication is mechanical, not semantic.
+    //
+    // Note on follow-up: `HTML_THEME` and `PHP_THEME` will start
+    // resolving `SCE_HJ_*` / `SCE_HB_*` slots after this commit (their
+    // `<script>` blocks now reach the keyword/comment/string mappings
+    // here), but they only get visible bold-blue keyword highlighting
+    // when their themes ALSO install class 1 / class 2 wordlists.
+    // Tracked in `docs/lexers-coverage.md` as a follow-up note on the
+    // HTML and PHP rows.
+    // ----------------------------------------------------------------
+    // Embedded JavaScript — client-side `<script>` blocks.
+    // `SCE_HJ_START` (40) / `SCE_HJ_DEFAULT` (41) intentionally
+    // unmapped (boundary / fall-through, mirrors `SCE_H_DEFAULT`).
+    // `SCE_HJ_STRINGEOL` (51) unmapped pending `StyleSlot::Error`
+    // (mirrors `SCE_H_SGML_ERROR` / `SCE_PAS_STRINGEOL`).
+    (SCE_HJ_COMMENT, StyleSlot::Comment),
+    (SCE_HJ_COMMENTLINE, StyleSlot::Comment),
+    (SCE_HJ_COMMENTDOC, StyleSlot::Comment),
+    (SCE_HJ_NUMBER, StyleSlot::Number),
+    (SCE_HJ_WORD, StyleSlot::Keyword),
+    (SCE_HJ_KEYWORD, StyleSlot::Keyword),
+    (SCE_HJ_DOUBLESTRING, StyleSlot::String),
+    (SCE_HJ_SINGLESTRING, StyleSlot::String),
+    (SCE_HJ_SYMBOLS, StyleSlot::Operator),
+    (SCE_HJ_REGEX, StyleSlot::String),
+    (SCE_HJ_TEMPLATELITERAL, StyleSlot::String),
+    // Embedded JavaScript — ASP server-side `<% %>` blocks.
+    (SCE_HJA_COMMENT, StyleSlot::Comment),
+    (SCE_HJA_COMMENTLINE, StyleSlot::Comment),
+    (SCE_HJA_COMMENTDOC, StyleSlot::Comment),
+    (SCE_HJA_NUMBER, StyleSlot::Number),
+    (SCE_HJA_WORD, StyleSlot::Keyword),
+    (SCE_HJA_KEYWORD, StyleSlot::Keyword),
+    (SCE_HJA_DOUBLESTRING, StyleSlot::String),
+    (SCE_HJA_SINGLESTRING, StyleSlot::String),
+    (SCE_HJA_SYMBOLS, StyleSlot::Operator),
+    (SCE_HJA_REGEX, StyleSlot::String),
+    (SCE_HJA_TEMPLATELITERAL, StyleSlot::String),
+    // Embedded VBScript — client-side `<script language=VBScript>`.
+    // VBScript has only `_COMMENTLINE` (single-line via `'` or `Rem`,
+    // no block-comment form) and one `_STRING` class (no single-
+    // quoted strings — `'` starts a comment). `SCE_HB_START` (70) /
+    // `SCE_HB_DEFAULT` (71) / `SCE_HB_IDENTIFIER` (76) intentionally
+    // unmapped (boundary / fall-through / generic identifier).
+    // `SCE_HB_STRINGEOL` (77) unmapped pending `StyleSlot::Error`.
+    (SCE_HB_COMMENTLINE, StyleSlot::Comment),
+    (SCE_HB_NUMBER, StyleSlot::Number),
+    (SCE_HB_WORD, StyleSlot::Keyword),
+    (SCE_HB_STRING, StyleSlot::String),
+    // Embedded VBScript — ASP server-side `<% %>` blocks (the
+    // dominant Classic ASP case: `<% If x > 0 Then Response.Write
+    // "hi" End If %>`).
+    (SCE_HBA_COMMENTLINE, StyleSlot::Comment),
+    (SCE_HBA_NUMBER, StyleSlot::Number),
+    (SCE_HBA_WORD, StyleSlot::Keyword),
+    (SCE_HBA_STRING, StyleSlot::String),
 ];
 const HYPERTEXT_ITALIC: &[usize] = &[
     SCE_H_COMMENT,
@@ -3364,8 +3445,37 @@ const HYPERTEXT_ITALIC: &[usize] = &[
     SCE_HPHP_COMMENT,
     SCE_HPHP_COMMENTLINE,
     SCE_H_SGML_COMMENT,
+    // Embedded JavaScript comments — block, line, and JSDoc all share
+    // the green-italic comment treatment. Same set repeated for the
+    // ASP-block (`SCE_HJA_*`) twin.
+    SCE_HJ_COMMENT,
+    SCE_HJ_COMMENTLINE,
+    SCE_HJ_COMMENTDOC,
+    SCE_HJA_COMMENT,
+    SCE_HJA_COMMENTLINE,
+    SCE_HJA_COMMENTDOC,
+    // Embedded VBScript — only one comment class per range. `'`
+    // apostrophe-prefixed lines and `Rem` statements both tokenise to
+    // `SCE_HB_COMMENTLINE` (or `SCE_HBA_COMMENTLINE` inside `<% %>`).
+    SCE_HB_COMMENTLINE,
+    SCE_HBA_COMMENTLINE,
 ];
-const HYPERTEXT_BOLD: &[usize] = &[SCE_H_TAG, SCE_HPHP_WORD, SCE_H_SGML_COMMAND];
+const HYPERTEXT_BOLD: &[usize] = &[
+    SCE_H_TAG,
+    SCE_HPHP_WORD,
+    SCE_H_SGML_COMMAND,
+    // Embedded JavaScript reserved words — both `_WORD` (primary
+    // class) and `_KEYWORD` (legacy ECMAScript class, same wordlist)
+    // render bold, matching the `SCE_H_TAG` / `SCE_HPHP_WORD`
+    // precedent. Same set repeated for the ASP-block twin.
+    SCE_HJ_WORD,
+    SCE_HJ_KEYWORD,
+    SCE_HJA_WORD,
+    SCE_HJA_KEYWORD,
+    // Embedded VBScript reserved words.
+    SCE_HB_WORD,
+    SCE_HBA_WORD,
+];
 
 // HTML rides the same hypertext lexer as PHP — same shared
 // `HYPERTEXT_STYLES` / `HYPERTEXT_ITALIC` / `HYPERTEXT_BOLD` tables
@@ -3375,22 +3485,29 @@ const HYPERTEXT_BOLD: &[usize] = &[SCE_H_TAG, SCE_HPHP_WORD, SCE_H_SGML_COMMAND]
 // in a `.html` file — installing it for L_HTML would be harmless but
 // is omitted for clarity.
 //
-// Embedded `<script>` JavaScript and `<style>` CSS inside HTML files
-// tokenise as `SCE_HJ_*` / `SCE_CSS_*` but those style indices aren't
-// in `HYPERTEXT_STYLES` today (deferred to when the `L_JAVASCRIPT`
-// and `L_CSS` rows are wired). Until then a `<script>` block inside
-// an HTML file shows its content uncoloured — same behaviour PHP
-// gets for embedded JS today.
+// Embedded `<script>` JavaScript blocks inside HTML files tokenise
+// as `SCE_HJ_*` — and after the ASP wiring commit those style
+// indices ARE in `HYPERTEXT_STYLES`. Result: a `<script>` block
+// inside an `.html` file gets correct comment / string / number /
+// operator styling for free. The piece still missing is class 1
+// (JavaScript) wordlist install on `HTML_THEME` — without it, JS
+// reserved words inside `<script>` blocks render at the default
+// foreground instead of bold blue. Adding `(1, JAVASCRIPT_KEYWORDS)`
+// to `HTML_THEME.keywords` is a one-line follow-up tracked on the
+// HTML row of `docs/lexers-coverage.md`. Embedded `<style>` CSS
+// (`SCE_CSS_*`) is still deferred until the `L_CSS` row is wired.
+//
 // XML uses Lexilla's `xml` lexer (`lmXML` — same factory family as
 // `hypertext` but constructed with `isXml=true`). The lexer reserves
 // class 5 for SGML / DTD vocabulary. XML's class 0 is empty by
 // design: XML has no canonical element vocabulary, every document
 // defines its own via DTD or schema. The shared `HYPERTEXT_STYLES`
 // table covers `SCE_H_*` (XML markup), `SCE_HPHP_*` (irrelevant for
-// XML but harmless — PHP code doesn't appear in `.xml` files), AND
-// the new `SCE_H_SGML_*` range added in this commit — DTD blocks
-// inside `<!DOCTYPE [ ... ]>` highlight uniformly across XML and
-// HTML files.
+// XML but harmless — PHP code doesn't appear in `.xml` files), the
+// `SCE_H_SGML_*` range — DTD blocks inside `<!DOCTYPE [ ... ]>`
+// highlight uniformly across XML and HTML files — AND the new
+// embedded-script ranges added by the ASP wiring (no-op for XML,
+// since XML documents don't embed `<script>` / `<% %>` blocks).
 const XML_THEME: LangTheme = LangTheme {
     keywords: &[(5, XML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -3606,13 +3723,50 @@ const PHP_THEME: LangTheme = LangTheme {
     //             slot today but the distinction is preserved for
     //             a future palette tweak)
     //   class 4 = PHP reserved words (drives SCE_HPHP_WORD)
-    // Classes 1/2/3 (JavaScript / VBScript / Python) and class 5
-    // (SGML) are left unset for this row; the embedded-script
-    // ranges those classes drive aren't styled by the PHP theme
-    // (`SCE_HJ_*`, `SCE_HB_*`, `SCE_HP_*` aren't in
-    // `HYPERTEXT_STYLES` today), so installing keyword words for
-    // them would have no visible effect anyway.
+    // Classes 1/2 (JavaScript / VBScript) are intentionally left
+    // unset for the PHP theme today even though their style ranges
+    // (`SCE_HJ_*` / `SCE_HB_*`) ARE in `HYPERTEXT_STYLES` after the
+    // ASP wiring commit. Result: a `.php` file with `<script>` blocks
+    // gets correct comment / string / number styling inside the
+    // script tags (style ranges resolve via `HYPERTEXT_STYLES`), but
+    // JS / VBScript reserved-word keyword highlighting falls back to
+    // default. Class 1 / class 2 wordlist installs are tracked as a
+    // one-line follow-up on the PHP row in
+    // `docs/lexers-coverage.md`. Class 3 (Python) and class 5 (SGML)
+    // similarly unset: Python-in-PHP doesn't exist; SGML inside
+    // `<?php ?>` would be unusual.
     keywords: &[(0, HTML_KEYWORDS), (4, PHP_KEYWORDS)],
+    styles: HYPERTEXT_STYLES,
+    italic: HYPERTEXT_ITALIC,
+    bold: HYPERTEXT_BOLD,
+};
+
+const ASP_THEME: LangTheme = LangTheme {
+    // Classic ASP rides the same hypertext lexer as HTML / PHP / XML.
+    // ASP files mix HTML markup with `<% %>` server-side script
+    // blocks; the blocks default to VBScript but can be JScript via
+    // `<%@ Language="JScript" %>`. Three wordlist classes installed:
+    //   class 0 = HTML tag names — drives `SCE_H_TAG` for the markup
+    //             body around the `<% %>` blocks
+    //   class 1 = JavaScript reserved words — drives both client-side
+    //             `SCE_HJ_WORD` (`<script>` blocks) and server-side
+    //             `SCE_HJA_WORD` (`<%@ Language="JScript" %>` pages
+    //             and `<script runat="server">` blocks)
+    //   class 2 = VBScript reserved words (all-lowercase) — drives
+    //             both client-side `SCE_HB_WORD` and the dominant
+    //             Classic ASP case `SCE_HBA_WORD` for `<% %>` blocks
+    //
+    // Class 3 (Python) intentionally not installed — PythonASP
+    // exists but is vanishingly rare; defer until `L_PYTHON` wires
+    // the `SCE_HP_*` range. Class 4 (PHP) is meaningful only inside
+    // `<?php ?>` blocks which Classic ASP files don't contain.
+    // Class 5 (SGML) renders via the shared `HYPERTEXT_STYLES` SGML
+    // range with no wordlist install (same pattern HTML/XML use).
+    keywords: &[
+        (0, HTML_KEYWORDS),
+        (1, JAVASCRIPT_KEYWORDS),
+        (2, VBSCRIPT_KEYWORDS),
+    ],
     styles: HYPERTEXT_STYLES,
     italic: HYPERTEXT_ITALIC,
     bold: HYPERTEXT_BOLD,
@@ -3668,6 +3822,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         // differs because LexProps has no wordlists. Single
         // `PROPS_THEME` covers both.
         Some(&PROPS_THEME)
+    } else if lang == L_ASP {
+        Some(&ASP_THEME)
     } else {
         None
     }
@@ -18156,10 +18312,11 @@ mod lang_theme_tests {
     use super::{lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO};
     use codepp_core::lang::{
         BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2,
-        HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_BATCH, L_C, L_CPP, L_CS, L_HTML, L_INI,
-        L_JAVA, L_JAVASCRIPT, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST,
-        L_TEXT, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
-        PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, XML_KEYWORDS,
+        HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_ASP, L_BATCH, L_C,
+        L_CPP, L_CS, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP,
+        L_PROPS, L_PYTHON, L_RC, L_RUST, L_TEXT, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS,
+        VBSCRIPT_KEYWORDS, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -18729,6 +18886,84 @@ mod lang_theme_tests {
         // hypertext lexer's PHP slot).
         assert_eq!(php.keywords[1].0, 4);
         assert_eq!(php.keywords[1].1, PHP_KEYWORDS);
+    }
+
+    /// Classic ASP uses Lexilla's `hypertext` lexer — same factory as
+    /// HTML / PHP / XML. ASP files mix HTML markup with `<% %>`
+    /// server-side script blocks (defaulting to `VBScript`, optionally
+    /// `JScript` via `<%@ Language="JScript" %>`). Three wordlist
+    /// classes installed: class 0 = HTML tags, class 1 = JavaScript,
+    /// class 2 = `VBScript`. Pins the canonical 3-class shape, the
+    /// canonical keyword constant links, the style-table share with
+    /// the rest of the hypertext family, and the case-sensitivity
+    /// invariants (JS exact-case, `VBScript` all-lowercase per
+    /// `LexHTML`'s `GetRangeLowered` contract for class 2).
+    ///
+    /// Critical structural assertion: no class 3 (Python), no class 4
+    /// (PHP), no class 5 (SGML) install. Class 3 is deferred until
+    /// `L_PYTHON` is wired. Class 4 (PHP) is HTML-mode only inside
+    /// `<?php ?>` which Classic ASP doesn't contain. Class 5 (SGML)
+    /// renders via the shared SGML range in `HYPERTEXT_STYLES`
+    /// without a wordlist install (same pattern as HTML/XML).
+    #[test]
+    fn asp_theme_installs_html_js_vbscript_classes() {
+        let asp = lang_theme(L_ASP).expect("ASP wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let html = lang_theme(L_HTML).expect("HTML wired");
+        // ASP reuses the same hypertext-family style tables.
+        assert_eq!(asp.styles, php.styles, "ASP must reuse HYPERTEXT_STYLES");
+        assert_eq!(asp.italic, php.italic, "ASP must reuse HYPERTEXT_ITALIC");
+        assert_eq!(asp.bold, php.bold, "ASP must reuse HYPERTEXT_BOLD");
+        // Three keyword classes: 0 = HTML tags, 1 = JavaScript,
+        // 2 = VBScript. Class indices are dictated by LexHTML's
+        // `htmlWordListDesc[]`, not arbitrary.
+        assert_eq!(
+            asp.keywords.len(),
+            3,
+            "ASP theme installs HTML (class 0) + JS (class 1) + VBScript (class 2)"
+        );
+        assert_eq!(asp.keywords[0].0, 0);
+        assert_eq!(asp.keywords[0].1, HTML_KEYWORDS);
+        assert_eq!(asp.keywords[1].0, 1);
+        assert_eq!(asp.keywords[1].1, JAVASCRIPT_KEYWORDS);
+        assert_eq!(asp.keywords[2].0, 2);
+        assert_eq!(asp.keywords[2].1, VBSCRIPT_KEYWORDS);
+        // Structural guard: pin "no class 3, 4, or 5". A regression
+        // that copy-pasted PHP's class 4 install onto ASP, added a
+        // speculative Python class 3 install, or wired class 5 SGML
+        // keywords would fail this assertion directly. The hypertext
+        // lexer accepts these classes but they have no semantic
+        // meaning in a Classic ASP file.
+        assert!(
+            asp.keywords.iter().all(|(class, _)| matches!(class, 0..=2)),
+            "ASP must install classes 0, 1, 2 ONLY — no class 3 (Python), \
+             class 4 (PHP), or class 5 (SGML) at this row's scope"
+        );
+        // Share the HTML wordlist with the HTML theme — both install
+        // the same canonical `HTML_KEYWORDS` const. A regression that
+        // forked a separate ASP-only HTML tag list would be caught
+        // by this assertion. (PHP also installs class 0 from the
+        // same const, so transitively ASP / HTML / PHP all read from
+        // a single source of truth for HTML tag names.)
+        assert_eq!(
+            asp.keywords[0].1, html.keywords[0].1,
+            "ASP and HTML must install the same HTML tag wordlist"
+        );
+        // Case-sensitivity invariant for class 2 (VBScript): LexHTML
+        // lowercases VB source before wordlist lookup, so every
+        // entry must be lowercase. JavaScript is case-sensitive but
+        // ECMAScript convention has all reserved words lowercase
+        // anyway, so the same check is informative for class 1.
+        for (class, list) in [
+            ("class 1 (JavaScript)", JAVASCRIPT_KEYWORDS),
+            ("class 2 (VBScript)", VBSCRIPT_KEYWORDS),
+        ] {
+            assert!(
+                list.chars().all(|c| !c.is_ascii_uppercase()),
+                "ASP {class} wordlist contains uppercase — \
+                 every reserved word should be all-lowercase"
+            );
+        }
     }
 
     /// Unwired language → `None`. The `apply_lang` caller treats

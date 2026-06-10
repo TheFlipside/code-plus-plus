@@ -897,6 +897,98 @@ pub const SCE_HPHP_COMMENTLINE: usize = 125;
 pub const SCE_HPHP_HSTRING_VARIABLE: usize = 126;
 pub const SCE_HPHP_OPERATOR: usize = 127;
 
+// LexHTML — embedded JavaScript inside client-side `<script>` blocks.
+// 14 contiguous indices 40..=53. Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 299-312.
+//
+// `SCE_HJ_START` (40) is the script-region boundary marker and
+// `SCE_HJ_DEFAULT` (41) is the per-block fallback; both intentionally
+// stay out of `HYPERTEXT_STYLES` so they fall through to STYLE_DEFAULT
+// (mirrors `SCE_H_DEFAULT` / `SCE_HPHP_DEFAULT`). `SCE_HJ_STRINGEOL`
+// (51) is the unterminated-string error indicator — unmapped pending
+// `StyleSlot::Error` (same deferral as `SCE_H_SGML_ERROR` /
+// `SCE_PAS_STRINGEOL` / `SCE_MAKE_IDEOL`).
+pub const SCE_HJ_START: usize = 40;
+pub const SCE_HJ_DEFAULT: usize = 41;
+pub const SCE_HJ_COMMENT: usize = 42;
+pub const SCE_HJ_COMMENTLINE: usize = 43;
+pub const SCE_HJ_COMMENTDOC: usize = 44;
+pub const SCE_HJ_NUMBER: usize = 45;
+pub const SCE_HJ_WORD: usize = 46;
+pub const SCE_HJ_KEYWORD: usize = 47;
+pub const SCE_HJ_DOUBLESTRING: usize = 48;
+pub const SCE_HJ_SINGLESTRING: usize = 49;
+pub const SCE_HJ_SYMBOLS: usize = 50;
+pub const SCE_HJ_STRINGEOL: usize = 51;
+pub const SCE_HJ_REGEX: usize = 52;
+pub const SCE_HJ_TEMPLATELITERAL: usize = 53;
+
+// LexHTML — embedded JavaScript inside ASP server-side `<% %>` blocks
+// (the `A` infix is upstream's for "ASP"). Same 14-suffix shape as
+// `SCE_HJ_*`, shifted to 55..=68. Same `_START` / `_DEFAULT` /
+// `_STRINGEOL` omission rationale as `SCE_HJ_*` above.
+// Cross-referenced against `vendor/lexilla/include/SciLexer.h` lines
+// 313-326.
+pub const SCE_HJA_START: usize = 55;
+pub const SCE_HJA_DEFAULT: usize = 56;
+pub const SCE_HJA_COMMENT: usize = 57;
+pub const SCE_HJA_COMMENTLINE: usize = 58;
+pub const SCE_HJA_COMMENTDOC: usize = 59;
+pub const SCE_HJA_NUMBER: usize = 60;
+pub const SCE_HJA_WORD: usize = 61;
+pub const SCE_HJA_KEYWORD: usize = 62;
+pub const SCE_HJA_DOUBLESTRING: usize = 63;
+pub const SCE_HJA_SINGLESTRING: usize = 64;
+pub const SCE_HJA_SYMBOLS: usize = 65;
+pub const SCE_HJA_STRINGEOL: usize = 66;
+pub const SCE_HJA_REGEX: usize = 67;
+pub const SCE_HJA_TEMPLATELITERAL: usize = 68;
+
+// LexHTML — embedded VBScript inside client-side
+// `<script language=VBScript>` blocks. 8 contiguous indices 70..=77.
+// Cross-referenced against `vendor/lexilla/include/SciLexer.h` lines
+// 327-334.
+//
+// VBScript has fewer lexical categories than JavaScript: only ONE
+// comment class (`SCE_HB_COMMENTLINE`, 72) because VBScript has no
+// block-comment syntax — both apostrophe-prefixed `' ...` lines and
+// `Rem ...` statements end at the line terminator. Only ONE string
+// class (`SCE_HB_STRING`, 75) — VBScript has no single-quoted strings
+// (single quote starts a comment). No `_KEYWORD` / `_SYMBOLS` /
+// `_REGEX` / `_TEMPLATELITERAL` classes (no separate ECMAScript-style
+// keyword class, operators tokenise as `_DEFAULT`, no regex
+// literals, no template literals). It does have its own
+// `_IDENTIFIER` class (76) that JS lacks.
+//
+// `SCE_HB_START` (70) / `SCE_HB_DEFAULT` (71) intentionally stay out
+// of `HYPERTEXT_STYLES` (boundary / fall-through, mirrors
+// `SCE_H_DEFAULT`). `SCE_HB_IDENTIFIER` (76) also unmapped (matches
+// `SCE_C_IDENTIFIER` / `SCE_PAS_IDENTIFIER` — generic identifiers
+// fall through). `SCE_HB_STRINGEOL` (77) unmapped pending
+// `StyleSlot::Error`.
+pub const SCE_HB_START: usize = 70;
+pub const SCE_HB_DEFAULT: usize = 71;
+pub const SCE_HB_COMMENTLINE: usize = 72;
+pub const SCE_HB_NUMBER: usize = 73;
+pub const SCE_HB_WORD: usize = 74;
+pub const SCE_HB_STRING: usize = 75;
+pub const SCE_HB_IDENTIFIER: usize = 76;
+pub const SCE_HB_STRINGEOL: usize = 77;
+
+// LexHTML — embedded VBScript inside ASP server-side `<% %>` blocks.
+// The bread-and-butter case for Classic ASP. Same 8-suffix shape as
+// `SCE_HB_*`, shifted to 80..=87. Same omissions and same
+// `_COMMENTLINE`-only comment class as `SCE_HB_*`. Cross-referenced
+// against `vendor/lexilla/include/SciLexer.h` lines 335-342.
+pub const SCE_HBA_START: usize = 80;
+pub const SCE_HBA_DEFAULT: usize = 81;
+pub const SCE_HBA_COMMENTLINE: usize = 82;
+pub const SCE_HBA_NUMBER: usize = 83;
+pub const SCE_HBA_WORD: usize = 84;
+pub const SCE_HBA_STRING: usize = 85;
+pub const SCE_HBA_IDENTIFIER: usize = 86;
+pub const SCE_HBA_STRINGEOL: usize = 87;
+
 // SCN_* notification codes (delivered via WM_NOTIFY's NMHDR.code) are added
 // when Phase 2+ first dispatches them. Each constant must be cross-checked
 // against `vendor/scintilla/include/Scintilla.h` at the time of addition;
