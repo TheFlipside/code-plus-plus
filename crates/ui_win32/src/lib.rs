@@ -188,13 +188,14 @@ use windows::Win32::Foundation::{
     COLORREF, E_FAIL, HWND, LPARAM, LRESULT, MAX_PATH, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    AlphaBlend, CreateCompatibleDC, CreateFontIndirectW, CreatePen, CreateSolidBrush, DeleteDC,
-    DeleteObject, DrawTextW, EnumFontFamiliesExW, FillRect, GetDC, GetMonitorInfoW, GetStockObject,
-    GetSysColorBrush, InvalidateRect, LineTo, MonitorFromWindow, MoveToEx, ReleaseDC, SelectObject,
-    SetBkColor, SetBkMode, SetTextColor, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, COLOR_WINDOW,
-    DEFAULT_CHARSET, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
-    FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    NULL_BRUSH, PS_SOLID, TEXTMETRICW, TRANSPARENT,
+    AlphaBlend, ClientToScreen, CreateCompatibleDC, CreateFontIndirectW, CreatePen,
+    CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EnumFontFamiliesExW, FillRect, GetDC,
+    GetMonitorInfoW, GetStockObject, GetSysColorBrush, InvalidateRect, LineTo, MonitorFromWindow,
+    MoveToEx, ReleaseDC, SelectObject, SetBkColor, SetBkMode, SetTextColor, AC_SRC_ALPHA,
+    AC_SRC_OVER, BLENDFUNCTION, COLOR_WINDOW, DEFAULT_CHARSET, DEFAULT_GUI_FONT, DT_END_ELLIPSIS,
+    DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ,
+    LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH, PS_SOLID, TEXTMETRICW,
+    TRANSPARENT,
 };
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
@@ -235,9 +236,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowTextW, IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW,
     LoadImageW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
     SendMessageW, SetCursor, SetLayeredWindowAttributes, SetMenu, SetMenuItemInfoW, SetParent,
-    SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateAcceleratorW,
-    TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
-    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_OWNERDRAW,
+    SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu,
+    TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK,
+    BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_OWNERDRAW,
     BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL,
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID,
     ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
@@ -246,11 +247,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MFT_RIGHTJUSTIFY, MF_BYCOMMAND, MF_BYPOSITION,
     MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MSG,
     SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
-    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED,
-    WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
-    WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL, WM_INITMENUPOPUP,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT,
-    WM_RBUTTONDOWN, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE,
+    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE,
+    WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL, WM_INITMENUPOPUP, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE,
     WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
     WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP,
     WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
@@ -13825,6 +13827,19 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             };
             setup_status_parts(status_hwnd, initial_width);
         }
+        // Subclass the status bar so right-clicks on the language
+        // part (leftmost) pop a context menu mirroring the menu
+        // bar's Language submenu. See `status_bar_subclass_proc`.
+        // `SetWindowSubclass` returns BOOL — failure is extremely
+        // unlikely (only OOM at subclass-chain allocation time) and
+        // the only consequence is that the context menu doesn't
+        // appear; the status bar otherwise functions normally.
+        let _ = SetWindowSubclass(
+            status_hwnd,
+            Some(status_bar_subclass_proc),
+            STATUS_BAR_SUBCLASS_ID,
+            0,
+        );
 
         // Toolbar — sits below the menu bar, above the tab strip.
         // Buttons are bound to existing menu IDs so click →
@@ -16282,6 +16297,159 @@ extern "system" fn tab_subclass_proc(
 /// Only one subclass is installed on the tab control today, so the
 /// value is arbitrary — the constant just gives it a name.
 const TAB_SUBCLASS_ID: usize = 1;
+
+/// Subclass id for the status-bar control. Each subclassed control
+/// needs its own id in the parent's subclass-chain bookkeeping — the
+/// values are arbitrary but must be distinct across all
+/// `SetWindowSubclass` callers on a given HWND.
+const STATUS_BAR_SUBCLASS_ID: usize = 2;
+
+/// Status-bar message: query the bounding rectangle of a part (the
+/// status bar is divided into N parts by `setup_status_parts`). The
+/// `windows` crate doesn't re-export `SB_GETRECT` in the
+/// `UI::Controls` module today; same pattern as the locally-defined
+/// `SB_SETTEXTW` inside `update_status` — the numeric value is from
+/// `commctrl.h` and is part of the stable Win32 ABI.
+const SB_GETRECT: u32 = 0x040A;
+
+/// Subclass procedure for the status bar. Intercepts right-clicks
+/// on the leftmost (language) part and pops a context menu showing
+/// the same content as the main menu bar's Language submenu. All
+/// other messages pass through to `DefSubclassProc` unchanged.
+///
+/// Reuses the existing `state.language_menu` HMENU directly — the
+/// same HMENU is attached to the menu bar as a submenu and can be
+/// passed to `TrackPopupMenu` without copying. Radio checkmarks
+/// (which mark the currently-detected language) are kept in sync
+/// by the shared `refresh_language_menu` call path; the popup
+/// inherits the current state automatically.
+///
+/// Same `catch_unwind` guard as `tab_subclass_proc` — unwinding
+/// across an `extern "system"` frame is UB.
+extern "system" fn status_bar_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id_subclass: usize,
+    _ref_data: usize,
+) -> LRESULT {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        match msg {
+            WM_RBUTTONUP => {
+                // Extract client-relative x / y from the packed lparam.
+                // Same low-/high-word pattern as `tab_subclass_proc`
+                // and every other Win32 mouse handler in the file.
+                let x = i32::from((lparam.0 & 0xFFFF) as i16);
+                let y = i32::from(((lparam.0 >> 16) & 0xFFFF) as i16);
+                if status_bar_x_is_in_lang_part(hwnd, x) {
+                    show_language_status_context_menu(hwnd, x, y);
+                    return LRESULT(0);
+                }
+                DefSubclassProc(hwnd, msg, wparam, lparam)
+            }
+            WM_NCDESTROY => {
+                // Match comctl32's documented "remove on destroy"
+                // requirement so the subclass storage doesn't
+                // outlive the HWND. Same pattern as
+                // `tab_subclass_proc`.
+                let _ = windows::Win32::UI::Shell::RemoveWindowSubclass(
+                    hwnd,
+                    Some(status_bar_subclass_proc),
+                    STATUS_BAR_SUBCLASS_ID,
+                );
+                DefSubclassProc(hwnd, msg, wparam, lparam)
+            }
+            _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+        }
+    }));
+    // Panic fallback forwards to `DefSubclassProc` rather than
+    // returning 0 — matches `tab_subclass_proc`'s shape and produces
+    // a sensible system default for any message a future maintainer
+    // adds custom handling for.
+    result.unwrap_or_else(|_| unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) })
+}
+
+/// True iff `client_x` (status-bar client coordinates) lands inside
+/// the language part. The 7-part layout is rebuilt by
+/// `setup_status_parts` on every `WM_SIZE`, but the language part is
+/// always part 0 — so the rect query is stable across window
+/// resizes without needing to plumb the current layout through.
+unsafe fn status_bar_x_is_in_lang_part(status_hwnd: HWND, client_x: i32) -> bool {
+    let mut rect = RECT::default();
+    let ok = unsafe {
+        SendMessageW(
+            status_hwnd,
+            SB_GETRECT,
+            Some(WPARAM(STATUS_PART_LANG)),
+            Some(LPARAM(&raw mut rect as isize)),
+        )
+    };
+    if ok.0 == 0 {
+        return false;
+    }
+    client_x >= rect.left && client_x < rect.right
+}
+
+/// Pop a context menu showing the Language menu's contents at the
+/// given status-bar client coordinates. `TPM_BOTTOMALIGN` opens the
+/// menu upward from the click point so it doesn't extend below the
+/// screen edge (the status bar is at the bottom of the window).
+/// `TPM_RETURNCMD` makes `TrackPopupMenu` return the selected
+/// command id instead of posting it; we then `PostMessageW` it to
+/// the main window so the existing `WM_COMMAND` dispatch path
+/// (`handle_language_menu_click`) handles it identically to a click
+/// on the real menu-bar Language item.
+unsafe fn show_language_status_context_menu(status_hwnd: HWND, client_x: i32, client_y: i32) {
+    let parent = match unsafe { GetParent(status_hwnd) } {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let Some(state) = (unsafe { state_from_hwnd(parent) }) else {
+        return;
+    };
+    let menu = state.language_menu;
+    if menu.0.is_null() {
+        return;
+    }
+    // `state` borrow ends here (NLL): `menu` is a `Copy` HMENU, no
+    // further field access. `TrackPopupMenu` below enters a modal
+    // message loop that re-dispatches into `main_wnd_proc`, which
+    // calls `state_from_hwnd(parent)` again; with this borrow
+    // already dropped there's no aliased `&mut WindowState`.
+    let _ = state;
+    let mut pt = POINT {
+        x: client_x,
+        y: client_y,
+    };
+    if !unsafe { ClientToScreen(status_hwnd, &raw mut pt) }.as_bool() {
+        return;
+    }
+    // TPM_BOTTOMALIGN — menu's bottom edge at `pt.y` → opens upward.
+    // TPM_LEFTALIGN  — left edge at `pt.x`.
+    // TPM_RETURNCMD  — return id instead of auto-posting WM_COMMAND.
+    // TPM_RIGHTBUTTON — right-click selects items (default is left).
+    // TPM_NONOTIFY   — suppress WM_MENUSELECT etc. during tracking.
+    let cmd = unsafe {
+        TrackPopupMenu(
+            menu,
+            TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+            pt.x,
+            pt.y,
+            Some(0),
+            parent,
+            None,
+        )
+    };
+    if cmd.0 != 0 {
+        // Same WM_COMMAND shape the menu bar produces — `wparam` low
+        // word = command id, high word = notification code (0 for
+        // menu items), `lparam` = 0 for menu sources. Routed through
+        // the existing ID_LANGUAGE_BASE dispatch in `main_wnd_proc`.
+        let _ =
+            unsafe { PostMessageW(Some(parent), WM_COMMAND, WPARAM(cmd.0 as usize), LPARAM(0)) };
+    }
+}
 
 // --- Tab strip owner-draw paint ---------------------------------------------
 //
