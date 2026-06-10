@@ -123,7 +123,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 10 / 🟡 78 / ⚫ 1.
+Total: 89 rows. ✅ 11 / 🟡 77 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -160,6 +160,37 @@ the full C primitive set. Authored by a 7-agent
 research-and-adversarial-verify workflow; library typedefs
 (`NSInteger` / `NSString` / `CGFloat` / ...) and Apple framework
 class names deliberately omitted.
+
+**Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
+(`LexMake.cxx`) — a small line-oriented lexer with a compact
+5-style table and a single keyword class. `MAKEFILE_KEYWORDS`
+(17 entries, all-lowercase) covers GNU Make directives recognised
+as the first word on a line: conditional (`ifdef` / `ifndef` /
+`ifeq` / `ifneq` / `else` / `endif`), define / undefine
+(`define` / `endef` / `undefine`), include (`include` /
+`sinclude` — `-include` excluded since the lexer rejects the
+leading hyphen), visibility (`override` / `export` / `unexport`
+/ `private`), path + dynamic-extension (`vpath` / `load`).
+NMAKE `!`-prefixed directives, built-in functions (`call` /
+`eval` / `foreach` / `shell` / etc.), automatic variables
+(`$@` / `$<` / etc.), and special targets (`.PHONY` / etc.)
+deliberately excluded — none drive wordlist lookups.
+
+`MAKEFILE_STYLES` is the framework's first **non-shared,
+compact** style table — does NOT reuse `CPP_STYLES` or
+`HYPERTEXT_STYLES`. Five emission mappings: `COMMENT` →
+Comment, `PREPROCESSOR` → Preprocessor (directives + NMAKE
+`!`-prefixed lines), `IDENTIFIER` → Keyword2 (`$(VAR)`
+references), `OPERATOR` → Operator, `TARGET` → Keyword (build
+target names — bold blue, like function declarations in code
+lexers). `DEFAULT` (0) falls through to STYLE_DEFAULT; `IDEOL`
+(9, unclosed variable-reference error) unmapped pending future
+`StyleSlot::Error`. Authored by a 7-agent workflow; all three
+verifiers APPROVE. Not added to
+`wired_languages_have_complete_themes` (its >= 8 style floor
+fits LexCPP / hypertext families, not LexMake's compact
+table); dedicated `makefile_uses_lexmake_compact_theme` test
+pins the canonical wiring instead.
 
 **XML (2026-05-14):** uses Lexilla's `xml` lexer (`lmXML` — same
 factory family as `hypertext`, constructed with `isXml=true`).
@@ -335,7 +366,7 @@ further shim work needed.
 | LaTeX | 74 | `latex` | ⚫ | ⚫ | 🟡 |
 | Lisp | 30 | `lisp` | ⚫ | ⚫ | 🟡 |
 | Lua | 23 | `lua` | ⚫ | ⚫ | 🟡 |
-| Makefile | 10 | `makefile` | ⚫ | ⚫ | 🟡 |
+| Makefile | 10 | `makefile` | ✅ | ✅ | ✅ |
 | Matlab | 44 | `matlab` | ⚫ | ⚫ | 🟡 |
 | MMIXAL | 75 | `mmixal` | ⚫ | ⚫ | 🟡 |
 | Nim | 76 | `nim` | ⚫ | ⚫ | 🟡 |

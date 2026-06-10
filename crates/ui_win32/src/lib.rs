@@ -102,9 +102,9 @@ use std::sync::Arc;
 
 use codepp_core::lang::{
     CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
-    HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_HTML, L_JAVA, L_OBJC, L_PHP,
-    L_RC, L_RUST, L_XML, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS,
-    XML_KEYWORDS,
+    HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_HTML, L_JAVA, L_MAKEFILE,
+    L_OBJC, L_PHP, L_RC, L_RUST, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -124,27 +124,28 @@ use codepp_scintilla_sys::{
     SCE_H_SGML_1ST_PARAM, SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING,
     SCE_H_SGML_ENTITY, SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG,
     SCE_H_TAGEND, SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART,
-    SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE,
-    SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR,
-    SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE,
-    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
-    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
-    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
-    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
-    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
-    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
-    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
-    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
-    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
-    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
-    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED,
-    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
-    SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
-    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MOD_DELETETEXT,
-    SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR,
+    SCE_MAKE_TARGET, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC,
+    SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO,
+    SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2,
+    SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT,
+    SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS,
+    SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
+    SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
+    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
+    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS,
+    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
+    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
+    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
+    SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
+    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
+    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO,
+    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
+    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
+    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE,
+    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
@@ -3391,6 +3392,38 @@ const XML_THEME: LangTheme = LangTheme {
     bold: HYPERTEXT_BOLD,
 };
 
+// --- LexMake (Makefile) ---
+// LexMake is a small line-oriented lexer with a compact style table
+// — five emission slots that actually carry colour, plus DEFAULT (0)
+// and IDEOL (9) that fall through to STYLE_DEFAULT pending a future
+// `StyleSlot::Error`. The lexer takes a single keyword class
+// (descriptor "Directives") for GNU Make first-word-on-line
+// directives; NMAKE `!`-prefixed lines are styled via the `!`
+// trigger and don't need wordlist entries.
+//
+// TARGET → Keyword (bold blue): build target names are the
+// "declarations" of a Makefile — the structural anchors a reader
+// scans for, equivalent to function / type names in code.
+// IDENTIFIER → Keyword2 (steel blue): `$(VAR)` references are
+// named identifiers, mirroring how PHP's `$variable` maps to
+// Keyword2 in HYPERTEXT_STYLES.
+const MAKEFILE_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_MAKE_COMMENT, StyleSlot::Comment),
+    (SCE_MAKE_PREPROCESSOR, StyleSlot::Preprocessor),
+    (SCE_MAKE_IDENTIFIER, StyleSlot::Keyword2),
+    (SCE_MAKE_OPERATOR, StyleSlot::Operator),
+    (SCE_MAKE_TARGET, StyleSlot::Keyword),
+];
+const MAKEFILE_ITALIC: &[usize] = &[SCE_MAKE_COMMENT];
+const MAKEFILE_BOLD: &[usize] = &[SCE_MAKE_TARGET];
+
+const MAKEFILE_THEME: LangTheme = LangTheme {
+    keywords: &[(0, MAKEFILE_KEYWORDS)],
+    styles: MAKEFILE_STYLES,
+    italic: MAKEFILE_ITALIC,
+    bold: MAKEFILE_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -3455,6 +3488,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&HTML_THEME)
     } else if lang == L_XML {
         Some(&XML_THEME)
+    } else if lang == L_MAKEFILE {
+        Some(&MAKEFILE_THEME)
     } else {
         None
     }
@@ -17943,9 +17978,9 @@ mod lang_theme_tests {
     use super::{lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO};
     use codepp_core::lang::{
         CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVA_KEYWORDS,
-        JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_HTML, L_JAVA, L_JAVASCRIPT, L_OBJC, L_PHP, L_PYTHON,
-        L_RC, L_RUST, L_TEXT, L_XML, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PHP_KEYWORDS, RC_KEYWORDS,
-        RUST_KEYWORDS, XML_KEYWORDS,
+        JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_HTML, L_JAVA, L_JAVASCRIPT, L_MAKEFILE, L_OBJC, L_PHP,
+        L_PYTHON, L_RC, L_RUST, L_TEXT, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+        PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -18182,6 +18217,46 @@ mod lang_theme_tests {
         assert_eq!(rust.keywords.len(), 1, "Rust theme uses class 0 only");
         assert_eq!(rust.keywords[0].0, 0);
         assert_eq!(rust.keywords[0].1, RUST_KEYWORDS);
+    }
+
+    /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a
+    /// small line-oriented lexer with a compact 5-style table and a
+    /// single keyword class (GNU Make directives). NOT included in
+    /// `wired_languages_have_complete_themes` because that test's
+    /// floor of >= 8 styles is calibrated for the `LexCPP` / hypertext
+    /// families; `LexMake`'s 5-mapping table (`MAKEFILE_STYLES`) is
+    /// legitimate — the lexer simply has fewer emission categories
+    /// to map. This dedicated test pins the canonical
+    /// `MAKEFILE_KEYWORDS` link via class 0 + the compact-style-table
+    /// shape + the contrast with the rest of the framework (does NOT
+    /// reuse `CPP_STYLES` or `HYPERTEXT_STYLES`).
+    #[test]
+    fn makefile_uses_lexmake_compact_theme() {
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let c = lang_theme(L_C).expect("C wired");
+        // Compact style table — 5 emission mappings (DEFAULT and
+        // IDEOL deliberately unmapped per the LexMake banner in
+        // scintilla-sys).
+        assert_eq!(
+            mk.styles.len(),
+            5,
+            "Makefile theme has {} style mappings; expected 5",
+            mk.styles.len()
+        );
+        // Distinct from the LexCPP / hypertext family style tables.
+        assert_ne!(
+            mk.styles, c.styles,
+            "Makefile must NOT reuse CPP_STYLES (it has its own MAKEFILE_STYLES)"
+        );
+        // Single class 0 only — LexMake has one wordlist (directives).
+        assert_eq!(mk.keywords.len(), 1, "Makefile installs class 0 only");
+        assert_eq!(mk.keywords[0].0, 0);
+        assert_eq!(mk.keywords[0].1, MAKEFILE_KEYWORDS);
+        // Structural guard: no other classes (LexMake doesn't have any).
+        assert!(
+            mk.keywords.iter().all(|(class, _)| *class == 0),
+            "Makefile installs class 0 only — LexMake exposes no other classes"
+        );
     }
 
     /// XML uses Lexilla's `xml` lexer — same factory family as the

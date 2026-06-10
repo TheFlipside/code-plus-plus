@@ -61,10 +61,40 @@ impl LangType {
         L_TEXT
     }
 
-    /// Resolve a path to a `LangType` by inspecting its extension.
-    /// Files with no extension (or an empty one) return [`L_TEXT`].
+    /// Resolve a path to a `LangType` by inspecting its filename then
+    /// extension.
+    ///
+    /// **Filename-pattern matching runs first** — case-insensitive
+    /// against every `LangEntry::filenames` entry. Currently this
+    /// covers `Makefile` / `GNUmakefile` / `Makefile.in` and the
+    /// other Makefile filename variants under `L_MAKEFILE.filenames`;
+    /// future commits extend the mechanism to `CMakeLists.txt` /
+    /// `Dockerfile` / `Vagrantfile` / dotfiles when those rows are
+    /// wired. A `Makefile.in` (extension `.in`, but the basename
+    /// matches `Makefile.in` in the filenames list) resolves to
+    /// `L_MAKEFILE` even though `.in` is not in
+    /// `L_MAKEFILE.extensions` — the filename pattern is more
+    /// specific.
+    ///
+    /// **Extension fallback** runs when no filename pattern matches.
+    /// Files with no extension AND no filename match return
+    /// [`L_TEXT`].
     #[must_use]
     pub fn from_path(path: &Path) -> Self {
+        if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+            for entry in LANG_TABLE {
+                for &candidate in entry.filenames {
+                    // `eq_ignore_ascii_case` normalises both sides
+                    // for the comparison, so we don't pre-lowercase
+                    // `name` the way `from_extension` does for
+                    // extensions. Saves an allocation on the hot
+                    // path (every file open hits this).
+                    if candidate.eq_ignore_ascii_case(name) {
+                        return entry.lang;
+                    }
+                }
+            }
+        }
         match path.extension().and_then(|s| s.to_str()) {
             Some(ext) => Self::from_extension(ext),
             None => L_TEXT,
@@ -133,6 +163,19 @@ pub struct LangEntry {
     /// share an extension, which N++ resolves the same way — the
     /// declaration order in this table is the resolution order).
     pub extensions: &'static [&'static str],
+    /// Whole-filename patterns (case-insensitive match against the
+    /// full file basename) for languages identified by filename
+    /// rather than extension. Currently populated for `L_MAKEFILE`
+    /// only (`Makefile` / `GNUmakefile` / `Makefile.in` / etc.).
+    /// The same mechanism will cover `CMakeLists.txt` /
+    /// `Dockerfile` / `Vagrantfile` / dotfiles when those rows are
+    /// wired in later Phase 4.5 commits — today's wiring is
+    /// Makefile-only. The path-resolution helper
+    /// [`LangType::from_path`] checks this list BEFORE falling back
+    /// to extension matching, so a file named literally `Makefile`
+    /// (no `.ext`) resolves correctly. Empty for languages
+    /// identified solely by extension.
+    pub filenames: &'static [&'static str],
 }
 
 /// Full language table. Sorted alphabetically by `menu_label`
@@ -161,6 +204,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Normal text file",
         lexer: None,
         extensions: &[],
+        filenames: &[],
     },
     // -- Alphabetical (case-insensitive). The menu UI groups
     //    same-first-letter blocks of size >= 2 into a submenu titled
@@ -171,6 +215,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Ada source file",
         lexer: Some("ada"),
         extensions: &["ada", "adb", "ads"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_ASN1,
@@ -178,6 +223,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "ASN.1 source file",
         lexer: Some("asn1"),
         extensions: &["asn1"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_ASP,
@@ -185,6 +231,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "ASP source file",
         lexer: Some("hypertext"),
         extensions: &["asp"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_ASM,
@@ -192,6 +239,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Assembly source file",
         lexer: Some("asm"),
         extensions: &["asm", "s"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_AU3,
@@ -199,6 +247,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "AutoIt source file",
         lexer: Some("au3"),
         extensions: &["au3"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_AVS,
@@ -206,6 +255,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "AviSynth source file",
         lexer: Some("avs"),
         extensions: &["avs", "avsi"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_BAANC,
@@ -213,6 +263,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "BaanC source file",
         lexer: Some("baan"),
         extensions: &["baan"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_BATCH,
@@ -220,6 +271,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Batch file",
         lexer: Some("batch"),
         extensions: &["bat", "cmd"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_BLITZBASIC,
@@ -227,6 +279,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Blitzbasic source file",
         lexer: Some("blitzbasic"),
         extensions: &["bb"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_C,
@@ -234,6 +287,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "C source file",
         lexer: Some("cpp"),
         extensions: &["c", "h"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_CS,
@@ -241,6 +295,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "C# source file",
         lexer: Some("cpp"),
         extensions: &["cs"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_CPP,
@@ -248,6 +303,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "C++ source file",
         lexer: Some("cpp"),
         extensions: &["cpp", "cxx", "cc", "hpp", "hxx", "hh", "ipp", "tpp", "inl"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_CAML,
@@ -255,6 +311,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Caml source file",
         lexer: Some("caml"),
         extensions: &["ml", "mli"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_CMAKE,
@@ -262,6 +319,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "CMake source file",
         lexer: Some("cmake"),
         extensions: &["cmake"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_COBOL,
@@ -274,6 +332,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         // disable highlighting for `.cob`/`.cbl` files.
         lexer: Some("COBOL"),
         extensions: &["cob", "cbl", "cpy"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_COFFEESCRIPT,
@@ -281,6 +340,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "CoffeeScript source file",
         lexer: Some("coffeescript"),
         extensions: &["coffee", "litcoffee"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_CSOUND,
@@ -288,6 +348,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "CSound source file",
         lexer: Some("csound"),
         extensions: &["orc", "sco", "csd"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_CSS,
@@ -295,6 +356,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "CSS source file",
         lexer: Some("css"),
         extensions: &["css"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_D,
@@ -302,6 +364,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "D source file",
         lexer: Some("d"),
         extensions: &["d"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_DIFF,
@@ -309,6 +372,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Diff/patch file",
         lexer: Some("diff"),
         extensions: &["diff", "patch"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_ERLANG,
@@ -316,6 +380,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Erlang source file",
         lexer: Some("erlang"),
         extensions: &["erl", "hrl"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_ERRORLIST,
@@ -323,6 +388,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Error-list output file",
         lexer: Some("errorlist"),
         extensions: &[],
+        filenames: &[],
     },
     LangEntry {
         lang: L_ESCRIPT,
@@ -330,6 +396,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "ESCRIPT source file",
         lexer: Some("escript"),
         extensions: &["em"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_FORTH,
@@ -337,6 +404,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Forth source file",
         lexer: Some("forth"),
         extensions: &["forth"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_FORTRAN_77,
@@ -344,6 +412,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Fortran (fixed form) source file",
         lexer: Some("f77"),
         extensions: &["f", "for", "f77", "ftn"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_FORTRAN,
@@ -351,6 +420,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Fortran (free form) source file",
         lexer: Some("fortran"),
         extensions: &["f90", "f95", "f2k", "f03", "f08", "f15"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_FREEBASIC,
@@ -358,6 +428,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Freebasic source file",
         lexer: Some("freebasic"),
         extensions: &["bas"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_GDSCRIPT,
@@ -365,6 +436,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "GDScript source file",
         lexer: Some("gdscript"),
         extensions: &["gd"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_GOLANG,
@@ -372,6 +444,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Go source file",
         lexer: Some("cpp"),
         extensions: &["go"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_GUI4CLI,
@@ -379,6 +452,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Gui4Cli source file",
         lexer: Some("gui4cli"),
         extensions: &["gc", "gui"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_HASKELL,
@@ -386,6 +460,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Haskell source file",
         lexer: Some("haskell"),
         extensions: &["hs"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_HOLLYWOOD,
@@ -393,6 +468,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Hollywood source file",
         lexer: Some("hollywood"),
         extensions: &["hws"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_HTML,
@@ -400,6 +476,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "HTML file",
         lexer: Some("hypertext"),
         extensions: &["html", "htm", "xhtml"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_INI,
@@ -407,6 +484,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "INI file",
         lexer: Some("props"),
         extensions: &["ini"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_INNO,
@@ -414,6 +492,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Inno Setup script",
         lexer: Some("inno"),
         extensions: &["iss"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_IHEX,
@@ -425,6 +504,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         // own registered lexer name.
         lexer: Some("ihex"),
         extensions: &["hex", "ihex"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_JAVA,
@@ -432,6 +512,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Java source file",
         lexer: Some("cpp"),
         extensions: &["java"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_JAVASCRIPT,
@@ -439,6 +520,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Javascript source file",
         lexer: Some("cpp"),
         extensions: &["js", "mjs", "cjs"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_JSON,
@@ -446,6 +528,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "JSON file",
         lexer: Some("json"),
         extensions: &["json"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_JSON5,
@@ -458,6 +541,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         // registration named `json5`.
         lexer: Some("json"),
         extensions: &["json5"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_JSP,
@@ -465,6 +549,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "JSP source file",
         lexer: Some("hypertext"),
         extensions: &["jsp"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_KIX,
@@ -472,6 +557,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "KIXtart source file",
         lexer: Some("kix"),
         extensions: &["kix"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_LATEX,
@@ -479,6 +565,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "LaTeX source file",
         lexer: Some("latex"),
         extensions: &["latex"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_LISP,
@@ -486,6 +573,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Lisp source file",
         lexer: Some("lisp"),
         extensions: &["lisp", "lsp", "el"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_LUA,
@@ -493,13 +581,32 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Lua source file",
         lexer: Some("lua"),
         extensions: &["lua"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_MAKEFILE,
         menu_label: "Makefile",
         desc: "Makefile",
         lexer: Some("makefile"),
-        extensions: &["makefile", "mak", "mk"],
+        // `mak` / `mk` are the conventional Makefile-fragment
+        // extensions. `makefile` (the bare word as an "extension")
+        // is removed — files literally named `Makefile` have NO
+        // extension, so `path.extension()` returns `None` and the
+        // entry was unreachable. The whole-filename matching below
+        // handles that case correctly.
+        extensions: &["mak", "mk"],
+        // Whole-filename matching is case-insensitive — `Makefile`,
+        // `makefile`, and `MAKEFILE` all hit. Covers every well-
+        // known Makefile filename pattern: the bare GNU / BSD forms
+        // plus the autotools `.in` / `.am` inputs.
+        filenames: &[
+            "Makefile",
+            "GNUmakefile",
+            "BSDmakefile",
+            "Makefile.in",
+            "Makefile.am",
+            "GNUmakefile.in",
+        ],
     },
     LangEntry {
         lang: L_MATLAB,
@@ -507,6 +614,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Matlab source file",
         lexer: Some("matlab"),
         extensions: &["matlab"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_MMIXAL,
@@ -514,6 +622,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "MMIXAL source file",
         lexer: Some("mmixal"),
         extensions: &["mms"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_NIM,
@@ -521,6 +630,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Nim source file",
         lexer: Some("nim"),
         extensions: &["nim"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_NNCRONTAB,
@@ -528,6 +638,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Nncrontab file",
         lexer: Some("nncrontab"),
         extensions: &["tab"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_NSIS,
@@ -535,6 +646,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "NSIS script",
         lexer: Some("nsis"),
         extensions: &["nsi", "nsh"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_OBJC,
@@ -542,6 +654,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Objective-C source file",
         lexer: Some("cpp"),
         extensions: &["m", "mm"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_OSCRIPT,
@@ -549,6 +662,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "OScript source file",
         lexer: Some("oscript"),
         extensions: &["osx"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_PASCAL,
@@ -556,6 +670,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Pascal source file",
         lexer: Some("pascal"),
         extensions: &["pas", "pp", "p", "dpr"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_PERL,
@@ -563,6 +678,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Perl source file",
         lexer: Some("perl"),
         extensions: &["pl", "pm", "plx"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_PHP,
@@ -570,6 +686,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "PHP source file",
         lexer: Some("hypertext"),
         extensions: &["php", "phtml"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_PS,
@@ -577,6 +694,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "PostScript file",
         lexer: Some("ps"),
         extensions: &["ps", "eps"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_POWERSHELL,
@@ -584,6 +702,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "PowerShell source file",
         lexer: Some("powershell"),
         extensions: &["ps1", "psm1", "psd1"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_PROPS,
@@ -591,6 +710,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Properties file",
         lexer: Some("props"),
         extensions: &["properties"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_PUREBASIC,
@@ -598,6 +718,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Purebasic source file",
         lexer: Some("purebasic"),
         extensions: &["pb"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_PYTHON,
@@ -605,6 +726,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Python source file",
         lexer: Some("python"),
         extensions: &["py", "pyw"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_R,
@@ -612,6 +734,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "R source file",
         lexer: Some("r"),
         extensions: &["r"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_RAKU,
@@ -619,6 +742,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Raku source file",
         lexer: Some("raku"),
         extensions: &["raku", "rakumod"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_REBOL,
@@ -626,6 +750,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "REBOL source file",
         lexer: Some("rebol"),
         extensions: &["reb", "rebol"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_REGISTRY,
@@ -633,6 +758,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Windows Registry file",
         lexer: Some("registry"),
         extensions: &["reg"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_RC,
@@ -640,6 +766,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Resource source file",
         lexer: Some("cpp"),
         extensions: &["rc"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_RUBY,
@@ -647,6 +774,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Ruby source file",
         lexer: Some("ruby"),
         extensions: &["rb", "rbw"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_RUST,
@@ -654,6 +782,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Rust source file",
         lexer: Some("rust"),
         extensions: &["rs"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_SREC,
@@ -661,6 +790,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Motorola S-Record file",
         lexer: Some("srec"),
         extensions: &["srec", "s19", "s28", "s37"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_SAS,
@@ -668,6 +798,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "SAS source file",
         lexer: Some("sas"),
         extensions: &["sas"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_SCHEME,
@@ -675,6 +806,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Scheme source file",
         lexer: Some("lisp"),
         extensions: &["scm", "ss"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_BASH,
@@ -682,6 +814,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Shell script",
         lexer: Some("bash"),
         extensions: &["sh", "bash"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_SMALLTALK,
@@ -689,6 +822,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Smalltalk source file",
         lexer: Some("smalltalk"),
         extensions: &["st"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_SPICE,
@@ -696,6 +830,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Spice circuit file",
         lexer: Some("spice"),
         extensions: &["sp", "spice"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_SQL,
@@ -708,6 +843,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         // enum doesn't carry a separate id for T-SQL.
         lexer: Some("sql"),
         extensions: &["sql"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_SWIFT,
@@ -715,6 +851,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Swift source file",
         lexer: Some("cpp"),
         extensions: &["swift"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_TCL,
@@ -722,6 +859,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "TCL source file",
         lexer: Some("tcl"),
         extensions: &["tcl"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_TEHEX,
@@ -729,6 +867,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Tektronix Extended HEX file",
         lexer: Some("tehex"),
         extensions: &["tek"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_TEX,
@@ -736,6 +875,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "TeX source file",
         lexer: Some("tex"),
         extensions: &["tex"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_TOML,
@@ -743,6 +883,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "TOML file",
         lexer: Some("toml"),
         extensions: &["toml"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_TXT2TAGS,
@@ -750,6 +891,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "txt2tags source file",
         lexer: Some("txt2tags"),
         extensions: &["t2t"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_TYPESCRIPT,
@@ -757,6 +899,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "TypeScript source file",
         lexer: Some("cpp"),
         extensions: &["ts", "tsx"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_VERILOG,
@@ -764,6 +907,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Verilog source file",
         lexer: Some("verilog"),
         extensions: &["v", "vh", "sv", "svh"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_VHDL,
@@ -771,6 +915,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "VHDL source file",
         lexer: Some("vhdl"),
         extensions: &["vhd", "vhdl"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_VB,
@@ -778,6 +923,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Visual Basic source file",
         lexer: Some("vb"),
         extensions: &["vb", "vbs"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_VISUALPROLOG,
@@ -785,6 +931,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "Visual Prolog source file",
         lexer: Some("visualprolog"),
         extensions: &["vip"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_XML,
@@ -792,6 +939,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "XML file",
         lexer: Some("xml"),
         extensions: &["xml", "xsd", "xsl", "xslt", "svg"],
+        filenames: &[],
     },
     LangEntry {
         lang: L_YAML,
@@ -799,6 +947,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "YAML file",
         lexer: Some("yaml"),
         extensions: &["yaml", "yml"],
+        filenames: &[],
     },
 ];
 
@@ -1436,6 +1585,64 @@ pub const HTML_KEYWORDS: &str = concat!(
     "th thead time title tr track tt u ul var video wbr xmp"
 );
 
+/// Space-separated GNU Make directive list for the `LexMake` lexer.
+/// Installed via `SCI_SETKEYWORDS(0, ...)` — the lexer's single
+/// keyword class, descriptor "Directives".
+///
+/// **Single-class theme.** `LexMake` takes only one wordlist: first-
+/// word-on-a-line directives. If a line's leading identifier
+/// matches an entry here AND the line does not contain `:` or `=`,
+/// the directive is styled as `SCE_MAKE_PREPROCESSOR`. Recipes
+/// (tab-prefixed command lines), variable references (`$(VAR)`),
+/// targets (identifier followed by `:`), and operators (`=` / `:=`
+/// / `?=` / `+=`) are all routed syntactically — none drive
+/// wordlist lookups.
+///
+/// **All-lowercase by convention.** GNU Make directives are
+/// lowercase in source; the lexer is case-sensitive (an uppercase
+/// `IFDEF` in source would NOT match against `ifdef` here).
+///
+/// Five categories (17 entries):
+///
+///   1. **Conditional** (6) — `ifdef` / `ifndef` / `ifeq` / `ifneq`
+///      / `else` / `endif` (GNU Make manual §7).
+///   2. **Define / undefine** (3) — `define` / `endef` (multi-line
+///      definitions, §6.8) / `undefine` (GNU Make 3.82+).
+///   3. **Include** (2) — `include` and `sinclude` (the
+///      hyphen-free alias of `-include` for parsers that tokenise
+///      identifiers without leading hyphens; the lexer's
+///      directive-line gate at `LexMake.cxx:159` rejects leading
+///      `-`, so `-include` would never match anyway).
+///   4. **Visibility** (4) — `override` (§5.7.2) / `export` /
+///      `unexport` (§5.7.4) / `private` (GNU Make 3.82+, §6.13).
+///   5. **Path + dynamic-extension** (2) — `vpath` (§13.2) / `load`
+///      (GNU Make 4.0+, §12.2 dynamic-object extension).
+///
+/// **Deliberately excluded:**
+///   - **NMAKE `!`-prefixed directives** (`!IF` / `!IFDEF` /
+///     `!ELSE` / etc.): the lexer styles the entire `!`-prefixed
+///     line as `SCE_MAKE_PREPROCESSOR` via the `!` trigger at
+///     `LexMake.cxx:155` — adding them to the wordlist would have
+///     no effect.
+///   - **Built-in functions** (`call` / `eval` / `foreach` /
+///     `shell` / `filter` / `patsubst` / `subst` / etc.): they
+///     appear inside `$(...)` and tokenise as
+///     `SCE_MAKE_IDENTIFIER`, not via class 0.
+///   - **Automatic variables** (`$@` / `$<` / `$^` / `$?` / `$*` /
+///     `$+` / `$|` / `$%`): styled as `SCE_MAKE_IDENTIFIER` by the
+///     `$(` trigger.
+///   - **Special targets** (`.PHONY` / `.SUFFIXES` / `.DEFAULT` /
+///     `.PRECIOUS` / etc.): appear as targets followed by `:` and
+///     style as `SCE_MAKE_TARGET`.
+///   - **Hyphenated `-include`**: see note 3 above.
+///
+/// Sourced and adversarially verified across three lenses (GNU
+/// Make manual / production Makefile corpora / editor baselines).
+pub const MAKEFILE_KEYWORDS: &str = concat!(
+    "define else endef endif export ifdef ifeq ifndef ifneq include load ",
+    "override private sinclude undefine unexport vpath"
+);
+
 /// Space-separated SGML / DTD keyword list for XML. Installed via
 /// the `xml` lexer's `SCI_SETKEYWORDS(5, ...)` — the hypertext-family
 /// lexers reserve class 5 for "SGML and DTD keywords" (the wordlist
@@ -1582,7 +1789,59 @@ mod tests {
         assert_eq!(LangType::from_path(Path::new("foo.rs")), L_RUST);
         assert_eq!(LangType::from_path(Path::new("script.py")), L_PYTHON);
         assert_eq!(LangType::from_path(Path::new("README")), L_TEXT);
-        assert_eq!(LangType::from_path(Path::new("Makefile")), L_TEXT);
+        // `Makefile` is NOT `L_TEXT` — it's matched via the
+        // filenames-pattern list (see test below). A file with no
+        // extension and no filename-pattern match (like `README`)
+        // still falls through to `L_TEXT`.
+        assert_eq!(LangType::from_path(Path::new("nope_no_match")), L_TEXT);
+    }
+
+    /// Files identified by whole-filename pattern rather than
+    /// extension: the canonical Makefile set. Pre-Phase-4.5 these
+    /// silently resolved to `L_TEXT` (the bug the user hit when
+    /// opening their first `Makefile`); the
+    /// `LangEntry::filenames` field added in this commit fixes that.
+    #[test]
+    fn from_path_recognises_makefile_by_filename() {
+        // Bare canonical forms.
+        assert_eq!(LangType::from_path(Path::new("Makefile")), L_MAKEFILE);
+        assert_eq!(LangType::from_path(Path::new("GNUmakefile")), L_MAKEFILE);
+        assert_eq!(LangType::from_path(Path::new("BSDmakefile")), L_MAKEFILE);
+        // Autotools inputs.
+        assert_eq!(LangType::from_path(Path::new("Makefile.in")), L_MAKEFILE);
+        assert_eq!(LangType::from_path(Path::new("Makefile.am")), L_MAKEFILE);
+        assert_eq!(LangType::from_path(Path::new("GNUmakefile.in")), L_MAKEFILE);
+        // Works through directory paths.
+        assert_eq!(
+            LangType::from_path(Path::new("/usr/src/foo/Makefile")),
+            L_MAKEFILE
+        );
+        // `.mk` / `.mak` extensions still work via the extension
+        // fallback — those are Makefile fragments / NMAKE files.
+        assert_eq!(LangType::from_path(Path::new("rules.mk")), L_MAKEFILE);
+        assert_eq!(LangType::from_path(Path::new("build.mak")), L_MAKEFILE);
+    }
+
+    /// Filename matching is case-insensitive — GNU make finds either
+    /// `Makefile` or `makefile`, and on case-insensitive filesystems
+    /// (Windows / macOS default) the user may have any casing.
+    #[test]
+    fn from_path_filename_match_is_case_insensitive() {
+        assert_eq!(LangType::from_path(Path::new("makefile")), L_MAKEFILE);
+        assert_eq!(LangType::from_path(Path::new("MAKEFILE")), L_MAKEFILE);
+        assert_eq!(LangType::from_path(Path::new("MakeFile")), L_MAKEFILE);
+        assert_eq!(LangType::from_path(Path::new("gnumakefile")), L_MAKEFILE);
+        assert_eq!(LangType::from_path(Path::new("MAKEFILE.IN")), L_MAKEFILE);
+    }
+
+    /// Filename match takes priority over extension match. A file
+    /// named `Makefile.in` has extension `.in` (which is not in
+    /// `L_MAKEFILE.extensions`) but the FULL basename matches the
+    /// filenames list — that more-specific match wins and the file
+    /// resolves to `L_MAKEFILE` rather than `L_TEXT`.
+    #[test]
+    fn from_path_filename_match_takes_priority_over_extension() {
+        assert_eq!(LangType::from_path(Path::new("Makefile.in")), L_MAKEFILE);
     }
 
     #[test]

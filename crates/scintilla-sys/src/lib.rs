@@ -775,6 +775,26 @@ pub const SCE_H_SGML_COMMENT: usize = 29;
 pub const SCE_H_SGML_1ST_PARAM_COMMENT: usize = 30;
 pub const SCE_H_SGML_BLOCK_DEFAULT: usize = 31;
 
+// LexMake (Makefile) style indices. The lexer is small — six emitted
+// indices plus an error indicator at 9. Cross-referenced against
+// `vendor/lexilla/lexers/LexMake.cxx` lines 54-63. Indices 6 / 7 / 8
+// are documented upstream as "unused"; we omit them.
+//
+// `SCE_MAKE_DEFAULT` (0) is intentionally left unmapped in
+// `MAKEFILE_STYLES` so it falls through to STYLE_DEFAULT (same
+// pattern as `SCE_H_DEFAULT` / `SCE_HPHP_DEFAULT`).
+// `SCE_MAKE_IDEOL` (9) — error indicator for an unclosed `$(`
+// variable reference at end-of-line — is also unmapped, pending the
+// same future `StyleSlot::Error` palette addition as
+// `SCE_H_SGML_ERROR` and `SCE_H_SGML_1ST_PARAM_COMMENT`.
+pub const SCE_MAKE_DEFAULT: usize = 0;
+pub const SCE_MAKE_COMMENT: usize = 1;
+pub const SCE_MAKE_PREPROCESSOR: usize = 2;
+pub const SCE_MAKE_IDENTIFIER: usize = 3;
+pub const SCE_MAKE_OPERATOR: usize = 4;
+pub const SCE_MAKE_TARGET: usize = 5;
+pub const SCE_MAKE_IDEOL: usize = 9;
+
 // LexHTML — PHP-mode style indices. Emitted when the lexer is
 // inside a `<?php ... ?>` block. `SCE_HPHP_COMPLEX_VARIABLE` lives
 // at 104 historically; the rest are a contiguous 118..=127 range.
