@@ -232,22 +232,23 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateAcceleratorTableW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DeleteMenu, DestroyAcceleratorTable, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
     DrawIconEx, DrawMenuBar, GetClientRect, GetCursorPos, GetDlgItem, GetMenu, GetMenuItemCount,
-    GetMessageW, GetParent, GetSubMenu, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
-    GetWindowTextW, IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW,
-    LoadImageW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SendMessageW, SetCursor, SetLayeredWindowAttributes, SetMenu, SetMenuItemInfoW, SetParent,
-    SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu,
-    TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK,
-    BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_OWNERDRAW,
-    BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL,
-    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID,
-    ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
-    GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO, IDOK,
-    IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
-    MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MFT_RIGHTJUSTIFY, MF_BYCOMMAND, MF_BYPOSITION,
-    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MSG,
+    GetMenuItemID, GetMessageW, GetParent, GetSubMenu, GetWindowLongPtrW, GetWindowRect,
+    GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer,
+    LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SendMessageW, SetCursor, SetLayeredWindowAttributes, SetMenu,
+    SetMenuItemInfoW, SetParent, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
+    ShowWindow, TrackPopupMenu, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
+    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
+    BS_GROUPBOX, BS_OWNERDRAW, BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING,
+    CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
+    DC_HASDEFID, DI_NORMAL, DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL,
+    FSHIFT, FVIRTKEY, GWLP_USERDATA, GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW,
+    IDC_HAND, IDC_SIZENS, IDNO, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA,
+    MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MFS_CHECKED,
+    MFS_UNCHECKED, MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MIIM_STATE, MSG,
     SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
-    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
+    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE,
     WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
     WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL, WM_INITMENUPOPUP, WM_LBUTTONDOWN,
@@ -5905,6 +5906,23 @@ unsafe fn refresh_language_menu(language_menu: HMENU, lang: LangType) {
     // is a no-op on a menu that doesn't contain `target`, so the
     // sweep is harmless on unrelated submenus and idempotent on
     // re-application.
+    //
+    // **Two-level visibility:** when the active language lives
+    // inside a letter submenu (e.g. Perl inside the "P" submenu),
+    // `CheckMenuRadioItem` on the submenu marks the language item
+    // — but the user only sees that bullet after hovering into the
+    // submenu. To indicate the active language at the **top level**
+    // too, we ALSO set `MFT_RADIOCHECK | MFS_CHECKED` on the parent
+    // letter submenu item by position. Letter submenu items have no
+    // command id (they carry an HMENU pointer instead), so
+    // `CheckMenuRadioItem`'s by-command sweep can't reach them —
+    // `SetMenuItemInfoW` by position is the only way. Other letter
+    // submenus get `MFS_UNCHECKED` so a previously-active letter's
+    // mark clears on language switch.
+    //
+    // The `MIIM_FTYPE | MIIM_STATE` mask only modifies fType / fState;
+    // the submenu's HMENU pointer (`hSubMenu` under `MIIM_SUBMENU`)
+    // is preserved, so the letter submenu still opens correctly.
     unsafe {
         let _ = CheckMenuRadioItem(
             language_menu,
@@ -5916,15 +5934,71 @@ unsafe fn refresh_language_menu(language_menu: HMENU, lang: LangType) {
         let count = GetMenuItemCount(Some(language_menu));
         for i in 0..count {
             let sub = GetSubMenu(language_menu, i);
-            if !sub.is_invalid() {
-                let _ = CheckMenuRadioItem(
-                    sub,
-                    u32::from(ID_LANGUAGE_BASE),
-                    u32::from(ID_LANGUAGE_END),
-                    target,
-                    MF_BYCOMMAND.0,
-                );
+            if sub.is_invalid() {
+                continue;
             }
+            // Mark items inside the submenu (the inner bullet, visible
+            // when the user opens the letter submenu).
+            let _ = CheckMenuRadioItem(
+                sub,
+                u32::from(ID_LANGUAGE_BASE),
+                u32::from(ID_LANGUAGE_END),
+                target,
+                MF_BYCOMMAND.0,
+            );
+            // Walk the submenu's items by position. Track two things:
+            //   * `contains_target` — does this submenu contain the
+            //     active language? (drives the bullet mark)
+            //   * `in_lang_band` — does this submenu hold items with
+            //     ids inside the language range at all? Letter
+            //     submenus (A / B / C / ...) yield `true`; the
+            //     greyed "User-Defined language" submenu yields
+            //     `false` (its items all have cmd id 0).
+            // The `in_lang_band` discriminator is load-bearing: we
+            // ONLY apply `SetMenuItemInfoW` to letter submenus.
+            // Touching the UDL submenu would replace its
+            // `MFS_GRAYED` state with `MFS_UNCHECKED` (`MIIM_STATE`
+            // overwrites fState wholesale), silently re-enabling the
+            // deliberately disabled item.
+            let inner_count = GetMenuItemCount(Some(sub));
+            let mut contains_target = false;
+            let mut in_lang_band = false;
+            for j in 0..inner_count {
+                let id = GetMenuItemID(sub, j);
+                if id == target {
+                    contains_target = true;
+                    in_lang_band = true;
+                    break;
+                }
+                if id >= u32::from(ID_LANGUAGE_BASE) && id <= u32::from(ID_LANGUAGE_END) {
+                    in_lang_band = true;
+                    // Don't break — still scanning for `target`.
+                }
+            }
+            if !in_lang_band {
+                continue;
+            }
+            // Mark / unmark the parent letter submenu item (top-level
+            // entry at position `i`) with MFT_RADIOCHECK + MFS_*.
+            let mut mii = MENUITEMINFOW {
+                cbSize: u32::try_from(core::mem::size_of::<MENUITEMINFOW>()).unwrap_or(0),
+                fMask: MIIM_FTYPE | MIIM_STATE,
+                fType: MFT_RADIOCHECK,
+                fState: if contains_target {
+                    MFS_CHECKED
+                } else {
+                    MFS_UNCHECKED
+                },
+                ..Default::default()
+            };
+            // `i` cast safe — GetMenuItemCount returns i32 >= 0 and
+            // we're iterating that exact range.
+            #[allow(
+                clippy::cast_sign_loss,
+                reason = "loop bound from GetMenuItemCount is non-negative"
+            )]
+            let pos = i as u32;
+            let _ = SetMenuItemInfoW(language_menu, pos, true, &raw mut mii);
         }
     }
 }
@@ -16412,6 +16486,17 @@ unsafe fn show_language_status_context_menu(status_hwnd: HWND, client_x: i32, cl
     if menu.0.is_null() {
         return;
     }
+    // Refresh the radio-bullet on the active language's menu item
+    // BEFORE the popup is shown. `WM_INITMENUPOPUP` does fire for
+    // `TrackPopupMenu` and the existing handler in `main_wnd_proc`
+    // re-applies the radio mark — but doing it here too is cheap
+    // (one `CheckMenuRadioItem` + a loop over a handful of
+    // submenus) and ensures the bullet is correct even if a future
+    // `TPM_NONOTIFY`-style flag suppresses the init path. Same
+    // borrow lifetime as `state` — drops on the next line.
+    if let Some(active) = state.shell.active() {
+        unsafe { refresh_language_menu(menu, active.lang) };
+    }
     // `state` borrow ends here (NLL): `menu` is a `Copy` HMENU, no
     // further field access. `TrackPopupMenu` below enters a modal
     // message loop that re-dispatches into `main_wnd_proc`, which
@@ -16429,11 +16514,15 @@ unsafe fn show_language_status_context_menu(status_hwnd: HWND, client_x: i32, cl
     // TPM_LEFTALIGN  — left edge at `pt.x`.
     // TPM_RETURNCMD  — return id instead of auto-posting WM_COMMAND.
     // TPM_RIGHTBUTTON — right-click selects items (default is left).
-    // TPM_NONOTIFY   — suppress WM_MENUSELECT etc. during tracking.
+    // Deliberately NOT TPM_NONOTIFY — that flag's behaviour on
+    // `WM_INITMENUPOPUP` is ambiguous across Windows versions, and
+    // letting init notifications through means our existing
+    // `WM_INITMENUPOPUP` handler can refresh the menu (the explicit
+    // refresh above is belt-and-braces).
     let cmd = unsafe {
         TrackPopupMenu(
             menu,
-            TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+            TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RETURNCMD | TPM_RIGHTBUTTON,
             pt.x,
             pt.y,
             Some(0),
