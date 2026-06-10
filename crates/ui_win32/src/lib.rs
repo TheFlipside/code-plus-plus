@@ -104,8 +104,9 @@ use codepp_core::lang::{
     BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2,
     C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
     L_ASP, L_BATCH, L_C, L_CPP, L_CS, L_HTML, L_INI, L_JAVA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP,
-    L_PROPS, L_RC, L_RUST, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-    PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, VBSCRIPT_KEYWORDS, XML_KEYWORDS,
+    L_PROPS, L_RC, L_RUST, L_SQL, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+    VBSCRIPT_KEYWORDS, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -139,25 +140,28 @@ use codepp_scintilla_sys::{
     SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION,
     SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE,
     SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR,
-    SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE,
-    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
-    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
-    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
-    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
-    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
-    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
-    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
-    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
-    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
-    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
-    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED,
-    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
-    SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
-    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MOD_DELETETEXT,
-    SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2, SCE_SQL_CHARACTER, SCE_SQL_COMMENT,
+    SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC,
+    SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT,
+    SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCI_BEGINUNDOACTION,
+    SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER,
+    SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
+    SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES,
+    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
+    SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
+    SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
+    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
+    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
+    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
+    SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
+    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
+    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO,
+    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
+    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
+    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE,
+    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
@@ -3709,6 +3713,114 @@ const PASCAL_THEME: LangTheme = LangTheme {
     bold: PASCAL_BOLD,
 };
 
+// --- LexSQL ---
+// LexSQL is case-insensitive: every candidate token is lowercased
+// (`LexSQL.cxx:786` `MakeLowerCase`) before keyword comparison, so
+// `SQL_KEYWORDS` / `SQL_KEYWORDS_2` are stored all-lowercase. SQL
+// source can use any casing (`SELECT` / `Select` / `select` all match
+// `select`); the case-insensitive convention is honoured
+// transparently.
+//
+// The lexer exposes EIGHT wordlist classes via `sqlWordListDesc[]`
+// (`LexSQL.cxx:266-275`): class 0 "Keywords", class 1 "Database
+// Objects", class 2 "PLDoc", class 3 "SQL*Plus", classes 4-7 "User
+// Keywords 1-4". `SQL_THEME` installs classes 0 + 1 today; classes
+// 2-7 are left out of the `keywords` array (the lexer accepts up to
+// 8 wordlists but doesn't require all eight to be set).
+//
+// Style-to-slot decisions:
+//   * COMMENT / COMMENTLINE / COMMENTDOC / COMMENTLINEDOC /
+//     SQLPLUS_COMMENT → Comment. All five comment-class indices the
+//     lexer emits share the same visual treatment (matches the
+//     C-family precedent of collapsing four comment forms onto one
+//     slot, plus SQL*Plus's REM-style line comment).
+//   * NUMBER → Number, STRING / CHARACTER → String, OPERATOR →
+//     Operator. Standard mappings, identical to every other lexer.
+//   * WORD (class 0) → Keyword (bold blue). Primary SQL reserved
+//     words — the structural anchors a SQL reader scans for.
+//   * WORD2 (class 1) → Keyword2 (steel blue). Types and built-in
+//     functions, distinct from primary keywords — same precedent as
+//     `SCE_C_WORD2` in `CPP_STYLES`.
+//   * SQLPLUS (class 3, Oracle SQL*Plus client-tool commands like
+//     `SPOOL` / `CONNECT` / `@script` / `PROMPT`) → Preprocessor.
+//     SQL*Plus commands are evaluated by the client, not the database
+//     engine — the canonical "out-of-band syntax marker" semantic the
+//     Preprocessor slot covers, same precedent as `SCE_BAT_HIDE` in
+//     `BATCH_STYLES`. Mapping to Keyword would conflate true SQL
+//     reserved words with client-tool directives.
+//   * SQLPLUS_PROMPT → Preprocessor. Same family as SQLPLUS — text
+//     rendered by the client tool, not interpreted by SQL.
+//   * COMMENTDOCKEYWORD (class 2, PLDoc `@tag` inside `/** */` doc
+//     comments) → Keyword2. PLDoc tags live inside a Comment-styled
+//     region but mark structural annotation; Keyword2's steel blue
+//     keeps them readable against the green comment background while
+//     signalling "this is a tag, not prose". The mapping fires
+//     unconditionally on lexer-detected `@tag` syntax; the class 2
+//     wordlist controls which tags get this style vs. the error
+//     style (left unmapped for v1, see below).
+//
+// Intentionally unmapped (fall through to STYLE_DEFAULT):
+//   * SCE_SQL_DEFAULT (0) — generic background text (same omission
+//     pattern as SCE_C_DEFAULT).
+//   * SCE_SQL_IDENTIFIER (11) — bare table / column / variable
+//     references (same omission as SCE_C_IDENTIFIER /
+//     SCE_PAS_IDENTIFIER).
+//   * SCE_SQL_QUOTEDIDENTIFIER (23) — `"customer_id"` style. Still an
+//     identifier semantically; the quoting is a syntactic dodge of
+//     reserved-word conflicts, not a visual category. The StyleSlot
+//     enum has no Identifier variant by design.
+//   * SCE_SQL_QOPERATOR (24) — Oracle `q'[...]'` alternate-quote
+//     markers. Could map to Operator, but they bookend a String
+//     region the lexer is already styling; leaving them at
+//     STYLE_DEFAULT keeps them visually subordinate to the string
+//     body (which IS coloured).
+//   * SCE_SQL_COMMENTDOCKEYWORDERROR (18) — unrecognised PLDoc tag,
+//     error indicator. Unmapped pending `StyleSlot::Error` (same
+//     deferral as `SCE_PAS_STRINGEOL` / `SCE_MAKE_IDEOL` /
+//     `SCE_H_SGML_ERROR` and the four embedded-script STRINGEOLs
+//     added by the ASP commit — error-slot migration list now at 9).
+//   * SCE_SQL_USER1..USER4 (19-22) — user-customisable wordlist
+//     ranges. Deferred until a per-user wordlist UI lands and can
+//     carry coordinated colour-choice decisions.
+const SQL_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_SQL_COMMENT, StyleSlot::Comment),
+    (SCE_SQL_COMMENTLINE, StyleSlot::Comment),
+    (SCE_SQL_COMMENTDOC, StyleSlot::Comment),
+    (SCE_SQL_COMMENTLINEDOC, StyleSlot::Comment),
+    (SCE_SQL_SQLPLUS_COMMENT, StyleSlot::Comment),
+    (SCE_SQL_NUMBER, StyleSlot::Number),
+    (SCE_SQL_WORD, StyleSlot::Keyword),
+    (SCE_SQL_WORD2, StyleSlot::Keyword2),
+    (SCE_SQL_STRING, StyleSlot::String),
+    (SCE_SQL_CHARACTER, StyleSlot::String),
+    (SCE_SQL_OPERATOR, StyleSlot::Operator),
+    (SCE_SQL_SQLPLUS, StyleSlot::Preprocessor),
+    (SCE_SQL_SQLPLUS_PROMPT, StyleSlot::Preprocessor),
+    (SCE_SQL_COMMENTDOCKEYWORD, StyleSlot::Keyword2),
+];
+// All five comment forms italic — matches CPP_ITALIC / PASCAL_ITALIC
+// precedent of italicising every comment-class index (CPP includes
+// `SCE_C_COMMENTDOC` / `SCE_C_COMMENTLINEDOC`, PASCAL italicises all
+// three of its comment forms). Skipping the doc-comment forms would
+// leave PLDoc `/** */` blocks visually less marked than the less
+// structured `/* */` and `--` lines, the opposite of what the
+// distinction is meant to convey.
+const SQL_ITALIC: &[usize] = &[
+    SCE_SQL_COMMENT,
+    SCE_SQL_COMMENTLINE,
+    SCE_SQL_COMMENTDOC,
+    SCE_SQL_COMMENTLINEDOC,
+    SCE_SQL_SQLPLUS_COMMENT,
+];
+const SQL_BOLD: &[usize] = &[SCE_SQL_WORD];
+
+const SQL_THEME: LangTheme = LangTheme {
+    keywords: &[(0, SQL_KEYWORDS), (1, SQL_KEYWORDS_2)],
+    styles: SQL_STYLES,
+    italic: SQL_ITALIC,
+    bold: SQL_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -3824,6 +3936,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&PROPS_THEME)
     } else if lang == L_ASP {
         Some(&ASP_THEME)
+    } else if lang == L_SQL {
+        Some(&SQL_THEME)
     } else {
         None
     }
@@ -18314,9 +18428,9 @@ mod lang_theme_tests {
         BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2,
         HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_ASP, L_BATCH, L_C,
         L_CPP, L_CS, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP,
-        L_PROPS, L_PYTHON, L_RC, L_RUST, L_TEXT, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS,
-        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS,
-        VBSCRIPT_KEYWORDS, XML_KEYWORDS,
+        L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEXT, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS,
+        SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -18587,6 +18701,100 @@ mod lang_theme_tests {
         assert!(
             pas.keywords.iter().all(|(class, _)| *class == 0),
             "Pascal installs class 0 only — LexPascal exposes no other classes"
+        );
+    }
+
+    /// SQL uses Lexilla's `sql` lexer (`LexSQL.cxx`). Case-insensitive
+    /// (`LexSQL.cxx:786` lowercases candidates before keyword lookup
+    /// — wordlists MUST be all-lowercase). Installs TWO of the
+    /// lexer's eight wordlist classes: class 0 = `SQL_KEYWORDS`
+    /// (statement-level reserved words including window-frame
+    /// vocabulary), class 1 = `SQL_KEYWORDS_2` (types + builtin
+    /// functions including window functions). Classes 2-7 (`PLDoc` /
+    /// SQL*Plus / User Keywords 1-4) are intentionally not installed.
+    ///
+    /// `SQL_STYLES` is a 14-mapping table — does NOT reuse
+    /// `CPP_STYLES`, `HYPERTEXT_STYLES`, `MAKEFILE_STYLES`,
+    /// `PASCAL_STYLES`, `BATCH_STYLES`, or `PROPS_STYLES`. Pins the
+    /// dedicated-table shape, canonical keyword links, all-lowercase
+    /// invariant, and structural "no class 2-7" guard.
+    #[test]
+    fn sql_uses_lexsql_dedicated_theme_with_two_classes() {
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        let c = lang_theme(L_C).expect("C wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let ini = lang_theme(L_INI).expect("INI wired");
+        // Compact dedicated style table — 14 emission mappings.
+        // DEFAULT / IDENTIFIER / QUOTEDIDENTIFIER / QOPERATOR /
+        // COMMENTDOCKEYWORDERROR / USER1..USER4 deliberately
+        // unmapped per the LexSQL banner in scintilla-sys.
+        assert_eq!(
+            sql.styles.len(),
+            14,
+            "SQL theme has {} style mappings; expected 14",
+            sql.styles.len()
+        );
+        // Distinct from every other style table in the framework.
+        assert_ne!(
+            sql.styles, c.styles,
+            "SQL must NOT reuse CPP_STYLES (it has its own SQL_STYLES)"
+        );
+        assert_ne!(sql.styles, mk.styles, "SQL must NOT reuse MAKEFILE_STYLES");
+        assert_ne!(sql.styles, pas.styles, "SQL must NOT reuse PASCAL_STYLES");
+        assert_ne!(
+            sql.styles, php.styles,
+            "SQL must NOT reuse HYPERTEXT_STYLES"
+        );
+        assert_ne!(sql.styles, bat.styles, "SQL must NOT reuse BATCH_STYLES");
+        assert_ne!(sql.styles, ini.styles, "SQL must NOT reuse PROPS_STYLES");
+        // Two keyword classes: 0 = reserved words, 1 = types/builtins.
+        // Class indices dictated by LexSQL's `sqlWordListDesc[]`.
+        assert_eq!(
+            sql.keywords.len(),
+            2,
+            "SQL theme installs class 0 (keywords) + class 1 (types/functions)"
+        );
+        assert_eq!(sql.keywords[0].0, 0);
+        assert_eq!(sql.keywords[0].1, SQL_KEYWORDS);
+        assert_eq!(sql.keywords[1].0, 1);
+        assert_eq!(sql.keywords[1].1, SQL_KEYWORDS_2);
+        // Structural guard: pin "no class 2-7". A regression that
+        // copy-pasted in a speculative PLDoc / SQL*Plus / User
+        // wordlist install would fail this assertion directly. The
+        // lexer accepts those classes but they're empty in v1.
+        assert!(
+            sql.keywords.iter().all(|(class, _)| matches!(class, 0 | 1)),
+            "SQL must install classes 0 + 1 ONLY — no class 2 (PLDoc), 3 (SQL*Plus), \
+             or 4-7 (User Keywords) at this row's scope"
+        );
+        // Pin the all-lowercase invariant for both wordlists.
+        // LexSQL.cxx:786 lowercases source before keyword lookup, so
+        // uppercase wordlist entries would never match. Same shape
+        // assertion as the Batch test pins for its case-insensitive
+        // wordlists.
+        for (label, list) in [("class 0", SQL_KEYWORDS), ("class 1", SQL_KEYWORDS_2)] {
+            assert!(
+                list.chars().all(|c| !c.is_ascii_uppercase()),
+                "SQL {label} list contains uppercase — LexSQL is case-insensitive and \
+                 lowercases source before lookup, so uppercase wordlist tokens never match"
+            );
+        }
+        // Pin the no-overlap invariant. LexSQL's first-hit semantics
+        // mean a token appearing in both lists either wastes bytes or
+        // produces inconsistent rendering depending on Lexilla
+        // version. The synthesis-and-verify workflow enforces this
+        // split; the test pins it permanently. Same shape assertion
+        // as the Batch test for its two-class wordlists.
+        let class0: std::collections::HashSet<&str> = SQL_KEYWORDS.split_whitespace().collect();
+        let class1: std::collections::HashSet<&str> = SQL_KEYWORDS_2.split_whitespace().collect();
+        let overlap: Vec<&&str> = class0.intersection(&class1).collect();
+        assert!(
+            overlap.is_empty(),
+            "SQL class 0 / class 1 wordlists overlap on {overlap:?} — LexSQL uses first-hit \
+             matching so duplicates either waste bytes or misrepresent the keyword/type split"
         );
     }
 

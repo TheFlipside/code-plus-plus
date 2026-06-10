@@ -2238,6 +2238,244 @@ pub const VBSCRIPT_KEYWORDS: &str = concat!(
     "timevalue monthname weekdayname",
 );
 
+/// Space-separated SQL reserved-word list installed via `LexSQL`'s
+/// `SCI_SETKEYWORDS(0, ...)` — class 0 of `sqlWordListDesc[]`. Drives
+/// `SCE_SQL_WORD` (primary keyword bold blue).
+///
+/// **All entries must be lowercase.** `LexSQL.cxx:786` calls
+/// `MakeLowerCase(styler[i+j])` on every candidate token before
+/// `keywords.InList(s)`. SQL source can use any casing (`SELECT` /
+/// `Select` / `select` all match `select`) — the case-insensitive
+/// convention is honoured transparently, but uppercase entries here
+/// would never match.
+///
+/// **Class split with `SQL_KEYWORDS_2`.** A token appears in exactly
+/// one wordlist. The split mirrors Notepad++'s shipped
+/// `langs.model.xml`:
+///
+///   * **Class 0 (this list)** — statement-level reserved words: DML
+///     verbs (`select` / `insert` / `update`), DDL verbs (`create` /
+///     `alter` / `drop`), DCL (`grant` / `revoke` / `commit`), clause
+///     keywords (`from` / `where` / `join`), control flow (`if` /
+///     `loop` / `case`), set ops (`union` / `intersect`), literals
+///     (`null` / `true` / `false`), and procedural vocabulary from
+///     T-SQL / PL/SQL / PL/pgSQL. The structural anchors a SQL reader
+///     scans for.
+///   * **Class 1 (`SQL_KEYWORDS_2`)** — built-in type names (`int` /
+///     `varchar` / `timestamp`) and built-in functions (`count` /
+///     `coalesce` / `cast` / `extract`).
+///
+/// **Window-frame vocabulary** (`current` / `following` / `groups` /
+/// `nulls` / `preceding` / `unbounded` / `window`) lives in class 0:
+/// `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW` reads as
+/// structural keyword syntax. The window FUNCTIONS themselves
+/// (`row_number` / `rank` / `lag` / `lead`) live in class 1 — they're
+/// builtin functions, not clause keywords.
+///
+/// **Dialect scope.** ANSI SQL:2016 baseline plus the four major
+/// dialects — `PostgreSQL`, MySQL/MariaDB, Microsoft SQL Server
+/// (T-SQL), and Oracle (PL/SQL). Hierarchical-query (`connect by` /
+/// `prior` / `level` / `rownum`), `merge`, `pivot` / `unpivot`,
+/// `returning`, `ilike`, `lateral`, `forall` — all covered.
+///
+/// **Deliberate exclusions:**
+///
+/// - Cloud-warehouse extensions (`Snowflake` `qualify` /
+///   `match_recognize`, `BigQuery` `safe.`, Redshift / `DuckDB`
+///   dialect-specific vocabulary). Add per project need.
+/// - Vendor schema identifiers (`sys` / `information_schema` /
+///   `pg_catalog` / `dbo` / `master` / `mysql` /
+///   `performance_schema`) — these are identifiers, not keywords;
+///   including would mis-style legitimate user references.
+/// - Optimiser hint contents (Oracle `/*+ ... */` body, T-SQL
+///   `OPTION (HASH JOIN)` inner words like `hash` / `recompile`) —
+///   too dialect-specific and overlaps too aggressively with common
+///   identifier names.
+/// - Punctuation / hyphenated forms — `LexSQL.cxx`'s `iswordchar`
+///   treats `-` as an operator, so a hypothetical wordlist entry
+///   like `end-exec` tokenises as three separate tokens (`end`, `-`,
+///   `exec`) and never matches as one word.
+///
+/// Sourced and adversarially verified across three lenses (ANSI
+/// SQL:2016 / Notepad++ baseline / `LexSQL.cxx` source). The
+/// completeness verifier flagged window-frame vocabulary and window
+/// function names as critical gaps — all added before commit.
+pub const SQL_KEYWORDS: &str = concat!(
+    // ANSI / dialect statement-level keywords (alphabetical)
+    "absolute action add after alias all allocate alter analyze and any are as ",
+    "asc asensitive assertion asymmetric at atomic authorization autoincrement ",
+    "auto_increment backup before begin between both breadth by call called ",
+    "cascade cascaded case catalog catch change charset check checkpoint class ",
+    "close cluster clustered collate collation column columns comment commit ",
+    "completion compute condition connect connection constraint constraints ",
+    "constructor contains continue corresponding create cross cube current ",
+    "cursor cycle data database databases day deallocate declare default ",
+    "deferrable deferred delete deny depth deref desc describe descriptor ",
+    "destroy destructor deterministic diagnostics dictionary disconnect ",
+    "distinct do domain drop dual dynamic each else elseif elsif end equals ",
+    "errlvl escape every except exception exclusive exec execute exists exit ",
+    "explain external false fetch fields file fillfactor first following for ",
+    "foreign forall found free freetext from full function general get global go ",
+    "goto grant group grouping groups handler having hold host hour identified ",
+    "identity if ignore ilike immediate in include index indicator initialize ",
+    "initially inner inout input insensitive insert instead intersect into is ",
+    "isolation iterate join key keys kill language large last lateral leading ",
+    "leave left less level like limit limited local locator lock login loop map ",
+    "master match materialized merge method minus minute modifies modify module ",
+    "month names national natural new next no nocheck nonclustered none not null ",
+    "nulls object of off offline offset offsets old on online only open ",
+    "openquery openrowset operation operator option or order ordinality others ",
+    "out outer output over overlaps overriding pad package parameter parameters ",
+    "partial partition percent perform pivot plan postfix preceding prefix ",
+    "preorder prepare preserve primary print prior privileges procedure proc ",
+    "public raise raiserror read readtext reads reconfigure record recursive ",
+    "references referencing refcursor relative release rename replace ",
+    "replication restore restrict result return returning returns revert revoke ",
+    "right role rollback rollup routine row rownum rows rowcount rule save ",
+    "savepoint schema schemas scope scroll search second section securityaudit ",
+    "select sensitive session set setof sets setuser share show shutdown size ",
+    "some specific specifictype sql sqlcode sqlerror sqlexception sqlstate ",
+    "sqlwarning start state statement static statistics structure symmetric ",
+    "synonym sysname system table tables tablesample temporary terminate ",
+    "textsize then throw timezone_hour timezone_minute to top trailing tran ",
+    "transaction trigger true truncate try tsequal type uescape unbounded under ",
+    "undo union unique unknown unnest unpivot unsigned until update updatetext ",
+    "usage use using value values view waitfor when whenever where while window ",
+    "with within without work write writetext xor zerofill zone",
+);
+
+/// Space-separated SQL **types and built-in functions** list
+/// installed via `LexSQL`'s `SCI_SETKEYWORDS(1, ...)` — class 1 of
+/// `sqlWordListDesc[]`. Drives `SCE_SQL_WORD2` (Keyword2 steel blue).
+///
+/// **All entries must be lowercase**, same case-insensitive contract
+/// as [`SQL_KEYWORDS`].
+///
+/// **No overlap with class 0.** `LexSQL`'s wordlist matching is
+/// first-hit (the lexer checks classes in registration order); having
+/// a token in both lists either wastes bytes or produces
+/// inconsistent rendering depending on Lexilla version. Every token
+/// here is verified absent from `SQL_KEYWORDS`.
+///
+/// **Categories** (organised: built-in types, then built-in
+/// functions; alphabetical within each).
+///
+/// **Type names** cover ANSI standard plus the four major dialects:
+///
+/// - ANSI: `int` / `integer` / `smallint` / `bigint` / `numeric` /
+///   `decimal` / `dec` / `float` / `real` / `double` / `precision` /
+///   `char` / `character` / `varchar` / `text` / `clob` / `blob` /
+///   `date` / `time` / `timestamp` / `interval` / `boolean` / `bool`
+///   / `binary` / `varbinary` / `varying`.
+/// - `PostgreSQL`: `serial` / `bigserial` / `smallserial` / `uuid` /
+///   `json` / `jsonb` / `bytea` / `money` / `cidr` / `inet` /
+///   `macaddr` / `tsvector` / `tsquery` / `citext` / `hstore` /
+///   `point` / `line` / `lseg` / `box` / `path` / `polygon` /
+///   `circle` / `range` / `int4range` / `int8range` / `numrange` /
+///   `tsrange` / `tstzrange` / `daterange`.
+/// - `MySQL`: `tinyint` / `mediumint` / `tinytext` / `mediumtext` /
+///   `longtext` / `tinyblob` / `mediumblob` / `longblob` / `year` /
+///   `bit`. (`MySQL`'s `SET` column type clashes with the SQL `SET`
+///   statement — `set` lives in class 0 / `SQL_KEYWORDS` because the
+///   statement form is overwhelmingly more common; `MySQL` `SET`
+///   columns render as Keyword bold rather than Keyword2 steel-blue,
+///   an acceptable v1 trade-off.)
+/// - SQL Server: `ntext` / `nchar` / `nvarchar` / `image` /
+///   `datetime` / `datetime2` / `datetimeoffset` / `smalldatetime` /
+///   `hierarchyid` / `geometry` / `geography` / `xml` / `sql_variant`
+///   / `uniqueidentifier`.
+/// - Oracle: `number` / `varchar2` / `nvarchar2` / `raw` / `long` /
+///   `nclob` / `bfile` / `rowid` / `urowid` / `ref`.
+/// - PG aliases: `serial4` / `serial8` / `int2` / `int4` / `int8` /
+///   `float4` / `float8`.
+///
+/// **Built-in functions** — Notepad++ ships these in WORD2 because
+/// they visually scan as language-level constructs in a SELECT (`COUNT(*)`
+/// / `COALESCE(x, y)` / `TO_CHAR(d)`) and deserve the steel-blue
+/// Keyword2 treatment distinct from user-defined identifier names:
+///
+/// - **ANSI niladic functions** (parenless): `current_date` /
+///   `current_time` / `current_timestamp` / `current_user` /
+///   `session_user` / `current_role` / `current_database` /
+///   `current_schema` / `system_user` / `user` / `localtime` /
+///   `localtimestamp`.
+/// - **ANSI function-keywords** (parse with their own syntax):
+///   `cast` / `extract` / `position` / `substring` / `trim` /
+///   `convert` / `coalesce` / `nullif` / `greatest` / `least`.
+/// - **Aggregates**: `count` / `sum` / `avg` / `min` / `max` /
+///   `stddev` / `stddev_pop` / `stddev_samp` / `variance` /
+///   `var_pop` / `var_samp` / `listagg` / `string_agg` / `array_agg`
+///   / `json_agg` / `jsonb_agg`.
+/// - **Window functions**: `row_number` / `rank` / `dense_rank` /
+///   `ntile` / `lag` / `lead` / `first_value` / `last_value` /
+///   `nth_value` / `percent_rank` / `cume_dist`.
+/// - **String** (`trim` / `position` / `substring` are listed under
+///   ANSI function-keywords above; not duplicated here): `length` /
+///   `char_length` / `character_length` / `octet_length` / `lower` /
+///   `upper` / `initcap` / `ltrim` / `rtrim` / `substr` / `replace`
+///   / `concat` / `lpad` / `rpad` / `repeat` / `reverse` / `ascii` /
+///   `chr` / `hex` / `unhex`.
+/// - **Math**: `abs` / `acos` / `asin` / `atan` / `atan2` /
+///   `ceil` / `ceiling` / `cos` / `exp` / `floor` / `log` / `mod` /
+///   `power` / `round` / `sign` / `sin` / `sqrt` / `tan` / `trunc`.
+/// - **Date / time**: `age` / `date_part` / `date_trunc` /
+///   `dateadd` / `datediff` / `datepart` / `getdate` / `getutcdate` /
+///   `now` / `sysdate` / `systimestamp` / `to_char` / `to_date` /
+///   `to_number` / `to_timestamp`.
+/// - **Null handling**: `nvl` / `nvl2` / `isnull` / `ifnull` /
+///   `iif` / `decode`.
+/// - **Hash**: `md5` / `sha1` / `sha2`.
+/// - **Regex**: `regexp_replace` / `regexp_like` / `regexp_substr`
+///   / `regexp_count` (Oracle / `PostgreSQL`).
+/// - **Misc**: `format` / `version` / `translate` / `treat`.
+///
+/// Sourced and adversarially verified across three lenses (ANSI
+/// SQL:2016 / Notepad++ baseline / `LexSQL.cxx` source). Completeness
+/// verifier flagged the entire window-function category as missing
+/// from the initial synthesis — all 11 ranking / offset / value
+/// functions added before commit.
+pub const SQL_KEYWORDS_2: &str = concat!(
+    // Built-in types
+    "bigint bigserial binary bit blob bool boolean box bytea bfile char ",
+    "character cidr circle citext clob date datetime datetime2 datetimeoffset ",
+    "daterange dec decimal double float float4 float8 geography geometry ",
+    "hierarchyid hstore image inet int int2 int4 int4range int8 int8range ",
+    "integer interval json jsonb line long longblob longtext lseg macaddr ",
+    "mediumblob mediumint mediumtext money nchar nclob ntext number numeric ",
+    "numrange nvarchar nvarchar2 path point polygon precision range raw real ",
+    "ref rowid serial serial4 serial8 smalldatetime smallint smallserial ",
+    "sql_variant text time timestamp tinyblob tinyint tinytext tsquery tsrange ",
+    "tstzrange tsvector uniqueidentifier urowid uuid varbinary varchar varchar2 ",
+    "varying xml year ",
+    // ANSI niladic functions
+    "current_database current_date current_role current_schema current_time ",
+    "current_timestamp current_user localtime localtimestamp session_user ",
+    "system_user user ",
+    // ANSI function-keywords + conversions
+    "cast coalesce convert extract greatest least nullif position substring ",
+    "trim ",
+    // Aggregates + statistical
+    "array_agg avg count json_agg jsonb_agg listagg max min stddev stddev_pop ",
+    "stddev_samp string_agg sum var_pop var_samp variance ",
+    // Window functions
+    "cume_dist dense_rank first_value lag last_value lead nth_value ntile ",
+    "percent_rank rank row_number ",
+    // String functions
+    "ascii char_length character_length chr concat hex initcap length lower ",
+    "lpad ltrim octet_length repeat reverse rpad rtrim substr unhex upper ",
+    // Math functions
+    "abs acos asin atan atan2 ceil ceiling cos exp floor log mod power round ",
+    "sign sin sqrt tan trunc ",
+    // Date / time functions
+    "age date_part date_trunc dateadd datediff datepart getdate getutcdate now ",
+    "sysdate systimestamp to_char to_date to_number to_timestamp ",
+    // Null handling
+    "decode ifnull iif isnull nvl nvl2 ",
+    // Hash + regex + misc
+    "md5 regexp_count regexp_like regexp_replace regexp_substr sha1 sha2 ",
+    "format translate treat version",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

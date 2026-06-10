@@ -654,7 +654,38 @@ pub const SCE_LUA_OPERATOR: usize = 10;
 pub const SCE_LUA_STRINGEOL: usize = 12;
 pub const SCE_LUA_LABEL: usize = 20;
 
-// LexSQL style indices.
+// LexSQL style indices. LexSQL defines 22 named style indices
+// (`SCE_SQL_DEFAULT` 0 through `SCE_SQL_QOPERATOR` 24 with gaps at
+// 12 and 14). Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 1224-1246.
+//
+// LexSQL is **case-insensitive** — `LexSQL.cxx:786` lowercases every
+// candidate token via `MakeLowerCase(styler[i+j])` before keyword
+// comparison, so all wordlists installed against this lexer MUST be
+// all-lowercase. Uppercase entries never match.
+//
+// Wordlist class assignments per `sqlWordListDesc[]`
+// (`LexSQL.cxx:266-275`):
+//   class 0 "Keywords"          → `SCE_SQL_WORD` (5)
+//   class 1 "Database Objects"  → `SCE_SQL_WORD2` (16)
+//   class 2 "PLDoc"             → `SCE_SQL_COMMENTDOCKEYWORD` (17)
+//   class 3 "SQL*Plus"          → `SCE_SQL_SQLPLUS` (8)
+//   classes 4-7 "User Keywords 1-4" → `SCE_SQL_USER1..USER4` (19-22)
+//
+// `SCE_SQL_DEFAULT` (0) and `SCE_SQL_IDENTIFIER` (11) intentionally
+// not declared here — falls through to STYLE_DEFAULT (same omission
+// pattern as `SCE_C_DEFAULT` / `SCE_C_IDENTIFIER`). The
+// host-unmapped indices `SCE_SQL_COMMENTDOCKEYWORDERROR` (18 — error
+// indicator, deferred to `StyleSlot::Error`), `SCE_SQL_QOPERATOR`
+// (24 — Oracle `q'[...]'` alternate-quote marker, subordinate to the
+// string body), and `SCE_SQL_USER1..USER4` (19-22 — user-customisable,
+// deferred until a per-user wordlist UI lands) are likewise not
+// declared. `SCE_SQL_QUOTEDIDENTIFIER` (23) IS declared below — it
+// was exported as part of an earlier scintilla-sys scaffolding pass
+// and is kept for backward compatibility of the FFI surface, but
+// `SQL_STYLES` deliberately does not map it (quoted identifiers fall
+// through to STYLE_DEFAULT, same omission rationale as the bare
+// `SCE_SQL_IDENTIFIER`).
 pub const SCE_SQL_COMMENT: usize = 1;
 pub const SCE_SQL_COMMENTLINE: usize = 2;
 pub const SCE_SQL_COMMENTDOC: usize = 3;
@@ -662,7 +693,13 @@ pub const SCE_SQL_NUMBER: usize = 4;
 pub const SCE_SQL_WORD: usize = 5;
 pub const SCE_SQL_STRING: usize = 6;
 pub const SCE_SQL_CHARACTER: usize = 7;
+pub const SCE_SQL_SQLPLUS: usize = 8;
+pub const SCE_SQL_SQLPLUS_PROMPT: usize = 9;
 pub const SCE_SQL_OPERATOR: usize = 10;
+pub const SCE_SQL_SQLPLUS_COMMENT: usize = 13;
+pub const SCE_SQL_COMMENTLINEDOC: usize = 15;
+pub const SCE_SQL_WORD2: usize = 16;
+pub const SCE_SQL_COMMENTDOCKEYWORD: usize = 17;
 pub const SCE_SQL_QUOTEDIDENTIFIER: usize = 23;
 
 // LexYAML style indices.

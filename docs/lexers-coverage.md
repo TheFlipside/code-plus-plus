@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 16 / 🟡 72 / ⚫ 1.
+Total: 89 rows. ✅ 17 / 🟡 71 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -456,6 +456,121 @@ invariant on both class 1 and class 2 (LexHTML lowercases VB
 source before lookup, and ECMAScript convention has all
 reserved words lowercase anyway).
 
+**SQL (2026-06-10):** uses Lexilla's `sql` lexer (`LexSQL.cxx`).
+Dedicated 14-mapping `SQL_STYLES` table — does NOT reuse
+`CPP_STYLES`, `HYPERTEXT_STYLES`, `MAKEFILE_STYLES`,
+`PASCAL_STYLES`, `BATCH_STYLES`, or `PROPS_STYLES`. Covers five
+comment forms (block / line / doc / line-doc / SQL*Plus REM all
+→ Comment), numbers, strings + characters, primary keywords
+(class 0 → `SCE_SQL_WORD` → Keyword bold blue), types + builtin
+functions (class 1 → `SCE_SQL_WORD2` → Keyword2 steel blue),
+operators, SQL*Plus client-tool commands + PROMPT (→
+Preprocessor — "out-of-band syntax marker" semantic, same
+precedent as Batch's `@` echo-suppress directive), and PLDoc
+`@tag` markers inside `/** */` doc comments (→ Keyword2).
+
+**Critical: case-insensitive lexer.** `LexSQL.cxx:786` calls
+`MakeLowerCase(styler[i+j])` on every candidate token before
+keyword comparison. `SQL_KEYWORDS` (389 entries) and
+`SQL_KEYWORDS_2` (215 entries) are stored all-lowercase. SQL
+source can use any casing (`SELECT` / `Select` / `select` all
+match) — the case-insensitive convention is honoured
+transparently. Uppercase wordlist entries would never match.
+The `sql_uses_lexsql_dedicated_theme_with_two_classes` test
+pins this invariant structurally.
+
+**Class split mirrors Notepad++'s shipped `langs.model.xml`.**
+A token appears in exactly one wordlist (the test pins the
+no-overlap invariant via a `HashSet` intersection check, same
+shape as the Batch test). Class 0 covers statement-level
+reserved words — DML / DDL / DCL verbs, clause keywords,
+control flow, set ops, literals, and procedural vocabulary
+from T-SQL / PL/SQL / PL/pgSQL. Class 1 covers built-in type
+names (`int` / `varchar` / `timestamp` / `jsonb` / `uuid`) and
+built-in functions (`count` / `coalesce` / `cast` / `extract`)
+including the full window-function family (`row_number` /
+`rank` / `dense_rank` / `ntile` / `lag` / `lead` / `first_value`
+/ `last_value` / `nth_value` / `percent_rank` / `cume_dist`).
+Window-frame keywords (`current` / `following` / `groups` /
+`nulls` / `preceding` / `unbounded` / `window`) live in class 0
+because they're structural clause vocabulary, not function
+names.
+
+**Dialect scope.** ANSI SQL:2016 baseline plus the four major
+dialects — PostgreSQL, MySQL/MariaDB, Microsoft SQL Server
+(T-SQL), and Oracle (PL/SQL). Hierarchical-query (`connect by`
+/ `prior` / `level` / `rownum`), `merge`, `pivot`/`unpivot`,
+`returning`, `ilike`, `lateral`, `forall` — all covered.
+Dialect-specific types include PG (`cidr` / `inet` / `hstore` /
+`tsvector` / `point`+geometric family), MySQL (`tinytext` /
+`year` / `tinyblob`), SQL Server (`hierarchyid` /
+`uniqueidentifier` / `sql_variant`), and Oracle (`number` /
+`varchar2` / `rowid` / `urowid` / `bfile`).
+
+**Classes 2-7 deliberately empty in v1.** The lexer exposes
+eight wordlist classes via `sqlWordListDesc[]`: class 0
+"Keywords", class 1 "Database Objects", class 2 "PLDoc", class
+3 "SQL*Plus", and classes 4-7 "User Keywords 1-4". `SQL_THEME`
+installs classes 0 and 1 today. PLDoc tag styling is niche
+(Oracle PL/SQL-specific); SQL*Plus is Oracle CLI-specific;
+user-customisable wordlists need a UI not yet built. Style
+indices `SCE_SQL_SQLPLUS` (8) / `SCE_SQL_SQLPLUS_PROMPT` (9) /
+`SCE_SQL_COMMENTDOCKEYWORD` (17) ARE mapped (to Preprocessor /
+Preprocessor / Keyword2) so the lexer's structural syntactic
+recognition (`@`-prefixed lines for SQL*Plus, `@tag` inside
+doc comments for PLDoc) still fires visibly — only specific
+command/tag names from wordlists go unrecognised. Adding the
+class 2 / class 3 wordlists later is a one-line theme edit.
+
+**Deliberate exclusions:**
+
+- Cloud-warehouse extensions (Snowflake `qualify`,
+  `match_recognize`, BigQuery `safe.`, Redshift / DuckDB
+  dialect-specific vocabulary) — add per project demand.
+- Vendor schema identifiers (`sys` / `information_schema` /
+  `pg_catalog` / `dbo` / `master` / `mysql` /
+  `performance_schema`) — identifiers, not keywords;
+  including would mis-style legitimate user references.
+- Optimiser hint contents (Oracle `/*+ ... */` body, T-SQL
+  `OPTION (HASH JOIN)` inner words) — too dialect-specific
+  and overlaps too aggressively with common identifiers.
+- Hyphenated forms (`end-exec`) — `LexSQL.cxx`'s `iswordchar`
+  treats `-` as an operator, so such entries can never match
+  as a single token; they'd be silent dead weight.
+
+Style indices intentionally unmapped: `DEFAULT` (0),
+`IDENTIFIER` (11), `QUOTEDIDENTIFIER` (23), `QOPERATOR` (24)
+all fall through to STYLE_DEFAULT (mirrors the `SCE_C_*`
+omission pattern for generic identifiers / boundary text).
+`COMMENTDOCKEYWORDERROR` (18) and `USER1..USER4` (19-22)
+deferred to future `StyleSlot::Error` / per-user wordlist UI
+respectively. This brings the codebase's deferred-Error-slot
+migration list from 8 to 9 entries.
+
+Authored by a 7-agent research-and-adversarial-verify
+workflow. The correctness verifier caught two cross-class
+duplicates (`path` and `repeat` in both class 0 and class 1
+— resolved by routing both to class 1, where PG type / string
+function fits are stronger), four fabricated tokens
+(`lowercase` / `semicolon` / `subclass_origin` are not SQL
+keywords; `end-exec` would never tokenise as one word with
+`-` as operator), and synthesis count inflations (claimed
+287 / 176; actual 389 / 215 after all fixes). The
+completeness verifier caught the entire window-function
+category missing from the initial draft (8 window-frame
+keywords for class 0, 11 window functions + 11 statistical
+aggregates + 7 T-SQL functions + 4 regex functions for
+class 1) — all added before commit. The format verifier
+confirmed the all-lowercase and no-overlap invariants hold
+after the corrections, structurally pinned by the test
+assertions.
+
+`sql_uses_lexsql_dedicated_theme_with_two_classes` test
+pins the 14-mapping shape, two-class structure, canonical
+keyword constant links, all-lowercase invariant on both
+wordlists, no-overlap invariant, and structural "no class
+2-7" guard.
+
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
 5-style table and a single keyword class. `MAKEFILE_KEYWORDS`
@@ -690,7 +805,7 @@ further shim work needed.
 | Shell | 26 | `bash` | ⚫ | ⚫ | 🟡 |
 | Smalltalk | 37 | `smalltalk` | ⚫ | ⚫ | 🟡 |
 | Spice | 82 | `spice` | ⚫ | ⚫ | 🟡 |
-| SQL | 17 | `sql` | ⚫ | ⚫ | 🟡 |
+| SQL | 17 | `sql` | ✅ | ✅ | ✅ |
 | Swift | 64 | `cpp` | ⚫ | ⚫ | 🟡 |
 | TCL | 29 | `tcl` | ⚫ | ⚫ | 🟡 |
 | Tektronix extended HEX | 63 | `tehex` | ⚫ | ⚫ | 🟡 |
