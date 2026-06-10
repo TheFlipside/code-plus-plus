@@ -35,6 +35,7 @@ residual rows formally tracked).
 | ✅ | Keywords + theme both wired in `Win32Ui::apply_lang`'s table. Pick this language from the Language menu and a sample file picks up visibly distinct colours for comments, strings, numbers, and keywords. |
 | 🟡 | Lexer attached and tokenising; no host keyword list and no host theme. Buffer renders uniformly black-on-white because every `SCE_*_*` style resolves to `STYLE_DEFAULT` after `SCI_STYLECLEARALL`. (Pre-2026-05-13: this row also covered "lexer compiled but unregistered in `LexillaShim.cxx`'s catalog"; that gap is now closed for every `LANG_TABLE` row with a non-`None` lexer.) |
 | ⚫ | No Lexilla lexer (`LANG_TABLE` row has `lexer: None`). Either by design (`L_TEXT` — plain text never highlights) or because no Lexilla lexer matches the language. Effectively a permanent state for the named row. |
+| — (Keywords column only) | Not applicable. The lexer takes no wordlists at all — host installs none by design. Currently used for `props` (INI / Properties), a pure line-prefix classifier. A row with `—` in the Keywords column and ✅ in the Theme column is still ✅ overall: the wiring is complete, there are simply no keywords to wire. |
 | ⏸ | Reserved for future host-side opt-out (e.g. a lexer the host deliberately leaves off the menu pending review). None today. |
 
 ## How to mark a row ✅
@@ -123,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 13 / 🟡 75 / ⚫ 1.
+Total: 89 rows. ✅ 15 / 🟡 73 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -298,6 +299,55 @@ hypertext families — legitimate, LexBatch simply has fewer
 emission categories). Dedicated `batch_uses_lexbatch_two_class_theme`
 test pins the canonical wiring instead, plus an explicit no-
 overlap check between the two wordlists.
+
+**INI file + Properties (2026-06-10):** both menu rows use Lexilla's
+`props` lexer (`LexProps.cxx`) and share a single `PROPS_THEME`.
+`L_INI` (`.ini`) and `L_PROPS` (`.properties`) exist as separate
+menu entries because Notepad++ surfaces them that way, but the
+underlying lexer behaviour is identical so they route to the same
+theme. The `ini_and_props_share_props_theme_with_no_wordlists`
+test pins this with a `std::ptr::eq` assertion — stronger than
+value-equality, it catches any future divergence into two
+silently-identical copies.
+
+`LexProps` is the framework's smallest lexer: a pure line-prefix
+classifier with **NO wordlists**. `ColourisePropsDoc`'s
+`WordList *[]` parameter is unused; classification is purely
+line-prefix-based (`#` / `!` / `;` → COMMENT, `[` → SECTION,
+`@` → DEFVAL, otherwise scan for `=` or `:` to split KEY from
+the value tail). `core::lang` therefore has no new keyword
+consts in this commit — `PROPS_THEME` installs no
+`SCI_SETKEYWORDS` calls, pinned structurally by
+`assert!(ini.keywords.is_empty(), ...)`.
+
+`PROPS_STYLES` is a compact 5-mapping table — does NOT reuse
+`CPP_STYLES`, `HYPERTEXT_STYLES`, `MAKEFILE_STYLES`,
+`PASCAL_STYLES`, or `BATCH_STYLES`. Mappings: COMMENT (1) →
+Comment italic, SECTION (2) → Keyword bold blue (`[section]`
+headers are the structural anchors a reader scans for, same
+role `SCE_MAKE_TARGET` plays for Makefile targets),
+ASSIGNMENT (3) → Operator (the `=` / `:` separator),
+DEFVAL (4) → Preprocessor (`@`-prefixed Java `.properties`
+default-value syntax is an out-of-band marker, same
+"directive" slot Batch uses for its leading `@` echo-
+suppress), KEY (5) → Keyword2 steel blue (key names are
+named identifiers on the left, distinct from SECTION's
+structural treatment). DEFAULT (0) intentionally unmapped —
+value text (post-`=`) is the dominant occupant of this slot
+and stays at default foreground, since INI values are
+arbitrary user data with no canonical meaning to colour.
+
+This is the first ✅ row in the matrix with `—` in the
+Keywords column instead of ✅ — the legend has a new entry
+documenting the convention. Two rows flip ✅ per commit
+because `L_INI` and `L_PROPS` share `PROPS_THEME` exactly.
+
+Not added to `wired_languages_have_complete_themes`
+(5-mapping table is below the 8-floor; `LexProps` simply has
+fewer emission categories). Dedicated
+`ini_and_props_share_props_theme_with_no_wordlists` test pins
+the canonical wiring instead, including the zero-wordlist
+invariant.
 
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
@@ -492,7 +542,7 @@ further shim work needed.
 | Haskell | 45 | `haskell` | ⚫ | ⚫ | 🟡 |
 | Hollywood | 87 | `hollywood` | ⚫ | ⚫ | 🟡 |
 | HTML | 8 | `hypertext` | ✅ | ✅ | ✅ |
-| INI file | 13 | `props` | ⚫ | ⚫ | 🟡 |
+| INI file | 13 | `props` | — | ✅ | ✅ |
 | Inno Setup | 46 | `inno` | ⚫ | ⚫ | 🟡 |
 | Intel HEX | 62 | `ihex` | ⚫ | ⚫ | 🟡 |
 | Java | 6 | `cpp` | ✅ | ✅ | ✅ |
@@ -517,7 +567,7 @@ further shim work needed.
 | PHP | 1 | `hypertext` | ✅ | ✅ | ✅ |
 | PostScript | 35 | `ps` | ⚫ | ⚫ | 🟡 |
 | PowerShell | 53 | `powershell` | ⚫ | ⚫ | 🟡 |
-| Properties | 34 | `props` | ⚫ | ⚫ | 🟡 |
+| Properties | 34 | `props` | — | ✅ | ✅ |
 | Purebasic | 68 | `purebasic` | ⚫ | ⚫ | 🟡 |
 | Python | 22 | `python` | ⚫ | ⚫ | 🟡 |
 | R | 54 | `r` | ⚫ | ⚫ | 🟡 |

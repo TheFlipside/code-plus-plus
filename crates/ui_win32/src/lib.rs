@@ -103,7 +103,7 @@ use std::sync::Arc;
 use codepp_core::lang::{
     BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2,
     C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_BATCH, L_C, L_CPP,
-    L_CS, L_HTML, L_JAVA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP, L_RC, L_RUST, L_XML,
+    L_CS, L_HTML, L_INI, L_JAVA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP, L_PROPS, L_RC, L_RUST, L_XML,
     MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS,
     RUST_KEYWORDS, XML_KEYWORDS,
 };
@@ -130,6 +130,7 @@ use codepp_scintilla_sys::{
     SCE_MAKE_TARGET, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2,
     SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER,
     SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD,
+    SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION,
     SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE,
     SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR,
     SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE,
@@ -3397,6 +3398,70 @@ const XML_THEME: LangTheme = LangTheme {
     bold: HYPERTEXT_BOLD,
 };
 
+// --- LexProps (INI / `.properties` files) ---
+// LexProps is the smallest lexer in the framework so far — a
+// pure line-prefix classifier with NO wordlists. Each line is
+// inspected by its first non-whitespace character: `#` / `!` /
+// `;` → COMMENT, `[` → SECTION, `@` → DEFVAL (Java's default-
+// value syntax for `.properties` resource bundles), otherwise
+// scan up to the first `=` or `:` and emit KEY → ASSIGNMENT →
+// DEFAULT for the value tail. Value text itself stays DEFAULT
+// by design — INI values are arbitrary user data with no
+// canonical meaning to colour, mirroring the `SCE_C_DEFAULT` /
+// `SCE_C_IDENTIFIER` omission pattern in `CPP_STYLES`.
+//
+// Both `L_INI` and `L_PROPS` route to the same `props` lexer
+// and share this single `PROPS_THEME`. The two `LangType` rows
+// exist because Notepad++ surfaces them as distinct menu
+// entries (one defaults to `.ini`, the other to `.properties`)
+// — the LANG_TABLE keeps the menu split but the lexer and
+// theme are unified.
+//
+// Style-to-slot decisions:
+//   * `COMMENT` (1) → Comment (green italic) — the universal
+//     comment slot. Covers `#` / `!` / `;` line comments.
+//   * `SECTION` (2) → Keyword (bold blue) — `[section]` headers
+//     are the structural anchors a reader scans for, the same
+//     role `SCE_MAKE_TARGET` plays in Makefiles, which is also
+//     mapped to Keyword bold.
+//   * `ASSIGNMENT` (3) → Operator — the `=` or `:` separator;
+//     matches every other lexer's punctuation → Operator
+//     mapping.
+//   * `DEFVAL` (4) → Preprocessor — `@`-prefixed default-value
+//     syntax is an out-of-band marker (Java `.properties`
+//     resource-bundle default), same "directive" semantics as
+//     Batch's leading `@` echo-suppress (also Preprocessor).
+//   * `KEY` (5) → Keyword2 (steel blue) — key names are named
+//     identifiers on the left of the assignment, distinct from
+//     SECTION's structural bold treatment. Same precedent as
+//     Makefile's `$(VAR)` → Keyword2 mapping.
+//
+// `SCE_PROPS_DEFAULT` (0) intentionally unmapped — falls
+// through to STYLE_DEFAULT. Value text (post-`=`) is the
+// dominant occupant of this slot and stays at default
+// foreground.
+const PROPS_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_PROPS_COMMENT, StyleSlot::Comment),
+    (SCE_PROPS_SECTION, StyleSlot::Keyword),
+    (SCE_PROPS_ASSIGNMENT, StyleSlot::Operator),
+    (SCE_PROPS_DEFVAL, StyleSlot::Preprocessor),
+    (SCE_PROPS_KEY, StyleSlot::Keyword2),
+];
+const PROPS_ITALIC: &[usize] = &[SCE_PROPS_COMMENT];
+const PROPS_BOLD: &[usize] = &[SCE_PROPS_SECTION];
+
+const PROPS_THEME: LangTheme = LangTheme {
+    // Zero-wordlist lexer — `LexProps::ColourisePropsDoc` ignores
+    // the `WordList *[]` parameter entirely; classification is
+    // line-prefix-based. Installing keywords would have no visible
+    // effect but is harmless; we install none to keep the wiring
+    // honest.
+    keywords: &[],
+    styles: PROPS_STYLES,
+    italic: PROPS_ITALIC,
+    bold: PROPS_BOLD,
+};
+
 // --- LexBatch (Windows cmd.exe scripts) ---
 // LexBatch is a small case-insensitive lexer emitting 9 distinct
 // style classes (`SCE_BAT_DEFAULT` 0 .. `SCE_BAT_AFTER_LABEL` 8),
@@ -3597,6 +3662,12 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&PASCAL_THEME)
     } else if lang == L_BATCH {
         Some(&BATCH_THEME)
+    } else if lang == L_INI || lang == L_PROPS {
+        // Both menu rows route to the same `props` lexer and share
+        // the same line-prefix classifier — no per-row keyword set
+        // differs because LexProps has no wordlists. Single
+        // `PROPS_THEME` covers both.
+        Some(&PROPS_THEME)
     } else {
         None
     }
@@ -18085,10 +18156,10 @@ mod lang_theme_tests {
     use super::{lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO};
     use codepp_core::lang::{
         BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2,
-        HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_BATCH, L_C, L_CPP, L_CS, L_HTML, L_JAVA,
-        L_JAVASCRIPT, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP, L_PYTHON, L_RC, L_RUST, L_TEXT, L_XML,
-        MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS,
-        RC_KEYWORDS, RUST_KEYWORDS, XML_KEYWORDS,
+        HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_BATCH, L_C, L_CPP, L_CS, L_HTML, L_INI,
+        L_JAVA, L_JAVASCRIPT, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST,
+        L_TEXT, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
+        PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -18493,6 +18564,64 @@ mod lang_theme_tests {
             overlap.is_empty(),
             "Batch class 0 / class 1 wordlists overlap on {overlap:?} — LexBatch uses first-hit \
              matching so duplicates either waste bytes or misrepresent cmd.exe's dispatch model"
+        );
+    }
+
+    /// INI files and Java `.properties` files both use Lexilla's
+    /// `props` lexer (`LexProps.cxx`). `LexProps` is a pure
+    /// line-prefix classifier with NO wordlists — the
+    /// `ColourisePropsDoc` `WordList *[]` parameter is unused.
+    /// Both `L_INI` and `L_PROPS` route to the same `PROPS_THEME`
+    /// because they share lexer behaviour exactly. NOT included in
+    /// `wired_languages_have_complete_themes` (5-mapping table is
+    /// below the 8-floor; `LexProps` simply has fewer emission
+    /// categories) — this dedicated test pins the canonical
+    /// zero-wordlist + shared-theme shape instead.
+    #[test]
+    fn ini_and_props_share_props_theme_with_no_wordlists() {
+        let ini = lang_theme(L_INI).expect("INI wired");
+        let props = lang_theme(L_PROPS).expect("Properties wired");
+        let c = lang_theme(L_C).expect("C wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        // Same pointer (same `&'static PROPS_THEME` is returned from
+        // both dispatch arms). Stronger than value-equality — pins
+        // that the two arms are not silently divergent copies.
+        assert!(
+            std::ptr::eq(ini, props),
+            "L_INI and L_PROPS must return the same `&PROPS_THEME` reference \
+             — they share lexer behaviour and must not drift apart"
+        );
+        // Compact style table — 5 emission mappings. DEFAULT (0)
+        // deliberately unmapped per the LexProps banner in
+        // scintilla-sys (value text falls through to STYLE_DEFAULT).
+        assert_eq!(
+            ini.styles.len(),
+            5,
+            "INI/Properties theme has {} style mappings; expected 5",
+            ini.styles.len()
+        );
+        // Sanity-check non-reuse vs the two compact tables most likely
+        // to be confused at maintenance time (the other LexCPP /
+        // hypertext shares are caught by sheer length difference —
+        // PROPS_STYLES has 5 mappings, CPP_STYLES has 10+, hypertext
+        // has ~20, PASCAL has 13, BATCH has 7).
+        assert_ne!(
+            ini.styles, c.styles,
+            "INI must NOT reuse CPP_STYLES (it has its own PROPS_STYLES)"
+        );
+        assert_ne!(ini.styles, mk.styles, "INI must NOT reuse MAKEFILE_STYLES");
+        // **Zero wordlists.** `LexProps::ColourisePropsDoc` ignores
+        // its `WordList *[]` parameter entirely; classification is
+        // line-prefix-based (`#` / `!` / `;` → COMMENT, `[` →
+        // SECTION, `@` → DEFVAL, otherwise scan for `=` / `:`).
+        // Installing wordlists would be wasted bytes that the lexer
+        // never reads. Pin this structurally so a future copy-paste
+        // that adds a speculative `(0, FOO_KEYWORDS)` install trips
+        // the test rather than silently bloating the binary.
+        assert!(
+            ini.keywords.is_empty(),
+            "INI/Properties theme must install NO wordlists — LexProps is a \
+             line-prefix classifier with no wordlist consumption"
         );
     }
 

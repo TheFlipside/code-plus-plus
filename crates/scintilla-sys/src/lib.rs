@@ -852,6 +852,34 @@ pub const SCE_BAT_IDENTIFIER: usize = 6;
 pub const SCE_BAT_OPERATOR: usize = 7;
 pub const SCE_BAT_AFTER_LABEL: usize = 8;
 
+// LexProps (INI / `.properties` files) style indices. 6 contiguous
+// slots covering the entire INI / Java-properties surface — line
+// comments (`#` / `!` / `;`), `[section]` headers, key names,
+// the `=` or `:` assignment separator, and Java's `@`-prefixed
+// default-value syntax. Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 486-491 and
+// `vendor/lexilla/lexers/LexProps.cxx` lines 38-80 (the
+// `ColourisePropsLine` per-line classifier) plus line 82
+// (`ColourisePropsDoc`, the zero-wordlist entry point whose
+// unused `WordList *[]` parameter justifies the no-keywords
+// claim below).
+//
+// `SCE_PROPS_DEFAULT` (0) is intentionally left unmapped in
+// `PROPS_STYLES` so it falls through to STYLE_DEFAULT — same
+// omission pattern as `SCE_C_DEFAULT` / `SCE_BAT_DEFAULT`.
+// Value text (the part after `=` / `:`) lands in DEFAULT by design;
+// INI values are arbitrary user data with no canonical meaning to
+// colour. `LexProps` itself is a **zero-wordlist** lexer — the
+// `WordList *[]` parameter in `ColourisePropsDoc` is unused — so
+// the host installs no `SCI_SETKEYWORDS` calls for `L_INI` or
+// `L_PROPS`. Classification is purely line-prefix-based.
+pub const SCE_PROPS_DEFAULT: usize = 0;
+pub const SCE_PROPS_COMMENT: usize = 1;
+pub const SCE_PROPS_SECTION: usize = 2;
+pub const SCE_PROPS_ASSIGNMENT: usize = 3;
+pub const SCE_PROPS_DEFVAL: usize = 4;
+pub const SCE_PROPS_KEY: usize = 5;
+
 // LexHTML — PHP-mode style indices. Emitted when the lexer is
 // inside a `<?php ... ?>` block. `SCE_HPHP_COMPLEX_VARIABLE` lives
 // at 104 historically; the rest are a contiguous 118..=127 range.
