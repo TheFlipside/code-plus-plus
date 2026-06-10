@@ -1765,6 +1765,179 @@ pub const MAKEFILE_KEYWORDS: &str = concat!(
     "override private sinclude undefine unexport vpath"
 );
 
+/// Space-separated cmd.exe **intrinsic** keyword list for the Batch
+/// lexer's wordlist 0. Installed via `SCI_SETKEYWORDS(0, ...)` against
+/// `lmBatch` — the lexer matches these tokens against `SCE_BAT_WORD`
+/// (style index 2).
+///
+/// **Case-insensitive contract.** `LexBatch` lowercases each source
+/// line before wordlist comparison (`LexBatch.cxx:233` — *"All testing is
+/// performed on a lower case version of the line since batch is
+/// case-insensitive"*). The wordlist itself must therefore be
+/// all-lowercase; uppercase tokens never match.
+///
+/// **Wordlist 0 vs. wordlist 1.** The split mirrors cmd.exe's own
+/// dispatch model — wordlist 0 carries the tokens cmd.exe parses /
+/// resolves directly, wordlist 1 carries the names cmd hands off to
+/// PATH-resolved external programs. First-hit rule applies inside the
+/// lexer (a token is in exactly one list); a `cd` token always styles
+/// as wordlist 0 even though `cd.exe` does exist on some forks.
+///
+/// **Categories** (73 entries):
+///
+/// 1. **Control flow** (`if`/`else`/`for`/`in`/`do`/`goto`/`call`/`exit`)
+///    — the cmd parser keywords. `exit` lives here because `EXIT /B` is
+///    parsed by cmd, not dispatched.
+/// 2. **`IF` predicates and comparison operators**
+///    (`defined`/`not`/`errorlevel`/`exist` + `equ`/`neq`/`lss`/`leq`/
+///    `gtr`/`geq`) — documented under `IF /?`; `IF NOT EXIST foo` lexes
+///    as four tokens.
+/// 3. **Core intrinsics** (`set`/`setlocal`/`endlocal`/`shift`/`echo`/
+///    `rem`/`pause`/`prompt`/`title`) — everything `cmd /?` lists as
+///    "built into Windows command shell".
+/// 4. **Filesystem builtins** (`cd`/`chdir`/`pushd`/`popd`/`dir`/`copy`/
+///    `move`/`del`/`erase`/`ren`/`rename`/`mkdir`/`md`/`rmdir`/`rd`/
+///    `type`/`more`/`cls`/`mklink`) — resolved by cmd directly. Both
+///    alias spellings included (`chdir`/`cd`, `mkdir`/`md`, …).
+/// 5. **Environment / info** (`ver`/`vol`/`date`/`time`/`path`/`color`/
+///    `assoc`/`ftype`/`label`/`help`/`print`).
+/// 6. **Control-flow-adjacent** (`choice`/`start`/`break`/`verify`/
+///    `loadhigh`/`lh`) — `loadhigh` and `lh` are explicitly recognised
+///    by `LexBatch.cxx:360` (`InList(word, {"call","do","loadhigh","lh"})`)
+///    so the lexer can apply the "next token is an external command"
+///    rule; omitting them from wordlist 0 would defeat that.
+/// 7. **`FOR /F` option keywords** (`tokens`/`delims`/`eol`/`skip`/
+///    `usebackq`) — bare keywords inside the `"tokens=… delims=…"`
+///    option string.
+/// 8. **`IF CMDEXTVERSION` token** (`cmdextversion`) — recognised by
+///    the `IF` parser for extended-features version checks.
+/// 9. **`SETLOCAL` mode tokens** (`enabledelayedexpansion`/
+///    `disabledelayedexpansion`/`enableextensions`/`disableextensions`)
+///    — toggle cmd parser behavior; the visual marker for delayed
+///    expansion being in scope.
+///
+/// **Deliberate exclusions:**
+///
+/// - **Switch tokens** (`/a`, `/p`, `/f`, `/d`, `/i`, `/r`, `/l`, `/b`,
+///   `/wait`, `/?`, …) — command-line flags, not keywords. Adding
+///   them would visually flatten the keyword/flag distinction.
+/// - **`true` / `false`** — cmd.exe has no boolean type. Batch idiom
+///   is `1` / `0` or `defined VAR`.
+/// - **`@`** — gets its own style class (`SCE_BAT_HIDE`, index 4),
+///   not a wordlist entry.
+/// - **`::`** — handled by `LexBatch`'s line classifier (comment,
+///   index 1), not by token lookup.
+/// - **Dynamic pseudo-variables** (`%errorlevel%`/`%cd%`/`%date%`/
+///   `%time%`/`%random%`/`%cmdcmdline%`/`%cmdextversion%`) — render
+///   through `%VAR%` expansion under `SCE_BAT_IDENTIFIER`. The bare
+///   word `errorlevel` IS in the wordlist because it's also the `IF`
+///   predicate keyword; the others aren't keywords in any context.
+/// - **Device names** (`nul`/`con`/`prn`/`aux`/`lpt1`-`lpt9`/`com1`-
+///   `com9`) — cmd.exe doesn't lex them as keywords at command
+///   position; they are filename arguments to other commands. Notepad++
+///   does colour them in its default scheme, but the dispatch-model
+///   philosophy here keeps wordlist 0 strictly = "tokens cmd parses".
+/// - **`goto:eof`** — `:eof` is a label reference, styled `SCE_BAT_LABEL`.
+///
+/// Sourced and adversarially verified across three lenses (cmd.exe
+/// dispatch model / Notepad++ defaults / `LexBatch` source).
+pub const BATCH_KEYWORDS: &str = concat!(
+    "if else for in do goto call exit defined not errorlevel exist ",
+    "equ neq lss leq gtr geq set setlocal endlocal shift echo rem ",
+    "pause prompt title cd chdir pushd popd dir copy move del erase ",
+    "ren rename mkdir md rmdir rd type more cls ver vol date time ",
+    "path color assoc ftype choice start break verify label help ",
+    "print mklink loadhigh lh cmdextversion tokens delims eol skip ",
+    "usebackq enabledelayedexpansion disabledelayedexpansion ",
+    "enableextensions disableextensions",
+);
+
+/// Space-separated **external command** keyword list for the Batch
+/// lexer's wordlist 1. Installed via `SCI_SETKEYWORDS(1, ...)` against
+/// `lmBatch` — the lexer matches these tokens against
+/// `SCE_BAT_COMMAND` (style index 5).
+///
+/// **Case-insensitive contract**, same as [`BATCH_KEYWORDS`]: tokens
+/// MUST be all-lowercase. **First-hit rule:** no token may appear in
+/// both wordlists; everything here is a token cmd.exe does NOT parse
+/// itself — it hands the token to PATH resolution and the matched
+/// `*.exe` / `*.com` / `*.bat` runs.
+///
+/// **Categories** (87 entries — all OS-shipped Win32 utilities the
+/// average batch corpus calls by bare name):
+///
+/// 1. **File / archive** (`attrib`/`comp`/`compact`/`cipher`/`convert`/
+///    `expand`/`fc`/`find`/`findstr`/`forfiles`/`fsutil`/`makecab`/
+///    `recover`/`replace`/`sort`/`subst`/`takeown`/`tree`/`where`/
+///    `xcopy`/`robocopy`/`icacls`/`cacls`).
+/// 2. **Codepage / console / clipboard** (`chcp`/`clip`/`mode`).
+/// 3. **System info** (`driverquery`/`hostname`/`openfiles`/`query`/
+///    `systeminfo`/`whoami`/`tasklist`/`auditpol`).
+/// 4. **Process control** (`taskkill`/`runas`/`sc`/`schtasks`/`at`/
+///    `wmic`/`shutdown`/`logoff`/`timeout`).
+/// 5. **Scripting hosts / shells** (`powershell`/`pwsh`/`cscript`/
+///    `wscript`/`mshta`).
+/// 6. **Installers / loaders** (`msiexec`/`rundll32`/`regsvr32`/
+///    `regedit`/`reg`).
+/// 7. **Network** (`arp`/`ftp`/`tftp`/`getmac`/`ipconfig`/`nbtstat`/
+///    `net`/`net1`/`netsh`/`netstat`/`nslookup`/`pathping`/`ping`/
+///    `route`/`telnet`/`tracert`).
+/// 8. **Disk / format** (`chkdsk`/`chkntfs`/`defrag`/`diskpart`/
+///    `format`/`mountvol`).
+/// 9. **Servicing / image** (`dism`/`sfc`/`pnputil`/`bcdedit`/
+///    `secedit`/`gpresult`/`gpupdate`/`bitsadmin`/`certutil`).
+/// 10. **Event log / scheduled events** (`eventcreate`/`wevtutil`).
+/// 11. **Time** (`w32tm`).
+///
+/// **Deliberate exclusions:**
+///
+/// - **cmd.exe intrinsics** (`ver`/`vol`/`label`/`exit`/`help`/`more`/
+///   `print`/`mklink`/…) — live in wordlist 0. cmd dispatches them
+///   directly; even though `label.exe` / `more.com` exist as files,
+///   cmd's own dispatch wins.
+/// - **Unix tools** (`less`/`ifconfig`/…) — not shipped with Windows;
+///   the Windows equivalents (`more` internal, `ipconfig` external)
+///   are covered.
+/// - **Dev-toolchain binaries** (`msbuild`/`devenv`/`cl`/`link`/
+///   `nmake`/`mingw32-make`) — not OS-shipped; ride along with
+///   Visual Studio / MinGW installs and only resolve inside a
+///   Developer Command Prompt. Styling them by default implies the
+///   lexer endorses a toolchain installation; this belongs in a
+///   user-customisable keyword file, not the default theme. (Also,
+///   `cl` and `link` are two- and four-letter tokens that collide
+///   with common user identifiers.)
+/// - **MMC console snap-ins** (`devmgmt.msc`/`compmgmt.msc`/etc.) —
+///   the bare word `devmgmt` is not an executable on PATH; the
+///   `.msc` document is launched via the Shell. Even though Notepad++
+///   sometimes includes the bare word, it doesn't resolve to anything
+///   from cmd, so styling it as a command would be misleading.
+/// - **Removed / deprecated binaries** (`eventquery`/`eventtriggers`)
+///   — both were removed from modern Windows; the former was a `.vbs`
+///   wrapper, the latter is gone entirely. Including them would
+///   mis-style references to programs that no longer exist.
+///
+/// `regedit` IS included despite being a GUI program because batch
+/// scripts routinely invoke it for silent imports (`regedit /s
+/// file.reg`) — a common idiom Notepad++'s default list also covers.
+/// `wmic` is included despite Windows 11 24H2 deprecation because the
+/// existing batch corpus still references it heavily.
+///
+/// Sourced and adversarially verified across three lenses (Win32
+/// utility roster / Notepad++ defaults / shipped-binary inventory).
+pub const BATCH_KEYWORDS_2: &str = concat!(
+    "arp at attrib auditpol bcdedit bitsadmin cacls certutil chcp ",
+    "chkdsk chkntfs cipher clip comp compact convert cscript defrag ",
+    "dism diskpart driverquery eventcreate expand fc find findstr ",
+    "forfiles format fsutil ftp getmac gpresult gpupdate hostname ",
+    "icacls ipconfig logoff makecab mode mountvol mshta msiexec ",
+    "nbtstat net net1 netsh netstat nslookup openfiles pathping ping ",
+    "pnputil powershell pwsh query recover reg regedit regsvr32 ",
+    "replace robocopy route rundll32 runas sc schtasks secedit sfc ",
+    "shutdown sort subst systeminfo takeown taskkill tasklist telnet ",
+    "tftp timeout tracert tree w32tm wevtutil where whoami wmic ",
+    "wscript xcopy",
+);
+
 /// Space-separated SGML / DTD keyword list for XML. Installed via
 /// the `xml` lexer's `SCI_SETKEYWORDS(5, ...)` — the hypertext-family
 /// lexers reserve class 5 for "SGML and DTD keywords" (the wordlist

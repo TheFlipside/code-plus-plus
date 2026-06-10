@@ -123,7 +123,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 12 / 🟡 76 / ⚫ 1.
+Total: 89 rows. ✅ 13 / 🟡 75 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -204,6 +204,100 @@ intentionally unmapped — DEFAULT / IDENTIFIER mirror the
 `StyleSlot::Error`. `pascal_uses_lexpascal_dedicated_theme`
 test pins the 13-mapping shape + class-0-only structure +
 canonical wiring + non-reuse of `CPP_STYLES`.
+
+**Batch (2026-06-10):** uses Lexilla's `batch` lexer
+(`LexBatch.cxx`) — a small case-insensitive lexer with a compact
+7-mapping `BATCH_STYLES` table covering line comments (`REM` /
+`::`), two distinct keyword classes (cmd.exe intrinsics in
+wordlist 0 → `SCE_BAT_WORD` → Keyword bold blue, PATH-discovered
+external programs in wordlist 1 → `SCE_BAT_COMMAND` → Keyword2
+steel blue), `:label` markers + leading `@` echo-suppress
+directives (both → Preprocessor, the "out-of-band syntax marker"
+slot since `StyleSlot` has no `Label` variant), operators
+(`SCE_BAT_OPERATOR`), and `AFTER_LABEL` trailing text →
+Comment (LexBatch's own `lexicalClasses[]` describes class 8 as
+comment-class). The Keyword / Keyword2 split mirrors cmd.exe's
+own dispatch model — class 0 = "cmd parsed this", class 1 =
+"cmd spawned this".
+
+**Critical: lexer lowercases the source.** `LexBatch.cxx:233`
+calls `MakeLowerCase(styler[i])` before wordlist lookup, so both
+wordlists MUST be all-lowercase. Batch source can use any casing
+(`IF` / `If` / `if` all match) — case-insensitivity honoured
+transparently. The `batch_uses_lexbatch_two_class_theme` test
+pins the all-lowercase invariant structurally so a future
+uppercase entry trips CI rather than silently failing to match.
+
+`BATCH_KEYWORDS` (class 0, 73 entries) covers cmd.exe intrinsics:
+control flow (`if` / `else` / `for` / `in` / `do` / `goto` /
+`call` / `exit`), `IF` predicates + comparison operators
+(`defined` / `not` / `errorlevel` / `exist` / `equ` / `neq` /
+`lss` / `leq` / `gtr` / `geq`), core builtins (`set` / `setlocal`
+/ `endlocal` / `shift` / `echo` / `rem` / `pause` / etc.),
+filesystem builtins with alias spellings (`cd`/`chdir`,
+`mkdir`/`md`, `rmdir`/`rd`, `del`/`erase`, `ren`/`rename`, plus
+`mklink`), environment / info (`ver` / `vol` / `date` / `time` /
+`path` / `color` / `assoc` / `ftype` / `label` / `help` /
+`print`), control-flow-adjacent (`choice` / `start` / `break` /
+`verify` / `loadhigh` / `lh`), `FOR /F` option keywords (`tokens`
+/ `delims` / `eol` / `skip` / `usebackq`), `IF cmdextversion`,
+and `SETLOCAL` mode toggles (`enabledelayedexpansion` /
+`disabledelayedexpansion` / `enableextensions` /
+`disableextensions`). `loadhigh` / `lh` included specifically
+because `LexBatch.cxx:360` explicitly tests for them when
+applying the "next token is an external command" rule.
+
+`BATCH_KEYWORDS_2` (class 1, 87 entries) covers OS-shipped Win32
+utilities the average batch corpus calls by bare name: file /
+archive (`xcopy` / `robocopy` / `findstr` / `forfiles` / `fsutil`
+/ `icacls` / `takeown` / etc.), codepage + clipboard (`chcp` /
+`clip` / `mode`), system info (`systeminfo` / `whoami` /
+`tasklist` / `auditpol`), process control (`taskkill` / `runas` /
+`sc` / `schtasks` / `wmic` / `shutdown` / `timeout`), scripting
+hosts (`powershell` / `pwsh` / `cscript` / `wscript` / `mshta`),
+installers / loaders (`msiexec` / `rundll32` / `regsvr32` /
+`regedit` / `reg`), network (`ping` / `ipconfig` / `netsh` /
+`tracert` / `route` / `arp` / `netstat` / `nslookup` / `telnet`
+/ etc.), disk / format (`chkdsk` / `diskpart` / `format` /
+`mountvol`), servicing / image (`dism` / `sfc` / `pnputil` /
+`bcdedit` / `gpresult` / `gpupdate` / `bitsadmin` / `certutil`),
+event log (`eventcreate` / `wevtutil`), and time (`w32tm`).
+
+Authored by a 7-agent research-and-adversarial-verify workflow.
+The correctness verifier caught three stale tokens from the
+draft (`devmgmt` — an `.msc` snap-in, not an executable;
+`eventquery` — a removed `.vbs`; `eventtriggers` — removed
+binary) and the missing `loadhigh` / `lh` pair. The completeness
+verifier surfaced ~20 high-frequency external tools missing from
+the draft (`chcp` / `timeout` / `certutil` / `msiexec` /
+`rundll32` / `cscript` / `wscript` / etc.) which were all added.
+The format verifier confirmed the all-lowercase + first-hit-no-
+overlap invariants hold.
+
+**Deliberate exclusions:** dev-toolchain binaries (`msbuild` /
+`cl` / `link` / `nmake` / `mingw32-make`) — not OS-shipped, ride
+along with Visual Studio / MinGW installs and only resolve
+inside Developer Command Prompts; styling them as known commands
+implies endorsing a specific toolchain. Unix tools (`less` /
+`ifconfig`) — not on Windows; the Windows equivalents (`more`
+internal, `ipconfig` external) are covered. Switch tokens (`/a`
+/ `/p` / `/f` / `/?` / etc.) — flags, not keywords. Pseudo-
+variables (`%errorlevel%` / `%cd%` / etc.) — render through
+`%VAR%` expansion under `SCE_BAT_IDENTIFIER`. Device names
+(`nul` / `con` / `prn`) — cmd doesn't lex them as keywords at
+command position. `DEFAULT` (0) and `IDENTIFIER` (6) style
+indices intentionally unmapped — mirror `SCE_C_*` omission
+pattern (generic identifiers carry no language meaning beyond
+default foreground). Parentheses `( )` get `SCE_BAT_DEFAULT`
+from the lexer itself (`LexBatch.cxx:595`), NOT `SCE_BAT_OPERATOR`
+— don't be fooled by the LexicalStyles class description.
+
+Not added to `wired_languages_have_complete_themes` (its
+7-mapping table is below the 8-floor calibrated for LexCPP /
+hypertext families — legitimate, LexBatch simply has fewer
+emission categories). Dedicated `batch_uses_lexbatch_two_class_theme`
+test pins the canonical wiring instead, plus an explicit no-
+overlap check between the two wordlists.
 
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
@@ -372,7 +466,7 @@ further shim work needed.
 | AutoIt | 40 | `au3` | ⚫ | ⚫ | 🟡 |
 | AviSynth | 66 | `avs` | ⚫ | ⚫ | 🟡 |
 | BaanC | 60 | `baan` | ⚫ | ⚫ | 🟡 |
-| Batch | 12 | `batch` | ⚫ | ⚫ | 🟡 |
+| Batch | 12 | `batch` | ✅ | ✅ | ✅ |
 | Blitzbasic | 67 | `blitzbasic` | ⚫ | ⚫ | 🟡 |
 | C | 2 | `cpp` | ✅ | ✅ | ✅ |
 | C# | 4 | `cpp` | ✅ | ✅ | ✅ |

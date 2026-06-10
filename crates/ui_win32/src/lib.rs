@@ -101,10 +101,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use codepp_core::lang::{
-    CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
-    HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_HTML, L_JAVA, L_MAKEFILE,
-    L_OBJC, L_PASCAL, L_PHP, L_RC, L_RUST, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS,
-    OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, XML_KEYWORDS,
+    BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2,
+    C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_BATCH, L_C, L_CPP,
+    L_CS, L_HTML, L_JAVA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP, L_RC, L_RUST, L_XML,
+    MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS,
+    RUST_KEYWORDS, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -114,9 +115,10 @@ use codepp_plugin_host::{
     RUNCOMMAND_RANGE, RUNCOMMAND_USER,
 };
 use codepp_scintilla_sys::{
-    ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_C_CHARACTER, SCE_C_COMMENT,
-    SCE_C_COMMENTDOC, SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR,
-    SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_HPHP_COMMENT,
+    ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_BAT_AFTER_LABEL, SCE_BAT_COMMAND,
+    SCE_BAT_COMMENT, SCE_BAT_HIDE, SCE_BAT_LABEL, SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_C_CHARACTER,
+    SCE_C_COMMENT, SCE_C_COMMENTDOC, SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER,
+    SCE_C_OPERATOR, SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_HPHP_COMMENT,
     SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE,
     SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD,
     SCE_H_ASP, SCE_H_ASPAT, SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT,
@@ -3395,6 +3397,61 @@ const XML_THEME: LangTheme = LangTheme {
     bold: HYPERTEXT_BOLD,
 };
 
+// --- LexBatch (Windows cmd.exe scripts) ---
+// LexBatch is a small case-insensitive lexer emitting 9 distinct
+// style classes (`SCE_BAT_DEFAULT` 0 .. `SCE_BAT_AFTER_LABEL` 8),
+// of which `BATCH_STYLES` maps 7 — line comments (REM / `::`), two
+// distinct keyword classes (cmd.exe intrinsics in wordlist 0 →
+// `SCE_BAT_WORD`, PATH-discovered external programs in wordlist 1 →
+// `SCE_BAT_COMMAND`), `:label` markers, the leading `@` echo-suppress
+// directive, operator punctuation, and "after-label" trailing text
+// the interpreter ignores. The remaining two (`SCE_BAT_DEFAULT` and
+// `SCE_BAT_IDENTIFIER`) intentionally fall through to STYLE_DEFAULT
+// — see the omission rationale at the bottom of this banner.
+//
+// Style-to-slot decisions:
+//   * `WORD` (intrinsics) → Keyword (bold blue) — the primary
+//     control-flow / builtin keyword class.
+//   * `COMMAND` (externals) → Keyword2 (steel blue) — distinct from
+//     control-flow keywords so readers can tell "cmd parsed this"
+//     from "cmd spawned this" at a glance. Same precedent as
+//     `SCE_C_WORD2` → Keyword2 in `CPP_STYLES`.
+//   * `LABEL` (`:setup`) → Preprocessor — `StyleSlot` has no `Label`
+//     variant; Preprocessor is the documented "out-of-band syntax
+//     marker" slot and visually the closest analogue to Notepad++'s
+//     default brown label colour.
+//   * `HIDE` (leading `@`) → Preprocessor — same "directive marker"
+//     read as a label, and the LexBatch class name HIDE matches that
+//     directive-shape semantics.
+//   * `AFTER_LABEL` → Comment — LexBatch's own `lexicalClasses[]`
+//     describes class 8 as comment-class (text trailing a `:label` is
+//     ignored by the interpreter just like a comment), so reusing the
+//     `Comment` slot honours the lexer's classification.
+//
+// `SCE_BAT_DEFAULT` (0) and `SCE_BAT_IDENTIFIER` (6) intentionally
+// unmapped — mirrors the `SCE_C_DEFAULT` / `SCE_C_IDENTIFIER`
+// omission pattern in `CPP_STYLES` (generic identifiers and `%VAR%`
+// expansion bodies carry no language-specific meaning beyond the
+// default foreground).
+const BATCH_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_BAT_COMMENT, StyleSlot::Comment),
+    (SCE_BAT_WORD, StyleSlot::Keyword),
+    (SCE_BAT_LABEL, StyleSlot::Preprocessor),
+    (SCE_BAT_HIDE, StyleSlot::Preprocessor),
+    (SCE_BAT_COMMAND, StyleSlot::Keyword2),
+    (SCE_BAT_OPERATOR, StyleSlot::Operator),
+    (SCE_BAT_AFTER_LABEL, StyleSlot::Comment),
+];
+const BATCH_ITALIC: &[usize] = &[SCE_BAT_COMMENT, SCE_BAT_AFTER_LABEL];
+const BATCH_BOLD: &[usize] = &[SCE_BAT_WORD, SCE_BAT_LABEL, SCE_BAT_HIDE];
+
+const BATCH_THEME: LangTheme = LangTheme {
+    keywords: &[(0, BATCH_KEYWORDS), (1, BATCH_KEYWORDS_2)],
+    styles: BATCH_STYLES,
+    italic: BATCH_ITALIC,
+    bold: BATCH_BOLD,
+};
+
 // --- LexMake (Makefile) ---
 // LexMake is a small line-oriented lexer with a compact style table
 // — five emission slots that actually carry colour, plus DEFAULT (0)
@@ -3538,6 +3595,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&MAKEFILE_THEME)
     } else if lang == L_PASCAL {
         Some(&PASCAL_THEME)
+    } else if lang == L_BATCH {
+        Some(&BATCH_THEME)
     } else {
         None
     }
@@ -18025,10 +18084,11 @@ mod lang_theme_tests {
     //! a buffer at default colours.
     use super::{lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO};
     use codepp_core::lang::{
-        CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVA_KEYWORDS,
-        JAVA_KEYWORDS_2, L_C, L_CPP, L_CS, L_HTML, L_JAVA, L_JAVASCRIPT, L_MAKEFILE, L_OBJC,
-        L_PASCAL, L_PHP, L_PYTHON, L_RC, L_RUST, L_TEXT, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS,
-        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, XML_KEYWORDS,
+        BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2,
+        HTML_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_BATCH, L_C, L_CPP, L_CS, L_HTML, L_JAVA,
+        L_JAVASCRIPT, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP, L_PYTHON, L_RC, L_RUST, L_TEXT, L_XML,
+        MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS,
+        RC_KEYWORDS, RUST_KEYWORDS, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -18339,6 +18399,100 @@ mod lang_theme_tests {
         assert!(
             mk.keywords.iter().all(|(class, _)| *class == 0),
             "Makefile installs class 0 only — LexMake exposes no other classes"
+        );
+    }
+
+    /// Batch (Windows cmd.exe scripts) uses Lexilla's `batch` lexer
+    /// (`LexBatch.cxx`) — a small case-insensitive lexer with a
+    /// compact 7-mapping style table. Installs TWO keyword classes
+    /// matching cmd.exe's own dispatch model: class 0 = intrinsics
+    /// (`SCE_BAT_WORD`), class 1 = PATH-discovered external programs
+    /// (`SCE_BAT_COMMAND`). NOT included in
+    /// `wired_languages_have_complete_themes` because its 7-mapping
+    /// table is below the 8-floor calibrated for `LexCPP` / hypertext
+    /// (legitimate — `LexBatch` simply has fewer emission categories).
+    /// Pins the canonical `BATCH_KEYWORDS` / `BATCH_KEYWORDS_2` links
+    /// plus the compact-style-table shape plus that the table does not
+    /// reuse `CPP_STYLES`, `HYPERTEXT_STYLES`, `MAKEFILE_STYLES`, or
+    /// `PASCAL_STYLES`.
+    #[test]
+    fn batch_uses_lexbatch_two_class_theme() {
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let c = lang_theme(L_C).expect("C wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        // Compact style table — 7 emission mappings. DEFAULT (0)
+        // and IDENTIFIER (6) deliberately unmapped per the `LexBatch`
+        // banner in scintilla-sys.
+        assert_eq!(
+            bat.styles.len(),
+            7,
+            "Batch theme has {} style mappings; expected 7",
+            bat.styles.len()
+        );
+        // Distinct from every other style table in the framework.
+        assert_ne!(
+            bat.styles, c.styles,
+            "Batch must NOT reuse CPP_STYLES (it has its own BATCH_STYLES)"
+        );
+        assert_ne!(
+            bat.styles, mk.styles,
+            "Batch must NOT reuse MAKEFILE_STYLES"
+        );
+        assert_ne!(bat.styles, pas.styles, "Batch must NOT reuse PASCAL_STYLES");
+        assert_ne!(
+            bat.styles, php.styles,
+            "Batch must NOT reuse HYPERTEXT_STYLES"
+        );
+        // Two keyword classes — class 0 (intrinsics) + class 1
+        // (externals), matching cmd.exe's dispatch model. Class
+        // index assignment is dictated by LexBatch's
+        // `batchWordListDesc[]` ("Internal Commands", "External
+        // Commands"), not arbitrary.
+        assert_eq!(
+            bat.keywords.len(),
+            2,
+            "Batch installs class 0 (intrinsics) + class 1 (externals)"
+        );
+        assert_eq!(bat.keywords[0].0, 0);
+        assert_eq!(bat.keywords[0].1, BATCH_KEYWORDS);
+        assert_eq!(bat.keywords[1].0, 1);
+        assert_eq!(bat.keywords[1].1, BATCH_KEYWORDS_2);
+        // Structural guard: no other classes — LexBatch only exposes
+        // two wordlists. A regression that copy-pasted e.g. PHP's
+        // class-4 install onto Batch would fail this assertion.
+        assert!(
+            bat.keywords
+                .iter()
+                .all(|(class, _)| *class == 0 || *class == 1),
+            "Batch installs class 0 + class 1 ONLY — LexBatch exposes no other wordlists"
+        );
+        // Pin the wordlists' all-lowercase invariant. LexBatch
+        // lowercases each source line before comparison; an
+        // uppercase token in either list would never match.
+        // ("equ"/"neq"/"lss"/"leq"/"gtr"/"geq" are the IF-comparison
+        // operators — they look uppercase in idiomatic batch scripts
+        // but must be stored lowercase in the wordlist.)
+        for (label, list) in [("class 0", BATCH_KEYWORDS), ("class 1", BATCH_KEYWORDS_2)] {
+            assert!(
+                list.chars().all(|c| !c.is_ascii_uppercase()),
+                "Batch {label} list contains uppercase — LexBatch is case-insensitive and \
+                 lowercases source before lookup, so uppercase wordlist tokens never match"
+            );
+        }
+        // Pin the no-overlap invariant. LexBatch applies first-hit
+        // semantics; a token in both lists would either be wasted
+        // bytes or, worse, misrepresent the dispatch model. The
+        // synthesis stage of the research workflow exists to enforce
+        // this split; the test pins it permanently.
+        let class0: std::collections::HashSet<&str> = BATCH_KEYWORDS.split_whitespace().collect();
+        let class1: std::collections::HashSet<&str> = BATCH_KEYWORDS_2.split_whitespace().collect();
+        let overlap: Vec<&&str> = class0.intersection(&class1).collect();
+        assert!(
+            overlap.is_empty(),
+            "Batch class 0 / class 1 wordlists overlap on {overlap:?} — LexBatch uses first-hit \
+             matching so duplicates either waste bytes or misrepresent cmd.exe's dispatch model"
         );
     }
 

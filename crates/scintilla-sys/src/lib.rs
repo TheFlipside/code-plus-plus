@@ -825,6 +825,33 @@ pub const SCE_PAS_OPERATOR: usize = 13;
 pub const SCE_PAS_ASM: usize = 14;
 pub const SCE_PAS_MULTILINESTRING: usize = 15;
 
+// LexBatch style indices. 9 contiguous slots covering the entire
+// Windows batch / cmd.exe lexical surface — line comments (REM /
+// `::`), two distinct keyword classes (cmd.exe intrinsics vs.
+// PATH-discovered external programs), `:label` markers, the leading
+// `@` echo-suppress directive, generic identifiers, operator
+// punctuation (`&` / `|` / `<` / `>` / `>>` and the `&&` / `||`
+// pairings — parentheses are deliberately styled as DEFAULT by the
+// lexer per `LexBatch.cxx:595`, *not* OPERATOR), and "after-label"
+// trailing text the cmd interpreter ignores. Cross-referenced
+// against `vendor/lexilla/lexers/LexBatch.cxx` lines 44-55.
+//
+// `SCE_BAT_DEFAULT` (0) and `SCE_BAT_IDENTIFIER` (6) are
+// intentionally left unmapped in `BATCH_STYLES` so they fall
+// through to STYLE_DEFAULT — same omission pattern as
+// `SCE_C_DEFAULT` / `SCE_C_IDENTIFIER` in `CPP_STYLES` (generic
+// identifiers, `%VAR%` expansion bodies, and unrecognised bare
+// tokens carry no language-specific meaning).
+pub const SCE_BAT_DEFAULT: usize = 0;
+pub const SCE_BAT_COMMENT: usize = 1;
+pub const SCE_BAT_WORD: usize = 2;
+pub const SCE_BAT_LABEL: usize = 3;
+pub const SCE_BAT_HIDE: usize = 4;
+pub const SCE_BAT_COMMAND: usize = 5;
+pub const SCE_BAT_IDENTIFIER: usize = 6;
+pub const SCE_BAT_OPERATOR: usize = 7;
+pub const SCE_BAT_AFTER_LABEL: usize = 8;
+
 // LexHTML — PHP-mode style indices. Emitted when the lexer is
 // inside a `<?php ... ?>` block. `SCE_HPHP_COMPLEX_VARIABLE` lives
 // at 104 historically; the rest are a contiguous 118..=127 range.
