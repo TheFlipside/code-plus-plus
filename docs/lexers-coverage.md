@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 17 / 🟡 71 / ⚫ 1.
+Total: 89 rows. ✅ 18 / 🟡 70 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -571,6 +571,134 @@ keyword constant links, all-lowercase invariant on both
 wordlists, no-overlap invariant, and structural "no class
 2-7" guard.
 
+**Visual Basic (2026-06-10):** uses Lexilla's `vb` lexer
+(`LexVB.cxx`). The `L_VB` row routes both `.vb` (VB.NET) and
+`.vbs` (VBScript) extensions to the same lexer; the wordlists
+cover the VB.NET superset (a strict superset of VBScript), so
+`.vbs` files render correctly with no false negatives. VBA /
+VB6 / VB Classic vocabulary is included transitively via
+`defbool` / `ccur` / `clngptr` / `ptrsafe` / `lset` / `rset`
+/ `load` / `unload` / `begin` / `attribute`.
+
+Dedicated 10-mapping `VB_STYLES` table — does NOT reuse any
+other framework style table (CPP / HYPERTEXT / MAKEFILE /
+PASCAL / BATCH / PROPS / SQL — all 7 non-reuse assertions
+structurally pinned in the test). Maps comments → Comment
+italic, decimal/`&H`/`&O`/`&B` numbers AND `#1/1/2024#`
+date literals → Number, `SCE_B_KEYWORD` (class 0, primary
+reserved words) → Keyword bold blue,
+`SCE_B_KEYWORD2`/`3`/`4` (classes 1/2/3) → Keyword2 steel-blue,
+double-quoted strings → String, `#If` / `#Region` / `#Const`
+preprocessor directives → Preprocessor bold (lexer-detected by
+leading `#`, not by wordlist), operators → Operator. DEFAULT
+(0), IDENTIFIER (7), STRINGEOL (9) intentionally unmapped —
+fall through to STYLE_DEFAULT (mirrors `SCE_C_*` / `SCE_PAS_*`
+omission pattern, plus STRINGEOL pending `StyleSlot::Error`).
+This brings the deferred-Error-slot migration list from 9 to
+10 entries.
+
+**Critical: case-insensitive lexer.** `LexVB.cxx:208` calls
+`sc.GetCurrentLowered(s, ...)` on every candidate token
+before `keywords.InList(s)`. `VB_KEYWORDS` (199 entries) and
+`VB_KEYWORDS_2` (53 entries) are stored all-lowercase. VB
+source can use any casing (`If` / `IF` / `if` all match) —
+the case-insensitive convention is honoured transparently.
+Uppercase wordlist entries would never match. The
+`vb_uses_lexvb_two_class_theme` test pins the all-lowercase
+invariant structurally.
+
+**Class split.** Class 0 (primary keywords) covers control
+flow, declaration modifiers, class / module / namespace
+syntax, error handling (`try` / `catch` / `finally` /
+`throw`), type-cast operator keywords (`ctype` / `directcast`
+/ `trycast` / `addressof` / `gettype` / `typeof` / `nameof`),
+the `c<Type>` conversion-function family (Microsoft-reserved,
+unlike the string / math / date intrinsics), sentinel
+literals (`true` / `false` / `nothing` / `null`), logical /
+comparison operator keywords (`and` / `andalso` / `or` /
+`orelse` / `not` / `xor` / `mod` / `is` / `isnot` / `like` /
+`eqv` / `imp` / `new`), `Option` directive vocabulary, LINQ
+contextual keywords (`from` / `where` / `group` / `into` /
+`join` / `equals` / `aggregate` / `distinct` / `order` /
+`skip` / `take` / `ascending` / `descending`), async / iterator
+contextual keywords (`async` / `await` / `yield` / `iterator`
+/ `custom` / `when` / `using` / `synclock` / `with`), VBA
+`Def<Type>` statements, VB6 form `Load` / `Unload`, the XML
+literal namespace lookup `getxmlnamespace`. Class 1 (types +
+intrinsics) covers the 16 VB.NET primitive types + VB Classic
+/ VBScript / VBA dialect-extension types and literals
+(`currency` / `variant` / `empty`) + 35 `vb<Name>` intrinsic
+constants from `Microsoft.VisualBasic.Constants` (text /
+line-ending: `vbcrlf` / `vbnewline` / `vbtab` etc.; MsgBox:
+button groups / icons / default-button / modality / return
+values).
+
+**`rem` deliberately excluded from class 0.** `LexVB.cxx:212-
+213` hard-codes `Rem` line-comment recognition before
+consulting any wordlist; `Rem` lines style as `SCE_B_COMMENT`
+regardless of whether `rem` is in class 0. The test pins this
+structurally with `assert!(!class0.contains("rem"), ...)` so a
+future "defensive" cleanup commit doesn't add it back as dead
+weight.
+
+**Independence from [`VBSCRIPT_KEYWORDS`].** The
+`VBSCRIPT_KEYWORDS` const (added by the ASP commit) feeds the
+**hypertext** lexer's class 2 for server-side VBScript inside
+`<% %>` blocks — a different lexer surface deliberately
+widened with library intrinsics (`msgbox` / `inputbox` / `chr`
+/ etc.) for ASP. `VB_KEYWORDS` feeds `LexVB`'s class 0 and
+follows Notepad++'s shipped `<Language name="vb">` `instre1`
+convention of excluding those library identifiers — they are
+not Microsoft-reserved keywords; including them would mis-colour
+user identifiers of the same name. (Only the `c<Type>`
+conversion family is included because Microsoft does list it
+as reserved.)
+
+**Deliberate exclusions** (Notepad++ ships some; trimmed as
+dead vocabulary):
+
+- Library intrinsics (`msgbox` / `inputbox` / `chr` / `asc` /
+  `len` / `left` / `right` / `mid` function form / `trim` /
+  `ucase` / `lcase` / `instr` / `replace` / `split` / `join`
+  / `now` / `date` function form / `time` / `year` / etc.) —
+  library identifiers, not Microsoft-reserved.
+- .NET framework type names (`Form` / `Application` /
+  `Console` / `System` / `Exception`) — library identifiers.
+- ASP intrinsic objects (`request` / `response` / `server` /
+  `session` / `application` / `objectcontext`) — same
+  reasoning as in the ASP commit.
+- `#`-prefixed preprocessor directives (`#if` / `#else` /
+  `#region` / `#const` / `#externalsource` / `#disable` /
+  `#enable`) — styled by lexer's `#`-prefix path, not by
+  wordlist.
+- `vb<Type>` `VarType` return-value constants (`vbInteger` /
+  `vbLong` / `vbString` / etc.) — duplicate type-name spelling
+  creates visual collision (`vbInteger` next to `Integer`
+  both rendering as Keyword2).
+- Colour constants (`vbBlack` / `vbBlue` / etc.), FileAttribute
+  / TriState / CompareMethod / CallType / DateFirst* families
+  — dead in modern .NET; modern code uses `Color.FromArgb` /
+  `My.Computer.FileSystem` / etc.
+
+Authored by a 7-agent research-and-adversarial-verify
+workflow. The correctness verifier CONFIRMED with minor
+nits (wordlist descriptors are `"Keywords"` / `"user1"` /
+`"user2"` / `"user3"` upstream — the three `userN` slots
+aren't user-customisable, they ARE the secondary keyword
+classes; `rem` would be dead in the wordlist). The
+completeness verifier flagged 5 missing tokens
+(`ascending` / `descending` for LINQ sort direction, `off` /
+`infer` for `Option` directive completeness, `getxmlnamespace`
+for VB.NET XML literals) — all added before commit. The
+format verifier CONFIRMED counts (199 / 53), no overlap,
+no duplicates, all lowercase, ASCII, style indices match
+SciLexer.h.
+
+`vb_uses_lexvb_two_class_theme` test pins the 10-mapping
+shape, two-class structure, canonical keyword links,
+all-lowercase invariant, no-overlap invariant, no-class-2/3
+guard, AND the `rem` exclusion structurally.
+
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
 5-style table and a single keyword class. `MAKEFILE_KEYWORDS`
@@ -815,7 +943,7 @@ further shim work needed.
 | TypeScript | 85 | `cpp` | ⚫ | ⚫ | 🟡 |
 | Verilog | 43 | `verilog` | ⚫ | ⚫ | 🟡 |
 | VHDL | 38 | `vhdl` | ⚫ | ⚫ | 🟡 |
-| Visual Basic | 18 | `vb` | ⚫ | ⚫ | 🟡 |
+| Visual Basic | 18 | `vb` | ✅ | ✅ | ✅ |
 | Visual Prolog | 84 | `visualprolog` | ⚫ | ⚫ | 🟡 |
 | XML | 9 | `xml` | ✅ | ✅ | ✅ |
 | YAML | 49 | `yaml` | ⚫ | ⚫ | 🟡 |

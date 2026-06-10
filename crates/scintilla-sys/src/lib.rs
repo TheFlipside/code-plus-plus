@@ -702,6 +702,51 @@ pub const SCE_SQL_WORD2: usize = 16;
 pub const SCE_SQL_COMMENTDOCKEYWORD: usize = 17;
 pub const SCE_SQL_QUOTEDIDENTIFIER: usize = 23;
 
+// LexVB style indices. 13 contiguous slots (0..=12) covering the
+// Visual Basic family (VB.NET, VBScript, VBA, VB Classic) — `'`
+// line comments, decimal / `&H` hex / `&O` octal / `&B` binary
+// numbers, four keyword classes (only classes 0 + 1 are populated
+// by `VB_THEME`; classes 2 + 3 are wordlist slots Notepad++ leaves
+// unset for general `.vb` files), double-quoted strings,
+// `#`-prefixed preprocessor directives, operator punctuation,
+// identifiers, `#1/1/2024#` date literals, and the
+// unterminated-string error state. Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 463-475 and
+// `vendor/lexilla/lexers/LexVB.cxx` lines 87-101 (lexicalClasses[]).
+//
+// LexVB is **case-insensitive** — `LexVB.cxx:208` calls
+// `sc.GetCurrentLowered(s, ...)` to lowercase candidate tokens
+// before consulting any wordlist. Wordlists installed against this
+// lexer MUST be all-lowercase.
+//
+// `SCE_B_DEFAULT` (0), `SCE_B_IDENTIFIER` (7), and `SCE_B_STRINGEOL`
+// (9) are intentionally unmapped in `VB_STYLES` — fall through to
+// STYLE_DEFAULT (same omission pattern as `SCE_PAS_DEFAULT` /
+// `SCE_PAS_IDENTIFIER` / `SCE_PAS_STRINGEOL`). The STRINGEOL
+// indicator is also pending the future `StyleSlot::Error` palette
+// addition.
+//
+// Indices 13-22 (`SCE_B_CONSTANT` / `SCE_B_ASM` / `SCE_B_LABEL` /
+// `SCE_B_ERROR` / `SCE_B_HEXNUMBER` / `SCE_B_BINNUMBER` /
+// `SCE_B_COMMENTBLOCK` / `SCE_B_DOCLINE` / `SCE_B_DOCBLOCK` /
+// `SCE_B_DOCKEYWORD`) ARE declared in `SciLexer.h` but are emitted
+// by sibling lexers (`LexBasic.cxx` for FreeBASIC / PureBasic /
+// BlitzBasic, sharing the SCE_B_ namespace) — `LexVB` itself never
+// emits them. Omitted here; add when those lexers are wired.
+pub const SCE_B_DEFAULT: usize = 0;
+pub const SCE_B_COMMENT: usize = 1;
+pub const SCE_B_NUMBER: usize = 2;
+pub const SCE_B_KEYWORD: usize = 3;
+pub const SCE_B_STRING: usize = 4;
+pub const SCE_B_PREPROCESSOR: usize = 5;
+pub const SCE_B_OPERATOR: usize = 6;
+pub const SCE_B_IDENTIFIER: usize = 7;
+pub const SCE_B_DATE: usize = 8;
+pub const SCE_B_STRINGEOL: usize = 9;
+pub const SCE_B_KEYWORD2: usize = 10;
+pub const SCE_B_KEYWORD3: usize = 11;
+pub const SCE_B_KEYWORD4: usize = 12;
+
 // LexYAML style indices.
 pub const SCE_YAML_COMMENT: usize = 1;
 pub const SCE_YAML_IDENTIFIER: usize = 2;

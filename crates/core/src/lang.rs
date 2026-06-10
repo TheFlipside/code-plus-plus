@@ -2238,6 +2238,302 @@ pub const VBSCRIPT_KEYWORDS: &str = concat!(
     "timevalue monthname weekdayname",
 );
 
+/// Space-separated primary keyword list for Visual Basic, installed
+/// via `LexVB`'s `SCI_SETKEYWORDS(0, ...)` — class 0 of
+/// `vbWordListDesc[]` (`LexVB.cxx:68`). Drives `SCE_B_KEYWORD`
+/// (style index 3), mapped to `StyleSlot::Keyword` (bold blue).
+///
+/// **All entries must be lowercase.** `LexVB.cxx:208` calls
+/// `sc.GetCurrentLowered(s, ...)` on every candidate token before
+/// `keywords.InList(s)`. VB source can use any casing (`If` / `IF`
+/// / `if` all match) — the case-insensitive convention is honoured
+/// transparently. Uppercase or mixed-case entries here would never
+/// match.
+///
+/// **Dialect scope — VB.NET superset.** `L_VB` routes both `.vb`
+/// (`VB.NET`) and `.vbs` (`VBScript`) extensions to the same Lexilla
+/// lexer (`lmVB`). `VB.NET` is a strict keyword superset of
+/// `VBScript` (every `VBScript` reserved word is also a `VB.NET`
+/// reserved word), and `.bas` / `.cls` / `.frm` VB6 / VBA source is
+/// covered transitively through the VBA-only additions (`defbool`
+/// / `cvar` / `clnglng` / `clngptr` / `ptrsafe` / `lset` / `rset`
+/// / `load` / `unload` / `begin` / `attribute`).
+///
+/// **Independence from [`VBSCRIPT_KEYWORDS`].** The
+/// `VBSCRIPT_KEYWORDS` const in this file (added by the ASP
+/// commit) feeds the **hypertext** lexer's class 2 for server-side
+/// `VBScript` inside `<% %>` blocks — a different lexer surface
+/// deliberately widened with intrinsic functions (`msgbox` /
+/// `inputbox` / `chr` / etc.) for ASP. `VB_KEYWORDS` (this list)
+/// feeds `LexVB`'s class 0 and follows Notepad++'s shipped
+/// `<Language name="vb">` `instre1` convention of excluding those
+/// library identifiers — they are not Microsoft-reserved keywords;
+/// including them would mis-colour user identifiers of the same
+/// name.
+///
+/// **Class split with `VB_KEYWORDS_2`.** A token appears in
+/// exactly one wordlist (the test pins this structurally). Class 0
+/// = control flow, declaration modifiers, class / module / namespace
+/// syntax, error handling, type-cast operator keywords, the
+/// `c<Type>` conversion-function family (which IS Microsoft-reserved,
+/// unlike the string / math / date intrinsics), sentinel literals,
+/// logical / comparison operator keywords, `Option` directive
+/// vocabulary, LINQ contextual keywords, async / iterator
+/// contextual keywords, VBA `Def<Type>` statements, VB6 form
+/// `Load` / `Unload`, retained-but-unused reserved words. Class 1
+/// = primitive type names + `vb<Name>` intrinsic constants from
+/// `Microsoft.VisualBasic.Constants`.
+///
+/// This is richer than Notepad++'s shipped single `instre1` block,
+/// matching the C / C++ / TypeScript precedent of splitting
+/// control-flow vs type vocabulary.
+///
+/// **Deliberate exclusions:**
+///
+/// - **Primitive type names** (`integer` / `long` / `double` /
+///   `string` / `boolean` / `byte` / `char` / `date` / `decimal` /
+///   `object` / `sbyte` / `short` / `single` / `uinteger` / `ulong`
+///   / `ushort` / `currency` / `variant`) — go to `VB_KEYWORDS_2`.
+///
+/// - **`empty`** — the `VBScript` `Empty` sentinel literal. Listed
+///   alongside `true` / `false` / `nothing` / `null` semantically,
+///   but routed to `VB_KEYWORDS_2` (class 1, Keyword2 steel-blue)
+///   because it's a `VBScript`-only dialect-extension marker
+///   without a `VB.NET` analogue (`VB.NET` uses `Nothing` for the
+///   missing-value sentinel). This asymmetry between `null` / `nothing`
+///   (class 0 Keyword) and `empty` (class 1 Keyword2) is intentional
+///   — see `VB_KEYWORDS_2` docstring.
+///
+/// - **Standard-library intrinsics** (`msgbox` / `inputbox` / `chr`
+///   / `asc` / `len` / `left` / `right` / `mid` function form /
+///   `trim` / `ucase` / `lcase` / `instr` / `replace` / `split` /
+///   `join` / `now` / `date` function form / `time` / `year` /
+///   `createobject` / `getobject` / `abs` / `sqr` / `rnd` /
+///   `isarray` / `isdate` / `isempty` / `isnull` / `isnumeric` /
+///   `isobject` / `typename` / `vartype` / `lbound` / `ubound` /
+///   `array`). Notepad++'s `<Language name="vb">` `instre1` block
+///   does NOT list these; they are library identifiers in
+///   `Microsoft.VisualBasic.dll`, not Microsoft-reserved words. The
+///   `c<Type>` conversion family IS included because Microsoft does
+///   list it as reserved (`cbool` through `cushort` plus VBA-only
+///   `ccur` / `cvar` / `clnglng` / `clngptr`).
+///
+/// - **.NET framework type names** (`Form` / `Application` /
+///   `Console` / `System` / `Exception`) — library identifiers, not
+///   language keywords.
+///
+/// - **ASP intrinsic objects** (`request` / `response` / `server` /
+///   `session` / `application` / `objectcontext`) — host-provided
+///   `ActiveX` objects supplied by IIS, not language constructs.
+///
+/// - **Preprocessor directives with the `#` prefix** (`#if` /
+///   `#else` / `#region` / `#const` / `#externalsource` / `#disable`
+///   / `#enable`). `LexVB.cxx`'s preprocessor path styles these via
+///   the dedicated `SCE_B_PREPROCESSOR` slot driven by the leading
+///   `#`, not via wordlist membership. Listing them here would be
+///   silently dead.
+///
+/// - **Punctuation operators** (`=` / `&` / `+` / `-` / `*` / `/`
+///   / `\` / `^` / `<<` / `>>` and compound `<op>=` forms) —
+///   tokenise as `SCE_B_OPERATOR`, not as keywords. Only the NAMED
+///   operators (`and` / `or` / `not` / `xor` / `mod` / `is` /
+///   `isnot` / `like` / `andalso` / `orelse` / `addressof` /
+///   `gettype` / `typeof` / `directcast` / `trycast` / `ctype` /
+///   `new` / `nameof`) tokenise as words and are included.
+///
+/// - **`vb<Type>` `VarType` return-value constants** (`vbInteger`
+///   / `vbLong` / `vbString` / `vbObject` etc.) — duplicate
+///   type-name spelling creates visual collision (`vbInteger` next
+///   to `Integer` both rendering as Keyword2); excluded from both
+///   classes.
+///
+/// **Special case: `rem`** is deliberately NOT in this wordlist.
+/// `LexVB.cxx:212-213` hard-codes `Rem` line-comment recognition
+/// before consulting any wordlist — `Rem` lines style as
+/// `SCE_B_COMMENT` regardless of whether `rem` is in class 0.
+/// Including it here would be silently dead.
+///
+/// Sourced and adversarially verified across three lenses
+/// (Microsoft Learn "Keywords (Visual Basic)" canonical
+/// reserved-word table / Notepad++ `langs.model.xml`
+/// `<Language name="vb">` `instre1` / `LexVB.cxx:215-222` wordlist
+/// dispatch). Completeness verifier flagged 5 omissions
+/// (`ascending` / `descending` for LINQ sorts, `off` / `infer` for
+/// `Option` directives, `getxmlnamespace` for XML literals) — all
+/// added before commit.
+pub const VB_KEYWORDS: &str = concat!(
+    // control flow
+    "if then else elseif end select case for each next to step ",
+    "while wend do loop until continue exit goto return resume on ",
+    // procedure / variable declaration and modifiers
+    "sub function dim const static shared shadows overloads overrides ",
+    "overridable mustoverride notoverridable mustinherit notinheritable ",
+    "partial lib alias declare property get let set withevents handles ",
+    "readonly writeonly default paramarray byval byref optional ",
+    "redim preserve erase ",
+    // class / module / namespace syntax
+    "class module namespace interface structure enum delegate event ",
+    "raiseevent addhandler removehandler operator implements inherits ",
+    "imports public private protected friend global of as in out ",
+    "narrowing widening ",
+    // self-reference
+    "me mybase myclass ",
+    // error handling (`error` is the legacy `On Error` keyword)
+    "try catch finally throw error ",
+    // type / cast operator keywords (real reserved words, not library)
+    "ctype directcast trycast addressof gettype typeof nameof ",
+    // XML-literal namespace lookup (VB.NET-unique reserved keyword)
+    "getxmlnamespace ",
+    // logical / comparison operator keywords. `eqv` / `imp` are
+    // VBScript / VB6 / VBA-only — removed from `VB.NET` proper, where
+    // using them as identifiers raises a compile error but they are
+    // NOT reserved words. Kept here because `L_VB` covers the whole
+    // VB family (`VB.NET` superset on the `VB.NET` axis, but with
+    // legacy-dialect operators included transitively for `.bas` /
+    // `.cls` / `.vbs` files that route through the same lexer).
+    // Impact on `VB.NET`-only files: harmless — `eqv` / `imp` as
+    // identifiers are extremely rare and the colour wouldn't be
+    // semantically meaningful anyway.
+    "and andalso or orelse not xor eqv imp mod is isnot like new ",
+    // type-conversion function keywords (Microsoft-reserved `c<Type>`
+    // family; `ccur` / `cvar` / `clnglng` / `clngptr` are VBA-only)
+    "cbool cbyte cchar cdate cdbl cdec cint clng cobj csbyte cshort ",
+    "csng cstr cuint culng cushort ccur cvar clnglng clngptr ",
+    // sentinel literals (`empty` deliberately omitted — routed to
+    // `VB_KEYWORDS_2` alongside other VBScript dialect markers)
+    "true false nothing null ",
+    // `Option` directive vocabulary
+    "option explicit strict compare binary text infer off ",
+    // `Declare` / assembly-attribute modifiers (separate from `Option`
+    // despite tokenising as plain words)
+    "unicode ansi assembly ",
+    // LINQ / query contextual keywords (`select` / `on` / `let`
+    // already listed above — single-class, first-occurrence wins)
+    "from where group by into join equals aggregate distinct ",
+    "order skip take ascending descending ",
+    // async / iterator / event / scope contextual keywords
+    "async await yield iterator custom when using synclock with ",
+    // misc statements
+    "call stop randomize debug print ",
+    // VB6 / VBA legacy statements still in widespread use (`mid` is
+    // the assignment-statement form; function form is library and
+    // excluded)
+    "lset rset mid load unload begin attribute ",
+    // VBA `Def<Type>` default-type-by-prefix statements
+    "defbool defbyte defcur defdate defdbl defdec defint deflng ",
+    "deflnglng deflngptr defobj defsng defstr defvar ",
+    // VBA 64-bit declaration modifier (Office 2010+)
+    "ptrsafe ",
+    // retained-but-unused per Microsoft (still tokenise as reserved)
+    "gosub endif",
+);
+
+/// Space-separated type / intrinsic-constant list for Visual Basic,
+/// installed via `LexVB`'s `SCI_SETKEYWORDS(1, ...)` — class 1 of
+/// `vbWordListDesc[]`. Drives `SCE_B_KEYWORD2` (style index 10),
+/// mapped to `StyleSlot::Keyword2` (steel blue) in `VB_STYLES`.
+///
+/// **All entries lowercase**, same case-insensitive contract as
+/// [`VB_KEYWORDS`].
+///
+/// **No overlap with class 0.** Verified structurally by the
+/// `vb_uses_lexvb_two_class_theme` test's `HashSet` intersection
+/// check.
+///
+/// **Categories** (53 entries):
+///
+/// - **VB.NET primitive types** (16) — `boolean` / `byte` / `char`
+///   / `date` / `decimal` / `double` / `integer` / `long` /
+///   `object` / `sbyte` / `short` / `single` / `string` / `uinteger`
+///   / `ulong` / `ushort`.
+///
+/// - **VB Classic / `VBScript` / VBA dialect-extension types and
+///   literals** (3) — `currency`, `variant`, `empty`. (`empty` is
+///   the `VBScript` `Empty` sentinel literal; coloured as Keyword2
+///   here since it's a dialect-extension marker rather than a
+///   primary control-flow word, and `VB.NET` has no `Empty` so the
+///   class-0 vs class-1 split favours class 1 for the `.vb`
+///   majority case.)
+///
+/// - **Text / line-ending intrinsic constants** (11) from
+///   `Microsoft.VisualBasic.Constants` — `vbcr` / `vbcrlf` /
+///   `vbformfeed` / `vblf` / `vbnewline` / `vbnull` / `vbnullchar`
+///   / `vbnullstring` / `vbtab` / `vbverticaltab` / `vbback`. The
+///   most heavily-typed identifiers in real VB code after the
+///   primitive types themselves; every string concatenation
+///   involves at least one.
+///
+/// - **`MsgBox` button-group constants** (6) — `vbokonly` /
+///   `vbokcancel` / `vbabortretryignore` / `vbyesnocancel` /
+///   `vbyesno` / `vbretrycancel`.
+///
+/// - **`MsgBox` icon constants** (4) — `vbcritical` / `vbquestion`
+///   / `vbexclamation` / `vbinformation`.
+///
+/// - **`MsgBox` default-button + modality constants** (6) —
+///   `vbdefaultbutton1` through `vbdefaultbutton4` /
+///   `vbapplicationmodal` / `vbsystemmodal`.
+///
+/// - **`MsgBox` return-value constants** (7) — `vbok` / `vbcancel`
+///   / `vbabort` / `vbretry` / `vbignore` / `vbyes` / `vbno`.
+///
+/// `MsgBox "X", vbCritical Or vbOKCancel` is the single most
+/// common idiom in legacy VB6 / VBA and remains common in
+/// `VB.NET`; covering the full vocabulary so users see consistent
+/// highlighting across the whole `MsgBox` expression.
+///
+/// **Deliberate exclusions** (Notepad++ ships some; trimmed as
+/// dead vocabulary):
+///
+/// - **Colour constants** (`vbblack` / `vbblue` / `vbcyan` /
+///   `vbgreen` / `vbmagenta` / `vbred` / `vbwhite` / `vbyellow`)
+///   — VB6 forms-only; modern .NET uses `Color.FromArgb`.
+/// - **`FileAttribute`** (`vbnormal` / `vbhidden` / `vbreadonly`
+///   / `vbsystem` / `vbvolume` / `vbdirectory` / `vbarchive` /
+///   `vbalias`) — niche; `My.Computer.FileSystem` is the modern
+///   equivalent.
+/// - **`TriState`** (`vbtrue` / `vbfalse` / `vbusedefault`) —
+///   overlaps with class 0 `true` / `false` and confuses the eye.
+/// - **`CompareMethod`** (`vbbinarycompare` / `vbtextcompare` /
+///   `vbdatabasecompare`) — single-site, only inside `Option
+///   Compare`.
+/// - **`VarType` return values** (`vbinteger` / `vblong` /
+///   `vbstring` / `vbobject` / `vbarray` etc.) — duplicate
+///   type-name spelling creates visual collision.
+/// - **`DateFirstDayOfWeek` / `DateFirstWeekOfYear`** families —
+///   locale plumbing, never seen in app code.
+/// - **`CallType`** (`vbmethod` / `vbget` / `vblet` / `vbset`) —
+///   reflection vocabulary, single-site.
+/// - **CLR type aliases** (`int32` / `int64` / `uint32` /
+///   `intptr`) — BCL type names, not VB keywords; VB source uses
+///   `Integer` / `Long` / `UInteger` instead.
+/// - **`DateTime` field names** (`year` / `month` / `day` / `hour`
+///   / `minute` / `second`) — properties, not type names.
+///
+/// Sourced and adversarially verified against Microsoft Learn
+/// `Microsoft.VisualBasic.Constants` reference, Notepad++
+/// `langs.model.xml` `instre2`, and `LexVB.cxx:215-222`.
+pub const VB_KEYWORDS_2: &str = concat!(
+    // VB.NET primitive types
+    "boolean byte char date decimal double integer long object sbyte ",
+    "short single string uinteger ulong ushort ",
+    // VB Classic / VBScript / VBA dialect-only types + literal
+    "currency variant empty ",
+    // Text / line-ending intrinsic constants
+    "vbcr vbcrlf vbformfeed vblf vbnewline vbnull vbnullchar vbnullstring ",
+    "vbtab vbverticaltab vbback ",
+    // MsgBox button group constants
+    "vbokonly vbokcancel vbabortretryignore vbyesnocancel vbyesno ",
+    "vbretrycancel ",
+    // MsgBox icon constants
+    "vbcritical vbquestion vbexclamation vbinformation ",
+    // MsgBox default-button + modality constants
+    "vbdefaultbutton1 vbdefaultbutton2 vbdefaultbutton3 vbdefaultbutton4 ",
+    "vbapplicationmodal vbsystemmodal ",
+    // MsgBox return-value constants
+    "vbok vbcancel vbabort vbretry vbignore vbyes vbno",
+);
+
 /// Space-separated SQL reserved-word list installed via `LexSQL`'s
 /// `SCI_SETKEYWORDS(0, ...)` — class 0 of `sqlWordListDesc[]`. Drives
 /// `SCE_SQL_WORD` (primary keyword bold blue).

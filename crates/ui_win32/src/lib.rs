@@ -104,9 +104,9 @@ use codepp_core::lang::{
     BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2,
     C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
     L_ASP, L_BATCH, L_C, L_CPP, L_CS, L_HTML, L_INI, L_JAVA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP,
-    L_PROPS, L_RC, L_RUST, L_SQL, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    L_PROPS, L_RC, L_RUST, L_SQL, L_VB, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
     PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-    VBSCRIPT_KEYWORDS, XML_KEYWORDS,
+    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -117,11 +117,13 @@ use codepp_plugin_host::{
 };
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_BAT_AFTER_LABEL, SCE_BAT_COMMAND,
-    SCE_BAT_COMMENT, SCE_BAT_HIDE, SCE_BAT_LABEL, SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_C_CHARACTER,
-    SCE_C_COMMENT, SCE_C_COMMENTDOC, SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER,
-    SCE_C_OPERATOR, SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_HBA_COMMENTLINE,
-    SCE_HBA_NUMBER, SCE_HBA_STRING, SCE_HBA_WORD, SCE_HB_COMMENTLINE, SCE_HB_NUMBER, SCE_HB_STRING,
-    SCE_HB_WORD, SCE_HJA_COMMENT, SCE_HJA_COMMENTDOC, SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING,
+    SCE_BAT_COMMENT, SCE_BAT_HIDE, SCE_BAT_LABEL, SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_B_COMMENT,
+    SCE_B_DATE, SCE_B_KEYWORD, SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4, SCE_B_NUMBER,
+    SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_C_CHARACTER, SCE_C_COMMENT,
+    SCE_C_COMMENTDOC, SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR,
+    SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER,
+    SCE_HBA_STRING, SCE_HBA_WORD, SCE_HB_COMMENTLINE, SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD,
+    SCE_HJA_COMMENT, SCE_HJA_COMMENTDOC, SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING,
     SCE_HJA_KEYWORD, SCE_HJA_NUMBER, SCE_HJA_REGEX, SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS,
     SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD, SCE_HJ_COMMENT, SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE,
     SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD, SCE_HJ_NUMBER, SCE_HJ_REGEX, SCE_HJ_SINGLESTRING,
@@ -3821,6 +3823,91 @@ const SQL_THEME: LangTheme = LangTheme {
     bold: SQL_BOLD,
 };
 
+// --- LexVB (Visual Basic — VB.NET / VBScript / VBA / VB Classic) ---
+// LexVB is case-insensitive: every candidate token is lowercased
+// (`LexVB.cxx:208` `sc.GetCurrentLowered`) before keyword lookup, so
+// `VB_KEYWORDS` and `VB_KEYWORDS_2` MUST be all-lowercase. VB source
+// can use any casing (`If` / `IF` / `if` all match `if`) — the
+// case-insensitive convention is honoured transparently. Same
+// convention as `LexSQL`, `LexPascal`, `LexBatch`.
+//
+// The lexer exposes FOUR wordlist classes via `vbWordListDesc[]`
+// (`LexVB.cxx:68-73`). Upstream descriptors are `"Keywords"` /
+// `"user1"` / `"user2"` / `"user3"` — slightly misleading: the three
+// `userN` slots aren't user-customisable, they ARE the secondary
+// keyword classes feeding `SCE_B_KEYWORD2..KEYWORD4`. `VB_THEME`
+// installs classes 0 + 1 — matches Notepad++'s shipped
+// `<Language name="vb">` two-class convention (richer than
+// Notepad++'s actual single-`instre1` ship, matching our
+// C / C++ / TypeScript precedent). Classes 2 + 3 are left out of
+// the `keywords` array; their style indices (`SCE_B_KEYWORD3` /
+// `SCE_B_KEYWORD4`) are still mapped to `Keyword2` so a future
+// project-specific wordlist install picks up sensible colouring
+// without re-wiring the theme.
+//
+// Style-to-slot decisions:
+//   * COMMENT (`'` line comment, plus `Rem` lines which LexVB
+//     hard-codes at `LexVB.cxx:212-213` before wordlist lookup)
+//     → Comment.
+//   * NUMBER (decimal + `&H` hex + `&O` octal + `&B` binary) and
+//     DATE (`#1/1/2024#` literal) both → Number. The date-literal
+//     form is structurally a literal value (parsed by the compiler
+//     into a typed DateTime); Number is the closest semantic slot,
+//     matching `SCE_PAS_HEXNUMBER` → Number precedent.
+//   * KEYWORD (class 0) → Keyword (bold blue) — primary reserved
+//     words, the structural anchors a VB reader scans for.
+//   * KEYWORD2 (class 1) → Keyword2 (steel blue) — primitive type
+//     names plus intrinsic-constant vocabulary. Same precedent as
+//     `SCE_C_WORD2`, `SCE_SQL_WORD2`.
+//   * KEYWORD3 / KEYWORD4 (classes 2 / 3, both unused for v1) →
+//     Keyword2 — empty wordlists today, but the style mapping is
+//     pre-wired so a project-specific install picks up sensible
+//     colouring with no theme edit.
+//   * STRING (`"double quoted"` — VB has no single-quote string
+//     form; single quote starts a comment) → String.
+//   * PREPROCESSOR (`#If` / `#Else` / `#Region` / `#Const` /
+//     `#ExternalSource` / `#Disable Warning` / `#Enable Warning`)
+//     → Preprocessor (bold). Mapped via the leading `#` not via
+//     wordlist membership.
+//   * OPERATOR → Operator.
+//
+// Intentionally unmapped (fall through to STYLE_DEFAULT):
+//   * SCE_B_DEFAULT (0) — generic background text (universal
+//     omission, matches `SCE_C_DEFAULT` / `SCE_PAS_DEFAULT` /
+//     `SCE_SQL_DEFAULT`).
+//   * SCE_B_IDENTIFIER (7) — bare variable / procedure references
+//     (matches `SCE_C_IDENTIFIER` / `SCE_PAS_IDENTIFIER` /
+//     `SCE_SQL_IDENTIFIER` precedent).
+//   * SCE_B_STRINGEOL (9) — unterminated-string error indicator.
+//     Unmapped pending `StyleSlot::Error`. Brings the codebase's
+//     deferred-Error-slot migration list to 10 entries (the prior
+//     9 plus this).
+const VB_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_B_COMMENT, StyleSlot::Comment),
+    (SCE_B_NUMBER, StyleSlot::Number),
+    (SCE_B_KEYWORD, StyleSlot::Keyword),
+    (SCE_B_STRING, StyleSlot::String),
+    (SCE_B_PREPROCESSOR, StyleSlot::Preprocessor),
+    (SCE_B_OPERATOR, StyleSlot::Operator),
+    (SCE_B_DATE, StyleSlot::Number),
+    (SCE_B_KEYWORD2, StyleSlot::Keyword2),
+    (SCE_B_KEYWORD3, StyleSlot::Keyword2),
+    (SCE_B_KEYWORD4, StyleSlot::Keyword2),
+];
+// Comment italic — matches universal Code++ convention.
+const VB_ITALIC: &[usize] = &[SCE_B_COMMENT];
+// Primary keywords + preprocessor directives bold — matches
+// Notepad++'s VB default and the Pascal/C precedent of bolding
+// both `SCE_C_WORD` and `SCE_C_PREPROCESSOR`.
+const VB_BOLD: &[usize] = &[SCE_B_KEYWORD, SCE_B_PREPROCESSOR];
+
+const VB_THEME: LangTheme = LangTheme {
+    keywords: &[(0, VB_KEYWORDS), (1, VB_KEYWORDS_2)],
+    styles: VB_STYLES,
+    italic: VB_ITALIC,
+    bold: VB_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -3938,6 +4025,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&ASP_THEME)
     } else if lang == L_SQL {
         Some(&SQL_THEME)
+    } else if lang == L_VB {
+        Some(&VB_THEME)
     } else {
         None
     }
@@ -18428,9 +18517,9 @@ mod lang_theme_tests {
         BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2,
         HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_ASP, L_BATCH, L_C,
         L_CPP, L_CS, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_MAKEFILE, L_OBJC, L_PASCAL, L_PHP,
-        L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEXT, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS,
-        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS,
-        SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, XML_KEYWORDS,
+        L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS,
+        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS,
+        SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -18795,6 +18884,111 @@ mod lang_theme_tests {
             overlap.is_empty(),
             "SQL class 0 / class 1 wordlists overlap on {overlap:?} — LexSQL uses first-hit \
              matching so duplicates either waste bytes or misrepresent the keyword/type split"
+        );
+    }
+
+    /// Visual Basic uses Lexilla's `vb` lexer (`LexVB.cxx`). Case-
+    /// insensitive (`LexVB.cxx:208` lowercases candidates before
+    /// keyword lookup — wordlists MUST be all-lowercase). Routes
+    /// both `.vb` (`VB.NET`) and `.vbs` (`VBScript`) extensions to
+    /// the same lexer. Installs TWO of the lexer's four wordlist
+    /// classes: class 0 = `VB_KEYWORDS` (primary reserved words,
+    /// `VB.NET` superset covering `VBScript` / VBA), class 1 =
+    /// `VB_KEYWORDS_2` (primitive types + `Microsoft.VisualBasic.
+    /// Constants` intrinsics like `vbCrLf` / `vbOKCancel`).
+    /// Classes 2 + 3 (`SCE_B_KEYWORD3` / `SCE_B_KEYWORD4`) are
+    /// unused for v1; their style indices ARE mapped to `Keyword2`
+    /// so a future project-specific install picks up sensible
+    /// colouring with no theme edit.
+    ///
+    /// `VB_STYLES` is a 10-mapping table — does NOT reuse
+    /// `CPP_STYLES`, `HYPERTEXT_STYLES`, `MAKEFILE_STYLES`,
+    /// `PASCAL_STYLES`, `BATCH_STYLES`, `PROPS_STYLES`, or
+    /// `SQL_STYLES`. Pins the dedicated-table shape, canonical
+    /// keyword links, all-lowercase invariant, no-overlap
+    /// invariant, and structural "no class 2 / 3 wordlist
+    /// install" guard.
+    #[test]
+    fn vb_uses_lexvb_two_class_theme() {
+        let vb = lang_theme(L_VB).expect("Visual Basic wired");
+        let c = lang_theme(L_C).expect("C wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let ini = lang_theme(L_INI).expect("INI wired");
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        // 10 emission mappings. DEFAULT (0), IDENTIFIER (7),
+        // STRINGEOL (9) deliberately unmapped per the LexVB banner
+        // in scintilla-sys.
+        assert_eq!(
+            vb.styles.len(),
+            10,
+            "VB theme has {} style mappings; expected 10",
+            vb.styles.len()
+        );
+        // Distinct from every other style table in the framework.
+        assert_ne!(vb.styles, c.styles, "VB must NOT reuse CPP_STYLES");
+        assert_ne!(vb.styles, mk.styles, "VB must NOT reuse MAKEFILE_STYLES");
+        assert_ne!(vb.styles, pas.styles, "VB must NOT reuse PASCAL_STYLES");
+        assert_ne!(vb.styles, php.styles, "VB must NOT reuse HYPERTEXT_STYLES");
+        assert_ne!(vb.styles, bat.styles, "VB must NOT reuse BATCH_STYLES");
+        assert_ne!(vb.styles, ini.styles, "VB must NOT reuse PROPS_STYLES");
+        assert_ne!(vb.styles, sql.styles, "VB must NOT reuse SQL_STYLES");
+        // Two keyword classes: 0 = reserved words, 1 = types/intrinsics.
+        // Class indices dictated by LexVB's `vbWordListDesc[]`.
+        assert_eq!(
+            vb.keywords.len(),
+            2,
+            "VB theme installs class 0 (keywords) + class 1 (types/intrinsics)"
+        );
+        assert_eq!(vb.keywords[0].0, 0);
+        assert_eq!(vb.keywords[0].1, VB_KEYWORDS);
+        assert_eq!(vb.keywords[1].0, 1);
+        assert_eq!(vb.keywords[1].1, VB_KEYWORDS_2);
+        // Structural guard: pin "no class 2 / 3". The lexer accepts
+        // those slots but they're empty in v1 and represent future
+        // project-customisable wordlist territory.
+        assert!(
+            vb.keywords.iter().all(|(class, _)| matches!(class, 0 | 1)),
+            "VB must install classes 0 + 1 ONLY — classes 2 / 3 are reserved \
+             for future project-specific wordlists"
+        );
+        // Pin the all-lowercase invariant for both wordlists.
+        // LexVB.cxx:208 lowercases source before keyword lookup, so
+        // uppercase wordlist entries would never match. Same shape
+        // assertion as the SQL / Batch tests for their
+        // case-insensitive wordlists.
+        for (label, list) in [("class 0", VB_KEYWORDS), ("class 1", VB_KEYWORDS_2)] {
+            assert!(
+                list.chars().all(|c| !c.is_ascii_uppercase()),
+                "VB {label} list contains uppercase — LexVB is case-insensitive and \
+                 lowercases source before lookup, so uppercase wordlist tokens never match"
+            );
+        }
+        // Pin the no-overlap invariant. A token in both lists either
+        // wastes bytes or produces inconsistent rendering. Same
+        // shape assertion as the SQL / Batch tests.
+        let class0: std::collections::HashSet<&str> = VB_KEYWORDS.split_whitespace().collect();
+        let class1: std::collections::HashSet<&str> = VB_KEYWORDS_2.split_whitespace().collect();
+        let overlap: Vec<&&str> = class0.intersection(&class1).collect();
+        assert!(
+            overlap.is_empty(),
+            "VB class 0 / class 1 wordlists overlap on {overlap:?} — \
+             a token belongs to exactly one class (reserved words vs types/intrinsics)"
+        );
+        // Pin the `rem` exclusion from class 0. `LexVB.cxx:212-213`
+        // hard-codes `Rem` line-comment recognition before consulting
+        // any wordlist; `Rem` lines style as `SCE_B_COMMENT`
+        // regardless of whether `rem` is in class 0. Including it
+        // would be silently dead bytes — the test pins the exclusion
+        // structurally so a future cleanup commit doesn't
+        // accidentally add it back as "defensive".
+        assert!(
+            !class0.contains("rem"),
+            "VB class 0 must NOT contain `rem` — LexVB.cxx:212-213 hard-codes Rem \
+             line-comment recognition before wordlist lookup, making any `rem` entry \
+             silently dead"
         );
     }
 
