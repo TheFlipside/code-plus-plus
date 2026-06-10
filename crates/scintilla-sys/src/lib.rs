@@ -888,6 +888,135 @@ pub const SCE_CSS_EXTENDED_PSEUDOELEMENT: usize = 21;
 pub const SCE_CSS_GROUP_RULE: usize = 22;
 pub const SCE_CSS_VARIABLE: usize = 23;
 
+// LexPerl style indices. Sparse range — 0..=31 contiguous, then a
+// jump to 40..=44 (sub prototype / format / interpolation base for
+// STRING_VAR / XLAT), and a second jump to a 54..=66 interpolation-
+// shadow band (variable-interpolation styles for the regex / heredoc
+// / q-family states). Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 380-424 and
+// `vendor/lexilla/lexers/LexPerl.cxx` lines 394-397 (`perlWordListDesc`)
+// + lines 96-104 (`isPerlKeyword` byte-exact wordlist matcher) +
+// line 94 (`INTERPOLATE_SHIFT` = 37 — defines the _VAR shadow band).
+//
+// **Case-sensitive lexer.** `LexPerl.cxx:96-104` copies token bytes
+// verbatim into a stack buffer and calls `keywords.InList(s)` with
+// no case folding. Wordlists installed against this lexer must use
+// the exact casing source uses. For Perl this matters specifically
+// for two families: the phase-block names (`BEGIN` / `END` / `INIT`
+// / `CHECK` / `UNITCHECK` / `AUTOLOAD` / `DESTROY`) and the
+// `__TOKEN__` literals (`__FILE__` / `__LINE__` / `__PACKAGE__` /
+// `__SUB__` / `__DATA__` / `__END__`) — Perl source writes these
+// uppercase by language requirement, so the wordlist MUST store the
+// uppercase form. Storing them lowercase silently disables the
+// highlight. Same byte-exact contract as LexCPP / LexRust (most
+// lexers, in fact — case-folding is the exception, used by LexCSS /
+// LexSQL / LexPascal / LexVB / LexBatch).
+//
+// **Single wordlist class.** `perlWordListDesc[]` declares one slot
+// (`"Keywords"`). All Perl built-ins + reserved words + named
+// operators (`x` / `cmp` / `lt` / `gt` / `le` / `ge` / `eq` / `ne`
+// / `and` / `or` / `not` / `xor`) + quote-like operator names
+// (`m` / `s` / `y` / `q` / `qq` / `qx` / `qr` / `qw` / `tr`) install
+// to class 0. The quote-like operator names ARE in the wordlist
+// even though their bodies tokenise via dedicated states — the
+// lexer's state-machine transitions on `m{` / `s/` / `q(` consume
+// the body before keyword classification runs, so listing the
+// operator name itself is harmless and matches Notepad++'s shipped
+// list.
+//
+// **`SCE_PL_*_VAR` interpolation shadows** (the 43 / 54-66 band).
+// `LexPerl.cxx:94` defines `INTERPOLATE_SHIFT = SCE_PL_STRING_VAR -
+// SCE_PL_STRING = 43 - 6 = 37`. Every state whose body interpolates
+// `$var` / `@var` references gets a `+37` shadow state for the
+// variable token: STRING (6) → STRING_VAR (43), REGEX (17) →
+// REGEX_VAR (54), REGSUBST (18) → REGSUBST_VAR (55), BACKTICKS (20)
+// → BACKTICKS_VAR (57), HERE_QQ (24) → HERE_QQ_VAR (61), HERE_QX
+// (25) → HERE_QX_VAR (62), STRING_QQ (27) → STRING_QQ_VAR (64),
+// STRING_QX (28) → STRING_QX_VAR (65), STRING_QR (29) →
+// STRING_QR_VAR (66). The shift is regular but the band is sparse —
+// non-interpolating base states (CHARACTER (7) / PUNCTUATION (8) /
+// PREPROCESSOR (9) / OPERATOR (10) / IDENTIFIER (11) / SCALAR (12)
+// / ARRAY (13) / HASH (14) / SYMBOLTABLE (15) / VARIABLE_INDEXER
+// (16) / LONGQUOTE (19) / DATASECTION (21) / HERE_DELIM (22) /
+// HERE_Q (23) / STRING_Q (26) / STRING_QW (30)) leave their +37
+// slots unused (45-53, 56, 58-60, 63, 67 — slot 44 is
+// `SCE_PL_XLAT` for `tr///` / `y///` transliteration bodies, which
+// IS used and is NOT part of the interpolation-shadow band).
+// Code++ routes every populated _VAR slot to `StyleSlot::Lifetime`
+// — the "purple sigil-tagged identifier" archetype Perl variables
+// share with Rust lifetimes.
+//
+// **Reserved-but-unused style indices** (per LexPerl.cxx:433-444
+// `LexicalClass[]` annotations — these are declared in SciLexer.h
+// but the lexer never emits them):
+//   * 8 PUNCTUATION — "currently not used"; punctuation bytes flow
+//     to SCE_PL_OPERATOR (10) instead.
+//   * 9 PREPROCESSOR — "preprocessor unused"; Perl has no real
+//     preprocessor (the `use` / `no` pragmas tokenise as keywords).
+//     Shebang `#!` lines style as COMMENTLINE (2).
+//   * 16 VARIABLE_INDEXER — "allocated but unused"; sigil-with-
+//     subscript context (`$foo[`, `$foo{`) stays in the SCALAR
+//     style.
+//   * 19 LONGQUOTE — "obsolete: replaced by qq/qx/qr/qw"; modern
+//     lexer emits STRING_QQ/QX/QR/QW (27-30) instead.
+// Declared here for completeness (a future Lexilla version may
+// activate them) but `PERL_STYLES` leaves all four unmapped.
+//
+// **`SCE_PL_DEFAULT` (0), `SCE_PL_ERROR` (1), `SCE_PL_IDENTIFIER`
+// (11) intentionally unmapped** in `PERL_STYLES` — fall through to
+// STYLE_DEFAULT. `_DEFAULT` is the universal omission; `_IDENTIFIER`
+// is bare-identifier (post-keyword-miss) text — same precedent as
+// `SCE_C_IDENTIFIER` / `SCE_PAS_IDENTIFIER` / `SCE_VB_IDENTIFIER`.
+// `_ERROR` is the soft-warning state for unbalanced delimiters etc.
+// — pending the future `StyleSlot::Error` palette addition (now at
+// 11 entries on the deferred-Error-slot migration list — adds the
+// LexPerl ERROR state to the existing 10).
+pub const SCE_PL_DEFAULT: usize = 0;
+pub const SCE_PL_ERROR: usize = 1;
+pub const SCE_PL_COMMENTLINE: usize = 2;
+pub const SCE_PL_POD: usize = 3;
+pub const SCE_PL_NUMBER: usize = 4;
+pub const SCE_PL_WORD: usize = 5;
+pub const SCE_PL_STRING: usize = 6;
+pub const SCE_PL_CHARACTER: usize = 7;
+pub const SCE_PL_PUNCTUATION: usize = 8;
+pub const SCE_PL_PREPROCESSOR: usize = 9;
+pub const SCE_PL_OPERATOR: usize = 10;
+pub const SCE_PL_IDENTIFIER: usize = 11;
+pub const SCE_PL_SCALAR: usize = 12;
+pub const SCE_PL_ARRAY: usize = 13;
+pub const SCE_PL_HASH: usize = 14;
+pub const SCE_PL_SYMBOLTABLE: usize = 15;
+pub const SCE_PL_VARIABLE_INDEXER: usize = 16;
+pub const SCE_PL_REGEX: usize = 17;
+pub const SCE_PL_REGSUBST: usize = 18;
+pub const SCE_PL_LONGQUOTE: usize = 19;
+pub const SCE_PL_BACKTICKS: usize = 20;
+pub const SCE_PL_DATASECTION: usize = 21;
+pub const SCE_PL_HERE_DELIM: usize = 22;
+pub const SCE_PL_HERE_Q: usize = 23;
+pub const SCE_PL_HERE_QQ: usize = 24;
+pub const SCE_PL_HERE_QX: usize = 25;
+pub const SCE_PL_STRING_Q: usize = 26;
+pub const SCE_PL_STRING_QQ: usize = 27;
+pub const SCE_PL_STRING_QX: usize = 28;
+pub const SCE_PL_STRING_QR: usize = 29;
+pub const SCE_PL_STRING_QW: usize = 30;
+pub const SCE_PL_POD_VERB: usize = 31;
+pub const SCE_PL_SUB_PROTOTYPE: usize = 40;
+pub const SCE_PL_FORMAT_IDENT: usize = 41;
+pub const SCE_PL_FORMAT: usize = 42;
+pub const SCE_PL_STRING_VAR: usize = 43;
+pub const SCE_PL_XLAT: usize = 44;
+pub const SCE_PL_REGEX_VAR: usize = 54;
+pub const SCE_PL_REGSUBST_VAR: usize = 55;
+pub const SCE_PL_BACKTICKS_VAR: usize = 57;
+pub const SCE_PL_HERE_QQ_VAR: usize = 61;
+pub const SCE_PL_HERE_QX_VAR: usize = 62;
+pub const SCE_PL_STRING_QQ_VAR: usize = 64;
+pub const SCE_PL_STRING_QX_VAR: usize = 65;
+pub const SCE_PL_STRING_QR_VAR: usize = 66;
+
 // LexHTML (hypertext) style indices — the `H` prefix is upstream's
 // for the HTML portion of the multi-mode lexer. The hypertext lexer
 // also emits SCE_HJ_* (embedded JavaScript), SCE_HB_* (VBScript),

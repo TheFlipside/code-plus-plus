@@ -3181,6 +3181,183 @@ pub const CSS_PSEUDO_ELEMENTS: &str = concat!(
     "view-transition-new view-transition-old",
 );
 
+/// Space-separated Perl reserved-word + built-in vocabulary installed
+/// via `LexPerl`'s `SCI_SETKEYWORDS(0, ...)` — class 0 of the
+/// single-slot `perlWordListDesc[]`. Drives `SCE_PL_WORD` (mapped to
+/// Keyword bold blue).
+///
+/// **CRITICAL: mixed-case wordlist with strict load-bearing UPPERCASE
+/// entries.** `LexPerl.cxx:96-104` (`isPerlKeyword`) copies token
+/// bytes verbatim into a stack buffer and calls `keywords.InList(s)`
+/// with **no case folding**. Perl source spells the phase-block names
+/// (`BEGIN` / `END` / `INIT` / `CHECK` / `UNITCHECK` / `AUTOLOAD` /
+/// `DESTROY`) and the `__TOKEN__` family (`__FILE__` / `__LINE__` /
+/// `__PACKAGE__` / `__SUB__` / `__DATA__` / `__END__`) in uppercase
+/// by language requirement — there is no lowercase form in any real
+/// Perl source. The wordlist MUST store the uppercase form for
+/// these 13 tokens. Lowercase forms would silently disable the
+/// highlight. All other entries are lowercase per standard Perl
+/// convention.
+///
+/// **`__DATA__` / `__END__` are load-bearing for `SCE_PL_DATASECTION`
+/// styling.** `LexPerl.cxx:872-877` only recolours these markers
+/// (and everything after them) to `SCE_PL_DATASECTION` from inside
+/// the `SCE_PL_WORD` state, which is only entered after a successful
+/// wordlist hit. Without uppercase `__DATA__` / `__END__` in this
+/// wordlist, the trailing data section never picks up the
+/// de-emphasised paint — it renders as plain identifier text.
+///
+/// **Single wordlist class.** `perlWordListDesc[]` declares one
+/// `"Keywords"` slot. The list bundles the standard Perl vocabulary:
+/// control-flow keywords + declarators (`if`, `unless`, `while`,
+/// `for`, `foreach`, `do`, `return`, `goto`, `die`, `exit`, `my`,
+/// `our`, `local`, `state`, `package`, `use`, `require`, `no`,
+/// `sub`, `bless`, `ref`, `defined`, `undef`, `wantarray`), the
+/// phase-block names UPPERCASE, the `__TOKEN__` family UPPERCASE,
+/// named operators (`x` for repetition, `cmp`, `lt`, `gt`, `le`,
+/// `ge`, `eq`, `ne`, `and`, `or`, `not`, `xor`, `err`), modern
+/// post-5.10 vocabulary (`say`, `state`, `given`, `when`, `default`,
+/// `break`, `fc`, `isa`), and the quote-like operator names (`m`,
+/// `s`, `y`, `q`, `qq`, `qx`, `qr`, `qw`, `tr`) which trigger
+/// state-machine transitions but are themselves keywords.
+///
+/// Coverage continues with the full I/O family (`print`, `printf`,
+/// `sprintf`, `open`, `close`, `read`, `write`, `seek`, `tell`,
+/// `binmode`, `fileno`, `truncate`, `eof`, `getc`, `chomp`, `chop`,
+/// `chr`, `ord`, `lc`, `lcfirst`, `uc`, `ucfirst`, `hex`, `oct`),
+/// string + regex built-ins (`length`, `substr`, `index`, `rindex`,
+/// `pos`, `split`, `join`, `reverse`, `pack`, `unpack`, `quotemeta`,
+/// `study`), list / array / hash built-ins (`push`, `pop`, `shift`,
+/// `unshift`, `splice`, `sort`, `grep`, `map`, `keys`, `values`,
+/// `each`, `exists`, `delete`), math built-ins (`abs`, `int`,
+/// `rand`, `srand`, `sqrt`, `sin`, `cos`, `exp`, `log`, `atan2`),
+/// the full syscall + IPC + process family, and the POSIX
+/// pwent/grent/netent/protoent/servent traversal verbs. Finally the
+/// Carp prose-diagnostics (`carp`, `croak`, `confess`, `cluck`) —
+/// these are module imports rather than core built-ins, so a
+/// user-defined `sub carp { ... }` will render bold-blue when it
+/// would otherwise render as default. Accepted false-positive risk;
+/// `LexPerl` has only one wordlist class so there is no Keyword2
+/// promotion path.
+///
+/// **Deliberate exclusions:** sigils (`$` / `@` / `%` / `&` / `*`)
+/// — those are operator-character tokens, not wordlist entries; the
+/// lexer routes them to SCALAR / ARRAY / HASH / SYMBOLTABLE styles
+/// based on the trailing identifier. File-test operators
+/// (`-e` / `-f` / `-d` / `-r` / `-w` / `-x` / `-s` / `-T` / etc.)
+/// — these are operator+letter pairs tokenised by lexer state, not
+/// keyword lookups. Special variables (`$_` / `@ARGV` / `%ENV` /
+/// `$0` / `$!` / `$@` / etc.) — these route to SCALAR / ARRAY / HASH
+/// styles. Package-qualified names (`File::Spec::catfile`) — module
+/// imports, not wordlist territory.
+///
+/// Sourced from `perlfunc(1)` + `perlsyn(1)` + Notepad++'s shipped
+/// `langs.model.xml` `<Language name="perl">` `instre1` list, and
+/// adversarially verified across three lenses (Perl docs, N++
+/// conventions, Lexilla source). Adversarial-verifier MUST-FIX
+/// additions before commit: 7 UPPERCASE phase blocks + 6 UPPERCASE
+/// `__TOKEN__` family + missing `ge` operator (13 + 1 = 14 additions
+/// from the initial synthesis-round 245 → 259).
+pub const PERL_KEYWORDS: &str = concat!(
+    // Math built-ins (alphabetical block starter)
+    "abs ",
+    // IPC + system calls (accept...alarm)
+    "accept alarm ",
+    // Boolean low-precedence operator + math
+    "and atan2 ",
+    // IPC
+    "bind binmode ",
+    // OO / declaration
+    "bless break ",
+    // Diagnostics / introspection
+    "caller ",
+    // System
+    "chdir chmod chomp chop chown chr chroot ",
+    "close closedir ",
+    // String comparison + IPC
+    "cmp connect continue cos crypt ",
+    // DBM
+    "dbmclose dbmopen ",
+    // Modern Perl switch + introspection
+    "default defined delete die do dump ",
+    // List + hash iteration
+    "each ",
+    // Conditional + ent-traversal
+    "else elsif ",
+    "endgrent endhostent endnetent endprotoent endpwent endservent ",
+    "eof eq err eval exec exists exit exp ",
+    // Modern Perl 5.16+ foldcase + system
+    "fc fcntl fileno flock ",
+    // Loops + format
+    "for foreach fork format formline ",
+    // I/O + ent-traversal
+    "getc ",
+    "getgrent getgrgid getgrnam ",
+    "gethostbyaddr gethostbyname gethostent getlogin ",
+    "getnetbyaddr getnetbyname getnetent ",
+    "getpeername getpgrp getppid getpriority ",
+    "getprotobyname getprotobynumber getprotoent ",
+    "getpwent getpwnam getpwuid ",
+    "getservbyname getservbyport getservent ",
+    "getsockname getsockopt ",
+    // Modern switch + glob + time + jump
+    "ge ",
+    "given glob gmtime goto grep gt ",
+    // Math + control
+    "hex ",
+    "if index int ioctl isa ",
+    "join ",
+    "keys kill ",
+    // Loop control + string
+    "last lc lcfirst le length link listen local localtime lock log lstat lt ",
+    // Quote-like operator names + iteration
+    "m map mkdir ",
+    // IPC msg + declaration
+    "msgctl msgget msgrcv msgsnd ",
+    "my ",
+    "ne next no not ",
+    // Numeric conversion
+    "oct open opendir or ord our ",
+    // Pack + IPC
+    "pack package pipe pop pos print printf prototype push ",
+    // Quote-like operator names
+    "q qq qr quotemeta qw qx ",
+    // Math + I/O + introspection
+    "rand read readdir readline readlink readpipe ",
+    "recv redo ref rename require reset return reverse rewinddir rindex rmdir ",
+    // Quote-like operator (substitution) + modern Perl
+    "s say scalar seek seekdir select ",
+    // IPC sem + setN-ent
+    "semctl semget semop send ",
+    "setgrent sethostent setnetent setpgrp setpriority setprotoent setpwent ",
+    "setservent setsockopt ",
+    // Array + IPC shm + syscall
+    "shift ",
+    "shmctl shmget shmread shmwrite ",
+    "shutdown sin sleep socket socketpair sort splice split sprintf sqrt srand ",
+    "stat state study sub substr symlink syscall sysopen sysread sysseek system ",
+    "syswrite ",
+    // Tied I/O + time + traversal
+    "tell telldir tie tied time times tr truncate ",
+    "uc ucfirst umask undef unless unlink unpack unshift untie until use utime ",
+    // Misc system + values
+    "values vec ",
+    "wait waitpid wantarray warn when while write ",
+    // Repetition operator + low-precedence boolean
+    "x xor ",
+    // Quote-like operator name (legacy synonym for tr)
+    "y ",
+    // Carp prose-diagnostics (idiomatic; false-positive accepted)
+    "carp croak confess cluck ",
+    // Phase-block special subroutines — UPPERCASE per Perl spec
+    // (lexer is byte-exact; lowercase would never match)
+    "BEGIN END INIT CHECK UNITCHECK AUTOLOAD DESTROY ",
+    // __TOKEN__ family — UPPERCASE per Perl spec, load-bearing for
+    // SCE_PL_DATASECTION mapping (__DATA__ / __END__ MUST be matched
+    // to enter the DATASECTION state per LexPerl.cxx:872-877)
+    "__FILE__ __LINE__ __PACKAGE__ __SUB__ __DATA__ __END__",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

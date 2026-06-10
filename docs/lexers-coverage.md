@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 19 / 🟡 69 / ⚫ 1.
+Total: 89 rows. ✅ 20 / 🟡 68 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -804,6 +804,123 @@ cross-namespace overlaps as REQUIRED invariants
 the four-way IDENTIFIER cascade uniform-bold theming, AND
 the `opacity` structural pin.
 
+**Perl (2026-06-10):** uses Lexilla's `perl` lexer
+(`LexPerl.cxx`). The `L_PERL` row routes `.pl` / `.pm` /
+`.cgi` files to the lexer with a single 259-entry
+**mixed-case** wordlist installed at class 0 (the only
+class `perlWordListDesc[]` declares). Most entries are
+lowercase per standard Perl convention, but **13 entries
+are stored UPPERCASE** because `LexPerl.cxx:96-104`
+(`isPerlKeyword`) is byte-exact case-sensitive and Perl
+source spells these uppercase by language requirement —
+storing them lowercase would silently disable the
+highlight. The uppercase subset: 7 phase-block special
+subroutines (`BEGIN` / `END` / `INIT` / `CHECK` /
+`UNITCHECK` / `AUTOLOAD` / `DESTROY`) + 6 `__TOKEN__`
+markers (`__FILE__` / `__LINE__` / `__PACKAGE__` /
+`__SUB__` / `__DATA__` / `__END__`). All 13 structurally
+pinned in the dedicated Perl test.
+
+**`__DATA__` / `__END__` uppercase entries are
+load-bearing for `SCE_PL_DATASECTION` styling.**
+`LexPerl.cxx:872-877` only recolours these markers (and
+everything after them) to `SCE_PL_DATASECTION` from
+inside the `SCE_PL_WORD` state, which is only entered
+after a wordlist match. Without uppercase entries the
+trailing data section never picks up de-emphasised paint.
+Specifically pinned in the test as a load-bearing
+invariant separate from the general uppercase pin.
+
+Dedicated **38-mapping** `PERL_STYLES` table — the
+**largest dedicated style table in the framework so far**
+(prior max was CSS at 20). Does NOT reuse any other
+framework style table (CPP / HYPERTEXT / MAKEFILE /
+PASCAL / BATCH / PROPS / SQL / VB / CSS / RUST — all **10
+non-reuse assertions** structurally pinned). Maps:
+- COMMENT / POD / POD_VERB / DATASECTION → Comment italic
+  (collapses line comments, POD prose, verbatim POD, and
+  the trailing data section into the same "non-executable
+  prose" archetype).
+- NUMBER → Number, WORD → Keyword bold, STRING /
+  CHARACTER → String, OPERATOR → Operator.
+- **Sigil archetype** (4 styles): SCALAR / ARRAY / HASH /
+  SYMBOLTABLE all → `Lifetime` — the "purple sigil-tagged
+  identifier" reuse. Perl sigils (`$x` / `@x` / `%x` /
+  `*x`) share the visual archetype with Rust lifetimes
+  (`'a`): short identifier-decorator, distinct from both
+  keywords and bare identifiers. Mapping all four
+  uniformly keeps `$/@/%/*` variables visually consistent
+  regardless of namespace.
+- **Heredoc family** (4 styles): HERE_DELIM → Keyword2
+  bold (the `<<EOF` opener is a structural marker);
+  HERE_Q / HERE_QQ / HERE_QX → String (the body in
+  single-quoted / interpolating / backtick variants).
+- **q-family** (5 styles): STRING_Q / STRING_QQ /
+  STRING_QX / STRING_QR / STRING_QW → String (all
+  quote-operator bodies, regardless of interpolation
+  semantics).
+- REGEX / REGSUBST / BACKTICKS → String. **XLAT**
+  (`tr/abc/xyz/` / `y/abc/xyz/`) → String.
+- **`+37` INTERPOLATE_SHIFT band** (9 _VAR slots):
+  STRING_VAR / REGEX_VAR / REGSUBST_VAR / BACKTICKS_VAR /
+  HERE_QQ_VAR / HERE_QX_VAR / STRING_QQ_VAR /
+  STRING_QX_VAR / STRING_QR_VAR all → `Lifetime`. These
+  are interpolated `$var` / `@var` references INSIDE
+  string / regex / heredoc / backticks bodies — the sigil
+  archetype carries through so an interpolated variable
+  reads the same purple as a top-level `$x` against the
+  surrounding String body. `LexPerl.cxx:94` defines
+  `INTERPOLATE_SHIFT = 37` (`SCE_PL_STRING_VAR -
+  SCE_PL_STRING`); non-interpolating base states leave
+  their `+37` slots unused (45-53, 56, 58-60, 63, 67 —
+  note slot 44 is `SCE_PL_XLAT`, which IS used for `tr///`
+  / `y///` transliteration bodies and is NOT part of the
+  interpolation-shadow band).
+- SUB_PROTOTYPE / FORMAT_IDENT → Keyword2 bold (the
+  `(...)` sig in `sub NAME (...)` and the `NAME =` header
+  in `format NAME = ...` are structural declarators);
+  FORMAT → String (the picture-body template).
+
+Intentionally unmapped — fall through to STYLE_DEFAULT:
+DEFAULT (0), ERROR (1, pending `StyleSlot::Error`),
+PUNCTUATION (8, "currently not used" per LexPerl source),
+PREPROCESSOR (9, "preprocessor unused" — Perl has no real
+preprocessor), IDENTIFIER (11, bare-identifier
+fall-through matches `SCE_C_IDENTIFIER` /
+`SCE_PAS_IDENTIFIER` precedent), VARIABLE_INDEXER (16,
+"allocated but unused" per LexPerl source), LONGQUOTE
+(19, "obsolete: replaced by qq/qx/qr/qw"). The
+deferred-Error-slot migration list grows from 10 entries
+(after CSS) to **11** with Perl's ERROR added.
+
+**Adversarial-verifier MUST-FIX additions from
+synthesis-round.** All three verifiers (correctness /
+completeness / format) independently flagged the same
+top issue: the synth claimed the wordlist contained the
+phase-block + `__TOKEN__` family but the actual list
+held none of them, and the proposed "lowercased into the
+same wordlist" plan was self-defeating because LexPerl's
+`WordList::InList` is byte-exact (no case folding). Fix:
+13 UPPERCASE entries added before commit. Completeness
+verifier additionally flagged the missing `ge`
+string-comparison operator (lt / gt / le / ge / eq / ne
+/ cmp was incomplete — `ge` was dropped); added. Format
+verifier flagged three `StyleSlot::Default` references
+in the synth's style_mapping_notes (the enum has no
+Default variant — indices 0 / 1 / 11 should be unmapped
+per framework convention); applied. Final wordlist: 245
++ 14 = 259 entries.
+
+`perl_uses_lexperl_mixed_case_theme` test pins the
+38-mapping shape, single-class structure, canonical
+keyword constant link, the 13 UPPERCASE entries
+structurally, the load-bearing `__DATA__` / `__END__`
+markers specifically, the restored `ge` operator, the
+four sigil-archetype Lifetime routings, every populated
+_VAR Lifetime routing (9 entries), and the four bold
+structural anchors (WORD / HERE_DELIM / SUB_PROTOTYPE /
+FORMAT_IDENT).
+
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
 5-style table and a single keyword class. `MAKEFILE_KEYWORDS`
@@ -1018,7 +1135,7 @@ further shim work needed.
 | Objective-C | 5 | `cpp` | ✅ | ✅ | ✅ |
 | OScript | 78 | `oscript` | ⚫ | ⚫ | 🟡 |
 | Pascal | 11 | `pascal` | ✅ | ✅ | ✅ |
-| Perl | 21 | `perl` | ⚫ | ⚫ | 🟡 |
+| Perl | 21 | `perl` | ✅ | ✅ | ✅ |
 | PHP | 1 | `hypertext` | ✅ | ✅ | ✅ |
 | PostScript | 35 | `ps` | ⚫ | ⚫ | 🟡 |
 | PowerShell | 53 | `powershell` | ⚫ | ⚫ | 🟡 |

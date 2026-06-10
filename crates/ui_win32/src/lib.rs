@@ -105,9 +105,10 @@ use codepp_core::lang::{
     CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS,
     CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS,
     JAVA_KEYWORDS_2, L_ASP, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_MAKEFILE,
-    L_OBJC, L_PASCAL, L_PHP, L_PROPS, L_RC, L_RUST, L_SQL, L_VB, L_XML, MAKEFILE_KEYWORDS,
-    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS,
-    SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+    L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_RC, L_RUST, L_SQL, L_VB, L_XML, MAKEFILE_KEYWORDS,
+    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS,
+    RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+    XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -144,7 +145,15 @@ use codepp_scintilla_sys::{
     SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET, SCE_PAS_ASM,
     SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER,
     SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER, SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR,
-    SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD, SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT,
+    SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD, SCE_PL_ARRAY, SCE_PL_BACKTICKS,
+    SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE, SCE_PL_DATASECTION, SCE_PL_FORMAT,
+    SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM, SCE_PL_HERE_Q, SCE_PL_HERE_QQ,
+    SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR, SCE_PL_NUMBER, SCE_PL_OPERATOR,
+    SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR, SCE_PL_REGSUBST,
+    SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING, SCE_PL_STRING_Q, SCE_PL_STRING_QQ,
+    SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR, SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QW,
+    SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE,
+    SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT, SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT,
     SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK,
     SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME,
     SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD,
@@ -4078,6 +4087,172 @@ const CSS_THEME: LangTheme = LangTheme {
     bold: CSS_BOLD,
 };
 
+// --- LexPerl (Perl) ---
+// LexPerl is byte-exact case-sensitive: `LexPerl.cxx:96-104`
+// (`isPerlKeyword`) copies token bytes verbatim into a stack buffer
+// and calls `keywords.InList(s)` with no case folding. Most entries
+// in `PERL_KEYWORDS` are lowercase per standard Perl convention, but
+// 13 entries (BEGIN / END / INIT / CHECK / UNITCHECK / AUTOLOAD /
+// DESTROY phase blocks, plus the __FILE__ / __LINE__ / __PACKAGE__ /
+// __SUB__ / __DATA__ / __END__ family) are stored UPPERCASE because
+// Perl source spells them uppercase by language requirement and the
+// lexer would never match a lowercase form. The 13-token uppercase
+// subset is structurally pinned in the dedicated Perl test.
+//
+// **__DATA__ / __END__ uppercase entries are load-bearing for the
+// SCE_PL_DATASECTION → Comment mapping below.** `LexPerl.cxx:872-
+// 877` only recolours these markers to `SCE_PL_DATASECTION` from
+// inside the `SCE_PL_WORD` state (i.e. after a wordlist match) — so
+// without the uppercase entries, the trailing data section never
+// picks up the de-emphasised paint.
+//
+// **Single wordlist class.** `perlWordListDesc[]` declares one
+// `"Keywords"` slot; `PERL_THEME` installs class 0 only.
+//
+// Style-to-slot decisions:
+//   * COMMENTLINE (`# ...`) → Comment italic.
+//   * POD (`=head1 ... =cut` prose blocks) → Comment italic — same
+//     archetype as line comments, de-emphasised relative to code.
+//   * POD_VERB (verbatim POD lines, indented) → Comment italic.
+//   * DATASECTION (everything after `__DATA__` / `__END__`) →
+//     Comment italic. Trailing non-executable data is de-emphasised
+//     prose; italic preserves the "this isn't code" cue.
+//   * NUMBER → Number.
+//   * WORD (wordlist hit — every Perl built-in / reserved word /
+//     named operator / `__TOKEN__` literal) → Keyword bold.
+//   * STRING (`"..."` double-quoted, interpolating) → String.
+//   * CHARACTER (`'...'` single-quoted, no interpolation) → String.
+//   * OPERATOR → Operator.
+//   * SCALAR / ARRAY / HASH / SYMBOLTABLE (sigil-tagged variables —
+//     `$x` / `@x` / `%x` / `*x`) → Lifetime. The "purple sigil-tagged
+//     identifier" archetype: Perl sigils share the visual feel of
+//     Rust lifetimes (short identifier-decorator, distinct from both
+//     keywords and bare identifiers), and `StyleSlot::Lifetime` is
+//     documented as reusable for "scoped binding" highlights at the
+//     enum declaration. Mapping all four sigil styles uniformly keeps
+//     `$/@/%/*` variables visually consistent regardless of which
+//     namespace they belong to.
+//   * REGEX (`m//` body) / REGSUBST (`s///` body) → String. Perl's
+//     palette doesn't have a Regex slot; String collapse is the
+//     established convention.
+//   * BACKTICKS (`` `cmd` ``) → String. Shell-command-as-string.
+//   * HERE_DELIM (`<<EOF` opening marker line) → Keyword2 bold. The
+//     delimiter is a structural marker, distinct from the body —
+//     Keyword2 + bold gives it the "structural anchor" feel without
+//     colliding with the WORD keyword slot.
+//   * HERE_Q / HERE_QQ / HERE_QX (heredoc body — single-quoted /
+//     interpolating / backtick-style respectively) → String.
+//   * STRING_Q / STRING_QQ / STRING_QX / STRING_QR / STRING_QW
+//     (`q{...}` / `qq{...}` / `qx{...}` / `qr{...}` / `qw{...}`
+//     quote-operator bodies) → String.
+//   * SUB_PROTOTYPE (text between `(` and `)` in `sub NAME (...)` —
+//     the `$@%*\` characters declaring a sub's signature) → Keyword2
+//     bold. Structural type-sig declaration, deserves its own
+//     accent.
+//   * FORMAT_IDENT (the `NAME =` header in `format NAME = ...`) →
+//     Keyword2 bold. Structural declarator.
+//   * FORMAT (the picture-body of a `format` template up to the
+//     terminating `.` line) → String. Templated content.
+//   * XLAT (`tr/abc/xyz/` / `y/abc/xyz/` transliteration body) →
+//     String.
+//   * All _VAR interpolation shadows (STRING_VAR (43) / REGEX_VAR
+//     (54) / REGSUBST_VAR (55) / BACKTICKS_VAR (57) / HERE_QQ_VAR
+//     (61) / HERE_QX_VAR (62) / STRING_QQ_VAR (64) / STRING_QX_VAR
+//     (65) / STRING_QR_VAR (66)) → Lifetime. These are interpolated
+//     `$var` / `@var` references INSIDE a string / regex / heredoc /
+//     backticks body; the sigil archetype carries through so an
+//     interpolated variable reads in the same purple as a top-level
+//     `$x`, against the surrounding String body. The +37 shift
+//     (`INTERPOLATE_SHIFT` at `LexPerl.cxx:94`) defines the band; the
+//     theme maps every populated slot uniformly so a future contributor
+//     adding regex highlighting (say, switching REGEX from String to a
+//     hypothetical Regex slot) only changes the body, not the variable.
+//
+// Intentionally unmapped (fall through to STYLE_DEFAULT):
+//   * SCE_PL_DEFAULT (0) — generic background text (universal
+//     omission, matches `SCE_C_DEFAULT` / `SCE_CSS_DEFAULT`).
+//   * SCE_PL_ERROR (1) — soft-warning state for unbalanced delimiters
+//     / unterminated quotes. Pending `StyleSlot::Error` palette
+//     addition (now at 11 entries on the deferred-Error-slot
+//     migration list — Perl's ERROR joins the 10 prior STRINGEOL-
+//     family slots).
+//   * SCE_PL_PUNCTUATION (8) — Lexilla marks "currently not used";
+//     punctuation flows to SCE_PL_OPERATOR.
+//   * SCE_PL_PREPROCESSOR (9) — Lexilla marks "preprocessor unused";
+//     Perl has no real preprocessor. Mapped slot would be dead.
+//   * SCE_PL_IDENTIFIER (11) — bare identifier (post-keyword-miss);
+//     matches `SCE_C_IDENTIFIER` / `SCE_PAS_IDENTIFIER` /
+//     `SCE_VB_IDENTIFIER` precedent.
+//   * SCE_PL_VARIABLE_INDEXER (16) — Lexilla marks "allocated but
+//     unused"; sigil-with-subscript stays in SCALAR style.
+//   * SCE_PL_LONGQUOTE (19) — Lexilla marks "obsolete: replaced by
+//     qq/qx/qr/qw"; modern lexer emits STRING_QQ/QX/QR/QW instead.
+const PERL_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_PL_COMMENTLINE, StyleSlot::Comment),
+    (SCE_PL_POD, StyleSlot::Comment),
+    (SCE_PL_NUMBER, StyleSlot::Number),
+    (SCE_PL_WORD, StyleSlot::Keyword),
+    (SCE_PL_STRING, StyleSlot::String),
+    (SCE_PL_CHARACTER, StyleSlot::String),
+    (SCE_PL_OPERATOR, StyleSlot::Operator),
+    (SCE_PL_SCALAR, StyleSlot::Lifetime),
+    (SCE_PL_ARRAY, StyleSlot::Lifetime),
+    (SCE_PL_HASH, StyleSlot::Lifetime),
+    (SCE_PL_SYMBOLTABLE, StyleSlot::Lifetime),
+    (SCE_PL_REGEX, StyleSlot::String),
+    (SCE_PL_REGSUBST, StyleSlot::String),
+    (SCE_PL_BACKTICKS, StyleSlot::String),
+    (SCE_PL_DATASECTION, StyleSlot::Comment),
+    (SCE_PL_HERE_DELIM, StyleSlot::Keyword2),
+    (SCE_PL_HERE_Q, StyleSlot::String),
+    (SCE_PL_HERE_QQ, StyleSlot::String),
+    (SCE_PL_HERE_QX, StyleSlot::String),
+    (SCE_PL_STRING_Q, StyleSlot::String),
+    (SCE_PL_STRING_QQ, StyleSlot::String),
+    (SCE_PL_STRING_QX, StyleSlot::String),
+    (SCE_PL_STRING_QR, StyleSlot::String),
+    (SCE_PL_STRING_QW, StyleSlot::String),
+    (SCE_PL_POD_VERB, StyleSlot::Comment),
+    (SCE_PL_SUB_PROTOTYPE, StyleSlot::Keyword2),
+    (SCE_PL_FORMAT_IDENT, StyleSlot::Keyword2),
+    (SCE_PL_FORMAT, StyleSlot::String),
+    (SCE_PL_STRING_VAR, StyleSlot::Lifetime),
+    (SCE_PL_XLAT, StyleSlot::String),
+    (SCE_PL_REGEX_VAR, StyleSlot::Lifetime),
+    (SCE_PL_REGSUBST_VAR, StyleSlot::Lifetime),
+    (SCE_PL_BACKTICKS_VAR, StyleSlot::Lifetime),
+    (SCE_PL_HERE_QQ_VAR, StyleSlot::Lifetime),
+    (SCE_PL_HERE_QX_VAR, StyleSlot::Lifetime),
+    (SCE_PL_STRING_QQ_VAR, StyleSlot::Lifetime),
+    (SCE_PL_STRING_QX_VAR, StyleSlot::Lifetime),
+    (SCE_PL_STRING_QR_VAR, StyleSlot::Lifetime),
+];
+// Comment italic — matches universal Code++ convention. POD,
+// POD_VERB, DATASECTION all carry italic via the Comment slot to
+// preserve the "non-executable prose" cue.
+const PERL_ITALIC: &[usize] = &[
+    SCE_PL_COMMENTLINE,
+    SCE_PL_POD,
+    SCE_PL_POD_VERB,
+    SCE_PL_DATASECTION,
+];
+// Primary keyword + heredoc delimiter + sub prototype + format
+// header bold — matches Notepad++ Perl default and the C/C++
+// precedent of bolding the structural-anchor families.
+const PERL_BOLD: &[usize] = &[
+    SCE_PL_WORD,
+    SCE_PL_HERE_DELIM,
+    SCE_PL_SUB_PROTOTYPE,
+    SCE_PL_FORMAT_IDENT,
+];
+
+const PERL_THEME: LangTheme = LangTheme {
+    keywords: &[(0, PERL_KEYWORDS)],
+    styles: PERL_STYLES,
+    italic: PERL_ITALIC,
+    bold: PERL_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -4199,6 +4374,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&VB_THEME)
     } else if lang == L_CSS {
         Some(&CSS_THEME)
+    } else if lang == L_PERL {
+        Some(&PERL_THEME)
     } else {
         None
     }
@@ -18687,16 +18864,20 @@ mod lang_theme_tests {
     use super::{
         lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO,
         SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3,
+        SCE_PL_ARRAY, SCE_PL_BACKTICKS_VAR, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
+        SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX_VAR, SCE_PL_REGEX_VAR, SCE_PL_REGSUBST_VAR,
+        SCE_PL_SCALAR, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QX_VAR,
+        SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD,
     };
     use codepp_core::lang::{
         BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2,
         CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2,
         C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_ASP,
         L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_MAKEFILE, L_OBJC,
-        L_PASCAL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEXT, L_VB, L_XML,
-        MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PHP_KEYWORDS,
-        RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS,
-        VB_KEYWORDS_2, XML_KEYWORDS,
+        L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEXT, L_VB, L_XML,
+        MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
+        PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS,
+        VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -18722,6 +18903,7 @@ mod lang_theme_tests {
             (L_XML, "XML"),
             (L_PASCAL, "Pascal"),
             (L_CSS, "CSS"),
+            (L_PERL, "Perl"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -19366,6 +19548,194 @@ mod lang_theme_tests {
                 "CSS bold list must contain {name} ({idx}) — the four-way \
                  IDENTIFIER cascade must theme uniformly so property colour \
                  stays consistent across CSS spec generations"
+            );
+        }
+    }
+
+    /// Perl uses Lexilla's `perl` lexer (`LexPerl.cxx`). The `L_PERL`
+    /// row routes `.pl` / `.pm` / `.cgi` files to the lexer with a
+    /// single 259-entry mixed-case wordlist installed at class 0 (the
+    /// only class `perlWordListDesc[]` declares). Most entries are
+    /// lowercase; 13 entries (7 phase blocks + 6 `__TOKEN__` family)
+    /// are UPPERCASE because `LexPerl.cxx:96-104` (`isPerlKeyword`)
+    /// is byte-exact case-sensitive and Perl source spells these
+    /// uppercase.
+    ///
+    /// `perl_uses_lexperl_mixed_case_theme` pins:
+    /// - 38-mapping style table shape
+    /// - 10 non-reuse style-table assertions (CPP / HYPERTEXT /
+    ///   MAKEFILE / PASCAL / BATCH / PROPS / SQL / VB / CSS / RUST)
+    /// - Single-class structure (`(0, PERL_KEYWORDS)`)
+    /// - The 13 UPPERCASE entries (BEGIN / END / INIT / CHECK /
+    ///   UNITCHECK / AUTOLOAD / DESTROY + 6 `__TOKEN__` markers)
+    ///   structurally — adversarial-verifier MUST-FIX from
+    ///   synthesis-round (all three verifiers flagged the
+    ///   uppercase-vs-lowercase issue independently)
+    /// - The load-bearing `__DATA__` / `__END__` UPPERCASE markers
+    ///   specifically (without these the `SCE_PL_DATASECTION` →
+    ///   Comment mapping at `LexPerl.cxx:872-877` never fires)
+    /// - The missing `ge` operator restored (completeness verifier
+    ///   MUST-FIX — `lt`/`gt`/`le`/`eq`/`ne`/`cmp` were present but
+    ///   `ge` was dropped)
+    /// - The four sigil styles (`SCALAR` / `ARRAY` / `HASH` /
+    ///   `SYMBOLTABLE`) all routed to `Lifetime` (sigil archetype)
+    /// - The +37 `INTERPOLATE_SHIFT` band: every populated `_VAR`
+    ///   slot (`STRING_VAR` / `REGEX_VAR` / `REGSUBST_VAR` /
+    ///   `BACKTICKS_VAR` / `HERE_QQ_VAR` / `HERE_QX_VAR` /
+    ///   `STRING_QQ_VAR` / `STRING_QX_VAR` / `STRING_QR_VAR`) routes
+    ///   to `Lifetime` uniformly
+    /// - The four bold-tagged structural anchors (`WORD` /
+    ///   `HERE_DELIM` / `SUB_PROTOTYPE` / `FORMAT_IDENT`)
+    #[test]
+    fn perl_uses_lexperl_mixed_case_theme() {
+        let perl = lang_theme(L_PERL).expect("Perl wired");
+        let c = lang_theme(L_C).expect("C wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let ini = lang_theme(L_INI).expect("INI wired");
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let css = lang_theme(L_CSS).expect("CSS wired");
+        let rust = lang_theme(L_RUST).expect("Rust wired");
+        // 38 emission mappings. DEFAULT (0), ERROR (1), PUNCTUATION
+        // (8), PREPROCESSOR (9), IDENTIFIER (11), VARIABLE_INDEXER
+        // (16), LONGQUOTE (19) deliberately unmapped per the LexPerl
+        // banner in scintilla-sys.
+        assert_eq!(
+            perl.styles.len(),
+            38,
+            "Perl theme has {} style mappings; expected 38",
+            perl.styles.len()
+        );
+        // Distinct from every other style table in the framework.
+        assert_ne!(perl.styles, c.styles, "Perl must NOT reuse CPP_STYLES");
+        assert_ne!(
+            perl.styles, mk.styles,
+            "Perl must NOT reuse MAKEFILE_STYLES"
+        );
+        assert_ne!(perl.styles, pas.styles, "Perl must NOT reuse PASCAL_STYLES");
+        assert_ne!(
+            perl.styles, php.styles,
+            "Perl must NOT reuse HYPERTEXT_STYLES"
+        );
+        assert_ne!(perl.styles, bat.styles, "Perl must NOT reuse BATCH_STYLES");
+        assert_ne!(perl.styles, ini.styles, "Perl must NOT reuse PROPS_STYLES");
+        assert_ne!(perl.styles, sql.styles, "Perl must NOT reuse SQL_STYLES");
+        assert_ne!(perl.styles, vb.styles, "Perl must NOT reuse VB_STYLES");
+        assert_ne!(perl.styles, css.styles, "Perl must NOT reuse CSS_STYLES");
+        assert_ne!(perl.styles, rust.styles, "Perl must NOT reuse RUST_STYLES");
+        // Single keyword class: 0 = PERL_KEYWORDS (the only class
+        // perlWordListDesc[] declares).
+        assert_eq!(
+            perl.keywords.len(),
+            1,
+            "Perl theme installs class 0 only — perlWordListDesc[] declares one slot"
+        );
+        assert_eq!(perl.keywords[0].0, 0);
+        assert_eq!(perl.keywords[0].1, PERL_KEYWORDS);
+        // Pin the 13 UPPERCASE entries structurally. Adversarial-
+        // verifier MUST-FIX from synthesis-round — all three
+        // verifiers flagged that LexPerl is byte-exact case-sensitive
+        // (LexPerl.cxx:96-104) and Perl source spells these uppercase.
+        // Lowercase entries would silently disable the highlight.
+        let tokens: std::collections::HashSet<&str> = PERL_KEYWORDS.split_whitespace().collect();
+        for uppercase_token in [
+            "BEGIN",
+            "END",
+            "INIT",
+            "CHECK",
+            "UNITCHECK",
+            "AUTOLOAD",
+            "DESTROY",
+            "__FILE__",
+            "__LINE__",
+            "__PACKAGE__",
+            "__SUB__",
+            "__DATA__",
+            "__END__",
+        ] {
+            assert!(
+                tokens.contains(uppercase_token),
+                "Perl wordlist must contain UPPERCASE `{uppercase_token}` — \
+                 LexPerl.cxx:96-104 is byte-exact case-sensitive and Perl source \
+                 spells this token uppercase. Lowercase form would never match."
+            );
+        }
+        // Specifically pin __DATA__ / __END__ as load-bearing for the
+        // SCE_PL_DATASECTION → Comment mapping. LexPerl.cxx:872-877
+        // only recolours these markers to DATASECTION from inside the
+        // WORD state (i.e. after wordlist match) — without uppercase
+        // entries the trailing data section never picks up
+        // de-emphasised paint.
+        assert!(
+            tokens.contains("__DATA__") && tokens.contains("__END__"),
+            "Perl wordlist MUST contain UPPERCASE `__DATA__` and `__END__` — \
+             these are load-bearing for SCE_PL_DATASECTION styling \
+             (LexPerl.cxx:872-877 recolours only from inside SCE_PL_WORD state)"
+        );
+        // Pin the `ge` operator restoration (completeness verifier
+        // MUST-FIX — the lt/gt/le/eq/ne/cmp family was present but
+        // ge was missing in initial synthesis).
+        assert!(
+            tokens.contains("ge"),
+            "Perl wordlist must contain `ge` — string-comparison family \
+             (lt / gt / le / ge / eq / ne / cmp) must be complete"
+        );
+        // Pin the four sigil-archetype mappings — all SCALAR / ARRAY
+        // / HASH / SYMBOLTABLE styles routed to Lifetime so $/@/%/*
+        // variables render in the same purple regardless of which
+        // namespace they belong to.
+        for (idx, name) in [
+            (SCE_PL_SCALAR, "SCE_PL_SCALAR"),
+            (SCE_PL_ARRAY, "SCE_PL_ARRAY"),
+            (SCE_PL_HASH, "SCE_PL_HASH"),
+            (SCE_PL_SYMBOLTABLE, "SCE_PL_SYMBOLTABLE"),
+        ] {
+            assert!(
+                perl.styles.contains(&(idx, StyleSlot::Lifetime)),
+                "Perl sigil style {name} ({idx}) must route to StyleSlot::Lifetime — \
+                 sigil-tagged variables share the Rust-lifetime visual archetype"
+            );
+        }
+        // Pin every populated _VAR interpolation shadow slot routed
+        // to Lifetime. The +37 INTERPOLATE_SHIFT band (LexPerl.cxx:94)
+        // defines these as the variable-token style emitted INSIDE an
+        // interpolating string / regex / heredoc / backticks body —
+        // they read as sigil-variables against the String body.
+        for (idx, name) in [
+            (SCE_PL_STRING_VAR, "SCE_PL_STRING_VAR"),
+            (SCE_PL_REGEX_VAR, "SCE_PL_REGEX_VAR"),
+            (SCE_PL_REGSUBST_VAR, "SCE_PL_REGSUBST_VAR"),
+            (SCE_PL_BACKTICKS_VAR, "SCE_PL_BACKTICKS_VAR"),
+            (SCE_PL_HERE_QQ_VAR, "SCE_PL_HERE_QQ_VAR"),
+            (SCE_PL_HERE_QX_VAR, "SCE_PL_HERE_QX_VAR"),
+            (SCE_PL_STRING_QQ_VAR, "SCE_PL_STRING_QQ_VAR"),
+            (SCE_PL_STRING_QX_VAR, "SCE_PL_STRING_QX_VAR"),
+            (SCE_PL_STRING_QR_VAR, "SCE_PL_STRING_QR_VAR"),
+        ] {
+            assert!(
+                perl.styles.contains(&(idx, StyleSlot::Lifetime)),
+                "Perl interpolation shadow {name} ({idx}) must route to \
+                 StyleSlot::Lifetime — interpolated $var reads as sigil-variable \
+                 against the surrounding String body"
+            );
+        }
+        // Pin the four bold structural anchors: WORD (every wordlist
+        // hit), HERE_DELIM (<<EOF opener), SUB_PROTOTYPE (sub sig),
+        // FORMAT_IDENT (format NAME =). A future commit that drops
+        // any of these from PERL_BOLD would lose the "structural
+        // marker" visual cue.
+        for (idx, name) in [
+            (SCE_PL_WORD, "SCE_PL_WORD"),
+            (SCE_PL_HERE_DELIM, "SCE_PL_HERE_DELIM"),
+            (SCE_PL_SUB_PROTOTYPE, "SCE_PL_SUB_PROTOTYPE"),
+            (SCE_PL_FORMAT_IDENT, "SCE_PL_FORMAT_IDENT"),
+        ] {
+            assert!(
+                perl.bold.contains(&idx),
+                "Perl bold list must contain {name} ({idx}) — structural anchor"
             );
         }
     }
