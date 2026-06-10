@@ -2772,6 +2772,415 @@ pub const SQL_KEYWORDS_2: &str = concat!(
     "format translate treat version",
 );
 
+/// Space-separated CSS1 property names installed via `LexCSS`'s
+/// `SCI_SETKEYWORDS(0, ...)` — class 0 of `cssWordListDesc[]`. Drives
+/// `SCE_CSS_IDENTIFIER` (the first hit in `LexCSS`'s four-way property-
+/// name cascade, mapped to Keyword bold).
+///
+/// **All entries must be lowercase.** `LexCSS.cxx:419` calls
+/// `sc.GetCurrentLowered(s, ...)` on every candidate token before
+/// `WordList::InList`. CSS source can use any casing (`COLOR` /
+/// `Color` / `color` all match) but uppercase wordlist entries here
+/// would never match. Same shape contract as the SQL / Batch / VB
+/// wordlists.
+///
+/// **Four-way IDENTIFIER cascade with [`CSS_PROPERTIES_CSS2`] /
+/// [`CSS_PROPERTIES_CSS3`] and (future) extension wordlist.**
+/// `LexCSS.cxx:425-438` consults classes 0 / 2 / 3 / 5 in priority
+/// order — a token appears in exactly one class. This list covers the
+/// canonical W3C CSS Level 1 (1996) property set: 5 box-model
+/// shorthands + 4 background longhands, the 6 border shorthand /
+/// width / colour / style longhands across all four edges, the 7
+/// font-* longhands, the 4 list-style longhands, the 4 margin
+/// longhands, the 4 padding longhands, the 4 text-* longhands, and
+/// the dimension + layout primitives (`width` / `height` /
+/// `display` / `float` / `clear` / `color` / `line-height` /
+/// `letter-spacing` / `word-spacing` / `white-space` /
+/// `vertical-align`). Roughly the "first-language" CSS subset that
+/// every browser has supported since 1996.
+///
+/// Sourced from the W3C CSS 1 Recommendation, cross-checked against
+/// Notepad++'s shipped `langs.model.xml` and the Lexilla
+/// `LexCSS.cxx` cascade logic.
+pub const CSS_PROPERTIES_CSS1: &str = concat!(
+    // Background
+    "background background-attachment background-color background-image ",
+    "background-position background-repeat ",
+    // Border (shorthand + per-edge + width / style / colour)
+    "border border-bottom border-bottom-width border-color border-left ",
+    "border-left-width border-right border-right-width border-style ",
+    "border-top border-top-width border-width ",
+    // Layout primitives
+    "clear color display float ",
+    // Font
+    "font font-family font-size font-style font-variant font-weight ",
+    // Dimensions
+    "height width ",
+    // Text + spacing
+    "letter-spacing line-height ",
+    // List
+    "list-style list-style-image list-style-position list-style-type ",
+    // Margin / padding
+    "margin margin-bottom margin-left margin-right margin-top ",
+    "padding padding-bottom padding-left padding-right padding-top ",
+    // Text alignment / decoration
+    "text-align text-decoration text-indent text-transform ",
+    // Misc layout
+    "vertical-align white-space word-spacing",
+);
+
+/// Space-separated CSS pseudo-class names installed via `LexCSS`'s
+/// `SCI_SETKEYWORDS(1, ...)` — class 1 of `cssWordListDesc[]`. Drives
+/// `SCE_CSS_PSEUDOCLASS` (mapped to Keyword2). Stored WITHOUT leading
+/// colons — the lexer's `:` state-machine entry (`LexCSS.cxx:251-262`)
+/// already routes post-colon tokens to PSEUDOCLASS state, then the
+/// wordlist sweep matches the bare identifier on word-boundary.
+///
+/// **All entries must be lowercase.** Same `GetCurrentLowered`
+/// contract as [`CSS_PROPERTIES_CSS1`].
+///
+/// **Legitimate state-disambiguated cross-namespace overlap.** `left`
+/// and `right` appear here (paged-media pseudo-classes `:left` /
+/// `:right`) AND in [`CSS_PROPERTIES_CSS2`] (positional properties).
+/// Lexilla disambiguates by lexer state — class 1 lookup only fires
+/// post-`:`, class 2 lookup only fires post-`{` in the property-name
+/// position — so the same token in both lists is the correct
+/// representation, not a duplicate to remove.
+///
+/// Covers Selectors Level 3 + Level 4: structural (`first-child` /
+/// `nth-child` / `is` / `where` / `has` / `not`), state
+/// (`hover` / `focus` / `active` / `visited` / `checked` /
+/// `disabled` / `focus-visible` / `focus-within` /
+/// `placeholder-shown`), form-validation
+/// (`valid` / `invalid` / `in-range` / `required` / `optional` /
+/// `user-valid` / `user-invalid`), input-state (`read-only` /
+/// `read-write` / `autofill`), media-element (`playing` / `paused` /
+/// `picture-in-picture` / `fullscreen`), tree-context (`root` /
+/// `empty` / `scope` / `target` / `target-within`), and structural
+/// position (`last-child` / `only-of-type` / `nth-of-type` /
+/// paged-media `left` / `right` / `first`).
+///
+/// Sourced from W3C CSS Selectors Level 4 spec, cross-checked against
+/// MDN's pseudo-class index and the Lexilla source.
+pub const CSS_PSEUDO_CLASSES: &str = concat!(
+    "active any-link autofill blank checked current ",
+    "default defined dir disabled empty enabled ",
+    "first first-child first-of-type ",
+    "focus focus-visible focus-within fullscreen future ",
+    "has host host-context hover ",
+    "in-range indeterminate invalid is ",
+    "lang last-child last-of-type left link local-link ",
+    "not ",
+    "nth-child nth-col nth-last-child nth-last-col nth-last-of-type nth-of-type ",
+    "only-child only-of-type optional out-of-range ",
+    "past paused picture-in-picture placeholder-shown playing ",
+    "read-only read-write required right root ",
+    "scope ",
+    "target target-within ",
+    "user-invalid user-valid ",
+    "valid visited where",
+);
+
+/// Space-separated CSS2 property names installed via `LexCSS`'s
+/// `SCI_SETKEYWORDS(2, ...)` — class 2 of `cssWordListDesc[]`. Drives
+/// `SCE_CSS_IDENTIFIER2` (the second hit in the four-way property-
+/// name cascade, mapped to Keyword bold — visually indistinguishable
+/// from [`CSS_PROPERTIES_CSS1`] / [`CSS_PROPERTIES_CSS3`] by design).
+///
+/// **All entries must be lowercase** (same `GetCurrentLowered`
+/// contract).
+///
+/// **Cascade extension of [`CSS_PROPERTIES_CSS1`].** Properties in
+/// this list are CSS2 / CSS2.1 additions that are NOT in CSS1.
+/// `LexCSS.cxx:431` falls through to class 2 only when class 0
+/// doesn't match. No token appears in both lists.
+///
+/// Covers CSS2 / CSS2.1 additions: positioning (`position` / `top` /
+/// `bottom` / `left` / `right` / `z-index`), display extensions
+/// (`overflow` / `visibility` / `clip`), the aural / speech family
+/// (`azimuth` / `cue` / `cue-after` / `cue-before` / `elevation` /
+/// `pause` / `pitch` / `play-during` / `richness` / `speak` /
+/// `speech-rate` / `stress` / `voice-family` / `volume` and
+/// friends — deprecated in CSS Speech Module Level 1 but Lexilla's
+/// `LexCSS` still recognises them and Notepad++'s langs.model.xml
+/// ships them, so Code++ preserves parity), table layout
+/// (`table-layout` / `border-collapse` / `border-spacing` /
+/// `caption-side` / `empty-cells`), generated content
+/// (`content` / `counter-increment` / `counter-reset` / `quotes` /
+/// `marker-offset`), paged media (`page` / `page-break-before` /
+/// `page-break-after` / `page-break-inside` / `orphans` / `widows` /
+/// `marks` / `size`), per-edge `border-*-color` / `border-*-style`,
+/// outline (`outline` + 3 longhands), `cursor`, `min-/max-` width +
+/// height, font sizing (`font-size-adjust` / `font-stretch`),
+/// bidirectional text (`direction` / `unicode-bidi`), and CSS2's
+/// `text-shadow` (relocated to CSS Text Decoration Level 3, but
+/// originally CSS2).
+///
+/// Sourced from the W3C CSS 2.1 Recommendation, cross-checked
+/// against Notepad++ baseline.
+pub const CSS_PROPERTIES_CSS2: &str = concat!(
+    // Aural / speech (CSS2 + CSS Speech)
+    "azimuth ",
+    // Border per-edge (colour + style — width is class 0)
+    "border-bottom-color border-bottom-style border-collapse ",
+    "border-left-color border-left-style border-right-color ",
+    "border-right-style border-spacing border-top-color border-top-style ",
+    // Positioning + clipping + visibility
+    "bottom caption-side clip ",
+    // Generated content + counters + quotes + marker
+    "content counter-increment counter-reset ",
+    "cue cue-after cue-before ",
+    "cursor ",
+    "direction elevation empty-cells ",
+    // Font extensions
+    "font-size-adjust font-stretch ",
+    // Positioning + marker + paged-media marks
+    "left marker-offset marks ",
+    // Sizing constraints
+    "max-height max-width min-height min-width ",
+    // Paged media
+    "orphans ",
+    // Outline
+    "outline outline-color outline-style outline-width ",
+    // Display extension
+    "overflow ",
+    // Paged-media controls
+    "page page-break-after page-break-before page-break-inside ",
+    // Aural pacing + pitch + duration
+    "pause pause-after pause-before pitch pitch-range play-during ",
+    // Positioning + generated content + paged-media + aural
+    "position quotes richness right size ",
+    "speak speak-header speak-numeral speak-punctuation speech-rate stress ",
+    // Table layout + text shadow + positioning + bidi + visibility +
+    // aural voice + paged margins + sizing
+    "table-layout text-shadow top unicode-bidi visibility ",
+    "voice-family volume widows z-index",
+);
+
+/// Space-separated CSS3 + modern property names installed via
+/// `LexCSS`'s `SCI_SETKEYWORDS(3, ...)` — class 3 of
+/// `cssWordListDesc[]`. Drives `SCE_CSS_IDENTIFIER3` (the third hit
+/// in the four-way property-name cascade, Keyword bold).
+///
+/// **All entries must be lowercase** (same `GetCurrentLowered`
+/// contract).
+///
+/// **Cascade extension of [`CSS_PROPERTIES_CSS1`] + [`CSS_PROPERTIES_CSS2`].**
+/// `LexCSS.cxx:433` falls through to class 3 only when classes 0 + 2
+/// don't match. No token appears in any other class.
+///
+/// Covers the CSS3+ modules in widespread use: flexbox (`flex` +
+/// `flex-*` + `justify-*` + `align-*` + `order`), grid (`grid` +
+/// `grid-*` + `gap` + `*-gap` + `place-*`), transforms (`transform` /
+/// `translate` / `rotate` / `scale` + 3D variants), transitions
+/// (`transition` + `transition-*`), animations (`animation` +
+/// `animation-*`), borders L3 (`border-radius` + corner-radius
+/// longhands + image + per-side `*-block-*` / `*-inline-*` logical
+/// equivalents), backgrounds L3 (`background-clip` / `-origin` /
+/// `-size` / `-blend-mode`), columns / multicol (`columns` +
+/// `column-*`), containment (`contain` + `container-*` +
+/// `content-visibility`), filter / mask / clip-path, fonts L4
+/// (`font-feature-settings` / `font-kerning` /
+/// `font-variation-settings` / `font-display`), logical properties
+/// (`inset-*` / `margin-block-*` / `margin-inline-*` /
+/// `padding-block-*` / `padding-inline-*` / `block-size` /
+/// `inline-size` / `max-block-size` etc.), overflow + scroll-snap +
+/// scrollbar styling, text L3+ (`text-shadow` is class 2 but
+/// `text-decoration-*` longhands + `text-emphasis-*` +
+/// `text-underline-*` + `text-justify` + `text-orientation` are
+/// here), accessibility (`accent-color` / `caret-color` /
+/// `color-scheme`), legacy-but-popular (`opacity` / `line-clamp` /
+/// `zoom` / `pointer-events` / `user-select`).
+///
+/// **Adversarial-verifier additions** beyond the initial synthesis:
+/// `opacity` (CSS Color Module Level 3 — single highest-impact
+/// omission flagged by both correctness + completeness verifiers),
+/// `accent-color` (modern form-control theming), `outline-offset`
+/// (CSS3 Basic UI), `scrollbar-color` / `scrollbar-width` /
+/// `scrollbar-gutter` (CSS Scrollbars Module, mainstream as of
+/// 2024), `content-visibility` (CSS Containment Level 2),
+/// `font-display` (CSS Fonts Module Level 4 — ubiquitous in
+/// `@font-face` blocks), `line-clamp` (formerly
+/// `-webkit-line-clamp`, now standardised).
+///
+/// Sourced from the W3C CSS Snapshot 2024, W3C CSS Working Group
+/// module index, and MDN's CSS property reference. Cross-checked
+/// against Notepad++ baseline.
+pub const CSS_PROPERTIES_CSS3: &str = concat!(
+    // Accessibility + accent
+    "accent-color ",
+    // Flexbox + grid alignment
+    "align-content align-items align-self ",
+    // Universal reset
+    "all ",
+    // Animations
+    "animation animation-delay animation-direction animation-duration ",
+    "animation-fill-mode animation-iteration-count animation-name ",
+    "animation-play-state animation-timing-function ",
+    // Form-control native styling
+    "appearance ",
+    // Layout / containment / sizing
+    "aspect-ratio backdrop-filter backface-visibility ",
+    // Background L3
+    "background-blend-mode background-clip background-origin background-size ",
+    // Logical sizing
+    "block-size ",
+    // Border block (logical)
+    "border-block border-block-color border-block-end border-block-end-color ",
+    "border-block-end-style border-block-end-width border-block-start ",
+    "border-block-start-color border-block-start-style ",
+    "border-block-start-width border-block-style border-block-width ",
+    // Border corner radii
+    "border-bottom-left-radius border-bottom-right-radius ",
+    "border-end-end-radius border-end-start-radius ",
+    // Border image
+    "border-image border-image-outset border-image-repeat border-image-slice ",
+    "border-image-source border-image-width ",
+    // Border inline (logical)
+    "border-inline border-inline-color border-inline-end ",
+    "border-inline-end-color border-inline-end-style border-inline-end-width ",
+    "border-inline-start border-inline-start-color border-inline-start-style ",
+    "border-inline-start-width border-inline-style border-inline-width ",
+    // Border radius
+    "border-radius border-start-end-radius border-start-start-radius ",
+    "border-top-left-radius border-top-right-radius ",
+    // Box
+    "box-decoration-break box-shadow box-sizing ",
+    // Multi-column + break
+    "break-after break-before break-inside ",
+    // Caret + clip-path
+    "caret-color clip-path color-scheme ",
+    // Columns / multicol
+    "column-count column-fill column-gap column-rule column-rule-color ",
+    "column-rule-style column-rule-width column-span column-width columns ",
+    // Containment + container queries
+    "contain container container-name container-type content-visibility ",
+    // Filter + flex
+    "filter flex flex-basis flex-direction flex-flow flex-grow flex-shrink ",
+    "flex-wrap ",
+    // Font features (CSS Fonts Level 3+4)
+    "font-display font-feature-settings font-kerning font-variation-settings ",
+    // Grid
+    "gap grid grid-area grid-auto-columns grid-auto-flow grid-auto-rows ",
+    "grid-column grid-column-end grid-column-gap grid-column-start grid-gap ",
+    "grid-row grid-row-end grid-row-gap grid-row-start grid-template ",
+    "grid-template-areas grid-template-columns grid-template-rows ",
+    // Hyphens + image
+    "hyphens image-rendering ",
+    // Logical sizing + inset
+    "inline-size inset inset-block inset-block-end inset-block-start ",
+    "inset-inline inset-inline-end inset-inline-start ",
+    // Isolation + justification
+    "isolation justify-content justify-items justify-self ",
+    // Line-clamp (formerly -webkit-line-clamp, now standardised)
+    "line-clamp ",
+    // Margin logical
+    "margin-block margin-block-end margin-block-start margin-inline ",
+    "margin-inline-end margin-inline-start ",
+    // Mask
+    "mask mask-clip mask-composite mask-image mask-mode mask-origin ",
+    "mask-position mask-repeat mask-size mask-type ",
+    // Max / min logical sizing
+    "max-block-size max-inline-size min-block-size min-inline-size ",
+    // Misc visual
+    "mix-blend-mode ",
+    // Object fit
+    "object-fit object-position ",
+    // Motion path
+    "offset offset-anchor offset-distance offset-path offset-position ",
+    "offset-rotate ",
+    // Opacity (must-fix add per correctness verifier)
+    "opacity ",
+    // Order + outline-offset
+    "order outline-offset ",
+    // Overflow
+    "overflow-anchor overflow-block overflow-inline overflow-wrap ",
+    "overflow-x overflow-y ",
+    // Overscroll
+    "overscroll-behavior overscroll-behavior-block ",
+    "overscroll-behavior-inline overscroll-behavior-x overscroll-behavior-y ",
+    // Padding logical
+    "padding-block padding-block-end padding-block-start padding-inline ",
+    "padding-inline-end padding-inline-start ",
+    // Perspective
+    "perspective perspective-origin ",
+    // Place (flexbox+grid shorthand)
+    "place-content place-items place-self ",
+    // Pointer / resize / rotate
+    "pointer-events resize rotate row-gap scale ",
+    // Scroll
+    "scroll-behavior ",
+    "scroll-margin scroll-margin-block scroll-margin-block-end ",
+    "scroll-margin-block-start scroll-margin-bottom scroll-margin-inline ",
+    "scroll-margin-inline-end scroll-margin-inline-start scroll-margin-left ",
+    "scroll-margin-right scroll-margin-top ",
+    "scroll-padding scroll-padding-block scroll-padding-block-end ",
+    "scroll-padding-block-start scroll-padding-bottom scroll-padding-inline ",
+    "scroll-padding-inline-end scroll-padding-inline-start scroll-padding-left ",
+    "scroll-padding-right scroll-padding-top ",
+    "scroll-snap-align scroll-snap-stop scroll-snap-type ",
+    // Scrollbar styling (CSS Scrollbars Module)
+    "scrollbar-color scrollbar-gutter scrollbar-width ",
+    // Tab + text decoration / emphasis
+    "tab-size text-align-last ",
+    "text-decoration-color text-decoration-line text-decoration-skip-ink ",
+    "text-decoration-style text-decoration-thickness ",
+    "text-emphasis text-emphasis-color text-emphasis-position text-emphasis-style ",
+    "text-justify text-orientation text-overflow text-rendering ",
+    "text-underline-offset text-underline-position ",
+    // Touch + transforms
+    "touch-action transform transform-box transform-origin transform-style ",
+    // Transitions
+    "transition transition-delay transition-duration transition-property ",
+    "transition-timing-function translate ",
+    // User select + will-change
+    "user-select will-change ",
+    // Word + writing + zoom
+    "word-break word-wrap writing-mode zoom",
+);
+
+/// Space-separated CSS pseudo-element names installed via `LexCSS`'s
+/// `SCI_SETKEYWORDS(4, ...)` — class 4 of `cssWordListDesc[]`. Drives
+/// `SCE_CSS_PSEUDOELEMENT` (mapped to Keyword2). Stored WITHOUT
+/// leading colons — the lexer's `:` state-machine matches the bare
+/// identifier after either single-colon `:before` (legacy CSS2) or
+/// double-colon `::before` (CSS3+) prefix.
+///
+/// **All entries must be lowercase** (same `GetCurrentLowered`
+/// contract).
+///
+/// **Legitimate state-disambiguated cross-namespace overlap.** `cue`
+/// appears here (pseudo-element `::cue` for `WebVTT`) AND in
+/// [`CSS_PROPERTIES_CSS2`] (the aural property `cue: ...`). Lexilla
+/// disambiguates by lexer state — class 4 lookup only fires
+/// post-`:` (or `::`) in the SELECTOR position, class 2 lookup only
+/// fires in the PROPERTY-NAME position — so the same token in both
+/// lists is the correct representation, not a duplicate to remove.
+///
+/// Covers W3C CSS Pseudo-Elements Level 4: typographic
+/// (`before` / `after` / `first-line` / `first-letter` / `marker` /
+/// `selection`), form controls (`placeholder` /
+/// `file-selector-button`), media (`backdrop` / `cue` /
+/// `cue-region` / `slotted` / `part`), web platform
+/// (`view-transition` family — 4 entries for the View Transitions
+/// API), accessibility / editor (`spelling-error` /
+/// `grammar-error` / `target-text`).
+///
+/// Sourced from W3C CSS Pseudo-Elements Module Level 4 + CSS View
+/// Transitions Module Level 1, cross-checked against MDN's
+/// pseudo-element reference.
+pub const CSS_PSEUDO_ELEMENTS: &str = concat!(
+    "after backdrop before ",
+    "cue cue-region ",
+    "file-selector-button ",
+    "first-letter first-line ",
+    "grammar-error marker ",
+    "part placeholder selection slotted spelling-error ",
+    "target-text ",
+    "view-transition view-transition-group view-transition-image-pair ",
+    "view-transition-new view-transition-old",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 18 / 🟡 70 / ⚫ 1.
+Total: 89 rows. ✅ 19 / 🟡 69 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -699,6 +699,111 @@ shape, two-class structure, canonical keyword links,
 all-lowercase invariant, no-overlap invariant, no-class-2/3
 guard, AND the `rem` exclusion structurally.
 
+**CSS (2026-06-10):** uses Lexilla's `css` lexer
+(`LexCSS.cxx`). The `L_CSS` row routes `.css` files to the
+lexer with **five wordlist classes installed simultaneously** —
+the broadest population in the framework so far (every other
+wired row uses 0, 1, or 2 classes; ASP uses 3). Classes 0
+(`CSS_PROPERTIES_CSS1`, 53 entries) + 2 (`CSS_PROPERTIES_CSS2`,
+69 entries) + 3 (`CSS_PROPERTIES_CSS3`, 254 entries) +
+(future) class 5 form a **five-arm IDENTIFIER cascade**
+(`LexCSS.cxx:425-438`): CSS1 hit → `SCE_CSS_IDENTIFIER`,
+CSS2 hit → `SCE_CSS_IDENTIFIER2`, CSS3 hit →
+`SCE_CSS_IDENTIFIER3`, class 5 hit →
+`SCE_CSS_EXTENDED_IDENTIFIER`, fallback →
+`SCE_CSS_UNKNOWN_IDENTIFIER`. The "four-way" framing used
+informally elsewhere in this note refers to the **four
+populated arms** for v1 — class 5 is intentionally empty
+(vendor-prefixed extensions, see next paragraph) so the
+fifth arm is dead until a follow-up commit, but
+`SCE_CSS_EXTENDED_IDENTIFIER` is still pre-themed
+identically to the other three IDENTIFIER variants so a
+future class-5 install picks up correct colouring with no
+theme edit. Classes 1 (`CSS_PSEUDO_CLASSES`, 63 entries)
++ 4 (`CSS_PSEUDO_ELEMENTS`, 21 entries) drive
+`SCE_CSS_PSEUDOCLASS` / `SCE_CSS_PSEUDOELEMENT` through
+a separate cascade (`LexCSS.cxx:440-454`). Classes 5 / 6
+/ 7 (vendor-prefixed extensions like `-webkit-*` /
+`-moz-*`) intentionally left empty for v1 — cascade-miss to
+`SCE_CSS_UNKNOWN_*` / `SCE_CSS_EXTENDED_*` is acceptable
+until a follow-up commit lands browser-prefix wordlists.
+
+Dedicated 20-mapping `CSS_STYLES` table — does NOT reuse
+any other framework style table (CPP / HYPERTEXT /
+MAKEFILE / PASCAL / BATCH / PROPS / SQL / VB — all 8
+non-reuse assertions structurally pinned in the test). The
+four-way IDENTIFIER cascade (`_IDENTIFIER` / `_IDENTIFIER2`
+/ `_IDENTIFIER3` / `_EXTENDED_IDENTIFIER`) and the element
+`SCE_CSS_TAG` (matching HTML's `SCE_H_TAG` precedent) ALL
+map to Keyword bold blue so property colour stays uniform
+regardless of which spec generation a property comes from —
+distinct lexer-side indices exist for plugins, not for
+human readers. CLASS / ID / PSEUDOCLASS / PSEUDOELEMENT /
+ATTRIBUTE / VARIABLE / EXTENDED pseudo variants all → Keyword2
+steel-blue (selector / variable accents). DIRECTIVE
+(`@import` etc.) / GROUP_RULE (the four hard-coded `media`
+/ `supports` / `document` / `-moz-document` per
+`LexCSS.cxx:460-463`) / IMPORTANT (`!important`) → all
+Preprocessor bold. COMMENT → Comment italic. OPERATOR /
+String / Single+Double-string as expected. DEFAULT (0),
+UNKNOWN_PSEUDOCLASS (4), UNKNOWN_IDENTIFIER (7), VALUE (8)
+intentionally unmapped — fall through to STYLE_DEFAULT
+(matches N++ light-theme convention; UNKNOWN_* are
+wordlist-miss fallbacks not errors, VALUE is right-of-colon
+literal text like `red` / `10px` / `auto` that N++ leaves
+default-coloured).
+
+**Critical: case-insensitive lexer.** `LexCSS.cxx:419` calls
+`sc.GetCurrentLowered(s, ...)` on every candidate token
+before any `WordList::InList` lookup. All five CSS
+wordlists are stored all-lowercase. CSS source can use any
+casing (`COLOR` / `Color` / `color` all match) — the
+case-insensitive convention is honoured transparently;
+uppercase wordlist entries would never match. The
+`css_uses_lexcss_five_class_cascade_theme` test pins the
+all-lowercase invariant on every wordlist structurally.
+
+**Legitimate state-disambiguated cross-namespace overlaps.**
+Unlike SQL / VB (strict no-overlap between class 0 / 1),
+CSS has by-design cross-namespace duplicates that the lexer
+state machine disambiguates: `left` and `right` appear in
+both class 1 (paged-media pseudo-classes `:left` / `:right`
+for print stylesheets) AND class 2 (positional properties
+`left: 10px;`); `cue` appears in both class 2 (CSS2 aural
+property `cue: ...`) AND class 4 (WebVTT pseudo-element
+`::cue`). Lexilla disambiguates by lexer state — wordlist
+queries fire only in the matching syntactic state. The test
+pins these overlaps as REQUIRED invariants (not duplicates
+to clean up) so a future "defensive" deduplication commit
+can't silently break paged-media pseudos or `::cue`
+styling.
+
+**`opacity` MUST-FIX from adversarial verifiers.** Initial
+synthesis omitted `opacity` (CSS Color Module Level 3,
+2003) — both correctness and completeness verifiers
+flagged it independently as the single highest-impact
+omission. Added to class 3 before commit. Completeness
+verifier also recommended modern v1 additions: `accent-color`
+(form-control theming), `outline-offset` (CSS3 Basic UI),
+`scrollbar-color` / `scrollbar-width` / `scrollbar-gutter`
+(CSS Scrollbars Module), `content-visibility` (CSS
+Containment Level 2), `font-display` (CSS Fonts L4
+`@font-face` descriptor), `line-clamp` (formerly
+`-webkit-line-clamp`, now standardised) — all added.
+Structural pin in the test asserts `opacity` stays in
+class 3 so a future cleanup doesn't drop it.
+
+`css_uses_lexcss_five_class_cascade_theme` test pins the
+20-mapping shape, five-class structure, canonical keyword
+constant links, all-lowercase invariant on every wordlist,
+strict no-overlap within the property-name cascade
+(class 0 / 2 / 3), strict no-overlap within the pseudo
+namespaces (class 1 / 4), the legitimate state-disambiguated
+cross-namespace overlaps as REQUIRED invariants
+(left/right in class 1 + class 2, cue in class 2 + class 4),
+the four-way IDENTIFIER cascade uniform-bold theming, AND
+the `opacity` structural pin.
+
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
 5-style table and a single keyword class. `MAKEFILE_KEYWORDS`
@@ -876,7 +981,7 @@ further shim work needed.
 | COBOL | 50 | `COBOL` | ⚫ | ⚫ | 🟡 |
 | CoffeeScript | 56 | `coffeescript` | ⚫ | ⚫ | 🟡 |
 | CSound | 70 | `csound` | ⚫ | ⚫ | 🟡 |
-| CSS | 20 | `css` | ⚫ | ⚫ | 🟡 |
+| CSS | 20 | `css` | ✅ | ✅ | ✅ |
 | D | 52 | `d` | ⚫ | ⚫ | 🟡 |
 | Diff | 33 | `diff` | ⚫ | ⚫ | 🟡 |
 | Erlang | 71 | `erlang` | ⚫ | ⚫ | 🟡 |

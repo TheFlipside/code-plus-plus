@@ -778,12 +778,99 @@ pub const SCE_TOML_TRIPLE_STRING_SQ: usize = 11;
 pub const SCE_TOML_TRIPLE_STRING_DQ: usize = 12;
 pub const SCE_TOML_DATETIME: usize = 14;
 
-// LexCSS style indices.
+// LexCSS style indices. 24 contiguous slots (0..=23) covering CSS
+// selectors (tag / class / id / attribute / pseudo-class / pseudo-
+// element), CSS1 / CSS2 / CSS3 property names via a four-way
+// IDENTIFIER cascade, at-rule directives (`@import` / `@media` /
+// `@font-face` / ...), `!important`, single / double-quoted strings,
+// `/* ... */` block comments, operators, and SCSS-style `$name` /
+// Less-style `@name` variables. Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 779-802 and
+// `vendor/lexilla/lexers/LexCSS.cxx` lines 558-568 (`cssWordListDesc`
+// array) + lines 78-86 (wordlist-pointer extraction) + line 419
+// (case-insensitive token matching) + lines 425-438 (four-way
+// IDENTIFIER cascade) + lines 440-454 (separate pseudo-class /
+// pseudo-element cascade).
+//
+// **Case-insensitive lexer.** `LexCSS.cxx:419` calls
+// `sc.GetCurrentLowered(s, ...)` on every candidate token before
+// any `WordList::InList` lookup. Wordlists installed against this
+// lexer MUST be all-lowercase — uppercase entries would never
+// match. Same shape contract as LexBatch / LexSQL / LexVB /
+// LexPascal.
+//
+// **Eight wordlist classes (0..=7).** Per `cssWordListDesc[]`:
+// 0 = CSS1 properties, 1 = standard pseudo-classes, 2 = CSS2
+// properties (extension of class 0), 3 = CSS3 properties
+// (extension of classes 0 + 2), 4 = standard pseudo-elements,
+// 5 = extended/vendor-prefixed properties, 6 = extended
+// pseudo-classes, 7 = extended pseudo-elements. Code++ populates
+// classes 0 + 1 + 2 + 3 + 4 for v1; classes 5 + 6 + 7 are reserved
+// for future vendor-prefix wordlists (current cascade-miss
+// behaviour is documented under `SCE_CSS_UNKNOWN_*` below).
+//
+// **Four-way IDENTIFIER cascade** (`LexCSS.cxx:425-438` —
+// property-name arm only; pseudo-class / pseudo-element have a
+// separate cascade at lines 440-454). The IDENTIFIER cascade
+// consults the property-name wordlists in priority order: class 0
+// hit → `SCE_CSS_IDENTIFIER`, class 2 hit → `SCE_CSS_IDENTIFIER2`,
+// class 3 hit → `SCE_CSS_IDENTIFIER3`, class 5 hit →
+// `SCE_CSS_EXTENDED_IDENTIFIER`, else → `SCE_CSS_UNKNOWN_IDENTIFIER`.
+// The host themes 6 / 15 / 17 / 19 identically (Keyword bold) so
+// property-name colour is consistent regardless of which spec
+// generation a property comes from — distinct lexer-side indices
+// exist for plugins that want to differentiate generations, not
+// because they should render differently by default.
+//
+// **`SCE_CSS_UNKNOWN_PSEUDOCLASS` (4) and `SCE_CSS_UNKNOWN_IDENTIFIER`
+// (7) are wordlist-miss fallbacks, NOT error states.** Both are
+// emitted when a syntactically-valid token doesn't match any
+// installed wordlist (e.g. a vendor-prefixed `-webkit-foo` while
+// class 5 is empty, or a CSS custom property `--foo` — see VARIABLE
+// gap below). Code++ leaves both unmapped so they fall through to
+// STYLE_DEFAULT and render at the user's default foreground —
+// matches N++ light-theme behaviour and is consistent with how the
+// framework treats other "no match" tokens (e.g. `SCE_C_IDENTIFIER`).
+// Distinct from STRINGEOL-family error indicators which are pending
+// the future `StyleSlot::Error` palette addition.
+//
+// **`SCE_CSS_GROUP_RULE` (22) is hard-coded for exactly four
+// at-rules.** `LexCSS.cxx:460-463` `strcmp`s against `"media"` /
+// `"supports"` / `"document"` / `"-moz-document"` and post-hoc
+// upgrades from `SCE_CSS_DIRECTIVE` to `SCE_CSS_GROUP_RULE`. Every
+// other at-rule (`@import`, `@charset`, `@keyframes`, `@font-face`,
+// `@page`, `@namespace`, `@layer`, `@container`, `@property`, ...)
+// stays as `SCE_CSS_DIRECTIVE`. The host themes 12 + 22 identically
+// (Preprocessor bold) so the visual is uniform N++-parity; no
+// wordlist exists for GROUP_RULE and the list cannot be extended
+// without patching the lexer.
+//
+// **`SCE_CSS_VARIABLE` (23) is SCSS `$name` / Less `@name` ONLY —
+// NOT CSS custom properties.** CSS custom properties (`--foo: red;`)
+// tokenise through the IDENTIFIER cascade, miss every wordlist, and
+// land in `SCE_CSS_UNKNOWN_IDENTIFIER` (style 7 → unmapped →
+// STYLE_DEFAULT). `SCE_CSS_VARIABLE` only activates when
+// `lexer.css.scss.language` / `lexer.css.less.language` /
+// `lexer.css.hss.language` is set on the lexer instance. Code++
+// doesn't set those for the `L_CSS` row (separate menu entries for
+// SCSS / Less would route to dedicated rows). The host still maps
+// 23 → Attribute so a future SCSS / Less wiring picks up sensible
+// colouring with no theme edit.
+//
+// **`SCE_CSS_DEFAULT` (0) and `SCE_CSS_VALUE` (8) are intentionally
+// unmapped.** `_DEFAULT` is the inherit-from-`STYLE_DEFAULT`
+// fallback; `_VALUE` is the right-of-colon literal text
+// (`color: RED` — the `RED` is VALUE), which N++ light theme leaves
+// at the user's default foreground. Same omission pattern as
+// `SCE_C_DEFAULT` / `SCE_PAS_DEFAULT`.
+pub const SCE_CSS_DEFAULT: usize = 0;
 pub const SCE_CSS_TAG: usize = 1;
 pub const SCE_CSS_CLASS: usize = 2;
 pub const SCE_CSS_PSEUDOCLASS: usize = 3;
+pub const SCE_CSS_UNKNOWN_PSEUDOCLASS: usize = 4;
 pub const SCE_CSS_OPERATOR: usize = 5;
 pub const SCE_CSS_IDENTIFIER: usize = 6;
+pub const SCE_CSS_UNKNOWN_IDENTIFIER: usize = 7;
 pub const SCE_CSS_VALUE: usize = 8;
 pub const SCE_CSS_COMMENT: usize = 9;
 pub const SCE_CSS_ID: usize = 10;
@@ -791,7 +878,14 @@ pub const SCE_CSS_IMPORTANT: usize = 11;
 pub const SCE_CSS_DIRECTIVE: usize = 12;
 pub const SCE_CSS_DOUBLESTRING: usize = 13;
 pub const SCE_CSS_SINGLESTRING: usize = 14;
+pub const SCE_CSS_IDENTIFIER2: usize = 15;
 pub const SCE_CSS_ATTRIBUTE: usize = 16;
+pub const SCE_CSS_IDENTIFIER3: usize = 17;
+pub const SCE_CSS_PSEUDOELEMENT: usize = 18;
+pub const SCE_CSS_EXTENDED_IDENTIFIER: usize = 19;
+pub const SCE_CSS_EXTENDED_PSEUDOCLASS: usize = 20;
+pub const SCE_CSS_EXTENDED_PSEUDOELEMENT: usize = 21;
+pub const SCE_CSS_GROUP_RULE: usize = 22;
 pub const SCE_CSS_VARIABLE: usize = 23;
 
 // LexHTML (hypertext) style indices — the `H` prefix is upstream's
