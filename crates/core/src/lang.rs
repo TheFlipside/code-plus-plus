@@ -677,7 +677,14 @@ pub const LANG_TABLE: &[LangEntry] = &[
         menu_label: "Perl",
         desc: "Perl source file",
         lexer: Some("perl"),
-        extensions: &["pl", "pm", "plx"],
+        // Matches Notepad++'s shipped `langs.model.xml` Perl row:
+        // `pl pm plx perl cgi pod psgi`. `.pod` is standalone Plain
+        // Old Documentation — pure POD with no Perl code — but
+        // LexPerl's POD-detection state machine handles it correctly
+        // (whole file enters `SCE_PL_POD` on the first `=head1`).
+        // `.cgi` is Perl CGI scripts (the historical web use case);
+        // `.psgi` is Perl Web Server Gateway Interface scripts.
+        extensions: &["pl", "pm", "plx", "perl", "cgi", "pod", "psgi"],
         filenames: &[],
     },
     LangEntry {
