@@ -23,6 +23,15 @@ name = "cppmimetools"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 codepp-plugin-sdk = { workspace = true }
+# Raw-DEFLATE inflate for SAML Decode (SAML Redirect Binding payloads
+# are URL-encoded + Base64-encoded + raw-DEFLATE compressed). Pure
+# Rust, MIT/Apache/Zlib triple-licensed — all on the workspace's
+# `deny.toml` allowlist. Already a transitive dep elsewhere in the
+# workspace (via image / PNG decoders), so adding it as a direct dep
+# here doesn't introduce new compile surface for the overall build.
+miniz_oxide = { version = "0.8", default-features = false, features = [
+    "with-alloc",
+] }
 
 [build-dependencies]
 # Embeds `VS_VERSION_INFO` into the cdylib so the Plugin Manager

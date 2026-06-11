@@ -1,6 +1,13 @@
 //! Integration test: load the in-tree `cppmimetools.dll`, assert the
 //! lifecycle messages fire in order, and verify cmd-id assignment for
-//! all six menu items.
+//! all twenty `FuncItem` entries (seventeen commands + three
+//! separators — the host renders any `FuncItem` with `p_func: None`
+//! as `MF_SEPARATOR`, and `PluginHost::lookup_cmd` correctly returns
+//! `None` for the separator cmd-ids since their `p_func` is `None`).
+//!
+//! The pinned label order matches `plugins/cppmimetools/src/imp.rs`'s
+//! `FUNCS` initialiser exactly — a re-order here changes muscle
+//! memory for every user.
 //!
 //! Mirrors `cppconverter.rs`'s shape — locate the cdylib relative to
 //! the test binary, stage it in a tempdir, discover + load via
@@ -52,8 +59,41 @@ fn decode_label(label_w: &[u16]) -> String {
     String::from_utf16_lossy(&label_w[..nul])
 }
 
+/// Positions of separator entries in the `FuncItem` array — 0-based
+/// indices. Each is encoded as `FuncItem { p_func: None, .. }` in
+/// `plugins/cppmimetools/src/imp.rs`; the host renders these as
+/// `MF_SEPARATOR` in the rendered menu.
+const SEPARATOR_POSITIONS: &[usize] = &[7, 10, 18];
+
+/// Expected menu-item label order — matches `imp.rs`'s `FUNCS`
+/// initialiser verbatim. Separator slots carry the sentinel `"---"`
+/// label that the plugin writes (the host ignores it). A re-order
+/// here would change every user's muscle memory, so pin it.
+const EXPECTED_LABELS: &[&str] = &[
+    "Base64 Encode",
+    "Base64 Encode with padding",
+    "Base64 Encode with Unix EOL",
+    "Base64 Encode by line",
+    "Base64 Decode",
+    "Base64 Decode strict",
+    "Base64 Decode by line",
+    "---",
+    "Quoted-printable Encode",
+    "Quoted-printable Decode",
+    "---",
+    "URL Encode (RFC1738)",
+    "URL Encode (RFC1738) by line",
+    "URL Encode (Extended)",
+    "URL Encode (Extended) by line",
+    "URL Encode (Full)",
+    "URL Encode (Full) by line",
+    "URL Decode",
+    "---",
+    "SAML Decode",
+];
+
 #[test]
-fn cppmimetools_loads_and_publishes_six_func_items() {
+fn cppmimetools_loads_and_publishes_twenty_func_items() {
     let Some(dll) = locate_cppmimetools() else {
         eprintln!(
             "skipping cppmimetools integration test: \
@@ -82,37 +122,61 @@ fn cppmimetools_loads_and_publishes_six_func_items() {
     );
 
     let funcs = info.func_items().expect("loaded plugin has func items");
-    assert_eq!(funcs.len(), 6, "cppmimetools contributes six menu items");
+    assert_eq!(
+        funcs.len(),
+        EXPECTED_LABELS.len(),
+        "cppmimetools contributes 17 commands + 3 separators = 20 FuncItem entries",
+    );
 
-    // Cmd-ids are sequential — pin them all to catch any host-side
-    // regression that skips a slot.
+    // Cmd-ids are sequential across both commands and separators —
+    // the host walks every FuncItem slot and assigns ids in order.
+    // Pin them all to catch any host-side regression that skips a
+    // slot.
     for (i, item) in funcs.iter().enumerate() {
         assert_eq!(
             item.cmd_id,
             PLUGIN_CMD_ID_BASE + i as i32,
             "cmd-id mismatch at slot {i}",
         );
-        assert!(item.p_func.is_some(), "p_func unset at slot {i}");
+        let is_sep = SEPARATOR_POSITIONS.contains(&i);
+        if is_sep {
+            assert!(
+                item.p_func.is_none(),
+                "separator slot {i} should have p_func: None",
+            );
+        } else {
+            assert!(
+                item.p_func.is_some(),
+                "command slot {i} should have p_func set",
+            );
+        }
     }
 
-    // Menu labels in the documented order. A re-order would change
-    // every user's muscle memory, so pin the ordering.
+    // Menu labels in the documented order. Separator slots carry the
+    // sentinel `"---"` label the plugin writes; the host renders
+    // `MF_SEPARATOR` for those slots regardless.
     let labels: Vec<String> = funcs.iter().map(|f| decode_label(&f.item_name)).collect();
-    assert_eq!(
-        labels,
-        vec![
-            "Base64 Encode",
-            "Base64 Decode",
-            "URL Encode",
-            "URL Decode",
-            "Quoted-Printable Encode",
-            "Quoted-Printable Decode",
-        ],
-    );
+    assert_eq!(labels, EXPECTED_LABELS);
 
-    // Lookup by cmd-id finds each callback; unassigned ids miss.
-    for i in 0..6 {
-        assert!(host.lookup_cmd(PLUGIN_CMD_ID_BASE + i).is_some());
+    // Lookup by cmd-id finds each command's callback; separator
+    // cmd-ids resolve to None because their `p_func` is None.
+    for (i, _) in funcs.iter().enumerate() {
+        let id = PLUGIN_CMD_ID_BASE + i as i32;
+        let resolved = host.lookup_cmd(id);
+        if SEPARATOR_POSITIONS.contains(&i) {
+            assert!(
+                resolved.is_none(),
+                "separator slot {i}'s cmd-id should not resolve to a callback",
+            );
+        } else {
+            assert!(
+                resolved.is_some(),
+                "command slot {i}'s cmd-id should resolve to a callback",
+            );
+        }
     }
-    assert!(host.lookup_cmd(PLUGIN_CMD_ID_BASE + 6).is_none());
+    // One past the last assigned id — should miss.
+    assert!(host
+        .lookup_cmd(PLUGIN_CMD_ID_BASE + EXPECTED_LABELS.len() as i32)
+        .is_none());
 }
