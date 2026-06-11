@@ -662,31 +662,138 @@ fn hex_digit(c: u8) -> Option<u8> {
 
 // ---- Quoted-Printable (RFC 2045 §6.7) -------------------------------------
 //
-// Encode emits no soft line breaks (`=\r\n`) — output isn't intended
-// for transport over an 80-col-limited channel; it's intended for
-// the user to read in the editor. Decode tolerates them anyway so
-// pasted MIME content round-trips correctly.
+// Three rules govern the encoded output:
+//
+//   * **Rule 5 line-length cap (76 chars).** Encoded lines are at most
+//     76 chars long (the trailing CRLF that separates lines is excluded
+//     from the count; the soft-break `=` IS included on the line it
+//     terminates). The encoder reserves column 76 for a potential
+//     soft-break `=`, so payload tops out at 75 chars per line —
+//     matching Python `quopri` and Perl `MIME::QuotedPrint` byte-for-
+//     byte. The line cap is structurally asserted by every wrapping
+//     test via the `assert_qp_line_cap` helper.
+//
+//   * **Rule 4 binary mode.** Input `\n` (0x0A) and `\r` (0x0D) are
+//     encoded as `=0A` and `=0D` per RFC 2045 §6.7 Rule 4 paragraph 2.
+//     The encoder NEVER emits a literal `\r\n` from input bytes — the
+//     only `\r\n` in the output is the trailing portion of a soft
+//     break `=\r\n`. This diverges intentionally from Notepad++'s
+//     mimeTools (which passes literal LF through, a spec violation
+//     for QP wire format on Unix-EOL inputs). The binary-mode choice
+//     round-trips losslessly for both text and binary input — see
+//     `qp_encode_control_chars` test.
+//
+//   * **Rule 3 trailing whitespace.** TAB / SPACE may appear literally
+//     mid-line, but MUST NOT appear at the end of an encoded line
+//     (immediately before a soft break OR at end-of-input). The
+//     encoder buffers each TAB/SPACE in a one-byte `pending_ws` slot
+//     and decides whether to flush it as literal or as `=09`/`=20`
+//     based on whether the next non-WS byte forces a soft break that
+//     would leave the WS at end-of-line.
+//
+// Soft-break format is the 3-byte sequence `=\r\n` (0x3D 0x0D 0x0A),
+// regardless of host OS. The decoder also tolerates `=\n` (LF-only
+// soft break) — the asymmetry is the right Postel posture: emit
+// strictly, accept liberally.
+//
+// **Atomicity:** `=XX` triples are atomic per Rule 1 — they cannot
+// be split across encoded lines. The line-fit check uses the full
+// 3-char unit length, so the soft break always precedes the entire
+// triple.
+
+/// Maximum payload chars per encoded line. The 76-char total limit
+/// from RFC 2045 §6.7 Rule 5 minus 1 for a potential trailing
+/// soft-break `=` that, if present, occupies column 76.
+const QP_PAYLOAD_CAP: usize = 75;
 
 fn qp_encode(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len());
+    // Worst case ~3.12x expansion: every byte → `=XX` triple PLUS
+    // one `=\r\n` soft break per 25 encoded chars. `saturating_mul(3)`
+    // gets close enough to avoid most reallocations and matches the
+    // existing `url_encode_with` capacity convention.
+    let mut out = String::with_capacity(bytes.len().saturating_mul(3));
+    let mut line_len = 0usize;
+    // RFC Rule 3 trailing-WS buffer. At most one byte is ever pending
+    // (WS is always a single byte). `None` means no deferred WS.
+    let mut pending_ws: Option<u8> = None;
+
     for &b in bytes {
+        if matches!(b, b' ' | b'\t') {
+            // WS arrives. Flush any previously-buffered WS as literal
+            // (it's now mid-line — followed by this new WS — so Rule 3
+            // doesn't apply to the flushed one).
+            if let Some(prev) = pending_ws {
+                qp_emit_literal(&mut out, &mut line_len, prev);
+            }
+            pending_ws = Some(b);
+            continue;
+        }
+        // Non-WS byte arrives. Decide how to flush any pending WS.
+        if let Some(prev) = pending_ws.take() {
+            let next_unit_len = if is_qp_safe(b) { 1 } else { 3 };
+            // Combined fit check: WS-as-literal (1 char) PLUS next
+            // unit. If both fit on the current line, flush WS as
+            // literal — it stays mid-line, no Rule 3 violation. If
+            // they don't fit, the WS would land at end-of-line
+            // before the soft break, so encode it as `=09`/`=20`
+            // instead.
+            if line_len + 1 + next_unit_len > QP_PAYLOAD_CAP {
+                qp_emit_encoded(&mut out, &mut line_len, prev);
+            } else {
+                qp_emit_literal(&mut out, &mut line_len, prev);
+            }
+        }
+        // Emit the non-WS byte. The helpers handle the soft-break
+        // line-fit check internally.
         if is_qp_safe(b) {
-            s.push(char::from(b));
+            qp_emit_literal(&mut out, &mut line_len, b);
         } else {
-            s.push('=');
-            s.push(HEX_UPPER[(b >> 4) as usize] as char);
-            s.push(HEX_UPPER[(b & 0x0f) as usize] as char);
+            qp_emit_encoded(&mut out, &mut line_len, b);
         }
     }
-    s
+
+    // End of input — flush any trailing WS as encoded `=09`/`=20`
+    // per Rule 3 (WS at EOF is end-of-line).
+    if let Some(prev) = pending_ws.take() {
+        qp_emit_encoded(&mut out, &mut line_len, prev);
+    }
+
+    out
+}
+
+/// Emit a 1-char literal byte, inserting a soft break first if the
+/// current line is already at the 75-char payload cap.
+fn qp_emit_literal(out: &mut String, line_len: &mut usize, b: u8) {
+    if *line_len + 1 > QP_PAYLOAD_CAP {
+        out.push_str("=\r\n");
+        *line_len = 0;
+    }
+    out.push(char::from(b));
+    *line_len += 1;
+}
+
+/// Emit a 3-char `=XX` triple, inserting a soft break first if the
+/// current line can't fit the full triple within the 75-char payload
+/// cap. The triple is atomic per RFC 2045 §6.7 Rule 1 — never split.
+fn qp_emit_encoded(out: &mut String, line_len: &mut usize, b: u8) {
+    if *line_len + 3 > QP_PAYLOAD_CAP {
+        out.push_str("=\r\n");
+        *line_len = 0;
+    }
+    out.push('=');
+    out.push(HEX_UPPER[(b >> 4) as usize] as char);
+    out.push(HEX_UPPER[(b & 0x0f) as usize] as char);
+    *line_len += 3;
 }
 
 fn is_qp_safe(b: u8) -> bool {
     // RFC 2045 §6.7 rule 2: printable ASCII (33..=126) except `=`
-    // is "Literal representation". Rule 3 adds TAB and SPACE.
-    // LF/CR are NOT safe: an unencoded LF would be ambiguous with
-    // hard line breaks the transport layer might normalize, so we
-    // always encode them as `=0A` / `=0D`.
+    // is "Literal representation". Rule 3 adds TAB and SPACE — those
+    // are mid-line-safe; end-of-line handling is in qp_encode's
+    // trailing-WS buffer protocol (per Rule 3). LF (0x0A) and
+    // CR (0x0D) are NOT safe: we always encode them as `=0A` / `=0D`
+    // per Rule 4 paragraph 2 (binary mode) — see qp_encode banner
+    // for rationale.
     matches!(b, b'\t' | b' ' | 33..=60 | 62..=126)
 }
 
@@ -1105,10 +1212,21 @@ mod tests {
     }
 
     #[test]
-    fn qp_encode_tab_and_space_are_safe() {
-        assert_eq!(qp_encode(b" "), " ");
-        assert_eq!(qp_encode(b"\t"), "\t");
+    fn qp_encode_tab_and_space_mid_line_are_literal() {
+        // RFC 2045 §6.7 Rule 3: TAB and SPACE are mid-line-safe but
+        // MUST be encoded if they'd appear at end of an encoded line
+        // (immediately before a soft break OR at EOF). The trailing-
+        // WS protocol in qp_encode handles this. Pre-protocol tests
+        // asserted `qp_encode(b" ") == " "` which was a Rule 3
+        // violation; the corrected behavior encodes a sole-byte
+        // SPACE/TAB at EOF as `=20`/`=09`.
+        //
+        // Mid-line TAB/SPACE between non-WS bytes stay literal.
         assert_eq!(qp_encode(b"a b\tc"), "a b\tc");
+        // EOF-trailing TAB/SPACE encode per Rule 3 — see also
+        // `qp_encode_trailing_space_at_eof_encoded`.
+        assert_eq!(qp_encode(b" "), "=20");
+        assert_eq!(qp_encode(b"\t"), "=09");
     }
 
     #[test]
@@ -1136,16 +1254,186 @@ mod tests {
         assert_eq!(qp_decode(b"foo=\r\nbar").unwrap(), b"foobar");
     }
 
+    /// RFC 2045 §6.7 Rule 5 invariant: every encoded line (delimited
+    /// by the literal CRLF that separates one encoded line from the
+    /// next) must be at most 76 chars. The trailing CRLF itself is
+    /// excluded from the count; a trailing soft-break `=` is included
+    /// (it's the last character of the line it terminates). This
+    /// helper makes the cap a machine-checked property of every
+    /// wrapping test below — any future regression that produces a
+    /// 77-char line fails loudly here even if the test author
+    /// forgets the explicit boundary.
+    fn assert_qp_line_cap(encoded: &str) {
+        for line in encoded.split("\r\n") {
+            assert!(
+                line.len() <= 76,
+                "QP encoded line exceeds 76 chars ({} chars): {line:?}",
+                line.len(),
+            );
+        }
+    }
+
     #[test]
-    fn qp_round_trip_multiline() {
-        let inputs: &[&[u8]] = &[b"line1\nline2", b"line1\r\nline2\r\nline3", b"a\nb\nc"];
+    fn qp_encode_users_canonical_example() {
+        // The exact input + expected output the user supplied. The
+        // input is 99 chars and contains a literal `=`. Expected
+        // behaviour: encode `=` as `=3D`, then continue emitting
+        // literals until column 75 is reached (at "bea"), then
+        // soft-break and continue on a new line. Matches Python
+        // `quopri.encodestring(..., quotetabs=False)` and Perl
+        // `MIME::QuotedPrint::encode_qp` byte-for-byte.
+        let input = b"If you believe that truth=beauty, then surely mathematics is the most beautiful branch of philosophy.";
+        let encoded = qp_encode(input);
+        let expected = "If you believe that truth=3Dbeauty, then surely mathematics is the most bea=\r\nutiful branch of philosophy.";
+        assert_eq!(encoded, expected);
+        // First encoded line is exactly 76 chars including the
+        // soft-break `=` at column 76 (75 payload + 1 marker). Pin
+        // it structurally so a future off-by-one tweak gets caught.
+        let lines: Vec<&str> = encoded.split("\r\n").collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].len(), 76);
+        assert!(lines[0].ends_with('='));
+        assert_qp_line_cap(&encoded);
+        // Round-trip preserves the original byte sequence exactly.
+        assert_eq!(qp_decode(encoded.as_bytes()).unwrap(), input);
+    }
+
+    #[test]
+    fn qp_encode_empty_no_crlf() {
+        // Empty input → empty output. No trailing CRLF, no soft
+        // break. Pin so a future "always terminate with CRLF" tweak
+        // doesn't slip through.
+        assert_eq!(qp_encode(b""), "");
+    }
+
+    #[test]
+    fn qp_encode_77_letters_wraps_at_75() {
+        // 75 'a' chars fit on the first line as payload, then the
+        // 76th 'a' would push line_len past the 75-char payload cap
+        // — soft break first, emit on new line. Matches Python
+        // `quopri` output for the same input.
+        let input = vec![b'a'; 77];
+        let encoded = qp_encode(&input);
+        // Expected layout: 75 'a' + "=" (column 76) + "\r\n" + 2 'a'.
+        let lines: Vec<&str> = encoded.split("\r\n").collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].len(), 76);
+        assert_eq!(&lines[0][..75], "a".repeat(75));
+        assert!(lines[0].ends_with('='));
+        assert_eq!(lines[1], "aa");
+        assert_qp_line_cap(&encoded);
+    }
+
+    #[test]
+    fn qp_encode_high_byte_at_column_boundary() {
+        // 73 'a' chars then a high byte. line_len=73, unit_len=3
+        // for `=FF`. 73+3=76 ≤ 76 BUT > 75 → soft break first.
+        // The triple is atomic (RFC §6.7 Rule 1) so it cannot be
+        // split across the soft break.
+        let mut input = vec![b'a'; 73];
+        input.push(0xff);
+        let encoded = qp_encode(&input);
+        let lines: Vec<&str> = encoded.split("\r\n").collect();
+        assert_eq!(lines.len(), 2);
+        // First line: 73 'a' + soft-break `=` = 74 chars.
+        assert_eq!(lines[0].len(), 74);
+        assert!(lines[0].ends_with('='));
+        // Second line: `=FF` (3 chars).
+        assert_eq!(lines[1], "=FF");
+        assert_qp_line_cap(&encoded);
+    }
+
+    #[test]
+    fn qp_encode_trailing_space_at_eof_encoded() {
+        // RFC 2045 §6.7 Rule 3: SPACE at end-of-line (here, EOF)
+        // MUST be encoded as `=20`. Matches Python / Perl.
+        assert_eq!(qp_encode(b"foo "), "foo=20");
+        // TAB same: end-of-line TAB is encoded as `=09`.
+        assert_eq!(qp_encode(b"foo\t"), "foo=09");
+    }
+
+    #[test]
+    fn qp_encode_trailing_spaces_at_eof_only_last_encoded() {
+        // Two trailing SPACEs: first is mid-line (followed by
+        // another SPACE that flushes it as literal), second is
+        // at EOF → encoded.
+        assert_eq!(qp_encode(b"foo  "), "foo =20");
+    }
+
+    #[test]
+    fn qp_encode_internal_spaces_stay_literal() {
+        // SPACE / TAB followed by non-WS are mid-line. Stay
+        // literal per Rule 3.
+        assert_eq!(qp_encode(b" foo"), " foo");
+        assert_eq!(qp_encode(b"a b\tc"), "a b\tc");
+    }
+
+    #[test]
+    fn qp_encode_space_at_wrap_boundary_encoded() {
+        // 75 'a' + SPACE + 'b'. The pending SPACE arrives at the
+        // moment 'b' is being processed. Combined fit check:
+        // line_len(75) + WS-literal(1) + b(1) = 77 > 75 → encode
+        // the SPACE as `=20` instead. That triple itself doesn't
+        // fit on the current line (75 + 3 = 78), so a soft break
+        // precedes it. Output: 75 'a' + "=\r\n" + "=20" + "b".
+        let mut input = vec![b'a'; 75];
+        input.extend_from_slice(b" b");
+        let encoded = qp_encode(&input);
+        let lines: Vec<&str> = encoded.split("\r\n").collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].len(), 76);
+        assert!(lines[0].ends_with('='));
+        assert_eq!(lines[1], "=20b");
+        assert_qp_line_cap(&encoded);
+    }
+
+    #[test]
+    fn qp_encode_binary_mode_for_lf_cr() {
+        // RFC 2045 §6.7 Rule 4 paragraph 2 (binary mode): LF (0x0A)
+        // and CR (0x0D) are encoded as `=0A`/`=0D`. The output NEVER
+        // contains a literal `\r\n` from input bytes; the only
+        // `\r\n` in the encoded stream is the trailing portion of
+        // a soft break `=\r\n`. This diverges from Notepad++
+        // mimeTools (text mode) by design — see qp_encode banner.
+        assert_eq!(qp_encode(b"abc\ndef"), "abc=0Adef");
+        assert_eq!(qp_encode(b"abc\r\ndef"), "abc=0D=0Adef");
+        // Multi-line input has no literal CR/LF in output.
+        let multi = qp_encode(b"line1\nline2\nline3");
+        assert_eq!(multi, "line1=0Aline2=0Aline3");
+    }
+
+    #[test]
+    fn qp_round_trip_multiline_binary_mode() {
+        // Binary mode encoder + tolerant decoder round-trip
+        // multi-line input losslessly. The decoder's `=0A` / `=0D`
+        // handling restores LF/CR; the soft-break path strips
+        // `=\r\n` sequences.
+        let inputs: &[&[u8]] = &[
+            b"line1\nline2",
+            b"line1\r\nline2\r\nline3",
+            b"a\nb\nc",
+            b"\n",
+            b"\r\n\r\n",
+        ];
         for input in inputs {
             let encoded = qp_encode(input);
             let decoded = qp_decode(encoded.as_bytes()).unwrap();
             assert_eq!(&decoded, input, "round-trip failed for {input:?}");
+            assert_qp_line_cap(&encoded);
+            // Binary-mode invariant: after stripping all `=\r\n`
+            // soft-break sequences, the encoded output contains
+            // ZERO raw `\r` or `\n` bytes. Any input LF/CR must
+            // have been encoded as `=0A`/`=0D` triples, never
+            // passed through literally. A regression that widened
+            // `is_qp_safe` to include `\n` would slip past the
+            // `assert_eq!` round-trip (since the decoder accepts
+            // literal LF too) but fail loudly here.
+            let stripped = encoded.replace("=\r\n", "");
             assert!(
-                !encoded.bytes().any(|b| b == b'\n' || b == b'\r'),
-                "encoded form should have no literal CR/LF: {encoded:?}",
+                !stripped.contains('\r') && !stripped.contains('\n'),
+                "binary-mode violation: encoded output contains raw CR/LF \
+                 after stripping soft breaks ({stripped:?}); input was {input:?}, \
+                 encoded was {encoded:?}",
             );
         }
     }
@@ -1157,6 +1445,46 @@ mod tests {
             let encoded = qp_encode(input);
             let decoded = qp_decode(encoded.as_bytes()).unwrap();
             assert_eq!(&decoded, input);
+            assert_qp_line_cap(&encoded);
+        }
+    }
+
+    #[test]
+    fn qp_round_trip_200_char_ascii() {
+        // Exercise the multi-soft-break path: 200 ASCII chars wrap
+        // into 3 encoded lines (75 + 75 + 50, with two soft breaks).
+        // Each line must respect the 76-cap; round-trip must be
+        // byte-exact.
+        let input: Vec<u8> = (0..200).map(|i| b'a' + (i as u8 % 26)).collect();
+        let encoded = qp_encode(&input);
+        let decoded = qp_decode(encoded.as_bytes()).unwrap();
+        assert_eq!(decoded, input);
+        assert_qp_line_cap(&encoded);
+        // Pin the line count — three lines means two soft breaks.
+        let lines: Vec<&str> = encoded.split("\r\n").collect();
+        assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn qp_round_trip_random_binary() {
+        // Cover the trailing-WS protocol interacting with arbitrary
+        // byte sequences (including embedded SPACEs/TABs and high
+        // bytes at varied positions). The deterministic LCG input
+        // matters less than the line-cap + round-trip invariants
+        // holding across the input space.
+        for seed in 0..20u32 {
+            let mut x = seed.wrapping_add(1).wrapping_mul(2_654_435_761);
+            let len = 50 + (seed as usize % 250);
+            let input: Vec<u8> = (0..len)
+                .map(|_| {
+                    x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    (x >> 16) as u8
+                })
+                .collect();
+            let encoded = qp_encode(&input);
+            let decoded = qp_decode(encoded.as_bytes()).unwrap();
+            assert_eq!(decoded, input, "round-trip failed for seed {seed}");
+            assert_qp_line_cap(&encoded);
         }
     }
 
