@@ -729,7 +729,121 @@ pub const SCE_JSON_OPERATOR: usize = 8;
 pub const SCE_JSON_KEYWORD: usize = 11;
 pub const SCE_JSON_ERROR: usize = 13;
 
-// LexBash (SH) style indices.
+// LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
+// the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
+// comments (COMMENTLINE), decimal / hex / base-N numeric literals
+// (NUMBER), reserved-word + builtin tokens (WORD), `"..."` and
+// `'...'` quoted strings (STRING / CHARACTER), the shell operator
+// set `^&%()-+=|{}[]:;>,*/<?!.~@` (OPERATOR), `$var` / `$1` / `$@`
+// sigil-tagged variables (SCALAR), `${param}` / `${param:-default}`
+// parameter expansion (PARAM), `` `cmd` `` and `$(cmd)` command
+// substitution (BACKTICKS), and the `<<EOF` / `<<-EOF` heredoc
+// machinery split across the opening delimiter line (HERE_DELIM)
+// and the body bytes (HERE_Q). Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 1094-1107, the
+// `lexicalClasses[]` table at `vendor/lexilla/lexers/LexBash.cxx`
+// lines 456-472, and the `LexerModule lmBash(SCLEX_BASH, ..., "bash",
+// bashWordListDesc)` registration at `LexBash.cxx:1268`.
+//
+// **LexBash is case-sensitive.** The keyword classification path at
+// `LexBash.cxx:689, :691, :699, :727` uses raw `strcmp` and
+// `keywords.InList(s)` against the unmodified `sc.GetCurrent(s, ...)`
+// buffer — no `MakeLowerCase` / `GetCurrentLowered` anywhere in the
+// file. So `if`/`then`/`fi` are keywords, `IF`/`Then`/`FI` fall
+// through to `SCE_SH_IDENTIFIER`. The hard-wired `bashStruct` /
+// `bashStruct_in` / `cmdDelimiter` / `testOperator` sets at
+// `:491-494` are populated lowercase only. Wordlist contents must
+// be byte-canonical lowercase to match Bash language semantics.
+// Same case-sensitive contract documented for [`SCE_PL_WORD`]
+// (Perl), [`SCE_P_WORD`] (Python), and [`SCE_LUA_WORD`] (Lua).
+//
+// **Single wordlist class.** `bashWordListDesc[]` at
+// `LexBash.cxx:205-208` declares one named slot, `"Keywords"`,
+// terminated by `nullptr`. `LexerBash::WordListSet` at `:558-572`
+// only dispatches `case 0: wordListN = &keywords; break;` and
+// no-ops for any other `n`. So unlike Lua (2 classes) / Python
+// (2 classes) / SQL (5 classes), Bash exposes exactly ONE keyword
+// surface. The lexer ships hard-wired short lists for syntactic
+// structure (`bashStruct = "if elif fi while until else then do
+// done esac eval"` at `:492`, `bashStruct_in = "for case select"`
+// at `:493`) matched independently of the user wordlist at
+// `:706, :713` — so a user-supplied class 0 list should populate
+// builtins / reserved words NOT already in `bashStruct` (no
+// behavioural change from duplicates, but spec noise).
+//
+// **No `SCE_SH_HERE_QQ` / `SCE_SH_HERE_QX` exist.** Unlike LexPerl
+// (which splits heredoc bodies into `SCE_PL_HERE_Q` /
+// `SCE_PL_HERE_QQ` / `SCE_PL_HERE_QX` based on the delimiter's
+// quoting style), LexBash emits a single `SCE_SH_HERE_Q` (state
+// 13) for every heredoc body byte regardless of whether the
+// delimiter was `EOF`, `'EOF'`, `"EOF"`, or `\EOF`. The
+// quoted-vs-unquoted distinction is tracked INTERNALLY via the
+// `HereDocCls::Quoted` flag at `LexBash.cxx:594` (set when the
+// delimiter starts with `'` or `"`) and `HereDocCls::Escaped` at
+// `:595` (set when the delimiter contains a backslash); both
+// flags affect ONLY behaviour inside the body — at `:906-908`
+// nested `$var` / `` ` `` expansions are suppressed when the
+// body is quoted/escaped. The emitted STYLE stays
+// `SCE_SH_HERE_Q`. So Code++ MUST NOT speculatively declare a
+// `SCE_SH_HERE_QQ` or `SCE_SH_HERE_QX` — they don't exist in
+// the lexer and adding them would mislead future contributors.
+// Opening `<<` / `<<-` delimiter line (and the closing-delimiter
+// line per `:896`) gets `SCE_SH_HERE_DELIM` (state 12). Here-string
+// `<<<` is consumed without a body state per `:828-830`.
+//
+// **`SCE_SH_SCALAR` (9) vs `SCE_SH_PARAM` (10) distinction.** Both
+// represent variable expansion but at different lexical scopes.
+// SCALAR is the bare `$var` / `$1` / `$@` form — the lexer enters
+// it at `:356` and consumes one identifier-shaped run via the
+// `setParam` character class at `:582`; no closing delimiter
+// (the comment at `:386-389` is explicit: "scalar has no
+// delimiter pair"). PARAM is the braced `${...}` parameter
+// expansion form — the lexer upgrades SCALAR → PARAM at
+// `:358-360` when the character after `$` is `{`, pushes a
+// balanced `{`…`}` region onto the `QuoteStack` at `:397-399`,
+// and may nest other expansions inside per `:912`. Both route
+// to `StyleSlot::Lifetime` in `BASH_STYLES` (matches the Perl
+// SCALAR / ARRAY / HASH / SYMBOLTABLE → Lifetime collapse at
+// `crates/ui_win32/src/lib.rs:4211-4214` — sigil-tagged variable
+// archetype) but the lexer-level distinction is real and worth
+// flagging for future palette tweaks.
+//
+// **`$(cmd)` styling depends on a property default.** The lexer
+// recognises three modes for `$()` command substitution via the
+// `lexer.bash.command.substitution` property (`LexBash.cxx:231-234`):
+// 0 = `Backtick` (default), 1 = `Inside`, 2 = `InsideTrack`. At
+// the default 0, `$(cmd)` is styled as `SCE_SH_BACKTICKS` end-to-
+// end — same slot as `` `cmd` ``, matching N++'s out-of-box
+// behaviour. Code++'s wiring leaves this property at default,
+// keeping emitted styles in the 0..=13 range and avoiding the
+// `commandSubstitutionFlag = 0x40` OR-shift at `:92` that would
+// produce styles in 64..=127. A future property flip would
+// require re-evaluating `BASH_STYLES` — flagged here so the
+// next maintainer sees the gotcha.
+//
+// **`SCE_SH_DEFAULT` (0) and `SCE_SH_IDENTIFIER` (8) intentionally
+// unmapped.** Universal-omission pattern: bare-default and post-
+// keyword-miss identifier render at STYLE_DEFAULT (the user's
+// chosen foreground). Matches `SCE_C_DEFAULT` / `SCE_C_IDENTIFIER`,
+// `SCE_PL_DEFAULT` / `SCE_PL_IDENTIFIER`, `SCE_P_DEFAULT` /
+// `SCE_P_IDENTIFIER`, `SCE_LUA_DEFAULT` / `SCE_LUA_IDENTIFIER`
+// precedent. `SCE_SH_IDENTIFIER` is the dominant fall-through —
+// emitted by the lexer at `LexBash.cxx:677, :694, :703, :710,
+// :717, :723, :728, :796, :1012, :1028, :1044, :1047, :1050, :1080,
+// :1099` (including the reclassification from `SCE_SH_NUMBER` when
+// a `.` is encountered at `:793-797`, since bash has no float
+// literals).
+//
+// **`SCE_SH_ERROR` (1) intentionally unmapped.** Joins the deferred-
+// Error-slot migration list. The lexer emits it at `:792` for
+// out-of-range base-N digits (e.g. `2#3`), at `:862-864` for
+// unterminated heredoc bodies, and at `:792` for malformed
+// numeric literals. Synthesising an ad-hoc red mapping here
+// creates palette drift that the `StyleSlot::Error` migration
+// would have to clean up — leave unmapped (falls through to
+// STYLE_DEFAULT) and migrate the whole cluster (Perl ERROR +
+// Lua STRINGEOL + Python STRINGEOL + ...) together.
+pub const SCE_SH_DEFAULT: usize = 0;
 pub const SCE_SH_ERROR: usize = 1;
 pub const SCE_SH_COMMENTLINE: usize = 2;
 pub const SCE_SH_NUMBER: usize = 3;
@@ -737,6 +851,7 @@ pub const SCE_SH_WORD: usize = 4;
 pub const SCE_SH_STRING: usize = 5;
 pub const SCE_SH_CHARACTER: usize = 6;
 pub const SCE_SH_OPERATOR: usize = 7;
+pub const SCE_SH_IDENTIFIER: usize = 8;
 pub const SCE_SH_SCALAR: usize = 9;
 pub const SCE_SH_PARAM: usize = 10;
 pub const SCE_SH_BACKTICKS: usize = 11;

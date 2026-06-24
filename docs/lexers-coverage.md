@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 24 / 🟡 64 / ⚫ 1.
+Total: 89 rows. ✅ 25 / 🟡 63 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1265,6 +1265,110 @@ variants), `.wtex` (Windows-Live-Writer TeX scratch files). NOT
 adding `.bib` (BibTeX has its own grammar; lives in a future
 `L_BIBTEX` row mapping to the separate LexBib lexer).
 
+**Bash (2026-06-24):** uses Lexilla's `bash` lexer (`LexBash.cxx`)
+— 14 emission states (0..=13) with a **single wordlist class**.
+`bashWordListDesc[]` at `LexBash.cxx:205-208` declares exactly one
+named slot (`"Keywords"`, `nullptr`-terminated); `LexerBash::
+WordListSet` at `:558-572` only dispatches `case 0:` and no-ops
+for any other class index — so reserved words and builtins
+necessarily share class 0 (unlike Lua / Python / SQL which split
+into 2+ classes). There is no `BASH_KEYWORDS_2`. Code++ populates
+`BASH_KEYWORDS` with Bash builtins (`echo`, `printf`, `cd`,
+`export`, `declare`, …) and reserved tokens NOT already handled
+by the hard-wired `bashStruct` / `bashStruct_in` sets at
+`LexBash.cxx:491-494` (`bashStruct = "if elif fi while until else
+then do done esac eval"`, `bashStruct_in = "for case select"` —
+matched independently of the user wordlist at `:706, :713`, so
+duplicating them in `BASH_KEYWORDS` would be no-op spec noise).
+
+**Case-sensitive byte-exact match.** `LexBash.cxx:727` calls
+`keywords.InList(s)` against the raw `sc.GetCurrent(s, ...)`
+buffer with no `MakeLowerCase` / `GetCurrentLowered` anywhere in
+the lexer (verified by grep). Wordlist contents must be lowercase
+to match Bash language semantics: `if`/`then`/`fi` are keywords,
+`IF`/`Then`/`FI` fall through to `SCE_SH_IDENTIFIER`. Pinned
+structurally in the theme test by the `!c.is_ascii_uppercase()`
+guard on `BASH_KEYWORDS`.
+
+**Key divergence from LexPerl: no `SCE_SH_HERE_QQ` / `SCE_SH_HERE_QX`.**
+Where LexPerl splits heredoc bodies into `SCE_PL_HERE_Q` /
+`SCE_PL_HERE_QQ` / `SCE_PL_HERE_QX` based on the delimiter's
+quoting style, LexBash emits a single `SCE_SH_HERE_Q` (state 13)
+for every body byte regardless of delimiter quoting. The
+quoted-vs-unquoted distinction is tracked INTERNALLY via
+`HereDocCls::Quoted` / `Escaped` flags at `LexBash.cxx:594-595`
+and affects only nested-expansion suppression behaviour at
+`:906-908` — the emitted style stays HERE_Q. The `Q` suffix is a
+misnomer inherited from LexPerl's taxonomy. The scintilla-sys
+banner explicitly forbids speculative declaration of
+`SCE_SH_HERE_QQ` / `SCE_SH_HERE_QX` constants. Opening `<<EOF` /
+`<<-EOF` delimiter line (and closing-delimiter line per `:896`)
+gets `SCE_SH_HERE_DELIM` (state 12); here-string `<<<` is
+consumed without a body state per `:828-830`.
+
+**11-mapping style table.** DEFAULT (0), IDENTIFIER (8), and
+ERROR (1) intentionally unmapped. DEFAULT + IDENTIFIER are the
+universal-omission pattern (matches Perl / Python / Lua / Pascal
+precedent — bare-default and post-keyword-miss render at
+STYLE_DEFAULT). ERROR joins the **deferred-Error-slot migration
+list** — the lexer emits it at `:792` for out-of-range base-N
+digits, at `:862-864` for unterminated heredocs, and at `:792`
+for malformed numerics. Synthesising an ad-hoc red here creates
+palette drift; defer to the global Error-slot migration that
+will sweep Perl ERROR + Lua / Python STRINGEOL + Bash ERROR +
+the rest of the deferred cluster together.
+
+**SCALAR + PARAM → Lifetime routing.** `SCE_SH_SCALAR` (9, bare
+`$var` / `$1` / `$@`) and `SCE_SH_PARAM` (10, braced `${param}` /
+`${param:-default}` parameter expansion) both route to
+`StyleSlot::Lifetime` — direct precedent at `SCE_PL_SCALAR` /
+`SCE_PL_ARRAY` / `SCE_PL_HASH` / `SCE_PL_SYMBOLTABLE → Lifetime`
+in `PERL_STYLES`. The `Lifetime` slot is documented at the
+`StyleSlot` enum (`crates/ui_win32/src/lib.rs:3074-3077`) as
+reusable for "scoped binding" highlights; Bash's `$x` is the
+canonical version of the sigil-tagged-variable archetype Perl
+inherited from sh. Uniform routing across SCALAR + PARAM matches
+Perl's uniform SCALAR/ARRAY/HASH/SYMBOLTABLE collapse.
+
+**HERE_DELIM → Keyword2 + bold.** Structural anchor distinct
+from the body — matches Perl `SCE_PL_HERE_DELIM → Keyword2 +
+bold` precedent.
+
+**Extension + filename expansion.** `L_BASH` claims `sh` /
+`bash` (N++ default parity) plus `ksh` / `zsh` / `ash` / `dash`
+(LexBash handles the POSIX shell + Bash extensions well enough
+for these dialects' syntax highlighting — the divergences
+tokenise gracefully). Filenames: `.bashrc` / `.bash_profile` /
+`.bash_login` / `.bash_logout` / `.bash_aliases` / `.profile` /
+`.zshrc` / `.zprofile` / `.zlogin` / `.zlogout` / `.zshenv` /
+`.kshrc` plus `PKGBUILD` (Arch package script) and `configure`
+(autoconf-generated). `.fish` deliberately omitted — Fish is not
+POSIX-compatible, deserves its own `L_FISH` row if Lexilla ever
+ships a fish lexer.
+
+**Properties left at defaults.** `lexer.bash.styling.inside.*`
+properties stay `false`, `lexer.bash.command.substitution` stays
+`0` (default `Backtick`). Keeps emitted styles in the 0..=13
+range and avoids the `commandSubstitutionFlag = 0x40` OR-shift
+at `LexBash.cxx:92` that would produce styles in 64..=127. A
+future property flip would require re-evaluating `BASH_STYLES`.
+
+**Test included in `wired_languages_have_complete_themes`** —
+11-mapping style table exceeds the 8-floor AND `BASH_KEYWORDS`
+populates class 0, so both gates pass. Dedicated test
+`bash_uses_lexbash_one_class_theme` additionally pins single-
+class wordlist surface (no `BASH_KEYWORDS_2`), SCALAR/PARAM →
+Lifetime routing, HERE_DELIM → Keyword2 routing, italic on
+COMMENTLINE, bold on WORD + HERE_DELIM, no bold on SCALAR /
+PARAM / BACKTICKS (sigil/expansion archetype carries weight via
+colour slot — matches Perl SCALAR / ARRAY / HASH staying
+non-bold), case-sensitive lowercase invariant, and 10 cross-
+language non-reuse `assert_ne!` pins (CPP / Makefile / Pascal /
+PHP / Batch / INI / SQL / VB / CSS / Perl). Test name
+`_one_class_` is the first in the framework — distinguishes
+single-populated-class from zero-class (TeX / LaTeX) and
+two-class (Batch).
+
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
 5-style table and a single keyword class. `MAKEFILE_KEYWORDS`
@@ -1496,7 +1600,7 @@ further shim work needed.
 | S-Record | 61 | `srec` | ⚫ | ⚫ | 🟡 |
 | SAS | 91 | `sas` | ⚫ | ⚫ | 🟡 |
 | Scheme | 31 | `lisp` | ⚫ | ⚫ | 🟡 |
-| Shell | 26 | `bash` | ⚫ | ⚫ | 🟡 |
+| Shell | 26 | `bash` | ✅ | ✅ | ✅ |
 | Smalltalk | 37 | `smalltalk` | ⚫ | ⚫ | 🟡 |
 | Spice | 82 | `spice` | ⚫ | ⚫ | 🟡 |
 | SQL | 17 | `sql` | ✅ | ✅ | ✅ |

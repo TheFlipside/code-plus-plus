@@ -101,15 +101,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use codepp_core::lang::{
-    BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1,
-    CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS,
-    CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS,
-    JAVA_KEYWORDS_2, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML,
-    L_INI, L_JAVA, L_LATEX, L_LUA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON,
-    L_RC, L_RUST, L_SQL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-    PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
-    RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-    XML_KEYWORDS,
+    BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS, CPP_KEYWORDS_2,
+    CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
+    CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS,
+    JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP,
+    L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_LATEX, L_LUA, L_MAKEFILE,
+    L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEX, L_VB, L_XML,
+    MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
+    PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS,
+    SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -167,6 +167,8 @@ use codepp_scintilla_sys::{
     SCE_P_WORD2, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC,
     SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO,
     SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2,
+    SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM, SCE_SH_HERE_Q,
+    SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING, SCE_SH_WORD,
     SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD,
     SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS,
     SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2,
@@ -4587,6 +4589,107 @@ const LATEX_THEME: LangTheme = LangTheme {
     bold: LATEX_BOLD,
 };
 
+// LexBash (Bash / POSIX shell). 11 mappings — DEFAULT (state 0,
+// generic background text), IDENTIFIER (state 8, post-keyword-miss
+// bare identifier and dominant fall-through per LexBash.cxx:677,
+// :694, :703, :710, :717, :723, :728, :796, :1012, :1028, :1044,
+// :1047, :1050, :1080, :1099), and ERROR (state 1, malformed
+// numeric / unterminated heredoc / out-of-range base-N digit —
+// joins the deferred-Error-slot migration list) are intentionally
+// unmapped per the scintilla-sys banner.
+//
+// Routing decisions:
+//   * COMMENTLINE → Comment — `#`-to-EOL line comments, with the
+//     POSIX shell precondition that `#` mid-identifier stays in
+//     the word (`LexBash.cxx:1029-1035`).
+//   * NUMBER → Number — decimal / hex (`0x`) / base-N (`DD#...`)
+//     per `LexBash.cxx:745-799`. Floats are NOT a Bash concept;
+//     `123.45` reclassifies as IDENTIFIER mid-token at `:793-797`.
+//   * WORD → Keyword — driven by `BASH_KEYWORDS` (class 0); hit
+//     only at command-Start position per `:726-728`. Structural
+//     reserved words (`if`/`then`/`fi`/`while`/`for`/`case`/etc.)
+//     ALSO route here via the hard-wired `bashStruct` /
+//     `bashStruct_in` sets at `:706, :713`.
+//   * STRING → String — `"..."` double-quoted, may contain `$var`
+//     expansions per `:1053-1055`.
+//   * CHARACTER → String — `'...'` single-quoted, no expansion;
+//     same dual-quote→String collapse as Python (SCE_P_STRING /
+//     SCE_P_CHARACTER) and Lua (SCE_LUA_STRING / SCE_LUA_CHARACTER).
+//   * OPERATOR → Operator — the shell operator set
+//     `^&%()-+=|{}[]:;>,*/<?!.~@` per `:580` plus the command-
+//     delimiter sub-set `| || |& & && ; ;; ( ) { }` at `:491`.
+//   * SCALAR → Lifetime — `$var` / `$1` / `$@` / `$#` sigil-tagged
+//     variable. Routes through `StyleSlot::Lifetime` (the
+//     "scoped binding" palette slot, documented at the `StyleSlot`
+//     enum declaration in `crates/ui_win32/src/lib.rs:3074-3077`)
+//     — direct precedent at `SCE_PL_SCALAR → Lifetime` at line
+//     4211 below. Bash's `$x` is the canonical version of the
+//     sigil-tagged-variable archetype Perl inherited from sh.
+//   * PARAM → Lifetime — `${param}` / `${param:-default}` /
+//     `${#array[@]}` parameter expansion (braced form). Same
+//     archetype as SCALAR — uniform `Lifetime` mapping mirrors
+//     Perl's uniform SCALAR/ARRAY/HASH/SYMBOLTABLE → Lifetime
+//     collapse at lines 4211-4214.
+//   * BACKTICKS → String — `` `cmd` `` (and `$(cmd)` at the
+//     default `lexer.bash.command.substitution = 0` per
+//     `LexBash.cxx:231-234`, 381-383). Shell-command-as-string
+//     archetype, matches `SCE_PL_BACKTICKS → String` at line 4217.
+//   * HERE_DELIM → Keyword2 — `<<EOF` / `<<'EOF'` / `<<-EOF`
+//     opening marker line AND the closing-delimiter line per
+//     `:896`. Structural anchor distinct from the body — matches
+//     `SCE_PL_HERE_DELIM → Keyword2 + bold` at line 4219.
+//   * HERE_Q → String — heredoc body. Single state covering both
+//     quoted and unquoted bodies per `:806-867`; LexBash, unlike
+//     LexPerl, does not split into HERE_Q / HERE_QQ / HERE_QX.
+//     The `Q` suffix in the constant name is a misnomer inherited
+//     from LexPerl's taxonomy — see the scintilla-sys banner.
+const BASH_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_SH_COMMENTLINE, StyleSlot::Comment),
+    (SCE_SH_NUMBER, StyleSlot::Number),
+    (SCE_SH_WORD, StyleSlot::Keyword),
+    (SCE_SH_STRING, StyleSlot::String),
+    (SCE_SH_CHARACTER, StyleSlot::String),
+    (SCE_SH_OPERATOR, StyleSlot::Operator),
+    (SCE_SH_SCALAR, StyleSlot::Lifetime),
+    (SCE_SH_PARAM, StyleSlot::Lifetime),
+    (SCE_SH_BACKTICKS, StyleSlot::String),
+    (SCE_SH_HERE_DELIM, StyleSlot::Keyword2),
+    (SCE_SH_HERE_Q, StyleSlot::String),
+];
+
+// Italic on `#`-to-EOL comments. Matches universal Code++
+// comment-slot convention (Python COMMENTLINE + COMMENTBLOCK,
+// Perl COMMENTLINE + POD, Rust COMMENTBLOCK + COMMENTLINE, Lua
+// COMMENT + COMMENTLINE + COMMENTDOC, LaTeX COMMENT + COMMENT2,
+// TeX DEFAULT).
+const BASH_ITALIC: &[usize] = &[SCE_SH_COMMENTLINE];
+
+// Primary keyword bold + heredoc-delimiter bold. WORD gets the
+// classic keyword-bold treatment matching the C / C++ / Lua /
+// Python / Perl precedent. HERE_DELIM is the structural anchor
+// for the `<<EOF` / `<<-EOF` / closing-delimiter machinery —
+// bolding matches the Perl `SCE_PL_HERE_DELIM` precedent at line
+// 4257 (structural-anchor convention). SCALAR / PARAM /
+// BACKTICKS deliberately excluded — they carry visual
+// distinction through their colour slots (Lifetime / String),
+// exactly as Perl's SCALAR / ARRAY / HASH stay non-bold at
+// lines 4211-4214 despite using the `Lifetime` slot.
+const BASH_BOLD: &[usize] = &[SCE_SH_WORD, SCE_SH_HERE_DELIM];
+
+// Single class 0 install. `bashWordListDesc[]` at
+// `LexBash.cxx:205-208` declares exactly one named slot
+// (`"Keywords"`); `LexerBash::WordListSet` at `:558-572` only
+// dispatches `case 0:` and no-ops for any other class. There is
+// no `BASH_KEYWORDS_2`. See the scintilla-sys banner for the
+// structural-reserved-word handling rationale (`bashStruct` /
+// `bashStruct_in` are hard-wired, NOT in `BASH_KEYWORDS`).
+const BASH_THEME: LangTheme = LangTheme {
+    keywords: &[(0, BASH_KEYWORDS)],
+    styles: BASH_STYLES,
+    italic: BASH_ITALIC,
+    bold: BASH_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -4718,6 +4821,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&TEX_THEME)
     } else if lang == L_LATEX {
         Some(&LATEX_THEME)
+    } else if lang == L_BASH {
+        Some(&BASH_THEME)
     } else {
         None
     }
@@ -19466,15 +19571,16 @@ mod lang_theme_tests {
         SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD,
     };
     use codepp_core::lang::{
-        BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2,
-        CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2,
-        C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
-        LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI,
-        L_JAVA, L_JAVASCRIPT, L_LATEX, L_LUA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS,
-        L_PYTHON, L_RC, L_RUST, L_SQL, L_TEX, L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS,
-        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS,
-        SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+        BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1,
+        CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
+        CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS,
+        JAVA_KEYWORDS, JAVA_KEYWORDS_2, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BASH, L_BATCH, L_C,
+        L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LUA, L_MAKEFILE,
+        L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEX, L_TEXT,
+        L_VB, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
+        PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+        RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+        XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -19503,6 +19609,7 @@ mod lang_theme_tests {
             (L_PERL, "Perl"),
             (L_PYTHON, "Python"),
             (L_LUA, "Lua"),
+            (L_BASH, "Shell"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -21056,6 +21163,182 @@ mod lang_theme_tests {
                 "Bold on {name} (keyword + structural-anchor convention)"
             );
         }
+    }
+
+    /// Bash / POSIX shell uses Lexilla's `bash` lexer (`LexBash.cxx`) —
+    /// 14 emission states (0..=13) with a SINGLE wordlist class
+    /// (`bashWordListDesc[]` at `LexBash.cxx:205-208` declares only
+    /// `"Keywords"`; `LexerBash::WordListSet` at `:558-572` no-ops
+    /// for any other class index). Included in
+    /// `wired_languages_have_complete_themes` (11-mapping style table
+    /// exceeds the 8-floor; `BASH_KEYWORDS` populates class 0).
+    ///
+    /// This dedicated test pins the 11-mapping shape (`DEFAULT` +
+    /// `IDENTIFIER` + `ERROR` intentionally unmapped — universal-
+    /// omission pattern + deferred-Error-slot migration), the
+    /// `SCALAR` / `PARAM` → `Lifetime` routing (Perl `SCALAR` /
+    /// `ARRAY` / `HASH` precedent — sigil-tagged variable archetype),
+    /// the `HERE_DELIM` → `Keyword2` routing (Perl `HERE_DELIM`
+    /// precedent — structural anchor), the single-class wordlist
+    /// contract (no `BASH_KEYWORDS_2` because `LexBash` has no
+    /// class 1), the contrast with the rest of the framework (10
+    /// non-reuse pins against sibling themes), and the italic /
+    /// bold anchors.
+    ///
+    /// Test naming: `bash_uses_lexbash_one_class_theme` — `_one_class_`
+    /// because `LexBash` declares exactly one wordlist slot AND
+    /// Code++ populates it. Contrasts with
+    /// `tex_uses_lextex_zero_class_theme` /
+    /// `latex_uses_lexlatex_zero_class_theme` (lexers shipped
+    /// intentionally empty) and `batch_uses_lexbatch_two_class_theme`
+    /// (multi-class). First `_one_class_` test in the framework —
+    /// same shape convention as the existing zero/two-class siblings.
+    #[test]
+    fn bash_uses_lexbash_one_class_theme() {
+        use codepp_scintilla_sys::{SCE_SH_DEFAULT, SCE_SH_ERROR, SCE_SH_IDENTIFIER};
+
+        use super::{
+            SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM,
+            SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR,
+            SCE_SH_STRING, SCE_SH_WORD,
+        };
+        let bash = lang_theme(L_BASH).expect("Bash wired");
+
+        // Style table size pin — 11 mappings (DEFAULT + IDENTIFIER +
+        // ERROR intentionally unmapped).
+        assert_eq!(
+            bash.styles.len(),
+            11,
+            "BASH_STYLES must map 11 indices (14 emission states minus DEFAULT + IDENTIFIER + ERROR)"
+        );
+
+        // Cross-language non-reuse pins. 10 sibling themes — must NOT
+        // share any other framework theme's style table.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let props = lang_theme(L_INI).expect("INI wired");
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let css = lang_theme(L_CSS).expect("CSS wired");
+        let perl = lang_theme(L_PERL).expect("Perl wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (mk, "Makefile"),
+            (pas, "Pascal"),
+            (php, "PHP"),
+            (bat, "Batch"),
+            (props, "INI"),
+            (sql, "SQL"),
+            (vb, "VB"),
+            (css, "CSS"),
+            (perl, "Perl"),
+        ] {
+            assert_ne!(
+                bash.styles, other.styles,
+                "Bash must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Single class 0 install — LexBash declares ONLY class 0
+        // `"Keywords"` per LexBash.cxx:205-208.
+        assert_eq!(bash.keywords.len(), 1, "Bash installs class 0 only");
+        assert_eq!(bash.keywords[0].0, 0);
+        assert_eq!(bash.keywords[0].1, BASH_KEYWORDS);
+        // Structural guard: no other classes — `WordListSet` at
+        // `LexBash.cxx:558-572` no-ops for n != 0.
+        assert!(
+            bash.keywords.iter().all(|(class, _)| *class == 0),
+            "Bash installs class 0 ONLY — LexBash exposes no other wordlists \
+             (bashWordListDesc[] declares only \"Keywords\")"
+        );
+
+        // Style-routing pins — every populated mapping.
+        for (idx, slot, name) in [
+            (SCE_SH_COMMENTLINE, StyleSlot::Comment, "SCE_SH_COMMENTLINE"),
+            (SCE_SH_NUMBER, StyleSlot::Number, "SCE_SH_NUMBER"),
+            (SCE_SH_WORD, StyleSlot::Keyword, "SCE_SH_WORD"),
+            (SCE_SH_STRING, StyleSlot::String, "SCE_SH_STRING"),
+            (SCE_SH_CHARACTER, StyleSlot::String, "SCE_SH_CHARACTER"),
+            (SCE_SH_OPERATOR, StyleSlot::Operator, "SCE_SH_OPERATOR"),
+            (SCE_SH_SCALAR, StyleSlot::Lifetime, "SCE_SH_SCALAR"),
+            (SCE_SH_PARAM, StyleSlot::Lifetime, "SCE_SH_PARAM"),
+            (SCE_SH_BACKTICKS, StyleSlot::String, "SCE_SH_BACKTICKS"),
+            (SCE_SH_HERE_DELIM, StyleSlot::Keyword2, "SCE_SH_HERE_DELIM"),
+            (SCE_SH_HERE_Q, StyleSlot::String, "SCE_SH_HERE_Q"),
+        ] {
+            assert!(
+                bash.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Explicit-omission pins. DEFAULT (0) + IDENTIFIER (8) follow
+        // the universal-omission pattern; ERROR (1) joins the
+        // deferred-Error-slot migration list. All three render at
+        // STYLE_DEFAULT today.
+        for (idx, name) in [
+            (SCE_SH_DEFAULT, "SCE_SH_DEFAULT"),
+            (SCE_SH_IDENTIFIER, "SCE_SH_IDENTIFIER"),
+            (SCE_SH_ERROR, "SCE_SH_ERROR"),
+        ] {
+            assert!(
+                !bash.styles.iter().any(|(i, _)| *i == idx),
+                "{name} must remain unmapped (intentional omission per banner)"
+            );
+        }
+
+        // Italic on `#`-to-EOL comment.
+        assert!(
+            bash.italic.contains(&SCE_SH_COMMENTLINE),
+            "Italic on SCE_SH_COMMENTLINE (universal comment-slot convention)"
+        );
+        // Pin no italic on anything else — bash has no doc-comment
+        // or block-comment styles, so the italic list is exactly one
+        // entry.
+        assert_eq!(
+            bash.italic.len(),
+            1,
+            "BASH_ITALIC should contain only SCE_SH_COMMENTLINE — no other comment families"
+        );
+
+        // Bold on primary keyword + heredoc delimiter (structural-
+        // anchor convention — matches Perl SCE_PL_HERE_DELIM
+        // precedent).
+        for (idx, name) in [
+            (SCE_SH_WORD, "SCE_SH_WORD"),
+            (SCE_SH_HERE_DELIM, "SCE_SH_HERE_DELIM"),
+        ] {
+            assert!(
+                bash.bold.contains(&idx),
+                "Bold on {name} (keyword + structural-anchor convention)"
+            );
+        }
+        // Pin no bold on SCALAR / PARAM / BACKTICKS — they carry
+        // visual distinction via their colour slots (Lifetime /
+        // String); matches Perl's SCALAR / ARRAY / HASH staying
+        // non-bold despite using Lifetime.
+        for (idx, name) in [
+            (SCE_SH_SCALAR, "SCE_SH_SCALAR"),
+            (SCE_SH_PARAM, "SCE_SH_PARAM"),
+            (SCE_SH_BACKTICKS, "SCE_SH_BACKTICKS"),
+        ] {
+            assert!(
+                !bash.bold.contains(&idx),
+                "{name} must NOT be bold (sigil/expansion archetype carries weight via colour slot)"
+            );
+        }
+
+        // Case-sensitive lowercase invariant. LexBash is byte-exact —
+        // an uppercase entry would never match. Pin structurally.
+        assert!(
+            BASH_KEYWORDS.chars().all(|c| !c.is_ascii_uppercase()),
+            "BASH_KEYWORDS contains uppercase — LexBash is byte-exact case-sensitive \
+             (LexBash.cxx:727 calls keywords.InList(s) on the raw sc.GetCurrent buffer \
+             with no MakeLowerCase), so uppercase wordlist tokens never match"
+        );
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a

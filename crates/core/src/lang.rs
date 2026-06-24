@@ -825,8 +825,38 @@ pub const LANG_TABLE: &[LangEntry] = &[
         menu_label: "Shell",
         desc: "Shell script",
         lexer: Some("bash"),
-        extensions: &["sh", "bash"],
-        filenames: &[],
+        // `sh` / `bash` are the canonical N++ default extensions per
+        // shipped `langs.model.xml`. Code++ additionally claims the
+        // ksh / zsh / ash / dash dialect extensions — LexBash handles
+        // their lexical surface (POSIX shell + Bash extensions) well
+        // enough for syntax highlighting; the dialects' divergences
+        // (associative arrays in ksh93, advanced parameter expansion
+        // in zsh) tokenise gracefully. `.fish` is deliberately omitted
+        // — Fish is not POSIX-compatible and deserves its own L_FISH
+        // row if Lexilla ever ships a fish lexer.
+        extensions: &["sh", "bash", "ksh", "zsh", "ash", "dash"],
+        // Canonical shell-rc + login-script filenames. The lookup path
+        // is `core::lang::resolve_by_filename` (matching the L_MAKEFILE
+        // precedent for `Makefile.in`); zero startup cost. `PKGBUILD`
+        // is Arch's package build script — pure Bash. `configure` is
+        // the autoconf-generated bootstrap script — POSIX shell with
+        // heavy `$()` / `[ ]` use.
+        filenames: &[
+            ".bashrc",
+            ".bash_profile",
+            ".bash_login",
+            ".bash_logout",
+            ".bash_aliases",
+            ".profile",
+            ".zshrc",
+            ".zprofile",
+            ".zlogin",
+            ".zlogout",
+            ".zshenv",
+            ".kshrc",
+            "PKGBUILD",
+            "configure",
+        ],
     },
     LangEntry {
         lang: L_SMALLTALK,
@@ -3731,6 +3761,93 @@ pub const PYTHON_KEYWORDS_2: &str = concat!(
     "__annotations__ __all__ __file__ __path__ __version__ __author__",
 );
 
+/// Space-separated Bash / POSIX-shell reserved-word + builtin
+/// vocabulary installed via `LexBash`'s `SCI_SETKEYWORDS(0, ...)`
+/// — the only class accepted by `LexerBash::WordListSet` per
+/// `vendor/lexilla/lexers/LexBash.cxx:558-572`. Drives `SCE_SH_WORD`
+/// (mapped to Keyword bold blue).
+///
+/// **Single-class wordlist surface.** `bashWordListDesc[]` at
+/// `LexBash.cxx:205-208` declares ONE named slot, `"Keywords"`,
+/// terminated by `nullptr`. Unlike Lua (2 classes), Python (2
+/// classes), or SQL (5 classes), Bash has no second / third
+/// wordlist — reserved words and builtins necessarily share class 0.
+/// There is no `BASH_KEYWORDS_2`.
+///
+/// **Case-sensitive byte-exact match.** `LexBash.cxx:727` calls
+/// `keywords.InList(s)` against the raw `sc.GetCurrent(s, ...)`
+/// buffer — no `MakeLowerCase` / `GetCurrentLowered` anywhere in
+/// the lexer. Confirmed by grepping the full source. Bash language
+/// semantics: every reserved word and builtin is lowercase. An
+/// uppercase entry below would never match.
+///
+/// **Command-Start position only.** `keywords.InList(s)` fires
+/// only when `cmdState == CmdState::Start` AND `keywordEnds` per
+/// `LexBash.cxx:726-728`. This means user-supplied keywords
+/// highlight ONLY when they appear as the first word of a command
+/// (matching how real Bash builtins / reserved words behave) —
+/// `echo "foo"` styles `echo` as `SCE_SH_WORD`; `bar echo "foo"`
+/// where `echo` is a sub-command argument styles it as
+/// `SCE_SH_IDENTIFIER`. Same Start-position gate applies to the
+/// hard-wired structural sets.
+///
+/// **Structural reserved words handled by `bashStruct` — NOT
+/// duplicated here.** `LexBash.cxx:492` populates `bashStruct =
+/// "if elif fi while until else then do done esac eval"` and
+/// `:493` populates `bashStruct_in = "for case select"`; both
+/// are matched at `:706, :713` independently of the user
+/// wordlist. Adding the control-flow tokens (`if`, `then`, `fi`,
+/// `while`, `for`, `case`, `select`, `in`, …) to this list would
+/// be no-op spec noise — the lexer would hit the hard-wired set
+/// first. The list below covers builtins (`echo`, `printf`,
+/// `read`, …) and reserved words NOT in `bashStruct` that the
+/// word-start gate at `LexBash.cxx:575` admits (`function`,
+/// `time`, `coproc`). The `!` negation token and `[` / `[[` /
+/// `]]` test-command brackets are deliberately NOT in this list
+/// — `setWordStart = setAlpha + "_"` at `LexBash.cxx:575`
+/// rejects them before keyword classification can fire (they
+/// route to `SCE_SH_OPERATOR` via `setBashOperator` at `:580`),
+/// so adding them would be unreachable spec noise.
+///
+/// **Sourcing.** Bash Reference Manual §3.1 ("Shell Syntax") +
+/// §4.1 ("Bourne Shell Builtins") + §4.2 ("Bash Builtin
+/// Commands"). Cross-referenced against N++'s shipped
+/// `langs.model.xml` `<Language name="bash">` `instre1` list for
+/// default-set parity. The N++ file is referenced for parity
+/// inspection only — no content copied from it (per the
+/// CLAUDE.md "no code from Notepad++" rule); the canonical
+/// source for every entry below is the Bash Reference Manual.
+pub const BASH_KEYWORDS: &str = concat!(
+    // Reserved tokens not in `bashStruct` and accepted by the
+    // word-start gate: `function` / `coproc` declaration,
+    // `time` pipeline timing. (`select` is already in
+    // `bashStruct_in`; `in` is matched by the `CmdState::Word`
+    // transition at LexBash.cxx:688-690.)
+    "coproc function time ",
+    // Declaration + scope builtins
+    "alias declare export local readonly typeset unalias unset ",
+    // I/O + variable manipulation builtins
+    "echo getopts let mapfile printf read readarray ",
+    // Process / job control builtins
+    "bg disown exec exit fg jobs kill suspend wait ",
+    // Navigation + directory stack builtins
+    "cd dirs popd pushd pwd ",
+    // Shell-mode + option builtins
+    "enable set shift shopt umask ulimit ",
+    // Conditional + history + completion builtins
+    "bind builtin caller command complete compgen compopt ",
+    // Test / type / source / trap / return / break / continue.
+    // `test` is deliberately NOT in this list — `LexBash.cxx:699`
+    // matches it via a hard-wired `strcmp` (separate from the
+    // `bashStruct` set noted above) that fires before
+    // `keywords.InList` at `:726-728` is consulted, so an entry
+    // here would be unreachable spec noise. `times` (the shell
+    // builtin printing accumulated process times) is a real
+    // builtin — kept.
+    "break continue false fc hash help history logout return ",
+    "source times trap true type ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3763,6 +3880,14 @@ mod tests {
         assert_eq!(LangType::from_extension("cls"), L_LATEX);
         assert_eq!(LangType::from_extension("ltx"), L_LATEX);
         assert_eq!(LangType::from_extension("dtx"), L_LATEX);
+        // Shell dialects all route to L_BASH — LexBash handles
+        // their lexical surface for syntax-highlighting purposes.
+        assert_eq!(LangType::from_extension("sh"), L_BASH);
+        assert_eq!(LangType::from_extension("bash"), L_BASH);
+        assert_eq!(LangType::from_extension("ksh"), L_BASH);
+        assert_eq!(LangType::from_extension("zsh"), L_BASH);
+        assert_eq!(LangType::from_extension("ash"), L_BASH);
+        assert_eq!(LangType::from_extension("dash"), L_BASH);
     }
 
     #[test]
@@ -3815,6 +3940,39 @@ mod tests {
         // fallback — those are Makefile fragments / NMAKE files.
         assert_eq!(LangType::from_path(Path::new("rules.mk")), L_MAKEFILE);
         assert_eq!(LangType::from_path(Path::new("build.mak")), L_MAKEFILE);
+    }
+
+    /// Shell-rc and login-script filenames resolve to `L_BASH`
+    /// via the `LangEntry::filenames` lookup path, matching the
+    /// `L_MAKEFILE` precedent. `PKGBUILD` (Arch's package script)
+    /// and `configure` (autoconf bootstrap) are also pure
+    /// Bash / POSIX shell — wired by filename, not extension.
+    #[test]
+    fn from_path_recognises_bash_by_filename() {
+        for name in [
+            ".bashrc",
+            ".bash_profile",
+            ".bash_login",
+            ".bash_logout",
+            ".bash_aliases",
+            ".profile",
+            ".zshrc",
+            ".zprofile",
+            ".zlogin",
+            ".zlogout",
+            ".zshenv",
+            ".kshrc",
+            "PKGBUILD",
+            "configure",
+        ] {
+            assert_eq!(
+                LangType::from_path(Path::new(name)),
+                L_BASH,
+                "{name} must route to L_BASH via the filenames lookup"
+            );
+        }
+        // Works through directory paths.
+        assert_eq!(LangType::from_path(Path::new("/home/user/.bashrc")), L_BASH);
     }
 
     /// Filename matching is case-insensitive — GNU make finds either
