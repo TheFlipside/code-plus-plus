@@ -105,10 +105,10 @@ use codepp_core::lang::{
     CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS,
     CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS,
     JAVA_KEYWORDS_2, L_ASP, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_MAKEFILE,
-    L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_RC, L_RUST, L_SQL, L_VB, L_XML, MAKEFILE_KEYWORDS,
-    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, RC_KEYWORDS,
-    RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-    XML_KEYWORDS,
+    L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_VB, L_XML,
+    MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
+    PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS,
+    SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -154,31 +154,34 @@ use codepp_scintilla_sys::{
     SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR, SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QW,
     SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE,
     SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT, SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT,
-    SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK,
-    SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME,
-    SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD,
-    SCE_RUST_WORD2, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC,
-    SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER,
-    SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT,
-    SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE,
-    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
-    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
-    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
-    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
-    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
-    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
-    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
-    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
-    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
-    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
-    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED,
-    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
-    SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
-    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MOD_DELETETEXT,
-    SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION, SCE_P_ATTRIBUTE, SCE_P_CHARACTER,
+    SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE, SCE_P_DECORATOR, SCE_P_DEFNAME,
+    SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE, SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER,
+    SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE, SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2,
+    SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE,
+    SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR,
+    SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2, SCE_SQL_CHARACTER, SCE_SQL_COMMENT,
+    SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC,
+    SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT,
+    SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCI_BEGINUNDOACTION,
+    SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER,
+    SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
+    SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES,
+    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
+    SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
+    SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
+    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
+    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
+    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
+    SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
+    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
+    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO,
+    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
+    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
+    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE,
+    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
@@ -4256,6 +4259,136 @@ const PERL_THEME: LangTheme = LangTheme {
     bold: PERL_BOLD,
 };
 
+// --- LexPython (Python 3) ---
+// LexPython is byte-exact case-sensitive: `LexPython.cxx:671` calls
+// `keywords.InList(identifier)` with no case folding (confirmed by
+// zero matches for `tolower` / `MakeLowerCase` / `GetCurrentLowered`
+// in the source). Wordlists must use source-canonical casing —
+// lowercase for the bulk of reserved words; CAPITALISED for
+// `True` / `False` / `None`; CamelCase for exception classes;
+// dunder-underscores for `__init__` etc.
+//
+// **Two wordlist classes.** `pythonWordListDesc[]` declares two
+// slots: `"Keywords"` (class 0, `PYTHON_KEYWORDS`) and
+// `"Highlighted identifiers"` (class 1, `PYTHON_KEYWORDS_2`).
+// Class 0 drives `SCE_P_WORD` (Keyword bold); class 1 drives
+// `SCE_P_WORD2` (Keyword2 steel-blue). Lexilla checks class 0
+// first — a cross-class duplicate would silently demote the
+// class-1 entry. The Python test asserts no-overlap structurally.
+//
+// **`True` / `False` / `None` placement.** Code++ deliberately
+// places these in class 0 (Keyword bold), NOT class 1, because
+// Python 3 makes them hard reserved words (`True = 5` raises
+// SyntaxError). Notepad++ historically put them in WORD2 for
+// Python 2 backward compatibility — Code++ diverges to honour
+// the modern language semantics.
+//
+// **`match` / `case` soft keywords (Python 3.10+).** Included in
+// class 0; LexPython's `IsMatchOrCaseIdentifier` helper
+// (`LexPython.cxx:258-289`) disambiguates non-pattern context so
+// `match = 1` and `obj.match()` correctly degrade to
+// `SCE_P_IDENTIFIER`.
+//
+// Style-to-slot decisions:
+//   * COMMENTLINE (`# ...`) → Comment italic.
+//   * COMMENTBLOCK (`##`-prefixed comment lines) → Comment italic.
+//     Lexilla emits this at `LexPython.cxx:914` when `sc.chNext ==
+//     '#'`; pre-themed for safety so the convention isn't
+//     uncoloured.
+//   * NUMBER (decimal / hex / oct / bin / underscore-separated /
+//     `0x` / `0b` / `0o` / `_`-grouped) → Number.
+//   * WORD (class-0 wordlist hit — Python reserved words) →
+//     Keyword bold.
+//   * WORD2 (class-1 wordlist hit — built-in functions, exception
+//     types, `self` / `cls`, dunders) → Keyword2.
+//   * STRING (`"..."`) / CHARACTER (`'...'`) → String. Python
+//     makes no semantic char/string split; both single- and
+//     double-quoted variants render identically.
+//   * TRIPLE (`'''...'''`) / TRIPLEDOUBLE (`"""..."""`) → String.
+//     The lexer has no docstring-specific lex state — a triple-
+//     quoted literal mid-expression (`x = """hello"""`) emits the
+//     same state as a module-level docstring. Styling these as
+//     Comment would mis-colour multi-line SQL queries, regex
+//     VERBOSE patterns, embedded HTML/JSON fixtures, and inline
+//     data blobs — all common in real Python. The docstring role
+//     is a runtime convention (`__doc__` binding), not a lexical
+//     one. PyCharm / VS Code / Sublime / Notepad++ all paint
+//     triple-quoted strings as String.
+//   * F-string family — FSTRING (`f"..."`) / FCHARACTER (`f'...'`)
+//     / FTRIPLE (`f'''...'''`) / FTRIPLEDOUBLE (`f"""..."""`) →
+//     all String. The `{}` interpolation sub-lexer is internal to
+//     Lexilla. Activation is `stringsF = true` by default
+//     (`LexPython.cxx:297`); Code++ doesn't override.
+//   * CLASSNAME (post-`class ` identifier) / DEFNAME (post-`def `
+//     identifier) → Keyword2. The lexer's kwLast state machine
+//     (lines 673-676) auto-reclassifies the identifier after a
+//     `class` / `def` wordlist hit. No wordlist install needed for
+//     the names themselves. Code++ rides Keyword2's non-bold weight
+//     even though N++ paints them bold — palette discipline keeps
+//     the `std::` / `mod` / Python class-name accent visually
+//     consistent across languages.
+//   * DECORATOR (`@foo` at line start) → Preprocessor bold. The
+//     line-start gate is internal to LexPython (line 916,
+//     `IsFirstNonWhitespace`), so mid-expression `@` matrix-mul
+//     (Python 3.5+) correctly degrades to `SCE_P_OPERATOR`. The
+//     Preprocessor slot's dark-green bold matches the "out-of-band
+//     annotation" visual weight N++ assigns to `#include` etc.
+//   * OPERATOR (`+ - * / = ( ) [ ] : , .` and the family) →
+//     Operator.
+//   * ATTRIBUTE (`obj.foo` post-decorator attribute access) →
+//     Keyword2. **Pre-themed only.** The lexer never emits this
+//     state under Code++'s defaults — `lexer.python.identifier.
+//     attributes` and `lexer.python.decorator.attributes` both
+//     default to 0 (`LexPython.cxx:305-306`) and Code++ never
+//     calls `SetProperty` to enable them. Wired for forward-
+//     compat — costs one table row, gains zero-effort activation
+//     if the property is ever flipped. Same pattern as CSS
+//     EXTENDED_PSEUDOCLASS pre-theming.
+//
+// Intentionally unmapped (fall through to STYLE_DEFAULT):
+//   * SCE_P_DEFAULT (0) — generic background text (universal
+//     omission, matches `SCE_C_DEFAULT` / `SCE_PL_DEFAULT`).
+//   * SCE_P_IDENTIFIER (11) — bare identifier (post-keyword-miss);
+//     matches `SCE_C_IDENTIFIER` / `SCE_PAS_IDENTIFIER` /
+//     `SCE_PL_IDENTIFIER` precedent.
+//   * SCE_P_STRINGEOL (13) — unterminated-string error indicator.
+//     Joins the deferred-Error-slot migration list — currently at
+//     12 entries (Perl ERROR + VB STRINGEOL + 9 others + this).
+const PYTHON_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_P_COMMENTLINE, StyleSlot::Comment),
+    (SCE_P_NUMBER, StyleSlot::Number),
+    (SCE_P_STRING, StyleSlot::String),
+    (SCE_P_CHARACTER, StyleSlot::String),
+    (SCE_P_WORD, StyleSlot::Keyword),
+    (SCE_P_TRIPLE, StyleSlot::String),
+    (SCE_P_TRIPLEDOUBLE, StyleSlot::String),
+    (SCE_P_CLASSNAME, StyleSlot::Keyword2),
+    (SCE_P_DEFNAME, StyleSlot::Keyword2),
+    (SCE_P_OPERATOR, StyleSlot::Operator),
+    (SCE_P_COMMENTBLOCK, StyleSlot::Comment),
+    (SCE_P_WORD2, StyleSlot::Keyword2),
+    (SCE_P_DECORATOR, StyleSlot::Preprocessor),
+    (SCE_P_FSTRING, StyleSlot::String),
+    (SCE_P_FCHARACTER, StyleSlot::String),
+    (SCE_P_FTRIPLE, StyleSlot::String),
+    (SCE_P_FTRIPLEDOUBLE, StyleSlot::String),
+    (SCE_P_ATTRIBUTE, StyleSlot::Keyword2),
+];
+// Line comments AND `##` block-style comments both italic — matches
+// universal Code++ convention for comment slots.
+const PYTHON_ITALIC: &[usize] = &[SCE_P_COMMENTLINE, SCE_P_COMMENTBLOCK];
+// Primary keyword + decorator bold — matches Notepad++ Python
+// default and the C/C++ precedent of bolding `SCE_C_WORD` +
+// `SCE_C_PREPROCESSOR`.
+const PYTHON_BOLD: &[usize] = &[SCE_P_WORD, SCE_P_DECORATOR];
+
+const PYTHON_THEME: LangTheme = LangTheme {
+    keywords: &[(0, PYTHON_KEYWORDS), (1, PYTHON_KEYWORDS_2)],
+    styles: PYTHON_STYLES,
+    italic: PYTHON_ITALIC,
+    bold: PYTHON_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -4379,6 +4512,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&CSS_THEME)
     } else if lang == L_PERL {
         Some(&PERL_THEME)
+    } else if lang == L_PYTHON {
+        Some(&PYTHON_THEME)
     } else {
         None
     }
@@ -19133,8 +19268,8 @@ mod lang_theme_tests {
         L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_MAKEFILE, L_OBJC,
         L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEXT, L_VB, L_XML,
         MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
-        PHP_KEYWORDS, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS,
-        VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+        PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS,
+        SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -19161,6 +19296,7 @@ mod lang_theme_tests {
             (L_PASCAL, "Pascal"),
             (L_CSS, "CSS"),
             (L_PERL, "Perl"),
+            (L_PYTHON, "Python"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -19997,6 +20133,212 @@ mod lang_theme_tests {
         }
     }
 
+    /// Python uses Lexilla's `python` lexer (`LexPython.cxx`). The
+    /// `L_PYTHON` row routes `.py` files to the lexer with TWO
+    /// wordlist classes installed (matches `pythonWordListDesc[]`):
+    /// class 0 = 37 reserved + soft-keyword tokens (lowercase except
+    /// for the source-canonical `True` / `False` / `None`), class 1
+    /// = 270 highlighted identifiers (built-in functions, exception
+    /// types, conventional `self`/`cls`, sentinel literals,
+    /// data-model dunders — case preserved per Python source).
+    ///
+    /// `python_uses_lexpython_two_class_theme` test pins:
+    /// - 18-mapping style table shape
+    /// - 10 non-reuse style-table assertions (CPP / HYPERTEXT /
+    ///   MAKEFILE / PASCAL / BATCH / PROPS / SQL / VB / CSS / RUST)
+    /// - Two-class structure (`(0, PYTHON_KEYWORDS)`,
+    ///   `(1, PYTHON_KEYWORDS_2)`)
+    /// - Strict no-overlap between class 0 and class 1 (a cross-class
+    ///   duplicate would silently demote — Lexilla checks class 0
+    ///   first at `LexPython.cxx:671`)
+    /// - `True` / `False` / `None` in class 0 ONLY (Python 3
+    ///   reserved words — deliberate divergence from N++'s
+    ///   Python-2-era WORD2 placement)
+    /// - `self` / `cls` in class 1 ONLY (conventional, not reserved)
+    /// - `match` / `case` soft keywords in class 0 (lexer's
+    ///   `IsMatchOrCaseIdentifier` disambiguates non-pattern context
+    ///   per `LexPython.cxx:258-289`)
+    /// - The four f-string family routings to String
+    ///   (FSTRING / FCHARACTER / FTRIPLE / FTRIPLEDOUBLE)
+    /// - CLASSNAME / DEFNAME / WORD2 / ATTRIBUTE → Keyword2
+    ///   (the auto-emitted name-being-defined family + built-in
+    ///   identifiers + opt-in attribute-access)
+    /// - DECORATOR → Preprocessor (line-start gated by
+    ///   `IsFirstNonWhitespace` per `LexPython.cxx:916`)
+    /// - WORD + DECORATOR are the only bold-tagged structural
+    ///   anchors
+    /// - COMMENTLINE + COMMENTBLOCK both italic (matches Comment
+    ///   slot convention for both `#` line comments AND `##`
+    ///   block-style comments)
+    #[test]
+    fn python_uses_lexpython_two_class_theme() {
+        use super::{
+            SCE_P_ATTRIBUTE, SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE,
+            SCE_P_DECORATOR, SCE_P_DEFNAME, SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE,
+            SCE_P_FTRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2,
+        };
+        let py = lang_theme(L_PYTHON).expect("Python wired");
+        let c = lang_theme(L_C).expect("C wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let ini = lang_theme(L_INI).expect("INI wired");
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let css = lang_theme(L_CSS).expect("CSS wired");
+        let rust = lang_theme(L_RUST).expect("Rust wired");
+        // 18 emission mappings. DEFAULT (0), IDENTIFIER (11),
+        // STRINGEOL (13) deliberately unmapped per the LexPython
+        // banner in scintilla-sys.
+        assert_eq!(
+            py.styles.len(),
+            18,
+            "Python theme has {} style mappings; expected 18",
+            py.styles.len()
+        );
+        // Distinct from every other style table in the framework.
+        assert_ne!(py.styles, c.styles, "Python must NOT reuse CPP_STYLES");
+        assert_ne!(
+            py.styles, mk.styles,
+            "Python must NOT reuse MAKEFILE_STYLES"
+        );
+        assert_ne!(py.styles, pas.styles, "Python must NOT reuse PASCAL_STYLES");
+        assert_ne!(
+            py.styles, php.styles,
+            "Python must NOT reuse HYPERTEXT_STYLES"
+        );
+        assert_ne!(py.styles, bat.styles, "Python must NOT reuse BATCH_STYLES");
+        assert_ne!(py.styles, ini.styles, "Python must NOT reuse PROPS_STYLES");
+        assert_ne!(py.styles, sql.styles, "Python must NOT reuse SQL_STYLES");
+        assert_ne!(py.styles, vb.styles, "Python must NOT reuse VB_STYLES");
+        assert_ne!(py.styles, css.styles, "Python must NOT reuse CSS_STYLES");
+        assert_ne!(py.styles, rust.styles, "Python must NOT reuse RUST_STYLES");
+        // Two keyword classes: 0 = reserved words, 1 = built-in
+        // identifiers. Class indices dictated by LexPython's
+        // `pythonWordListDesc[]`.
+        assert_eq!(
+            py.keywords.len(),
+            2,
+            "Python theme installs class 0 (reserved) + class 1 (highlighted identifiers)"
+        );
+        assert_eq!(py.keywords[0].0, 0);
+        assert_eq!(py.keywords[0].1, PYTHON_KEYWORDS);
+        assert_eq!(py.keywords[1].0, 1);
+        assert_eq!(py.keywords[1].1, PYTHON_KEYWORDS_2);
+        // Structural guard: pin "no class 2+" — LexPython only
+        // declares two wordlist slots.
+        assert!(
+            py.keywords.iter().all(|(class, _)| matches!(class, 0 | 1)),
+            "Python must install classes 0 + 1 ONLY (LexPython has 2 wordlist slots)"
+        );
+        // Pin the no-overlap invariant. Lexilla checks class 0 first
+        // (LexPython.cxx:671), so a cross-class duplicate would
+        // silently demote class 1 entries — an invisible bug.
+        let class0: std::collections::HashSet<&str> = PYTHON_KEYWORDS.split_whitespace().collect();
+        let class1: std::collections::HashSet<&str> =
+            PYTHON_KEYWORDS_2.split_whitespace().collect();
+        let overlap: Vec<&str> = class0.intersection(&class1).copied().collect();
+        assert!(
+            overlap.is_empty(),
+            "Python class 0 / class 1 wordlists overlap on {overlap:?} — \
+             Lexilla checks class 0 first; an overlap silently demotes class 1"
+        );
+        // Pin `True` / `False` / `None` in class 0 ONLY. These are
+        // Python 3 reserved words (`True = 5` raises SyntaxError);
+        // N++ historically places them in WORD2 for Python 2
+        // compat, Code++ deliberately diverges to honour modern
+        // language semantics.
+        for token in ["True", "False", "None"] {
+            assert!(
+                class0.contains(token) && !class1.contains(token),
+                "Python {token} must be in class 0 ONLY (Python 3 reserved word; \
+                 N++'s WORD2 placement is a Python-2-era artifact)"
+            );
+        }
+        // Pin `self` / `cls` in class 1 ONLY. These are not reserved
+        // (`def foo(this, that)` is legal Python) but every style
+        // guide highlights them — class 1 placement gives them
+        // Keyword2 accent without claiming reserved status.
+        for token in ["self", "cls"] {
+            assert!(
+                !class0.contains(token) && class1.contains(token),
+                "Python {token} must be in class 1 ONLY (conventional, not reserved)"
+            );
+        }
+        // Pin `match` / `case` in class 0. Python 3.10+ soft
+        // keywords; LexPython.cxx:258-289 (IsMatchOrCaseIdentifier)
+        // disambiguates non-pattern context, so class-0 placement
+        // is safe — the lexer vetoes the wordlist hit when `match`
+        // / `case` appear as regular identifiers.
+        for token in ["match", "case"] {
+            assert!(
+                class0.contains(token),
+                "Python {token} must be in class 0 (soft keyword; lexer disambiguates \
+                 via IsMatchOrCaseIdentifier per LexPython.cxx:258-289)"
+            );
+        }
+        // Pin the f-string family routing — all four variants route
+        // to String. The `{}` interpolation sub-lexer is internal to
+        // Lexilla; the outer body is just String.
+        for (idx, name) in [
+            (SCE_P_FSTRING, "SCE_P_FSTRING"),
+            (SCE_P_FCHARACTER, "SCE_P_FCHARACTER"),
+            (SCE_P_FTRIPLE, "SCE_P_FTRIPLE"),
+            (SCE_P_FTRIPLEDOUBLE, "SCE_P_FTRIPLEDOUBLE"),
+        ] {
+            assert!(
+                py.styles.contains(&(idx, StyleSlot::String)),
+                "Python f-string {name} ({idx}) must route to StyleSlot::String — \
+                 the {{}} interpolation sub-lexer is internal to Lexilla"
+            );
+        }
+        // Pin the auto-emitted name-being-defined family
+        // (CLASSNAME / DEFNAME) + WORD2 + ATTRIBUTE all route to
+        // Keyword2 — Code++'s "built-in / type-name accent" slot.
+        for (idx, name) in [
+            (SCE_P_CLASSNAME, "SCE_P_CLASSNAME"),
+            (SCE_P_DEFNAME, "SCE_P_DEFNAME"),
+            (SCE_P_WORD2, "SCE_P_WORD2"),
+            (SCE_P_ATTRIBUTE, "SCE_P_ATTRIBUTE"),
+        ] {
+            assert!(
+                py.styles.contains(&(idx, StyleSlot::Keyword2)),
+                "Python {name} ({idx}) must route to StyleSlot::Keyword2"
+            );
+        }
+        // Pin DECORATOR → Preprocessor bold. Line-start gated by
+        // `IsFirstNonWhitespace` (LexPython.cxx:916), so
+        // mid-expression `@` matrix-mul degrades to OPERATOR.
+        assert!(
+            py.styles
+                .contains(&(SCE_P_DECORATOR, StyleSlot::Preprocessor)),
+            "Python SCE_P_DECORATOR must route to StyleSlot::Preprocessor (bold accent \
+             for @decorator lines; line-start gated by IsFirstNonWhitespace)"
+        );
+        // Pin the two bold-tagged structural anchors.
+        for (idx, name) in [
+            (SCE_P_WORD, "SCE_P_WORD"),
+            (SCE_P_DECORATOR, "SCE_P_DECORATOR"),
+        ] {
+            assert!(
+                py.bold.contains(&idx),
+                "Python bold list must contain {name} ({idx}) — structural anchor"
+            );
+        }
+        // Pin both italic comment slots — `#` line comments AND
+        // `##` block-style comments both render Comment-italic.
+        for (idx, name) in [
+            (SCE_P_COMMENTLINE, "SCE_P_COMMENTLINE"),
+            (SCE_P_COMMENTBLOCK, "SCE_P_COMMENTBLOCK"),
+        ] {
+            assert!(
+                py.italic.contains(&idx),
+                "Python italic list must contain {name} ({idx}) — comment family"
+            );
+        }
+    }
+
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a
     /// small line-oriented lexer with a compact 5-style table and a
     /// single keyword class (GNU Make directives). NOT included in
@@ -20377,10 +20719,10 @@ mod lang_theme_tests {
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
     /// updating in the same commit — same as for `L_C` / `L_CPP`
-    /// / `L_CS` / `L_RUST` / `L_PHP` above.
+    /// / `L_CS` / `L_RUST` / `L_PHP` above. `L_PYTHON` was removed
+    /// from this list when the Python row landed.
     #[test]
     fn unwired_languages_have_no_theme() {
-        assert!(lang_theme(L_PYTHON).is_none(), "Python not wired yet");
         assert!(lang_theme(L_JAVASCRIPT).is_none(), "JS not wired yet");
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");
     }

@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 20 / 🟡 68 / ⚫ 1.
+Total: 89 rows. ✅ 21 / 🟡 67 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -921,6 +921,114 @@ _VAR Lifetime routing (9 entries), and the four bold
 structural anchors (WORD / HERE_DELIM / SUB_PROTOTYPE /
 FORMAT_IDENT).
 
+**Python (2026-06-24):** uses Lexilla's `python` lexer
+(`LexPython.cxx`). The `L_PYTHON` row routes `.py` files
+with **two wordlist classes** installed (matches
+`pythonWordListDesc[]`): `PYTHON_KEYWORDS` (37 entries,
+class 0 = reserved + soft keywords) drives `SCE_P_WORD` →
+Keyword bold, `PYTHON_KEYWORDS_2` (270 entries, class 1 =
+highlighted identifiers) drives `SCE_P_WORD2` → Keyword2.
+
+**Case-sensitive lexer.** `LexPython.cxx:671` calls
+`keywords.InList(identifier)` with no case folding — zero
+matches for `tolower` / `MakeLowerCase` /
+`GetCurrentLowered` in the source. Wordlists store
+source-canonical casing: `True` / `False` / `None`
+capitalised (Python 3 reserved literals), lowercase rest
+of class 0, CamelCase exception classes in class 1, dunder
+underscores preserved on `__init__` / `__repr__` etc.
+
+**`True` / `False` / `None` placement: class 0, NOT
+class 1.** Python 3 makes these hard reserved words
+(`True = 5` raises `SyntaxError`). Notepad++ historically
+places them in class 1 (WORD2) for Python 2 backward
+compatibility — Code++ deliberately diverges to honour
+modern language semantics. Pinned in the test as a
+structural invariant.
+
+**`match` / `case` soft keywords (Python 3.10+).**
+Installed in class 0. LexPython.cxx:258-289
+(`IsMatchOrCaseIdentifier`) disambiguates non-pattern
+context — `match = 1` and `obj.match()` correctly degrade
+to `SCE_P_IDENTIFIER` while `match value:` / `case 1:` at
+statement position fire `SCE_P_WORD`. The lexer does the
+right thing; installing the soft keywords is correct and
+safe.
+
+**No cross-class duplicates.** Lexilla checks class 0
+first (LexPython.cxx:671), so a duplicate would silently
+demote class 1 entries — an invisible bug. Verified by
+PowerShell HashSet intersection before commit (zero
+overlap on 37 + 270 = 307 unique tokens) AND pinned
+structurally by the Python theme test.
+
+Dedicated **18-mapping** `PYTHON_STYLES` table — does NOT
+reuse any other framework style table (CPP / HYPERTEXT /
+MAKEFILE / PASCAL / BATCH / PROPS / SQL / VB / CSS / RUST
+— all **10 non-reuse assertions** structurally pinned).
+Maps:
+- COMMENTLINE (`# ...`) / COMMENTBLOCK (`##` line prefix
+  per LexPython.cxx:914) → Comment italic.
+- NUMBER → Number, STRING / CHARACTER → String,
+  OPERATOR → Operator.
+- WORD (class 0 hit) → Keyword bold.
+- WORD2 (class 1 hit) → Keyword2.
+- TRIPLE (`'''...'''`) / TRIPLEDOUBLE (`"""..."""`) →
+  String, not Comment. The lexer has no docstring-specific
+  state; styling these as Comment would mis-colour
+  multi-line SQL queries, `re.VERBOSE` regex patterns,
+  embedded HTML / JSON test fixtures. Matches PyCharm / VS
+  Code / Sublime / Notepad++ all painting triple-quoted
+  literals as String.
+- **F-string family** (4 styles): FSTRING (`f"..."`) /
+  FCHARACTER (`f'...'`) / FTRIPLE (`f'''...'''`) /
+  FTRIPLEDOUBLE (`f"""..."""`) all → String. The `{}`
+  interpolation sub-lexer is internal to Lexilla.
+  Activation is automatic — `stringsF = true` by default
+  (LexPython.cxx:297), Code++ doesn't override.
+- **Name-being-defined family**: CLASSNAME (post-`class `
+  identifier) / DEFNAME (post-`def ` identifier) →
+  Keyword2. The lexer's kwLast state machine
+  (LexPython.cxx:673-676) auto-reclassifies the identifier
+  after a `class` / `def` wordlist hit — no wordlist install
+  needed for the names themselves. Code++ rides Keyword2's
+  non-bold weight (N++ paints bold; palette discipline keeps
+  the C++ `std::` / Rust `mod` / Python class-name accent
+  visually consistent).
+- DECORATOR (`@foo` at line start) → Preprocessor bold.
+  Line-start gated by `IsFirstNonWhitespace`
+  (LexPython.cxx:916) so mid-expression `@` matrix-mul
+  (Python 3.5+) correctly degrades to `SCE_P_OPERATOR`.
+- ATTRIBUTE (post-decorator attribute access) → Keyword2.
+  **Pre-themed only**: `lexer.python.identifier.attributes`
+  and `lexer.python.decorator.attributes` both default to 0
+  (LexPython.cxx:305-306), Code++ never calls SetProperty.
+  The state never fires under defaults; wired for
+  forward-compat (same pattern as CSS EXTENDED_PSEUDOCLASS
+  pre-theming).
+
+Intentionally unmapped — fall through to STYLE_DEFAULT:
+DEFAULT (0), IDENTIFIER (11, bare-identifier fall-through
+matching `SCE_C_IDENTIFIER` / `SCE_PL_IDENTIFIER`
+precedent), STRINGEOL (13, pending `StyleSlot::Error`).
+The deferred-Error-slot migration list grows from 11
+entries (after Perl ERROR) to **12** with Python's
+STRINGEOL added.
+
+`python_uses_lexpython_two_class_theme` test pins the
+18-mapping shape, **10** non-reuse style-table assertions,
+two-class structure, canonical keyword constant links,
+strict no-overlap between classes, the `True` / `False` /
+`None` class-0-only invariant (Python 3 reserved status),
+the `self` / `cls` class-1-only invariant (conventional,
+not reserved), the `match` / `case` class-0 invariant
+(soft keywords, lexer disambiguates), the f-string family
+→ String routing (4 indices), the name-being-defined
+family → Keyword2 routing (4 indices including the
+forward-compat ATTRIBUTE), the DECORATOR → Preprocessor
+routing, the bold structural anchors (WORD + DECORATOR),
+and both italic comment slots (COMMENTLINE + COMMENTBLOCK).
+
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
 5-style table and a single keyword class. `MAKEFILE_KEYWORDS`
@@ -1141,7 +1249,7 @@ further shim work needed.
 | PowerShell | 53 | `powershell` | ⚫ | ⚫ | 🟡 |
 | Properties | 34 | `props` | — | ✅ | ✅ |
 | Purebasic | 68 | `purebasic` | ⚫ | ⚫ | 🟡 |
-| Python | 22 | `python` | ⚫ | ⚫ | 🟡 |
+| Python | 22 | `python` | ✅ | ✅ | ✅ |
 | R | 54 | `r` | ⚫ | ⚫ | 🟡 |
 | Raku | 89 | `raku` | ⚫ | ⚫ | 🟡 |
 | REBOL | 79 | `rebol` | ⚫ | ⚫ | 🟡 |

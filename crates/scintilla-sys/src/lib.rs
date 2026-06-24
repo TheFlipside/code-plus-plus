@@ -592,9 +592,110 @@ pub const SCE_RUST_IDENTIFIER: usize = 17;
 pub const SCE_RUST_LIFETIME: usize = 18;
 pub const SCE_RUST_MACRO: usize = 19;
 
-// LexPython style indices — the "P" prefix is upstream's choice for
-// LexPython's enum. Style numbers verified against
-// `vendor/lexilla/include/SciLexer.h` SCE_P_*.
+// LexPython style indices. 21 contiguous slots (0..=20) covering
+// the Python lexer's full emission set: `#` line comments, `##`
+// block comments (separate state, see banner below), decimal /
+// hex / oct / bin / underscore-separated number literals, two
+// wordlist classes (`SCE_P_WORD` for reserved words, `SCE_P_WORD2`
+// for built-in identifiers), single- and double-quoted strings,
+// triple-quoted strings (`'''...'''` and `"""..."""`), the four
+// f-string variants (`f"..."` / `f'...'` / `f'''...'''` /
+// `f"""..."""`), class / def names (post-keyword identifier
+// styles, set automatically by a kwLast state machine),
+// operators, identifiers, decorators (`@foo` at line start), and
+// the opt-in attribute-access style. Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 160-180 and
+// `vendor/lexilla/lexers/LexPython.cxx` lines 321-325
+// (`pythonWordListDesc`), 258-289 (`IsMatchOrCaseIdentifier`),
+// 671 + 694 (case-sensitive `keywords.InList` / `keywords2.InList`
+// dispatch), 297 (`stringsF = true` default for f-string
+// activation), 305-306 (`identifierAttributes` /
+// `decoratorAttributes` defaulting to 0).
+//
+// **Case-sensitive lexer.** Python language semantics: `True`,
+// `False`, `None` are spelled with leading capitals; `match` /
+// `case` (soft keywords, Python 3.10+) are lowercase. LexPython
+// does NO case folding — `keywords.InList(identifier)` matches
+// the byte-exact source token against the installed wordlist.
+// Wordlists must store source-canonical casing — see the
+// `PYTHON_KEYWORDS` doc comment for the `True`/`False`/`None`
+// placement rationale (class 0 because Python 3 makes them
+// reserved, unlike Python 2 / N++ where they were builtins).
+//
+// **Two wordlist classes.** `pythonWordListDesc[]` declares two
+// slots: `"Keywords"` (class 0) and `"Highlighted identifiers"`
+// (class 1). Class 0 hits emit `SCE_P_WORD` (mapped to Keyword
+// bold); class 1 hits emit `SCE_P_WORD2` (Keyword2 steel-blue).
+// A token in both classes silently demotes to class 0 (Lexilla
+// checks class 0 first at line 671) — wordlists must not
+// overlap; `PYTHON_KEYWORDS` / `PYTHON_KEYWORDS_2` enforce this
+// structurally via the test suite.
+//
+// **`match` / `case` soft keywords.** Python 3.10+ PEP 634 makes
+// these reserved ONLY in pattern-matching position (`match
+// value:` / `case 1:`); elsewhere (`match = 1`, `x.match()`)
+// they're regular identifiers. LexPython handles disambiguation
+// internally via `IsMatchOrCaseIdentifier` (lines 258-289): if
+// the source position is not pattern-matching context, the
+// wordlist hit is vetoed and the token falls through to
+// `SCE_P_IDENTIFIER`. Installing them in class 0 is correct and
+// safe — the lexer does the right thing.
+//
+// **`SCE_P_CLASSNAME` (8) / `SCE_P_DEFNAME` (9) auto-emission.**
+// LexPython's kwLast state machine (lines 673-676): when the
+// previous wordlist-class-0 hit was `class` or `def`, the next
+// identifier token gets reclassified to CLASSNAME / DEFNAME
+// instead of plain IDENTIFIER. No wordlist install needed for
+// the class / def NAMES themselves — only that `class` and
+// `def` are in the class-0 wordlist (they are).
+//
+// **`SCE_P_DECORATOR` (15) auto-emission.** LexPython line 916:
+// `@` at line start (after `IsFirstNonWhitespace` gate)
+// transitions into the DECORATOR state, consuming the
+// identifier that follows. Mid-expression `@` (matrix-mul
+// operator, Python 3.5+) correctly degrades to `SCE_P_OPERATOR`
+// — no wordlist install needed.
+//
+// **`SCE_P_COMMENTBLOCK` (12) — `##` line-prefix comments.**
+// Emitted by LexPython.cxx line 914 when `sc.chNext == '#'`
+// (`#` followed by `#`). NOT a separate block-comment syntax —
+// Python has no `/* */`-style comments. Pre-themed to Comment
+// for safety so users following the `##` heading convention in
+// some style guides don't see uncoloured text.
+//
+// **`SCE_P_STRINGEOL` (13) intentionally unmapped.** Joins the
+// deferred-Error-slot migration list (Perl ERROR, VB STRINGEOL,
+// and 9 others currently at 12 entries after this addition).
+// Synthesising an ad-hoc red here creates palette drift that
+// the Error-slot migration would have to clean up — better to
+// leave unmapped (falls through to STYLE_DEFAULT) and migrate
+// the whole cluster together.
+//
+// **F-string family (16-19) activation.** `stringsF = true` by
+// default in LexPython (line 297). Code++ does not override —
+// f-strings highlight automatically. The four variants are
+// distinguished by quote shape: `f"..."` → 16 FSTRING,
+// `f'...'` → 17 FCHARACTER, `f'''...'''` → 18 FTRIPLE,
+// `f"""..."""` → 19 FTRIPLEDOUBLE. All four route to String;
+// the `{}` interpolation sub-lexer is internal to Lexilla.
+//
+// **`SCE_P_ATTRIBUTE` (20) opt-in.** Gated by the
+// `lexer.python.identifier.attributes` (default 0) and
+// `lexer.python.decorator.attributes` (default 0) properties.
+// Code++ never calls `SetProperty` to enable these — the state
+// NEVER fires under default configuration. Pre-themed to
+// Keyword2 anyway for forward-compat: same pattern as CSS
+// EXTENDED_PSEUDOCLASS / EXTENDED_PSEUDOELEMENT pre-theming.
+// Costs one table row; gains zero-effort activation if the
+// property is ever flipped.
+//
+// **`SCE_P_DEFAULT` (0) and `SCE_P_IDENTIFIER` (11) intentionally
+// unmapped.** Universal omission pattern: bare-identifier and
+// background-text styles render at STYLE_DEFAULT (the user's
+// chosen foreground) — same precedent as `SCE_C_DEFAULT` /
+// `SCE_C_IDENTIFIER`, `SCE_PAS_DEFAULT` / `SCE_PAS_IDENTIFIER`,
+// `SCE_PL_DEFAULT` / `SCE_PL_IDENTIFIER`.
+pub const SCE_P_DEFAULT: usize = 0;
 pub const SCE_P_COMMENTLINE: usize = 1;
 pub const SCE_P_NUMBER: usize = 2;
 pub const SCE_P_STRING: usize = 3;
@@ -605,6 +706,7 @@ pub const SCE_P_TRIPLEDOUBLE: usize = 7;
 pub const SCE_P_CLASSNAME: usize = 8;
 pub const SCE_P_DEFNAME: usize = 9;
 pub const SCE_P_OPERATOR: usize = 10;
+pub const SCE_P_IDENTIFIER: usize = 11;
 pub const SCE_P_COMMENTBLOCK: usize = 12;
 pub const SCE_P_STRINGEOL: usize = 13;
 pub const SCE_P_WORD2: usize = 14;
@@ -613,6 +715,7 @@ pub const SCE_P_FSTRING: usize = 16;
 pub const SCE_P_FCHARACTER: usize = 17;
 pub const SCE_P_FTRIPLE: usize = 18;
 pub const SCE_P_FTRIPLEDOUBLE: usize = 19;
+pub const SCE_P_ATTRIBUTE: usize = 20;
 
 // LexJSON style indices.
 pub const SCE_JSON_NUMBER: usize = 1;
