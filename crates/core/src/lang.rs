@@ -3746,6 +3746,13 @@ mod tests {
         assert_eq!(LangType::from_extension("go"), L_GOLANG);
         assert_eq!(LangType::from_extension("rb"), L_RUBY);
         assert_eq!(LangType::from_extension("lua"), L_LUA);
+        // L_TEX vs L_LATEX disambiguation: `.tex` → L_TEX (plain),
+        // `.latex` → L_LATEX. The empty-keywords decision in
+        // TEX_THEME hinges on this being the case (L_TEX must
+        // tolerate LaTeX content too — see scintilla-sys LexTeX
+        // banner for the rationale).
+        assert_eq!(LangType::from_extension("tex"), L_TEX);
+        assert_eq!(LangType::from_extension("latex"), L_LATEX);
     }
 
     #[test]

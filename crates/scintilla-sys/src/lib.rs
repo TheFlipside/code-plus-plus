@@ -743,6 +743,63 @@ pub const SCE_SH_BACKTICKS: usize = 11;
 pub const SCE_SH_HERE_DELIM: usize = 12;
 pub const SCE_SH_HERE_Q: usize = 13;
 
+// LexLaTeX style indices. 13 contiguous slots (0..=12) covering
+// the LaTeX lexer's full emission set: `%` line comments, `$...$`
+// / `\(...\)` math and `$$...$$` / `\[...\]` display-math regions,
+// `\begin{env}` / `\end{env}` tag pairs (TAG / TAG2), the eight
+// escaped specials `\#` / `\$` / `\%` / `\&` / `\_` / `\{` / `\}`
+// / `\<space>` per `latexIsSpecial`, the verbatim mode (`\verb`,
+// `\begin{verbatim}`, `\begin{lstlisting}`), the `[opt]` option
+// span on command parameters, and the recovery state for
+// malformed escapes. Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 492-504 and
+// `vendor/lexilla/lexers/LexLaTeX.cxx` lines 195-501.
+//
+// LexLaTeX is case-sensitive (matches LaTeX semantics:
+// `\Begin{equation}` is not the same as `\begin{equation}` —
+// the lexer's tag-detection at `LexLaTeX.cxx:158-193` does
+// byte-exact `strcmp` against lowercase needles like `"\\begin"`
+// / `"{verbatim}"` / `"{math}"`).
+//
+// **Zero-wordlist surface.** `LexLaTeX.cxx:561` declares
+// `emptyWordListDesc = {0}` and the `LexerModule` registration
+// at `:565` passes that sentinel; the lexer never calls
+// `keywords.InList`. The host must NOT install keyword lists
+// against the `"latex"` lexer name — they'd be silently dropped.
+// `LATEX_THEME.keywords` is `&[]` by design.
+//
+// **Math states are doubled (MATH / MATH2).** MATH covers
+// `$...$` and `\(...\)` (inline); MATH2 covers `$$...$$` and
+// `\[...\]` (display) and the named math environments in
+// `mathEnvs[]` at `LexLaTeX.cxx:116-129`. Both route to the
+// same `StyleSlot::String` slot — math content is a literal
+// region semantically, painted the same way strings are.
+//
+// **Comment states are doubled (COMMENT / COMMENT2).** COMMENT
+// is `%`-to-EOL line comment; COMMENT2 is `\begin{comment}` /
+// `\end{comment}` block comment from the `comment` package.
+// Both → `StyleSlot::Comment`.
+//
+// **SCE_L_DEFAULT and SCE_L_ERROR intentionally unmapped.**
+// DEFAULT is the plain-prose slot, falls through to
+// `STYLE_DEFAULT`. ERROR (state 12) is the recovery slot for
+// malformed `\` escapes, EOL-in-`\verb`, EOL-in-`\<command>`
+// inside math mode (`LexLaTeX.cxx:246, 326, 338, 364, 406,
+// 477`) — joins the deferred-Error-slot migration list.
+pub const SCE_L_DEFAULT: usize = 0;
+pub const SCE_L_COMMAND: usize = 1;
+pub const SCE_L_TAG: usize = 2;
+pub const SCE_L_MATH: usize = 3;
+pub const SCE_L_COMMENT: usize = 4;
+pub const SCE_L_TAG2: usize = 5;
+pub const SCE_L_MATH2: usize = 6;
+pub const SCE_L_COMMENT2: usize = 7;
+pub const SCE_L_VERBATIM: usize = 8;
+pub const SCE_L_SHORTCMD: usize = 9;
+pub const SCE_L_SPECIAL: usize = 10;
+pub const SCE_L_CMDOPT: usize = 11;
+pub const SCE_L_ERROR: usize = 12;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated
@@ -892,6 +949,56 @@ pub const SCE_LUA_WORD6: usize = 17;
 pub const SCE_LUA_WORD7: usize = 18;
 pub const SCE_LUA_WORD8: usize = 19;
 pub const SCE_LUA_LABEL: usize = 20;
+
+// LexTeX style indices. 6 contiguous slots (0..=5) covering the
+// plain-TeX lexer's full emission set: comment-marker `%` and
+// punctuation symbols (SYMBOL), `\command` keyword runs (COMMAND),
+// `{` / `}` / `$` group delimiters (GROUP), the bracket /
+// numeric special characters (SPECIAL), the comment body after
+// `%` (DEFAULT), and the plain text fall-through (TEXT).
+// Cross-referenced against `vendor/lexilla/include/SciLexer.h`
+// lines 930-935 and `vendor/lexilla/lexers/LexTeX.cxx` lines
+// 76-280.
+//
+// LexTeX is case-sensitive — `LexTeX.cxx:236` calls
+// `keywords.InList(key)` against the raw `sc.GetCurrent(...)`
+// buffer with no case folding; the `isTeXfive` character-class
+// predicate at `:107-111` admits both `a..z` and `A..Z` so
+// `\Section` and `\section` are distinct tokens (matches
+// TeX-the-language semantics).
+//
+// **Comment body is `SCE_TEX_DEFAULT`, not a dedicated comment
+// state.** The lexer's `%`-comment dispatch at `:248-254`:
+// (1) styles the leading `%` as `SCE_TEX_SYMBOL` (style 3),
+// (2) sets `SCE_TEX_DEFAULT` (style 0) on the next char for the
+// rest of the comment body, (3) flips `inComment = true` so
+// every subsequent char paints DEFAULT until EOL re-enters
+// `SCE_TEX_TEXT` at `:210-215`. So `SCE_TEX_DEFAULT` is the
+// comment-body slot — must route to `StyleSlot::Comment` and be
+// italic. `SCE_TEX_TEXT` is the StyleContext initial state
+// (`:202`) and the plain-prose fall-through — left unmapped,
+// it renders as `STYLE_DEFAULT`.
+//
+// **Wordlist surface (7 classes), shipped empty for parity.**
+// `texWordListDesc[]` at `LexTeX.cxx:487-496` declares 7 classes
+// ("TeX, eTeX, pdfTeX, Omega" plus 6 ConTeXt language packs).
+// Notepad++ defaults ship every class empty — and so does Code++.
+// The reason is the lexer's behaviour at `:230-245`: with a
+// populated wordlist, any `\command` NOT in the list silently
+// downgrades from `SCE_TEX_COMMAND` to `SCE_TEX_TEXT` (plain
+// prose). Users opening `.tex` files containing LaTeX content
+// (the default `.tex` handler is L_TEX, not L_LATEX) would see
+// `\section` / `\textbf` render as plain text while only the
+// TeX primitives `\def` / `\let` highlighted — surprising
+// visual feedback. Empty wordlist short-circuits the keyword
+// check at `:230` and every `\command` paints as
+// `SCE_TEX_COMMAND` uniformly. `TEX_THEME.keywords` is `&[]`.
+pub const SCE_TEX_DEFAULT: usize = 0;
+pub const SCE_TEX_SPECIAL: usize = 1;
+pub const SCE_TEX_GROUP: usize = 2;
+pub const SCE_TEX_SYMBOL: usize = 3;
+pub const SCE_TEX_COMMAND: usize = 4;
+pub const SCE_TEX_TEXT: usize = 5;
 
 // LexSQL style indices. LexSQL defines 22 named style indices
 // (`SCE_SQL_DEFAULT` 0 through `SCE_SQL_QOPERATOR` 24 with gaps at

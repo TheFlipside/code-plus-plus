@@ -105,10 +105,11 @@ use codepp_core::lang::{
     CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS,
     CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS,
     JAVA_KEYWORDS_2, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML,
-    L_INI, L_JAVA, L_LUA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC,
-    L_RUST, L_SQL, L_VB, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
-    PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS,
-    SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+    L_INI, L_JAVA, L_LATEX, L_LUA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON,
+    L_RC, L_RUST, L_SQL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+    RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+    XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -145,47 +146,49 @@ use codepp_scintilla_sys::{
     SCE_LUA_CHARACTER, SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL,
     SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING,
     SCE_LUA_WORD, SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6,
-    SCE_LUA_WORD7, SCE_LUA_WORD8, SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR,
-    SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT,
-    SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING,
-    SCE_PAS_NUMBER, SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING,
-    SCE_PAS_WORD, SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER,
-    SCE_PL_COMMENTLINE, SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH,
-    SCE_PL_HERE_DELIM, SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX,
-    SCE_PL_HERE_QX_VAR, SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX,
-    SCE_PL_REGEX_VAR, SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING,
-    SCE_PL_STRING_Q, SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR,
-    SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR,
-    SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT,
-    SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION,
-    SCE_P_ATTRIBUTE, SCE_P_CHARACTER, SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE,
-    SCE_P_DECORATOR, SCE_P_DEFNAME, SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE,
-    SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER, SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE,
-    SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK,
-    SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME,
-    SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD,
-    SCE_RUST_WORD2, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC,
-    SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER,
-    SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT,
-    SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE,
-    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
-    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
-    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
-    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
-    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
-    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
-    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
-    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
-    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
-    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
-    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED,
-    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
-    SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
-    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MOD_DELETETEXT,
-    SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCE_LUA_WORD7, SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2,
+    SCE_L_MATH, SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
+    SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR,
+    SCE_MAKE_TARGET, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2,
+    SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER,
+    SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD,
+    SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
+    SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
+    SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR,
+    SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR,
+    SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING, SCE_PL_STRING_Q,
+    SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR, SCE_PL_STRING_QR_VAR,
+    SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR,
+    SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT, SCE_PROPS_ASSIGNMENT,
+    SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION, SCE_P_ATTRIBUTE,
+    SCE_P_CHARACTER, SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE, SCE_P_DECORATOR,
+    SCE_P_DEFNAME, SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE, SCE_P_FTRIPLEDOUBLE,
+    SCE_P_NUMBER, SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE, SCE_P_TRIPLEDOUBLE, SCE_P_WORD,
+    SCE_P_WORD2, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC,
+    SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO,
+    SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2,
+    SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD,
+    SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS,
+    SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2,
+    SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL, SCE_TEX_SYMBOL,
+    SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT,
+    SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS,
+    SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
+    SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
+    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
+    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS,
+    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
+    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
+    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
+    SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
+    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
+    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO,
+    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
+    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
+    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE,
+    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
@@ -4497,6 +4500,93 @@ const LUA_THEME: LangTheme = LangTheme {
     bold: LUA_BOLD,
 };
 
+// LexTeX (plain TeX). Five mappings: SCE_TEX_TEXT (plain prose
+// fall-through, state 5) is intentionally unmapped per the
+// scintilla-sys banner. SCE_TEX_DEFAULT routes to Comment
+// because — counter to the slot's name — it is the comment-body
+// emission state (the leading `%` is SCE_TEX_SYMBOL, every
+// subsequent char until EOL is SCE_TEX_DEFAULT; see the
+// scintilla-sys banner for the load-bearing rationale and the
+// `LexTeX.cxx:248-254` cite).
+const TEX_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_TEX_DEFAULT, StyleSlot::Comment),
+    (SCE_TEX_SPECIAL, StyleSlot::Operator),
+    (SCE_TEX_GROUP, StyleSlot::Operator),
+    (SCE_TEX_SYMBOL, StyleSlot::Operator),
+    (SCE_TEX_COMMAND, StyleSlot::Keyword),
+];
+
+// Italic on the comment body (SCE_TEX_DEFAULT) — universal
+// comment-slot italic convention.
+const TEX_ITALIC: &[usize] = &[SCE_TEX_DEFAULT];
+
+// Bold on `\command` runs (SCE_TEX_COMMAND) — primary-keyword
+// bold convention, matches the Lua / Python / CPP precedent.
+const TEX_BOLD: &[usize] = &[SCE_TEX_COMMAND];
+
+// Empty keywords — TEX_THEME ships no wordlists per N++ default
+// parity. Populated wordlists would silently downgrade unknown
+// `\command` tokens to plain text via the `:230-245` filter,
+// which surprises users opening `.tex` files containing LaTeX
+// content. See the scintilla-sys banner for the full rationale.
+const TEX_THEME: LangTheme = LangTheme {
+    keywords: &[],
+    styles: TEX_STYLES,
+    italic: TEX_ITALIC,
+    bold: TEX_BOLD,
+};
+
+// LexLaTeX. 11 mappings — DEFAULT (state 0, plain-prose
+// fall-through) and ERROR (state 12, deferred Error slot) are
+// intentionally unmapped per the scintilla-sys banner.
+//
+// Routing decisions: COMMAND / SHORTCMD → Keyword (the `\foo`
+// and single-char `\\` / `\!` etc. control sequences are
+// LaTeX's verbs); TAG / TAG2 / CMDOPT → Keyword2 (environment
+// names in `\begin{env}` / `\end{env}` and the `[opt]` option
+// blocks are structural identifiers, matches the
+// `SCE_P_CLASSNAME` precedent); MATH / MATH2 / VERBATIM →
+// String (math regions and `\verb` content are literal regions
+// semantically, matches the Perl regex-as-String precedent);
+// COMMENT / COMMENT2 → Comment (both `%`-to-EOL and the
+// `\begin{comment}` block-comment from the `comment` package
+// are comment slots); SPECIAL → Operator (the eight escaped
+// punctuation characters `\#` / `\$` / `\%` / `\&` / `\_` /
+// `\{` / `\}` / `\<space>`).
+const LATEX_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_L_COMMAND, StyleSlot::Keyword),
+    (SCE_L_TAG, StyleSlot::Keyword2),
+    (SCE_L_MATH, StyleSlot::String),
+    (SCE_L_COMMENT, StyleSlot::Comment),
+    (SCE_L_TAG2, StyleSlot::Keyword2),
+    (SCE_L_MATH2, StyleSlot::String),
+    (SCE_L_COMMENT2, StyleSlot::Comment),
+    (SCE_L_VERBATIM, StyleSlot::String),
+    (SCE_L_SHORTCMD, StyleSlot::Keyword),
+    (SCE_L_SPECIAL, StyleSlot::Operator),
+    (SCE_L_CMDOPT, StyleSlot::Keyword2),
+];
+
+// Italic on both comment families. VERBATIM stays roman
+// (verbatim is typically rendered monospace, not italic).
+const LATEX_ITALIC: &[usize] = &[SCE_L_COMMENT, SCE_L_COMMENT2];
+
+// Bold on every command-shaped state — primary keyword + the
+// `\begin` / `\end` structural anchors. Matches Lua's
+// WORD + LABEL precedent.
+const LATEX_BOLD: &[usize] = &[SCE_L_COMMAND, SCE_L_SHORTCMD, SCE_L_TAG, SCE_L_TAG2];
+
+// Empty keywords — the lexer's `emptyWordListDesc` at
+// `LexLaTeX.cxx:561` declares zero wordlist classes; the host
+// must not install any (they'd be silently dropped). See the
+// scintilla-sys banner.
+const LATEX_THEME: LangTheme = LangTheme {
+    keywords: &[],
+    styles: LATEX_STYLES,
+    italic: LATEX_ITALIC,
+    bold: LATEX_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -4624,6 +4714,10 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&PYTHON_THEME)
     } else if lang == L_LUA {
         Some(&LUA_THEME)
+    } else if lang == L_TEX {
+        Some(&TEX_THEME)
+    } else if lang == L_LATEX {
+        Some(&LATEX_THEME)
     } else {
         None
     }
@@ -19376,11 +19470,11 @@ mod lang_theme_tests {
         CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2,
         C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
         LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI,
-        L_JAVA, L_JAVASCRIPT, L_LUA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS,
-        L_PYTHON, L_RC, L_RUST, L_SQL, L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS,
-        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS,
-        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+        L_JAVA, L_JAVASCRIPT, L_LATEX, L_LUA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS,
+        L_PYTHON, L_RC, L_RUST, L_SQL, L_TEX, L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS,
+        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS,
+        SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -20726,6 +20820,240 @@ mod lang_theme_tests {
             assert!(
                 lua.italic.contains(&idx),
                 "Lua italic list must contain {name} ({idx}) — comment family"
+            );
+        }
+    }
+
+    /// Plain TeX uses Lexilla's `tex` lexer (`LexTeX.cxx`) — a small
+    /// 6-emission-state lexer with a 7-class wordlist surface that
+    /// Code++ deliberately ships with zero keywords installed (matches
+    /// Notepad++ default parity; populated wordlists would silently
+    /// downgrade unknown `\command` tokens to plain text per
+    /// `LexTeX.cxx:230-245`, which surprises users opening `.tex` files
+    /// containing LaTeX content). NOT included in
+    /// `wired_languages_have_complete_themes`: that test's
+    /// `theme.styles.len() >= 8` floor calibrates for richly-styled
+    /// lexers (`LexCPP`, hypertext family), and TeX's compact 5-mapping
+    /// table is legitimate — the lexer simply has fewer emission
+    /// categories. This dedicated test pins the load-bearing
+    /// `SCE_TEX_DEFAULT` → Comment routing (DEFAULT is the comment-body
+    /// emission state per `LexTeX.cxx:248-254`, not the plain-prose
+    /// slot — TEXT is the plain-prose slot, intentionally unmapped),
+    /// the 5-mapping shape, the contrast with the rest of the
+    /// framework (does NOT reuse any other lexer's `_STYLES`), and the
+    /// empty-keywords invariant.
+    #[test]
+    fn tex_uses_lextex_zero_class_theme() {
+        use codepp_scintilla_sys::SCE_TEX_TEXT;
+
+        use super::{
+            SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL, SCE_TEX_SYMBOL,
+        };
+        let tex = lang_theme(L_TEX).expect("TeX wired");
+
+        // Style table size pin — 5 mappings (TEXT intentionally
+        // unmapped per the scintilla-sys banner).
+        assert_eq!(
+            tex.styles.len(),
+            5,
+            "TEX_STYLES must map 5 indices: DEFAULT, SPECIAL, GROUP, SYMBOL, COMMAND"
+        );
+
+        // Cross-language non-reuse pins. 10 sibling themes.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let props = lang_theme(L_INI).expect("INI wired");
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let css = lang_theme(L_CSS).expect("CSS wired");
+        let rust = lang_theme(L_RUST).expect("Rust wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (mk, "Makefile"),
+            (pas, "Pascal"),
+            (php, "PHP"),
+            (bat, "Batch"),
+            (props, "INI"),
+            (sql, "SQL"),
+            (vb, "VB"),
+            (css, "CSS"),
+            (rust, "Rust"),
+        ] {
+            assert_ne!(
+                tex.styles, other.styles,
+                "TeX must NOT reuse {name}_STYLES — structurally distinct compact table"
+            );
+        }
+
+        // Empty-keywords invariant. Load-bearing — populated
+        // wordlists would silently downgrade unknown commands to
+        // plain text per LexTeX.cxx:230-245.
+        assert!(
+            tex.keywords.is_empty(),
+            "TEX_THEME.keywords must be empty (N++ default parity)"
+        );
+
+        // Style-routing pins.
+        for (idx, slot, name) in [
+            (SCE_TEX_DEFAULT, StyleSlot::Comment, "SCE_TEX_DEFAULT"),
+            (SCE_TEX_SPECIAL, StyleSlot::Operator, "SCE_TEX_SPECIAL"),
+            (SCE_TEX_GROUP, StyleSlot::Operator, "SCE_TEX_GROUP"),
+            (SCE_TEX_SYMBOL, StyleSlot::Operator, "SCE_TEX_SYMBOL"),
+            (SCE_TEX_COMMAND, StyleSlot::Keyword, "SCE_TEX_COMMAND"),
+        ] {
+            assert!(
+                tex.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Explicit-omission pin: SCE_TEX_TEXT is the plain-prose
+        // fall-through, intentionally unmapped — must fall through
+        // to STYLE_DEFAULT.
+        assert!(
+            !tex.styles.iter().any(|(i, _)| *i == SCE_TEX_TEXT),
+            "SCE_TEX_TEXT must remain unmapped (plain-prose fall-through to STYLE_DEFAULT)"
+        );
+
+        // Italic + bold structural anchors.
+        assert!(
+            tex.italic.contains(&SCE_TEX_DEFAULT),
+            "Italic on SCE_TEX_DEFAULT (comment body)"
+        );
+        assert!(
+            tex.bold.contains(&SCE_TEX_COMMAND),
+            "Bold on SCE_TEX_COMMAND (primary keyword convention)"
+        );
+    }
+
+    /// LaTeX uses Lexilla's `latex` lexer (`LexLaTeX.cxx`) — 13
+    /// contiguous emission states with a zero-wordlist surface
+    /// (`emptyWordListDesc` at `LexLaTeX.cxx:561` declares no
+    /// classes; the lexer never calls `keywords.InList`). NOT
+    /// included in `wired_languages_have_complete_themes` because
+    /// `LATEX_THEME.keywords = &[]` violates the iteration's
+    /// `!keywords.is_empty()` floor — matches the `PROPS_THEME`
+    /// precedent which is excluded for the same reason. This
+    /// dedicated test pins the 11-mapping shape (DEFAULT + ERROR
+    /// intentionally unmapped), the doubled MATH / MATH2 + COMMENT /
+    /// COMMENT2 + TAG / TAG2 + COMMAND / SHORTCMD style families
+    /// routing through their respective slots, the contrast with the
+    /// rest of the framework (10 non-reuse pins + the TeX cross-pin
+    /// since both ship together), and the empty-keywords invariant.
+    #[test]
+    fn latex_uses_lexlatex_zero_class_theme() {
+        use codepp_scintilla_sys::{SCE_L_DEFAULT, SCE_L_ERROR};
+
+        use super::{
+            SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH, SCE_L_MATH2,
+            SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
+        };
+        let latex = lang_theme(L_LATEX).expect("LaTeX wired");
+        let tex = lang_theme(L_TEX).expect("TeX wired");
+
+        // Style table size pin — 11 mappings (DEFAULT + ERROR
+        // intentionally unmapped).
+        assert_eq!(
+            latex.styles.len(),
+            11,
+            "LATEX_STYLES must map 11 indices (13 emission states minus DEFAULT + ERROR)"
+        );
+
+        // Cross-language non-reuse pins. 10 sibling themes + TeX
+        // cross-pin (sibling lexer family — must NOT share theme).
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let props = lang_theme(L_INI).expect("INI wired");
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let css = lang_theme(L_CSS).expect("CSS wired");
+        let rust = lang_theme(L_RUST).expect("Rust wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (mk, "Makefile"),
+            (pas, "Pascal"),
+            (php, "PHP"),
+            (bat, "Batch"),
+            (props, "INI"),
+            (sql, "SQL"),
+            (vb, "VB"),
+            (css, "CSS"),
+            (rust, "Rust"),
+        ] {
+            assert_ne!(
+                latex.styles, other.styles,
+                "LaTeX must NOT reuse {name}_STYLES"
+            );
+        }
+        assert_ne!(
+            latex.styles, tex.styles,
+            "LaTeX must NOT reuse TEX_STYLES (paired family but structurally distinct)"
+        );
+
+        // Empty-keywords invariant.
+        assert!(
+            latex.keywords.is_empty(),
+            "LATEX_THEME.keywords must be empty (lexer's emptyWordListDesc at LexLaTeX.cxx:561)"
+        );
+
+        // Style-routing pins — every populated mapping.
+        for (idx, slot, name) in [
+            (SCE_L_COMMAND, StyleSlot::Keyword, "SCE_L_COMMAND"),
+            (SCE_L_SHORTCMD, StyleSlot::Keyword, "SCE_L_SHORTCMD"),
+            (SCE_L_TAG, StyleSlot::Keyword2, "SCE_L_TAG"),
+            (SCE_L_TAG2, StyleSlot::Keyword2, "SCE_L_TAG2"),
+            (SCE_L_CMDOPT, StyleSlot::Keyword2, "SCE_L_CMDOPT"),
+            (SCE_L_MATH, StyleSlot::String, "SCE_L_MATH"),
+            (SCE_L_MATH2, StyleSlot::String, "SCE_L_MATH2"),
+            (SCE_L_VERBATIM, StyleSlot::String, "SCE_L_VERBATIM"),
+            (SCE_L_COMMENT, StyleSlot::Comment, "SCE_L_COMMENT"),
+            (SCE_L_COMMENT2, StyleSlot::Comment, "SCE_L_COMMENT2"),
+            (SCE_L_SPECIAL, StyleSlot::Operator, "SCE_L_SPECIAL"),
+        ] {
+            assert!(
+                latex.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Explicit-omission pins.
+        for (idx, name) in [
+            (SCE_L_DEFAULT, "SCE_L_DEFAULT"),
+            (SCE_L_ERROR, "SCE_L_ERROR"),
+        ] {
+            assert!(
+                !latex.styles.iter().any(|(i, _)| *i == idx),
+                "{name} must remain unmapped (intentional omission per banner)"
+            );
+        }
+
+        // Italic on both comment families.
+        for (idx, name) in [
+            (SCE_L_COMMENT, "SCE_L_COMMENT"),
+            (SCE_L_COMMENT2, "SCE_L_COMMENT2"),
+        ] {
+            assert!(
+                latex.italic.contains(&idx),
+                "Italic on {name} (comment family)"
+            );
+        }
+
+        // Bold on every command-shaped state.
+        for (idx, name) in [
+            (SCE_L_COMMAND, "SCE_L_COMMAND"),
+            (SCE_L_SHORTCMD, "SCE_L_SHORTCMD"),
+            (SCE_L_TAG, "SCE_L_TAG"),
+            (SCE_L_TAG2, "SCE_L_TAG2"),
+        ] {
+            assert!(
+                latex.bold.contains(&idx),
+                "Bold on {name} (keyword + structural-anchor convention)"
             );
         }
     }

@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 22 / 🟡 66 / ⚫ 1.
+Total: 89 rows. ✅ 24 / 🟡 64 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1171,6 +1171,100 @@ anchors (WORD + LABEL — note PREPROCESSOR deliberately
 excluded), and all three italic comment slots
 (COMMENT + COMMENTLINE + COMMENTDOC).
 
+**TeX + LaTeX (2026-06-24):** paired wiring across two distinct
+Lexilla lexers — `tex` (`LexTeX.cxx`, 6-state emission set) for
+plain TeX (`L_TEX` row, extension `.tex`) and `latex`
+(`LexLaTeX.cxx`, 13-state emission set) for LaTeX (`L_LATEX` row,
+extension `.latex`). N++ ships both as separate language menu
+entries; Code++ matches that. Neither language ships keyword
+wordlists: `LATEX_THEME.keywords` is `&[]` because
+`LexLaTeX.cxx:561` declares `emptyWordListDesc = {0}` and the
+lexer never calls `keywords.InList`. `TEX_THEME.keywords` is
+`&[]` by deliberate choice — `LexTeX.cxx:230-245` silently
+downgrades unknown `\command` tokens to plain text when a
+populated wordlist filters them, and the default `.tex` handler
+in Code++ is `L_TEX` (not `L_LATEX`), so a user opening a `.tex`
+file containing LaTeX content would see `\section` / `\textbf`
+render as plain prose while only Knuth's `\def` / `\let`
+highlighted — surprising visual feedback. Empty wordlist
+short-circuits the filter and every `\command` paints uniformly
+as `SCE_TEX_COMMAND` Keyword bold. Matches N++ default-set parity.
+
+**Both lexers are case-sensitive.** LexTeX byte-exact-compares at
+`:236`; LexLaTeX does byte-exact `strcmp` against lowercase
+needles like `"\\begin"` / `"{verbatim}"` at `:158-193`. So
+`\Begin{equation}` is not recognised as a tag and `\Section`
+does not match LaTeX-the-language's section sectioning command.
+
+**The load-bearing TeX-routing decision** is `SCE_TEX_DEFAULT`
+→ Comment. Counter to the slot's name, `SCE_TEX_DEFAULT` is the
+comment-body emission state per `LexTeX.cxx:248-254`: the
+leading `%` is `SCE_TEX_SYMBOL`, then every subsequent char
+until EOL paints `SCE_TEX_DEFAULT` while the `inComment` flag
+is set. `SCE_TEX_TEXT` is the plain-prose fall-through (the
+`StyleContext` initial state at `:202`) — left unmapped, it
+renders as `STYLE_DEFAULT`. Both decisions structurally pinned
+in the TeX theme test.
+
+**LaTeX state doubling is theme-collapsed.** MATH (inline `$..$`
+/ `\(..\)`) and MATH2 (display `$$..$$` / `\[..\]` / math
+environments per `mathEnvs[]` at `LexLaTeX.cxx:116-129`) both
+route to `StyleSlot::String` — math content is a literal region
+semantically. COMMENT (`%`-to-EOL) and COMMENT2
+(`\begin{comment}` / `\end{comment}` block) both route to
+`StyleSlot::Comment`. TAG (`\begin{env}`) and TAG2
+(`\end{env}`) both route to `StyleSlot::Keyword2` — environment
+names are LaTeX-specific structural identifiers, matches the
+`SCE_P_CLASSNAME` precedent. COMMAND (`\foo`) and SHORTCMD
+(single-char `\\` / `\!` / `\,`) both route to `StyleSlot::Keyword`.
+VERBATIM (`\verb<delim>` and `\begin{verbatim}` /
+`\begin{lstlisting}`) routes to `StyleSlot::String` — verbatim
+content is a literal region. SPECIAL (the eight escaped
+characters `\#` / `\$` / `\%` / `\&` / `\_` / `\{` / `\}` /
+`\<space>` per `latexIsSpecial`) routes to `StyleSlot::Operator`
+— punctuation escapes. CMDOPT (the `[opt]` option block on
+commands like `\section[short]{long}`) routes to
+`StyleSlot::Keyword2` — structural identifier.
+
+**Intentional omissions.** TeX: `SCE_TEX_TEXT` (plain-prose
+fall-through). LaTeX: `SCE_L_DEFAULT` (plain-prose), `SCE_L_ERROR`
+(deferred-Error-slot migration cluster). All three are explicitly
+pinned as omissions in the theme tests.
+
+**Italic + bold structural anchors.** TeX italic: `SCE_TEX_DEFAULT`
+(comment body). TeX bold: `SCE_TEX_COMMAND`. LaTeX italic: both
+comment families (`SCE_L_COMMENT` + `SCE_L_COMMENT2`; VERBATIM
+stays roman because verbatim is typically monospace). LaTeX bold:
+every command-shaped state (`SCE_L_COMMAND` + `SCE_L_SHORTCMD` +
+`SCE_L_TAG` + `SCE_L_TAG2`) — same "keyword + structural anchor"
+convention as Lua (`SCE_LUA_WORD` + `SCE_LUA_LABEL`).
+
+**Excluded from `wired_languages_have_complete_themes`.** Both
+languages have dedicated standalone tests instead. TeX has 5
+style mappings — below the iteration's `>=8` floor (which
+calibrates for richly-styled lexers like LexCPP and the
+hypertext family; TeX's compact emission set is legitimate,
+just smaller). LaTeX has 11 mappings (would pass the floor) but
+empty `keywords` — violates the iteration's `!keywords.is_empty()`
+guard, matches the `PROPS_THEME` precedent which is excluded for
+the same reason. Each dedicated test pins the size, the **10**
+non-reuse `assert_ne!` style-table assertions (CPP / MAKEFILE /
+PASCAL / HYPERTEXT / BATCH / PROPS / SQL / VB / CSS / RUST), the
+empty-keywords invariant, the style-slot routing for every
+populated mapping, the explicit omissions for unmapped states,
+and the italic + bold structural anchors. LaTeX additionally
+pins the TeX cross-non-reuse (paired family but structurally
+distinct themes — `latex.styles != tex.styles`).
+
+**Extension parity.** `L_TEX` matches `.tex` only; `L_LATEX`
+matches `.latex` only. Both deliberately conservative — N++
+`langs.model.xml` defaults match the same. Plausible follow-on
+additions tracked but not in this commit: `.sty` (LaTeX style
+packages), `.cls` (LaTeX class files), `.ltx` / `.dtx` (LaTeX
+variants), `.wtex` (Windows-Live-Writer TeX scratch files). NOT
+adding `.bib` (BibTeX has its own grammar; lives in a future
+`L_BIBTEX` row mapping to the separate LexBib lexer).
+
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
 5-style table and a single keyword class. `MAKEFILE_KEYWORDS`
@@ -1373,7 +1467,7 @@ further shim work needed.
 | JSON5 | 94 | `json` | ⚫ | ⚫ | 🟡 |
 | JSP | 55 | `hypertext` | ⚫ | ⚫ | 🟡 |
 | KIXtart | 39 | `kix` | ⚫ | ⚫ | 🟡 |
-| LaTeX | 74 | `latex` | ⚫ | ⚫ | 🟡 |
+| LaTeX | 74 | `latex` | ✅ | ✅ | ✅ |
 | Lisp | 30 | `lisp` | ⚫ | ⚫ | 🟡 |
 | Lua | 23 | `lua` | ✅ | ✅ | ✅ |
 | Makefile | 10 | `makefile` | ✅ | ✅ | ✅ |
@@ -1409,7 +1503,7 @@ further shim work needed.
 | Swift | 64 | `cpp` | ⚫ | ⚫ | 🟡 |
 | TCL | 29 | `tcl` | ⚫ | ⚫ | 🟡 |
 | Tektronix extended HEX | 63 | `tehex` | ⚫ | ⚫ | 🟡 |
-| TeX | 24 | `tex` | ⚫ | ⚫ | 🟡 |
+| TeX | 24 | `tex` | ✅ | ✅ | ✅ |
 | TOML | 90 | `toml` | ⚫ | ⚫ | 🟡 |
 | txt2tags | 83 | `txt2tags` | ⚫ | ⚫ | 🟡 |
 | TypeScript | 85 | `cpp` | ⚫ | ⚫ | 🟡 |
