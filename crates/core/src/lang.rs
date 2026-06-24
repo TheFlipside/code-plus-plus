@@ -3365,6 +3365,148 @@ pub const PERL_KEYWORDS: &str = concat!(
     "__FILE__ __LINE__ __PACKAGE__ __SUB__ __DATA__ __END__",
 );
 
+/// Space-separated Lua 5.4 reserved-word vocabulary installed via
+/// `LexLua`'s `SCI_SETKEYWORDS(0, ...)` — class 0 of
+/// `luaWordListDesc[]`. Drives `SCE_LUA_WORD` (mapped to Keyword
+/// bold blue).
+///
+/// **Case-sensitive lexer.** `LexLua.cxx:472, 479` calls
+/// `keywords.InList(identifier)` with no case folding — verified by
+/// zero matches for `tolower` / `MakeLowerCase` / `GetCurrentLowered`
+/// in the source AND by inspection of `WordList::InList` at
+/// `vendor/lexilla/lexlib/WordList.cxx:162-170, 202-204` which does
+/// byte-exact comparison. Identifier text is captured raw via
+/// `sc.GetCurrentString(s, Transform::none)` at `LexLua.cxx:391`.
+/// Wordlists must store source-canonical casing — Lua language
+/// semantics: every reserved keyword is lowercase (`if`, `then`,
+/// `end`, `function`, `local`, `goto`, `return`, …). Same byte-exact
+/// contract as [`PERL_KEYWORDS`] / [`PYTHON_KEYWORDS`].
+///
+/// **Two-class wordlist with [`LUA_KEYWORDS_2`] for m1.** Class 0
+/// holds the 22 Lua 5.4 reserved words (exactly the §3.1 set from
+/// the Lua reference manual). Class 1 holds 25 basic library
+/// function names from the `_G` table (Lua 5.4 §6.1). Lexilla
+/// checks class 0 first (`LexLua.cxx:472,479-480`), so a collision
+/// would silently demote class 1 entries — pinned no-overlap
+/// structurally in the Lua theme test.
+///
+/// **8-class wordlist surface, only 2 populated for m1.**
+/// `luaWordListDesc[]` at `LexLua.cxx:51-61` declares 8 wordlist
+/// slots — class 0 "Keywords", class 1 "Basic functions", class 2
+/// "String, (table) & math functions", class 3 "(coroutines), I/O
+/// & system facilities", classes 4-7 "user1..user4". The dispatch
+/// chain at `LexLua.cxx:479-494` consumes them in that exact
+/// order; an out-of-order install (e.g. installing basic-function
+/// names into class 0) silently mis-classifies them as Keyword
+/// instead of Keyword2. Code++ m1 installs classes 0 + 1 only,
+/// matching the Python wiring precedent. The string + table +
+/// math library member names (target: class 2) and coroutine +
+/// io + os + debug member names (target: class 3) are tracked as
+/// a follow-on commit — they add `LUA_KEYWORDS_3` /
+/// `LUA_KEYWORDS_4` constants and route to `SCE_LUA_WORD3` /
+/// `WORD4` (already pre-themed to Keyword2 in `LUA_STYLES`, so
+/// wiring is a single line in `LUA_THEME`). The four user
+/// customisation slots (classes 4 through 7) stay empty by design.
+///
+/// **`goto` placement, load-bearing for `SCE_LUA_LABEL`.** Class
+/// 0 includes `goto` — the label-from-goto-target lexer path at
+/// `LexLua.cxx:382-396` requires `goto` to be in `keywords`
+/// (class 0). If `goto` is missing from class 0, the
+/// `goto target_name` construct silently never highlights
+/// `target_name` as `SCE_LUA_LABEL`. The `::label::` definition
+/// path at `LexLua.cxx:320-357` ALSO consults class 0 via the
+/// `!keywords.InList(s)` guard at `:335` — rejecting any
+/// `::reserved_word::` as not-a-label. Both behaviours are
+/// correct and require `goto` to live in class 0.
+///
+/// **`true` / `false` / `nil` placement: class 0.** Lua's three
+/// special literals are spelled lowercase and are language-level
+/// reserved words (you cannot write `local true = 1`). Same byte-
+/// exact lowercase as the rest of class 0 — no Python-2-style
+/// builtin / reserved-word ambiguity here.
+///
+/// Sourced from the Lua 5.4 Reference Manual §3.1 ("Lexical
+/// Conventions / Reserved Words"). Cross-referenced against
+/// `vendor/lexilla/lexers/LexLua.cxx:51-61` for the wordlist
+/// class taxonomy and N++'s shipped `langs.model.xml` `<Language
+/// name="lua">` `instre1` list for default-set parity.
+pub const LUA_KEYWORDS: &str = concat!(
+    // Logical + boolean literals (lowercase per Lua spec — the
+    // lexer is byte-exact, capitalised forms never match)
+    "and false nil not or true ",
+    // Block / loop / control flow
+    "break do else elseif end for if in repeat return then until while ",
+    // Declaration + jump
+    "function goto local",
+);
+
+/// Space-separated Lua 5.4 basic library function vocabulary
+/// installed via `LexLua`'s `SCI_SETKEYWORDS(1, ...)` — class 1
+/// of `luaWordListDesc[]` ("Basic functions"). Drives
+/// `SCE_LUA_WORD2` (mapped to Keyword2 steel-blue).
+///
+/// **Case preserved per Lua source convention.** All entries are
+/// lowercase except the two module-introspection sentinels
+/// `_G` and `_VERSION`, which Lua canonically writes with a
+/// leading underscore + uppercase. The lexer is byte-exact —
+/// `print` matches but `Print` does not, `_G` matches but `_g`
+/// does not.
+///
+/// **Scope: basic library only (the `_G` table).** Covers the 25
+/// global functions and sentinels from the Lua 5.4 standard
+/// library §6.1 ("Basic Functions"). String / table / math
+/// library member names (`string.format`, `table.insert`,
+/// `math.floor`, …) are DEFERRED to a future `LUA_KEYWORDS_3`
+/// targeting wordlist class 2 — see `LUA_KEYWORDS` doc comment
+/// for the rationale. Coroutine / I/O / OS / debug library
+/// names similarly deferred to `LUA_KEYWORDS_4` targeting
+/// class 3. Both pre-themed to Keyword2 in `LUA_STYLES` for
+/// zero-effort activation.
+///
+/// **`type` placement: class 1 ONLY.** Both `type(v)` (basic
+/// function) and `math.type` / `io.type` (library member names)
+/// exist in Lua 5.4. With Code++ shipping classes 0 + 1 today,
+/// `type` lives only in class 1 — the future `LUA_KEYWORDS_3`
+/// must NOT re-add it (Lexilla checks class 0 first, then 1,
+/// then 2 in source order; a cross-class duplicate would silently
+/// demote the secondary entry).
+///
+/// **`getmetatable` / `setmetatable` placement: class 1 ONLY.**
+/// `debug.getmetatable` / `debug.setmetatable` exist in the
+/// `debug` library but the bare names belong to the basic
+/// library — class 1 carries the bare name; the future
+/// `LUA_KEYWORDS_4` covering `debug.*` must NOT re-add them.
+///
+/// **No cross-class duplicates with [`LUA_KEYWORDS`].** Verified
+/// by `HashSet` intersection before commit AND structurally
+/// pinned by the Lua theme test. Lexilla checks class 0 first
+/// (`LexLua.cxx:472, 479-480`), so a duplicate would silently
+/// demote class 1 entries to Keyword instead of Keyword2 — an
+/// invisible bug.
+///
+/// Sourced from the Lua 5.4 Reference Manual §6.1 ("Basic
+/// Functions"), cross-referenced against `dofile -e
+/// 'for k in pairs(_G) do print(k) end'` against a stock
+/// Lua 5.4 interpreter, and N++'s shipped `langs.model.xml`
+/// `<Language name="lua">` `instre2` / type1 list for default-
+/// set parity. The N++ file is referenced for parity inspection
+/// only — no content copied from it (per the CLAUDE.md
+/// "no code from Notepad++" rule); the canonical source for
+/// every entry below is the Lua 5.4 Reference Manual.
+pub const LUA_KEYWORDS_2: &str = concat!(
+    // Module / version sentinels (canonical _G / _VERSION casing)
+    "_G _VERSION ",
+    // Type / metaprotocol introspection
+    "assert collectgarbage error getmetatable rawequal rawget rawlen ",
+    "rawset setmetatable tonumber tostring type ",
+    // Iteration helpers
+    "ipairs next pairs select ",
+    // I/O + module loading
+    "dofile load loadfile print require ",
+    // Error handling + sub-call
+    "pcall xpcall",
+);
+
 /// Space-separated Python 3 reserved-word vocabulary installed via
 /// `LexPython`'s `SCI_SETKEYWORDS(0, ...)` — class 0 of
 /// `pythonWordListDesc[]`. Drives `SCE_P_WORD` (mapped to Keyword

@@ -104,11 +104,11 @@ use codepp_core::lang::{
     BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1,
     CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS,
     CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS,
-    JAVA_KEYWORDS_2, L_ASP, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_MAKEFILE,
-    L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_VB, L_XML,
-    MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
-    PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS,
-    SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+    JAVA_KEYWORDS_2, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML,
+    L_INI, L_JAVA, L_LUA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC,
+    L_RUST, L_SQL, L_VB, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
+    PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS,
+    SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -141,47 +141,51 @@ use codepp_scintilla_sys::{
     SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM,
     SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY,
     SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND,
-    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_MAKE_COMMENT,
-    SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET, SCE_PAS_ASM,
-    SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER,
-    SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER, SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR,
-    SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD, SCE_PL_ARRAY, SCE_PL_BACKTICKS,
-    SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE, SCE_PL_DATASECTION, SCE_PL_FORMAT,
-    SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM, SCE_PL_HERE_Q, SCE_PL_HERE_QQ,
-    SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR, SCE_PL_NUMBER, SCE_PL_OPERATOR,
-    SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR, SCE_PL_REGSUBST,
-    SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING, SCE_PL_STRING_Q, SCE_PL_STRING_QQ,
-    SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR, SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QW,
-    SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE,
-    SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT, SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT,
-    SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION, SCE_P_ATTRIBUTE, SCE_P_CHARACTER,
-    SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE, SCE_P_DECORATOR, SCE_P_DEFNAME,
-    SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE, SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER,
-    SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE, SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2,
-    SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE,
-    SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR,
-    SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2, SCE_SQL_CHARACTER, SCE_SQL_COMMENT,
-    SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC,
-    SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT,
-    SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCI_BEGINUNDOACTION,
-    SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER,
-    SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
-    SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES,
-    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
-    SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
-    SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
-    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
-    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
-    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
-    SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
-    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
-    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
-    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO,
-    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
-    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
-    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE,
-    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT,
-    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART,
+    SCE_LUA_CHARACTER, SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL,
+    SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING,
+    SCE_LUA_WORD, SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6,
+    SCE_LUA_WORD7, SCE_LUA_WORD8, SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR,
+    SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT,
+    SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING,
+    SCE_PAS_NUMBER, SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING,
+    SCE_PAS_WORD, SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER,
+    SCE_PL_COMMENTLINE, SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH,
+    SCE_PL_HERE_DELIM, SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX,
+    SCE_PL_HERE_QX_VAR, SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX,
+    SCE_PL_REGEX_VAR, SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING,
+    SCE_PL_STRING_Q, SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR,
+    SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR,
+    SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT,
+    SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION,
+    SCE_P_ATTRIBUTE, SCE_P_CHARACTER, SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE,
+    SCE_P_DECORATOR, SCE_P_DEFNAME, SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE,
+    SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER, SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE,
+    SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK,
+    SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME,
+    SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD,
+    SCE_RUST_WORD2, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC,
+    SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER,
+    SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT,
+    SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE,
+    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
+    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
+    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
+    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
+    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
+    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
+    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
+    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
+    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
+    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
+    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
+    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED,
+    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
+    SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
+    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MOD_DELETETEXT,
+    SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
@@ -4389,6 +4393,110 @@ const PYTHON_THEME: LangTheme = LangTheme {
     bold: PYTHON_BOLD,
 };
 
+// LexLua emits 21 styles (0..=20). Code++ maps the 18 visually
+// meaningful ones below. Three are intentionally unmapped (fall
+// through to STYLE_DEFAULT):
+//   * SCE_LUA_DEFAULT (0) — generic background text (universal
+//     omission, matches `SCE_C_DEFAULT` / `SCE_P_DEFAULT`).
+//   * SCE_LUA_IDENTIFIER (11) — bare identifier (post-keyword-miss);
+//     matches `SCE_C_IDENTIFIER` / `SCE_P_IDENTIFIER` /
+//     `SCE_PL_IDENTIFIER` precedent.
+//   * SCE_LUA_STRINGEOL (12) — unterminated-string error indicator.
+//     Joins the deferred-Error-slot migration list — currently at
+//     13 entries (Perl ERROR + VB STRINGEOL + Python STRINGEOL +
+//     10 others including this one).
+//
+// Routing decisions worth flagging:
+//   * COMMENT / COMMENTLINE / COMMENTDOC all → Comment italic. The
+//     three slots cover `--[[ ]]` block comments, `-- ...` line
+//     comments (including the top-of-file shebang at
+//     LexLua.cxx:280), and `---`-initiated LDoc-style doc comments
+//     plus their cross-line continuations. LDoc tag handling
+//     (`---@param`, `---@return`) is NOT a separate state — the
+//     entire run from `---` to EOL is one flat COMMENTDOC token
+//     per LexLua.cxx:542-544, so a single italic-comment treatment
+//     covers them all.
+//   * STRING / CHARACTER / LITERALSTRING all → String. Lua makes
+//     no semantic char/string split (single-quoted and double-
+//     quoted are functionally identical, only differ in which
+//     quote needs escaping). LITERALSTRING covers `[[...]]` /
+//     `[=[...]=]` long-bracket form per LexLua.cxx:525-532;
+//     `LongDelimCheck` allows up to 254 `=` chars between brackets.
+//     Treating all three String-uniform matches Python's
+//     TRIPLE / TRIPLEDOUBLE → String precedent.
+//   * WORD → Keyword bold (class 0 reserved-word hit). WORD2 ..
+//     WORD8 → Keyword2 (classes 1-7 secondary library / user
+//     customisation slots — all 7 secondary classes pre-themed
+//     for forward-compat even though Code++ m1 only ships
+//     [`LUA_KEYWORDS_2`] for class 1; classes 2/3/4-7 stay empty
+//     today but the styles are wired so a `LUA_KEYWORDS_3` /
+//     `_4` follow-on commit needs only a one-line `keywords:`
+//     extension in `LUA_THEME` to activate). Same forward-compat
+//     pattern as CSS EXTENDED_PSEUDOCLASS and Python ATTRIBUTE.
+//   * PREPROCESSOR → Preprocessor (NOT bold). LexLua.cxx:548-549
+//     emits this ONLY for `$` at column 0 — obsolete Lua-pre-4.0
+//     preprocessor directive ("Obsolete since Lua 4.0, but still
+//     in old code"). The `#!` shebang at file top is handled
+//     separately at LexLua.cxx:278-281 and types as COMMENTLINE,
+//     NOT PREPROCESSOR. Kept visually identifiable via the
+//     Preprocessor slot but NOT bold — boldening dead syntax
+//     misleads.
+//   * LABEL → Preprocessor (structural anchor for `::name::` goto
+//     labels and `goto target` resolution targets). LexLua.cxx:
+//     320-396 implements two paths: `::label::` definition (the
+//     four-segment scan emits LABEL for the brackets and the
+//     identifier, with a `!keywords.InList` guard at :335
+//     rejecting `::reserved_word::` constructs) and `goto target`
+//     downstream-identifier styling (the post-`goto` identifier
+//     is LABEL unless it turned out to be a reserved keyword, in
+//     which case it downgrades to WORD at :393). Both paths
+//     require `goto` to live in class 0 — pinned in the test.
+//     Routing to Preprocessor matches Python's SCE_P_DECORATOR
+//     precedent — both are "out-of-band annotation" structural
+//     anchors. Bold-tagged in `LUA_BOLD` alongside `SCE_LUA_WORD`
+//     for visual weight matching the structural-anchor role.
+const LUA_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_LUA_COMMENT, StyleSlot::Comment),
+    (SCE_LUA_COMMENTLINE, StyleSlot::Comment),
+    (SCE_LUA_COMMENTDOC, StyleSlot::Comment),
+    (SCE_LUA_NUMBER, StyleSlot::Number),
+    (SCE_LUA_WORD, StyleSlot::Keyword),
+    (SCE_LUA_STRING, StyleSlot::String),
+    (SCE_LUA_CHARACTER, StyleSlot::String),
+    (SCE_LUA_LITERALSTRING, StyleSlot::String),
+    (SCE_LUA_PREPROCESSOR, StyleSlot::Preprocessor),
+    (SCE_LUA_OPERATOR, StyleSlot::Operator),
+    (SCE_LUA_WORD2, StyleSlot::Keyword2),
+    (SCE_LUA_WORD3, StyleSlot::Keyword2),
+    (SCE_LUA_WORD4, StyleSlot::Keyword2),
+    (SCE_LUA_WORD5, StyleSlot::Keyword2),
+    (SCE_LUA_WORD6, StyleSlot::Keyword2),
+    (SCE_LUA_WORD7, StyleSlot::Keyword2),
+    (SCE_LUA_WORD8, StyleSlot::Keyword2),
+    (SCE_LUA_LABEL, StyleSlot::Preprocessor),
+];
+// All three comment family styles italic — matches universal
+// Code++ comment-slot convention (Python COMMENTLINE +
+// COMMENTBLOCK, Perl COMMENTLINE + POD family, Rust
+// COMMENTBLOCK + COMMENTLINE).
+const LUA_ITALIC: &[usize] = &[SCE_LUA_COMMENT, SCE_LUA_COMMENTLINE, SCE_LUA_COMMENTDOC];
+// Primary keyword + label bold — `SCE_LUA_WORD` (class 0 reserved
+// word hit) gets the classic keyword-bold treatment matching
+// `SCE_C_WORD` / `SCE_P_WORD` precedent; `SCE_LUA_LABEL` carries
+// matching weight as a structural anchor (parallels Python
+// `SCE_P_DECORATOR` bold). SCE_LUA_PREPROCESSOR deliberately
+// excluded — Lua's `$` preprocessor was obsolete in Lua 4.0
+// (LexLua.cxx:549 comment is explicit) and boldening dead syntax
+// misleads.
+const LUA_BOLD: &[usize] = &[SCE_LUA_WORD, SCE_LUA_LABEL];
+
+const LUA_THEME: LangTheme = LangTheme {
+    keywords: &[(0, LUA_KEYWORDS), (1, LUA_KEYWORDS_2)],
+    styles: LUA_STYLES,
+    italic: LUA_ITALIC,
+    bold: LUA_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -4514,6 +4622,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&PERL_THEME)
     } else if lang == L_PYTHON {
         Some(&PYTHON_THEME)
+    } else if lang == L_LUA {
+        Some(&LUA_THEME)
     } else {
         None
     }
@@ -19264,12 +19374,13 @@ mod lang_theme_tests {
     use codepp_core::lang::{
         BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2,
         CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2,
-        C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, L_ASP,
-        L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_MAKEFILE, L_OBJC,
-        L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEXT, L_VB, L_XML,
-        MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
-        PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS,
-        SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+        C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
+        LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI,
+        L_JAVA, L_JAVASCRIPT, L_LUA, L_MAKEFILE, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS,
+        L_PYTHON, L_RC, L_RUST, L_SQL, L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS,
+        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -19297,6 +19408,7 @@ mod lang_theme_tests {
             (L_CSS, "CSS"),
             (L_PERL, "Perl"),
             (L_PYTHON, "Python"),
+            (L_LUA, "Lua"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -20335,6 +20447,285 @@ mod lang_theme_tests {
             assert!(
                 py.italic.contains(&idx),
                 "Python italic list must contain {name} ({idx}) — comment family"
+            );
+        }
+    }
+
+    /// Lua uses Lexilla's `lua` lexer (`LexLua.cxx`). 21-style
+    /// emission set (0..=20) with an 8-class wordlist surface
+    /// (`luaWordListDesc[]` at LexLua.cxx:51-61); Code++ ships
+    /// classes 0 + 1 today, with classes 2-7 pre-themed for
+    /// forward-compat. Pins:
+    ///
+    /// - 18-mapping style table — DEFAULT (0) / IDENTIFIER (11) /
+    ///   `STRINGEOL` (12) intentionally unmapped per the `LexLua`
+    ///   banner in scintilla-sys (DEFAULT + IDENTIFIER fall
+    ///   through to `STYLE_DEFAULT`; `STRINGEOL` pending the
+    ///   deferred-Error-slot migration).
+    /// - 10 non-reuse `assert_ne!` style-table assertions covering
+    ///   the full framework breadth: CPP / MAKEFILE / PASCAL /
+    ///   HYPERTEXT (via PHP) / BATCH / PROPS (via INI) / SQL /
+    ///   VB / CSS / RUST. (Python deliberately NOT in this list
+    ///   — both languages have distinct multi-class wordlist
+    ///   surfaces with overlapping shape categories, so an
+    ///   accidental swap would still pass the per-language pins
+    ///   below; we trust the per-Lua-token pins to catch it.)
+    /// - Two-class structure: 0 = reserved words, 1 = basic library
+    ///   functions. Class indices dictated by `luaWordListDesc[]`.
+    /// - Canonical keyword constant links (`LUA_KEYWORDS` and
+    ///   `LUA_KEYWORDS_2` reachable via the `keywords:` field).
+    /// - Structural "no class 2+" guard — Code++ m1 installs
+    ///   classes 0 + 1 ONLY today (classes 2/3/4-7 deferred).
+    /// - Zero cross-class overlap on the no-overlap invariant
+    ///   (`HashSet` intersection). Load-bearing: Lexilla checks
+    ///   class 0 first at LexLua.cxx:472,479-480 so a duplicate
+    ///   would silently demote class 1 entries.
+    /// - Specific-token class-membership pins:
+    ///     - `function` / `local` / `then` / `end` / `goto` /
+    ///       `nil` / `true` / `false` in class 0 ONLY (reserved).
+    ///     - `print` / `tostring` / `type` / `pairs` /
+    ///       `getmetatable` in class 1 ONLY (basic library).
+    ///     - `goto` placement is load-bearing — the label-from-
+    ///       goto-target path at LexLua.cxx:382-396 requires it.
+    /// - Style routing pins:
+    ///     - COMMENT / COMMENTLINE / COMMENTDOC → Comment.
+    ///     - STRING / CHARACTER / LITERALSTRING → String.
+    ///     - WORD → Keyword (bold class-0-hit).
+    ///     - WORD2 ... WORD8 (7 indices) → Keyword2 (all
+    ///       secondary classes route through the same slot).
+    ///     - LABEL → Preprocessor (out-of-band structural
+    ///       anchor, matches `SCE_P_DECORATOR` precedent).
+    ///     - PREPROCESSOR → Preprocessor (legacy `$` directive).
+    /// - WORD + LABEL bold (structural-anchor convention,
+    ///   matches Python WORD + DECORATOR).
+    /// - COMMENT + COMMENTLINE + COMMENTDOC italic (universal
+    ///   comment-slot convention).
+    #[test]
+    fn lua_uses_lexlua_eight_class_theme() {
+        use super::{
+            SCE_LUA_CHARACTER, SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE,
+            SCE_LUA_LABEL, SCE_LUA_LITERALSTRING, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING,
+            SCE_LUA_WORD, SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5,
+            SCE_LUA_WORD6, SCE_LUA_WORD7, SCE_LUA_WORD8,
+        };
+        let lua = lang_theme(L_LUA).expect("Lua wired");
+        let c = lang_theme(L_C).expect("C wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let ini = lang_theme(L_INI).expect("INI wired");
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let css = lang_theme(L_CSS).expect("CSS wired");
+        let rust = lang_theme(L_RUST).expect("Rust wired");
+        // 18 emission mappings. DEFAULT (0), IDENTIFIER (11),
+        // STRINGEOL (12) deliberately unmapped per the LexLua
+        // banner in scintilla-sys.
+        assert_eq!(
+            lua.styles.len(),
+            18,
+            "Lua theme has {} style mappings; expected 18",
+            lua.styles.len()
+        );
+        // Distinct from every other style table in the framework.
+        assert_ne!(lua.styles, c.styles, "Lua must NOT reuse CPP_STYLES");
+        assert_ne!(lua.styles, mk.styles, "Lua must NOT reuse MAKEFILE_STYLES");
+        assert_ne!(lua.styles, pas.styles, "Lua must NOT reuse PASCAL_STYLES");
+        assert_ne!(
+            lua.styles, php.styles,
+            "Lua must NOT reuse HYPERTEXT_STYLES"
+        );
+        assert_ne!(lua.styles, bat.styles, "Lua must NOT reuse BATCH_STYLES");
+        assert_ne!(lua.styles, ini.styles, "Lua must NOT reuse PROPS_STYLES");
+        assert_ne!(lua.styles, sql.styles, "Lua must NOT reuse SQL_STYLES");
+        assert_ne!(lua.styles, vb.styles, "Lua must NOT reuse VB_STYLES");
+        assert_ne!(lua.styles, css.styles, "Lua must NOT reuse CSS_STYLES");
+        assert_ne!(lua.styles, rust.styles, "Lua must NOT reuse RUST_STYLES");
+        // Two keyword classes for m1: 0 = reserved words, 1 = basic
+        // library functions. Class indices dictated by LexLua's
+        // `luaWordListDesc[]` at LexLua.cxx:51-61. Classes 2-7
+        // (string/table/math, coroutine/io/os, user1..user4) are
+        // deferred — pre-themed in `LUA_STYLES` so a future
+        // commit only needs to add `LUA_KEYWORDS_3` / `_4` and
+        // extend the `keywords:` array.
+        assert_eq!(
+            lua.keywords.len(),
+            2,
+            "Lua m1 installs class 0 (reserved) + class 1 (basic library) only"
+        );
+        assert_eq!(lua.keywords[0].0, 0);
+        assert_eq!(lua.keywords[0].1, LUA_KEYWORDS);
+        assert_eq!(lua.keywords[1].0, 1);
+        assert_eq!(lua.keywords[1].1, LUA_KEYWORDS_2);
+        // Structural guard: pin "no class 2+" for m1. The lexer
+        // supports 8 wordlist slots (classes 0-7) but Code++ only
+        // ships 2 today; a future commit adding `LUA_KEYWORDS_3`
+        // / `_4` must update this assertion alongside the new
+        // class indices.
+        assert!(
+            lua.keywords.iter().all(|(class, _)| matches!(class, 0 | 1)),
+            "Lua m1 must install classes 0 + 1 ONLY (classes 2-7 deferred to follow-on commit)"
+        );
+        // Pin the no-overlap invariant. Lexilla checks class 0
+        // first (LexLua.cxx:472, 479-480), so a cross-class
+        // duplicate would silently demote class 1 entries — an
+        // invisible bug.
+        let class0: std::collections::HashSet<&str> = LUA_KEYWORDS.split_whitespace().collect();
+        let class1: std::collections::HashSet<&str> = LUA_KEYWORDS_2.split_whitespace().collect();
+        let overlap: Vec<&str> = class0.intersection(&class1).copied().collect();
+        assert!(
+            overlap.is_empty(),
+            "Lua class 0 / class 1 wordlists overlap on {overlap:?} — \
+             Lexilla checks class 0 first; an overlap silently demotes class 1"
+        );
+        // Pin Lua 5.4 reserved words in class 0 ONLY. These are
+        // all language-level reserved keywords (you cannot write
+        // `local function = 1` or `local true = 1`). Class 0
+        // membership is load-bearing for `function` (no specific
+        // lexer state machine, just a Keyword highlight), for
+        // `end` (closes blocks; LexLua.cxx:393 explicitly
+        // downgrades `goto end` to WORD for `end`), and for the
+        // three special literals.
+        for token in ["function", "local", "then", "end", "nil", "true", "false"] {
+            assert!(
+                class0.contains(token) && !class1.contains(token),
+                "Lua {token} must be in class 0 ONLY (Lua 5.4 reserved word)"
+            );
+        }
+        // Pin `goto` in class 0. LOAD-BEARING: the label-from-
+        // goto-target path at LexLua.cxx:382-396 tracks
+        // `idenStyle == SCE_LUA_WORD && ident == \"goto\"` to
+        // arm the next-identifier-is-LABEL state. If `goto`
+        // is missing from class 0, the entire `goto target_name`
+        // construct silently never styles `target_name` as LABEL.
+        assert!(
+            class0.contains("goto") && !class1.contains("goto"),
+            "Lua `goto` must be in class 0 ONLY — load-bearing for SCE_LUA_LABEL emission \
+             on `goto target` constructs (LexLua.cxx:382-396 checks `ident == \"goto\"`)"
+        );
+        // Pin basic library functions in class 1 ONLY. `print` /
+        // `tostring` / `pairs` are the canonical class-1 tokens.
+        // `type` placement is doubly load-bearing: it exists as
+        // both `type(v)` (basic function) and `math.type` /
+        // `io.type` (library member); class-1 ownership here
+        // prevents a future `LUA_KEYWORDS_3` from re-adding it
+        // and silently demoting via the class-order check.
+        // `getmetatable` is similarly load-bearing — it exists
+        // bare AND as `debug.getmetatable`.
+        for token in ["print", "tostring", "type", "pairs", "getmetatable"] {
+            assert!(
+                !class0.contains(token) && class1.contains(token),
+                "Lua {token} must be in class 1 ONLY (basic library function; \
+                 future `_3`/`_4` keyword lists must NOT re-add)"
+            );
+        }
+        // Pin the comment-family routing — all three comment
+        // slots (block `--[[ ]]`, line `-- ...`, and `---`
+        // LDoc-style) route to Comment. Note that LexLua does
+        // NOT parse LDoc `---@param` / `---@return` tags as a
+        // separate state — the entire COMMENTDOC run from `---`
+        // to EOL is one flat token per LexLua.cxx:542-544, so
+        // a single Comment treatment covers all three.
+        for (idx, name) in [
+            (SCE_LUA_COMMENT, "SCE_LUA_COMMENT"),
+            (SCE_LUA_COMMENTLINE, "SCE_LUA_COMMENTLINE"),
+            (SCE_LUA_COMMENTDOC, "SCE_LUA_COMMENTDOC"),
+        ] {
+            assert!(
+                lua.styles.contains(&(idx, StyleSlot::Comment)),
+                "Lua {name} ({idx}) must route to StyleSlot::Comment"
+            );
+        }
+        // Pin the string-family routing — all three string slots
+        // (double-quoted, single-quoted, long-bracket `[[...]]`)
+        // route to String. Lua makes no semantic char/string
+        // split.
+        for (idx, name) in [
+            (SCE_LUA_STRING, "SCE_LUA_STRING"),
+            (SCE_LUA_CHARACTER, "SCE_LUA_CHARACTER"),
+            (SCE_LUA_LITERALSTRING, "SCE_LUA_LITERALSTRING"),
+        ] {
+            assert!(
+                lua.styles.contains(&(idx, StyleSlot::String)),
+                "Lua {name} ({idx}) must route to StyleSlot::String — \
+                 Lua makes no semantic char/string distinction"
+            );
+        }
+        // Pin SCE_LUA_WORD → Keyword (class-0 reserved-word hit).
+        assert!(
+            lua.styles.contains(&(SCE_LUA_WORD, StyleSlot::Keyword)),
+            "Lua SCE_LUA_WORD must route to StyleSlot::Keyword (class-0 reserved-word hit)"
+        );
+        // Pin ALL seven secondary WORD slots (WORD2..WORD8) →
+        // Keyword2. Code++'s palette has one secondary-keyword
+        // slot; collapsing all 7 lexer wordlist hits to it
+        // matches the structural reality. Classes 2-7 are
+        // unpopulated by Code++ today but the styles are
+        // pre-themed for forward-compat — same pattern as
+        // CSS EXTENDED_PSEUDOCLASS and Python ATTRIBUTE
+        // pre-theming.
+        for (idx, name) in [
+            (SCE_LUA_WORD2, "SCE_LUA_WORD2"),
+            (SCE_LUA_WORD3, "SCE_LUA_WORD3"),
+            (SCE_LUA_WORD4, "SCE_LUA_WORD4"),
+            (SCE_LUA_WORD5, "SCE_LUA_WORD5"),
+            (SCE_LUA_WORD6, "SCE_LUA_WORD6"),
+            (SCE_LUA_WORD7, "SCE_LUA_WORD7"),
+            (SCE_LUA_WORD8, "SCE_LUA_WORD8"),
+        ] {
+            assert!(
+                lua.styles.contains(&(idx, StyleSlot::Keyword2)),
+                "Lua {name} ({idx}) must route to StyleSlot::Keyword2 — \
+                 secondary wordlist class hit (pre-themed for forward-compat)"
+            );
+        }
+        // Pin SCE_LUA_LABEL → Preprocessor. Structural anchor
+        // for `::name::` goto labels — routing to Preprocessor
+        // matches Python's SCE_P_DECORATOR precedent (both are
+        // out-of-band annotation styles weighted as
+        // structural-anchor slots).
+        assert!(
+            lua.styles
+                .contains(&(SCE_LUA_LABEL, StyleSlot::Preprocessor)),
+            "Lua SCE_LUA_LABEL must route to StyleSlot::Preprocessor \
+             (out-of-band structural anchor for `::name::` / `goto target`)"
+        );
+        // Pin SCE_LUA_PREPROCESSOR → Preprocessor (legacy `$`
+        // column-0 directive — obsolete since Lua 4.0 per
+        // LexLua.cxx:549). NOT bold — boldening dead syntax
+        // misleads.
+        assert!(
+            lua.styles
+                .contains(&(SCE_LUA_PREPROCESSOR, StyleSlot::Preprocessor)),
+            "Lua SCE_LUA_PREPROCESSOR must route to StyleSlot::Preprocessor \
+             (legacy `$` directive, obsolete since Lua 4.0)"
+        );
+        // Pin the two bold-tagged structural anchors. WORD is the
+        // classic class-0 reserved-word emphasis; LABEL gets
+        // matching weight as the `::name::` / `goto target`
+        // structural anchor. PREPROCESSOR deliberately NOT in
+        // this list — boldening dead Lua-pre-4.0 syntax
+        // misleads.
+        for (idx, name) in [
+            (SCE_LUA_WORD, "SCE_LUA_WORD"),
+            (SCE_LUA_LABEL, "SCE_LUA_LABEL"),
+        ] {
+            assert!(
+                lua.bold.contains(&idx),
+                "Lua bold list must contain {name} ({idx}) — structural anchor"
+            );
+        }
+        // Pin all three italic comment slots — block `--[[ ]]`,
+        // line `-- ...`, AND `---` LDoc all render Comment-italic.
+        for (idx, name) in [
+            (SCE_LUA_COMMENT, "SCE_LUA_COMMENT"),
+            (SCE_LUA_COMMENTLINE, "SCE_LUA_COMMENTLINE"),
+            (SCE_LUA_COMMENTDOC, "SCE_LUA_COMMENTDOC"),
+        ] {
+            assert!(
+                lua.italic.contains(&idx),
+                "Lua italic list must contain {name} ({idx}) — comment family"
             );
         }
     }

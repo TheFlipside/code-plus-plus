@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 21 / 🟡 67 / ⚫ 1.
+Total: 89 rows. ✅ 22 / 🟡 66 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1029,6 +1029,148 @@ forward-compat ATTRIBUTE), the DECORATOR → Preprocessor
 routing, the bold structural anchors (WORD + DECORATOR),
 and both italic comment slots (COMMENTLINE + COMMENTBLOCK).
 
+**Lua (2026-06-24):** uses Lexilla's `lua` lexer
+(`LexLua.cxx`). The `L_LUA` row routes `.lua` files
+(N++ `langs.model.xml` default-set parity — Lua row
+ships `lua` only; `wlua` / `rockspec` / `nse` deferred
+as plausible follow-on additions but NOT N++ defaults).
+
+**8-class wordlist surface, 2 populated for m1.**
+`luaWordListDesc[]` at LexLua.cxx:51-61 declares 8 slots:
+class 0 "Keywords", class 1 "Basic functions", class 2
+"String, (table) & math functions", class 3 "(coroutines),
+I/O & system facilities", classes 4-7 "user1..user4".
+Code++ m1 installs classes 0 + 1: `LUA_KEYWORDS` (22
+entries, Lua 5.4 reserved words from the reference manual
+§3.1) drives `SCE_LUA_WORD` → Keyword bold; `LUA_KEYWORDS_2`
+(25 entries, basic library functions from `_G` per §6.1)
+drives `SCE_LUA_WORD2` → Keyword2 steel-blue. Classes 2-7
+are PRE-THEMED to Keyword2 in `LUA_STYLES` (all 7 secondary
+slots route to the same palette colour) so a future
+`LUA_KEYWORDS_3` (string + table + math member names) and
+`LUA_KEYWORDS_4` (coroutine + io + os + debug member
+names) need only a one-line `keywords:` array extension
+in `LUA_THEME` to activate — same forward-compat pattern
+as CSS EXTENDED_PSEUDOCLASS pre-theming and Python
+ATTRIBUTE pre-theming. Classes 4-7 stay empty by design
+(user customisation slots).
+
+**Case-sensitive lexer.** LexLua.cxx:472, 479 calls
+`keywords.InList(identifier)` with no case folding —
+verified by inspection of `WordList::InList` at
+`vendor/lexilla/lexlib/WordList.cxx:162-170, 202-204`
+(byte-exact comparison with zero `tolower` /
+`MakeLowerCase` / `CompareCaseInsensitive` anywhere on
+the path). Identifier text captured raw via
+`sc.GetCurrentString(s, Transform::none)` at
+LexLua.cxx:391. Net result: `function` highlights as a
+keyword, `Function` does not; `_G` and `_VERSION` match
+the canonical Lua sentinel casing but `_g` does not.
+
+**`goto` placement: class 0, load-bearing.** Two lexer
+paths consult class 0 specifically for the keyword
+`goto`. (1) The `goto target` label-from-goto-target path
+at LexLua.cxx:382-396 tracks `idenStyle == SCE_LUA_WORD &&
+ident == "goto"` to arm the next-identifier-is-LABEL
+state — if `goto` is missing from class 0, the entire
+construct silently never highlights `target_name` as
+`SCE_LUA_LABEL`. (2) The `::label::` definition path at
+LexLua.cxx:320-357 has a `!keywords.InList(s)` guard at
+:335 rejecting `::reserved_word::` constructs as not-a-
+label. Both paths require `goto` to live in class 0. The
+class-0-only invariant for `goto` is structurally pinned
+in the Lua theme test.
+
+**`type` / `getmetatable` placement: class 1 ONLY.** Lua
+has both `type(v)` (basic function) and `math.type` /
+`io.type` (library member names). Class 1 owns the bare
+`type`; a future `LUA_KEYWORDS_3` covering `math.*` /
+`io.*` member names must NOT re-add it — Lexilla checks
+class 0 first (LexLua.cxx:472, 479-480), then class 1,
+then 2 in source order, and a cross-class duplicate
+silently demotes the secondary entry. Same load-bearing
+constraint for `getmetatable` (bare basic function vs.
+`debug.getmetatable`).
+
+**No cross-class duplicates.** Verified by HashSet
+intersection before commit (zero overlap on 22 + 25 = 47
+unique tokens) AND structurally pinned by the Lua theme
+test.
+
+Dedicated **18-mapping** `LUA_STYLES` table — does NOT
+reuse any other framework style table (CPP / HYPERTEXT /
+MAKEFILE / PASCAL / BATCH / PROPS / SQL / VB / CSS / RUST
+— all **10 non-reuse assertions** structurally pinned).
+Maps:
+- COMMENT (`--[[ ]]` block) / COMMENTLINE (`-- ...` line,
+  also catches the top-of-file shebang per
+  LexLua.cxx:280) / COMMENTDOC (`---` LDoc-initiated,
+  plus cross-line continuation tracked via the
+  `lastLineDocComment` line-state flag at LexLua.cxx:534,
+  542-544) all → Comment italic. **LDoc tag handling
+  (`---@param`, `---@return`) is NOT a separate lexer
+  state** — the entire run from `---` to EOL is one flat
+  COMMENTDOC token, so a single Comment treatment covers
+  all three slot variants.
+- NUMBER → Number, OPERATOR → Operator. NUMBER
+  recognises decimal, hex (`0x` / `0X` prefix), and
+  hex-float (`p` / `P` binary exponent) per
+  LexLua.cxx:240-242, 359-366.
+- WORD (class 0 hit) → Keyword bold.
+- WORD2 ... WORD8 (7 secondary classes) → Keyword2 — see
+  forward-compat rationale above.
+- STRING (`"..."`) / CHARACTER (`'...'`) / LITERALSTRING
+  (`[[...]]` / `[=[...]=]` / up to 254 `=` chars per
+  `LongDelimCheck` at LexLua.cxx:41-49, 525-532) all →
+  String. Lua makes no semantic char/string split — both
+  quote forms are functionally identical, differing only
+  in which quote needs escaping.
+- LABEL → Preprocessor. Structural anchor for `::name::`
+  goto labels and `goto target` resolution targets per
+  LexLua.cxx:320-396. Routing to Preprocessor matches
+  Python's SCE_P_DECORATOR precedent (both are
+  out-of-band annotation styles). **Bold-tagged**
+  alongside WORD for visual weight matching the
+  structural-anchor role.
+- PREPROCESSOR → Preprocessor (NOT bold). LexLua.cxx:
+  548-549 emits this ONLY for `$` at column 0 —
+  obsolete since Lua 4.0 per the source comment. The
+  `#!` shebang at file top is handled separately at
+  LexLua.cxx:278-281 and types as COMMENTLINE, NOT
+  PREPROCESSOR. Kept visually identifiable via the
+  Preprocessor slot but excluded from the bold list —
+  boldening dead syntax misleads.
+
+Intentionally unmapped — fall through to STYLE_DEFAULT:
+DEFAULT (0), IDENTIFIER (11, bare-identifier fall-through
+matching `SCE_C_IDENTIFIER` / `SCE_P_IDENTIFIER` /
+`SCE_PL_IDENTIFIER` precedent), STRINGEOL (12, pending
+`StyleSlot::Error`). The deferred-Error-slot migration
+list grows from 12 entries (after Python's STRINGEOL) to
+**13** with Lua's STRINGEOL added.
+
+`lua_uses_lexlua_eight_class_theme` test pins the
+18-mapping shape, **10** non-reuse style-table assertions,
+two-class structure (m1), canonical keyword constant
+links, the no-class-2+-for-m1 structural guard, strict
+no-overlap between classes, the seven reserved-word
+class-0-only invariants (`function` / `local` / `then` /
+`end` / `nil` / `true` / `false`), the load-bearing
+`goto` class-0 invariant (SCE_LUA_LABEL emission
+depends on it), the five basic-library class-1-only
+invariants (`print` / `tostring` / `type` / `pairs` /
+`getmetatable`), the comment-family → Comment routing
+(3 indices), the string-family → String routing (3
+indices including the long-bracket LITERALSTRING), the
+SCE_LUA_WORD → Keyword routing, all seven secondary
+WORD2..WORD8 → Keyword2 routings (forward-compat
+pre-theming), the LABEL → Preprocessor routing
+(out-of-band anchor), the PREPROCESSOR → Preprocessor
+routing (legacy `$` directive), the bold structural
+anchors (WORD + LABEL — note PREPROCESSOR deliberately
+excluded), and all three italic comment slots
+(COMMENT + COMMENTLINE + COMMENTDOC).
+
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
 5-style table and a single keyword class. `MAKEFILE_KEYWORDS`
@@ -1233,7 +1375,7 @@ further shim work needed.
 | KIXtart | 39 | `kix` | ⚫ | ⚫ | 🟡 |
 | LaTeX | 74 | `latex` | ⚫ | ⚫ | 🟡 |
 | Lisp | 30 | `lisp` | ⚫ | ⚫ | 🟡 |
-| Lua | 23 | `lua` | ⚫ | ⚫ | 🟡 |
+| Lua | 23 | `lua` | ✅ | ✅ | ✅ |
 | Makefile | 10 | `makefile` | ✅ | ✅ | ✅ |
 | Matlab | 44 | `matlab` | ⚫ | ⚫ | 🟡 |
 | MMIXAL | 75 | `mmixal` | ⚫ | ⚫ | 🟡 |

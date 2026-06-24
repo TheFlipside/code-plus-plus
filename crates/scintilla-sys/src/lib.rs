@@ -743,7 +743,135 @@ pub const SCE_SH_BACKTICKS: usize = 11;
 pub const SCE_SH_HERE_DELIM: usize = 12;
 pub const SCE_SH_HERE_Q: usize = 13;
 
-// LexLua style indices.
+// LexLua style indices. 21 contiguous slots (0..=20) covering
+// the Lua lexer's full emission set: `--` line comments and
+// `--[[ ]]` long-bracket block comments, the `---`-initiated
+// LDoc-style documentation comments, decimal / hex / hex-float
+// number literals, eight wordlist classes (`SCE_LUA_WORD` for
+// reserved keywords plus `SCE_LUA_WORD2..WORD8` for the seven
+// secondary library / user-customisation classes), double- and
+// single-quoted strings, the `[[...]]` / `[=[...]=]` long-bracket
+// literal strings, the obsolete Lua-pre-4.0 `$`-prefixed
+// preprocessor directive, operators, identifiers, the unterminated
+// string error indicator, and the `::name::` goto label anchors.
+// Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 505-525 and
+// `vendor/lexilla/lexers/LexLua.cxx` lines 51-61
+// (`luaWordListDesc`), 65-88 (`lexicalClasses[]`), 191-228
+// (`LexerLua::WordListSet` case dispatch), 472-494 (case-sensitive
+// `keywords.InList` chain across all 8 wordlist classes), 525-532
+// (`LongDelimCheck` long-bracket detection), 534-547 (`---` LDoc
+// trigger + cross-line continuation flag), 548-549 (`$` column-0
+// preprocessor directive), 320-396 (`::label::` definition AND
+// `goto target` label-target paths).
+//
+// **Case-sensitive lexer.** Lua language semantics: every reserved
+// keyword (`if` / `then` / `end` / `function` / `local` / `goto` /
+// `return` / ...) is spelled lowercase. LexLua does NO case
+// folding — `keywords.InList(identifier)` at `LexLua.cxx:472,479`
+// matches the byte-exact source token against the installed
+// wordlist (verified: `WordList::InList` at
+// `vendor/lexilla/lexlib/WordList.cxx:162-170, 202-204` does
+// byte-exact comparison with no `tolower` / `MakeLowerCase` /
+// `CompareCaseInsensitive` anywhere on the path). Identifier text
+// is captured raw via `sc.GetCurrentString(s, Transform::none)` at
+// `LexLua.cxx:391`. Net result: `if` / `IF` / `If` are three
+// distinct tokens; only the lowercase form matches a Lua keyword
+// list. Wordlists must store source-canonical lowercase casing —
+// same byte-exact contract as [`PERL_KEYWORDS`] / [`PYTHON_KEYWORDS`].
+//
+// **Eight wordlist classes (1 primary + 7 secondary).**
+// `luaWordListDesc[]` declares eight slots: `"Keywords"`
+// (class 0) → `SCE_LUA_WORD` bold; `"Basic functions"` (class 1)
+// → `SCE_LUA_WORD2`; `"String, (table) & math functions"` (class
+// 2) → `SCE_LUA_WORD3`; `"(coroutines), I/O & system facilities"`
+// (class 3) → `SCE_LUA_WORD4`; `"user1"` / `"user2"` / `"user3"` /
+// `"user4"` (classes 4-7) → `SCE_LUA_WORD5..WORD8`. The order is
+// LOCKED by `LexLua.cxx:191-228` (`switch (n)` in
+// `LexerLua::WordListSet` mapping `n` → `keywords{n+1}`) AND by
+// the dispatch chain at `:479-494` consuming them in that exact
+// order. So a "basic function" wordlist MUST go to
+// `SCI_SETKEYWORDS` index 1, not 0, or it will be styled as a
+// reserved keyword. Lexilla checks class 0 first; a cross-class
+// duplicate silently demotes the secondary entry.
+//
+// **`SCE_LUA_LITERALSTRING` (8) trigger.** Long-bracket strings
+// `[[...]]` / `[=[...]=]` / `[==[...]==]` … (up to 254 `=`
+// characters). At `LexLua.cxx:525-532`: on `sc.ch == '['` from
+// `SCE_LUA_DEFAULT`, `LongDelimCheck` at `:41-49` counts `=`
+// characters between two brackets — zero → fall through to
+// `SCE_LUA_OPERATOR` (subscript); ≥1 → `SetState(LITERALSTRING)`.
+// Termination requires `LongDelimCheck` to return the SAME
+// `sepCount` recorded on entry (`:437-442`), persisted across
+// lines via the line-state low byte (`maskSeparator = 0xFF`).
+//
+// **`SCE_LUA_COMMENTDOC` (3) triggers.** Three paths at
+// `LexLua.cxx:533-547`: explicit `---` triple-dash at `:542-544`
+// (sets `lastLineDocComment = 0x200`); cross-line continuation at
+// `:534` (the very-next-line `--` inherits doc-comment status via
+// the line-state ternary `lastLineDocComment ? COMMENTDOC :
+// COMMENTLINE`); plus `SCE_LUA_COMMENT` (the block-comment
+// variant, NOT this slot) at `:535-541` via `--[[` / `--[=[`
+// long-bracket form. The lexer does NOT parse LDoc `---@param` /
+// `---@return` tags — the entire run from `---` to EOL is one
+// flat `COMMENTDOC` token. Code++ themes this Comment-italic
+// alongside `COMMENT` / `COMMENTLINE`.
+//
+// **`SCE_LUA_LABEL` (20) triggers.** Two distinct paths. (1)
+// `::label::` definition at `LexLua.cxx:320-357` — when
+// `OPERATOR` sees `:` with `chPrev == ':'`, a forward scan reads
+// the identifier and requires a closing `::`; if the identifier
+// is in the primary `keywords` list, the entire construct is
+// REJECTED (`!keywords.InList(s)` guard at `:335`). On success
+// four segments emit at `:341-353`. (2) `goto target` target
+// identifier at `LexLua.cxx:382-396` — when the just-completed
+// identifier was the keyword `goto` (tracked at `:515-517`), the
+// next identifier types as `LABEL`; if the candidate turned out
+// to be a reserved keyword (`goto end`), it downgrades to `WORD`
+// at `:393`. Both paths REQUIRE `goto` to actually be in class 0
+// (`keywords` list) — see [`LUA_KEYWORDS`] for the placement
+// invariant.
+//
+// **`SCE_LUA_PREPROCESSOR` (9) trigger.** ONLY `$` at column 0
+// (`LexLua.cxx:548-549`). The comment at `:549` is explicit:
+// "Obsolete since Lua 4.0, but still in old code". This is NOT
+// the shebang path — `#!` at top of document is handled separately
+// at `:278-281` and types as `COMMENTLINE`, not `PREPROCESSOR`.
+// Code++ themes this Preprocessor for visual identification but
+// does NOT add it to the bold list — boldening dead syntax
+// misleads. Same restraint applied as N++'s defaults.
+//
+// **`SCE_LUA_STRINGEOL` (12) intentionally unmapped.** Joins the
+// deferred-Error-slot migration list — currently 12 entries after
+// Python's `SCE_P_STRINGEOL` addition; Lua's `STRINGEOL` makes 13.
+// LexLua emits this via `ChangeState` at `:416, 434` when a `"` /
+// `'` string hits EOL without a closing quote AND `stringWs == 0`
+// (the lexer recognises Lua 5.2+'s `\z` "skip whitespace" escape;
+// a string mid-`\z`-suppression does NOT fire STRINGEOL on newline).
+// Synthesising an ad-hoc red here creates palette drift that the
+// Error-slot migration would have to clean up — leave unmapped
+// (falls through to STYLE_DEFAULT) and migrate the whole cluster
+// together.
+//
+// **`SCE_LUA_DEFAULT` (0) and `SCE_LUA_IDENTIFIER` (11) intentionally
+// unmapped.** Universal omission pattern: bare-identifier and
+// background-text styles render at STYLE_DEFAULT (the user's
+// chosen foreground) — same precedent as `SCE_C_DEFAULT` /
+// `SCE_C_IDENTIFIER`, `SCE_PAS_DEFAULT` / `SCE_PAS_IDENTIFIER`,
+// `SCE_PL_DEFAULT` / `SCE_PL_IDENTIFIER`, `SCE_P_DEFAULT` /
+// `SCE_P_IDENTIFIER`.
+//
+// **`SCE_LUA_WORD2..WORD8` (13-19) pre-themed despite partial
+// host install.** Code++ ships [`LUA_KEYWORDS_2`] today (class 1
+// = basic functions, drives `SCE_LUA_WORD2`); classes 2-7 are
+// left unpopulated pending follow-on commits. All 7 secondary
+// WORD slots map to Keyword2 in `LUA_STYLES` for forward-compat
+// — costs seven table rows, gains zero-effort activation if a
+// future commit adds `LUA_KEYWORDS_3` / `_4` (string-table-math
+// / coroutine-io-os library names). Same forward-compat pattern
+// as CSS EXTENDED_PSEUDOCLASS pre-theming and Python's ATTRIBUTE
+// pre-theming.
+pub const SCE_LUA_DEFAULT: usize = 0;
 pub const SCE_LUA_COMMENT: usize = 1;
 pub const SCE_LUA_COMMENTLINE: usize = 2;
 pub const SCE_LUA_COMMENTDOC: usize = 3;
@@ -754,7 +882,15 @@ pub const SCE_LUA_CHARACTER: usize = 7;
 pub const SCE_LUA_LITERALSTRING: usize = 8;
 pub const SCE_LUA_PREPROCESSOR: usize = 9;
 pub const SCE_LUA_OPERATOR: usize = 10;
+pub const SCE_LUA_IDENTIFIER: usize = 11;
 pub const SCE_LUA_STRINGEOL: usize = 12;
+pub const SCE_LUA_WORD2: usize = 13;
+pub const SCE_LUA_WORD3: usize = 14;
+pub const SCE_LUA_WORD4: usize = 15;
+pub const SCE_LUA_WORD5: usize = 16;
+pub const SCE_LUA_WORD6: usize = 17;
+pub const SCE_LUA_WORD7: usize = 18;
+pub const SCE_LUA_WORD8: usize = 19;
 pub const SCE_LUA_LABEL: usize = 20;
 
 // LexSQL style indices. LexSQL defines 22 named style indices
