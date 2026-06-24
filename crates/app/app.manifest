@@ -25,10 +25,28 @@
 
   <!-- UTF-8 active codepage so the rare ANSI APIs the host or a
        loaded plugin reach for (e.g. legacy NPP plugins) interpret
-       byte strings as UTF-8 instead of the system default. -->
+       byte strings as UTF-8 instead of the system default.
+
+       DPI awareness: PerMonitorV2 (Win10 1607+) is the modern
+       token — the OS hands us real pixels and re-notifies on
+       monitor moves via WM_DPICHANGED instead of bitmap-stretching
+       the window (which is what produces the uniform fuzziness on
+       high-DPI displays when this declaration is absent). The
+       fallback list 'PerMonitorV2, PerMonitor' lets Win10 pre-1607
+       still pick PerMonitor v1 (Win8.1+ runtime). The older
+       'dpiAware True/PM' key below covers Win7 and Win8 — those
+       runtimes don't deliver PerMonitor callbacks, so they treat
+       'True/PM' as plain system-DPI awareness (equivalent to
+       'True'), which still avoids bitmap stretching at the
+       monitor the window opens on. Scintilla 5.x and themed comctl6 controls handle
+       their own DPI re-scaling, so this works mostly out-of-the-
+       box; any hard-coded pixel offsets that look small on a
+       high-DPI monitor are individual MulDiv follow-ups. -->
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
       <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">True/PM</dpiAware>
     </windowsSettings>
   </application>
 </assembly>
