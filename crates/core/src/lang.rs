@@ -900,7 +900,13 @@ pub const LANG_TABLE: &[LangEntry] = &[
         menu_label: "TCL",
         desc: "TCL source file",
         lexer: Some("tcl"),
-        extensions: &["tcl"],
+        // `.tcl` (canonical), `.tk` (Tk script), `.itcl` (incr Tcl
+        // class definitions), `.exp` (Expect — TCL-derived, same
+        // lexical surface), `.wfs` (Tcl/Tk widget framework
+        // scripts). N++ ships the same set as `instre1` for the
+        // TCL row in `langs.model.xml`; LexTCL handles all five
+        // dialects with the same wordlist surface.
+        extensions: &["tcl", "tk", "itcl", "exp", "wfs"],
         filenames: &[],
     },
     LangEntry {
@@ -4078,6 +4084,263 @@ pub const NSIS_VARIABLES: &str = concat!(
     "$HWNDPARENT ",
 );
 
+/// Space-separated TCL built-in command vocabulary installed
+/// via `LexTCL`'s `SCI_SETKEYWORDS(0, ...)` — class 0 of the
+/// nine-class `tclWordListDesc[]` registration at
+/// `vendor/lexilla/lexers/LexTCL.cxx:361-372` (terminated by `0`
+/// after `"user4"`). Drives `SCE_TCL_WORD` per the dispatch at
+/// `LexTCL.cxx:160-161`.
+///
+/// **Nine-class wordlist surface, this is class 0.**
+/// `tclWordListDesc[]` declares `"TCL Keywords"` / `"TK Keywords"` /
+/// `"iTCL Keywords"` / `"tkCommands"` / `"expand"` / `"user1"` /
+/// `"user2"` / `"user3"` / `"user4"`. Code++ populates classes
+/// 0-3 only — see [`TCL_TK_KEYWORDS`], [`TCL_ITCL_KEYWORDS`], and
+/// [`TCL_TK_COMMANDS`]. Classes 4 (`expand` — brace-context-only
+/// special class), 5-8 (`user1`..`user4` — user customisation)
+/// ship empty in N++'s `langs.model.xml` default and Code++
+/// matches.
+///
+/// **Asymmetric class precedence.** The lexer's match chain at
+/// `LexTCL.cxx:160-180` checks classes 0-4 in an `if / else if`
+/// first-match-wins chain, then classes 5-8 in a SEPARATE
+/// `if / else if` chain that runs UNCONDITIONALLY after — a
+/// class-5..8 hit OVERRIDES any class-0..3 classification. Code++
+/// keeps classes 5-8 empty to avoid this footgun. Authors adding
+/// user1..user4 wordlists should understand the override semantics
+/// before populating them.
+///
+/// **Case-sensitive byte-exact match.** `LexTCL.cxx` has NO case
+/// folding — `keywords.InList(s)` at `:160` runs byte-exact against
+/// the source token (verified: no `MakeLowerCase` / `tolower` /
+/// `GetCurrentLowered` / `CompareCaseInsensitive` anywhere on the
+/// wordlist-match path). TCL the language is case-sensitive at the
+/// interpreter level — `set` and `SET` are distinct commands — so
+/// the lexer's byte-exact posture matches TCL semantics. Wordlist
+/// entries below are in their **canonical lowercase** form per the
+/// Tcl 8.6 / 9.0 Reference Manual (every built-in command is
+/// documented and spelled lowercase: `puts`, `set`, `if`, `proc`,
+/// `expr`, `foreach`, etc.). Same byte-exact contract as
+/// `LUA_KEYWORDS` / `PERL_KEYWORDS`.
+///
+/// **Namespace-stripped match.** The lexer strips leading `:`
+/// from the candidate buffer at `LexTCL.cxx:156-157` before
+/// `InList` — so `::set` source matches the bare `set` wordlist
+/// entry. `IsAWordChar` at `:32-35` accepts `:` (the namespace
+/// separator), so a fully-qualified `namespace::cmd` traverses as
+/// a SINGLE identifier token. To highlight namespaced commands
+/// like `string::length` requires the full `namespace::cmd` form
+/// in the wordlist (contrast with NSIS's `:`-exclusion which
+/// breaks `nsExec::Exec` into two halves).
+///
+/// **No cross-class duplicates.** A token listed in BOTH class 0
+/// (here) AND class 1 (`TCL_TK_KEYWORDS`) hits class 0 first per
+/// the `if / else if` chain at `:160-167` — the class-1 entry
+/// would be unreachable. The four populated wordlists below maintain
+/// disjoint membership, structurally guarded by the
+/// `tcl_uses_lextcl_nine_class_theme` test's `HashSet` no-overlap
+/// pin.
+///
+/// **Sourcing.** The Tcl 8.6 / 9.0 Reference Manual ("Built-In
+/// Commands" — <https://www.tcl-lang.org/man/tcl/contents.htm>) is
+/// the canonical source for the strict interpreter built-ins.
+/// Supplemented by commonly-used standard-library procedures
+/// from `auto.tcl` / `word.tcl` / `package.tcl` (the `auto_*`
+/// family, `tclLog`, `tcl_endOfWord` / `tcl_findLibrary` /
+/// `tcl_startOf*Word` / `tcl_wordBreak*`, `pkg_mkIndex`) — these
+/// aren't strict built-ins but appear at the top-level shell
+/// pervasively enough that N++'s `langs.model.xml` ships them in
+/// the same class, and Code++ matches for default-set parity.
+/// The N++ file is referenced for parity inspection only, no
+/// content copied (CLAUDE.md "no code from Notepad++" rule).
+pub const TCL_KEYWORDS: &str = concat!(
+    // Variable / scope / namespace commands
+    "append array global incr lappend lassign lindex linsert ",
+    "list llength lrange lremove lrepeat lreplace lreverse ",
+    "lsearch lset lsort namespace set unset upvar uplevel ",
+    "variable ",
+    // Control flow
+    "after break catch continue error eval exit expr for foreach ",
+    "if return switch throw try update vwait while ",
+    // Procedure / closure
+    "apply coroutine proc rename tailcall yield yieldto ",
+    // String / regex / format
+    "format regexp regsub scan string subst ",
+    // I/O / file / channel
+    "close eof fblocked fconfigure fcopy fileevent flush gets ",
+    "open puts read seek socket source tell ",
+    // File system
+    "cd file glob pwd ",
+    // Process / system
+    "auto_execok auto_import auto_load auto_load_index ",
+    "auto_qualify auto_reset bgerror clock encoding env exec ",
+    "history info interp memory msgcat package pid platform ",
+    "pkg_mkIndex registry tcl_endOfWord tcl_findLibrary ",
+    "tcl_startOfNextWord tcl_startOfPreviousWord tcl_wordBreakAfter ",
+    "tcl_wordBreakBefore tclLog time trace unknown ",
+    // Math / binary / conversion
+    "binary mathfunc mathop ",
+    // Bit / encoding helpers commonly used at the command level
+    "concat join split ",
+    // Dictionary
+    "dict ",
+    // Channel-attach / Windows-only DDE / load helpers
+    "dde load chan ",
+);
+
+/// Space-separated Tk widget-creation command vocabulary
+/// installed via `LexTCL`'s `SCI_SETKEYWORDS(1, ...)` — class 1
+/// of the nine-class `tclWordListDesc[]` registration at
+/// `vendor/lexilla/lexers/LexTCL.cxx:361-372`. Drives
+/// `SCE_TCL_WORD2` per the dispatch at `LexTCL.cxx:162-163`.
+///
+/// **Class 1 = widget-creation commands.** Distinct from class 3
+/// (`tkCommands` — see [`TCL_TK_COMMANDS`]) which carries the
+/// geometry / event / window-info subcommands. The split mirrors
+/// the layered Tk API — class 1 is "construct this widget"
+/// (`button`, `label`, `entry`, `frame`, `text`, `canvas`,
+/// `toplevel`, …) while class 3 is "manage / query the toolkit"
+/// (`pack`, `grid`, `bind`, `winfo`, `wm`, …).
+///
+/// **Case-sensitive byte-exact match.** Same contract as
+/// `TCL_KEYWORDS`. Tk command names are canonically lowercase per
+/// the Tcl/Tk Reference Manual.
+///
+/// **Sourcing.** The Tk Reference Manual ("Built-In Commands" —
+/// <https://www.tcl-lang.org/man/tcl/TkCmd/contents.htm>) is the
+/// canonical source for every entry below. Cross-referenced
+/// against Notepad++'s `langs.model.xml` `instre2` for parity;
+/// no content copied (CLAUDE.md "no code from N++" rule).
+pub const TCL_TK_KEYWORDS: &str = concat!(
+    // Core widget-creation commands
+    "button canvas checkbutton entry frame label labelframe ",
+    "listbox menu menubutton message panedwindow radiobutton ",
+    "scale scrollbar spinbox text toplevel ttk::button ",
+    "ttk::checkbutton ttk::combobox ttk::entry ttk::frame ",
+    "ttk::label ttk::labelframe ttk::menubutton ttk::notebook ",
+    "ttk::panedwindow ttk::progressbar ttk::radiobutton ",
+    "ttk::scale ttk::scrollbar ttk::separator ttk::sizegrip ",
+    "ttk::spinbox ttk::treeview ",
+    // Toolkit-level entry-point commands tied to widget construction
+    "tk tkwait ",
+    // Tk dialog / utility commands grouped with widget-creation in
+    // N++'s shipped class 1
+    "tk_bisque tk_chooseColor tk_chooseDirectory tk_dialog ",
+    "tk_focusFollowsMouse tk_focusNext tk_focusPrev ",
+    "tk_getOpenFile tk_getSaveFile tk_menuSetFocus tk_messageBox ",
+    "tk_optionMenu tk_popup tk_setPalette tk_textCopy ",
+    "tk_textCut tk_textPaste tkerror ",
+);
+
+/// Space-separated `[incr Tcl]` / `TclOO` extension vocabulary
+/// installed via `LexTCL`'s `SCI_SETKEYWORDS(2, ...)` — class 2
+/// of the nine-class `tclWordListDesc[]` registration at
+/// `vendor/lexilla/lexers/LexTCL.cxx:361-372`. Drives
+/// `SCE_TCL_WORD3` per the dispatch at `LexTCL.cxx:164-165`.
+///
+/// **Class 2 = OO extension keywords.** Covers both `[incr Tcl]`
+/// (the original Tcl class system) and `TclOO` (the 8.6+ built-in
+/// object system) command surfaces. The two systems share a
+/// substantial vocabulary (`class`, `method`, `constructor`,
+/// `destructor`, `public`, `private`, `protected`) so populating
+/// a single wordlist for both matches N++'s default-set posture.
+///
+/// **Case-sensitive byte-exact match.** Same contract as
+/// `TCL_KEYWORDS`. All `[incr Tcl]` and `TclOO` keywords are
+/// canonically lowercase per the `itcl(n)` and `TclOO(n)` man
+/// pages.
+///
+/// **All `TclOO` entry points belong here, not in class 0.** The
+/// namespace-prefixed `oo::class` / `oo::define` / `oo::object`
+/// commands, the call-site keywords `self` / `next` / `my`, and
+/// the body keywords (`method`, `constructor`, `destructor`,
+/// `superclass`, `mixin`, …) all live in class 2. Maintains the
+/// disjoint-membership invariant across [`TCL_KEYWORDS`],
+/// [`TCL_TK_KEYWORDS`], [`TCL_ITCL_KEYWORDS`], and
+/// [`TCL_TK_COMMANDS`] — structurally pinned by the
+/// `tcl_uses_lextcl_nine_class_theme` test's `HashSet` no-overlap
+/// guard.
+///
+/// **Sourcing.** The `[incr Tcl]` Reference Manual (`itcl(n)`,
+/// `itclclass(n)`, `itclvars(n)`) and the `TclOO` Reference Manual
+/// (`TclOO(n)`, `oo::class(n)`, `oo::define(n)`) are the canonical
+/// sources. Cross-referenced against N++'s `langs.model.xml` for
+/// parity (N++ ships this class empty by default, so the entries
+/// below are Code++'s editorial choice of useful baseline — see
+/// `docs/lexers-coverage.md` for the per-language rationale).
+pub const TCL_ITCL_KEYWORDS: &str = concat!(
+    // `[incr Tcl]` class-body and namespace keywords
+    "class inherit ",
+    // Access modifiers
+    "public private protected ",
+    // Member-declaration keywords (used inside class bodies)
+    "method constructor destructor common ",
+    // TclOO entry-point commands
+    "oo::class oo::define oo::object ",
+    // TclOO call-site keywords
+    "self next my ",
+    // TclOO class-definition keywords (used inside `oo::define`)
+    "superclass mixin filter export unexport forward ",
+    "renamemethod deletemethod ",
+    // Object-introspection helpers
+    "isa ",
+    // `[incr Tcl]` body / configuration helpers
+    "body configbody ",
+);
+
+/// Space-separated Tk subcommand / geometry-manager / introspection
+/// command vocabulary installed via `LexTCL`'s
+/// `SCI_SETKEYWORDS(3, ...)` — class 3 of the nine-class
+/// `tclWordListDesc[]` registration at
+/// `vendor/lexilla/lexers/LexTCL.cxx:361-372`. Drives
+/// `SCE_TCL_WORD4` per the dispatch at `LexTCL.cxx:166-167`.
+///
+/// **Class 3 = Tk management / query commands.** Distinct from
+/// class 1 (`TK Keywords` — see [`TCL_TK_KEYWORDS`]) which carries
+/// widget-CREATION commands. The lexer's separate-class split
+/// follows N++'s shipped `tkCommands` semantic — class 3 is the
+/// "manage / query / event" surface (`pack`, `grid`, `place`,
+/// `bind`, `bindtags`, `winfo`, `wm`, `event`, …) while class 1
+/// is "construct this widget".
+///
+/// **Case-sensitive byte-exact match.** Same contract as
+/// `TCL_KEYWORDS`. All Tk manager / query commands are canonically
+/// lowercase per the Tk Reference Manual.
+///
+/// **No overlap with class 1.** The widget-creation set in
+/// [`TCL_TK_KEYWORDS`] (`button`, `canvas`, `entry`, …) is
+/// disjoint from this list — verified structurally by the
+/// `tcl_uses_lextcl_nine_class_theme` test's `HashSet` no-overlap
+/// pin.
+///
+/// **Sourcing.** The Tk Reference Manual (`pack(n)`, `grid(n)`,
+/// `place(n)`, `bind(n)`, `winfo(n)`, `wm(n)`, `event(n)`,
+/// `option(n)`, `selection(n)`, `clipboard(n)`, `font(n)`,
+/// `tk(n)`, `image(n)`, `focus(n)`, `grab(n)`, `bell(n)`) is the
+/// canonical source. Cross-referenced against N++'s
+/// `langs.model.xml` `instre3` / `instre4` for parity; no content
+/// copied (CLAUDE.md "no code from N++" rule).
+pub const TCL_TK_COMMANDS: &str = concat!(
+    // Geometry managers
+    "pack grid place ",
+    // Event / binding management
+    "bind bindtags event ",
+    // Window / window-manager introspection
+    "winfo wm ",
+    // Focus / grab / pointer
+    "focus grab ",
+    // Image / option / clipboard / selection
+    "image option clipboard selection ",
+    // Sound / display
+    "bell ",
+    // Window-order / mapping
+    "destroy lower raise ",
+    // Send / cross-application
+    "send ",
+    // Font management
+    "font ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4118,6 +4381,13 @@ mod tests {
         assert_eq!(LangType::from_extension("zsh"), L_BASH);
         assert_eq!(LangType::from_extension("ash"), L_BASH);
         assert_eq!(LangType::from_extension("dash"), L_BASH);
+        // TCL family — `.tcl`, `.tk`, `.itcl`, `.exp` (Expect),
+        // `.wfs` (Tcl/Tk widget framework). Same lexical surface.
+        assert_eq!(LangType::from_extension("tcl"), L_TCL);
+        assert_eq!(LangType::from_extension("tk"), L_TCL);
+        assert_eq!(LangType::from_extension("itcl"), L_TCL);
+        assert_eq!(LangType::from_extension("exp"), L_TCL);
+        assert_eq!(LangType::from_extension("wfs"), L_TCL);
     }
 
     #[test]

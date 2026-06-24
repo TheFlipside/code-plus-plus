@@ -1067,6 +1067,266 @@ pub const SCE_NSIS_PAGEEX: usize = 16;
 pub const SCE_NSIS_FUNCTIONDEF: usize = 17;
 pub const SCE_NSIS_COMMENTBOX: usize = 18;
 
+// LexTCL style indices. 22 contiguous slots (0..=21) covering
+// the TCL / Tk lexer's full emission set: `#` line comments with
+// two command-position variants (COMMENT at command-start,
+// COMMENTLINE elsewhere) plus `#~` block comments (BLOCK_COMMENT)
+// and `#-` / `##` line-leading box-comment continuations
+// (COMMENT_BOX), `"..."` strings (IN_QUOTE) with WORD_IN_QUOTE
+// for keyword hits inside the string body, decimal / hex / `\#NN`
+// special-form numeric literals (NUMBER), bare-token operator
+// emission for brackets / braces / `;` / `,` / `$` / parentheses
+// (OPERATOR), unmatched bare identifiers (IDENTIFIER),
+// `$var` / `$arr(idx)` variable substitution (SUBSTITUTION) and
+// the `${var}` braced form's interior body (SUB_BRACE), `-flag`
+// command-option modifiers (MODIFIER), the special `{keyword}`
+// exact-brace expansion-keyword class (EXPAND), and the
+// nine-class wordlist surface (WORD plus WORD2..WORD8 for
+// the secondary user-customisation slots). Cross-referenced
+// against `vendor/lexilla/include/SciLexer.h` lines 245-266 and
+// the lexer body `vendor/lexilla/lexers/LexTCL.cxx` with the
+// `tclWordListDesc[]` descriptor at `LexTCL.cxx:361-372` and the
+// `LexerModule lmTCL(SCLEX_TCL, ColouriseTCLDoc, "tcl", 0,
+// tclWordListDesc)` registration at `LexTCL.cxx:375`.
+//
+// **Case-sensitive lexer.** `LexTCL.cxx` does NO case folding —
+// the identifier text is collected raw via
+// `sc.GetCurrent(w, sizeof(w))` at `LexTCL.cxx:152` and the
+// `keywords.InList(s)` / `keywords2..9.InList(s)` chain at
+// `:160-179` runs byte-exact against the source spelling
+// (verified: no `MakeLowerCase` / `tolower` / `GetCurrentLowered`
+// / `CompareCaseInsensitive` anywhere on the wordlist-match
+// path; the only `toupper` call sits in `IsANumberChar` at `:45`
+// for the `E` exponent character, unrelated to keywords). TCL
+// the language is case-sensitive — `set` and `SET` are distinct
+// commands at the interpreter level — so the lexer's byte-exact
+// posture matches TCL semantics. Wordlists installed against
+// this lexer MUST store source-canonical lowercase spellings
+// (`puts` / `set` / `if` / `proc` / `while` / `foreach`, etc.) —
+// uppercase entries never match a TCL author's source. Same
+// byte-exact contract as `LUA_KEYWORDS` / `PERL_KEYWORDS`.
+//
+// **The only token normalisation before lookup is stripping
+// leading `::` (namespace separators)** at `LexTCL.cxx:156-157`
+// — `::set` and `::ns::cmd` have the leading colons skipped so
+// the bare `set` / `ns::cmd` is what `InList` sees. The
+// trailing-`\r` strip at `:154-155` is a CRLF-safety belt, not
+// a semantic transformation. Critically, `IsAWordChar` at
+// `LexTCL.cxx:32-35` accepts `:` (the namespace separator), so a
+// namespaced identifier like `namespace::cmd` traverses as a
+// SINGLE identifier token through the wordlist match — wordlist
+// entries for namespaced commands need the full `ns::cmd` form
+// (contrast with NSIS's `:`-exclusion at `:1015-1022` which
+// breaks `nsExec::Exec` into two halves).
+//
+// **Nine wordlist classes.** `tclWordListDesc[]` at
+// `LexTCL.cxx:361-372` declares nine named slots, terminated by
+// `0`:
+//   - class 0 `"TCL Keywords"`  → `SCE_TCL_WORD`    (`:160-161`).
+//     Primary TCL built-in commands — `puts` / `set` / `if` /
+//     `while` / `for` / `foreach` / `proc` / `return` / `expr` /
+//     `eval` / `catch` / `switch` / etc. The bulk of the
+//     vocabulary; theme paints this `Keyword` bold.
+//   - class 1 `"TK Keywords"`   → `SCE_TCL_WORD2`   (`:162-163`).
+//     Tk widget-creation commands — `button` / `label` / `entry` /
+//     `frame` / `toplevel` / `canvas` / `text` / etc.
+//   - class 2 `"iTCL Keywords"` → `SCE_TCL_WORD3`   (`:164-165`).
+//     `[incr Tcl]` / TclOO extensions — `class` / `inherit` /
+//     `method` / `constructor` / `destructor` / etc. Ships
+//     empty in N++'s default.
+//   - class 3 `"tkCommands"`    → `SCE_TCL_WORD4`   (`:166-167`).
+//     Tk geometry-manager / event / window-info subcommands —
+//     `pack` / `grid` / `place` / `bind` / `wm` / `winfo` /
+//     `bindtags` / `tk_*` / etc. Distinct from class 1 (widget
+//     creation) — semantic split matches N++'s `langs.model.xml`.
+//   - class 4 `"expand"`        → `SCE_TCL_EXPAND`  (`:168-170`).
+//     **Special-context class** — fires ONLY when the token
+//     appears literally inside `{token}` with no surrounding
+//     whitespace. The check at `:168-170` reads
+//     `sc.GetRelative(-strlen(s)-1) == '{' && keywords5.InList(s)
+//     && sc.ch == '}'` — a bare `expand_keyword` in code context
+//     never matches this class. This is the TCL `{*}` expansion
+//     mechanism's lexer hook. Ships empty in N++'s default.
+//   - class 5 `"user1"`         → `SCE_TCL_WORD5`   (`:172-173`).
+//   - class 6 `"user2"`         → `SCE_TCL_WORD6`   (`:174-175`).
+//   - class 7 `"user3"`         → `SCE_TCL_WORD7`   (`:176-177`).
+//   - class 8 `"user4"`         → `SCE_TCL_WORD8`   (`:178-179`).
+//     All four `user*` slots ship empty in N++'s default — they're
+//     user-customisation slots. Unlike Bash (1 class), NSIS (4
+//     classes), or Lua (8 classes), TCL exposes exactly nine —
+//     and Code++ populates classes 0-3 only, matching N++.
+//
+// **Wordlist match precedence is asymmetric.** Classes 0-4 are
+// checked in an `if / else if` chain at `:160-171` — first match
+// wins. Classes 5-8 are checked in a SEPARATE `if / else if`
+// chain at `:172-180` AFTER classes 0-4 — a class-5..8 hit
+// OVERRIDES any class-0..3 classification via the unconditional
+// `if` at `:172` versus the chained `else if` at `:162-167`. Put
+// concretely: if `puts` appears in both class 0 (TCL Keywords)
+// and class 5 (user1), the user-class hit replaces the TCL-class
+// hit and the token paints as `SCE_TCL_WORD5`. The expand-class
+// check (`keywords5` at `:168`) is bracketed inside the 0-4
+// chain so it does NOT override; it only fires inside `{token}`
+// brace context. Wordlist authors must understand: class 5-8
+// entries are "force-style this token regardless of any earlier
+// classification". Most use cases (and Code++'s shipped default)
+// leave classes 5-8 empty.
+//
+// **`SCE_TCL_WORD_IN_QUOTE` (4) is the single mid-string
+// keyword slot — collapses every class hit.** When the lexer
+// catches a keyword while `quote` is true (inside `IN_QUOTE`),
+// the ternary at `:158, :161-167` emits `WORD_IN_QUOTE`
+// regardless of which class matched — there is no
+// `WORD2_IN_QUOTE` / `WORD3_IN_QUOTE` / etc. Code++ routes the
+// entire slot to `StyleSlot::String` so the in-quote keyword
+// hit blends into the surrounding string body rather than
+// punching out of it (mirrors Bash's mid-`"..."` SCALAR not
+// pulling the string apart).
+//
+// **`SCE_TCL_SUBSTITUTION` (8) and `SCE_TCL_SUB_BRACE` (9) are
+// the variable-reference pair.** `$var` outside braces lexes
+// as `SUBSTITUTION` (entered at `:334` when `sc.chNext != '{'`,
+// continues until a non-word char at `:142-144`). `$arr(idx)`
+// flips into `OPERATOR` for the `(` then back into
+// `SUBSTITUTION` for the index (`:122-139`), with `,` as a
+// sub-separator inside the parens. `${var}` enters via `:336-338`
+// where the `$` and `{` style as `OPERATOR` and the interior
+// styles as `SUB_BRACE` (the `subBrace` flag at `:108-117`
+// overrides EVERYTHING including backslash escapes until the
+// closing `}`). Both states route to `StyleSlot::Lifetime` —
+// sigil-tagged variable archetype, same as Bash SCALAR / PARAM
+// and NSIS VARIABLE / STRINGVAR.
+//
+// **`SCE_TCL_MODIFIER` (10) is the `-flag` command-option
+// state.** Entered at `:348` via the ternary
+// `IsADigit(sc.chNext) ? SCE_TCL_NUMBER : SCE_TCL_MODIFIER` —
+// the lexer disambiguates `-1` (number) from `-flag` (option).
+// `string match -nocase -- $foo` produces three `MODIFIER`
+// tokens. Routed to `StyleSlot::Keyword2` (secondary keyword
+// archetype) — option flags appear densely in any TCL command
+// invocation, so the secondary-keyword colour signals "this is
+// a modifier" without the visual weight of bold.
+//
+// **`SCE_TCL_EXPAND` (11) — the brace-context-only class.** See
+// the class-4 description above. Routed to `StyleSlot::Keyword`
+// + bold matching the primary `WORD` archetype — when the
+// brace-context check fires, this is the "TCL `{*}` expansion
+// keyword".
+//
+// **Four comment-state cluster.** TCL's comment surface is the
+// richest in the framework: `SCE_TCL_COMMENT` (state 1, `#` at
+// command-position at `:279-280`), `SCE_TCL_COMMENTLINE` (state 2,
+// `#` elsewhere at `:101, :282`), `SCE_TCL_COMMENT_BOX` (state 20,
+// `#-` / `##` at line-start with cross-line continuation through
+// the `LS_COMMENT_BOX` lineState at `:105, :220, :226, :286`), and
+// `SCE_TCL_BLOCK_COMMENT` (state 21, `#~` at line-start at `:284`).
+// All four collapse to `StyleSlot::Comment` in the theme —
+// uniform-comment convention matching Lua's COMMENT + COMMENTLINE
+// + COMMENTDOC triple-collapse. The `expected` flag tracking
+// command-position is set after `{` (`:312`), `}` (`:317`), `[`
+// (`:321`), `;` (`:329`), and line start with `IsAWordStart` /
+// space (`:251`). A bare `#` at column 0 emits `COMMENTLINE`,
+// not `COMMENT` — only command-position `#` gets the (state-1)
+// promoted form.
+//
+// **`SCE_TCL_NUMBER` (3) is approximate, not strict.** The
+// in-source comment at `LexTCL.cxx:42-43` is explicit: "Not
+// exactly following number definition (several dots are seen
+// as OK, etc.) but probably enough in most cases."
+// `IsANumberChar` at `:41-47` accepts hex digits (via
+// `IsADigit(ch, 0x10)`), `E`/`e` exponent, `.`, `-`, `+`.
+// Detection paths: bare-digit start at `:303-304` (when
+// `IsADigit(sc.ch) && !IsAWordChar(sc.chPrev)`), `\#NN` form
+// at `:239-240`, and a `#`-prefixed hex form when preceded by
+// whitespace/operator and followed by a hex digit at `:342-345`.
+// There is NO explicit `0x` prefix recognition — the lexer
+// relies on `IsADigit(ch, 0x10)` accepting `0`-`9` / `A`-`F` /
+// `a`-`f` as the number runs.
+//
+// **NO dedicated brace-string state.** Brace-grouped `{...}` is
+// the TCL deferred-evaluation form, but the lexer treats `{`
+// and `}` as `SCE_TCL_OPERATOR` (`:311, :316`) and lexes the
+// interior as normal code — fold level increments on `{`
+// (`:313`) and decrements on `}` (`:318`). This matches TCL's
+// "braces defer evaluation but don't change tokenisation" rule.
+// Disambiguating list literals from brace-grouped strings is a
+// parser-level concern, not a lexer-level one.
+//
+// **NO dedicated PROC / proc-definition state.** `proc` is just
+// a keyword from class 0 — if the user includes it in TCL
+// Keywords (and Code++ does), the `name`, `args`, and `body` of
+// `proc name {args} {body}` tokenise as regular identifiers and
+// brace-groups. No `SCE_TCL_DEFNAME` analogue exists — contrast
+// with Python's `SCE_P_DEFNAME` or Pascal's similar dedicated
+// slots.
+//
+// **NO dedicated `[...]` command-substitution state.** The `[`
+// and `]` style as `SCE_TCL_OPERATOR` (`:320-326`); the interior
+// recurses through normal lexing with `expected = true` set
+// after `[` (`:321`) so the next word is treated as a command.
+//
+// **NO `if 0 { ... }` dead-code recognition.** The lexer treats
+// it as a regular `if` keyword + `0` number + brace block.
+// Highlighting "this brace block is dead code" is a parser
+// concern.
+//
+// **`SCE_TCL_DEFAULT` (0) and `SCE_TCL_IDENTIFIER` (7)
+// intentionally unmapped.** Universal omission pattern:
+// background-text and bare-identifier states render at
+// `STYLE_DEFAULT` (the user's chosen foreground) — same
+// precedent as `SCE_C_DEFAULT` / `SCE_C_IDENTIFIER`,
+// `SCE_PL_DEFAULT` / `SCE_PL_IDENTIFIER`, `SCE_LUA_DEFAULT` /
+// `SCE_LUA_IDENTIFIER`. NO `SCE_TCL_ERROR` state exists — the
+// lexer has no recovery / malformed-token branch (every
+// unmatched character walks back to `SCE_TCL_DEFAULT`), so no
+// deferred-Error-slot entry is needed (contrast with
+// `SCE_SH_ERROR` / `SCE_LUA_STRINGEOL` which join the deferred-
+// migration cluster).
+//
+// **`SCE_TCL_WORD5..WORD8` (16-19) pre-themed despite empty host
+// install.** Code++ ships classes 0-3 today (matching N++
+// default); classes 4-8 are left unpopulated. All four `WORD5..8`
+// slots still map to `Keyword2` in `TCL_STYLES` for forward-compat
+// — costs four table rows, gains zero-effort activation if a
+// future commit adds `TCL_USER1` / `_USER2` / etc. Same
+// forward-compat pattern as the Lua WORD2..WORD8 pre-theming and
+// the Python ATTRIBUTE pre-theming.
+//
+// **Two runtime properties — `fold.comment` / `fold.compact`.**
+// Read at `LexTCL.cxx:51-52` via the legacy `GetPropertyInt`
+// API (no `DefineProperty` schema). Both control folding only —
+// neither affects token emission. Default `fold.comment=0`
+// (off), default `fold.compact=1` (on). `LangTheme` has no
+// `properties` slot today, so Code++ runs both at the lexer
+// default — same posture as NSIS's `nsis.ignorecase` /
+// `nsis.uservars`. The deferred properties-slot follow-up
+// referenced in the NSIS banner generalises across this lexer
+// too, but folding behaviour is not the gating concern (no
+// token-emission impact). Tracked in `docs/lexers-coverage.md`
+// for the future folding-host wiring commit.
+pub const SCE_TCL_DEFAULT: usize = 0;
+pub const SCE_TCL_COMMENT: usize = 1;
+pub const SCE_TCL_COMMENTLINE: usize = 2;
+pub const SCE_TCL_NUMBER: usize = 3;
+pub const SCE_TCL_WORD_IN_QUOTE: usize = 4;
+pub const SCE_TCL_IN_QUOTE: usize = 5;
+pub const SCE_TCL_OPERATOR: usize = 6;
+pub const SCE_TCL_IDENTIFIER: usize = 7;
+pub const SCE_TCL_SUBSTITUTION: usize = 8;
+pub const SCE_TCL_SUB_BRACE: usize = 9;
+pub const SCE_TCL_MODIFIER: usize = 10;
+pub const SCE_TCL_EXPAND: usize = 11;
+pub const SCE_TCL_WORD: usize = 12;
+pub const SCE_TCL_WORD2: usize = 13;
+pub const SCE_TCL_WORD3: usize = 14;
+pub const SCE_TCL_WORD4: usize = 15;
+pub const SCE_TCL_WORD5: usize = 16;
+pub const SCE_TCL_WORD6: usize = 17;
+pub const SCE_TCL_WORD7: usize = 18;
+pub const SCE_TCL_WORD8: usize = 19;
+pub const SCE_TCL_COMMENT_BOX: usize = 20;
+pub const SCE_TCL_BLOCK_COMMENT: usize = 21;
+
 // LexLaTeX style indices. 13 contiguous slots (0..=12) covering
 // the LaTeX lexer's full emission set: `%` line comments, `$...$`
 // / `\(...\)` math and `$$...$$` / `\[...\]` display-math regions,

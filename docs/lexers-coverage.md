@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 26 / 🟡 62 / ⚫ 1.
+Total: 89 rows. ✅ 27 / 🟡 61 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1533,6 +1533,152 @@ cross-language non-reuse `assert_ne!` pins. Test name
 the four-slot LexNsis surface from `_one_class_` (Bash),
 `_two_class_` (Batch), and `_zero_class_` (TeX / LaTeX).
 
+**TCL (2026-06-24):** uses Lexilla's `tcl` lexer (`LexTCL.cxx`) —
+22 emission states (0..=21) with **nine wordlist classes**, the
+richest wordlist surface in the framework. `tclWordListDesc[]` at
+`LexTCL.cxx:361-372` declares `"TCL Keywords"` / `"TK Keywords"`
+/ `"iTCL Keywords"` / `"tkCommands"` / `"expand"` / `"user1"` /
+`"user2"` / `"user3"` / `"user4"`, terminated by `0`. Code++
+populates classes 0-3 — `TCL_KEYWORDS` (class 0, ~100 entries
+covering TCL 8.6 / 9.0 built-in commands per the Tcl Reference
+Manual: variable / scope / namespace, control flow, procedure,
+string / regex / format, I/O / channel, file system, process /
+system, math / binary, dictionary), `TCL_TK_KEYWORDS` (class 1,
+~50 entries covering Tk widget-creation commands and `tk_*`
+dialog / utility commands per the Tk Reference Manual),
+`TCL_ITCL_KEYWORDS` (class 2, ~20 entries covering `[incr Tcl]`
+and TclOO class-body keywords and entry-point commands —
+`oo::class` / `oo::define` / `oo::object`, `self` / `next` /
+`my`, `method` / `superclass` / `mixin`), and `TCL_TK_COMMANDS`
+(class 3, ~20 entries covering Tk geometry / event / introspection
+commands per the Tk Reference Manual — `pack` / `grid` / `bind` /
+`winfo` / `wm` / `focus` / `grab` / `event` / `font`). Classes
+4-8 ship empty matching N++'s `langs.model.xml` default — class 4
+(`expand`) is the special brace-context-only class for TCL `{*}`
+expansion sentinels, and classes 5-8 (`user1..user4`) are
+user-customisation slots.
+
+**Case-sensitive byte-exact match.** No `MakeLowerCase` /
+`tolower` / `GetCurrentLowered` / `CompareCaseInsensitive`
+anywhere on the wordlist-match path — `keywords.InList(s)` at
+`LexTCL.cxx:160-179` runs byte-exact against the source token
+captured raw via `sc.GetCurrent(w, sizeof(w))` at `:152`. TCL
+the language is case-sensitive at the interpreter level (`set`
+and `SET` are distinct commands), so the lexer's byte-exact
+posture matches TCL semantics. All four populated wordlists
+store source-canonical lowercase spellings per the Tcl/Tk
+Reference Manuals. Same byte-exact contract as `LUA_KEYWORDS`
+/ `PERL_KEYWORDS`. The theme test pins canonical-lowercase
+anchors structurally (`puts`, `set`, `if`, `proc`, `foreach`,
+`while`, `expr` for class 0; `button`, `label`, `entry`,
+`frame`, `text`, `canvas` for class 1; `class`, `method`,
+`constructor`, `destructor` for class 2; `pack`, `grid`,
+`place`, `bind`, `winfo`, `wm` for class 3) so a future
+"let's uppercase the list" regression trips CI.
+
+**Asymmetric class precedence — classes 5-8 override classes
+0-3.** The lexer's match chain at `LexTCL.cxx:160-180` runs
+classes 0-4 in a first-match-wins `if / else if` chain, then
+runs classes 5-8 UNCONDITIONALLY after. A token duplicated
+between class 0 and class 5 hits class 0 first BUT class 5
+then overrides — the final classification is class 5. Code++
+ships classes 5-8 empty so the override doesn't fire, but the
+test's `HashSet` no-overlap guard structurally pins against
+ANY duplication across the four populated wordlists to
+future-proof the contract: any contributor adding `puts` to
+both class 0 and class 2 trips CI immediately.
+
+**Namespace-stripped match.** `IsAWordChar` at
+`LexTCL.cxx:32-35` accepts `:` (the namespace separator), so
+a fully-qualified `namespace::cmd` traverses as a single
+identifier token through the wordlist. The lexer additionally
+strips leading `:` from the candidate at `:156-157`, so `::set`
+in source matches the bare `set` wordlist entry. To highlight
+namespaced commands like `oo::class` requires the full
+`namespace::cmd` form in the wordlist — which is exactly how
+`TCL_ITCL_KEYWORDS` ships the TclOO entry points.
+
+**Rich 20-mapping style table.** 22 emission states minus
+DEFAULT (0) and IDENTIFIER (7), both following the universal-
+omission pattern (background-text and bare-identifier render
+at `STYLE_DEFAULT`). Routing summary: four-state comment cluster
+(`COMMENT` + `COMMENTLINE` + `COMMENT_BOX` + `BLOCK_COMMENT`)
+→ Comment uniform-collapse; two-state string-family
+(`IN_QUOTE` + `WORD_IN_QUOTE` — the latter being LexTCL's
+single mid-string keyword-hit slot per `:158-167` regardless
+of which class matched) → String uniform-collapse;
+`SUBSTITUTION` + `SUB_BRACE` → Lifetime (sigil-tagged variable
+archetype — Bash SCALAR / PARAM precedent); `MODIFIER`
+(`-flag` command-option) → Keyword2 (steel blue);
+`EXPAND` (brace-context `{keyword}` class) → Keyword bold;
+`WORD` (primary built-in commands) → Keyword bold;
+`WORD2..WORD8` → Keyword2 (six secondary classes — Tk widgets,
+iTcl / TclOO, tkCommands, and four user-customisation slots
+pre-themed for forward-compat). No `SCE_TCL_ERROR` exists in
+the lexer (no recovery / malformed-token branch), so no
+deferred-Error-slot entry is needed (contrast with `SCE_SH_ERROR`
+/ `SCE_LUA_STRINGEOL` joining the deferred cluster).
+
+**Italic on all four comment families.** Richest comment surface
+in the framework — `SCE_TCL_COMMENT` (command-position `#`),
+`SCE_TCL_COMMENTLINE` (elsewhere `#`), `SCE_TCL_COMMENT_BOX`
+(`#-` / `##` line-leading boxed continuation with cross-line
+state at `:105, :220, :226, :286`), `SCE_TCL_BLOCK_COMMENT`
+(`#~` at line-start at `:284`). All four italic, all four →
+Comment slot. Test pins `tcl.italic.len() == 4` structurally.
+
+**Bold on WORD + EXPAND only.** Two states bolded —
+`SCE_TCL_WORD` (primary built-in command class, matches
+SCE_SH_WORD / SCE_NSIS_FUNCTION precedent) and `SCE_TCL_EXPAND`
+(brace-context expansion keyword class, structurally a TCL
+keyword under the `{*}` mechanism). `WORD2..WORD8` deliberately
+NOT bolded (their distinct steel-blue Keyword2 colour already
+carries the cue; bolding the Tk + iTCL + tkCommands + user1..4
+bands alongside core TCL keywords would create excessive visual
+weight in Tk-heavy GUI scripts — same restraint as Perl's
+SCE_PL_HASH / SCE_PL_ARRAY staying non-bold). `MODIFIER` /
+`SUBSTITUTION` / `SUB_BRACE` deliberately NOT bolded — flags
+appear densely (`string match -nocase -- $foo`), and the
+Lifetime colour on sigil-tagged variables already carries the
+cue (matches Bash SCALAR / PARAM staying non-bold).
+
+**Property posture — lexer defaults.** LexTCL exposes two
+runtime properties at `:51-52` via the legacy `GetPropertyInt`
+API: `fold.comment` (default 0, off) and `fold.compact`
+(default 1, on). Both affect folding only — neither changes
+token emission. Code++ runs both at the lexer default (same
+posture as NSIS — `LangTheme` has no `properties` slot today),
+which is the correct shape for token-rendering parity. The
+deferred properties-slot follow-up referenced in the NSIS row
+generalises across TCL too, but folding behaviour is not the
+gating concern (no token-emission impact). Tracked here for
+the future folding-host wiring commit.
+
+**Test included in `wired_languages_have_complete_themes`** —
+20-mapping style table exceeds the 8-floor AND four wordlist
+classes are installed, so both gates pass. Dedicated test
+`tcl_uses_lextcl_nine_class_theme` additionally pins:
+four-class wordlist install (classes 4-8 NOT installed —
+structural guard matches N++ default-empty); the `HashSet`
+no-overlap invariant across the four populated wordlists (the
+override semantics of classes 5-8 make any duplicate
+unreachable AND a future class-5 override would silently
+demote a class-0 hit — the guard prevents both); the 20
+populated style-routing pins; DEFAULT + IDENTIFIER
+explicit-omission pins; italic on the four-comment-family
+cluster with `len() == 4` pin; bold on WORD + EXPAND with
+`len() == 2` pin and explicit non-bold guards for WORD2..WORD8
++ SUBSTITUTION + SUB_BRACE + MODIFIER; canonical-lowercase
+anchor pins for all four wordlists matching the lexer's
+byte-exact case-sensitive contract; structural no-overlap
+pins on canonical anchors (no Tk widget-creation commands in
+TCL_KEYWORDS; no Tk-management commands in TCL_TK_KEYWORDS; no
+core TCL commands in TCL_ITCL_KEYWORDS); and 10 cross-language
+non-reuse `assert_ne!` pins. Test name `_nine_class_` is the
+first in the framework — distinguishes the nine-slot LexTCL
+surface from `_one_class_` (Bash), `_two_class_` (Batch),
+`_four_class_` (NSIS), and `_zero_class_` (TeX / LaTeX).
+
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
 5-style table and a single keyword class. `MAKEFILE_KEYWORDS`
@@ -1769,7 +1915,7 @@ further shim work needed.
 | Spice | 82 | `spice` | ⚫ | ⚫ | 🟡 |
 | SQL | 17 | `sql` | ✅ | ✅ | ✅ |
 | Swift | 64 | `cpp` | ⚫ | ⚫ | 🟡 |
-| TCL | 29 | `tcl` | ⚫ | ⚫ | 🟡 |
+| TCL | 29 | `tcl` | ✅ | ✅ | ✅ |
 | Tektronix extended HEX | 63 | `tehex` | ⚫ | ⚫ | 🟡 |
 | TeX | 24 | `tex` | ✅ | ✅ | ✅ |
 | TOML | 90 | `toml` | ⚫ | ⚫ | 🟡 |

@@ -106,11 +106,11 @@ use codepp_core::lang::{
     CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS,
     JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP,
     L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_LATEX, L_LUA, L_MAKEFILE,
-    L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEX, L_VB,
-    L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TCL, L_TEX,
+    L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
     PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
-    RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-    XML_KEYWORDS,
+    RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
+    TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -177,25 +177,30 @@ use codepp_scintilla_sys::{
     SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD,
     SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS,
     SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2,
-    SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL, SCE_TEX_SYMBOL,
-    SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT,
-    SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS,
-    SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
-    SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
-    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
-    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS,
-    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
-    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
-    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
-    SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
-    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
-    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
-    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO,
-    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
-    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
-    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE,
-    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT,
-    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE, SCE_TCL_COMMENT_BOX,
+    SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER, SCE_TCL_NUMBER, SCE_TCL_OPERATOR,
+    SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD, SCE_TCL_WORD2, SCE_TCL_WORD3,
+    SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7, SCE_TCL_WORD8,
+    SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL,
+    SCE_TEX_SYMBOL, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT,
+    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN,
+    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER,
+    SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT,
+    SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT,
+    SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM,
+    SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN,
+    SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER,
+    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE,
+    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES,
+    SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
+    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
+    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
+    SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT,
+    SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS,
+    SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
+    SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
+    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MOD_DELETETEXT,
+    SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
@@ -4865,6 +4870,173 @@ const NSIS_THEME: LangTheme = LangTheme {
     bold: NSIS_BOLD,
 };
 
+// --- LexTCL ---
+// `LexTCL.cxx` defines 22 contiguous emission states (0..=21). 20
+// of them get a paint slot below; SCE_TCL_DEFAULT (0) and
+// SCE_TCL_IDENTIFIER (7) deliberately stay unmapped per the
+// universal-omission pattern (background-text + bare-identifier
+// render at STYLE_DEFAULT — same as SCE_C_DEFAULT /
+// SCE_C_IDENTIFIER, SCE_LUA_DEFAULT / SCE_LUA_IDENTIFIER,
+// SCE_PL_DEFAULT / SCE_PL_IDENTIFIER, SCE_SH_DEFAULT precedent).
+// No SCE_TCL_ERROR state exists — LexTCL has no recovery /
+// malformed-token branch, so no deferred-Error-slot entry needed
+// (contrast with SCE_SH_ERROR / SCE_LUA_STRINGEOL joining the
+// deferred-Error cluster).
+const TCL_STYLES: &[(usize, StyleSlot)] = &[
+    // Four-state comment cluster — `#`-line at command position
+    // (COMMENT), `#`-line elsewhere (COMMENTLINE), `#~` block
+    // (BLOCK_COMMENT), and `#-` / `##` line-leading box
+    // continuation (COMMENT_BOX). All collapse to Comment per
+    // the universal-comment convention; matches Lua COMMENT +
+    // COMMENTLINE + COMMENTDOC triple-collapse and NSIS's
+    // COMMENT + COMMENTBOX collapse precedent.
+    (SCE_TCL_COMMENT, StyleSlot::Comment),
+    (SCE_TCL_COMMENTLINE, StyleSlot::Comment),
+    (SCE_TCL_COMMENT_BOX, StyleSlot::Comment),
+    (SCE_TCL_BLOCK_COMMENT, StyleSlot::Comment),
+    // Numeric literals.
+    (SCE_TCL_NUMBER, StyleSlot::Number),
+    // String body — `"..."` content (IN_QUOTE, entered at `:308`,
+    // exited at `:261-263`). Routed to String per the
+    // uniform-string-body archetype.
+    (SCE_TCL_IN_QUOTE, StyleSlot::String),
+    // Mid-string keyword hits (WORD_IN_QUOTE) — defensive
+    // routing only. The ternary at `:158-167` would emit this
+    // when a quoted token matched any of keywords 0..3, BUT the
+    // word-resolution entry guard at `:150` is
+    // `sc.state == SCE_TCL_IDENTIFIER || sc.state == SCE_TCL_MODIFIER`,
+    // so the `quote` flag at `:158` is always false at runtime
+    // and `SCE_TCL_WORD_IN_QUOTE` is never emitted by upstream
+    // LexTCL today. Kept in the table at String so a future
+    // Lexilla patch that activates the slot (already implemented
+    // in some downstream forks) doesn't render it un-coloured.
+    (SCE_TCL_WORD_IN_QUOTE, StyleSlot::String),
+    // Operator — brackets / braces / `;` / `,` / parens /
+    // backslash-escape per `:111, :124, :128, :134, :266, :311,
+    // :316, :326, :336, :352`. Note: `$` is NOT here — bare `$`
+    // triggers SUBSTITUTION at `:331` and `${` triggers SUB_BRACE
+    // at `:336-337`; the OPERATOR character class covers the
+    // structural punctuation only.
+    (SCE_TCL_OPERATOR, StyleSlot::Operator),
+    // Variable-substitution pair — `$var` (SUBSTITUTION,
+    // `:120-136, :334`) and `${var}` body (SUB_BRACE, `:115,
+    // :338`). Both → Lifetime per the sigil-tagged-variable
+    // archetype; matches Bash SCALAR / PARAM (`:9-10` in
+    // scintilla-sys SCE_SH numbering) and NSIS VARIABLE /
+    // STRINGVAR (`:6, :13`) precedent.
+    (SCE_TCL_SUBSTITUTION, StyleSlot::Lifetime),
+    (SCE_TCL_SUB_BRACE, StyleSlot::Lifetime),
+    // Command-option modifier `-flag` — entered at `:348` via
+    // the disambiguator `IsADigit(sc.chNext) ? NUMBER : MODIFIER`
+    // so `-1` is a number while `-flag` is a modifier. Routed to
+    // Keyword2 (secondary-keyword archetype) — option flags
+    // appear densely in any TCL command invocation; the steel-
+    // blue Keyword2 colour signals "command modifier" without the
+    // bold weight a Keyword slot would add. Considered routing
+    // to Preprocessor but Preprocessor is conventionally reserved
+    // for line-leading directives, and `-flag` is mid-command.
+    (SCE_TCL_MODIFIER, StyleSlot::Keyword2),
+    // `{keyword}` exact-brace expansion class (EXPAND) — fires
+    // only when class 4 (`expand`) wordlist matches inside
+    // literal `{...}` braces per `:168-170`. Routed to Keyword
+    // matching the primary WORD archetype — when the brace-
+    // context check fires, this is structurally a TCL keyword
+    // operating under the `{*}` expansion mechanism.
+    (SCE_TCL_EXPAND, StyleSlot::Keyword),
+    // Primary built-in command class (TCL Keywords) → Keyword
+    // bold blue. Same role as SCE_SH_WORD / SCE_NSIS_FUNCTION.
+    (SCE_TCL_WORD, StyleSlot::Keyword),
+    // Secondary library / extension classes — Tk widget creation
+    // (WORD2), iTcl / TclOO (WORD3), Tk management (WORD4), and
+    // four user-customisation slots (WORD5..WORD8). All →
+    // Keyword2 (steel blue), matching the Lua WORD2..WORD8
+    // precedent. WORD5..WORD8 are pre-themed despite empty host
+    // install for forward-compat — costs four table rows, gains
+    // zero-effort activation if a future commit adds custom
+    // wordlists. Same pattern as Lua WORD2..WORD8 pre-theming
+    // and Python ATTRIBUTE pre-theming.
+    (SCE_TCL_WORD2, StyleSlot::Keyword2),
+    (SCE_TCL_WORD3, StyleSlot::Keyword2),
+    (SCE_TCL_WORD4, StyleSlot::Keyword2),
+    (SCE_TCL_WORD5, StyleSlot::Keyword2),
+    (SCE_TCL_WORD6, StyleSlot::Keyword2),
+    (SCE_TCL_WORD7, StyleSlot::Keyword2),
+    (SCE_TCL_WORD8, StyleSlot::Keyword2),
+];
+
+// Italic on all four comment families — COMMENT (command-position
+// `#`) + COMMENTLINE (elsewhere `#`) + COMMENT_BOX (`#-`/`##`
+// box) + BLOCK_COMMENT (`#~`). Universal Code++ comment-slot
+// convention; matches Lua COMMENT + COMMENTLINE + COMMENTDOC
+// triple-italic and NSIS COMMENT + COMMENTBOX double-italic
+// precedent. The four-italic count is the richest comment surface
+// in the framework; the theme test pins `tcl.italic.len() == 4`
+// structurally so a future "let's drop one" regression is loud.
+const TCL_ITALIC: &[usize] = &[
+    SCE_TCL_COMMENT,
+    SCE_TCL_COMMENTLINE,
+    SCE_TCL_COMMENT_BOX,
+    SCE_TCL_BLOCK_COMMENT,
+];
+
+// Bold the primary built-in command class (WORD) and the
+// brace-context expansion class (EXPAND) — both carry the
+// "this is a TCL keyword" structural cue and match the Bash
+// SCE_SH_WORD / NSIS SCE_NSIS_FUNCTION bold precedent. WORD2..
+// WORD8 deliberately NOT bolded — they already carry distinct
+// steel-blue Keyword2 colour, and bolding the Tk + iTCL +
+// tkCommands + user1..4 bands alongside core TCL keywords would
+// create excessive visual weight in Tk-heavy GUI scripts.
+// Mirrors Perl SCE_PL_WORD bold while SCE_PL_HASH / SCE_PL_ARRAY
+// stay non-bold. MODIFIER (`-flag`) deliberately NOT bolded —
+// flags appear densely (e.g. `string match -nocase -- $foo`)
+// and bolding them would overwhelm the surrounding command.
+// SUBSTITUTION / SUB_BRACE deliberately NOT bolded — same
+// convention as SCE_SH_SCALAR / SCE_SH_PARAM staying non-bold
+// despite using Lifetime.
+const TCL_BOLD: &[usize] = &[SCE_TCL_WORD, SCE_TCL_EXPAND];
+
+// Classes 0-3 installed. `tclWordListDesc[]` at
+// `LexTCL.cxx:361-372` declares NINE classes terminated by `0`:
+// `"TCL Keywords"` (class 0 — TCL built-in commands), `"TK Keywords"`
+// (class 1 — Tk widget-creation), `"iTCL Keywords"` (class 2 —
+// `[incr Tcl]` / TclOO extensions), `"tkCommands"` (class 3 — Tk
+// geometry / event / introspection), `"expand"` (class 4 — special
+// brace-context-only class; ships empty in N++ default), and
+// `"user1".."user4"` (classes 5-8 — user customisation; all four
+// ship empty in N++ default).
+//
+// Code++ matches N++'s `langs.model.xml` default-set by populating
+// classes 0-3 only. Classes 4-8 ship empty — class 4 because the
+// `expand` brace-context check is an opt-in mechanism for TCL
+// `{*}` expansion sentinels (rare in default scripts), and classes
+// 5-8 because they're explicitly user-extension slots. The four
+// populated wordlists maintain disjoint membership across all
+// four classes — structurally pinned by the
+// `tcl_uses_lextcl_nine_class_theme` test's `HashSet` no-overlap
+// guard.
+//
+// Case + property posture. LexTCL is case-sensitive byte-exact
+// (no case folding anywhere on the wordlist-match path — see the
+// scintilla-sys banner for verification). The only runtime
+// properties (`fold.comment` / `fold.compact`) affect folding
+// only, not token emission; Code++ runs both at the lexer default
+// (`LangTheme` has no `properties` slot today). Wordlist contents
+// are stored in their canonical lowercase form per the Tcl/Tk
+// Reference Manual — matching the source spelling a TCL author
+// writes byte-for-byte.
+const TCL_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, TCL_KEYWORDS),
+        (1, TCL_TK_KEYWORDS),
+        (2, TCL_ITCL_KEYWORDS),
+        (3, TCL_TK_COMMANDS),
+    ],
+    styles: TCL_STYLES,
+    italic: TCL_ITALIC,
+    bold: TCL_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -5000,6 +5172,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&BASH_THEME)
     } else if lang == L_NSIS {
         Some(&NSIS_THEME)
+    } else if lang == L_TCL {
+        Some(&TCL_THEME)
     } else {
         None
     }
@@ -19753,10 +19927,11 @@ mod lang_theme_tests {
         CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS,
         JAVA_KEYWORDS, JAVA_KEYWORDS_2, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BASH, L_BATCH, L_C,
         L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LUA, L_MAKEFILE,
-        L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEX,
-        L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS,
-        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+        L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TCL,
+        L_TEX, L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS,
+        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
         VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
     };
 
@@ -19788,6 +19963,7 @@ mod lang_theme_tests {
             (L_LUA, "Lua"),
             (L_BASH, "Shell"),
             (L_NSIS, "NSIS"),
+            (L_TCL, "TCL"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -21848,6 +22024,346 @@ mod lang_theme_tests {
                  consulting any wordlist; an entry here is unreachable spec noise"
             );
         }
+    }
+
+    /// TCL uses Lexilla's `tcl` lexer (`LexTCL.cxx`) — a substantial
+    /// 22-state byte-exact case-sensitive lexer with a nine-class
+    /// wordlist surface. The dedicated test pins the four-class
+    /// install contract (classes 0-3 populated matching N++ default;
+    /// classes 4-8 ship empty), the rich 20-mapping style table
+    /// (22 emission states minus DEFAULT + IDENTIFIER, which follow
+    /// the universal-omission pattern), the four-state comment
+    /// cluster collapse to Comment (`COMMENT` + `COMMENTLINE` +
+    /// `COMMENT_BOX` + `BLOCK_COMMENT` — richest comment surface in
+    /// the framework), the two-state string-family collapse to
+    /// String (`IN_QUOTE` + `WORD_IN_QUOTE` — the latter being
+    /// `LexTCL`'s single mid-string keyword-hit slot per
+    /// `LexTCL.cxx:158-167` regardless of which class matched), the
+    /// `SUBSTITUTION` + `SUB_BRACE` → Lifetime routing (sigil-tagged
+    /// variable archetype — Bash SCALAR / PARAM precedent), the
+    /// `MODIFIER` → Keyword2 routing (`-flag` command-option
+    /// archetype), the `EXPAND` → Keyword routing (brace-context
+    /// `{keyword}` class), the `WORD` → Keyword bold routing
+    /// (primary built-in command class), the `WORD2..WORD8` →
+    /// Keyword2 routing (six secondary classes — Tk widgets, iTcl /
+    /// `TclOO`, `tkCommands`, and four user-customisation slots
+    /// pre-themed for forward-compat), DEFAULT + IDENTIFIER
+    /// explicit-omission pins, italic anchors on all four comment
+    /// families, bold anchors + non-bold guards, no-overlap
+    /// invariant across the four populated wordlists (`HashSet`
+    /// structural guard), and the contrast with the rest of the
+    /// framework (10 non-reuse pins against sibling themes).
+    ///
+    /// Test naming: `tcl_uses_lextcl_nine_class_theme` —
+    /// `_nine_class_` because `tclWordListDesc[]` declares exactly
+    /// nine wordlist slots (the lexer's richest wordlist surface).
+    /// Code++ populates classes 0-3 (matching N++ default) — the
+    /// `nine_class` count reflects the LEXER's surface, not Code++'s
+    /// install count. Contrasts with `bash_uses_lexbash_one_class_theme`
+    /// (1 class), `batch_uses_lexbatch_two_class_theme` (2 classes),
+    /// and `nsis_uses_lexnsis_four_class_theme` (4 classes). First
+    /// `_nine_class_` test in the framework.
+    #[test]
+    fn tcl_uses_lextcl_nine_class_theme() {
+        use std::collections::HashSet;
+
+        use codepp_scintilla_sys::{SCE_TCL_DEFAULT, SCE_TCL_IDENTIFIER};
+
+        use super::{
+            SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE, SCE_TCL_COMMENT_BOX,
+            SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER, SCE_TCL_NUMBER, SCE_TCL_OPERATOR,
+            SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD, SCE_TCL_WORD2, SCE_TCL_WORD3,
+            SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7, SCE_TCL_WORD8,
+            SCE_TCL_WORD_IN_QUOTE,
+        };
+        let tcl = lang_theme(L_TCL).expect("TCL wired");
+
+        // Style table size pin — 20 mappings (22 emission states
+        // minus DEFAULT (0) and IDENTIFIER (7), both intentionally
+        // unmapped; no SCE_TCL_ERROR exists in the lexer).
+        assert_eq!(
+            tcl.styles.len(),
+            20,
+            "TCL_STYLES must map 20 indices (22 emission states minus DEFAULT + IDENTIFIER)"
+        );
+
+        // Cross-language non-reuse pins. 10 sibling themes — must NOT
+        // share any other framework theme's style table.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let props = lang_theme(L_INI).expect("INI wired");
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let bash = lang_theme(L_BASH).expect("Bash wired");
+        let nsis = lang_theme(L_NSIS).expect("NSIS wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (mk, "Makefile"),
+            (pas, "Pascal"),
+            (php, "PHP"),
+            (bat, "Batch"),
+            (props, "INI"),
+            (sql, "SQL"),
+            (vb, "VB"),
+            (bash, "Bash"),
+            (nsis, "NSIS"),
+        ] {
+            assert_ne!(tcl.styles, other.styles, "TCL must NOT reuse {name}_STYLES");
+        }
+
+        // Four-class install — classes 0 (`TCL Keywords`), 1 (`TK
+        // Keywords`), 2 (`iTCL Keywords`), and 3 (`tkCommands`).
+        // Classes 4 (`expand` — brace-context only), 5 (`user1`),
+        // 6 (`user2`), 7 (`user3`), 8 (`user4`) ship empty in N++
+        // default per `langs.model.xml`; Code++ matches.
+        assert_eq!(
+            tcl.keywords.len(),
+            4,
+            "TCL installs classes 0-3 only (matches N++ default; classes 4-8 ship empty)"
+        );
+        assert_eq!(tcl.keywords[0].0, 0);
+        assert_eq!(tcl.keywords[0].1, TCL_KEYWORDS);
+        assert_eq!(tcl.keywords[1].0, 1);
+        assert_eq!(tcl.keywords[1].1, TCL_TK_KEYWORDS);
+        assert_eq!(tcl.keywords[2].0, 2);
+        assert_eq!(tcl.keywords[2].1, TCL_ITCL_KEYWORDS);
+        assert_eq!(tcl.keywords[3].0, 3);
+        assert_eq!(tcl.keywords[3].1, TCL_TK_COMMANDS);
+        // Structural guard: classes 4-8 must NOT be installed.
+        assert!(
+            tcl.keywords
+                .iter()
+                .all(|(class, _)| *class == 0 || *class == 1 || *class == 2 || *class == 3),
+            "TCL installs classes 0-3 ONLY — classes 4 (expand), 5-8 (user1..user4) ship empty \
+             in N++ default per langs.model.xml"
+        );
+
+        // No-overlap invariant across the four populated wordlists.
+        // The lexer's match chain at LexTCL.cxx:160-180 checks
+        // classes 0-4 in a first-match-wins chain, so a token
+        // duplicated in classes 0 + 1 would always hit class 0 —
+        // the class-1 entry would be unreachable spec noise. Even
+        // worse, classes 5-8 run UNCONDITIONALLY after, so a class-5
+        // duplicate would OVERRIDE the class-0 hit (we don't ship
+        // class-5+ entries today but the no-overlap guard
+        // future-proofs the contract). Pin structurally via
+        // HashSet — a future contributor adding a duplicate trips CI.
+        let mut seen: HashSet<&str> = HashSet::new();
+        for (class_idx, words) in tcl.keywords {
+            for tok in words.split_whitespace() {
+                assert!(
+                    seen.insert(tok),
+                    "TCL wordlist token `{tok}` appears in multiple classes (currently checking \
+                     class {class_idx}) — the lexer's first-match-wins chain at \
+                     LexTCL.cxx:160-167 makes any duplicate unreachable spec noise"
+                );
+            }
+        }
+
+        // Style-routing pins — every populated mapping.
+        for (idx, slot, name) in [
+            (SCE_TCL_COMMENT, StyleSlot::Comment, "SCE_TCL_COMMENT"),
+            (
+                SCE_TCL_COMMENTLINE,
+                StyleSlot::Comment,
+                "SCE_TCL_COMMENTLINE",
+            ),
+            (
+                SCE_TCL_COMMENT_BOX,
+                StyleSlot::Comment,
+                "SCE_TCL_COMMENT_BOX",
+            ),
+            (
+                SCE_TCL_BLOCK_COMMENT,
+                StyleSlot::Comment,
+                "SCE_TCL_BLOCK_COMMENT",
+            ),
+            (SCE_TCL_NUMBER, StyleSlot::Number, "SCE_TCL_NUMBER"),
+            (SCE_TCL_IN_QUOTE, StyleSlot::String, "SCE_TCL_IN_QUOTE"),
+            (
+                SCE_TCL_WORD_IN_QUOTE,
+                StyleSlot::String,
+                "SCE_TCL_WORD_IN_QUOTE",
+            ),
+            (SCE_TCL_OPERATOR, StyleSlot::Operator, "SCE_TCL_OPERATOR"),
+            (
+                SCE_TCL_SUBSTITUTION,
+                StyleSlot::Lifetime,
+                "SCE_TCL_SUBSTITUTION",
+            ),
+            (SCE_TCL_SUB_BRACE, StyleSlot::Lifetime, "SCE_TCL_SUB_BRACE"),
+            (SCE_TCL_MODIFIER, StyleSlot::Keyword2, "SCE_TCL_MODIFIER"),
+            (SCE_TCL_EXPAND, StyleSlot::Keyword, "SCE_TCL_EXPAND"),
+            (SCE_TCL_WORD, StyleSlot::Keyword, "SCE_TCL_WORD"),
+            (SCE_TCL_WORD2, StyleSlot::Keyword2, "SCE_TCL_WORD2"),
+            (SCE_TCL_WORD3, StyleSlot::Keyword2, "SCE_TCL_WORD3"),
+            (SCE_TCL_WORD4, StyleSlot::Keyword2, "SCE_TCL_WORD4"),
+            (SCE_TCL_WORD5, StyleSlot::Keyword2, "SCE_TCL_WORD5"),
+            (SCE_TCL_WORD6, StyleSlot::Keyword2, "SCE_TCL_WORD6"),
+            (SCE_TCL_WORD7, StyleSlot::Keyword2, "SCE_TCL_WORD7"),
+            (SCE_TCL_WORD8, StyleSlot::Keyword2, "SCE_TCL_WORD8"),
+        ] {
+            assert!(
+                tcl.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Explicit-omission pins. DEFAULT (0) follows the universal-
+        // omission pattern — renders at STYLE_DEFAULT (user's chosen
+        // foreground). IDENTIFIER (7) is the unmatched-bare-identifier
+        // slot — same omission pattern as SCE_C_IDENTIFIER /
+        // SCE_LUA_IDENTIFIER / SCE_PL_IDENTIFIER. No SCE_TCL_ERROR
+        // exists in the lexer to omit.
+        for (idx, name) in [
+            (SCE_TCL_DEFAULT, "SCE_TCL_DEFAULT"),
+            (SCE_TCL_IDENTIFIER, "SCE_TCL_IDENTIFIER"),
+        ] {
+            assert!(
+                !tcl.styles.iter().any(|(i, _)| *i == idx),
+                "{name} must remain unmapped (intentional universal-omission per banner)"
+            );
+        }
+
+        // Italic on all four comment families — COMMENT (command-
+        // position `#`) + COMMENTLINE (elsewhere `#`) + COMMENT_BOX
+        // (`#-` / `##` line-leading boxed continuation) +
+        // BLOCK_COMMENT (`#~`). Richest comment surface in the
+        // framework; matches Lua COMMENT + COMMENTLINE + COMMENTDOC
+        // triple-italic and NSIS COMMENT + COMMENTBOX double-italic
+        // precedent.
+        for (idx, name) in [
+            (SCE_TCL_COMMENT, "SCE_TCL_COMMENT"),
+            (SCE_TCL_COMMENTLINE, "SCE_TCL_COMMENTLINE"),
+            (SCE_TCL_COMMENT_BOX, "SCE_TCL_COMMENT_BOX"),
+            (SCE_TCL_BLOCK_COMMENT, "SCE_TCL_BLOCK_COMMENT"),
+        ] {
+            assert!(
+                tcl.italic.contains(&idx),
+                "Italic on {name} (universal comment-slot convention; four comment families)"
+            );
+        }
+        // Pin no italic on anything else — TCL has exactly four
+        // comment families.
+        assert_eq!(
+            tcl.italic.len(),
+            4,
+            "TCL_ITALIC should contain exactly the four comment-family states"
+        );
+
+        // Bold the primary built-in command class (WORD) and the
+        // brace-context expansion class (EXPAND). Both carry the
+        // "this is a TCL keyword" structural cue. Matches SCE_SH_WORD
+        // / SCE_NSIS_FUNCTION bold precedent.
+        for (idx, name) in [
+            (SCE_TCL_WORD, "SCE_TCL_WORD"),
+            (SCE_TCL_EXPAND, "SCE_TCL_EXPAND"),
+        ] {
+            assert!(
+                tcl.bold.contains(&idx),
+                "Bold on {name} (primary-keyword + brace-expansion convention)"
+            );
+        }
+        // Pin no bold on the secondary classes (WORD2..WORD8) and
+        // the sigil / modifier slots — they carry distinction via
+        // their colour slots (Keyword2 / Lifetime / Keyword2), not
+        // font weight. Matches Bash SCALAR / PARAM staying non-bold
+        // and Perl HASH / ARRAY staying non-bold precedent.
+        for (idx, name) in [
+            (SCE_TCL_WORD2, "SCE_TCL_WORD2"),
+            (SCE_TCL_WORD3, "SCE_TCL_WORD3"),
+            (SCE_TCL_WORD4, "SCE_TCL_WORD4"),
+            (SCE_TCL_WORD5, "SCE_TCL_WORD5"),
+            (SCE_TCL_WORD6, "SCE_TCL_WORD6"),
+            (SCE_TCL_WORD7, "SCE_TCL_WORD7"),
+            (SCE_TCL_WORD8, "SCE_TCL_WORD8"),
+            (SCE_TCL_SUBSTITUTION, "SCE_TCL_SUBSTITUTION"),
+            (SCE_TCL_SUB_BRACE, "SCE_TCL_SUB_BRACE"),
+            (SCE_TCL_MODIFIER, "SCE_TCL_MODIFIER"),
+        ] {
+            assert!(
+                !tcl.bold.contains(&idx),
+                "{name} must NOT be bold (carries weight via colour slot, not font weight)"
+            );
+        }
+        // Pin exact bold count — exactly two entries (WORD + EXPAND).
+        assert_eq!(
+            tcl.bold.len(),
+            2,
+            "TCL_BOLD should contain exactly SCE_TCL_WORD + SCE_TCL_EXPAND"
+        );
+
+        // Case-sensitivity contract. LexTCL runs byte-exact `InList`
+        // with NO case folding (verified at LexTCL.cxx:152, 160 — no
+        // MakeLowerCase / tolower / GetCurrentLowered on the
+        // wordlist-match path). Wordlist contents are stored in
+        // their canonical lowercase form per the Tcl 8.6 / 9.0
+        // Reference Manual (`puts` / `set` / `if` / `proc` / etc.).
+        // Pin a few canonical anchors structurally so a future
+        // "let's uppercase the list" regression is loud rather than
+        // silent.
+        for canonical in ["puts", "set", "if", "proc", "foreach", "while", "expr"] {
+            assert!(
+                TCL_KEYWORDS.split_whitespace().any(|tok| tok == canonical),
+                "TCL_KEYWORDS must contain the canonical lowercase `{canonical}` — LexTCL runs \
+                 byte-exact case-sensitive against source spelling; uppercase entries would \
+                 never match a TCL author's source"
+            );
+        }
+        for canonical in ["button", "label", "entry", "frame", "text", "canvas"] {
+            assert!(
+                TCL_TK_KEYWORDS
+                    .split_whitespace()
+                    .any(|tok| tok == canonical),
+                "TCL_TK_KEYWORDS must contain the canonical lowercase Tk widget `{canonical}`"
+            );
+        }
+        for canonical in ["class", "method", "constructor", "destructor"] {
+            assert!(
+                TCL_ITCL_KEYWORDS
+                    .split_whitespace()
+                    .any(|tok| tok == canonical),
+                "TCL_ITCL_KEYWORDS must contain the canonical lowercase OO keyword `{canonical}`"
+            );
+        }
+        for canonical in ["pack", "grid", "place", "bind", "winfo", "wm"] {
+            assert!(
+                TCL_TK_COMMANDS
+                    .split_whitespace()
+                    .any(|tok| tok == canonical),
+                "TCL_TK_COMMANDS must contain the canonical lowercase Tk command `{canonical}`"
+            );
+        }
+
+        // No-overlap pin across the four wordlists for a handful of
+        // canonical anchors — defence in depth on top of the HashSet
+        // guard above. The widget-creation set (class 1) must not
+        // contain Tk-management commands; the OO set (class 2) must
+        // not contain core TCL commands; etc.
+        assert!(
+            !TCL_KEYWORDS
+                .split_whitespace()
+                .any(|tok| tok == "button" || tok == "canvas"),
+            "TCL_KEYWORDS must NOT contain Tk widget-creation commands — those belong in \
+             TCL_TK_KEYWORDS (class 1)"
+        );
+        assert!(
+            !TCL_TK_KEYWORDS
+                .split_whitespace()
+                .any(|tok| tok == "pack" || tok == "grid" || tok == "winfo"),
+            "TCL_TK_KEYWORDS must NOT contain Tk-management commands — those belong in \
+             TCL_TK_COMMANDS (class 3)"
+        );
+        assert!(
+            !TCL_ITCL_KEYWORDS
+                .split_whitespace()
+                .any(|tok| tok == "puts" || tok == "set" || tok == "proc"),
+            "TCL_ITCL_KEYWORDS must NOT contain core TCL commands — those belong in \
+             TCL_KEYWORDS (class 0)"
+        );
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a
