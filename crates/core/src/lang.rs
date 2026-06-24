@@ -564,10 +564,12 @@ pub const LANG_TABLE: &[LangEntry] = &[
         menu_label: "LaTeX",
         desc: "LaTeX source file",
         lexer: Some("latex"),
-        // `.sty` (LaTeX style packages) share LaTeX syntax — same
-        // `\command` / `\begin{env}` / `%` comment grammar; N++
-        // also routes `.sty` to the LaTeX lexer.
-        extensions: &["latex", "sty"],
+        // `.sty` (LaTeX style packages), `.cls` (document class
+        // files), `.ltx` (LaTeX-format-source variant), `.dtx`
+        // (documented-source format) all share LaTeX grammar —
+        // same `\command` / `\begin{env}` / `%` comment syntax;
+        // N++ also routes the four to the LaTeX lexer.
+        extensions: &["latex", "sty", "cls", "ltx", "dtx"],
         filenames: &[],
     },
     LangEntry {
@@ -3756,8 +3758,11 @@ mod tests {
         // banner for the rationale).
         assert_eq!(LangType::from_extension("tex"), L_TEX);
         assert_eq!(LangType::from_extension("latex"), L_LATEX);
-        // `.sty` (LaTeX style package) — shares LaTeX grammar.
+        // `.sty` / `.cls` / `.ltx` / `.dtx` — all LaTeX grammar.
         assert_eq!(LangType::from_extension("sty"), L_LATEX);
+        assert_eq!(LangType::from_extension("cls"), L_LATEX);
+        assert_eq!(LangType::from_extension("ltx"), L_LATEX);
+        assert_eq!(LangType::from_extension("dtx"), L_LATEX);
     }
 
     #[test]
