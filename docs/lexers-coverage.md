@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 25 / 🟡 63 / ⚫ 1.
+Total: 89 rows. ✅ 26 / 🟡 62 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1369,6 +1369,170 @@ PHP / Batch / INI / SQL / VB / CSS / Perl). Test name
 single-populated-class from zero-class (TeX / LaTeX) and
 two-class (Batch).
 
+**NSIS (2026-06-24):** uses Lexilla's `nsis` lexer (`LexNsis.cxx`)
+— 19 emission states (0..=18) with **four wordlist classes**.
+`nsisWordLists[]` at `LexNsis.cxx:658-663` declares `"Functions"`
+/ `"Variables"` / `"Lables"` [sic — upstream typo preserved] /
+`"UserDefined"`, terminated by `nullptr`. Code++ populates classes
+0 (`NSIS_FUNCTIONS` — ~200 entries covering NSIS instruction set
+plus non-hard-wired `!`-directives plus plugin bare-name halves
+like `nsExec` / `StrFunc`) and 1 (`NSIS_VARIABLES` — ~50 entries
+covering predefined `$INSTDIR` / `$WINDIR` / shell-folder constants
+plus the `$0..$9` / `$R0..$R9` numbered registers, each entry
+prefixed with `$` per the lexer's identifier-buffer construction
+at `LexNsis.cxx:252-265`). Classes 2 and 3 ship empty matching
+N++'s `langs.model.xml` default — labels and user-defined macros
+are user-extension surface, not host-shipped vocabulary.
+
+**Hard-wired short-circuit cluster — 18 tokens bypass the
+wordlist.** `classifyWordNsis` at `LexNsis.cxx:206-231`
+short-circuits on `!macro` / `!macroend` / `!ifdef` / `!ifndef`
+/ `!endif` / `!if` / `!else` / `!ifmacrodef` / `!ifmacrondef` /
+`Section` / `SectionEnd` / `SubSection` / `SubSectionEnd` /
+`SectionGroup` / `SectionGroupEnd` / `PageEx` / `PageExEnd` /
+`Function` / `FunctionEnd` BEFORE consulting any user wordlist
+— they route to dedicated `SCE_NSIS_MACRODEF` / `IFDEFINEDEF` /
+`SECTIONDEF` / `SUBSECTIONDEF` / `SECTIONGROUP` / `PAGEEX` /
+`FUNCTIONDEF` states instead of `SCE_NSIS_FUNCTION`. Pinned
+structurally in the theme test by an `iter().any()` shadow guard
+preventing accidental duplication; the test would catch a future
+contributor copy-pasting `"section"` into `NSIS_FUNCTIONS` (it
+would be unreachable spec noise — the lexer never consults the
+wordlist for these tokens).
+
+**Three-string-flavour collapse — STRINGDQ + STRINGLQ + STRINGRQ
+all → String.** NSIS supports three independent quote characters:
+`"..."` (DQ, state 2), `` `...` `` (LQ — "left quote", state 3),
+`'...'` (RQ — "right quote", state 4). The three are tracked as
+distinct lexer states (transitions at `LexNsis.cxx:322-326,
+:327-334, :335-342` opening; `:388-407` closing) but collapse to
+a single `StyleSlot::String` in `NSIS_STYLES` — uniform-archetype
+matches the Lua `LITERALSTRING + CHARACTER + STRING` triple-
+collapse precedent. String bodies support `$\` (dollar-backslash)
+escape at `:385-386` so `$\"` does not close a DQ string, and a
+trailing `\` at EOL at `:409-443` continues across lines.
+
+**STRINGVAR + VARIABLE → Lifetime.** Sigil-tagged variable
+archetype matching the Bash SCALAR / PARAM → Lifetime precedent.
+`SCE_NSIS_STRINGVAR` (state 13) is emitted from inside an active
+string body when the lexer detects `$var` / `${var}` / `$\esc` at
+`:518, :527-530, :536` — same archetype as the bare top-level
+variable, routes to the same slot for uniform visual handling.
+The `${...}` brace-form at `:245-248` and the `nsis.uservars=1`
+user-var fallback at `:252-266` (when the property is set) both
+route to bare `SCE_NSIS_VARIABLE` outside strings.
+
+**LABEL → Preprocessor.** Matches `SCE_LUA_LABEL` precedent. NSIS
+labels are jump targets (`goto label_name`) inside Sections /
+Functions; the `Preprocessor` slot's distinct colour carries the
+"structural anchor, not content" cue without the visual noise that
+bolding would create inside long Section bodies. The lexer does
+NOT auto-detect "identifier followed by `:`" — user enumeration in
+class 2 is required for labels to highlight (N++ ships class 2
+empty, so Code++ matches; users opt in by editing config).
+
+**USERDEFINED → Keyword2.** Matches `SCE_LUA_WORD2` precedent for
+"secondary library / user customisation". User-defined names from
+`!define foo bar` / `!macro mymacro` get this slot when the user
+adds them to class 3 — N++ ships class 3 empty, Code++ matches.
+
+**18-mapping style table.** DEFAULT (0) intentionally unmapped
+(universal background-fall-through pattern). NO `SCE_NSIS_ERROR`
+state exists in the lexer — `LexNsis.cxx` has no recovery /
+malformed-token branch; the lexer simply walks back to DEFAULT on
+any unmatched character. Contrast with `SCE_SH_ERROR` / `SCE_PL_ERROR`
+which join the deferred-Error-slot migration cluster — NSIS doesn't
+need a deferred-Error entry.
+
+**Italic on both comment families.** `SCE_NSIS_COMMENT` (state 1,
+`;` and `#` line comments per `:316`) AND `SCE_NSIS_COMMENTBOX`
+(state 18, `/* ... */` block comments per `:357-361, :490-495`).
+Matches the Lua COMMENT + COMMENTLINE + COMMENTDOC triple-italic
+precedent (every comment-class state gets italic). Pinned to
+exactly 2 entries by the theme test's `nsis.italic.len() == 2`
+assertion — NSIS has no doc-comment third family to add.
+
+**Bold on the structural + preprocessor cluster.** Eight states
+bolded: FUNCTION + FUNCTIONDEF + SECTIONDEF + SUBSECTIONDEF +
+SECTIONGROUP + PAGEEX get keyword-bold matching N++ default
+scheme; IFDEFINEDEF + MACRODEF mirror the `SCE_C_PREPROCESSOR`
+bold precedent for `#ifdef` / `#define`. LABEL deliberately NOT
+bolded (Preprocessor colour carries the cue; matches
+`SCE_LUA_PREPROCESSOR` staying non-bold); VARIABLE / STRINGVAR /
+USERDEFINED deliberately NOT bolded (Lifetime / Keyword2 colours
+carry the cue; matches Bash SCALAR / PARAM precedent).
+
+**Canonical mixed-case wordlists, lexer-default property posture.**
+LexNsis exposes two case + scope-modifying properties at `:178,
+:184` whose lexer defaults are both `0`:
+
+* `nsis.ignorecase` — when `1`, lowercases the buffered token
+  before `InList` at `:198-202` AND routes all hard-wired matches
+  through `NsisCmp` (`CompareCaseInsensitive`). When `0` (the
+  default), `InList` runs byte-exact against the source spelling
+  and the hard-wired branches `strcmp` directly against
+  `Section` / `Function` / `!macro` / etc.
+* `nsis.uservars` — when `1`, any `$`-prefixed token of valid
+  `isNsisChar` characters classifies as `SCE_NSIS_VARIABLE`
+  even outside the class-1 wordlist (`:252-266`). When `0`
+  (the default), user-declared variables (`Var MyVar` →
+  `$MyVar`) lex as `SCE_NSIS_DEFAULT` — only the predefined
+  names in `NSIS_VARIABLES` highlight.
+
+Code++ stores `NSIS_FUNCTIONS` and `NSIS_VARIABLES` in their
+**canonical mixed-case** form per the NSIS Users Manual
+(`MessageBox` / `SetOutPath` / `WriteRegStr` / `$INSTDIR` /
+`$WINDIR` / `$R0..$R9` / etc.) — matching the source spelling an
+NSIS author writes and matching the hard-wired-branch comparison
+strings at `:206-231`. With both properties at their lexer default
+(Code++ does not install them — `LangTheme` has no `properties`
+slot today), the canonical-mixed-case wordlists match real NSIS
+source byte-for-byte: `MessageBox` in the source hits the
+mixed-case `MessageBox` in `NSIS_FUNCTIONS`, the hard-wired
+`Section` matches the `:221` branch directly, and `$INSTDIR`
+hits `$INSTDIR` in `NSIS_VARIABLES`. The remaining gap is
+`nsis.uservars=0` — user-declared variables don't highlight.
+Tracked as a follow-up that adds the `properties: &[(&str, &str)]`
+slot to `LangTheme` and threads `SCI_SETPROPERTY` through
+`apply_lang` — the same plumbing unlocks CSS's
+`lexer.css.scss.language` and Python's
+`lexer.python.identifier.attributes` forward-compat hooks already
+referenced in their scintilla-sys banners, best landed as one
+generalising commit rather than NSIS-specific. Once the slot
+lands, only `nsis.uservars=1` needs installing — `nsis.ignorecase`
+can stay at the lexer default because canonical mixed-case keeps
+working under both property values. The 80% ✅ gate in this
+matrix counts NSIS as ✅ because the wordlist + style + italic +
+bold wiring is complete.
+
+**Test included in `wired_languages_have_complete_themes`** —
+18-mapping style table exceeds the 8-floor AND `NSIS_FUNCTIONS`
+populates class 0, so both gates pass. Dedicated test
+`nsis_uses_lexnsis_four_class_theme` additionally pins:
+two-class wordlist install (classes 2 + 3 NOT installed —
+structural guard matches N++ default-empty); the SEVEN dedicated
+structural-state routings that the host MUST theme explicitly
+(SECTIONDEF / SUBSECTIONDEF / SECTIONGROUP / PAGEEX / FUNCTIONDEF
+→ Keyword, IFDEFINEDEF / MACRODEF → Preprocessor); the
+three-string-flavour collapse to String; SCALAR-archetype
+VARIABLE / STRINGVAR → Lifetime; LABEL → Preprocessor;
+USERDEFINED → Keyword2; italic on both comment families; bold
+on the structural + preprocessor cluster with non-bold pins for
+LABEL / VARIABLE / STRINGVAR / USERDEFINED; canonical-
+mixed-case anchor pins for both `NSIS_FUNCTIONS` (`MessageBox`,
+`SetOutPath`, `WriteRegStr`, `CreateDirectory`) and
+`NSIS_VARIABLES` (`$INSTDIR`, `$WINDIR`, `$PROGRAMFILES`, `$R0`)
+matching the lexer-default `nsis.ignorecase=0` byte-exact
+contract; `$`-sigil-prefix invariant for class 1 (the lexer
+constructs the token buffer including the leading `$` at
+`:252-265`); hard-wired-shadow guard preventing accidental
+duplication of the 18 hard-wired tokens (`Section`,
+`SectionEnd`, `Function`, …) into `NSIS_FUNCTIONS`; and 10
+cross-language non-reuse `assert_ne!` pins. Test name
+`_four_class_` is the first in the framework — distinguishes
+the four-slot LexNsis surface from `_one_class_` (Bash),
+`_two_class_` (Batch), and `_zero_class_` (TeX / LaTeX).
+
 **Makefile (2026-05-14):** uses Lexilla's `makefile` lexer
 (`LexMake.cxx`) — a small line-oriented lexer with a compact
 5-style table and a single keyword class. `MAKEFILE_KEYWORDS`
@@ -1579,7 +1743,7 @@ further shim work needed.
 | MMIXAL | 75 | `mmixal` | ⚫ | ⚫ | 🟡 |
 | Nim | 76 | `nim` | ⚫ | ⚫ | 🟡 |
 | Nncrontab | 77 | `nncrontab` | ⚫ | ⚫ | 🟡 |
-| NSIS | 28 | `nsis` | ⚫ | ⚫ | 🟡 |
+| NSIS | 28 | `nsis` | ✅ | ✅ | ✅ |
 | Objective-C | 5 | `cpp` | ✅ | ✅ | ✅ |
 | OScript | 78 | `oscript` | ⚫ | ⚫ | 🟡 |
 | Pascal | 11 | `pascal` | ✅ | ✅ | ✅ |

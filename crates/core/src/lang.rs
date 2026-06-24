@@ -3848,6 +3848,236 @@ pub const BASH_KEYWORDS: &str = concat!(
     "source times trap true type ",
 );
 
+/// Space-separated NSIS instruction / `!`-directive vocabulary
+/// installed via `LexNsis`'s `SCI_SETKEYWORDS(0, ...)` — class 0
+/// of the four-class `nsisWordLists[]` registration at
+/// `vendor/lexilla/lexers/LexNsis.cxx:658-663`. Drives
+/// `SCE_NSIS_FUNCTION` per the dispatch at `LexNsis.cxx:233-234`.
+///
+/// **Four-class wordlist surface, this is class 0.** `nsisWordLists[]`
+/// declares `"Functions"` / `"Variables"` / `"Lables"` (sic) /
+/// `"UserDefined"`, terminated by `nullptr`. Code++ populates
+/// classes 0 and 1 only — see [`NSIS_VARIABLES`]. Classes 2
+/// (`Lables` — note upstream typo, do NOT silently correct to
+/// `"Labels"`) and 3 (`UserDefined`) ship empty in N++'s
+/// `langs.model.xml` and Code++ matches.
+///
+/// **Misleading slot name.** Despite the upstream name `"Functions"`,
+/// this is semantically the NSIS **instruction set** — every
+/// built-in command (`File`, `SetOutPath`, `MessageBox`,
+/// `WriteRegStr`, `CreateDirectory`, `IfFileExists`, etc.)
+/// plus every `!`-prefixed compile-time directive NOT in the
+/// hard-wired short-circuit set (`!define`, `!include`,
+/// `!insertmacro`, `!undef`, `!system`, `!warning`, `!error`,
+/// `!verbose`, `!pragma`, etc.). Class 0 is the bulk of the
+/// vocabulary — ~200 entries.
+///
+/// **Case-sensitivity is property-driven, host runs at lexer
+/// default.** `LexNsis.cxx:178` reads the `nsis.ignorecase`
+/// runtime property; default `0` means strict byte-exact
+/// `strcmp` against the source token, value `1` causes the
+/// buffered token to be lowercased before `InList` at
+/// `:198-202`. Code++ does NOT install the property today
+/// (`LangTheme` has no `properties` slot — a follow-up adds it
+/// per `docs/lexers-coverage.md`), so the lexer runs at its
+/// default `nsis.ignorecase=0`. The wordlist contents below
+/// MUST therefore be in **canonical mixed-case** as written in
+/// the NSIS Users Manual (`MessageBox`, `SetOutPath`,
+/// `WriteRegStr`, …) — this matches the byte-exact source
+/// spelling produced by an NSIS script author and matches the
+/// hard-wired branches at `:206-231` which also compare against
+/// the mixed-case canonical form. (Notepad++'s `langs.model.xml`
+/// ships these in lowercase paired with a `nsis.ignorecase=1`
+/// property install; once Code++ adds the properties slot,
+/// either spelling will work — but the canonical mixed-case
+/// form documents author intent independent of the property and
+/// will keep working if the property is ever toggled.)
+///
+/// **Do NOT duplicate hard-wired tokens here.** `classifyWordNsis`
+/// at `LexNsis.cxx:206-231` short-circuits on `!macro` /
+/// `!macroend` / `!ifdef` / `!ifndef` / `!endif` / `!if` /
+/// `!else` / `!ifmacrodef` / `!ifmacrondef` / `Section` /
+/// `SectionEnd` / `SubSection` / `SubSectionEnd` /
+/// `SectionGroup` / `SectionGroupEnd` / `PageEx` / `PageExEnd` /
+/// `Function` / `FunctionEnd` BEFORE consulting any user
+/// wordlist — they route to their dedicated `SCE_NSIS_*DEF` /
+/// `SECTIONGROUP` / `PAGEEX` / `MACRODEF` / `IFDEFINEDEF` states
+/// instead. Adding them here would be unreachable spec noise.
+///
+/// **No `::` plugin-call recognition.** NSIS source commonly
+/// writes plugin invocations as `nsExec::Exec` / `StrFunc::*` /
+/// `InstallOptions::*`, but `isNsisChar` at `LexNsis.cxx:63-66`
+/// excludes `:`, so the `::` breaks the identifier into two
+/// halves that classify independently. For plugin calls to
+/// highlight, the wordlist below contains the bare names
+/// (`nsExec`, `Exec`, `StrFunc`, `InstallOptions`) rather than
+/// the qualified form.
+///
+/// **Sourcing.** The NSIS Users Manual (Appendix B "Instructions"
+/// and Appendix C "Preprocessor") is the canonical source for
+/// every entry below. Cross-referenced against N++'s shipped
+/// `langs.model.xml` `<Language name="nsis">` `instre1` list
+/// for default-set parity. The N++ file is referenced for parity
+/// inspection only — no content copied from it (per the
+/// CLAUDE.md "no code from Notepad++" rule); the canonical
+/// source for every entry below is the NSIS Users Manual.
+pub const NSIS_FUNCTIONS: &str = concat!(
+    // `!`-directives NOT in the hard-wired short-circuit set
+    // (those are `!macro`/`!macroend`/`!if`/`!ifdef`/`!ifndef`/
+    // `!else`/`!endif`/`!ifmacrodef`/`!ifmacrondef`). NSIS
+    // `!`-directives are canonically lowercase per Users Manual
+    // Appendix C — so these match the source spelling under
+    // `nsis.ignorecase=0` byte-exact comparison.
+    "!addincludedir !addplugindir !appendfile !cd !define !delfile ",
+    "!echo !error !execute !finalize !getdllversion !include ",
+    "!insertmacro !packhdr !pragma !searchparse !searchreplace ",
+    "!system !tempfile !undef !verbose !warning ",
+    // Flow-control / call / jump instructions
+    "Abort Call CallInstDLL ClearErrors DetailPrint Exec ",
+    "ExecShell ExecWait Goto IfErrors IfFileExists IfRebootFlag ",
+    "IfSilent IfAbort IntCmp IntCmpU IntFmt IntOp IsWindow ",
+    "MessageBox Nop Pop Push Quit Return Sleep ",
+    // String / number manipulation
+    "StrCmp StrCmpS StrCpy StrLen ",
+    // File / directory / path instructions
+    "CopyFiles CreateDirectory CreateShortCut Delete ",
+    "ExpandEnvStrings File FindClose FindFirst FindNext ",
+    "GetFileTime GetFileTimeLocal GetFullPathName GetTempFileName ",
+    "Rename RMDir SearchPath SetFileAttributes SetOutPath ",
+    // I/O on files (read/write/seek)
+    "FileBufSize FileClose FileErrorText FileOpen FileRead ",
+    "FileReadByte FileReadUTF16LE FileSeek ",
+    "FileWrite FileWriteByte FileWriteUTF16LE ",
+    "FlushINI ",
+    // Registry / INI
+    "DeleteINISec DeleteINIStr DeleteRegKey DeleteRegValue ",
+    "EnumRegKey EnumRegValue ReadEnvStr ReadINIStr ReadRegDWORD ",
+    "ReadRegStr WriteINIStr WriteRegBin WriteRegDWORD ",
+    "WriteRegExpandStr WriteRegStr WriteRegMultiStr ",
+    // Section / instType / page metadata setters
+    "AddBrandingImage AllowRootDirInstall AllowSkipFiles ",
+    "AutoCloseWindow BGFont BGGradient BrandingText BringToFront ",
+    "Caption ChangeUI CheckBitmap CompletedText ComponentText ",
+    "CRCCheck DirText DirVar DirVerify EnableWindow ",
+    "GetCurInstType GetDlgItem GetDLLVersion ",
+    "GetDLLVersionLocal GetErrorLevel GetFunctionAddress ",
+    "GetInstDirError GetLabelAddress HideWindow Icon ",
+    "InstallButtonText InstallColors InstallDir InstallDirRegKey ",
+    "InstProgressFlags InstType InstTypeGetText InstTypeSetText ",
+    "LockWindow LogSet LogText ",
+    // `PageEx` deliberately omitted — it's hard-wired at
+    // `LexNsis.cxx:227-228` to `SCE_NSIS_PAGEEX`, short-circuits
+    // before the wordlist is consulted, so an entry would be
+    // unreachable spec noise (caught by the theme test's
+    // hard-wired-shadow guard).
+    "MiscButtonText Name OutFile Page PageCallbacks ",
+    "Reboot ReserveFile SectionGetFlags SectionGetInstTypes ",
+    "SectionGetSize SectionGetText SectionIn SectionSetFlags ",
+    "SectionSetInstTypes SectionSetSize SectionSetText ",
+    "SendMessage SetAutoClose SetBrandingImage SetCompress ",
+    "SetCompressor SetCompressorDictSize SetCtlColors ",
+    "SetCurInstType SetDatablockOptimize SetDateSave ",
+    "SetDetailsPrint SetDetailsView SetErrorLevel SetErrors ",
+    "SetFont SetOverwrite SetPluginUnload SetRebootFlag ",
+    "SetRegView SetShellVarContext SetSilent ShowInstDetails ",
+    "ShowUninstDetails ShowWindow SilentInstall SilentUnInstall ",
+    "SpaceTexts SubCaption UninstallButtonText UninstallCaption ",
+    "UninstallExeName UninstallIcon UninstallSubCaption ",
+    "UninstallText UninstPage Var WindowIcon XPStyle ",
+    // DLL load / unload (NSIS-side)
+    "RegDLL UnRegDLL ",
+    // Strings / language tables
+    "LangString LicenseBkColor LicenseData ",
+    "LicenseForceSelection LicenseLangString LicenseText ",
+    "LoadLanguageFile ",
+    // Plugin invocation bare names (the `::` is not lexed —
+    // `nsExec::Exec` splits into `nsExec` and `Exec` halves;
+    // these are the namespace halves of the default plugin set).
+    "nsExec InstallOptions StrFunc System WinMessages ",
+    "UnsafeFile Dialogs nsDialogs Banner AdvSplash Splash ",
+    "UserInfo Math LangDLL StartMenu ",
+    // Version-info instructions
+    "VIAddVersionKey VIProductVersion Unicode InitPluginsDir ",
+    // Uninstaller writer + miscellaneous compile-time
+    "WriteUninstaller ",
+);
+
+/// Space-separated NSIS predefined-variable / numbered-register
+/// vocabulary installed via `LexNsis`'s `SCI_SETKEYWORDS(1, ...)`
+/// — class 1 of the four-class `nsisWordLists[]` registration at
+/// `vendor/lexilla/lexers/LexNsis.cxx:658-663`. Drives
+/// `SCE_NSIS_VARIABLE` per the dispatch at `LexNsis.cxx:236-237`.
+///
+/// **Sigil-included canonical form.** NSIS variables are written
+/// in source with a leading `$`, e.g. `$INSTDIR`. The lexer's
+/// `classifyWordNsis` at `LexNsis.cxx:252-265` walks the
+/// `isNsisChar` characters from the `$` and constructs a buffer
+/// that includes the `$` prefix — `s[0] == '$'` is the
+/// discriminator at `:252`. So the wordlist entries below MUST
+/// include the `$` sigil to match. (The `${...}` brace form is
+/// handled separately by a shape check at `:245-248` that does
+/// not consult any wordlist — those interpolations always style
+/// as `SCE_NSIS_VARIABLE` regardless of class 1 contents.)
+///
+/// **`nsis.uservars` opt-in extension — not installed today.**
+/// When the runtime property `nsis.uservars=1` is set,
+/// `classifyWordNsis` at `LexNsis.cxx:252-266` treats ANY
+/// `$`-prefixed token of valid `isNsisChar` characters as a
+/// variable, bypassing this wordlist. Code++ does NOT install
+/// the property today (same `LangTheme`-has-no-properties-slot
+/// constraint as `nsis.ignorecase`), so user-declared variables
+/// (`Var MyVar` → `$MyVar`) currently lex as `SCE_NSIS_DEFAULT`.
+/// Only the predefined names enumerated below highlight. The
+/// follow-up that adds the properties slot also installs
+/// `nsis.uservars=1` for parity with the N++ default.
+///
+/// **Case-sensitivity is property-driven, host runs at lexer
+/// default** — same contract as `NSIS_FUNCTIONS`. With
+/// `nsis.ignorecase=0` (lexer default; Code++ matches by not
+/// installing the property), `InList` is byte-exact against the
+/// canonical mixed-case source spelling. NSIS predefined
+/// variables are written in source ALL-UPPERCASE after the `$`
+/// sigil per Users Manual §4.2.3 (`$INSTDIR`, `$WINDIR`, …), so
+/// the entries below match that canonical form. The numbered
+/// registers `$R0..$R9` use uppercase `R` per the same Users
+/// Manual section.
+///
+/// **Numbered registers (`$0..$9`, `$R0..$R9`)** are NSIS's
+/// general-purpose register set, manipulated by `IntOp` /
+/// `StrCpy` etc. Included alongside the predefined-folder
+/// constants because both share the `SCE_NSIS_VARIABLE` slot
+/// semantically — they're "variables provided by the runtime
+/// without being declared".
+///
+/// **Sourcing.** The NSIS Users Manual §4.2 ("Variables") and
+/// §4.2.3 ("Constants") is the canonical source for every entry
+/// below. Cross-referenced against N++'s `langs.model.xml`
+/// `<Language name="nsis">` `instre2` list for default-set
+/// parity; no content copied (CLAUDE.md "no code from N++"
+/// rule).
+pub const NSIS_VARIABLES: &str = concat!(
+    // Numbered general-purpose registers (`IntOp $0 ...`, etc.)
+    "$0 $1 $2 $3 $4 $5 $6 $7 $8 $9 ",
+    "$R0 $R1 $R2 $R3 $R4 $R5 $R6 $R7 $R8 $R9 ",
+    // Install / output / system-folder constants
+    "$INSTDIR $OUTDIR $CMDLINE $LANGUAGE ",
+    "$PROGRAMFILES $PROGRAMFILES32 $PROGRAMFILES64 ",
+    "$COMMONFILES $COMMONFILES32 $COMMONFILES64 ",
+    "$DESKTOP $EXEDIR $EXEFILE $EXEPATH ",
+    "$WINDIR $SYSDIR $TEMP $PLUGINSDIR ",
+    // Start menu / shortcut folders
+    "$STARTMENU $SMPROGRAMS $SMSTARTUP $QUICKLAUNCH ",
+    // Shell-folder constants per SHGetFolderPath
+    "$DOCUMENTS $SENDTO $RECENT $FAVORITES ",
+    "$MUSIC $PICTURES $VIDEOS $NETHOOD $FONTS ",
+    "$TEMPLATES $APPDATA $LOCALAPPDATA $PRINTHOOD ",
+    "$INTERNET_CACHE $COOKIES $HISTORY $PROFILE ",
+    "$ADMINTOOLS $RESOURCES $RESOURCES_LOCALIZED ",
+    "$CDBURN_AREA ",
+    // Handles / window state constants
+    "$HWNDPARENT ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

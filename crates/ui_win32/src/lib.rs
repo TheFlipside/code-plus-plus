@@ -106,10 +106,11 @@ use codepp_core::lang::{
     CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS,
     JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP,
     L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_LATEX, L_LUA, L_MAKEFILE,
-    L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEX, L_VB, L_XML,
-    MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
-    PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS,
-    SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+    L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEX, L_VB,
+    L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+    RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+    XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -149,27 +150,31 @@ use codepp_scintilla_sys::{
     SCE_LUA_WORD7, SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2,
     SCE_L_MATH, SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
     SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR,
-    SCE_MAKE_TARGET, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2,
-    SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER,
-    SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD,
-    SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
-    SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
-    SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR,
-    SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR,
-    SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING, SCE_PL_STRING_Q,
-    SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR, SCE_PL_STRING_QR_VAR,
-    SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR,
-    SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT, SCE_PROPS_ASSIGNMENT,
-    SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION, SCE_P_ATTRIBUTE,
-    SCE_P_CHARACTER, SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE, SCE_P_DECORATOR,
-    SCE_P_DEFNAME, SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE, SCE_P_FTRIPLEDOUBLE,
-    SCE_P_NUMBER, SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE, SCE_P_TRIPLEDOUBLE, SCE_P_WORD,
-    SCE_P_WORD2, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC,
-    SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO,
-    SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2,
-    SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM, SCE_SH_HERE_Q,
-    SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING, SCE_SH_WORD,
-    SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD,
+    SCE_MAKE_TARGET, SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION,
+    SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER,
+    SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ,
+    SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF,
+    SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT,
+    SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING,
+    SCE_PAS_NUMBER, SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING,
+    SCE_PAS_WORD, SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER,
+    SCE_PL_COMMENTLINE, SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH,
+    SCE_PL_HERE_DELIM, SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX,
+    SCE_PL_HERE_QX_VAR, SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX,
+    SCE_PL_REGEX_VAR, SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING,
+    SCE_PL_STRING_Q, SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR,
+    SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR,
+    SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT,
+    SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION,
+    SCE_P_ATTRIBUTE, SCE_P_CHARACTER, SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE,
+    SCE_P_DECORATOR, SCE_P_DEFNAME, SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE,
+    SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER, SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE,
+    SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK,
+    SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME,
+    SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD,
+    SCE_RUST_WORD2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM,
+    SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING,
+    SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD,
     SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS,
     SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2,
     SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL, SCE_TEX_SYMBOL,
@@ -4690,6 +4695,176 @@ const BASH_THEME: LangTheme = LangTheme {
     bold: BASH_BOLD,
 };
 
+// --- LexNsis (NSIS installer script) ---
+//
+// 19 emission states (0..=18). 17 routed; DEFAULT (0) follows the
+// universal background-fall-through convention. No ERROR state
+// exists in LexNsis — the lexer simply walks back to DEFAULT on
+// any unmatched character (contrast with `SCE_SH_ERROR` /
+// `SCE_PL_ERROR` which join the deferred-Error-slot migration).
+//
+// Style routing rationale per slot:
+//   * COMMENT → Comment — `;` and `#` line comments per
+//     `LexNsis.cxx:316`. Universal Comment-slot convention.
+//   * COMMENTBOX → Comment — `/* ... */` block comments per
+//     `:357-361, :490-495`. Matches the Lua COMMENT + COMMENTLINE
+//     + COMMENTDOC uniform-Comment-slot precedent at line 4487.
+//   * STRINGDQ → String — `"..."` per `:322-326, :388-393`.
+//   * STRINGLQ → String — `` `...` `` per `:335-342, :395-400`.
+//   * STRINGRQ → String — `'...'` per `:327-334, :402-407`.
+//     All three string flavours collapse to the same `String`
+//     slot — uniform-archetype matches the Lua LITERALSTRING +
+//     CHARACTER + STRING triple collapse at line 4424-4431.
+//   * FUNCTION → Keyword — class-0 wordlist hit per `:233-234`.
+//     Despite the upstream slot name `"Functions"`, semantically
+//     this is the NSIS instruction set (`MessageBox` /
+//     `WriteRegStr` / `File` / `SetOutPath` / `IfFileExists` /
+//     `!define` / `!include` / etc.). Matches `SCE_C_WORD` /
+//     `SCE_SH_WORD` / `SCE_P_WORD` → Keyword bold-blue precedent.
+//   * VARIABLE → Lifetime — class-1 wordlist hit, `${...}` shape,
+//     and (when `nsis.uservars=1`) bare `$user` per `:236-237,
+//     :245-248, :252-265`. Sigil-tagged variable archetype —
+//     matches the Bash SCALAR / PARAM → Lifetime precedent at
+//     line 4653-4654 and Perl's SCALAR / ARRAY / HASH /
+//     SYMBOLTABLE → Lifetime collapse rationale.
+//   * LABEL → Preprocessor — class-2 wordlist hit per `:239-240`.
+//     Structural out-of-band jump-target anchor. Matches
+//     `SCE_LUA_LABEL` → Preprocessor precedent (Lua's `::name::`
+//     goto labels) for the same archetypal "structural anchor"
+//     reason — labels are not content, they're addressing marks.
+//   * USERDEFINED → Keyword2 — class-3 wordlist hit per `:242-243`.
+//     User-extension slot for `!define`d / `!macro`-defined names
+//     the user wants explicitly highlighted. Matches `SCE_LUA_WORD2`
+//     → Keyword2 precedent for "secondary library / user
+//     customisation".
+//   * SECTIONDEF / SUBSECTIONDEF / SECTIONGROUP / PAGEEX /
+//     FUNCTIONDEF → Keyword — hard-wired structural keywords per
+//     `:218-231`. `Section` / `SectionEnd` / `SubSection` /
+//     `SubSectionEnd` / `SectionGroup` / `SectionGroupEnd` /
+//     `PageEx` / `PageExEnd` / `Function` / `FunctionEnd` all
+//     get the same Keyword bold treatment matching N++ default
+//     scheme — structural-keyword cluster.
+//   * IFDEFINEDEF / MACRODEF → Preprocessor — hard-wired
+//     `!`-prefixed compile-time directives per `:206-216`. `!macro`
+//     / `!macroend` / `!if` / `!ifdef` / `!ifndef` / `!endif` /
+//     `!else` / `!ifmacrodef` / `!ifmacrondef`. Direct precedent:
+//     `SCE_C_PREPROCESSOR` for `#ifdef` / `#endif` / `#define` —
+//     compile-time directives are Preprocessor by archetype.
+//   * STRINGVAR → Lifetime — `$var` / `${var}` interpolation
+//     inside an active string body per `:518, :527-530, :536`.
+//     Same sigil-tagged-variable archetype as bare VARIABLE,
+//     routes to the same slot — uniform handling matches Bash's
+//     mid-string SCALAR handling.
+//   * NUMBER → Number — decimal-only literals per `:282, :351-352,
+//     :461-462`. Universal Number-slot convention.
+const NSIS_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_NSIS_COMMENT, StyleSlot::Comment),
+    (SCE_NSIS_STRINGDQ, StyleSlot::String),
+    (SCE_NSIS_STRINGLQ, StyleSlot::String),
+    (SCE_NSIS_STRINGRQ, StyleSlot::String),
+    (SCE_NSIS_FUNCTION, StyleSlot::Keyword),
+    (SCE_NSIS_VARIABLE, StyleSlot::Lifetime),
+    (SCE_NSIS_LABEL, StyleSlot::Preprocessor),
+    (SCE_NSIS_USERDEFINED, StyleSlot::Keyword2),
+    (SCE_NSIS_SECTIONDEF, StyleSlot::Keyword),
+    (SCE_NSIS_SUBSECTIONDEF, StyleSlot::Keyword),
+    (SCE_NSIS_IFDEFINEDEF, StyleSlot::Preprocessor),
+    (SCE_NSIS_MACRODEF, StyleSlot::Preprocessor),
+    (SCE_NSIS_STRINGVAR, StyleSlot::Lifetime),
+    (SCE_NSIS_NUMBER, StyleSlot::Number),
+    (SCE_NSIS_SECTIONGROUP, StyleSlot::Keyword),
+    (SCE_NSIS_PAGEEX, StyleSlot::Keyword),
+    (SCE_NSIS_FUNCTIONDEF, StyleSlot::Keyword),
+    (SCE_NSIS_COMMENTBOX, StyleSlot::Comment),
+];
+
+// Italic on `;` / `#` line comments AND `/* ... */` block
+// comments — both render as comment-semantic prose. Matches the
+// Lua COMMENT + COMMENTLINE + COMMENTDOC triple-italic
+// convention (every comment-class state gets italic) rather
+// than the Bash COMMENTLINE-only single-italic case — NSIS has
+// two distinct comment families that BOTH benefit from
+// italicisation, and there's no doc-style third family to
+// elevate. Universal Code++ comment-slot convention.
+const NSIS_ITALIC: &[usize] = &[SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX];
+
+// Bold the entire structural-keyword cluster (FUNCTION +
+// FUNCTIONDEF + SECTIONDEF + SUBSECTIONDEF + SECTIONGROUP +
+// PAGEEX) matching Notepad++ default NSIS scheme — all five
+// dedicated `*DEF` / `*GROUP` / `PAGEEX` slots get keyword-bold
+// treatment alongside the wordlist-driven FUNCTION instruction
+// hits (`MessageBox` / `WriteRegStr` / etc.). Plus IFDEFINEDEF
+// + MACRODEF, mirroring the `SCE_C_PREPROCESSOR` bold precedent
+// for `#ifdef` / `#define` — `!`-prefixed compile-time
+// directives are structurally anchoring code blocks. LABEL
+// deliberately NOT bolded — labels appear frequently inside
+// long Section bodies; bolding would create visual noise. The
+// Preprocessor slot's distinct colour already carries the
+// out-of-band-anchor cue, matching `SCE_LUA_PREPROCESSOR`
+// staying non-bold at line 4492-4495. VARIABLE / STRINGVAR /
+// USERDEFINED deliberately excluded — they carry visual
+// distinction through their colour slots (Lifetime / Keyword2),
+// exactly as Bash SCALAR / PARAM stay non-bold despite using
+// Lifetime at line 4677.
+const NSIS_BOLD: &[usize] = &[
+    SCE_NSIS_FUNCTION,
+    SCE_NSIS_FUNCTIONDEF,
+    SCE_NSIS_SECTIONDEF,
+    SCE_NSIS_SUBSECTIONDEF,
+    SCE_NSIS_SECTIONGROUP,
+    SCE_NSIS_PAGEEX,
+    SCE_NSIS_IFDEFINEDEF,
+    SCE_NSIS_MACRODEF,
+];
+
+// Classes 0 + 1 installed. `nsisWordLists[]` at
+// `LexNsis.cxx:658-663` declares four classes: `"Functions"`
+// (class 0 — NSIS instruction set + non-hard-wired
+// `!`-directives), `"Variables"` (class 1 — predefined
+// `$INSTDIR` / `$WINDIR` / `$0..$9` / etc.), `"Lables"` [sic]
+// (class 2 — user-supplied label names; ships empty in N++
+// default), `"UserDefined"` (class 3 — user-supplied
+// `!define`d / `!macro`-defined names; ships empty in N++
+// default). Code++ matches N++ by populating only classes
+// 0 and 1.
+//
+// Case + scope contract. LexNsis reads two runtime properties
+// (`nsis.ignorecase` defaulting to 0; `nsis.uservars` defaulting
+// to 0) at `LexNsis.cxx:178, :184, :508`. Code++ matches the
+// LEXER defaults today — `LangTheme` has no `properties` slot, so
+// neither property is installed, and the lexer runs at strict
+// byte-exact comparison with no bare-`$user` fallback. Wordlist
+// contents below are stored in their **canonical mixed-case**
+// form per the NSIS Users Manual (`MessageBox` / `SetOutPath` /
+// `WriteRegStr` / `$INSTDIR` / etc.) — matching the source
+// spelling an NSIS author writes and matching the hard-wired
+// branches at `:206-231` (`Section`, `Function`, `SectionGroup`,
+// etc.) which also compare canonical mixed-case. This is the
+// same default-set behaviour Notepad++ would exhibit if its own
+// `nsis.ignorecase=1` property install were removed — Code++'s
+// shape is consistent with author-intent and the lexer source.
+//
+// Consequence of NOT installing `nsis.uservars=1`: user-declared
+// variables (`Var MyVar` → `$MyVar`) lex as `SCE_NSIS_DEFAULT`
+// instead of `SCE_NSIS_VARIABLE`. Only the predefined `$INSTDIR`
+// / `$WINDIR` / etc. names in `NSIS_VARIABLES` highlight. Tracked
+// in `docs/lexers-coverage.md` for a follow-up that adds a
+// `properties: &[(&str, &str)]` slot to `LangTheme` and threads
+// `SCI_SETPROPERTY` through `apply_lang` — the same plumbing
+// also unlocks CSS's `lexer.css.scss.language` and Python's
+// `lexer.python.identifier.attributes` forward-compat hooks
+// already referenced in their respective banners. Once the slot
+// lands, installing `nsis.ignorecase=1` is optional — canonical
+// mixed-case keeps working under both property values, so the
+// follow-up will install `nsis.uservars=1` for user-var
+// highlighting without needing to flip case handling.
+const NSIS_THEME: LangTheme = LangTheme {
+    keywords: &[(0, NSIS_FUNCTIONS), (1, NSIS_VARIABLES)],
+    styles: NSIS_STYLES,
+    italic: NSIS_ITALIC,
+    bold: NSIS_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -4823,6 +4998,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&LATEX_THEME)
     } else if lang == L_BASH {
         Some(&BASH_THEME)
+    } else if lang == L_NSIS {
+        Some(&NSIS_THEME)
     } else {
         None
     }
@@ -19576,11 +19753,11 @@ mod lang_theme_tests {
         CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS,
         JAVA_KEYWORDS, JAVA_KEYWORDS_2, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BASH, L_BATCH, L_C,
         L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LUA, L_MAKEFILE,
-        L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEX, L_TEXT,
-        L_VB, L_XML, MAKEFILE_KEYWORDS, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
-        PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
-        RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-        XML_KEYWORDS,
+        L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TEX,
+        L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS,
+        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -19610,6 +19787,7 @@ mod lang_theme_tests {
             (L_PYTHON, "Python"),
             (L_LUA, "Lua"),
             (L_BASH, "Shell"),
+            (L_NSIS, "NSIS"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -21339,6 +21517,337 @@ mod lang_theme_tests {
              (LexBash.cxx:727 calls keywords.InList(s) on the raw sc.GetCurrent buffer \
              with no MakeLowerCase), so uppercase wordlist tokens never match"
         );
+    }
+
+    /// NSIS uses Lexilla's `nsis` lexer (`LexNsis.cxx`) — a 19-state
+    /// installer-script lexer with FOUR wordlist classes (`Functions`,
+    /// `Variables`, `Lables` [sic — upstream typo preserved], and
+    /// `UserDefined`) per `nsisWordLists[]` at `LexNsis.cxx:658-663`.
+    /// Code++ populates classes 0 and 1 only — matching N++'s
+    /// `langs.model.xml` default-set (classes 2 and 3 ship empty).
+    /// Included in `wired_languages_have_complete_themes` (18-mapping
+    /// style table exceeds the 8-floor; `NSIS_FUNCTIONS` populates
+    /// class 0).
+    ///
+    /// This dedicated test pins the 18-mapping shape (`DEFAULT`
+    /// intentionally unmapped — universal-omission pattern; no
+    /// `SCE_NSIS_ERROR` state exists in the lexer, so no
+    /// deferred-Error-slot entry), the SEVEN dedicated structural-
+    /// state routings (`SECTIONDEF` / `SUBSECTIONDEF` /
+    /// `SECTIONGROUP` / `PAGEEX` / `FUNCTIONDEF` → Keyword;
+    /// `IFDEFINEDEF` / `MACRODEF` → Preprocessor) that the host MUST
+    /// theme explicitly — otherwise common tokens like `Section` /
+    /// `!macro` / `Function` render at `STYLE_DEFAULT`, the
+    /// THREE-string-flavour collapse to `String` (DQ / LQ / RQ —
+    /// matches Lua LITERALSTRING + CHARACTER + STRING precedent),
+    /// the `VARIABLE` / `STRINGVAR` → `Lifetime` routing (Bash
+    /// SCALAR / PARAM precedent — sigil-tagged variable archetype),
+    /// the `LABEL` → `Preprocessor` routing (Lua LABEL precedent —
+    /// structural anchor), the `USERDEFINED` → `Keyword2` routing
+    /// (Lua WORD2 precedent — user customisation slot), the
+    /// two-class wordlist install contract (classes 2 + 3 NOT
+    /// installed because N++ default ships them empty), the
+    /// contrast with the rest of the framework (10 non-reuse pins
+    /// against sibling themes), and the italic / bold anchors.
+    ///
+    /// Test naming: `nsis_uses_lexnsis_four_class_theme` — `_four_class_`
+    /// because `nsisWordLists[]` declares exactly four wordlist
+    /// slots. Code++ populates classes 0 + 1 (matching N++
+    /// default) — the `four_class` count reflects the lexer's
+    /// surface, not Code++'s install count. Contrasts with
+    /// `bash_uses_lexbash_one_class_theme` (1 class),
+    /// `batch_uses_lexbatch_two_class_theme` (2 classes), and the
+    /// hypothetical `sql_uses_lexsql_five_class_theme` (5 classes
+    /// — not yet defined as a dedicated test). First `_four_class_`
+    /// test in the framework.
+    #[test]
+    fn nsis_uses_lexnsis_four_class_theme() {
+        use codepp_scintilla_sys::SCE_NSIS_DEFAULT;
+
+        use super::{
+            SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF,
+            SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER,
+            SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ,
+            SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF,
+            SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE,
+        };
+        let nsis = lang_theme(L_NSIS).expect("NSIS wired");
+
+        // Style table size pin — 18 mappings (DEFAULT intentionally
+        // unmapped; no SCE_NSIS_ERROR exists in the lexer).
+        assert_eq!(
+            nsis.styles.len(),
+            18,
+            "NSIS_STYLES must map 18 indices (19 emission states minus DEFAULT)"
+        );
+
+        // Cross-language non-reuse pins. 10 sibling themes — must NOT
+        // share any other framework theme's style table.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let props = lang_theme(L_INI).expect("INI wired");
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let perl = lang_theme(L_PERL).expect("Perl wired");
+        let bash = lang_theme(L_BASH).expect("Bash wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (mk, "Makefile"),
+            (pas, "Pascal"),
+            (php, "PHP"),
+            (bat, "Batch"),
+            (props, "INI"),
+            (sql, "SQL"),
+            (vb, "VB"),
+            (perl, "Perl"),
+            (bash, "Bash"),
+        ] {
+            assert_ne!(
+                nsis.styles, other.styles,
+                "NSIS must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Two-class install — classes 0 (`Functions`) and 1
+        // (`Variables`) only. Classes 2 (`Lables`) and 3
+        // (`UserDefined`) ship empty in N++ default-set per
+        // `langs.model.xml`; Code++ matches.
+        assert_eq!(
+            nsis.keywords.len(),
+            2,
+            "NSIS installs classes 0 + 1 only (matches N++ default; classes 2 + 3 ship empty)"
+        );
+        assert_eq!(nsis.keywords[0].0, 0);
+        assert_eq!(nsis.keywords[0].1, NSIS_FUNCTIONS);
+        assert_eq!(nsis.keywords[1].0, 1);
+        assert_eq!(nsis.keywords[1].1, NSIS_VARIABLES);
+        // Structural guard: classes 2 and 3 must NOT be installed —
+        // they'd shadow N++'s default-empty behaviour silently and
+        // require users to remove them rather than add their own.
+        assert!(
+            nsis.keywords
+                .iter()
+                .all(|(class, _)| *class == 0 || *class == 1),
+            "NSIS installs classes 0 + 1 ONLY — classes 2 (Lables) and 3 (UserDefined) \
+             ship empty in N++ default per langs.model.xml"
+        );
+
+        // Style-routing pins — every populated mapping.
+        for (idx, slot, name) in [
+            (SCE_NSIS_COMMENT, StyleSlot::Comment, "SCE_NSIS_COMMENT"),
+            (SCE_NSIS_STRINGDQ, StyleSlot::String, "SCE_NSIS_STRINGDQ"),
+            (SCE_NSIS_STRINGLQ, StyleSlot::String, "SCE_NSIS_STRINGLQ"),
+            (SCE_NSIS_STRINGRQ, StyleSlot::String, "SCE_NSIS_STRINGRQ"),
+            (SCE_NSIS_FUNCTION, StyleSlot::Keyword, "SCE_NSIS_FUNCTION"),
+            (SCE_NSIS_VARIABLE, StyleSlot::Lifetime, "SCE_NSIS_VARIABLE"),
+            (SCE_NSIS_LABEL, StyleSlot::Preprocessor, "SCE_NSIS_LABEL"),
+            (
+                SCE_NSIS_USERDEFINED,
+                StyleSlot::Keyword2,
+                "SCE_NSIS_USERDEFINED",
+            ),
+            (
+                SCE_NSIS_SECTIONDEF,
+                StyleSlot::Keyword,
+                "SCE_NSIS_SECTIONDEF",
+            ),
+            (
+                SCE_NSIS_SUBSECTIONDEF,
+                StyleSlot::Keyword,
+                "SCE_NSIS_SUBSECTIONDEF",
+            ),
+            (
+                SCE_NSIS_IFDEFINEDEF,
+                StyleSlot::Preprocessor,
+                "SCE_NSIS_IFDEFINEDEF",
+            ),
+            (
+                SCE_NSIS_MACRODEF,
+                StyleSlot::Preprocessor,
+                "SCE_NSIS_MACRODEF",
+            ),
+            (
+                SCE_NSIS_STRINGVAR,
+                StyleSlot::Lifetime,
+                "SCE_NSIS_STRINGVAR",
+            ),
+            (SCE_NSIS_NUMBER, StyleSlot::Number, "SCE_NSIS_NUMBER"),
+            (
+                SCE_NSIS_SECTIONGROUP,
+                StyleSlot::Keyword,
+                "SCE_NSIS_SECTIONGROUP",
+            ),
+            (SCE_NSIS_PAGEEX, StyleSlot::Keyword, "SCE_NSIS_PAGEEX"),
+            (
+                SCE_NSIS_FUNCTIONDEF,
+                StyleSlot::Keyword,
+                "SCE_NSIS_FUNCTIONDEF",
+            ),
+            (
+                SCE_NSIS_COMMENTBOX,
+                StyleSlot::Comment,
+                "SCE_NSIS_COMMENTBOX",
+            ),
+        ] {
+            assert!(
+                nsis.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Explicit-omission pin. DEFAULT (0) follows the universal-
+        // omission pattern — renders at STYLE_DEFAULT (the user's
+        // chosen foreground). No SCE_NSIS_ERROR / SCE_NSIS_IDENTIFIER
+        // exists in the lexer to omit.
+        assert!(
+            !nsis.styles.iter().any(|(i, _)| *i == SCE_NSIS_DEFAULT),
+            "SCE_NSIS_DEFAULT must remain unmapped (intentional universal-omission per banner)"
+        );
+
+        // Italic on both comment families — `;` / `#` line comments
+        // (COMMENT) AND `/* ... */` block comments (COMMENTBOX).
+        // Matches Lua's COMMENT + COMMENTLINE + COMMENTDOC
+        // triple-italic precedent.
+        for (idx, name) in [
+            (SCE_NSIS_COMMENT, "SCE_NSIS_COMMENT"),
+            (SCE_NSIS_COMMENTBOX, "SCE_NSIS_COMMENTBOX"),
+        ] {
+            assert!(
+                nsis.italic.contains(&idx),
+                "Italic on {name} (universal comment-slot convention; both comment families)"
+            );
+        }
+        // Pin no italic on anything else — NSIS has exactly two
+        // comment families.
+        assert_eq!(
+            nsis.italic.len(),
+            2,
+            "NSIS_ITALIC should contain exactly SCE_NSIS_COMMENT + SCE_NSIS_COMMENTBOX"
+        );
+
+        // Bold the structural-keyword cluster + preprocessor-directive
+        // cluster. FUNCTION + FUNCTIONDEF + SECTIONDEF +
+        // SUBSECTIONDEF + SECTIONGROUP + PAGEEX get keyword-bold
+        // matching N++ default scheme; IFDEFINEDEF + MACRODEF
+        // mirror the `SCE_C_PREPROCESSOR` bold precedent.
+        for (idx, name) in [
+            (SCE_NSIS_FUNCTION, "SCE_NSIS_FUNCTION"),
+            (SCE_NSIS_FUNCTIONDEF, "SCE_NSIS_FUNCTIONDEF"),
+            (SCE_NSIS_SECTIONDEF, "SCE_NSIS_SECTIONDEF"),
+            (SCE_NSIS_SUBSECTIONDEF, "SCE_NSIS_SUBSECTIONDEF"),
+            (SCE_NSIS_SECTIONGROUP, "SCE_NSIS_SECTIONGROUP"),
+            (SCE_NSIS_PAGEEX, "SCE_NSIS_PAGEEX"),
+            (SCE_NSIS_IFDEFINEDEF, "SCE_NSIS_IFDEFINEDEF"),
+            (SCE_NSIS_MACRODEF, "SCE_NSIS_MACRODEF"),
+        ] {
+            assert!(
+                nsis.bold.contains(&idx),
+                "Bold on {name} (structural-keyword + preprocessor-directive convention)"
+            );
+        }
+        // Pin no bold on LABEL / VARIABLE / STRINGVAR / USERDEFINED —
+        // they carry visual distinction through their colour slots
+        // (Preprocessor / Lifetime / Lifetime / Keyword2); matches
+        // Bash SCALAR / PARAM staying non-bold and Lua LUA_PREPROCESSOR
+        // staying non-bold.
+        for (idx, name) in [
+            (SCE_NSIS_LABEL, "SCE_NSIS_LABEL"),
+            (SCE_NSIS_VARIABLE, "SCE_NSIS_VARIABLE"),
+            (SCE_NSIS_STRINGVAR, "SCE_NSIS_STRINGVAR"),
+            (SCE_NSIS_USERDEFINED, "SCE_NSIS_USERDEFINED"),
+        ] {
+            assert!(
+                !nsis.bold.contains(&idx),
+                "{name} must NOT be bold (carries weight via colour slot, not font weight)"
+            );
+        }
+
+        // Case-sensitivity contract. LexNsis runs at strict byte-exact
+        // `InList` when `nsis.ignorecase=0` (the LEXER default; Code++
+        // matches by not installing the property). Wordlist contents
+        // are stored in their CANONICAL MIXED-CASE form per NSIS Users
+        // Manual — `MessageBox` / `SetOutPath` / `WriteRegStr` for
+        // class 0 and `$INSTDIR` / `$WINDIR` / etc. for class 1 —
+        // matching the source spelling an NSIS author writes. Pin a
+        // few canonical anchors structurally so a future "let's
+        // lowercase the whole list" regression is loud rather than
+        // silent.
+        for canonical in ["MessageBox", "SetOutPath", "WriteRegStr", "CreateDirectory"] {
+            assert!(
+                NSIS_FUNCTIONS
+                    .split_whitespace()
+                    .any(|tok| tok == canonical),
+                "NSIS_FUNCTIONS must contain the canonical mixed-case `{canonical}` — Code++ \
+                 doesn't install `nsis.ignorecase=1` so LexNsis runs at default byte-exact \
+                 comparison against the source spelling"
+            );
+        }
+        for canonical in ["$INSTDIR", "$WINDIR", "$PROGRAMFILES", "$R0"] {
+            assert!(
+                NSIS_VARIABLES
+                    .split_whitespace()
+                    .any(|tok| tok == canonical),
+                "NSIS_VARIABLES must contain the canonical mixed-case `{canonical}` — same \
+                 byte-exact contract as NSIS_FUNCTIONS"
+            );
+        }
+
+        // `$`-sigil contract for class 1. LexNsis's classifyWordNsis
+        // at :252-265 constructs the token buffer INCLUDING the leading
+        // `$`, so class-1 entries MUST start with `$` to match the
+        // bare-`$var` dispatch.
+        assert!(
+            NSIS_VARIABLES
+                .split_whitespace()
+                .all(|tok| tok.starts_with('$')),
+            "NSIS_VARIABLES contains a non-$-prefixed entry — classifyWordNsis at \
+             LexNsis.cxx:252-265 builds the buffer including the leading $; entries without it \
+             never match the bare-$var dispatch"
+        );
+
+        // Hard-wired short-circuit guard. The seven hard-wired keyword
+        // groups at LexNsis.cxx:206-231 bypass the user wordlist
+        // entirely — duplicating them in NSIS_FUNCTIONS would be
+        // unreachable spec noise. Pin a structural guard against the
+        // dominant cases using their canonical mixed-case spellings
+        // (matches the hard-wired branches' own `NsisCmp` arguments
+        // under the default `nsis.ignorecase=0` byte-exact path).
+        for hardwired in [
+            "Section",
+            "SectionEnd",
+            "SubSection",
+            "SubSectionEnd",
+            "SectionGroup",
+            "SectionGroupEnd",
+            "PageEx",
+            "PageExEnd",
+            "Function",
+            "FunctionEnd",
+            "!macro",
+            "!macroend",
+            "!if",
+            "!ifdef",
+            "!ifndef",
+            "!endif",
+            "!else",
+            "!ifmacrodef",
+            "!ifmacrondef",
+        ] {
+            // Match on whole-token to avoid false-positives from
+            // substrings (e.g. `!if` inside `!ifdef`).
+            assert!(
+                !NSIS_FUNCTIONS
+                    .split_whitespace()
+                    .any(|tok| tok == hardwired),
+                "NSIS_FUNCTIONS contains hard-wired token `{hardwired}` — the lexer's \
+                 classifyWordNsis at LexNsis.cxx:206-231 short-circuits to a dedicated \
+                 SCE_NSIS_*DEF/SECTIONGROUP/PAGEEX/MACRODEF/IFDEFINEDEF state BEFORE \
+                 consulting any wordlist; an entry here is unreachable spec noise"
+            );
+        }
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a

@@ -858,6 +858,215 @@ pub const SCE_SH_BACKTICKS: usize = 11;
 pub const SCE_SH_HERE_DELIM: usize = 12;
 pub const SCE_SH_HERE_Q: usize = 13;
 
+// LexNsis style indices. 19 contiguous slots (0..=18) covering
+// the NSIS installer-script lexer's full emission set: `;` and `#`
+// line comments (COMMENT) plus `/* ... */` block comments
+// (COMMENTBOX), three independent quoted-string flavours
+// (STRINGDQ / STRINGLQ / STRINGRQ for `"..."` / `` `...` `` / `'...'`),
+// decimal-only numeric literals (NUMBER), wordlist-classified
+// instruction / variable / label / user-defined tokens (FUNCTION /
+// VARIABLE / LABEL / USERDEFINED), hard-wired structural keyword
+// pairs (`Section`/`SectionEnd`, `SubSection`/`SubSectionEnd`,
+// `SectionGroup`/`SectionGroupEnd`, `PageEx`/`PageExEnd`,
+// `Function`/`FunctionEnd` → SECTIONDEF / SUBSECTIONDEF /
+// SECTIONGROUP / PAGEEX / FUNCTIONDEF), the `!`-prefixed
+// preprocessor / macro-definition family (`!macro`/`!macroend`
+// → MACRODEF; `!if`/`!ifdef`/`!ifndef`/`!else`/`!endif`/
+// `!ifmacrodef`/`!ifmacrondef` → IFDEFINEDEF), and the `$var` /
+// `${var}` interpolation that fires inside an active string body
+// (STRINGVAR). Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 859-877, the in-source
+// state-comment table at `vendor/lexilla/lexers/LexNsis.cxx`
+// lines 36-55, the wordlist-descriptions array `nsisWordLists[]`
+// at `LexNsis.cxx:658-663`, and the
+// `LexerModule lmNsis(SCLEX_NSIS, ColouriseNsisDoc, "nsis",
+// FoldNsisDoc, nsisWordLists)` registration at `LexNsis.cxx:666`.
+//
+// **Case-sensitivity is property-driven.** The classifier at
+// `LexNsis.cxx:178` reads `styler.GetPropertyInt("nsis.ignorecase")`
+// and, when set to `1`, both lowercases the buffered token before
+// `InList` (`:198-202`) and routes all hard-wired keyword matches
+// through `NsisCmp` (`:107-113`) which dispatches to
+// `CompareCaseInsensitive`. The default is `0` (strict `strcmp`).
+//
+// **Code++ runs the lexer at default `nsis.ignorecase=0`.** The
+// `LangTheme` struct has no `properties` slot today, so
+// `apply_lang` does NOT issue `SCI_SETPROPERTY` for either
+// `nsis.ignorecase` or `nsis.uservars`. To still highlight the
+// canonical NSIS source (`Section` / `MessageBox` / `$INSTDIR`
+// — all mixed-case by convention), the user wordlists ship in
+// **canonical mixed-case** matching the on-disk spelling. The
+// lexer's byte-exact `strcmp` then matches `MessageBox` in source
+// against `MessageBox` in the wordlist. This is the same posture
+// Notepad++ uses in practice (its `langs.model.xml` ships
+// mixed-case `instre1`/`instre2` lists, not lowercased ones —
+// the `nsis.ignorecase=1` claim in N++'s docs is stale relative
+// to its shipped wordlist content). Source written in
+// non-canonical case (e.g. `MESSAGEBOX`, `messagebox`) will not
+// highlight until a future commit adds the
+// `LangTheme::properties: &[(&str, &str)]` slot and installs
+// `nsis.ignorecase=1`; see the `lexers-coverage.md` follow-up
+// tracker. Sourcing the wordlist in mixed-case is the strictly
+// better default of the two: it works against the on-disk
+// convention without any plumbing changes.
+//
+// **Four wordlist classes.** `nsisWordLists[]` at
+// `LexNsis.cxx:658-663` declares four named slots, terminated by
+// `nullptr`:
+//   - class 0 `"Functions"` → `SCE_NSIS_FUNCTION` (`:233-234`).
+//     Semantically the **instruction set** — NSIS built-in
+//     commands like `MessageBox` / `WriteRegStr` / `File` /
+//     `SetOutPath`, plus `!`-directives NOT in the hard-wired set
+//     (`!define` / `!include` / `!insertmacro` / `!undef` /
+//     `!system` / `!warning` / `!error` / `!verbose` / `!pragma`).
+//     Naming is misleading — this slot covers far more than
+//     traditional "functions".
+//   - class 1 `"Variables"` → `SCE_NSIS_VARIABLE` (`:236-237`).
+//     Predefined NSIS variables and constants (`$INSTDIR`,
+//     `$WINDIR`, `$PROGRAMFILES`, `${NSISDIR}`, the `$0..$9` /
+//     `$R0..$R9` numbered registers).
+//   - class 2 `"Lables"` (**sic — upstream typo preserved**) →
+//     `SCE_NSIS_LABEL` (`:239-240`). User-supplied label / goto-
+//     target names. **Do not silently correct to `"Labels"`** —
+//     Lexilla dispatches on the exact string at `:191-194` and
+//     a corrected name would never match. Notepad++ ships this
+//     class empty in `langs.model.xml`; Code++ matches.
+//   - class 3 `"UserDefined"` → `SCE_NSIS_USERDEFINED` (`:242-243`).
+//     User-supplied `!define`d / `!macro`-defined names the user
+//     wants explicitly highlighted. Notepad++ ships empty by
+//     default; Code++ matches.
+// Unlike Bash (1 class), Lua (2 classes), Python (2 classes), or
+// SQL (5 classes), NSIS exposes exactly four — and Code++
+// populates classes 0 and 1 only.
+//
+// **Seven hard-wired keyword groups bypass the wordlist entirely.**
+// `classifyWordNsis` at `LexNsis.cxx:206-231` short-circuits on
+// these before consulting any user wordlist, dispatching directly
+// to their dedicated SCE states:
+//   - `!macro` / `!macroend` → `SCE_NSIS_MACRODEF` (`:206-207`)
+//   - `!ifdef` / `!ifndef` / `!endif` → `SCE_NSIS_IFDEFINEDEF`
+//     (`:209-210`)
+//   - `!if` / `!else` → `SCE_NSIS_IFDEFINEDEF` (`:212-213`)
+//   - `!ifmacrodef` / `!ifmacrondef` → `SCE_NSIS_IFDEFINEDEF`
+//     (`:215-216`)
+//   - `SectionGroup` / `SectionGroupEnd` → `SCE_NSIS_SECTIONGROUP`
+//     (`:218-219`)
+//   - `Section` / `SectionEnd` → `SCE_NSIS_SECTIONDEF` (`:221-222`)
+//   - `SubSection` / `SubSectionEnd` → `SCE_NSIS_SUBSECTIONDEF`
+//     (`:224-225`)
+//   - `PageEx` / `PageExEnd` → `SCE_NSIS_PAGEEX` (`:227-228`)
+//   - `Function` / `FunctionEnd` → `SCE_NSIS_FUNCTIONDEF` (`:230-231`)
+// These tokens MUST NOT be duplicated in the class-0 `Functions`
+// wordlist — they're shadowed by the earlier branch (no behavioural
+// change, but spec noise). Conversely, every theme MUST colour
+// the seven dedicated `*DEF` / `SECTIONGROUP` / `PAGEEX` /
+// `MACRODEF` / `IFDEFINEDEF` slots explicitly — otherwise common
+// tokens like `Section` / `!macro` / `Function` render at
+// `STYLE_DEFAULT`.
+//
+// **Three independent string-flavour states.** Unlike Lua's
+// LITERALSTRING + CHARACTER + STRING triple that collapses to
+// one `String` slot, LexNsis emits three distinct states for
+// the three quote characters NSIS accepts:
+//   - `SCE_NSIS_STRINGDQ` (state 2) — `"..."` double-quoted, opened
+//     at `:322-326` and closed at `:388-393`.
+//   - `SCE_NSIS_STRINGLQ` (state 3) — `` `...` `` left-quoted
+//     (backtick), opened at `:335-342` and closed at `:395-400`.
+//   - `SCE_NSIS_STRINGRQ` (state 4) — `'...'` right-quoted
+//     (single), opened at `:327-334` and closed at `:402-407`.
+// All three route to `StyleSlot::String` in `NSIS_STYLES` —
+// uniform-archetype collapse matching the Lua precedent.
+// Strings support `$\` (dollar-backslash) escape at `:385-386`
+// so `$\"` does not close a DQ string, and a trailing `\` at
+// end-of-line at `:409-443` continues the string onto the next
+// line.
+//
+// **`SCE_NSIS_STRINGVAR` (13) is the `$var` interpolation inside
+// an active string body.** Emitted at `:518` (`$\` escape
+// sequence inside string), `:527-528` (bare `$var` whose
+// identifier matches the class-1 `Variables` wordlist), `:530`
+// (bare `$var` user variable when `nsis.uservars=1`), and
+// `:536` (`${var}` brace-form interpolation). Direct parallel
+// to Bash's `SCALAR` / `PARAM` mid-string handling — same
+// archetype, routes to `StyleSlot::Lifetime` matching the bare
+// `SCE_NSIS_VARIABLE` routing.
+//
+// **`nsis.uservars` opt-in.** A second runtime property at
+// `LexNsis.cxx:181-185` (read at `:184, :508`). When set to `1`,
+// any `$`-prefixed token of valid `isNsisChar` characters
+// (`[A-Za-z0-9._]`) is treated as a variable even if not in the
+// `Variables` wordlist (`:252-266`) — both at top level (→
+// `SCE_NSIS_VARIABLE`) and inside string bodies (→
+// `SCE_NSIS_STRINGVAR` at `:529-530`). Default is `0` (off);
+// Notepad++ ships `1` (on); Code++'s `apply_lang` MUST set
+// `nsis.uservars=1` via `SCI_SETPROPERTY` to match N++ behaviour
+// — without it, `$MyCustomVar` lexes as `SCE_NSIS_DEFAULT`
+// instead of `SCE_NSIS_VARIABLE`, dropping a meaningful styling
+// cue.
+//
+// **Decimal-only numeric literals.** `isNsisNumber` at
+// `LexNsis.cxx:58-61` accepts strictly `[0-9]`. There is NO
+// recognition of `0x...` hex, `0...` octal, or `1.5` float —
+// `0x1F` would fail the all-digit test at `:272-279` and fall
+// through to whichever path the leading-character classifier
+// chooses. Detection happens at `:351-352` (single digit + EOL)
+// and `:269-283` (multi-digit run inside `classifyWordNsis`).
+//
+// **No `::` plugin-call recognition.** NSIS source commonly
+// writes plugin invocations as `nsExec::Exec` or `StrFunc::*`,
+// but `isNsisChar` at `:63-66` excludes `:`, so the `::` breaks
+// the identifier. Both halves classify independently against
+// the wordlists. To highlight plugin calls, host wordlists must
+// contain the bare names (`nsExec`, `Exec`, `StrFunc`, etc.) —
+// the qualified `nsExec::Exec` form will never match a single
+// wordlist entry.
+//
+// **No label-trailing-colon detection.** Labels go through
+// class 2 `Lables` only — there is no automatic recognition
+// of "identifier followed by `:`" as a label definition. User
+// must enumerate label names in class 2 for them to highlight.
+// The `:` terminator is not in `isNsisChar` so it ends the
+// identifier; the bare name (without `:`) is what `InList`
+// sees. Notepad++ ships class 2 empty — Code++ matches.
+//
+// **`SCE_NSIS_DEFAULT` (0) intentionally unmapped.** Universal
+// background-fall-through convention matching `SCE_C_DEFAULT`,
+// `SCE_SH_DEFAULT`, `SCE_P_DEFAULT`, `SCE_LUA_DEFAULT`,
+// `SCE_L_DEFAULT` precedent. No `SCE_NSIS_ERROR` state exists
+// in the lexer — `LexNsis.cxx` has no recovery / malformed-token
+// branch (the lexer simply walks back to `SCE_NSIS_DEFAULT` on
+// any unmatched character), so no deferred-Error-slot entry is
+// needed (contrast with `SCE_SH_ERROR` at `:847` which joins
+// the deferred-migration cluster).
+//
+// **Legacy property API.** LexNsis predates the
+// `OptionSet` / `DefineProperty` infrastructure used by newer
+// lexers (e.g. LexHTML, LexBash). Properties are read directly
+// via `styler.GetPropertyInt(...)` at `:144, :178, :184, :508,
+// :566-567`; there is no schema, unknown property keys are
+// silently ignored. The full property surface is:
+// `nsis.ignorecase`, `nsis.uservars`, `fold`, `fold.at.else`,
+// `nsis.foldutilcmd`.
+pub const SCE_NSIS_DEFAULT: usize = 0;
+pub const SCE_NSIS_COMMENT: usize = 1;
+pub const SCE_NSIS_STRINGDQ: usize = 2;
+pub const SCE_NSIS_STRINGLQ: usize = 3;
+pub const SCE_NSIS_STRINGRQ: usize = 4;
+pub const SCE_NSIS_FUNCTION: usize = 5;
+pub const SCE_NSIS_VARIABLE: usize = 6;
+pub const SCE_NSIS_LABEL: usize = 7;
+pub const SCE_NSIS_USERDEFINED: usize = 8;
+pub const SCE_NSIS_SECTIONDEF: usize = 9;
+pub const SCE_NSIS_SUBSECTIONDEF: usize = 10;
+pub const SCE_NSIS_IFDEFINEDEF: usize = 11;
+pub const SCE_NSIS_MACRODEF: usize = 12;
+pub const SCE_NSIS_STRINGVAR: usize = 13;
+pub const SCE_NSIS_NUMBER: usize = 14;
+pub const SCE_NSIS_SECTIONGROUP: usize = 15;
+pub const SCE_NSIS_PAGEEX: usize = 16;
+pub const SCE_NSIS_FUNCTIONDEF: usize = 17;
+pub const SCE_NSIS_COMMENTBOX: usize = 18;
+
 // LexLaTeX style indices. 13 contiguous slots (0..=12) covering
 // the LaTeX lexer's full emission set: `%` line comments, `$...$`
 // / `\(...\)` math and `$$...$$` / `\[...\]` display-math regions,
