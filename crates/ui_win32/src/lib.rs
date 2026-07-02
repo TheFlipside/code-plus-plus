@@ -3023,18 +3023,26 @@ fn update_brace_highlight(editor: &EditorHandle) {
         -1
     };
 
+    // SCI_BRACEHIGHLIGHT and SCI_BRACEBADLIGHT both write into Scintilla's
+    // single shared `braces[2]` + `bracesMatchStyle` slot (Editor.cxx:8237,
+    // 8248 → SetBraceHighlight at :5407-5423). If we call the "bad" clear
+    // AFTER the "good" set, we wipe the state we just wrote and PaintText
+    // never overwrites the brace's style byte to STYLE_BRACELIGHT
+    // (PositionCache.cxx:219 gate `rangeLine.ContainsCharacter(braces[i])`
+    // is false because braces[] is now [-1, -1]). Order: clear the opposite
+    // state FIRST, then set the desired one.
     if brace_pos >= 0 {
         let match_pos = editor.brace_match(brace_pos as u64);
         if match_pos >= 0 {
-            editor.brace_highlight(brace_pos, match_pos);
             editor.brace_bad_light(-1);
+            editor.brace_highlight(brace_pos, match_pos);
         } else {
             editor.brace_highlight(-1, -1);
             editor.brace_bad_light(brace_pos);
         }
     } else {
-        editor.brace_highlight(-1, -1);
         editor.brace_bad_light(-1);
+        editor.brace_highlight(-1, -1);
     }
 }
 
