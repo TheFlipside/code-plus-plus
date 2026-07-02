@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 27 / 🟡 61 / ⚫ 1.
+Total: 89 rows. ✅ 28 / 🟡 60 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1882,7 +1882,7 @@ further shim work needed.
 | JSP | 55 | `hypertext` | ⚫ | ⚫ | 🟡 |
 | KIXtart | 39 | `kix` | ⚫ | ⚫ | 🟡 |
 | LaTeX | 74 | `latex` | ✅ | ✅ | ✅ |
-| Lisp | 30 | `lisp` | ⚫ | ⚫ | 🟡 |
+| Lisp | 30 | `lisp` | ✅ | ✅ | ✅ |
 | Lua | 23 | `lua` | ✅ | ✅ | ✅ |
 | Makefile | 10 | `makefile` | ✅ | ✅ | ✅ |
 | Matlab | 44 | `matlab` | ⚫ | ⚫ | 🟡 |
@@ -1927,6 +1927,48 @@ further shim work needed.
 | Visual Prolog | 84 | `visualprolog` | ⚫ | ⚫ | 🟡 |
 | XML | 9 | `xml` | ✅ | ✅ | ✅ |
 | YAML | 49 | `yaml` | ⚫ | ⚫ | 🟡 |
+
+**Lisp (2026-07-02):** uses Lexilla's `lisp` lexer
+(`LexLisp.cxx`) — a compact 12-slot byte-exact case-sensitive
+S-expression lexer with a state-7 gap in the public style range
+(`SciLexer.h:676-677` jumps `SCE_LISP_STRING=6` directly to
+`SCE_LISP_STRINGEOL=8` — there is no `SCE_LISP_CHARACTER`, unlike
+Bash / Lua / Perl / Python). Two-class wordlist surface —
+`LISP_KEYWORDS` (class 0, functions and special operators) and
+`LISP_KEYWORDS_KW` (class 1, `&`-prefixed lambda-list markers like
+`&rest`, `&key`, `&optional`). Nine-mapping `LISP_STYLES` covers
+COMMENT + MULTI_COMMENT → Comment italic (both `;`-line and
+`#|...|#` block forms), NUMBER, KEYWORD → Keyword bold (class-0
+hit), KEYWORD_KW → Keyword2 (class-1 hit — `&`-marker steel blue),
+SYMBOL → Lifetime (`:kw` and `'quoted` sigil-tagged symbols — Bash
+SCALAR / PARAM precedent), STRING, OPERATOR, SPECIAL → Keyword bold
+(earmuffed globals `*foo*` / `+bar+` plus `#'foo` / `#\c` / `#xFF`
+reader-macro emissions — structural-anchor archetype matching TCL
+EXPAND). DEFAULT (0), IDENTIFIER (9), STRINGEOL (8) intentionally
+unmapped per the universal-omission + deferred-Error pattern;
+STRINGEOL is additionally never emitted at runtime (grep of
+`LexLisp.cxx` returns zero hits for the constant).
+
+The `.cxx`-private state markers 29 / 30 / 31
+(`SCE_LISP_CHARACTER` / `MACRO` / `MACRO_DISPATCH`) `#define`d at
+`LexLisp.cxx:32-34` are transient parse states — never emitted as
+final styles, and deliberately NOT exported from `scintilla-sys`.
+The `lisp` lexer also drives the `L_SCHEME` row via the same
+shared-lexer pattern that PHP / HTML / ASP use with `hypertext` —
+a follow-on commit wires `L_SCHEME`'s `SCHEME_THEME` against this
+same `LISP_STYLES` table with a distinct `SCHEME_KEYWORDS` /
+`SCHEME_KEYWORDS_KW` pair.
+
+Authored by a 4-agent research-and-synthesise workflow. Structural
+guards pinned in `lisp_uses_lexlisp_two_class_theme`: byte-exact
+lowercase invariant on both wordlists, `&`-prefix contract on
+`LISP_KEYWORDS_KW` (parallels `NSIS_VARIABLES`'s `$`-prefix guard),
+`:`-symbol unreachable-token guard (`:kw` symbols enter
+`SCE_LISP_SYMBOL` via `LexLisp.cxx:107-109` and never reach
+`classifyWordLisp` — `:`-prefixed wordlist entries would be spec
+noise), `HashSet` cross-class no-overlap guard, canonical-anchor
+pins (`defun` in class 0, `&rest` in class 1), and 10 cross-language
+non-reuse pins.
 
 ## Notes
 

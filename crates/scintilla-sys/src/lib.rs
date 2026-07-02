@@ -1384,6 +1384,104 @@ pub const SCE_L_SPECIAL: usize = 10;
 pub const SCE_L_CMDOPT: usize = 11;
 pub const SCE_L_ERROR: usize = 12;
 
+// LexLisp style indices. 12 public style slots numbered 0..=12 with a
+// deliberate gap at state 7 — the Common Lisp / Scheme S-expression
+// lexer covers `;`-line comments and `#| ... |#` block comments,
+// decimal and radix-prefixed numeric literals (`#x`, `#o`, `#b`,
+// `#NrDDD`), two wordlist classes (`KEYWORD` for functions / special
+// operators, `KEYWORD_KW` for `&`-prefixed lambda-list markers),
+// `:kw` / `'quoted` sigil-tagged symbols (SYMBOL), `"..."` strings
+// (STRING) plus the never-emitted unterminated-string error indicator
+// (STRINGEOL), the `(` `)` `[` `]` `{` `}` `'` `` ` `` punctuation
+// (OPERATOR), the fall-through identifier state (IDENTIFIER), and
+// the earmuff + reader-macro-result state (SPECIAL). Cross-referenced
+// against `vendor/lexilla/include/SciLexer.h:670-681` and the lexer
+// body `vendor/lexilla/lexers/LexLisp.cxx:50-235`; wordlist descriptor
+// at `LexLisp.cxx:280-284`; `LexerModule lmLISP(SCLEX_LISP,
+// ColouriseLispDoc, "lisp", FoldLispDoc, lispWordListDesc)` at
+// `LexLisp.cxx:286`. Language name string for `SCI_SETILEXER` lookup:
+// `"lisp"`.
+//
+// **Two wordlist classes.** `lispWordListDesc[]` at
+// `LexLisp.cxx:280-284` declares exactly two entries: index 0
+// "Functions and special operators" → `SCE_LISP_KEYWORD` via
+// `classifyWordLisp` (`LexLisp.cxx:64-65`), index 1 "Keywords" →
+// `SCE_LISP_KEYWORD_KW` via `:66-67`. First-match-wins chain — class 0
+// is checked before class 1, so a token duplicated across classes
+// silently demotes the class-1 entry. Contrast Bash (1 class), NSIS
+// (4 classes), TCL (9 classes), Lua (8 classes). No `OptionSet` /
+// `PropertySet` — this is a legacy classic-Accessor lexer,
+// `SCI_SETPROPERTY` calls into `lisp` are no-ops.
+//
+// **Byte-exact case-sensitive lexer.** `classifyWordLisp` at
+// `LexLisp.cxx:50-75` builds its token buffer via raw
+// `s[i] = styler[start + i]` (`:56`) — no lowercasing. `WordList::InList`
+// does byte-equality; `LexerBase::WordListSet` passes the default
+// `lowerCase = false` to `WordList::Set`. Grep of `LexLisp.cxx` for
+// `MakeLowerCase|tolower|GetCurrentLowered|CaseInsensitive` returns
+// zero matches. Common Lisp's canonical case-insensitivity is a
+// reader-level property (`READTABLE-CASE :UPCASE`); the lexer does
+// not simulate it. Ship wordlists in the exact byte-case the buffer
+// will carry — by CL source convention that is lowercase (`defun`,
+// `let`, `lambda`). Same byte-exact contract as LUA_KEYWORDS /
+// PERL_KEYWORDS / TCL_KEYWORDS / BASH_KEYWORDS.
+//
+// **State 7 is a permanent hole in the public numbering.**
+// `SciLexer.h:676` declares `SCE_LISP_STRING = 6`; the very next
+// line `:677` declares `SCE_LISP_STRINGEOL = 8`. There is no
+// `SCE_LISP_*` constant with value 7 anywhere in the Scintilla /
+// Lexilla source tree — unlike Bash (`SCE_SH_CHARACTER = 6`), Lua
+// (`SCE_LUA_CHARACTER = 7`), Perl (`SCE_PL_CHARACTER = 7`), Python
+// (`SCE_P_CHARACTER = 4`), Lisp has no CHARACTER slot in the public
+// surface. The `'x` form is the QUOTE reader-macro — an `'` byte
+// emitted as OPERATOR (`LexLisp.cxx:120, 140, 202`) followed by a
+// SYMBOL run (`:122, 142, 204`), not a character literal. The `#\c`
+// character-literal reader-macro emits SPECIAL via an internal-only
+// state (see next paragraph). The `pub const` block below reflects
+// the gap literally — number 6, then jump to 8, no state-7 stub.
+//
+// **STRINGEOL (8) is public-declared but never emitted.**
+// `SciLexer.h:677` declares the constant, but grep of `LexLisp.cxx`
+// for `SCE_LISP_STRINGEOL` returns zero hits — the STRING block at
+// `LexLisp.cxx:220-229` closes only on unescaped `"`, has no `atEOL`
+// branch, and lets an unterminated string linger in
+// `state == SCE_LISP_STRING` until the final `styler.ColourTo` at
+// `:234`. Constant is included in the FFI surface for header parity
+// but unmapped by `LISP_STYLES` (deferred Error slot per SCE_SH_ERROR
+// / SCE_LUA_STRINGEOL / SCE_L_ERROR precedent).
+//
+// **Internal-only states 29 / 30 / 31 are `#define`d PRIVATELY inside
+// `LexLisp.cxx:32-34`:**
+//     #define SCE_LISP_CHARACTER 29
+//     #define SCE_LISP_MACRO 30
+//     #define SCE_LISP_MACRO_DISPATCH 31
+// These are NOT in `SciLexer.h` and MUST NOT be exported from
+// `scintilla-sys`. They are transient state markers the lexer walks
+// through while parsing `#| … |#` (block comment), `#x` / `#o` / `#b`
+// (radix macros), and `#\c` (character literals) at
+// `LexLisp.cxx:106, 145-176, 179-194`; every transition emits a
+// DIFFERENT public style (`SCE_LISP_MULTI_COMMENT`, `SCE_LISP_SPECIAL`,
+// or `SCE_LISP_OPERATOR`) via `styler.ColourTo(..., <public>)`.
+// Values 29/30/31 fall outside the SciLexer.h public range and would
+// resolve to `STYLE_DEFAULT` if they ever escaped — the design intent
+// is "never emitted as final style". Do not tempt future contributors
+// to add pub consts for them. Contrast TCL where
+// `SCE_TCL_WORD_IN_QUOTE` is a public state currently never emitted;
+// Lisp's 29/30/31 are stricter — they are `.cxx`-private.
+pub const SCE_LISP_DEFAULT: usize = 0;
+pub const SCE_LISP_COMMENT: usize = 1;
+pub const SCE_LISP_NUMBER: usize = 2;
+pub const SCE_LISP_KEYWORD: usize = 3;
+pub const SCE_LISP_KEYWORD_KW: usize = 4;
+pub const SCE_LISP_SYMBOL: usize = 5;
+pub const SCE_LISP_STRING: usize = 6;
+// State 7 intentionally absent — SciLexer.h:676-677 jumps 6 → 8. See banner.
+pub const SCE_LISP_STRINGEOL: usize = 8;
+pub const SCE_LISP_IDENTIFIER: usize = 9;
+pub const SCE_LISP_OPERATOR: usize = 10;
+pub const SCE_LISP_SPECIAL: usize = 11;
+pub const SCE_LISP_MULTI_COMMENT: usize = 12;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated

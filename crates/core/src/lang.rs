@@ -577,7 +577,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         menu_label: "Lisp",
         desc: "Lisp source file",
         lexer: Some("lisp"),
-        extensions: &["lisp", "lsp", "el"],
+        extensions: &["lisp", "lsp", "el", "cl"],
         filenames: &[],
     },
     LangEntry {
@@ -3548,6 +3548,121 @@ pub const LUA_KEYWORDS_2: &str = concat!(
     "pcall xpcall",
 );
 
+/// Space-separated Common Lisp / Scheme function + special-operator
+/// vocabulary installed via `LexLisp`'s `SCI_SETKEYWORDS(0, …)` — class
+/// 0 of `lispWordListDesc[]` at `vendor/lexilla/lexers/LexLisp.cxx:280-284`
+/// ("Functions and special operators"). Drives `SCE_LISP_KEYWORD` per
+/// the dispatch at `LexLisp.cxx:64-65`.
+///
+/// **Two-class wordlist with [`LISP_KEYWORDS_KW`] for class 1.** Class
+/// 0 first-match-wins over class 1 per `LexLisp.cxx:64-68` (Lexilla
+/// checks `keywords.InList(s)` before `keywords_kw.InList(s)`) — a
+/// token duplicated across classes silently demotes the class-1 entry.
+/// Cross-class no-overlap pinned in `lisp_uses_lexlisp_two_class_theme`.
+///
+/// **Case-sensitive lexer.** `classifyWordLisp` at `LexLisp.cxx:50-75`
+/// builds the token buffer via raw `styler[start + i]` at `:56` with no
+/// case folding — `defun` matches, `DEFUN` never does. Common Lisp
+/// source convention is lowercase; wordlists must match. Same
+/// byte-exact contract as [`LUA_KEYWORDS`] / [`TCL_KEYWORDS`].
+///
+/// **`:`-prefix stripping does NOT happen here.** In Lisp, `:foo`
+/// enters `SCE_LISP_SYMBOL` (state 5) via the DEFAULT-state branch at
+/// `LexLisp.cxx:107-109` — it never reaches `classifyWordLisp`. So
+/// keyword-argument names (`:test`, `:key`, `:initial-value`) DO NOT
+/// belong in this wordlist; they paint via SYMBOL / Lifetime
+/// automatically.
+///
+/// Sourced from the Common Lisp `HyperSpec` ("Symbols in the
+/// `COMMON-LISP` Package"). Cross-referenced against Notepad++'s
+/// `langs.model.xml` `<Language name="lisp">` `instre1` list for
+/// default-set parity (no content copied from Notepad++ per
+/// CLAUDE.md).
+pub const LISP_KEYWORDS: &str = concat!(
+    "not defun defmacro defvar defparameter defconstant defclass ",
+    "defmethod defgeneric defsetf defstruct deftype defpackage ",
+    "define-condition define-symbol-macro define-modify-macro ",
+    "define-compiler-macro define-setf-expander ",
+    "+ - * / = < > <= >= /= 1+ 1- ",
+    "princ prin1 print pprint write format terpri fresh-line ",
+    "eval apply funcall quote identity function complement backquote ",
+    "lambda set setq setf psetq psetf multiple-value-setq ",
+    "gensym make-symbol intern symbol-name symbol-value symbol-plist ",
+    "get getf putprop remprop hash make-hash-table gethash remhash ",
+    "array make-array aref svref elt ",
+    "car cdr cons list list* append reverse nreverse last nth nthcdr ",
+    "first second third fourth fifth sixth seventh eighth ninth tenth ",
+    "caar cadr cdar cddr caaar caadr cadar caddr cdaar cdadr cddar ",
+    "cdddr caaaar caaadr caadar caaddr cadaar cadadr caddar cadddr ",
+    "cdaaar cdaadr cdadar cdaddr cddaar cddadr cdddar cddddr ",
+    "member assoc rassoc subst sublis nsubst nsublis remove remove-if ",
+    "remove-if-not delete delete-if delete-if-not length position ",
+    "position-if find find-if count count-if ",
+    "mapc mapcar mapl maplist mapcan mapcon reduce ",
+    "rplaca rplacd nconc revappend nreconc ",
+    "atom symbolp numberp integerp floatp rationalp complexp realp ",
+    "stringp characterp arrayp vectorp listp consp null boundp ",
+    "fboundp functionp keywordp packagep hash-table-p typep subtypep ",
+    "minusp zerop plusp evenp oddp eq eql equal equalp ",
+    "cond case ecase typecase etypecase when unless ",
+    "and or if let let* flet labels macrolet symbol-macrolet ",
+    "prog prog1 prog2 progn progv block return return-from tagbody go ",
+    "do do* dolist dotimes loop with for in on across being finally ",
+    "catch throw unwind-protect handler-case handler-bind ",
+    "restart-case restart-bind signal error cerror warn break ",
+    "continue errset backtrace evalhook ",
+    "truncate floor ceiling round mod rem float coerce ",
+    "min max abs signum sin cos tan asin acos atan sinh cosh tanh ",
+    "expt exp log sqrt isqrt random ",
+    "logand logior logxor lognot logeqv lognand lognor logorc1 ",
+    "logorc2 logandc1 logandc2 logtest logbitp logcount ash ",
+    "integer bignum ratio rational real complex character ",
+    "declare declaim proclaim the check-type assert ",
+    "eval-when in-package use-package import export ",
+    "shadow shadowing-import ",
+    "multiple-value-bind multiple-value-call multiple-value-list ",
+    "values values-list ",
+    "read read-line read-char write-char write-line write-string ",
+    "open close with-open-file with-open-stream ",
+    "make-instance slot-value slot-boundp with-slots with-accessors ",
+    "call-next-method next-method-p ",
+    "t nil ",
+    // Scheme forms coexist under the shared `lisp` lexer per LANG_TABLE
+    // at :575-582 and :819. R7RS §7.1 canonical vocabulary:
+    "define define-syntax syntax-rules syntax-case ",
+    "letrec letrec-syntax let-syntax begin delay force cons-stream ",
+    "car+cdr set-car! set-cdr! null? pair? procedure? boolean? ",
+    "string? vector? symbol? number? eqv?",
+);
+
+/// Space-separated Common Lisp lambda-list-marker vocabulary installed
+/// via `LexLisp`'s `SCI_SETKEYWORDS(1, …)` — class 1 of
+/// `lispWordListDesc[]` at `LexLisp.cxx:280-284` ("Keywords"). Drives
+/// `SCE_LISP_KEYWORD_KW` per `LexLisp.cxx:66-67`.
+///
+/// **Scope: `&`-prefixed lambda-list markers ONLY.** The eight ANSI CL
+/// markers per CLHS §3.4.1 ("Ordinary Lambda Lists"): `&allow-other-keys`,
+/// `&aux`, `&body`, `&environment`, `&key`, `&optional`, `&rest`,
+/// `&whole`. The `&` character is admitted by `isLispwordstart` at
+/// `LexLisp.cxx:44-47` (excludes only `;`, whitespace, operator chars,
+/// newline, `"`), so `&rest` enters `SCE_LISP_IDENTIFIER` at `:110-112`
+/// and reaches `classifyWordLisp` with the `&` prefix INCLUDED in the
+/// buffer. Wordlist entries MUST retain the leading `&` — parallels
+/// [`NSIS_VARIABLES`] storing entries with leading `$`.
+///
+/// **No cross-class duplicates with [`LISP_KEYWORDS`].** Verified by a
+/// `HashSet` intersection guard in `lisp_uses_lexlisp_two_class_theme`.
+/// Lexilla's first-match-wins chain at `LexLisp.cxx:64-68` would
+/// silently demote any duplicate class-1 entry.
+///
+/// Notepad++ ships class 1 empty (`<Keywords name="instre2"></Keywords>`
+/// in stock `langs.model.xml`). This is a strictly-additive enhancement
+/// relative to Notepad++'s colouring — nothing that Notepad++ paints
+/// changes; tokens Notepad++ leaves as IDENTIFIER get promoted to
+/// `KEYWORD_KW`.
+pub const LISP_KEYWORDS_KW: &str =
+    "&allow-other-keys &aux &body &environment &key &optional &rest &whole";
+
 /// Space-separated Python 3 reserved-word vocabulary installed via
 /// `LexPython`'s `SCI_SETKEYWORDS(0, ...)` — class 0 of
 /// `pythonWordListDesc[]`. Drives `SCE_P_WORD` (mapped to Keyword
@@ -4388,6 +4503,13 @@ mod tests {
         assert_eq!(LangType::from_extension("itcl"), L_TCL);
         assert_eq!(LangType::from_extension("exp"), L_TCL);
         assert_eq!(LangType::from_extension("wfs"), L_TCL);
+        // Lisp family — `.lisp`, `.lsp`, `.el` (Emacs Lisp), `.cl`
+        // (ANSI Common Lisp). All share the `lisp` Lexilla lexer.
+        // `.scm` / `.ss` route to L_SCHEME per LANG_TABLE:819.
+        assert_eq!(LangType::from_extension("lisp"), L_LISP);
+        assert_eq!(LangType::from_extension("lsp"), L_LISP);
+        assert_eq!(LangType::from_extension("el"), L_LISP);
+        assert_eq!(LangType::from_extension("cl"), L_LISP);
     }
 
     #[test]

@@ -104,13 +104,14 @@ use codepp_core::lang::{
     BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS, CPP_KEYWORDS_2,
     CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
     CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS,
-    JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP,
-    L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_LATEX, L_LUA, L_MAKEFILE,
-    L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TCL, L_TEX,
-    L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-    PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
-    RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
-    TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+    JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS, LISP_KEYWORDS_KW,
+    LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI,
+    L_JAVA, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS,
+    L_PYTHON, L_RC, L_RUST, L_SQL, L_TCL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS,
+    NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+    VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -143,12 +144,14 @@ use codepp_scintilla_sys::{
     SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM,
     SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY,
     SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND,
-    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART,
-    SCE_LUA_CHARACTER, SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL,
-    SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING,
-    SCE_LUA_WORD, SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6,
-    SCE_LUA_WORD7, SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2,
-    SCE_L_MATH, SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
+    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_LISP_COMMENT,
+    SCE_LISP_KEYWORD, SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER,
+    SCE_LISP_OPERATOR, SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER,
+    SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING,
+    SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD,
+    SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7,
+    SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH,
+    SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
     SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR,
     SCE_MAKE_TARGET, SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION,
     SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER,
@@ -5037,6 +5040,104 @@ const TCL_THEME: LangTheme = LangTheme {
     bold: TCL_BOLD,
 };
 
+// --- LexLisp (Common Lisp / Scheme) ---
+//
+// Style-routing rationale (per public state, low index to high):
+//   * SCE_LISP_COMMENT (1) → Comment — `;`-to-EOL line comment
+//     per `LexLisp.cxx:114-117, 208-212`.
+//   * SCE_LISP_NUMBER (2) → Number — decimal literals via the
+//     `classifyWordLisp` digit-only path at `:54-58, :62`, plus
+//     radix-prefix literals `#x` / `#o` / `#b` / `#NrDDD` routed
+//     through the private MACRO_DISPATCH (31) and MACRO (30)
+//     states before emission.
+//   * SCE_LISP_KEYWORD (3) → Keyword — class-0 wordlist hit per
+//     `:64-65`. Primary function / special-operator archetype;
+//     matches SCE_C_WORD / SCE_SH_WORD / SCE_TCL_WORD precedent.
+//   * SCE_LISP_KEYWORD_KW (4) → Keyword2 — class-1 wordlist hit
+//     per `:66-67`. `&`-prefixed lambda-list markers; secondary-
+//     keyword archetype matches SCE_LUA_WORD2 / SCE_TCL_WORD2.
+//   * SCE_LISP_SYMBOL (5) → Lifetime — `:kw` keyword-package
+//     symbols (entered at `:107-109`) AND `'foo` quoted symbols
+//     after the `'` operator (entered at `:121-123, :141-143,
+//     :203-205`). Sigil-tagged-value archetype matches Bash
+//     SCALAR / PARAM and NSIS VARIABLE / STRINGVAR precedent.
+//     The `:kw` reads to the KEYWORD package — semantically a
+//     name binding, not a syntactic keyword; distinct slot.
+//   * SCE_LISP_STRING (6) → String — `"..."` per `:125-128,
+//     :220-229`.
+//   * SCE_LISP_OPERATOR (10) → Operator — `(` `)` `[` `]` `{`
+//     `}` `'` `` ` `` per `isLispoperator` at `:36-42`; emitted
+//     at `:118-124, :138-144, :166, :172, :200-206`. Every
+//     emission is a one-byte `ColourTo(i, SCE_LISP_OPERATOR)` —
+//     `))` produces two separate spans; foreground-only styling
+//     recommended.
+//   * SCE_LISP_SPECIAL (11) → Keyword — overloaded across four
+//     unrelated tokens: (a) earmuffed globals `*foo*` / `+bar+`
+//     per `classifyWordLisp:68-70`, (b) `#\c` character literals
+//     via the internal CHARACTER (29) state at `:158, :187-191`,
+//     (c) `#'foo` function-quote reader-macro at `:162-163,
+//     :196-199`, (d) radix-prefixed numeric payloads via the
+//     MACRO (30) state at `:181`. All four are "this is a Lisp
+//     semantic anchor" cues — routed to Keyword bold matching
+//     the structural-anchor archetype (SCE_TCL_EXPAND precedent).
+//   * SCE_LISP_MULTI_COMMENT (12) → Comment — `#| ... |#` block
+//     comment per `:151, :213-219`. Universal Comment-slot
+//     convention; matches Lua's COMMENT + COMMENTLINE +
+//     COMMENTDOC triple and NSIS's COMMENT + COMMENTBOX double.
+//
+// SCE_LISP_DEFAULT (0), SCE_LISP_IDENTIFIER (9), SCE_LISP_STRINGEOL
+// (8) intentionally UNMAPPED. DEFAULT + IDENTIFIER follow the
+// universal-omission pattern per SCE_C_DEFAULT / SCE_C_IDENTIFIER,
+// SCE_LUA_DEFAULT / SCE_LUA_IDENTIFIER, SCE_TCL_DEFAULT /
+// SCE_TCL_IDENTIFIER. STRINGEOL joins the deferred-Error-slot
+// migration list alongside SCE_SH_ERROR, SCE_LUA_STRINGEOL,
+// SCE_L_ERROR — and additionally `SCE_LISP_STRINGEOL` is
+// permanently unreachable at runtime (see scintilla-sys banner
+// note; grep of LexLisp.cxx for the constant returns zero hits).
+const LISP_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_LISP_COMMENT, StyleSlot::Comment),
+    (SCE_LISP_NUMBER, StyleSlot::Number),
+    (SCE_LISP_KEYWORD, StyleSlot::Keyword),
+    (SCE_LISP_KEYWORD_KW, StyleSlot::Keyword2),
+    (SCE_LISP_SYMBOL, StyleSlot::Lifetime),
+    (SCE_LISP_STRING, StyleSlot::String),
+    (SCE_LISP_OPERATOR, StyleSlot::Operator),
+    (SCE_LISP_SPECIAL, StyleSlot::Keyword),
+    (SCE_LISP_MULTI_COMMENT, StyleSlot::Comment),
+];
+
+// Italic on both comment families — `;`-to-EOL COMMENT +
+// `#|...|#` MULTI_COMMENT. Universal Code++ comment-slot
+// convention; matches NSIS COMMENT + COMMENTBOX double-italic
+// and Lua triple-italic precedent.
+const LISP_ITALIC: &[usize] = &[SCE_LISP_COMMENT, SCE_LISP_MULTI_COMMENT];
+
+// Bold the primary keyword class (KEYWORD, class-0 wordlist hit)
+// and the structural-anchor state (SPECIAL, earmuffed globals +
+// reader-macro emissions). Matches TCL_BOLD's WORD + EXPAND
+// two-entry precedent: "primary keyword + one structural anchor".
+// KEYWORD_KW deliberately NOT bolded — carries distinct Keyword2
+// colour; boldening alongside class-0 hits would over-weight the
+// lambda-list markers. SYMBOL deliberately NOT bolded — sigil-
+// tagged archetype carries weight via Lifetime slot, exactly as
+// Bash SCALAR / PARAM stay non-bold.
+const LISP_BOLD: &[usize] = &[SCE_LISP_KEYWORD, SCE_LISP_SPECIAL];
+
+// Two-class install. `lispWordListDesc[]` at LexLisp.cxx:280-284
+// declares exactly two classes:
+//   - class 0 "Functions and special operators" → SCE_LISP_KEYWORD
+//   - class 1 "Keywords" → SCE_LISP_KEYWORD_KW
+// Same shape as Lua's two-populated install. No runtime properties
+// consulted (LexLisp has no OptionSet; SCI_SETPROPERTY is a no-op).
+// Wordlist contents in canonical lowercase per byte-exact case
+// contract.
+const LISP_THEME: LangTheme = LangTheme {
+    keywords: &[(0, LISP_KEYWORDS), (1, LISP_KEYWORDS_KW)],
+    styles: LISP_STYLES,
+    italic: LISP_ITALIC,
+    bold: LISP_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -5174,6 +5275,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&NSIS_THEME)
     } else if lang == L_TCL {
         Some(&TCL_THEME)
+    } else if lang == L_LISP {
+        Some(&LISP_THEME)
     } else {
         None
     }
@@ -19925,14 +20028,15 @@ mod lang_theme_tests {
         BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1,
         CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
         CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS,
-        JAVA_KEYWORDS, JAVA_KEYWORDS_2, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BASH, L_BATCH, L_C,
-        L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LUA, L_MAKEFILE,
-        L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TCL,
-        L_TEX, L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS,
-        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+        JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
+        LUA_KEYWORDS_2, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA,
+        L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
+        L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_XML,
+        MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+        PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
+        RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+        XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -19964,6 +20068,7 @@ mod lang_theme_tests {
             (L_BASH, "Shell"),
             (L_NSIS, "NSIS"),
             (L_TCL, "TCL"),
+            (L_LISP, "Lisp"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -22363,6 +22468,251 @@ mod lang_theme_tests {
                 .any(|tok| tok == "puts" || tok == "set" || tok == "proc"),
             "TCL_ITCL_KEYWORDS must NOT contain core TCL commands — those belong in \
              TCL_KEYWORDS (class 0)"
+        );
+    }
+
+    /// Lisp uses Lexilla's `lisp` lexer (`LexLisp.cxx`) — a 12-slot
+    /// byte-exact case-sensitive S-expression lexer with a two-class
+    /// wordlist surface. Shared across `L_LISP` (`.lisp` / `.lsp` /
+    /// `.el` / `.cl`); `L_SCHEME` (`.scm` / `.ss`) lands in a follow-on
+    /// commit reusing this same style table with a distinct
+    /// `SCHEME_KEYWORDS` pair. The dedicated test pins the 9-mapping
+    /// style table (12 public slots — with a lexer-level gap at state 7
+    /// — minus DEFAULT + IDENTIFIER + STRINGEOL), the two-class install
+    /// contract, SYMBOL → Lifetime (sigil-tagged-value archetype — Bash
+    /// SCALAR / PARAM precedent), SPECIAL → Keyword bold (structural-
+    /// anchor archetype — TCL EXPAND precedent), the italic collapse
+    /// of both COMMENT + `MULTI_COMMENT` onto the Comment slot, and
+    /// the 10 cross-language non-reuse pins.
+    ///
+    /// Test naming: `lisp_uses_lexlisp_two_class_theme` —
+    /// `_two_class_` because `lispWordListDesc[]` at
+    /// `LexLisp.cxx:280-284` declares exactly two classes. Same
+    /// "count reflects lexer surface, not Code++'s install count"
+    /// naming convention as Lua (`_eight_class_`) and TCL
+    /// (`_nine_class_`).
+    #[test]
+    fn lisp_uses_lexlisp_two_class_theme() {
+        use codepp_scintilla_sys::{
+            SCE_LISP_COMMENT, SCE_LISP_DEFAULT, SCE_LISP_IDENTIFIER, SCE_LISP_KEYWORD,
+            SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER, SCE_LISP_OPERATOR,
+            SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_STRINGEOL, SCE_LISP_SYMBOL,
+        };
+        use std::collections::HashSet;
+        let lisp = lang_theme(L_LISP).expect("Lisp wired");
+
+        // Style-table size pin — 9 mappings (12 public emission
+        // slots 0..=12 minus state-7 gap, minus DEFAULT + IDENTIFIER
+        // + STRINGEOL).
+        assert_eq!(
+            lisp.styles.len(),
+            9,
+            "LISP_STYLES must map 9 indices (12 public slots minus \
+             state-7 gap and minus DEFAULT + IDENTIFIER + STRINGEOL)"
+        );
+
+        // Cross-language non-reuse — 10 pins.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let props = lang_theme(L_INI).expect("INI wired");
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let bash = lang_theme(L_BASH).expect("Bash wired");
+        let tcl = lang_theme(L_TCL).expect("TCL wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (mk, "Makefile"),
+            (pas, "Pascal"),
+            (php, "PHP"),
+            (bat, "Batch"),
+            (props, "INI"),
+            (sql, "SQL"),
+            (vb, "VB"),
+            (bash, "Bash"),
+            (tcl, "TCL"),
+        ] {
+            assert_ne!(
+                lisp.styles, other.styles,
+                "Lisp must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Two-class install per lispWordListDesc[] at :280-284.
+        assert_eq!(
+            lisp.keywords.len(),
+            2,
+            "Lisp installs both class 0 + class 1"
+        );
+        assert_eq!(lisp.keywords[0].0, 0);
+        assert_eq!(lisp.keywords[0].1, LISP_KEYWORDS);
+        assert_eq!(lisp.keywords[1].0, 1);
+        assert_eq!(lisp.keywords[1].1, LISP_KEYWORDS_KW);
+
+        // HashSet no-overlap across the two populated wordlists.
+        // Lexilla checks class 0 first at LexLisp.cxx:64-65 then
+        // class 1 at :66-67 — a duplicate demotes silently.
+        let mut seen: HashSet<&str> = HashSet::new();
+        for (class_idx, words) in lisp.keywords {
+            for tok in words.split_whitespace() {
+                assert!(
+                    seen.insert(tok),
+                    "LISP wordlist token `{tok}` appears in multiple \
+                     classes (currently checking class {class_idx}) — \
+                     the lexer's first-match-wins chain at \
+                     LexLisp.cxx:64-68 makes any duplicate unreachable"
+                );
+            }
+        }
+
+        // Style-routing pins (9 mappings).
+        for (idx, slot, name) in [
+            (SCE_LISP_COMMENT, StyleSlot::Comment, "SCE_LISP_COMMENT"),
+            (SCE_LISP_NUMBER, StyleSlot::Number, "SCE_LISP_NUMBER"),
+            (SCE_LISP_KEYWORD, StyleSlot::Keyword, "SCE_LISP_KEYWORD"),
+            (
+                SCE_LISP_KEYWORD_KW,
+                StyleSlot::Keyword2,
+                "SCE_LISP_KEYWORD_KW",
+            ),
+            (SCE_LISP_SYMBOL, StyleSlot::Lifetime, "SCE_LISP_SYMBOL"),
+            (SCE_LISP_STRING, StyleSlot::String, "SCE_LISP_STRING"),
+            (SCE_LISP_OPERATOR, StyleSlot::Operator, "SCE_LISP_OPERATOR"),
+            (SCE_LISP_SPECIAL, StyleSlot::Keyword, "SCE_LISP_SPECIAL"),
+            (
+                SCE_LISP_MULTI_COMMENT,
+                StyleSlot::Comment,
+                "SCE_LISP_MULTI_COMMENT",
+            ),
+        ] {
+            assert!(
+                lisp.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Intentional-omission pins.
+        for (idx, name) in [
+            (SCE_LISP_DEFAULT, "SCE_LISP_DEFAULT"),
+            (SCE_LISP_IDENTIFIER, "SCE_LISP_IDENTIFIER"),
+            (SCE_LISP_STRINGEOL, "SCE_LISP_STRINGEOL"),
+        ] {
+            assert!(
+                !lisp.styles.iter().any(|(i, _)| *i == idx),
+                "{name} must remain unmapped (universal omission / \
+                 deferred-Error / never-emitted)"
+            );
+        }
+
+        // Italic — both comment families.
+        for (idx, name) in [
+            (SCE_LISP_COMMENT, "SCE_LISP_COMMENT"),
+            (SCE_LISP_MULTI_COMMENT, "SCE_LISP_MULTI_COMMENT"),
+        ] {
+            assert!(
+                lisp.italic.contains(&idx),
+                "Italic on {name} (universal comment-slot convention)"
+            );
+        }
+        assert_eq!(
+            lisp.italic.len(),
+            2,
+            "LISP_ITALIC must contain exactly COMMENT + MULTI_COMMENT"
+        );
+
+        // Bold — primary keyword + structural anchor.
+        for (idx, name) in [
+            (SCE_LISP_KEYWORD, "SCE_LISP_KEYWORD"),
+            (SCE_LISP_SPECIAL, "SCE_LISP_SPECIAL"),
+        ] {
+            assert!(
+                lisp.bold.contains(&idx),
+                "Bold on {name} (primary-keyword + structural-anchor \
+                 convention — TCL WORD+EXPAND precedent)"
+            );
+        }
+        for (idx, name) in [
+            (SCE_LISP_KEYWORD_KW, "SCE_LISP_KEYWORD_KW"),
+            (SCE_LISP_SYMBOL, "SCE_LISP_SYMBOL"),
+        ] {
+            assert!(
+                !lisp.bold.contains(&idx),
+                "{name} must NOT be bold (carries weight via colour \
+                 slot, not font weight)"
+            );
+        }
+        assert_eq!(
+            lisp.bold.len(),
+            2,
+            "LISP_BOLD must contain exactly KEYWORD + SPECIAL"
+        );
+
+        // Case-sensitivity contract — LexLisp does byte-exact InList
+        // with NO case folding (LexLisp.cxx:50-75 does no MakeLowerCase
+        // / tolower / GetCurrentLowered on the wordlist-match path).
+        // Wordlists stored in canonical lowercase per CL convention.
+        assert!(
+            LISP_KEYWORDS.chars().all(|c| !c.is_ascii_uppercase()),
+            "LISP_KEYWORDS contains uppercase — LexLisp is byte-exact \
+             case-sensitive (LexLisp.cxx:64 calls keywords.InList(s) \
+             on the raw buffer with no case folding)"
+        );
+        assert!(
+            LISP_KEYWORDS_KW.chars().all(|c| !c.is_ascii_uppercase()),
+            "LISP_KEYWORDS_KW contains uppercase — same byte-exact \
+             contract as LISP_KEYWORDS"
+        );
+
+        // Canonical-anchor pins.
+        assert!(
+            LISP_KEYWORDS.split_whitespace().any(|t| t == "defun"),
+            "LISP_KEYWORDS must include `defun` (CL's foundational \
+             function definer — the archetype class-0 hit)"
+        );
+        assert!(
+            LISP_KEYWORDS_KW.split_whitespace().any(|t| t == "&rest"),
+            "LISP_KEYWORDS_KW must include `&rest` (canonical lambda- \
+             list marker — the archetype class-1 hit)"
+        );
+
+        // `&`-prefix contract for class 1. `isLispwordstart` at
+        // LexLisp.cxx:44-47 admits `&`, and classifyWordLisp's buffer
+        // at :55-57 INCLUDES the leading `&` — entries must retain it.
+        // Parallels NSIS_VARIABLES's leading-`$` contract.
+        assert!(
+            LISP_KEYWORDS_KW
+                .split_whitespace()
+                .all(|tok| tok.starts_with('&')),
+            "LISP_KEYWORDS_KW contains a non-&-prefixed entry — \
+             LexLisp's isLispwordstart at :44-47 admits `&` and \
+             classifyWordLisp at :50-75 builds the buffer INCLUDING \
+             the `&`; bare tokens never match the `&rest` dispatch"
+        );
+
+        // `:`-symbol guard (hard-wired-shadow guard). Keyword-argument
+        // names (`:test`, `:key`, `:initial-value`) enter
+        // SCE_LISP_SYMBOL via the DEFAULT-state branch at
+        // LexLisp.cxx:107-109 — they NEVER reach classifyWordLisp, so
+        // any `:`-prefixed wordlist entry is unreachable spec noise.
+        // Same "wordlist path never seen" archetype as NSIS hard-wired
+        // short-circuits.
+        assert!(
+            !LISP_KEYWORDS
+                .split_whitespace()
+                .any(|tok| tok.starts_with(':')),
+            "LISP_KEYWORDS contains a `:`-prefixed entry — `:foo` \
+             keyword symbols enter SCE_LISP_SYMBOL via the DEFAULT- \
+             state branch at LexLisp.cxx:107-109 and never reach \
+             classifyWordLisp; `:`-prefixed entries are unreachable"
+        );
+        assert!(
+            !LISP_KEYWORDS_KW
+                .split_whitespace()
+                .any(|tok| tok.starts_with(':')),
+            "LISP_KEYWORDS_KW contains a `:`-prefixed entry — same \
+             unreachable-token rationale as LISP_KEYWORDS above"
         );
     }
 
