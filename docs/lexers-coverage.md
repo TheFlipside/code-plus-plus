@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 28 / 🟡 60 / ⚫ 1.
+Total: 89 rows. ✅ 29 / 🟡 59 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1909,7 +1909,7 @@ further shim work needed.
 | Rust | 81 | `rust` | ✅ | ✅ | ✅ |
 | S-Record | 61 | `srec` | ⚫ | ⚫ | 🟡 |
 | SAS | 91 | `sas` | ⚫ | ⚫ | 🟡 |
-| Scheme | 31 | `lisp` | ⚫ | ⚫ | 🟡 |
+| Scheme | 31 | `lisp` | ✅ | ✅ | ✅ |
 | Shell | 26 | `bash` | ✅ | ✅ | ✅ |
 | Smalltalk | 37 | `smalltalk` | ⚫ | ⚫ | 🟡 |
 | Spice | 82 | `spice` | ⚫ | ⚫ | 🟡 |
@@ -1955,8 +1955,8 @@ The `.cxx`-private state markers 29 / 30 / 31
 final styles, and deliberately NOT exported from `scintilla-sys`.
 The `lisp` lexer also drives the `L_SCHEME` row via the same
 shared-lexer pattern that PHP / HTML / ASP use with `hypertext` —
-a follow-on commit wires `L_SCHEME`'s `SCHEME_THEME` against this
-same `LISP_STYLES` table with a distinct `SCHEME_KEYWORDS` /
+see the Scheme rationale below for `SCHEME_THEME`, which rides
+this same `LISP_STYLES` table with a distinct `SCHEME_KEYWORDS` /
 `SCHEME_KEYWORDS_KW` pair.
 
 Authored by a 4-agent research-and-synthesise workflow. Structural
@@ -1969,6 +1969,64 @@ lowercase invariant on both wordlists, `&`-prefix contract on
 noise), `HashSet` cross-class no-overlap guard, canonical-anchor
 pins (`defun` in class 0, `&rest` in class 1), and 10 cross-language
 non-reuse pins.
+
+**Scheme (2026-07-02):** rides the same Lexilla `lisp` lexer as
+L_LISP — `SCHEME_THEME` in `ui_win32/src/lib.rs` reuses `LISP_STYLES`
+/ `LISP_ITALIC` / `LISP_BOLD` by direct `&'static` reference (pinned
+by `std::ptr::eq` in
+`scheme_reuses_lexlisp_theme_with_r7rs_wordlists`). Only the
+wordlists differ: `SCHEME_KEYWORDS` (class 0, ~245 tokens) carries
+R7RS §7 formal syntax (`define`, `define-syntax`, `letrec`, `begin`,
+`lambda`, `syntax-rules`, `call/cc`, `dynamic-wind`, …) plus the
+§6.1–6.14 procedure canon (bytevectors, R7RS I/O `read-line` /
+`write-string` / `peek-u8`, character/string maps, library forms
+`define-library` / `import` / `export`) plus SRFI-1 higher-order
+idioms (`filter`, `fold`, `fold-left`, `fold-right`, `reduce`) which
+are de facto standard even in R7RS-small codebases;
+`SCHEME_KEYWORDS_KW` (class 1, ~80 tokens) carries the R7RS
+predicate/mutator vocabulary — every entry ends in `?` (predicate:
+`null?`, `pair?`, `eqv?`, `char-alphabetic?`, `string<=?`, …) or `!`
+(mutator: `set-car!`, `vector-set!`, `bytevector-copy!`). The
+class-1 `?`/`!` sigil contract is Scheme's semantic parallel to
+Lisp's syntactic leading-`&` contract; both hit
+`SCE_LISP_KEYWORD_KW` → Keyword2 in the shared table.
+
+Tokens that moved: the four-line "// Scheme forms coexist" block in
+`LISP_KEYWORDS` (which had mixed R7RS `define` / `null?` /
+`set-car!` etc. into CL's wordlist) was migrated wholesale into
+`SCHEME_KEYWORDS` / `SCHEME_KEYWORDS_KW`. Correctness gain: CL now
+lists only `defun` / `labels` / `rplaca` / `atom` / `null` / `eq` /
+`equal` (no `?`, no `!`); Scheme now lists only the R7RS canon.
+`set!` lives in Scheme class 0 as an R7RS §4.1.6 assignment
+special form, NOT in class 1 with the `!`-suffix data mutators —
+a guard pin enforces this.
+
+Extension coverage extended from `.scm` / `.ss` to include R7RS
+`.sld` (define-library file, canonical in Chibi / Chicken /
+Sagittarius / Gauche) and R6RS `.sls` (library source, deployed
+in Chez / Guile / Larceny). `.rkt` deliberately not claimed —
+Racket has diverged from R7RS (`#lang racket`, `struct`,
+`require`/`provide`, `match`, `for/list` are not R7RS); a future
+`L_RACKET` row is the right destination. `.sps` (R6RS program
+script) skipped as too rare. `.smd` (Notepad++ ships) skipped —
+not a standard Scheme extension in any implementation.
+
+This is the first wiring of the "shared Lexilla lexer, distinct
+wordlists" pattern applied to a two-class lexer — precedent from
+`HYPERTEXT_STYLES` across HTML / PHP / ASP / XML (single-class
+installs) applied to `LexLisp`. Reusable template for JSON5
+(riding `json`) and future shared-lexer siblings: copy the
+`LangTheme` struct; keep styles/italic/bold pointing at the shared
+`&'static` slice; swap only the `keywords: &[…]` pair. Structural
+guards pinned in `scheme_reuses_lexlisp_theme_with_r7rs_wordlists`:
+`std::ptr::eq` on styles/italic/bold (catches copy-paste
+divergence), two-class install shape, `HashSet` cross-class
+no-overlap, byte-exact lowercase invariant, `?`/`!` sigil contract
+on class 1, `set!` class-0 placement guard, `:`-prefix
+unreachable-token guard, canonical anchors (`define` in class 0,
+`null?` in class 1), and 10 cross-language WORDLIST non-reuse pins
+(content-based, NOT style-based, because Scheme intentionally
+shares styles with Lisp).
 
 ## Notes
 

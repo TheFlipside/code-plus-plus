@@ -107,11 +107,11 @@ use codepp_core::lang::{
     JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS, LISP_KEYWORDS_KW,
     LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI,
     L_JAVA, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS,
-    L_PYTHON, L_RC, L_RUST, L_SQL, L_TCL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS,
-    NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-    PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-    VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+    L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS,
+    NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
+    PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
+    SCHEME_KEYWORDS_KW, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -5138,6 +5138,33 @@ const LISP_THEME: LangTheme = LangTheme {
     bold: LISP_BOLD,
 };
 
+// Scheme rides the shared `lisp` Lexilla lexer per LANG_TABLE:815-822
+// — same lexer as L_LISP, distinct R7RS wordlists. The style /
+// italic / bold tables ARE the exact `LISP_*` slices (same
+// `&'static` references, not copies) — verified by
+// `std::ptr::eq(scheme.styles, lisp.styles)` in
+// `scheme_reuses_lexlisp_theme_with_r7rs_wordlists`. Only the
+// keyword content differs: `SCHEME_KEYWORDS` replaces Common Lisp
+// `defun` / `labels` / `rplaca` / `atom` / `null` with R7RS
+// `define` / `letrec` / `syntax-rules` / `call/cc`;
+// `SCHEME_KEYWORDS_KW` replaces `&`-prefixed lambda-list markers
+// with the `?` / `!` predicate/mutator contract vocabulary
+// (`null?`, `pair?`, `set-car!`, `vector-fill!`, …).
+//
+// This is the first "shared Lexilla lexer, distinct wordlists"
+// wiring for a two-class lexer — precedent from `HYPERTEXT_STYLES`
+// across HTML / PHP / ASP / XML (single-class installs). Reusable
+// template for future shared-lexer siblings (e.g. JSON5 riding
+// `json` once wired): copy the `LangTheme` struct; keep
+// styles/italic/bold pointing at the shared `&'static` slice; swap
+// only the `keywords: &[…]` pair.
+const SCHEME_THEME: LangTheme = LangTheme {
+    keywords: &[(0, SCHEME_KEYWORDS), (1, SCHEME_KEYWORDS_KW)],
+    styles: LISP_STYLES,
+    italic: LISP_ITALIC,
+    bold: LISP_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -5277,6 +5304,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&TCL_THEME)
     } else if lang == L_LISP {
         Some(&LISP_THEME)
+    } else if lang == L_SCHEME {
+        Some(&SCHEME_THEME)
     } else {
         None
     }
@@ -20031,12 +20060,12 @@ mod lang_theme_tests {
         JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
         LUA_KEYWORDS_2, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA,
         L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
-        L_PROPS, L_PYTHON, L_RC, L_RUST, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_XML,
+        L_PROPS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_XML,
         MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
         PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
-        RC_KEYWORDS, RUST_KEYWORDS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-        XML_KEYWORDS,
+        RC_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SQL_KEYWORDS,
+        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -20069,6 +20098,7 @@ mod lang_theme_tests {
             (L_NSIS, "NSIS"),
             (L_TCL, "TCL"),
             (L_LISP, "Lisp"),
+            (L_SCHEME, "Scheme"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -22474,9 +22504,11 @@ mod lang_theme_tests {
     /// Lisp uses Lexilla's `lisp` lexer (`LexLisp.cxx`) — a 12-slot
     /// byte-exact case-sensitive S-expression lexer with a two-class
     /// wordlist surface. Shared across `L_LISP` (`.lisp` / `.lsp` /
-    /// `.el` / `.cl`); `L_SCHEME` (`.scm` / `.ss`) lands in a follow-on
-    /// commit reusing this same style table with a distinct
-    /// `SCHEME_KEYWORDS` pair. The dedicated test pins the 9-mapping
+    /// `.el` / `.cl`); `L_SCHEME` (`.scm` / `.ss` / `.sld` / `.sls`)
+    /// reuses this same style table via `SCHEME_THEME` with distinct
+    /// R7RS `SCHEME_KEYWORDS` / `SCHEME_KEYWORDS_KW` (see the
+    /// `scheme_reuses_lexlisp_theme_with_r7rs_wordlists` test).
+    /// The dedicated test pins the 9-mapping
     /// style table (12 public slots — with a lexer-level gap at state 7
     /// — minus DEFAULT + IDENTIFIER + STRINGEOL), the two-class install
     /// contract, SYMBOL → Lifetime (sigil-tagged-value archetype — Bash
@@ -22714,6 +22746,226 @@ mod lang_theme_tests {
             "LISP_KEYWORDS_KW contains a `:`-prefixed entry — same \
              unreachable-token rationale as LISP_KEYWORDS above"
         );
+    }
+
+    /// Scheme is the FIRST wiring of the "shared Lexilla lexer,
+    /// distinct wordlists" pattern applied to a TWO-class lexer.
+    /// `SCHEME_THEME` reuses `LISP_STYLES` / `LISP_ITALIC` /
+    /// `LISP_BOLD` by direct `&'static` reference (pointer equality,
+    /// not just content equality) and installs distinct
+    /// `SCHEME_KEYWORDS` (R7RS `define` / `letrec` / `syntax-rules`
+    /// / `call/cc`) + `SCHEME_KEYWORDS_KW` (R7RS `?`-predicates +
+    /// `!`-mutators) via the same `SCI_SETKEYWORDS(0/1, …)`
+    /// two-class install.
+    ///
+    /// Precedent for the shared-styles half: HTML / PHP / ASP / XML
+    /// all ride `HYPERTEXT_STYLES` via the `hypertext` lexer. What's
+    /// new: this is the first pair to share a two-class `LexLisp`-
+    /// shaped install with only the wordlists diverging.
+    ///
+    /// Pinned invariants: (1) `std::ptr::eq` on styles/italic/bold —
+    /// stronger than content-equality; catches a future copy-paste
+    /// that introduces a separate `SCHEME_STYLES` const with
+    /// identical bytes (that copy-paste is the exact drift the
+    /// shared-lexer pattern exists to prevent). (2) Two-class
+    /// install shape. (3) `HashSet` cross-class no-overlap. (4)
+    /// Byte-exact lowercase (same `LexLisp` case-sensitive contract
+    /// as Lisp per LexLisp.cxx:50-75). (5) `?`/`!` sigil contract
+    /// on class 1 — the Scheme predicate/mutator archetype
+    /// paralleling Lisp's leading-`&` contract on class 1. (6)
+    /// Canonical anchors `define` (class 0) and `null?` (class 1).
+    /// (7) 10 cross-language WORDLIST non-reuse pins — content-
+    /// based, NOT style-based, because Scheme intentionally shares
+    /// styles with Lisp. (8) `set!` in class 0 guard — special form
+    /// per R7RS §4.1.6, not a mutator.
+    #[test]
+    fn scheme_reuses_lexlisp_theme_with_r7rs_wordlists() {
+        use std::collections::HashSet;
+
+        let lisp = lang_theme(L_LISP).expect("Lisp wired");
+        let scheme = lang_theme(L_SCHEME).expect("Scheme wired");
+
+        // (1a) Shared reference — CONTENT equality (documents intent).
+        assert_eq!(
+            scheme.styles, lisp.styles,
+            "Scheme must reuse LISP_STYLES verbatim (content)"
+        );
+        assert_eq!(scheme.italic, lisp.italic, "Scheme must reuse LISP_ITALIC");
+        assert_eq!(scheme.bold, lisp.bold, "Scheme must reuse LISP_BOLD");
+
+        // (1b) Shared reference — POINTER equality (enforces intent).
+        // Content-equality would pass if a future contributor
+        // copy-pasted LISP_STYLES into a separate SCHEME_STYLES const
+        // with identical bytes — that copy-paste is the exact drift
+        // the shared-lexer pattern exists to prevent. Pointer-equality
+        // catches it directly.
+        assert!(
+            std::ptr::eq(scheme.styles, lisp.styles),
+            "SCHEME_THEME.styles must point at LISP_STYLES itself, \
+             not a copy — shared-lexer pattern requires reference \
+             sharing, not just content equality"
+        );
+        assert!(
+            std::ptr::eq(scheme.italic, lisp.italic),
+            "SCHEME_THEME.italic must point at LISP_ITALIC itself"
+        );
+        assert!(
+            std::ptr::eq(scheme.bold, lisp.bold),
+            "SCHEME_THEME.bold must point at LISP_BOLD itself"
+        );
+
+        // (2) Two-class install shape — same as LISP_THEME.
+        assert_eq!(
+            scheme.keywords.len(),
+            2,
+            "Scheme installs both class 0 + class 1 per \
+             lispWordListDesc[] at LexLisp.cxx:280-284"
+        );
+        assert_eq!(scheme.keywords[0].0, 0);
+        assert_eq!(scheme.keywords[0].1, SCHEME_KEYWORDS);
+        assert_eq!(scheme.keywords[1].0, 1);
+        assert_eq!(scheme.keywords[1].1, SCHEME_KEYWORDS_KW);
+
+        // Distinct wordlists — R7RS vs CL.
+        assert_ne!(
+            scheme.keywords[0].1, lisp.keywords[0].1,
+            "Scheme class 0 must differ from Lisp class 0 — \
+             R7RS `define` vs CL `defun`"
+        );
+        assert_ne!(
+            scheme.keywords[1].1, lisp.keywords[1].1,
+            "Scheme class 1 must differ from Lisp class 1 — \
+             R7RS `?`/`!` predicates/mutators vs CL `&`-lambda-list markers"
+        );
+
+        // (3) HashSet no-overlap across the two populated wordlists.
+        // Lexilla checks class 0 first at LexLisp.cxx:64-65 then
+        // class 1 at :66-67 — a duplicate demotes silently.
+        let mut seen: HashSet<&str> = HashSet::new();
+        for (class_idx, words) in scheme.keywords {
+            for tok in words.split_whitespace() {
+                assert!(
+                    seen.insert(tok),
+                    "SCHEME wordlist token `{tok}` appears in multiple \
+                     classes (currently checking class {class_idx}) — \
+                     the lexer's first-match-wins chain at \
+                     LexLisp.cxx:64-68 makes any duplicate unreachable"
+                );
+            }
+        }
+
+        // (4) Case-sensitivity — LexLisp does byte-exact InList with
+        // NO case folding (LexLisp.cxx:50-75). R6RS §4.2 / R7RS §2.1
+        // mandate case-sensitivity for identifiers. Canonical lowercase.
+        assert!(
+            SCHEME_KEYWORDS.chars().all(|c| !c.is_ascii_uppercase()),
+            "SCHEME_KEYWORDS contains uppercase — LexLisp is byte-exact \
+             case-sensitive (LexLisp.cxx:64 calls keywords.InList(s) \
+             on the raw buffer with no case folding)"
+        );
+        assert!(
+            SCHEME_KEYWORDS_KW.chars().all(|c| !c.is_ascii_uppercase()),
+            "SCHEME_KEYWORDS_KW contains uppercase — same byte-exact \
+             contract as SCHEME_KEYWORDS"
+        );
+
+        // (5) `?`/`!` sigil contract on class 1.
+        assert!(
+            SCHEME_KEYWORDS_KW
+                .split_whitespace()
+                .all(|tok| tok.ends_with('?') || tok.ends_with('!')),
+            "SCHEME_KEYWORDS_KW entries must end in `?` (predicate) or \
+             `!` (mutator) — Scheme's R7RS §1.3.5 naming contract; \
+             class-1 slot reserved for that sigil-tagged archetype \
+             (semantic parallel to LISP_KEYWORDS_KW's syntactic \
+             leading-`&` lambda-list-marker contract)"
+        );
+
+        // (6) Canonical-anchor pins.
+        assert!(
+            SCHEME_KEYWORDS.split_whitespace().any(|t| t == "define"),
+            "SCHEME_KEYWORDS must include `define` (R7RS canonical \
+             function/value binder — archetype class-0 hit)"
+        );
+        assert!(
+            SCHEME_KEYWORDS_KW.split_whitespace().any(|t| t == "null?"),
+            "SCHEME_KEYWORDS_KW must include `null?` (R7RS canonical \
+             empty-list predicate — archetype class-1 hit)"
+        );
+
+        // (8) `set!` guard — special form per R7RS §4.1.6, class 0
+        // not class 1. The trailing `!` is coincidental to its
+        // syntactic role. Guards against the natural author error
+        // of grouping `set!` with `set-car!` / `set-cdr!` mutators.
+        assert!(
+            SCHEME_KEYWORDS.split_whitespace().any(|t| t == "set!"),
+            "SCHEME_KEYWORDS must include `set!` (R7RS §4.1.6 \
+             assignment SPECIAL FORM — belongs with binding-shape \
+             forms like `define` / `let` / `letrec`, NOT with \
+             data-mutator procedures)"
+        );
+        assert!(
+            !SCHEME_KEYWORDS_KW.split_whitespace().any(|t| t == "set!"),
+            "SCHEME_KEYWORDS_KW must NOT include `set!` — it's a \
+             special form (R7RS §4.1.6), not a mutator; belongs in \
+             class 0 with `define` / `let` / `letrec`. The trailing \
+             `!` is coincidental to its syntactic role"
+        );
+
+        // `:`-prefix exclusion — same as Lisp; :kw symbols enter
+        // SCE_LISP_SYMBOL via DEFAULT-state branch at LexLisp.cxx:107-109
+        // and never reach classifyWordLisp. `:`-prefixed entries are
+        // unreachable spec noise.
+        assert!(
+            !SCHEME_KEYWORDS
+                .split_whitespace()
+                .any(|tok| tok.starts_with(':')),
+            "SCHEME_KEYWORDS contains a `:`-prefixed entry — same \
+             unreachable-token rationale as LISP_KEYWORDS"
+        );
+        assert!(
+            !SCHEME_KEYWORDS_KW
+                .split_whitespace()
+                .any(|tok| tok.starts_with(':')),
+            "SCHEME_KEYWORDS_KW contains a `:`-prefixed entry — same \
+             unreachable-token rationale"
+        );
+
+        // (7) 10 cross-language non-reuse pins — WORDLIST content, NOT
+        // styles. Scheme intentionally shares styles with Lisp, so the
+        // Lisp test's style-based non-reuse loop would fail on this
+        // exact assertion. Content comparison sidesteps that.
+        // INI (L_INI / PROPS_THEME) is deliberately excluded — its
+        // keywords slice is empty (`LexProps::ColourisePropsDoc`
+        // ignores wordlists entirely per PROPS_THEME banner at
+        // :3619-3625), which would panic-on-index below.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let py = lang_theme(L_PYTHON).expect("Python wired");
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let bash = lang_theme(L_BASH).expect("Bash wired");
+        let tcl = lang_theme(L_TCL).expect("TCL wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (mk, "Makefile"),
+            (pas, "Pascal"),
+            (php, "PHP"),
+            (bat, "Batch"),
+            (py, "Python"),
+            (sql, "SQL"),
+            (vb, "VB"),
+            (bash, "Bash"),
+            (tcl, "TCL"),
+        ] {
+            assert_ne!(
+                scheme.keywords[0].1, other.keywords[0].1,
+                "Scheme must NOT reuse {name}'s class-0 wordlist"
+            );
+        }
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a

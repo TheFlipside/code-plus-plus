@@ -817,7 +817,7 @@ pub const LANG_TABLE: &[LangEntry] = &[
         menu_label: "Scheme",
         desc: "Scheme source file",
         lexer: Some("lisp"),
-        extensions: &["scm", "ss"],
+        extensions: &["scm", "ss", "sld", "sls"],
         filenames: &[],
     },
     LangEntry {
@@ -3626,13 +3626,7 @@ pub const LISP_KEYWORDS: &str = concat!(
     "open close with-open-file with-open-stream ",
     "make-instance slot-value slot-boundp with-slots with-accessors ",
     "call-next-method next-method-p ",
-    "t nil ",
-    // Scheme forms coexist under the shared `lisp` lexer per LANG_TABLE
-    // at :575-582 and :819. R7RS §7.1 canonical vocabulary:
-    "define define-syntax syntax-rules syntax-case ",
-    "letrec letrec-syntax let-syntax begin delay force cons-stream ",
-    "car+cdr set-car! set-cdr! null? pair? procedure? boolean? ",
-    "string? vector? symbol? number? eqv?",
+    "t nil",
 );
 
 /// Space-separated Common Lisp lambda-list-marker vocabulary installed
@@ -3662,6 +3656,163 @@ pub const LISP_KEYWORDS: &str = concat!(
 /// `KEYWORD_KW`.
 pub const LISP_KEYWORDS_KW: &str =
     "&allow-other-keys &aux &body &environment &key &optional &rest &whole";
+
+/// Space-separated R7RS Scheme reserved-word vocabulary installed via
+/// the shared `lisp` Lexilla lexer's `SCI_SETKEYWORDS(0, …)` — class 0
+/// of `lispWordListDesc[]` at `vendor/lexilla/lexers/LexLisp.cxx:280-284`
+/// ("Functions and special operators"). Drives `SCE_LISP_KEYWORD` per
+/// `LexLisp.cxx:64-65`.
+///
+/// **Two-class contract with [`SCHEME_KEYWORDS_KW`] on class 1.** No
+/// cross-class duplicates — verified pairwise by a `HashSet`
+/// intersection guard in `scheme_reuses_lexlisp_theme_with_r7rs_wordlists`.
+/// The lexer's first-match-wins chain at `LexLisp.cxx:64-68` would
+/// silently demote any duplicate class-1 entry to `SCE_LISP_KEYWORD`.
+///
+/// **Case-sensitive.** `LexLisp` `classifyWordLisp` at
+/// `LexLisp.cxx:50-75` does raw byte copies with NO case folding
+/// (no `MakeLowerCase` / `tolower` / `GetCurrentLowered` on the
+/// wordlist-match path); `WordList::InList` does byte-equality.
+/// R6RS §4.2 and R7RS §2.1 mandate case-sensitivity for identifiers
+/// (reversing R5RS's case-insensitivity), so canonical lowercase is
+/// correct — every R7RS report code sample and every modern
+/// implementation ships identifiers in lowercase.
+///
+/// **`:`-prefix exclusion.** Keyword-argument symbols (`:test`,
+/// `:key`) enter `SCE_LISP_SYMBOL` via the DEFAULT-state branch at
+/// `LexLisp.cxx:107-109` and NEVER reach `classifyWordLisp` — any
+/// `:`-prefixed wordlist entry would be unreachable spec noise.
+/// Same guard as [`LISP_KEYWORDS`].
+///
+/// **Source of vocabulary.** R7RS-small §7 formal syntax + §6.1-6.14
+/// procedure indices. Cross-checked against Notepad++'s
+/// `langs.model.xml` `<Language name="scheme">` `instre1` for
+/// default-set parity; extended to full R7RS (Notepad++'s list is
+/// R5RS-flavoured — no `define-record-type`, `guard`, `parameterize`,
+/// `when` / `unless`, `case-lambda`, bytevectors, R7RS I/O, library
+/// forms). SRFI-1 higher-order idioms (`filter`, `fold`, `fold-left`,
+/// `fold-right`, `reduce`) also included — de facto standard even in
+/// R7RS-small codebases. No content copied from Notepad++ per
+/// CLAUDE.md.
+///
+/// **Divergence from Common Lisp.** This list carries R7RS canon
+/// (`define`, `letrec`, `syntax-rules`, `set!`, `call/cc`,
+/// `dynamic-wind`, …). The Common Lisp counterparts (`defun`,
+/// `labels`, `rplaca`, `atom`, `null`, `eq`, `equal`) live in
+/// [`LISP_KEYWORDS`] and do NOT belong here. The class-0 archetype
+/// includes `set!` — a *special form* per R7RS §4.1.6 (Assignments),
+/// grouped with the binding-shape forms (`define` / `let` / `letrec`),
+/// NOT with the `!`-suffix mutator procedures (`set-car!`,
+/// `vector-set!`) which are class 1. The `!`-ending on `set!` is
+/// coincidental to its syntactic role.
+pub const SCHEME_KEYWORDS: &str = concat!(
+    "* + - / < <= = => > >= abs acos and angle append apply asin ",
+    "assoc assq assv atan begin ",
+    "bytevector bytevector-append bytevector-copy bytevector-length ",
+    "bytevector-u8-ref ",
+    "caaaar caaadr caaar caadar caaddr caadr caar cadaar cadadr ",
+    "cadar caddar cadddr caddr cadr ",
+    "call-with-current-continuation call-with-input-file ",
+    "call-with-output-file call-with-port call-with-values call/cc ",
+    "car case case-lambda ",
+    "cdaaar cdaadr cdaar cdadar cdaddr cdadr cdar cddaar cddadr ",
+    "cddar cdddar cddddr cdddr cddr cdr ",
+    "ceiling char->integer char-downcase char-foldcase char-upcase ",
+    "close-input-port close-output-port close-port command-line ",
+    "cond cond-expand cons cos ",
+    "current-error-port current-input-port current-output-port ",
+    "define define-library define-record-type define-syntax ",
+    "define-values delay delay-force denominator display do ",
+    "dynamic-wind else emergency-exit environment eof-object ",
+    "error error-object-irritants error-object-message eval exact ",
+    "exact->inexact exact-integer-sqrt exp export expt features filter ",
+    "floor floor-quotient floor-remainder floor/ flush-output-port ",
+    "fold fold-left fold-right for-each force gcd ",
+    "get-output-string guard if imag-part import include include-ci ",
+    "inexact inexact->exact integer->char interaction-environment ",
+    "lambda lcm length let let* let*-values let-syntax let-values ",
+    "letrec letrec* letrec-syntax library ",
+    "list list->string list->vector list-copy list-ref list-tail ",
+    "load log magnitude ",
+    "make-bytevector make-list make-polar make-promise ",
+    "make-rectangular make-string make-vector map max member memq ",
+    "memv min modulo newline not null-environment number->string ",
+    "numerator open-input-file open-input-string open-output-file ",
+    "open-output-string or parameterize peek-char peek-u8 ",
+    "quasiquote quote quotient raise raise-continuable rationalize ",
+    "read read-bytevector read-char read-line read-string read-u8 ",
+    "real-part reduce remainder reverse round ",
+    "scheme-report-environment set! sin sqrt square ",
+    "string string->list string->number string->symbol string->utf8 ",
+    "string->vector string-append string-copy string-downcase ",
+    "string-for-each string-length string-map string-ref string-upcase ",
+    "substring symbol->string syntax-rules tan ",
+    "truncate truncate-quotient ",
+    "truncate-remainder truncate/ unless unquote unquote-splicing ",
+    "utf8->string values vector vector->list vector->string ",
+    "vector-append vector-copy vector-for-each vector-length vector-map ",
+    "vector-ref when with-exception-handler with-input-from-file ",
+    "with-output-to-file write write-bytevector write-char ",
+    "write-string write-u8",
+);
+
+/// Space-separated R7RS Scheme predicate + mutator vocabulary installed
+/// via the shared `lisp` Lexilla lexer's `SCI_SETKEYWORDS(1, …)` —
+/// class 1 of `lispWordListDesc[]` at `LexLisp.cxx:280-284`
+/// ("Keywords"). Drives `SCE_LISP_KEYWORD_KW` per `LexLisp.cxx:66-67`
+/// → Keyword2 in `LISP_STYLES`.
+///
+/// **Scope: `?`-suffix predicates + `!`-suffix destructive procedures
+/// ONLY.** This is Scheme's *semantic* sigil contract (R7RS §1.3.5):
+/// identifiers ending in `?` are predicates that return a boolean;
+/// identifiers ending in `!` mutate their arguments. Structural
+/// parallel to [`LISP_KEYWORDS_KW`]'s syntactic leading-`&` contract
+/// on class 1 — both slots reserve the sigil-tagged archetype for the
+/// Keyword2 colour.
+///
+/// **`set!` is NOT here.** The trailing `!` is coincidental to `set!`'s
+/// R7RS §4.1.6 role as an *assignment special form* — a syntactic
+/// binder, not a data mutator like `set-car!` / `vector-set!` /
+/// `string-fill!`. `set!` lives in [`SCHEME_KEYWORDS`] class 0 with
+/// the other binding-shape forms.
+///
+/// **`#t` / `#f` / `#true` / `#false` are NOT here.** Leading `#`
+/// enters `SCE_LISP_MACRO_DISPATCH` at `LexLisp.cxx:106` (private
+/// state) and remaps to `SCE_LISP_SPECIAL` on emission. Never reaches
+/// `classifyWordLisp` — the wordlist path never sees these tokens.
+///
+/// **No cross-class duplicates with [`SCHEME_KEYWORDS`].** Verified by
+/// the same `HashSet` intersection guard. Adjacent-name pairs like
+/// `string-copy` (class 0) vs `string-copy!` (class 1),
+/// `vector-copy` vs `vector-copy!`, and `char-upcase` / `char-downcase`
+/// (class 0, char transformers) vs `char-upper-case?` /
+/// `char-lower-case?` (class 1, char predicates) all resolve cleanly
+/// to opposite classes.
+///
+/// Notepad++'s stock `langs.model.xml` ships class 1 empty for Scheme
+/// (all predicates + mutators dumped into `instre1`). This class-1
+/// population is a strictly-additive visual enhancement — nothing
+/// Notepad++ paints changes; tokens Notepad++ paints as class-0
+/// KEYWORD get promoted to `KEYWORD_KW`.
+pub const SCHEME_KEYWORDS_KW: &str = concat!(
+    "binary-port? boolean=? boolean? bytevector? ",
+    "char-alphabetic? char-ci<=? char-ci<? char-ci=? char-ci>=? ",
+    "char-ci>? char-lower-case? char-numeric? char-ready? ",
+    "char-upper-case? char-whitespace? ",
+    "char<=? char<? char=? char>=? char>? char? ",
+    "complex? eof-object? eq? equal? eqv? error-object? ",
+    "even? exact-integer? exact? file-error? file-exists? finite? ",
+    "infinite? inexact? input-port-open? ",
+    "input-port? integer? list? nan? negative? null? number? odd? ",
+    "output-port-open? output-port? pair? port? positive? procedure? ",
+    "promise? rational? read-error? real? ",
+    "string-ci<=? string-ci<? string-ci=? string-ci>=? string-ci>? ",
+    "string<=? string<? string=? string>=? string>? string? ",
+    "symbol=? symbol? textual-port? vector? zero? ",
+    "bytevector-copy! bytevector-u8-set! set-car! set-cdr! ",
+    "string-copy! string-fill! string-set! ",
+    "vector-copy! vector-fill! vector-set!",
+);
 
 /// Space-separated Python 3 reserved-word vocabulary installed via
 /// `LexPython`'s `SCI_SETKEYWORDS(0, ...)` — class 0 of
@@ -4505,11 +4656,23 @@ mod tests {
         assert_eq!(LangType::from_extension("wfs"), L_TCL);
         // Lisp family — `.lisp`, `.lsp`, `.el` (Emacs Lisp), `.cl`
         // (ANSI Common Lisp). All share the `lisp` Lexilla lexer.
-        // `.scm` / `.ss` route to L_SCHEME per LANG_TABLE:819.
+        // `.scm` / `.ss` / `.sld` / `.sls` route to L_SCHEME below.
         assert_eq!(LangType::from_extension("lisp"), L_LISP);
         assert_eq!(LangType::from_extension("lsp"), L_LISP);
         assert_eq!(LangType::from_extension("el"), L_LISP);
         assert_eq!(LangType::from_extension("cl"), L_LISP);
+        // Scheme family — `.scm`, `.ss` (PLT/Racket/Chez), R7RS `.sld`
+        // (library definition), R6RS `.sls` (library source). Shares
+        // the `lisp` Lexilla lexer with L_LISP but installs distinct
+        // SCHEME_KEYWORDS / SCHEME_KEYWORDS_KW per SCHEME_THEME in
+        // ui_win32/src/lib.rs. `.rkt` (Racket) NOT included — Racket
+        // has diverged from R7RS; a future L_RACKET row is the right
+        // destination. `.sps` (R6RS program script) NOT included —
+        // vanishingly rare compared to `.sls`; add later if requested.
+        assert_eq!(LangType::from_extension("scm"), L_SCHEME);
+        assert_eq!(LangType::from_extension("ss"), L_SCHEME);
+        assert_eq!(LangType::from_extension("sld"), L_SCHEME);
+        assert_eq!(LangType::from_extension("sls"), L_SCHEME);
     }
 
     #[test]
