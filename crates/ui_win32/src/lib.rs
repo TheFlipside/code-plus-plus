@@ -106,12 +106,13 @@ use codepp_core::lang::{
     CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS,
     JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS, LISP_KEYWORDS_KW,
     LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI,
-    L_JAVA, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS,
-    L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS,
-    NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
-    PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
-    SCHEME_KEYWORDS_KW, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+    L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL,
+    L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL, L_TEX, L_VB, L_XML,
+    MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+    RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SQL_KEYWORDS, SQL_KEYWORDS_2,
+    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+    VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -199,11 +200,17 @@ use codepp_scintilla_sys::{
     SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
     SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
     SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT,
-    SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS,
-    SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
-    SC_EFF_QUALITY_NON_ANTIALIASED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
-    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MOD_DELETETEXT,
-    SC_MOD_INSERTTEXT, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK,
+    SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8,
+    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
+    SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
+    SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
+    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
+    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
+    SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
+    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
+    SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT,
+    STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
@@ -1325,6 +1332,31 @@ impl UiPlatform for Win32Ui {
         } else {
             apply_default_styles(&self.editor);
         }
+        // Fold properties MUST be issued here, not once at editor
+        // creation: `LexState::PropSet` at
+        // `ScintillaBase.cxx:687-694` is `if (instance) { … }` —
+        // silently no-op with no lexer bound — and every
+        // `SCI_SETILEXER` mints a fresh `ILexer5` instance with its
+        // own default `options.fold = false` (see e.g.
+        // `LexCPP.cxx:400`). Scintilla does NOT copy properties from
+        // the outgoing instance to the incoming one, so we re-issue
+        // the universal fold trio on every language switch.
+        //
+        // The `apply_fold_margin` call at editor creation sets up
+        // the margin *geometry* (type, mask, sensitivity, marker
+        // shapes, colours, automatic-fold flags) — none of which
+        // depend on a lexer being attached. Only the fold *classifier*
+        // properties are language-instance-local, and they live here.
+        //
+        // Batch and Makefile lexers have no `Fold` function of their
+        // own — the property is silently ignored, so we issue it
+        // unconditionally rather than gating on lexer support.
+        self.editor.set_property("fold", "1");
+        self.editor.set_property("fold.compact", "0");
+        self.editor.set_property("fold.comment", "1");
+        for &(name, value) in extra_fold_properties(lang) {
+            self.editor.set_property(name, value);
+        }
         // Trigger a full re-style of the buffer through the now-set
         // lexer. Scintilla doesn't auto-restyle on `SCI_SETILEXER`
         // — it only re-styles regions on edit / scroll / explicit
@@ -1371,11 +1403,13 @@ impl UiPlatform for Win32Ui {
             .style_set_underline(STYLE_DEFAULT, entry.underline);
 
         // Propagate STYLE_DEFAULT to every other style index, then
-        // re-apply the line-number margin (which SCI_STYLECLEARALL
-        // resets to STYLE_DEFAULT, losing its margin-specific
-        // colour pair and the per-doc width).
+        // re-apply the line-number margin and brace-highlight styles
+        // (all sit in the 32-39 predefined-style range that
+        // `SCI_STYLECLEARALL` resets to `STYLE_DEFAULT`, losing their
+        // per-slot colour pairs).
         self.editor.style_clear_all();
         apply_line_number_margin(&self.editor);
+        apply_brace_styles(&self.editor);
 
         // Transparency. WS_EX_LAYERED is required for
         // `SetLayeredWindowAttributes` to take effect; when
@@ -2701,8 +2735,11 @@ fn apply_default_styles(editor: &EditorHandle) {
     // SCI_STYLECLEARALL also clobbers STYLE_LINENUMBER (and the rest
     // of the 32–39 predefined styles), so the line-number margin's
     // colours and width — which are font-metric-dependent — must be
-    // re-applied after every clear.
+    // re-applied after every clear. Same reasoning for the brace-
+    // highlight pair (STYLE_BRACELIGHT = 34, STYLE_BRACEBAD = 35) —
+    // both live inside the 32-39 range `SCI_STYLECLEARALL` resets.
     apply_line_number_margin(editor);
+    apply_brace_styles(editor);
 }
 
 /// Configure the line-number margin: type, width, and the
@@ -2830,6 +2867,175 @@ fn apply_change_history_margin(editor: &EditorHandle) {
 /// per-doc enablement is repeated here.
 fn enable_change_history(editor: &EditorHandle) {
     editor.set_change_history(SC_CHANGE_HISTORY_ENABLED | SC_CHANGE_HISTORY_MARKERS);
+}
+
+// --- Brace-match highlight colours ----------------------------------
+//
+// N++ defaults from `PowerEditor/src/stylers.model.xml` "Brace
+// highlight" (fg=FF0000 bold) and "Bad brace colour" (fg=800000).
+// Scintilla wants COLORREF (0x00BBGGRR), so N++'s RGB #FF0000 red
+// becomes 0x0000FF here and #800000 dark red becomes 0x000080.
+const FG_BRACE_LIGHT: u32 = 0x00_00_00_FF;
+const FG_BRACE_BAD: u32 = 0x00_00_00_80;
+const BG_BRACE_LIGHT: u32 = 0x00_FF_FF_FF;
+
+// --- Fold margin colours + geometry ---------------------------------
+//
+// N++'s "Fold" and "Fold margin" entries in stylers.model.xml (verified
+// against ScintillaEditView.cpp:3236-3245 and :4624-4640) apply the
+// XML `bgColor` to the marker foreground and `fgColor` to the marker
+// background — a deliberate swap. The effective palette:
+//   - marker outline (fore): #F3F3F3 light grey
+//   - marker fill (back):    #808080 mid grey
+//   - marker active (hover): #FF0000 red (matches STYLE_BRACELIGHT)
+//   - margin strip base:     #E9E9E9 near-white
+//   - margin strip hover:    #FFFFFF pure white
+// Encoded here as COLORREF (BBGGRR). Greys and white are palindromic.
+const FOLD_MARKER_FG: u32 = 0x00_F3_F3_F3;
+const FOLD_MARKER_BG: u32 = 0x00_80_80_80;
+const FOLD_MARKER_ACTIVE: u32 = 0x00_00_00_FF;
+const FOLD_MARGIN_BG: u32 = 0x00_E9_E9_E9;
+const FOLD_MARGIN_HI: u32 = 0x00_FF_FF_FF;
+
+/// Margin index for the fold column. Sits between the line-number
+/// margin (index 0) and the change-history strip (index 4). N++
+/// uses index 3, but Code++'s layout puts change-history at 4, not
+/// between bookmark and fold — so fold lands at index 2.
+const FOLD_MARGIN: u32 = 2;
+/// Pixel width of [`FOLD_MARGIN`]. 14 px matches N++'s default.
+const FOLD_MARGIN_PX: i32 = 14;
+
+/// Configure the two reserved brace-highlight styles (34, 35) with
+/// N++'s red / dark-red palette. Idempotent — safe to call after
+/// any `SCI_STYLECLEARALL`. Called at three sites (editor creation
+/// in [`Win32Ui::run`], the tail of [`apply_default_styles`], and
+/// the tail of [`Win32Ui::apply_default_style`]) because
+/// `STYLE_BRACELIGHT` / `STYLE_BRACEBAD` are in the 32-39 predefined
+/// range that `SCI_STYLECLEARALL` resets to `STYLE_DEFAULT` — same
+/// re-application pattern as `STYLE_LINENUMBER`.
+fn apply_brace_styles(editor: &EditorHandle) {
+    editor.style_set_fore(STYLE_BRACELIGHT, FG_BRACE_LIGHT);
+    editor.style_set_back(STYLE_BRACELIGHT, BG_BRACE_LIGHT);
+    editor.style_set_bold(STYLE_BRACELIGHT, true);
+    editor.style_set_fore(STYLE_BRACEBAD, FG_BRACE_BAD);
+    editor.style_set_back(STYLE_BRACEBAD, BG_BRACE_LIGHT);
+    editor.style_set_bold(STYLE_BRACEBAD, false);
+}
+
+/// Configure the fold margin's view state: allocate margin 2 as a
+/// `SC_MASK_FOLDERS` symbol margin, define the BOXPLUS/BOXMINUS
+/// shape family with CONNECTED variants for mid-region markers
+/// (N++'s default "Box" style), set marker + margin-strip colours,
+/// enable selected-marker highlighting, install the "draw
+/// horizontal line below collapsed region" flag, and delegate
+/// click / marker visibility / auto-expand-on-edit to Scintilla
+/// via `SCI_SETAUTOMATICFOLD`.
+///
+/// **Must be called AFTER [`apply_change_history_margin`]** — that
+/// function's defensive `set_margin_mask(1..=3, 0)` loop would
+/// otherwise wipe [`FOLD_MARGIN`]'s mask right back to zero. The
+/// call order at editor creation is
+/// [`apply_change_history_margin`] → [`enable_change_history`] →
+/// [`apply_fold_margin`].
+///
+/// The `fold` property itself is NOT set here — it lives on the
+/// attached lexer instance (which doesn't exist yet at editor
+/// creation) and, critically, does not carry across
+/// `SCI_SETILEXER`: every fresh `CreateLexer` call in
+/// [`Win32Ui::apply_lang`] mints a new instance whose
+/// `options.fold` starts `false`. `LexState::PropSet` at
+/// `ScintillaBase.cxx:687-694` is `if (instance) { … }` — a
+/// silent no-op with no lexer bound. See
+/// [`Win32Ui::apply_lang`] where the universal `fold` /
+/// `fold.compact` / `fold.comment` trio is (re-)issued on every
+/// language switch alongside the per-lexer extras.
+fn apply_fold_margin(editor: &EditorHandle) {
+    editor.set_margin_type(FOLD_MARGIN, SC_MARGIN_SYMBOL);
+    editor.set_margin_mask(FOLD_MARGIN, SC_MASK_FOLDERS);
+    editor.set_margin_sensitive(FOLD_MARGIN, true);
+    editor.set_margin_width(FOLD_MARGIN, FOLD_MARGIN_PX);
+
+    // Marker shapes — N++ default "Box" style, verified against
+    // ScintillaEditView.cpp:4624-4640. The CONNECTED variants for
+    // FOLDEREND / FOLDEROPENMID render the vertical continuation
+    // line through the +/- glyph when nested inside a parent fold.
+    for (marker, shape) in [
+        (SC_MARKNUM_FOLDEROPEN, SC_MARK_BOXMINUS),
+        (SC_MARKNUM_FOLDER, SC_MARK_BOXPLUS),
+        (SC_MARKNUM_FOLDERSUB, SC_MARK_VLINE),
+        (SC_MARKNUM_FOLDERTAIL, SC_MARK_LCORNER),
+        (SC_MARKNUM_FOLDEREND, SC_MARK_BOXPLUSCONNECTED),
+        (SC_MARKNUM_FOLDEROPENMID, SC_MARK_BOXMINUSCONNECTED),
+        (SC_MARKNUM_FOLDERMIDTAIL, SC_MARK_TCORNER),
+    ] {
+        editor.marker_define(marker, shape);
+        editor.marker_set_fore(marker, FOLD_MARKER_FG);
+        editor.marker_set_back(marker, FOLD_MARKER_BG);
+        editor.marker_set_back_selected(marker, FOLD_MARKER_ACTIVE);
+    }
+    editor.marker_enable_highlight(true);
+
+    editor.set_fold_margin_colour(true, FOLD_MARGIN_BG);
+    editor.set_fold_margin_hi_colour(true, FOLD_MARGIN_HI);
+
+    // 0x10 = SC_FOLDFLAG_LINEAFTER_CONTRACTED — draws the horizontal
+    // rule below a collapsed region so the user always sees a
+    // "you-collapsed-a-region-here" cue.
+    editor.set_fold_flags(SC_FOLDFLAG_LINEAFTER_CONTRACTED);
+
+    // Vanilla click-to-toggle + marker visibility + auto-expand on
+    // edit. Shift/Ctrl-click extensions (fold-all-children) would
+    // require a manual SCN_MARGINCLICK handler; deferred.
+    editor.set_automatic_fold(
+        SC_AUTOMATICFOLD_SHOW | SC_AUTOMATICFOLD_CLICK | SC_AUTOMATICFOLD_CHANGE,
+    );
+}
+
+/// Return `true` if `c` is one of the six ASCII bracket characters
+/// that Scintilla's `SCI_BRACEMATCH` recognises: `()`, `[]`, `{}`,
+/// `<>`. N++ matches without filtering by lexer (spurious `<>`
+/// matches in non-HTML buffers are the exact N++ behaviour).
+#[inline]
+const fn is_brace(c: u8) -> bool {
+    matches!(c, b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'<' | b'>')
+}
+
+/// Dispatch brace-match highlight on the current caret position.
+/// Called from the `SCN_UPDATEUI` handler on every selection or
+/// content change. Total cost per call: 3-6 direct-call round-trips
+/// (get pos, 2× get char, 0-1 `brace_match`, 1 highlight, 1 `bad_light`)
+/// — sub-µs on the direct-call path, well inside the 5 ms p99
+/// keystroke budget.
+fn update_brace_highlight(editor: &EditorHandle) {
+    let pos = editor.current_pos() as i64;
+    let ch_before = if pos > 0 {
+        editor.char_at((pos - 1) as u64)
+    } else {
+        0
+    };
+    let ch_at = editor.char_at(pos as u64);
+
+    let brace_pos: i64 = if is_brace(ch_before) {
+        pos - 1
+    } else if is_brace(ch_at) {
+        pos
+    } else {
+        -1
+    };
+
+    if brace_pos >= 0 {
+        let match_pos = editor.brace_match(brace_pos as u64);
+        if match_pos >= 0 {
+            editor.brace_highlight(brace_pos, match_pos);
+            editor.brace_bad_light(-1);
+        } else {
+            editor.brace_highlight(-1, -1);
+            editor.brace_bad_light(brace_pos);
+        }
+    } else {
+        editor.brace_highlight(-1, -1);
+        editor.brace_bad_light(-1);
+    }
 }
 
 /// Number of lines beyond the visible window's bottom edge to
@@ -5227,6 +5433,52 @@ const ASP_THEME: LangTheme = LangTheme {
     italic: HYPERTEXT_ITALIC,
     bold: HYPERTEXT_BOLD,
 };
+
+/// Extra fold sub-properties beyond the universal `fold` /
+/// `fold.compact` / `fold.comment` trio that
+/// [`Win32Ui::apply_lang`] issues on every language switch.
+/// Sourced from N++'s per-lexer setters
+/// (`ScintillaEditView.cpp` — `setCppLexer` at :1276-1281,
+/// `setRustLexer` at :1367-1378, `setPythonLexer` at
+/// `ScintillaEditView.h:813-818`).
+///
+/// Every language switch runs `SCI_SETILEXER` which creates a
+/// fresh `ILexer5` instance — Scintilla does NOT preserve
+/// properties across the switch (verified against
+/// `Document.cxx:65`, `ScintillaBase.cxx:687-694`, and
+/// `LexCPP.cxx:400` where `OptionsCPP::fold` defaults to `false`).
+/// So every call site must re-issue every property; that's what
+/// this table is for.
+///
+/// Batch (`LexBatch.cxx` — no fold function), Makefile
+/// (`LexMakefile.cxx` — no fold function): the universal trio is
+/// still issued but silently ignored. No entries needed here.
+fn extra_fold_properties(lang: LangType) -> &'static [(&'static str, &'static str)] {
+    // LexCPP family — LangEntry rows that map to the `cpp` Lexilla
+    // lexer per `core::lang::LANG_TABLE`: C, C++, C#, Java,
+    // Javascript, Objective-C, Resource file, Rust. All accept the
+    // same `fold.preprocessor` + `fold.cpp.comment.explicit` pair.
+    if lang == L_C
+        || lang == L_CPP
+        || lang == L_CS
+        || lang == L_JAVA
+        || lang == L_JAVASCRIPT
+        || lang == L_OBJC
+        || lang == L_RC
+        || lang == L_RUST
+    {
+        &[
+            ("fold.preprocessor", "1"),
+            ("fold.cpp.comment.explicit", "0"),
+        ]
+    } else if lang == L_PYTHON {
+        // Fold triple-quoted string literals per N++'s
+        // `setPythonLexer`.
+        &[("fold.quotes.python", "1")]
+    } else {
+        &[]
+    }
+}
 
 /// Per-language theme dispatch. Returns `Some(&theme)` for any
 /// language whose keyword classes + style mappings have been
@@ -15101,6 +15353,25 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         apply_change_history_margin(&editor);
         enable_change_history(&editor);
 
+        // Brace-match visual: initialise STYLE_BRACELIGHT (34) and
+        // STYLE_BRACEBAD (35) with the N++ red/dark-red palette. The
+        // SCN_UPDATEUI handler then paints the caret's bracket + its
+        // mate (or the caret's bracket alone when unmatched) as the
+        // cursor moves.
+        apply_brace_styles(&editor);
+
+        // Fold margin GEOMETRY: allocate margin index 2, install the
+        // box-style markers, set colours, enable automatic click-
+        // toggle and auto-expand-on-edit. Must run AFTER
+        // `apply_change_history_margin` — that function's defensive
+        // `set_margin_mask(1..=3, 0)` loop would otherwise wipe our
+        // mask right back to zero. The fold *classifier* property
+        // (`fold=1`) is issued per-language in `apply_lang` because
+        // it lives on the lexer instance, which doesn't exist yet
+        // here and gets replaced with a fresh instance on every
+        // `SCI_SETILEXER`.
+        apply_fold_margin(&editor);
+
         // Wake closure: PostMessage ourselves WM_APP_WAKE.
         // PostMessage is thread-safe — it just enqueues a message for
         // the target window's thread, which is what we want.
@@ -19498,6 +19769,16 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 if (updated & SC_UPDATE_V_SCROLL) != 0 {
                                     populate_visible_line_numbers(&state.editor);
                                 }
+                                // Brace-match highlight — repaint
+                                // whenever the selection moved OR the
+                                // document content changed (typing past
+                                // a highlighted pair leaves stale
+                                // highlight otherwise). Ignore pure-
+                                // scroll updates; the caret position
+                                // hasn't changed then.
+                                if (updated & (SC_UPDATE_SELECTION | SC_UPDATE_CONTENT)) != 0 {
+                                    update_brace_highlight(&state.editor);
+                                }
                             }
                         }
                     } else if nmhdr.code == NM_DBLCLK {
@@ -19993,6 +20274,102 @@ mod tab_display_name_tests {
         // Untitled tabs feed their "new N" name straight into
         // the dialog — no special-casing in the prompt.
         assert_eq!(save_confirm_prompt_for("new 3"), "Save file 'new 3' ?");
+    }
+}
+
+#[cfg(test)]
+mod brace_match_tests {
+    use super::{
+        extra_fold_properties, is_brace, BG_BRACE_LIGHT, FG_BRACE_BAD, FG_BRACE_LIGHT, FOLD_MARGIN,
+        FOLD_MARGIN_BG, FOLD_MARGIN_HI, FOLD_MARGIN_PX, FOLD_MARKER_ACTIVE, FOLD_MARKER_BG,
+        FOLD_MARKER_FG,
+    };
+    use codepp_core::lang::{
+        L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_JAVA, L_JAVASCRIPT, L_LISP, L_LUA, L_MAKEFILE, L_OBJC,
+        L_PYTHON, L_RC, L_RUST, L_SCHEME, L_TCL, L_TEXT,
+    };
+
+    #[test]
+    fn is_brace_matches_all_eight_ascii_bracket_chars() {
+        for c in [b'(', b')', b'[', b']', b'{', b'}', b'<', b'>'] {
+            assert!(is_brace(c), "expected `{c}` (byte {c:#04x}) to be a brace");
+        }
+    }
+
+    #[test]
+    fn is_brace_rejects_non_bracket_bytes() {
+        for c in [b'a', b'Z', b'0', b'9', b' ', b'"', b'\'', b'\\', b'/', 0u8] {
+            assert!(!is_brace(c), "byte {c:#04x} must not be a brace");
+        }
+    }
+
+    #[test]
+    fn cpp_family_gets_preprocessor_and_explicit_comment_props() {
+        for lang in [L_C, L_CPP, L_CS, L_JAVA, L_JAVASCRIPT, L_OBJC, L_RC, L_RUST] {
+            let props = extra_fold_properties(lang);
+            assert!(
+                props
+                    .iter()
+                    .any(|(k, v)| *k == "fold.preprocessor" && *v == "1"),
+                "{lang:?} missing fold.preprocessor=1"
+            );
+            assert!(
+                props
+                    .iter()
+                    .any(|(k, v)| *k == "fold.cpp.comment.explicit" && *v == "0"),
+                "{lang:?} missing fold.cpp.comment.explicit=0"
+            );
+        }
+    }
+
+    #[test]
+    fn python_gets_fold_quotes_python() {
+        assert_eq!(
+            extra_fold_properties(L_PYTHON),
+            &[("fold.quotes.python", "1")]
+        );
+    }
+
+    #[test]
+    fn non_extra_languages_get_empty_slice() {
+        for lang in [L_BASH, L_TCL, L_LISP, L_SCHEME, L_LUA, L_TEXT] {
+            assert!(
+                extra_fold_properties(lang).is_empty(),
+                "{lang:?} unexpectedly has fold sub-properties"
+            );
+        }
+    }
+
+    #[test]
+    fn non_foldable_lexers_still_get_empty_slice() {
+        for lang in [L_BATCH, L_MAKEFILE] {
+            assert!(
+                extra_fold_properties(lang).is_empty(),
+                "{lang:?} must not attempt to set fold sub-properties — lexer has no fold function"
+            );
+        }
+    }
+
+    #[test]
+    fn npp_colour_and_geometry_defaults_pin_to_stylers_model_xml() {
+        // Brace: N++ RGB #FF0000 (bold) and #800000 → BBGGRR encoded
+        // as 0x0000FF and 0x000080.
+        assert_eq!(FG_BRACE_LIGHT, 0x00_00_00_FF);
+        assert_eq!(FG_BRACE_BAD, 0x00_00_00_80);
+        assert_eq!(BG_BRACE_LIGHT, 0x00_FF_FF_FF);
+        // Fold marker + margin: greys and white are palindromic in
+        // COLORREF, so these values match N++'s RGB #F3F3F3 /
+        // #808080 / #FF0000 / #E9E9E9 / #FFFFFF verbatim.
+        assert_eq!(FOLD_MARKER_FG, 0x00_F3_F3_F3);
+        assert_eq!(FOLD_MARKER_BG, 0x00_80_80_80);
+        assert_eq!(FOLD_MARKER_ACTIVE, 0x00_00_00_FF);
+        assert_eq!(FOLD_MARGIN_BG, 0x00_E9_E9_E9);
+        assert_eq!(FOLD_MARGIN_HI, 0x00_FF_FF_FF);
+        // Margin index + width match N++'s ScintillaEditView.cpp
+        // defaults (index 3 in N++, index 2 here per Code++'s
+        // change-history at index 4 layout).
+        assert_eq!(FOLD_MARGIN, 2);
+        assert_eq!(FOLD_MARGIN_PX, 14);
     }
 }
 

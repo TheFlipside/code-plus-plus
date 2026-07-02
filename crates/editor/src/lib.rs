@@ -30,13 +30,16 @@
 use core::ffi::c_void;
 
 use codepp_scintilla_sys::{
-    sptr_t, uptr_t, CreateLexer, ScintillaDirectFunction, SCI_GETTARGETEND, SCI_GETTARGETSTART,
-    SCI_MARKERDEFINE, SCI_MARKERSETBACK, SCI_REPLACETARGET, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET,
-    SCI_SEARCHNEXT, SCI_SEARCHPREV, SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE,
-    SCI_SETCHANGEHISTORY, SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN, SCI_SETMARGINTYPEN,
-    SCI_SETMARGINWIDTHN, SCI_SETSEARCHFLAGS, SCI_SETTARGETRANGE, SCI_STYLECLEARALL,
-    SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC,
-    SCI_STYLESETSIZE, SCI_STYLESETUNDERLINE,
+    sptr_t, uptr_t, CreateLexer, ScintillaDirectFunction, SCI_BRACEBADLIGHT, SCI_BRACEHIGHLIGHT,
+    SCI_BRACEMATCH, SCI_GETCHARAT, SCI_GETCURRENTPOS, SCI_GETTARGETEND, SCI_GETTARGETSTART,
+    SCI_MARKERDEFINE, SCI_MARKERENABLEHIGHLIGHT, SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED,
+    SCI_MARKERSETFORE, SCI_REPLACETARGET, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT,
+    SCI_SEARCHPREV, SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE,
+    SCI_SETCHANGEHISTORY, SCI_SETFOLDFLAGS, SCI_SETFOLDMARGINCOLOUR, SCI_SETFOLDMARGINHICOLOUR,
+    SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN, SCI_SETMARGINSENSITIVEN,
+    SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETPROPERTY, SCI_SETSEARCHFLAGS,
+    SCI_SETTARGETRANGE, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT,
+    SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE, SCI_STYLESETUNDERLINE,
 };
 
 /// Opaque handle to a Scintilla editor control.
@@ -309,6 +312,173 @@ impl EditorHandle {
     /// `SC_MARK_FULLRECT` paint as a solid bar in a narrow margin.
     pub fn marker_set_back(&self, marker_num: u32, colour: u32) {
         self.send(SCI_MARKERSETBACK, marker_num as uptr_t, colour as sptr_t);
+    }
+
+    /// Configure the foreground colour drawn for marker number
+    /// `marker_num`. For outline-style markers (`SC_MARK_BOXPLUS` /
+    /// `SC_MARK_BOXMINUS` / the fold `VLINE`/`LCORNER`/`TCORNER`
+    /// family) the foreground is the outline / glyph colour, while
+    /// [`Self::marker_set_back`] is the fill. `colour` is the same
+    /// `0x00BBGGRR` COLORREF as [`Self::style_set_fore`].
+    pub fn marker_set_fore(&self, marker_num: u32, colour: u32) {
+        self.send(SCI_MARKERSETFORE, marker_num as uptr_t, colour as sptr_t);
+    }
+
+    /// Configure the highlight background colour for marker number
+    /// `marker_num` — drawn instead of [`Self::marker_set_back`] when
+    /// the marker's fold range contains the caret (only fires while
+    /// [`Self::marker_enable_highlight`] is on). Powers the "hover
+    /// the caret over a collapsed region and its `+`/`−` glows"
+    /// visual feedback that Notepad++ uses.
+    pub fn marker_set_back_selected(&self, marker_num: u32, colour: u32) {
+        self.send(
+            SCI_MARKERSETBACKSELECTED,
+            marker_num as uptr_t,
+            colour as sptr_t,
+        );
+    }
+
+    /// Toggle the marker-highlight feature globally. When on,
+    /// [`Self::marker_set_back_selected`] takes effect for every
+    /// marker whose containing fold range brackets the caret.
+    pub fn marker_enable_highlight(&self, on: bool) {
+        self.send(SCI_MARKERENABLEHIGHLIGHT, sptr_t::from(on) as uptr_t, 0);
+    }
+
+    /// Make margin `n` respond to mouse clicks — required for
+    /// click-to-toggle-fold behaviour, whether the host handles the
+    /// clicks manually via `SCN_MARGINCLICK` or delegates to
+    /// [`Self::set_automatic_fold`].
+    pub fn set_margin_sensitive(&self, margin: u32, on: bool) {
+        self.send(SCI_SETMARGINSENSITIVEN, margin as uptr_t, sptr_t::from(on));
+    }
+
+    /// Paint the fold-margin strip in `colour` (`0x00BBGGRR`
+    /// COLORREF). `use_it = false` clears the override and lets
+    /// Scintilla fall back to its theme default. Distinct from a
+    /// marker background — this fills the strip between markers.
+    pub fn set_fold_margin_colour(&self, use_it: bool, colour: u32) {
+        self.send(
+            SCI_SETFOLDMARGINCOLOUR,
+            sptr_t::from(use_it) as uptr_t,
+            colour as sptr_t,
+        );
+    }
+
+    /// Fold-margin strip colour drawn when the mouse hovers over
+    /// the margin. Same encoding as
+    /// [`Self::set_fold_margin_colour`].
+    pub fn set_fold_margin_hi_colour(&self, use_it: bool, colour: u32) {
+        self.send(
+            SCI_SETFOLDMARGINHICOLOUR,
+            sptr_t::from(use_it) as uptr_t,
+            colour as sptr_t,
+        );
+    }
+
+    /// Enable Scintilla's built-in fold-margin behaviour — click
+    /// dispatch, marker visibility, auto-expand-on-edit — driven by
+    /// `flags` (`SC_AUTOMATICFOLD_SHOW | _CLICK | _CHANGE`). With
+    /// all three set, the host does not need an `SCN_MARGINCLICK`
+    /// handler for vanilla click-to-toggle behaviour. Shift/Ctrl-
+    /// click extensions (fold-all-children) still require a manual
+    /// handler.
+    pub fn set_automatic_fold(&self, flags: u32) {
+        self.send(SCI_SETAUTOMATICFOLD, flags as uptr_t, 0);
+    }
+
+    /// Configure visual decorations around contracted/expanded fold
+    /// ranges. `flags` is an OR of `SC_FOLDFLAG_*`; N++ ships
+    /// `SC_FOLDFLAG_LINEAFTER_CONTRACTED` (0x10) — the "draw a
+    /// horizontal rule below a collapsed region" indicator.
+    pub fn set_fold_flags(&self, flags: u32) {
+        self.send(SCI_SETFOLDFLAGS, flags as uptr_t, 0);
+    }
+
+    /// Set a runtime property on the currently-attached Lexilla
+    /// lexer — the standard way to toggle features like folding
+    /// (`"fold"` → `"1"`), lexer sub-flags
+    /// (`"fold.preprocessor"` / `"fold.quotes.python"`), or the
+    /// language-specific case-fold / user-word flags that some
+    /// lexers respect. Scintilla copies both strings on the call;
+    /// caller buffers only need to live for the duration of `send`.
+    ///
+    /// **Requires a lexer attached** — `LexState::PropSet`
+    /// (`ScintillaBase.cxx:687-694`) is `if (instance) { … }` and
+    /// silently no-ops with no lexer. Callers must issue
+    /// `SCI_SETILEXER` (via [`Self::set_lexer_by_name`]) first, and
+    /// re-issue every property after every subsequent
+    /// `SCI_SETILEXER` — Scintilla does NOT carry properties over
+    /// to the new lexer instance.
+    ///
+    /// Names and values must be plain ASCII with no interior NUL —
+    /// interior NUL falls back to an empty string and emits a
+    /// `tracing::warn!` (same pattern as
+    /// [`Self::style_set_font`]) so the failure is observable
+    /// rather than silent.
+    pub fn set_property(&self, name: &str, value: &str) {
+        let cname = std::ffi::CString::new(name).unwrap_or_else(|_| {
+            tracing::warn!(
+                property = name,
+                "set_property: name contains interior NUL; using empty string"
+            );
+            std::ffi::CString::default()
+        });
+        let cvalue = std::ffi::CString::new(value).unwrap_or_else(|_| {
+            tracing::warn!(
+                property = name,
+                value = value,
+                "set_property: value contains interior NUL; using empty string"
+            );
+            std::ffi::CString::default()
+        });
+        self.send(
+            SCI_SETPROPERTY,
+            cname.as_ptr() as uptr_t,
+            cvalue.as_ptr() as sptr_t,
+        );
+    }
+
+    /// Return the current caret position (0-based byte offset into
+    /// the buffer). Used by the brace-match dispatch on every
+    /// `SCN_UPDATEUI` with `SC_UPDATE_SELECTION`.
+    #[must_use]
+    pub fn current_pos(&self) -> u64 {
+        self.send(SCI_GETCURRENTPOS, 0, 0) as u64
+    }
+
+    /// Return the byte at document position `pos`, or `0` if `pos`
+    /// is past the end. Used by the brace-match dispatch to detect
+    /// whether the caret sits at (or immediately after) a bracket.
+    #[must_use]
+    pub fn char_at(&self, pos: u64) -> u8 {
+        (self.send(SCI_GETCHARAT, pos as uptr_t, 0) & 0xFF) as u8
+    }
+
+    /// Return the position of the bracket paired with the one at
+    /// `pos`, or `-1` ([`codepp_scintilla_sys::INVALID_POSITION`]) if
+    /// there is no match. Scintilla returns `Sci_Position` /
+    /// `sptr_t` — signed — because `-1` is the "unmatched" sentinel.
+    /// Caller supplies the position of a bracket byte; behaviour is
+    /// undefined (returns `-1`) if `pos` is not on a bracket.
+    #[must_use]
+    pub fn brace_match(&self, pos: u64) -> i64 {
+        self.send(SCI_BRACEMATCH, pos as uptr_t, 0) as i64
+    }
+
+    /// Highlight the two positions `pos_a` and `pos_b` in
+    /// `STYLE_BRACELIGHT` — the matched-brace-pair visual. Passing
+    /// `-1` for either clears the highlight; passing `-1` for both
+    /// clears any previously-highlighted pair.
+    pub fn brace_highlight(&self, pos_a: i64, pos_b: i64) {
+        self.send(SCI_BRACEHIGHLIGHT, pos_a as uptr_t, pos_b as sptr_t);
+    }
+
+    /// Highlight `pos` in `STYLE_BRACEBAD` — the unmatched-bracket
+    /// visual. Passing `-1` clears the highlight. Only one position
+    /// at a time; the "bad" highlight is per-caret, not per-pair.
+    pub fn brace_bad_light(&self, pos: i64) {
+        self.send(SCI_BRACEBADLIGHT, pos as uptr_t, 0);
     }
 
     /// Enable Scintilla's built-in change-history tracking on the

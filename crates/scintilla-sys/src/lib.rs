@@ -560,6 +560,179 @@ pub const SC_MARGIN_TEXT: u32 = 4;
 /// as a `SC_MARK_FULLRECT` orange bar.
 pub const SC_MARGIN_SYMBOL: u32 = 0;
 
+// --- Brace-match highlight ------------------------------------------
+//
+// Scintilla ships two reserved style slots for the "cursor is at a
+// bracket" visual feedback that N++ shows in red:
+//   - `STYLE_BRACELIGHT` (34) — the matched-pair colour (both the
+//     caret's bracket and its mate render in this style)
+//   - `STYLE_BRACEBAD` (35) — the unmatched-bracket colour (only the
+//     caret's bracket, drawn on its own)
+// The host activates them by sending `SCI_BRACEHIGHLIGHT(a, b)` to
+// paint both `a` and `b` in `STYLE_BRACELIGHT`, or
+// `SCI_BRACEBADLIGHT(pos)` to paint one `pos` in `STYLE_BRACEBAD`.
+// Passing `-1` (`INVALID_POSITION`) for either clears the highlight.
+// `SCI_BRACEMATCH(pos, 0)` returns the paired-bracket position or
+// `-1` when unpaired. Values from `vendor/scintilla/include/Scintilla.h`.
+pub const SCI_BRACEHIGHLIGHT: u32 = 2351;
+pub const SCI_BRACEBADLIGHT: u32 = 2352;
+pub const SCI_BRACEMATCH: u32 = 2353;
+/// Read a single byte from the document at position `wparam`.
+/// Returns the raw byte (0 when the position is past the end).
+/// Used by the brace-match dispatch on cursor move to detect
+/// whether the caret sits at (or immediately after) a bracket.
+pub const SCI_GETCHARAT: u32 = 2007;
+/// Reserved style slot for the matched bracket + its pair —
+/// N++ default paints these in `RGB(0xFF, 0x00, 0x00)` bold.
+pub const STYLE_BRACELIGHT: usize = 34;
+/// Reserved style slot for a bracket at the caret whose mate is
+/// missing — N++ default paints in `RGB(0x80, 0x00, 0x00)` normal.
+pub const STYLE_BRACEBAD: usize = 35;
+/// Scintilla's sentinel for "no such position" — returned by
+/// `SCI_BRACEMATCH` when the paired bracket is missing, and
+/// accepted by `SCI_BRACEHIGHLIGHT` / `SCI_BRACEBADLIGHT` as the
+/// "clear highlight" argument.
+pub const INVALID_POSITION: isize = -1;
+
+// --- Fold margin + fold markers -------------------------------------
+//
+// The fold column between the line-number margin and the editing
+// area, showing +/- toggles for logical regions the lexer's fold
+// classifier has grouped. Enabled by:
+//   1. `SCI_SETPROPERTY("fold", "1")` — turns the classifier on for
+//      the currently-attached Lexilla lexer. Every lexer with a
+//      Fold* function (LexCPP, LexPython, LexBash, LexLisp, LexLua,
+//      LexTCL, LexNsis, LexProps) responds. LexBatch and LexMakefile
+//      lack fold functions — the property is a silent no-op for them.
+//   2. Configuring a symbol margin with `SC_MASK_FOLDERS` so
+//      Scintilla renders the `SC_MARKNUM_FOLDER*` family in it.
+//   3. Defining the marker shapes (BOXPLUS / BOXMINUS + CONNECTED
+//      variants — the N++ default "Box" style).
+//   4. `SCI_SETAUTOMATICFOLD` to let Scintilla handle click-to-toggle,
+//      auto-expand-on-edit, and marker-visibility toggling internally
+//      (no `SCN_MARGINCLICK` handler needed for vanilla behaviour).
+/// Set a runtime property on the currently-attached lexer.
+/// `wparam` = pointer to a NUL-terminated ASCII name, `lparam` =
+/// pointer to a NUL-terminated ASCII value. Both strings are copied
+/// by Scintilla; caller's buffers only need to live for the duration
+/// of the call. Property is preserved across `SCI_SETILEXER`.
+pub const SCI_SETPROPERTY: u32 = 4004;
+/// Make margin `wparam` respond to mouse clicks — required for
+/// click-to-toggle-fold behaviour (whether via
+/// `SCI_SETAUTOMATICFOLD` or a manual `SCN_MARGINCLICK` handler).
+pub const SCI_SETMARGINSENSITIVEN: u32 = 2246;
+/// Set the foreground colour drawn for marker number `wparam`.
+/// `lparam` is a `COLORREF` (`0x00BBGGRR`). Complements
+/// `SCI_MARKERSETBACK` (already exported) which sets the fill.
+pub const SCI_MARKERSETFORE: u32 = 2041;
+/// Set the marker's "selected"/highlight background colour — used
+/// when `SCI_MARKERENABLEHIGHLIGHT` is on and the containing fold
+/// range brackets the caret. N++ paints selected fold markers in
+/// red (matching the brace-highlight colour).
+pub const SCI_MARKERSETBACKSELECTED: u32 = 2292;
+/// Toggle the marker-highlight feature. When on, markers whose
+/// fold-range brackets the caret render with their
+/// `SCI_MARKERSETBACKSELECTED` colour instead of the base
+/// `SCI_MARKERSETBACK`; provides the "hover the caret over a
+/// collapsed region and its `+`/`−` glow" feedback.
+pub const SCI_MARKERENABLEHIGHLIGHT: u32 = 2293;
+/// Set the fold-margin strip's background colour. `wparam` is a
+/// boolean: 1 = use the supplied `lparam` COLORREF, 0 = fall back
+/// to the theme default. N++ uses this for the light-grey strip
+/// under the fold markers.
+pub const SCI_SETFOLDMARGINCOLOUR: u32 = 2290;
+/// Set the fold-margin strip's highlight colour — drawn instead of
+/// `SCI_SETFOLDMARGINCOLOUR` when the mouse is over the margin.
+pub const SCI_SETFOLDMARGINHICOLOUR: u32 = 2291;
+/// Bit-mask that a margin's `SCI_SETMARGINMASKN` must include to
+/// render the `SC_MARKNUM_FOLDER*` family. Covers bits 25..=31.
+pub const SC_MASK_FOLDERS: u32 = 0xFE00_0000;
+/// Marker number for the "end tail of a middle segment of a
+/// contracted fold" — the `└` corner at the bottom of a collapsed
+/// nested region. Shape in N++'s BOX style: `SC_MARK_BOXPLUSCONNECTED`.
+pub const SC_MARKNUM_FOLDEREND: u32 = 25;
+/// Marker for a mid-region open-fold header — the `−` in the middle
+/// of an expanded parent's children. N++ shape: `SC_MARK_BOXMINUSCONNECTED`.
+pub const SC_MARKNUM_FOLDEROPENMID: u32 = 26;
+/// Marker for the `└` at the bottom-mid of a nested expanded region.
+/// N++ shape: `SC_MARK_TCORNER`.
+pub const SC_MARKNUM_FOLDERMIDTAIL: u32 = 27;
+/// Marker for the `└` at the end of a top-level expanded region.
+/// N++ shape: `SC_MARK_LCORNER`.
+pub const SC_MARKNUM_FOLDERTAIL: u32 = 28;
+/// Marker for the `│` continuation line drawn between the header
+/// and tail of an expanded fold range. N++ shape: `SC_MARK_VLINE`.
+pub const SC_MARKNUM_FOLDERSUB: u32 = 29;
+/// Marker for the collapsed-fold header (`+` glyph). N++ shape:
+/// `SC_MARK_BOXPLUS`.
+pub const SC_MARKNUM_FOLDER: u32 = 30;
+/// Marker for the expanded-fold header (`−` glyph). N++ shape:
+/// `SC_MARK_BOXMINUS`.
+pub const SC_MARKNUM_FOLDEROPEN: u32 = 31;
+
+// Fold-marker shape constants (subset — used by the fold-margin
+// wiring; the full set includes ARROW / CIRCLEPLUS / DOTDOTDOT
+// etc. per `vendor/scintilla/include/Scintilla.h:132-150`). The
+// BOX family is what N++ ships by default.
+/// Vertical line — the `│` continuation stroke between fold
+/// header and tail. Paired with `SC_MARKNUM_FOLDERSUB`.
+pub const SC_MARK_VLINE: u32 = 9;
+/// L-corner — the `└` at the bottom of a top-level expanded fold.
+/// Paired with `SC_MARKNUM_FOLDERTAIL`.
+pub const SC_MARK_LCORNER: u32 = 10;
+/// T-corner — the `├` at the bottom-mid of a nested expanded fold.
+/// Paired with `SC_MARKNUM_FOLDERMIDTAIL`.
+pub const SC_MARK_TCORNER: u32 = 11;
+/// Filled square with `+` inside — the "click to expand" glyph on
+/// a collapsed fold header. Paired with `SC_MARKNUM_FOLDER`.
+pub const SC_MARK_BOXPLUS: u32 = 12;
+/// Same as `SC_MARK_BOXPLUS` but with a continuation line drawn
+/// through it — used for a collapsed fold nested inside another
+/// expanded fold. Paired with `SC_MARKNUM_FOLDEREND`.
+pub const SC_MARK_BOXPLUSCONNECTED: u32 = 13;
+/// Filled square with `−` inside — the "click to collapse" glyph
+/// on an expanded fold header. Paired with `SC_MARKNUM_FOLDEROPEN`.
+pub const SC_MARK_BOXMINUS: u32 = 14;
+/// Same as `SC_MARK_BOXMINUS` but with a continuation line — the
+/// mid-region expanded-fold header. Paired with `SC_MARKNUM_FOLDEROPENMID`.
+pub const SC_MARK_BOXMINUSCONNECTED: u32 = 15;
+
+/// Toggle a single line's fold state (`wparam` = line number).
+/// Only needed if `SC_AUTOMATICFOLD_CLICK` is not enabled and the
+/// host handles `SCN_MARGINCLICK` manually — Code++ uses automatic
+/// fold today so this is exported for a future Shift/Ctrl-click
+/// extension (fold-all-children semantics N++ layers on top).
+pub const SCI_TOGGLEFOLD: u32 = 2231;
+/// Enable Scintilla's built-in fold-margin behaviour. `wparam` is
+/// a bitmask of `SC_AUTOMATICFOLD_*` flags. Avoids writing a manual
+/// `SCN_MARGINCLICK` handler; Shift/Ctrl-click semantics require
+/// the manual path.
+pub const SCI_SETAUTOMATICFOLD: u32 = 2663;
+/// `SC_AUTOMATICFOLD_SHOW = 1` — automatically show markers when a
+/// fold header line is encountered by the lexer.
+pub const SC_AUTOMATICFOLD_SHOW: u32 = 1;
+/// `SC_AUTOMATICFOLD_CLICK = 2` — turn a click in the fold margin
+/// into a toggle without host involvement.
+pub const SC_AUTOMATICFOLD_CLICK: u32 = 2;
+/// `SC_AUTOMATICFOLD_CHANGE = 4` — auto-expand collapsed folds when
+/// an edit lands inside them.
+pub const SC_AUTOMATICFOLD_CHANGE: u32 = 4;
+/// Set the fold-visualisation flags (`wparam` bitmask of
+/// `SC_FOLDFLAG_*`). Controls decorations drawn around
+/// contracted/expanded fold ranges independently of the marker
+/// shapes.
+pub const SCI_SETFOLDFLAGS: u32 = 2233;
+/// `SC_FOLDFLAG_LINEAFTER_CONTRACTED = 0x10` — draw a horizontal
+/// line below a collapsed fold, matching N++'s
+/// "you-collapsed-a-region-here" indicator.
+pub const SC_FOLDFLAG_LINEAFTER_CONTRACTED: u32 = 0x10;
+
+/// Fired when the user clicks in a margin whose
+/// `SCI_SETMARGINSENSITIVEN` is enabled. Used when the host
+/// implements manual fold-toggle (Shift/Ctrl-click extensions) —
+/// vanilla click-to-toggle is covered by `SC_AUTOMATICFOLD_CLICK`.
+pub const SCN_MARGINCLICK: u32 = 2010;
+
 // LexCPP style indices used by the Phase 4 m1 default theme. The
 // full set lives in `vendor/lexilla/include/SciLexer.h`; only those
 // the theme actually targets are mirrored here.
