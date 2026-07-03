@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 35 / 🟡 53 / ⚫ 1.
+Total: 89 rows. ✅ 36 / 🟡 52 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1880,7 +1880,7 @@ further shim work needed.
 | JSON | 57 | `json` | ⚫ | ⚫ | 🟡 |
 | JSON5 | 94 | `json` | ⚫ | ⚫ | 🟡 |
 | JSP | 55 | `hypertext` | ⚫ | ⚫ | 🟡 |
-| KIXtart | 39 | `kix` | ⚫ | ⚫ | 🟡 |
+| KIXtart | 39 | `kix` | ✅ | ✅ | ✅ |
 | LaTeX | 74 | `latex` | ✅ | ✅ | ✅ |
 | Lisp | 30 | `lisp` | ✅ | ✅ | ✅ |
 | Lua | 23 | `lua` | ✅ | ✅ | ✅ |
@@ -2548,6 +2548,129 @@ DEFAULT + IDENTIFIER unmapped guards, 3-entry italic set
 (`entity`, `architecture`, `signal`, `begin`, `end`), and a
 `X01`-family case-folding guard that asserts NONE of the
 upstream banner's mixed-case forms slipped in.
+
+**KIXtart (2026-07-04):** uses Lexilla's `kix` lexer
+(`LexKix.cxx`, ~130 lines) — a compact classifier for KIXtart
+4.x, a Windows login-script language (mid-abandoned in 2018 but
+still deployed at legacy shops). The SCE numbering is
+**non-contiguous** — 11 emission slots at 0..=10 plus
+`SCE_KIX_IDENTIFIER` at 31 (a 20-index gap the author reserved
+for future style additions). Case-insensitive language;
+`GetCurrentLowered` at `LexKix.cxx:84` (macro path) and `:98`
+(identifier path) case-fold before every wordlist probe, so
+wordlist entries MUST be lowercase.
+
+Three active wordlist classes drive three visually distinct
+promotion paths:
+
+- **`KIX_KEYWORDS` (class 0, 51 tokens):** KIXtart **commands**
+  — statement-heading tokens ONLY: control flow (`if`,
+  `else`, `while`, `for`, `next`, `function`, `endfunction`,
+  `gosub`, `return`, `select`, `case`), variable declarations
+  (`dim`, `redim`, `global`), filesystem statements (`use`,
+  `copy`, `move`, `del`, `md`, `rd`, `cd`, `run`, `shell`),
+  console I/O statements (`cls`, `color`, `at`, `get`, `gets`,
+  `beep`, `sleep`), and time (`settime`, `include`). Class 0
+  fires FIRST at `LexKix.cxx:100-101` — matches promote from
+  `SCE_KIX_IDENTIFIER` to `SCE_KIX_KEYWORD`. **Deliberately
+  excludes** `?` / `??` (LexKix's classifier can't reach the
+  identifier-exit path for them — `IsAWordChar` at `:33-35`
+  and `IsOperator` at `:37-39` both reject `?`, so the state
+  machine never enters `SCE_KIX_IDENTIFIER` on `?`) and the
+  registry / printer / config command-forms (`addkey`,
+  `delkey`, `writevalue`, `delvalue`, `addprinterconnection`,
+  `logevent`, `settitle`, `setconsole`, `setl`, `setm`,
+  `setascii`, `setoption`, `setwallpaper`, `setfileattr`) —
+  all documented as FUNCTIONS in the KIXtart 4.x reference,
+  idiomatically called in expression context. They live in
+  `KIX_FUNCTIONS`; duplicating them here would silently mask
+  the FUNCTIONS entry because `LexKix.cxx:100-103` probes
+  class 0 first.
+- **`KIX_FUNCTIONS` (class 1, 105 tokens):** KIXtart
+  **built-in functions** — expression-usable helpers with
+  return values: string utilities (`left`, `right`, `substr`,
+  `len`, `instr`, `lcase`, `ucase`, `trim`, `replace`),
+  numeric coercions (`cint`, `cstr`, `cdbl`, `val`,
+  `dectohex`), filesystem queries (`dir`, `fileexists`,
+  `getfileattr`, `getfilesize`, `open`, `close`, `readline`,
+  `writeline`), registry (`readvalue`, `writevalue`,
+  `delvalue`, `addkey`, `delkey`, `enumkey`, `enumvalue`,
+  `existkey`, `loadhive`, `unloadhive`, `savekey`, `savedkey`,
+  `readtype`), printer connection (`addprinterconnection`,
+  `delprinterconnection`, `setdefaultprinter`), event log
+  (`logevent`, `backupeventlog`, `cleareventlog`), system
+  config (`settitle`, `setconsole`, `setl`, `setm`,
+  `setascii`, `setoption`, `setwallpaper`, `setfileattr`),
+  object interop (`createobject`, `getobject`), and system
+  introspection (`memorysize`, `getdiskspace`, `messagebox`,
+  `sendkeys`). Class 1 fires after class 0 at `:102-103` —
+  matches promote from `SCE_KIX_IDENTIFIER` to
+  `SCE_KIX_FUNCTIONS`. The commands-vs-functions split is
+  important — a KIXtart author reads them as visually
+  distinct categories, and a token misused (e.g., `use` on
+  an expression RHS) is almost always a bug the theme
+  should surface.
+- **`KIX_MACROS` (class 2, 76 tokens):** KIXtart
+  **built-in macros** — the fixed vocabulary of `@`-prefixed
+  runtime constants. Names WITHOUT the leading `@`
+  (classifier strips the sigil via `&s[1]` at `:86` before
+  probing). Covers identity (`userid`, `username`,
+  `fullname`, `wksta`), time (`date`, `time`, `day`,
+  `month`, `year`, `ticks`, `msecs`), network (`address`,
+  `hostname`, `ipaddress0`-`ipaddress3`, `ldrive`,
+  `ldomain`), system info (`cpu`, `mhz`, `build`, `csd`,
+  `dos`, `kix`, `syslang`, `pid`, `ras`), and script
+  metadata (`scriptdir`, `scriptexe`, `scriptname`,
+  `curdir`, `cwd`, `result`, `serror`). **This class is a
+  whitelist gate**, not a promotion path: MACRO state is
+  entered at `:121-122` on the `@` sigil, and at scan exit
+  the whitelist decides whether MACRO STAYS (matched) or
+  DOWNGRADES to DEFAULT (unmatched). So a typo like
+  `@daat` paints as default text, not as a false-positive
+  macro — the whole point of the whitelist.
+
+A fourth class (`keywords4`) is declared but commented out at
+`LexKix.cxx:47` — Code++ doesn't install it. The three
+sigil-prefixed style families (`$var` → `SCE_KIX_VAR`,
+`@macro` → `SCE_KIX_MACRO`) include the sigil in the emitted
+style run (consistent with Perl / Bash / Ruby sigil-family
+convention). String semantics are identical for both quote
+forms (`"..."` STRING1 and `'...'` STRING2) — no escape
+sequences in either.
+
+Theme choices:
+- KEYWORD → `Keyword` (bold-blue); FUNCTIONS → `Keyword2`
+  (teal) — the two-tone contrast makes commands-vs-functions
+  visually obvious.
+- VAR (`$sigil`) → `Lifetime` — matches Rust's `'lt`
+  convention for sigil-prefixed identifiers.
+- MACRO (`@sigil`) → `Preprocessor` — the purple accent
+  matches Ruby's `:symbol` and Smalltalk's `#symbol`
+  (designator-follows-sigil family). Distinct from VAR so
+  the two sigil families are visually distinguishable at a
+  glance.
+- STRING1 + STRING2 → `String` (both quote forms share
+  identical semantics); NUMBER → `Number`; OPERATOR →
+  `Operator`; COMMENT (`;`) + COMMENTSTREAM (`/* */`) →
+  `Comment` (both italic).
+- Bold only on KEYWORD (KIXtart commands read as reserved
+  words). FUNCTIONS gets its identity from colour, matching
+  the framework's "one bold visual for language keywords"
+  rule.
+
+Structural test coverage: 14 invariants including
+3-class-in-canonical-order pin, per-wordlist lowercase guard,
+`@`-sigil-not-in-KIX_MACROS guard (protects against the
+mistake of listing macro entries as `@date` instead of
+`date`), 10 style-routing pins, DEFAULT + IDENTIFIER unmapped
+guards (IDENTIFIER at slot 31 is the intermediate state for
+unknown user-defined identifiers — those paint as default
+text, not as false-positive keywords), 6 cross-language
+non-reuse pins, and 5+5+5 anchor pins across commands /
+functions / macros (`if`, `else`, `while`, `for`, `next`,
+`function`, `endfunction`; `getobject`, `createobject`,
+`messagebox`, `left`, `right`; `date`, `time`, `userid`,
+`wksta`, `scriptdir`).
 
 ## Notes
 

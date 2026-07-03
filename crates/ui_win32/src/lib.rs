@@ -105,18 +105,18 @@ use codepp_core::lang::{
     ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2,
     CPP_KEYWORDS, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3,
     CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
-    HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS,
-    LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP,
-    L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
-    L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST,
-    L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS,
-    NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
-    PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-    PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
-    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-    VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
+    HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS,
+    KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM,
+    L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT,
+    L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS,
+    L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VHDL,
+    L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
+    RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
+    SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
+    VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -155,7 +155,9 @@ use codepp_scintilla_sys::{
     SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM,
     SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY,
     SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND,
-    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_LISP_COMMENT,
+    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_KIX_COMMENT,
+    SCE_KIX_COMMENTSTREAM, SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER,
+    SCE_KIX_OPERATOR, SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT,
     SCE_LISP_KEYWORD, SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER,
     SCE_LISP_OPERATOR, SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER,
     SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING,
@@ -6295,6 +6297,78 @@ const VHDL_THEME: LangTheme = LangTheme {
     bold: VHDL_BOLD,
 };
 
+// `KIXtart` theme — 10 mappings across the 12 SCE_KIX_* slots
+// (0..=10 + 31). Both `SCE_KIX_DEFAULT` (0) and
+// `SCE_KIX_IDENTIFIER` (31) stay unmapped: DEFAULT per the
+// framework's universal convention; IDENTIFIER because it's the
+// intermediate state for bare identifiers that don't match
+// KEYWORD or FUNCTIONS wordlists (i.e., ordinary user-defined
+// identifiers) — those SHOULD paint as default text so the
+// reader isn't visually assaulted by every function name.
+//
+// **Cross-family palette choices:**
+//   - KEYWORD (commands) → `Keyword` — bold-blue, matches
+//     VHDL/RB/ST convention for reserved-word class.
+//   - FUNCTIONS (built-in functions) → `Keyword2` — teal, so
+//     `KIXtart`'s command-vs-function distinction is visually
+//     obvious. Same slot as VHDL's STDFUNCTION.
+//   - VAR (`$sigil`) → `Lifetime` — matches Rust's `'lt` and
+//     Ruby's `SCE_RB_INSTANCE_VAR` / `SCE_RB_CLASS_VAR`
+//     conventions for "identifier prefixed by a sigil"
+//     (`SCE_RB_GLOBAL` routes to `Macro` in `RB_STYLES`, not
+//     `Lifetime` — it's not the peer here).
+//   - MACRO (`@sigil`) → `Preprocessor` — the purple accent
+//     matches Ruby's `:symbol` and Smalltalk's `#symbol` (the
+//     "designator that follows a sigil" family). Different from
+//     VAR so the two sigil families are visually distinct.
+//   - STRING1 (double-quoted) + STRING2 (single-quoted) → `String`
+//     — no double-vs-single quote distinction in the theme (the
+//     underlying string semantics are identical in `KIXtart`).
+//   - NUMBER → `Number` — standard.
+//   - OPERATOR → `Operator` — standard.
+//   - COMMENT (`;`) + COMMENTSTREAM (`/* */`) → `Comment` — both.
+const KIX_STYLES: &[(usize, StyleSlot)] = &[
+    // Comments (line + block)
+    (SCE_KIX_COMMENT, StyleSlot::Comment),
+    (SCE_KIX_COMMENTSTREAM, StyleSlot::Comment),
+    // Strings (double- and single-quoted)
+    (SCE_KIX_STRING1, StyleSlot::String),
+    (SCE_KIX_STRING2, StyleSlot::String),
+    // Numeric literal
+    (SCE_KIX_NUMBER, StyleSlot::Number),
+    // `$var` sigil-prefixed variable
+    (SCE_KIX_VAR, StyleSlot::Lifetime),
+    // `@macro` sigil-prefixed macro (whitelist-gated)
+    (SCE_KIX_MACRO, StyleSlot::Preprocessor),
+    // Commands (bold-keyword)
+    (SCE_KIX_KEYWORD, StyleSlot::Keyword),
+    // Built-in functions (teal accent)
+    (SCE_KIX_FUNCTIONS, StyleSlot::Keyword2),
+    // Punctuation-class operator
+    (SCE_KIX_OPERATOR, StyleSlot::Operator),
+];
+
+// Italic only on the comment families — universal prose-italic
+// convention. Both `;` line comments and `/* */` block comments
+// render italic.
+const KIX_ITALIC: &[usize] = &[SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM];
+
+// Bold only on the KEYWORD class (`KIXtart` commands read as
+// language-keyword-class tokens). FUNCTIONS get their identity
+// from the Keyword2 colour accent, not weight — matching the
+// framework's "one bold visual for language keywords" rule.
+const KIX_BOLD: &[usize] = &[SCE_KIX_KEYWORD];
+
+// Three-class install matches LexKix's `keywords` / `keywords2` /
+// `keywords3` at `LexKix.cxx:44-46`. Class 3 (`keywords4`) is
+// commented out at `:47` — never probed — so we don't install it.
+const KIX_THEME: LangTheme = LangTheme {
+    keywords: &[(0, KIX_KEYWORDS), (1, KIX_FUNCTIONS), (2, KIX_MACROS)],
+    styles: KIX_STYLES,
+    italic: KIX_ITALIC,
+    bold: KIX_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -6494,6 +6568,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&ST_THEME)
     } else if lang == L_VHDL {
         Some(&VHDL_THEME)
+    } else if lang == L_KIX {
+        Some(&KIX_THEME)
     } else {
         None
     }
@@ -21655,7 +21731,9 @@ mod lang_theme_tests {
         SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3,
         SCE_DIFF_ADDED, SCE_DIFF_CHANGED, SCE_DIFF_COMMAND, SCE_DIFF_COMMENT, SCE_DIFF_DELETED,
         SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD, SCE_DIFF_PATCH_DELETE, SCE_DIFF_POSITION,
-        SCE_DIFF_REMOVED_PATCH_ADD, SCE_DIFF_REMOVED_PATCH_DELETE, SCE_PL_ARRAY,
+        SCE_DIFF_REMOVED_PATCH_ADD, SCE_DIFF_REMOVED_PATCH_DELETE, SCE_KIX_COMMENT,
+        SCE_KIX_COMMENTSTREAM, SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER,
+        SCE_KIX_OPERATOR, SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_PL_ARRAY,
         SCE_PL_BACKTICKS_VAR, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
         SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX_VAR, SCE_PL_REGEX_VAR, SCE_PL_REGSUBST_VAR,
         SCE_PL_SCALAR, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QX_VAR,
@@ -21686,18 +21764,19 @@ mod lang_theme_tests {
         BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1,
         CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
         CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS,
-        JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
-        LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML,
-        L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL,
-        L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
-        L_TCL, L_TEX, L_TEXT, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS,
-        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
-        PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
-        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-        VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
-        VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
+        JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS,
+        LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP,
+        L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA,
+        L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY,
+        L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VHDL, L_XML,
+        MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+        PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+        PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
+        RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS,
+        SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
+        TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES,
+        VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES,
+        VHDL_USERWORDS, XML_KEYWORDS,
     };
     use codepp_scintilla_sys::SCE_VHDL_IDENTIFIER;
 
@@ -26298,6 +26377,213 @@ mod lang_theme_tests {
                 "VHDL wordlists must NOT contain the mixed-case form \
                  `{wrong}` — the lexer's GetCurrentLowered case-folds \
                  before InList, so this entry would be dead"
+            );
+        }
+    }
+
+    /// `KIXtart` (`L_KIX`) uses Lexilla's `LexKix` — a compact
+    /// 130-line lexer for Windows login-script vocabulary
+    /// (`KIXtart` 4.x). Non-contiguous SCE numbering: 11 emission
+    /// slots at 0..=10 plus `SCE_KIX_IDENTIFIER` at 31 (a 20-index
+    /// gap the author reserved). Three active wordlist classes —
+    /// commands / functions / macros — drive three visually
+    /// distinct promotion paths, with the macro path being a
+    /// **whitelist gate** (unknown `@name` DOWNGRADES to DEFAULT
+    /// rather than staying MACRO — see `LexKix.cxx:81-89`).
+    ///
+    /// Coverage invariants asserted here:
+    ///   1. `lang_theme(L_KIX)` returns `Some(&KIX_THEME)`.
+    ///   2. Style count matches `KIX_STYLES` (10 mappings across
+    ///      12 `SCE_KIX_*` slots — `DEFAULT` and `IDENTIFIER`
+    ///      deliberately unmapped).
+    ///   3. Three wordlist classes installed in canonical order
+    ///      (0 = commands, 1 = functions, 2 = macros — matches
+    ///      `LexKix.cxx:44-46`).
+    ///   4. All three wordlists non-empty.
+    ///   5. Every wordlist entry lowercase (case-folded contract).
+    ///   6. `KIX_MACROS` entries carry NO leading `@` sigil — the
+    ///      classifier strips the sigil (`&s[1]` at `:86`) before
+    ///      probing.
+    ///   7. Style-routing pins: `KEYWORD` → Keyword, `FUNCTIONS` →
+    ///      Keyword2, `VAR` → Lifetime, `MACRO` → Preprocessor,
+    ///      `STRING1` / `STRING2` → String, `NUMBER` → Number,
+    ///      `OPERATOR` → Operator, `COMMENT` / `COMMENTSTREAM` →
+    ///      Comment.
+    ///   8. `DEFAULT` + `IDENTIFIER` remain unmapped.
+    ///   9. Italic set == 2 comment-family entries.
+    ///   10. Bold set == 1 (`KEYWORD` only).
+    ///   11. Cross-language non-reuse of styles slice.
+    ///   12. `KIX_KEYWORDS` includes anchor commands (`if`, `else`,
+    ///       `while`, `for`, `next`, `function`, `endfunction`).
+    ///   13. `KIX_FUNCTIONS` includes anchor functions
+    ///       (`getobject`, `createobject`, `messagebox`, `left`,
+    ///       `right`).
+    ///   14. `KIX_MACROS` includes anchor macros (`date`, `time`,
+    ///       `userid`, `wksta`, `scriptdir`).
+    #[test]
+    fn kix_uses_lexkix_three_class_whitelist_theme() {
+        // Invariant 1.
+        let kix = lang_theme(L_KIX).expect("KIXtart wired");
+
+        // Invariant 2: 10 style mappings.
+        assert_eq!(
+            kix.styles.len(),
+            10,
+            "KIX_STYLES must map 10 indices (11 emission slots at \
+             0..=10 minus DEFAULT + IDENTIFIER at 31; both deliberately \
+             unmapped)"
+        );
+
+        // Invariant 3: 3 wordlist classes in canonical order.
+        assert_eq!(
+            kix.keywords.len(),
+            3,
+            "KIX_THEME must install exactly 3 wordlist classes \
+             (LexKix uses classes 0/1/2 — class 3 keywords4 is \
+             commented out at LexKix.cxx:47)"
+        );
+        assert_eq!(kix.keywords[0].0, 0, "class 0 = commands");
+        assert_eq!(kix.keywords[1].0, 1, "class 1 = functions");
+        assert_eq!(kix.keywords[2].0, 2, "class 2 = macros");
+        assert_eq!(kix.keywords[0].1, KIX_KEYWORDS);
+        assert_eq!(kix.keywords[1].1, KIX_FUNCTIONS);
+        assert_eq!(kix.keywords[2].1, KIX_MACROS);
+
+        // Invariant 4: all three non-empty.
+        for (name, list) in [
+            ("KIX_KEYWORDS", KIX_KEYWORDS),
+            ("KIX_FUNCTIONS", KIX_FUNCTIONS),
+            ("KIX_MACROS", KIX_MACROS),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: every wordlist entry lowercase.
+        for (name, list) in [
+            ("KIX_KEYWORDS", KIX_KEYWORDS),
+            ("KIX_FUNCTIONS", KIX_FUNCTIONS),
+            ("KIX_MACROS", KIX_MACROS),
+        ] {
+            for token in list.split_whitespace() {
+                assert!(
+                    token.chars().all(|c| !c.is_ascii_uppercase()),
+                    "{name} token `{token}` contains uppercase — \
+                     LexKix.cxx:84/98 call GetCurrentLowered before \
+                     InList, so uppercase entries would never match. \
+                     Language is case-insensitive"
+                );
+            }
+        }
+
+        // Invariant 6: no leading `@` in KIX_MACROS entries.
+        for token in KIX_MACROS.split_whitespace() {
+            assert!(
+                !token.starts_with('@'),
+                "KIX_MACROS token `{token}` has leading `@` — the \
+                 classifier strips the sigil (`&s[1]` at \
+                 LexKix.cxx:86) before probing InList, so an entry \
+                 with `@` would never match"
+            );
+        }
+
+        // Invariant 7: style-routing pins.
+        for (idx, slot, name) in [
+            (SCE_KIX_COMMENT, StyleSlot::Comment, "SCE_KIX_COMMENT"),
+            (
+                SCE_KIX_COMMENTSTREAM,
+                StyleSlot::Comment,
+                "SCE_KIX_COMMENTSTREAM",
+            ),
+            (SCE_KIX_STRING1, StyleSlot::String, "SCE_KIX_STRING1"),
+            (SCE_KIX_STRING2, StyleSlot::String, "SCE_KIX_STRING2"),
+            (SCE_KIX_NUMBER, StyleSlot::Number, "SCE_KIX_NUMBER"),
+            (SCE_KIX_VAR, StyleSlot::Lifetime, "SCE_KIX_VAR"),
+            (SCE_KIX_MACRO, StyleSlot::Preprocessor, "SCE_KIX_MACRO"),
+            (SCE_KIX_KEYWORD, StyleSlot::Keyword, "SCE_KIX_KEYWORD"),
+            (SCE_KIX_FUNCTIONS, StyleSlot::Keyword2, "SCE_KIX_FUNCTIONS"),
+            (SCE_KIX_OPERATOR, StyleSlot::Operator, "SCE_KIX_OPERATOR"),
+        ] {
+            assert!(
+                kix.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: DEFAULT + IDENTIFIER remain unmapped.
+        assert!(
+            !kix.styles.iter().any(|(i, _)| *i == 0),
+            "SCE_KIX_DEFAULT (0) must remain unmapped"
+        );
+        assert!(
+            !kix.styles.iter().any(|(i, _)| *i == 31),
+            "SCE_KIX_IDENTIFIER (31) must remain unmapped — bare \
+             user-defined identifiers should paint as default text"
+        );
+
+        // Invariant 9: italic set == 2 comment-family entries.
+        assert_eq!(
+            kix.italic.len(),
+            2,
+            "KIX_ITALIC must contain exactly COMMENT + COMMENTSTREAM"
+        );
+        assert!(kix.italic.contains(&SCE_KIX_COMMENT));
+        assert!(kix.italic.contains(&SCE_KIX_COMMENTSTREAM));
+
+        // Invariant 10: bold set == 1 (KEYWORD only).
+        assert_eq!(kix.bold.len(), 1, "KIX_BOLD must contain exactly KEYWORD");
+        assert!(kix.bold.contains(&SCE_KIX_KEYWORD));
+
+        // Invariant 11: cross-language non-reuse.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let rb = lang_theme(L_RUBY).expect("Ruby wired");
+        let ps = lang_theme(L_PS).expect("PostScript wired");
+        let vhdl = lang_theme(L_VHDL).expect("VHDL wired");
+        let bash = lang_theme(L_BASH).expect("Bash wired");
+        let diff = lang_theme(L_DIFF).expect("Diff wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (rb, "Ruby"),
+            (ps, "PostScript"),
+            (vhdl, "VHDL"),
+            (bash, "Bash"),
+            (diff, "Diff"),
+        ] {
+            assert_ne!(kix.styles, other.styles, "KIX must NOT reuse {name}_STYLES");
+        }
+
+        // Invariant 12: KIX_KEYWORDS anchor commands.
+        for anchor in [
+            "if",
+            "else",
+            "while",
+            "for",
+            "next",
+            "function",
+            "endfunction",
+        ] {
+            assert!(
+                KIX_KEYWORDS.split_whitespace().any(|t| t == anchor),
+                "KIX_KEYWORDS must include command `{anchor}`"
+            );
+        }
+
+        // Invariant 13: KIX_FUNCTIONS anchor built-ins.
+        for anchor in ["getobject", "createobject", "messagebox", "left", "right"] {
+            assert!(
+                KIX_FUNCTIONS.split_whitespace().any(|t| t == anchor),
+                "KIX_FUNCTIONS must include function `{anchor}`"
+            );
+        }
+
+        // Invariant 14: KIX_MACROS anchor macros (bare names).
+        for anchor in ["date", "time", "userid", "wksta", "scriptdir"] {
+            assert!(
+                KIX_MACROS.split_whitespace().any(|t| t == anchor),
+                "KIX_MACROS must include macro `{anchor}` (bare name, \
+                 no `@` sigil)"
             );
         }
     }

@@ -5767,6 +5767,203 @@ pub const VHDL_STDTYPES: &str = concat!(
 /// zero-init behaviour.
 pub const VHDL_USERWORDS: &str = "";
 
+/// Space-separated `KIXtart` **command** vocabulary installed via
+/// `LexKix`'s `SCI_SETKEYWORDS(0, ...)` — `keywords` (class 0) at
+/// `vendor/lexilla/lexers/LexKix.cxx:44`. Drives `SCE_KIX_KEYWORD`
+/// via the identifier-exit classifier at `LexKix.cxx:100-101`:
+/// on scan exit, `keywords.InList(s)` is probed FIRST (before
+/// `keywords2`), and matches are promoted from `SCE_KIX_IDENTIFIER`
+/// to `SCE_KIX_KEYWORD`.
+///
+/// **Scope: commands, not functions.** `KIXtart` splits its
+/// vocabulary into two visually-distinct categories: **commands**
+/// (statement-heading; drive control flow, filesystem/registry
+/// side effects, screen I/O) and **functions** (expression-usable;
+/// return values). Only commands belong here. Functions live in
+/// `KIX_FUNCTIONS` (class 1). The lexer paints each with a
+/// distinct style so a `KIXtart` author can visually verify a token
+/// is used in its intended slot — a `use` on the right-hand side
+/// of `$x = use()` is almost certainly a bug because `use` is a
+/// command, not a function.
+///
+/// **Case-insensitive language, byte-exact wordlist.** `KIXtart` is
+/// case-insensitive: `IF` and `if` are the same command. The
+/// classifier calls `GetCurrentLowered(s, sizeof(s))` at
+/// `LexKix.cxx:98` before `InList`, so wordlist entries MUST be
+/// lowercase — an uppercase entry would never match. Same
+/// convention as `VHDL_KEYWORDS` and `PS_LEVEL1_KEYWORDS`.
+///
+/// **Source.** `KIXtart` 4.x language reference (the last stable
+/// release-family before the language went dormant in ~2018).
+/// Cross-referenced against the `KIXtart` community's `kix.dtd` /
+/// `kix.xml` help schema and the Notepad++ 8.x shipped default
+/// `KIXtart` user-defined-language definition. No code copied.
+pub const KIX_KEYWORDS: &str = concat!(
+    // Control flow
+    "if else endif ",
+    "while loop until do ",
+    "for each next to step in ",
+    "select case endselect ",
+    "break exit continue ",
+    // User-defined functions + procedure control
+    "function endfunction ",
+    "gosub return goto call ",
+    // Variable declarations
+    "dim redim global ",
+    // Filesystem statement commands
+    "use del copy move md rd cd ",
+    "run shell ",
+    // Console + I/O statement commands
+    "sleep beep big small flushkb debug ",
+    "cls color at ",
+    "get gets password ",
+    // System statement commands
+    "settime include ",
+    // NOTE: `?` / `??` (KIXtart print-newline / print-no-newline) and
+    // registry / printer / config command-forms (addkey / delkey /
+    // writevalue / delvalue / addprinterconnection / logevent /
+    // settitle / setconsole / setl / setm / setascii / setoption /
+    // setwallpaper / setfileattr) are INTENTIONALLY ABSENT.
+    //
+    // `?` / `??` cannot reach the identifier-exit path — `IsAWordChar`
+    // at `LexKix.cxx:33-35` excludes `?` (0x3F: not isalnum, not `_`,
+    // not >=0x80) and `IsOperator` at `:37-39` excludes it too (the
+    // 9-char operator set is `+ - * / & | < > =` only), so the state
+    // machine at `:110-129` never transitions to `SCE_KIX_IDENTIFIER`
+    // on `?` and `keywords.InList("?")` is never called. Adding the
+    // tokens here would be dead code.
+    //
+    // The registry / printer / config forms are all documented as
+    // FUNCTIONS in the `KIXtart` 4.x reference (each returns a
+    // status code and is idiomatically used in expression context —
+    // `$err = WriteValue(...)`, `If AddKey(...) = 0`). They live in
+    // `KIX_FUNCTIONS`. Duplicating them here would silently mask the
+    // FUNCTIONS entry because `LexKix.cxx:100-103` probes `keywords`
+    // FIRST, defeating the commands-vs-functions visual contract.
+);
+
+/// Space-separated `KIXtart` **built-in-function** vocabulary
+/// installed via `LexKix`'s `SCI_SETKEYWORDS(1, ...)` — `keywords2`
+/// (class 1) at `LexKix.cxx:45`. Drives `SCE_KIX_FUNCTIONS` via
+/// the identifier-exit classifier at `LexKix.cxx:102-103`: on scan
+/// exit, if `keywords.InList(s)` returned false, `keywords2.InList(s)`
+/// is probed — matches promote from `SCE_KIX_IDENTIFIER` to
+/// `SCE_KIX_FUNCTIONS`.
+///
+/// **Scope: expression-usable, return values.** See `KIX_KEYWORDS`
+/// for the commands-vs-functions distinction. This list holds the
+/// `KIXtart` 4.x built-in function surface — string utilities,
+/// filesystem queries, registry queries, numeric conversions,
+/// object interop (`CreateObject` / `GetObject` for COM), and system
+/// info.
+///
+/// **Case-insensitive language, byte-exact wordlist.** Same
+/// case-folding rule as `KIX_KEYWORDS`. Entries lowercase.
+///
+/// **Source.** `KIXtart` 4.x language reference. No code copied.
+pub const KIX_FUNCTIONS: &str = concat!(
+    // Numeric conversion / math
+    "abs cdbl cint cstr chr asc dectohex ",
+    "iif rnd round srnd val vartype vartypename typecast ",
+    "formatnumber ",
+    // String utilities
+    "left right substr len instr instrrev ",
+    "lcase ucase ltrim rtrim trim replace join ",
+    "asciitochr ",
+    // Array utilities
+    "ubound ascan ",
+    // Filesystem / files
+    "dir fileexists exist existkey ",
+    "getfileattr getfilesize getfiletime getfileversion ",
+    "comparefiletimes deltree freefilehandle ",
+    "open close readline writeline redirectoutput ",
+    // Process
+    "setdefaultprinter shutdown logoff execute setsystemstate ",
+    // Registry
+    "readvalue writevalue delvalue ",
+    "addkey delkey enumkey enumvalue savedkey ",
+    "loadhive unloadhive savekey ",
+    "readtype readprofilestring writeprofilestring ",
+    // Environment + system state
+    "expandenvironmentvars macros memorysize ",
+    "getdiskspace inifile addprogramgroup addprogramitem ",
+    "delprogramgroup delprogramitem showprogramgroup ",
+    "logevent backupeventlog cleareventlog ",
+    "addprinterconnection delprinterconnection ",
+    "in ingroup isdeclared enumgroup enumlocalgroup enumipinfo ",
+    "setfileattr setl setm setascii setconsole setoption ",
+    "settitle setwallpaper setfocus ",
+    // Object interop (COM)
+    "createobject getobject ",
+    // Input + UI
+    "box messagebox sendkeys sendmessage senddata ",
+    // Identity + naming
+    "sidtoname ",
+);
+
+/// Space-separated `KIXtart` **macro-name** vocabulary installed via
+/// `LexKix`'s `SCI_SETKEYWORDS(2, ...)` — `keywords3` (class 2) at
+/// `LexKix.cxx:46`. Drives the MACRO whitelist gate at
+/// `LexKix.cxx:81-89`: a `@name` token enters `SCE_KIX_MACRO`
+/// state at `:121-122` and, on scan exit, the identifier AFTER
+/// the `@` (`&s[1]` at `:86`) is probed against this list. If
+/// present, MACRO stays. If absent, MACRO DOWNGRADES to DEFAULT
+/// at `:87-88`. **This wordlist is a whitelist**, not a
+/// dictionary — its whole purpose is to catch typos in macro
+/// names.
+///
+/// **Names WITHOUT the `@` prefix.** The classifier probes
+/// `&s[1]` (byte 1 onward — the identifier after the sigil), so
+/// wordlist entries are the bare macro name. `@date` sends
+/// `date` to `InList`; the wordlist entry MUST be `date`, not
+/// `@date`.
+///
+/// **Case-insensitive language, byte-exact wordlist.** Same
+/// case-folding rule as `KIX_KEYWORDS` (via `GetCurrentLowered`
+/// at `:84`). Entries lowercase. `@DATE` and `@date` both
+/// case-fold to `date` before the whitelist probe.
+///
+/// **Source.** `KIXtart` 4.x language reference — the full built-in
+/// macro surface. `KIXtart` has ~80 macros covering identity
+/// (user / computer / domain), time (date / time / ticks),
+/// network (IP / hostname / mapped drives), system config
+/// (OS version / CPU / memory), and script metadata
+/// (script name / dir / result). No user extension — the
+/// macro namespace is fixed by the `KIXtart` runtime.
+pub const KIX_MACROS: &str = concat!(
+    // Identity
+    "userid username fullname wksta ",
+    "wuserid userlang priv primarygroup ",
+    "homedir homedrive homeshare longhomedir ",
+    "sid ",
+    // Domain / server
+    "domain ldomain ldomainid lserver rserver ",
+    "site sdomain ",
+    // Network
+    "address hostname ",
+    "ipaddress0 ipaddress1 ipaddress2 ipaddress3 ",
+    "connectmode ",
+    "ldrive ldriveid ldriveparent ldriveroot ",
+    "ldriveservice ldrivetype ",
+    // Time / date
+    "date day month year time ",
+    "mdayno wdayno wday monthno ",
+    "ticks msecs ",
+    // System info
+    "cpu mhz build csd dos inwin kix ",
+    "resolution ",
+    "prodsuite producttype ",
+    "syslang tssession pid ras inwow64 onwow64 ",
+    "maxpwage pwage ",
+    // Script metadata
+    "scriptdir scriptexe scriptname ",
+    "startdir curdir cwd ",
+    "result serror error ",
+    // Console
+    "crlf color comment ",
+    "computer lanroot ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

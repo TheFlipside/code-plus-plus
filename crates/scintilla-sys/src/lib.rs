@@ -2548,6 +2548,158 @@ pub const SCE_VHDL_STDTYPE: usize = 13;
 pub const SCE_VHDL_USERWORD: usize = 14;
 pub const SCE_VHDL_BLOCK_COMMENT: usize = 15;
 
+// LexKix style indices. **Non-contiguous — 11 emission slots
+// spanning 0..=10 plus IDENTIFIER at 31**, a 20-index gap that
+// reserves 11..=30 for future style additions (Notepad++ convention
+// for niche lexers where the author left headroom rather than
+// committing to a numeric layout).
+//
+// LexKix is a compact 130-line lexer (`LexKix.cxx`, contributed by
+// Manfred Becker in 2004, extended by Lee Wilmott in 2014 to add
+// block-comment support) for KIXtart — a Windows login-script
+// language mid-abandoned by its author in 2018 but still in
+// production at legacy Windows shops. The language mixes sigil-
+// prefixed variables (`$var`) and macros (`@date`, `@time`) with
+// C-family strings and dual comment styles (`;` line + `/* */`
+// block).
+//
+// Style semantics (paint-loop citations reference LexKix.cxx):
+//   - DEFAULT (0)          — whitespace and any classifier
+//                            fall-through. Entry at `:75, :79, :89,
+//                            :93, :105, :57, :61, :66, :71`.
+//   - COMMENT (1)          — `;...` line comment. Entry at `:112`,
+//                            terminated on `atLineEnd` at `:56-57`.
+//   - STRING1 (2)          — `"..."` double-quoted string. Entry at
+//                            `:115-116`, terminated on the matching
+//                            `"` at `:65-66`. **No escape sequences**
+//                            — the classifier stops the string at
+//                            the first bare `"`. KIXtart doesn't
+//                            support C-style backslash escapes in
+//                            strings; embedded double-quotes are
+//                            impossible in this string form.
+//   - STRING2 (3)          — `'...'` single-quoted string. Entry at
+//                            `:117-118`, terminated on the matching
+//                            `'` at `:70-71`. Same no-escape rule
+//                            as STRING1.
+//   - NUMBER (4)           — Numeric literal. Entry at `:123-124`
+//                            when the char is `IsADigit` OR when
+//                            `.digit` / `&digit` prefix appears
+//                            (the `&`-prefix is KIXtart's hex-number
+//                            marker, per Notepad++ 8.x convention).
+//                            Terminated at `:73-75` when the next
+//                            char is not a digit.
+//   - VAR (5)              — `$var` variable reference. Entry at
+//                            `:119-120` on the `$` char; scans
+//                            word-chars via `IsAWordChar` at :34
+//                            (accented / high-bit chars included by
+//                            design — see `IsAWordChar` at `:33-35`),
+//                            terminated on non-word-char at `:77-79`.
+//                            **The `$` char itself is styled as part
+//                            of the VAR run** (the sigil isn't
+//                            emitted as OPERATOR — the classifier
+//                            enters VAR state before the sigil is
+//                            "consumed").
+//   - MACRO (6)            — `@macroname` macro reference. Entry at
+//                            `:121-122` on the `@` char; on scan
+//                            exit at `:81-89`, the identifier
+//                            AFTER the `@` (`&s[1]` at `:86`) is
+//                            probed against `keywords3` (class 2 —
+//                            the "known macros" wordlist). If NOT
+//                            in the list, the state DOWNGRADES to
+//                            DEFAULT at `:87-88` (so unknown
+//                            `@foo` bare tokens paint as default,
+//                            not as a false-positive macro). If IN
+//                            the list, MACRO stays. **Class 2 is a
+//                            positive whitelist**, not a
+//                            style-override for typos.
+//   - KEYWORD (7)          — Reserved KIXtart command (`if`,
+//                            `else`, `while`, `for`, etc.) matched
+//                            from `keywords` (class 0) at
+//                            `:100-101`. Promoted from IDENTIFIER
+//                            at scan exit.
+//   - FUNCTIONS (8)        — Built-in KIXtart function (`getobject`,
+//                            `readvalue`, `messagebox`, etc.)
+//                            matched from `keywords2` (class 1) at
+//                            `:102-103`. Promoted from IDENTIFIER
+//                            at scan exit. Distinct from KEYWORD
+//                            because KIXtart authors read commands
+//                            and functions as visually distinct
+//                            categories (commands are
+//                            statement-only; functions can appear
+//                            inside expressions).
+//   - OPERATOR (9)         — Punctuation-class operator. Entered at
+//                            `:125-126` when `IsOperator(ch)` at
+//                            `:37-39` matches. **Note the restricted
+//                            operator set**: `+ - * / & | < > =` —
+//                            only nine characters. `!`, `~`, `%`,
+//                            `^`, `?` are NOT included. Terminated
+//                            at `:91-93`.
+//   - COMMENTSTREAM (10)   — `/* ... */` block comment.
+//                            Contributed by Lee Wilmott's 2014
+//                            patch (per the file header). Entry at
+//                            `:113-114`, terminated on `*/` at
+//                            `:59-62`. **Newline-safe** — spans
+//                            multiple lines (no `atLineEnd`
+//                            terminator, unlike COMMENT).
+//   - IDENTIFIER (31)      — Bare identifier that fails BOTH the
+//                            `keywords` and `keywords2` probes at
+//                            scan exit `:96-105`. Intermediate scan
+//                            state for identifier tokens; only
+//                            emitted at paint time when the token
+//                            is neither a KEYWORD nor a FUNCTION
+//                            (i.e., a user-defined variable name
+//                            without the `$` sigil — which is
+//                            legal in KIXtart function calls and
+//                            UDF definitions).
+//
+// **Wordlist classes.** LexKix's classifier at `:44-46` names three
+// active classes: `keywords` (class 0), `keywords2` (class 1),
+// `keywords3` (class 2). A fourth (`keywords4`, class 3) is
+// **commented out** at `:47` — declared for future use, never
+// probed. The lexer registers NO `WordListDescriptions[]` array
+// (unlike VHDL / PostScript / Ruby), meaning the class names above
+// aren't self-documented in the classifier — they're inferred from
+// the `SCI_SETKEYWORDS(class, ...)` numeric indices at classifier
+// entry. Code++ installs three classes; class 3 stays unset.
+//
+// **Case handling.** The classifier calls `GetCurrentLowered` at
+// `:84` (macro path) and `:98` (identifier path) — KIXtart is
+// **case-insensitive**. Wordlist entries MUST be lowercase; same
+// convention as VHDL / PostScript.
+//
+// **Sigil handling.** The two sigil-prefixed forms (`$var`,
+// `@macro`) are entered by the classifier's `if (sc.ch == '$')` /
+// `if (sc.ch == '@')` branches at `:119-122`. The sigil is included
+// in the emitted style run (a `$foo` token paints as one continuous
+// SCE_KIX_VAR span, not `$` + `foo`). This matches Ruby's
+// `SCE_RB_INSTANCE_VAR` / `SCE_RB_CLASS_VAR` (which include the
+// sigil) and Perl / Bash `SCE_*_SCALAR` (which also include it) —
+// consistent with the family convention.
+//
+// **The macro whitelist gate.** Unlike KEYWORD / FUNCTIONS (which
+// promote IDENTIFIER → styled-token on wordlist hit), MACRO
+// DOWNGRADES to DEFAULT on wordlist miss. So a well-known macro
+// like `@date` paints as SCE_KIX_MACRO; a typo like `@daat` paints
+// as SCE_KIX_DEFAULT (not SCE_KIX_MACRO). This is a deliberate
+// visual signal — KIXtart macros are a fixed vocabulary (no user
+// extension), so an unrecognised `@name` is almost certainly a
+// typo. The classifier catches it at style time.
+//
+// Values match `SciLexer.h:1027-1038`. LexKix registers SCLEX_KIX
+// (= 57) at `LexKix.cxx:136`.
+pub const SCE_KIX_DEFAULT: usize = 0;
+pub const SCE_KIX_COMMENT: usize = 1;
+pub const SCE_KIX_STRING1: usize = 2;
+pub const SCE_KIX_STRING2: usize = 3;
+pub const SCE_KIX_NUMBER: usize = 4;
+pub const SCE_KIX_VAR: usize = 5;
+pub const SCE_KIX_MACRO: usize = 6;
+pub const SCE_KIX_KEYWORD: usize = 7;
+pub const SCE_KIX_FUNCTIONS: usize = 8;
+pub const SCE_KIX_OPERATOR: usize = 9;
+pub const SCE_KIX_COMMENTSTREAM: usize = 10;
+pub const SCE_KIX_IDENTIFIER: usize = 31;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated
