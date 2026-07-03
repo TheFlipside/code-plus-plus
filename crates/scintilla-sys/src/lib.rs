@@ -1845,6 +1845,183 @@ pub const SCE_DIFF_PATCH_DELETE: usize = 9;
 pub const SCE_DIFF_REMOVED_PATCH_ADD: usize = 10;
 pub const SCE_DIFF_REMOVED_PATCH_DELETE: usize = 11;
 
+// LexPS style indices. 16 contiguous slots (0..=15) covering
+// Adobe PostScript's stack-based token grammar as
+// implemented by `ColourisePSDoc` at `LexPS.cxx:67-270`.
+//
+// Style semantics (paint-loop citations reference LexPS.cxx):
+//   - DEFAULT (0)             — whitespace / uninteresting
+//                               fall-through. **Note:** the
+//                               lexer uses `SCE_C_DEFAULT`
+//                               (also 0) as its neutral state
+//                               throughout the state machine
+//                               (`:101, :109, :111, :120, :162,
+//                               :166, :169, :197, :224`); the
+//                               two constants are numerically
+//                               identical so no confusion.
+//   - COMMENT (1)             — `%...` line comments. Line
+//                               entry at `:229-239` (via the
+//                               `%` branch when the next char
+//                               isn't `%` at line-start),
+//                               terminated at `:99-102` on EOL.
+//                               DSC-comment fallback at `:113`
+//                               downgrades to COMMENT when a
+//                               `%%...`-line-start prefix is
+//                               followed by whitespace without
+//                               the trailing `:`.
+//   - DSC_COMMENT (2)         — Document Structuring
+//                               Convention directive line
+//                               (`%%directive`). Entry at
+//                               `:230-232` when `%%` starts
+//                               a line, terminated at `:103-114`
+//                               on `:` (which promotes to
+//                               `DSC_VALUE`) or EOL.
+//   - DSC_VALUE (3)           — Value after `%%directive:`
+//                               (e.g. `%%Title: My Document`).
+//                               Entry at `:107` (after eating
+//                               the colon) or `:233-236` (for
+//                               the `%%+` continuation
+//                               shorthand), terminated at
+//                               `:99-102` on EOL.
+//   - NUMBER (4)              — Numeric literals: integers,
+//                               reals with exponents, and
+//                               radix numbers (`16#FF`,
+//                               `2#1010`). Entry at `:240-259`,
+//                               with sign / decimal / exponent
+//                               state pinned by the flag
+//                               triplet `numHasPoint` /
+//                               `numHasExponent` / `numHasSign`
+//                               (`:89-92`, `:243-246, :250-253,
+//                               :256-259`) and radix state via
+//                               `numRadix` (`:122-130`).
+//                               Terminated at `:116-151` on
+//                               self-delimiting / whitespace,
+//                               or demoted to `NAME` at
+//                               `:119, :123, :129, :133,
+//                               :141, :147, :150` when the
+//                               token turns out not to parse
+//                               as a number.
+//   - NAME (5)                — Bare identifier / operator not
+//                               matched by any wordlist. Entry
+//                               at `:261` (any non-whitespace
+//                               non-delimiter char in DEFAULT
+//                               state), terminated at
+//                               `:152-163`. On termination the
+//                               lexer runs the
+//                               `keywords[1..5].InList(s)`
+//                               chain at `:156-159` — a match
+//                               promotes to `KEYWORD` via
+//                               `ChangeState` at `:160`;
+//                               otherwise the token stays
+//                               `NAME`.
+//   - KEYWORD (6)             — Wordlist-matched operator.
+//                               Set only via the `ChangeState`
+//                               promotion at `:160`; never
+//                               entered directly.
+//   - LITERAL (7)             — `/name` literal-name literal
+//                               (pushes the name onto the
+//                               stack as a symbol without
+//                               executing it). Entry at
+//                               `:208` (single `/`), terminated
+//                               at `:164-166` on self-
+//                               delimiting / whitespace.
+//   - IMMEVAL (8)             — `//name`
+//                               immediately-evaluated name
+//                               (Level-2 feature — evaluates
+//                               the name at scan time rather
+//                               than execution time). Entry
+//                               at `:205-206` (`//`),
+//                               terminated at `:164-166`.
+//   - PAREN_ARRAY (9)         — Array delimiter `[` / `]`.
+//                               Single-char state entered at
+//                               `:199-200`, released
+//                               immediately at `:167-169`.
+//   - PAREN_DICT (10)         — Dictionary delimiter `<<` /
+//                               `>>` (Level-2). Entry at
+//                               `:210-213, :220-222`,
+//                               released at `:167-169`.
+//   - PAREN_PROC (11)         — Procedure body delimiter `{`
+//                               / `}`. Entry at `:201-202`,
+//                               released at `:167-169`. The
+//                               folder at `:272-325`
+//                               syntax-folds on this style
+//                               (`:292` checks
+//                               `style == SCE_PS_PAREN_PROC`).
+//   - TEXT (12)               — `(...)` string literal with
+//                               nested parens and `\`-escape.
+//                               Entry at `:226-228`,
+//                               terminated at `:170-178` via
+//                               the `nestTextCurrent` depth
+//                               counter (line state carries
+//                               depth across lines via
+//                               `SetLineState` at `:265-266`).
+//   - HEXSTRING (13)          — `<...>` hex-encoded string.
+//                               Entry at `:218` (`<` alone),
+//                               terminated at `:179-185`.
+//                               A non-hex non-whitespace char
+//                               inside triggers an inline
+//                               `BADSTRINGCHAR` mark at
+//                               `:184` via `styler.ColourTo`.
+//   - BASE85STRING (14)       — `<~...~>` base-85 encoded
+//                               string (Level-2). Entry at
+//                               `:214-217` (`<~`), terminated
+//                               at `:186-193` on the closing
+//                               `~>`. Bad-char inline mark at
+//                               `:192`.
+//   - BADSTRINGCHAR (15)      — Error marker for a non-hex /
+//                               non-base85 char inside its
+//                               respective string state, or
+//                               for a stray `>` / `)` at
+//                               DEFAULT state at `:223-225`.
+//                               Not entered via `SetState` —
+//                               applied inline via
+//                               `styler.ColourTo` at `:184,
+//                               :192, :225`.
+//
+// **Wordlist classes.** `psWordListDesc[]` at `LexPS.cxx:327-334`
+// declares five classes:
+//   - class 0 "PS Level 1 operators"     → gated by `ps.level >= 1`
+//   - class 1 "PS Level 2 operators"     → gated by `ps.level >= 2`
+//   - class 2 "PS Level 3 operators"     → gated by `ps.level >= 3`
+//   - class 3 "RIP-specific operators"   → always active
+//   - class 4 "User-defined operators"   → always active
+// Default `ps.level = 3` (`:84`) enables all three level
+// tiers; a lower value disables the higher classes without
+// disturbing the always-active RIP + user classes.
+//
+// **Case handling.** `LexPS` calls `sc.GetCurrent(s, sizeof(s))`
+// at `:155`, NOT `GetCurrentLowered` — wordlist matching is
+// **case-sensitive**. PostScript is a case-sensitive language;
+// `add` / `Add` / `ADD` are distinct names, and canonical
+// mixed-case identifiers like `FontDirectory`,
+// `StandardEncoding`, `ISOLatin1Encoding`, `HalftoneType` are
+// part of the standard operator set.
+//
+// **DEFAULT-vs-SCE_C_DEFAULT.** The classifier uses
+// `SCE_C_DEFAULT` (also value 0, from `SciLexer.h`) as its
+// neutral state throughout — a Scintilla-family convention
+// where any lexer may fall back on the shared "no style"
+// value. Byte-equivalent to `SCE_PS_DEFAULT`.
+//
+// Values match `SciLexer.h:843-858`. LexPS registers
+// SCLEX_PS at `LexPS.cxx:336`.
+pub const SCE_PS_DEFAULT: usize = 0;
+pub const SCE_PS_COMMENT: usize = 1;
+pub const SCE_PS_DSC_COMMENT: usize = 2;
+pub const SCE_PS_DSC_VALUE: usize = 3;
+pub const SCE_PS_NUMBER: usize = 4;
+pub const SCE_PS_NAME: usize = 5;
+pub const SCE_PS_KEYWORD: usize = 6;
+pub const SCE_PS_LITERAL: usize = 7;
+pub const SCE_PS_IMMEVAL: usize = 8;
+pub const SCE_PS_PAREN_ARRAY: usize = 9;
+pub const SCE_PS_PAREN_DICT: usize = 10;
+pub const SCE_PS_PAREN_PROC: usize = 11;
+pub const SCE_PS_TEXT: usize = 12;
+pub const SCE_PS_HEXSTRING: usize = 13;
+pub const SCE_PS_BASE85STRING: usize = 14;
+pub const SCE_PS_BADSTRINGCHAR: usize = 15;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated

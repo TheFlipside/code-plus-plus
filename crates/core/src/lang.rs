@@ -5116,6 +5116,243 @@ pub const TCL_TK_COMMANDS: &str = concat!(
     "font ",
 );
 
+// PostScript wordlists — installed by `LexPS` via
+// `SCI_SETKEYWORDS(class_index, ...)`. The lexer's
+// `psWordListDesc[]` at `vendor/lexilla/lexers/LexPS.cxx:327-334`
+// declares five classes (0..=4); the level-tier classes (0..=2)
+// are populated here, RIP (3) and user-defined (4) are parked
+// empty — see the `PS_THEME` install banner in
+// `crates/ui_win32/src/lib.rs` for the rationale (both are
+// downstream extension points; the LexPS classifier at
+// `:156-159` queries them via `InList` on the default-
+// constructed empty WordList when the host skips
+// `SCI_SETKEYWORDS(3, ...)` / `SCI_SETKEYWORDS(4, ...)`,
+// which returns `false` and is safe).
+//
+// **Case-sensitive byte-exact match.** LexPS calls
+// `sc.GetCurrent(s, sizeof(s))` at `LexPS.cxx:155` — NOT
+// `GetCurrentLowered` — so wordlist matching is
+// **case-sensitive**. PostScript is a case-sensitive language;
+// canonical mixed-case identifiers like `FontDirectory`,
+// `StandardEncoding`, `ISOLatin1Encoding`, `HalftoneType`, and
+// filter names (`ASCII85Decode`, `DCTDecode`, `FlateDecode`,
+// …) MUST appear with their canonical case or they will not
+// match at scan time.
+
+/// Space-separated PostScript **Level 1** operator vocabulary
+/// installed via `LexPS`'s `SCI_SETKEYWORDS(0, ...)` — class 0
+/// of the five-class `psWordListDesc[]` at
+/// `vendor/lexilla/lexers/LexPS.cxx:327-334`. Gated on
+/// `ps.level >= 1` at `:156`; a lower `ps.level` property
+/// disables this class. Default `ps.level = 3` (per
+/// `:84`) enables all three level tiers.
+///
+/// **Source:** the PostScript Language Reference, 3rd
+/// edition (Adobe, 1999) — Appendix B "Operator Summary"
+/// — Level 1 subset. The operator *names* are the public
+/// language ABI; no PostScript source or documentation
+/// prose is copied. Cross-referenced against Ghostscript's
+/// `Resource/Init/gs_lev2.ps` for scope-boundary parity
+/// (what belongs in Level 1 vs Level 2).
+///
+/// **Scope.** The stack / math / array / dictionary / string
+/// / boolean / control / type / file / graphics-state / CTM
+/// / path / painting / font / VM core available in every
+/// PostScript interpreter since Level 1 (1985). Level 2 /
+/// Level 3 additions (color, patterns, resources, `DeviceN`,
+/// shading, filters, …) live in [`PS_LEVEL2_KEYWORDS`] and
+/// [`PS_LEVEL3_KEYWORDS`].
+///
+/// **Case.** Almost every Level 1 operator is lowercase; the
+/// two exceptions carried in this list are `FontDirectory`
+/// (the built-in font dictionary) and `StandardEncoding` (the
+/// default character encoding). Both canonical mixed-case per
+/// PLR §5.3.
+pub const PS_LEVEL1_KEYWORDS: &str = concat!(
+    // Stack manipulation
+    "dup exch pop copy roll index mark cleartomark counttomark clear count ",
+    // Math / arithmetic
+    "abs add sub mul div idiv mod neg ceiling floor round truncate sqrt ",
+    "atan cos sin exp ln log rand srand rrand ",
+    // Array (delimiters `[` / `]` are handled by the
+    // classifier's PAREN_ARRAY state, not by wordlist)
+    "array length get put getinterval putinterval astore aload forall ",
+    // Dictionary
+    "dict maxlength begin end def load store known undef where ",
+    "currentdict systemdict userdict cleardictstack countdictstack dictstack ",
+    // String (`length` / `get` / `put` shared with array; not
+    // re-listed)
+    "string anchorsearch search token ",
+    // Boolean / relational / bitwise
+    "eq ne gt ge lt le and or not xor bitshift true false ",
+    // Control
+    "exec if ifelse for repeat loop exit stop stopped ",
+    "countexecstack execstack quit start ",
+    // Type / conversion / attribute
+    "type cvlit cvx executeonly noaccess readonly ",
+    "rcheck wcheck xcheck cvi cvr cvn cvs cvrs ",
+    // File / stream
+    "file closefile read write readhexstring writehexstring ",
+    "readstring writestring readline bytesavailable flushfile ",
+    "resetfile status run currentfile print echo prompt ",
+    // Virtual memory
+    "save restore vmstatus ",
+    // Graphics state
+    "gsave grestore grestoreall initgraphics ",
+    "setlinewidth setlinecap setlinejoin setmiterlimit setdash ",
+    "setgray sethsbcolor setrgbcolor ",
+    "currentlinewidth currentlinecap currentlinejoin currentmiterlimit currentdash ",
+    "currentgray currenthsbcolor currentrgbcolor ",
+    "setflat currentflat settransfer currenttransfer setscreen currentscreen ",
+    // CTM
+    "matrix initmatrix identmatrix defaultmatrix currentmatrix setmatrix ",
+    "translate scale rotate concat concatmatrix ",
+    "transform dtransform itransform idtransform invertmatrix ",
+    // Path construction
+    "newpath moveto rmoveto lineto rlineto arc arcn arct arcto ",
+    "curveto rcurveto closepath flattenpath reversepath strokepath clippath ",
+    "currentpoint pathbbox pathforall initclip clip eoclip ",
+    // Painting
+    "erasepage fill eofill stroke image imagemask ",
+    "show ashow widthshow awidthshow kshow stringwidth ",
+    // Font
+    "findfont scalefont setfont currentfont makefont ",
+    "definefont undefinefont FontDirectory StandardEncoding ",
+    // Output
+    "showpage copypage ",
+    // Errors / misc
+    "bind null usertime realtime nulldevice ",
+);
+
+/// Space-separated PostScript **Level 2** operator vocabulary
+/// installed via `LexPS`'s `SCI_SETKEYWORDS(1, ...)` — class 1
+/// of `psWordListDesc[]`. Gated on `ps.level >= 2` at
+/// `LexPS.cxx:157`.
+///
+/// **Source:** the PostScript Language Reference, 3rd
+/// edition, Appendix B — Level 2 additions (Adobe, 1990
+/// introduction of Level 2). Cross-referenced against
+/// Ghostscript's `Resource/Init/gs_lev2.ps` for scope-
+/// boundary parity.
+///
+/// **Scope.** Level 2 additions to the operator set:
+/// device-independent colour spaces (setters + the
+/// discriminators — `DeviceGray` / `CIEBasedA` / `Indexed` /
+/// `Pattern` / `Separation` — that name the colour-space
+/// families `setcolorspace` selects), patterns, forms,
+/// resources, page-device parameters, the `<<`/`>>` dict
+/// shorthand (classifier-handled), object serialisation,
+/// per-context graphics-state objects, character positioning
+/// variants including `glyphshow`, filename enumeration,
+/// user-path operators, local/global-VM management (`setglobal`
+/// / `currentglobal`), halftone dictionaries with the
+/// `HalftoneType` discriminator, and the Level 2 filter
+/// mechanism (`ASCII85Decode` / `DCTDecode` / `LZWDecode`
+/// / `RunLengthDecode` / `SubFileDecode` / `NullEncode` and
+/// their Encode counterparts).
+///
+/// **Case.** Colour-space discriminators (`DeviceGray`,
+/// `CIEBasedA`, …), the halftone discriminator (`HalftoneType`),
+/// filter names (`ASCII85Decode`, `DCTDecode`, …), and
+/// `ISOLatin1Encoding` are canonical `PascalCase` / `CamelCase`
+/// per PLR §3.13, §4.8, §5.3. Every other Level 2 addition is
+/// lowercase.
+pub const PS_LEVEL2_KEYWORDS: &str = concat!(
+    // Colour spaces — setters + discriminators (the family names
+    // `setcolorspace` selects via array-head token)
+    "setcmykcolor currentcmykcolor setcolor setcolorspace ",
+    "currentcolor currentcolorspace ",
+    "setcolorrendering currentcolorrendering ",
+    "setoverprint currentoverprint colorimage ",
+    "DeviceGray DeviceRGB DeviceCMYK ",
+    "CIEBasedA CIEBasedABC CIEBasedDEF CIEBasedDEFG ",
+    "Indexed Pattern Separation ",
+    // Patterns / forms
+    "makepattern setpattern execform ",
+    // Resource machinery
+    "findresource resourcestatus resourceforall ",
+    "defineresource undefineresource ",
+    // Device / page
+    "setpagedevice currentpagedevice ",
+    "setdevparams currentdevparams selectdevice ",
+    // Fonts + Level 2 glyph-showing
+    "selectfont composefont ISOLatin1Encoding glyphshow ",
+    // Object serialisation
+    "printobject writeobject setobjectformat currentobjectformat ",
+    // Graphics-state objects + local/global VM (Level 2's
+    // two-VM model per PLR §3.7.2)
+    "gstate setgstate currentgstate globaldict languagelevel ",
+    "setglobal currentglobal ",
+    // Halftones (Level 2 machinery + the `HalftoneType`
+    // dictionary-type discriminator)
+    "setcolorscreen currentcolorscreen ",
+    "setcolortransfer currentcolortransfer ",
+    "sethalftone currenthalftone HalftoneType ",
+    // Character positioning variants
+    "cshow xshow yshow xyshow filenameforall ",
+    // User path
+    "uappend ucache ucachestatus upath ufill ueofill ustroke ustrokepath ",
+    // Level 2 filter mechanism (PLR §3.13). `FlateDecode` /
+    // `FlateEncode` / `ReusableStreamDecode` are Level 3
+    // additions and live in `PS_LEVEL3_KEYWORDS`.
+    "ASCII85Decode ASCII85Encode ASCIIHexDecode ASCIIHexEncode ",
+    "DCTDecode DCTEncode CCITTFaxDecode CCITTFaxEncode ",
+    "LZWDecode LZWEncode RunLengthDecode RunLengthEncode ",
+    "SubFileDecode NullEncode ",
+);
+
+/// Space-separated PostScript **Level 3** operator vocabulary
+/// installed via `LexPS`'s `SCI_SETKEYWORDS(2, ...)` — class 2
+/// of `psWordListDesc[]`. Gated on `ps.level >= 3` at
+/// `LexPS.cxx:158`.
+///
+/// **Source:** the PostScript Language Reference, 3rd
+/// edition (Adobe, 1999) — Level 3 additions (Adobe, 1997
+/// introduction of Level 3 alongside PDF 1.2). Cross-
+/// referenced against Ghostscript's Level-3 resource files
+/// for parity.
+///
+/// **Scope, minimal by design.** Only the genuine Level 3
+/// additions live here — the Level 2 filter mechanism
+/// (`ASCII85Decode` / `DCTDecode` / `LZWDecode` / …), the
+/// Level 2 colour-space discriminators (`DeviceGray` /
+/// `CIEBasedA` / `Indexed` / `Pattern` / `Separation`), the
+/// Level 2 `HalftoneType` discriminator, and Level 2's
+/// local/global-VM operators (`setglobal` / `currentglobal`)
+/// and `glyphshow` are ALL in [`PS_LEVEL2_KEYWORDS`] because
+/// that is where the PostScript Language Reference places
+/// them (§3.7.2, §3.13, §4.5.6, §4.8, §7.4). Mis-classifying
+/// them as Level 3 works accidentally at the default
+/// `ps.level = 3` (`LexPS`'s `:156-159` chain always fires
+/// class 2's `InList` when the setting is 3), but silently
+/// hides those operators when a user's session or `.psrc`
+/// sets `ps.level = 1` or `2`.
+///
+/// The genuine Level 3 additions are:
+///   - Smooth shading (`shfill` / `setsmoothness` /
+///     `currentsmoothness`).
+///   - Idiom recognition (`setidiomrecognition` /
+///     `currentidiomrecognition`).
+///   - The `DeviceN` colour space (the one colour-space
+///     family Level 3 added on top of Level 2's set).
+///   - Flate compression (`FlateDecode` / `FlateEncode`) and
+///     the `ReusableStreamDecode` filter (added alongside
+///     the reusable-stream and PDF-1.2 image models).
+///
+/// **Case.** `FlateDecode` / `FlateEncode` /
+/// `ReusableStreamDecode` are canonical `CamelCase` per PLR
+/// §3.13; `DeviceN` is canonical `PascalCase` per PLR §4.8.
+pub const PS_LEVEL3_KEYWORDS: &str = concat!(
+    // Smooth shading
+    "shfill setsmoothness currentsmoothness ",
+    // Idiom recognition
+    "setidiomrecognition currentidiomrecognition ",
+    // The one Level 3 colour-space addition
+    "DeviceN ",
+    // Level 3 stream-filter additions
+    "FlateDecode FlateEncode ReusableStreamDecode ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

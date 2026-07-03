@@ -108,12 +108,13 @@ use codepp_core::lang::{
     HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS,
     LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP,
     L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
-    L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL,
-    L_TCL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-    OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS,
-    PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-    SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
-    TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+    L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUST, L_SCHEME,
+    L_SQL, L_TCL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
+    RC_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SQL_KEYWORDS, SQL_KEYWORDS_2,
+    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+    VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -177,47 +178,49 @@ use codepp_scintilla_sys::{
     SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR,
     SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT,
     SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION,
-    SCE_P_ATTRIBUTE, SCE_P_CHARACTER, SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE,
-    SCE_P_DECORATOR, SCE_P_DEFNAME, SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE,
-    SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER, SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE,
-    SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK,
-    SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME,
-    SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD,
-    SCE_RUST_WORD2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM,
-    SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING,
-    SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD,
-    SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS,
-    SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2,
-    SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE, SCE_TCL_COMMENT_BOX,
-    SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER, SCE_TCL_NUMBER, SCE_TCL_OPERATOR,
-    SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD, SCE_TCL_WORD2, SCE_TCL_WORD3,
-    SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7, SCE_TCL_WORD8,
-    SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL,
-    SCE_TEX_SYMBOL, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT,
-    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN,
-    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER,
-    SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT,
-    SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT,
-    SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM,
-    SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN,
-    SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER,
-    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE,
-    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES,
-    SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
-    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
-    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
-    SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT,
-    SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK,
-    SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8,
-    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
-    SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
-    SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
-    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
-    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
-    SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
-    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
-    SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT,
-    STYLE_LINENUMBER,
+    SCE_PS_BASE85STRING, SCE_PS_COMMENT, SCE_PS_DSC_COMMENT, SCE_PS_DSC_VALUE, SCE_PS_HEXSTRING,
+    SCE_PS_IMMEVAL, SCE_PS_KEYWORD, SCE_PS_LITERAL, SCE_PS_NUMBER, SCE_PS_PAREN_ARRAY,
+    SCE_PS_PAREN_DICT, SCE_PS_PAREN_PROC, SCE_PS_TEXT, SCE_P_ATTRIBUTE, SCE_P_CHARACTER,
+    SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE, SCE_P_DECORATOR, SCE_P_DEFNAME,
+    SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE, SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER,
+    SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE, SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2,
+    SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE,
+    SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR,
+    SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER,
+    SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM, SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR,
+    SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING, SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT,
+    SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC,
+    SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT,
+    SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCE_TCL_BLOCK_COMMENT,
+    SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE, SCE_TCL_COMMENT_BOX, SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE,
+    SCE_TCL_MODIFIER, SCE_TCL_NUMBER, SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE,
+    SCE_TCL_WORD, SCE_TCL_WORD2, SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6,
+    SCE_TCL_WORD7, SCE_TCL_WORD8, SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT,
+    SCE_TEX_GROUP, SCE_TEX_SPECIAL, SCE_TEX_SYMBOL, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE,
+    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
+    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
+    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
+    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
+    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
+    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
+    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
+    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
+    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
+    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
+    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
+    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE,
+    SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED,
+    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
+    SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE,
+    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
+    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
+    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS,
+    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY,
+    SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION,
+    SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
@@ -5626,6 +5629,164 @@ const DIFF_THEME: LangTheme = LangTheme {
     bold: DIFF_BOLD,
 };
 
+// --- LexPS (PostScript) ---
+//
+// PostScript is a stack-based page-description language with
+// a small operator vocabulary (~250 Level 1 ops, ~80 Level 2
+// additions, ~30 Level 3 additions) and a token grammar
+// dominated by self-delimiting punctuation (`[` `]` `{` `}`
+// `/` `<` `>` `(` `)` `%`). The classifier at
+// `LexPS.cxx:67-270` runs a per-character state machine
+// over `SCE_C_DEFAULT` neutral state, entering typed states
+// (NUMBER, NAME, LITERAL, TEXT, HEXSTRING, …) on the
+// leading character and terminating on the next
+// self-delimiting / whitespace char.
+//
+// **13-mapping style table.** 16 `SCE_PS_*` slots minus
+// three deliberate omissions:
+//   - `SCE_PS_DEFAULT` (0)       — neutral state; keeps
+//                                  `STYLE_DEFAULT` (universal
+//                                  convention).
+//   - `SCE_PS_NAME` (5)          — bare identifier that
+//                                  didn't match any wordlist;
+//                                  stays default-coloured. If
+//                                  the lexer's `:156-159`
+//                                  wordlist chain matches,
+//                                  `ChangeState` at `:160`
+//                                  promotes to `KEYWORD` and
+//                                  the keyword slot's colour
+//                                  takes over — so leaving
+//                                  `NAME` unmapped means
+//                                  "unknown symbol renders in
+//                                  the buffer's default text
+//                                  colour", the standard
+//                                  Code++ convention for
+//                                  user-defined identifiers.
+//   - `SCE_PS_BADSTRINGCHAR` (15)— error marker. Applied
+//                                  inline via
+//                                  `styler.ColourTo` at
+//                                  `:184, :192, :225` for a
+//                                  non-hex / non-base85 char
+//                                  inside a `<…>` or `<~…~>`
+//                                  string. Leaving it
+//                                  unmapped means bad
+//                                  characters render
+//                                  default-coloured (same
+//                                  precedent as `SCE_ASM_STRINGEOL`
+//                                  and `SCE_LISP_STRINGEOL`).
+//
+// **Slot mapping rationale.**
+//   - `COMMENT` (1)         → Comment (green italic). `%...`
+//                             line comments.
+//   - `DSC_COMMENT` (2)     → Preprocessor (purple, italic).
+//                             `%%directive` DSC lines are
+//                             structural file metadata, not
+//                             executable code — Preprocessor
+//                             slot's "out-of-band syntax
+//                             marker" semantic is the
+//                             natural match (same slot the
+//                             CPP theme picks for `#define`
+//                             / `#include`).
+//   - `DSC_VALUE` (3)       → String. The value part of a
+//                             DSC directive (e.g.
+//                             `%%Title: My Document`) is
+//                             textual data, not code.
+//   - `NUMBER` (4)          → Number (magenta).
+//   - `KEYWORD` (6)         → Keyword (bold blue). Primary
+//                             operator archetype.
+//   - `LITERAL` (7)         → Keyword2 (steel blue). `/name`
+//                             literal-name literal — a name
+//                             pushed onto the stack as a
+//                             symbol without execution;
+//                             semantically a symbol
+//                             reference, closest match to
+//                             the `Keyword2` "secondary
+//                             keyword / identifier" slot.
+//   - `IMMEVAL` (8)         → Macro (violet). `//name`
+//                             immediately-evaluated name is
+//                             a distinct Level-2 concept
+//                             (evaluates at scan time, not
+//                             execution time) — the `Macro`
+//                             slot's "special-flavour
+//                             instruction" semantic
+//                             differentiates it visually
+//                             from plain `LITERAL`.
+//   - `PAREN_ARRAY` (9)     → Operator (dark grey). `[` /
+//                             `]` array delimiter.
+//   - `PAREN_DICT` (10)     → Operator (dark grey). `<<` /
+//                             `>>` dict delimiter.
+//   - `PAREN_PROC` (11)     → Operator (dark grey). `{` /
+//                             `}` procedure delimiter.
+//                             (All three PAREN_* stylings
+//                             consistently Operator; the
+//                             underlying `[` `{` `<<`
+//                             constructs remain
+//                             differentiable by shape at a
+//                             glance — colour doesn't need
+//                             to over-differentiate.)
+//   - `TEXT` (12)           → String (brick red). `(...)`
+//                             string literal.
+//   - `HEXSTRING` (13)      → String. `<...>` hex-encoded
+//                             string.
+//   - `BASE85STRING` (14)   → String. `<~...~>` base-85
+//                             encoded string.
+const PS_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_PS_COMMENT, StyleSlot::Comment),
+    (SCE_PS_DSC_COMMENT, StyleSlot::Preprocessor),
+    (SCE_PS_DSC_VALUE, StyleSlot::String),
+    (SCE_PS_NUMBER, StyleSlot::Number),
+    (SCE_PS_KEYWORD, StyleSlot::Keyword),
+    (SCE_PS_LITERAL, StyleSlot::Keyword2),
+    (SCE_PS_IMMEVAL, StyleSlot::Macro),
+    (SCE_PS_PAREN_ARRAY, StyleSlot::Operator),
+    (SCE_PS_PAREN_DICT, StyleSlot::Operator),
+    (SCE_PS_PAREN_PROC, StyleSlot::Operator),
+    (SCE_PS_TEXT, StyleSlot::String),
+    (SCE_PS_HEXSTRING, StyleSlot::String),
+    (SCE_PS_BASE85STRING, StyleSlot::String),
+];
+
+// Italic on the full comment family: line `COMMENT` (1) and
+// the DSC directive prefix `DSC_COMMENT` (2). `DSC_VALUE` (3)
+// stays upright — it's the actual textual payload of a DSC
+// directive (title text, filenames, bounding-box coords),
+// visually part of the string family. Universal Code++
+// convention: italic tags "human prose" classes, not "data
+// payload" classes.
+const PS_ITALIC: &[usize] = &[SCE_PS_COMMENT, SCE_PS_DSC_COMMENT];
+
+// Bold on the primary keyword class. Same single-entry
+// pattern as `RUST_BOLD` / `ASM_BOLD` / `DIFF_BOLD` — the
+// primary operator archetype gets the visual weight; other
+// classes rely on colour for differentiation.
+const PS_BOLD: &[usize] = &[SCE_PS_KEYWORD];
+
+// **Three-class install.** `psWordListDesc[]` at
+// `LexPS.cxx:327-334` declares FIVE classes (Level 1 / Level
+// 2 / Level 3 operators + RIP + user-defined); classes 0..=2
+// are populated here, classes 3 (RIP-specific) and 4
+// (user-defined) are omitted from the install. The classifier
+// at `:156-159` queries all five with `InList`, but
+// `WordList::InList` on a default-constructed empty wordlist
+// returns `false` — so skipping the install for the two
+// parked classes is safe and gets the same result as
+// installing empty strings. Downstream users who want to
+// bolt on printer-driver-specific (`RIP`) or
+// site-specific-macro (`user`) operators can extend the
+// install without disturbing the level-tier vocabulary.
+// Precedent: `ASM_THEME` skips its two fold-only classes
+// (6/7) for the same reason.
+const PS_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, PS_LEVEL1_KEYWORDS),
+        (1, PS_LEVEL2_KEYWORDS),
+        (2, PS_LEVEL3_KEYWORDS),
+    ],
+    styles: PS_STYLES,
+    italic: PS_ITALIC,
+    bold: PS_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -5817,6 +5978,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&ASM_THEME)
     } else if lang == L_DIFF {
         Some(&DIFF_THEME)
+    } else if lang == L_PS {
+        Some(&PS_THEME)
     } else {
         None
     }
@@ -20983,6 +21146,9 @@ mod lang_theme_tests {
         SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX_VAR, SCE_PL_REGEX_VAR, SCE_PL_REGSUBST_VAR,
         SCE_PL_SCALAR, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QX_VAR,
         SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD,
+        SCE_PS_BASE85STRING, SCE_PS_COMMENT, SCE_PS_DSC_COMMENT, SCE_PS_DSC_VALUE,
+        SCE_PS_HEXSTRING, SCE_PS_IMMEVAL, SCE_PS_KEYWORD, SCE_PS_LITERAL, SCE_PS_NUMBER,
+        SCE_PS_PAREN_ARRAY, SCE_PS_PAREN_DICT, SCE_PS_PAREN_PROC, SCE_PS_TEXT,
     };
     use codepp_core::lang::{
         BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1,
@@ -20991,12 +21157,13 @@ mod lang_theme_tests {
         JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
         LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML,
         L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL,
-        L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL, L_TEX, L_TEXT,
-        L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS,
-        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-        SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
-        TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+        L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL, L_TEX,
+        L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS,
+        PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+        RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SQL_KEYWORDS, SQL_KEYWORDS_2,
+        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+        VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -24405,6 +24572,349 @@ mod lang_theme_tests {
             diff.bold.contains(&SCE_DIFF_COMMAND),
             "Bold on SCE_DIFF_COMMAND (top-of-diff anchor)"
         );
+    }
+
+    /// PostScript (`L_PS`) uses Lexilla's `LexPS` lexer
+    /// (`SCLEX_PS`) — a stack-language classifier at
+    /// `LexPS.cxx:67-270` covering PostScript Level 1 / 2 / 3
+    /// operator sets across the 16 `SCE_PS_*` slots. The theme
+    /// paints 13 of the 16 (omitting `DEFAULT` / `NAME` /
+    /// `BADSTRINGCHAR` per the `PS_STYLES` banner) and installs
+    /// three keyword classes (Level 1 / 2 / 3), parking the two
+    /// downstream-extension classes (RIP / user-defined) empty.
+    ///
+    /// Pinned invariants:
+    ///   1. 13-mapping style table (16 `SCE_PS_*` slots minus
+    ///      3 deliberate omissions: `DEFAULT` — universal
+    ///      neutral-state skip; `NAME` — unmatched-identifier
+    ///      convention; `BADSTRINGCHAR` — error-state, same as
+    ///      `SCE_ASM_STRINGEOL` / `SCE_LISP_STRINGEOL` are
+    ///      unmapped).
+    ///   2. Three-class install shape (classes 0..=2 populated;
+    ///      class 3 = RIP and class 4 = user-defined are
+    ///      omitted from the install — `LexPS`'s `:156-159`
+    ///      classifier chain safely queries default-constructed
+    ///      empty `WordList`s for the skipped classes).
+    ///   3. `HashSet` cross-class no-overlap — `LexPS`'s `:156-159`
+    ///      short-circuits at the first `InList` match, so a
+    ///      token appearing in two classes takes the color of
+    ///      whichever class is queried first (Level 1 wins over
+    ///      Level 2 wins over Level 3 by the `||` chain order).
+    ///      The guard catches copy-paste drift that would
+    ///      shadow Level 2 / Level 3 entries.
+    ///   4. **Case-sensitive** wordlist contract — `LexPS`
+    ///      calls `sc.GetCurrent(s, sizeof(s))` at
+    ///      `LexPS.cxx:155`, NOT `GetCurrentLowered`. This
+    ///      test verifies the wordlists contain both lowercase
+    ///      entries (the majority of PostScript operators) AND
+    ///      the canonical mixed-case identifiers
+    ///      (`FontDirectory`, `StandardEncoding`,
+    ///      `ISOLatin1Encoding`, `HalftoneType`, filter names).
+    ///      Contrast with `LexAsm` (case-folded) and `LexLisp`
+    ///      (case-sensitive but conventionally lowercase-only).
+    ///   5. Canonical-anchor pins across the three level tiers:
+    ///      `add` (Level 1 arithmetic), `moveto` (Level 1 path
+    ///      construction), `FontDirectory` (Level 1
+    ///      canonical mixed-case),
+    ///      `setcolorspace` (Level 2 colour),
+    ///      `ISOLatin1Encoding` (Level 2 canonical mixed-case),
+    ///      `shfill` (Level 3 smooth shading),
+    ///      `FlateDecode` (Level 3 canonical filter name).
+    ///   6. Style-routing pins — every mapped `SCE_PS_*` slot
+    ///      routes to the intended `StyleSlot`.
+    ///   7. Deliberate-omission pins — `DEFAULT` (0), `NAME`
+    ///      (5), `BADSTRINGCHAR` (15) stay unmapped.
+    ///   8. Italic set == `COMMENT` + `DSC_COMMENT` (the full
+    ///      comment family; `DSC_VALUE` is data payload, not
+    ///      prose, and stays upright).
+    ///   9. Bold set == `KEYWORD` only (single-entry
+    ///      primary-class-bold pattern; `RUST_BOLD` /
+    ///      `ASM_BOLD` / `DIFF_BOLD` precedent).
+    ///  10. Cross-language non-reuse — PostScript's unique
+    ///      `LITERAL`-as-`Keyword2` + `IMMEVAL`-as-`Macro` slot
+    ///      picks are not shared with any other wired language.
+    #[test]
+    fn ps_uses_lexps_three_level_theme() {
+        use codepp_scintilla_sys::{SCE_PS_BADSTRINGCHAR, SCE_PS_DEFAULT, SCE_PS_NAME};
+        use std::collections::HashSet;
+        let ps = lang_theme(L_PS).expect("PostScript wired");
+
+        // Invariant 1: 13-mapping style table.
+        assert_eq!(
+            ps.styles.len(),
+            13,
+            "PS_STYLES must map 13 indices (16 SCE_PS_* slots minus \
+             DEFAULT + NAME + BADSTRINGCHAR)"
+        );
+
+        // Invariant 2: three-class install shape.
+        assert_eq!(
+            ps.keywords.len(),
+            3,
+            "PS installs classes 0..=2 (RIP class 3 + user-defined \
+             class 4 are downstream-extension points, safely queried \
+             on default-empty WordLists at LexPS.cxx:156-159)"
+        );
+        for (expected_class, actual) in (0..3).zip(ps.keywords.iter()) {
+            assert_eq!(
+                actual.0, expected_class,
+                "PS keyword class-index order must be 0..=2, got {actual:?}"
+            );
+        }
+        assert_eq!(ps.keywords[0].1, PS_LEVEL1_KEYWORDS);
+        assert_eq!(ps.keywords[1].1, PS_LEVEL2_KEYWORDS);
+        assert_eq!(ps.keywords[2].1, PS_LEVEL3_KEYWORDS);
+
+        // Invariant 3: HashSet cross-class no-overlap. All five
+        // wordlist classes route to the same `SCE_PS_KEYWORD` style
+        // via `ChangeState` at `LexPS.cxx:160` — the classifier does
+        // NOT paint per-class colours. What a duplicate breaks is
+        // the `ps.level` gate: LexPS's `:156-159` `||` chain checks
+        // class N whenever `ps.level >= N`, so a duplicate copy of a
+        // token into a *higher* level than its true minimum is
+        // silently inert (the lower-level entry already fires the
+        // match at every `ps.level >= min`). The failure direction
+        // that this guard catches is the OPPOSITE: a Level-3-only
+        // operator (e.g. `FlateDecode`) accidentally copied into
+        // Level 1 or Level 2 would incorrectly highlight at
+        // `ps.level = 1` or `2`, below its true minimum — the
+        // shadowing failure the coverage-doc rationale calls out.
+        // Enforcing "each token lives in exactly its minimum-required
+        // class" makes both directions impossible and keeps the
+        // `ps.level` gate authoritative.
+        let mut seen: HashSet<&str> = HashSet::new();
+        for (class_idx, words) in ps.keywords {
+            for tok in words.split_whitespace() {
+                assert!(
+                    seen.insert(tok),
+                    "PS wordlist token `{tok}` appears in multiple \
+                     classes (currently checking class {class_idx}) — \
+                     each operator must live in exactly its minimum \
+                     PostScript-level class so the `ps.level` gate at \
+                     LexPS.cxx:156-159 stays authoritative"
+                );
+            }
+        }
+
+        // Invariant 3b: reserved delimiter chars must NEVER appear
+        // as wordlist entries. The `IsASelfDelimitingChar` set at
+        // `LexPS.cxx:38-42` (`[`, `]`, `{`, `}`, `/`, `<`, `>`,
+        // `(`, `)`, `%`) and the whitespace / control chars at
+        // `:44-47` are entered by their own classifier branches at
+        // `:199-238` — a wordlist token containing one of these
+        // chars would never be matched because `GetCurrent`
+        // terminates at the first self-delimiting char at `:153`.
+        // Cheap regression guard against a wordlist author
+        // accidentally splicing e.g. `<<` or `%%Title` into a
+        // level-tier list.
+        for (class_idx, words) in ps.keywords {
+            for tok in words.split_whitespace() {
+                assert!(
+                    tok.chars().all(|c| !matches!(
+                        c,
+                        '[' | ']' | '{' | '}' | '/' | '<' | '>' | '(' | ')' | '%'
+                    )),
+                    "PS class-{class_idx} entry `{tok}` contains a \
+                     LexPS self-delimiting char ([ ] {{ }} / < > ( ) %) \
+                     — the classifier at LexPS.cxx:38-42 terminates \
+                     `GetCurrent` on these chars, so no wordlist entry \
+                     containing one could ever be matched"
+                );
+            }
+        }
+
+        // Invariant 4: case-sensitive contract. LexPS uses
+        // `GetCurrent` (NOT `GetCurrentLowered`) at :155, so both
+        // lowercase and canonical mixed-case entries are expected.
+        // The wordlists SHOULD contain mixed-case entries; assert
+        // that at least one canonical mixed-case identifier exists
+        // in each of Level 1 (FontDirectory), Level 2 (ISOLatin1Encoding),
+        // and Level 3 (FlateDecode). If all were lowercase, that
+        // would be a signal the author mistook LexPS for a
+        // case-folded lexer.
+        assert!(
+            PS_LEVEL1_KEYWORDS
+                .split_whitespace()
+                .any(|t| t.chars().any(|c| c.is_ascii_uppercase())),
+            "PS_LEVEL1_KEYWORDS must contain at least one canonical \
+             mixed-case identifier (e.g. `FontDirectory`) — LexPS is \
+             case-sensitive per :155 `GetCurrent`; a wordlist that is \
+             purely lowercase signals the author confused LexPS with \
+             a case-folded lexer like LexAsm"
+        );
+        assert!(
+            PS_LEVEL2_KEYWORDS
+                .split_whitespace()
+                .any(|t| t.chars().any(|c| c.is_ascii_uppercase())),
+            "PS_LEVEL2_KEYWORDS must contain at least one canonical \
+             mixed-case identifier (e.g. `ISOLatin1Encoding`) — see \
+             invariant 4 rationale"
+        );
+        assert!(
+            PS_LEVEL3_KEYWORDS
+                .split_whitespace()
+                .any(|t| t.chars().any(|c| c.is_ascii_uppercase())),
+            "PS_LEVEL3_KEYWORDS must contain at least one canonical \
+             mixed-case identifier (e.g. `FlateDecode`) — Level 3 \
+             filter names are PascalCase per PLR §3.13"
+        );
+
+        // Invariant 5: canonical-anchor pins.
+        assert!(
+            PS_LEVEL1_KEYWORDS.split_whitespace().any(|t| t == "add"),
+            "PS_LEVEL1_KEYWORDS must include `add` (the archetype \
+             arithmetic operator)"
+        );
+        assert!(
+            PS_LEVEL1_KEYWORDS.split_whitespace().any(|t| t == "moveto"),
+            "PS_LEVEL1_KEYWORDS must include `moveto` (the archetype \
+             path-construction operator)"
+        );
+        assert!(
+            PS_LEVEL1_KEYWORDS
+                .split_whitespace()
+                .any(|t| t == "FontDirectory"),
+            "PS_LEVEL1_KEYWORDS must include `FontDirectory` (the \
+             built-in font dictionary — canonical PascalCase per \
+             PLR §5.3)"
+        );
+        assert!(
+            PS_LEVEL2_KEYWORDS
+                .split_whitespace()
+                .any(|t| t == "setcolorspace"),
+            "PS_LEVEL2_KEYWORDS must include `setcolorspace` (Level 2 \
+             colour-space setter — canonical Level 2 archetype)"
+        );
+        assert!(
+            PS_LEVEL2_KEYWORDS
+                .split_whitespace()
+                .any(|t| t == "ISOLatin1Encoding"),
+            "PS_LEVEL2_KEYWORDS must include `ISOLatin1Encoding` \
+             (Level 2's Latin-1 encoding vector — canonical PascalCase \
+             per PLR §5.3)"
+        );
+        assert!(
+            PS_LEVEL3_KEYWORDS.split_whitespace().any(|t| t == "shfill"),
+            "PS_LEVEL3_KEYWORDS must include `shfill` (the archetype \
+             Level 3 smooth-shading operator)"
+        );
+        assert!(
+            PS_LEVEL3_KEYWORDS
+                .split_whitespace()
+                .any(|t| t == "FlateDecode"),
+            "PS_LEVEL3_KEYWORDS must include `FlateDecode` (the \
+             archetype Level 3 stream filter — canonical CamelCase \
+             per PLR §3.13)"
+        );
+
+        // Invariant 6: style-routing pins.
+        for (idx, slot, name) in [
+            (SCE_PS_COMMENT, StyleSlot::Comment, "SCE_PS_COMMENT"),
+            (
+                SCE_PS_DSC_COMMENT,
+                StyleSlot::Preprocessor,
+                "SCE_PS_DSC_COMMENT",
+            ),
+            (SCE_PS_DSC_VALUE, StyleSlot::String, "SCE_PS_DSC_VALUE"),
+            (SCE_PS_NUMBER, StyleSlot::Number, "SCE_PS_NUMBER"),
+            (SCE_PS_KEYWORD, StyleSlot::Keyword, "SCE_PS_KEYWORD"),
+            (SCE_PS_LITERAL, StyleSlot::Keyword2, "SCE_PS_LITERAL"),
+            (SCE_PS_IMMEVAL, StyleSlot::Macro, "SCE_PS_IMMEVAL"),
+            (
+                SCE_PS_PAREN_ARRAY,
+                StyleSlot::Operator,
+                "SCE_PS_PAREN_ARRAY",
+            ),
+            (SCE_PS_PAREN_DICT, StyleSlot::Operator, "SCE_PS_PAREN_DICT"),
+            (SCE_PS_PAREN_PROC, StyleSlot::Operator, "SCE_PS_PAREN_PROC"),
+            (SCE_PS_TEXT, StyleSlot::String, "SCE_PS_TEXT"),
+            (SCE_PS_HEXSTRING, StyleSlot::String, "SCE_PS_HEXSTRING"),
+            (
+                SCE_PS_BASE85STRING,
+                StyleSlot::String,
+                "SCE_PS_BASE85STRING",
+            ),
+        ] {
+            assert!(
+                ps.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 7: deliberate-omission pins.
+        for (idx, name) in [
+            (SCE_PS_DEFAULT, "SCE_PS_DEFAULT"),
+            (SCE_PS_NAME, "SCE_PS_NAME"),
+            (SCE_PS_BADSTRINGCHAR, "SCE_PS_BADSTRINGCHAR"),
+        ] {
+            assert!(
+                !ps.styles.iter().any(|(i, _)| *i == idx),
+                "{name} must remain unmapped (universal neutral- / \
+                 unmatched- / error-state convention)"
+            );
+        }
+
+        // Invariant 8: italic set == COMMENT + DSC_COMMENT.
+        assert_eq!(
+            ps.italic.len(),
+            2,
+            "PS_ITALIC must contain exactly COMMENT + DSC_COMMENT"
+        );
+        for (idx, name) in [
+            (SCE_PS_COMMENT, "SCE_PS_COMMENT"),
+            (SCE_PS_DSC_COMMENT, "SCE_PS_DSC_COMMENT"),
+        ] {
+            assert!(
+                ps.italic.contains(&idx),
+                "Italic on {name} (comment-family universal convention)"
+            );
+        }
+        assert!(
+            !ps.italic.contains(&SCE_PS_DSC_VALUE),
+            "SCE_PS_DSC_VALUE must NOT be italic — it's data payload, \
+             not prose"
+        );
+
+        // Invariant 9: bold set == KEYWORD only.
+        assert_eq!(
+            ps.bold.len(),
+            1,
+            "PS_BOLD must contain exactly KEYWORD (single-entry \
+             primary-class-bold; RUST_BOLD / ASM_BOLD / DIFF_BOLD \
+             precedent)"
+        );
+        assert!(
+            ps.bold.contains(&SCE_PS_KEYWORD),
+            "Bold on SCE_PS_KEYWORD (primary operator archetype)"
+        );
+
+        // Invariant 10: cross-language non-reuse of styles slice.
+        // PS's `LITERAL`-as-Keyword2 + `IMMEVAL`-as-Macro slot picks
+        // are unique to PostScript across the wired set.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let asm = lang_theme(L_ASM).expect("Assembly wired");
+        let diff = lang_theme(L_DIFF).expect("Diff wired");
+        let lisp = lang_theme(L_LISP).expect("Lisp wired");
+        let scheme = lang_theme(L_SCHEME).expect("Scheme wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let props = lang_theme(L_INI).expect("INI wired");
+        let bash = lang_theme(L_BASH).expect("Bash wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (asm, "Assembly"),
+            (diff, "Diff"),
+            (lisp, "Lisp"),
+            (scheme, "Scheme"),
+            (mk, "Makefile"),
+            (bat, "Batch"),
+            (props, "INI"),
+            (bash, "Bash"),
+            (php, "PHP"),
+        ] {
+            assert_ne!(ps.styles, other.styles, "PS must NOT reuse {name}_STYLES");
+        }
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a

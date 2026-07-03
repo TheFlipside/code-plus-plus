@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 31 / 🟡 57 / ⚫ 1.
+Total: 89 rows. ✅ 32 / 🟡 56 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1895,7 +1895,7 @@ further shim work needed.
 | Pascal | 11 | `pascal` | ✅ | ✅ | ✅ |
 | Perl | 21 | `perl` | ✅ | ✅ | ✅ |
 | PHP | 1 | `hypertext` | ✅ | ✅ | ✅ |
-| PostScript | 35 | `ps` | ⚫ | ⚫ | 🟡 |
+| PostScript | 35 | `ps` | ✅ | ✅ | ✅ |
 | PowerShell | 53 | `powershell` | ⚫ | ⚫ | 🟡 |
 | Properties | 34 | `props` | — | ✅ | ✅ |
 | Purebasic | 68 | `purebasic` | ⚫ | ⚫ | 🟡 |
@@ -2134,6 +2134,128 @@ DEFAULT-unmapped guard, single-entry italic set
 (`SCE_DIFF_COMMENT` only — added / removed / changed content
 stays upright for fast review scanning), single-entry bold set
 (`SCE_DIFF_COMMAND` only — `RUST_BOLD` / `ASM_BOLD` precedent).
+
+**PostScript (2026-07-03):** uses Lexilla's `ps` lexer
+(`LexPS.cxx`, `SCLEX_PS`) covering Adobe PostScript's
+stack-based token grammar across 16 style classes and 5
+wordlist classes. The classifier at `LexPS.cxx:67-270` runs a
+per-character state machine over `SCE_C_DEFAULT` neutral state,
+entering typed states on self-delimiting punctuation (`[` `]`
+`{` `}` `/` `<` `>` `(` `)` `%`) or on the leading char of a
+number / identifier / string. `PS_LEVEL1_KEYWORDS` (class 0,
+215 tokens) covers the core stack / math / array / dictionary /
+string / boolean / control / type / file / graphics-state /
+CTM / path / painting / font vocabulary shipped in every
+PostScript interpreter since Level 1 (1985);
+`PS_LEVEL2_KEYWORDS` (class 1, 83 tokens) adds device-
+independent colour spaces (setters plus the family
+discriminators `DeviceGray` / `CIEBasedA` / `Indexed` /
+`Pattern` / `Separation`), patterns / forms, resources,
+page-device parameters, object serialisation, per-context
+graphics-state objects with local/global-VM management
+(`setglobal` / `currentglobal`), the halftone-type
+discriminator (`HalftoneType`), character positioning
+variants (including `glyphshow`), user-path operators, and
+the Level 2 filter mechanism (`ASCII85Decode` / `DCTDecode`
+/ `LZWDecode` / `RunLengthDecode` / `SubFileDecode` /
+`NullEncode` plus the Encode counterparts);
+`PS_LEVEL3_KEYWORDS` (class 2, 9 tokens) is deliberately
+minimal — only the genuine Level 3 additions:
+smooth shading (`shfill` / `setsmoothness` /
+`currentsmoothness`), idiom recognition
+(`setidiomrecognition` / `currentidiomrecognition`), the
+one Level 3 colour-space addition (`DeviceN`), and the
+Level 3 stream filters (`FlateDecode` / `FlateEncode` /
+`ReusableStreamDecode`). The three level lists were
+scrubbed for classification drift during code review —
+several colour-space discriminators, filter names, VM
+operators, and `HalftoneType` were initially mis-placed
+in Level 3 (works accidentally at the default
+`ps.level = 3`, but silently hides those operators when a
+user sets `ps.level = 1` or `2`); they've been moved to
+Level 2 where PLR §3.7.2 / §3.13 / §4.5.6 / §4.8 / §7.4
+place them. Classes 3 (RIP-specific) and 4 (user-defined)
+are downstream-extension points and are omitted from the
+install — LexPS's `:156-159` classifier chain safely
+queries default-constructed empty `WordList`s via `InList`
+when the host skips `SCI_SETKEYWORDS`, verified against
+`LexerBase.cxx:32-34` (allocates `KEYWORDSET_MAX+1` empty
+`WordList`s at construction) and `WordList.cxx:154-156`
+(returns `false` immediately on null `words` pointer). Same
+parking pattern as ASM's fold-only classes 6/7.
+
+Not on the wordlist (by design): dictionary keys like
+`ShadingType`, `FunctionType`, `ShadingDict` are always
+written with a leading `/` in PostScript source, so LexPS
+tokenises them as `SCE_PS_LITERAL` at `LexPS.cxx:208` — a
+state that terminates at `:164-166` without ever consulting
+the wordlist chain. Adding them to a `PS_LEVEL*` list would
+be inert regardless of which level. Real Level 3 operator
+identifiers (`shfill`, `FlateDecode`, …) are used bare,
+without a `/`, and reach the classifier at `:152-163`.
+
+Thirteen theme routings paint the buffer distinctly:
+`SCE_PS_KEYWORD` → `StyleSlot::Keyword` (bold blue — primary
+operator archetype); `SCE_PS_LITERAL` → `Keyword2` (steel blue
+— `/name` literal-name literals are symbol references, closest
+match to the secondary keyword slot); `SCE_PS_IMMEVAL` → `Macro`
+(violet — `//name` immediately-evaluated names are a distinct
+Level-2 concept, differentiated from plain LITERAL by the
+`Macro` slot the same way Rust's `println!` is set apart from
+regular identifiers); `SCE_PS_DSC_COMMENT` → `Preprocessor`
+(purple italic — `%%directive` DSC lines are structural
+file-level metadata, semantically parallel to C's `#define` /
+`#include`); `SCE_PS_DSC_VALUE` → `String` (the actual textual
+payload after the `:` in a DSC directive); PostScript's three
+paren-family states (`PAREN_ARRAY` for `[` `]`, `PAREN_DICT` for
+`<<` `>>`, `PAREN_PROC` for `{` `}`) all map to `Operator`
+(dark grey) — the underlying constructs remain differentiable by
+shape at a glance, colour doesn't need to over-differentiate;
+the three string archetypes (`TEXT` for `(...)`, `HEXSTRING` for
+`<...>`, `BASE85STRING` for `<~...~>`) all share `String` (brick
+red). `SCE_PS_COMMENT` italic; `SCE_PS_KEYWORD` bold (single-entry
+`RUST_BOLD` / `ASM_BOLD` / `DIFF_BOLD` precedent). `SCE_PS_DEFAULT`
+/ `SCE_PS_NAME` / `SCE_PS_BADSTRINGCHAR` intentionally unmapped —
+neutral state, unmatched-identifier, and error-marker
+respectively (same convention as `SCE_ASM_STRINGEOL` /
+`SCE_LISP_STRINGEOL`).
+
+Case handling: `LexPS` calls `sc.GetCurrent(s, sizeof(s))` at
+`LexPS.cxx:155`, **NOT** `GetCurrentLowered` — wordlist matching
+is case-sensitive. PostScript is a case-sensitive language;
+canonical mixed-case identifiers like `FontDirectory`,
+`StandardEncoding`, `ISOLatin1Encoding`, `HalftoneType`, and
+filter names (`ASCII85Decode`, `DCTDecode`, `FlateDecode`, …)
+appear with their exact case in the wordlists. Contrast with
+`LexAsm` (case-folded via `GetCurrentLowered`) and `LexLisp`
+(case-sensitive but conventionally lowercase-only). Structural
+guards pinned in `ps_uses_lexps_three_level_theme`: 13-mapping
+style table, three-class install shape (with the RIP + user-defined
+downstream-extension parking explicitly documented), `HashSet`
+cross-class no-overlap (guards Level 2 / 3 entries against being
+shadowed by Level 1 duplicates via the `||` short-circuit at
+`:156-159`), **case-sensitive contract** (each of Level 1 / 2 / 3
+must contain at least one canonical mixed-case identifier —
+signals wordlist author didn't confuse LexPS with a case-folded
+lexer), seven canonical anchors across the three levels (`add` +
+`moveto` + `FontDirectory` for Level 1, `setcolorspace` +
+`ISOLatin1Encoding` for Level 2, `shfill` + `FlateDecode` for
+Level 3), 13 style-routing pins, three deliberate-omission pins
+(`DEFAULT` / `NAME` / `BADSTRINGCHAR`), italic set == `COMMENT` +
+`DSC_COMMENT`, bold set == `KEYWORD` only, 10 cross-language
+non-reuse pins (unique `LITERAL`-as-`Keyword2` +
+`IMMEVAL`-as-`Macro` slot picks).
+
+Deferred: `SCE_PS_PAREN_ARRAY` / `PAREN_DICT` / `PAREN_PROC` all
+share `StyleSlot::Operator`. A future palette redesign could
+differentiate procedure braces (`{` `}`) from array brackets
+(`[` `]`) and dict markers (`<<` `>>`) for stronger structural
+visual cues, but the current single-slot picks match the
+palette's coarse-by-design convention (`StyleSlot` doc says "reuse
+what fits semantically" rather than "invent a new slot per
+language"). Classes 3 (RIP) and 4 (user-defined) sit empty
+pending downstream demand for printer-driver-specific or
+site-macro operator sets.
 
 ## Notes
 
