@@ -107,9 +107,9 @@ use codepp_core::lang::{
     CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
     HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS,
     LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP,
-    L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS,
-    L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL,
-    L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+    L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
+    L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL,
+    L_TCL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
     OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS,
     PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
     SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
@@ -136,27 +136,30 @@ use codepp_scintilla_sys::{
     SCE_CSS_IMPORTANT, SCE_CSS_OPERATOR, SCE_CSS_PSEUDOCLASS, SCE_CSS_PSEUDOELEMENT,
     SCE_CSS_SINGLESTRING, SCE_CSS_TAG, SCE_CSS_VARIABLE, SCE_C_CHARACTER, SCE_C_COMMENT,
     SCE_C_COMMENTDOC, SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR,
-    SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER,
-    SCE_HBA_STRING, SCE_HBA_WORD, SCE_HB_COMMENTLINE, SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD,
-    SCE_HJA_COMMENT, SCE_HJA_COMMENTDOC, SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING,
-    SCE_HJA_KEYWORD, SCE_HJA_NUMBER, SCE_HJA_REGEX, SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS,
-    SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD, SCE_HJ_COMMENT, SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE,
-    SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD, SCE_HJ_NUMBER, SCE_HJ_REGEX, SCE_HJ_SINGLESTRING,
-    SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL, SCE_HJ_WORD, SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE,
-    SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER,
-    SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP,
-    SCE_H_ASPAT, SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT,
-    SCE_H_DOUBLESTRING, SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION,
-    SCE_H_SGML_1ST_PARAM, SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING,
-    SCE_H_SGML_ENTITY, SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG,
-    SCE_H_TAGEND, SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART,
-    SCE_LISP_COMMENT, SCE_LISP_KEYWORD, SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT,
-    SCE_LISP_NUMBER, SCE_LISP_OPERATOR, SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL,
-    SCE_LUA_CHARACTER, SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL,
-    SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING,
-    SCE_LUA_WORD, SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6,
-    SCE_LUA_WORD7, SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2,
-    SCE_L_MATH, SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
+    SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_DIFF_ADDED, SCE_DIFF_CHANGED,
+    SCE_DIFF_COMMAND, SCE_DIFF_COMMENT, SCE_DIFF_DELETED, SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD,
+    SCE_DIFF_PATCH_DELETE, SCE_DIFF_POSITION, SCE_DIFF_REMOVED_PATCH_ADD,
+    SCE_DIFF_REMOVED_PATCH_DELETE, SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER, SCE_HBA_STRING,
+    SCE_HBA_WORD, SCE_HB_COMMENTLINE, SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD, SCE_HJA_COMMENT,
+    SCE_HJA_COMMENTDOC, SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING, SCE_HJA_KEYWORD, SCE_HJA_NUMBER,
+    SCE_HJA_REGEX, SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD,
+    SCE_HJ_COMMENT, SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD,
+    SCE_HJ_NUMBER, SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL,
+    SCE_HJ_WORD, SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE,
+    SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR,
+    SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP, SCE_H_ASPAT,
+    SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT, SCE_H_DOUBLESTRING,
+    SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM,
+    SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY,
+    SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND,
+    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_LISP_COMMENT,
+    SCE_LISP_KEYWORD, SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER,
+    SCE_LISP_OPERATOR, SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER,
+    SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING,
+    SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD,
+    SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7,
+    SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH,
+    SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
     SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR,
     SCE_MAKE_TARGET, SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION,
     SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER,
@@ -5517,6 +5520,112 @@ const ASM_THEME: LangTheme = LangTheme {
     bold: ASM_BOLD,
 };
 
+// --- LexDiff ---
+//
+// Line-shape classifier — no tokeniser, no wordlists
+// (`emptyWordListDesc[]` at LexDiff.cxx:149-151). Each
+// SCE_DIFF_* index below corresponds to one line archetype
+// the classifier at `:38-101` emits based on the leading
+// characters of the line.
+//
+// **Slot mapping rationale (12 classes → 6 palette slots).**
+// Diff's semantic contract is that added lines read GREEN
+// and removed lines read RED. Code++'s palette already
+// carries both — `FG_COMMENT` (green) and `FG_STRING`
+// (brick red) — so the row reuses each for its COLOUR value
+// while suppressing the italic modifier on the added /
+// removed archetypes (italic is per-index, not per-slot;
+// see `DIFF_ITALIC` below):
+//   - COMMENT (1)              → Comment (green italic).
+//                                Preamble prose ("Only in
+//                                ...").
+//   - COMMAND (2)              → Keyword (blue bold). Reads
+//                                as the top-of-diff command
+//                                anchor (`diff ...` /
+//                                `Index: ...`).
+//   - HEADER (3)               → Preprocessor (purple). Slot
+//                                doc says "out-of-band syntax
+//                                marker"; file boundaries fit.
+//   - POSITION (4)             → Number (magenta). Hunk /
+//                                position markers are
+//                                dominated by numeric line
+//                                ranges (`@@ -12,7 +34,8 @@`);
+//                                Number is the natural match.
+//   - DELETED (5)              → String (brick red). Removed
+//                                content — the palette entry's
+//                                colour value carries the
+//                                semantics, its slot name is
+//                                immaterial here.
+//   - ADDED (6)                → Comment (green, NOT italic).
+//                                Reuses the green colour but
+//                                is excluded from
+//                                `DIFF_ITALIC` so added lines
+//                                stay upright.
+//   - CHANGED (7)              → Lifetime (amber). Context-
+//                                diff `!` lines — a third
+//                                distinct colour that avoids
+//                                both green and red.
+//   - PATCH_ADD (8)            → Comment (green, not italic).
+//                                Combined `++` — both parents
+//                                added; unambiguous net-add.
+//   - PATCH_DELETE (9)         → String (red). Combined `+-`.
+//   - REMOVED_PATCH_ADD (10)   → String (red). Combined `-+`.
+//   - REMOVED_PATCH_DELETE (11)→ String (red). Combined `--`
+//                                — both parents removed;
+//                                unambiguous net-delete.
+//                                (For `+-` and `-+`, git's
+//                                combined-diff markers encode
+//                                per-parent add/remove state
+//                                and don't reduce to a single
+//                                "net" outcome; grouping them
+//                                with delete is an author
+//                                choice for visual simplicity,
+//                                keeping the red/green palette
+//                                to two colours rather than
+//                                introducing a fifth semantic
+//                                slot for merge-conflict
+//                                variants.)
+//
+// DEFAULT (0) intentionally NOT mapped — context lines keep
+// `STYLE_DEFAULT` (black on white) so they don't compete with
+// the added / removed / changed lines the reviewer is
+// scanning for. Same convention every other `LangTheme` uses
+// for its `*_DEFAULT` archetype.
+const DIFF_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_DIFF_COMMENT, StyleSlot::Comment),
+    (SCE_DIFF_COMMAND, StyleSlot::Keyword),
+    (SCE_DIFF_HEADER, StyleSlot::Preprocessor),
+    (SCE_DIFF_POSITION, StyleSlot::Number),
+    (SCE_DIFF_DELETED, StyleSlot::String),
+    (SCE_DIFF_ADDED, StyleSlot::Comment),
+    (SCE_DIFF_CHANGED, StyleSlot::Lifetime),
+    (SCE_DIFF_PATCH_ADD, StyleSlot::Comment),
+    (SCE_DIFF_PATCH_DELETE, StyleSlot::String),
+    (SCE_DIFF_REMOVED_PATCH_ADD, StyleSlot::String),
+    (SCE_DIFF_REMOVED_PATCH_DELETE, StyleSlot::String),
+];
+
+// Italic only on the preamble prose class. Added / removed
+// / changed content stays upright — the reviewer is meant to
+// scan those fast, and italicising blocks of source code
+// would work against that goal. Same convention as CPP's
+// `SCE_C_COMMENTDOC` skip (doc-strings NOT italicised).
+const DIFF_ITALIC: &[usize] = &[SCE_DIFF_COMMENT];
+
+// Bold only the top-of-diff `diff ` / `Index: ` command
+// anchor — same one-entry pattern as `RUST_BOLD` /
+// `ASM_BOLD` (primary class only). HEADER / POSITION /
+// DELETED / ADDED / etc. rely on colour for
+// differentiation, no boldness needed.
+const DIFF_BOLD: &[usize] = &[SCE_DIFF_COMMAND];
+
+const DIFF_THEME: LangTheme = LangTheme {
+    keywords: &[],
+    styles: DIFF_STYLES,
+    italic: DIFF_ITALIC,
+    bold: DIFF_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -5706,6 +5815,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&SCHEME_THEME)
     } else if lang == L_ASM {
         Some(&ASM_THEME)
+    } else if lang == L_DIFF {
+        Some(&DIFF_THEME)
     } else {
         None
     }
@@ -20865,7 +20976,10 @@ mod lang_theme_tests {
         SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
         SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
         SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3,
-        SCE_PL_ARRAY, SCE_PL_BACKTICKS_VAR, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
+        SCE_DIFF_ADDED, SCE_DIFF_CHANGED, SCE_DIFF_COMMAND, SCE_DIFF_COMMENT, SCE_DIFF_DELETED,
+        SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD, SCE_DIFF_PATCH_DELETE, SCE_DIFF_POSITION,
+        SCE_DIFF_REMOVED_PATCH_ADD, SCE_DIFF_REMOVED_PATCH_DELETE, SCE_PL_ARRAY,
+        SCE_PL_BACKTICKS_VAR, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
         SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX_VAR, SCE_PL_REGEX_VAR, SCE_PL_REGSUBST_VAR,
         SCE_PL_SCALAR, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QX_VAR,
         SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD,
@@ -20875,14 +20989,14 @@ mod lang_theme_tests {
         CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
         CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS,
         JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
-        LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI,
-        L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL,
-        L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_XML,
-        MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-        PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
-        RC_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SQL_KEYWORDS,
-        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+        LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML,
+        L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL,
+        L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL, L_TEX, L_TEXT,
+        L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS,
+        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+        SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
+        TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -24084,6 +24198,213 @@ mod lang_theme_tests {
                  slot, not font weight)"
             );
         }
+    }
+
+    /// Diff (`L_DIFF`) uses Lexilla's `LexDiff` lexer — the smallest
+    /// lexer family in Lexilla (12 style classes, no wordlists,
+    /// no tokeniser). `ColouriseDiffLine` at `LexDiff.cxx:38-101`
+    /// inspects the leading character(s) of each line and colours
+    /// the entire line with one style, so every `SCE_DIFF_*` index
+    /// paints a **line archetype**, not a token type.
+    ///
+    /// NOT included in `wired_languages_have_complete_themes`: that
+    /// test asserts `!theme.keywords.is_empty()`, but `LexDiff` registers
+    /// `emptyWordListDesc[]` at `LexDiff.cxx:149-151` — an empty
+    /// keyword slice is the correct wiring, not an incomplete one.
+    /// The `>= 8` style floor is not the issue (Diff maps 11).
+    ///
+    /// Pinned invariants:
+    ///   1. Zero-keyword install — `LexDiff` has no wordlists; the
+    ///      row's `keywords` slice MUST be empty. A future edit
+    ///      that adds an entry would install nothing at the
+    ///      lexer level (`LexDiff` ignores wordlists) and would
+    ///      only serve to confuse.
+    ///   2. 11-mapping style table (12 `SCE_DIFF_*` slots minus
+    ///      `DEFAULT` — context lines keep `STYLE_DEFAULT` so they
+    ///      don't compete with added/removed/changed lines).
+    ///   3. Cross-language non-reuse of the styles slice — Diff's
+    ///      unique `CHANGED`-as-`Lifetime` + `POSITION`-as-`Number` pair
+    ///      is not shared with any other wired language.
+    ///   4. Style-routing pins — every mapped `SCE_DIFF_*` slot
+    ///      routes to the intended `StyleSlot`.
+    ///   5. Semantic colour pins — the visual contract of a diff:
+    ///      **added lines render green, removed lines render red.**
+    ///      `ADDED` and `PATCH_ADD` share `StyleSlot::Comment` (green)
+    ///      with `COMMENT`; `DELETED`, `PATCH_DELETE`, `REMOVED_PATCH_ADD`,
+    ///      `REMOVED_PATCH_DELETE` all share `StyleSlot::String`
+    ///      (brick red). A future palette refactor that separates
+    ///      "prose green" from "diff-added green" would need to
+    ///      rethink these mappings — pinning the current shape
+    ///      makes that intentional.
+    ///   6. DEFAULT (0) unmapped — context lines keep default
+    ///      style so they visually recede.
+    ///   7. Italic set == exactly `[SCE_DIFF_COMMENT]` — added /
+    ///      removed / changed content stays upright to keep the
+    ///      reviewer's scan fast (italicising blocks of source
+    ///      code would work against that).
+    ///   8. Bold set == exactly `[SCE_DIFF_COMMAND]` — one-entry
+    ///      pattern matching `RUST_BOLD` / `ASM_BOLD`, boldening
+    ///      the top-of-diff anchor and nothing else.
+    #[test]
+    fn diff_uses_lexdiff_line_shape_theme() {
+        use codepp_scintilla_sys::SCE_DIFF_DEFAULT;
+        let diff = lang_theme(L_DIFF).expect("Diff wired");
+
+        // Invariant 1: zero-keyword install.
+        assert!(
+            diff.keywords.is_empty(),
+            "DIFF_THEME.keywords must be empty — LexDiff registers \
+             emptyWordListDesc[] at LexDiff.cxx:149-151 and ignores \
+             any wordlist installation"
+        );
+
+        // Invariant 2: 11-mapping style table.
+        assert_eq!(
+            diff.styles.len(),
+            11,
+            "DIFF_STYLES must map 11 indices (12 SCE_DIFF_* slots minus \
+             DEFAULT)"
+        );
+
+        // Invariant 3: cross-language non-reuse of styles slice
+        // (10-sibling defense-in-depth, matches ASM precedent).
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let asm = lang_theme(L_ASM).expect("Assembly wired");
+        let lisp = lang_theme(L_LISP).expect("Lisp wired");
+        let scheme = lang_theme(L_SCHEME).expect("Scheme wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let props = lang_theme(L_INI).expect("INI wired");
+        let bash = lang_theme(L_BASH).expect("Bash wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let tcl = lang_theme(L_TCL).expect("TCL wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (asm, "Assembly"),
+            (lisp, "Lisp"),
+            (scheme, "Scheme"),
+            (mk, "Makefile"),
+            (bat, "Batch"),
+            (props, "INI"),
+            (bash, "Bash"),
+            (php, "PHP"),
+            (tcl, "TCL"),
+            (vb, "VB"),
+        ] {
+            assert_ne!(
+                diff.styles, other.styles,
+                "DIFF must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 4: style-routing pins for every mapped index.
+        for (idx, slot, name) in [
+            (SCE_DIFF_COMMENT, StyleSlot::Comment, "SCE_DIFF_COMMENT"),
+            (SCE_DIFF_COMMAND, StyleSlot::Keyword, "SCE_DIFF_COMMAND"),
+            (SCE_DIFF_HEADER, StyleSlot::Preprocessor, "SCE_DIFF_HEADER"),
+            (SCE_DIFF_POSITION, StyleSlot::Number, "SCE_DIFF_POSITION"),
+            (SCE_DIFF_DELETED, StyleSlot::String, "SCE_DIFF_DELETED"),
+            (SCE_DIFF_ADDED, StyleSlot::Comment, "SCE_DIFF_ADDED"),
+            (SCE_DIFF_CHANGED, StyleSlot::Lifetime, "SCE_DIFF_CHANGED"),
+            (SCE_DIFF_PATCH_ADD, StyleSlot::Comment, "SCE_DIFF_PATCH_ADD"),
+            (
+                SCE_DIFF_PATCH_DELETE,
+                StyleSlot::String,
+                "SCE_DIFF_PATCH_DELETE",
+            ),
+            (
+                SCE_DIFF_REMOVED_PATCH_ADD,
+                StyleSlot::String,
+                "SCE_DIFF_REMOVED_PATCH_ADD",
+            ),
+            (
+                SCE_DIFF_REMOVED_PATCH_DELETE,
+                StyleSlot::String,
+                "SCE_DIFF_REMOVED_PATCH_DELETE",
+            ),
+        ] {
+            assert!(
+                diff.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 5: semantic colour contract. The diff-review
+        // visual contract is added=green, removed=red. Assert both
+        // groups share their intended palette slot so a future
+        // palette refactor breaks the test rather than silently
+        // recolouring one but not the others.
+        let green_slot = StyleSlot::Comment;
+        let red_slot = StyleSlot::String;
+        for (idx, name) in [
+            (SCE_DIFF_ADDED, "SCE_DIFF_ADDED"),
+            (SCE_DIFF_PATCH_ADD, "SCE_DIFF_PATCH_ADD"),
+        ] {
+            assert!(
+                diff.styles.contains(&(idx, green_slot)),
+                "{name} must share the green (Comment) slot — diff \
+                 added-line contract"
+            );
+        }
+        for (idx, name) in [
+            (SCE_DIFF_DELETED, "SCE_DIFF_DELETED"),
+            (SCE_DIFF_PATCH_DELETE, "SCE_DIFF_PATCH_DELETE"),
+            (SCE_DIFF_REMOVED_PATCH_ADD, "SCE_DIFF_REMOVED_PATCH_ADD"),
+            (
+                SCE_DIFF_REMOVED_PATCH_DELETE,
+                "SCE_DIFF_REMOVED_PATCH_DELETE",
+            ),
+        ] {
+            assert!(
+                diff.styles.contains(&(idx, red_slot)),
+                "{name} must share the red (String) slot — diff \
+                 removed-line contract"
+            );
+        }
+
+        // Invariant 6: DEFAULT unmapped.
+        assert!(
+            !diff.styles.iter().any(|(i, _)| *i == SCE_DIFF_DEFAULT),
+            "SCE_DIFF_DEFAULT must remain unmapped — context lines \
+             keep STYLE_DEFAULT so they don't compete visually with \
+             the added/removed/changed lines the reviewer is scanning"
+        );
+
+        // Invariant 7: italic set == [SCE_DIFF_COMMENT].
+        assert_eq!(
+            diff.italic.len(),
+            1,
+            "DIFF_ITALIC must contain exactly SCE_DIFF_COMMENT (preamble \
+             prose only)"
+        );
+        assert!(
+            diff.italic.contains(&SCE_DIFF_COMMENT),
+            "Italic on SCE_DIFF_COMMENT (preamble prose)"
+        );
+        for (idx, name) in [
+            (SCE_DIFF_ADDED, "SCE_DIFF_ADDED"),
+            (SCE_DIFF_DELETED, "SCE_DIFF_DELETED"),
+            (SCE_DIFF_CHANGED, "SCE_DIFF_CHANGED"),
+        ] {
+            assert!(
+                !diff.italic.contains(&idx),
+                "{name} must NOT be italic — reviewer must scan \
+                 added/removed/changed content upright"
+            );
+        }
+
+        // Invariant 8: bold set == [SCE_DIFF_COMMAND].
+        assert_eq!(
+            diff.bold.len(),
+            1,
+            "DIFF_BOLD must contain exactly SCE_DIFF_COMMAND (top-of-diff \
+             anchor; RUST_BOLD / ASM_BOLD single-entry precedent)"
+        );
+        assert!(
+            diff.bold.contains(&SCE_DIFF_COMMAND),
+            "Bold on SCE_DIFF_COMMAND (top-of-diff anchor)"
+        );
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a

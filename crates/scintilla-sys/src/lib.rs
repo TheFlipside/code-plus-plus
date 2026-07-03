@@ -1769,6 +1769,82 @@ pub const SCE_ASM_EXTINSTRUCTION: usize = 14;
 pub const SCE_ASM_COMMENTDIRECTIVE: usize = 15;
 pub const SCE_ASM_STRINGBACKQUOTE: usize = 16;
 
+// LexDiff style indices. 12 contiguous slots (0..=11) — the
+// smallest lexer family in Lexilla. LexDiff has no tokeniser in
+// the usual sense: `ColouriseDiffLine` at `LexDiff.cxx:38-101`
+// inspects the leading character(s) of each line and colours the
+// entire line with one style, so every SCE_DIFF_* index below
+// corresponds to a **line archetype**, not a token type.
+//
+// Style semantics (paint-loop citations reference LexDiff.cxx):
+//   - DEFAULT (0)                — context / unchanged line
+//                                  (` ` prefix). Fall-through at
+//                                  `:98-99`.
+//   - COMMENT (1)                — free-text preamble ("Only in
+//                                  ...", "Binary file ..."). The
+//                                  classifier's catch-all at
+//                                  `:96-97` for lines that don't
+//                                  match a diff-format prefix.
+//   - COMMAND (2)                — `diff ...` (GNU diff invocation)
+//                                  and `Index: ...` (Subversion
+//                                  header). Emitted at `:43-46`.
+//   - HEADER (3)                 — file-boundary markers: unified
+//                                  `--- ` / `+++ ` file lines
+//                                  (`:54, 63`), context-diff
+//                                  `*** ` file line (`:75`), p4
+//                                  `====` (`:65`), difflib `? `
+//                                  (`:77`).
+//   - POSITION (4)               — hunk / position markers:
+//                                  unified `@@ ... @@` (`:79`),
+//                                  normal-diff numeric line
+//                                  ranges (`:81`), context-diff
+//                                  position variants (`:50-52,
+//                                  61, 71-73`).
+//   - DELETED (5)                — unified `-` / normal-diff `<`
+//                                  removed content (`:90-91`);
+//                                  also context-diff `---xxx`
+//                                  fall-through at `:56`.
+//   - ADDED (6)                  — unified `+` / normal-diff `>`
+//                                  added content (`:92-93`).
+//   - CHANGED (7)                — context-diff `!` changed
+//                                  content (`:94-95`).
+//   - PATCH_ADD (8)              — combined-diff `++` (both
+//                                  parents added, `:82-83`).
+//   - PATCH_DELETE (9)           — combined-diff `+-` (`:84-85`).
+//   - REMOVED_PATCH_ADD (10)     — combined-diff `-+` (`:86-87`).
+//   - REMOVED_PATCH_DELETE (11)  — combined-diff `--` (`:88-89`).
+//
+// **No wordlists.** `emptyWordListDesc[]` at `LexDiff.cxx:149-151`
+// and the `LexerModule` registration at `:155` — LexDiff is a
+// pure line-shape classifier, so `LangTheme.keywords` is empty
+// for this row (no `SCI_SETKEYWORDS` calls issue).
+//
+// **Case handling.** The leading-character discrimination at
+// `:43-89` mixes `strncmp` prefix compares (`diff `, `Index: `,
+// `--- `, `+++ `, `====`, `***`, `? `, `++`, `+-`, `-+`, `--`)
+// with direct byte comparisons (`lineBuffer[0] == '@'` at
+// `:78`, digit-range check at `:80`, `'-' | '<' | '+' | '>' |
+// '!'` at `:90-95`). Both are byte-exact — no `tolower` /
+// `strncasecmp` in the chain — so no case-folding applies.
+// Diff output never carries alternative case in these markers,
+// so the ADDED/DELETED/HEADER discrimination is pure
+// leading-character shape.
+//
+// Values match `SciLexer.h:596-607`. LexDiff registers
+// SCLEX_DIFF at `LexDiff.cxx:155`.
+pub const SCE_DIFF_DEFAULT: usize = 0;
+pub const SCE_DIFF_COMMENT: usize = 1;
+pub const SCE_DIFF_COMMAND: usize = 2;
+pub const SCE_DIFF_HEADER: usize = 3;
+pub const SCE_DIFF_POSITION: usize = 4;
+pub const SCE_DIFF_DELETED: usize = 5;
+pub const SCE_DIFF_ADDED: usize = 6;
+pub const SCE_DIFF_CHANGED: usize = 7;
+pub const SCE_DIFF_PATCH_ADD: usize = 8;
+pub const SCE_DIFF_PATCH_DELETE: usize = 9;
+pub const SCE_DIFF_REMOVED_PATCH_ADD: usize = 10;
+pub const SCE_DIFF_REMOVED_PATCH_DELETE: usize = 11;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated

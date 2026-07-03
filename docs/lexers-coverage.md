@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 30 / 🟡 58 / ⚫ 1.
+Total: 89 rows. ✅ 31 / 🟡 57 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1858,7 +1858,7 @@ further shim work needed.
 | CSound | 70 | `csound` | ⚫ | ⚫ | 🟡 |
 | CSS | 20 | `css` | ✅ | ✅ | ✅ |
 | D | 52 | `d` | ⚫ | ⚫ | 🟡 |
-| Diff | 33 | `diff` | ⚫ | ⚫ | 🟡 |
+| Diff | 33 | `diff` | ✅ | ✅ | ✅ |
 | Erlang | 71 | `erlang` | ⚫ | ⚫ | 🟡 |
 | ErrorList | 92 | `errorlist` | ⚫ | ⚫ | 🟡 |
 | ESCRIPT | 72 | `escript` | ⚫ | ⚫ | 🟡 |
@@ -2091,6 +2091,49 @@ are consulted only by the folder at `LexAsm.cxx:490-500` and left
 empty — a future commit can populate them with matched pairs
 (`proc`/`endp`, `%macro`/`%endmacro`, `.if`/`.endif`) to enable
 directive-pair folding without disturbing the classifier chain.
+
+**Diff (2026-07-03):** uses Lexilla's `diff` lexer (`LexDiff.cxx`,
+`SCLEX_DIFF`) — the smallest lexer family in Lexilla. There is no
+tokeniser and no wordlist: `ColouriseDiffLine` at
+`LexDiff.cxx:38-101` inspects the leading character(s) of each line
+via strict-case `strncmp` chains at `:43-89` and paints the entire
+line with a single style, so every `SCE_DIFF_*` index corresponds
+to one **line archetype**. `emptyWordListDesc[]` at `:149-151`
+formalises the no-wordlist contract; `DIFF_THEME.keywords` is
+correspondingly the first row in the framework with an empty
+`&[]` — no `SCI_SETKEYWORDS` calls issue.
+
+Eleven theme routings across six palette slots preserve the
+visual contract that added lines read GREEN and removed lines
+read RED: `SCE_DIFF_ADDED` and `SCE_DIFF_PATCH_ADD` share
+`StyleSlot::Comment` (green) with `SCE_DIFF_COMMENT` — the shared
+colour value is intentional, and the added-line indices are
+deliberately excluded from `DIFF_ITALIC` so only the preamble
+prose ("Only in ...", "Binary file ...") tilts; `SCE_DIFF_DELETED`,
+`SCE_DIFF_PATCH_DELETE`, `SCE_DIFF_REMOVED_PATCH_ADD`, and
+`SCE_DIFF_REMOVED_PATCH_DELETE` all share `StyleSlot::String`
+(brick red — the palette's red slot); `SCE_DIFF_CHANGED` →
+`StyleSlot::Lifetime` (amber — a third distinct colour for
+context-diff `!` lines that are neither strictly added nor
+removed); `SCE_DIFF_COMMAND` → `StyleSlot::Keyword` (blue bold
+— top-of-diff `diff ...` / `Index: ...` anchor);
+`SCE_DIFF_HEADER` → `StyleSlot::Preprocessor` (purple — file
+boundaries read as out-of-band syntax markers); `SCE_DIFF_POSITION`
+→ `StyleSlot::Number` (magenta — hunk headers dominated by
+numeric line ranges like `@@ -12,7 +34,8 @@`). `SCE_DIFF_DEFAULT`
+stays unmapped so unchanged context lines keep `STYLE_DEFAULT`
+and recede visually.
+
+Structural guards pinned in `diff_uses_lexdiff_line_shape_theme`:
+zero-keyword install (LexDiff ignores wordlists), 11-mapping
+style table (12 slots minus DEFAULT), eight cross-language
+non-reuse pins, 11 style-routing pins, semantic colour
+contract (ADDED / PATCH_ADD share green; DELETED / PATCH_DELETE
+/ REMOVED_PATCH_ADD / REMOVED_PATCH_DELETE share red),
+DEFAULT-unmapped guard, single-entry italic set
+(`SCE_DIFF_COMMENT` only — added / removed / changed content
+stays upright for fast review scanning), single-entry bold set
+(`SCE_DIFF_COMMAND` only — `RUST_BOLD` / `ASM_BOLD` precedent).
 
 ## Notes
 
