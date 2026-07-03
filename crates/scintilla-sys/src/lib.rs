@@ -2376,6 +2376,178 @@ pub const SCE_ST_ASSIGN: usize = 14;
 pub const SCE_ST_CHARACTER: usize = 15;
 pub const SCE_ST_SPEC_SEL: usize = 16;
 
+// LexVHDL style indices. 16 contiguous slots (0..=15) covering
+// IEEE-1076 VHDL as classified by `ColouriseVHDLDoc` at
+// `LexVHDL.cxx:60-178`. Seven wordlist classes drive a single
+// identifier-recognition state (`SCE_VHDL_IDENTIFIER`) that
+// promotes to one of seven distinct styles at classifier exit —
+// unlike the C-family lexers, VHDL demands typographic
+// discrimination across keyword / word-operator / attribute /
+// standard-function / standard-package / standard-type / user-word
+// axes because a well-formed VHDL entity references all seven in
+// close succession (`entity` / `and` / `'range` / `to_integer` /
+// `ieee.numeric_std.all` / `std_logic` / user-signal-name).
+//
+// Style semantics (paint-loop citations reference LexVHDL.cxx):
+//   - DEFAULT (0)          — whitespace and unclassified
+//                            fall-through. Entry at `:83-84`,
+//                            `:86-87`, `:107-108`, `:116-117`,
+//                            `:125-126`, `:130`, `:136`.
+//   - COMMENT (1)          — `--...` line comment (VHDL's only
+//                            block-comment-free heritage
+//                            comment style until VHDL-2008
+//                            introduced `/* ... */`). Entry at
+//                            `:150`, terminated on `atLineEnd`
+//                            at `:115-118`.
+//   - COMMENTLINEBANG (2)  — `--!...` line comment. A Doxygen /
+//                            documentation-comment convention
+//                            adopted from Verilog. Entry at
+//                            `:147-148`, terminated on
+//                            `atLineEnd` at `:115-118`.
+//   - NUMBER (3)           — Numeric literal. Entered at
+//                            `:142-143` on a digit or `.digit`
+//                            (VHDL literals include decimal
+//                            integers, real literals with `E`
+//                            exponent, and based-integer form
+//                            `2#1010#` / `16#FF#`). Terminated at
+//                            `:85-88` when the next char is
+//                            neither a wordchar nor `#`.
+//   - STRING (4)           — `"..."` string literal. Entry at
+//                            `:153-154`; `""` is the doubled-quote
+//                            escape per `:119-124`. Also entered
+//                            from the char-literal path at
+//                            `:155-165` when a single-quoted
+//                            three-tick sequence is unambiguously
+//                            a character literal (identifier'('x')
+//                            disambiguation).
+//   - OPERATOR (5)         — Punctuation-class operator. Entered
+//                            at `:169-170` when `isoperator(ch)`
+//                            matches (Scintilla-shared classifier
+//                            covering `+-*/=<>!@%^&|~`, brackets,
+//                            comma, semicolon). Terminated
+//                            immediately at `:83-84`.
+//   - IDENTIFIER (6)       — Intermediate state for a
+//                            word-start-to-word-end scan; NEVER
+//                            the final emitted style. At scan
+//                            exit `:90-114`, `GetCurrentLowered`
+//                            case-folds the identifier and the
+//                            wordlist chain rewrites the style to
+//                            one of KEYWORD / STDOPERATOR /
+//                            ATTRIBUTE / STDFUNCTION / STDPACKAGE
+//                            / STDTYPE / USERWORD (via
+//                            `sc.ChangeState` at `:94-107`) —
+//                            or, if no wordlist matches, IDENTIFIER
+//                            remains the emitted style at `:108`.
+//                            Also the state for extended
+//                            identifiers (`\name\`) entered at
+//                            `:166-168`, terminated on backslash
+//                            or line end at `:109-113`.
+//   - STRINGEOL (7)        — Unterminated `"..."` at end of
+//                            line. Promoted from STRING at
+//                            `:127-131`.
+//   - KEYWORD (8)          — Reserved word from
+//                            `keywordlists[0]`. Promoted from
+//                            IDENTIFIER at `:93-94`.
+//   - STDOPERATOR (9)      — Word-form operator (`and`, `or`,
+//                            `not`, `xor`, `nand`, `nor`, `xnor`,
+//                            `abs`, `mod`, `rem`, `sll`, `srl`,
+//                            `sla`, `sra`, `rol`, `ror`) from
+//                            `keywordlists[1]`. Promoted from
+//                            IDENTIFIER at `:95-96`. Distinct
+//                            from OPERATOR (5), which paints the
+//                            punctuation-class operators.
+//   - ATTRIBUTE (10)       — Predefined attribute (`'range`,
+//                            `'length`, `'high`, `'low`, `'left`,
+//                            `'right`, `'event`, `'stable`, etc.
+//                            — the tick-prefix form is the VHDL
+//                            attribute-access syntax) from
+//                            `keywordlists[2]`. Promoted from
+//                            IDENTIFIER at `:97-98`. Note the
+//                            lexer stores attributes without
+//                            the leading tick — in the common
+//                            multi-char attribute-access case
+//                            (`T'range`, `T'event`), the tick's
+//                            `else if (sc.ch == '\'')` branch at
+//                            `:155-165` calls no `SetState`, so
+//                            the tick stays emitted as
+//                            `SCE_VHDL_DEFAULT`. The `else if`
+//                            chain never falls through to
+//                            `isoperator` at `:169-170` (that
+//                            branch is a sibling, and
+//                            `isoperator` doesn't include `'`
+//                            in `CharacterSet.h:165-176`
+//                            anyway). `SCE_VHDL_DEFAULT` is
+//                            deliberately left unmapped in
+//                            `VHDL_STYLES`, so the tick paints
+//                            with the default text colour.
+//   - STDFUNCTION (11)     — Standard-library function
+//                            (`to_integer`, `rising_edge`,
+//                            `resize`, etc.) from
+//                            `keywordlists[3]`. Promoted from
+//                            IDENTIFIER at `:99-100`.
+//   - STDPACKAGE (12)      — Standard-library package
+//                            (`ieee`, `std_logic_1164`,
+//                            `numeric_std`, etc.) from
+//                            `keywordlists[4]`. Promoted from
+//                            IDENTIFIER at `:101-102`.
+//   - STDTYPE (13)         — Standard-library type
+//                            (`std_logic`, `std_logic_vector`,
+//                            `boolean`, `integer`, etc.) from
+//                            `keywordlists[5]`. Promoted from
+//                            IDENTIFIER at `:103-104`.
+//   - USERWORD (14)        — Project-specific user words from
+//                            `keywordlists[6]`. Promoted from
+//                            IDENTIFIER at `:105-106`. Code++
+//                            ships this class empty — it's the
+//                            per-project extension slot (a user
+//                            can populate it via a future
+//                            per-project override once the
+//                            settings surface exists).
+//   - BLOCK_COMMENT (15)   — `/* ... */` block comment
+//                            (VHDL-2008 addition). Entry at
+//                            `:151-152`, terminated on `*/` at
+//                            `:132-138`.
+//
+// **Wordlist classes.** `VHDLWordLists[]` at
+// `LexVHDL.cxx:552-561` declares seven classes in this exact
+// order: 0=Keywords, 1=Operators, 2=Attributes,
+// 3=Standard Functions, 4=Standard Packages, 5=Standard Types,
+// 6=User Words. The SCE_VHDL_* style IDs are
+// version-agnostic — the same 16 styles cover VHDL-87 through
+// VHDL-2008; what differs across revisions is only the
+// *contents* of the wordlists (VHDL-2008 adds reserved words
+// like `context`, `assume`, `sequence`, etc. that Code++
+// currently omits — see `VHDL_KEYWORDS` rationale in
+// `codepp_core::lang`). The STD* classes track IEEE-1076
+// package annexes.
+//
+// **Case handling.** VHDL is a **case-insensitive** language.
+// The classifier's `GetCurrentLowered` at `:92` case-folds the
+// scanned identifier to lowercase before every `InList` probe.
+// Wordlist entries must be lowercase — an uppercase entry would
+// never match. This is the same convention as LexPS but the
+// **opposite** of LexRuby / LexSmalltalk (case-sensitive) and
+// LexCPP (case-sensitive with hardcoded folding suppression).
+//
+// Values match `SciLexer.h:1119-1134`. LexVHDL registers
+// SCLEX_VHDL (= 64) at `LexVHDL.cxx:564`.
+pub const SCE_VHDL_DEFAULT: usize = 0;
+pub const SCE_VHDL_COMMENT: usize = 1;
+pub const SCE_VHDL_COMMENTLINEBANG: usize = 2;
+pub const SCE_VHDL_NUMBER: usize = 3;
+pub const SCE_VHDL_STRING: usize = 4;
+pub const SCE_VHDL_OPERATOR: usize = 5;
+pub const SCE_VHDL_IDENTIFIER: usize = 6;
+pub const SCE_VHDL_STRINGEOL: usize = 7;
+pub const SCE_VHDL_KEYWORD: usize = 8;
+pub const SCE_VHDL_STDOPERATOR: usize = 9;
+pub const SCE_VHDL_ATTRIBUTE: usize = 10;
+pub const SCE_VHDL_STDFUNCTION: usize = 11;
+pub const SCE_VHDL_STDPACKAGE: usize = 12;
+pub const SCE_VHDL_STDTYPE: usize = 13;
+pub const SCE_VHDL_USERWORD: usize = 14;
+pub const SCE_VHDL_BLOCK_COMMENT: usize = 15;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated

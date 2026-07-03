@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 34 / 🟡 54 / ⚫ 1.
+Total: 89 rows. ✅ 35 / 🟡 53 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1922,7 +1922,7 @@ further shim work needed.
 | txt2tags | 83 | `txt2tags` | ⚫ | ⚫ | 🟡 |
 | TypeScript | 85 | `cpp` | ⚫ | ⚫ | 🟡 |
 | Verilog | 43 | `verilog` | ⚫ | ⚫ | 🟡 |
-| VHDL | 38 | `vhdl` | ⚫ | ⚫ | 🟡 |
+| VHDL | 38 | `vhdl` | ✅ | ✅ | ✅ |
 | Visual Basic | 18 | `vb` | ✅ | ✅ | ✅ |
 | Visual Prolog | 84 | `visualprolog` | ⚫ | ⚫ | 🟡 |
 | XML | 9 | `xml` | ✅ | ✅ | ✅ |
@@ -2447,6 +2447,107 @@ italic set (`COMMENT` only), 6-entry bold set with
 non-bold sanity checks on `GLOBAL` / `KWSEND` / `BINARY`
 / `SPECIAL` / `ASSIGN` / `SYMBOL`, 10 cross-language
 non-reuse pins.
+
+**VHDL (2026-07-03):** uses Lexilla's `vhdl` lexer
+(`LexVHDL.cxx`, ~600 lines including folder) — a case-insensitive
+IEEE-1076 hardware-description lexer with the widest
+wordlist-class fan-out we've wired (7 classes vs 1-3 for most
+lexers). The classifier's `SCE_VHDL_IDENTIFIER` state is an
+intermediate stop: on scan exit at `LexVHDL.cxx:90-107`,
+`GetCurrentLowered` case-folds the identifier and probes each
+of `keywordlists[0..6]` sequentially, promoting to KEYWORD /
+STDOPERATOR / ATTRIBUTE / STDFUNCTION / STDPACKAGE / STDTYPE /
+USERWORD respectively. The identifier scan state never survives
+to paint time when a wordlist matches — so `VHDL_STYLES`
+deliberately leaves both DEFAULT (0) and IDENTIFIER (6) unmapped.
+16 SCE_VHDL_* slots minus those two = 14 style mappings.
+
+The 7 wordlist classes populated per `VHDLWordLists[]` at
+`:552-561` (case-insensitive contract per §13.4 — every wordlist
+entry MUST be lowercase because `GetCurrentLowered` case-folds
+before `InList`):
+
+- **`VHDL_KEYWORDS` (class 0, 82 tokens):** IEEE-1076-1993
+  reserved words plus `protected` (VHDL-2002+). VHDL-2008
+  additions (`assume`, `context`, `cover`, `default`,
+  `fairness`, `force`, `parameter`, `property`, `release`,
+  `restrict`, `sequence`, `strong`, `vunit`) intentionally
+  excluded pending broader VHDL-2008 coverage — the fold
+  routine doesn't fold on them either, so adding here without
+  matching folder work would create inconsistency.
+- **`VHDL_OPERATORS` (class 1, 16 tokens):** the exact
+  IEEE-1076 §7.2 word-form operator set (`abs`, `and`, `mod`,
+  `nand`, `nor`, `not`, `or`, `rem`, `rol`, `ror`, `sla`,
+  `sll`, `sra`, `srl`, `xnor`, `xor`). Distinct SCE style
+  (`SCE_VHDL_STDOPERATOR`) so the theme can bold word
+  operators AS keywords — which is how a VHDL author reads
+  them.
+- **`VHDL_ATTRIBUTES` (class 2, 31 tokens):** IEEE-1076
+  §14.1 predefined attributes (`left`, `right`, `low`,
+  `high`, `range`, `length`, `event`, `stable`, etc.). Note
+  `range` overlaps `VHDL_KEYWORDS` — the classifier probes
+  class 0 FIRST at `:93` so the Attributes-list entry for
+  `range` is dead, but kept for parity with the upstream
+  banner at `:578-581`.
+- **`VHDL_STDFUNCTIONS` (class 3, 28 tokens):** functions
+  from `std.textio`, `ieee.std_logic_1164`, and
+  `ieee.numeric_std` / `numeric_bit`. Note the upstream
+  banner writes `to_UX01` (mixed case) but the wordlist
+  MUST use `to_ux01` since the lexer case-folds before
+  match.
+- **`VHDL_STDPACKAGES` (class 4, 17 tokens):** the fixed
+  libraries (`std`, `ieee`, `work`) plus package names
+  under `std` (`standard`, `textio`) and `ieee`
+  (`std_logic_1164`, `numeric_std`, `math_real`, VITAL, etc.).
+- **`VHDL_STDTYPES` (class 5, 28 tokens):** predefined types
+  from `std.standard` (`boolean`, `bit`, `integer`, `real`,
+  etc.), `std.textio` (`line`, `text`, `side`, `width`),
+  `ieee.std_logic_1164` (`std_ulogic`, `std_ulogic_vector`,
+  `std_logic`, `std_logic_vector`, plus the four
+  case-folded logic-value subtypes `x01`, `x01z`, `ux01`,
+  `ux01z` — again, lowercase because the lexer case-folds),
+  and `ieee.numeric_std` (`unsigned`, `signed`).
+- **`VHDL_USERWORDS` (class 6, empty):** deliberately empty
+  — the per-project extension slot the lexer author designed
+  for user-populated identifiers via a project-level
+  override. Reserved as the default-empty value the future
+  per-project override layers on top of. Empty install is
+  required (not skippable) because `LexerBase.h:19` + `.cxx:32-34`
+  pre-allocate `KEYWORDSET_MAX+1 = 9` `WordList*` slots and the
+  classifier addresses slot 6 unconditionally at `:105`.
+
+The theme choices: KEYWORD + STDOPERATOR paint the same
+bold-keyword weight (both read as language reserved words);
+ATTRIBUTE gets the Preprocessor purple accent (matches Ruby
+`:symbol` / Smalltalk `#symbol` — the "designator-that-lives-
+after-a-sigil" family); STDPACKAGE gets the Macro accent
+(package names read as top-level namespaces akin to C
+`#define` targets); STDFUNCTION and USERWORD share the
+Keyword2 teal (library helper + user-flagged identifier);
+STDTYPE reuses the Number-tinted accent for type-family
+tokens. OPERATOR paints as Operator, comments as Comment
+(all three of COMMENT / COMMENTLINEBANG / BLOCK_COMMENT are
+italicised), strings as String (STRING and STRINGEOL both
+mapped so the runaway-string error indicator stays visible).
+
+Only KEYWORD and STDOPERATOR are bold — not ATTRIBUTE /
+STDFUNCTION / STDPACKAGE / STDTYPE / USERWORD, which get
+their identity from colour rather than weight, matching the
+"one bold visual for language keywords" rule used across the
+framework.
+
+Structural test coverage: 12 invariants including
+7-class-in-correct-order pin (class-index dispatch precedence
+at `:93-107`), 5-class-non-empty guard + explicit
+User-Words-empty guard, per-wordlist all-lowercase pin
+(guards against re-copying the upstream banner's mixed-case
+`to_UX01` / `X01` / `X01Z` etc.), 14 style-routing pins,
+DEFAULT + IDENTIFIER unmapped guards, 3-entry italic set
+(comment family), 2-entry bold set (KEYWORD + STDOPERATOR),
+6 cross-language non-reuse pins, 5 anchor reserved-word pins
+(`entity`, `architecture`, `signal`, `begin`, `end`), and a
+`X01`-family case-folding guard that asserts NONE of the
+upstream banner's mixed-case forms slipped in.
 
 ## Notes
 

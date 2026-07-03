@@ -109,12 +109,14 @@ use codepp_core::lang::{
     LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP,
     L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
     L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST,
-    L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS,
-    NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-    PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
-    RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-    SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+    L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS,
+    NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
+    PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+    PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
+    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+    VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -205,31 +207,35 @@ use codepp_scintilla_sys::{
     SCE_TCL_MODIFIER, SCE_TCL_NUMBER, SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE,
     SCE_TCL_WORD, SCE_TCL_WORD2, SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6,
     SCE_TCL_WORD7, SCE_TCL_WORD8, SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT,
-    SCE_TEX_GROUP, SCE_TEX_SPECIAL, SCE_TEX_SYMBOL, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE,
-    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
-    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
-    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
-    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
-    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
-    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
-    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
-    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
-    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
-    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
-    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE,
-    SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED,
-    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
-    SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE,
-    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
-    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
-    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS,
-    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY,
-    SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS,
-    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION,
-    SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCE_TEX_GROUP, SCE_TEX_SPECIAL, SCE_TEX_SYMBOL, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT,
+    SCE_VHDL_COMMENT, SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER,
+    SCE_VHDL_OPERATOR, SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE,
+    SCE_VHDL_STDTYPE, SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCI_BEGINUNDOACTION,
+    SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER,
+    SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
+    SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES,
+    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
+    SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
+    SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
+    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
+    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
+    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
+    SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
+    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
+    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO,
+    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
+    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
+    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
+    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED,
+    SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER,
+    SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
+    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
+    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
+    SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
+    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
+    SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT,
+    STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
@@ -6174,6 +6180,121 @@ const ST_THEME: LangTheme = LangTheme {
     bold: ST_BOLD,
 };
 
+// VHDL theme — 14 mappings across 16 SCE_VHDL_* slots.
+// SCE_VHDL_DEFAULT (0) is left unmapped (paints with the
+// default palette, same as every other lexer's `DEFAULT`).
+// SCE_VHDL_IDENTIFIER (6) is also unmapped — it's an
+// intermediate scan-in-progress state per the citation banner
+// in `scintilla-sys/src/lib.rs` and never appears at paint
+// time in a well-formed source (any identifier that survives
+// the classifier's IDENTIFIER-exit branch at
+// `LexVHDL.cxx:90-107` without matching one of the 7 wordlist
+// classes still paints as IDENTIFIER, so mapping it to
+// `StyleSlot::Comment` or similar would over-paint the "user
+// wrote something the lexer doesn't recognise" case — an
+// unstyled default is the right visual for that). SCE_VHDL_USERWORD
+// (14) IS mapped to `Keyword2` even though `VHDL_USERWORDS`
+// ships empty — this reserves the visual slot for when a
+// per-project override populates class 6.
+//
+// **Cross-family palette choices:**
+//   - KEYWORD (reserved words) → `Keyword` — matches
+//     RUST/RB/ST convention.
+//   - STDOPERATOR (word-form operators) → `Keyword` — same
+//     bold-blue as KEYWORD because `and`/`or`/`not`/`xor` read
+//     as reserved-word-class tokens to a VHDL author, not as
+//     library helpers.
+//   - ATTRIBUTE → `Preprocessor` — a purple-family accent that
+//     matches Ruby's `:symbol` slot and Smalltalk's SYMBOL. VHDL
+//     attributes are the closest analogue in this language —
+//     bare designators accessed via a tick.
+//   - STDFUNCTION → `Keyword2` — teal / steel-blue to
+//     distinguish library helpers from language keywords.
+//   - STDPACKAGE → `Macro` — a distinct accent for library
+//     package names (`ieee`, `std_logic_1164`), matching how
+//     `#define` targets get called out in C.
+//   - STDTYPE → `Number` — a numeric-tinted accent for the
+//     type name family (`std_logic`, `integer`). Matches the
+//     visual weight readers expect for type-family tokens
+//     that are neither operators nor keywords.
+//   - USERWORD → `Keyword2` — same visual weight as
+//     STDFUNCTION, reserving the "identifier the user's
+//     project cares about" slot.
+//   - OPERATOR (punctuation) → `Operator` — standard.
+//   - STRING / STRINGEOL → `String` — both. STRINGEOL is the
+//     unterminated-string error indicator; it still needs a
+//     visible colour so the reader sees the runaway string.
+//   - NUMBER → `Number` — standard.
+//   - COMMENT / COMMENTLINEBANG / BLOCK_COMMENT → `Comment`.
+const VHDL_STYLES: &[(usize, StyleSlot)] = &[
+    // Comment family (line + doc-line + block)
+    (SCE_VHDL_COMMENT, StyleSlot::Comment),
+    (SCE_VHDL_COMMENTLINEBANG, StyleSlot::Comment),
+    (SCE_VHDL_BLOCK_COMMENT, StyleSlot::Comment),
+    // Numeric literal
+    (SCE_VHDL_NUMBER, StyleSlot::Number),
+    // String family (regular + EOL-error)
+    (SCE_VHDL_STRING, StyleSlot::String),
+    (SCE_VHDL_STRINGEOL, StyleSlot::String),
+    // Punctuation operator
+    (SCE_VHDL_OPERATOR, StyleSlot::Operator),
+    // Reserved words + word-form operators (both bold-keyword)
+    (SCE_VHDL_KEYWORD, StyleSlot::Keyword),
+    (SCE_VHDL_STDOPERATOR, StyleSlot::Keyword),
+    // Predefined attributes (purple accent — matches Ruby :sym / Smalltalk #sym)
+    (SCE_VHDL_ATTRIBUTE, StyleSlot::Preprocessor),
+    // Standard-library callable helpers
+    (SCE_VHDL_STDFUNCTION, StyleSlot::Keyword2),
+    // Standard-library package names
+    (SCE_VHDL_STDPACKAGE, StyleSlot::Macro),
+    // Standard-library types
+    (SCE_VHDL_STDTYPE, StyleSlot::Number),
+    // User words (empty class today; visual slot reserved)
+    (SCE_VHDL_USERWORD, StyleSlot::Keyword2),
+];
+
+// Italic only on the comment family — the universal
+// prose-italic convention. All three comment-flavour styles
+// (line `--`, doc-line `--!`, block `/* */`) render italic.
+const VHDL_ITALIC: &[usize] = &[
+    SCE_VHDL_COMMENT,
+    SCE_VHDL_COMMENTLINEBANG,
+    SCE_VHDL_BLOCK_COMMENT,
+];
+
+// Bold on the two "reads-as-a-language-keyword" classes: the
+// reserved-word class (`SCE_VHDL_KEYWORD`) and the word-form
+// operators (`SCE_VHDL_STDOPERATOR` — `and` / `or` / `not` /
+// `xor` etc., which the theme paints the SAME visual weight
+// as reserved words because they parse as reserved words in
+// IEEE-1076 §7.2). Not bold on ATTRIBUTE, STDFUNCTION,
+// STDPACKAGE, STDTYPE, USERWORD — those get their identity
+// from colour (via distinct StyleSlots) rather than weight,
+// matching the "one bold visual for language keywords" rule
+// used across the framework.
+const VHDL_BOLD: &[usize] = &[SCE_VHDL_KEYWORD, SCE_VHDL_STDOPERATOR];
+
+// Seven-class install matches `VHDLWordLists[]` at
+// `LexVHDL.cxx:552-561`. Order matters for the classifier's
+// dispatch precedence at `LexVHDL.cxx:93-107` (Keywords wins
+// over Operators wins over Attributes ...) — this order
+// mirrors that. Class 6 (User Words) ships empty by design;
+// see `VHDL_USERWORDS` rationale.
+const VHDL_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, VHDL_KEYWORDS),
+        (1, VHDL_OPERATORS),
+        (2, VHDL_ATTRIBUTES),
+        (3, VHDL_STDFUNCTIONS),
+        (4, VHDL_STDPACKAGES),
+        (5, VHDL_STDTYPES),
+        (6, VHDL_USERWORDS),
+    ],
+    styles: VHDL_STYLES,
+    italic: VHDL_ITALIC,
+    bold: VHDL_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -6371,6 +6492,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&RB_THEME)
     } else if lang == L_SMALLTALK {
         Some(&ST_THEME)
+    } else if lang == L_VHDL {
+        Some(&VHDL_THEME)
     } else {
         None
     }
@@ -21549,8 +21672,16 @@ mod lang_theme_tests {
         SCE_RB_SYMBOL, SCE_RB_WORD, SCE_RB_WORD_DEMOTED, SCE_ST_ASSIGN, SCE_ST_BINARY, SCE_ST_BOOL,
         SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL, SCE_ST_KWSEND, SCE_ST_NIL, SCE_ST_NUMBER,
         SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL, SCE_ST_SPEC_SEL, SCE_ST_STRING, SCE_ST_SUPER,
-        SCE_ST_SYMBOL,
+        SCE_ST_SYMBOL, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT,
+        SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER, SCE_VHDL_OPERATOR,
+        SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE, SCE_VHDL_STDTYPE,
+        SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD,
     };
+    // SCE_VHDL_IDENTIFIER is a scan-intermediate state that isn't
+    // referenced in the main-scope theme (VHDL_STYLES deliberately
+    // leaves it unmapped — see banner). Test asserts the
+    // unmapped-ness, so pull the constant from codepp_scintilla_sys
+    // directly rather than re-exporting through super.
     use codepp_core::lang::{
         BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1,
         CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
@@ -21559,14 +21690,16 @@ mod lang_theme_tests {
         LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML,
         L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL,
         L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
-        L_TCL, L_TEX, L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+        L_TCL, L_TEX, L_TEXT, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS,
+        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
+        PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
         PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
         SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
         TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-        VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+        VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
+        VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
     };
+    use codepp_scintilla_sys::SCE_VHDL_IDENTIFIER;
 
     /// Every wired language must:
     ///   - Return `Some(&theme)`.
@@ -25913,6 +26046,259 @@ mod lang_theme_tests {
             (bash, "Bash"),
         ] {
             assert_ne!(st.styles, other.styles, "ST must NOT reuse {name}_STYLES");
+        }
+    }
+
+    /// VHDL (`L_VHDL`) uses Lexilla's `LexVHDL` — a mid-size C++
+    /// lexer (~600 lines including folder) for IEEE-1076 hardware
+    /// description. Seven wordlist classes drive seven distinct
+    /// styles (KEYWORD / STDOPERATOR / ATTRIBUTE / STDFUNCTION /
+    /// STDPACKAGE / STDTYPE / USERWORD), each promoted from a
+    /// single intermediate `SCE_VHDL_IDENTIFIER` scan state at
+    /// `LexVHDL.cxx:90-107`. The 7-class wordlist install is the
+    /// widest we've done — most lexers use 1-2 classes.
+    /// VHDL is case-insensitive per §13.4; `GetCurrentLowered`
+    /// case-folds before wordlist probes so entries MUST be
+    /// lowercase.
+    ///
+    /// Coverage invariants asserted here:
+    ///   1. `lang_theme(L_VHDL)` returns `Some(&VHDL_THEME)`.
+    ///   2. Style count matches `VHDL_STYLES` (14 mappings across
+    ///      16 `SCE_VHDL_*` slots — `DEFAULT` and `IDENTIFIER`
+    ///      deliberately unmapped).
+    ///   3. All seven wordlist classes installed in the correct
+    ///      class-index order (matches `VHDLWordLists[]` at
+    ///      `LexVHDL.cxx:552-561`).
+    ///   4. Every keyword list is non-empty EXCEPT class 6
+    ///      (`VHDL_USERWORDS`), which ships empty by design.
+    ///   5. Every wordlist entry is lowercase (case-folded language
+    ///      contract).
+    ///   6. Style-routing pins: `KEYWORD` / `STDOPERATOR` →
+    ///      Keyword, `ATTRIBUTE` → Preprocessor, `STDFUNCTION` /
+    ///      `USERWORD` → Keyword2, `STDPACKAGE` → Macro,
+    ///      `STDTYPE` → Number, `OPERATOR` → Operator,
+    ///      `STRING` / `STRINGEOL` → String, `NUMBER` → Number,
+    ///      `COMMENT` / `COMMENTLINEBANG` / `BLOCK_COMMENT` →
+    ///      Comment.
+    ///   7. `DEFAULT` + `IDENTIFIER` remain unmapped.
+    ///   8. Italic set == 3 comment-family entries (`COMMENT` +
+    ///      `COMMENTLINEBANG` + `BLOCK_COMMENT`).
+    ///   9. Bold set == `KEYWORD` + `STDOPERATOR` (both
+    ///      bold-keyword per the "reads-as-a-language-keyword"
+    ///      convention).
+    ///   10. Cross-language non-reuse of styles slice.
+    ///   11. `VHDL_KEYWORDS` includes anchor reserved words
+    ///       (`entity`, `architecture`, `signal`, `begin`, `end`).
+    ///   12. `VHDL_STDTYPES` includes the IEEE-1164 uppercase logic
+    ///       values case-folded (`x01`, `x01z`, `ux01`, `ux01z`) —
+    ///       NOT the upstream banner's original mixed-case form.
+    #[test]
+    fn vhdl_uses_lexvhdl_theme() {
+        // Invariant 1.
+        let vhdl = lang_theme(L_VHDL).expect("VHDL wired");
+
+        // Invariant 2: 14 style mappings, 16 SCE_VHDL_* slots.
+        assert_eq!(
+            vhdl.styles.len(),
+            14,
+            "VHDL_STYLES must map 14 indices (16 SCE_VHDL_* slots \
+             minus DEFAULT and IDENTIFIER; STRING and STRINGEOL are \
+             both mapped so there's no combined slot to subtract)"
+        );
+
+        // Invariant 3: 7 wordlist classes in correct order.
+        assert_eq!(
+            vhdl.keywords.len(),
+            7,
+            "VHDL_THEME must install exactly 7 wordlist classes \
+             (matches VHDLWordLists[] at LexVHDL.cxx:552-561)"
+        );
+        assert_eq!(vhdl.keywords[0].0, 0, "class 0 = Keywords");
+        assert_eq!(vhdl.keywords[1].0, 1, "class 1 = Operators");
+        assert_eq!(vhdl.keywords[2].0, 2, "class 2 = Attributes");
+        assert_eq!(vhdl.keywords[3].0, 3, "class 3 = Standard Functions");
+        assert_eq!(vhdl.keywords[4].0, 4, "class 4 = Standard Packages");
+        assert_eq!(vhdl.keywords[5].0, 5, "class 5 = Standard Types");
+        assert_eq!(vhdl.keywords[6].0, 6, "class 6 = User Words");
+        // Content pins.
+        assert_eq!(vhdl.keywords[0].1, VHDL_KEYWORDS);
+        assert_eq!(vhdl.keywords[1].1, VHDL_OPERATORS);
+        assert_eq!(vhdl.keywords[2].1, VHDL_ATTRIBUTES);
+        assert_eq!(vhdl.keywords[3].1, VHDL_STDFUNCTIONS);
+        assert_eq!(vhdl.keywords[4].1, VHDL_STDPACKAGES);
+        assert_eq!(vhdl.keywords[5].1, VHDL_STDTYPES);
+        assert_eq!(vhdl.keywords[6].1, VHDL_USERWORDS);
+
+        // Invariant 4: all classes non-empty except User Words.
+        for (idx, list, name) in [
+            (0, VHDL_KEYWORDS, "VHDL_KEYWORDS"),
+            (1, VHDL_OPERATORS, "VHDL_OPERATORS"),
+            (2, VHDL_ATTRIBUTES, "VHDL_ATTRIBUTES"),
+            (3, VHDL_STDFUNCTIONS, "VHDL_STDFUNCTIONS"),
+            (4, VHDL_STDPACKAGES, "VHDL_STDPACKAGES"),
+            (5, VHDL_STDTYPES, "VHDL_STDTYPES"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "{name} (class {idx}) must be non-empty"
+            );
+        }
+        assert!(
+            VHDL_USERWORDS.split_whitespace().count() == 0,
+            "VHDL_USERWORDS (class 6) must ship empty — see \
+             VHDL_USERWORDS banner in codepp_core::lang"
+        );
+
+        // Invariant 5: every wordlist entry lowercase.
+        for (idx, list, name) in [
+            (0, VHDL_KEYWORDS, "VHDL_KEYWORDS"),
+            (1, VHDL_OPERATORS, "VHDL_OPERATORS"),
+            (2, VHDL_ATTRIBUTES, "VHDL_ATTRIBUTES"),
+            (3, VHDL_STDFUNCTIONS, "VHDL_STDFUNCTIONS"),
+            (4, VHDL_STDPACKAGES, "VHDL_STDPACKAGES"),
+            (5, VHDL_STDTYPES, "VHDL_STDTYPES"),
+        ] {
+            for token in list.split_whitespace() {
+                assert!(
+                    token.chars().all(|c| !c.is_ascii_uppercase()),
+                    "{name} (class {idx}) token `{token}` contains \
+                     uppercase — LexVHDL:92 calls GetCurrentLowered \
+                     before InList, so uppercase entries would never \
+                     match. Language is case-insensitive per §13.4"
+                );
+            }
+        }
+
+        // Invariant 6: style-routing pins.
+        for (idx, slot, name) in [
+            (SCE_VHDL_COMMENT, StyleSlot::Comment, "SCE_VHDL_COMMENT"),
+            (
+                SCE_VHDL_COMMENTLINEBANG,
+                StyleSlot::Comment,
+                "SCE_VHDL_COMMENTLINEBANG",
+            ),
+            (
+                SCE_VHDL_BLOCK_COMMENT,
+                StyleSlot::Comment,
+                "SCE_VHDL_BLOCK_COMMENT",
+            ),
+            (SCE_VHDL_NUMBER, StyleSlot::Number, "SCE_VHDL_NUMBER"),
+            (SCE_VHDL_STRING, StyleSlot::String, "SCE_VHDL_STRING"),
+            (SCE_VHDL_STRINGEOL, StyleSlot::String, "SCE_VHDL_STRINGEOL"),
+            (SCE_VHDL_OPERATOR, StyleSlot::Operator, "SCE_VHDL_OPERATOR"),
+            (SCE_VHDL_KEYWORD, StyleSlot::Keyword, "SCE_VHDL_KEYWORD"),
+            (
+                SCE_VHDL_STDOPERATOR,
+                StyleSlot::Keyword,
+                "SCE_VHDL_STDOPERATOR",
+            ),
+            (
+                SCE_VHDL_ATTRIBUTE,
+                StyleSlot::Preprocessor,
+                "SCE_VHDL_ATTRIBUTE",
+            ),
+            (
+                SCE_VHDL_STDFUNCTION,
+                StyleSlot::Keyword2,
+                "SCE_VHDL_STDFUNCTION",
+            ),
+            (SCE_VHDL_STDPACKAGE, StyleSlot::Macro, "SCE_VHDL_STDPACKAGE"),
+            (SCE_VHDL_STDTYPE, StyleSlot::Number, "SCE_VHDL_STDTYPE"),
+            (SCE_VHDL_USERWORD, StyleSlot::Keyword2, "SCE_VHDL_USERWORD"),
+        ] {
+            assert!(
+                vhdl.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 7: DEFAULT + IDENTIFIER remain unmapped.
+        assert!(
+            !vhdl.styles.iter().any(|(i, _)| *i == 0),
+            "SCE_VHDL_DEFAULT (0) must remain unmapped"
+        );
+        assert!(
+            !vhdl.styles.iter().any(|(i, _)| *i == SCE_VHDL_IDENTIFIER),
+            "SCE_VHDL_IDENTIFIER must remain unmapped — it's an \
+             intermediate scan state that never survives to paint \
+             time when a wordlist matches"
+        );
+
+        // Invariant 8: italic set == 3 comment-family entries.
+        assert_eq!(
+            vhdl.italic.len(),
+            3,
+            "VHDL_ITALIC must contain exactly COMMENT + \
+             COMMENTLINEBANG + BLOCK_COMMENT"
+        );
+        for it in [
+            SCE_VHDL_COMMENT,
+            SCE_VHDL_COMMENTLINEBANG,
+            SCE_VHDL_BLOCK_COMMENT,
+        ] {
+            assert!(
+                vhdl.italic.contains(&it),
+                "VHDL_ITALIC must include comment-family slot {it}"
+            );
+        }
+
+        // Invariant 9: bold set == KEYWORD + STDOPERATOR.
+        assert_eq!(
+            vhdl.bold.len(),
+            2,
+            "VHDL_BOLD must contain exactly KEYWORD + STDOPERATOR"
+        );
+        assert!(vhdl.bold.contains(&SCE_VHDL_KEYWORD));
+        assert!(vhdl.bold.contains(&SCE_VHDL_STDOPERATOR));
+
+        // Invariant 10: cross-language non-reuse of styles slice.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let asm = lang_theme(L_ASM).expect("Assembly wired");
+        let diff = lang_theme(L_DIFF).expect("Diff wired");
+        let ps = lang_theme(L_PS).expect("PostScript wired");
+        let rb = lang_theme(L_RUBY).expect("Ruby wired");
+        let st_theme = lang_theme(L_SMALLTALK).expect("Smalltalk wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (asm, "Assembly"),
+            (diff, "Diff"),
+            (ps, "PostScript"),
+            (rb, "Ruby"),
+            (st_theme, "Smalltalk"),
+        ] {
+            assert_ne!(
+                vhdl.styles, other.styles,
+                "VHDL must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 11: VHDL_KEYWORDS anchor tokens.
+        for anchor in ["entity", "architecture", "signal", "begin", "end"] {
+            assert!(
+                VHDL_KEYWORDS.split_whitespace().any(|t| t == anchor),
+                "VHDL_KEYWORDS must include reserved word `{anchor}`"
+            );
+        }
+
+        // Invariant 12: IEEE-1164 logic values lowercase in STDTYPES.
+        for logic in ["x01", "x01z", "ux01", "ux01z"] {
+            assert!(
+                VHDL_STDTYPES.split_whitespace().any(|t| t == logic),
+                "VHDL_STDTYPES must include IEEE-1164 logic-value \
+                 type `{logic}` in LOWERCASE (upstream banner writes \
+                 `X01`, `X01Z`, etc. but GetCurrentLowered at :92 \
+                 case-folds before InList)"
+            );
+        }
+        // Sanity: NONE of the mixed-case forms slipped in.
+        for wrong in ["X01", "X01Z", "UX01", "UX01Z", "to_UX01"] {
+            assert!(
+                !VHDL_STDTYPES.split_whitespace().any(|t| t == wrong)
+                    && !VHDL_STDFUNCTIONS.split_whitespace().any(|t| t == wrong),
+                "VHDL wordlists must NOT contain the mixed-case form \
+                 `{wrong}` — the lexer's GetCurrentLowered case-folds \
+                 before InList, so this entry would be dead"
+            );
         }
     }
 

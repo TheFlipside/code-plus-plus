@@ -5504,6 +5504,269 @@ pub const SMALLTALK_SPECIAL_SELECTORS: &str = concat!(
     "and: or: xor: not ",
 );
 
+/// Space-separated VHDL **reserved-word** vocabulary installed via
+/// `LexVHDL`'s `SCI_SETKEYWORDS(0, ...)` — the first class of
+/// `VHDLWordLists[]` at
+/// `vendor/lexilla/lexers/LexVHDL.cxx:552-561`. Drives
+/// `SCE_VHDL_KEYWORD` via the identifier-exit classifier at
+/// `LexVHDL.cxx:93-94`: on scan exit, the wordlist chain probes
+/// this list FIRST and promotes matching identifiers from
+/// `SCE_VHDL_IDENTIFIER` to `SCE_VHDL_KEYWORD`.
+///
+/// **Case-insensitive language, byte-exact wordlist.** VHDL is
+/// case-insensitive per IEEE-1076 §13.4 — `ENTITY` and `entity`
+/// are the same reserved word. The classifier calls
+/// `GetCurrentLowered(s, sizeof(s))` at `LexVHDL.cxx:92` before
+/// every wordlist probe, so `InList` receives a case-folded
+/// (lowercase) identifier. Wordlist entries MUST be lowercase —
+/// an uppercase entry would never match. Same convention as
+/// `PS_LEVEL1_KEYWORDS` (also case-insensitive).
+///
+/// **Source.** IEEE-1076-1993 §13.9 reserved-word list, extended
+/// to IEEE-1076-2002's `protected`. Cross-referenced against the
+/// upstream Scintilla author's documented list at
+/// `vendor/lexilla/lexers/LexVHDL.cxx:568-573` — a `//
+/// Keyword:` commented enumeration. That list is 81 words
+/// (`access` through `with`); `protected` was NOT in Scintilla's
+/// -93-vintage enumeration but is a legitimate VHDL-2002+
+/// reserved word (used in the classifier's own fold routine's
+/// keyword string at `LexVHDL.cxx:238-239` and fold-trigger
+/// `strcmp` at `:403`), so we include it. VHDL-2008 additions (`assume`, `context`,
+/// `cover`, `default`, `fairness`, `force`, `parameter`,
+/// `property`, `release`, `restrict`, `sequence`, `strong`,
+/// `vunit`, etc.) are intentionally excluded pending broader
+/// VHDL-2008 syntax coverage — the fold routine doesn't fold on
+/// them either, so adding them here without matching folder
+/// work would create an inconsistency.
+///
+/// **The `range` overlap.** `range` appears in BOTH this
+/// wordlist (as a reserved word — `range 0 to 7` in a subtype
+/// declaration) AND `VHDL_ATTRIBUTES` (as an attribute
+/// designator — `T'range`). The lexer's dispatch order at
+/// `LexVHDL.cxx:93-107` probes classes 0..6 sequentially; class
+/// 0 (Keywords) is checked FIRST at `:93`, class 2 (Attributes)
+/// at `:97`. So `range` in this list ALWAYS wins over the
+/// Attributes-list entry — a `T'range` token paints `range` as
+/// `SCE_VHDL_KEYWORD` (the tick itself painting as
+/// `SCE_VHDL_OPERATOR`). This precedence matches Scintilla's
+/// upstream behaviour and Notepad++'s ship default.
+pub const VHDL_KEYWORDS: &str = concat!(
+    // Declaration keywords
+    "access after alias all architecture array assert attribute ",
+    "begin block body buffer bus ",
+    "case component configuration constant ",
+    "disconnect downto ",
+    "else elsif end entity exit ",
+    "file for function generate generic group guarded ",
+    "if impure in inertial inout is ",
+    "label library linkage literal loop ",
+    "map new next null ",
+    "of on open others out ",
+    "package port postponed procedure process protected pure ",
+    "range record register reject report return ",
+    "select severity shared signal subtype ",
+    "then to transport type ",
+    "unaffected units until use ",
+    "variable wait when while with ",
+);
+
+/// Space-separated VHDL **word-form operator** vocabulary
+/// installed via `LexVHDL`'s `SCI_SETKEYWORDS(1, ...)` — the
+/// second class of `VHDLWordLists[]` at `LexVHDL.cxx:552-561`.
+/// Drives `SCE_VHDL_STDOPERATOR` via classifier at
+/// `LexVHDL.cxx:95-96` when the identifier fails the KEYWORD
+/// probe but matches this list. Case-insensitive per
+/// `GetCurrentLowered` at `:92`.
+///
+/// **Scope.** IEEE-1076 §7.2 defines 16 word-form operators
+/// (`abs`, `and`, `mod`, `nand`, `nor`, `not`, `or`, `rem`,
+/// `rol`, `ror`, `sla`, `sll`, `sra`, `srl`, `xnor`, `xor`).
+/// Distinct from punctuation-class operators (`+ - * / = < > <= >= /=`)
+/// which paint as `SCE_VHDL_OPERATOR` via `isoperator` at
+/// `:169-170`. The dual style lets the theme colour word
+/// operators (which read as identifiers to the eye) distinctly
+/// from punctuation ones.
+///
+/// **Case-insensitive language, byte-exact wordlist.** Same
+/// case-folding rule as `VHDL_KEYWORDS` — entries lowercase.
+pub const VHDL_OPERATORS: &str = concat!(
+    "abs and mod nand nor not or rem ",
+    "rol ror sla sll sra srl xnor xor ",
+);
+
+/// Space-separated VHDL **predefined-attribute** vocabulary
+/// installed via `LexVHDL`'s `SCI_SETKEYWORDS(2, ...)` — the
+/// third class of `VHDLWordLists[]` at `LexVHDL.cxx:552-561`.
+/// Drives `SCE_VHDL_ATTRIBUTE` via classifier at
+/// `LexVHDL.cxx:97-98` when the identifier fails KEYWORD and
+/// STDOPERATOR probes but matches this list.
+///
+/// **Attribute designator, not the tick.** VHDL attributes are
+/// accessed via `T'attr` syntax (a tick between the prefix and
+/// the attribute designator). The lexer handles the tick via a
+/// dedicated `else if (sc.ch == '\'')` branch at `LexVHDL.cxx:155-165`
+/// (sibling to the `isoperator` branch at `:169-170`, so the
+/// tick can never fall through to `SCE_VHDL_OPERATOR`); in the
+/// common attribute-access case (multi-character attribute name),
+/// that branch calls no `SetState`, so the tick stays as
+/// `SCE_VHDL_DEFAULT`. The designator identifier itself is
+/// separately promoted to `SCE_VHDL_ATTRIBUTE`. Wordlist entries
+/// are the designator only (no leading tick).
+///
+/// **Case-insensitive language, byte-exact wordlist.** Same
+/// case-folding rule as `VHDL_KEYWORDS`.
+///
+/// **The `range` overlap** — see `VHDL_KEYWORDS` rationale.
+/// `range` appears here for completeness (matches upstream) but
+/// its Attributes-list entry is dead code because
+/// class 0 (Keywords) fires first at `:93`.
+///
+/// **Source.** IEEE-1076-1993 §14.1 predefined attributes.
+/// Cross-referenced against upstream banner at
+/// `LexVHDL.cxx:578-581`.
+pub const VHDL_ATTRIBUTES: &str = concat!(
+    // Scalar type attributes
+    "left right low high ascending image value pos val succ pred ",
+    "leftof rightof base range reverse_range ",
+    // Array attributes
+    "length ",
+    // Signal attributes
+    "delayed stable quiet transaction event active ",
+    "last_event last_active last_value driving driving_value ",
+    // Name-string attributes
+    "simple_name path_name instance_name ",
+);
+
+/// Space-separated VHDL **standard-function** vocabulary
+/// installed via `LexVHDL`'s `SCI_SETKEYWORDS(3, ...)` — the
+/// fourth class of `VHDLWordLists[]` at `LexVHDL.cxx:552-561`.
+/// Drives `SCE_VHDL_STDFUNCTION` via classifier at
+/// `LexVHDL.cxx:99-100`.
+///
+/// **Source.** Functions defined by the IEEE-1076 standard
+/// packages (`std.textio`, `ieee.std_logic_1164`,
+/// `ieee.numeric_std`, `ieee.numeric_bit`) plus the fixed
+/// `std.standard` namespace utilities. Cross-referenced against
+/// upstream banner at `LexVHDL.cxx:583-586`.
+///
+/// **Case-insensitive language, byte-exact wordlist.** Entries
+/// are lowercase — the upstream banner's `to_UX01` is written
+/// mixed-case to reflect the IEEE-1164 uppercase convention for
+/// the target type name, but the lexer lowercases before match
+/// (`GetCurrentLowered` at `:92`) so the wordlist MUST use
+/// `to_ux01`. Same applies elsewhere in the list.
+pub const VHDL_STDFUNCTIONS: &str = concat!(
+    // std.textio I/O
+    "now readline read writeline write endfile ",
+    // std_logic_1164 conversion + resolution
+    "resolved to_bit to_bitvector to_stdulogic to_stdlogicvector to_stdulogicvector ",
+    "to_x01 to_x01z to_ux01 ",
+    // Edge detectors
+    "rising_edge falling_edge is_x ",
+    // numeric_std / numeric_bit shifts + rotates + resize + coercions
+    "shift_left shift_right rotate_left rotate_right resize ",
+    "to_integer to_unsigned to_signed std_match to_01 ",
+);
+
+/// Space-separated VHDL **standard-package** vocabulary
+/// installed via `LexVHDL`'s `SCI_SETKEYWORDS(4, ...)` — the
+/// fifth class of `VHDLWordLists[]` at `LexVHDL.cxx:552-561`.
+/// Drives `SCE_VHDL_STDPACKAGE` via classifier at
+/// `LexVHDL.cxx:101-102`.
+///
+/// **Source.** IEEE-1076-2008 §16 standard packages plus the
+/// three fixed libraries (`std`, `ieee`, `work`) that every
+/// VHDL design references. `work` is the implicit current-
+/// design library. Cross-referenced against upstream banner at
+/// `LexVHDL.cxx:588-591`.
+///
+/// **Case-insensitive language, byte-exact wordlist.** Same
+/// case-folding rule as `VHDL_KEYWORDS`.
+pub const VHDL_STDPACKAGES: &str = concat!(
+    // Libraries
+    "std ieee work ",
+    // std library packages
+    "standard textio ",
+    // ieee library packages (synthesis + arith)
+    "std_logic_1164 std_logic_arith std_logic_misc ",
+    "std_logic_signed std_logic_textio std_logic_unsigned ",
+    "numeric_bit numeric_std ",
+    // ieee math packages
+    "math_complex math_real ",
+    // ieee VITAL packages (timing)
+    "vital_primitives vital_timing ",
+);
+
+/// Space-separated VHDL **standard-type** vocabulary installed
+/// via `LexVHDL`'s `SCI_SETKEYWORDS(5, ...)` — the sixth class
+/// of `VHDLWordLists[]` at `LexVHDL.cxx:552-561`. Drives
+/// `SCE_VHDL_STDTYPE` via classifier at `LexVHDL.cxx:103-104`.
+///
+/// **Source.** Predefined types from `std.standard` (`boolean`,
+/// `bit`, `integer`, `real`, `time`, `natural`, `positive`,
+/// `character`, `string`, `bit_vector`, plus the file-open
+/// enumerations), from `std.textio` (`line`, `text`, `side`,
+/// `width`), and from `ieee.std_logic_1164` (`std_ulogic`,
+/// `std_ulogic_vector`, `std_logic`, `std_logic_vector`, and
+/// the four subtype constants `x01`, `x01z`, `ux01`, `ux01z`).
+/// `unsigned` / `signed` come from `ieee.numeric_std`.
+/// Cross-referenced against upstream banner at
+/// `LexVHDL.cxx:593-596`.
+///
+/// **Case-insensitive language, byte-exact wordlist.** The
+/// upstream banner writes `X01` / `X01Z` / `UX01` / `UX01Z` in
+/// uppercase to reflect IEEE-1164's uppercase convention for the
+/// logic-value type names, but the lexer lowercases before
+/// match — wordlist entries MUST be lowercase (`x01`, `x01z`,
+/// etc.).
+pub const VHDL_STDTYPES: &str = concat!(
+    // std.standard scalars
+    "boolean bit character severity_level integer real time delay_length ",
+    "natural positive ",
+    // std.standard arrays
+    "string bit_vector ",
+    // std.standard file-open enumerations
+    "file_open_kind file_open_status ",
+    // std.textio
+    "line text side width ",
+    // ieee.std_logic_1164 (types + subtype constants)
+    "std_ulogic std_ulogic_vector std_logic std_logic_vector ",
+    "x01 x01z ux01 ux01z ",
+    // ieee.numeric_std
+    "unsigned signed ",
+);
+
+/// Space-separated VHDL **user-word** vocabulary installed via
+/// `LexVHDL`'s `SCI_SETKEYWORDS(6, ...)` — the seventh (and
+/// last) class of `VHDLWordLists[]` at `LexVHDL.cxx:552-561`.
+/// Drives `SCE_VHDL_USERWORD` via classifier at
+/// `LexVHDL.cxx:105-106`.
+///
+/// **Deliberately empty.** This class is the per-project
+/// extension slot — the VHDL lexer author designed it as an
+/// opt-in surface for project-specific identifiers (module
+/// names, custom-package types) that a user's `.properties`
+/// override could populate. Code++ ships it empty (a valid
+/// `WordList` with zero entries) so the class-index dispatch
+/// at `:105-106` still fires without falsely promoting any
+/// identifier. When Code++ grows a per-project override
+/// surface, this constant becomes the default-empty value the
+/// user config layers over.
+///
+/// **Empty install is required, not skippable.** `LexerBase`
+/// pre-allocates `KEYWORDSET_MAX + 1 = 9` `WordList*` slots at
+/// construction (`LexerBase.h:19` enum + `LexerBase.cxx:32-34`
+/// loop) — well past the 7 that `VHDLWordLists[]` names, so
+/// slot 6 exists unconditionally. The classifier at
+/// `LexVHDL.cxx:105` addresses slot 6 whether or not it was
+/// installed, so an unset slot 6 would still receive
+/// `InList(s)` calls against a fresh empty list (safe:
+/// returns false). Installing an empty string via
+/// `SCI_SETKEYWORDS(6, "")` writes an explicit empty
+/// `WordList`, which is the safer guarantee than relying on
+/// zero-init behaviour.
+pub const VHDL_USERWORDS: &str = "";
+
 #[cfg(test)]
 mod tests {
     use super::*;
