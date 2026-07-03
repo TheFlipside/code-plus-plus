@@ -240,13 +240,14 @@ use windows::Win32::UI::Controls::Dialogs::{
     OFN_PATHMUSTEXIST, OPENFILENAMEW,
 };
 use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT,
-    ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT,
-    LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_STATE, LVIF_TEXT, LVIS_STATEIMAGEMASK,
-    LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
-    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVM_SETITEMTEXTW, LVN_ITEMCHANGED,
-    LVS_EX_CHECKBOXES, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS,
-    LVS_SINGLESEL, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NM_DBLCLK, ODT_TAB, TCHITTESTINFO, TCIF_TEXT,
+    InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, CDDS_PREPAINT,
+    CDRF_DODEFAULT, CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES,
+    ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT, LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW,
+    LVIF_STATE, LVIF_TEXT, LVIS_STATEIMAGEMASK, LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT,
+    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE,
+    LVM_SETITEMTEXTW, LVN_ITEMCHANGED, LVS_EX_CHECKBOXES, LVS_EX_DOUBLEBUFFER,
+    LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, NMCUSTOMDRAW, NMHDR,
+    NMITEMACTIVATE, NMLISTVIEW, NM_CUSTOMDRAW, NM_DBLCLK, ODT_TAB, TCHITTESTINFO, TCIF_TEXT,
     TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW,
     TCM_SETCURSEL, TCM_SETITEMW, TCM_SETPADDING, TCN_SELCHANGE, TCS_OWNERDRAWFIXED, WC_COMBOBOX,
     WC_LISTVIEWW, WC_TABCONTROL, WM_MOUSELEAVE,
@@ -19710,6 +19711,61 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // pointer for the duration of the dispatch. We
                     // read by value into a local; nothing escapes.
                     let nmhdr = *nmhdr_ptr;
+                    // Toolbar background custom-draw. The default
+                    // `ToolbarWindow32` UxTheme paints a system-
+                    // grey backdrop that reads as visually heavy
+                    // against Code++'s light chrome — users on
+                    // Win10/11 light mode consistently describe it
+                    // as "9x-era." UxTheme routes its background
+                    // paint through NM_CUSTOMDRAW / CDDS_PREPAINT
+                    // to the parent BEFORE it paints the buttons,
+                    // so filling `nmcd.rc` here with our own
+                    // chrome brush lands under the button paint —
+                    // the themed hover / pressed / disabled glyphs
+                    // continue to draw correctly on top.
+                    //
+                    // Return `CDRF_NOTIFYITEMDRAW` (not
+                    // `CDRF_SKIPDEFAULT`) so the toolbar still
+                    // hands each button back to UxTheme for its
+                    // normal themed paint — skipping default would
+                    // strip the theme entirely, losing hover
+                    // states, and force us into full owner-draw
+                    // (tracked as Phase 5 option (c) in DESIGN.md
+                    // §7.4). Item stages currently pass through
+                    // via `CDRF_DODEFAULT` — no per-button
+                    // overrides today.
+                    //
+                    // Colour source is `dialog_bg_brush()`
+                    // (`DIALOG_BG = 0xF9F9F9`), the same brush the
+                    // Find/Replace and Goto dialogs use, so all of
+                    // Code++'s chrome bars converge on a single
+                    // near-white shade. Matches the perceptual
+                    // "menu bar + status bar look" that motivated
+                    // this change without picking up the specific
+                    // system-colour drift that `COLOR_MENUBAR` /
+                    // `COLOR_3DFACE` show across theme variants.
+                    if nmhdr.code == NM_CUSTOMDRAW {
+                        let owns_source = if let Some(state) = state_from_hwnd(hwnd) {
+                            nmhdr.hwndFrom == state.toolbar_hwnd
+                        } else {
+                            false
+                        };
+                        if owns_source {
+                            // SAFETY: outer wnd_proc `unsafe`
+                            // block; `lparam` is a valid pointer
+                            // to an `NMCUSTOMDRAW`-prefixed struct
+                            // (the toolbar sends `NMTBCUSTOMDRAW`,
+                            // whose first field is `NMCUSTOMDRAW`)
+                            // for the dispatch's duration. Read
+                            // by shared reference — no mutation.
+                            let nmcd = &*(lparam.0 as *const NMCUSTOMDRAW);
+                            if nmcd.dwDrawStage == CDDS_PREPAINT {
+                                FillRect(nmcd.hdc, &raw const nmcd.rc, dialog_bg_brush());
+                                return LRESULT(CDRF_NOTIFYITEMDRAW as isize);
+                            }
+                            return LRESULT(CDRF_DODEFAULT as isize);
+                        }
+                    }
                     if nmhdr.code == TCN_SELCHANGE {
                         // Filter on the source HWND so a future
                         // sibling tab control doesn't accidentally
