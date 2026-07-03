@@ -666,6 +666,34 @@ pub enum PendingDialog {
     Error { title: String, message: String },
 }
 
+/// Which branch [`Shell::open_file`] took, so the UI knows whether
+/// it must synchronously rebind the Scintilla view.
+///
+/// See the doc on [`Shell::open_file`] for the "why" behind
+/// `SwitchedToExisting`: the tab-strip resync only updates the
+/// visual selection, not the view's document pointer, so a re-open
+/// of an already-loaded file needs an explicit follow-up on the UI
+/// side to swap [`SCI_SETDOCPOINTER`](crates/scintilla-sys) to the
+/// dedupe target — otherwise the tab bar shows the switch while the
+/// editor keeps rendering the previous buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenFileOutcome {
+    /// A load was queued; the UI's normal `drain` + `activate_tab`
+    /// cycle handles the rest when the loader posts its wake.
+    Loading,
+    /// The path was already open at `usize`; the shell flipped
+    /// `active_tab`. The UI must issue a synchronous view rebind
+    /// (Scintilla `SCI_SETDOCPOINTER` to the existing tab's
+    /// materialised document) since no `WM_APP_WAKE` will fire.
+    SwitchedToExisting(usize),
+    /// The path was already open and already the active tab. No
+    /// state changed; UI has nothing to do beyond a chrome refresh.
+    AlreadyActive,
+    /// The open was refused (loader shut down, tab cap reached).
+    /// UI has nothing to do.
+    Rejected,
+}
+
 /// One open buffer (one tab in the multi-tab UI).
 ///
 /// Phase 3 milestone 6a moves the single-buffer model to a tabbed
@@ -1843,7 +1871,24 @@ impl Shell {
         Ok(())
     }
 
-    pub fn open_file(&mut self, path: PathBuf) {
+    /// Request that `path` be opened. Returns the branch the shell
+    /// took so the UI knows whether it needs to synchronously rebind
+    /// the Scintilla view.
+    ///
+    /// The rebind matters in the `SwitchedToExisting` case: the tab
+    /// strip's `TCM_SETCURSEL` update (fired from the UI's normal
+    /// post-mutation resync) does **not** generate `TCN_SELCHANGE`,
+    /// so the `wnd_proc`'s `handle_tab_selchange` — which is what
+    /// actually issues `SCI_SETDOCPOINTER` — never runs on its own.
+    /// Without an explicit follow-up, the tab strip would show the
+    /// user's re-opened file as active while the editor keeps
+    /// rendering the previous buffer.
+    ///
+    /// The other three variants require no UI action beyond the
+    /// normal chrome refresh: `Loading` is handled by the `drain`'s
+    /// `activate_tab` when the loader posts its wake, `AlreadyActive`
+    /// changed nothing, and `Rejected` didn't touch any tab state.
+    pub fn open_file(&mut self, path: PathBuf) -> OpenFileOutcome {
         // De-duplicate: if the path is already open in some tab,
         // switch to that tab rather than allocating a fresh one.
         // Without this, the user can stack identical-content tabs
@@ -1856,12 +1901,14 @@ impl Shell {
             .iter()
             .position(|t| t.path.as_deref() == Some(path.as_path()))
         {
-            if self.active_tab != Some(idx) {
+            return if self.active_tab == Some(idx) {
+                OpenFileOutcome::AlreadyActive
+            } else {
                 self.active_tab = Some(idx);
                 #[cfg(target_os = "windows")]
                 self.queue_buffer_activated();
-            }
-            return;
+                OpenFileOutcome::SwitchedToExisting(idx)
+            };
         }
 
         // Bound the per-session DoS surface — see `MAX_OPEN_TABS`.
@@ -1877,7 +1924,7 @@ impl Shell {
                 path = ?path,
                 "open_file refused: tab cap reached",
             );
-            return;
+            return OpenFileOutcome::Rejected;
         }
 
         // Queue NPPN_FILEBEFOREOPEN before the load is enqueued.
@@ -1905,7 +1952,7 @@ impl Shell {
             #[cfg(target_os = "windows")]
             self.pending_notifications
                 .push(Notification::FileLoadFailed);
-            return;
+            return OpenFileOutcome::Rejected;
         };
         // Decide where the load result will land. If the active
         // tab is empty *and isn't already waiting for its own load
@@ -1949,7 +1996,7 @@ impl Shell {
                 });
                 let new_idx = self.tabs.len() - 1;
                 self.active_tab = Some(new_idx);
-                return;
+                return OpenFileOutcome::Loading;
             }
         };
         // Reusing an empty tab — assign an id if it didn't have one
@@ -1976,6 +2023,7 @@ impl Shell {
             });
             self.active_tab = Some(self.tabs.len() - 1);
         }
+        OpenFileOutcome::Loading
     }
 
     /// Drain pending tasks and apply each to the shell + UI. Returns
@@ -2083,7 +2131,12 @@ impl Shell {
             .iter()
             .position(|t| t.path.as_deref() == Some(path.as_path()))
         else {
-            self.open_file(path);
+            // Fallback for stale-watcher scenarios: the path isn't
+            // in the tab list, so open it fresh. The dedupe-rebind
+            // outcome can't fire here (we just proved above that no
+            // tab holds this path), so the discarded return value
+            // is genuinely nothing the UI needs to react to.
+            let _ = self.open_file(path);
             return;
         };
         let Some(req_id) = self.loader.open(path) else {
@@ -4062,7 +4115,17 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // resolves outside the user's home tree, as a courtesy
         // against accidental plugin bugs. Not security-critical
         // given the threat model; included for sharper diagnostics.
-        self.shell.open_file(path);
+        //
+        // Return value discarded here: the dispatch trait's
+        // `open_file` predates `OpenFileOutcome`. The UI-side
+        // rebind hook the interactive `ID_FILE_OPEN` path uses
+        // instead lives in `main_wnd_proc`'s plugin-dispatch arm,
+        // which snapshots `active_tab` around
+        // `dispatch_plugin_message` and fires
+        // `handle_tab_selchange` synchronously if the plugin's
+        // NPPM_* call flipped the active tab to a materialised
+        // background buffer.
+        let _ = self.shell.open_file(path);
     }
 
     fn reload_file(&mut self, path: Option<PathBuf>) {
@@ -4101,7 +4164,12 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             }
             true
         } else {
-            self.shell.open_file(path);
+            // Return value discarded: the position() check above
+            // already handled the "already open" case, so this arm
+            // only enqueues a fresh load — `OpenFileOutcome::Loading`
+            // is handled by the drain's `activate_tab` when the
+            // loader posts its wake, no dedupe hook needed.
+            let _ = self.shell.open_file(path);
             // open_file's load completion will fire BUFFERACTIVATED
             // for the new tab via apply_load_result.
             true
@@ -4881,7 +4949,13 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         };
         for tab in &session.tabs {
             if let Some(p) = tab.path.clone() {
-                self.shell.open_file(p);
+                // Return value discarded here: the plugin dispatch
+                // arm in `main_wnd_proc` snapshots `active_tab`
+                // around `dispatch_plugin_message` and fires the
+                // synchronous rebind on any net change — same hook
+                // that catches HostBridge::open_file and
+                // switch_to_file's dedupe cases.
+                let _ = self.shell.open_file(p);
             }
         }
         true
@@ -7611,6 +7685,50 @@ mod tests {
     }
 
     #[test]
+    fn open_file_returns_switched_to_existing_on_dedupe() {
+        // The UI leans on this return value to decide whether to
+        // synchronously rebind the Scintilla view: without the
+        // `SwitchedToExisting` signal it would let the WM_APP_WAKE
+        // drain do the work, but the dedupe branch doesn't queue a
+        // load, so no wake ever fires. Result: tab bar shows the
+        // switch, editor stays on the previous buffer's document.
+        let dir = tempfile::tempdir().unwrap();
+        let p1 = dir.path().join("first.txt");
+        let p2 = dir.path().join("second.txt");
+        std::fs::write(&p1, "1\n").unwrap();
+        std::fs::write(&p2, "2\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        // First open: fresh load (`Loading`).
+        let outcome_p1 = shell.open_file(p1.clone());
+        assert_eq!(outcome_p1, OpenFileOutcome::Loading);
+        // Second open: distinct path, still `Loading`.
+        let outcome_p2 = shell.open_file(p2.clone());
+        assert_eq!(outcome_p2, OpenFileOutcome::Loading);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() >= 2,
+            Duration::from_secs(2),
+        );
+
+        // Re-open p1 (idx 0) while p2 (idx 1) is active — dedupe
+        // branch fires and returns the target index.
+        assert_eq!(shell.active_tab, Some(1));
+        let outcome = shell.open_file(p1.clone());
+        assert_eq!(outcome, OpenFileOutcome::SwitchedToExisting(0));
+        assert_eq!(shell.active_tab, Some(0));
+
+        // Re-open p1 again while p1 is now active — no state change.
+        let outcome = shell.open_file(p1);
+        assert_eq!(outcome, OpenFileOutcome::AlreadyActive);
+        assert_eq!(shell.active_tab, Some(0));
+    }
+
+    #[test]
     #[cfg(target_os = "windows")]
     fn open_file_already_active_is_idempotent() {
         // If the path is already open AND active, open_file is a
@@ -7799,15 +7917,20 @@ mod tests {
         let active_before = shell.active_tab;
 
         // Branch 1 — fresh path at the cap: refused.
-        shell.open_file(new_at_cap);
+        let outcome = shell.open_file(new_at_cap);
         assert_eq!(shell.tabs.len(), MAX_OPEN_TABS);
+        assert_eq!(outcome, OpenFileOutcome::Rejected);
 
         // Branch 2 — already-open path at the cap: de-dupe fires
         // *before* the cap check, so the call succeeds and the
         // active flips back to that tab. Tab count unchanged.
-        shell.open_file(opened_first);
+        let outcome = shell.open_file(opened_first);
         assert_eq!(shell.tabs.len(), MAX_OPEN_TABS);
         assert_eq!(shell.active_tab, Some(opened_first_idx));
+        assert_eq!(
+            outcome,
+            OpenFileOutcome::SwitchedToExisting(opened_first_idx)
+        );
         assert_ne!(
             shell.active_tab, active_before,
             "de-dupe at cap must still flip the active tab",

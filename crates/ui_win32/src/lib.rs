@@ -213,7 +213,8 @@ use codepp_scintilla_sys::{
     STYLE_LINENUMBER,
 };
 use codepp_shell::{
-    HostHandles, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
+    HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
+    UiPlatform,
 };
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
@@ -16851,9 +16852,33 @@ unsafe fn handle_fif_listview_dblclk(main_hwnd: HWND, row: usize) {
     let Some(row) = row_data else {
         return;
     };
-    if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+    let deduped = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
         state.fif_pending_jumps.push(row.clone());
-        state.shell.open_file(row.path);
+        matches!(
+            state.shell.open_file(row.path),
+            OpenFileOutcome::SwitchedToExisting(_) | OpenFileOutcome::AlreadyActive
+        )
+    } else {
+        false
+    };
+    // If the FIF target was already open (either as the active tab
+    // or a background tab), no async load will fire — the WM_APP_WAKE
+    // drain that normally handles caret placement never wakes. Do
+    // the tab-strip resync + view rebind synchronously so the user
+    // lands on the matched line right away. `apply_pending_fif_jumps`
+    // is idempotent (it only jumps when the active tab's path
+    // matches a queued entry), so it's safe to call here even if
+    // the load already applied the jump.
+    if deduped {
+        // SAFETY: caller (`main_wnd_proc`) owns the UI-thread borrow
+        // and is not inside a plugin callback; each unsafe fn below
+        // sends synchronous Win32 messages and doesn't re-enter our
+        // wnd_proc.
+        unsafe {
+            refresh_tab_chrome(main_hwnd);
+            handle_tab_selchange(main_hwnd);
+            apply_pending_fif_jumps(main_hwnd);
+        }
     }
 }
 
@@ -18326,10 +18351,21 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 LRESULT(0)
             }
             WM_DROPFILES => {
+                let mut deduped = false;
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let hdrop = HDROP(wparam.0 as *mut c_void);
-                    handle_dropped_files(state, hdrop);
+                    deduped = handle_dropped_files(state, hdrop);
                     DragFinish(hdrop);
+                }
+                // If the last drop targeted an already-open file
+                // (e.g. dragging the same file twice), the shell
+                // flipped `active_tab` without kicking off a load
+                // — see the ID_FILE_OPEN dedupe comment. Fire the
+                // selchange manually so the editor swaps to the
+                // just-activated buffer's Scintilla doc.
+                if deduped {
+                    refresh_tab_chrome(hwnd);
+                    handle_tab_selchange(hwnd);
                 }
                 LRESULT(0)
             }
@@ -18421,13 +18457,17 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // can re-enter our wnd_proc, and any active
                         // borrow at that point would alias-UB.
                         let path = prompt_open_path(hwnd);
+                        let mut deduped = false;
                         if let Some(p) = path {
-                            if let Some(state) = state_from_hwnd(hwnd) {
-                                let _ =
-                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                        state.shell.open_file(p);
-                                    }));
-                            }
+                            let outcome = if let Some(state) = state_from_hwnd(hwnd) {
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    state.shell.open_file(p)
+                                }))
+                                .unwrap_or(OpenFileOutcome::Rejected)
+                            } else {
+                                OpenFileOutcome::Rejected
+                            };
+                            deduped = matches!(outcome, OpenFileOutcome::SwitchedToExisting(_));
                         }
                         // If `open_file` switched to an existing tab
                         // (the de-dupe branch) there's no async load
@@ -18437,6 +18477,18 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // case (the WM_APP_WAKE drain runs sync_tab_strip
                         // again when the load completes).
                         refresh_tab_chrome(hwnd);
+                        // Dedupe branch: the shell flipped
+                        // `active_tab` but no load will wake to
+                        // run `handle_tab_selchange` — and
+                        // `sync_tab_strip`'s `TCM_SETCURSEL`
+                        // doesn't generate `TCN_SELCHANGE`, so the
+                        // view stays bound to the previous buffer's
+                        // Scintilla document. Fire the selchange
+                        // handler manually so the editor swaps to
+                        // the just-activated tab's doc pointer.
+                        if deduped {
+                            handle_tab_selchange(hwnd);
+                        }
                         fire_queued_notifications(hwnd);
                     }
                     ID_FILE_SAVE_AS => {
@@ -19523,6 +19575,21 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 || (RUNCOMMAND_USER..RUNCOMMAND_USER + RUNCOMMAND_RANGE).contains(&m) =>
             {
                 if let Some(state) = state_from_hwnd(hwnd) {
+                    // Snapshot the active tab before dispatch so
+                    // we can detect plugin-driven flips
+                    // (`NPPM_SWITCHTOFILE`, `NPPM_DOOPEN` on a
+                    // background-loaded path, `NPPM_ACTIVATEDOC`,
+                    // `NPPM_LOADSESSION`, …). These paths mutate
+                    // `Shell.active_tab` directly and don't return
+                    // an `OpenFileOutcome`, so the interactive
+                    // path's return-value hook doesn't reach them.
+                    // Without a rebind here the Scintilla view
+                    // stays bound to the *previous* tab's document
+                    // — a subsequent Ctrl+S would read the stale
+                    // buffer's text and write it to the *new*
+                    // active tab's path, silently corrupting an
+                    // unrelated file on disk.
+                    let pre_active = state.shell.active_tab;
                     let handles = state.host_handles(hwnd);
                     let (shell, mut ui) = state.split();
                     // SAFETY: `(msg, wparam, lparam)` are forwarded
@@ -19570,6 +19637,52 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             }
                             apply_fif_prefill(dlg, &prefill);
                         }
+                    }
+                    // Detect plugin-driven active-tab flips and
+                    // synchronously rebind the view. Fire on any
+                    // net active-tab change whose target isn't
+                    // still loading — for a still-loading tab,
+                    // `apply_load_result` will do the rebind on
+                    // the WM_APP_WAKE drain instead.
+                    //
+                    // Do **not** gate on `scintilla_doc != 0`:
+                    // background-loaded tabs (session restore /
+                    // NPPM_LOADSESSION opening multiple files at
+                    // once) finish with `scintilla_doc == 0`
+                    // whenever they weren't the active tab at
+                    // load-completion time — nothing will re-fire
+                    // the load, so waiting on WM_APP_WAKE would
+                    // leave them permanently unrebound.
+                    // `handle_tab_selchange` already lazily
+                    // materialises the document from `tab.text`
+                    // in that case (see its `text_to_populate`
+                    // branch); the interactive paths above
+                    // (ID_FILE_OPEN / WM_DROPFILES / FIF dblclk)
+                    // deliberately fire it without any doc-pointer
+                    // check for the same reason. Without this,
+                    // an NPPM_SWITCHTOFILE / NPPM_ACTIVATEDOC /
+                    // NPPM_DOOPEN dedupe onto such a background
+                    // tab leaves `Shell.active_tab` and the
+                    // visible Scintilla document out of sync,
+                    // and the next Ctrl+S silently writes the
+                    // still-bound previous buffer's text to the
+                    // new active tab's path.
+                    let needs_rebind = state_from_hwnd(hwnd)
+                        .and_then(|s| {
+                            let new_active = s.shell.active_tab?;
+                            if Some(new_active) == pre_active {
+                                return None;
+                            }
+                            let tab = s.shell.tabs.get(new_active)?;
+                            if tab.pending_load.is_some() {
+                                return None;
+                            }
+                            Some(())
+                        })
+                        .is_some();
+                    if needs_rebind {
+                        refresh_tab_chrome(hwnd);
+                        handle_tab_selchange(hwnd);
                     }
                     match routed {
                         Some(lr) => LRESULT(lr),
@@ -19966,10 +20079,27 @@ unsafe fn state_from_hwnd<'a>(hwnd: HWND) -> Option<&'a mut WindowState> {
 /// reject rather than risk an overflow when computing `needed + 1`.
 const MAX_PATH_TCHARS: u32 = 32_767;
 
+/// Returns `true` when **any** drop in the batch hit
+/// [`OpenFileOutcome::SwitchedToExisting`], i.e. the file was already
+/// open in some tab. The `WM_DROPFILES` caller uses that signal to fire
+/// a synchronous view rebind — see the `ID_FILE_OPEN` dedupe comment
+/// for why the tab-strip resync alone isn't sufficient.
+///
+/// Accumulated with `|=` across the loop rather than tracked as the
+/// last-seen result: the shell's `open_file` promotes each opened tab
+/// to active in turn, so a mid-loop dedupe flip to a background tab
+/// followed by a load-enqueue on a fresh path would leave `active_tab`
+/// pointing at the fresh tab (rebound by the load's `WM_APP_WAKE`
+/// drain — OK). But a mid-loop dedupe followed by `Rejected` (only
+/// reachable at the `MAX_OPEN_TABS` cap) would leave `active_tab`
+/// pointing at the deduped-to tab with no rebind — so we must react
+/// if any iteration returned `SwitchedToExisting`.
+///
 /// SAFETY: `hdrop` must be a valid HDROP handed to us by `WM_DROPFILES`.
-unsafe fn handle_dropped_files(state: &mut WindowState, hdrop: HDROP) {
+unsafe fn handle_dropped_files(state: &mut WindowState, hdrop: HDROP) -> bool {
     // DragQueryFileW with iFile=0xFFFFFFFF returns the count.
     let count = unsafe { DragQueryFileW(hdrop, 0xFFFF_FFFF, None) };
+    let mut any_deduped = false;
     for i in 0..count {
         // First call: required-buffer size (TCHARs, exclusive of null).
         let needed = unsafe { DragQueryFileW(hdrop, i, None) };
@@ -19988,8 +20118,10 @@ unsafe fn handle_dropped_files(state: &mut WindowState, hdrop: HDROP) {
         // `copied` excludes the trailing null.
         buf.truncate(copied);
         let path = PathBuf::from(String::from_utf16_lossy(&buf));
-        state.shell.open_file(path);
+        let outcome = state.shell.open_file(path);
+        any_deduped |= matches!(outcome, OpenFileOutcome::SwitchedToExisting(_));
     }
+    any_deduped
 }
 
 #[cfg(test)]
