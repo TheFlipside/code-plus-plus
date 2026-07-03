@@ -101,18 +101,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use codepp_core::lang::{
-    BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS, CPP_KEYWORDS_2,
-    CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
-    CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS,
-    JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS, LISP_KEYWORDS_KW,
-    LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI,
-    L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL,
-    L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL, L_TEX, L_VB, L_XML,
-    MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-    PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
-    RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SQL_KEYWORDS, SQL_KEYWORDS_2,
-    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-    VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+    ASM_CPU_KEYWORDS, ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS,
+    ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2,
+    CPP_KEYWORDS, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3,
+    CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
+    HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS,
+    LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP,
+    L_CS, L_CSS, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS,
+    L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL,
+    L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+    OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS,
+    PYTHON_KEYWORDS_2, RC_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+    SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
+    TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -122,37 +123,40 @@ use codepp_plugin_host::{
     RUNCOMMAND_RANGE, RUNCOMMAND_USER,
 };
 use codepp_scintilla_sys::{
-    ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_BAT_AFTER_LABEL, SCE_BAT_COMMAND,
-    SCE_BAT_COMMENT, SCE_BAT_HIDE, SCE_BAT_LABEL, SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_B_COMMENT,
-    SCE_B_DATE, SCE_B_KEYWORD, SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4, SCE_B_NUMBER,
-    SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CSS_ATTRIBUTE, SCE_CSS_CLASS,
-    SCE_CSS_COMMENT, SCE_CSS_DIRECTIVE, SCE_CSS_DOUBLESTRING, SCE_CSS_EXTENDED_IDENTIFIER,
-    SCE_CSS_EXTENDED_PSEUDOCLASS, SCE_CSS_EXTENDED_PSEUDOELEMENT, SCE_CSS_GROUP_RULE, SCE_CSS_ID,
-    SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3, SCE_CSS_IMPORTANT,
-    SCE_CSS_OPERATOR, SCE_CSS_PSEUDOCLASS, SCE_CSS_PSEUDOELEMENT, SCE_CSS_SINGLESTRING,
-    SCE_CSS_TAG, SCE_CSS_VARIABLE, SCE_C_CHARACTER, SCE_C_COMMENT, SCE_C_COMMENTDOC,
-    SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR, SCE_C_PREPROCESSOR,
-    SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER, SCE_HBA_STRING,
-    SCE_HBA_WORD, SCE_HB_COMMENTLINE, SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD, SCE_HJA_COMMENT,
-    SCE_HJA_COMMENTDOC, SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING, SCE_HJA_KEYWORD, SCE_HJA_NUMBER,
-    SCE_HJA_REGEX, SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD,
-    SCE_HJ_COMMENT, SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD,
-    SCE_HJ_NUMBER, SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL,
-    SCE_HJ_WORD, SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE,
-    SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR,
-    SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP, SCE_H_ASPAT,
-    SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT, SCE_H_DOUBLESTRING,
-    SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM,
-    SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY,
-    SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND,
-    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_LISP_COMMENT,
-    SCE_LISP_KEYWORD, SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER,
-    SCE_LISP_OPERATOR, SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER,
-    SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING,
-    SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD,
-    SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7,
-    SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH,
-    SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
+    ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
+    SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+    SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
+    SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
+    SCE_BAT_AFTER_LABEL, SCE_BAT_COMMAND, SCE_BAT_COMMENT, SCE_BAT_HIDE, SCE_BAT_LABEL,
+    SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_B_COMMENT, SCE_B_DATE, SCE_B_KEYWORD, SCE_B_KEYWORD2,
+    SCE_B_KEYWORD3, SCE_B_KEYWORD4, SCE_B_NUMBER, SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING,
+    SCE_CSS_ATTRIBUTE, SCE_CSS_CLASS, SCE_CSS_COMMENT, SCE_CSS_DIRECTIVE, SCE_CSS_DOUBLESTRING,
+    SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_EXTENDED_PSEUDOCLASS, SCE_CSS_EXTENDED_PSEUDOELEMENT,
+    SCE_CSS_GROUP_RULE, SCE_CSS_ID, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3,
+    SCE_CSS_IMPORTANT, SCE_CSS_OPERATOR, SCE_CSS_PSEUDOCLASS, SCE_CSS_PSEUDOELEMENT,
+    SCE_CSS_SINGLESTRING, SCE_CSS_TAG, SCE_CSS_VARIABLE, SCE_C_CHARACTER, SCE_C_COMMENT,
+    SCE_C_COMMENTDOC, SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR,
+    SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER,
+    SCE_HBA_STRING, SCE_HBA_WORD, SCE_HB_COMMENTLINE, SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD,
+    SCE_HJA_COMMENT, SCE_HJA_COMMENTDOC, SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING,
+    SCE_HJA_KEYWORD, SCE_HJA_NUMBER, SCE_HJA_REGEX, SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS,
+    SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD, SCE_HJ_COMMENT, SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE,
+    SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD, SCE_HJ_NUMBER, SCE_HJ_REGEX, SCE_HJ_SINGLESTRING,
+    SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL, SCE_HJ_WORD, SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE,
+    SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER,
+    SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP,
+    SCE_H_ASPAT, SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT,
+    SCE_H_DOUBLESTRING, SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION,
+    SCE_H_SGML_1ST_PARAM, SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING,
+    SCE_H_SGML_ENTITY, SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG,
+    SCE_H_TAGEND, SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART,
+    SCE_LISP_COMMENT, SCE_LISP_KEYWORD, SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT,
+    SCE_LISP_NUMBER, SCE_LISP_OPERATOR, SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL,
+    SCE_LUA_CHARACTER, SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL,
+    SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING,
+    SCE_LUA_WORD, SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6,
+    SCE_LUA_WORD7, SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2,
+    SCE_L_MATH, SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
     SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR,
     SCE_MAKE_TARGET, SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION,
     SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER,
@@ -5388,6 +5392,131 @@ const SCHEME_THEME: LangTheme = LangTheme {
     bold: LISP_BOLD,
 };
 
+// --- Assembly (LexAsm) style + theme ----------------------------------
+//
+// LexAsm has 17 SCE_ASM_* slots (0..=16) — see the paint-loop banner in
+// `crates/scintilla-sys/src/lib.rs`'s SCE_ASM_* block for the full state
+// model. Six of them carry the wordlist-classifier archetypes we want
+// distinct colours on:
+//
+//   * CPUINSTRUCTION (6) — the primary keyword archetype; the main
+//     visual "this is assembly code" cue → Keyword (bold blue).
+//   * MATHINSTRUCTION (7) — x87 FPU mnemonics, semantically CPU-adjacent
+//     but visually secondary → Keyword2 (steel-blue).
+//   * REGISTER (8) — the most-tokenised element in typical assembly.
+//     Distinct colour matters more here than for any other class
+//     because visually scanning `rax` / `xmm7` / `k3` at a glance
+//     is the primary way an assembly reader tracks data flow →
+//     Lifetime slot (LISP_SYMBOL / Bash SCALAR precedent for "sigil-
+//     tagged archetype that wants its own hue").
+//   * DIRECTIVE (9) — assembler pseudo-ops (`.text`, `%macro`,
+//     `proc`, `global`); reads as "out-of-band syntax marker"
+//     rather than as code → Preprocessor slot (same slot the C
+//     `#include` / `#define` family uses, precedent set by the
+//     StyleSlot::Preprocessor doc-comment).
+//   * DIRECTIVEOPERAND (10) — size / distance / attribute qualifiers
+//     (`byte`, `ptr`, `near`, `readonly`); attributes of directives
+//     rather than directives themselves → Keyword2 (same slot as
+//     MATHINSTRUCTION — both are "secondary keyword" archetypes).
+//   * EXTINSTRUCTION (14) — SSE/AVX/AVX-512/MMX SIMD mnemonics.
+//     Visually distinct from scalar instructions so vectorised
+//     inner loops pop out; deserves its own hue → Macro slot
+//     (same "special-flavor instruction" feel as Rust's
+//     `println!`). Precedent: no other language uses Macro for a
+//     non-Rust archetype today, but the slot's doc-comment
+//     explicitly invites reuse "for similar 'scoped binding'
+//     highlights if applicable" — SIMD-vs-scalar visual
+//     distinction is exactly that.
+//
+// Plus six straightforward slots (COMMENT, NUMBER, STRING, OPERATOR,
+// CHARACTER-as-String, STRINGBACKQUOTE-as-String), an active MASM
+// COMMENTDIRECTIVE (15) → Comment mapping — reached at
+// `LexAsm.cxx:354-356` when the classifier sees the literal
+// `"comment"` DIRECTIVE token — plus one currently-unused state
+// mapped defensively for future paint paths (COMMENTBLOCK (11) →
+// Comment; per the `LexAsm.cxx:6` header note this state is
+// reserved for future GNU-as colouring and the lexer never enters
+// it today), and three deliberately unmapped states (DEFAULT,
+// IDENTIFIER, STRINGEOL — the transient / error states — same
+// convention as LISP_STYLES's LISP_IDENTIFIER + LISP_STRINGEOL
+// skip and every other LangTheme's DEFAULT skip). Count check:
+// 6 archetypes + 6 straightforward + 1 active + 1 defensive = 14,
+// matching `ASM_STYLES.len()` asserted by
+// `asm_uses_lexasm_six_class_theme`.
+const ASM_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_ASM_COMMENT, StyleSlot::Comment),
+    (SCE_ASM_NUMBER, StyleSlot::Number),
+    (SCE_ASM_STRING, StyleSlot::String),
+    (SCE_ASM_OPERATOR, StyleSlot::Operator),
+    (SCE_ASM_CPUINSTRUCTION, StyleSlot::Keyword),
+    (SCE_ASM_MATHINSTRUCTION, StyleSlot::Keyword2),
+    (SCE_ASM_REGISTER, StyleSlot::Lifetime),
+    (SCE_ASM_DIRECTIVE, StyleSlot::Preprocessor),
+    (SCE_ASM_DIRECTIVEOPERAND, StyleSlot::Keyword2),
+    (SCE_ASM_COMMENTBLOCK, StyleSlot::Comment),
+    (SCE_ASM_CHARACTER, StyleSlot::String),
+    (SCE_ASM_EXTINSTRUCTION, StyleSlot::Macro),
+    (SCE_ASM_COMMENTDIRECTIVE, StyleSlot::Comment),
+    (SCE_ASM_STRINGBACKQUOTE, StyleSlot::String),
+];
+
+// Italic on the full comment family: line COMMENT (1), unused-but-
+// forward-mapped COMMENTBLOCK (11), and MASM's COMMENT-directive
+// block state (15). Universal Code++ comment-slot convention;
+// matches Lisp COMMENT + MULTI_COMMENT and NSIS COMMENT + COMMENTBOX
+// double-italic precedent.
+const ASM_ITALIC: &[usize] = &[
+    SCE_ASM_COMMENT,
+    SCE_ASM_COMMENTBLOCK,
+    SCE_ASM_COMMENTDIRECTIVE,
+];
+
+// Bold the primary CPU-instruction archetype. The visual weight of
+// the CPU class is the main "this line does work" cue. FPU (7) /
+// EXT (14) intentionally NOT bolded: they carry distinct hues
+// (Keyword2 / Macro) that already differentiate them from CPU
+// without over-weighting the strip when vectorised code dominates
+// the buffer. DIRECTIVE (9) NOT bolded either — Preprocessor slot
+// carries its own weight, and assembler pseudo-ops are usually
+// line-leading so already visually anchored. Precedent: LISP_BOLD
+// bolds only KEYWORD + SPECIAL (the primary class + one structural
+// anchor); TCL_BOLD bolds WORD + EXPAND (same pattern). Assembly's
+// primary anchor is line-leading DIRECTIVE, but boldening it
+// would collide with the Preprocessor slot's semantic weight, so
+// this row sticks to the single-entry pattern (Rust's RUST_BOLD =
+// WORD only, precedent for one-entry primary-class-bold).
+const ASM_BOLD: &[usize] = &[SCE_ASM_CPUINSTRUCTION];
+
+// Six-class install. `asmWordListDesc[]` at LexAsm.cxx:80-90 declares
+// eight classes; the first six carry instruction / register /
+// directive vocabulary and get populated below. Classes 6/7
+// (`Directives4Foldstart` / `Directives4Foldend`) are consulted only
+// by the folder at `:490-500` and left empty here — populating them
+// with matched directive pairs (e.g. `proc`/`endp`, `%macro`/`%endmacro`)
+// is a future enhancement that adds directive-pair folding without
+// disturbing the classifier.
+//
+// **First-match-wins ordering matters at the LEXER, not here.** The
+// classifier chains through classes 0→5 at `:335-347`; a mnemonic
+// listed in both CPU (0) and EXT (5) paints from CPU. The wordlists
+// in `core::lang` verify no cross-class duplicates via
+// `asm_uses_lexasm_six_class_theme` (its `HashSet` intersection
+// guard walking `asm.keywords`), same shape as the LISP two-class
+// guard.
+const ASM_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, ASM_CPU_KEYWORDS),
+        (1, ASM_FPU_KEYWORDS),
+        (2, ASM_REG_KEYWORDS),
+        (3, ASM_DIRECTIVE_KEYWORDS),
+        (4, ASM_DIRECTIVE_OP_KEYWORDS),
+        (5, ASM_EXT_KEYWORDS),
+    ],
+    styles: ASM_STYLES,
+    italic: ASM_ITALIC,
+    bold: ASM_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -5575,6 +5704,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&LISP_THEME)
     } else if lang == L_SCHEME {
         Some(&SCHEME_THEME)
+    } else if lang == L_ASM {
+        Some(&ASM_THEME)
     } else {
         None
     }
@@ -20727,7 +20858,12 @@ mod lang_theme_tests {
     //! known language fails loudly rather than silently rendering
     //! a buffer at default colours.
     use super::{
-        lang_theme, slot_color, StyleSlot, FG_COMMENT, FG_KEYWORD, FG_MACRO,
+        lang_theme, slot_color, StyleSlot, ASM_CPU_KEYWORDS, ASM_DIRECTIVE_KEYWORDS,
+        ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS,
+        FG_COMMENT, FG_KEYWORD, FG_MACRO, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
+        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
+        SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
         SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3,
         SCE_PL_ARRAY, SCE_PL_BACKTICKS_VAR, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
         SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX_VAR, SCE_PL_REGEX_VAR, SCE_PL_REGSUBST_VAR,
@@ -20739,9 +20875,9 @@ mod lang_theme_tests {
         CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
         CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS,
         JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
-        LUA_KEYWORDS_2, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI, L_JAVA,
-        L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
-        L_PROPS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_XML,
+        LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_HTML, L_INI,
+        L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL,
+        L_PHP, L_PROPS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_XML,
         MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
         PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
         RC_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SQL_KEYWORDS,
@@ -23645,6 +23781,307 @@ mod lang_theme_tests {
             assert_ne!(
                 scheme.keywords[0].1, other.keywords[0].1,
                 "Scheme must NOT reuse {name}'s class-0 wordlist"
+            );
+        }
+    }
+
+    /// Assembly (`L_ASM`) uses Lexilla's `LexAsm` lexer, driving the
+    /// `SCLEX_ASM` classifier chain across six wordlist classes
+    /// (CPU / FPU / registers / directives / directive-operands /
+    /// extended instructions) and the seven emission slots the theme
+    /// paints distinctly (COMMENT/NUMBER/STRING/OPERATOR/CPU/FPU/
+    /// REGISTER/DIRECTIVE/DIRECTIVEOPERAND/EXT + the two aliased
+    /// String archetypes CHARACTER + STRINGBACKQUOTE + the two Comment
+    /// aliases COMMENTBLOCK + COMMENTDIRECTIVE = 14 mappings).
+    ///
+    /// Pinned invariants:
+    ///   1. Six-class install shape (classes 0..=5 populated; 6/7 —
+    ///      the fold-only pair — deliberately unset).
+    ///   2. `HashSet` cross-class no-overlap — `LexAsm`'s classifier
+    ///      chain at `:335-347` demotes any duplicate silently, so
+    ///      a mnemonic in both CPU (0) and EXT (5) would paint from
+    ///      whichever class the chain sees first (CPU). The guard
+    ///      catches the copy-paste drift that would leave EXT
+    ///      entries unreachable.
+    ///   3. Lowercase-only wordlist contract — `LexAsm` calls
+    ///      `GetCurrentLowered(s, sizeof(s))` at `:332` before every
+    ///      `InList` check, so any uppercase entry is guaranteed-
+    ///      unmatched.
+    ///   4. Cross-language non-reuse — ASM must NOT share styles /
+    ///      italic / bold slices with any other wired language (its
+    ///      REGISTER-as-Lifetime + EXT-as-Macro slot picks are
+    ///      unique to assembly).
+    ///   5. Canonical-anchor pins across the six classes:
+    ///      `mov` (CPU), `fld` (FPU), `rax` (REG), `.text` (DIRECTIVE),
+    ///      `ptr` (OP), `vmovss` (EXT).
+    ///   6. `"comment"` MUST appear in `ASM_DIRECTIVE_KEYWORDS` —
+    ///      `LexAsm`'s special-cased MASM COMMENT-block path at
+    ///      `:350-356` triggers only when the just-classified
+    ///      DIRECTIVE token equals literal `"comment"`. Omitting it
+    ///      would silently break MASM `COMMENT ~ ... ~` block-comment
+    ///      lexing.
+    ///   7. Style-routing pins — every `SCE_ASM_*` slot mapped
+    ///      routes to the intended `StyleSlot`.
+    ///   8. Deliberate-omission pins — DEFAULT (0), IDENTIFIER (5),
+    ///      STRINGEOL (13) stay unmapped (universal transient /
+    ///      error-state convention).
+    ///   9. Italic set == COMMENT + COMMENTBLOCK + COMMENTDIRECTIVE
+    ///      (the full comment family).
+    ///  10. Bold set == CPUINSTRUCTION only (primary keyword archetype,
+    ///      `RUST_BOLD` single-entry precedent).
+    #[test]
+    fn asm_uses_lexasm_six_class_theme() {
+        use codepp_scintilla_sys::{SCE_ASM_DEFAULT, SCE_ASM_IDENTIFIER, SCE_ASM_STRINGEOL};
+        use std::collections::HashSet;
+        let asm = lang_theme(L_ASM).expect("Assembly wired");
+
+        // 14-mapping style table pin (see doc-comment).
+        assert_eq!(
+            asm.styles.len(),
+            14,
+            "ASM_STYLES must map 14 indices (17 SCE_ASM_* slots minus \
+             DEFAULT + IDENTIFIER + STRINGEOL)"
+        );
+
+        // Cross-language non-reuse across a broad sample — assembly's
+        // REGISTER-as-Lifetime + EXT-as-Macro slot picks are unique.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let lisp = lang_theme(L_LISP).expect("Lisp wired");
+        let scheme = lang_theme(L_SCHEME).expect("Scheme wired");
+        let bash = lang_theme(L_BASH).expect("Bash wired");
+        let tcl = lang_theme(L_TCL).expect("TCL wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let props = lang_theme(L_INI).expect("INI wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (lisp, "Lisp"),
+            (scheme, "Scheme"),
+            (bash, "Bash"),
+            (tcl, "TCL"),
+            (mk, "Makefile"),
+            (bat, "Batch"),
+            (vb, "VB"),
+            (php, "PHP"),
+            (props, "INI"),
+        ] {
+            assert_ne!(asm.styles, other.styles, "ASM must NOT reuse {name}_STYLES");
+        }
+
+        // Six-class install shape.
+        assert_eq!(
+            asm.keywords.len(),
+            6,
+            "ASM installs classes 0..=5 (classes 6/7 fold-only, left empty)"
+        );
+        for (expected_class, actual) in (0..6).zip(asm.keywords.iter()) {
+            assert_eq!(
+                actual.0, expected_class,
+                "ASM keyword class-index order must be 0..=5, got {actual:?}"
+            );
+        }
+        assert_eq!(asm.keywords[0].1, ASM_CPU_KEYWORDS);
+        assert_eq!(asm.keywords[1].1, ASM_FPU_KEYWORDS);
+        assert_eq!(asm.keywords[2].1, ASM_REG_KEYWORDS);
+        assert_eq!(asm.keywords[3].1, ASM_DIRECTIVE_KEYWORDS);
+        assert_eq!(asm.keywords[4].1, ASM_DIRECTIVE_OP_KEYWORDS);
+        assert_eq!(asm.keywords[5].1, ASM_EXT_KEYWORDS);
+
+        // HashSet cross-class no-overlap (see doc-comment invariant 2).
+        let mut seen: HashSet<&str> = HashSet::new();
+        for (class_idx, words) in asm.keywords {
+            for tok in words.split_whitespace() {
+                assert!(
+                    seen.insert(tok),
+                    "ASM wordlist token `{tok}` appears in multiple \
+                     classes (currently checking class {class_idx}) — \
+                     LexAsm's first-match-wins chain at \
+                     LexAsm.cxx:335-347 makes any duplicate unreachable"
+                );
+            }
+        }
+
+        // Lowercase-only contract (invariant 3). LexAsm lowercases the
+        // buffer via GetCurrentLowered at :332 before InList; any
+        // uppercase wordlist entry is guaranteed-unmatched.
+        for (class_idx, words) in asm.keywords {
+            for tok in words.split_whitespace() {
+                assert!(
+                    tok.chars().all(|c| !c.is_ascii_uppercase()),
+                    "ASM class-{class_idx} entry `{tok}` contains \
+                     uppercase — LexAsm lowercases the source token via \
+                     GetCurrentLowered at :332 before InList; uppercase \
+                     wordlist entries never match"
+                );
+            }
+        }
+
+        // Canonical-anchor pins (invariant 5).
+        assert!(
+            ASM_CPU_KEYWORDS.split_whitespace().any(|t| t == "mov"),
+            "ASM_CPU_KEYWORDS must include `mov` (the archetype \
+             CPU-instruction hit)"
+        );
+        assert!(
+            ASM_FPU_KEYWORDS.split_whitespace().any(|t| t == "fld"),
+            "ASM_FPU_KEYWORDS must include `fld` (the archetype x87 \
+             load — canonical class-1 hit)"
+        );
+        assert!(
+            ASM_REG_KEYWORDS.split_whitespace().any(|t| t == "rax"),
+            "ASM_REG_KEYWORDS must include `rax` (x86-64's primary \
+             accumulator — canonical class-2 hit)"
+        );
+        assert!(
+            ASM_DIRECTIVE_KEYWORDS
+                .split_whitespace()
+                .any(|t| t == ".text"),
+            "ASM_DIRECTIVE_KEYWORDS must include `.text` (GAS canonical \
+             section directive — LexAsm's `IsAWordStart` at :45-48 \
+             admits `.` alongside `_` / `%` / `@` / `$` / `?`, and the \
+             DEFAULT-state entry at :414-420 picks IDENTIFIER on any \
+             `IsAWordStart` character, so `.text` reaches the inline \
+             classifier at :341 as the single token `.text`)"
+        );
+        assert!(
+            ASM_DIRECTIVE_OP_KEYWORDS
+                .split_whitespace()
+                .any(|t| t == "ptr"),
+            "ASM_DIRECTIVE_OP_KEYWORDS must include `ptr` (MASM's \
+             canonical operand-modifier — `qword ptr [rax]`)"
+        );
+        assert!(
+            ASM_EXT_KEYWORDS.split_whitespace().any(|t| t == "vmovss"),
+            "ASM_EXT_KEYWORDS must include `vmovss` (canonical AVX \
+             scalar-single move — the archetype VEX-prefixed EXT hit)"
+        );
+
+        // `"comment"` MUST be in class 3 (invariant 6). LexAsm's
+        // :350-356 checks `!strcmp(s, "comment")` after the DIRECTIVE
+        // classification; omission silently breaks MASM COMMENT
+        // block-comment lexing.
+        assert!(
+            ASM_DIRECTIVE_KEYWORDS
+                .split_whitespace()
+                .any(|t| t == "comment"),
+            "ASM_DIRECTIVE_KEYWORDS must include `comment` (MASM's \
+             COMMENT ~...~ block-comment directive — LexAsm's \
+             :350-356 special-cases the literal `\"comment\"` token \
+             after DIRECTIVE classification and enters \
+             COMMENTDIRECTIVE state; omitting it breaks MASM block \
+             comments entirely)"
+        );
+
+        // Style-routing pins (invariant 7). Every mapped slot →
+        // intended StyleSlot.
+        for (idx, slot, name) in [
+            (SCE_ASM_COMMENT, StyleSlot::Comment, "SCE_ASM_COMMENT"),
+            (SCE_ASM_NUMBER, StyleSlot::Number, "SCE_ASM_NUMBER"),
+            (SCE_ASM_STRING, StyleSlot::String, "SCE_ASM_STRING"),
+            (SCE_ASM_OPERATOR, StyleSlot::Operator, "SCE_ASM_OPERATOR"),
+            (
+                SCE_ASM_CPUINSTRUCTION,
+                StyleSlot::Keyword,
+                "SCE_ASM_CPUINSTRUCTION",
+            ),
+            (
+                SCE_ASM_MATHINSTRUCTION,
+                StyleSlot::Keyword2,
+                "SCE_ASM_MATHINSTRUCTION",
+            ),
+            (SCE_ASM_REGISTER, StyleSlot::Lifetime, "SCE_ASM_REGISTER"),
+            (
+                SCE_ASM_DIRECTIVE,
+                StyleSlot::Preprocessor,
+                "SCE_ASM_DIRECTIVE",
+            ),
+            (
+                SCE_ASM_DIRECTIVEOPERAND,
+                StyleSlot::Keyword2,
+                "SCE_ASM_DIRECTIVEOPERAND",
+            ),
+            (
+                SCE_ASM_COMMENTBLOCK,
+                StyleSlot::Comment,
+                "SCE_ASM_COMMENTBLOCK",
+            ),
+            (SCE_ASM_CHARACTER, StyleSlot::String, "SCE_ASM_CHARACTER"),
+            (
+                SCE_ASM_EXTINSTRUCTION,
+                StyleSlot::Macro,
+                "SCE_ASM_EXTINSTRUCTION",
+            ),
+            (
+                SCE_ASM_COMMENTDIRECTIVE,
+                StyleSlot::Comment,
+                "SCE_ASM_COMMENTDIRECTIVE",
+            ),
+            (
+                SCE_ASM_STRINGBACKQUOTE,
+                StyleSlot::String,
+                "SCE_ASM_STRINGBACKQUOTE",
+            ),
+        ] {
+            assert!(
+                asm.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Intentional-omission pins (invariant 8).
+        for (idx, name) in [
+            (SCE_ASM_DEFAULT, "SCE_ASM_DEFAULT"),
+            (SCE_ASM_IDENTIFIER, "SCE_ASM_IDENTIFIER"),
+            (SCE_ASM_STRINGEOL, "SCE_ASM_STRINGEOL"),
+        ] {
+            assert!(
+                !asm.styles.iter().any(|(i, _)| *i == idx),
+                "{name} must remain unmapped (universal transient / \
+                 error-state convention)"
+            );
+        }
+
+        // Italic set == full comment family (invariant 9).
+        for (idx, name) in [
+            (SCE_ASM_COMMENT, "SCE_ASM_COMMENT"),
+            (SCE_ASM_COMMENTBLOCK, "SCE_ASM_COMMENTBLOCK"),
+            (SCE_ASM_COMMENTDIRECTIVE, "SCE_ASM_COMMENTDIRECTIVE"),
+        ] {
+            assert!(
+                asm.italic.contains(&idx),
+                "Italic on {name} (universal comment-slot convention)"
+            );
+        }
+        assert_eq!(
+            asm.italic.len(),
+            3,
+            "ASM_ITALIC must contain exactly COMMENT + COMMENTBLOCK + \
+             COMMENTDIRECTIVE"
+        );
+
+        // Bold set == CPUINSTRUCTION only (invariant 10).
+        assert_eq!(
+            asm.bold.len(),
+            1,
+            "ASM_BOLD must contain exactly CPUINSTRUCTION (single-entry \
+             primary-keyword-bold; RUST_BOLD precedent)"
+        );
+        assert!(
+            asm.bold.contains(&SCE_ASM_CPUINSTRUCTION),
+            "Bold on SCE_ASM_CPUINSTRUCTION (primary keyword archetype)"
+        );
+        for (idx, name) in [
+            (SCE_ASM_MATHINSTRUCTION, "SCE_ASM_MATHINSTRUCTION"),
+            (SCE_ASM_REGISTER, "SCE_ASM_REGISTER"),
+            (SCE_ASM_DIRECTIVE, "SCE_ASM_DIRECTIVE"),
+            (SCE_ASM_EXTINSTRUCTION, "SCE_ASM_EXTINSTRUCTION"),
+        ] {
+            assert!(
+                !asm.bold.contains(&idx),
+                "{name} must NOT be bold (carries weight via colour \
+                 slot, not font weight)"
             );
         }
     }

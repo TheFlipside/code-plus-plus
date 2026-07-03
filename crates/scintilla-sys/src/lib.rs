@@ -1655,6 +1655,120 @@ pub const SCE_LISP_OPERATOR: usize = 10;
 pub const SCE_LISP_SPECIAL: usize = 11;
 pub const SCE_LISP_MULTI_COMMENT: usize = 12;
 
+// LexAsm style indices. 17 contiguous slots (0..=16) — the
+// generic assembler lexer used by MASM / NASM / GAS-syntax
+// buffers via SCLEX_ASM (the SCLEX_AS "secondary" lexer at
+// `LexAsm.cxx:523` shares the SAME SCE_ASM_* namespace with a
+// different set of default properties; both lex identical
+// classification). Cross-referenced against
+// `vendor/lexilla/include/LexicalStyles.iface:829-847` and the
+// `lexicalClassesAsm[]` array at `vendor/lexilla/lexers/LexAsm.cxx:128-147`.
+//
+// **State model.** LexAsm's paint loop is a classic Scintilla
+// stream lexer (`LexerAsm::Lex` at `LexAsm.cxx:274-434`; the
+// folder at `:440-518` is separate):
+//
+//   - DEFAULT (0) is transient — the lexer walks back to it after
+//     completing OPERATOR / NUMBER / IDENTIFIER / string bodies.
+//   - COMMENT (1) is the `;`-to-EOL line comment (default in
+//     MASM/NASM; GAS's `#` variant comes in via the `SCLEX_AS`
+//     sibling with commentChar='#'). Termination at
+//     `LexAsm.cxx:296-298` (walks back to DEFAULT on line-start
+//     reset); entry at `:415-416` (`sc.ch == commentCharacter`
+//     inside the DEFAULT state).
+//   - NUMBER (2) covers digit-started literals plus the
+//     `.<digit>` float-literal head — entry at `:417-418`
+//     (`IsADigit(sc.ch) || (sc.ch == '.' && IsADigit(sc.chNext))`),
+//     termination at `:323-327` (walks back on `!IsAWordChar`).
+//     No explicit hex/binary/octal parser — the lexer just runs
+//     as many `IsAWordChar` characters as follow, so
+//     `0xFF`, `0b1010`, `1234h`, `77o` all lex as NUMBER by
+//     virtue of being digit-started + all `IsAWordChar` bytes.
+//   - STRING (3) is the double-quoted string with `\`-escape
+//     handling at `:370-380`. CHARACTER (12) is the single-quoted
+//     equivalent at `:383-393`. STRINGBACKQUOTE (16) is the
+//     back-quoted form (uncommon; some GAS macro dialects).
+//     STRINGEOL (13) is the "hit end-of-line inside an open
+//     string" error state — three `ChangeState(SCE_ASM_STRINGEOL)`
+//     call sites at `:378` (STRING), `:391` (CHARACTER),
+//     `:404` (STRINGBACKQUOTE).
+//   - OPERATOR (4) covers Assembly's punctuation set — the 18
+//     characters `IsAsmOperator` at `:50-55` accepts:
+//     `* / - + ( ) = ^ [ ] < & > , | ~ % :`. Notable
+//     omissions: `!` and `{` `}` are NOT operators (they fall
+//     through to whatever the surrounding state emits); `?` is
+//     a WORD character per `IsAWordChar` at `:42`, not an
+//     operator; `.` is deliberately kept out of the operator set
+//     (see `:53` comment) so it can start identifiers (GAS
+//     pseudo-ops) and numbers (floats).
+//   - IDENTIFIER (5) is the transient state during word scan;
+//     the inline classifier at `:329-358` promotes the completed
+//     identifier to CPUINSTRUCTION (6) / MATHINSTRUCTION (7) /
+//     REGISTER (8) / DIRECTIVE (9) / DIRECTIVEOPERAND (10) /
+//     EXTINSTRUCTION (14) via the first-match `InList` chain
+//     rooted at `:335` (`cpuInstruction.InList(s)`); any token
+//     not in any wordlist stays IDENTIFIER — that's the archetype
+//     for labels, symbols, macros.
+//
+// **Case handling.** The classifier calls
+// `GetCurrentLowered(s, sizeof(s))` at `:332` before every
+// `InList` check, so wordlists MUST be lowercase — the source
+// token "MOV" / "mov" / "Mov" all match a lowercase "mov"
+// wordlist entry. Contrast with LexLisp's byte-exact case-
+// sensitive path (`SCE_LISP_KEYWORD` requires an exact-case
+// match, so wordlists ship lowercase-only). Both lexers land on
+// "lowercase wordlist" as the ergonomic authoring contract.
+//
+// **The `comment` directive.** MASM's `COMMENT <delim>...<delim>`
+// block-comment directive triggers a special path at
+// `LexAsm.cxx:350-356`: when the just-classified DIRECTIVE token
+// equals literal `"comment"`, the lexer eats whitespace and then
+// enters COMMENTDIRECTIVE (15) until it sees the delimiter char
+// again (default `~`, configurable via
+// `lexer.asm.comment.delimiter`). This means `comment` MUST
+// appear in the class-3 (`Directives`) wordlist for the special
+// path to fire — omit it and MASM `COMMENT` blocks lex as
+// consecutive IDENTIFIERs.
+//
+// **COMMENTBLOCK (11) is empty state — reserved for a "future
+// GNU as colouring" comment at `LexAsm.cxx:6`.** The lexer never
+// enters this state today; the constant is retained for API
+// stability and forward-compat but unused.
+//
+// **Wordlist classes.** `asmWordListDesc[]` at
+// `LexAsm.cxx:80-90` declares eight classes:
+//   - class 0 "CPU instructions"       → SCE_ASM_CPUINSTRUCTION
+//   - class 1 "FPU instructions"       → SCE_ASM_MATHINSTRUCTION
+//   - class 2 "Registers"              → SCE_ASM_REGISTER
+//   - class 3 "Directives"             → SCE_ASM_DIRECTIVE
+//   - class 4 "Directive operands"     → SCE_ASM_DIRECTIVEOPERAND
+//   - class 5 "Extended instructions"  → SCE_ASM_EXTINSTRUCTION
+//   - class 6 "Directives4Foldstart"   → fold-only (empty here)
+//   - class 7 "Directives4Foldend"     → fold-only (empty here)
+// Classes 6/7 drive syntax-based folding via
+// `LexAsm.cxx:490-500`; folding is enabled via the universal
+// `fold` property but the empty wordlists mean no
+// directive-pair folding fires (indentation-based folding is
+// still available via Scintilla's other fold logic if the user
+// wants it).
+pub const SCE_ASM_DEFAULT: usize = 0;
+pub const SCE_ASM_COMMENT: usize = 1;
+pub const SCE_ASM_NUMBER: usize = 2;
+pub const SCE_ASM_STRING: usize = 3;
+pub const SCE_ASM_OPERATOR: usize = 4;
+pub const SCE_ASM_IDENTIFIER: usize = 5;
+pub const SCE_ASM_CPUINSTRUCTION: usize = 6;
+pub const SCE_ASM_MATHINSTRUCTION: usize = 7;
+pub const SCE_ASM_REGISTER: usize = 8;
+pub const SCE_ASM_DIRECTIVE: usize = 9;
+pub const SCE_ASM_DIRECTIVEOPERAND: usize = 10;
+pub const SCE_ASM_COMMENTBLOCK: usize = 11;
+pub const SCE_ASM_CHARACTER: usize = 12;
+pub const SCE_ASM_STRINGEOL: usize = 13;
+pub const SCE_ASM_EXTINSTRUCTION: usize = 14;
+pub const SCE_ASM_COMMENTDIRECTIVE: usize = 15;
+pub const SCE_ASM_STRINGBACKQUOTE: usize = 16;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated

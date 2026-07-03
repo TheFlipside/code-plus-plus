@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 29 / 🟡 59 / ⚫ 1.
+Total: 89 rows. ✅ 30 / 🟡 58 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1842,7 +1842,7 @@ further shim work needed.
 | Ada | 42 | `ada` | ⚫ | ⚫ | 🟡 |
 | ASN.1 | 65 | `asn1` | ⚫ | ⚫ | 🟡 |
 | ASP | 16 | `hypertext` | ✅ | ✅ | ✅ |
-| Assembly | 32 | `asm` | ⚫ | ⚫ | 🟡 |
+| Assembly | 32 | `asm` | ✅ | ✅ | ✅ |
 | AutoIt | 40 | `au3` | ⚫ | ⚫ | 🟡 |
 | AviSynth | 66 | `avs` | ⚫ | ⚫ | 🟡 |
 | BaanC | 60 | `baan` | ⚫ | ⚫ | 🟡 |
@@ -2027,6 +2027,70 @@ unreachable-token guard, canonical anchors (`define` in class 0,
 `null?` in class 1), and 10 cross-language WORDLIST non-reuse pins
 (content-based, NOT style-based, because Scheme intentionally
 shares styles with Lisp).
+
+**Assembly (2026-07-03):** uses Lexilla's `asm` lexer (`LexAsm.cxx`,
+`SCLEX_ASM`) covering x86-family (16 / 32 / 64-bit) sources across
+MASM / NASM / GAS dialects — the eight-class
+`asmWordListDesc[]` at `LexAsm.cxx:80-90` is filled across six
+populated classes plus the two empty fold-only tail. `ASM_CPU_KEYWORDS`
+(class 0, ~300 mnemonics) is the primary scalar-integer /
+control-flow archetype (`mov`, `add`, `jmp`, `call`, `ret`, `push`,
+`pop`, string ops, set-on-condition, system, cache management);
+`ASM_FPU_KEYWORDS` (class 1, ~95 x87 mnemonics) covers the classic
+ST(0)-based FPU (`fld`, `fadd`, `fsin`, `fisttp`, `fwait`, …);
+`ASM_REG_KEYWORDS` (class 2, ~240 registers) enumerates every
+architecturally-visible x86-64 register across all widths — general
+(8/16/32/64-bit `al` through `r15`), instruction pointer, flags,
+segment, control, debug, FPU stack, MMX, SSE/AVX/AVX-512 vector
+(`xmm0..zmm31`), AVX-512 mask (`k0..k7`), and MPX bound
+(`bnd0..bnd3`); `ASM_DIRECTIVE_KEYWORDS` (class 3, ~260 entries) is
+the MASM ∪ NASM ∪ GAS union — MASM `proc` / `endp` / `.data` /
+`invoke`, NASM `%macro` / `%define` / `section` / `resb` / `db`,
+GAS `.text` / `.globl` / `.type` / `.cfi_*`; `ASM_DIRECTIVE_OP_KEYWORDS`
+(class 4, ~35 qualifiers) carries size specifiers (`byte`, `dword`,
+`xmmword`, `zmmword`), distance modifiers (`ptr`, `near`, `far`,
+`offset`), and MASM segment attributes; `ASM_EXT_KEYWORDS` (class 5,
+~495 mnemonics) is the SIMD family — MMX, SSE1–4.2, AES-NI,
+PCLMULQDQ, SHA extensions, AVX (VEX-encoded), FMA3, AVX-512
+(F/CD/DQ/BW + masking), and 3DNow!.
+
+Six theme routings paint distinctly: `SCE_ASM_CPUINSTRUCTION` →
+`StyleSlot::Keyword` (bold blue — primary archetype);
+`SCE_ASM_MATHINSTRUCTION` → `Keyword2` (x87 secondary);
+`SCE_ASM_REGISTER` → `Lifetime` slot (distinctive hue — visual
+scanning of `rax` / `xmm7` / `k3` at a glance is the primary way
+assembly readers track data flow, matches LISP_SYMBOL /
+Bash SCALAR "sigil-tagged archetype" precedent);
+`SCE_ASM_DIRECTIVE` → `Preprocessor` (assembler pseudo-ops read
+as "out-of-band syntax markers", same slot as C `#include`);
+`SCE_ASM_DIRECTIVEOPERAND` → `Keyword2`;
+`SCE_ASM_EXTINSTRUCTION` → `Macro` (SIMD needs to pop out in
+vectorised inner loops — RUST_MACRO precedent for
+"special-flavor instruction"). Comment family (`COMMENT` +
+`COMMENTBLOCK` + `COMMENTDIRECTIVE`) all italic; `CPUINSTRUCTION`
+single-entry bold (RUST_BOLD precedent).
+
+Case handling: `LexAsm` calls `GetCurrentLowered(s, sizeof(s))`
+at `:332` before every `InList` check — wordlists ship
+lowercase-only. Uppercase entries never match (assembler source
+`MOV` / `mov` / `Mov` all become `mov` before the classifier
+runs). Structural guards pinned in `asm_uses_lexasm_six_class_theme`:
+14-mapping style table, six-class install shape, `HashSet`
+cross-class + intra-class no-overlap (LexAsm's first-match-wins
+chain at `:335-347` demotes duplicates), lowercase-only contract,
+canonical anchors (`mov` / `fld` / `rax` / `.text` / `ptr` /
+`vmovss` across the six classes), `"comment"` MUST-be-in-class-3
+for MASM `COMMENT ~...~` block-comment lexing, 14 style-routing
+pins, three deliberate-omission pins (`DEFAULT` / `IDENTIFIER` /
+`STRINGEOL`), italic and bold set-shape pins, and 10 cross-language
+non-reuse pins (unique REGISTER-as-Lifetime + EXT-as-Macro slot
+picks).
+
+Deferred: classes 6/7 (`Directives4Foldstart` / `Directives4Foldend`)
+are consulted only by the folder at `LexAsm.cxx:490-500` and left
+empty — a future commit can populate them with matched pairs
+(`proc`/`endp`, `%macro`/`%endmacro`, `.if`/`.endif`) to enable
+directive-pair folding without disturbing the classifier chain.
 
 ## Notes
 

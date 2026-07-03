@@ -3657,6 +3657,515 @@ pub const LISP_KEYWORDS: &str = concat!(
 pub const LISP_KEYWORDS_KW: &str =
     "&allow-other-keys &aux &body &environment &key &optional &rest &whole";
 
+// --- Assembly (LexAsm) wordlists --------------------------------------
+//
+// LexAsm at `vendor/lexilla/lexers/LexAsm.cxx` powers L_ASM (`SCLEX_ASM`)
+// via the "asm" lexer name in Notepad++'s catalog. The classifier at
+// `:329-358` calls `GetCurrentLowered(s, sizeof(s))` at `:332` before
+// every `InList` check, so every wordlist below is **lowercase-only**
+// by contract — mixed-case source tokens ("MOV", "Mov", "mov") all
+// hit the same lowercase entry. This is the ergonomic authoring
+// contract asm has always had (assemblers themselves are case-
+// insensitive on mnemonics / registers / directives) and matches
+// Notepad++'s stock `langs.model.xml <Language name="asm">` list.
+//
+// The wordlists cover **x86-family (16 / 32 / 64-bit)** assembly as
+// the primary target — the dominant use case for a general
+// developer editor. NASM's official instruction reference, Intel's
+// SDM Volume 2A/2B/2C, and AMD64 APM Volume 3 were cross-referenced
+// as source of truth; entries with an asterisk-comment in the
+// original references (pseudo-ops, macro directives) are placed in
+// the appropriate DIRECTIVES/OPS/EXT class rather than CPU.
+//
+// **Six populated classes + two empty fold-only ones.** The
+// eight-class `asmWordListDesc[]` at `LexAsm.cxx:80-90` is filled
+// as follows:
+//   * class 0 CPU        → [`ASM_CPU_KEYWORDS`]     (~300 mnemonics)
+//   * class 1 FPU        → [`ASM_FPU_KEYWORDS`]     (~95 x87 mnemonics)
+//   * class 2 Registers  → [`ASM_REG_KEYWORDS`]     (~240 registers)
+//   * class 3 Directives → [`ASM_DIRECTIVE_KEYWORDS`] (~260 MASM +
+//                          NASM + GAS + preprocessor directives)
+//   * class 4 Operands   → [`ASM_DIRECTIVE_OP_KEYWORDS`] (~35 size /
+//                          scope / attribute qualifiers)
+//   * class 5 Extended   → [`ASM_EXT_KEYWORDS`]     (~495 SSE / AVX /
+//                          AVX-512 / MMX / 3DNow!)
+// Classes 6/7 are `Directives4Foldstart` / `Directives4Foldend`,
+// consulted only by the folder (`LexAsm.cxx:490-500`); left empty
+// today. A future commit can populate them with matched pairs
+// (`.if`/`.endif`, `%macro`/`%endmacro`, `proc`/`endp`) to enable
+// directive-pair folding without disturbing the classifier.
+//
+// **No cross-class duplicates.** The first-match-wins chain at
+// `:335-347` demotes any duplicate silently — a mnemonic listed in
+// both CPU and EXT would paint from whichever class the chain sees
+// first (CPU). Verified pairwise by a `HashSet` intersection guard
+// in `asm_uses_lexasm_six_class_theme` (see the seen-set assertion
+// walking `asm.keywords`).
+
+/// Space-separated **x86-family CPU-instruction** vocabulary
+/// installed via `LexAsm`'s `SCI_SETKEYWORDS(0, …)` — class 0 of
+/// `asmWordListDesc[]` at `vendor/lexilla/lexers/LexAsm.cxx:80-90`
+/// ("CPU instructions"). Drives `SCE_ASM_CPUINSTRUCTION`.
+///
+/// **Scope: general-purpose, control-flow, and integer arithmetic
+/// mnemonics** across 16 / 32 / 64-bit x86. Data movement (`mov`,
+/// `push`, `pop`, `lea`, `xchg`), arithmetic (`add`, `sub`, `mul`,
+/// `imul`, `div`, `idiv`, `inc`, `dec`, `neg`), logic (`and`, `or`,
+/// `xor`, `not`, `shl`, `shr`, `sal`, `sar`, `rol`, `ror`, `test`),
+/// compare/branch (`cmp`, `jmp`, `je`, `jne`, `jg`, `jl`, `ja`,
+/// `jb`, `jc`, `jz`, `js`, `jo`, `call`, `ret`, `loop`), string
+/// ops (`movs`, `stos`, `lods`, `scas`, `cmps`, `rep`, `repe`,
+/// `repne`), stack (`push`, `pop`, `pushf`, `popf`, `enter`,
+/// `leave`), set-on-condition (`setz`, `setnz`, `sete`, `setne`,
+/// `setg`, `setl`, `seta`, `setb`), system (`syscall`, `sysret`,
+/// `int`, `iret`, `cpuid`, `rdtsc`, `hlt`, `cli`, `sti`), and
+/// misc (`nop`, `wait`, `cbw`, `cwd`, `cdq`, `cqo`, `cld`, `std`,
+/// `bswap`, `xlat`).
+///
+/// **Sourced from Intel SDM Volume 2A/2B/2C** (instruction set
+/// reference) and AMD64 APM Volume 3. Cross-referenced against
+/// Notepad++'s `langs.model.xml <Language name="asm">` `instre1`
+/// list for default-set parity (no content copied from Notepad++
+/// per CLAUDE.md — this is an independent enumeration from the
+/// public ISA references).
+pub const ASM_CPU_KEYWORDS: &str = concat!(
+    // Data movement
+    "mov movabs movsx movsxd movzx xchg xadd cmpxchg cmpxchg8b cmpxchg16b ",
+    "push pusha pushad pushf pushfd pushfq ",
+    "pop popa popad popf popfd popfq ",
+    "lea lahf sahf lds les lfs lgs lss xlat xlatb bswap ",
+    "cmove cmovne cmovnz cmovz cmovg cmovnle cmovge cmovnl cmovl cmovnge ",
+    "cmovle cmovng cmova cmovnbe cmovae cmovnb cmovb cmovnae cmovbe cmovna ",
+    "cmovc cmovnc cmovo cmovno cmovs cmovns cmovp cmovpe cmovnp cmovpo ",
+    // Integer arithmetic
+    "add adc sub sbb inc dec neg mul imul div idiv ",
+    "adcx adox mulx ",
+    // Logic + shift + rotate
+    "and or xor not shl shld shr shrd sal sar rol ror rcl rcr test ",
+    // Bit ops
+    "bt bts btr btc bsf bsr popcnt lzcnt tzcnt andn bextr blsi blsmsk blsr ",
+    "bzhi pdep pext rorx sarx shlx shrx ",
+    // Compare + branch
+    "cmp jmp ",
+    "je jne jz jnz jg jng jge jnge jl jnl jle jnle ja jna jae jnae jb jnb jbe jnbe ",
+    "jc jnc jo jno js jns jp jpe jnp jpo jcxz jecxz jrcxz ",
+    // Loop family
+    "loop loope loopne loopz loopnz ",
+    // Call / return
+    "call ret retn retf iret iretd iretq enter leave ",
+    // Set on condition
+    "sete setne setz setnz setg setng setge setnge setl setnl setle setnle ",
+    "seta setna setae setnae setb setnb setbe setnbe setc setnc seto setno ",
+    "sets setns setp setpe setnp setpo ",
+    // String
+    "movs movsb movsw movsd movsq ",
+    "stos stosb stosw stosd stosq ",
+    "lods lodsb lodsw lodsd lodsq ",
+    "scas scasb scasw scasd scasq ",
+    "cmps cmpsb cmpsw cmpsd cmpsq ",
+    "rep repe repne repz repnz ",
+    // I/O
+    "in out ins insb insw insd outs outsb outsw outsd ",
+    // Flags / conversion
+    "clc cld cli cmc stc std sti ",
+    "cbw cwd cwde cdq cdqe cqo ",
+    // Segment / descriptor / system
+    "arpl bound lar lsl verr verw sgdt sidt sldt smsw str lgdt lidt lldt ltr ",
+    "clts invd wbinvd invlpg lmsw hlt rsm ud2 ",
+    // CPUID / TSC / MSR / random / rd/wr
+    "cpuid rdtsc rdtscp rdmsr wrmsr rdpmc rdrand rdseed rdpid rdgsbase rdfsbase wrgsbase wrfsbase ",
+    // Interrupts / syscall
+    "int int3 into syscall sysret sysenter sysexit swapgs ",
+    // Prefetch hints (SSE / 3DNow! origin). `prefetch` +
+    // `prefetchw` are omitted here — routed via ASM_EXT_KEYWORDS
+    // to keep them grouped with the rest of the SIMD prefetch
+    // family (`prefetchnta`, `prefetcht0..2`). `prefetchwt1` is
+    // Intel Xeon Phi / Knights Landing — also EXT.
+    // Misc no-op / hint. `pause` stays as CPU (spin-loop hint —
+    // classified in Notepad++'s default list under CPU too, even
+    // though the encoding is SSE2's REP NOP). `fwait` is x87 FPU
+    // sync — lives in ASM_FPU_KEYWORDS to avoid a class-0/class-1
+    // duplicate the LexAsm classifier chain at :335-347 would
+    // silently demote. `wait` (opcode 9B) stays here as the CPU
+    // sync instruction.
+    "nop pause ud0 ud1 endbr32 endbr64 wait ",
+    // 64-bit cache-management + non-temporal store. `movnti` (SSE2-
+    // introduced but scalar-integer non-temporal store) counts as
+    // CPU domain per Intel SDM Vol. 2 — kept here rather than in
+    // EXT. `clflush` / `clflushopt` / `clwb` are cache-management
+    // and reasonably CPU. `popcnt` is already listed in the bit-ops
+    // group above (SSE4.2 introduction but scalar bit operation);
+    // that placement wins the first-match here.
+    "movnti clflush clflushopt clwb ",
+);
+
+/// Space-separated **x87 FPU mnemonic** vocabulary installed via
+/// `LexAsm`'s `SCI_SETKEYWORDS(1, …)` — class 1 of
+/// `asmWordListDesc[]` at `vendor/lexilla/lexers/LexAsm.cxx:80-90`
+/// ("FPU instructions"). Drives `SCE_ASM_MATHINSTRUCTION`.
+///
+/// **Scope: x87 floating-point unit ONLY** — the classic ST(0)/ST(7)
+/// stack-based ISA (Intel SDM Volume 2 Ch. 3-6, x87 sections).
+/// SSE / SSE2 / AVX floating-point instructions live in
+/// [`ASM_EXT_KEYWORDS`] (class 5) as "extended instructions" — that
+/// classification matches Notepad++'s stock list and reflects the
+/// visual grouping most assembly programmers reach for. MMX
+/// integer-vector mnemonics ALSO live in EXT (they share SSE's
+/// register file conceptually and the classifier chains through EXT
+/// after this class).
+pub const ASM_FPU_KEYWORDS: &str = concat!(
+    // Load / store
+    "fld fst fstp fild fist fistp fisttp fbld fbstp ",
+    "fldz fld1 fldpi fldl2e fldl2t fldlg2 fldln2 ",
+    "fxch fcmove fcmovne fcmovb fcmovbe fcmovnb fcmovnbe fcmovu fcmovnu ",
+    // Arithmetic
+    "fadd faddp fiadd fsub fsubp fisub fsubr fsubrp fisubr ",
+    "fmul fmulp fimul fdiv fdivp fidiv fdivr fdivrp fidivr ",
+    "fchs fabs fsqrt frndint fprem fprem1 fscale fxtract ",
+    // Compare
+    "fcom fcomp fcompp ficom ficomp fucom fucomp fucompp ",
+    "fcomi fcomip fucomi fucomip ftst fxam ",
+    // Transcendental
+    "fsin fcos fsincos fptan fpatan f2xm1 fyl2x fyl2xp1 ",
+    // Environment / control
+    "fnop fwait finit fninit fclex fnclex fstsw fnstsw fstcw fnstcw fldcw ",
+    "fstenv fnstenv fldenv fsave fnsave frstor ",
+    "fxsave fxrstor ffree fdecstp fincstp ",
+);
+
+/// Space-separated **x86-family register** vocabulary installed
+/// via `LexAsm`'s `SCI_SETKEYWORDS(2, …)` — class 2 of
+/// `asmWordListDesc[]` at `vendor/lexilla/lexers/LexAsm.cxx:80-90`
+/// ("Registers"). Drives `SCE_ASM_REGISTER`.
+///
+/// **Scope: every architecturally-visible register on x86-64 and
+/// its 32/16/8-bit predecessors.** General-purpose (`rax` /
+/// `eax` / `ax` / `ah` / `al` and the r8..r15 family), instruction
+/// pointer / flags in three widths, segment (`cs`/`ds`/`es`/`fs`/
+/// `gs`/`ss`), control (`cr0..cr15`), debug (`dr0..dr15`), FPU
+/// (`st`/`st0..st7`), MMX (`mm0..mm7`), and SSE/AVX/AVX-512 vector
+/// (`xmm0..xmm31`, `ymm0..ymm31`, `zmm0..zmm31`) plus AVX-512 mask
+/// (`k0..k7`) and bound (`bnd0..bnd3`).
+///
+/// **AVX-512 vector register count.** Intel's AVX-512 spec adds 16
+/// vector registers on top of AVX's 16, so the full range is 0-31
+/// for zmm/ymm/xmm. On non-AVX-512 CPUs registers 16-31 don't
+/// physically exist, but the source token still lexes as a
+/// register — the assembler is responsible for rejecting them
+/// against the target's ISA subset.
+pub const ASM_REG_KEYWORDS: &str = concat!(
+    // General 8-bit low + high halves
+    "al bl cl dl ah bh ch dh ",
+    // General 8-bit low-only (need REX prefix in 64-bit mode)
+    "spl bpl sil dil ",
+    "r8b r9b r10b r11b r12b r13b r14b r15b ",
+    // General 16-bit
+    "ax bx cx dx si di bp sp ",
+    "r8w r9w r10w r11w r12w r13w r14w r15w ",
+    // General 32-bit
+    "eax ebx ecx edx esi edi ebp esp ",
+    "r8d r9d r10d r11d r12d r13d r14d r15d ",
+    // General 64-bit
+    "rax rbx rcx rdx rsi rdi rbp rsp ",
+    "r8 r9 r10 r11 r12 r13 r14 r15 ",
+    // Instruction pointer
+    "ip eip rip ",
+    // Flags
+    "flags eflags rflags ",
+    // Segment
+    "cs ds es fs gs ss ",
+    // Control
+    "cr0 cr1 cr2 cr3 cr4 cr5 cr6 cr7 cr8 cr9 cr10 cr11 cr12 cr13 cr14 cr15 ",
+    // Debug
+    "dr0 dr1 dr2 dr3 dr4 dr5 dr6 dr7 dr8 dr9 dr10 dr11 dr12 dr13 dr14 dr15 ",
+    // FPU
+    "st st0 st1 st2 st3 st4 st5 st6 st7 ",
+    // MMX (aliases st0..st7 physically)
+    "mm0 mm1 mm2 mm3 mm4 mm5 mm6 mm7 ",
+    // SSE/AVX 128-bit
+    "xmm0 xmm1 xmm2 xmm3 xmm4 xmm5 xmm6 xmm7 xmm8 xmm9 xmm10 xmm11 xmm12 xmm13 xmm14 xmm15 ",
+    "xmm16 xmm17 xmm18 xmm19 xmm20 xmm21 xmm22 xmm23 xmm24 xmm25 xmm26 xmm27 xmm28 xmm29 xmm30 xmm31 ",
+    // AVX 256-bit
+    "ymm0 ymm1 ymm2 ymm3 ymm4 ymm5 ymm6 ymm7 ymm8 ymm9 ymm10 ymm11 ymm12 ymm13 ymm14 ymm15 ",
+    "ymm16 ymm17 ymm18 ymm19 ymm20 ymm21 ymm22 ymm23 ymm24 ymm25 ymm26 ymm27 ymm28 ymm29 ymm30 ymm31 ",
+    // AVX-512 512-bit
+    "zmm0 zmm1 zmm2 zmm3 zmm4 zmm5 zmm6 zmm7 zmm8 zmm9 zmm10 zmm11 zmm12 zmm13 zmm14 zmm15 ",
+    "zmm16 zmm17 zmm18 zmm19 zmm20 zmm21 zmm22 zmm23 zmm24 zmm25 zmm26 zmm27 zmm28 zmm29 zmm30 zmm31 ",
+    // AVX-512 mask registers
+    "k0 k1 k2 k3 k4 k5 k6 k7 ",
+    // MPX bound
+    "bnd0 bnd1 bnd2 bnd3",
+);
+
+/// Space-separated **assembler directive** vocabulary installed via
+/// `LexAsm`'s `SCI_SETKEYWORDS(3, …)` — class 3 of
+/// `asmWordListDesc[]` at `vendor/lexilla/lexers/LexAsm.cxx:80-90`
+/// ("Directives"). Drives `SCE_ASM_DIRECTIVE`.
+///
+/// **Scope: the union of MASM, NASM, and GNU-as directive keywords**
+/// most likely to appear in x86-family source. Because the lexer
+/// runs the same wordlist chain across all three dialects (via
+/// `SCLEX_ASM`), collecting them all in one class means a mixed-
+/// dialect codebase — or a source that ships with matching NASM
+/// and MASM builds — highlights consistently.
+///
+/// **Special-cased entry: `"comment"`.** `LexAsm` at `:350-356`
+/// treats a just-classified DIRECTIVE token equal to literal
+/// `"comment"` as MASM's block-comment directive, entering
+/// COMMENTDIRECTIVE state until the delimiter reappears. Omitting
+/// this entry would break MASM `COMMENT ~ ... ~` block-comment
+/// lexing entirely — the block would render as consecutive
+/// IDENTIFIERs. Retained here as the first entry.
+///
+/// **GAS `.`-prefixed directives are stored WITH the leading dot.**
+/// `LexAsm.cxx:45-48` (`IsAWordStart`) explicitly admits `.` as a
+/// word-start character (alongside `%`, `@`, `$`, `?`); the DEFAULT-
+/// state entry at `:414-420` picks `SCE_ASM_IDENTIFIER` on any
+/// `IsAWordStart` character (the `.` + digit lookahead branch at
+/// `:417` picks `NUMBER` instead, which is why literal `.5` doesn't
+/// swallow a dot into an identifier). Result: `.text` scans as the
+/// single identifier token `".text"` including the dot, and reaches
+/// the inline classifier at `:329-358` — specifically
+/// `directive.InList(s)` at `:341` — with the dot present. The
+/// wordlist entry MUST include the dot. Parallels
+/// [`NSIS_VARIABLES`]'s leading-`$` storage and [`LISP_KEYWORDS_KW`]'s
+/// leading-`&` storage.
+///
+/// **NASM `%`-prefixed preprocessor directives are also stored WITH
+/// the leading `%`.** `LexAsm.cxx:45-48` (`IsAWordStart`) admits `%`
+/// as a word-start character alongside `.` and `@`, so `%define`
+/// scans as a single identifier token `"%define"` — the `%` does NOT
+/// terminate the scan. The wordlist entries below (`%define`,
+/// `%macro`, `%if`, `%ifndef`, …) therefore preserve the `%` prefix;
+/// bare `define` / `macro` / `if` etc. would never match a real NASM
+/// preprocessor directive.
+pub const ASM_DIRECTIVE_KEYWORDS: &str = concat!(
+    // MASM block-comment trigger — MUST be first (see doc-comment)
+    "comment ",
+    // MASM segment / section
+    "segment ends assume model code data const stack ",
+    ".model .code .data .data? .const .stack .fardata .fardata? ",
+    // MASM procedure / structure. `struc` / `ends` intentionally
+    // absent — `ends` is already in the segment section above (MASM
+    // uses it for both `SEGMENT`/`ENDS`, `STRUC`/`ENDS`, `STRUCT`/`ENDS`,
+    // and `UNION`/`ENDS`); `struc` is included in the NASM section
+    // below (NASM's core structure-definition keyword — MASM's `STRUC`
+    // is spelled identically so the NASM entry covers both). `equ`
+    // deferred to NASM section (same reason: identical spelling across
+    // dialects). No `endstruct` / `endunion` entries — MASM closes
+    // both blocks with the shared `ENDS` above, not a form-specific
+    // `endstruct` / `endunion` (neither of which is a real MASM
+    // directive).
+    "proc endp struct union ",
+    "record typedef textequ label ",
+    // MASM linkage / symbol
+    "public private external extern extrn global common comm ",
+    "includelib include end org align even alias echo option ",
+    "invoke ",
+    // MASM conditional assembly (case-insensitive: If/ifdef/etc.).
+    // Full MASM `IF*` / `ELSEIF*` family per Microsoft's directives
+    // reference: IF, IFB, IFDEF, IFDIF, IFDIFI, IFE, IFIDN, IFIDNI,
+    // IFNB, IFNDEF, ELSEIF, ELSEIFB, ELSEIFDEF, ELSEIFDIF, ELSEIFDIFI,
+    // ELSEIFE, ELSEIFIDN, ELSEIFIDNI, ELSEIFNB, ELSEIFNDEF. Note the
+    // negation pattern: `N` appears only in the composite `NB` /
+    // `NDEF` suffixes, never as a bare `IFN` / `ELSEIFN` — those
+    // don't exist as directives.
+    "if ifdef ifndef ifb ifnb ifidn ifidni ifdif ifdifi ife ",
+    "elseif elseifdef elseifndef elseifb elseifnb elseifidn elseifidni ",
+    "elseifdif elseifdifi elseife else endif ",
+    // MASM macro
+    "macro endm exitm goto local purge irp irpc rept while endw ",
+    // NASM section / declaration (mixed with GAS overlap resolved by unique keys)
+    "section bits use16 use32 use64 default cpu warning ",
+    "%define %undef %assign %strcat %strlen %substr ",
+    "%macro %endmacro %imacro %rmacro %exitmacro %rotate ",
+    "%if %ifdef %ifndef %ifnidn %ifidn %ifmacro %ifnmacro %ifctx %ifnctx ",
+    "%elif %elifdef %elifndef %else %endif ",
+    "%rep %endrep %include %pathsearch %depend ",
+    "%push %pop %repl %arg %stacksize %local %line %error %warning %fatal ",
+    "%iassign %idefine %ixdefine %xdefine ",
+    "resb resw resd resq rest reso resy resz ",
+    "db dw dd dq dt do dy dz incbin ",
+    "absolute times equ struc endstruc istruc iend at ",
+    // GAS pseudo-ops (leading `.`). `.data` intentionally absent
+    // — already included in the MASM section above (MASM's
+    // `.DATA` and GAS's `.data` are lexically identical so a
+    // single entry covers both).
+    ".text .bss .rodata .section .previous .subsection ",
+    ".globl .global .local .weak .hidden .protected .extern ",
+    ".type .size .comm .lcomm .align .balign .balignw .balignl .p2align ",
+    ".byte .word .short .int .long .quad .octa .single .double .float ",
+    ".string .string8 .string16 .asciz .ascii .space .zero .fill .skip ",
+    ".org .set .equ .equiv .eqv ",
+    ".rept .endr .macro .endm .purgem .exitm .altmacro .noaltmacro ",
+    ".if .ifdef .ifndef .ifb .ifnb .ifc .ifnc .ifeq .ifne .iflt .ifle ",
+    ".ifgt .ifge .else .elseif .endif ",
+    ".include .incbin .file .line .loc .cfi_startproc .cfi_endproc ",
+    ".cfi_offset .cfi_def_cfa .cfi_def_cfa_offset .cfi_def_cfa_register ",
+    ".cfi_rel_offset .cfi_adjust_cfa_offset .cfi_restore ",
+    ".ident .desc .stabs .stabn .stabd .print .err .fail .warning .error ",
+    ".arch .code16 .code32 .code64 .att_syntax .intel_syntax .syntax noprefix prefix ",
+);
+
+/// Space-separated **directive-operand qualifier** vocabulary
+/// installed via `LexAsm`'s `SCI_SETKEYWORDS(4, …)` — class 4 of
+/// `asmWordListDesc[]` at `vendor/lexilla/lexers/LexAsm.cxx:80-90`
+/// ("Directive operands"). Drives `SCE_ASM_DIRECTIVEOPERAND`.
+///
+/// **Scope: size specifiers, distance modifiers, and section /
+/// symbol attributes** — the vocabulary that goes NEXT TO
+/// directives rather than on their own line. `byte`, `word`,
+/// `dword`, `qword`, `tbyte`, `oword`, `xmmword`, `ymmword`,
+/// `zmmword` for size prefixes on memory operands (used by MASM,
+/// TASM, NASM); `ptr`, `near`, `far`, `short`, `offset`, `seg`
+/// for MASM operand-modifier keywords; `flat`, `abs`, `rel` for
+/// address-mode selectors; scope / linkage attributes
+/// (`readonly`, `readwrite`, `execute`, `discard`, `nopage`,
+/// `nocache`, `noshare`, `shared`, `page`, `para`, `dgroup`,
+/// `export`) for MASM segment definitions. `alias`, `at`,
+/// `common`, `private`, `public` are ALSO MASM segment attributes
+/// but their primary use is as top-level directives and they are
+/// routed to [`ASM_DIRECTIVE_KEYWORDS`] (class 3) — see the inline
+/// comment on the wordlist body below.
+pub const ASM_DIRECTIVE_OP_KEYWORDS: &str = concat!(
+    // Size specifiers
+    "byte word dword qword tbyte tword fword oword xmmword ymmword zmmword ",
+    // Distance modifiers
+    "ptr near far short offset seg flat abs rel ",
+    // Segment attributes (MASM segment definition). `alias`, `at`,
+    // `common`, `private`, `public` are ALSO MASM segment-attribute
+    // keywords but their primary use is as top-level directives —
+    // routed via ASM_DIRECTIVE_KEYWORDS so `public foo` /
+    // `common bar` at column-0 highlight as directives; the
+    // attribute-form (`.segment name public`) paints identically.
+    "readonly readwrite execute discard nopage nocache noshare shared ",
+    "page para dgroup ",
+    // Scope-only extras
+    "export ",
+    // Type qualifiers
+    "signed unsigned ",
+);
+
+/// Space-separated **extended-instruction** vocabulary installed
+/// via `LexAsm`'s `SCI_SETKEYWORDS(5, …)` — class 5 of
+/// `asmWordListDesc[]` at `vendor/lexilla/lexers/LexAsm.cxx:80-90`
+/// ("Extended instructions"). Drives `SCE_ASM_EXTINSTRUCTION`.
+///
+/// **Scope: SIMD (MMX / SSE / SSE2..SSE4.2 / AVX / AVX2 / AVX-512
+/// F+VL+DQ+BW+CD / FMA3 / AES-NI / PCLMULQDQ / SHA / 3DNow!)** —
+/// the vector-instruction family. This class exists specifically
+/// because vectorised code visually reads different from scalar
+/// integer/FP code, and users tuning SIMD-heavy inner loops want
+/// the SIMD lines to pop out.
+///
+/// **Only distinct mnemonics.** MMX-and-SSE overlap on some
+/// mnemonics (`emms`, `movd`, `movq` MMX vs `movq` SSE2 xmm form)
+/// — the mnemonic appears once regardless.
+pub const ASM_EXT_KEYWORDS: &str = concat!(
+    // MMX
+    "emms movd movq paddb paddw paddd paddq paddsb paddsw paddusb paddusw ",
+    "psubb psubw psubd psubq psubsb psubsw psubusb psubusw ",
+    "pmullw pmulhw pmulhuw pmuludq pmaddwd ",
+    "pand pandn por pxor ",
+    "pcmpeqb pcmpeqw pcmpeqd pcmpgtb pcmpgtw pcmpgtd ",
+    "psllw pslld psllq psrlw psrld psrlq psraw psrad ",
+    "packsswb packssdw packuswb ",
+    "punpckhbw punpckhwd punpckhdq punpcklbw punpcklwd punpckldq ",
+    "movntq maskmovq pavgb pavgw psadbw ",
+    // SSE (scalar + packed single)
+    "movss movaps movups movhps movlps movhlps movlhps movmskps ",
+    "addss addps subss subps mulss mulps divss divps sqrtss sqrtps ",
+    "rcpss rcpps rsqrtss rsqrtps minss minps maxss maxps ",
+    "cmpss cmpps comiss ucomiss ",
+    "andps andnps orps xorps unpckhps unpcklps shufps ",
+    "cvtsi2ss cvtss2si cvttss2si cvtps2pi cvttps2pi cvtpi2ps ",
+    "ldmxcsr stmxcsr sfence prefetchnta prefetcht0 prefetcht1 prefetcht2 ",
+    "movntps ",
+    // SSE2. `movsd` / `cmpsd` / `movnti` / `pause` deliberately
+    // absent — resolved as CPU (see ASM_CPU_KEYWORDS notes on
+    // string-op-vs-SIMD mnemonic overload for movsd/cmpsd; movnti
+    // is scalar non-temporal store; pause is a spin-loop hint).
+    "movapd movupd movhpd movlpd movdqa movdqu movdq2q movq2dq ",
+    "addsd addpd subsd subpd mulsd mulpd divsd divpd sqrtsd sqrtpd ",
+    "minsd minpd maxsd maxpd cmppd comisd ucomisd ",
+    "andpd andnpd orpd xorpd unpckhpd unpcklpd shufpd ",
+    "cvtsi2sd cvtsd2si cvttsd2si cvtsd2ss cvtss2sd ",
+    "cvtps2pd cvtpd2ps cvtdq2ps cvtdq2pd cvtps2dq cvtpd2dq cvttps2dq cvttpd2dq ",
+    "movntdq movntpd maskmovdqu lfence mfence ",
+    // Integer add/subtract/shift mnemonics that MMX and SSE2
+    // share (encoding differs by operand register class — mm* vs
+    // xmm* — but assemblers use the same mnemonic; LexAsm sees
+    // only the token). Already declared in the MMX section above
+    // — omitted here.
+    "pshuflw pshufhw pshufd pslldq psrldq ",
+    // SSE3. `fisttp` absent — routed via ASM_FPU_KEYWORDS as x87
+    // FPU truncate-store (SSE3-introduced but FPU-native).
+    "addsubps addsubpd haddps haddpd hsubps hsubpd movsldup movshdup movddup ",
+    "lddqu monitor mwait ",
+    // SSSE3
+    "phaddw phaddd phaddsw phsubw phsubd phsubsw pmaddubsw pmulhrsw ",
+    "pshufb psignb psignw psignd pabsb pabsw pabsd palignr ",
+    // SSE4.1
+    "blendps blendvps blendpd blendvpd pblendw pblendvb ",
+    "dpps dppd insertps extractps roundss roundsd roundps roundpd ",
+    "mpsadbw pmaxsb pmaxud pmaxuw pminsb pminud pminuw ",
+    "pmovsxbw pmovsxbd pmovsxbq pmovsxwd pmovsxwq pmovsxdq ",
+    "pmovzxbw pmovzxbd pmovzxbq pmovzxwd pmovzxwq pmovzxdq ",
+    "pmulld pmuldq ptest ",
+    "pinsrb pinsrd pinsrq pextrb pextrw pextrd pextrq ",
+    "packusdw phminposuw ",
+    // SSE4.2. `popcnt` deliberately absent — routed via
+    // ASM_CPU_KEYWORDS as it operates on scalar integer domain
+    // and reads as a general-purpose instruction to most users.
+    "crc32 pcmpestri pcmpestrm pcmpistri pcmpistrm pcmpgtq ",
+    // AES-NI + PCLMULQDQ
+    "aesdec aesdeclast aesenc aesenclast aesimc aeskeygenassist ",
+    "pclmulqdq pclmulhqhqdq pclmulhqlqdq pclmullqhqdq pclmullqlqdq ",
+    // SHA
+    "sha1rnds4 sha1nexte sha1msg1 sha1msg2 sha256rnds2 sha256msg1 sha256msg2 ",
+    // AVX (VEX-encoded, most SSE ops get a `v` prefix — abbreviated set here)
+    "vmovss vmovsd vmovaps vmovapd vmovups vmovupd vmovdqa vmovdqu ",
+    "vaddss vaddsd vaddps vaddpd vsubss vsubsd vsubps vsubpd ",
+    "vmulss vmulsd vmulps vmulpd vdivss vdivsd vdivps vdivpd ",
+    "vsqrtss vsqrtsd vsqrtps vsqrtpd vrcpss vrcpps vrsqrtss vrsqrtps ",
+    "vminss vminsd vminps vminpd vmaxss vmaxsd vmaxps vmaxpd ",
+    "vcmpss vcmpsd vcmpps vcmppd vcomiss vcomisd vucomiss vucomisd ",
+    "vandps vandpd vorps vorpd vxorps vxorpd vandnps vandnpd ",
+    "vshufps vshufpd vunpckhps vunpckhpd vunpcklps vunpcklpd vblendps vblendpd ",
+    "vblendvps vblendvpd vinsertps vextractps ",
+    "vbroadcastss vbroadcastsd vbroadcastf128 vinsertf128 vextractf128 ",
+    "vperm2f128 vpermilps vpermilpd vzeroall vzeroupper ",
+    // FMA3
+    "vfmadd132ps vfmadd213ps vfmadd231ps vfmadd132pd vfmadd213pd vfmadd231pd ",
+    "vfmadd132ss vfmadd213ss vfmadd231ss vfmadd132sd vfmadd213sd vfmadd231sd ",
+    "vfmsub132ps vfmsub213ps vfmsub231ps vfmsub132pd vfmsub213pd vfmsub231pd ",
+    "vfmsub132ss vfmsub213ss vfmsub231ss vfmsub132sd vfmsub213sd vfmsub231sd ",
+    "vfnmadd132ps vfnmadd213ps vfnmadd231ps vfnmsub132ps vfnmsub213ps vfnmsub231ps ",
+    // AVX-512 core (F/CD/ER/PF + VL/DQ/BW + IFMA + VBMI — abbreviated)
+    "vpaddb vpaddw vpaddd vpaddq vpsubb vpsubw vpsubd vpsubq ",
+    "vpmullw vpmulld vpmullq vpmulhw vpmulhrsw vpmuldq vpmuludq ",
+    "vpandd vpandq vpandnd vpandnq vpord vporq vpxord vpxorq ",
+    "vpermd vpermq vpermps vpermpd vpermi2ps vpermi2pd vpermt2ps vpermt2pd ",
+    "vbroadcasti32x4 vbroadcasti64x4 vbroadcastf32x4 vbroadcastf64x4 ",
+    "vextracti32x4 vextracti64x4 vextractf32x4 vextractf64x4 ",
+    "vinserti32x4 vinserti64x4 vinsertf32x4 vinsertf64x4 ",
+    "vpternlogd vpternlogq vptestmd vptestmq vptestnmd vptestnmq ",
+    "vscatterdps vscatterqps vscatterdpd vscatterqpd ",
+    "vgatherdps vgatherqps vgatherdpd vgatherqpd ",
+    "vpcompressd vpcompressq vcompressps vcompresspd ",
+    "vpexpandd vpexpandq vexpandps vexpandpd ",
+    "kmovb kmovw kmovd kmovq kandb kandw kandd kandq korb korw kord korq ",
+    "kxorb kxorw kxord kxorq knotb knotw knotd knotq ",
+    "kshiftlb kshiftlw kshiftld kshiftlq kshiftrb kshiftrw kshiftrd kshiftrq ",
+    "kortestb kortestw kortestd kortestq ktestb ktestw ktestd ktestq ",
+    // 3DNow!
+    "femms pfadd pfsub pfsubr pfmul pfdiv pfrsqrt pfrcp pfmin pfmax ",
+    "pfcmpge pfcmpgt pfcmpeq pfacc pfnacc pfpnacc ",
+    "pi2fw pi2fd pf2iw pf2id pmulhrw pavgusb pswapd prefetch prefetchw ",
+    // Intel Xeon Phi / Knights Landing prefetch hint (AVX-512-adjacent).
+    "prefetchwt1",
+);
+
 /// Space-separated R7RS Scheme reserved-word vocabulary installed via
 /// the shared `lisp` Lexilla lexer's `SCI_SETKEYWORDS(0, …)` — class 0
 /// of `lispWordListDesc[]` at `vendor/lexilla/lexers/LexLisp.cxx:280-284`
