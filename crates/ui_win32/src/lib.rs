@@ -468,12 +468,19 @@ const FIF_DOCK_HEADER_H: i32 = 22;
 /// so it reads as a button rather than a square.
 const FIF_DOCK_CLOSE_W: i32 = 24;
 
-/// Tab strip height in pixels. The Win32 default at 96 DPI; once
-/// `layout_children` becomes DPI-aware (Phase 4 polish item) this
-/// becomes a measured value via `TCM_GETITEMRECT`. Promoted to a
-/// module-level constant so the splitter clamp computation in
-/// `splitter_wnd_proc` shares the same source of truth.
-const TAB_HEIGHT_PX: i32 = 22;
+/// Tab strip height in pixels. Bumped ~1.4x above the 22-px Win32
+/// default so the tab bar reads as its own chrome band — the
+/// tighter default cell felt cramped once the surrounding toolbar /
+/// status bar sat in Code++'s light chrome — but held back from a
+/// full 2x (44) which read as excessive next to the toolbar. The
+/// cell height is bumped in lockstep via [`TAB_TEXT_PADDING_Y_PX`]
+/// so the tab cells fill the strip and don't leave a bare band on
+/// top. Once `layout_children` becomes DPI-aware (Phase 4 polish
+/// item) this becomes a measured value via `TCM_GETITEMRECT`.
+/// Promoted to a module-level constant so the splitter clamp
+/// computation in `splitter_wnd_proc` shares the same source of
+/// truth.
+const TAB_HEIGHT_PX: i32 = 30;
 
 /// Status bar height in pixels. Same DPI-deferral rationale as
 /// `TAB_HEIGHT_PX`.
@@ -15439,11 +15446,11 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // every paint site, so a partial failure shows blank icons
         // rather than crashing.
         let tab_bitmap_px = pick_tab_bitmap_size();
-        let (tab_save_blue_png, tab_save_red_png) = if tab_bitmap_px == TAB_BITMAP_PX_HIDPI {
-            (PNG_TAB_SAVE_HIDPI, PNG_TAB_SAVE_DIRTY_HIDPI)
-        } else {
-            (PNG_TAB_SAVE_LO, PNG_TAB_SAVE_DIRTY_LO)
-        };
+        // `pick_tab_bitmap_size` unconditionally returns HIDPI for
+        // the taller [`TAB_HEIGHT_PX`] cell; the LO branch is kept
+        // dormant behind the function so a future per-monitor-DPI
+        // scaler can restore it without churning this call site.
+        let (tab_save_blue_png, tab_save_red_png) = (PNG_TAB_SAVE_HIDPI, PNG_TAB_SAVE_DIRTY_HIDPI);
         let tab_save_blue_hbm = match toolbar::png_to_hbitmap(tab_save_blue_png) {
             Ok(h) => h,
             Err(e) => {
@@ -17782,13 +17789,42 @@ unsafe fn show_language_status_context_menu(status_hwnd: HWND, client_x: i32, cl
 // callbacks for tabs and steals the cell, but it does not intercept
 // `WM_DRAWITEM`.
 
-/// Tab-strip icon edge length at standard DPI. Half the toolbar's
-/// 24-px choice because the strip is too short for a 24-px icon.
+/// Tab-strip icon edge length at standard DPI (kept dormant — see
+/// [`pick_tab_bitmap_size`]). Half the toolbar's 24-px choice
+/// because the strip is too short for a 24-px icon at the old
+/// [`TAB_HEIGHT_PX`] of 22; unused today because the taller 30-px
+/// strip pairs with the HIDPI icon on every DPI tier so a single
+/// 32-px source bitmap covers both LO and HIDPI paths.
+#[allow(dead_code)]
 const TAB_BITMAP_PX_LO: i32 = 16;
-/// Tab-strip icon edge length at `HiDPI`. Picked between LO and HIDPI
-/// via [`pick_tab_bitmap_size`] using the same threshold the toolbar
-/// uses (`toolbar::HIDPI_DPI_THRESHOLD`).
+/// Tab-strip icon **source** edge length in pixels — the size of the
+/// PNG asset decoded into `WindowState.tab_save_*_hbm`. Named
+/// `HIDPI` for historical reasons (LO / HIDPI selection lived in
+/// [`pick_tab_bitmap_size`]); today the function returns this value
+/// unconditionally so the higher-resolution source is used on every
+/// DPI tier. The **displayed** icon size is
+/// [`TAB_ICON_DISPLAY_PX`], which is smaller — the source bitmap
+/// is downscaled at blit time via `AlphaBlend`'s built-in stretch
+/// so the icon fits inside the [`TAB_HEIGHT_PX`] cell with
+/// breathing room and clears the [`TAB_ACTIVE_INDICATOR`] strip.
 const TAB_BITMAP_PX_HIDPI: i32 = 32;
+
+/// Tab-strip icon **display** edge length. Decoupled from the
+/// source bitmap size ([`TAB_BITMAP_PX_HIDPI`]) so we can render a
+/// crisp downscale of the 32-px asset at whatever size actually
+/// fits the 30-px tab cell without clipping. 20 px leaves 5 px of
+/// vertical breathing room top+bottom around a 30-px cell centred
+/// vertically (30 − 20 = 10 → 5 px each side). The icon's top rows
+/// sit inside the top edge of the
+/// [`TAB_ACTIVE_INDICATOR_HEIGHT_PX_HIDPI`] orange strip on active
+/// tabs; the icon paints after the strip via `AlphaBlend`, so its
+/// opaque pixels overwrite the strip within the icon's ~20-px-wide
+/// left column while the strip stays fully visible across the rest
+/// of the tab width — see [`tab_save_icon_rect`] for the alignment
+/// rationale (icon centre matches the text centre). `AlphaBlend`
+/// does bilinear-ish stretch on downscale; 32→20 is a clean-enough
+/// ratio (~63%) that the glyph stays legible.
+const TAB_ICON_DISPLAY_PX: i32 = 20;
 
 /// Pixel inset from the tab cell's left edge to the save icon, and
 /// from the tab cell's right edge to the close-X glyph. Generous
@@ -17805,15 +17841,21 @@ const TAB_CLOSEX_SIZE_PX: i32 = 12;
 /// Pixel padding to feed `TCM_SETPADDING` so the tab control reserves
 /// room either side of the tab text for the save icon (left) and
 /// close-X (right). Left-side reservation must accommodate
-/// `TAB_PAD_X_PX` (6) + icon width (16 at LO DPI; 32 at `HiDPI` but the
-/// padding is computed against LO since `TCM_SETPADDING` has no DPI
-/// awareness) + `TAB_ICON_TEXT_GAP_PX` (4) = 26 px. Right-side reuses
-/// the same value to balance the close-X glyph + gap.
-const TAB_TEXT_PADDING_X_PX: i32 = 26;
+/// `TAB_PAD_X_PX` (6) + [`TAB_ICON_DISPLAY_PX`] (20) +
+/// `TAB_ICON_TEXT_GAP_PX` (4) = 30 px. Right-side reuses the same
+/// value to balance the close-X glyph + gap. `TCM_SETPADDING`
+/// itself has no DPI awareness, so this is a single value applied
+/// across DPI tiers.
+const TAB_TEXT_PADDING_X_PX: i32 = 30;
 /// Vertical padding fed to `TCM_SETPADDING` alongside [`TAB_TEXT_PADDING_X_PX`].
-/// 4 keeps the tab a touch taller than the system default so the
-/// 16-px icon doesn't crowd the top/bottom borders.
-const TAB_TEXT_PADDING_Y_PX: i32 = 4;
+/// Sized against [`TAB_HEIGHT_PX`] (30) so the auto-computed cell
+/// (`text_height` ≈ 15 + 2 * `padding_y` + control overhead) fills
+/// the strip end-to-end without a bare band on top. 7 empirically
+/// lands the cell at ~30 px at 96 DPI with the default GUI font —
+/// the tab control's per-padding-unit contribution to cell height
+/// is ~1.9 px, so `padding_y = 7` yields cell ≈ 15 + 14 + overhead ≈
+/// 30, matching the target strip height.
+const TAB_TEXT_PADDING_Y_PX: i32 = 7;
 
 /// `SourceConstantAlpha` (0..255) `AlphaBlend` applies when blitting an
 /// inactive tab's save icon. 128 ≈ 50% opacity — readable but visibly
@@ -17824,13 +17866,20 @@ const TAB_INACTIVE_ICON_ALPHA: u8 = 128;
 /// the editor body so the active tab reads as a continuous extension
 /// of the document area below it.
 const TAB_BG_ACTIVE: u32 = 0x00_FF_FF_FF;
-/// Tab cell background for inactive tabs. A subtle near-white grey
-/// (~RGB 240,240,240) that distinguishes inactive cells from the
-/// active one without competing with the tab strip's own backdrop.
-const TAB_BG_INACTIVE: u32 = 0x00_F0_F0_F0;
+/// Tab cell background for inactive tabs. A slight dark grey
+/// (~RGB 208,208,208) that puts the inactive cells "in shade"
+/// against the near-white active tab and light toolbar chrome — the
+/// look users asked for on Win10/11 light mode. Old value 0xF0F0F0
+/// (near-white) was too close to the surrounding chrome to read as
+/// inactive at a glance. The save icon within inherits the shaded
+/// look via `TAB_INACTIVE_ICON_ALPHA`'s 50% blend against this
+/// darker backdrop — no separate icon colour is needed.
+const TAB_BG_INACTIVE: u32 = 0x00_D0_D0_D0;
 /// Same as [`TAB_BG_INACTIVE`] but slightly brighter, used while the
-/// cursor hovers over an inactive tab. RGB ~248,248,248.
-const TAB_BG_INACTIVE_HOVER: u32 = 0x00_F8_F8_F8;
+/// cursor hovers over an inactive tab. RGB ~220,220,220 — a small
+/// step lift that still keeps the cell visibly "in shade" relative
+/// to the active tab.
+const TAB_BG_INACTIVE_HOVER: u32 = 0x00_DC_DC_DC;
 /// Foreground (text) colour for the active tab's label.
 const TAB_FG_ACTIVE: u32 = 0x00_00_00_00;
 /// Foreground for inactive tabs — medium grey so they read as
@@ -17844,18 +17893,32 @@ const TAB_FG_INACTIVE: u32 = 0x00_60_60_60;
 /// reads as an accent rather than competing with the chrome. The
 /// system tab control paints a hairline themed outline on top of
 /// the cell after `WM_DRAWITEM` returns, eating ~1 px from the top
-/// of the strip — `TAB_ACTIVE_INDICATOR_HEIGHT_PX_LO` accounts for
-/// that so the visible portion is ~3 px. COLORREF is BGR.
+/// of the strip; the paint path unconditionally uses
+/// [`TAB_ACTIVE_INDICATOR_HEIGHT_PX_HIDPI`] (8 px painted) so the
+/// visible portion is ~7 px — reads as a bold accent band rather
+/// than a thin hairline. COLORREF is BGR.
 const TAB_ACTIVE_INDICATOR: u32 = 0x00_26_A7_FF;
-/// Pixel height of the active-tab indicator strip at standard DPI.
-/// 6 px painted ≈ 5 px visible after the system's themed-outline
-/// overdraw; reads as a deliberate accent without dominating the
-/// cell.
+/// Pixel height of the active-tab indicator strip at standard DPI
+/// (kept dormant — see [`pick_tab_bitmap_size`]). 6 px painted ≈
+/// 5 px visible after the system's themed-outline overdraw; would
+/// read as a strong accent at 96 DPI. Unused today because the
+/// tab-strip paint path unconditionally uses
+/// [`TAB_ACTIVE_INDICATOR_HEIGHT_PX_HIDPI`] alongside the always-
+/// HIDPI icon source; a future per-monitor DPI scaler slotting into
+/// [`pick_tab_bitmap_size`] can rewire the paint site to pick
+/// between these two values.
+#[allow(dead_code)]
 const TAB_ACTIVE_INDICATOR_HEIGHT_PX_LO: i32 = 6;
-/// `HiDPI` counterpart — kept proportional to the LO value (1.5x) so
-/// the strip retains the same visual weight at higher pixel
-/// densities without looking chunky.
-const TAB_ACTIVE_INDICATOR_HEIGHT_PX_HIDPI: i32 = 9;
+/// `HiDPI` counterpart — reduced from the initial value of 9 to 8
+/// px so the strip pairs cleanly with the 20-px icon inside a
+/// 30-px cell (a taller strip started eating perceptible space
+/// off the icon's ~5-px top breathing room). Same
+/// overlap-then-overwrite scheme as the LO tier (see
+/// [`tab_save_icon_rect`]): the icon's top rows sit inside the
+/// strip's reserved zone, but the icon's `AlphaBlend` runs after
+/// the strip fill so the icon column paints cleanly on top and the
+/// strip stays visible across the rest of the tab.
+const TAB_ACTIVE_INDICATOR_HEIGHT_PX_HIDPI: i32 = 8;
 
 /// Background fill for the close-X box on the active tab in its
 /// resting state — a deep red. COLORREF (BBGGRR) for RGB(183,28,28),
@@ -17878,22 +17941,37 @@ const TAB_CLOSEX_GLYPH: u32 = 0x00_FF_FF_FF;
 /// LO / HIDPI pairs are 16-px / 32-px renders of the same SVG sources
 /// generated by `tools/codepp-icons/generate.py`. Decoded once at
 /// `WindowState` construction via `toolbar::png_to_hbitmap` and stored
-/// as `HBITMAP`s on `WindowState` for the life of the window.
+/// as `HBITMAP`s on `WindowState` for the life of the window. LO
+/// variants are kept dormant behind [`pick_tab_bitmap_size`] for a
+/// future per-monitor DPI scaler; today only the HIDPI pair is
+/// actually decoded.
+#[allow(dead_code)]
 const PNG_TAB_SAVE_LO: &[u8] = include_bytes!("../../../assets/icons/tab-save.png");
 const PNG_TAB_SAVE_HIDPI: &[u8] = include_bytes!("../../../assets/icons/tab-save@2x.png");
+#[allow(dead_code)]
 const PNG_TAB_SAVE_DIRTY_LO: &[u8] = include_bytes!("../../../assets/icons/tab-save-dirty.png");
 const PNG_TAB_SAVE_DIRTY_HIDPI: &[u8] =
     include_bytes!("../../../assets/icons/tab-save-dirty@2x.png");
 
-/// Pick the tab-strip icon edge length based on the system DPI.
-/// Mirrors `toolbar::pick_bitmap_size` (24 vs 48) but for the tab
-/// strip's half-size icon set (16 vs 32).
+/// Pick the tab-strip icon **source** bitmap edge length.
+///
+/// Historically DPI-driven — LO on sub-144-DPI systems, HIDPI at
+/// or above `toolbar::HIDPI_DPI_THRESHOLD` (144 DPI, i.e. Windows'
+/// 150 % scaling tier) — but now that the tab strip is
+/// [`TAB_HEIGHT_PX`] (30) tall — up from the 22-px Win32 default —
+/// the 16-px LO source read as tiny inside the taller cell. Users asked for a
+/// save icon that scales up in proportion to the taller tab
+/// height, so we always return HIDPI regardless of monitor DPI and
+/// downscale to [`TAB_ICON_DISPLAY_PX`] (20) at blit time via
+/// `AlphaBlend`'s built-in stretch. The 32-px source is the SVG's
+/// native @2x render, so decoding it is cheap and stretching down
+/// to 20 px gives a crisper glyph than upscaling the 16-px LO
+/// source would. Kept as a function (rather than inlining the
+/// constant) so a future DPI-aware scaler — say, per-monitor DPI
+/// with two extra asset tiers — can slot back in without churning
+/// the call sites.
 fn pick_tab_bitmap_size() -> i32 {
-    if toolbar::system_dpi_y() >= toolbar::HIDPI_DPI_THRESHOLD {
-        TAB_BITMAP_PX_HIDPI
-    } else {
-        TAB_BITMAP_PX_LO
-    }
+    TAB_BITMAP_PX_HIDPI
 }
 
 /// Compute the screen-space rect of the close-X clickable area within
@@ -17918,8 +17996,18 @@ fn tab_close_x_rect(item_rect: RECT) -> RECT {
 }
 
 /// Compute the rect inside a tab cell where the save icon is painted.
-/// The icon sits flush-left, vertically centred. `bitmap_px` is the
-/// edge length of the source bitmap (16 or 32).
+/// The icon sits flush-left, vertically centred on the cell midpoint
+/// — the same midpoint `DrawTextW`'s `DT_VCENTER` uses for the tab
+/// label — so the icon's vertical centre lines up with the text's.
+/// On active tabs this puts the top of the icon slightly inside the
+/// [`TAB_ACTIVE_INDICATOR_HEIGHT_PX_HIDPI`] orange strip's reserved
+/// zone; the icon's `AlphaBlend` paints after the strip, so the
+/// icon's opaque pixels overwrite the strip in its own ~20-px-wide
+/// column while the strip stays fully visible across the rest of
+/// the tab width. Keeping icon/text aligned reads better than
+/// biasing the icon downward to fully clear the strip. `bitmap_px`
+/// is the edge length of the displayed icon (see
+/// [`TAB_ICON_DISPLAY_PX`]).
 fn tab_save_icon_rect(item_rect: RECT, bitmap_px: i32) -> RECT {
     let cy = i32::midpoint(item_rect.top, item_rect.bottom);
     let half = bitmap_px / 2;
@@ -18033,20 +18121,26 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
     }
 
     // Active-tab indicator: an orange strip along the top edge of
-    // the active cell. See `TAB_ACTIVE_INDICATOR_HEIGHT_PX_LO` /
-    // `_HIDPI` for the painted-vs-visible-px rationale (the system
-    // tab control's themed-outline overdraw eats ~1 px from the
-    // top). Painted after the background fill (so the strip sits on
-    // top of any system theme paint) and before the icon (so it
-    // never bleeds across the icon's pixels). Inactive tabs get
-    // nothing — the strip is the visual cue that says "this is the
-    // focused buffer".
+    // the active cell. See `TAB_ACTIVE_INDICATOR_HEIGHT_PX_HIDPI`
+    // for the painted-vs-visible-px rationale (the system tab
+    // control's themed-outline overdraw eats ~1 px from the top).
+    // Painted after the background fill (so the strip sits on top
+    // of any system theme paint) and BEFORE the icon: the icon's
+    // ~3-px overlap with the strip is intentionally overwritten by
+    // the icon's `AlphaBlend` inside the ~20-px icon column so the
+    // icon centre stays aligned with the text centre — see the
+    // paint block below and [`tab_save_icon_rect`]. Inactive tabs
+    // get nothing — the strip is the visual cue that says "this
+    // is the focused buffer".
     if active {
-        let strip_h = if state.tab_bitmap_px == TAB_BITMAP_PX_HIDPI {
-            TAB_ACTIVE_INDICATOR_HEIGHT_PX_HIDPI
-        } else {
-            TAB_ACTIVE_INDICATOR_HEIGHT_PX_LO
-        };
+        // `state.tab_bitmap_px` is always `TAB_BITMAP_PX_HIDPI`
+        // today ([`pick_tab_bitmap_size`] always returns HIDPI), so
+        // the strip height is HIDPI unconditionally. Kept as a
+        // direct read of the HIDPI constant rather than a per-DPI
+        // branch to match the treatment of the sibling LO assets;
+        // a future per-monitor DPI scaler can reintroduce the
+        // branch here alongside [`pick_tab_bitmap_size`]'s scaler.
+        let strip_h = TAB_ACTIVE_INDICATOR_HEIGHT_PX_HIDPI;
         let strip_rc = RECT {
             left: dis.rcItem.left,
             top: dis.rcItem.top,
@@ -18073,7 +18167,20 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
         state.tab_save_blue_hbm
     };
     if !icon_hbm.is_invalid() {
-        let icon_rc = tab_save_icon_rect(dis.rcItem, state.tab_bitmap_px);
+        // Display size ([`TAB_ICON_DISPLAY_PX`], 20 px) is decoupled
+        // from the source bitmap size (`state.tab_bitmap_px`, 32 px)
+        // so the icon fits inside the 30-px cell with 5 px of
+        // breathing room top+bottom. The icon overlaps the top of
+        // the orange indicator strip on active tabs by ~3 px inside
+        // its own ~20-px-wide column; the icon paints AFTER the
+        // strip (see the strip block above) so its opaque pixels
+        // overwrite that overlap and the strip stays fully visible
+        // across the rest of the tab width — that alignment reads
+        // cleaner than biasing the icon downward would (icon and
+        // text centres stay on the same horizontal line).
+        // `AlphaBlend` stretches the 32-px source down to the 20-px
+        // dest during the blit; no separate resize step required.
+        let icon_rc = tab_save_icon_rect(dis.rcItem, TAB_ICON_DISPLAY_PX);
         let icon_w = icon_rc.right - icon_rc.left;
         let icon_h = icon_rc.bottom - icon_rc.top;
         let alpha = if active { 255 } else { TAB_INACTIVE_ICON_ALPHA };
@@ -18118,7 +18225,7 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
     // for the label; let `DT_END_ELLIPSIS` clip long names with "…".
     if idx < state.shell.tabs.len() {
         let text_left =
-            tab_save_icon_rect(dis.rcItem, state.tab_bitmap_px).right + TAB_ICON_TEXT_GAP_PX;
+            tab_save_icon_rect(dis.rcItem, TAB_ICON_DISPLAY_PX).right + TAB_ICON_TEXT_GAP_PX;
         let text_right = tab_close_x_rect(dis.rcItem).left - TAB_TEXT_CLOSEX_GAP_PX;
         if text_right > text_left {
             let mut text_rc = RECT {
@@ -18171,14 +18278,15 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
             TAB_CLOSEX_BOX_GREY
         };
         let close_rc = tab_close_x_rect(dis.rcItem);
-        // Stroke thickness: 2 px at HiDPI for legibility, 1 at
-        // standard DPI. Inset by 3 px so the X doesn't touch the box
-        // edges and reads as a glyph rather than as noise.
-        let pen_width = if state.tab_bitmap_px == TAB_BITMAP_PX_HIDPI {
-            2
-        } else {
-            1
-        };
+        // Stroke thickness: 2 px. Was per-DPI (1 at 96, 2 at HIDPI)
+        // when the tab strip pulled two source-bitmap tiers, but
+        // now that [`pick_tab_bitmap_size`] returns HIDPI on every
+        // tier the 2-px stroke is what actually ships everywhere;
+        // a per-monitor DPI scaler can reintroduce the branch here
+        // alongside [`pick_tab_bitmap_size`]'s scaler. Inset by 3
+        // px so the X doesn't touch the box edges and reads as a
+        // glyph rather than as noise.
+        let pen_width = 2;
         let inset = 3;
         // SAFETY: brush + pen are created locally and released at
         // the end of the block. The DC and rect are valid for the
