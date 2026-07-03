@@ -2022,6 +2022,208 @@ pub const SCE_PS_HEXSTRING: usize = 13;
 pub const SCE_PS_BASE85STRING: usize = 14;
 pub const SCE_PS_BADSTRINGCHAR: usize = 15;
 
+// LexRuby style indices. 32 assigned emission slots spanning
+// indices 0..=31 and 40..=44 (indices 32..=39 are reserved as
+// an IDENTIFIER sub-style range per `SubStyles subStyles`
+// declaration at `LexRuby.cxx:211`; `styleSubable[]` at
+// `:156` lists only `SCE_RB_IDENTIFIER` as sub-styleable).
+// Plus one pseudo-style constant (`SCE_RB_UPPER_BOUND` = 45,
+// used as `SCE_RB_IDENTIFIER_PREFERRE` via `#define` at
+// `:333` — "prefer regex after identifier" hint that never
+// reaches the host as an emitted style).
+//
+// Style semantics (paint-loop citations reference LexRuby.cxx):
+//   - DEFAULT (0)            — whitespace / neutral state.
+//   - ERROR (1)              — malformed / unterminated
+//                              token. Distinct visual so the
+//                              user sees a bad `%<c>...`
+//                              string mid-buffer.
+//   - COMMENTLINE (2)        — `#`-prefixed line comments.
+//   - POD (3)                — `=begin` / `=end` block
+//                              comment (Ruby's POD-ish
+//                              multi-line comment format).
+//   - NUMBER (4)             — numeric literals: integer,
+//                              float, rational (`_r`),
+//                              complex (`_i`), hex (`0x`),
+//                              oct (`0o` / `0`), bin (`0b`),
+//                              digit-separators (`1_000`).
+//   - WORD (5)               — reserved keywords in their
+//                              primary role (leading a
+//                              statement / expression).
+//                              Emitted via `ChangeState` in
+//                              `ClassifyWordRb` at
+//                              `:373-374` after the
+//                              `keywords.InList(s)` check
+//                              at `:358`.
+//   - STRING (6)             — `"..."` double-quoted
+//                              interpolable string.
+//   - CHARACTER (7)          — `'...'` single-quoted
+//                              non-interpolable string.
+//                              Lexer name is legacy — Ruby
+//                              has no C-style char literal.
+//   - CLASSNAME (8)          — Identifier following `class`
+//                              (the class being defined).
+//                              Emitted at `:340-341` via
+//                              `prevWord == "class"`.
+//   - DEFNAME (9)            — Identifier following `def`
+//                              (method being defined).
+//                              Emitted at `:344-345`.
+//   - OPERATOR (10)          — Punctuation (`+`, `->`, `=>`,
+//                              `**`, `<=>`, `&.`, `::`, …).
+//   - IDENTIFIER (11)        — Bare identifier that didn't
+//                              match the keyword wordlist
+//                              and isn't sigil-prefixed.
+//                              The one sub-style-able
+//                              archetype (per `:156`
+//                              `styleSubable[]`).
+//   - REGEX (12)             — `/regex/[opts]` literal.
+//   - GLOBAL (13)            — `$foo`, `$0`..`$9`, `$_`, and
+//                              Ruby's other `$`-prefixed
+//                              special globals (`$~`, `$&`,
+//                              `$'`, `` $` `` etc.).
+//   - SYMBOL (14)            — `:foo` symbol literal, and
+//                              trailing-`:` hash-key
+//                              shorthand (`foo:`) emitted at
+//                              `:1411-1417`.
+//   - MODULE_NAME (15)       — Identifier following `module`
+//                              (the module being defined).
+//                              Emitted at `:342-343`.
+//   - INSTANCE_VAR (16)      — `@foo` instance variable.
+//   - CLASS_VAR (17)         — `@@foo` class variable.
+//   - BACKTICKS (18)         — `` `cmd` `` command
+//                              substitution.
+//   - DATASECTION (19)       — Everything after a bare
+//                              `__END__` marker at
+//                              line-start. Entry at
+//                              `:1426-1431`.
+//   - HERE_DELIM (20)        — `<<HEREDOC` or `<<~HEREDOC`
+//                              delimiter word itself.
+//   - HERE_Q (21)            — Heredoc body when the
+//                              delimiter is single-quoted
+//                              (`<<'FOO'` — non-interp).
+//   - HERE_QQ (22)           — Heredoc body when the
+//                              delimiter is bare or
+//                              double-quoted (interp).
+//   - HERE_QX (23)           — Heredoc body when the
+//                              delimiter is backtick-quoted
+//                              (command interp).
+//   - STRING_Q (24)          — `%q(...)` — single-quoted
+//                              generic-brace string.
+//   - STRING_QQ (25)         — `%Q(...)` — double-quoted
+//                              generic-brace string.
+//   - STRING_QX (26)         — `%x(...)` — command-substituted
+//                              generic-brace string.
+//   - STRING_QR (27)         — `%r(...)` — regex.
+//   - STRING_QW (28)         — `%W(...)` — interpolable
+//                              string array. (LexRuby's
+//                              lexical-class label is
+//                              "qw = array"; matches Perl's
+//                              historical `qw` naming.)
+//   - WORD_DEMOTED (29)      — Keyword used as trailing
+//                              modifier: `stmt if cond`,
+//                              `stmt while cond`. Emitted
+//                              at `:371` when
+//                              `keywordIsAmbiguous(s)` (list
+//                              at `:1793-1797`:
+//                              `if / do / while / unless /
+//                              until / for`) AND
+//                              `keywordIsModifier`.
+//   - STDIN (30)             — Bare `STDIN` constant.
+//   - STDOUT (31)            — Bare `STDOUT` constant.
+//   - (32..=39)              — Sub-style range for
+//                              `SCE_RB_IDENTIFIER` (host
+//                              can allocate up to 8
+//                              user-classified identifier
+//                              buckets via
+//                              `SCI_ALLOCATESUBSTYLES`).
+//                              Not statically assigned.
+//   - STDERR (40)            — Bare `STDERR` constant.
+//   - STRING_W (41)          — `%w(...)` — non-interpolable
+//                              string array.
+//   - STRING_I (42)          — `%i(...)` — non-interpolable
+//                              symbol array.
+//   - STRING_QI (43)         — `%I(...)` — interpolable
+//                              symbol array.
+//   - STRING_QS (44)         — `%s(...)` — bare symbol
+//                              generic-brace syntax.
+//                              Lexical-class label is
+//                              "identifier symbol".
+//   - UPPER_BOUND (45)       — Not a real style. Used
+//                              internally as
+//                              `SCE_RB_IDENTIFIER_PREFERRE`
+//                              (`:333` `#define`) — a
+//                              "prefer regex after this
+//                              identifier" hint that is
+//                              intercepted at `:1442` and
+//                              never reaches the host.
+//                              Declared here for API
+//                              stability parity with
+//                              `SciLexer.h:462`.
+//
+// **Wordlist classes.** `rubyWordListDesc[]` at
+// `LexRuby.cxx:142-145` declares ONE class: "Keywords"
+// (class 0). All identifier promotion to `SCE_RB_WORD` /
+// `SCE_RB_WORD_DEMOTED` runs through this single wordlist
+// via `keywords.InList(s)` at `:358`. Sigil-prefixed vars
+// (`$` / `@` / `@@` / `:`) and definition-context names
+// (post-`class` / `module` / `def`) bypass the wordlist —
+// they're state-machine-driven.
+//
+// **Case handling.** `ClassifyWordRb` at `:335-337` calls
+// `styler.GetRange(start, end)` — no `GetCurrentLowered`
+// wrapper — so wordlist matching is **case-sensitive**.
+// Ruby is a case-sensitive language; `BEGIN` / `END`
+// (uppercase, top-level blocks) and `__FILE__` / `__LINE__`
+// / `__ENCODING__` (double-underscore magic constants) are
+// canonical uppercase / mixed-case entries.
+//
+// **`?` and `!` in identifiers.** LexRuby's `:1418-1425`
+// special path admits trailing `?` / `!` on identifiers
+// (`empty?`, `nil?`, `strip!`) — the classifier extends the
+// segment to include them. So `defined?` in the wordlist
+// matches the tokenised `defined?` segment.
+//
+// Values match `SciLexer.h:425-462`. LexRuby registers
+// SCLEX_RUBY at `LexRuby.cxx:2191`.
+pub const SCE_RB_DEFAULT: usize = 0;
+pub const SCE_RB_ERROR: usize = 1;
+pub const SCE_RB_COMMENTLINE: usize = 2;
+pub const SCE_RB_POD: usize = 3;
+pub const SCE_RB_NUMBER: usize = 4;
+pub const SCE_RB_WORD: usize = 5;
+pub const SCE_RB_STRING: usize = 6;
+pub const SCE_RB_CHARACTER: usize = 7;
+pub const SCE_RB_CLASSNAME: usize = 8;
+pub const SCE_RB_DEFNAME: usize = 9;
+pub const SCE_RB_OPERATOR: usize = 10;
+pub const SCE_RB_IDENTIFIER: usize = 11;
+pub const SCE_RB_REGEX: usize = 12;
+pub const SCE_RB_GLOBAL: usize = 13;
+pub const SCE_RB_SYMBOL: usize = 14;
+pub const SCE_RB_MODULE_NAME: usize = 15;
+pub const SCE_RB_INSTANCE_VAR: usize = 16;
+pub const SCE_RB_CLASS_VAR: usize = 17;
+pub const SCE_RB_BACKTICKS: usize = 18;
+pub const SCE_RB_DATASECTION: usize = 19;
+pub const SCE_RB_HERE_DELIM: usize = 20;
+pub const SCE_RB_HERE_Q: usize = 21;
+pub const SCE_RB_HERE_QQ: usize = 22;
+pub const SCE_RB_HERE_QX: usize = 23;
+pub const SCE_RB_STRING_Q: usize = 24;
+pub const SCE_RB_STRING_QQ: usize = 25;
+pub const SCE_RB_STRING_QX: usize = 26;
+pub const SCE_RB_STRING_QR: usize = 27;
+pub const SCE_RB_STRING_QW: usize = 28;
+pub const SCE_RB_WORD_DEMOTED: usize = 29;
+pub const SCE_RB_STDIN: usize = 30;
+pub const SCE_RB_STDOUT: usize = 31;
+pub const SCE_RB_STDERR: usize = 40;
+pub const SCE_RB_STRING_W: usize = 41;
+pub const SCE_RB_STRING_I: usize = 42;
+pub const SCE_RB_STRING_QI: usize = 43;
+pub const SCE_RB_STRING_QS: usize = 44;
+pub const SCE_RB_UPPER_BOUND: usize = 45;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated

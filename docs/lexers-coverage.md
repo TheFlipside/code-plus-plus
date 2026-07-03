@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 32 / 🟡 56 / ⚫ 1.
+Total: 89 rows. ✅ 33 / 🟡 55 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1905,7 +1905,7 @@ further shim work needed.
 | REBOL | 79 | `rebol` | ⚫ | ⚫ | 🟡 |
 | Registry | 80 | `registry` | ⚫ | ⚫ | 🟡 |
 | Resource file | 7 | `cpp` | ✅ | ✅ | ✅ |
-| Ruby | 36 | `ruby` | ⚫ | ⚫ | 🟡 |
+| Ruby | 36 | `ruby` | ✅ | ✅ | ✅ |
 | Rust | 81 | `rust` | ✅ | ✅ | ✅ |
 | S-Record | 61 | `srec` | ⚫ | ⚫ | 🟡 |
 | SAS | 91 | `sas` | ⚫ | ⚫ | 🟡 |
@@ -2256,6 +2256,103 @@ what fits semantically" rather than "invent a new slot per
 language"). Classes 3 (RIP) and 4 (user-defined) sit empty
 pending downstream demand for printer-driver-specific or
 site-macro operator sets.
+
+**Ruby (2026-07-03):** uses Lexilla's `ruby` lexer
+(`LexRuby.cxx`, `SCLEX_RUBY`) — the largest single-file lexer
+in Lexilla at 2191 lines. The classifier state machine at
+`LexRuby.cxx:1043-1770` distinguishes context-sensitive uses
+of `if` / `do` / `while` / `unless` / `until` / `for` (leader
+vs trailing modifier via `keywordIsModifier` at `:1803`),
+infers identifier category from sigil (`$` global, `@`
+instance, `@@` class, `:` symbol) and position (post-`class`
+/ `module` / `def` → the identifier being defined), and
+admits trailing `?` / `!` on identifiers at `:1418-1425`
+(so `defined?` in `RUBY_KEYWORDS` matches the tokenised
+segment). One wordlist class — "Keywords" per
+`rubyWordListDesc[]` at `:142-145` — carries 41 Ruby 3.x
+reserved words including canonical uppercase (`BEGIN` /
+`END`) and double-underscore magic constants (`__FILE__` /
+`__LINE__` / `__ENCODING__`). Kernel methods like `raise`,
+`throw`, `catch`, `loop`, `require`, `__method__` and the
+`attr_*` family are intentionally EXCLUDED — they're
+ordinary method calls, not reserved words. Case-sensitive
+matching via `styler.GetRange` at `:335-337` (NOT
+`GetCurrentLowered`) — the uppercase / mixed-case entries
+must appear with their exact case in the wordlist.
+
+Thirty-four theme routings across 37 emissible slots (32 at
+indices 0..=31 + 5 at 40..=44; indices 32..=39 are a sub-style
+reservation range for `SCE_RB_IDENTIFIER` per `:156, :211`,
+never emitted directly), minus 3 deliberate omissions
+(`DEFAULT` / `ERROR` / `IDENTIFIER`). `SCE_RB_UPPER_BOUND`
+(45) is a pseudo-style `#define` for
+`SCE_RB_IDENTIFIER_PREFERRE` at `:333` that only ever sets
+the classifier's internal `preferRE` flag at `:1440-1444` —
+never reaches the host and so isn't counted as emissible.
+Ruby's 16-way string family (4 direct — `STRING`,
+`CHARACTER`, `BACKTICKS`, `REGEX`; 5 percent-literal variants
+— `%q`, `%Q`, `%x`, `%r`, `%W`; 3 non-interp variants — `%w`,
+`%i`, `%I`; 4 heredoc variants — delimiter + `_Q` + `_QQ` +
+`_QX`) all consolidate onto `StyleSlot::String`
+— the palette's brick-red slot carries the semantics
+regardless of Ruby's percent-literal / heredoc syntax
+variations. The sigil-tagged scoped bindings are the
+theme's most-differentiated area: `INSTANCE_VAR` (`@foo`)
+and `CLASS_VAR` (`@@foo`) share `StyleSlot::Lifetime`
+(amber — the slot doc-comment says "reuse for similar
+scoped-binding highlights"; `@` / `@@` sigils are exactly
+that), while `GLOBAL` (`$foo`, `$0`..`$9`, `$_`, `$~`,
+`$&`, …) routes to `StyleSlot::Macro` (violet — distinct
+sigil class). `SYMBOL` (`:foo`) and the built-in stream
+constants `STDIN` / `STDOUT` / `STDERR` share
+`StyleSlot::Preprocessor` (purple — out-of-band syntax
+markers / distinct namespace). Definition names
+(`CLASSNAME` post-`class`, `DEFNAME` post-`def`,
+`MODULE_NAME` post-`module`) share `StyleSlot::Keyword2`
+(steel-blue). `WORD` and `WORD_DEMOTED` (the
+trailing-modifier usage of an ambiguous keyword like
+`stmt if cond`) both route to `StyleSlot::Keyword` for a
+matched blue colour, but only `WORD` is bold — the weight
+change flags the modifier role while keeping the
+language-level identity clear. Comment family (`COMMENTLINE`
++ `POD` + `DATASECTION`) all share the Comment green,
+with `COMMENTLINE` + `POD` italic; `DATASECTION` (post-
+`__END__` payload) shares the colour but stays upright,
+since a long data block would visually dominate if
+italicised.
+
+Structural guards pinned in `ruby_uses_lexruby_theme`:
+34-mapping style table, single-class install shape,
+case-sensitive contract (at least one uppercase / mixed-case
+canonical entry), 9 canonical anchors (`def` / `class` /
+`if` / `end` / `nil` / `self` / `defined?` / `BEGIN` /
+`__FILE__`), 34 style-routing pins, 4 deliberate-omission
+pins (`DEFAULT` / `ERROR` / `IDENTIFIER` / `UPPER_BOUND`),
+string-family bucket assertion (16 string archetypes all
+route to `StyleSlot::String`), sigil-tagged binding
+category (`INSTANCE_VAR` + `CLASS_VAR` share `Lifetime`,
+`GLOBAL` gets `Macro` — distinct sigil classes must not
+collide), symbol / stdio bucket (5 indices share
+`Preprocessor`), italic set == `COMMENTLINE` + `POD`,
+bold set == `WORD` only (single-entry
+primary-class-bold; `RUST_BOLD` / `ASM_BOLD` / `DIFF_BOLD`
+/ `PS_BOLD` precedent), 10 cross-language non-reuse pins.
+
+Excluded from `RUBY_KEYWORDS` by design: Kernel methods
+(`puts`, `print`, `warn`, `eval`) — LexRuby paints those
+via a separate special-case at `:393-395` that promotes
+them to the pseudo-style `SCE_RB_IDENTIFIER_PREFERRE`
+regardless of wordlist membership, so listing them would
+be redundant and could interfere with the demotion
+detection at `:359-360`. Constants (`STDIN` / `STDOUT` /
+`STDERR`) — LexRuby directly emits these via dedicated
+`SCE_RB_STDIN` / `STDOUT` / `STDERR` slots (30 / 31 / 40)
+so wordlist entry would be inert. The IDENTIFIER
+sub-styling range (indices 32..=39, reserved for host-
+allocated sub-styles via `SCI_ALLOCATESUBSTYLES`) is left
+untouched — a future commit can allocate sub-styles for
+built-in Ruby type discrimination (`Array` / `Hash` /
+`String` etc.) via `SubStyles` at `:211`.
 
 ## Notes
 

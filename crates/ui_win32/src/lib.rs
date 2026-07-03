@@ -108,13 +108,13 @@ use codepp_core::lang::{
     HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS,
     LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP,
     L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
-    L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUST, L_SCHEME,
-    L_SQL, L_TCL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+    L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST,
+    L_SCHEME, L_SQL, L_TCL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
     OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
     PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
-    RC_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SQL_KEYWORDS, SQL_KEYWORDS_2,
-    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-    VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+    RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SQL_KEYWORDS,
+    SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -184,43 +184,50 @@ use codepp_scintilla_sys::{
     SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE, SCE_P_DECORATOR, SCE_P_DEFNAME,
     SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE, SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER,
     SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE, SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2,
-    SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE,
-    SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR,
-    SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER,
-    SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM, SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR,
-    SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING, SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT,
-    SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC,
-    SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT,
-    SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCE_TCL_BLOCK_COMMENT,
-    SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE, SCE_TCL_COMMENT_BOX, SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE,
-    SCE_TCL_MODIFIER, SCE_TCL_NUMBER, SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE,
-    SCE_TCL_WORD, SCE_TCL_WORD2, SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6,
-    SCE_TCL_WORD7, SCE_TCL_WORD8, SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT,
-    SCE_TEX_GROUP, SCE_TEX_SPECIAL, SCE_TEX_SYMBOL, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE,
-    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
-    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
-    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
-    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
-    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
-    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
-    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
-    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
-    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
-    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
-    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE,
-    SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED,
-    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
-    SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE,
-    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
-    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
-    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS,
-    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY,
-    SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS,
-    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION,
-    SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCE_RB_BACKTICKS, SCE_RB_CHARACTER, SCE_RB_CLASSNAME, SCE_RB_CLASS_VAR, SCE_RB_COMMENTLINE,
+    SCE_RB_DATASECTION, SCE_RB_DEFNAME, SCE_RB_GLOBAL, SCE_RB_HERE_DELIM, SCE_RB_HERE_Q,
+    SCE_RB_HERE_QQ, SCE_RB_HERE_QX, SCE_RB_INSTANCE_VAR, SCE_RB_MODULE_NAME, SCE_RB_NUMBER,
+    SCE_RB_OPERATOR, SCE_RB_POD, SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN, SCE_RB_STDOUT,
+    SCE_RB_STRING, SCE_RB_STRING_I, SCE_RB_STRING_Q, SCE_RB_STRING_QI, SCE_RB_STRING_QQ,
+    SCE_RB_STRING_QR, SCE_RB_STRING_QS, SCE_RB_STRING_QW, SCE_RB_STRING_QX, SCE_RB_STRING_W,
+    SCE_RB_SYMBOL, SCE_RB_WORD, SCE_RB_WORD_DEMOTED, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK,
+    SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME,
+    SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD,
+    SCE_RUST_WORD2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM,
+    SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING,
+    SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD,
+    SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS,
+    SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2,
+    SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE, SCE_TCL_COMMENT_BOX,
+    SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER, SCE_TCL_NUMBER, SCE_TCL_OPERATOR,
+    SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD, SCE_TCL_WORD2, SCE_TCL_WORD3,
+    SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7, SCE_TCL_WORD8,
+    SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL,
+    SCE_TEX_SYMBOL, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT,
+    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN,
+    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER,
+    SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT,
+    SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT,
+    SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM,
+    SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN,
+    SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER,
+    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE,
+    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES,
+    SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
+    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
+    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
+    SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT,
+    SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK,
+    SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8,
+    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
+    SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
+    SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
+    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
+    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
+    SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
+    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
+    SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT,
+    STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
@@ -5787,6 +5794,224 @@ const PS_THEME: LangTheme = LangTheme {
     bold: PS_BOLD,
 };
 
+// --- LexRuby ---
+//
+// Ruby is a dynamically-typed OOP language with rich literal
+// syntax (16 distinct string archetypes, sigil-tagged
+// variables, symbols, regexes, heredocs). LexRuby is the
+// largest single-file lexer in Lexilla (2191 lines) — its
+// classifier state machine at `LexRuby.cxx:1043-1770`
+// distinguishes context-sensitive uses of `if` / `do` /
+// `while` (statement leader vs trailing modifier) and infers
+// the type of an identifier from its sigil prefix (`$` global,
+// `@` instance, `@@` class, `:` symbol) and its position
+// (post-`class` → `CLASSNAME`, post-`def` → `DEFNAME`,
+// post-`module` → `MODULE_NAME`).
+//
+// **34-mapping style table.** Emissible-slot arithmetic:
+// 32 slots at indices 0..=31 + 5 slots at indices 40..=44 =
+// 37 emissible slots (indices 32..=39 are a sub-style
+// reservation range for `SCE_RB_IDENTIFIER` per
+// `LexRuby.cxx:156, :211` and are never emitted directly).
+// Subtract the 3 deliberate omissions below: 37 − 3 = 34.
+//
+// Deliberate omissions:
+//   - `DEFAULT` (0)          — neutral state, keeps
+//                              `STYLE_DEFAULT`.
+//   - `ERROR` (1)            — unterminated / malformed
+//                              token. Left unmapped so the
+//                              buffer's default text colour
+//                              flags the bad token to the
+//                              user's eye without an
+//                              opinionated "error red" the
+//                              palette doesn't carry.
+//   - `IDENTIFIER` (11)      — bare identifier that didn't
+//                              match the keyword wordlist
+//                              and isn't sigil-prefixed —
+//                              plain user names / variables.
+//                              Universal Code++ convention
+//                              (same as C's plain
+//                              identifier: no dedicated
+//                              colour, just default text).
+//   - `UPPER_BOUND` (45)     — pseudo-style
+//                              (`SCE_RB_IDENTIFIER_PREFERRE`
+//                              per `LexRuby.cxx:333`) never
+//                              emitted to the host. No mapping.
+//
+// **Slot mapping rationale — leveraging the sigil/context
+// distinctions LexRuby exposes:**
+//
+//   Comment family (green italic):
+//     `COMMENTLINE` (2)      — `#` line comment.
+//     `POD` (3)              — `=begin`/`=end` block.
+//     `DATASECTION` (19)     — post-`__END__` data payload;
+//                              semantically "commentary" once
+//                              the interpreter treats it as
+//                              text-only via the `DATA` file
+//                              object. Coloured Comment but
+//                              deliberately NOT italicised
+//                              (see `RB_ITALIC` — italicising
+//                              a potentially long block of
+//                              inline data would visually
+//                              dominate).
+//
+//   Keyword family (blue):
+//     `WORD` (5)             — primary keyword (`if`, `def`,
+//                              `class`, …). BOLD.
+//     `WORD_DEMOTED` (29)    — same keyword used as a
+//                              trailing modifier
+//                              (`stmt if cond`). Same
+//                              Keyword slot for a matched
+//                              colour but NOT bold — the
+//                              visual weight change flags
+//                              the modifier role to the
+//                              reader while keeping the
+//                              language-level identity of
+//                              the token clear.
+//
+//   Definition names (steel-blue `Keyword2`):
+//     `CLASSNAME` (8)        — the identifier after `class`.
+//     `DEFNAME` (9)          — the identifier after `def`.
+//     `MODULE_NAME` (15)     — the identifier after `module`.
+//                              (All three are the same
+//                              semantic category: "the
+//                              thing being defined".)
+//
+//   String family (brick red):
+//     Direct literals — `STRING` (6, `"..."`), `CHARACTER`
+//     (7, `'...'` — LexRuby's legacy name; Ruby has no
+//     C-style char literal), `BACKTICKS` (18,
+//     `` `cmd` ``), `REGEX` (12, `/regex/`).
+//     Percent-literal generic-brace family — `STRING_Q`
+//     (24, `%q()`), `STRING_QQ` (25, `%Q()`),
+//     `STRING_QX` (26, `%x()`), `STRING_QR` (27, `%r()`),
+//     `STRING_QW` (28, `%W()` interp string array),
+//     `STRING_W` (41, `%w()` non-interp), `STRING_I` (42,
+//     `%i()` non-interp symbol array), `STRING_QI` (43,
+//     `%I()` interp symbol array).
+//     Heredoc family — `HERE_DELIM` (20, the `<<HEREDOC`
+//     word itself), `HERE_Q` / `HERE_QQ` / `HERE_QX` (21,
+//     22, 23 — body variants by quoting).
+//
+//   Sigil-tagged bindings (amber `Lifetime`):
+//     `INSTANCE_VAR` (16, `@foo`) and `CLASS_VAR` (17,
+//     `@@foo`) — Ruby's per-object / per-class scoped
+//     bindings. The `Lifetime` slot's doc-comment says
+//     "reuse for similar 'scoped binding' highlights if
+//     applicable" — `@` and `@@` sigils are exactly that.
+//
+//   Globals (violet `Macro`):
+//     `GLOBAL` (13, `$foo`, `$0`..`$9`, `$_`, `$~`, `$&`,
+//     `$'`, `` $` ``) — Ruby's `$`-prefixed globals and
+//     magic special-variable set. Distinct slot from
+//     instance/class vars so the reader sees at a glance
+//     which scope a sigil refers to. **Divergence from Perl
+//     (see `PERL_STYLES` above).** Perl routes all sigil
+//     variables (`$` / `@` / `%` / `*`) uniformly to
+//     `Lifetime`, treating sigil-tagging as one visual
+//     class. Ruby splits `$` (global scope, `Macro`) from
+//     `@` / `@@` (per-object / per-class scope, `Lifetime`)
+//     because Ruby users regularly need to spot the scope
+//     of a variable at a glance — global mutation vs
+//     instance mutation is a semantically meaningful
+//     distinction that the palette can afford to show. Perl
+//     users typically care less about the sigil's specific
+//     scope (in Perl a `$` sigil can name a scalar, a hash
+//     element, or a scalar-context array access; the sigil
+//     is more about context than scope), so the uniform
+//     treatment fits Perl better.
+//
+//   Symbols and standard-stream constants (purple
+//   `Preprocessor` — the "out-of-band syntax marker" slot):
+//     `SYMBOL` (14, `:foo`) and `STRING_QS` (44, `%s()`
+//     bare-symbol generic-brace) — Ruby symbols are
+//     immutable name references, a distinct namespace
+//     from strings.
+//     `STDIN` (30), `STDOUT` (31), `STDERR` (40) —
+//     built-in file objects. LexRuby directly emits these
+//     as dedicated styles rather than letting them fall
+//     through to `IDENTIFIER`; the theme honours that by
+//     colouring them distinctly.
+//
+//   Numbers (magenta `Number`):
+//     `NUMBER` (4) — all numeric-literal forms.
+//
+//   Operator (dark grey):
+//     `OPERATOR` (10) — punctuation.
+const RB_STYLES: &[(usize, StyleSlot)] = &[
+    // Comment family
+    (SCE_RB_COMMENTLINE, StyleSlot::Comment),
+    (SCE_RB_POD, StyleSlot::Comment),
+    (SCE_RB_DATASECTION, StyleSlot::Comment),
+    // Numeric
+    (SCE_RB_NUMBER, StyleSlot::Number),
+    // Keywords (primary + demoted-modifier)
+    (SCE_RB_WORD, StyleSlot::Keyword),
+    (SCE_RB_WORD_DEMOTED, StyleSlot::Keyword),
+    // Definition names
+    (SCE_RB_CLASSNAME, StyleSlot::Keyword2),
+    (SCE_RB_DEFNAME, StyleSlot::Keyword2),
+    (SCE_RB_MODULE_NAME, StyleSlot::Keyword2),
+    // Operator
+    (SCE_RB_OPERATOR, StyleSlot::Operator),
+    // String family (direct literals)
+    (SCE_RB_STRING, StyleSlot::String),
+    (SCE_RB_CHARACTER, StyleSlot::String),
+    (SCE_RB_BACKTICKS, StyleSlot::String),
+    (SCE_RB_REGEX, StyleSlot::String),
+    // Percent-literal generic-brace family
+    (SCE_RB_STRING_Q, StyleSlot::String),
+    (SCE_RB_STRING_QQ, StyleSlot::String),
+    (SCE_RB_STRING_QX, StyleSlot::String),
+    (SCE_RB_STRING_QR, StyleSlot::String),
+    (SCE_RB_STRING_QW, StyleSlot::String),
+    (SCE_RB_STRING_W, StyleSlot::String),
+    (SCE_RB_STRING_I, StyleSlot::String),
+    (SCE_RB_STRING_QI, StyleSlot::String),
+    // Heredoc family
+    (SCE_RB_HERE_DELIM, StyleSlot::String),
+    (SCE_RB_HERE_Q, StyleSlot::String),
+    (SCE_RB_HERE_QQ, StyleSlot::String),
+    (SCE_RB_HERE_QX, StyleSlot::String),
+    // Sigil-tagged scoped bindings
+    (SCE_RB_INSTANCE_VAR, StyleSlot::Lifetime),
+    (SCE_RB_CLASS_VAR, StyleSlot::Lifetime),
+    // Globals
+    (SCE_RB_GLOBAL, StyleSlot::Macro),
+    // Symbols + standard streams
+    (SCE_RB_SYMBOL, StyleSlot::Preprocessor),
+    (SCE_RB_STRING_QS, StyleSlot::Preprocessor),
+    (SCE_RB_STDIN, StyleSlot::Preprocessor),
+    (SCE_RB_STDOUT, StyleSlot::Preprocessor),
+    (SCE_RB_STDERR, StyleSlot::Preprocessor),
+];
+
+// Italic on the human-prose comment classes only:
+// `COMMENTLINE` and `POD`. `DATASECTION` shares the Comment
+// slot's colour but is NOT italicised — post-`__END__`
+// content is often a large embedded data block (e.g. a YAML
+// payload accessed via `DATA.read`), and italicising a long
+// block hurts readability more than helps.
+const RB_ITALIC: &[usize] = &[SCE_RB_COMMENTLINE, SCE_RB_POD];
+
+// Bold only the primary keyword class. `WORD_DEMOTED` (the
+// trailing-modifier usage of an ambiguous keyword) shares the
+// blue Keyword colour but stays non-bold — the visual weight
+// change flags the modifier role at a glance while keeping
+// the keyword's identity clear. Single-primary-class-bold
+// precedent: `RUST_BOLD` / `ASM_BOLD` / `DIFF_BOLD` /
+// `PS_BOLD`.
+const RB_BOLD: &[usize] = &[SCE_RB_WORD];
+
+// One-class install (matches LexRuby's single-class
+// `rubyWordListDesc[]` at `LexRuby.cxx:142-145`).
+const RB_THEME: LangTheme = LangTheme {
+    keywords: &[(0, RUBY_KEYWORDS)],
+    styles: RB_STYLES,
+    italic: RB_ITALIC,
+    bold: RB_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -5980,6 +6205,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&DIFF_THEME)
     } else if lang == L_PS {
         Some(&PS_THEME)
+    } else if lang == L_RUBY {
+        Some(&RB_THEME)
     } else {
         None
     }
@@ -21148,7 +21375,14 @@ mod lang_theme_tests {
         SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD,
         SCE_PS_BASE85STRING, SCE_PS_COMMENT, SCE_PS_DSC_COMMENT, SCE_PS_DSC_VALUE,
         SCE_PS_HEXSTRING, SCE_PS_IMMEVAL, SCE_PS_KEYWORD, SCE_PS_LITERAL, SCE_PS_NUMBER,
-        SCE_PS_PAREN_ARRAY, SCE_PS_PAREN_DICT, SCE_PS_PAREN_PROC, SCE_PS_TEXT,
+        SCE_PS_PAREN_ARRAY, SCE_PS_PAREN_DICT, SCE_PS_PAREN_PROC, SCE_PS_TEXT, SCE_RB_BACKTICKS,
+        SCE_RB_CHARACTER, SCE_RB_CLASSNAME, SCE_RB_CLASS_VAR, SCE_RB_COMMENTLINE,
+        SCE_RB_DATASECTION, SCE_RB_DEFNAME, SCE_RB_GLOBAL, SCE_RB_HERE_DELIM, SCE_RB_HERE_Q,
+        SCE_RB_HERE_QQ, SCE_RB_HERE_QX, SCE_RB_INSTANCE_VAR, SCE_RB_MODULE_NAME, SCE_RB_NUMBER,
+        SCE_RB_OPERATOR, SCE_RB_POD, SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN, SCE_RB_STDOUT,
+        SCE_RB_STRING, SCE_RB_STRING_I, SCE_RB_STRING_Q, SCE_RB_STRING_QI, SCE_RB_STRING_QQ,
+        SCE_RB_STRING_QR, SCE_RB_STRING_QS, SCE_RB_STRING_QW, SCE_RB_STRING_QX, SCE_RB_STRING_W,
+        SCE_RB_SYMBOL, SCE_RB_WORD, SCE_RB_WORD_DEMOTED,
     };
     use codepp_core::lang::{
         BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1,
@@ -21157,13 +21391,14 @@ mod lang_theme_tests {
         JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
         LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML,
         L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL,
-        L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUST, L_SCHEME, L_SQL, L_TCL, L_TEX,
-        L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS,
-        PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
-        RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SQL_KEYWORDS, SQL_KEYWORDS_2,
-        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-        VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+        L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SQL, L_TCL,
+        L_TEX, L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
+        SCHEME_KEYWORDS_KW, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+        XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -24914,6 +25149,334 @@ mod lang_theme_tests {
             (php, "PHP"),
         ] {
             assert_ne!(ps.styles, other.styles, "PS must NOT reuse {name}_STYLES");
+        }
+    }
+
+    /// Ruby (`L_RUBY`) uses Lexilla's `LexRuby` lexer (`SCLEX_RUBY`)
+    /// — the largest single-file lexer in Lexilla (2191 lines) —
+    /// covering Ruby's rich literal syntax across 32 populated
+    /// `SCE_RB_*` slots with a single "Keywords" wordlist class.
+    /// The classifier at `LexRuby.cxx:1043-1770` runs a
+    /// context-sensitive state machine that distinguishes
+    /// leader vs modifier uses of `if` / `do` / `while` /
+    /// `unless` / `until` / `for` (via `keywordIsModifier`),
+    /// infers identifier categories from sigil prefix (`$` /
+    /// `@` / `@@` / `:`) and definition context (post-`class` /
+    /// `def` / `module`), and admits trailing `?` / `!` in
+    /// identifier segments at `:1418-1425`.
+    ///
+    /// Pinned invariants:
+    ///   1. 34-mapping style table. Arithmetic: 37 emissible
+    ///      slots (32 at indices 0..=31 + 5 at 40..=44; indices
+    ///      32..=39 are a sub-style reservation for
+    ///      `SCE_RB_IDENTIFIER` per `:156, :211`, never emitted
+    ///      directly) minus 3 deliberate omissions (`DEFAULT` /
+    ///      `ERROR` / `IDENTIFIER`) = 34.
+    ///   2. Single-class install shape (`LexRuby` has exactly
+    ///      one wordlist class — "Keywords" at
+    ///      `rubyWordListDesc[]` `LexRuby.cxx:142-145`).
+    ///   3. Case-sensitive contract — `ClassifyWordRb` at
+    ///      `:335-337` uses `styler.GetRange` (NOT
+    ///      `GetCurrentLowered`). Verified by presence of
+    ///      canonical uppercase / mixed-case entries
+    ///      (`BEGIN`, `END`, `__FILE__`).
+    ///   4. Canonical anchors — `def` (definition), `class`
+    ///      (class definition), `if` (control flow), `end`
+    ///      (block terminator), `nil` (nil literal), `self`
+    ///      (implicit receiver), `defined?` (introspection
+    ///      keyword with trailing `?`), `BEGIN` (canonical
+    ///      uppercase top-level block), `__FILE__` (canonical
+    ///      double-underscore magic constant).
+    ///   5. Style-routing pins — every mapped `SCE_RB_*` slot
+    ///      routes to the intended `StyleSlot`.
+    ///   6. Deliberate omissions — `DEFAULT` (0), `ERROR` (1),
+    ///      `IDENTIFIER` (11), `UPPER_BOUND` (45 — pseudo-style
+    ///      per `:333`) stay unmapped.
+    ///   7. String family — the 16 string-family archetypes
+    ///      (`STRING` / `CHARACTER` / `BACKTICKS` / `REGEX`
+    ///      / `STRING_Q` / `STRING_QQ` / `STRING_QX` /
+    ///      `STRING_QR` / `STRING_QW` / `STRING_W` /
+    ///      `STRING_I` / `STRING_QI` + 4 heredoc variants)
+    ///      all route to `StyleSlot::String` — the palette's
+    ///      brick-red slot carries the semantics regardless
+    ///      of Ruby's percent-literal / heredoc syntax
+    ///      variations.
+    ///   8. Sigil-tagged scoped bindings — `INSTANCE_VAR` +
+    ///      `CLASS_VAR` both route to `Lifetime` (amber
+    ///      "scoped binding" slot); `GLOBAL` routes to
+    ///      `Macro` (violet — distinct sigil class).
+    ///   9. Symbols + standard streams share `Preprocessor`
+    ///      (out-of-band syntax marker slot):
+    ///      `SYMBOL` + `STRING_QS` + `STDIN` + `STDOUT` +
+    ///      `STDERR`.
+    ///  10. Italic set == `COMMENTLINE` + `POD` (comment
+    ///      family only — `DATASECTION` shares the Comment
+    ///      slot's colour but is NOT italic since post-
+    ///      `__END__` may contain a large data payload).
+    ///  11. Bold set == `WORD` only (single-entry primary-
+    ///      class-bold; `RUST_BOLD` / `ASM_BOLD` /
+    ///      `DIFF_BOLD` / `PS_BOLD` precedent).
+    ///      `WORD_DEMOTED` shares the Keyword slot's colour
+    ///      but stays non-bold — the weight change flags the
+    ///      trailing-modifier role.
+    ///  12. Cross-language non-reuse — Ruby's combination of
+    ///      16-way String consolidation + `Lifetime` for
+    ///      instance/class vars is not shared by any other
+    ///      wired language.
+    #[test]
+    fn ruby_uses_lexruby_theme() {
+        use codepp_scintilla_sys::{
+            SCE_RB_DEFAULT, SCE_RB_ERROR, SCE_RB_IDENTIFIER, SCE_RB_UPPER_BOUND,
+        };
+        let rb = lang_theme(L_RUBY).expect("Ruby wired");
+
+        // Invariant 1: 34-mapping style table.
+        assert_eq!(
+            rb.styles.len(),
+            34,
+            "RB_STYLES must map 34 indices — 37 emissible slots \
+             (32 at 0..=31 + 5 at 40..=44; 32..=39 are a sub-style \
+             reservation range for SCE_RB_IDENTIFIER per :156, :211) \
+             minus 3 deliberate omissions (DEFAULT / ERROR / \
+             IDENTIFIER) = 34"
+        );
+
+        // Invariant 2: single-class install shape.
+        assert_eq!(
+            rb.keywords.len(),
+            1,
+            "RB installs class 0 only (LexRuby's rubyWordListDesc[] at \
+             LexRuby.cxx:142-145 declares exactly one class: 'Keywords')"
+        );
+        assert_eq!(rb.keywords[0].0, 0, "class 0 = Keywords");
+        assert_eq!(rb.keywords[0].1, RUBY_KEYWORDS);
+
+        // Invariant 2b: RUBY_KEYWORDS token count.
+        // The canonical Ruby 3.x reserved-word set per
+        // `docs.ruby-lang.org` is exactly 41 tokens. Pin the count
+        // so a future accidental re-addition of Kernel methods
+        // (`raise` / `throw` / `catch` / `loop` / `__method__` / …)
+        // or an accidental omission trips CI immediately rather than
+        // waiting for a doc-comment-vigilance failure.
+        assert_eq!(
+            RUBY_KEYWORDS.split_whitespace().count(),
+            41,
+            "RUBY_KEYWORDS must contain exactly 41 tokens (the \
+             canonical Ruby 3.x reserved-word set per \
+             docs.ruby-lang.org). If this fails, either a Kernel \
+             method leaked into the list (see the doc-comment's \
+             exclusion enumeration) or a reserved word was omitted."
+        );
+
+        // Invariant 3: case-sensitive contract. LexRuby uses
+        // `styler.GetRange` (not `GetCurrentLowered`) at :335-337.
+        // Uppercase entries (`BEGIN`, `END`, `__FILE__`) MUST match
+        // exactly — a lowercase-only wordlist would signal the author
+        // confused LexRuby with a case-folded lexer.
+        assert!(
+            RUBY_KEYWORDS
+                .split_whitespace()
+                .any(|t| t.chars().any(|c| c.is_ascii_uppercase())),
+            "RUBY_KEYWORDS must contain at least one canonical \
+             uppercase identifier (e.g. `BEGIN`, `END`, `__FILE__`) — \
+             LexRuby is case-sensitive per :335-337 `styler.GetRange`; \
+             a purely-lowercase wordlist signals the author confused \
+             LexRuby with a case-folded lexer like LexAsm"
+        );
+
+        // Invariant 4: canonical anchors.
+        for anchor in [
+            "def", "class", "if", "end", "nil", "self", "defined?", "BEGIN", "__FILE__",
+        ] {
+            assert!(
+                RUBY_KEYWORDS.split_whitespace().any(|t| t == anchor),
+                "RUBY_KEYWORDS must include `{anchor}` (canonical \
+                 Ruby reserved word)"
+            );
+        }
+
+        // Invariant 5: style-routing pins.
+        for (idx, slot, name) in [
+            (SCE_RB_COMMENTLINE, StyleSlot::Comment, "SCE_RB_COMMENTLINE"),
+            (SCE_RB_POD, StyleSlot::Comment, "SCE_RB_POD"),
+            (SCE_RB_DATASECTION, StyleSlot::Comment, "SCE_RB_DATASECTION"),
+            (SCE_RB_NUMBER, StyleSlot::Number, "SCE_RB_NUMBER"),
+            (SCE_RB_WORD, StyleSlot::Keyword, "SCE_RB_WORD"),
+            (
+                SCE_RB_WORD_DEMOTED,
+                StyleSlot::Keyword,
+                "SCE_RB_WORD_DEMOTED",
+            ),
+            (SCE_RB_CLASSNAME, StyleSlot::Keyword2, "SCE_RB_CLASSNAME"),
+            (SCE_RB_DEFNAME, StyleSlot::Keyword2, "SCE_RB_DEFNAME"),
+            (
+                SCE_RB_MODULE_NAME,
+                StyleSlot::Keyword2,
+                "SCE_RB_MODULE_NAME",
+            ),
+            (SCE_RB_OPERATOR, StyleSlot::Operator, "SCE_RB_OPERATOR"),
+            (SCE_RB_STRING, StyleSlot::String, "SCE_RB_STRING"),
+            (SCE_RB_CHARACTER, StyleSlot::String, "SCE_RB_CHARACTER"),
+            (SCE_RB_BACKTICKS, StyleSlot::String, "SCE_RB_BACKTICKS"),
+            (SCE_RB_REGEX, StyleSlot::String, "SCE_RB_REGEX"),
+            (SCE_RB_STRING_Q, StyleSlot::String, "SCE_RB_STRING_Q"),
+            (SCE_RB_STRING_QQ, StyleSlot::String, "SCE_RB_STRING_QQ"),
+            (SCE_RB_STRING_QX, StyleSlot::String, "SCE_RB_STRING_QX"),
+            (SCE_RB_STRING_QR, StyleSlot::String, "SCE_RB_STRING_QR"),
+            (SCE_RB_STRING_QW, StyleSlot::String, "SCE_RB_STRING_QW"),
+            (SCE_RB_STRING_W, StyleSlot::String, "SCE_RB_STRING_W"),
+            (SCE_RB_STRING_I, StyleSlot::String, "SCE_RB_STRING_I"),
+            (SCE_RB_STRING_QI, StyleSlot::String, "SCE_RB_STRING_QI"),
+            (SCE_RB_HERE_DELIM, StyleSlot::String, "SCE_RB_HERE_DELIM"),
+            (SCE_RB_HERE_Q, StyleSlot::String, "SCE_RB_HERE_Q"),
+            (SCE_RB_HERE_QQ, StyleSlot::String, "SCE_RB_HERE_QQ"),
+            (SCE_RB_HERE_QX, StyleSlot::String, "SCE_RB_HERE_QX"),
+            (
+                SCE_RB_INSTANCE_VAR,
+                StyleSlot::Lifetime,
+                "SCE_RB_INSTANCE_VAR",
+            ),
+            (SCE_RB_CLASS_VAR, StyleSlot::Lifetime, "SCE_RB_CLASS_VAR"),
+            (SCE_RB_GLOBAL, StyleSlot::Macro, "SCE_RB_GLOBAL"),
+            (SCE_RB_SYMBOL, StyleSlot::Preprocessor, "SCE_RB_SYMBOL"),
+            (
+                SCE_RB_STRING_QS,
+                StyleSlot::Preprocessor,
+                "SCE_RB_STRING_QS",
+            ),
+            (SCE_RB_STDIN, StyleSlot::Preprocessor, "SCE_RB_STDIN"),
+            (SCE_RB_STDOUT, StyleSlot::Preprocessor, "SCE_RB_STDOUT"),
+            (SCE_RB_STDERR, StyleSlot::Preprocessor, "SCE_RB_STDERR"),
+        ] {
+            assert!(
+                rb.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 6: deliberate omissions.
+        for (idx, name) in [
+            (SCE_RB_DEFAULT, "SCE_RB_DEFAULT"),
+            (SCE_RB_ERROR, "SCE_RB_ERROR"),
+            (SCE_RB_IDENTIFIER, "SCE_RB_IDENTIFIER"),
+            (SCE_RB_UPPER_BOUND, "SCE_RB_UPPER_BOUND"),
+        ] {
+            assert!(
+                !rb.styles.iter().any(|(i, _)| *i == idx),
+                "{name} must remain unmapped (neutral / error / \
+                 unmatched / pseudo-style convention)"
+            );
+        }
+
+        // Invariant 7: String-family bucket. All 16 string archetypes
+        // (direct + percent-literal + heredoc + backticks + regex)
+        // route to the same `StyleSlot::String` — the palette's
+        // brick-red slot carries the semantics regardless of Ruby's
+        // percent-literal / heredoc syntax variations.
+        let string_archetypes = [
+            SCE_RB_STRING,
+            SCE_RB_CHARACTER,
+            SCE_RB_BACKTICKS,
+            SCE_RB_REGEX,
+            SCE_RB_STRING_Q,
+            SCE_RB_STRING_QQ,
+            SCE_RB_STRING_QX,
+            SCE_RB_STRING_QR,
+            SCE_RB_STRING_QW,
+            SCE_RB_STRING_W,
+            SCE_RB_STRING_I,
+            SCE_RB_STRING_QI,
+            SCE_RB_HERE_DELIM,
+            SCE_RB_HERE_Q,
+            SCE_RB_HERE_QQ,
+            SCE_RB_HERE_QX,
+        ];
+        for idx in string_archetypes {
+            assert!(
+                rb.styles.contains(&(idx, StyleSlot::String)),
+                "string-family idx {idx} must route to String slot"
+            );
+        }
+
+        // Invariant 8: sigil-tagged scoped bindings.
+        assert!(rb
+            .styles
+            .contains(&(SCE_RB_INSTANCE_VAR, StyleSlot::Lifetime)));
+        assert!(rb.styles.contains(&(SCE_RB_CLASS_VAR, StyleSlot::Lifetime)));
+        assert!(
+            rb.styles.contains(&(SCE_RB_GLOBAL, StyleSlot::Macro)),
+            "GLOBAL must NOT share Lifetime with instance/class vars \
+             — sigil class differs ($ vs @ / @@)"
+        );
+
+        // Invariant 9: symbols + standard streams share Preprocessor.
+        for idx in [
+            SCE_RB_SYMBOL,
+            SCE_RB_STRING_QS,
+            SCE_RB_STDIN,
+            SCE_RB_STDOUT,
+            SCE_RB_STDERR,
+        ] {
+            assert!(
+                rb.styles.contains(&(idx, StyleSlot::Preprocessor)),
+                "symbol / stdio idx {idx} must route to Preprocessor slot"
+            );
+        }
+
+        // Invariant 10: italic set == COMMENTLINE + POD.
+        assert_eq!(
+            rb.italic.len(),
+            2,
+            "RB_ITALIC must contain exactly COMMENTLINE + POD"
+        );
+        assert!(rb.italic.contains(&SCE_RB_COMMENTLINE));
+        assert!(rb.italic.contains(&SCE_RB_POD));
+        assert!(
+            !rb.italic.contains(&SCE_RB_DATASECTION),
+            "DATASECTION shares the Comment colour but must NOT be italic \
+             — post-`__END__` payload may be a large data block, and \
+             italicising a long block hurts readability"
+        );
+
+        // Invariant 11: bold set == WORD only.
+        assert_eq!(
+            rb.bold.len(),
+            1,
+            "RB_BOLD must contain exactly WORD (single-entry \
+             primary-class-bold; RUST_BOLD / ASM_BOLD / DIFF_BOLD / \
+             PS_BOLD precedent)"
+        );
+        assert!(rb.bold.contains(&SCE_RB_WORD));
+        assert!(
+            !rb.bold.contains(&SCE_RB_WORD_DEMOTED),
+            "WORD_DEMOTED shares the Keyword colour but must NOT be \
+             bold — the weight change flags the trailing-modifier role"
+        );
+
+        // Invariant 12: cross-language non-reuse of styles slice.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let asm = lang_theme(L_ASM).expect("Assembly wired");
+        let diff = lang_theme(L_DIFF).expect("Diff wired");
+        let ps = lang_theme(L_PS).expect("PostScript wired");
+        let lisp = lang_theme(L_LISP).expect("Lisp wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let props = lang_theme(L_INI).expect("INI wired");
+        let bash = lang_theme(L_BASH).expect("Bash wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (asm, "Assembly"),
+            (diff, "Diff"),
+            (ps, "PostScript"),
+            (lisp, "Lisp"),
+            (mk, "Makefile"),
+            (bat, "Batch"),
+            (props, "INI"),
+            (bash, "Bash"),
+            (php, "PHP"),
+        ] {
+            assert_ne!(rb.styles, other.styles, "RB must NOT reuse {name}_STYLES");
         }
     }
 

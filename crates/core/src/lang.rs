@@ -5353,6 +5353,77 @@ pub const PS_LEVEL3_KEYWORDS: &str = concat!(
     "FlateDecode FlateEncode ReusableStreamDecode ",
 );
 
+/// Space-separated Ruby reserved-word vocabulary installed via
+/// `LexRuby`'s `SCI_SETKEYWORDS(0, ...)` — the sole class of
+/// `rubyWordListDesc[]` at
+/// `vendor/lexilla/lexers/LexRuby.cxx:142-145`. Drives
+/// `SCE_RB_WORD` (and, when a keyword is used as a trailing
+/// statement modifier and matches `keywordIsAmbiguous` at
+/// `:1793-1797`, `SCE_RB_WORD_DEMOTED`) via the classifier at
+/// `:358-374`.
+///
+/// **Case-sensitive byte-exact match.** `ClassifyWordRb` at
+/// `:335-337` calls `styler.GetRange(start, end)` — no
+/// `GetCurrentLowered` wrapper — so `BEGIN` / `END` / `__FILE__`
+/// / `__LINE__` / `__ENCODING__` are canonical uppercase /
+/// double-underscore-magic entries and MUST appear with their
+/// exact case. `defined?` is admitted at the token-boundary
+/// level by `:1418-1425`'s special path that extends an
+/// identifier segment across a trailing `?` / `!` — the
+/// wordlist entry `defined?` (with the `?`) matches the
+/// segment `styler.GetRange` produces.
+///
+/// **Source.** The Ruby Language Reference (ISO/IEC 30170:2012
+/// §11 "Keywords" + community MRI documentation of the Ruby
+/// 3.x reserved-word set). The keyword *names* are the public
+/// language ABI; no Ruby source or documentation prose is
+/// copied. Cross-referenced against N++'s shipped
+/// `langs.model.xml` `<Language name="ruby">` `instre1` for
+/// default-set parity; no content copied (CLAUDE.md "no code
+/// from N++" rule).
+///
+/// **Scope.** Strict reserved-word set (41 entries — the
+/// Ruby 3.x reserved-word list per `docs.ruby-lang.org`'s
+/// keyword page). Excludes Kernel methods entirely — `puts`,
+/// `print`, `warn`, `eval` (which `LexRuby` handles via its
+/// own special-case at `:393-395` that promotes them to the
+/// pseudo-style `SCE_RB_IDENTIFIER_PREFERRE` regardless of
+/// wordlist membership); AND every other `Kernel` method
+/// like `raise`, `throw`, `catch`, `loop`, `lambda`, `proc`,
+/// `require`, `require_relative`, `load`, `attr_accessor` /
+/// `attr_reader` / `attr_writer`, `__method__` (the current-
+/// method-name reflection helper) — none of these are
+/// reserved words, and listing them here would incorrectly
+/// paint them bold-keyword when they're just ordinary
+/// method calls. Excludes constants (`STDIN`, `STDOUT`,
+/// `STDERR`, `ARGV`, `ENV`, `RUBY_VERSION`) — those are
+/// host-emitted via their own `SCE_RB_*` slots (`STDIN` =
+/// 30, `STDOUT` = 31, `STDERR` = 40, all directly emitted
+/// by the classifier state machine) or paint as bare
+/// identifiers.
+pub const RUBY_KEYWORDS: &str = concat!(
+    // Definition keywords
+    "class module def end alias undef ",
+    // Control flow — leaders (statement-heading)
+    "if elsif else unless case when then while until for do ",
+    "break next redo retry return yield ",
+    // Exception handling. `raise` is intentionally EXCLUDED —
+    // it's a Kernel method (`Kernel#raise`), not a reserved word.
+    "begin rescue ensure ",
+    // Boolean / nil / self / super
+    "true false nil self super ",
+    // Logical operators (word form)
+    "and or not ",
+    // Introspection
+    "defined? in ",
+    // Top-level blocks (canonical uppercase)
+    "BEGIN END ",
+    // Magic constants (double-underscore, uppercase). `__method__`
+    // is intentionally EXCLUDED — it's a Kernel method that
+    // returns the current-method name symbol, not a reserved word.
+    "__FILE__ __LINE__ __ENCODING__ ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
