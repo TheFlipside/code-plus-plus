@@ -5424,6 +5424,86 @@ pub const RUBY_KEYWORDS: &str = concat!(
     "__FILE__ __LINE__ __ENCODING__ ",
 );
 
+/// Space-separated Smalltalk **special-selector** vocabulary
+/// installed via `LexSmalltalk`'s `SCI_SETKEYWORDS(0, ...)`
+/// — the sole class of `smalltalkWordListDesc[]` at
+/// `vendor/lexilla/lexers/LexSmalltalk.cxx:325-328`. Drives
+/// `SCE_ST_SPEC_SEL` via the classifier at `:250-251` — an
+/// identifier promoted to `SCE_ST_SPEC_SEL` when it matches
+/// this wordlist, otherwise it stays at `SCE_ST_KWSEND`
+/// (for `keyword:`-suffixed idents) or falls through the
+/// hardcoded strcmp chain at `:257-266` for the 5 language
+/// constants (`self` / `super` / `nil` / `true` / `false`).
+///
+/// **Case-sensitive byte-exact match.** `handleLetter` at
+/// `:223-270` builds the identifier via
+/// `isAlphaNumeric` chars from `ClassificationTable[]` at
+/// `:71-80` (no folding) then dispatches
+/// `wordLists[0]->InList(ident)` at `:250`. Wordlist entries
+/// must match the source's exact case. Smalltalk is a
+/// case-sensitive language.
+///
+/// **Per-keyword-part, not compound.** `handleLetter` reads
+/// alphanumeric chars then admits AT MOST ONE trailing `:`
+/// (`:241-247` — `doubleColonPresent` is `bool`, not a
+/// counter). So a compound selector like `ifTrue:ifFalse:`
+/// is tokenised as TWO separate atoms `ifTrue:` and
+/// `ifFalse:`. Entries in this wordlist must be
+/// single-keyword-part atoms (`ifTrue:`, `ifFalse:`) —
+/// NEVER compound (`ifTrue:ifFalse:`), which would be
+/// unreachable.
+///
+/// **Do NOT list `self` / `super` / `nil` / `true` /
+/// `false`.** The `handleLetter` dispatch order at
+/// `:250-266` is `InList` (first, line 250) →
+/// `doubleColonPresent` (252) → `isUpper(ident[0])` (254)
+/// → hardcoded strcmp chain (`:257-266`, as a last-chance
+/// fallback for bare lowercase idents). If any of these
+/// five were added to this wordlist, `InList` would fire
+/// FIRST and silently promote them to `SCE_ST_SPEC_SEL`,
+/// OVERRIDING the dedicated `SCE_ST_SELF` / `SUPER` /
+/// `NIL` / `BOOL` styles they'd otherwise land in via the
+/// hardcoded fallback — the opposite of the intended
+/// visual differentiation. They're excluded because
+/// `InList` would win a precedence it shouldn't, not
+/// because it would lose to something else.
+///
+/// **Source.** `SciTE`'s default Smalltalk `.properties` file
+/// at `vendor/lexilla/test/examples/smalltalk/SciTE.properties:2`
+/// ships an 11-selector default (`ifTrue: ifFalse:
+/// whileTrue: whileFalse: ifNil: ifNotNil: whileTrue
+/// whileFalse repeat isNil notNil`). Code++ extends this with
+/// the 4 boolean short-circuit combinators (`and:` / `or:` /
+/// `xor:` / `not`) that also read as control-flow constructs
+/// at read-time. Total 15 entries. Cross-referenced against
+/// the Blue Book (ANSI Smalltalk / Squeak / Pharo control-
+/// flow protocols) — no code copied.
+///
+/// **Scope, deliberately minimal.** This wordlist is for
+/// selectors that visually read as language keywords
+/// (`ifTrue:` is Smalltalk's `if`; `whileTrue:` is its
+/// `while`; `and:` is short-circuit boolean-and). Ordinary
+/// method-send selectors like `at:` / `put:` / `do:` /
+/// `collect:` / `printString` are NOT in this list — they
+/// paint as `SCE_ST_KWSEND` (steel-blue) which is the
+/// correct "keyword-send but not a control primitive"
+/// styling. Adding them here would over-bold ordinary
+/// message sends and defeat the visual signal.
+pub const SMALLTALK_SPECIAL_SELECTORS: &str = concat!(
+    // Boolean-conditional control flow (single-part atoms;
+    // the compound `ifTrue:ifFalse:` is tokenised as two
+    // atoms, so both parts must be listed separately)
+    "ifTrue: ifFalse: ",
+    // Nil-conditional control flow
+    "ifNil: ifNotNil: ",
+    // Iteration control flow
+    "whileTrue: whileFalse: whileTrue whileFalse repeat ",
+    // Nil predicates (unary — no trailing `:`)
+    "isNil notNil ",
+    // Boolean short-circuit combinators
+    "and: or: xor: not ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2224,6 +2224,158 @@ pub const SCE_RB_STRING_QI: usize = 43;
 pub const SCE_RB_STRING_QS: usize = 44;
 pub const SCE_RB_UPPER_BOUND: usize = 45;
 
+// LexSmalltalk style indices. 17 contiguous slots (0..=16) —
+// a compact lexer (330 lines total) for a syntactically-tiny
+// language where "everything is a message send." The
+// classifier at `LexSmalltalk.cxx:272-322` runs a
+// character-class dispatch (`isSpecial` / `isBinSel` /
+// `isDecDigit` / `isLetter` at `:82-86`, driven by the
+// auto-generated `ClassificationTable[256]` at `:71-80`) and
+// hands off to typed handlers (`handleHash` for `#symbol`,
+// `handleSpecial` for `()[]{};.^:` punctuation,
+// `handleNumeric` for radix numerics, `handleLetter` for
+// identifier + keyword-send + hardcoded-word disambiguation,
+// `handleBinSel` for binary selectors).
+//
+// Style semantics (paint-loop citations reference LexSmalltalk.cxx):
+//   - DEFAULT (0)      — whitespace and unclassified local
+//                        variables (temp names between `|`
+//                        bars) — anything the classifier
+//                        leaves unpromoted.
+//   - STRING (1)       — `'...'` string literal. `''` is the
+//                        escape for a single quote per
+//                        `skipString` at `:109-119`.
+//   - NUMBER (2)       — Numeric literal. Supports radix
+//                        (`16r1F` = decimal 31), decimal
+//                        fractions, scaled decimal (`3s2`),
+//                        and scientific exponent (`e` / `d` /
+//                        `q`). Full grammar at `:166-214`.
+//   - COMMENT (3)      — `"..."` block comment (Smalltalk
+//                        uses double-quote for comments,
+//                        single-quote for strings — the
+//                        opposite of every other C-family
+//                        convention). No nesting; `skipComment`
+//                        at `:103-107`.
+//   - SYMBOL (4)       — `#foo` symbol literal or `#'quoted'`
+//                        string-form symbol. Also emitted for
+//                        keyword-part symbols like
+//                        `#at:put:`. Entry at `:301-302`,
+//                        classification at `handleHash`
+//                        `:121-144`.
+//   - BINARY (5)       — Binary-selector message name
+//                        composed from
+//                        `~@%&*-+=|\/,<>?!` chars (the
+//                        `isBinSel` set at `:86`, entered
+//                        by `handleBinSel` at `:216-221`).
+//                        Note `-` followed by a digit is
+//                        promoted to NUMBER instead
+//                        (`:313-315`).
+//   - BOOL (6)         — `true` / `false`. Hardcoded at
+//                        `:263-264`.
+//   - SELF (7)         — `self`. Hardcoded at `:257-258`.
+//   - SUPER (8)        — `super`. Hardcoded at `:259-260`.
+//   - NIL (9)          — `nil`. Hardcoded at `:261-262`.
+//   - GLOBAL (10)      — Identifier whose first char is
+//                        UpperCase per `isUpper` at `:85`.
+//                        Smalltalk convention: class names
+//                        and global variables are
+//                        `PascalCase` (`Object`, `Array`,
+//                        `Smalltalk`); local variables and
+//                        method names are lower-case
+//                        (`aString`, `aCollection`). Emitted
+//                        at `:254-255`.
+//   - RETURN (11)      — `^` return operator. Handled
+//                        specially by `handleSpecial` at
+//                        `:152-157` (any `^` NOT part of
+//                        `:=` becomes RETURN; the actual
+//                        `^` handler is at `:153-154`).
+//   - SPECIAL (12)     — Punctuation from the "special"
+//                        char set `()[]{};.^:` at `:44` —
+//                        entered by `handleSpecial` at
+//                        `:146-158` when NOT a `:=` prefix
+//                        and NOT a bare `^`.
+//   - KWSEND (13)      — Keyword-send message part. An
+//                        identifier ending in a single `:`
+//                        (`at:`, `put:`, `do:`, `ifTrue:`
+//                        when NOT in the special-selector
+//                        wordlist). Classification at
+//                        `:252-253`.
+//   - ASSIGN (14)      — `:=` assignment operator.
+//                        Handled at `:148-151`; the classifier
+//                        eats the following `=` at `:150`.
+//   - CHARACTER (15)   — `$c` character literal (dollar sign
+//                        followed by exactly one character).
+//                        Entry at `:303-306`.
+//   - SPEC_SEL (16)    — Wordlist-matched control-flow /
+//                        boolean-combinator / nil-test
+//                        selector (`ifTrue:`, `whileTrue:`,
+//                        `isNil`, `and:`, etc.). Promoted
+//                        from KWSEND/DEFAULT at `:250-251`
+//                        when the ident matches
+//                        `wordLists[0]`.
+//
+// **Wordlist classes.** `smalltalkWordListDesc[]` at
+// `LexSmalltalk.cxx:325-328` declares ONE class: "Special
+// selectors" (class 0). The lexer ships NO default entries
+// — the wordlist is entirely user-populated. SciTE's
+// bundled `SciTE.properties` at
+// `vendor/lexilla/test/examples/smalltalk/SciTE.properties`
+// documents an 11-selector default (`ifTrue: ifFalse:
+// whileTrue: whileFalse: ifNil: ifNotNil: whileTrue
+// whileFalse repeat isNil notNil`) — Code++ extends this
+// with the 4 boolean combinators (`and:` / `or:` / `xor:`
+// / `not`).
+//
+// **Case handling.** The classifier uses byte-exact
+// `strcmp` at `:257-266` for the 5 hardcoded reserved words
+// and `wordLists[0]->InList` at `:250` for the wordlist —
+// both **case-sensitive**. `Self` / `SELF` / `sELF` are
+// distinct from the hardcoded `self` and would render as
+// `SCE_ST_GLOBAL` / `SCE_ST_DEFAULT` respectively. Wordlist
+// entries also match byte-exact.
+//
+// **Hardcoded language keywords.** LexSmalltalk hardcodes
+// its five language constants (`self` / `super` / `nil` /
+// `true` / `false`) directly in the `handleLetter`
+// classifier at `:257-266` rather than through the
+// wordlist. This is deliberate — those constants have
+// dedicated styles (`SCE_ST_SELF` / `SUPER` / `NIL` /
+// `BOOL`) so the theme can paint them distinctly from
+// wordlist-matched selectors. **Do NOT add them to the
+// `SMALLTALK_SPECIAL_SELECTORS` wordlist.** The
+// `handleLetter` dispatch order at `:250-266` is
+// `InList` (first) → `doubleColonPresent` → `isUpper`
+// → hardcoded strcmp chain (last, as a fallback for bare
+// lowercase idents). Adding these five constants to the
+// wordlist would make `InList` fire FIRST and silently
+// promote them to `SCE_ST_SPEC_SEL`, OVERRIDING the
+// dedicated `SELF` / `SUPER` / `NIL` / `BOOL` styles
+// that give them distinct visual identity — the
+// opposite of the intended behaviour. The exclusion is
+// enforced not because the wordlist path is unreachable,
+// but because it would win a dispatch precedence it
+// shouldn't win.
+//
+// Values match `SciLexer.h:1247-1263`. LexSmalltalk registers
+// SCLEX_SMALLTALK at `LexSmalltalk.cxx:330`.
+pub const SCE_ST_DEFAULT: usize = 0;
+pub const SCE_ST_STRING: usize = 1;
+pub const SCE_ST_NUMBER: usize = 2;
+pub const SCE_ST_COMMENT: usize = 3;
+pub const SCE_ST_SYMBOL: usize = 4;
+pub const SCE_ST_BINARY: usize = 5;
+pub const SCE_ST_BOOL: usize = 6;
+pub const SCE_ST_SELF: usize = 7;
+pub const SCE_ST_SUPER: usize = 8;
+pub const SCE_ST_NIL: usize = 9;
+pub const SCE_ST_GLOBAL: usize = 10;
+pub const SCE_ST_RETURN: usize = 11;
+pub const SCE_ST_SPECIAL: usize = 12;
+pub const SCE_ST_KWSEND: usize = 13;
+pub const SCE_ST_ASSIGN: usize = 14;
+pub const SCE_ST_CHARACTER: usize = 15;
+pub const SCE_ST_SPEC_SEL: usize = 16;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated

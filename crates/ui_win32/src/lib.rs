@@ -109,12 +109,12 @@ use codepp_core::lang::{
     LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP,
     L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
     L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST,
-    L_SCHEME, L_SQL, L_TCL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS,
+    NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
     PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
-    RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SQL_KEYWORDS,
-    SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
+    RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+    SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -198,36 +198,38 @@ use codepp_scintilla_sys::{
     SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD,
     SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS,
     SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2,
-    SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE, SCE_TCL_COMMENT_BOX,
-    SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER, SCE_TCL_NUMBER, SCE_TCL_OPERATOR,
-    SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD, SCE_TCL_WORD2, SCE_TCL_WORD3,
-    SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7, SCE_TCL_WORD8,
-    SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL,
-    SCE_TEX_SYMBOL, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT,
-    SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN,
-    SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER,
-    SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT,
-    SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT,
-    SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM,
-    SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN,
-    SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER,
-    SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE,
-    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES,
-    SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
-    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
-    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
-    SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT,
-    SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK,
-    SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8,
-    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
-    SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT,
-    SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
-    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
-    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
-    SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
-    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
-    SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT,
-    STYLE_LINENUMBER,
+    SCE_ST_ASSIGN, SCE_ST_BINARY, SCE_ST_BOOL, SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL,
+    SCE_ST_KWSEND, SCE_ST_NIL, SCE_ST_NUMBER, SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL,
+    SCE_ST_SPEC_SEL, SCE_ST_STRING, SCE_ST_SUPER, SCE_ST_SYMBOL, SCE_TCL_BLOCK_COMMENT,
+    SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE, SCE_TCL_COMMENT_BOX, SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE,
+    SCE_TCL_MODIFIER, SCE_TCL_NUMBER, SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE,
+    SCE_TCL_WORD, SCE_TCL_WORD2, SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6,
+    SCE_TCL_WORD7, SCE_TCL_WORD8, SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT,
+    SCE_TEX_GROUP, SCE_TEX_SPECIAL, SCE_TEX_SYMBOL, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE,
+    SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
+    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
+    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
+    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
+    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
+    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
+    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
+    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
+    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
+    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
+    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
+    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE,
+    SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED,
+    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
+    SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE,
+    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
+    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
+    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS,
+    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY,
+    SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION,
+    SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
@@ -6012,6 +6014,166 @@ const RB_THEME: LangTheme = LangTheme {
     bold: RB_BOLD,
 };
 
+// --- LexSmalltalk ---
+//
+// Smalltalk is a pure-OO message-send language where syntax
+// is famously "everything is a message." The classifier at
+// `LexSmalltalk.cxx:272-322` is a compact character-class
+// dispatcher (330 lines total) with 17 style classes. Five
+// language constants (`self` / `super` / `nil` / `true` /
+// `false`) are hardcoded at `:257-266` with dedicated
+// `SCE_ST_SELF` / `SUPER` / `NIL` / `BOOL` styles, so the
+// theme paints them distinctly from wordlist-matched
+// selectors.
+//
+// **16-mapping style table.** 17 slots (0..=16) minus one
+// deliberate omission:
+//   - `DEFAULT` (0)         — whitespace and unclassified
+//                             tokens (temp-var names between
+//                             `|` bars, method parameters
+//                             like `aString`). Keeps
+//                             `STYLE_DEFAULT` — the universal
+//                             convention.
+//
+// **Slot mapping rationale — leveraging LexSmalltalk's
+// deliberate keyword split into 6 semantic slots:**
+//
+//   Comment (green italic):
+//     `COMMENT` (3)         — `"..."` block comment.
+//                             Smalltalk uses double-quote
+//                             for comments and single-quote
+//                             for strings (opposite of every
+//                             other C-family convention).
+//
+//   Language constants (blue bold):
+//     `SELF` (7)            — `self`.
+//     `SUPER` (8)           — `super`.
+//     `NIL` (9)             — `nil`.
+//     `BOOL` (6)            — `true` / `false`.
+//     `RETURN` (11)         — `^` return operator.
+//     `SPEC_SEL` (16)       — Wordlist-matched control-flow
+//                             selectors (`ifTrue:`,
+//                             `whileTrue:`, `and:`, …). All
+//                             six route to `StyleSlot::Keyword`
+//                             and appear in `ST_BOLD` — these
+//                             are Smalltalk's language
+//                             keywords and control-flow
+//                             primitives, deserving the
+//                             strongest visual emphasis.
+//
+//   Class/global + keyword-send (steel blue Keyword2):
+//     `GLOBAL` (10)         — UpperCase-first identifier —
+//                             Smalltalk convention for class
+//                             names + globals (`Object`,
+//                             `Array`, `String`,
+//                             `Transcript`). Emitted
+//                             directly by the classifier at
+//                             `:254-255` based on
+//                             `isUpper(first-char)`.
+//     `KWSEND` (13)         — Keyword-send message part
+//                             ending in `:` that did NOT
+//                             match the special-selector
+//                             wordlist (`at:`, `put:`, `do:`,
+//                             `collect:`, `printOn:`). These
+//                             are ordinary message sends —
+//                             steel blue keeps them visually
+//                             prominent (they carry semantic
+//                             meaning) without over-bolding.
+//
+//   String / character (brick red):
+//     `STRING` (1)          — `'...'` string.
+//     `CHARACTER` (15)      — `$c` character literal.
+//
+//   Number (magenta):
+//     `NUMBER` (2)          — integer / radix / decimal /
+//                             scientific / scaled-decimal.
+//
+//   Symbol (purple Preprocessor):
+//     `SYMBOL` (4)          — `#foo` symbol literal, `#'x'`
+//                             quoted symbol, `#at:put:`
+//                             compound-keyword symbol.
+//                             Symbols in Smalltalk are
+//                             immutable name references —
+//                             `StyleSlot::Preprocessor`'s
+//                             "distinct namespace" semantic
+//                             fits (same slot Ruby uses for
+//                             its `:foo` symbols).
+//
+//   Operator (dark grey):
+//     `BINARY` (5)          — Binary-selector message name
+//                             (`+`, `-`, `*`, `<=`, `->`,
+//                             etc. — from the
+//                             `isBinSel` set at
+//                             `LexSmalltalk.cxx:86`).
+//     `SPECIAL` (12)        — Punctuation `()`, `[]`, `{}`,
+//                             `;`, `.`, `:` — from the
+//                             `isSpecial` set at `:44`.
+//     `ASSIGN` (14)         — `:=` assignment operator.
+const ST_STYLES: &[(usize, StyleSlot)] = &[
+    // Comment (block)
+    (SCE_ST_COMMENT, StyleSlot::Comment),
+    // Language constants + control flow (all Keyword, all bold)
+    (SCE_ST_SELF, StyleSlot::Keyword),
+    (SCE_ST_SUPER, StyleSlot::Keyword),
+    (SCE_ST_NIL, StyleSlot::Keyword),
+    (SCE_ST_BOOL, StyleSlot::Keyword),
+    (SCE_ST_RETURN, StyleSlot::Keyword),
+    (SCE_ST_SPEC_SEL, StyleSlot::Keyword),
+    // Class/global + keyword-send (both Keyword2)
+    (SCE_ST_GLOBAL, StyleSlot::Keyword2),
+    (SCE_ST_KWSEND, StyleSlot::Keyword2),
+    // String family
+    (SCE_ST_STRING, StyleSlot::String),
+    (SCE_ST_CHARACTER, StyleSlot::String),
+    // Numeric
+    (SCE_ST_NUMBER, StyleSlot::Number),
+    // Symbols (Preprocessor — matches Ruby's `:foo` slot)
+    (SCE_ST_SYMBOL, StyleSlot::Preprocessor),
+    // Operator family
+    (SCE_ST_BINARY, StyleSlot::Operator),
+    (SCE_ST_SPECIAL, StyleSlot::Operator),
+    (SCE_ST_ASSIGN, StyleSlot::Operator),
+];
+
+// Italic only on the block comment. Same universal
+// convention: italicise prose-family classes only. Smalltalk
+// has no doc-comment convention, no POD/JSDoc block, so
+// `COMMENT` is the only italic member.
+const ST_ITALIC: &[usize] = &[SCE_ST_COMMENT];
+
+// Bold on ALL six language-keyword classes: the four
+// hardcoded constants (`SELF` / `SUPER` / `NIL` / `BOOL`),
+// the `RETURN` operator `^`, and the wordlist-matched
+// control-flow special-selector class. **Divergence from
+// the single-entry `RUST_BOLD` / `ASM_BOLD` / `DIFF_BOLD`
+// / `PS_BOLD` / `RB_BOLD` precedent** — Smalltalk's
+// classifier deliberately splits its keyword archetype
+// across 6 dedicated SCE indices (unlike LexRuby / LexRust /
+// LexAsm which use one `SCE_*_WORD` and rely on wordlists
+// or state machines to differentiate). To preserve the
+// "one visual weight for language keywords" contract that
+// the rest of the framework's themes uphold, all 6 dedicated
+// Smalltalk keyword slots must be bolded together — bolding
+// only one would leave `nil` bold but `true` non-bold (or
+// vice versa), which is visually incoherent.
+const ST_BOLD: &[usize] = &[
+    SCE_ST_SELF,
+    SCE_ST_SUPER,
+    SCE_ST_NIL,
+    SCE_ST_BOOL,
+    SCE_ST_RETURN,
+    SCE_ST_SPEC_SEL,
+];
+
+// One-class install (matches LexSmalltalk's single-class
+// `smalltalkWordListDesc[]` at `LexSmalltalk.cxx:325-328`).
+const ST_THEME: LangTheme = LangTheme {
+    keywords: &[(0, SMALLTALK_SPECIAL_SELECTORS)],
+    styles: ST_STYLES,
+    italic: ST_ITALIC,
+    bold: ST_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -6207,6 +6369,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&PS_THEME)
     } else if lang == L_RUBY {
         Some(&RB_THEME)
+    } else if lang == L_SMALLTALK {
+        Some(&ST_THEME)
     } else {
         None
     }
@@ -21382,7 +21546,10 @@ mod lang_theme_tests {
         SCE_RB_OPERATOR, SCE_RB_POD, SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN, SCE_RB_STDOUT,
         SCE_RB_STRING, SCE_RB_STRING_I, SCE_RB_STRING_Q, SCE_RB_STRING_QI, SCE_RB_STRING_QQ,
         SCE_RB_STRING_QR, SCE_RB_STRING_QS, SCE_RB_STRING_QW, SCE_RB_STRING_QX, SCE_RB_STRING_W,
-        SCE_RB_SYMBOL, SCE_RB_WORD, SCE_RB_WORD_DEMOTED,
+        SCE_RB_SYMBOL, SCE_RB_WORD, SCE_RB_WORD_DEMOTED, SCE_ST_ASSIGN, SCE_ST_BINARY, SCE_ST_BOOL,
+        SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL, SCE_ST_KWSEND, SCE_ST_NIL, SCE_ST_NUMBER,
+        SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL, SCE_ST_SPEC_SEL, SCE_ST_STRING, SCE_ST_SUPER,
+        SCE_ST_SYMBOL,
     };
     use codepp_core::lang::{
         BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1,
@@ -21391,14 +21558,14 @@ mod lang_theme_tests {
         JAVA_KEYWORDS, JAVA_KEYWORDS_2, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
         LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML,
         L_INI, L_JAVA, L_JAVASCRIPT, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL,
-        L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SQL, L_TCL,
-        L_TEX, L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+        L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
+        L_TCL, L_TEX, L_TEXT, L_VB, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
         OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
         PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
         PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
-        SCHEME_KEYWORDS_KW, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-        XML_KEYWORDS,
+        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+        VB_KEYWORDS, VB_KEYWORDS_2, XML_KEYWORDS,
     };
 
     /// Every wired language must:
@@ -25477,6 +25644,275 @@ mod lang_theme_tests {
             (php, "PHP"),
         ] {
             assert_ne!(rb.styles, other.styles, "RB must NOT reuse {name}_STYLES");
+        }
+    }
+
+    /// Smalltalk (`L_SMALLTALK`) uses Lexilla's `LexSmalltalk`
+    /// (`SCLEX_SMALLTALK`) — a compact 330-line classifier for
+    /// a language where "everything is a message send" so the
+    /// syntax surface is tiny (17 style classes). Five language
+    /// constants (`self` / `super` / `nil` / `true` / `false`)
+    /// are hardcoded at `LexSmalltalk.cxx:257-266` with dedicated
+    /// SCE slots so the theme paints them distinctly from
+    /// wordlist-matched selectors, and one wordlist class
+    /// ("Special selectors") ships EMPTY by default from the
+    /// lexer — Code++ populates it with 15 canonical
+    /// control-flow / nil-test / boolean-combinator selectors
+    /// (`SciTE` default set of 11 plus the 4 short-circuit
+    /// combinators).
+    ///
+    /// Pinned invariants:
+    ///   1. 16-mapping style table (17 `SCE_ST_*` slots minus
+    ///      `DEFAULT` — universal neutral-state skip).
+    ///   2. Single-class install shape (`LexSmalltalk` has
+    ///      exactly one wordlist class — "Special selectors"
+    ///      at `smalltalkWordListDesc[]` `LexSmalltalk.cxx:325-328`).
+    ///   3. Wordlist token-count pin: 15 entries. Guards
+    ///      against accidental drift (e.g. adding `at:` or
+    ///      `printOn:` which are ordinary sends, not
+    ///      control-flow).
+    ///   4. Canonical anchors: `ifTrue:` / `ifFalse:` /
+    ///      `whileTrue:` / `whileFalse:` / `ifNil:` /
+    ///      `ifNotNil:` / `isNil` / `notNil` / `and:` / `or:`.
+    ///   5. Exclusion pins — the wordlist must NOT contain
+    ///      `self` / `super` / `nil` / `true` / `false`
+    ///      (hardcoded in the classifier at `:257-266` with
+    ///      dedicated SCE slots), NOR compound selectors like
+    ///      `ifTrue:ifFalse:` (tokenised as two separate atoms
+    ///      per `handleLetter`'s single-colon-suffix rule at
+    ///      `:241-247`), NOR ordinary utility sends like
+    ///      `printString` / `printOn:` / `at:` / `at:put:`
+    ///      (should paint as `SCE_ST_KWSEND`, not
+    ///      `SCE_ST_SPEC_SEL`).
+    ///   6. Style-routing pins — every mapped `SCE_ST_*` slot
+    ///      routes to the intended `StyleSlot`.
+    ///   7. Deliberate omission — `SCE_ST_DEFAULT` stays
+    ///      unmapped (whitespace + local variables keep
+    ///      default text colour).
+    ///   8. Italic set == `[SCE_ST_COMMENT]` only.
+    ///   9. Bold set == the 6 language-keyword classes
+    ///      (`SELF` / `SUPER` / `NIL` / `BOOL` / `RETURN` /
+    ///      `SPEC_SEL`). This is a DELIBERATE divergence from
+    ///      the single-entry `RUST_BOLD` / `ASM_BOLD` /
+    ///      `DIFF_BOLD` / `PS_BOLD` / `RB_BOLD` precedent —
+    ///      `LexSmalltalk` splits its keyword archetype
+    ///      across six dedicated SCE indices (whereas
+    ///      LexRuby/LexRust use one `SCE_*_WORD`), so all six
+    ///      must be bolded together to preserve the "one
+    ///      visual weight for language keywords" contract.
+    ///  10. Cross-language non-reuse — Smalltalk's
+    ///      distinctive 6-way keyword bold pattern is not
+    ///      shared with any other wired language.
+    #[test]
+    fn smalltalk_uses_lexsmalltalk_theme() {
+        use codepp_scintilla_sys::SCE_ST_DEFAULT;
+        let st = lang_theme(L_SMALLTALK).expect("Smalltalk wired");
+
+        // Invariant 1: 16-mapping style table.
+        assert_eq!(
+            st.styles.len(),
+            16,
+            "ST_STYLES must map 16 indices (17 SCE_ST_* slots minus DEFAULT)"
+        );
+
+        // Invariant 2: single-class install shape.
+        assert_eq!(
+            st.keywords.len(),
+            1,
+            "ST installs class 0 only (LexSmalltalk's smalltalkWordListDesc[] \
+             at LexSmalltalk.cxx:325-328 declares exactly one class: \
+             'Special selectors')"
+        );
+        assert_eq!(st.keywords[0].0, 0, "class 0 = Special selectors");
+        assert_eq!(st.keywords[0].1, SMALLTALK_SPECIAL_SELECTORS);
+
+        // Invariant 3: wordlist token-count pin.
+        assert_eq!(
+            SMALLTALK_SPECIAL_SELECTORS.split_whitespace().count(),
+            15,
+            "SMALLTALK_SPECIAL_SELECTORS must contain exactly 15 tokens \
+             (SciTE default 11 + boolean short-circuit combinators \
+             and:/or:/xor:/not). If this fails, either an ordinary send \
+             leaked in or a control-flow selector was dropped."
+        );
+
+        // Invariant 4: canonical anchors.
+        for anchor in [
+            "ifTrue:",
+            "ifFalse:",
+            "whileTrue:",
+            "whileFalse:",
+            "ifNil:",
+            "ifNotNil:",
+            "isNil",
+            "notNil",
+            "and:",
+            "or:",
+        ] {
+            assert!(
+                SMALLTALK_SPECIAL_SELECTORS
+                    .split_whitespace()
+                    .any(|t| t == anchor),
+                "SMALLTALK_SPECIAL_SELECTORS must include `{anchor}` \
+                 (canonical Smalltalk control-flow / nil-test / boolean \
+                 combinator selector)"
+            );
+        }
+
+        // Invariant 5: exclusion pins.
+        // 5a. Hardcoded language constants must NOT appear.
+        // `handleLetter`'s dispatch order at `LexSmalltalk.cxx:250-266`
+        // is `InList` (first, line 250) → `doubleColonPresent` (252)
+        // → `isUpper(ident[0])` (254) → hardcoded strcmp chain
+        // (:257-266, last-chance fallback for bare lowercase idents).
+        // If any of these 5 constants were in the wordlist,
+        // `InList` would fire FIRST and silently promote them to
+        // `SCE_ST_SPEC_SEL`, OVERRIDING the dedicated `SELF` /
+        // `SUPER` / `NIL` / `BOOL` styles the hardcoded fallback
+        // would otherwise assign — the opposite of the intended
+        // visual differentiation. The exclusion enforces that
+        // `InList` doesn't win a precedence it shouldn't win.
+        for excluded in ["self", "super", "nil", "true", "false"] {
+            assert!(
+                !SMALLTALK_SPECIAL_SELECTORS
+                    .split_whitespace()
+                    .any(|t| t == excluded),
+                "SMALLTALK_SPECIAL_SELECTORS must NOT include `{excluded}` \
+                 — LexSmalltalk.cxx:250 InList runs BEFORE the hardcoded \
+                 strcmp chain at :257-266, so this would override the \
+                 dedicated SCE_ST_SELF/SUPER/NIL/BOOL slot"
+            );
+        }
+        // 5b. Compound selectors must NOT appear — the classifier
+        // tokenises them as separate single-colon atoms.
+        for compound in [
+            "ifTrue:ifFalse:",
+            "ifFalse:ifTrue:",
+            "ifNil:ifNotNil:",
+            "to:do:",
+        ] {
+            assert!(
+                !SMALLTALK_SPECIAL_SELECTORS
+                    .split_whitespace()
+                    .any(|t| t == compound),
+                "SMALLTALK_SPECIAL_SELECTORS must NOT include compound \
+                 selector `{compound}` — LexSmalltalk's :241-247 admits \
+                 only a single trailing `:`, so compound selectors are \
+                 tokenised as separate atoms"
+            );
+        }
+        // 5c. Ordinary utility sends must NOT appear.
+        for utility in ["at:", "put:", "printString", "printOn:", "do:", "collect:"] {
+            assert!(
+                !SMALLTALK_SPECIAL_SELECTORS
+                    .split_whitespace()
+                    .any(|t| t == utility),
+                "SMALLTALK_SPECIAL_SELECTORS must NOT include ordinary \
+                 send `{utility}` — over-bolding ordinary message sends \
+                 defeats the visual control-flow signal"
+            );
+        }
+
+        // Invariant 6: style-routing pins.
+        for (idx, slot, name) in [
+            (SCE_ST_COMMENT, StyleSlot::Comment, "SCE_ST_COMMENT"),
+            (SCE_ST_SELF, StyleSlot::Keyword, "SCE_ST_SELF"),
+            (SCE_ST_SUPER, StyleSlot::Keyword, "SCE_ST_SUPER"),
+            (SCE_ST_NIL, StyleSlot::Keyword, "SCE_ST_NIL"),
+            (SCE_ST_BOOL, StyleSlot::Keyword, "SCE_ST_BOOL"),
+            (SCE_ST_RETURN, StyleSlot::Keyword, "SCE_ST_RETURN"),
+            (SCE_ST_SPEC_SEL, StyleSlot::Keyword, "SCE_ST_SPEC_SEL"),
+            (SCE_ST_GLOBAL, StyleSlot::Keyword2, "SCE_ST_GLOBAL"),
+            (SCE_ST_KWSEND, StyleSlot::Keyword2, "SCE_ST_KWSEND"),
+            (SCE_ST_STRING, StyleSlot::String, "SCE_ST_STRING"),
+            (SCE_ST_CHARACTER, StyleSlot::String, "SCE_ST_CHARACTER"),
+            (SCE_ST_NUMBER, StyleSlot::Number, "SCE_ST_NUMBER"),
+            (SCE_ST_SYMBOL, StyleSlot::Preprocessor, "SCE_ST_SYMBOL"),
+            (SCE_ST_BINARY, StyleSlot::Operator, "SCE_ST_BINARY"),
+            (SCE_ST_SPECIAL, StyleSlot::Operator, "SCE_ST_SPECIAL"),
+            (SCE_ST_ASSIGN, StyleSlot::Operator, "SCE_ST_ASSIGN"),
+        ] {
+            assert!(
+                st.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 7: DEFAULT unmapped.
+        assert!(
+            !st.styles.iter().any(|(i, _)| *i == SCE_ST_DEFAULT),
+            "SCE_ST_DEFAULT must remain unmapped (whitespace + \
+             local/temp variables keep default text colour)"
+        );
+
+        // Invariant 8: italic set == [COMMENT].
+        assert_eq!(
+            st.italic.len(),
+            1,
+            "ST_ITALIC must contain exactly SCE_ST_COMMENT"
+        );
+        assert!(st.italic.contains(&SCE_ST_COMMENT));
+
+        // Invariant 9: bold set == 6 language-keyword classes.
+        assert_eq!(
+            st.bold.len(),
+            6,
+            "ST_BOLD must contain exactly 6 language-keyword classes \
+             (SELF + SUPER + NIL + BOOL + RETURN + SPEC_SEL) — deliberate \
+             divergence from the single-entry precedent, see banner"
+        );
+        for bold_idx in [
+            SCE_ST_SELF,
+            SCE_ST_SUPER,
+            SCE_ST_NIL,
+            SCE_ST_BOOL,
+            SCE_ST_RETURN,
+            SCE_ST_SPEC_SEL,
+        ] {
+            assert!(
+                st.bold.contains(&bold_idx),
+                "SCE_ST_* language-keyword slot {bold_idx} must be bold"
+            );
+        }
+        // Non-bold sanity checks.
+        for non_bold in [
+            SCE_ST_GLOBAL,
+            SCE_ST_KWSEND,
+            SCE_ST_BINARY,
+            SCE_ST_SPECIAL,
+            SCE_ST_ASSIGN,
+            SCE_ST_SYMBOL,
+        ] {
+            assert!(
+                !st.bold.contains(&non_bold),
+                "SCE_ST_* non-keyword slot {non_bold} must NOT be bold"
+            );
+        }
+
+        // Invariant 10: cross-language non-reuse of styles slice.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let asm = lang_theme(L_ASM).expect("Assembly wired");
+        let diff = lang_theme(L_DIFF).expect("Diff wired");
+        let ps = lang_theme(L_PS).expect("PostScript wired");
+        let rb = lang_theme(L_RUBY).expect("Ruby wired");
+        let lisp = lang_theme(L_LISP).expect("Lisp wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let props = lang_theme(L_INI).expect("INI wired");
+        let bash = lang_theme(L_BASH).expect("Bash wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (asm, "Assembly"),
+            (diff, "Diff"),
+            (ps, "PostScript"),
+            (rb, "Ruby"),
+            (lisp, "Lisp"),
+            (mk, "Makefile"),
+            (bat, "Batch"),
+            (props, "INI"),
+            (bash, "Bash"),
+        ] {
+            assert_ne!(st.styles, other.styles, "ST must NOT reuse {name}_STYLES");
         }
     }
 

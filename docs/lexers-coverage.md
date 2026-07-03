@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 33 / 🟡 55 / ⚫ 1.
+Total: 89 rows. ✅ 34 / 🟡 54 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1911,7 +1911,7 @@ further shim work needed.
 | SAS | 91 | `sas` | ⚫ | ⚫ | 🟡 |
 | Scheme | 31 | `lisp` | ✅ | ✅ | ✅ |
 | Shell | 26 | `bash` | ✅ | ✅ | ✅ |
-| Smalltalk | 37 | `smalltalk` | ⚫ | ⚫ | 🟡 |
+| Smalltalk | 37 | `smalltalk` | ✅ | ✅ | ✅ |
 | Spice | 82 | `spice` | ⚫ | ⚫ | 🟡 |
 | SQL | 17 | `sql` | ✅ | ✅ | ✅ |
 | Swift | 64 | `cpp` | ⚫ | ⚫ | 🟡 |
@@ -2353,6 +2353,100 @@ allocated sub-styles via `SCI_ALLOCATESUBSTYLES`) is left
 untouched — a future commit can allocate sub-styles for
 built-in Ruby type discrimination (`Array` / `Hash` /
 `String` etc.) via `SubStyles` at `:211`.
+
+**Smalltalk (2026-07-03):** uses Lexilla's `smalltalk` lexer
+(`LexSmalltalk.cxx`, `SCLEX_SMALLTALK`) — a compact 330-line
+character-class-dispatch classifier for a language where
+"everything is a message send." Auto-generated
+`ClassificationTable[256]` at `LexSmalltalk.cxx:71-80`
+categorises source chars into five sets (`DecDigit`, `Letter`,
+`Special`, `Upper`, `BinSel`); the driver at `:272-322`
+dispatches to typed handlers (`handleHash` for `#symbol`,
+`handleSpecial` for `()[]{};.^:` punctuation, `handleNumeric`
+for radix-supporting numerics, `handleLetter` for
+identifier + keyword-send + hardcoded-word disambiguation,
+`handleBinSel` for `~@%&*-+=|\/,<>?!` binary selectors).
+Case-sensitive matching via byte-exact `strcmp` at `:257-266`
+for the five hardcoded language constants (`self` / `super`
+/ `nil` / `true` / `false`), and via
+`wordLists[0]->InList` at `:250` for the single
+"Special selectors" wordlist class.
+
+Sixteen theme routings across 17 `SCE_ST_*` slots (minus
+`DEFAULT` — universal neutral-state skip). Smalltalk's
+distinctive feature is that its language-keyword archetype
+is split across SIX dedicated SCE indices — the hardcoded
+constants (`SELF` / `SUPER` / `NIL` / `BOOL`), the return
+operator `^` (`RETURN`), and the wordlist-matched
+control-flow selectors (`SPEC_SEL`) — all six route to
+`StyleSlot::Keyword` (bold blue). This is a deliberate
+divergence from every other wired lexer's single-entry bold
+precedent (`RUST_BOLD` = `SCE_RUST_WORD` only; `ASM_BOLD` =
+`SCE_ASM_CPUINSTRUCTION` only; `RB_BOLD` = `SCE_RB_WORD`
+only): where LexRuby / LexRust use a single `SCE_*_WORD`
+slot and rely on wordlist matching to differentiate keyword
+subclasses, LexSmalltalk pre-splits its keyword archetype at
+the classifier level. To preserve the "one visual weight
+for language keywords" contract, all six dedicated slots
+must be bolded together — bolding only one would leave
+`nil` bold but `true` non-bold (or vice versa), which reads
+as visually incoherent.
+
+`GLOBAL` (10) — UpperCase-first identifiers, Smalltalk
+convention for class names and globals — routes to
+`Keyword2` (steel blue). `KWSEND` (13) — keyword-send
+message parts ending in `:` that did NOT match the wordlist
+(`at:`, `put:`, `do:`, `collect:`, `printOn:`) — also
+`Keyword2`, keeping ordinary sends visually prominent
+without over-bolding. `SYMBOL` (4) — `#foo` symbol literals
+— routes to `Preprocessor` (purple, matching Ruby's `:foo`
+convention). String literals (`STRING` for `'...'`,
+`CHARACTER` for `$c`) share `StyleSlot::String` (brick red).
+The three operator classes (`BINARY` — user-defined binary
+selectors, `SPECIAL` — punctuation, `ASSIGN` — `:=`) share
+`StyleSlot::Operator` (dark grey).
+
+`SMALLTALK_SPECIAL_SELECTORS` carries 15 canonical
+control-flow / nil-test / boolean-combinator selectors —
+SciTE's default 11-entry set from
+`vendor/lexilla/test/examples/smalltalk/SciTE.properties`
+(`ifTrue:` `ifFalse:` `whileTrue:` `whileFalse:` `ifNil:`
+`ifNotNil:` `whileTrue` `whileFalse` `repeat` `isNil`
+`notNil`) plus the 4 short-circuit boolean combinators
+(`and:` `or:` `xor:` `not`). Ordinary utility sends
+(`at:`, `put:`, `do:`, `collect:`, `printString`,
+`printOn:`) are DELIBERATELY excluded — over-bolding
+ordinary message sends defeats the visual control-flow
+signal, and those sends already paint distinctly as
+`SCE_ST_KWSEND` (steel-blue Keyword2). Compound selectors
+(`ifTrue:ifFalse:`, `to:by:do:`) are also excluded because
+`handleLetter` at `:241-247` admits only ONE trailing `:`
+per identifier segment — compounds tokenise as separate
+atoms that each need their own single-part wordlist entry.
+The five hardcoded constants (`self` / `super` / `nil` /
+`true` / `false`) are excluded for the OPPOSITE reason
+one might first assume: `handleLetter`'s dispatch order
+at `:250-266` puts `InList` FIRST (line 250) with the
+hardcoded strcmp chain as the last-chance fallback
+(`:257-266`). So adding those five to the wordlist would
+silently promote them to `SCE_ST_SPEC_SEL` and OVERRIDE
+their dedicated `SCE_ST_SELF` / `SUPER` / `NIL` / `BOOL`
+styles — the opposite of intended visual differentiation.
+The exclusion enforces that `InList` doesn't win a
+precedence it shouldn't win.
+
+Structural guards pinned in `smalltalk_uses_lexsmalltalk_theme`:
+16-mapping style table, single-class install shape,
+15-token wordlist-count pin (guards against ordinary-send
+leakage), 10 canonical anchors across control-flow /
+nil-test / boolean combinators, 3 exclusion bucket pins
+(no hardcoded constants, no compounds, no utility sends —
+5 + 4 + 6 = 15 forbidden-token checks total), 16
+style-routing pins, `DEFAULT`-unmapped guard, single-entry
+italic set (`COMMENT` only), 6-entry bold set with
+non-bold sanity checks on `GLOBAL` / `KWSEND` / `BINARY`
+/ `SPECIAL` / `ASSIGN` / `SYMBOL`, 10 cross-language
+non-reuse pins.
 
 ## Notes
 
