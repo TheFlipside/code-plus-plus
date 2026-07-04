@@ -8140,6 +8140,295 @@ pub const D_META: &str = concat!(
 /// without a theme change.
 pub const D_WORD7: &str = "";
 
+/// PowerShell language keywords (class 0 → `SCE_POWERSHELL_KEYWORD`).
+///
+/// **Source of truth:** Microsoft Learn `about_Language_Keywords`
+/// (`learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_language_keywords`)
+/// for the 40 language keywords (36 table entries + 4 workflow
+/// entries), and Microsoft Learn `about_Logical_Operators` /
+/// `about_Bitwise_Operators` for the 8 operator-word tokens
+/// (`and` / `or` / `not` / `xor` / `band` / `bor` / `bnot` /
+/// `bxor`) — see the "Operator-word tokens included" paragraph
+/// below for why they fire through identifier classification.
+///
+/// **Case-insensitive byte-lowered match.** `LexPowerShell`
+/// has no `caseSensitive` factory switch — the identifier
+/// classification cascade at `LexPowerShell.cxx:154-172` calls
+/// `sc.GetCurrentLowered(s, sizeof(s))` unconditionally before
+/// every `WordList::InList` probe. PowerShell is documented
+/// as case-insensitive (Microsoft Learn
+/// `about_Language_Keywords`,
+/// `about_Comparison_Operators`), so wordlist tokens MUST be
+/// all-lowercase. An uppercase entry would silently never
+/// match. Same discipline as [`COBOL_KEYWORDS_A`] and
+/// [`CMAKE_COMMANDS`]; inverted from [`D_KEYWORDS`].
+///
+/// **Operator-word tokens included.** `and`, `or`, `not`,
+/// `xor`, `band`, `bor`, `bnot`, `bxor` are documented on
+/// Microsoft Learn `about_Logical_Operators` and
+/// `about_Bitwise_Operators` — the operator-page authority,
+/// NOT `about_Language_Keywords`. They appear in PowerShell
+/// source as `-and`, `-or`, `-not`, `-band`, etc.
+/// `LexPowerShell`'s paint loop dispatches `isoperator(sc.ch)`
+/// at `LexPowerShell.cxx:192-193` BEFORE `IsAWordChar(sc.ch)`
+/// at `:194-195`, so the leading `-` transitions to
+/// `SCE_POWERSHELL_OPERATOR`; the trailing bare word then
+/// enters `SCE_POWERSHELL_IDENTIFIER` and the
+/// `GetCurrentLowered` + `InList` probe at `:154-169` fires on
+/// the bare `and`/`or`/etc. Consequence: including these bare
+/// forms is load-bearing — the operator-word suffix picks up
+/// keyword styling without a wordlist entry for the hyphenated
+/// spelling. This is the same shape Notepad++'s built-in
+/// PowerShell definition uses.
+///
+/// **Workflow keywords included.** `inlinescript`, `parallel`,
+/// `sequence`, `workflow` are documented reserved words per
+/// `about_Language_Keywords` even though the Workflow feature
+/// itself is Windows PowerShell 5.1-only (removed from
+/// PowerShell 6+). They remain reserved words in the language
+/// grammar — highlight consistently across editions.
+///
+/// **`clean` included (PS 7.3+).** The `clean` block was
+/// added to the `about_Language_Keywords` list in PowerShell
+/// 7.3 (November 2022). Ship it — older editions simply won't
+/// use the keyword and the highlight is a no-op.
+///
+/// **Deliberately excluded — not in `about_Language_Keywords`:**
+///   - `namespace` — a contextual token in `using namespace X.Y`
+///     directives; NOT a reserved word per the spec.
+///   - `interface` — not a PowerShell keyword at all
+///     (PowerShell has no `interface` construct at the language
+///     level; only `class` is a keyword).
+pub const POWERSHELL_KEYWORDS: &str = concat!(
+    // Script blocks / advanced-function blocks.
+    "begin process end dynamicparam clean ",
+    // Control flow.
+    "break continue do else elseif exit for foreach ",
+    "from if in return switch throw trap try catch ",
+    "finally until while ",
+    // Declarations.
+    "class enum function filter param hidden static ",
+    "data define var ",
+    // Module / provenance.
+    "using ",
+    // Workflow (PS 5.1 only; reserved in language grammar).
+    "workflow inlinescript parallel sequence ",
+    // Operator-word suffixes — fire in identifier state after
+    // the leading `-` tokenises as operator.
+    "and or not xor band bor bnot bxor ",
+);
+
+/// PowerShell built-in cmdlets (class 1 →
+/// `SCE_POWERSHELL_CMDLET`).
+///
+/// **Source of truth:** Microsoft PowerShell module documentation
+/// (`Microsoft.PowerShell.Management`, `Microsoft.PowerShell.Utility`,
+/// `Microsoft.PowerShell.Core`).
+///
+/// **Case-insensitive byte-lowered match.** Same discipline
+/// as [`POWERSHELL_KEYWORDS`]. PowerShell source spells
+/// cmdlets in `PascalCase` (`Get-ChildItem`) by convention, but
+/// the lexer's `GetCurrentLowered` call lowercases the token
+/// before probing — wordlist entries must be all-lowercase.
+///
+/// **Hyphenated cmdlets tokenise as one identifier.**
+/// `LexPowerShell.cxx:32-34`'s `IsAWordChar` accepts `-` as a
+/// word character (`ch == '-'` in the return expression), so
+/// `Get-ChildItem` enters `SCE_POWERSHELL_IDENTIFIER` state
+/// as a single token including the embedded hyphen. The
+/// classification cascade at `:154-172` then matches
+/// `get-childitem` in the wordlist.
+///
+/// Coverage: ~83 tokens across the three core Microsoft
+/// modules. Provider-specific cmdlets (`WSMan`,
+/// `Microsoft.WSMan.Management`), platform-specific cmdlets
+/// (Windows-only WMI / `EventLog` / Registry), and third-party
+/// module cmdlets deliberately excluded — those are best
+/// discovered via `Get-Command -Module` at runtime rather
+/// than baked into the base highlight.
+pub const POWERSHELL_CMDLETS: &str = concat!(
+    // File / path / content management.
+    "get-childitem get-content set-content add-content ",
+    "get-item set-item copy-item move-item remove-item ",
+    "rename-item new-item test-path convert-path ",
+    "split-path join-path resolve-path ",
+    // Location (working directory).
+    "get-location set-location push-location pop-location ",
+    // Process management.
+    "get-process stop-process start-process wait-process ",
+    // Service management.
+    "get-service start-service stop-service restart-service ",
+    // Output writers.
+    "write-host write-output write-error write-warning ",
+    "write-verbose write-debug write-information read-host ",
+    // Variable management.
+    "get-variable set-variable clear-variable ",
+    "remove-variable new-variable ",
+    // Reflection / help / history.
+    "get-command get-help get-member get-history ",
+    // Command invocation.
+    "invoke-command invoke-expression ",
+    // Object pipeline vocabulary.
+    "where-object foreach-object select-object sort-object ",
+    "group-object measure-object compare-object ",
+    // Output formatting / redirection.
+    "format-table format-list format-wide out-host out-file ",
+    "out-string out-null ",
+    // Module system.
+    "import-module export-modulemember get-module ",
+    "remove-module new-module ",
+    // Data interchange.
+    "import-csv export-csv convertfrom-json convertto-json ",
+    "convertto-xml invoke-restmethod invoke-webrequest ",
+    // Utilities.
+    "get-date new-object get-alias set-alias select-string ",
+    "start-sleep ",
+    // Remoting sessions.
+    "new-pssession enter-pssession exit-pssession ",
+    "remove-pssession ",
+);
+
+/// PowerShell built-in aliases (class 2 →
+/// `SCE_POWERSHELL_ALIAS`).
+///
+/// **Source of truth:** default `Get-Alias` output on
+/// Windows PowerShell 5.1 (the widest deployment target).
+/// PowerShell 6+ removed some Unix-conflicting aliases
+/// (`curl` / `wget` / `sc` on non-Windows to unshadow the
+/// real binaries) — the ones removed on PS 6+ are still
+/// shipped here so 5.1 files continue to highlight. On
+/// PS 6+ Linux/macOS the highlight is a no-op (the alias
+/// doesn't exist so the source doesn't contain the token).
+///
+/// **Case-insensitive byte-lowered match.** Same discipline
+/// as [`POWERSHELL_KEYWORDS`]. Aliases are lowercase by
+/// convention (`ls` / `cd` / `dir`) but the case-fold
+/// contract is honoured regardless.
+///
+/// **Deliberately excluded:**
+///   - `foreach` — would collide with [`POWERSHELL_KEYWORDS`]
+///     class 0 for the `foreach` script-block keyword.
+///     `LexPowerShell.cxx:154-169` probes wordlists in
+///     order 0/1/2/3/4 first-match-wins, so a class-2
+///     duplicate would be dead code. The `foreach` alias
+///     resolves to `ForEach-Object` at runtime, but the
+///     bare token gets keyword styling — defensible since
+///     the two spellings are semantically related.
+///   - `?` and `%` — non-word punctuation. `isoperator`
+///     fires FIRST at `LexPowerShell.cxx:192-193`, so these
+///     tokens never reach identifier classification.
+///   - Single-letter aliases (`h`, `r`) — high shadow-risk
+///     against user variables named `$h` / `$r`.
+///   - `mkdir` — well-known function, in
+///     [`POWERSHELL_FUNCTIONS`] class 3.
+pub const POWERSHELL_ALIASES: &str = concat!(
+    // Filesystem navigation (Unix-style + cmd.exe-style).
+    "cd ls dir cat type cls clear ",
+    // File operations (Unix-style + cmd.exe-style).
+    "copy cp move mv del rm erase rd rmdir md ",
+    // Output.
+    "echo write ",
+    // Location / history.
+    "pwd history ",
+    // Process management.
+    "kill ps gps ",
+    // Pipeline vocabulary (short forms).
+    "where select sort group ",
+    // Set / get short forms (two- and three-letter cmdlet-family aliases).
+    "sc si sv sl gc gi gci gv gp sp gm gcm ",
+    // Invoke-* short forms.
+    "iex icm ",
+    // CSV round-trip short forms.
+    "epcsv ipcsv ",
+    // Web request short forms (Unix `curl` / `wget` alias in 5.1).
+    "curl wget iwr ",
+);
+
+/// PowerShell well-known built-in functions (class 3 →
+/// `SCE_POWERSHELL_FUNCTION`).
+///
+/// **Source of truth:** default `Get-Command -CommandType
+/// Function` output on Windows PowerShell 5.1 (base
+/// console) for `help` / `mkdir` / `prompt` / `pause` /
+/// `more` / `clear-host` / `get-verb` / `tabexpansion` /
+/// `tabexpansion2`; Windows PowerShell 5.1 ISE's shipped
+/// function set for the ISE-only entry `psedit` (defined by
+/// the ISE profile — invokes
+/// `$psise.CurrentPowerShellTab.Files.Add`, then injected
+/// into remote sessions by ISE). ISE-only inclusion is
+/// deliberate: a user editing a `.ps1` in Notepad++/Code++
+/// often references `psedit` in comments/annotations, and
+/// ISE ships as part of Windows PowerShell 5.1. `oss`
+/// (Get-Command output) — an alias for `Out-String -Stream`
+/// in PowerShell 6+ / Core; ships across editions to
+/// highlight consistently.
+///
+/// **Case-insensitive byte-lowered match.** Same discipline
+/// as [`POWERSHELL_KEYWORDS`].
+///
+/// `mkdir` lives here (not in [`POWERSHELL_ALIASES`]) because
+/// it's a genuine function that wraps `New-Item -ItemType
+/// Directory` — the alias `md` resolves TO this function.
+/// `get-verb` is a shipped function in PS 5.1 (promoted to
+/// a cmdlet in PS 7), which is why it appears here rather
+/// than in [`POWERSHELL_CMDLETS`].
+pub const POWERSHELL_FUNCTIONS: &str = concat!(
+    "help mkdir oss prompt pause more clear-host ",
+    "get-verb tabexpansion tabexpansion2 psedit ",
+);
+
+/// PowerShell user-extension slot (class 4 →
+/// `SCE_POWERSHELL_USER1`).
+///
+/// **Ships empty.** Precedent from [`D_WORD7`] and prior
+/// wirings: third-party module cmdlets, DSC resource names,
+/// and site-specific vocabulary are NOT highlighted at the
+/// keyword level. Users who want a specific vocabulary to
+/// render as `Keyword2` can populate this list via a
+/// project-level override; the `SCE_POWERSHELL_USER1` slot
+/// is mapped in the theme defensively so that override
+/// takes effect without a theme change.
+pub const POWERSHELL_USER1: &str = "";
+
+/// PowerShell comment-based-help tags (class 5 →
+/// `SCE_POWERSHELL_COMMENTDOCKEYWORD`).
+///
+/// **Source of truth:** Microsoft Learn
+/// `about_Comment_Based_Help` (`learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_comment_based_help`).
+/// The "Comment-based help keywords" section enumerates
+/// exactly the 15 tokens shipped here.
+///
+/// **Different state from other wordlists.**
+/// `LexPowerShell.cxx:107` probes `keywords6.InList(s + 1)`
+/// INSIDE the `SCE_POWERSHELL_COMMENTDOCKEYWORD` state —
+/// entered from `SCE_POWERSHELL_COMMENTSTREAM` at
+/// `:96-98` when a `.` is followed by a word character.
+/// The `s + 1` skips the leading `.` sigil, so wordlist
+/// entries must be BARE tag names WITHOUT `.` (e.g.
+/// `synopsis`, not `.synopsis`). Invalid tags fall back
+/// to `SCE_POWERSHELL_COMMENTSTREAM` via `ChangeState` at
+/// `:108`.
+///
+/// **Case-insensitive byte-lowered match.** Same discipline
+/// as [`POWERSHELL_KEYWORDS`]. PowerShell users
+/// conventionally write these tokens in UPPERCASE
+/// (`.SYNOPSIS`) but the lexer's `GetCurrentLowered` at
+/// `:106` lowercases before probing — wordlist entries are
+/// lowercase.
+pub const POWERSHELL_DOC_KEYWORDS: &str = concat!(
+    // Overview.
+    "synopsis description ",
+    // Parameters / examples / I/O.
+    "parameter example inputs outputs ",
+    // Notes / cross-references.
+    "notes link ",
+    // Classification.
+    "component role functionality ",
+    // Help delegation.
+    "forwardhelptargetname forwardhelpcategory ",
+    "remotehelprunspace externalhelp ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

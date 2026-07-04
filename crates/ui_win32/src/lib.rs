@@ -116,17 +116,18 @@ use codepp_core::lang::{
     KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA,
     L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_CPP, L_CS, L_CSS, L_D,
     L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX,
-    L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS,
-    L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG,
-    L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-    PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
-    RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-    SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-    XML_KEYWORDS, YAML_KEYWORDS,
+    L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
+    L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
+    L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
+    NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
+    RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
+    SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+    VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -219,25 +220,30 @@ use codepp_scintilla_sys::{
     SCE_PL_STRING_Q, SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR,
     SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR,
     SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT,
-    SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION,
-    SCE_PS_BASE85STRING, SCE_PS_COMMENT, SCE_PS_DSC_COMMENT, SCE_PS_DSC_VALUE, SCE_PS_HEXSTRING,
-    SCE_PS_IMMEVAL, SCE_PS_KEYWORD, SCE_PS_LITERAL, SCE_PS_NUMBER, SCE_PS_PAREN_ARRAY,
-    SCE_PS_PAREN_DICT, SCE_PS_PAREN_PROC, SCE_PS_TEXT, SCE_P_ATTRIBUTE, SCE_P_CHARACTER,
-    SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE, SCE_P_DECORATOR, SCE_P_DEFNAME,
-    SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE, SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER,
-    SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE, SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2,
-    SCE_RB_BACKTICKS, SCE_RB_CHARACTER, SCE_RB_CLASSNAME, SCE_RB_CLASS_VAR, SCE_RB_COMMENTLINE,
-    SCE_RB_DATASECTION, SCE_RB_DEFNAME, SCE_RB_GLOBAL, SCE_RB_HERE_DELIM, SCE_RB_HERE_Q,
-    SCE_RB_HERE_QQ, SCE_RB_HERE_QX, SCE_RB_INSTANCE_VAR, SCE_RB_MODULE_NAME, SCE_RB_NUMBER,
-    SCE_RB_OPERATOR, SCE_RB_POD, SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN, SCE_RB_STDOUT,
-    SCE_RB_STRING, SCE_RB_STRING_I, SCE_RB_STRING_Q, SCE_RB_STRING_QI, SCE_RB_STRING_QQ,
-    SCE_RB_STRING_QR, SCE_RB_STRING_QS, SCE_RB_STRING_QW, SCE_RB_STRING_QX, SCE_RB_STRING_W,
-    SCE_RB_SYMBOL, SCE_RB_WORD, SCE_RB_WORD_DEMOTED, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK,
-    SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME,
-    SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD,
-    SCE_RUST_WORD2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM,
-    SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING,
-    SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD,
+    SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT,
+    SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM, SCE_POWERSHELL_FUNCTION,
+    SCE_POWERSHELL_HERE_CHARACTER, SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_KEYWORD,
+    SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING, SCE_POWERSHELL_USER1,
+    SCE_POWERSHELL_VARIABLE, SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL,
+    SCE_PROPS_KEY, SCE_PROPS_SECTION, SCE_PS_BASE85STRING, SCE_PS_COMMENT, SCE_PS_DSC_COMMENT,
+    SCE_PS_DSC_VALUE, SCE_PS_HEXSTRING, SCE_PS_IMMEVAL, SCE_PS_KEYWORD, SCE_PS_LITERAL,
+    SCE_PS_NUMBER, SCE_PS_PAREN_ARRAY, SCE_PS_PAREN_DICT, SCE_PS_PAREN_PROC, SCE_PS_TEXT,
+    SCE_P_ATTRIBUTE, SCE_P_CHARACTER, SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE,
+    SCE_P_DECORATOR, SCE_P_DEFNAME, SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE,
+    SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER, SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE,
+    SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2, SCE_RB_BACKTICKS, SCE_RB_CHARACTER,
+    SCE_RB_CLASSNAME, SCE_RB_CLASS_VAR, SCE_RB_COMMENTLINE, SCE_RB_DATASECTION, SCE_RB_DEFNAME,
+    SCE_RB_GLOBAL, SCE_RB_HERE_DELIM, SCE_RB_HERE_Q, SCE_RB_HERE_QQ, SCE_RB_HERE_QX,
+    SCE_RB_INSTANCE_VAR, SCE_RB_MODULE_NAME, SCE_RB_NUMBER, SCE_RB_OPERATOR, SCE_RB_POD,
+    SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN, SCE_RB_STDOUT, SCE_RB_STRING, SCE_RB_STRING_I,
+    SCE_RB_STRING_Q, SCE_RB_STRING_QI, SCE_RB_STRING_QQ, SCE_RB_STRING_QR, SCE_RB_STRING_QS,
+    SCE_RB_STRING_QW, SCE_RB_STRING_QX, SCE_RB_STRING_W, SCE_RB_SYMBOL, SCE_RB_WORD,
+    SCE_RB_WORD_DEMOTED, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC,
+    SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO,
+    SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2,
+    SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM, SCE_SH_HERE_Q,
+    SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING, SCE_SH_WORD,
+    SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD,
     SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS,
     SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2,
     SCE_ST_ASSIGN, SCE_ST_BINARY, SCE_ST_BOOL, SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL,
@@ -7575,6 +7581,94 @@ const D_THEME: LangTheme = LangTheme {
     bold: D_BOLD,
 };
 
+// LexPowerShell style routing. 15 mappings (17 `SCE_POWERSHELL_*`
+// slots minus `DEFAULT` and `IDENTIFIER` per framework
+// convention). Wired against `LexPowerShell.cxx` and
+// `SciLexer.h:1452-1468`.
+//
+//   - COMMENT + COMMENTSTREAM → Comment italic. Two comment
+//     states (`#`-to-EOL vs `<# ... #>`) collapse to the same
+//     visual archetype — matches the Lua / Tcl / Perl / D
+//     comment-family collapse precedent.
+//   - STRING + CHARACTER + HERE_STRING + HERE_CHARACTER →
+//     String. Four flavors, one slot: double-quoted (expands
+//     `$name`), single-quoted (literal), `@"..."@` here-string,
+//     `@'...'@` here-string. Same collapse policy as D's
+//     five-string-flavor uniform.
+//   - NUMBER → Number.
+//   - VARIABLE → `Lifetime`. `$name` PowerShell variables
+//     share the "sigil-tagged identifier" purple accent with
+//     Perl `$scalar`/`@array`/`%hash`/`*symbol_table`,
+//     Bash `$var`, and Rust `'lifetime`. Consistent visual
+//     grammar across every language whose lexer emits a
+//     sigilled-identifier state.
+//   - OPERATOR → Operator. Punctuation (`+`, `-`, `|`,
+//     `>`, `-and`/`-eq` leading `-`).
+//   - KEYWORD (class 0) → Keyword bold. Primary structural
+//     vocabulary — script-block openers, control flow,
+//     declarations.
+//   - CMDLET (class 1) + ALIAS (class 2) + FUNCTION (class 3)
+//     + USER1 (class 4) → Keyword2. Four secondary vocabulary
+//     classes share the Keyword2 accent because they all read
+//     as "known name from the language's callable dictionary"
+//     rather than the primary keyword vocabulary. USER1 is
+//     mapped defensively so a project-level override paints
+//     without a theme change (same precedent as D_WORD7).
+//   - COMMENTDOCKEYWORD → Macro. `.SYNOPSIS`/`.DESCRIPTION`
+//     etc. inside `<# ... #>` stream comments — read as
+//     "known name from the doc-tag vocabulary", same semantic
+//     slot as D's `@param`/`@return` and Rust `println!`
+//     macro invocations.
+const POWERSHELL_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_POWERSHELL_COMMENT, StyleSlot::Comment),
+    (SCE_POWERSHELL_COMMENTSTREAM, StyleSlot::Comment),
+    (SCE_POWERSHELL_STRING, StyleSlot::String),
+    (SCE_POWERSHELL_CHARACTER, StyleSlot::String),
+    (SCE_POWERSHELL_HERE_STRING, StyleSlot::String),
+    (SCE_POWERSHELL_HERE_CHARACTER, StyleSlot::String),
+    (SCE_POWERSHELL_NUMBER, StyleSlot::Number),
+    (SCE_POWERSHELL_VARIABLE, StyleSlot::Lifetime),
+    (SCE_POWERSHELL_OPERATOR, StyleSlot::Operator),
+    (SCE_POWERSHELL_KEYWORD, StyleSlot::Keyword),
+    (SCE_POWERSHELL_CMDLET, StyleSlot::Keyword2),
+    (SCE_POWERSHELL_ALIAS, StyleSlot::Keyword2),
+    (SCE_POWERSHELL_FUNCTION, StyleSlot::Keyword2),
+    (SCE_POWERSHELL_USER1, StyleSlot::Keyword2),
+    (SCE_POWERSHELL_COMMENTDOCKEYWORD, StyleSlot::Macro),
+];
+
+// Italic on both comment states — matches the universal
+// Code++ comment-slot convention.
+const POWERSHELL_ITALIC: &[usize] = &[SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTSTREAM];
+
+// Bold on primary keyword only. Matches the C / Rust / D /
+// COBOL precedent — the "one bold class = language keywords"
+// rule. Secondary vocabulary (CMDLET / ALIAS / FUNCTION /
+// USER1) uses Keyword2 weight, not bold.
+const POWERSHELL_BOLD: &[usize] = &[SCE_POWERSHELL_KEYWORD];
+
+// Six-class install matches `powershellWordLists[]` at
+// `LexPowerShell.cxx:283-291` with class 4 (User1) shipped
+// empty by design. Order is load-bearing — `SCI_SETKEYWORDS`
+// respects wordlist-descriptor order. Wordlist class 5
+// (DocComment) routes to `SCE_POWERSHELL_COMMENTDOCKEYWORD`
+// inside the stream-comment state only, NOT through
+// identifier classification — see the PowerShell
+// scintilla-sys banner.
+const POWERSHELL_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, POWERSHELL_KEYWORDS),
+        (1, POWERSHELL_CMDLETS),
+        (2, POWERSHELL_ALIASES),
+        (3, POWERSHELL_FUNCTIONS),
+        (4, POWERSHELL_USER1),
+        (5, POWERSHELL_DOC_KEYWORDS),
+    ],
+    styles: POWERSHELL_STYLES,
+    italic: POWERSHELL_ITALIC,
+    bold: POWERSHELL_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -7800,6 +7894,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&GUI4CLI_THEME)
     } else if lang == L_D {
         Some(&D_THEME)
+    } else if lang == L_POWERSHELL {
+        Some(&POWERSHELL_THEME)
     } else {
         None
     }
@@ -23026,17 +23122,18 @@ mod lang_theme_tests {
         LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
         L_CMAKE, L_COBOL, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
         L_INNO, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS,
-        L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME,
-        L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
-        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS,
-        PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
-        RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-        SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-        VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-        XML_KEYWORDS, YAML_KEYWORDS,
+        L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY,
+        L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML,
+        L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
+        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
+        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
+        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS,
+        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
+        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -23051,9 +23148,14 @@ mod lang_theme_tests {
         SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_IDENTIFIER, SCE_HA_IMPORT,
         SCE_INNO_IDENTIFIER, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
         SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR,
-        SCE_MATLAB_STRING, SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER, SCE_YAML_COMMENT,
-        SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD, SCE_YAML_NUMBER,
-        SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
+        SCE_MATLAB_STRING, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET,
+        SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM,
+        SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
+        SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER, SCE_POWERSHELL_KEYWORD,
+        SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING,
+        SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER,
+        SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD,
+        SCE_YAML_NUMBER, SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
     };
 
     /// Every wired language must:
@@ -23087,6 +23189,7 @@ mod lang_theme_tests {
             (L_TCL, "TCL"),
             (L_LISP, "Lisp"),
             (L_SCHEME, "Scheme"),
+            (L_POWERSHELL, "PowerShell"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -30841,6 +30944,380 @@ mod lang_theme_tests {
             "L_D extensions must contain `di` (D interface files — \
              auto-generated module headers)"
         );
+    }
+
+    /// PowerShell rides Lexilla's `powershell` lexer
+    /// (`LexPowerShell.cxx`, 294 lines, Tim Gerundt 2008 per
+    /// `LexPowerShell.cxx:1-6`). 17 `SCE_POWERSHELL_*` slots (0..=16),
+    /// six-class wordlist (WL0 language keywords, WL1 cmdlets, WL2
+    /// aliases, WL3 well-known functions, WL4 reserved user extension,
+    /// WL5 comment-based-help tags). Dispatches `SCLEX_POWERSHELL`
+    /// (= 88, per `SciLexer.h:104`).
+    ///
+    /// Distinctive features asserted here: **case-insensitive
+    /// byte-lowered matching** (wordlists all-lowercase; same
+    /// discipline as `COBOL_KEYWORDS_A`), **four string flavors
+    /// collapsing to one visual** (`"..."` / `'...'` /
+    /// `@"..."@` / `@'...'@`), **`$var` VARIABLE state maps to
+    /// Lifetime slot** (matching Perl / Bash sigil-tagged
+    /// identifier archetype), **class 5 doc-help tags fire only
+    /// inside `<# ... #>` stream comments** (leading `.` sigil
+    /// stripped at the `keywords6.InList(s + 1)` probe).
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_POWERSHELL)` returns
+    ///      `Some(&POWERSHELL_THEME)`.
+    ///   2. Style count == 15 (17 `SCE_POWERSHELL_*` slots minus
+    ///      DEFAULT (0) and IDENTIFIER (7)).
+    ///   3. Six wordlist classes in canonical order (0/1/2/3/4/5)
+    ///      matching `powershellWordLists[]` at
+    ///      `LexPowerShell.cxx:283-291`. Order is load-bearing
+    ///      for `SCI_SETKEYWORDS`.
+    ///   4. Classes 0/1/2/3/5 non-empty; class 4 (User1 /
+    ///      user-extension slot) permitted empty by design.
+    ///   5. Every populated wordlist token is
+    ///      `[a-z0-9_-]+` — the case-insensitive lexer requires
+    ///      lowercase entries and `LexPowerShell.cxx:32-34`'s
+    ///      `IsAWordChar` accepts hyphens (`ch == '-'`) so
+    ///      hyphenated cmdlets like `get-childitem` tokenise as
+    ///      one identifier.
+    ///   6. No cross-list duplicates across WL0/WL1/WL2/WL3
+    ///      (WL4 empty, WL5 EXCLUDED — `DocComment` tags live in a
+    ///      separate lexer state per the `LexPowerShell` design).
+    ///   7. Style-routing pins for the 15 mapped SCE constants.
+    ///   8. DEFAULT (0) and IDENTIFIER (7) both unmapped.
+    ///   9. Italic set == 2 (both comment states — `#` line and
+    ///      `<# ... #>` stream).
+    ///   10. Bold set == 1 (`KEYWORD` only — primary keyword
+    ///       class).
+    ///   11. Cross-language non-reuse — `POWERSHELL_STYLES`
+    ///       must not deep-equal any prior wired theme.
+    ///   12. Anchor tokens: language keywords `if`, `else`,
+    ///       `foreach`, `function`, `param`, `return`, `throw`,
+    ///       `try`, `catch` in WL0; cmdlets `get-childitem`,
+    ///       `set-content`, `where-object`, `foreach-object`
+    ///       in WL1; aliases `cd`, `ls`, `cat`, `dir` in WL2;
+    ///       doc-help tags `synopsis`, `parameter`, `example`,
+    ///       `notes` in WL5.
+    ///   13. `L_POWERSHELL` `LangEntry` `extensions` contains
+    ///       `ps1`, `psm1`, and `psd1` — the three canonical
+    ///       PowerShell script / module / manifest extensions.
+    ///   14. WL5 doc-help tags stored WITHOUT leading `.`
+    ///       (bare `synopsis`, not `.synopsis`) — matches
+    ///       `LexPowerShell.cxx:107`'s `keywords6.InList(s + 1)`
+    ///       sigil-strip probe.
+    #[test]
+    fn powershell_uses_lexpowershell_six_class_theme() {
+        let ps = lang_theme(L_POWERSHELL).expect("PowerShell wired");
+
+        // Invariant 2: 15 mappings.
+        assert_eq!(
+            ps.styles.len(),
+            15,
+            "POWERSHELL_STYLES must map 15 indices (17 SCE_POWERSHELL_* \
+             slots minus DEFAULT (0) and IDENTIFIER (7) — both \
+             intentionally unmapped per framework convention)"
+        );
+
+        // Invariant 3: six classes canonical descriptor order.
+        assert_eq!(
+            ps.keywords.len(),
+            6,
+            "POWERSHELL_THEME must install exactly 6 wordlist classes \
+             (matches powershellWordLists[] at LexPowerShell.cxx:283-291)"
+        );
+        for (i, expected) in [
+            (0, POWERSHELL_KEYWORDS),
+            (1, POWERSHELL_CMDLETS),
+            (2, POWERSHELL_ALIASES),
+            (3, POWERSHELL_FUNCTIONS),
+            (4, POWERSHELL_USER1),
+            (5, POWERSHELL_DOC_KEYWORDS),
+        ] {
+            assert_eq!(ps.keywords[i].0, i as u32);
+            assert_eq!(ps.keywords[i].1, expected);
+        }
+
+        // Invariant 4: WL0/1/2/3/5 non-empty; WL4 permitted empty.
+        for (list, name) in [
+            (POWERSHELL_KEYWORDS, "KEYWORDS"),
+            (POWERSHELL_CMDLETS, "CMDLETS"),
+            (POWERSHELL_ALIASES, "ALIASES"),
+            (POWERSHELL_FUNCTIONS, "FUNCTIONS"),
+            (POWERSHELL_DOC_KEYWORDS, "DOC_KEYWORDS"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "POWERSHELL_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: every populated wordlist token is
+        // lowercase + digits + underscore + hyphen (the
+        // PowerShell identifier alphabet the lexer accepts per
+        // `IsAWordChar` at LexPowerShell.cxx:32-34 —
+        // `ch == '-' || ch == '_'` + isalnum). All entries MUST
+        // be lowercase because the lexer's
+        // `GetCurrentLowered` at `:154-172` folds the source
+        // token before every InList probe.
+        for (list, name) in [
+            (POWERSHELL_KEYWORDS, "KEYWORDS"),
+            (POWERSHELL_CMDLETS, "CMDLETS"),
+            (POWERSHELL_ALIASES, "ALIASES"),
+            (POWERSHELL_FUNCTIONS, "FUNCTIONS"),
+            (POWERSHELL_DOC_KEYWORDS, "DOC_KEYWORDS"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    tok.bytes().all(|b| b.is_ascii_lowercase()
+                        || b.is_ascii_digit()
+                        || b == b'_'
+                        || b == b'-'),
+                    "POWERSHELL_{name} token `{tok}` violates \
+                     PowerShell identifier alphabet — must be \
+                     lowercase [a-z0-9_-]+ so LexPowerShell's \
+                     GetCurrentLowered probe finds a match"
+                );
+            }
+        }
+
+        // Invariant 6: cross-list uniqueness across
+        // WL0/WL1/WL2/WL3. WL4 is empty by design; WL5
+        // (DOC_KEYWORDS) is EXCLUDED because its tags fire only
+        // inside the SCE_POWERSHELL_COMMENTDOCKEYWORD state,
+        // reached exclusively from SCE_POWERSHELL_COMMENTSTREAM
+        // on a `.` sigil at LexPowerShell.cxx:96-98 — no
+        // competition with the identifier cascade at
+        // `:154-172`.
+        use std::collections::HashSet;
+        let sets = [
+            (
+                "KEYWORDS",
+                POWERSHELL_KEYWORDS
+                    .split_whitespace()
+                    .collect::<HashSet<_>>(),
+            ),
+            (
+                "CMDLETS",
+                POWERSHELL_CMDLETS
+                    .split_whitespace()
+                    .collect::<HashSet<_>>(),
+            ),
+            (
+                "ALIASES",
+                POWERSHELL_ALIASES
+                    .split_whitespace()
+                    .collect::<HashSet<_>>(),
+            ),
+            (
+                "FUNCTIONS",
+                POWERSHELL_FUNCTIONS
+                    .split_whitespace()
+                    .collect::<HashSet<_>>(),
+            ),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                if let Some(shared) = sets[i].1.intersection(&sets[j].1).next() {
+                    panic!(
+                        "POWERSHELL_{} and POWERSHELL_{} both contain \
+                         `{shared}` — LexPowerShell.cxx:154-169 probes \
+                         wordlists 0/1/2/3/4 first-match-wins for \
+                         identifier classification. A cross-list \
+                         duplicate leaves the later entry dead code. \
+                         Drop from whichever list is not the \
+                         intended-victor.",
+                        sets[i].0, sets[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 7: style-routing pins for all 15 mapped
+        // SCE constants.
+        for (idx, slot, name) in [
+            (
+                SCE_POWERSHELL_COMMENT,
+                StyleSlot::Comment,
+                "SCE_POWERSHELL_COMMENT",
+            ),
+            (
+                SCE_POWERSHELL_COMMENTSTREAM,
+                StyleSlot::Comment,
+                "SCE_POWERSHELL_COMMENTSTREAM",
+            ),
+            (
+                SCE_POWERSHELL_STRING,
+                StyleSlot::String,
+                "SCE_POWERSHELL_STRING",
+            ),
+            (
+                SCE_POWERSHELL_CHARACTER,
+                StyleSlot::String,
+                "SCE_POWERSHELL_CHARACTER",
+            ),
+            (
+                SCE_POWERSHELL_HERE_STRING,
+                StyleSlot::String,
+                "SCE_POWERSHELL_HERE_STRING",
+            ),
+            (
+                SCE_POWERSHELL_HERE_CHARACTER,
+                StyleSlot::String,
+                "SCE_POWERSHELL_HERE_CHARACTER",
+            ),
+            (
+                SCE_POWERSHELL_NUMBER,
+                StyleSlot::Number,
+                "SCE_POWERSHELL_NUMBER",
+            ),
+            (
+                SCE_POWERSHELL_VARIABLE,
+                StyleSlot::Lifetime,
+                "SCE_POWERSHELL_VARIABLE",
+            ),
+            (
+                SCE_POWERSHELL_OPERATOR,
+                StyleSlot::Operator,
+                "SCE_POWERSHELL_OPERATOR",
+            ),
+            (
+                SCE_POWERSHELL_KEYWORD,
+                StyleSlot::Keyword,
+                "SCE_POWERSHELL_KEYWORD",
+            ),
+            (
+                SCE_POWERSHELL_CMDLET,
+                StyleSlot::Keyword2,
+                "SCE_POWERSHELL_CMDLET",
+            ),
+            (
+                SCE_POWERSHELL_ALIAS,
+                StyleSlot::Keyword2,
+                "SCE_POWERSHELL_ALIAS",
+            ),
+            (
+                SCE_POWERSHELL_FUNCTION,
+                StyleSlot::Keyword2,
+                "SCE_POWERSHELL_FUNCTION",
+            ),
+            (
+                SCE_POWERSHELL_USER1,
+                StyleSlot::Keyword2,
+                "SCE_POWERSHELL_USER1",
+            ),
+            (
+                SCE_POWERSHELL_COMMENTDOCKEYWORD,
+                StyleSlot::Macro,
+                "SCE_POWERSHELL_COMMENTDOCKEYWORD",
+            ),
+        ] {
+            assert!(
+                ps.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: DEFAULT (0) and IDENTIFIER (7) unmapped.
+        assert!(
+            !ps.styles.iter().any(|(i, _)| *i == SCE_POWERSHELL_DEFAULT),
+            "SCE_POWERSHELL_DEFAULT (0) must remain unmapped"
+        );
+        assert!(
+            !ps.styles
+                .iter()
+                .any(|(i, _)| *i == SCE_POWERSHELL_IDENTIFIER),
+            "SCE_POWERSHELL_IDENTIFIER (7) must remain unmapped — bare \
+             PowerShell identifiers paint at STYLE_DEFAULT per framework \
+             convention"
+        );
+
+        // Invariant 9: italic == 2 (both comment states).
+        assert_eq!(ps.italic.len(), 2);
+        for c in [SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTSTREAM] {
+            assert!(ps.italic.contains(&c));
+        }
+
+        // Invariant 10: bold == 1 (KEYWORD only).
+        assert_eq!(ps.bold.len(), 1);
+        assert!(ps.bold.contains(&SCE_POWERSHELL_KEYWORD));
+
+        // Invariant 11: cross-language non-reuse.
+        let d = lang_theme(L_D).expect("D wired");
+        let cobol = lang_theme(L_COBOL).expect("COBOL wired");
+        let yaml = lang_theme(L_YAML).expect("YAML wired");
+        for (other, name) in [(d, "D"), (cobol, "COBOL"), (yaml, "YAML")] {
+            assert_ne!(
+                ps.styles, other.styles,
+                "PowerShell must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 12: canonical anchor coverage.
+        // WL0 language keywords per about_Language_Keywords.
+        for kw in [
+            "if", "else", "foreach", "function", "param", "return", "throw", "try", "catch",
+        ] {
+            assert!(
+                POWERSHELL_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "POWERSHELL_KEYWORDS must include core keyword `{kw}`"
+            );
+        }
+        // WL1 canonical cmdlets from the three core Microsoft
+        // modules.
+        for cmd in [
+            "get-childitem",
+            "set-content",
+            "where-object",
+            "foreach-object",
+        ] {
+            assert!(
+                POWERSHELL_CMDLETS.split_whitespace().any(|t| t == cmd),
+                "POWERSHELL_CMDLETS must include canonical cmdlet `{cmd}`"
+            );
+        }
+        // WL2 canonical Unix-style + cmd.exe-style aliases.
+        for al in ["cd", "ls", "cat", "dir"] {
+            assert!(
+                POWERSHELL_ALIASES.split_whitespace().any(|t| t == al),
+                "POWERSHELL_ALIASES must include canonical alias `{al}`"
+            );
+        }
+        // WL5 comment-based-help tags per about_Comment_Based_Help.
+        for tag in ["synopsis", "parameter", "example", "notes"] {
+            assert!(
+                POWERSHELL_DOC_KEYWORDS.split_whitespace().any(|t| t == tag),
+                "POWERSHELL_DOC_KEYWORDS must include canonical help tag `{tag}`"
+            );
+        }
+
+        // Invariant 13: L_POWERSHELL LangEntry extensions
+        // contains all three canonical PowerShell suffixes.
+        use codepp_core::lang::LANG_TABLE;
+        let ps_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_POWERSHELL)
+            .expect("L_POWERSHELL LangEntry present in LANG_TABLE");
+        for ext in ["ps1", "psm1", "psd1"] {
+            assert!(
+                ps_entry.extensions.contains(&ext),
+                "L_POWERSHELL extensions must contain `{ext}`"
+            );
+        }
+
+        // Invariant 14: WL5 doc-help tags stored WITHOUT
+        // leading `.` sigil. `LexPowerShell.cxx:107` probes
+        // `keywords6.InList(s + 1)` — the `+ 1` skips the `.`
+        // that entered the state. A `.synopsis` wordlist entry
+        // would silently never match.
+        for tok in POWERSHELL_DOC_KEYWORDS.split_whitespace() {
+            assert!(
+                !tok.starts_with('.'),
+                "POWERSHELL_DOC_KEYWORDS token `{tok}` must NOT include \
+                 the leading `.` sigil — LexPowerShell.cxx:107 strips it \
+                 before the InList probe. Entry would be dead code."
+            );
+        }
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a

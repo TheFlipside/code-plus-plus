@@ -4717,6 +4717,154 @@ pub const SCE_D_WORD5: usize = 20;
 pub const SCE_D_WORD6: usize = 21;
 pub const SCE_D_WORD7: usize = 22;
 
+// LexPowerShell style indices. 17 contiguous slots (0..=16)
+// for the PowerShell scripting language (Windows PowerShell
+// 5.1 + PowerShell 6+ / Core; the Lexilla lexer doesn't
+// distinguish editions). Constants mirror
+// `SciLexer.h:1452-1468` verbatim. Dispatches
+// SCLEX_POWERSHELL (= 88, per `SciLexer.h:104`) via a
+// **six-class wordlist** declared at
+// `vendor\lexilla\lexers\LexPowerShell.cxx:283-291`
+// (`powershellWordLists[]`):
+//
+//     powershellWordLists[] = {
+//         "Commands",    // class 0 → SCE_POWERSHELL_KEYWORD
+//         "Cmdlets",     // class 1 → SCE_POWERSHELL_CMDLET
+//         "Aliases",     // class 2 → SCE_POWERSHELL_ALIAS
+//         "Functions",   // class 3 → SCE_POWERSHELL_FUNCTION
+//         "User1",       // class 4 → SCE_POWERSHELL_USER1
+//         "DocComment",  // class 5 → SCE_POWERSHELL_COMMENTDOCKEYWORD
+//         0,
+//     };
+//
+// **Case-insensitive matching.** LexPowerShell has no
+// `caseSensitive` factory switch — the identifier
+// classification cascade at `LexPowerShell.cxx:154-172` calls
+// `sc.GetCurrentLowered(s, sizeof(s))` unconditionally before
+// every `WordList::InList` probe. PowerShell is documented as
+// a case-insensitive language (Microsoft Learn
+// `about_Language_Keywords`, `about_Comparison_Operators`),
+// so wordlists MUST be all-lowercase. An uppercase entry
+// would never match — inverted from `D_KEYWORDS`, matches
+// `COBOL_KEYWORDS_A`'s case-fold discipline.
+//
+// **CommentDocKeyword — leading-dot sigil stripped.**
+// `SCE_POWERSHELL_COMMENTDOCKEYWORD` (16) is entered from
+// `SCE_POWERSHELL_COMMENTSTREAM` on `.` + word character at
+// `LexPowerShell.cxx:96-98`. Wordlist class 5 (`DocComment`)
+// is probed with `keywords6.InList(s + 1)` at `:107` — the
+// `+ 1` skips the leading `.`, so wordlist entries must be
+// BARE tag names WITHOUT `.` (`SYNOPSIS`, not `.SYNOPSIS`).
+// Invalid tags fall back to `SCE_POWERSHELL_COMMENTSTREAM`
+// via `ChangeState` at `:108`.
+//
+// **Wordlist install map** (per the state machine at
+// `LexPowerShell.cxx:154-172`):
+//
+//     class 0 → keywords  → SCE_POWERSHELL_KEYWORD             (language keywords)
+//     class 1 → keywords2 → SCE_POWERSHELL_CMDLET              (Verb-Noun cmdlets)
+//     class 2 → keywords3 → SCE_POWERSHELL_ALIAS               (built-in aliases)
+//     class 3 → keywords4 → SCE_POWERSHELL_FUNCTION            (well-known functions)
+//     class 4 → keywords5 → SCE_POWERSHELL_USER1               (user extension)
+//     class 5 → keywords6 → SCE_POWERSHELL_COMMENTDOCKEYWORD   (comment-based help tags)
+//
+// **Two string flavors + two here-string flavors.**
+// PowerShell distinguishes double-quoted (`"..."` — expands
+// variables and escape sequences) from single-quoted
+// (`'...'` — literal) strings, and provides `@"..."@` /
+// `@'...'@` here-string variants that span multiple lines.
+// LexPowerShell tokenises them as four distinct states:
+//   - `SCE_POWERSHELL_STRING` (2) — `"..."` (`:112-118`,
+//     entered at `:180`).
+//   - `SCE_POWERSHELL_CHARACTER` (3) — `'...'` (`:119-123`,
+//     entered at `:182`).
+//   - `SCE_POWERSHELL_HERE_STRING` (14) — `@"..."@`
+//     (`:124-129`, entered at `:184`).
+//   - `SCE_POWERSHELL_HERE_CHARACTER` (15) — `@'...'@`
+//     (`:130-135`, entered at `:186`).
+//
+// All four collapse to `StyleSlot::String` at the theme
+// level for uniform visual identity.
+//
+// **Backtick continuation.** In `SCE_POWERSHELL_STRING`
+// (double-quoted), backtick `\`` is the PowerShell escape
+// character — `sc.Forward()` at `:117` skips the next
+// character so `` `" `` doesn't close the string. Outside
+// strings at `:196-198`, a bare backtick at the DEFAULT
+// state also consumes the next character (line-continuation
+// role).
+//
+// **Numeric literal recognition — cross-line state.**
+// `SCE_POWERSHELL_NUMBER` (4) accepts hex (`0x...`),
+// decimals, exponents, sign after `e`, and a curated suffix
+// set (`g`/`k`/`l`/`m`/`n`/`p`/`s`/`t`/`u`/`y`) at
+// `IsNumericLiteral()` (`:36-69`). Entry at `:190-191`
+// includes the leading-dot fractional case
+// (`.5` when `chPrev != '.'`).
+//
+// **`#region`/`#endregion` folding.** `FoldPowerShellDoc`
+// at `:247-259` walks `SCE_POWERSHELL_COMMENT` looking for
+// `#region` / `#endregion` markers to open/close fold
+// levels. Pure lexer concern — no host configuration.
+// `<# ... #>` stream comments fold via a separate branch
+// at `:241-246`.
+//
+// Style semantics (paint-loop citations reference
+// LexPowerShell.cxx):
+//
+//   - SCE_POWERSHELL_DEFAULT (0) — whitespace / unclassified.
+//     Framework convention: leave unmapped.
+//   - SCE_POWERSHELL_COMMENT (1) — `#`-to-EOL line comment.
+//   - SCE_POWERSHELL_STRING (2) — `"..."` double-quoted
+//     literal.
+//   - SCE_POWERSHELL_CHARACTER (3) — `'...'` single-quoted
+//     literal.
+//   - SCE_POWERSHELL_NUMBER (4) — numeric literal.
+//   - SCE_POWERSHELL_VARIABLE (5) — `$name` variable
+//     reference. Entered at `:188` on `$`, extends through
+//     `IsAWordChar` at `:146-149`.
+//   - SCE_POWERSHELL_OPERATOR (6) — punctuation classified
+//     via `isoperator()` at `:150-153` and `:192-193`.
+//   - SCE_POWERSHELL_IDENTIFIER (7) — bare identifier
+//     fallback. Framework convention: leave unmapped so
+//     plain identifiers paint at STYLE_DEFAULT.
+//   - SCE_POWERSHELL_KEYWORD (8) — wordlist class 0 hit
+//     (language keywords).
+//   - SCE_POWERSHELL_CMDLET (9) — wordlist class 1 hit
+//     (Verb-Noun cmdlets).
+//   - SCE_POWERSHELL_ALIAS (10) — wordlist class 2 hit
+//     (built-in aliases).
+//   - SCE_POWERSHELL_FUNCTION (11) — wordlist class 3 hit
+//     (well-known functions).
+//   - SCE_POWERSHELL_USER1 (12) — wordlist class 4 hit
+//     (reserved user-extension slot).
+//   - SCE_POWERSHELL_COMMENTSTREAM (13) — `<# ... #>`
+//     stream / block comment.
+//   - SCE_POWERSHELL_HERE_STRING (14) — `@"..."@`
+//     double-quoted here-string.
+//   - SCE_POWERSHELL_HERE_CHARACTER (15) — `@'...'@`
+//     single-quoted here-string.
+//   - SCE_POWERSHELL_COMMENTDOCKEYWORD (16) — `.SYNOPSIS` /
+//     `.DESCRIPTION` etc. inside a `<# ... #>` stream
+//     comment. Comment-based help tag.
+pub const SCE_POWERSHELL_DEFAULT: usize = 0;
+pub const SCE_POWERSHELL_COMMENT: usize = 1;
+pub const SCE_POWERSHELL_STRING: usize = 2;
+pub const SCE_POWERSHELL_CHARACTER: usize = 3;
+pub const SCE_POWERSHELL_NUMBER: usize = 4;
+pub const SCE_POWERSHELL_VARIABLE: usize = 5;
+pub const SCE_POWERSHELL_OPERATOR: usize = 6;
+pub const SCE_POWERSHELL_IDENTIFIER: usize = 7;
+pub const SCE_POWERSHELL_KEYWORD: usize = 8;
+pub const SCE_POWERSHELL_CMDLET: usize = 9;
+pub const SCE_POWERSHELL_ALIAS: usize = 10;
+pub const SCE_POWERSHELL_FUNCTION: usize = 11;
+pub const SCE_POWERSHELL_USER1: usize = 12;
+pub const SCE_POWERSHELL_COMMENTSTREAM: usize = 13;
+pub const SCE_POWERSHELL_HERE_STRING: usize = 14;
+pub const SCE_POWERSHELL_HERE_CHARACTER: usize = 15;
+pub const SCE_POWERSHELL_COMMENTDOCKEYWORD: usize = 16;
+
 // LexTOML style indices. The upstream enum also defines
 // `SCE_TOML_ERROR` (7), `SCE_TOML_STRINGEOL` (15), and
 // `SCE_TOML_ESCAPECHAR` (13) — those are intentionally omitted

@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 48 / 🟡 40 / ⚫ 1.
+Total: 89 rows. ✅ 49 / 🟡 39 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1896,7 +1896,7 @@ further shim work needed.
 | Perl | 21 | `perl` | ✅ | ✅ | ✅ |
 | PHP | 1 | `hypertext` | ✅ | ✅ | ✅ |
 | PostScript | 35 | `ps` | ✅ | ✅ | ✅ |
-| PowerShell | 53 | `powershell` | ⚫ | ⚫ | 🟡 |
+| PowerShell | 53 | `powershell` | ✅ | ✅ | ✅ |
 | Properties | 34 | `props` | — | ✅ | ✅ |
 | Purebasic | 68 | `purebasic` | ⚫ | ⚫ | 🟡 |
 | Python | 22 | `python` | ✅ | ✅ | ✅ |
@@ -4276,6 +4276,232 @@ class), 3 cross-language non-reuse pins (COBOL / CMake /
 YAML), 7 + 5 + 5 canonical D anchor tokens (spec §2.4.5
 keywords + type primitives + specials), and `.di`
 extension presence pin.
+
+**PowerShell (2026-07-05):** uses Lexilla's `powershell`
+lexer (`LexPowerShell.cxx`, 294 lines, Tim Gerundt 2008 per
+`LexPowerShell.cxx:1-6`). 17 `SCE_POWERSHELL_*` slots
+(0..=16), six-class wordlist (WL0 language keywords, WL1
+cmdlets, WL2 aliases, WL3 well-known functions, WL4
+reserved user-extension, WL5 comment-based-help tags).
+Dispatches `SCLEX_POWERSHELL` (= 88, per `SciLexer.h:104`).
+Distinctive features: **case-insensitive byte-lowered
+matching** (all wordlists lowercase — same discipline as
+COBOL / CMake / Gui4Cli, inverted from D), **hyphens are
+word characters** (so `Get-ChildItem` tokenises as one
+identifier and the wordlist entry is `get-childitem`),
+**four string flavors collapsing to one visual** (double,
+single, `@"..."@` here-string, `@'...'@` here-string),
+**`$var` VARIABLE state maps to Lifetime slot** (matching
+Perl / Bash / Rust sigil-tagged identifier archetype), and
+**class 5 doc-help tags fire only inside `<# ... #>`
+stream comments** (leading `.` sigil stripped at the
+`keywords6.InList(s + 1)` probe).
+
+**Case-insensitive classification.** `LexPowerShell` has
+no `caseSensitive` factory switch. The identifier
+classification cascade at `LexPowerShell.cxx:154-172` calls
+`sc.GetCurrentLowered(s, sizeof(s))` unconditionally
+before every `WordList::InList` probe. PowerShell
+identifiers are compared with `OrdinalIgnoreCase` per
+PowerShell Language Specification §7.4, so wordlist tokens
+MUST be all-lowercase. Uppercase entries would silently
+never match. Test invariant #5 pins the discipline across
+all five populated wordlists.
+
+**Hyphens are word characters.**
+`LexPowerShell.cxx:32-34`'s `IsAWordChar` returns
+`ch >= 0x80 || isalnum(ch) || ch == '-' || ch == '_'` —
+so `-` extends the current identifier when NOT at position
+0 of a token. Combined with the state-machine dispatch at
+`:192-194` (`isoperator` fires BEFORE `IsAWordChar`), the
+outcome is:
+
+- **Leading `-`** — `isoperator('-')` is true, so
+  `SCE_POWERSHELL_OPERATOR` state entered. Once the next
+  char is non-operator, state exits back to DEFAULT which
+  immediately enters IDENTIFIER on the bare word. This is
+  how PowerShell's `-and`, `-eq`, `-like`, etc. tokenise:
+  `-` as OPERATOR + bare word as IDENTIFIER. Consequence:
+  wordlist entries for operator-word suffixes (`and`,
+  `or`, `not`, `xor`, `band`, `bor`, `bnot`, `bxor`) DO
+  fire in the identifier state, giving these tokens
+  Keyword styling. Ship as-is.
+- **Mid-token `-`** — no OPERATOR state transition, `-`
+  extends the current IDENTIFIER token. Consequence:
+  `Get-ChildItem` enters IDENTIFIER on `G`, extends through
+  `-` and every char after, produces one lowered token
+  `get-childitem` at the InList probe. Wordlist entries
+  for cmdlets thus contain hyphens.
+
+**WL4 (User1) ships empty by design.** Same precedent as
+`D_WORD7` / Rust reserved. Third-party module cmdlets, DSC
+resource names, and site-specific vocabulary are not
+highlighted at the keyword level — populate this list via
+a project-level override; the `SCE_POWERSHELL_USER1` slot
+is mapped defensively so the override takes effect without
+a theme change.
+
+**Cross-list uniqueness EXCLUDES wordlist class 5**
+(DocComment tags). Ddoc-style tokens like `synopsis`,
+`description`, `example` are semantically unrelated to
+identifier vocabulary but the state machine dispatches on
+context (WL5 fires only inside the
+`SCE_POWERSHELL_COMMENTDOCKEYWORD` state at `:107`, entered
+from `SCE_POWERSHELL_COMMENTSTREAM` on a `.` sigil at
+`:96-98`; WL0-WL4 fire only in identifier state at
+`:154-172`). Test invariant #6 checks pairwise intersection
+only across WL0/WL1/WL2/WL3.
+
+**Statement-position lexer quirks:**
+
+- **Four string flavors, one visual slot.**
+  `SCE_POWERSHELL_STRING` (`"..."` — expands `$name`
+  interpolation with `` ` `` escape at `:112-118`),
+  `SCE_POWERSHELL_CHARACTER` (`'...'` — literal, no
+  expansion at `:119-123`), `SCE_POWERSHELL_HERE_STRING`
+  (`@"..."@` multi-line double-quoted at `:124-129`),
+  `SCE_POWERSHELL_HERE_CHARACTER` (`@'...'@` multi-line
+  single-quoted at `:130-135`). All four route to
+  `StyleSlot::String` for uniform user-visible identity.
+- **`#region` / `#endregion` folding.**
+  `FoldPowerShellDoc` at `:247-259` walks
+  `SCE_POWERSHELL_COMMENT` looking for these markers to
+  open/close fold levels. Pure lexer concern — no host
+  configuration.
+- **`<# ... #>` stream comments fold** via a separate
+  branch at `:241-246`.
+- **Doc-comment keyword sigil-stripping.**
+  `SCE_POWERSHELL_COMMENTDOCKEYWORD` is entered from
+  `SCE_POWERSHELL_COMMENTSTREAM` on `.` + word char
+  (`:96-98`), the wordlist probe strips the `.` via
+  `keywords6.InList(s + 1)` at `:107`. Invalid tags fall
+  back to `SCE_POWERSHELL_COMMENTSTREAM` via `ChangeState`
+  at `:108`. Wordlist entries are BARE tag names (no `.`).
+
+**Six wordlist classes:**
+
+- **Class 0** (`POWERSHELL_KEYWORDS`, ~50 tokens):
+  script-block openers (`begin` / `process` / `end` /
+  `dynamicparam` / `clean`) + control flow (`break` /
+  `continue` / `do` / `else` / `elseif` / `exit` / `for` /
+  `foreach` / `from` / `if` / `in` / `return` / `switch` /
+  `throw` / `trap` / `try` / `catch` / `finally` /
+  `until` / `while`) + declarations (`class` / `enum` /
+  `function` / `filter` / `param` / `hidden` / `static` /
+  `data` / `define` / `var`) + module system (`using`) +
+  Workflow reserved words (`workflow` / `inlinescript` /
+  `parallel` / `sequence`) + operator-word suffixes
+  (`and` / `or` / `not` / `xor` / `band` / `bor` /
+  `bnot` / `bxor`). Language keywords sourced from
+  Microsoft Learn `about_Language_Keywords` (36 table
+  entries + 4 workflow entries). Operator-words sourced
+  from `about_Logical_Operators` and
+  `about_Bitwise_Operators` — they are `-and`/`-or`/etc.
+  in source but the leading `-` tokenises as OPERATOR, so
+  the bare-word suffix fires through identifier
+  classification (see banner). `namespace` and
+  `interface` deliberately excluded — neither is a
+  documented reserved word per the spec.
+- **Class 1** (`POWERSHELL_CMDLETS`, ~80 tokens): core
+  cmdlets from `Microsoft.PowerShell.Management`,
+  `Microsoft.PowerShell.Utility`, and
+  `Microsoft.PowerShell.Core` — file/path operations,
+  process/service management, output writers, object
+  pipeline, formatting, module system, data interchange
+  (CSV / JSON / XML), and remoting sessions. All stored
+  lowercased and hyphenated as they lex.
+  Provider-specific / platform-specific / third-party
+  cmdlets excluded — those are best discovered via
+  `Get-Command -Module` at runtime.
+- **Class 2** (`POWERSHELL_ALIASES`, ~55 tokens): default
+  aliases from `Get-Alias` output on Windows PowerShell
+  5.1 — Unix-style (`cd` / `ls` / `cat` / `cp` / `mv` /
+  `rm` / `pwd` / `curl` / `wget`) + cmd.exe-style
+  (`dir` / `type` / `cls` / `copy` / `del` / `erase` /
+  `rd` / `rmdir` / `md`) + three-letter cmdlet-family
+  shortcuts (`sc` / `si` / `sv` / `sl` / `gc` / `gi` /
+  `gci` / `gv` / `gp` / `sp` / `gm` / `gcm`) + Invoke-*
+  shortcuts (`iex` / `icm`). `foreach` alias excluded —
+  would collide with class 0 keyword. `?` / `%` excluded
+  — non-word punctuation the lexer routes as OPERATOR.
+- **Class 3** (`POWERSHELL_FUNCTIONS`, 11 tokens):
+  shipped built-in functions per `Get-Command
+  -CommandType Function` — `help` / `mkdir` / `oss` /
+  `prompt` / `pause` / `more` / `clear-host` /
+  `get-verb` / `tabexpansion` / `tabexpansion2` /
+  `psedit`. `mkdir` lives here (not aliases) because
+  it's a real function that wraps `New-Item -ItemType
+  Directory`; the alias `md` resolves TO it.
+- **Class 4** (`POWERSHELL_USER1`, empty): reserved
+  user-extension slot. Same precedent as `D_WORD7`.
+- **Class 5** (`POWERSHELL_DOC_KEYWORDS`, 15 tokens):
+  comment-based-help tags per Microsoft Learn
+  `about_Comment_Based_Help` — `synopsis` /
+  `description` / `parameter` / `example` / `inputs` /
+  `outputs` / `notes` / `link` / `component` / `role` /
+  `functionality` / `forwardhelptargetname` /
+  `forwardhelpcategory` / `remotehelprunspace` /
+  `externalhelp`. Complete enumeration from the primary
+  source — the "Comment-based help keywords" section of
+  the doc lists exactly these 15 tokens.
+
+**Style routing (15 mappings; `DEFAULT` and `IDENTIFIER`
+unmapped):**
+
+- **COMMENT + COMMENTSTREAM** → `Comment` italic. Two
+  comment states (`#`-to-EOL vs `<# ... #>`) collapse to
+  the same visual archetype — matches the Lua / Tcl /
+  Perl / D comment-family collapse precedent.
+- **NUMBER** → `Number`. Recognises decimals, hex
+  (`0x...`), exponents, sign after `e`, and curated
+  suffixes (`g` / `k` / `l` / `m` / `n` / `p` / `s` /
+  `t` / `u` / `y`).
+- **VARIABLE** → `Lifetime`. `$name` sigilled
+  identifiers share the purple accent with Perl
+  `$scalar`/`@array`/`%hash`/`*symbol_table`, Bash
+  `$var`, and Rust `'lifetime`. Consistent visual
+  grammar across every language whose lexer emits a
+  sigilled-identifier state.
+- **KEYWORD** (class 0) → `Keyword` bold. Primary
+  structural vocabulary.
+- **STRING + CHARACTER + HERE_STRING + HERE_CHARACTER**
+  → `String`. Four flavors, one slot — see string
+  discussion above.
+- **CMDLET + ALIAS + FUNCTION + USER1** (classes 1/2/3/4)
+  → `Keyword2`. Four secondary vocabulary classes share
+  the Keyword2 accent since they all read as "known name
+  from the language's callable dictionary" rather than
+  the primary keyword vocabulary. USER1 mapped
+  defensively for the reserved-extension use case.
+- **OPERATOR** → `Operator`. Punctuation (`+`, `-`, `|`,
+  `>`, `-and`/`-eq` leading `-`, etc.).
+- **COMMENTDOCKEYWORD** → `Macro`. `.SYNOPSIS`/
+  `.DESCRIPTION` etc. inside `<# ... #>` stream
+  comments. Read as "known name from the doc-tag
+  vocabulary" — same semantic slot as D's `@param` and
+  Rust `println!` macro invocations.
+
+**DEFAULT and IDENTIFIER unmapped.** DEFAULT by framework
+convention (whitespace → STYLE_DEFAULT). IDENTIFIER by
+framework convention so plain identifiers fall through
+without host colouring — the lexer emits IDENTIFIER only
+for tokens that failed all five wordlist probes at
+`:154-169`.
+
+Structural test coverage: 14 invariants — 15 style
+mappings pin, six-class canonical descriptor-order pin
+(load-bearing for `SCI_SETKEYWORDS`), non-empty guard for
+WL0/1/2/3/5 (WL4 permitted empty by design), every-token
+`[a-z0-9_-]+` pin (case-insensitive lowercase + hyphen
+identifier alphabet), cross-list uniqueness across
+WL0/WL1/WL2/WL3 (WL5 EXCLUDED — DocComment tags live in
+a separate lexer state), 15 style-routing pins,
+`DEFAULT` + `IDENTIFIER` unmapped pins, italic == 2
+(both comment states), bold == 1 (`KEYWORD` — primary
+keyword class), 3 cross-language non-reuse pins (D /
+COBOL / YAML), 9 + 4 + 4 + 4 canonical PowerShell anchor
+tokens, `.ps1` / `.psm1` / `.psd1` extension presence
+pin, and WL5-no-leading-dot sigil-strip pin.
 
 ## Notes
 
