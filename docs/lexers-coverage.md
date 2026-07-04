@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 37 / 🟡 51 / ⚫ 1.
+Total: 89 rows. ✅ 38 / 🟡 50 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1851,7 +1851,7 @@ further shim work needed.
 | C | 2 | `cpp` | ✅ | ✅ | ✅ |
 | C# | 4 | `cpp` | ✅ | ✅ | ✅ |
 | C++ | 3 | `cpp` | ✅ | ✅ | ✅ |
-| Caml | 41 | `caml` | ⚫ | ⚫ | 🟡 |
+| Caml | 41 | `caml` | ✅ | ✅ | ✅ |
 | CMake | 48 | `cmake` | ⚫ | ⚫ | 🟡 |
 | COBOL | 50 | `COBOL` | ⚫ | ⚫ | 🟡 |
 | CoffeeScript | 56 | `coffeescript` | ⚫ | ⚫ | 🟡 |
@@ -2782,9 +2782,11 @@ with; the "callable helper" grouping doesn't apply. MACRO / SENT
 (purple accent for the two structured-named-token families —
 `@Error` runtime macros AND `{ENTER}` SendKeys share the visual
 "this is a named token, not string content" role); PREPROCESSOR
-→ `Macro` (C-family `#define` accent, distinct from MACRO
-because AutoIt3's preprocessor and runtime macros are
-semantically different); VARIABLE (`$name`) → `Lifetime` (matches
+→ `Macro` (a distinct accent slot — the framework's
+Rust-macro accent, deliberately not `Preprocessor` so
+AutoIt3's `#include` paints differently from the `@Error`
+runtime macros, which use `Preprocessor`); VARIABLE (`$name`)
+→ `Lifetime` (matches
 Rust `'lt`, KIXtart `$var`, Ruby `SCE_RB_INSTANCE_VAR`); EXPAND
 → `Keyword` (empty class today; visual slot reserved for a
 future per-project extension); COMMENT (`;`) + COMMENTBLOCK
@@ -2805,6 +2807,109 @@ required in `AU3_MACROS`, `#`-sigil required in
 set (comment family), 1-entry bold set (KEYWORD), 5
 cross-language non-reuse pins, and 5+3+3+3+2 anchor pins across
 keywords / functions / macros / sendkeys / preprocessors.
+
+**Caml (2026-07-04):** uses Lexilla's `caml` lexer (`LexCaml.cxx`,
+~330 lines) — a dual-mode OCaml / Standard ML '97 lexer
+contributed by Robert Roessler (2005-2009). Case-sensitive
+(opposite of AutoIt / VHDL / KIXtart), with a **runtime
+SML-mode sentinel** at `LexCaml.cxx:71` — the classifier probes
+`keywords.InList("andalso")` on entry and, if `andalso` is
+present, switches every mode-dependent branch to Standard ML
+rules (numeric literal syntax, char-literal `#"..."` form, tag
+suppression, extra identifier chars). Code++ ships OCaml mode;
+`CAML_KEYWORDS` deliberately OMITS `andalso`, and the test
+invariant #5 pins that.
+
+**Nested block comments.** OCaml supports arbitrarily-nested
+`(* ... *)` block comments. LexCaml encodes nesting depth in the
+SCE state by INCREMENTING the state on `(*` entry and
+DECREMENTING on `*)` exit — SCE_CAML_COMMENT (12) → COMMENT1
+(13) → COMMENT2 (14) → COMMENT3 (15). Depths beyond 3 are tracked
+in a separate counter but reuse the COMMENT3 style. Code++ maps
+all four to `StyleSlot::Comment` (uniform visual — depth doesn't
+affect appearance, only the classifier's un-nesting bookkeeping).
+
+**Three wordlist classes:**
+
+- **`CAML_KEYWORDS` (class 0, 56 tokens):** primary OCaml
+  reserved words — control flow (`if` / `then` / `else` /
+  `match` / `when` / `for` / `to` / `downto` / `do` / `done`
+  / `while` / `try`), value bindings (`let` / `rec` / `and`
+  / `in` / `as` / `of`), function definition (`fun` /
+  `function`), module system (`module` / `struct` / `sig` /
+  `end` / `open` / `include` / `functor` / `with`), object
+  system (`class` / `object` / `inherit` / `initializer` /
+  `method` / `virtual` / `private` / `new` / `constraint`),
+  type / exception / value declarations (`type` /
+  `exception` / `val` / `external` / `mutable`), boolean
+  literals (`true` / `false`), word-form operators (`or` /
+  `lor` / `lxor` / `land` / `lsl` / `lsr` / `asr` / `mod` /
+  `lazy`), and `assert` / `begin`. **Excludes `andalso`** —
+  see SML-mode sentinel above.
+- **`CAML_KEYWORDS2` (class 1, 97 tokens):** Pervasives /
+  Stdlib functions. Since OCaml 4.07 (2018) `Pervasives` was
+  renamed `Stdlib` but functions remain auto-opened at the
+  top level. Covers I/O (`print_string` / `print_int` /
+  `print_endline` / `read_line` / `open_in` / `input_line`
+  / `output_string`), numeric conversion (`int_of_float`
+  / `float_of_int` / `string_of_int` / `int_of_string`),
+  combinators (`fst` / `snd` / `not` / `compare` / `min` /
+  `max` / `abs` / `succ` / `pred` / `ignore`),
+  Option / Result constructors (`Some` / `None` / `Ok` /
+  `Error`), and error handling (`raise` / `failwith` /
+  `invalid_arg` / `exit`).
+- **`CAML_KEYWORDS3` (class 2, 41 tokens):** primitive and
+  Stdlib type names. Built-ins (`int` / `float` / `string`
+  / `bool` / `char` / `unit` / `bytes` / `int32` / `int64`
+  / `nativeint` / `float32`), polymorphic containers (`list`
+  / `array` / `option` / `result` / `seq` / `lazy_t` —
+  `ref` is intentionally omitted, see below), exception +
+  format (`exn` / `format` / `format4` / `format6`), and
+  common capitalised stdlib module names as bare identifiers
+  (`List` / `Array` / `String` / `Bytes` / `Hashtbl` /
+  `Buffer` / `Printf` / `Scanf` / `Format` / etc.). Dot
+  breaks the identifier in LexCaml, so `List.map` tokenises
+  as `List` + `.` + `map` — the wordlist can only match
+  bare parts, so the module portion appears here and the
+  function name is picked up by class 1 if bare or nothing
+  otherwise.
+
+**Wordlist dispatch precedence at `LexCaml.cxx:141-146`**:
+class 0 → class 1 → class 2. A token in both KEYWORDS2 and
+KEYWORDS3 gets the KEYWORDS2 style — that's why `ref` (both a
+function and a type constructor) is placed in `CAML_KEYWORDS2`
+only, since the function reading is more common in surface
+OCaml. The KEYWORDS3 entry would be dead code.
+
+**Theme choices:** KEYWORD → `Keyword` (bold-blue); KEYWORD2
+(functions) → `Keyword2` (teal); KEYWORD3 (types) → `Number`
+(numeric-tinted accent — matches VHDL's STDTYPE convention).
+TAGNAME (`` `Tag `` polymorphic-variant tags) → `Preprocessor`
+(purple accent — the family's designator-follows-sigil style).
+LINENUM (`#123` compile-time line markers) → `Macro` (the
+framework's distinct-from-Preprocessor accent slot, shared with
+`SCE_RB_GLOBAL` / `SCE_VHDL_STDPACKAGE` / `SCE_AU3_PREPROCESSOR`
+— C's `SCE_C_PREPROCESSOR` actually routes to `Preprocessor`,
+which TAGNAME already uses here). OPERATOR → `Operator`;
+NUMBER → `Number`;
+CHAR / STRING / WHITE → `String` (WHITE is the SML
+embedded-whitespace escape, mapped defensively so a mis-flagged
+`.sml` opened as `.ml` still renders sensibly). COMMENT +
+COMMENT1/2/3 → `Comment` (all four italic).
+
+**Only KEYWORD is bolded.** KEYWORD2 (functions) and KEYWORD3
+(types) get their identity from colour rather than weight,
+matching the framework's "one bold visual for language keywords"
+rule.
+
+Structural test coverage: 12 invariants including
+`andalso`-must-be-absent guard (the CRITICAL SML-mode-sentinel
+protection), 3-class order pin, all-non-empty guard, per-class
+count assertion, 14 style-routing pins, DEFAULT + IDENTIFIER
+unmapped guards (bare user identifiers paint as default text),
+4-entry italic set (all comment nesting depths), 1-entry bold
+set (KEYWORD only), 4 cross-language non-reuse pins, and
+7+4+4 anchor pins across keywords / functions / types.
 
 ## Notes
 

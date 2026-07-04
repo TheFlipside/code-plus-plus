@@ -6458,6 +6458,184 @@ pub const AU3_UDF: &str = concat!(
     "_ispressed _sendmessage ",
 );
 
+/// Space-separated Objective Caml **reserved-word** vocabulary
+/// installed via `LexCaml`'s `SCI_SETKEYWORDS(0, ...)` — class 0
+/// (`"Keywords"`) at
+/// `vendor/lexilla/lexers/LexCaml.cxx:322-327`. Drives
+/// `SCE_CAML_KEYWORD` via the identifier-exit classifier at
+/// `LexCaml.cxx:141-142`: on scan exit, `keywords.InList(t)` is
+/// probed and matches promote the intermediate `SCE_CAML_IDENTIFIER`
+/// state to `SCE_CAML_KEYWORD`. The `_` singleton is
+/// hardcoded-promoted at the same site regardless of wordlist
+/// content.
+///
+/// **Case-sensitive language, byte-exact wordlist.** OCaml is
+/// case-sensitive per its grammar (`Let` is an identifier, `let`
+/// is the reserved word). `LexCaml` scans identifiers byte-exact
+/// at `LexCaml.cxx:136-139` with no case-folding, so entries
+/// must match the source's exact case. Same convention as Ruby,
+/// Smalltalk, Rust; OPPOSITE of VHDL / `KIXtart` / `AutoIt3`.
+///
+/// **Do NOT include `andalso`.** The literal token `andalso` in
+/// this wordlist is `LexCaml`'s runtime sentinel for switching
+/// the entire classifier into Standard ML mode
+/// (`LexCaml.cxx:71` — `const bool isSML = keywords.InList("andalso")`).
+/// Because Code++ wires OCaml specifically (not SML), this
+/// wordlist MUST omit `andalso`. If SML support is ever added
+/// as a separate `L_SML` `LangType`, that dedicated wordlist
+/// installs `andalso` to activate SML mode.
+///
+/// **Source.** OCaml 5.x reference manual §1 lexical
+/// conventions. Cross-referenced against Notepad++ 8.x's shipped
+/// Caml UDL. No code copied.
+pub const CAML_KEYWORDS: &str = concat!(
+    // Control flow
+    "if then else match when ",
+    "for to downto do done while ",
+    "try ",
+    // Value bindings + function definition
+    "let rec nonrec and in as of ",
+    "fun function ",
+    // Module system
+    "module struct sig end open include ",
+    "functor with ",
+    // Object system
+    "class object inherit initializer method virtual private new ",
+    "constraint ",
+    // Type / exception / value declarations
+    "type exception val external mutable ",
+    // Boolean literals
+    "true false ",
+    // Word-form operators (bit-wise + logical + numeric)
+    "or lor lxor land lsl lsr asr mod lazy ",
+    // Assertion + grouping
+    "assert begin ",
+);
+
+/// Space-separated Objective Caml **Pervasives / Stdlib** function
+/// vocabulary installed via `LexCaml`'s `SCI_SETKEYWORDS(1, ...)`
+/// — class 1 (`"Keywords2"`) at `LexCaml.cxx:322-327`. Drives
+/// `SCE_CAML_KEYWORD2` via the classifier at `LexCaml.cxx:143-144`
+/// on `keywords2.InList(t)` hit.
+///
+/// **Scope: bare identifiers only.** `LexCaml` scans identifiers
+/// as `iscamlf` + `iscaml` chars (alpha/digit/underscore/apostrophe
+/// per `:47-48`, `:132`). A dot `.` breaks the identifier — `List.map`
+/// tokenises as three tokens `List` + `.` + `map`, so wordlist
+/// entries can only match the bare part (`List`, `map`). Dotted
+/// module-qualified names (`List.map`) can't be listed here;
+/// the module name and function name must be listed separately
+/// (or the function name only if module qualification is
+/// optional or the wordlist relies on the bare form).
+///
+/// **Scope: Pervasives / Stdlib since 4.07.** OCaml renamed the
+/// module `Pervasives` to `Stdlib` in 4.07 (2018); functions
+/// remain auto-opened at the top level. Covers I/O
+/// (`print_string`, `print_int`, `read_line`, `open_in`,
+/// `close_out`), option/result constructors (`Some`, `None`,
+/// `Ok`, `Error`), coercions (`int_of_float`, `float_of_int`,
+/// `string_of_int`, `int_of_string`), reference cell ops (`ref`
+/// — actually a type constructor, but syntactically identical),
+/// and the standard combinators (`fst`, `snd`, `ignore`,
+/// `compare`, `min`, `max`, `not`, `succ`, `pred`, `abs`,
+/// `incr`, `decr`, `raise`, `failwith`, `invalid_arg`, `at_exit`,
+/// `exit`).
+///
+/// **Case-sensitive, byte-exact.** Same as `CAML_KEYWORDS`.
+///
+/// **Source.** OCaml 5.x Stdlib documentation.
+pub const CAML_KEYWORDS2: &str = concat!(
+    // I/O — print
+    "print_char print_string print_int print_float print_endline print_newline ",
+    "prerr_char prerr_string prerr_int prerr_float prerr_endline prerr_newline ",
+    // I/O — read (`read_string` is intentionally omitted —
+    // Stdlib has no top-level `read_string`; only `read_line`,
+    // `read_int`, `read_float`, and their `*_opt` variants exist)
+    "read_line read_int read_float ",
+    "read_int_opt read_float_opt ",
+    // I/O — file (`input_string` is intentionally omitted —
+    // Stdlib has no such function; the closest is
+    // `really_input_string`, which IS listed below)
+    "open_in open_in_bin open_out open_out_bin close_in close_out ",
+    "input_char input_line input input_byte input_binary_int input_value ",
+    "really_input really_input_string ",
+    "output_char output_string output_bytes output_byte output_binary_int output_value ",
+    "flush at_exit seek_in seek_out pos_in pos_out in_channel_length out_channel_length ",
+    // Numeric conversion
+    "int_of_float float_of_int int_of_string string_of_int ",
+    "float_of_string string_of_float string_of_bool bool_of_string ",
+    "char_of_int int_of_char ",
+    "int_of_string_opt float_of_string_opt bool_of_string_opt ",
+    // Basic combinators + higher-order (`identity` is intentionally
+    // omitted — Stdlib's identity function is `Fun.id`, not a
+    // bare top-level `identity`. `hash` is likewise omitted —
+    // the generic polymorphic hash is `Hashtbl.hash`, no bare
+    // top-level `hash` exists)
+    "fst snd not compare min max abs succ pred ignore ",
+    // Numeric
+    "truncate ceil floor mod_float sqrt exp log log10 sin cos tan asin acos atan atan2 ",
+    "sinh cosh tanh ldexp frexp modf classify_float ",
+    // Reference cell
+    "ref incr decr ",
+    // Option / Result constructors + operators
+    "Some None Ok Error ",
+    // Error handling — `Assert_failure` is capitalised because
+    // it's an exception constructor (OCaml naming convention:
+    // exception + variant constructors start with a capital);
+    // `LexCaml` is case-sensitive so entries must match source
+    "raise raise_notrace failwith invalid_arg exit ",
+    "Assert_failure ",
+);
+
+/// Space-separated Objective Caml **type-name** vocabulary
+/// installed via `LexCaml`'s `SCI_SETKEYWORDS(2, ...)` — class 2
+/// (`"Keywords3"`) at `LexCaml.cxx:322-327`. Drives
+/// `SCE_CAML_KEYWORD3` via the classifier at `LexCaml.cxx:145-146`
+/// on `keywords3.InList(t)` hit.
+///
+/// **Scope: primitive + Stdlib type names.** OCaml's built-in
+/// types (`int`, `float`, `string`, `bool`, `char`, `unit`,
+/// `bytes`, `int32`, `int64`, `nativeint`, `float32`), plus the
+/// polymorphic containers (`list`, `array`, `option`, `result`,
+/// `ref`), plus common Stdlib type names (`exn`, `format`,
+/// `format4`, `format6`, `Buffer.t`, `Hashtbl.t` — the bare
+/// suffix or the module portion). Because dots break
+/// identifiers, dotted names like `Buffer.t` must appear in this
+/// list as `Buffer` (module capital) and `t` (bare — but `t` is
+/// so common that including it would over-paint every polymorphic
+/// type parameter; deliberately EXCLUDED).
+///
+/// **Case-sensitive, byte-exact.** Same as `CAML_KEYWORDS`.
+///
+/// **Source.** OCaml 5.x reference manual §Predefined types.
+pub const CAML_KEYWORDS3: &str = concat!(
+    // Primitives (NB: `float32` is intentionally omitted — OCaml
+    // 5.2 introduced `Float32.t` and `float32#` unboxed, but no
+    // bare top-level `float32` type analogous to `int32` / `int64`
+    // / `nativeint`. `seq` is also omitted — sequences are
+    // `'a Seq.t`, no bare top-level `seq` alias)
+    "int float string bool char unit ",
+    "bytes int32 int64 nativeint ",
+    // Polymorphic containers (NB: `ref` is intentionally omitted —
+    // it appears in `CAML_KEYWORDS2` as the more-common
+    // function-invocation reading, and the class-1 dispatch
+    // at `LexCaml.cxx:143-144` fires before class 2 so a
+    // duplicate here would be dead code)
+    "list array option result lazy_t ",
+    // Exception + format
+    "exn format format4 format6 ",
+    // Common capitalised stdlib module names (bare — dot breaks
+    // the identifier so module-qualified names appear as their
+    // module portion here). `Stream` intentionally omitted — the
+    // module was removed from Stdlib in OCaml 5.0 and moved to
+    // the external `camlp-streams` package; listing it would
+    // contradict the docstring's stated 5.x provenance
+    "List Array String Bytes Hashtbl Buffer Printf ",
+    "Scanf Format Char Int Float Bool Option Result Seq ",
+    "Sys Filename ",
+    "Map Set Queue Stack ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -104,21 +104,21 @@ use codepp_core::lang::{
     ASM_CPU_KEYWORDS, ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS,
     ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS, AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS,
     AU3_PREPROCESSORS, AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS,
-    BATCH_KEYWORDS_2, CPP_KEYWORDS, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2,
-    CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2,
-    C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
-    KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
-    LUA_KEYWORDS_2, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML,
-    L_INI, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC,
-    L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
-    L_SQL, L_TCL, L_TEX, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-    PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
-    RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-    SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-    VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
-    VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
+    BATCH_KEYWORDS_2, CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CPP_KEYWORDS, CPP_KEYWORDS_2,
+    CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
+    CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS,
+    JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS,
+    LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM, L_ASP, L_AU3, L_BASH,
+    L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_KIX,
+    L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS,
+    L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VHDL,
+    L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
+    RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
+    SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
+    VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -137,74 +137,77 @@ use codepp_scintilla_sys::{
     SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_BAT_AFTER_LABEL,
     SCE_BAT_COMMAND, SCE_BAT_COMMENT, SCE_BAT_HIDE, SCE_BAT_LABEL, SCE_BAT_OPERATOR, SCE_BAT_WORD,
     SCE_B_COMMENT, SCE_B_DATE, SCE_B_KEYWORD, SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4,
-    SCE_B_NUMBER, SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CSS_ATTRIBUTE,
-    SCE_CSS_CLASS, SCE_CSS_COMMENT, SCE_CSS_DIRECTIVE, SCE_CSS_DOUBLESTRING,
-    SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_EXTENDED_PSEUDOCLASS, SCE_CSS_EXTENDED_PSEUDOELEMENT,
-    SCE_CSS_GROUP_RULE, SCE_CSS_ID, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3,
-    SCE_CSS_IMPORTANT, SCE_CSS_OPERATOR, SCE_CSS_PSEUDOCLASS, SCE_CSS_PSEUDOELEMENT,
-    SCE_CSS_SINGLESTRING, SCE_CSS_TAG, SCE_CSS_VARIABLE, SCE_C_CHARACTER, SCE_C_COMMENT,
-    SCE_C_COMMENTDOC, SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR,
-    SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_DIFF_ADDED, SCE_DIFF_CHANGED,
-    SCE_DIFF_COMMAND, SCE_DIFF_COMMENT, SCE_DIFF_DELETED, SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD,
-    SCE_DIFF_PATCH_DELETE, SCE_DIFF_POSITION, SCE_DIFF_REMOVED_PATCH_ADD,
-    SCE_DIFF_REMOVED_PATCH_DELETE, SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER, SCE_HBA_STRING,
-    SCE_HBA_WORD, SCE_HB_COMMENTLINE, SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD, SCE_HJA_COMMENT,
-    SCE_HJA_COMMENTDOC, SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING, SCE_HJA_KEYWORD, SCE_HJA_NUMBER,
-    SCE_HJA_REGEX, SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD,
-    SCE_HJ_COMMENT, SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD,
-    SCE_HJ_NUMBER, SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL,
-    SCE_HJ_WORD, SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE,
-    SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR,
-    SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP, SCE_H_ASPAT,
-    SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT, SCE_H_DOUBLESTRING,
-    SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM,
-    SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY,
-    SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND,
-    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_KIX_COMMENT,
-    SCE_KIX_COMMENTSTREAM, SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER,
-    SCE_KIX_OPERATOR, SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT,
-    SCE_LISP_KEYWORD, SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER,
-    SCE_LISP_OPERATOR, SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER,
-    SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING,
-    SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD,
-    SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7,
-    SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH,
-    SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
-    SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR,
-    SCE_MAKE_TARGET, SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION,
-    SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER,
-    SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ,
-    SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF,
-    SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT,
-    SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING,
-    SCE_PAS_NUMBER, SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING,
-    SCE_PAS_WORD, SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER,
-    SCE_PL_COMMENTLINE, SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH,
-    SCE_PL_HERE_DELIM, SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX,
-    SCE_PL_HERE_QX_VAR, SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX,
-    SCE_PL_REGEX_VAR, SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING,
-    SCE_PL_STRING_Q, SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR,
-    SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR,
-    SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT,
-    SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION,
-    SCE_PS_BASE85STRING, SCE_PS_COMMENT, SCE_PS_DSC_COMMENT, SCE_PS_DSC_VALUE, SCE_PS_HEXSTRING,
-    SCE_PS_IMMEVAL, SCE_PS_KEYWORD, SCE_PS_LITERAL, SCE_PS_NUMBER, SCE_PS_PAREN_ARRAY,
-    SCE_PS_PAREN_DICT, SCE_PS_PAREN_PROC, SCE_PS_TEXT, SCE_P_ATTRIBUTE, SCE_P_CHARACTER,
-    SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE, SCE_P_DECORATOR, SCE_P_DEFNAME,
-    SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE, SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER,
-    SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE, SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2,
-    SCE_RB_BACKTICKS, SCE_RB_CHARACTER, SCE_RB_CLASSNAME, SCE_RB_CLASS_VAR, SCE_RB_COMMENTLINE,
-    SCE_RB_DATASECTION, SCE_RB_DEFNAME, SCE_RB_GLOBAL, SCE_RB_HERE_DELIM, SCE_RB_HERE_Q,
-    SCE_RB_HERE_QQ, SCE_RB_HERE_QX, SCE_RB_INSTANCE_VAR, SCE_RB_MODULE_NAME, SCE_RB_NUMBER,
-    SCE_RB_OPERATOR, SCE_RB_POD, SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN, SCE_RB_STDOUT,
-    SCE_RB_STRING, SCE_RB_STRING_I, SCE_RB_STRING_Q, SCE_RB_STRING_QI, SCE_RB_STRING_QQ,
-    SCE_RB_STRING_QR, SCE_RB_STRING_QS, SCE_RB_STRING_QW, SCE_RB_STRING_QX, SCE_RB_STRING_W,
-    SCE_RB_SYMBOL, SCE_RB_WORD, SCE_RB_WORD_DEMOTED, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK,
-    SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME,
-    SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD,
-    SCE_RUST_WORD2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM,
-    SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING,
-    SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD,
+    SCE_B_NUMBER, SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CAML_CHAR,
+    SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD,
+    SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR,
+    SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CSS_ATTRIBUTE, SCE_CSS_CLASS,
+    SCE_CSS_COMMENT, SCE_CSS_DIRECTIVE, SCE_CSS_DOUBLESTRING, SCE_CSS_EXTENDED_IDENTIFIER,
+    SCE_CSS_EXTENDED_PSEUDOCLASS, SCE_CSS_EXTENDED_PSEUDOELEMENT, SCE_CSS_GROUP_RULE, SCE_CSS_ID,
+    SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3, SCE_CSS_IMPORTANT,
+    SCE_CSS_OPERATOR, SCE_CSS_PSEUDOCLASS, SCE_CSS_PSEUDOELEMENT, SCE_CSS_SINGLESTRING,
+    SCE_CSS_TAG, SCE_CSS_VARIABLE, SCE_C_CHARACTER, SCE_C_COMMENT, SCE_C_COMMENTDOC,
+    SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR, SCE_C_PREPROCESSOR,
+    SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_DIFF_ADDED, SCE_DIFF_CHANGED, SCE_DIFF_COMMAND,
+    SCE_DIFF_COMMENT, SCE_DIFF_DELETED, SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD, SCE_DIFF_PATCH_DELETE,
+    SCE_DIFF_POSITION, SCE_DIFF_REMOVED_PATCH_ADD, SCE_DIFF_REMOVED_PATCH_DELETE,
+    SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER, SCE_HBA_STRING, SCE_HBA_WORD, SCE_HB_COMMENTLINE,
+    SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD, SCE_HJA_COMMENT, SCE_HJA_COMMENTDOC,
+    SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING, SCE_HJA_KEYWORD, SCE_HJA_NUMBER, SCE_HJA_REGEX,
+    SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD, SCE_HJ_COMMENT,
+    SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD, SCE_HJ_NUMBER,
+    SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL, SCE_HJ_WORD,
+    SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING,
+    SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING,
+    SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP, SCE_H_ASPAT, SCE_H_ATTRIBUTE,
+    SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT, SCE_H_DOUBLESTRING, SCE_H_ENTITY,
+    SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM, SCE_H_SGML_COMMAND,
+    SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY, SCE_H_SGML_SIMPLESTRING,
+    SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND, SCE_H_TAGUNKNOWN, SCE_H_VALUE,
+    SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM,
+    SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR,
+    SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT, SCE_LISP_KEYWORD,
+    SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER, SCE_LISP_OPERATOR,
+    SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER, SCE_LUA_COMMENT,
+    SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER,
+    SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD, SCE_LUA_WORD2,
+    SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7, SCE_LUA_WORD8,
+    SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH, SCE_L_MATH2,
+    SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM, SCE_MAKE_COMMENT,
+    SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET,
+    SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF,
+    SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX,
+    SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ,
+    SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED,
+    SCE_NSIS_VARIABLE, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2,
+    SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER,
+    SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD,
+    SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
+    SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
+    SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR,
+    SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR,
+    SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING, SCE_PL_STRING_Q,
+    SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR, SCE_PL_STRING_QR_VAR,
+    SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR,
+    SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT, SCE_PROPS_ASSIGNMENT,
+    SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION, SCE_PS_BASE85STRING,
+    SCE_PS_COMMENT, SCE_PS_DSC_COMMENT, SCE_PS_DSC_VALUE, SCE_PS_HEXSTRING, SCE_PS_IMMEVAL,
+    SCE_PS_KEYWORD, SCE_PS_LITERAL, SCE_PS_NUMBER, SCE_PS_PAREN_ARRAY, SCE_PS_PAREN_DICT,
+    SCE_PS_PAREN_PROC, SCE_PS_TEXT, SCE_P_ATTRIBUTE, SCE_P_CHARACTER, SCE_P_CLASSNAME,
+    SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE, SCE_P_DECORATOR, SCE_P_DEFNAME, SCE_P_FCHARACTER,
+    SCE_P_FSTRING, SCE_P_FTRIPLE, SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER, SCE_P_OPERATOR, SCE_P_STRING,
+    SCE_P_TRIPLE, SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2, SCE_RB_BACKTICKS, SCE_RB_CHARACTER,
+    SCE_RB_CLASSNAME, SCE_RB_CLASS_VAR, SCE_RB_COMMENTLINE, SCE_RB_DATASECTION, SCE_RB_DEFNAME,
+    SCE_RB_GLOBAL, SCE_RB_HERE_DELIM, SCE_RB_HERE_Q, SCE_RB_HERE_QQ, SCE_RB_HERE_QX,
+    SCE_RB_INSTANCE_VAR, SCE_RB_MODULE_NAME, SCE_RB_NUMBER, SCE_RB_OPERATOR, SCE_RB_POD,
+    SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN, SCE_RB_STDOUT, SCE_RB_STRING, SCE_RB_STRING_I,
+    SCE_RB_STRING_Q, SCE_RB_STRING_QI, SCE_RB_STRING_QQ, SCE_RB_STRING_QR, SCE_RB_STRING_QS,
+    SCE_RB_STRING_QW, SCE_RB_STRING_QX, SCE_RB_STRING_W, SCE_RB_SYMBOL, SCE_RB_WORD,
+    SCE_RB_WORD_DEMOTED, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC,
+    SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO,
+    SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2,
+    SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM, SCE_SH_HERE_Q,
+    SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING, SCE_SH_WORD,
+    SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD,
     SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS,
     SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2,
     SCE_ST_ASSIGN, SCE_ST_BINARY, SCE_ST_BOOL, SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL,
@@ -6444,7 +6447,12 @@ const AU3_STYLES: &[(usize, StyleSlot)] = &[
     (SCE_AU3_VARIABLE, StyleSlot::Lifetime),
     // `{ENTER}` SendKeys inside strings — matches MACRO purple
     (SCE_AU3_SENT, StyleSlot::Preprocessor),
-    // `#include` / `#Region` etc. — C-family macro accent
+    // `#include` / `#Region` etc. — `StyleSlot::Macro` (the
+    // Rust-macro accent shared with `SCE_RB_GLOBAL` /
+    // `SCE_VHDL_STDPACKAGE` etc.). Deliberately DISTINCT from
+    // `Preprocessor` (which C's `SCE_C_PREPROCESSOR` uses) so
+    // AutoIt3 `#include` paints differently from its `@Error`
+    // runtime macros (which route to `Preprocessor`)
     (SCE_AU3_PREPROCESSOR, StyleSlot::Macro),
     // Empty class — reserved user-extension slot
     (SCE_AU3_SPECIAL, StyleSlot::Keyword2),
@@ -6491,6 +6499,112 @@ const AU3_THEME: LangTheme = LangTheme {
     styles: AU3_STYLES,
     italic: AU3_ITALIC,
     bold: AU3_BOLD,
+};
+
+// Objective Caml theme — 14 mappings across the 16 SCE_CAML_* slots
+// (0..=15). Both `SCE_CAML_DEFAULT` (0) and `SCE_CAML_IDENTIFIER`
+// (1) stay unmapped: DEFAULT per the framework convention;
+// IDENTIFIER because it's the paint style for bare user
+// identifiers (variables / function names) that survive the
+// wordlist chain unmatched — those SHOULD paint as default text
+// (matching KIXtart's IDENTIFIER-unmapped stance). LexCaml
+// exposes IDENTIFIER as a separate SCE constant so a project
+// could theme user identifiers distinctly if desired; Code++
+// deliberately doesn't take that path.
+//
+// **Cross-family palette choices:**
+//   - KEYWORD (reserved words: `let`, `if`, `match`, etc.) →
+//     `Keyword` — bold-blue, standard.
+//   - KEYWORD2 (Pervasives/Stdlib functions: `print_string`,
+//     `List.map`, etc.) → `Keyword2` — teal, matches the
+//     "language-provided callable helper" role used by AutoIt3
+//     FUNCTION and VHDL STDFUNCTION.
+//   - KEYWORD3 (type names: `int`, `list`, `option`, `Buffer`)
+//     → `Number` — the numeric-tinted accent for type-family
+//     tokens. Matches VHDL's STDTYPE convention.
+//   - TAGNAME (`` `Tag `` polymorphic variant tags) →
+//     `Preprocessor` — the purple accent matches Ruby `:symbol`,
+//     Smalltalk `#symbol`, AutoIt3 `@Macro` and the
+//     "designator-follows-sigil" family. `` ` `` is the sigil.
+//   - LINENUM (`#123` line-number directives) → `Macro` — a
+//     distinct accent slot (framework's Rust-macro accent,
+//     shared with `SCE_RB_GLOBAL` / `SCE_VHDL_STDPACKAGE` /
+//     `SCE_AU3_PREPROCESSOR`). Chosen to visually separate the
+//     compile-time `#123` line-marker from the surrounding
+//     source without colliding with TAGNAME (which already uses
+//     `Preprocessor`).
+//   - OPERATOR → `Operator` — standard.
+//   - NUMBER → `Number` — standard.
+//   - CHAR (`'c'` char literals) → `String` — same slot as
+//     STRING, matching every other language's char-literal
+//     treatment.
+//   - STRING → `String` — standard.
+//   - WHITE (SML embedded whitespace escape — never emitted in
+//     Caml mode) → `String` — falls back to the surrounding
+//     STRING style. Mapped so a stray SML-flavour file that
+//     the user opens as `.ml` still renders sensibly.
+//   - COMMENT / COMMENT1 / COMMENT2 / COMMENT3 → `Comment` —
+//     all four nesting-depth styles share the same visual.
+//     Nesting depth doesn't affect appearance; it's tracked
+//     by the classifier for correct un-nesting only.
+const CAML_STYLES: &[(usize, StyleSlot)] = &[
+    // Reserved words (bold-blue)
+    (SCE_CAML_KEYWORD, StyleSlot::Keyword),
+    // Pervasives/Stdlib functions
+    (SCE_CAML_KEYWORD2, StyleSlot::Keyword2),
+    // Type names (numeric-tinted accent)
+    (SCE_CAML_KEYWORD3, StyleSlot::Number),
+    // `` `Tag `` polymorphic-variant tags (purple sigil accent)
+    (SCE_CAML_TAGNAME, StyleSlot::Preprocessor),
+    // `#123` line-number directive
+    (SCE_CAML_LINENUM, StyleSlot::Macro),
+    // Punctuation operator
+    (SCE_CAML_OPERATOR, StyleSlot::Operator),
+    // Numeric literal
+    (SCE_CAML_NUMBER, StyleSlot::Number),
+    // Character literal (`'c'`)
+    (SCE_CAML_CHAR, StyleSlot::String),
+    // SML whitespace escape (never in Caml mode; mapped
+    // defensively so a mis-flagged `.sml` opened as Caml
+    // still renders)
+    (SCE_CAML_WHITE, StyleSlot::String),
+    // String literal (`"..."`)
+    (SCE_CAML_STRING, StyleSlot::String),
+    // Nested block comments (all four depth-levels share Comment)
+    (SCE_CAML_COMMENT, StyleSlot::Comment),
+    (SCE_CAML_COMMENT1, StyleSlot::Comment),
+    (SCE_CAML_COMMENT2, StyleSlot::Comment),
+    (SCE_CAML_COMMENT3, StyleSlot::Comment),
+];
+
+// Italic on all four comment-nesting styles — universal
+// prose-italic convention. Nesting depth doesn't matter; every
+// comment layer renders italic.
+const CAML_ITALIC: &[usize] = &[
+    SCE_CAML_COMMENT,
+    SCE_CAML_COMMENT1,
+    SCE_CAML_COMMENT2,
+    SCE_CAML_COMMENT3,
+];
+
+// Bold only on KEYWORD. KEYWORD2 (functions) and KEYWORD3
+// (types) share the Keyword2/Number colour accent but not
+// weight, matching the framework's "one bold visual for
+// language keywords" rule.
+const CAML_BOLD: &[usize] = &[SCE_CAML_KEYWORD];
+
+// Three-class install matches `camlWordListDesc[]` at
+// `LexCaml.cxx:322-327` — class 0 (Keywords), class 1
+// (Keywords2 — Pervasives/Stdlib functions), class 2
+// (Keywords3 — type names). Dispatch precedence at
+// `LexCaml.cxx:141-146`: class 0 fires first, then class 1,
+// then class 2 (with the `_` singleton short-circuit at
+// `:141`).
+const CAML_THEME: LangTheme = LangTheme {
+    keywords: &[(0, CAML_KEYWORDS), (1, CAML_KEYWORDS2), (2, CAML_KEYWORDS3)],
+    styles: CAML_STYLES,
+    italic: CAML_ITALIC,
+    bold: CAML_BOLD,
 };
 
 const HTML_THEME: LangTheme = LangTheme {
@@ -6696,6 +6810,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&KIX_THEME)
     } else if lang == L_AU3 {
         Some(&AU3_THEME)
+    } else if lang == L_CAML {
+        Some(&CAML_THEME)
     } else {
         None
     }
@@ -21857,6 +21973,9 @@ mod lang_theme_tests {
         SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
         SCE_AU3_KEYWORD, SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR,
         SCE_AU3_SENT, SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE,
+        SCE_CAML_CHAR, SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
+        SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER,
+        SCE_CAML_OPERATOR, SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE,
         SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3,
         SCE_DIFF_ADDED, SCE_DIFF_CHANGED, SCE_DIFF_COMMAND, SCE_DIFF_COMMENT, SCE_DIFF_DELETED,
         SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD, SCE_DIFF_PATCH_DELETE, SCE_DIFF_POSITION,
@@ -21891,22 +22010,23 @@ mod lang_theme_tests {
     // directly rather than re-exporting through super.
     use codepp_core::lang::{
         AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS, AU3_PREPROCESSORS, AU3_SENDKEYS,
-        AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2,
-        CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
-        CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS,
-        JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS,
-        KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM, L_ASP,
-        L_AU3, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA,
-        L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL,
-        L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL,
-        L_TEX, L_TEXT, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
-        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-        VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
-        VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
+        AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CAML_KEYWORDS,
+        CAML_KEYWORDS2, CAML_KEYWORDS3, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2,
+        CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2,
+        C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
+        KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
+        LUA_KEYWORDS_2, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS,
+        L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
+        L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST,
+        L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS,
+        NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
+        PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
+        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS,
+        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
+        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+        XML_KEYWORDS,
     };
     use codepp_scintilla_sys::SCE_VHDL_IDENTIFIER;
 
@@ -26974,6 +27094,174 @@ mod lang_theme_tests {
             assert!(
                 AU3_PREPROCESSORS.split_whitespace().any(|t| t == anchor),
                 "AU3_PREPROCESSORS must include directive `{anchor}` (with #)"
+            );
+        }
+    }
+
+    /// Objective Caml (`L_CAML`) uses Lexilla's `LexCaml` — a
+    /// dual-mode Caml/Standard-ML lexer with 16 `SCE_CAML_*`
+    /// slots. Nested block-comment styles (`COMMENT` +
+    /// `COMMENT1..3` tracking nesting depth up to 4 levels),
+    /// case-sensitive wordlist matching (opposite of the
+    /// case-insensitive AutoIt/VHDL/KIXtart family), and a
+    /// **runtime SML-mode sentinel** at `LexCaml.cxx:71` that
+    /// switches the entire classifier's behavior if the
+    /// keywords wordlist contains `andalso`. Code++ ships
+    /// Caml mode; `CAML_KEYWORDS` deliberately OMITS `andalso`.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_CAML)` returns `Some(&CAML_THEME)`.
+    ///   2. Style count == 14 (16 `SCE_CAML_*` slots minus
+    ///      `DEFAULT` and `IDENTIFIER` — both intentionally
+    ///      unmapped so bare user identifiers paint as default).
+    ///   3. Three wordlist classes in canonical order.
+    ///   4. All three wordlists non-empty.
+    ///   5. `CAML_KEYWORDS` must NOT contain `andalso` — that
+    ///      token is `LexCaml`'s SML-mode activation sentinel and
+    ///      including it would silently switch the whole
+    ///      classifier into SML behavior (`.ml` files stop
+    ///      lexing as OCaml).
+    ///   6. Entries case-mixed (case-sensitive language;
+    ///      capitalised module/constructor names are expected
+    ///      in `CAML_KEYWORDS2` / `CAML_KEYWORDS3`).
+    ///   7. Style-routing pins for the 14 mapped SCE constants.
+    ///   8. `DEFAULT` + `IDENTIFIER` remain unmapped.
+    ///   9. Italic set == 4 (all comment-nesting levels).
+    ///   10. Bold set == 1 (`KEYWORD` only).
+    ///   11. Cross-language non-reuse.
+    ///   12. Anchor tokens present.
+    #[test]
+    fn caml_uses_lexcaml_three_class_theme() {
+        let caml = lang_theme(L_CAML).expect("Caml wired");
+
+        // Invariant 2: 14 style mappings.
+        assert_eq!(
+            caml.styles.len(),
+            14,
+            "CAML_STYLES must map 14 indices (16 SCE_CAML_* slots \
+             minus DEFAULT and IDENTIFIER)"
+        );
+
+        // Invariant 3: 3 wordlist classes.
+        assert_eq!(
+            caml.keywords.len(),
+            3,
+            "CAML_THEME must install exactly 3 wordlist classes \
+             (matches camlWordListDesc[] at LexCaml.cxx:322-327)"
+        );
+        assert_eq!(caml.keywords[0].0, 0);
+        assert_eq!(caml.keywords[1].0, 1);
+        assert_eq!(caml.keywords[2].0, 2);
+        assert_eq!(caml.keywords[0].1, CAML_KEYWORDS);
+        assert_eq!(caml.keywords[1].1, CAML_KEYWORDS2);
+        assert_eq!(caml.keywords[2].1, CAML_KEYWORDS3);
+
+        // Invariant 4: non-empty.
+        for (name, list) in [
+            ("CAML_KEYWORDS", CAML_KEYWORDS),
+            ("CAML_KEYWORDS2", CAML_KEYWORDS2),
+            ("CAML_KEYWORDS3", CAML_KEYWORDS3),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: CRITICAL — `andalso` must NOT be present.
+        assert!(
+            !CAML_KEYWORDS.split_whitespace().any(|t| t == "andalso"),
+            "CAML_KEYWORDS must NOT include `andalso` — it is \
+             LexCaml's runtime SML-mode sentinel at LexCaml.cxx:71 \
+             (`isSML = keywords.InList(\"andalso\")`). Including it \
+             would silently switch the entire classifier from OCaml \
+             mode to Standard ML mode, changing numeric-literal \
+             rules, char-literal syntax, tag suppression, and \
+             identifier chars"
+        );
+
+        // Invariant 7: style-routing pins.
+        for (idx, slot, name) in [
+            (SCE_CAML_KEYWORD, StyleSlot::Keyword, "SCE_CAML_KEYWORD"),
+            (SCE_CAML_KEYWORD2, StyleSlot::Keyword2, "SCE_CAML_KEYWORD2"),
+            (SCE_CAML_KEYWORD3, StyleSlot::Number, "SCE_CAML_KEYWORD3"),
+            (
+                SCE_CAML_TAGNAME,
+                StyleSlot::Preprocessor,
+                "SCE_CAML_TAGNAME",
+            ),
+            (SCE_CAML_LINENUM, StyleSlot::Macro, "SCE_CAML_LINENUM"),
+            (SCE_CAML_OPERATOR, StyleSlot::Operator, "SCE_CAML_OPERATOR"),
+            (SCE_CAML_NUMBER, StyleSlot::Number, "SCE_CAML_NUMBER"),
+            (SCE_CAML_CHAR, StyleSlot::String, "SCE_CAML_CHAR"),
+            (SCE_CAML_WHITE, StyleSlot::String, "SCE_CAML_WHITE"),
+            (SCE_CAML_STRING, StyleSlot::String, "SCE_CAML_STRING"),
+            (SCE_CAML_COMMENT, StyleSlot::Comment, "SCE_CAML_COMMENT"),
+            (SCE_CAML_COMMENT1, StyleSlot::Comment, "SCE_CAML_COMMENT1"),
+            (SCE_CAML_COMMENT2, StyleSlot::Comment, "SCE_CAML_COMMENT2"),
+            (SCE_CAML_COMMENT3, StyleSlot::Comment, "SCE_CAML_COMMENT3"),
+        ] {
+            assert!(
+                caml.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: DEFAULT + IDENTIFIER unmapped.
+        assert!(
+            !caml.styles.iter().any(|(i, _)| *i == 0),
+            "SCE_CAML_DEFAULT (0) must remain unmapped"
+        );
+        assert!(
+            !caml.styles.iter().any(|(i, _)| *i == 1),
+            "SCE_CAML_IDENTIFIER (1) must remain unmapped — bare \
+             user identifiers should paint as default text"
+        );
+
+        // Invariant 9: italic == 4 comment styles.
+        assert_eq!(caml.italic.len(), 4);
+        for c in [
+            SCE_CAML_COMMENT,
+            SCE_CAML_COMMENT1,
+            SCE_CAML_COMMENT2,
+            SCE_CAML_COMMENT3,
+        ] {
+            assert!(caml.italic.contains(&c));
+        }
+
+        // Invariant 10: bold == 1.
+        assert_eq!(caml.bold.len(), 1);
+        assert!(caml.bold.contains(&SCE_CAML_KEYWORD));
+
+        // Invariant 11: cross-language non-reuse.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let rb = lang_theme(L_RUBY).expect("Ruby wired");
+        let vhdl = lang_theme(L_VHDL).expect("VHDL wired");
+        let au3 = lang_theme(L_AU3).expect("AutoIt wired");
+        for (other, name) in [(cpp, "C++"), (rb, "Ruby"), (vhdl, "VHDL"), (au3, "AutoIt")] {
+            assert_ne!(
+                caml.styles, other.styles,
+                "Caml must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 12: anchor tokens.
+        for kw in ["let", "match", "if", "then", "else", "fun", "type"] {
+            assert!(
+                CAML_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "CAML_KEYWORDS must include reserved word `{kw}`"
+            );
+        }
+        for kw2 in ["print_string", "raise", "Some", "None"] {
+            assert!(
+                CAML_KEYWORDS2.split_whitespace().any(|t| t == kw2),
+                "CAML_KEYWORDS2 must include `{kw2}`"
+            );
+        }
+        for kw3 in ["int", "list", "option", "string"] {
+            assert!(
+                CAML_KEYWORDS3.split_whitespace().any(|t| t == kw3),
+                "CAML_KEYWORDS3 must include type `{kw3}`"
             );
         }
     }

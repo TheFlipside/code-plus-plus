@@ -2929,6 +2929,165 @@ pub const SCE_AU3_EXPAND: usize = 13;
 pub const SCE_AU3_COMOBJ: usize = 14;
 pub const SCE_AU3_UDF: usize = 15;
 
+// LexCaml style indices. 16 contiguous slots (0..=15) covering
+// Objective Caml (OCaml) — AND Standard ML '97, which the same
+// lexer supports via runtime mode-switching. Contributed by
+// Robert Roessler (2005-2009).
+//
+// **Dual-mode behavior.** LexCaml is unique among the wired
+// lexers: the SAME classifier runs in Caml mode OR Standard ML
+// mode, gated by a **wordlist sentinel** at `LexCaml.cxx:71` —
+// `const bool isSML = keywords.InList("andalso")`. If the
+// keywords wordlist contains the literal token `andalso`, every
+// mode-dependent branch in the classifier switches to SML rules
+// (numeric literal syntax, char literal `#"..."` form, tag
+// suppression, extra identifier chars `\`/`\``). Code++ ships
+// Caml mode (no `andalso` in `CAML_KEYWORDS`); SML mode is
+// deliberately unwired — a future dedicated `L_SML` LangType
+// would install its own wordlist with `andalso` included.
+//
+// Style semantics (paint-loop citations reference LexCaml.cxx):
+//   - DEFAULT (0)       — whitespace / unclassified fall-through.
+//                         Entry at every state-exit site (`:78,
+//                         :148, :155, :169, :190, :222, :235,
+//                         :257, :292`).
+//   - IDENTIFIER (1)    — Intermediate scan state for a
+//                         bare identifier. Entered at `:93-94`
+//                         when the char is `iscamlf` (alpha or
+//                         `_`). At scan exit `:132-148`, the
+//                         token is looked up against 3 wordlist
+//                         classes AND the special `_` singleton
+//                         → KEYWORD promotion, then falls back
+//                         to DEFAULT (leaving IDENTIFIER as
+//                         paint style only when no wordlist
+//                         matches — the "user identifier" case).
+//   - TAGNAME (2)       — `\`Tag` polymorphic-variant tag (Caml
+//                         mode only). Entry at `:95-96` on
+//                         backtick followed by identifier-start;
+//                         scan exits at `:154-155`. Suppressed
+//                         in SML mode.
+//   - KEYWORD (3)       — Primary Caml reserved word from
+//                         `keywords` (class 0). Promoted from
+//                         IDENTIFIER at `:141-142`. Also
+//                         hardcoded promotion of `_` singleton
+//                         at `:141` AND `()` / `[]` empty-tuple
+//                         / empty-list tokens at `:183-186`
+//                         from the OPERATOR state.
+//   - KEYWORD2 (4)      — Optional Pervasives-family functions
+//                         from `keywords2` (class 1) — `Stdlib`
+//                         since 4.07. Promoted at `:143-144`.
+//   - KEYWORD3 (5)      — Optional type-name family from
+//                         `keywords3` (class 2). Promoted at
+//                         `:145-146`.
+//   - LINENUM (6)       — `#123` line-number directive (Caml
+//                         mode only — used by `ocamlrun` for
+//                         mapping compiled locations back to
+//                         source). Entry at `:97-98`; scan exit
+//                         on non-digit at `:168-169`.
+//                         Suppressed in SML mode.
+//   - OPERATOR (7)      — Punctuation-class operator. Two entry
+//                         paths: `:122-127` on the sprawling
+//                         Caml operator + bracket + punctuation
+//                         set (`! ? ~ = < > @ ^ | & + - * / $ %`
+//                         plus `( ) [ ] { } ; , : . #`), and
+//                         SML additionally accepts `\` / `\``
+//                         as "extra identifier chars"
+//                         (`:125-127`). Multi-char operators
+//                         handled by the OPERATOR-state
+//                         continuation at `:172-193`.
+//   - NUMBER (8)        — Numeric literal. Entered at `:99-113`
+//                         on a digit — base 10 by default,
+//                         optionally base 2/8/16 via
+//                         `0b`/`0o`/`0x` prefix (Caml) or `0x`
+//                         only + `0w` word-prefix (SML). Complex
+//                         continuation at `:195-223` handles
+//                         underscores, integer suffixes `l`/`L`/
+//                         `n`, decimal point, exponent notation.
+//   - CHAR (9)          — Character literal. Two forms: Caml
+//                         `'c'` at `:114-115` (with backslash
+//                         escape handling at `:225-243`); SML
+//                         `#"c"` at `:116-117` (falls through
+//                         to STRING handling at `:245-247`
+//                         via deliberate fallthrough).
+//   - WHITE (10)        — SML embedded-whitespace escape inside
+//                         string literals — the `\   \` form
+//                         where whitespace between two backslashes
+//                         is invisible. Entered from
+//                         STRING/CHAR at `:250-251`; exited at
+//                         `:263-277` by backtracking through the
+//                         style buffer to find the pre-white
+//                         state. Caml mode never enters this
+//                         state.
+//   - STRING (11)       — `"..."` string literal. Entry at
+//                         `:118-119`; scan exit on unescaped
+//                         `"` at `:255-260`. SML mode
+//                         additionally terminates at line end
+//                         (`:256`), Caml doesn't.
+//   - COMMENT (12)      — `(* ... *)` block comment, level 0
+//                         (outermost). Entry at `:120-121`.
+//   - COMMENT1 (13)     — Nested comment, level 1. Comments in
+//                         Caml nest arbitrarily; the state
+//                         increments to encode nesting depth
+//                         (`sc.state + 1` at `:285`) — a nested
+//                         `(*` inside COMMENT enters COMMENT1,
+//                         another nest enters COMMENT2, and one
+//                         more COMMENT3. Depths beyond 3 are
+//                         tracked in the `nesting` counter but
+//                         reuse the COMMENT3 style. Closing `*)`
+//                         at `:288-293` decrements.
+//   - COMMENT2 (14)     — Nested comment, level 2.
+//   - COMMENT3 (15)     — Nested comment, level 3+.
+//
+// **Wordlist classes.** `camlWordListDesc[]` at
+// `LexCaml.cxx:322-327` declares three classes: 0 = Keywords
+// (primary Caml reserved words), 1 = Keywords2 (Pervasives-family
+// functions), 2 = Keywords3 (type names).
+//
+// **Case handling.** LexCaml is **case-sensitive**. The classifier
+// scans byte-exact identifiers into `t[]` at `:136-139` with no
+// case-folding, and every `InList(t)` probe is byte-exact.
+// Wordlist entries must match the source's exact case. This is
+// the OPPOSITE of VHDL / KIXtart / AutoIt3 (all case-insensitive
+// with mandatory-lowercase wordlists) and matches Ruby /
+// Smalltalk / Rust convention.
+//
+// **The `_` singleton keyword.** `LexCaml.cxx:141` special-cases
+// the single-char underscore — `if ((n == 1 && sc.chPrev == '_') || keywords.InList(t))` —
+// so `_` paints as KEYWORD even without appearing in the wordlist.
+// Consistent with OCaml semantics (`_` is the wildcard pattern).
+//
+// **`()` / `[]` are KEYWORDS, not OPERATORS.** The classifier at
+// `:183-186` intercepts empty-tuple `()` and empty-list `[]`
+// tokens from the OPERATOR state and promotes them to KEYWORD.
+// These are literal values in OCaml (the unit value and the
+// empty list), not operators — the promotion reflects that.
+//
+// **Magic comments (`(*@rc ... *)`).** LexCaml supports an
+// optional "read-only comment" style via the
+// `lexer.caml.magic` property (`:72`, `:294-297`). When set,
+// comments beginning with `@rc` after `(*` are marked with the
+// `0x10` state bit — a style range beyond 15. Code++ doesn't
+// enable this property; the magic-comment feature stays dormant.
+//
+// Values match `SciLexer.h:1135-1150`. LexCaml registers
+// SCLEX_CAML (= 65) at `LexCaml.cxx:329`.
+pub const SCE_CAML_DEFAULT: usize = 0;
+pub const SCE_CAML_IDENTIFIER: usize = 1;
+pub const SCE_CAML_TAGNAME: usize = 2;
+pub const SCE_CAML_KEYWORD: usize = 3;
+pub const SCE_CAML_KEYWORD2: usize = 4;
+pub const SCE_CAML_KEYWORD3: usize = 5;
+pub const SCE_CAML_LINENUM: usize = 6;
+pub const SCE_CAML_OPERATOR: usize = 7;
+pub const SCE_CAML_NUMBER: usize = 8;
+pub const SCE_CAML_CHAR: usize = 9;
+pub const SCE_CAML_WHITE: usize = 10;
+pub const SCE_CAML_STRING: usize = 11;
+pub const SCE_CAML_COMMENT: usize = 12;
+pub const SCE_CAML_COMMENT1: usize = 13;
+pub const SCE_CAML_COMMENT2: usize = 14;
+pub const SCE_CAML_COMMENT3: usize = 15;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated
