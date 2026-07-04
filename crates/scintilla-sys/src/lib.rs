@@ -3088,6 +3088,119 @@ pub const SCE_CAML_COMMENT1: usize = 13;
 pub const SCE_CAML_COMMENT2: usize = 14;
 pub const SCE_CAML_COMMENT3: usize = 15;
 
+// LexAda style indices. 12 contiguous slots (0..=11) covering the
+// Ada 95 lexer (which also handles Ada 2005/2012 syntax cleanly
+// since none of those revisions changed comment/string/numeric
+// syntax — only the reserved-word set grew). Contributed by
+// Sergey Koshcheyev (2002); dispatches SCLEX_ADA (= 20) via a
+// **single wordlist** — `WordList "Keywords"` at
+// `vendor/lexilla/lexers/LexAda.cxx:42-45` (`adaWordListDesc[]`).
+// Cross-referenced against `vendor/lexilla/include/SciLexer.h`
+// lines 633-644 and `vendor/lexilla/include/LexicalStyles.iface`
+// lines 695-707.
+//
+// **Case-insensitive lexer.** Ada language semantics: identifier
+// case does not distinguish tokens (`Package_Body` and
+// `PACKAGE_BODY` refer to the same declaration). LexAda enforces
+// this at the classifier level, `LexAda.cxx:194-217`
+// (`ColouriseWord`): every character of the candidate identifier
+// is folded to lowercase with `word += tolower(sc.ch)` BEFORE the
+// `keywords.InList(word.c_str())` lookup at `:208`. Consequence:
+// wordlist entries MUST be lowercase (an entry like `Begin` would
+// be dead code — the lookup key is already `begin` by the time
+// InList runs). Code++'s `ADA_KEYWORDS` in
+// `crates/core/src/lang.rs` respects this: every token is the
+// canonical Ada Reference Manual reserved word in lowercase form.
+//
+// **Apostrophe disambiguation.** Ada's `'` is overloaded: it
+// terminates a character literal (`'a'`) AND opens an attribute
+// selector (`X'Range`, `Integer'First`). LexAda tracks this with
+// a per-line `apostropheStartsAttribute` bool at
+// `LexAda.cxx:234-243` (per-line state stored via
+// `styler.SetLineState`). After a keyword hit it clears the flag
+// UNLESS the keyword is exactly `all` (which is followed by
+// attribute-like syntax in dereference — `Ptr.all'Address` —
+// `LexAda.cxx:211-213`). This is transparent to the host — we
+// don't need to duplicate the logic, but the wordlist must
+// contain `all` for the disambiguation to fire correctly. If
+// `all` is missing from `ADA_KEYWORDS`, every apostrophe after
+// `all` would be parsed as an attribute open, breaking character
+// literals in nearby code. Code++'s wordlist includes `all`.
+//
+// Style semantics (paint-loop citations reference LexAda.cxx):
+//
+//   - SCE_ADA_DEFAULT (0) — whitespace and inter-token slack;
+//     `ColouriseWhiteSpace :188-192`. Reset target at every
+//     line end (`:246`), so mid-line styling never persists
+//     across lines.
+//   - SCE_ADA_WORD (1) — reserved word from the Keywords
+//     wordlist; promoted from IDENTIFIER after case-folded
+//     InList hit at `:208-209`. Bold in typical themes.
+//   - SCE_ADA_IDENTIFIER (2) — non-reserved word; the initial
+//     state for any word run at `:196` before InList resolves.
+//     If InList misses, the state stays IDENTIFIER; if the
+//     candidate fails `IsValidIdentifier` (`:205-206`), it
+//     downgrades to ILLEGAL instead.
+//   - SCE_ADA_NUMBER (3) — decimal literal (`42`, `3.14`),
+//     scientific notation (`1.0e-3`), based literals
+//     (`16#FF#`, `2#1010#`) with the `#`-delimited base
+//     syntax handled at `ColouriseNumber :147-178`. The
+//     numeric paint state is entered at the SetState call
+//     inside that function and validated by `IsValidNumber`
+//     before returning to DEFAULT.
+//   - SCE_ADA_DELIMITER (4) — single-char operators/punctuation
+//     from `IsDelimiterCharacter` at `:286-309`. Includes
+//     `&`, `'`, `(`, `)`, `*`, `+`, `,`, `-`, `.`, `/`, `:`,
+//     `;`, `<`, `=`, `>`, `|` — everything Ada tokenises as
+//     punctuation. Multi-char operators like `:=`, `=>`,
+//     `..`, `**`, `<<`, `>>`, `<=`, `>=`, `/=` are painted
+//     as consecutive DELIMITER runs (the lexer doesn't fuse
+//     them into a single token — visually they still render
+//     as one span since they share the DELIMITER style).
+//   - SCE_ADA_CHARACTER (5) — well-formed character literal
+//     `'x'`; painted from `ColouriseCharacter :73-84`. Entered
+//     only when `apostropheStartsAttribute == false` (see above).
+//   - SCE_ADA_CHARACTEREOL (6) — unterminated character
+//     literal (EOL reached before closing `'`); call site at
+//     `LexAda.cxx:83` (`ColouriseContext(sc, '\\'',
+//     SCE_ADA_CHARACTEREOL)`) with the classifier body at
+//     `ColouriseContext :86-96`. A visible-error state for
+//     the "you forgot the closing apostrophe" case.
+//   - SCE_ADA_STRING (7) — well-formed double-quoted string
+//     literal, `ColouriseString :179-187`.
+//   - SCE_ADA_STRINGEOL (8) — unterminated string literal,
+//     mirror of CHARACTEREOL; also a visible-error state.
+//   - SCE_ADA_LABEL (9) — `<< label_name >>` block label
+//     target for `goto`; `ColouriseLabel :114-146`. Distinct
+//     paint lets themes emphasise labels since they're
+//     unusual in modern Ada style.
+//   - SCE_ADA_COMMENTLINE (10) — `--` line comment,
+//     `ColouriseComment :98-106`. Ada has no block comments;
+//     line comments are the sole comment form.
+//   - SCE_ADA_ILLEGAL (11) — malformed identifier or bad
+//     numeric literal; used for tokens that failed
+//     `IsValidIdentifier` / `IsValidNumber`. A themable
+//     visible-error state — good practice to paint it in
+//     high-contrast red so syntax errors surface in the
+//     editor rather than silently rendering as identifiers.
+//
+// Wordlist class ordering: 0 = Keywords. There is only one
+// class; adaWordListDesc[1] is the NULL sentinel at
+// `LexAda.cxx:44`. Consequence: no unused `SCI_SETKEYWORDS` calls
+// — Code++ installs class 0 only.
+pub const SCE_ADA_DEFAULT: usize = 0;
+pub const SCE_ADA_WORD: usize = 1;
+pub const SCE_ADA_IDENTIFIER: usize = 2;
+pub const SCE_ADA_NUMBER: usize = 3;
+pub const SCE_ADA_DELIMITER: usize = 4;
+pub const SCE_ADA_CHARACTER: usize = 5;
+pub const SCE_ADA_CHARACTEREOL: usize = 6;
+pub const SCE_ADA_STRING: usize = 7;
+pub const SCE_ADA_STRINGEOL: usize = 8;
+pub const SCE_ADA_LABEL: usize = 9;
+pub const SCE_ADA_COMMENTLINE: usize = 10;
+pub const SCE_ADA_ILLEGAL: usize = 11;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated

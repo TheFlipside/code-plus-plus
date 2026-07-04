@@ -6636,6 +6636,68 @@ pub const CAML_KEYWORDS3: &str = concat!(
     "Map Set Queue Stack ",
 );
 
+/// Ada reserved words (73 tokens covering Ada 83, Ada 95, Ada 2005,
+/// and Ada 2012 revisions of the Ada Reference Manual, §2.9).
+///
+/// **Case handling.** `LexAda` folds every identifier byte to
+/// lowercase via `tolower` before the `keywords.InList` lookup at
+/// `vendor/lexilla/lexers/LexAda.cxx:200-208`, so every token in
+/// this list MUST be lowercase — an uppercase or mixed-case entry
+/// would be dead code (the `InList` probe key is `begin`, never
+/// `Begin`). The Ada Reference Manual itself renders reserved
+/// words in bold lowercase, matching this convention.
+///
+/// **Revision coverage.** Base set is Ada 83 (63 reserved words):
+/// abort, abs, accept, access, all, and, array, at, begin, body,
+/// case, constant, declare, delay, delta, digits, do, else, elsif,
+/// end, entry, exception, exit, for, function, generic, goto, if,
+/// in, is, limited, loop, mod, new, not, null, of, or, others, out,
+/// package, pragma, private, procedure, raise, range, record, rem,
+/// renames, return, reverse, select, separate, subtype, task,
+/// terminate, then, type, use, when, while, with, xor. Ada 95 adds
+/// 6 (abstract, aliased, protected, requeue, tagged, until). Ada
+/// 2005 adds 3 (interface, overriding, synchronized). Ada 2012
+/// adds 1 (some). Total: 73. Ada 2022's `parallel` is NOT included
+/// yet — most Ada code in the wild targets Ada 2012 or earlier, and
+/// `LexAda` ships a lexer titled "Ada 95" that has never had 2022-era
+/// tokens added upstream; adding `parallel` before it's needed
+/// would only tint pre-2022 identifiers named `parallel` bold.
+///
+/// **Disambiguation dependency.** `LexAda` tracks Ada's apostrophe
+/// overloading (char literal vs attribute selector) with a per-line
+/// bool that clears after any keyword hit EXCEPT `all`
+/// (`LexAda.cxx:211-213`). Consequence: `all` MUST remain in this
+/// list. Removing it would break character literals appearing after
+/// pointer-dereference syntax (`Ptr.all'Address` and friends).
+pub const ADA_KEYWORDS: &str = concat!(
+    // Ada 83 core (63) — sorted alphabetically.
+    "abort abs accept access all and array at ",
+    "begin body ",
+    "case constant ",
+    "declare delay delta digits do ",
+    "else elsif end entry exception exit ",
+    "for function ",
+    "generic goto ",
+    "if in is ",
+    "limited loop ",
+    "mod ",
+    "new not null ",
+    "of or others out ",
+    "package pragma private procedure ",
+    "raise range record rem renames return reverse ",
+    "select separate subtype ",
+    "task terminate then type ",
+    "use ",
+    "when while with ",
+    "xor ",
+    // Ada 95 additions (6).
+    "abstract aliased protected requeue tagged until ",
+    // Ada 2005 additions (3).
+    "interface overriding synchronized ",
+    // Ada 2012 addition (1).
+    "some ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

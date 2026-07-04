@@ -101,24 +101,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use codepp_core::lang::{
-    ASM_CPU_KEYWORDS, ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS,
-    ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS, AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS,
-    AU3_PREPROCESSORS, AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS,
-    BATCH_KEYWORDS_2, CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CPP_KEYWORDS, CPP_KEYWORDS_2,
-    CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
-    CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS,
-    JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS,
-    LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM, L_ASP, L_AU3, L_BASH,
-    L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_KIX,
-    L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS,
-    L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VHDL,
-    L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-    PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
-    RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
-    SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
-    VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
+    ADA_KEYWORDS, ASM_CPU_KEYWORDS, ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS,
+    ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS, AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS,
+    AU3_MACROS, AU3_PREPROCESSORS, AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS,
+    BATCH_KEYWORDS, BATCH_KEYWORDS_2, CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CPP_KEYWORDS,
+    CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3,
+    CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
+    HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS,
+    KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA,
+    L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI,
+    L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL,
+    L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
+    L_TCL, L_TEX, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
+    RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+    SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+    VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
+    VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -128,7 +129,9 @@ use codepp_plugin_host::{
     RUNCOMMAND_RANGE, RUNCOMMAND_USER,
 };
 use codepp_scintilla_sys::{
-    ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
+    ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
+    SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER,
+    SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
     SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
     SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
     SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_AU3_COMMENT,
@@ -6607,6 +6610,88 @@ const CAML_THEME: LangTheme = LangTheme {
     bold: CAML_BOLD,
 };
 
+// LexAda emits 11 non-DEFAULT style indices covering the full Ada
+// 95/2005/2012 lexical surface. **10 are mapped**; SCE_ADA_IDENTIFIER
+// (2) is deliberately left unmapped — matches the framework
+// convention documented for `CPP_STYLES` at :3836-3837 and the
+// explicit rationale for `KIX_STYLES` / `CAML_STYLES` / `PASCAL_STYLES`,
+// where bare user-defined identifiers paint at `STYLE_DEFAULT`
+// so the reader isn't visually assaulted by every variable /
+// subprogram / package / type-name in the buffer. SCE_ADA_DEFAULT
+// (0) is also unmapped by construction; every OTHER SCE_ADA_* slot
+// gets a distinct visible colour.
+//
+// Style routing rationale:
+//   - WORD (reserved words) → Keyword — the language's canonical
+//     bold-blue accent. Only ADA_KEYWORDS class is installed
+//     (single wordlist per `adaWordListDesc[]`).
+//   - IDENTIFIER — deliberately UNMAPPED. LexAda sets
+//     SCE_ADA_IDENTIFIER as the terminal state for every
+//     non-keyword word (`LexAda.cxx:196`); if this were painted,
+//     every variable / type / subprogram / package name would
+//     tint with a palette accent instead of matching plain text.
+//     Every neighbor themed lexer (C, C++, Pascal, VHDL, KIXtart,
+//     Caml, AutoIt) omits its `_IDENTIFIER` slot for the same
+//     reason. Ada follows suit.
+//   - NUMBER → Number. Ada supports decimal (`42` / `3.14`),
+//     scientific (`1.0e-3`), and based literals (`16#FF#`,
+//     `2#1010#`) via `ColouriseNumber`.
+//   - DELIMITER → Operator — Ada's `:=`, `=>`, `..`, `**`, `<<`,
+//     `>>`, `<=`, `>=`, `/=` all render as consecutive DELIMITER
+//     runs since LexAda emits one style-run per punctuation char.
+//   - CHARACTER + STRING → String — literal quoted content.
+//   - CHARACTEREOL + STRINGEOL → String too — unterminated
+//     literals still get the string colour so the user's eye
+//     picks up the run; the illegal-token cue comes from
+//     ILLEGAL. Alternative would be to leave them unmapped
+//     pending a future `StyleSlot::Error` palette (that's what
+//     LexPas, LexHTML SGML, and LexMake do); Ada instead
+//     borrows the pattern from VHDL, whose `VHDL_STYLES` (:6250)
+//     maps SCE_VHDL_STRINGEOL to `String`. Neither convention is
+//     wrong; Ada picks the visible-in-lane choice so the
+//     malformed region still reads as string-shaped.
+//   - LABEL → Preprocessor — `<< label >>` block-label targets
+//     for `goto`; the "out-of-band syntax marker" reading fits
+//     the Preprocessor slot's visual meaning.
+//   - COMMENTLINE → Comment.
+//   - ILLEGAL → Macro — a distinct visible-error accent for
+//     tokens LexAda rejected (bad identifier, bad numeric
+//     literal). Reusing Macro because the slot is otherwise
+//     Rust-only and Ada doesn't have real macros; borrowing it
+//     for a themable syntax-error indicator gives ILLEGAL its
+//     own colour without adding a new palette slot.
+const ADA_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_ADA_WORD, StyleSlot::Keyword),
+    (SCE_ADA_NUMBER, StyleSlot::Number),
+    (SCE_ADA_DELIMITER, StyleSlot::Operator),
+    (SCE_ADA_CHARACTER, StyleSlot::String),
+    (SCE_ADA_CHARACTEREOL, StyleSlot::String),
+    (SCE_ADA_STRING, StyleSlot::String),
+    (SCE_ADA_STRINGEOL, StyleSlot::String),
+    (SCE_ADA_LABEL, StyleSlot::Preprocessor),
+    (SCE_ADA_COMMENTLINE, StyleSlot::Comment),
+    (SCE_ADA_ILLEGAL, StyleSlot::Macro),
+];
+
+// Italic on comments — universal prose-italic convention.
+const ADA_ITALIC: &[usize] = &[SCE_ADA_COMMENTLINE];
+
+// Bold only on WORD (reserved words). No secondary bold — the
+// theme uses one bold visual for language keywords, matching the
+// framework's convention.
+const ADA_BOLD: &[usize] = &[SCE_ADA_WORD];
+
+// Single-class install matches `adaWordListDesc[]` at
+// `LexAda.cxx:42-45` — class 0 is "Keywords" and adaWordListDesc[1]
+// is the NULL sentinel. Only class 0 is populated; no
+// `SCI_SETKEYWORDS(1, ...)` needed.
+const ADA_THEME: LangTheme = LangTheme {
+    keywords: &[(0, ADA_KEYWORDS)],
+    styles: ADA_STYLES,
+    italic: ADA_ITALIC,
+    bold: ADA_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -6812,6 +6897,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&AU3_THEME)
     } else if lang == L_CAML {
         Some(&CAML_THEME)
+    } else if lang == L_ADA {
+        Some(&ADA_THEME)
     } else {
         None
     }
@@ -21966,8 +22053,10 @@ mod lang_theme_tests {
     use super::{
         lang_theme, slot_color, StyleSlot, ASM_CPU_KEYWORDS, ASM_DIRECTIVE_KEYWORDS,
         ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS,
-        FG_COMMENT, FG_KEYWORD, FG_MACRO, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
-        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        FG_COMMENT, FG_KEYWORD, FG_MACRO, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
+        SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER,
+        SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
+        SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
         SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
         SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
         SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
@@ -22009,26 +22098,26 @@ mod lang_theme_tests {
     // unmapped-ness, so pull the constant from codepp_scintilla_sys
     // directly rather than re-exporting through super.
     use codepp_core::lang::{
-        AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS, AU3_PREPROCESSORS, AU3_SENDKEYS,
-        AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CAML_KEYWORDS,
-        CAML_KEYWORDS2, CAML_KEYWORDS3, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2,
-        CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2,
-        C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
-        KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
-        LUA_KEYWORDS_2, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS,
-        L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
-        L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST,
-        L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS,
-        NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
-        PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
-        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS,
-        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
-        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-        XML_KEYWORDS,
+        ADA_KEYWORDS, AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS, AU3_PREPROCESSORS,
+        AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2,
+        CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1,
+        CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
+        CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS,
+        JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS,
+        LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH,
+        L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT,
+        L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
+        L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
+        L_TEXT, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
+        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+        VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
+        VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
     };
-    use codepp_scintilla_sys::SCE_VHDL_IDENTIFIER;
+    use codepp_scintilla_sys::{SCE_ADA_IDENTIFIER, SCE_VHDL_IDENTIFIER};
 
     /// Every wired language must:
     ///   - Return `Some(&theme)`.
@@ -27264,6 +27353,201 @@ mod lang_theme_tests {
                 "CAML_KEYWORDS3 must include type `{kw3}`"
             );
         }
+    }
+
+    /// Ada (`L_ADA`) uses Lexilla's `LexAda` — a single-wordlist
+    /// case-insensitive lexer for Ada 95/2005/2012 with 12
+    /// `SCE_ADA_*` slots. Distinctive features: apostrophe
+    /// overloading (character literal vs `X'Attribute` selector,
+    /// disambiguated by a per-line `apostropheStartsAttribute`
+    /// bool that treats `all` specially at `LexAda.cxx:211-213`);
+    /// `<< label >>` block-label targets for `goto`; based
+    /// literals `16#FF#`; and two visible-error states
+    /// (`STRINGEOL` for unterminated strings, `CHARACTEREOL` for
+    /// unterminated char literals, plus `ILLEGAL` for bad
+    /// identifiers/numbers). Case handling is fixed at the
+    /// lexer level: `LexAda.cxx:200-208` folds every identifier
+    /// byte to `tolower` before `InList` — so `ADA_KEYWORDS`
+    /// MUST be lowercase.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_ADA)` returns `Some(&ADA_THEME)`.
+    ///   2. Style count == 10 (12 `SCE_ADA_*` slots minus
+    ///      `DEFAULT` and `IDENTIFIER` — the framework convention
+    ///      is that bare user identifiers paint at `STYLE_DEFAULT`;
+    ///      Ada matches C / C++ / Pascal / VHDL / `KIXtart` / Caml /
+    ///      `AutoIt` on this).
+    ///   3. Single wordlist class 0 in canonical order.
+    ///   4. `ADA_KEYWORDS` non-empty.
+    ///   5. Every token is lowercase (`LexAda` case-folds before
+    ///      `InList` lookup — uppercase entries would be dead code).
+    ///   6. `all` MUST be present — `LexAda`'s apostrophe
+    ///      disambiguation at `:211-213` special-cases `all` so
+    ///      character literals after `Ptr.all'Address` still lex.
+    ///   7. Style-routing pins for the 10 mapped SCE constants.
+    ///   8. `DEFAULT` and `IDENTIFIER` remain unmapped.
+    ///   9. Italic set == 1 (`COMMENTLINE`).
+    ///   10. Bold set == 1 (`WORD` only).
+    ///   11. Cross-language non-reuse (Ada must not reuse another
+    ///       lexer's style table verbatim).
+    ///   12. Anchor tokens present.
+    #[test]
+    fn ada_uses_lexada_single_class_theme() {
+        let ada = lang_theme(L_ADA).expect("Ada wired");
+
+        // Invariant 2: 10 style mappings.
+        assert_eq!(
+            ada.styles.len(),
+            10,
+            "ADA_STYLES must map 10 indices (12 SCE_ADA_* slots \
+             minus DEFAULT and IDENTIFIER)"
+        );
+
+        // Invariant 3: single wordlist class 0.
+        assert_eq!(
+            ada.keywords.len(),
+            1,
+            "ADA_THEME must install exactly 1 wordlist class \
+             (matches adaWordListDesc[] at LexAda.cxx:42-45 — \
+             only class 0 `Keywords`, adaWordListDesc[1] is the \
+             NULL sentinel)"
+        );
+        assert_eq!(ada.keywords[0].0, 0);
+        assert_eq!(ada.keywords[0].1, ADA_KEYWORDS);
+
+        // Invariant 4: non-empty.
+        assert!(
+            ADA_KEYWORDS.split_whitespace().count() > 0,
+            "ADA_KEYWORDS must be non-empty"
+        );
+
+        // Invariant 5: every token lowercase — LexAda folds via
+        // `tolower` before InList at LexAda.cxx:200-208, so any
+        // uppercase byte would render the entry unreachable.
+        for tok in ADA_KEYWORDS.split_whitespace() {
+            assert!(
+                tok.bytes().all(|b| !b.is_ascii_uppercase()),
+                "ADA_KEYWORDS token `{tok}` contains uppercase — \
+                 LexAda case-folds before InList so this entry \
+                 is unreachable"
+            );
+        }
+
+        // Invariant 6: `all` present — apostrophe disambiguation
+        // at LexAda.cxx:211-213 depends on `all` being a keyword
+        // hit. Removing it would break character literals after
+        // pointer-dereference syntax (`Ptr.all'Address` etc.).
+        assert!(
+            ADA_KEYWORDS.split_whitespace().any(|t| t == "all"),
+            "ADA_KEYWORDS must include `all` — LexAda's per-line \
+             `apostropheStartsAttribute` bool at :211-213 relies \
+             on `all` firing the wordlist branch to keep the \
+             attribute-vs-char-literal disambiguation correct"
+        );
+
+        // Invariant 7: style-routing pins.
+        for (idx, slot, name) in [
+            (SCE_ADA_WORD, StyleSlot::Keyword, "SCE_ADA_WORD"),
+            (SCE_ADA_NUMBER, StyleSlot::Number, "SCE_ADA_NUMBER"),
+            (SCE_ADA_DELIMITER, StyleSlot::Operator, "SCE_ADA_DELIMITER"),
+            (SCE_ADA_CHARACTER, StyleSlot::String, "SCE_ADA_CHARACTER"),
+            (
+                SCE_ADA_CHARACTEREOL,
+                StyleSlot::String,
+                "SCE_ADA_CHARACTEREOL",
+            ),
+            (SCE_ADA_STRING, StyleSlot::String, "SCE_ADA_STRING"),
+            (SCE_ADA_STRINGEOL, StyleSlot::String, "SCE_ADA_STRINGEOL"),
+            (SCE_ADA_LABEL, StyleSlot::Preprocessor, "SCE_ADA_LABEL"),
+            (
+                SCE_ADA_COMMENTLINE,
+                StyleSlot::Comment,
+                "SCE_ADA_COMMENTLINE",
+            ),
+            (SCE_ADA_ILLEGAL, StyleSlot::Macro, "SCE_ADA_ILLEGAL"),
+        ] {
+            assert!(
+                ada.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: DEFAULT and IDENTIFIER unmapped.
+        assert!(
+            !ada.styles.iter().any(|(i, _)| *i == 0),
+            "SCE_ADA_DEFAULT (0) must remain unmapped"
+        );
+        assert!(
+            !ada.styles.iter().any(|(i, _)| *i == SCE_ADA_IDENTIFIER),
+            "SCE_ADA_IDENTIFIER (2) must remain unmapped — bare \
+             user identifiers should paint as default text, matching \
+             the framework convention for C / C++ / Pascal / VHDL / \
+             KIXtart / Caml / AutoIt"
+        );
+
+        // Invariant 9: italic == 1 (comment).
+        assert_eq!(ada.italic.len(), 1);
+        assert!(ada.italic.contains(&SCE_ADA_COMMENTLINE));
+
+        // Invariant 10: bold == 1 (WORD only).
+        assert_eq!(ada.bold.len(), 1);
+        assert!(ada.bold.contains(&SCE_ADA_WORD));
+
+        // Invariant 11: cross-language non-reuse.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let rb = lang_theme(L_RUBY).expect("Ruby wired");
+        let vhdl = lang_theme(L_VHDL).expect("VHDL wired");
+        let au3 = lang_theme(L_AU3).expect("AutoIt wired");
+        let caml = lang_theme(L_CAML).expect("Caml wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (rb, "Ruby"),
+            (vhdl, "VHDL"),
+            (au3, "AutoIt"),
+            (caml, "Caml"),
+        ] {
+            assert_ne!(ada.styles, other.styles, "Ada must NOT reuse {name}_STYLES");
+        }
+
+        // Invariant 12: anchor tokens across Ada revisions.
+        // Ada 83 core:
+        for kw in [
+            "begin",
+            "end",
+            "procedure",
+            "function",
+            "package",
+            "is",
+            "if",
+            "then",
+            "else",
+            "loop",
+            "return",
+        ] {
+            assert!(
+                ADA_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "ADA_KEYWORDS must include Ada 83 reserved word `{kw}`"
+            );
+        }
+        // Ada 95:
+        for kw in ["abstract", "aliased", "protected", "tagged"] {
+            assert!(
+                ADA_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "ADA_KEYWORDS must include Ada 95 reserved word `{kw}`"
+            );
+        }
+        // Ada 2005:
+        for kw in ["interface", "overriding", "synchronized"] {
+            assert!(
+                ADA_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "ADA_KEYWORDS must include Ada 2005 reserved word `{kw}`"
+            );
+        }
+        // Ada 2012:
+        assert!(
+            ADA_KEYWORDS.split_whitespace().any(|t| t == "some"),
+            "ADA_KEYWORDS must include Ada 2012 reserved word `some`"
+        );
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a

@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 38 / 🟡 50 / ⚫ 1.
+Total: 89 rows. ✅ 39 / 🟡 49 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1839,7 +1839,7 @@ further shim work needed.
 | Language | LangType id | Lexer | Keywords | Theme | Status |
 | --- | --- | --- | --- | --- | --- |
 | Normal Text | 0 | — | — | — | ⚫ |
-| Ada | 42 | `ada` | ⚫ | ⚫ | 🟡 |
+| Ada | 42 | `ada` | ✅ | ✅ | ✅ |
 | ASN.1 | 65 | `asn1` | ⚫ | ⚫ | 🟡 |
 | ASP | 16 | `hypertext` | ✅ | ✅ | ✅ |
 | Assembly | 32 | `asm` | ✅ | ✅ | ✅ |
@@ -2910,6 +2910,105 @@ unmapped guards (bare user identifiers paint as default text),
 4-entry italic set (all comment nesting depths), 1-entry bold
 set (KEYWORD only), 4 cross-language non-reuse pins, and
 7+4+4 anchor pins across keywords / functions / types.
+
+**Ada (2026-07-04):** uses Lexilla's `ada` lexer (`LexAda.cxx`,
+~330 lines) — a single-wordlist case-insensitive lexer written
+by Sergey Koshcheyev in 2002. Titled "Lexer for Ada 95" but
+handles Ada 2005 / Ada 2012 syntax cleanly since none of those
+revisions changed comment / string / numeric syntax — only the
+reserved-word set grew (95 added `abstract` / `aliased` /
+`protected` / `requeue` / `tagged` / `until`; 2005 added
+`interface` / `overriding` / `synchronized`; 2012 added `some`).
+`ADA_KEYWORDS` covers all four revisions — 73 tokens total, all
+lowercase.
+
+**Critical: lexer lowercases the source.** `LexAda.cxx:200-208`
+folds every identifier byte via `tolower` before the
+`keywords.InList` lookup — Ada language semantics: identifier
+case does not distinguish tokens (`Package_Body` and
+`PACKAGE_BODY` refer to the same declaration). Consequence: every
+token in `ADA_KEYWORDS` MUST be lowercase; an uppercase or
+mixed-case entry would be dead code (the lookup key is already
+`begin` by the time InList runs). Ada Reference Manual convention
+renders reserved words in bold lowercase, matching this. Test
+invariant #5 pins every-token-lowercase and would flag any drift.
+
+**Apostrophe disambiguation dependency.** Ada's `'` is overloaded:
+`'a'` opens a character literal, but `X'Range` /
+`Integer'First` opens an attribute selector. LexAda tracks the
+per-line meaning with a `apostropheStartsAttribute` bool at
+`LexAda.cxx:234-243` (persisted line-to-line via
+`styler.SetLineState`). After any keyword hit the flag CLEARS
+(next apostrophe = character literal) UNLESS the matched keyword
+is exactly `all` (`:211-213`), because Ada pointer-dereference
+syntax `Ptr.all'Address` is followed by attribute selection.
+Consequence: `all` MUST remain in `ADA_KEYWORDS` — dropping it
+would break character literals near dereference sites. Test
+invariant #6 pins `all`-must-be-present specifically to catch
+that failure mode.
+
+**Style routing (10 mappings; `IDENTIFIER` and `DEFAULT`
+deliberately unmapped):**
+
+- **WORD (SCE_ADA_WORD, promoted from IDENTIFIER by wordlist
+  hit)** → `Keyword` bold blue — the language's reserved words.
+- **IDENTIFIER** — deliberately UNMAPPED. LexAda sets
+  `SCE_ADA_IDENTIFIER` as the terminal state for every
+  non-keyword word (variables, types, subprograms, packages);
+  painting it would tint every bare name in an Ada source file
+  with a palette accent. Every neighbor themed lexer (C, C++,
+  Pascal, VHDL, KIXtart, Caml, AutoIt) omits its `_IDENTIFIER`
+  slot for the same reason — the KIX banner in `ui_win32/src/lib.rs`
+  documents this explicitly ("SHOULD paint as default text so the
+  reader isn't visually assaulted by every function name"). Ada
+  matches the convention.
+- **NUMBER** → `Number`. Ada supports based literals (`16#FF#`,
+  `2#1010#`) via LexAda's `#`-delimited base syntax.
+- **DELIMITER** → `Operator`. Ada's multi-char operators
+  (`:=`, `=>`, `..`, `**`, `<<`, `>>`, `<=`, `>=`, `/=`) each
+  paint as consecutive single-char DELIMITER runs — LexAda
+  doesn't fuse them, but the shared style makes them read as
+  one span.
+- **CHARACTER + CHARACTEREOL + STRING + STRINGEOL** → `String`.
+  The two `*EOL` states (unterminated char / string literal)
+  fall into `String` too — same lane as the well-formed
+  variants, since the token content is still string-like even
+  in error. Precedent: `VHDL_STYLES` maps `SCE_VHDL_STRINGEOL`
+  to `String`. LexPas / LexHTML SGML / LexMake take the
+  opposite path (unmapped, pending a future `StyleSlot::Error`).
+  Ada picks the visible-in-lane choice; either convention is
+  defensible.
+- **LABEL (`<< target >>` goto targets)** → `Preprocessor`
+  purple — "out-of-band syntax marker" reading fits the
+  Preprocessor slot's visual semantics. Ada block labels are
+  unusual in modern code so a distinct accent draws the eye.
+- **COMMENTLINE (`--`)** → `Comment` green italic. Ada has no
+  block comments; line comments are the sole comment form.
+- **ILLEGAL** → `Macro`. A distinct high-contrast accent for
+  tokens LexAda rejected (`IsValidIdentifier` fail or
+  `IsValidNumber` fail). Borrowed from the `StyleSlot::Macro`
+  slot (otherwise Rust-only) because Ada doesn't have real
+  macros, and this gives syntax errors their own colour without
+  adding a new palette slot.
+
+Only the WORD style is bold — matching the framework's "one bold
+visual for language keywords" rule.
+
+**Single-class install.** `adaWordListDesc[]` at
+`LexAda.cxx:42-45` declares one class only, `"Keywords"`, with
+`adaWordListDesc[1] = 0` as the NULL sentinel. `ADA_THEME`
+installs class 0 alone. Test invariant #3 pins the single-class
+shape.
+
+Structural test coverage: 12 invariants — 10 style mappings pin,
+single-class-only pin, `ADA_KEYWORDS` non-empty guard,
+every-token-lowercase pin (dead-code prevention),
+`all`-must-be-present pin (apostrophe-disambiguation dependency),
+10 style-routing pins, `DEFAULT` + `IDENTIFIER` unmapped pins
+(bare user identifiers paint as default text), italic == 1
+(`COMMENTLINE`), bold == 1 (`WORD` only), 5 cross-language
+non-reuse pins (C++ / Ruby / VHDL / AutoIt / Caml), and 19 anchor
+tokens across Ada 83 / 95 / 2005 / 2012 revisions.
 
 ## Notes
 
