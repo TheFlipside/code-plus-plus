@@ -7451,6 +7451,49 @@ pub const CMAKE_PARAMETERS: &str = concat!(
 /// a theme change.
 pub const CMAKE_USERDEFINED: &str = "";
 
+/// YAML value-position boolean/null tokens (class 0 →
+/// `SCE_YAML_KEYWORD`).
+///
+/// **Source of truth:** YAML 1.1 spec §10.3 (boolean scalars,
+/// `y|Y|yes|Yes|YES|n|N|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF`)
+/// and §10.4 (null scalar, `~|null|Null|NULL`). YAML 1.2
+/// tightened these to lowercase-only, but almost every YAML
+/// parser in the wild (`PyYAML`, `libyaml`, `ruamel`, `snakeyaml`
+/// permissive mode, etc.) still accepts the full YAML 1.1 set —
+/// so a lexer that highlights only the lowercase family would
+/// leave common `true`/`True`/`TRUE` mixed-case usage flat.
+///
+/// **Case-exact match.** `LexYAML.cxx:188` calls
+/// `KeywordAtChar` which delegates to `WordList::InList` —
+/// byte-exact, no case folding. Every spelling variant the
+/// theme wants highlighted must appear literally.
+///
+/// **`~` compact-null included.** YAML's canonical null sigil
+/// `~` is a full §10.4 spelling equal in status to `null`.
+/// `KeywordAtChar` at `LexYAML.cxx:63-76` trims trailing spaces
+/// from the value span and passes the one-byte buffer `"~"`
+/// to `WordList::InList`. `InList` (`WordList.cxx:154-190`) has
+/// exactly one prefix special-case — `^` for a starts-with
+/// wildcard — and no sigil-stripping logic for `~` or `%`. A
+/// wordlist entry `"~"` indexes cleanly into `starts[0x7E]` and
+/// byte-compares to a match. Common in Ansible playbooks, K8s
+/// manifests, and Docker Compose; omitting it would render the
+/// most common YAML null idiom at plain-scalar `SCE_YAML_DEFAULT`.
+pub const YAML_KEYWORDS: &str = concat!(
+    // Boolean — YAML 1.1 §10.3 y-family (Yes/No aliases).
+    "y Y yes Yes YES ",
+    "n N no No NO ",
+    // Boolean — YAML 1.1 §10.3 true/false family.
+    "true True TRUE ",
+    "false False FALSE ",
+    // Boolean — YAML 1.1 §10.3 on/off aliases.
+    "on On ON ",
+    "off Off OFF ",
+    // Null — YAML 1.1 §10.4 (`~` is the compact-null form,
+    // equal in status to the alphabetic spellings).
+    "~ null Null NULL ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4207,7 +4207,96 @@ pub const SCE_B_KEYWORD2: usize = 10;
 pub const SCE_B_KEYWORD3: usize = 11;
 pub const SCE_B_KEYWORD4: usize = 12;
 
-// LexYAML style indices.
+// LexYAML style indices. 10 contiguous slots (0..=9) for the
+// YAML line-oriented scalar-value lexer. Dispatches SCLEX_YAML
+// (= 48) via a **single-class wordlist** ("Keywords") at
+// `vendor\lexilla\lexers\LexYAML.cxx:33-36` (`yamlWordListDesc[]`):
+//
+//     yamlWordListDesc[] = { "Keywords", nullptr };
+//
+// **Wordlist semantics — value-position boolean/null tokens.**
+// `LexYAML.cxx:188` probes `KeywordAtChar(&lineBuffer[i],
+// &lineBuffer[startComment], keywords)` on the value span AFTER
+// the `key: ` prefix (i.e. only in the mapping-value position,
+// never in the key position and never inside quoted strings).
+// The probe is byte-exact via `WordList::InList`, so every
+// case variant the theme wants highlighted must appear
+// literally. The canonical set is the YAML 1.1 boolean/null
+// spelling family (`true`/`True`/`TRUE`, `false`/`False`/`FALSE`,
+// `yes`/`no`/`on`/`off` and their case variants, plus `null`/
+// `Null`/`NULL` and the tilde `~`). YAML 1.2 restricts these to
+// lowercase only but real-world YAML files use every case so
+// the full set stays.
+//
+// **Non-wordlist syntactic dispatches** (line-oriented state
+// machine at `LexYAML.cxx:86-216`):
+//
+//   - `SCE_YAML_DOCUMENT` at `:112-115` — line starts with
+//     `---` (document start) or `...` (document end). Whole
+//     line coloured.
+//   - `SCE_YAML_ERROR` at `:121-124` — indented line with a
+//     TAB in the leading whitespace (YAML forbids tab
+//     indentation outside block scalars). Whole line
+//     coloured; block-header syntax errors also route here.
+//   - `SCE_YAML_COMMENT` at `:125-128` — first non-space
+//     char is `#`. Whole line coloured. Also mid-line
+//     comments at `:133-136` after a space-padded `#`.
+//   - `SCE_YAML_IDENTIFIER` at `:138` — token before the
+//     first unquoted `:` followed by whitespace or EOL. The
+//     mapping-key position.
+//   - `SCE_YAML_OPERATOR` at `:139` — the `:` separator
+//     itself.
+//   - `SCE_YAML_TEXT` at `:106` — content of a folded (`>`)
+//     or literal (`|`) block scalar, tracked across lines
+//     via the parent-line-state indent comparison at
+//     `:99-109`. Block scalar content is verbatim string
+//     data.
+//   - `SCE_YAML_REFERENCE` at `:183` — value starting with
+//     `&` (anchor) or `*` (alias), read to end-of-value.
+//   - `SCE_YAML_KEYWORD` at `:189` — wordlist match on the
+//     value span (see wordlist semantics above).
+//   - `SCE_YAML_NUMBER` at `:206` — value containing only
+//     digits / `-` / `.` / `,` / space. Bare numeric scalar.
+//   - `SCE_YAML_DEFAULT` at `:134, :156, :168, :198, :215` —
+//     fallthrough for values that match no more specific
+//     state (unquoted plain-scalar strings, empty block
+//     scalar headers, and inter-token slack).
+//
+// Style semantics (paint-loop citations reference LexYAML.cxx):
+//
+//   - SCE_YAML_DEFAULT (0) — inter-token slack + plain
+//     unquoted scalar values. Framework convention: leave
+//     unmapped so plain string values paint at STYLE_DEFAULT.
+//   - SCE_YAML_COMMENT (1) — `#`-prefixed comment.
+//   - SCE_YAML_IDENTIFIER (2) — key in a mapping-key
+//     position (the token before the first `:`). Deliberately
+//     mapped (unlike most IDENTIFIER states which follow the
+//     framework's "bare identifier → DEFAULT" rule) because
+//     YAML keys are structurally distinct — the key IS the
+//     structural anchor of a mapping and users read it as
+//     "the label" rather than "an ordinary identifier"; this
+//     mirrors `SCE_P_CLASSNAME` / `SCE_P_DEFNAME` /
+//     `SCE_PL_SUB_PROTOTYPE` / `SCE_PL_FORMAT_IDENT` which
+//     also route structural-name identifier states to
+//     `Keyword2`.
+//   - SCE_YAML_KEYWORD (3) — wordlist match (case-exact) on
+//     a value-position boolean/null token.
+//   - SCE_YAML_NUMBER (4) — bare numeric scalar in value
+//     position.
+//   - SCE_YAML_REFERENCE (5) — `&anchor` / `*alias`
+//     definition or dereference.
+//   - SCE_YAML_DOCUMENT (6) — `---` document-start /
+//     `...` document-end marker line.
+//   - SCE_YAML_TEXT (7) — content of a folded / literal
+//     block scalar spanning multiple lines. String content
+//     by semantics.
+//   - SCE_YAML_ERROR (8) — TAB-indented line or malformed
+//     block scalar header. Framework convention: no Error
+//     slot — leave unmapped so the buffer stays legible at
+//     STYLE_DEFAULT rather than lighting up in an arbitrary
+//     colour.
+//   - SCE_YAML_OPERATOR (9) — the mapping-separator `:`.
+pub const SCE_YAML_DEFAULT: usize = 0;
 pub const SCE_YAML_COMMENT: usize = 1;
 pub const SCE_YAML_IDENTIFIER: usize = 2;
 pub const SCE_YAML_KEYWORD: usize = 3;

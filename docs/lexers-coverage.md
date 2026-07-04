@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 44 / 🟡 44 / ⚫ 1.
+Total: 89 rows. ✅ 45 / 🟡 43 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1926,7 +1926,7 @@ further shim work needed.
 | Visual Basic | 18 | `vb` | ✅ | ✅ | ✅ |
 | Visual Prolog | 84 | `visualprolog` | ⚫ | ⚫ | 🟡 |
 | XML | 9 | `xml` | ✅ | ✅ | ✅ |
-| YAML | 49 | `yaml` | ⚫ | ⚫ | 🟡 |
+| YAML | 49 | `yaml` | ✅ | ✅ | ✅ |
 
 **Lisp (2026-07-02):** uses Lexilla's `lisp` lexer
 (`LexLisp.cxx`) — a compact 12-slot byte-exact case-sensitive
@@ -3639,6 +3639,108 @@ italic == 1 (`COMMENT`), bold == 5 (`COMMANDS` +
 `WHILEDEF` + `FOREACHDEF` + `IFDEFINEDEF` + `MACRODEF`), 3
 cross-language non-reuse pins (Inno / Haskell / MATLAB),
 and 14 + 5 canonical CMake command + parameter anchors.
+
+**YAML (2026-07-04):** uses Lexilla's `yaml` lexer
+(`LexYAML.cxx`, ~370 lines). 10 `SCE_YAML_*` slots (0..=9),
+single-class wordlist ("Keywords"). Distinctive feature:
+**line-oriented scalar-value tokenizer** — the lexer treats
+each source line as a `key: value` unit and dispatches the
+value span through a dedicated classifier.
+
+**Line-oriented state machine.** `ColouriseYAMLLine` at
+`LexYAML.cxx:86-216` runs once per source line. It reads the
+line into a fixed buffer, walks it once, and paints the whole
+line in one of several structural forms:
+
+- Leading `---` / `...` → `SCE_YAML_DOCUMENT` (document
+  start/end marker, whole line).
+- TAB in leading whitespace → `SCE_YAML_ERROR` (YAML forbids
+  tab indentation outside block scalars).
+- First non-space char is `#` → `SCE_YAML_COMMENT`.
+- Continuation of a folded (`>`) or literal (`|`) block
+  scalar → `SCE_YAML_TEXT` (indent-comparison against the
+  parent line's stored state at `:99-109`).
+- Otherwise: scan for the first unquoted `:` followed by
+  whitespace or EOL → key at `SCE_YAML_IDENTIFIER`,
+  separator at `SCE_YAML_OPERATOR`, value dispatched below.
+
+**Value-position classifier.** Everything after `key: ` runs
+through a short cascade:
+
+- `&anchor` / `*alias` → `SCE_YAML_REFERENCE`.
+- Wordlist match (byte-exact `InList` at `:188`) →
+  `SCE_YAML_KEYWORD`. This is the only wordlist-driven
+  dispatch in the entire lexer.
+- Digits / `-` / `.` / `,` / spaces only → `SCE_YAML_NUMBER`
+  (bare numeric scalar).
+- Anything else → `SCE_YAML_DEFAULT` (plain unquoted string
+  scalar).
+
+**Wordlist semantics.** One class, one purpose: the value-
+position boolean/null tokens. `LexYAML.cxx:188` calls
+`KeywordAtChar` which delegates to `WordList::InList` — case-
+exact, no folding. `YAML_KEYWORDS` ships the full YAML 1.1
+§10.3-§10.4 spelling family (`y`/`Y`/`yes`/`Yes`/`YES` /
+`true`/`True`/`TRUE` / `false`/`False`/`FALSE` /
+`on`/`On`/`ON` / `off`/`Off`/`OFF` / `~`/`null`/`Null`/`NULL`
++ n-variants). YAML 1.2 restricts these to lowercase only but
+almost every YAML parser in the wild still accepts YAML 1.1's
+mixed-case forms; leaving the mixed-case variants
+unhighlighted would be a real user-visible regression.
+
+**`~` compact-null included.** YAML 1.1 §10.4 lists `~` as a
+canonical null spelling equal in status to `null`/`Null`/`NULL`.
+`WordList::InList` at `WordList.cxx:154-190` has exactly one
+prefix special-case — `^` for a starts-with wildcard — and no
+sigil-stripping for `~` or `%`; a one-byte entry `"~"` indexes
+cleanly into `starts[0x7E]` and byte-compares to a match. `~`
+is common in Ansible playbooks, Kubernetes manifests, Docker
+Compose files, and Rails fixtures; test invariant #6 pins its
+presence so a future edit doesn't silently drop it.
+
+**Style routing (8 mappings; `DEFAULT` and `ERROR` unmapped):**
+
+- **COMMENT** → `Comment` italic. `#`-to-EOL line comment
+  (YAML's only comment form).
+- **IDENTIFIER** → `Keyword2`. **Framework exception** — most
+  `SCE_*_IDENTIFIER` states leave the slot unmapped so bare
+  identifiers paint at `STYLE_DEFAULT`. YAML's IDENTIFIER is
+  structurally the **key** of a mapping (the token before the
+  first `:`), not a bare identifier, so it earns Keyword2 the
+  same way `SCE_P_CLASSNAME` / `SCE_P_DEFNAME` /
+  `SCE_PL_SUB_PROTOTYPE` / `SCE_PL_FORMAT_IDENT` route
+  structural-name identifier states to Keyword2.
+- **KEYWORD** → `Keyword` bold. Boolean/null value tokens —
+  bold matches the C / Python / Rust primary-keyword archetype.
+- **NUMBER** → `Number`.
+- **REFERENCE** → `Preprocessor`. `&anchor` / `*alias` —
+  structural cross-reference, out-of-band syntax marker.
+- **DOCUMENT** → `Preprocessor` bold. `---` / `...` document
+  boundaries — same "out-of-band structural marker" lane as
+  REFERENCE; bold sets them apart while sharing the accent
+  colour.
+- **TEXT** → `String`. Content of folded / literal block
+  scalars — verbatim string data spanning multiple lines.
+- **OPERATOR** → `Operator`. The mapping-separator `:`.
+
+**DEFAULT and ERROR unmapped.** Framework convention
+(DEFAULT); framework has no Error slot (ERROR). Both fall
+through to `STYLE_DEFAULT` which is the least-offensive
+default — bare STYLE_DEFAULT keeps the buffer legible even
+when the lexer emits states the theme doesn't colour.
+
+Structural test coverage: 12 invariants — 8 style mappings
+pin, single-class canonical-position pin, non-empty guard,
+every-token-is-a-documented-YAML-boolean/null-spelling pin
+(dead-code prevention: guards against a future edit accidentally
+shipping arbitrary non-boolean/null tokens that byte-exact
+`InList` would never match in a sensible file), `~`-presence
+pin, 8 style-routing pins, `DEFAULT` + `ERROR` unmapped pins,
+italic == 1 (`COMMENT`), bold == 2 (`KEYWORD` + `DOCUMENT`), 3
+cross-language non-reuse pins (CMake / Inno / Haskell), and
+11 canonical anchor tokens covering both YAML 1.2 lowercase,
+one YAML 1.1 uppercase variant per boolean/null triple, and
+the `~` compact-null spelling.
 
 ## Notes
 

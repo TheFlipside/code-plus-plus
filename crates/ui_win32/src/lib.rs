@@ -115,7 +115,7 @@ use codepp_core::lang::{
     L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_CPP, L_CS, L_CSS, L_DIFF, L_HASKELL, L_HTML, L_INI,
     L_INNO, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS,
     L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME,
-    L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS,
+    L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS,
     MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
     PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
     PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
@@ -123,7 +123,7 @@ use codepp_core::lang::{
     SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
     VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
     VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
+    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -243,31 +243,32 @@ use codepp_scintilla_sys::{
     SCE_V_COMMENTLINE, SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT, SCE_V_INPUT,
     SCE_V_NUMBER, SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR,
     SCE_V_STRING, SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3,
-    SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT,
-    SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS,
-    SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
-    SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
-    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
-    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS,
-    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
-    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
-    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
-    SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
-    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
-    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
-    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO,
-    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
-    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
-    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
-    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED,
-    SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER,
-    SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
-    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
-    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
-    SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
-    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
-    SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT,
-    STYLE_LINENUMBER,
+    SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD, SCE_YAML_NUMBER,
+    SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT, SCI_BEGINUNDOACTION, SCI_CLEAR,
+    SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION,
+    SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
+    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
+    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
+    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
+    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
+    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
+    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
+    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
+    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
+    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
+    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE,
+    SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED,
+    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
+    SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE,
+    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
+    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
+    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS,
+    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY,
+    SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION,
+    SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
@@ -7162,6 +7163,77 @@ const CMAKE_THEME: LangTheme = LangTheme {
     bold: CMAKE_BOLD,
 };
 
+// YAML (`L_YAML`) uses Lexilla's `LexYAML.cxx` — a
+// line-oriented scalar-value lexer. 10 `SCE_YAML_*` slots
+// (0..=9); one wordlist class ("Keywords") for the boolean/
+// null value tokens. 8 style mappings; `DEFAULT` (0) and
+// `ERROR` (8) intentionally unmapped.
+//
+// **Slot rationale** (per the `LexYAML.cxx` banner in
+// `scintilla-sys/src/lib.rs`):
+//
+//   - COMMENT → Comment. `#`-prefixed line comment.
+//   - IDENTIFIER → Keyword2. Mapping-key position — the
+//     token before the first `:` separator. Framework
+//     exception: most IDENTIFIER states follow the "bare
+//     identifier → DEFAULT" rule, but YAML's IDENTIFIER is
+//     structurally the key of a mapping, not a bare
+//     identifier. Precedent: SCE_P_CLASSNAME /
+//     SCE_P_DEFNAME / SCE_PL_SUB_PROTOTYPE /
+//     SCE_PL_FORMAT_IDENT all route to Keyword2 for the
+//     same reason.
+//   - KEYWORD → Keyword bold. Boolean/null value tokens
+//     (`true`, `False`, `null`, `yes`, etc.). Bold matches
+//     the C / Python / Rust primary-keyword archetype.
+//   - NUMBER → Number.
+//   - REFERENCE → Preprocessor. `&anchor` / `*alias` — a
+//     structural cross-reference that reads as an out-of-band
+//     syntax marker rather than content. Same lane as
+//     CMake's `${var}` and the hypertext lexer's HTML
+//     entities.
+//   - DOCUMENT → Preprocessor bold. `---` / `...` document
+//     boundaries. Same "out-of-band structural marker"
+//     lane as REFERENCE; bold sets them apart from bare
+//     `&`/`*` references while sharing the accent colour.
+//   - TEXT → String. Content of folded (`>`) / literal
+//     (`|`) block scalars — verbatim string data spanning
+//     multiple lines.
+//   - OPERATOR → Operator. The mapping-separator `:`.
+const YAML_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_YAML_COMMENT, StyleSlot::Comment),
+    (SCE_YAML_IDENTIFIER, StyleSlot::Keyword2),
+    (SCE_YAML_KEYWORD, StyleSlot::Keyword),
+    (SCE_YAML_NUMBER, StyleSlot::Number),
+    (SCE_YAML_REFERENCE, StyleSlot::Preprocessor),
+    (SCE_YAML_DOCUMENT, StyleSlot::Preprocessor),
+    (SCE_YAML_TEXT, StyleSlot::String),
+    (SCE_YAML_OPERATOR, StyleSlot::Operator),
+];
+
+// Italic on `#`-to-EOL comments. Matches universal Code++
+// comment-slot convention (Python COMMENTLINE + COMMENTBLOCK,
+// Perl COMMENTLINE + POD, Rust COMMENTBLOCK + COMMENTLINE,
+// Lua COMMENT + COMMENTLINE + COMMENTDOC, Bash COMMENTLINE).
+const YAML_ITALIC: &[usize] = &[SCE_YAML_COMMENT];
+
+// Bold on KEYWORD (matched boolean/null value) and DOCUMENT
+// (`---`/`...` markers). KEYWORD gets classic keyword-bold
+// treatment matching the C / Python / Perl / Lua precedent;
+// DOCUMENT is a structural anchor (document boundary) and
+// bolding parallels the Perl `SCE_PL_HERE_DELIM` structural-
+// anchor convention.
+const YAML_BOLD: &[usize] = &[SCE_YAML_KEYWORD, SCE_YAML_DOCUMENT];
+
+// Single-class install matches `yamlWordListDesc[]` at
+// `LexYAML.cxx:33-36` — one wordlist ("Keywords") for the
+// value-position boolean/null token family.
+const YAML_THEME: LangTheme = LangTheme {
+    keywords: &[(0, YAML_KEYWORDS)],
+    styles: YAML_STYLES,
+    italic: YAML_ITALIC,
+    bold: YAML_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -7379,6 +7451,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&INNO_THEME)
     } else if lang == L_CMAKE {
         Some(&CMAKE_THEME)
+    } else if lang == L_YAML {
+        Some(&YAML_THEME)
     } else {
         None
     }
@@ -22604,7 +22678,7 @@ mod lang_theme_tests {
         L_DIFF, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP,
         L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS,
         L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB,
-        L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
+        L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
         NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
         PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
         PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
@@ -22612,13 +22686,15 @@ mod lang_theme_tests {
         TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
         VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
         VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
-        VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
+        VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_HA_IDENTIFIER, SCE_HA_IMPORT, SCE_INNO_IDENTIFIER,
         SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
         SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR,
-        SCE_MATLAB_STRING, SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER,
+        SCE_MATLAB_STRING, SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER, SCE_YAML_COMMENT,
+        SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD, SCE_YAML_NUMBER,
+        SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
     };
 
     /// Every wired language must:
@@ -29221,6 +29297,190 @@ mod lang_theme_tests {
             assert!(
                 CMAKE_PARAMETERS.split_whitespace().any(|t| t == kw),
                 "CMAKE_PARAMETERS must include argument keyword `{kw}`"
+            );
+        }
+    }
+
+    /// YAML (`L_YAML`) uses Lexilla's `LexYAML` — a line-oriented
+    /// scalar-value lexer. 10 `SCE_YAML_*` slots (0..=9); one
+    /// wordlist class ("Keywords") for the value-position
+    /// boolean/null token family (`true`/`True`/`TRUE`,
+    /// `false`/`False`/`FALSE`, `yes`/`no`/`on`/`off` case
+    /// variants, `null`/`Null`/`NULL`). Byte-exact `InList`
+    /// match at `LexYAML.cxx:188` — every case variant the
+    /// theme wants highlighted must appear literally.
+    ///
+    /// **`IDENTIFIER` mapped (framework exception).** Most
+    /// `SCE_*_IDENTIFIER` states leave the slot unmapped so
+    /// bare identifiers paint at `STYLE_DEFAULT`. YAML's
+    /// IDENTIFIER is structurally the **key** of a mapping
+    /// (the token before the first `:`) — not a bare
+    /// identifier — so it earns Keyword2 the same way
+    /// `SCE_P_CLASSNAME` / `SCE_P_DEFNAME` /
+    /// `SCE_PL_SUB_PROTOTYPE` / `SCE_PL_FORMAT_IDENT` do.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_YAML)` returns `Some(&YAML_THEME)`.
+    ///   2. Style count == 8 (10 `SCE_YAML_*` slots minus
+    ///      `DEFAULT` and `ERROR`, both intentionally unmapped).
+    ///   3. Single wordlist class in canonical position (0).
+    ///   4. Class 0 (`YAML_KEYWORDS`) non-empty.
+    ///   5. Every wordlist token is one of the documented
+    ///      YAML 1.1 boolean/null spellings (guards against a
+    ///      future edit accidentally shipping arbitrary tokens
+    ///      that `LexYAML.cxx:188`'s byte-exact `InList` would
+    ///      never match in a sensible YAML file).
+    ///   6. Tilde `~` present in `YAML_KEYWORDS`
+    ///      (`vendor/lexilla/lexlib/WordList.cxx:154-190`'s
+    ///      `InList` has only one prefix special-case — `^`
+    ///      for a starts-with wildcard — so a one-byte `"~"`
+    ///      entry matches cleanly. Omitting it would leave
+    ///      the most common YAML null idiom `key: ~` at
+    ///      `SCE_YAML_DEFAULT`).
+    ///   7. Style-routing pins for the 8 mapped SCE constants.
+    ///   8. `DEFAULT` (0) and `ERROR` (8) both remain unmapped.
+    ///   9. Italic set == 1 (`COMMENT` only).
+    ///   10. Bold set == 2 (`KEYWORD` + `DOCUMENT`).
+    ///   11. Cross-language non-reuse (YAML must NOT reuse
+    ///       another lexer's style table).
+    ///   12. Anchor value tokens present (`true`/`false`/`null`
+    ///       lowercase + one uppercase variant each + `~` —
+    ///       proves both YAML 1.2 and YAML 1.1 mixed-case are
+    ///       wired, plus the compact-null spelling).
+    #[test]
+    fn yaml_uses_lexyaml_single_class_theme() {
+        let yaml = lang_theme(L_YAML).expect("YAML wired");
+
+        // Invariant 2: 8 mappings.
+        assert_eq!(
+            yaml.styles.len(),
+            8,
+            "YAML_STYLES must map 8 indices (10 SCE_YAML_* slots \
+             minus DEFAULT (0) and ERROR (8), both intentionally \
+             unmapped per framework convention)"
+        );
+
+        // Invariant 3: single class, canonical position 0.
+        assert_eq!(
+            yaml.keywords.len(),
+            1,
+            "YAML_THEME must install exactly 1 wordlist class \
+             (matches yamlWordListDesc[] at LexYAML.cxx:33-36)"
+        );
+        assert_eq!(yaml.keywords[0].0, 0);
+        assert_eq!(yaml.keywords[0].1, YAML_KEYWORDS);
+
+        // Invariant 4: non-empty.
+        assert!(
+            YAML_KEYWORDS.split_whitespace().count() > 0,
+            "YAML_KEYWORDS must be non-empty"
+        );
+
+        // Invariant 5: every token is a YAML 1.1 boolean/null
+        // spelling. Guards against a future edit accidentally
+        // shipping arbitrary tokens — LexYAML's byte-exact
+        // InList at :188 would never match e.g. `foo` in a
+        // sensible YAML file, so a stray non-boolean/null
+        // token is either dead code or (worse) an author error.
+        let allowed: &[&str] = &[
+            "y", "Y", "yes", "Yes", "YES", "n", "N", "no", "No", "NO", "true", "True", "TRUE",
+            "false", "False", "FALSE", "on", "On", "ON", "off", "Off", "OFF", "~", "null", "Null",
+            "NULL",
+        ];
+        for tok in YAML_KEYWORDS.split_whitespace() {
+            assert!(
+                allowed.contains(&tok),
+                "YAML_KEYWORDS token `{tok}` is not a documented \
+                 YAML 1.1 boolean/null spelling — either add it \
+                 to the allowed list with a spec citation or \
+                 remove it from YAML_KEYWORDS"
+            );
+        }
+
+        // Invariant 6: `~` present — YAML 1.1 §10.4 compact-null
+        // spelling. `WordList.cxx:154-190` `InList` has one
+        // prefix special-case (`^` starts-with wildcard) and
+        // no sigil-stripping for `~` or `%`, so a one-byte
+        // entry matches cleanly. Omitting `~` would leave the
+        // common `key: ~` YAML idiom at `SCE_YAML_DEFAULT`.
+        assert!(
+            YAML_KEYWORDS.split_whitespace().any(|t| t == "~"),
+            "YAML_KEYWORDS MUST contain `~` — canonical YAML 1.1 \
+             §10.4 compact-null spelling; omitting it leaves \
+             `key: ~` at SCE_YAML_DEFAULT"
+        );
+
+        // Invariant 7: style-routing pins.
+        for (idx, slot, name) in [
+            (SCE_YAML_COMMENT, StyleSlot::Comment, "SCE_YAML_COMMENT"),
+            (
+                SCE_YAML_IDENTIFIER,
+                StyleSlot::Keyword2,
+                "SCE_YAML_IDENTIFIER",
+            ),
+            (SCE_YAML_KEYWORD, StyleSlot::Keyword, "SCE_YAML_KEYWORD"),
+            (SCE_YAML_NUMBER, StyleSlot::Number, "SCE_YAML_NUMBER"),
+            (
+                SCE_YAML_REFERENCE,
+                StyleSlot::Preprocessor,
+                "SCE_YAML_REFERENCE",
+            ),
+            (
+                SCE_YAML_DOCUMENT,
+                StyleSlot::Preprocessor,
+                "SCE_YAML_DOCUMENT",
+            ),
+            (SCE_YAML_TEXT, StyleSlot::String, "SCE_YAML_TEXT"),
+            (SCE_YAML_OPERATOR, StyleSlot::Operator, "SCE_YAML_OPERATOR"),
+        ] {
+            assert!(
+                yaml.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: DEFAULT (0) and ERROR (8) both unmapped.
+        assert!(
+            !yaml.styles.iter().any(|(i, _)| *i == 0),
+            "SCE_YAML_DEFAULT (0) must remain unmapped"
+        );
+        assert!(
+            !yaml.styles.iter().any(|(i, _)| *i == 8),
+            "SCE_YAML_ERROR (8) must remain unmapped — framework \
+             has no Error slot; bare STYLE_DEFAULT is the least \
+             offensive fallback"
+        );
+
+        // Invariant 9: italic == 1.
+        assert_eq!(yaml.italic.len(), 1);
+        assert!(yaml.italic.contains(&SCE_YAML_COMMENT));
+
+        // Invariant 10: bold == 2 (KEYWORD + DOCUMENT).
+        assert_eq!(yaml.bold.len(), 2);
+        assert!(yaml.bold.contains(&SCE_YAML_KEYWORD));
+        assert!(yaml.bold.contains(&SCE_YAML_DOCUMENT));
+
+        // Invariant 11: cross-language non-reuse.
+        let cmake = lang_theme(L_CMAKE).expect("CMake wired");
+        let inno = lang_theme(L_INNO).expect("Inno wired");
+        let haskell = lang_theme(L_HASKELL).expect("Haskell wired");
+        for (other, name) in [(cmake, "CMake"), (inno, "Inno"), (haskell, "Haskell")] {
+            assert_ne!(
+                yaml.styles, other.styles,
+                "YAML must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 12: canonical anchor coverage — YAML 1.2
+        // lowercase form + one YAML 1.1 uppercase variant of
+        // each triple + `~` (proves the mixed-case wiring
+        // works and the compact-null spelling is present).
+        for kw in [
+            "true", "false", "null", "TRUE", "FALSE", "NULL", "yes", "no", "on", "off", "~",
+        ] {
+            assert!(
+                YAML_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "YAML_KEYWORDS must include `{kw}`"
             );
         }
     }
