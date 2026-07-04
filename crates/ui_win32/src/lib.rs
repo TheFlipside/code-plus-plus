@@ -112,14 +112,15 @@ use codepp_core::lang::{
     L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI,
     L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL,
     L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
-    L_TCL, L_TEX, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS,
+    NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
     PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
     RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
     SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
     TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-    VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
-    VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
+    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+    XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -223,14 +224,17 @@ use codepp_scintilla_sys::{
     SCE_TEX_GROUP, SCE_TEX_SPECIAL, SCE_TEX_SYMBOL, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT,
     SCE_VHDL_COMMENT, SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER,
     SCE_VHDL_OPERATOR, SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE,
-    SCE_VHDL_STDTYPE, SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCI_BEGINUNDOACTION,
-    SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER,
-    SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
-    SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES,
-    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
-    SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
-    SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
-    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
+    SCE_VHDL_STDTYPE, SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCE_V_COMMENT,
+    SCE_V_COMMENTLINE, SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT, SCE_V_INPUT,
+    SCE_V_NUMBER, SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR,
+    SCE_V_STRING, SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3,
+    SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT,
+    SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS,
+    SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
+    SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
+    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
+    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS,
+    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
     SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
     SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
     SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
@@ -6692,6 +6696,137 @@ const ADA_THEME: LangTheme = LangTheme {
     bold: ADA_BOLD,
 };
 
+// LexVerilog emits 19 SCE_V_* slots — 13 contiguous (0..=12) plus
+// 6 in the extension range (19..=24). **17 are mapped**;
+// `SCE_V_DEFAULT` (0) and `SCE_V_IDENTIFIER` (11) stay unmapped
+// per the framework convention (bare identifiers paint at
+// `STYLE_DEFAULT` alongside the C / C++ / Pascal / VHDL / KIXtart /
+// Caml / AutoIt / Ada family). The `SCE_V_USER` (19) slot is
+// mapped so that a project that populates class 3 (user tasks /
+// identifiers) sees the theme apply; the shipped wordlist is
+// empty by default.
+//
+// **Port-styling states.** SCE_V_INPUT / OUTPUT / INOUT /
+// PORT_CONNECT (21..=24) are gated by the
+// `lexer.verilog.portstyling` option (default `false` at
+// `LexVerilog.cxx:146`). Code++ does not currently plumb
+// `SCI_SETPROPERTY`, so those states do not fire in practice
+// unless the user manually enables the option via a Scintilla
+// property. Mapping them defensively means the theme is already
+// consistent for the day port-styling is exposed via a settings
+// UI or a per-project override — and crucially, the three port
+// directions route to the SAME slot (Keyword) they'd land in via
+// class 0 wordlist matching when portStyling is OFF. Flipping the
+// option therefore produces zero visual difference on the same
+// source characters.
+//
+// Style routing rationale:
+//   - COMMENT + COMMENTLINE + COMMENTLINEBANG → Comment.
+//     All three comment forms share the italic-green convention;
+//     COMMENTLINEBANG (`//!`) is a doc-flag variant that still
+//     reads as a comment to the human eye.
+//   - COMMENT_WORD → Preprocessor — Doxygen-style keywords
+//     (`\author`, `\brief`, `\file`) inside any comment (block,
+//     line, or line-bang; LexVerilog transitions into COMMENT_WORD
+//     from all three comment states). Purple accent draws the eye
+//     to the semantic-marker nature of the token.
+//   - NUMBER → Number.
+//   - WORD (Class 0 — module structure, control flow) →
+//     Keyword bold blue.
+//   - WORD2 (Class 1 — types, net-types, gate primitives,
+//     drive/charge strengths) → Keyword2 teal. Kept
+//     unweighted (not bold) so the primary control-flow
+//     keywords still stand out visually.
+//   - WORD3 (Class 2 — `$`-prefixed system tasks) → Macro.
+//     Distinct accent because the `$` sigil already reads as
+//     out-of-band and reusing Keyword2 would blur the visual
+//     line between "language reserved word" and "runtime
+//     library call". Matches how PostScript's SCE_PS_IMMEVAL
+//     (the `//name` immediate-evaluate reference at :5772)
+//     and Ruby's SCE_RB_GLOBAL borrow the Macro slot for the
+//     same "distinct sigil-marked identifier" reading.
+//   - USER (Class 3 — user-defined tasks / identifiers) →
+//     Keyword2. Same lane as WORD2 since the semantic
+//     intent is "known library-ish identifier"; the shipped
+//     wordlist is empty by default, so this only matters if
+//     a project override populates it.
+//   - PREPROCESSOR (` `-directives: `` `include ``,
+//     `` `define ``, `` `ifdef ``, …) → Preprocessor. The
+//     canonical slot for out-of-band syntax markers.
+//   - OPERATOR → Operator.
+//   - IDENTIFIER — deliberately UNMAPPED. Framework convention.
+//   - STRING → String.
+//   - STRINGEOL → String. Same lane as STRING so the
+//     malformed region still reads as string-shaped; matches
+//     VHDL_STYLES / ADA_STYLES precedent. LexPas / LexHTML
+//     SGML / LexMake take the opposite path (unmapped,
+//     pending a future StyleSlot::Error) — either convention
+//     is defensible.
+//   - INPUT / OUTPUT / INOUT → Keyword. Matches the SCE_V_WORD
+//     baseline these tokens land in via class 0 wordlist
+//     matching when `portStyling` is off (Code++'s default),
+//     so toggling the property later doesn't create a large
+//     visual jump on identical source characters (bold-blue
+//     Keyword either way).
+//   - PORT_CONNECT → Keyword2. `.name` in `.name (expr)`
+//     module-instantiation binds reads as "known binding
+//     identifier" — same lane as USER (project-known helper
+//     names).
+const VERILOG_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_V_COMMENT, StyleSlot::Comment),
+    (SCE_V_COMMENTLINE, StyleSlot::Comment),
+    (SCE_V_COMMENTLINEBANG, StyleSlot::Comment),
+    (SCE_V_COMMENT_WORD, StyleSlot::Preprocessor),
+    (SCE_V_NUMBER, StyleSlot::Number),
+    (SCE_V_WORD, StyleSlot::Keyword),
+    (SCE_V_WORD2, StyleSlot::Keyword2),
+    (SCE_V_WORD3, StyleSlot::Macro),
+    (SCE_V_USER, StyleSlot::Keyword2),
+    (SCE_V_PREPROCESSOR, StyleSlot::Preprocessor),
+    (SCE_V_OPERATOR, StyleSlot::Operator),
+    (SCE_V_STRING, StyleSlot::String),
+    (SCE_V_STRINGEOL, StyleSlot::String),
+    (SCE_V_INPUT, StyleSlot::Keyword),
+    (SCE_V_OUTPUT, StyleSlot::Keyword),
+    (SCE_V_INOUT, StyleSlot::Keyword),
+    (SCE_V_PORT_CONNECT, StyleSlot::Keyword2),
+];
+
+// Italic on the three comment style variants and the
+// doc-keyword state — matching the framework's italic-comment
+// convention (see CAML_ITALIC, RUST_ITALIC).
+const VERILOG_ITALIC: &[usize] = &[
+    SCE_V_COMMENT,
+    SCE_V_COMMENTLINE,
+    SCE_V_COMMENTLINEBANG,
+    SCE_V_COMMENT_WORD,
+];
+
+// Bold only on WORD (class 0 primary reserved words). WORD2 /
+// WORD3 / USER differentiate via colour, not weight — matches
+// the framework's "one bold visual for language keywords" rule
+// (Caml, VHDL, KIXtart, Ada all follow this).
+const VERILOG_BOLD: &[usize] = &[SCE_V_WORD];
+
+// Three wordlist classes installed: class 0 (WORD), class 1
+// (WORD2), class 2 (WORD3). Classes 3 (USER), 4 (COMMENT_WORD),
+// and 5 (ppDefinitions) intentionally left uninstalled — the
+// USER slot is empty by design (project-specific override
+// mechanism), COMMENT_WORD is a Doxygen-style customisation
+// point that Code++ doesn't ship defaults for, and
+// ppDefinitions is a lexer-internal macro-expansion table not
+// a highlighting class.
+const VERILOG_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, VERILOG_KEYWORDS),
+        (1, VERILOG_KEYWORDS_2),
+        (2, VERILOG_SYSTEM_TASKS),
+    ],
+    styles: VERILOG_STYLES,
+    italic: VERILOG_ITALIC,
+    bold: VERILOG_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -6899,6 +7034,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&CAML_THEME)
     } else if lang == L_ADA {
         Some(&ADA_THEME)
+    } else if lang == L_VERILOG {
+        Some(&VERILOG_THEME)
     } else {
         None
     }
@@ -22090,7 +22227,10 @@ mod lang_theme_tests {
         SCE_ST_SYMBOL, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT,
         SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER, SCE_VHDL_OPERATOR,
         SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE, SCE_VHDL_STDTYPE,
-        SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD,
+        SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCE_V_COMMENT, SCE_V_COMMENTLINE,
+        SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT, SCE_V_INPUT, SCE_V_NUMBER,
+        SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR, SCE_V_STRING,
+        SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3,
     };
     // SCE_VHDL_IDENTIFIER is a scan-intermediate state that isn't
     // referenced in the main-scope theme (VHDL_STYLES deliberately
@@ -22108,16 +22248,17 @@ mod lang_theme_tests {
         L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT,
         L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
         L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
-        L_TEXT, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+        L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
         OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
         PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
         PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
         SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
         TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-        VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
-        VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
+        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
+        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
+        VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
     };
-    use codepp_scintilla_sys::{SCE_ADA_IDENTIFIER, SCE_VHDL_IDENTIFIER};
+    use codepp_scintilla_sys::{SCE_ADA_IDENTIFIER, SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER};
 
     /// Every wired language must:
     ///   - Return `Some(&theme)`.
@@ -27548,6 +27689,277 @@ mod lang_theme_tests {
             ADA_KEYWORDS.split_whitespace().any(|t| t == "some"),
             "ADA_KEYWORDS must include Ada 2012 reserved word `some`"
         );
+    }
+
+    /// Verilog (`L_VERILOG`) uses Lexilla's `LexVerilog` — a
+    /// case-sensitive lexer covering Verilog-1995 / Verilog-2001 /
+    /// Verilog-2005 (IEEE 1364) plus `SystemVerilog` (IEEE 1800)
+    /// with 19 `SCE_V_*` slots (13 contiguous 0..=12 plus the
+    /// extension range 19..=24). Key features: three primary
+    /// wordlist classes (WORD / WORD2 / WORD3), a distinct
+    /// `SCE_V_COMMENTLINEBANG` (`//!`) doc-comment variant, an
+    /// `SCE_V_COMMENT_WORD` state for Doxygen-style keywords
+    /// inside block comments, `` ` ``-prefixed preprocessor
+    /// directives (no wordlist gate — the syntactic prefix
+    /// alone triggers the state), and four optional port-styling
+    /// states (`SCE_V_INPUT` / `OUTPUT` / `INOUT` /
+    /// `PORT_CONNECT`) gated by `lexer.verilog.portstyling`
+    /// (default off at `LexVerilog.cxx:146`).
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_VERILOG)` returns `Some(&VERILOG_THEME)`.
+    ///   2. Style count == 17 (13+6 = 19 slots minus `DEFAULT`
+    ///      and `IDENTIFIER`, both unmapped per framework
+    ///      convention).
+    ///   3. Three wordlist classes in canonical order (0 / 1 / 2)
+    ///      — matches `verilogWordLists[]` classes for WORD /
+    ///      WORD2 / WORD3. Classes 3 / 4 / 5 (USER /
+    ///      documentation-word / `ppDefinitions`) are
+    ///      intentionally uninstalled.
+    ///   4. All three installed wordlists non-empty.
+    ///   5. System-tasks class MUST have the `$` sigil on every
+    ///      entry — `LexVerilog.cxx:362` treats `$` as part of
+    ///      the identifier, so a bare `display` entry would be
+    ///      dead code (the identifier assembled at `:552` always
+    ///      starts with `$` for a system task).
+    ///   6. Every token across the three installed wordlists is
+    ///      lowercase (the underlying identifier body, ignoring
+    ///      any leading `$`) — `LexVerilog` is case-sensitive and
+    ///      all IEEE reserved words are lowercase.
+    ///   7. Style-routing pins for the 17 mapped SCE constants.
+    ///   8. `DEFAULT` (0) and `IDENTIFIER` (11) remain unmapped.
+    ///   9. Italic set == 4 (`COMMENT` / `COMMENTLINE` /
+    ///      `COMMENTLINEBANG` / `COMMENT_WORD`).
+    ///   10. Bold set == 1 (`WORD` only — WORD2 / WORD3 / USER
+    ///       differentiate via colour, not weight).
+    ///   11. Cross-language non-reuse (Verilog must NOT reuse
+    ///       VHDL / Ada / CPP style tables verbatim — `LexVerilog`
+    ///       and `LexVHDL` emit different SCE index ranges).
+    ///   12. Anchor tokens present across the three classes
+    ///       covering Verilog-1995 core, Verilog-2001 additions,
+    ///       and `SystemVerilog` additions.
+    #[test]
+    fn verilog_uses_lexverilog_three_class_theme() {
+        let v = lang_theme(L_VERILOG).expect("Verilog wired");
+
+        // Invariant 2: 17 style mappings.
+        assert_eq!(
+            v.styles.len(),
+            17,
+            "VERILOG_STYLES must map 17 indices (19 SCE_V_* slots \
+             minus DEFAULT and IDENTIFIER)"
+        );
+
+        // Invariant 3: three wordlist classes in canonical order.
+        assert_eq!(
+            v.keywords.len(),
+            3,
+            "VERILOG_THEME must install exactly 3 wordlist classes \
+             (classes 0 / 1 / 2 out of the six declared in \
+             verilogWordLists[] — USER / doc-word / ppDefinitions \
+             intentionally uninstalled)"
+        );
+        assert_eq!(v.keywords[0].0, 0);
+        assert_eq!(v.keywords[1].0, 1);
+        assert_eq!(v.keywords[2].0, 2);
+        assert_eq!(v.keywords[0].1, VERILOG_KEYWORDS);
+        assert_eq!(v.keywords[1].1, VERILOG_KEYWORDS_2);
+        assert_eq!(v.keywords[2].1, VERILOG_SYSTEM_TASKS);
+
+        // Invariant 4: non-empty.
+        for (name, list) in [
+            ("VERILOG_KEYWORDS", VERILOG_KEYWORDS),
+            ("VERILOG_KEYWORDS_2", VERILOG_KEYWORDS_2),
+            ("VERILOG_SYSTEM_TASKS", VERILOG_SYSTEM_TASKS),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: every system-task entry starts with `$`.
+        for tok in VERILOG_SYSTEM_TASKS.split_whitespace() {
+            assert!(
+                tok.starts_with('$'),
+                "VERILOG_SYSTEM_TASKS entry `{tok}` must start with \
+                 `$` — LexVerilog.cxx:362 treats `$` as part of the \
+                 identifier so a bare entry would be dead code"
+            );
+        }
+
+        // Invariant 6: every token is lowercase (ignoring the
+        // leading `$` sigil on system-task entries — case is
+        // still lowercase after the sigil).
+        for (name, list) in [
+            ("VERILOG_KEYWORDS", VERILOG_KEYWORDS),
+            ("VERILOG_KEYWORDS_2", VERILOG_KEYWORDS_2),
+            ("VERILOG_SYSTEM_TASKS", VERILOG_SYSTEM_TASKS),
+        ] {
+            for tok in list.split_whitespace() {
+                let body = tok.strip_prefix('$').unwrap_or(tok);
+                assert!(
+                    body.bytes().all(|b| !b.is_ascii_uppercase()),
+                    "{name} token `{tok}` contains uppercase — \
+                     LexVerilog is case-sensitive but every IEEE \
+                     reserved word is lowercase; uppercase means \
+                     a typo or a non-reserved identifier"
+                );
+            }
+        }
+
+        // Invariant 7: style-routing pins.
+        for (idx, slot, name) in [
+            (SCE_V_COMMENT, StyleSlot::Comment, "SCE_V_COMMENT"),
+            (SCE_V_COMMENTLINE, StyleSlot::Comment, "SCE_V_COMMENTLINE"),
+            (
+                SCE_V_COMMENTLINEBANG,
+                StyleSlot::Comment,
+                "SCE_V_COMMENTLINEBANG",
+            ),
+            (
+                SCE_V_COMMENT_WORD,
+                StyleSlot::Preprocessor,
+                "SCE_V_COMMENT_WORD",
+            ),
+            (SCE_V_NUMBER, StyleSlot::Number, "SCE_V_NUMBER"),
+            (SCE_V_WORD, StyleSlot::Keyword, "SCE_V_WORD"),
+            (SCE_V_WORD2, StyleSlot::Keyword2, "SCE_V_WORD2"),
+            (SCE_V_WORD3, StyleSlot::Macro, "SCE_V_WORD3"),
+            (SCE_V_USER, StyleSlot::Keyword2, "SCE_V_USER"),
+            (
+                SCE_V_PREPROCESSOR,
+                StyleSlot::Preprocessor,
+                "SCE_V_PREPROCESSOR",
+            ),
+            (SCE_V_OPERATOR, StyleSlot::Operator, "SCE_V_OPERATOR"),
+            (SCE_V_STRING, StyleSlot::String, "SCE_V_STRING"),
+            (SCE_V_STRINGEOL, StyleSlot::String, "SCE_V_STRINGEOL"),
+            (SCE_V_INPUT, StyleSlot::Keyword, "SCE_V_INPUT"),
+            (SCE_V_OUTPUT, StyleSlot::Keyword, "SCE_V_OUTPUT"),
+            (SCE_V_INOUT, StyleSlot::Keyword, "SCE_V_INOUT"),
+            (
+                SCE_V_PORT_CONNECT,
+                StyleSlot::Keyword2,
+                "SCE_V_PORT_CONNECT",
+            ),
+        ] {
+            assert!(
+                v.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: DEFAULT + IDENTIFIER unmapped.
+        assert!(
+            !v.styles.iter().any(|(i, _)| *i == 0),
+            "SCE_V_DEFAULT (0) must remain unmapped"
+        );
+        assert!(
+            !v.styles.iter().any(|(i, _)| *i == SCE_V_IDENTIFIER),
+            "SCE_V_IDENTIFIER (11) must remain unmapped — bare user \
+             identifiers should paint as default text, matching the \
+             framework convention for C / C++ / Pascal / VHDL / \
+             KIXtart / Caml / AutoIt / Ada"
+        );
+
+        // Invariant 9: italic == 4 (three comment styles + doc-word).
+        assert_eq!(v.italic.len(), 4);
+        for i in [
+            SCE_V_COMMENT,
+            SCE_V_COMMENTLINE,
+            SCE_V_COMMENTLINEBANG,
+            SCE_V_COMMENT_WORD,
+        ] {
+            assert!(v.italic.contains(&i));
+        }
+
+        // Invariant 10: bold == 1.
+        assert_eq!(v.bold.len(), 1);
+        assert!(v.bold.contains(&SCE_V_WORD));
+
+        // Invariant 11: cross-language non-reuse.
+        let vhdl = lang_theme(L_VHDL).expect("VHDL wired");
+        let ada = lang_theme(L_ADA).expect("Ada wired");
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let caml = lang_theme(L_CAML).expect("Caml wired");
+        for (other, name) in [(vhdl, "VHDL"), (ada, "Ada"), (cpp, "C++"), (caml, "Caml")] {
+            assert_ne!(
+                v.styles, other.styles,
+                "Verilog must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 12: anchor tokens.
+        // Verilog-1995 core (class 0 primary keywords).
+        for kw in [
+            "module",
+            "endmodule",
+            "always",
+            "initial",
+            "begin",
+            "end",
+            "if",
+            "else",
+            "case",
+            "endcase",
+            "for",
+            "while",
+            "assign",
+            "input",
+            "output",
+        ] {
+            assert!(
+                VERILOG_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "VERILOG_KEYWORDS must include Verilog-1995 keyword `{kw}`"
+            );
+        }
+        // SystemVerilog additions (class 0).
+        for kw in [
+            "class",
+            "endclass",
+            "interface",
+            "endinterface",
+            "package",
+            "endpackage",
+            "always_comb",
+            "always_ff",
+            "always_latch",
+            "assert",
+            "sequence",
+            "property",
+        ] {
+            assert!(
+                VERILOG_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "VERILOG_KEYWORDS must include SystemVerilog keyword `{kw}`"
+            );
+        }
+        // Types + net-types + gates (class 1).
+        for kw in [
+            "reg", "wire", "logic", "integer", "real", "bit", "int", "and", "or", "xor", "nand",
+            "nor",
+        ] {
+            assert!(
+                VERILOG_KEYWORDS_2.split_whitespace().any(|t| t == kw),
+                "VERILOG_KEYWORDS_2 must include type / gate `{kw}`"
+            );
+        }
+        // System tasks (class 2).
+        for kw in [
+            "$display",
+            "$monitor",
+            "$time",
+            "$finish",
+            "$random",
+            "$readmemh",
+            "$fopen",
+            "$fclose",
+        ] {
+            assert!(
+                VERILOG_SYSTEM_TASKS.split_whitespace().any(|t| t == kw),
+                "VERILOG_SYSTEM_TASKS must include system task `{kw}`"
+            );
+        }
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a

@@ -3201,6 +3201,194 @@ pub const SCE_ADA_LABEL: usize = 9;
 pub const SCE_ADA_COMMENTLINE: usize = 10;
 pub const SCE_ADA_ILLEGAL: usize = 11;
 
+// LexVerilog style indices. Contiguous slots 0..=12 for the
+// classic surface, then a **numeric gap** followed by 19..=24
+// for the SystemVerilog / port-styling / documentation-word
+// extension states. Contributed by Avi Yegudin (based on
+// Neil Hodgson's LexCPP frame) and extended by Ted Fried
+// with the SystemVerilog states.
+// Cross-referenced against `vendor/lexilla/include/SciLexer.h`
+// lines 1008-1026 and
+// `vendor/lexilla/include/LexicalStyles.iface`. Dispatches
+// SCLEX_VERILOG (= 56) via a **six-class wordlist descriptor**
+// at `vendor/lexilla/lexers/LexVerilog.cxx:1076-1084`:
+//
+//     verilogWordLists[] = {
+//         "Primary keywords and identifiers",   // class 0 → SCE_V_WORD
+//         "Secondary keywords and identifiers", // class 1 → SCE_V_WORD2
+//         "System Tasks",                        // class 2 → SCE_V_WORD3
+//         "User defined tasks and identifiers", // class 3 → SCE_V_USER
+//         "Documentation comment keywords",     // class 4 → SCE_V_COMMENT_WORD
+//         "Preprocessor definitions",           // class 5 → `ppDefinitions`
+//     };
+//
+// **Case-sensitive lexer.** Verilog / SystemVerilog language
+// semantics: identifier case DOES distinguish tokens (`module`
+// and `Module` are not the same declaration). LexVerilog matches
+// wordlist entries byte-exactly at `LexVerilog.cxx:552-559` —
+// no `tolower` fold applied — so wordlist entries MUST be the
+// canonical lowercase reserved-word form (all IEEE 1364 / 1800
+// reserved words are lowercase; user identifiers use whatever
+// case the source declares them with, which is why the lexer
+// treats them as identifiers rather than keywords).
+//
+// **Class 5 is NOT a highlighting class.** `ppDefinitions` at
+// `LexVerilog.cxx:317` populates the lexer's internal
+// `preprocessorDefinitionsStart` table for
+// `` `define ``-style macro expansion during lexing — it does
+// not drive an SCE_V_* style. Code++ installs classes 0, 1, 2
+// only (WORD / WORD2 / WORD3). Classes 3 (USER) and 4
+// (COMMENT_WORD) have their styles mapped defensively in the
+// theme so a future project-level override that populates them
+// takes effect without a theme-side follow-up.
+//
+// **Wordlist dispatch precedence** at `LexVerilog.cxx:552-561`:
+// class 0 (WORD) → class 1 (WORD2) → class 2 (WORD3) → class 3
+// (USER). Additionally, if class 4 fires (`keywords5.InList(s)`
+// at `:508` inside the SCE_V_COMMENT_WORD scan state), the
+// match paints `SCE_V_COMMENT_WORD` — that only fires while
+// scanning INSIDE a block comment, so it's not a dispatch-order
+// concern for identifiers outside comments.
+//
+// **Port-styling states (SCE_V_INPUT / OUTPUT / INOUT /
+// PORT_CONNECT) are gated by an option** —
+// `lexer.verilog.portstyling` at `LexVerilog.cxx:168`, default
+// `false` (`:146`). When off, module port directions render as
+// `SCE_V_WORD` (matched via the class 0 wordlist entry) and
+// `.name` port bindings render as `SCE_V_IDENTIFIER`. When
+// on (host sets `SCI_SETPROPERTY "lexer.verilog.portstyling"
+// "1"`), the classifier promotes `input`/`output`/`inout`
+// after `(` to their dedicated states (`:533-547`) and the
+// identifier after `.` inside module instantiation to
+// `SCE_V_PORT_CONNECT`. Code++ maps these four styles
+// defensively so a user who enables `portstyling` sees a
+// coherent theme, but leaves the option OFF by default.
+//
+// Style semantics (paint-loop citations reference LexVerilog.cxx):
+//
+//   - SCE_V_DEFAULT (0) — inter-token slack. Reset at every
+//     transition back to whitespace.
+//   - SCE_V_COMMENT (1) — `/* ... */` block comment; scanned
+//     at `case SCE_V_COMMENT` `:571-579`. Terminates on `*/`.
+//     Doc-comment keywords (`\author`, `\brief`, …) inside a
+//     block comment are promoted to SCE_V_COMMENT_WORD via
+//     the `IsAWordStart` branch at `:575-577` when the class
+//     4 wordlist matches.
+//   - SCE_V_COMMENTLINE (2) — `//` line comment. Doc-comment
+//     keywords in line comments are also promoted to
+//     SCE_V_COMMENT_WORD via the shared case-fallthrough at
+//     `:580-587`.
+//   - SCE_V_COMMENTLINEBANG (3) — `//!` line comment, the
+//     Verilog-idiomatic "documentation flag" comment variant.
+//     Same COMMENT_WORD promotion path as SCE_V_COMMENTLINE
+//     (`:580-587`). Distinct paint lets themes emphasise
+//     doc-comments over plain `//` comments.
+//   - SCE_V_NUMBER (4) — numeric literal. Verilog's rich
+//     number syntax includes sized binary/octal/decimal/hex
+//     (`4'b1010`, `8'hFF`, `16'd42`, `32'o755`), unsized
+//     integers, real literals (`3.14`, `1.0e-3`), and the
+//     underscore separator (`64'hDEAD_BEEF`).
+//   - SCE_V_WORD (5) — class 0 wordlist match. **Primary
+//     reserved words** — module structure (`module` /
+//     `endmodule` / `interface`), procedural blocks (`always`
+//     / `initial` / `final`), control flow (`if` / `else` /
+//     `case` / `for` / `while`), and assertion/property
+//     temporal operators.
+//   - SCE_V_STRING (6) — `"..."` double-quoted string literal.
+//     Verilog supports `\n` / `\t` / `\\` / `\"` / `\ddd`
+//     (octal) / `\xHH` (hex) escapes inside strings.
+//   - SCE_V_WORD2 (7) — class 1 wordlist match. **Secondary
+//     reserved words** — types (`reg`, `wire`, `logic`,
+//     `integer`, `real`, `bit`, `int`), net-type variants
+//     (`wand`, `wor`, `tri`, `supply0`, `supply1`), gate
+//     primitives (`and`, `or`, `nand`, `nor`, `buf`, `not`,
+//     `nmos`, `pmos`), drive/charge-strength qualifiers,
+//     and type-modifier keywords (`signed`, `unsigned`,
+//     `packed`).
+//   - SCE_V_WORD3 (8) — class 2 wordlist match. **System
+//     tasks** — the `$`-prefixed built-in family
+//     (`$display`, `$monitor`, `$time`, `$strobe`, `$random`,
+//     `$readmemh`, `$fopen`, `$fclose`, …). The `$` is part
+//     of the identifier at `IsAWordStart :362` so wordlist
+//     entries MUST include the leading `$`.
+//   - SCE_V_PREPROCESSOR (9) — `` ` ``-prefixed directive
+//     (`` `include ``, `` `define ``, `` `ifdef ``,
+//     `` `timescale ``, …). Entered at `:617-618` when a
+//     backtick is encountered at DEFAULT. No wordlist gate;
+//     the styling is driven purely by the syntactic
+//     backtick-prefix.
+//   - SCE_V_OPERATOR (10) — punctuation (`=`, `==`, `===`,
+//     `!=`, `!==`, `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`,
+//     `~`, `<<`, `>>`, `<<<`, `>>>`, `<=`, `>=`, `?`, `:`,
+//     `@`, `#`, `,`, `;`, `(`, `)`, `[`, `]`, `{`, `}`,
+//     `,`, `->`, `->>`, `<->`).
+//   - SCE_V_IDENTIFIER (11) — non-reserved word. Initial
+//     state for any word-run at `:743` / `:757`. Every
+//     variable / signal / instance / module-name declaration
+//     terminates here unless a wordlist hit rewrites the
+//     state.
+//   - SCE_V_STRINGEOL (12) — unterminated `"..."` (newline
+//     inside string). Visible-error state.
+//   - SCE_V_USER (19) — class 3 wordlist match. **User-defined
+//     tasks / identifiers** — a customisation slot so an
+//     editor / project can highlight known helper task /
+//     function names distinctly from the reserved-word set.
+//     Code++ ships this empty; a future per-project override
+//     may populate it. Also the target of the
+//     `options.allUppercaseDocKeyword` promotion at `:560-561`
+//     — any AllUpperCase identifier in the regular
+//     SCE_V_IDENTIFIER path (not in a comment) gets promoted
+//     to USER when that option is enabled.
+//   - SCE_V_COMMENT_WORD (20) — class 4 wordlist match inside
+//     ANY comment (block `/* ... */`, line `//`, or
+//     doc-line `//!`). LexVerilog transitions into COMMENT_WORD
+//     from all three comment states via a shared `IsAWordStart`
+//     branch at `:575-577` (block) and `:585-587` (line +
+//     line-bang, joint case-fallthrough). The `lineState`
+//     capture at `:576` / `:585` preserves the caller state so a
+//     `keywords5.InList` MISS restores the correct comment
+//     style at `:511`. Scanned at `SCE_V_COMMENT_WORD :503-514`.
+//     Typical use: doc-comment keywords like `\author`,
+//     `\brief`, `\file` for a Doxygen-style tooling workflow.
+//   - SCE_V_INPUT (21) — port direction `input` after a
+//     module port `(` when `portStyling == true` at `:533-534`.
+//     Off by default; mapped defensively.
+//   - SCE_V_OUTPUT (22) — port direction `output`, `:536-538`.
+//   - SCE_V_INOUT (23) — port direction `inout`, `:539-541`.
+//   - SCE_V_PORT_CONNECT (24) — the identifier after `.` in a
+//     module instantiation port-bind (e.g. `.clk (sys_clk)`)
+//     when `portStyling == true` at `:548-551`. Off by
+//     default; mapped defensively.
+//
+// **Activity mask (translate_off / translate_on shading).**
+// LexVerilog OR's an `activitySet` bit (0x40) into the state
+// while inside a `` `translate_off `` region so a fold /
+// theme system can render that region dimmed. Code++ does
+// NOT map the INACTIVE range today — a future refinement
+// could paint activity-masked regions with a dedicated dim
+// slot; for now, translate_off regions render at
+// `STYLE_DEFAULT` since the (activitySet | SCE_V_*) states
+// fall outside our mapping table.
+pub const SCE_V_DEFAULT: usize = 0;
+pub const SCE_V_COMMENT: usize = 1;
+pub const SCE_V_COMMENTLINE: usize = 2;
+pub const SCE_V_COMMENTLINEBANG: usize = 3;
+pub const SCE_V_NUMBER: usize = 4;
+pub const SCE_V_WORD: usize = 5;
+pub const SCE_V_STRING: usize = 6;
+pub const SCE_V_WORD2: usize = 7;
+pub const SCE_V_WORD3: usize = 8;
+pub const SCE_V_PREPROCESSOR: usize = 9;
+pub const SCE_V_OPERATOR: usize = 10;
+pub const SCE_V_IDENTIFIER: usize = 11;
+pub const SCE_V_STRINGEOL: usize = 12;
+pub const SCE_V_USER: usize = 19;
+pub const SCE_V_COMMENT_WORD: usize = 20;
+pub const SCE_V_INPUT: usize = 21;
+pub const SCE_V_OUTPUT: usize = 22;
+pub const SCE_V_INOUT: usize = 23;
+pub const SCE_V_PORT_CONNECT: usize = 24;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated

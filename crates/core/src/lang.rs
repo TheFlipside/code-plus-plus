@@ -6698,6 +6698,211 @@ pub const ADA_KEYWORDS: &str = concat!(
     "some ",
 );
 
+/// Verilog / `SystemVerilog` primary reserved words (class 0 →
+/// `SCE_V_WORD`). Union of Verilog-2005 (IEEE 1364-2005) and
+/// `SystemVerilog` (IEEE 1800-2017) reserved-word sets that
+/// aren't types / net-types / gate primitives / drive-strength
+/// qualifiers (those move to `VERILOG_KEYWORDS_2`) — control
+/// flow, block structure, procedural blocks, class / interface /
+/// package structure, and assertion/property temporal operators.
+///
+/// **Case-sensitive lexer.** `LexVerilog.cxx:552` matches
+/// wordlist entries byte-exactly (no `tolower` fold). All IEEE
+/// reserved words are lowercase, so every entry stays lowercase.
+///
+/// **Standards coverage.** Ships the union of Verilog-1995 /
+/// Verilog-2001 / Verilog-2005 / `SystemVerilog`. Ports (`input`
+/// / `output` / `inout`) are included as class 0 keywords so
+/// they render as `SCE_V_WORD` when `portStyling` is off
+/// (Code++'s default); with `portStyling` on, the lexer
+/// promotes them to `SCE_V_INPUT` / `OUTPUT` / `INOUT` before
+/// the wordlist gate fires — either way the tokens are
+/// styled, but only class 0 membership guarantees coverage
+/// under the default option value.
+pub const VERILOG_KEYWORDS: &str = concat!(
+    // Module / interface / program / package structure.
+    "module endmodule macromodule ",
+    "interface endinterface modport ",
+    "program endprogram ",
+    "package endpackage import export ",
+    "primitive endprimitive table endtable ",
+    "config endconfig cell design instance liblist library incdir use ",
+    "checker endchecker ",
+    // Class / OO (SystemVerilog).
+    "class endclass extends implements virtual pure extern ",
+    "local protected new this super null ",
+    // Ports / parameters / typedef.
+    "input output inout ref const parameter localparam specparam defparam ",
+    "typedef ",
+    // Procedural blocks.
+    "always always_comb always_ff always_latch initial final ",
+    "fork join join_any join_none disable ",
+    "begin end ",
+    // Control flow.
+    "if else ",
+    "case casex casez endcase default ",
+    "unique unique0 priority ",
+    "for forever while do break continue return foreach repeat ",
+    "wait wait_order iff ",
+    // Continuous assignment / net force / net aliasing.
+    "assign deassign force release alias ",
+    // Task / function.
+    "task endtask function endfunction void automatic static ",
+    // Generate.
+    "generate endgenerate genvar ",
+    // Timing / specify.
+    "specify endspecify posedge negedge edge event ",
+    "timeunit timeprecision ",
+    // Constants / literals.
+    "randcase randsequence ",
+    "clocking endclocking global ",
+    // Coverage / constraint (SystemVerilog).
+    "covergroup endgroup coverpoint cross bins binsof ignore_bins illegal_bins ",
+    "constraint solve dist inside with soft ",
+    "rand randc ",
+    // Assertion / property / sequence.
+    "assert assume cover expect restrict ",
+    "property endproperty sequence endsequence ",
+    "first_match intersect throughout within ",
+    "implies before until until_with matches tagged ",
+    "nexttime eventually ",
+    "s_nexttime s_eventually s_always s_until s_until_with ",
+    "accept_on reject_on sync_accept_on sync_reject_on ",
+    "let bind ",
+    // Enum / struct / union.
+    "enum struct union packed ",
+    // Miscellaneous.
+    "context untyped ",
+    "wildcard ",
+    // SystemVerilog RTL enhancements.
+    "interconnect nettype ",
+);
+
+/// Verilog / `SystemVerilog` secondary reserved words (class 1 →
+/// `SCE_V_WORD2`). Types, net-types, gate primitives, and
+/// drive/charge-strength qualifiers — the "shape and drive" of
+/// signals, distinct from the control-flow keyword class.
+///
+/// Every entry is lowercase per the case-sensitive lexer note.
+pub const VERILOG_KEYWORDS_2: &str = concat!(
+    // Variable types (Verilog + SystemVerilog).
+    "reg integer real realtime time ",
+    "logic bit byte shortint int longint shortreal ",
+    "string chandle ",
+    "signed unsigned ",
+    "var type ",
+    // Net types.
+    "wire wand wor tri tri0 tri1 triand trior trireg uwire ",
+    "supply0 supply1 ",
+    "vectored scalared ",
+    // Gate primitives.
+    "and or xor xnor nand nor not buf ",
+    "bufif0 bufif1 notif0 notif1 ",
+    "nmos pmos cmos rnmos rpmos rcmos ",
+    "tran tranif0 tranif1 rtran rtranif0 rtranif1 ",
+    "pullup pulldown ",
+    // Drive / charge strengths.
+    "pull0 pull1 strong0 strong1 weak0 weak1 highz0 highz1 ",
+    "small medium large ",
+    // Advanced modifiers (SystemVerilog).
+    "showcancelled noshowcancelled ",
+    "pulsestyle_ondetect pulsestyle_onevent ",
+    // Strength-related.
+    "strong weak ",
+    // Async control.
+    "ifnone ",
+);
+
+/// Verilog / `SystemVerilog` class-2 wordlist — `$`-prefixed
+/// built-in identifiers routed to `SCE_V_WORD3`.
+///
+/// **Scope note.** The wordlist is *not* strictly "system tasks
+/// and functions from IEEE 1364 §17 / IEEE 1800 §20-25" — it's
+/// the broader "`$`-prefixed built-in identifiers Code++ wants
+/// highlighted", which is what `LexVerilog`'s class 2 dispatch
+/// actually consumes. It includes the standard system-task
+/// families (§20-27 of IEEE 1800-2017: display / write / strobe
+/// / monitor, file I/O, simulation control, math, random, VCD
+/// dump, severity, coverage control, timing checks), the SVA
+/// sampled-value / global-clock functions (§16.9, §16.14.6), the
+/// stochastic-analysis queue tasks (§17.9 in IEEE 1364-2005), the
+/// bit / vector introspection functions (§20.7), and the two
+/// hierarchy-reference tokens (`$root`, `$unit`) that syntactically
+/// look like `$`-tasks but are actually scope references (§23.8,
+/// §3.13/§26.3). Everything in here is defined by an IEEE ratified
+/// standard; simulator-vendor extensions (Synopsys `$psprintf`,
+/// Cadence `$system`) are intentionally omitted so the highlight
+/// scope matches the standard's own inventory.
+///
+/// **The `$` is part of the identifier** at `IsAWordStart` in
+/// `LexVerilog.cxx:362`, so every wordlist entry MUST include
+/// the leading `$` — a bare `display` entry would never match
+/// because the identifier assembled at `:552` starts with `$`.
+pub const VERILOG_SYSTEM_TASKS: &str = concat!(
+    // Display / write.
+    "$display $displayb $displayo $displayh ",
+    "$write $writeb $writeo $writeh ",
+    "$strobe $strobeb $strobeo $strobeh ",
+    "$monitor $monitorb $monitoro $monitorh $monitoron $monitoroff ",
+    // Simulation control.
+    "$finish $stop $exit ",
+    "$time $stime $realtime $printtimescale $timeformat ",
+    // File I/O (IEEE 1364 §17.1 — every output family carries
+    // the same radix-suffixed variants as the console side).
+    "$fopen $fclose ",
+    "$fdisplay $fdisplayb $fdisplayo $fdisplayh ",
+    "$fwrite $fwriteb $fwriteo $fwriteh ",
+    "$fstrobe $fstrobeb $fstrobeo $fstrobeh ",
+    "$fmonitor $fmonitorb $fmonitoro $fmonitorh ",
+    "$fread $fscanf $fgetc $fgets $sscanf $ferror $feof ",
+    "$fflush $fseek $ftell $rewind ",
+    "$readmemb $readmemh $writememb $writememh ",
+    // Conversion.
+    "$bitstoreal $realtobits $itor $rtoi $signed $unsigned ",
+    // Math (SystemVerilog).
+    "$clog2 $ln $log10 $exp $sqrt $pow $floor $ceil ",
+    "$sin $cos $tan $asin $acos $atan $atan2 $hypot ",
+    "$sinh $cosh $tanh $asinh $acosh $atanh ",
+    // Random + stochastic distributions.
+    "$random $urandom $urandom_range ",
+    "$dist_uniform $dist_normal $dist_exponential ",
+    "$dist_poisson $dist_chi_square $dist_t $dist_erlang ",
+    // Stochastic queues (IEEE 1364 §17.9).
+    "$q_initialize $q_add $q_remove $q_full $q_exam ",
+    // Assertion / severity (SystemVerilog).
+    "$info $warning $error $fatal ",
+    "$assertoff $asserton $assertkill $assertpasson $assertpassoff ",
+    "$assertfailon $assertfailoff $assertnonvacuouson $assertvacuousoff ",
+    // SVA sampled-value functions (IEEE 1800 §16.9).
+    "$sampled $rose $fell $stable $changed $past ",
+    // SVA global-clock sampled-value functions (IEEE 1800 §16.14.6).
+    "$past_gclk $rose_gclk $fell_gclk $stable_gclk ",
+    "$changed_gclk $future_gclk ",
+    "$rising_gclk $falling_gclk $steady_gclk $changing_gclk ",
+    "$global_clock $inferred_clock $inferred_disable ",
+    // Coverage (SystemVerilog).
+    "$coverage_control $coverage_get $coverage_get_max ",
+    "$coverage_merge $coverage_save $get_coverage ",
+    // Simulation queries.
+    "$test$plusargs $value$plusargs ",
+    "$dumpfile $dumpvars $dumpon $dumpoff $dumpall $dumpflush $dumplimit ",
+    "$dumpports $dumpportson $dumpportsoff $dumpportsall $dumpportsflush ",
+    "$dumpportslimit ",
+    // Bit / vector introspection.
+    "$bits $high $low $left $right $increment $size $dimensions $unpacked_dimensions ",
+    "$isunknown $countones $onehot $onehot0 ",
+    "$typename $countbits ",
+    // Timing / PLA / SDF.
+    "$hold $setup $setuphold $recovery $removal $recrem ",
+    "$skew $timeskew $fullskew $period $width $nochange ",
+    // Formatted-string.
+    "$sformat $sformatf $swrite $swriteb $swriteo $swriteh ",
+    // Hierarchy references + type-cast (technically not "tasks"
+    // per se but syntactically `$`-prefixed built-ins, so class 2
+    // is the right SCE_V_WORD3 lane for them — see scope note above).
+    "$root $unit $cast ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

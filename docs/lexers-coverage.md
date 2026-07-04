@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 39 / 🟡 49 / ⚫ 1.
+Total: 89 rows. ✅ 40 / 🟡 48 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1921,7 +1921,7 @@ further shim work needed.
 | TOML | 90 | `toml` | ⚫ | ⚫ | 🟡 |
 | txt2tags | 83 | `txt2tags` | ⚫ | ⚫ | 🟡 |
 | TypeScript | 85 | `cpp` | ⚫ | ⚫ | 🟡 |
-| Verilog | 43 | `verilog` | ⚫ | ⚫ | 🟡 |
+| Verilog | 43 | `verilog` | ✅ | ✅ | ✅ |
 | VHDL | 38 | `vhdl` | ✅ | ✅ | ✅ |
 | Visual Basic | 18 | `vb` | ✅ | ✅ | ✅ |
 | Visual Prolog | 84 | `visualprolog` | ⚫ | ⚫ | 🟡 |
@@ -3009,6 +3009,179 @@ every-token-lowercase pin (dead-code prevention),
 (`COMMENTLINE`), bold == 1 (`WORD` only), 5 cross-language
 non-reuse pins (C++ / Ruby / VHDL / AutoIt / Caml), and 19 anchor
 tokens across Ada 83 / 95 / 2005 / 2012 revisions.
+
+**Verilog (2026-07-04):** uses Lexilla's `verilog` lexer
+(`LexVerilog.cxx`, ~1080 lines) — a case-sensitive lexer written
+by Avi Yegudin on top of Neil Hodgson's LexCPP frame and later
+extended by Ted Fried with SystemVerilog states. Covers
+Verilog-1995 / 2001 / 2005 (IEEE 1364) plus SystemVerilog
+(IEEE 1800). File extensions `.v` / `.vh` / `.sv` / `.svh` all
+route here.
+
+**Six wordlist classes; three installed.** `verilogWordLists[]`
+at `LexVerilog.cxx:1076-1084` declares six classes:
+
+- **Class 0** (`VERILOG_KEYWORDS`, ~170 tokens): primary
+  reserved words — module / interface / program / package /
+  class structure (`module` / `endmodule` / `interface` /
+  `class` / `extends`), procedural blocks (`always` /
+  `always_comb` / `always_ff` / `always_latch` / `initial` /
+  `final` / `fork` / `join`), control flow (`if` / `else` /
+  `case` / `casex` / `casez` / `for` / `foreach` / `while`),
+  continuous assignment (`assign` / `deassign` / `force` /
+  `release`), timing (`posedge` / `negedge` / `wait` /
+  `event`), generate (`generate` / `endgenerate` / `genvar`),
+  and the SystemVerilog assertion / property / sequence
+  temporal-operator family (`assert` / `assume` / `cover` /
+  `property` / `sequence` / `always` / `eventually` /
+  `nexttime` / `s_until` / `s_until_with` / `sync_accept_on`
+  / `sync_reject_on` / `throughout` / `within` / …). Also
+  covers coverage / constraint keywords (`covergroup` /
+  `coverpoint` / `constraint` / `solve` / `dist` /
+  `inside`).
+- **Class 1** (`VERILOG_KEYWORDS_2`, ~75 tokens): types,
+  net-types, gate primitives, and drive / charge strength
+  qualifiers — the "shape and drive of signals" set,
+  distinct from the control-flow keyword class. Variable
+  types (`reg` / `integer` / `real` / `logic` / `bit` /
+  `int` / `longint`), net-types (`wire` / `wand` / `wor` /
+  `tri` / `supply0` / `supply1` / `trireg` / `uwire`),
+  gate primitives (`and` / `or` / `xor` / `nand` / `nor` /
+  `not` / `buf` / `nmos` / `pmos` / `cmos` / `tran` /
+  `pullup` / `pulldown`), drive/charge strengths (`pull0` /
+  `pull1` / `strong0` / `weak0` / `highz0` / `small` /
+  `medium` / `large`), and SystemVerilog modifiers
+  (`signed` / `unsigned` / `showcancelled` /
+  `noshowcancelled` / `pulsestyle_ondetect` /
+  `pulsestyle_onevent`).
+- **Class 2** (`VERILOG_SYSTEM_TASKS`, ~180 tokens):
+  `$`-prefixed system tasks and functions from IEEE 1364
+  §17 and IEEE 1800 §20-25. Display / write family
+  (`$display` / `$monitor` / `$strobe` / `$write` including
+  the `b` / `o` / `h` radix variants), simulation control
+  (`$finish` / `$stop` / `$time` / `$realtime`), file I/O
+  (`$fopen` / `$fclose` / `$fdisplay` / `$fread` /
+  `$sscanf` / `$readmemh` / `$readmemb` / `$writememh`),
+  conversion (`$signed` / `$unsigned` / `$bitstoreal`),
+  math (`$clog2` / `$ln` / `$log10` / `$exp` / `$sqrt` /
+  `$pow` / `$sin` / `$cos` / `$tan` / `$atan2` /
+  `$hypot`), randomization (`$random` / `$urandom` /
+  `$urandom_range` / `$dist_normal` /
+  `$dist_exponential` / `$dist_poisson`), assertion /
+  severity (`$info` / `$warning` / `$error` / `$fatal` /
+  `$assertoff` / `$asserton` / `$assertkill`), coverage
+  (`$coverage_control` / `$get_coverage`), timing check
+  system tasks (`$hold` / `$setup` / `$recovery` /
+  `$removal` / `$skew` / `$period` / `$width` /
+  `$nochange`), VCD dump family (`$dumpfile` / `$dumpvars`
+  / `$dumpports` / `$dumpon` / `$dumpoff`), bit /
+  vector introspection (`$bits` / `$high` / `$low` /
+  `$isunknown` / `$countones` / `$onehot` / `$typename` /
+  `$size`), and `$test$plusargs` / `$value$plusargs` for
+  command-line argument parsing.
+- **Class 3** (User-defined tasks / identifiers) — NOT
+  installed. Ships empty; a future per-project override
+  mechanism will populate this if the framework grows one.
+  Present as an SCE state (`SCE_V_USER`) so mapping it in
+  the theme is defensive: if the class is populated, the
+  colour is already right.
+- **Class 4** (Documentation comment keywords) — NOT
+  installed. Doxygen-style keywords like `\author` /
+  `\brief` / `\file` inside a block comment would fire
+  `SCE_V_COMMENT_WORD` if this class were populated.
+  Code++ ships without a canonical doc-keyword set for
+  Verilog; a future doc-syntax pass could add one.
+- **Class 5** (Preprocessor definitions) — NOT a
+  highlighting class. `ppDefinitions` at
+  `LexVerilog.cxx:317` populates the lexer's internal
+  macro-expansion table for `` `define ``-style
+  expansion during scanning. Not something a syntax theme
+  installs.
+
+**Case-sensitive lexer.** `LexVerilog.cxx:552-559` matches
+wordlist entries byte-exactly — no `tolower` fold. All IEEE
+1364 / 1800 reserved words are lowercase, so every entry stays
+lowercase. Test invariant #6 pins every-token-lowercase (with
+the leading `$` sigil skipped for the system-tasks class).
+
+**System-task sigil.** `IsAWordStart` at `LexVerilog.cxx:362`
+includes `$` as a word-start character, so an identifier
+starting with `$` assembles into a single token including
+the sigil. Consequence: `VERILOG_SYSTEM_TASKS` entries MUST
+include the leading `$` — a bare `display` entry would be
+unreachable (the InList probe key is always `$display`).
+Test invariant #5 pins `$`-must-be-present on every
+system-tasks entry.
+
+**Style routing (17 mappings; `DEFAULT` and `IDENTIFIER`
+unmapped):**
+
+- **COMMENT + COMMENTLINE + COMMENTLINEBANG** → `Comment`
+  green italic — all three comment forms share the
+  italic-comment convention. `COMMENTLINEBANG` (`//!`) is a
+  doc-flag variant that reads as a comment to the human eye
+  but is emitted as a distinct SCE state so a themed skin
+  could pop it visually if desired.
+- **COMMENT_WORD** → `Preprocessor` purple. Doxygen-style
+  keyword recognized inside a block comment; the "semantic
+  marker inside prose" reading fits the Preprocessor slot's
+  visual meaning.
+- **NUMBER** → `Number`. Verilog's rich number syntax
+  (sized `4'b1010` / `8'hFF` / `16'd42`, unsized decimals,
+  real literals, underscore separators) all funnel here.
+- **WORD (class 0)** → `Keyword` bold blue. Primary
+  reserved words.
+- **WORD2 (class 1)** → `Keyword2` teal. Types / net-types
+  / gates / strengths get the secondary accent — they're
+  reserved words too, but the visual hierarchy pins
+  control-flow keywords as the primary emphasis.
+- **WORD3 (class 2)** → `Macro`. Distinct accent for
+  `$`-prefixed system tasks; the sigil already reads as
+  out-of-band and reusing Keyword2 would blur the visual
+  line between "language reserved word" and "runtime
+  library call". Matches how PostScript's `SCE_PS_IMMEVAL`
+  and Ruby's `SCE_RB_GLOBAL` borrow the Macro slot for the
+  same "distinct sigil-marked identifier" reading.
+- **USER (class 3)** → `Keyword2`. Same lane as WORD2
+  since the semantic intent is "known library-ish
+  identifier"; empty wordlist by default, so this only
+  matters if a project override populates it.
+- **PREPROCESSOR** (`` ` ``-directives) → `Preprocessor`.
+  The canonical slot for out-of-band syntax markers.
+- **OPERATOR** → `Operator`.
+- **IDENTIFIER** — deliberately UNMAPPED. Framework
+  convention (matches C / C++ / Pascal / VHDL / KIXtart /
+  Caml / AutoIt / Ada).
+- **STRING** → `String`.
+- **STRINGEOL** → `String`. Same lane as STRING so the
+  malformed region still reads as string-shaped; matches
+  VHDL / Ada precedent.
+- **INPUT / OUTPUT / INOUT** → `Keyword`. Matches the
+  `SCE_V_WORD` baseline these tokens land in via class 0
+  wordlist matching when `portStyling` is off (Code++'s
+  default at `LexVerilog.cxx:146`), so toggling the option
+  later doesn't create a visual jump on identical source
+  characters (bold-blue Keyword either way).
+- **PORT_CONNECT** → `Keyword2`. `.name` in `.name (expr)`
+  module-instantiation binds reads as "known binding
+  identifier" — same lane as USER (project-known helper
+  names).
+
+Only WORD is bold — matches the framework's "one bold visual
+for language keywords" rule (Caml, VHDL, KIXtart, Ada all
+follow this).
+
+Structural test coverage: 12 invariants — 17 style mappings pin,
+three-class order pin (classes 0 / 1 / 2 in canonical order),
+all-non-empty guard for the three installed wordlists,
+`$`-sigil-must-be-present on every system-tasks entry,
+every-token-lowercase (with `$` stripped) across all three
+classes, 17 style-routing pins, `DEFAULT` + `IDENTIFIER`
+unmapped pins, italic == 4 (three comment styles + doc-word),
+bold == 1 (`WORD` only), 4 cross-language non-reuse pins
+(VHDL / Ada / C++ / Caml), and 47 anchor tokens spread across
+Verilog-1995 core (15), SystemVerilog additions (12), types /
+gates (12), and system tasks (8).
 
 ## Notes
 
