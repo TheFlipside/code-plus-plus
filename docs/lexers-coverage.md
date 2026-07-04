@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 49 / 🟡 39 / ⚫ 1.
+Total: 89 rows. ✅ 50 / 🟡 38 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1900,7 +1900,7 @@ further shim work needed.
 | Properties | 34 | `props` | — | ✅ | ✅ |
 | Purebasic | 68 | `purebasic` | ⚫ | ⚫ | 🟡 |
 | Python | 22 | `python` | ✅ | ✅ | ✅ |
-| R | 54 | `r` | ⚫ | ⚫ | 🟡 |
+| R | 54 | `r` | ✅ | ✅ | ✅ |
 | Raku | 89 | `raku` | ⚫ | ⚫ | 🟡 |
 | REBOL | 79 | `rebol` | ⚫ | ⚫ | 🟡 |
 | Registry | 80 | `registry` | ⚫ | ⚫ | 🟡 |
@@ -4502,6 +4502,257 @@ keyword class), 3 cross-language non-reuse pins (D /
 COBOL / YAML), 9 + 4 + 4 + 4 canonical PowerShell anchor
 tokens, `.ps1` / `.psm1` / `.psd1` extension presence
 pin, and WL5-no-leading-dot sigil-strip pin.
+
+**R (2026-07-05):** uses Lexilla's `r` lexer (`LexR.cxx`,
+350 lines, Neil Hodgson 1998-2002 per `LexR.cxx:1-6`). 16
+`SCE_R_*` slots (0..=15), three-class wordlist (WL0 R
+reserved words + logical / null / NA / Inf / NaN constants;
+WL1 base package functions; WL2 other default-loaded
+package functions — `stats` / `utils` / `graphics` /
+`grDevices` / `methods`). Dispatches `SCLEX_R` (= 86, per
+`SciLexer.h:102`). Distinctive features: **case-sensitive
+byte-exact matching** (same discipline as D, inverted from
+PowerShell / COBOL — R is spec-level case-sensitive so
+`TRUE` and `true` are distinct identifiers), **`.` is a
+mid-word character but NOT a word start** (so `is.numeric`
+tokenises as one identifier; wordlist entries include
+literal dots), **five string flavors collapsing to one
+visual** (`"..."`, `'...'`, `` `name` `` backticked
+non-standard name, R 4.0+ `r"(...)"` raw, R 4.0+
+`r'(...)'` raw), **user-definable infix operators**
+(`%in%`, `%*%`, `%o%`), and **descriptor's unused slots**
+(RWordLists declares five entries but only classes 0/1/2
+are probed — 3/4 are literally labelled "Unused").
+
+**Case-sensitive classification.** `LexR.cxx:149` calls
+`sc.GetCurrent(s, sizeof(s))` (byte-exact), NOT
+`GetCurrentLowered`. R is case-sensitive at the spec
+level, so wordlist tokens are spelled exactly as they
+appear in R source — mostly lowercase, but constants
+`TRUE`/`FALSE`/`NULL`/`NA`/`Inf`/`NaN` + the four
+`NA_*_` variants are UPPERCASE, `NROW`/`NCOL` are
+UPPERCASE, and `UseMethod`/`NextMethod` are CamelCase.
+Test invariant #5 pins the case-sensitive alphabet across
+all three wordlists.
+
+**`.`-delimited identifiers are one token.**
+`LexR.cxx:30-32`'s `IsAWordChar` returns
+`(ch < 0x80) && (isalnum(ch) || ch == '.' || ch == '_')` —
+so `.` mid-word extends the identifier. But `IsAWordStart`
+at `:34-36` uses `(isalnum(ch) || ch == '_')` — no leading
+dot. Consequence: `is.na`, `data.frame`, `as.character`,
+`dev.off`, `t.test`, `read.csv`, `na.omit`, `install.packages`
+tokenise as ONE identifier including the internal dot(s),
+and wordlist entries include the dots verbatim. This is
+essential for base R where `.`-separated names are the
+convention.
+
+**Cross-list uniqueness across ALL three classes.**
+Unlike D (where WL2 lives in a separate lexer state), R's
+three probed classes all share the identifier
+classification cascade at `LexR.cxx:150-156` — a token in
+two classes leaves the later entry dead code. Test
+invariant #6 checks pairwise intersection across all
+three. Deliberate placements:
+
+- `mean` / `prod` / `sum` / `summary` / `sample` /
+  `set.seed` → base (WL1) — they live in the `base`
+  namespace even though users think of them as stats.
+- `median` / `sd` / `var` / `cor` / `cov` / `quantile` /
+  `IQR` / `mad` → stats (WL2) — the classic descriptive
+  statistics functions live in the `stats` package.
+- `read.csv` / `write.csv` / `str` / `head` / `tail` /
+  `sessionInfo` → utils (WL2).
+- `plot` → graphics/other (WL2) despite being promoted
+  to `base` in R 4.0.0. Every R user's mental model
+  places `plot` in `graphics`, and every base method
+  dispatches to `graphics::plot.default`. Deliberate
+  deviation from strict package origin.
+
+**Descriptor's `Unused` slots.** `RWordLists[]` at
+`LexR.cxx:339-346` declares five entries but the last two
+are literally labelled `"Unused"` in the source. The paint
+loop at `:146-158` only probes wordlists 0/1/2. The host
+theme installs only three classes — installing 4 or 5
+would be dead code. Same defensive rule as the D wiring's
+"declared but never emitted" discipline.
+
+**Statement-position lexer quirks:**
+
+- **Five string flavors, one visual slot.**
+  `SCE_R_STRING` (`"..."`), `SCE_R_STRING2` (`'...'`),
+  `SCE_R_BACKTICKS` (`` `name` `` — non-standard names,
+  used for reserved-word-like identifiers or column
+  names with spaces), `SCE_R_RAWSTRING` (R 4.0+
+  `r"(...)"` / `r"[...]"` / `r"{...}"` raw string,
+  double-quoted), `SCE_R_RAWSTRING2` (R 4.0+ raw string,
+  single-quoted). All five route to `StyleSlot::String`
+  for uniform visual identity.
+- **Raw strings with dash decorations.** R 4.0.0 (April
+  2020) added raw strings with three delimiter families:
+  `r"(...)"`, `r"[...]"`, `r"{...}"`, plus optional dash
+  decorations for nested quotes like `r"-(...)-"`. Dash
+  count + matching-delimiter state persist per line via
+  `styler.SetLineState` at `:271-274`; parsed by
+  `CheckRawString` at `:84-103`.
+- **Infix operator state.** `SCE_R_INFIX` (10) covers
+  R's user-definable `%...%` operators (`%%` modulo,
+  `%in%` membership, `%*%` matrix multiplication, `%o%`
+  outer product, `%/%` integer division). Entered at
+  `:260-261` on `%`, exits on closing `%` at `:222-223`.
+  `SCE_R_INFIXEOL` (11) is the error state for
+  unterminated `%` reaching EOL — routes to Operator so
+  an unclosed `%` doesn't paint like a comment.
+- **Number literal recognition.** `SCE_R_NUMBER` (5)
+  accepts decimals, hex (`0x`), scientific exponents
+  (`e±`/`p±`), and R-specific suffixes `L` (integer
+  literal) and `i` (imaginary/complex literal) per
+  `LexR.cxx:134-144`.
+- **`ESCAPESEQUENCE` opt-in.** `SCE_R_ESCAPESEQUENCE`
+  (15) is emitted only when the host sets
+  `lexer.r.escape.sequence` = 1 (default 0). Code++
+  does not enable this property today, so the lexer
+  never emits this state — the host theme leaves it
+  unmapped (test invariant #8 enforces the exclusion).
+
+**Three wordlist classes:**
+
+- **Class 0** (`R_RESERVED`, 19 tokens): the canonical
+  CRAN `?Reserved` list — control flow (`if` / `else` /
+  `repeat` / `while` / `for` / `in` / `next` / `break`)
+  + function definition (`function`) + logical constants
+  (`TRUE` / `FALSE`) + null / math / NA sentinels
+  (`NULL` / `NA` / `Inf` / `NaN`) + typed NA variants
+  (`NA_integer_` / `NA_real_` / `NA_complex_` /
+  `NA_character_`). Verbatim from
+  `stat.ethz.ch/R-manual/R-devel/library/base/html/Reserved.html`.
+  `T` / `F` deliberately EXCLUDED (per `?Reserved`,
+  ordinary base variables bound to `TRUE`/`FALSE` at
+  startup — user-rebindable, not parser-reserved).
+  `return` deliberately EXCLUDED (base primitive
+  function per `?return`, not a reserved word — lives in
+  WL1). `...` deliberately EXCLUDED (tokenises as
+  `SCE_R_OPERATOR`, not through identifier
+  classification).
+- **Class 1** (`R_BASE_FUNCTIONS`, ~180 tokens): the
+  base package's user-facing functions — type
+  predicates (`is.na` / `is.null` / `is.numeric` /
+  `is.character` / `is.function` / etc.), type
+  coercions (`as.numeric` / `as.character` / `as.Date`
+  / etc.), constructors (`c` / `list` / `matrix` /
+  `data.frame` / `factor`), aggregation (`sum` / `mean`
+  / `min` / `max` / `length`), sequences (`seq` /
+  `seq_len` / `seq_along` / `rep` / `rev`), apply
+  family (`apply` / `sapply` / `lapply` / `mapply` /
+  `tapply` / `vapply`), ordering (`sort` / `order` /
+  `rank` / `which` / `match` / `unique`), set
+  operations (`union` / `intersect` / `setdiff`),
+  function primitives (`return` / `invisible` / `stop`
+  / `warning` / `message`), package management
+  (`library` / `require` / `attach` / `detach`), I/O
+  (`print` / `cat` / `paste` / `sprintf` / `readLines`
+  / `saveRDS`), string operations (`substr` /
+  `toupper` / `strsplit` / `gsub` / `grep` / `grepl`),
+  math primitives (`abs` / `sqrt` / `exp` / `log` /
+  `floor` / `ceiling`), environment access
+  (`environment` / `globalenv` / `assign` / `get` /
+  `exists`), introspection (`class` / `typeof` /
+  `attributes` / `names`), error handling (`tryCatch`
+  / `try` / `conditionMessage`), object system
+  (`UseMethod` / `NextMethod` / `structure` /
+  `unclass`), sampling (`sample` / `set.seed`), the
+  base generic `summary`, logical aggregators (`all` /
+  `any` / `identical` / `xor`), functional-programming
+  primitives (`Reduce` / `Filter` / `Map` / `Recall`), factor
+  accessors (`levels` / `nlevels`), object manipulation
+  (`unlist` / `do.call`), the `Sys.*` system family
+  (`Sys.time` / `Sys.Date` / `Sys.getenv`), and the
+  file path family (`file.exists` / `file.path` /
+  `basename` / `dirname`). Sourced from the base
+  package index at
+  `stat.ethz.ch/R-manual/R-devel/library/base/html/00Index.html`.
+- **Class 2** (`R_OTHER_FUNCTIONS`, ~90 tokens):
+  functions from `stats` / `utils` / `graphics` /
+  `grDevices` / `methods` — the other default-loaded
+  packages. Descriptive statistics (`median` / `sd` /
+  `var` / `cor` / `cov` / `quantile` / `IQR` / `mad`),
+  modelling (`lm` / `glm` / `aov` / `predict` /
+  `resid` / `coef` / `AIC` / `BIC`), hypothesis
+  tests (`t.test` / `chisq.test` / `wilcox.test` /
+  `cor.test`), data manipulation (`aggregate` /
+  `formula` / `na.omit` / `nls`), GLM families
+  (`gaussian` / `binomial` / `poisson`), RNG
+  (`rnorm` / `runif` / `rbinom` / `rpois` / `rexp` /
+  ... 9 more distributions), density/quantile
+  functions (`dnorm` / `qnorm` / `pnorm` / `dunif` /
+  `qunif` / `punif`), utils I/O (`read.csv` /
+  `write.csv` / `read.table` / `head` / `tail`),
+  utils package management (`install.packages` /
+  `installed.packages` / `available.packages` /
+  `download.file`), graphics plotting (`plot` /
+  `hist` / `boxplot` / `barplot` / `pie` / `points`
+  / `lines` / `abline` / `text` / `legend` / `axis`
+  / `par` / `layout`), grDevices (`dev.new` /
+  `dev.off` / `pdf` / `png` / `jpeg` / `svg` /
+  `colors` / `rgb` / `hsv`), and methods (S4 class
+  system: `setClass` / `setGeneric` / `setMethod` /
+  `new` / `slot` / `slotNames` / `isVirtualClass` /
+  `validObject` / `setRefClass`).
+
+**Style routing (13 mappings; `DEFAULT`, `IDENTIFIER`,
+`ESCAPESEQUENCE` unmapped):**
+
+- **COMMENT** → `Comment` italic. Single `#`-to-EOL
+  comment state.
+- **NUMBER** → `Number`. Decimals, hex, scientific, `L`
+  / `i` suffixes.
+- **KWORD** (class 0) → `Keyword` bold. R reserved
+  words + logical / null / NA / Inf / NaN constants.
+- **STRING + STRING2 + BACKTICKS + RAWSTRING +
+  RAWSTRING2** → `String`. Five flavors, one slot —
+  see string discussion above.
+- **BASEKWORD + OTHERKWORD** (classes 1/2) → `Keyword2`.
+  Base and other-default-package functions share the
+  Keyword2 accent since they all read as "known name
+  from the language's callable dictionary" rather than
+  parser-reserved vocabulary. Distinct SCE states are
+  preserved so a future palette can split base vs
+  stats coloring without a wordlist reshuffle.
+- **OPERATOR + INFIX + INFIXEOL** → `Operator`.
+  Punctuation plus R's user-definable `%...%` infix
+  operators. `INFIXEOL` is the unterminated-infix
+  error state — routes to Operator so an unclosed `%`
+  doesn't paint like a comment.
+
+**DEFAULT, IDENTIFIER, ESCAPESEQUENCE unmapped.**
+DEFAULT and IDENTIFIER by framework convention
+(whitespace / bare identifiers → STYLE_DEFAULT).
+ESCAPESEQUENCE because the host doesn't enable the
+`lexer.r.escape.sequence` property today — the lexer
+never emits this state, so mapping it would be dead
+code (test invariant #8 enforces the exclusion).
+
+Structural test coverage: 15 invariants — 13 style
+mappings pin, three-class canonical descriptor-order
+pin (load-bearing for `SCI_SETKEYWORDS`), non-empty
+guard for all three classes,
+every-token-`[A-Za-z0-9._]` pin (R identifier alphabet
+including case-sensitive uppercase constants + dots
+mid-word), cross-list uniqueness across ALL three
+classes (unlike D which excludes WL2 for state
+separation — R's three classes all share the
+identifier cascade so uniqueness is required), 13
+style-routing pins, `DEFAULT` + `IDENTIFIER` +
+`ESCAPESEQUENCE` unmapped pins, italic == 1 (COMMENT
+only), bold == 1 (`KWORD` — primary keyword class), 3
+cross-language non-reuse pins (D / PowerShell / COBOL),
+11 + 8 + 6 canonical R anchor tokens (CRAN reserved +
+canonical base + canonical stats/utils/graphics),
+`.r` extension presence pin, and TWO negative pins
+distinguishing R from convention-based highlighters:
+`T`/`F` must NOT be in WL0 (user-rebindable per CRAN
+`?Reserved`) and `return` must NOT be in WL0 (base
+primitive per `?return` — lives in WL1).
 
 ## Notes
 

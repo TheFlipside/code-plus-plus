@@ -8429,6 +8429,258 @@ pub const POWERSHELL_DOC_KEYWORDS: &str = concat!(
     "remotehelprunspace externalhelp ",
 );
 
+/// R reserved words and logical constants (class 0 →
+/// `SCE_R_KWORD`).
+///
+/// **Source of truth:** the `?Reserved` manual page at
+/// `stat.ethz.ch/R-manual/R-devel/library/base/html/Reserved.html`.
+/// The page documents 19 literal-spelling reserved words plus
+/// the `...` / `..1` / `..2` / ... varargs-placeholder family;
+/// only the 19 literal tokens are representable in a Scintilla
+/// wordlist (`...` and its numbered variants tokenise as
+/// `SCE_R_DEFAULT` — see the `...` exclusion note below). All
+/// 19 literal reserved words are shipped here. Verbatim from
+/// the manual page: "The reserved words in R's parser are
+/// `if` `else` `repeat` `while` `function` `for` `in` `next`
+/// `break` `TRUE` `FALSE` `NULL` `Inf` `NaN` `NA`
+/// `NA_integer_` `NA_real_` `NA_complex_` `NA_character_`."
+/// These are the identifiers the R parser refuses to bind
+/// (`x <- 3` works, `if <- 3` errors with "unexpected
+/// assignment").
+///
+/// **Case-sensitive byte-exact match.** `LexR.cxx:149` calls
+/// `sc.GetCurrent(s, sizeof(s))` (byte-exact), NOT
+/// `GetCurrentLowered`. R is a case-sensitive language at
+/// the spec level, so wordlist tokens use the exact spelling
+/// from `?Reserved` — most lowercase, but `TRUE`/`FALSE`/
+/// `NULL`/`NA`/`Inf`/`NaN` and the four `NA_*_` variants
+/// UPPERCASE. Same discipline as [`D_KEYWORDS`]; inverted
+/// from [`POWERSHELL_KEYWORDS`] / [`COBOL_KEYWORDS_A`].
+///
+/// **`T` and `F` deliberately EXCLUDED.** `T`/`F` are
+/// commonly used as shorthand for `TRUE`/`FALSE` in R
+/// programs, but `?Reserved` explicitly documents them as
+/// **ordinary base variables** bound to `TRUE`/`FALSE` at
+/// startup — user code can reassign `T <- 5` (unlike `TRUE
+/// <- 5` which errors). Including them here would
+/// mis-represent user-rebindable identifiers as parser
+/// reserved words. Some IDEs highlight `T`/`F` at the
+/// same weight as `TRUE`/`FALSE`, but that's a convention
+/// choice — the R Language Definition draws the line, so
+/// we do too.
+///
+/// **`return` deliberately EXCLUDED.** `return` is NOT in
+/// `?Reserved`; it's a base primitive function (`?return`
+/// → `Description: Terminate a function call`). Placing it
+/// here would drift from the CRAN attribution; it belongs
+/// in [`R_BASE_FUNCTIONS`] alongside `invisible`, `stop`,
+/// `warning`, and `message` — all four are similarly
+/// primitive control-flow functions.
+///
+/// **`...` deliberately EXCLUDED.** `...` (dot-dot-dot,
+/// R's varargs placeholder) never enters
+/// `SCE_R_IDENTIFIER` — `.` is neither `IsAWordStart` at
+/// `LexR.cxx:34-36` (which only accepts `[0-9A-Za-z_]`)
+/// nor in `IsAnOperator` at `:38-48` (whose comment at
+/// `:39` explicitly says `` `.` `` is left out because it's
+/// used to make up numbers). Each `.` in `...` therefore
+/// falls through every state-entry branch at `:237-268` and
+/// stays `SCE_R_DEFAULT` (unstyled). Including `...` in a
+/// wordlist would be unreachable — the identifier-cascade
+/// probe at `:150-156` never sees this token.
+pub const R_RESERVED: &str = concat!(
+    // Control flow.
+    "if else repeat while for in next break ",
+    // Function definition.
+    "function ",
+    // Logical constants.
+    "TRUE FALSE ",
+    // Null / missing / math sentinels.
+    "NULL NA Inf NaN ",
+    // Typed NA sentinels.
+    "NA_integer_ NA_real_ NA_complex_ NA_character_ ",
+);
+
+/// R base package functions (class 1 → `SCE_R_BASEKWORD`).
+///
+/// **Source of truth:** the `base` package index at
+/// `stat.ethz.ch/R-manual/R-devel/library/base/html/00Index.html`.
+/// `base` is one of the seven default-loaded packages in
+/// every R session (also `stats`, `utils`, `graphics`,
+/// `grDevices`, `methods`, `datasets`) — users write these
+/// function names without an explicit `library()` call.
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`R_RESERVED`]. Base function names are generally
+/// lowercase, but `NROW`/`NCOL`/`UseMethod`/`NextMethod`/
+/// `Recall` are the documented CamelCase / UPPERCASE
+/// spellings — an all-lowercase entry would silently miss.
+///
+/// **`.`-delimited identifiers are one token.**
+/// `LexR.cxx:30-32` accepts `.` as a mid-word character (but
+/// not as a word start, per `:34-36`), so `is.numeric` /
+/// `data.frame` / `as.character` tokenise as ONE
+/// identifier including the internal dots. Wordlist
+/// entries thus include the dots verbatim.
+///
+/// **Coverage:** ~180 tokens covering type predicates,
+/// coercions, constructors, aggregation, sequences,
+/// apply family, ordering, set operations, function
+/// primitives, package management, I/O, string
+/// operations, math primitives, environment access,
+/// introspection, error handling, object system,
+/// sampling, logical aggregators, functional-programming
+/// primitives (`Reduce`/`Filter`/`Map`), factor accessors
+/// (`levels`/`nlevels`), object manipulation
+/// (`unlist`/`do.call`/`identical`), the `Sys.*` system
+/// family, and the `file.*`/`basename`/`dirname` path
+/// family.
+///
+/// **Cross-list ownership.**
+///   - `mean` / `prod` / `sum` / `summary` — base
+///     (primitive or generic in base namespace).
+///   - `sample` / `set.seed` — base (NOT stats, despite the
+///     statistical use).
+///   - `median` / `sd` / `var` / `cor` / `cov` /
+///     `quantile` / `IQR` / `mad` — `stats` package; live
+///     in [`R_OTHER_FUNCTIONS`].
+///   - `read.csv` / `write.csv` / `str` / `head` / `tail` —
+///     `utils` package; live in [`R_OTHER_FUNCTIONS`].
+///   - `return` / `invisible` / `stop` / `warning` /
+///     `message` — base primitive control-flow functions.
+pub const R_BASE_FUNCTIONS: &str = concat!(
+    // Type predicates.
+    "is.numeric is.character is.logical is.integer ",
+    "is.double is.complex is.na is.null is.nan ",
+    "is.finite is.infinite is.function is.list is.vector ",
+    "is.matrix is.array is.data.frame is.factor ",
+    "is.environment ",
+    // Type coercions.
+    "as.numeric as.character as.integer as.logical ",
+    "as.double as.complex as.factor as.list as.vector ",
+    "as.matrix as.data.frame as.array as.Date ",
+    // Constructors.
+    "c list vector matrix array data.frame factor ",
+    "numeric character integer logical double complex ",
+    // Aggregation.
+    "sum mean min max range prod length nchar nrow ncol ",
+    "dim NROW NCOL ",
+    // Sequences.
+    "seq seq_len seq_along rep rev ",
+    // Apply family.
+    "apply sapply lapply mapply tapply vapply ",
+    // Ordering / indexing.
+    "sort order rank which match unique duplicated ",
+    "table subset ",
+    // Set operations.
+    "union intersect setdiff is.element ",
+    // Function primitives / control flow.
+    "return invisible stop warning message stopifnot ",
+    // Package management.
+    "library require attach detach search ",
+    // I/O.
+    "print cat format paste paste0 sprintf ",
+    "readLines writeLines readRDS saveRDS ",
+    // String operations.
+    "substr substring toupper tolower trimws strsplit ",
+    "gsub sub grep grepl regmatches ",
+    // Math primitives.
+    "abs sqrt exp log log2 log10 sin cos tan ",
+    "asin acos atan atan2 floor ceiling round trunc sign ",
+    // Environment access.
+    "environment globalenv parent.frame new.env ",
+    "assign get exists rm ",
+    // Introspection.
+    "class typeof mode attributes attr names dimnames ",
+    "rownames colnames ",
+    // Error handling.
+    "tryCatch try conditionMessage ",
+    // Object system.
+    "UseMethod NextMethod structure unclass ",
+    // Sampling / randomness — in base (not stats).
+    "sample set.seed ",
+    // Generic (in base).
+    "summary ",
+    // Logical aggregators / equality.
+    "all any identical xor ",
+    // Functional-programming primitives (Reduce family + Recall for self-recursion).
+    "Reduce Filter Map Recall ",
+    // Sequence / factor accessors.
+    "cumsum levels nlevels ",
+    // Object manipulation.
+    "unlist do.call ",
+    // System family.
+    "Sys.time Sys.Date Sys.getenv ",
+    // File path family.
+    "file.exists file.path basename dirname ",
+);
+
+/// R other default-package functions (class 2 →
+/// `SCE_R_OTHERKWORD`).
+///
+/// **Source of truth:** the `stats` / `utils` / `graphics` /
+/// `grDevices` / `methods` package indices at
+/// `stat.ethz.ch/R-manual/R-devel/library/{stats,utils,graphics,grDevices,methods}/html/00Index.html`.
+/// All five packages load by default in a fresh R session
+/// alongside `base` and `datasets`, so users write these
+/// names without an explicit `library()` call — but the
+/// symbols live outside `base`, so they route to a distinct
+/// keyword class for a distinct visual weight.
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`R_RESERVED`].
+///
+/// **`plot` placed here despite recent base ownership.**
+/// `plot` was promoted to a generic in `base` in a recent R
+/// release (the `plot()` S3 generic itself now lives in
+/// `base`, though `plot.default` and all the workhorse
+/// methods remain in `graphics`). Virtually every R user's
+/// mental model places `plot` in `graphics`, so placing it
+/// here matches user intuition and existing IDE conventions
+/// — deliberate deviation from strict namespace origin.
+///
+/// **Coverage:** ~90 tokens across statistics (`stats`),
+/// utilities (`utils`), plotting (`graphics`),
+/// graphics devices (`grDevices`), and the S4 object
+/// system (`methods`).
+pub const R_OTHER_FUNCTIONS: &str = concat!(
+    // stats — descriptive statistics.
+    "median sd var cor cov quantile IQR mad ",
+    // stats — modelling.
+    "lm glm aov anova predict resid residuals coef ",
+    "coefficients fitted AIC BIC logLik ",
+    // stats — hypothesis tests.
+    "t.test chisq.test wilcox.test cor.test ",
+    // stats — data manipulation.
+    "aggregate formula na.omit na.exclude nls ",
+    // stats — GLM families.
+    "family gaussian binomial poisson ",
+    // stats — distributions (RNG).
+    "rnorm runif rbinom rpois rexp rgamma rbeta ",
+    "rchisq rt rf ",
+    // stats — distributions (density / quantile / CDF).
+    "dnorm dunif pnorm qnorm punif qunif ",
+    // utils — introspection / help.
+    "str head tail help sessionInfo ",
+    // utils — package management.
+    "install.packages installed.packages ",
+    "available.packages download.file packageVersion ",
+    // utils — I/O.
+    "read.csv write.csv read.table write.table ",
+    "capture.output ",
+    // graphics — plotting primitives.
+    "plot hist boxplot barplot pie ",
+    // graphics — annotation / composition.
+    "points lines abline text legend axis par layout ",
+    // grDevices — devices.
+    "dev.new dev.off pdf png jpeg svg ",
+    // grDevices — colour.
+    "colors rgb hsv ",
+    // methods — S4 class system.
+    "setClass setGeneric setMethod new slot slotNames ",
+    "isVirtualClass validObject setRefClass ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

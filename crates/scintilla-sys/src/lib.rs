@@ -4865,6 +4865,138 @@ pub const SCE_POWERSHELL_HERE_STRING: usize = 14;
 pub const SCE_POWERSHELL_HERE_CHARACTER: usize = 15;
 pub const SCE_POWERSHELL_COMMENTDOCKEYWORD: usize = 16;
 
+// LexR style indices. 16 contiguous slots (0..=15) for the R
+// statistical programming language (also handles S, S-PLUS,
+// per `LexR.cxx:1-6`). Constants mirror `SciLexer.h:1419-1434`
+// verbatim. Dispatches SCLEX_R (= 86, per `SciLexer.h:102`)
+// via a **three-class wordlist** declared at
+// `vendor\lexilla\lexers\LexR.cxx:339-346` (`RWordLists[]`).
+// The descriptor declares five slots, but the last two are
+// literally labelled "Unused" (classes 3 and 4) — the paint
+// loop at `:146-159` only probes wordlists 0/1/2:
+//
+//     RWordLists[] = {
+//         "Language Keywords",              // class 0 → SCE_R_KWORD
+//         "Base / Default package function", // class 1 → SCE_R_BASEKWORD
+//         "Other Package Functions",        // class 2 → SCE_R_OTHERKWORD
+//         "Unused",                          // class 3 — never probed
+//         "Unused",                          // class 4 — never probed
+//         nullptr,
+//     };
+//
+// **Case-SENSITIVE matching.** The identifier classification
+// cascade at `LexR.cxx:146-158` calls
+// `sc.GetCurrent(s, sizeof(s))` (byte-exact), NOT
+// `GetCurrentLowered`. R is a case-sensitive language at the
+// spec level (`TRUE` != `true`, `NULL` != `null` — actually
+// `NULL` and `TRUE` are the canonical spellings; `null` /
+// `true` are just user-defined identifiers), so wordlists
+// use exact-case spellings. Same discipline as `D_KEYWORDS`,
+// inverted from `POWERSHELL_KEYWORDS` / `COBOL_KEYWORDS_A`.
+//
+// **`.` is a word char but NOT a word start.** `IsAWordChar`
+// at `LexR.cxx:30-32` accepts `[0-9A-Za-z._]`, but
+// `IsAWordStart` at `:34-36` accepts only `[0-9A-Za-z_]`.
+// Consequence: R identifiers like `is.numeric` or
+// `data.frame` tokenise as ONE identifier (the `.` extends
+// the word), so wordlist entries CAN contain internal `.`
+// characters — this is essential for the base-package
+// functions where `.`-separated names are the convention
+// (`is.na`, `is.null`, `data.frame`, `as.numeric`, etc.).
+//
+// **Number literals.** `SCE_R_NUMBER` (5) recognises decimal,
+// hex (`0x`), scientific (`e±` / `p±`), and R-specific
+// suffixes `L` (integer) and `i` (imaginary/complex) per
+// `LexR.cxx:134-144` and R Language Reference
+// §"Literal constants".
+//
+// **Raw string literals — R 4.0+ `r"(...)"` syntax.**
+// R 4.0.0 (April 2020) added raw strings with three
+// delimiter families: `r"(...)"`, `r"[...]"`, `r"{...}"`,
+// plus optional dash decorations for nested quotes like
+// `r"-(...)-"`. Both `r"..."` and `r'...'` variants are
+// supported. Two states:
+//   - `SCE_R_RAWSTRING` (13) — `r"..."` double-quoted raw.
+//   - `SCE_R_RAWSTRING2` (14) — `r'...'` single-quoted raw.
+// Dash count + matching-delimiter state persist per line
+// via `styler.SetLineState` at `:271-274`; parsed by
+// `CheckRawString` at `:84-103`.
+//
+// **Backticked identifiers.** `SCE_R_BACKTICKS` (12) covers
+// R's non-standard names — anything between `` ` `` marks,
+// used for reserved-word-like identifiers (`` `if` `` as a
+// variable, column names with spaces, etc.). Same visual
+// slot as `SCE_R_STRING` at the theme level.
+//
+// **Infix operators.** `SCE_R_INFIX` (10) covers R's
+// user-definable infix operators like `%%` (modulo), `%in%`
+// (membership test), `%*%` (matrix multiplication), `%o%`
+// (outer product). Entered at `:260-261` on `%`, exits on
+// closing `%` at `:222-223`. `SCE_R_INFIXEOL` (11) is the
+// error state when the infix operator hits EOL without
+// closing — visual slot: `Operator`.
+//
+// **`\\uHHHH` / `\\UHHHHHHHH` / `\\xHH` escape sequences.**
+// `SCE_R_ESCAPESEQUENCE` (15) is opt-in via the property
+// `lexer.r.escape.sequence` (default `0` = off). When
+// enabled, `\\x`/`\\u`/`\\U` sequences inside strings render
+// distinctly. Entry logic at `:170-182`; `atEscapeEnd`
+// counter at `:78-81`. The host does not enable this
+// property today; the style constant is defined for future
+// use.
+//
+// Style semantics (paint-loop citations reference LexR.cxx):
+//
+//   - SCE_R_DEFAULT (0) — whitespace / unclassified.
+//     Framework convention: leave unmapped.
+//   - SCE_R_COMMENT (1) — `#`-to-EOL line comment.
+//   - SCE_R_KWORD (2) — wordlist class 0 hit (R language
+//     keywords per spec §"Reserved words").
+//   - SCE_R_BASEKWORD (3) — wordlist class 1 hit (base
+//     package functions — `c`, `list`, `mean`, `sum`,
+//     `length`, etc.).
+//   - SCE_R_OTHERKWORD (4) — wordlist class 2 hit (other
+//     package functions — reserved for `stats`, `utils`,
+//     `graphics`, etc.).
+//   - SCE_R_NUMBER (5) — numeric literal.
+//   - SCE_R_STRING (6) — `"..."` double-quoted literal.
+//   - SCE_R_STRING2 (7) — `'...'` single-quoted literal.
+//   - SCE_R_OPERATOR (8) — punctuation per
+//     `IsAnOperator()` at `:38-48` (`+`/`-`/`*`/`/`/`^`/
+//     `<`/`>`/`=`/`&`/`|`/`$`/`(`/`)`/`{`/`}`/`[`/`]`/`!`/
+//     `~`/`?`/`:`). Deliberately EXCLUDES `.` (used in
+//     numbers).
+//   - SCE_R_IDENTIFIER (9) — bare identifier fallback.
+//     Framework convention: leave unmapped.
+//   - SCE_R_INFIX (10) — `%...%` user-defined infix
+//     operator body.
+//   - SCE_R_INFIXEOL (11) — unterminated `%` reached EOL.
+//   - SCE_R_BACKTICKS (12) — `` `name` `` backticked
+//     non-standard name.
+//   - SCE_R_RAWSTRING (13) — R 4.0+ `r"(...)"` /
+//     `r"[...]"` / `r"{...}"` raw string, double-quoted.
+//   - SCE_R_RAWSTRING2 (14) — R 4.0+ `r'(...)'` /
+//     `r'[...]'` / `r'{...}'` raw string, single-quoted.
+//   - SCE_R_ESCAPESEQUENCE (15) — `\\x` / `\\u` / `\\U`
+//     escape sequence inside a string, only emitted when
+//     `lexer.r.escape.sequence` = 1.
+pub const SCE_R_DEFAULT: usize = 0;
+pub const SCE_R_COMMENT: usize = 1;
+pub const SCE_R_KWORD: usize = 2;
+pub const SCE_R_BASEKWORD: usize = 3;
+pub const SCE_R_OTHERKWORD: usize = 4;
+pub const SCE_R_NUMBER: usize = 5;
+pub const SCE_R_STRING: usize = 6;
+pub const SCE_R_STRING2: usize = 7;
+pub const SCE_R_OPERATOR: usize = 8;
+pub const SCE_R_IDENTIFIER: usize = 9;
+pub const SCE_R_INFIX: usize = 10;
+pub const SCE_R_INFIXEOL: usize = 11;
+pub const SCE_R_BACKTICKS: usize = 12;
+pub const SCE_R_RAWSTRING: usize = 13;
+pub const SCE_R_RAWSTRING2: usize = 14;
+pub const SCE_R_ESCAPESEQUENCE: usize = 15;
+
 // LexTOML style indices. The upstream enum also defines
 // `SCE_TOML_ERROR` (7), `SCE_TOML_STRINGEOL` (15), and
 // `SCE_TOML_ESCAPECHAR` (13) — those are intentionally omitted

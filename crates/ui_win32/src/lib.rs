@@ -117,17 +117,18 @@ use codepp_core::lang::{
     L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_CPP, L_CS, L_CSS, L_D,
     L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX,
     L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
-    L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
+    L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
     L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
     NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
     POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
     POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
     PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
-    RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
-    SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-    VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+    RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+    VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
+    VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
+    VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -241,29 +242,32 @@ use codepp_scintilla_sys::{
     SCE_RB_WORD_DEMOTED, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC,
     SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO,
     SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2,
-    SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM, SCE_SH_HERE_Q,
-    SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING, SCE_SH_WORD,
-    SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD,
-    SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS,
-    SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2,
-    SCE_ST_ASSIGN, SCE_ST_BINARY, SCE_ST_BOOL, SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL,
-    SCE_ST_KWSEND, SCE_ST_NIL, SCE_ST_NUMBER, SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL,
-    SCE_ST_SPEC_SEL, SCE_ST_STRING, SCE_ST_SUPER, SCE_ST_SYMBOL, SCE_TCL_BLOCK_COMMENT,
-    SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE, SCE_TCL_COMMENT_BOX, SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE,
-    SCE_TCL_MODIFIER, SCE_TCL_NUMBER, SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE,
-    SCE_TCL_WORD, SCE_TCL_WORD2, SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6,
-    SCE_TCL_WORD7, SCE_TCL_WORD8, SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT,
-    SCE_TEX_GROUP, SCE_TEX_SPECIAL, SCE_TEX_SYMBOL, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT,
-    SCE_VHDL_COMMENT, SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER,
-    SCE_VHDL_OPERATOR, SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE,
-    SCE_VHDL_STDTYPE, SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCE_V_COMMENT,
-    SCE_V_COMMENTLINE, SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT, SCE_V_INPUT,
-    SCE_V_NUMBER, SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR,
-    SCE_V_STRING, SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3,
-    SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD, SCE_YAML_NUMBER,
-    SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT, SCI_BEGINUNDOACTION, SCI_CLEAR,
-    SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION,
-    SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+    SCE_R_BACKTICKS, SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_INFIX, SCE_R_INFIXEOL, SCE_R_KWORD,
+    SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD, SCE_R_RAWSTRING, SCE_R_RAWSTRING2,
+    SCE_R_STRING, SCE_R_STRING2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE,
+    SCE_SH_HERE_DELIM, SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR,
+    SCE_SH_STRING, SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC,
+    SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER,
+    SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT,
+    SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCE_ST_ASSIGN, SCE_ST_BINARY, SCE_ST_BOOL,
+    SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL, SCE_ST_KWSEND, SCE_ST_NIL, SCE_ST_NUMBER,
+    SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL, SCE_ST_SPEC_SEL, SCE_ST_STRING, SCE_ST_SUPER,
+    SCE_ST_SYMBOL, SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE,
+    SCE_TCL_COMMENT_BOX, SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER, SCE_TCL_NUMBER,
+    SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD, SCE_TCL_WORD2,
+    SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7, SCE_TCL_WORD8,
+    SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL,
+    SCE_TEX_SYMBOL, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT,
+    SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER, SCE_VHDL_OPERATOR,
+    SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE, SCE_VHDL_STDTYPE,
+    SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCE_V_COMMENT, SCE_V_COMMENTLINE,
+    SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT, SCE_V_INPUT, SCE_V_NUMBER,
+    SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR, SCE_V_STRING,
+    SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3, SCE_YAML_COMMENT,
+    SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR,
+    SCE_YAML_REFERENCE, SCE_YAML_TEXT, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY,
+    SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
+    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
     SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
     SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
     SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
@@ -7669,6 +7673,79 @@ const POWERSHELL_THEME: LangTheme = LangTheme {
     bold: POWERSHELL_BOLD,
 };
 
+// LexR style routing. 13 mappings (16 `SCE_R_*` slots minus
+// `DEFAULT` and `IDENTIFIER` per framework convention, minus
+// `ESCAPESEQUENCE` which the host doesn't enable — see
+// scintilla-sys R banner). Wired against `LexR.cxx` and
+// `SciLexer.h:1419-1434`.
+//
+//   - COMMENT → Comment italic. Single `#`-to-EOL comment
+//     state.
+//   - STRING + STRING2 + BACKTICKS + RAWSTRING + RAWSTRING2
+//     → String. Five flavors collapsing to one visual —
+//     `"..."` / `'...'` / `` `...` `` (backticked
+//     non-standard name) / `r"(...)"` raw / `r'(...)'` raw.
+//     Same collapse policy as D's five-string-flavor
+//     uniform and PowerShell's four-flavor uniform.
+//   - NUMBER → Number.
+//   - KWORD (class 0) → Keyword bold. R reserved words +
+//     logical / null / NA / Inf / NaN constants.
+//   - BASEKWORD (class 1) + OTHERKWORD (class 2) →
+//     Keyword2. Base and other-default-package functions
+//     share the Keyword2 accent since they all read as
+//     "known name from the language's callable dictionary"
+//     rather than parser-reserved vocabulary. Distinct SCE
+//     states are preserved so a future palette can split
+//     base vs stats coloring without a wordlist reshuffle.
+//   - OPERATOR + INFIX + INFIXEOL → Operator. Punctuation
+//     plus R's user-definable `%...%` infix operators
+//     (`%in%`, `%*%`, `%o%`, etc.). `INFIXEOL` is the
+//     unterminated-infix error state — routes to Operator
+//     so an unclosed `%` doesn't paint like a comment.
+const R_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_R_COMMENT, StyleSlot::Comment),
+    (SCE_R_STRING, StyleSlot::String),
+    (SCE_R_STRING2, StyleSlot::String),
+    (SCE_R_BACKTICKS, StyleSlot::String),
+    (SCE_R_RAWSTRING, StyleSlot::String),
+    (SCE_R_RAWSTRING2, StyleSlot::String),
+    (SCE_R_NUMBER, StyleSlot::Number),
+    (SCE_R_KWORD, StyleSlot::Keyword),
+    (SCE_R_BASEKWORD, StyleSlot::Keyword2),
+    (SCE_R_OTHERKWORD, StyleSlot::Keyword2),
+    (SCE_R_OPERATOR, StyleSlot::Operator),
+    (SCE_R_INFIX, StyleSlot::Operator),
+    (SCE_R_INFIXEOL, StyleSlot::Operator),
+];
+
+// Italic on the single comment state — matches the
+// universal Code++ comment-slot convention.
+const R_ITALIC: &[usize] = &[SCE_R_COMMENT];
+
+// Bold on KWORD only. Matches the C / Rust / D / COBOL /
+// PowerShell precedent — the "one bold class = language
+// reserved words" rule. Function classes (BASEKWORD /
+// OTHERKWORD) use Keyword2 weight, not bold.
+const R_BOLD: &[usize] = &[SCE_R_KWORD];
+
+// Three-class install matches `RWordLists[]` at
+// `LexR.cxx:339-346` — only classes 0/1/2 are probed by the
+// identifier classification cascade at `:146-158`; classes
+// 3/4 in the descriptor are labelled "Unused" and never
+// consulted, so we skip them entirely. Order is
+// load-bearing — `SCI_SETKEYWORDS` respects
+// wordlist-descriptor order.
+const R_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, R_RESERVED),
+        (1, R_BASE_FUNCTIONS),
+        (2, R_OTHER_FUNCTIONS),
+    ],
+    styles: R_STYLES,
+    italic: R_ITALIC,
+    bold: R_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -7896,6 +7973,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&D_THEME)
     } else if lang == L_POWERSHELL {
         Some(&POWERSHELL_THEME)
+    } else if lang == L_R {
+        Some(&R_THEME)
     } else {
         None
     }
@@ -23122,18 +23201,19 @@ mod lang_theme_tests {
         LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
         L_CMAKE, L_COBOL, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
         L_INNO, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS,
-        L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY,
+        L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY,
         L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML,
         L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
         OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
         POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
         POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
         PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS,
-        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
-        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+        R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+        SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+        VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+        XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -23153,9 +23233,12 @@ mod lang_theme_tests {
         SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
         SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER, SCE_POWERSHELL_KEYWORD,
         SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING,
-        SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER,
-        SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD,
-        SCE_YAML_NUMBER, SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
+        SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS, SCE_R_BASEKWORD,
+        SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER, SCE_R_INFIX,
+        SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
+        SCE_R_RAWSTRING, SCE_R_RAWSTRING2, SCE_R_STRING, SCE_R_STRING2, SCE_VHDL_IDENTIFIER,
+        SCE_V_IDENTIFIER, SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER,
+        SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
     };
 
     /// Every wired language must:
@@ -23190,6 +23273,7 @@ mod lang_theme_tests {
             (L_LISP, "Lisp"),
             (L_SCHEME, "Scheme"),
             (L_POWERSHELL, "PowerShell"),
+            (L_R, "R"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -31318,6 +31402,329 @@ mod lang_theme_tests {
                  before the InList probe. Entry would be dead code."
             );
         }
+    }
+
+    /// R uses Lexilla's `r` lexer (`LexR.cxx`, 350 lines, Neil
+    /// Hodgson 1998-2002 per `LexR.cxx:1-6`). 16 `SCE_R_*`
+    /// slots (0..=15), three-class wordlist (WL0 R reserved
+    /// words + logical/NA/Inf constants, WL1 base package
+    /// functions, WL2 other default-loaded package functions
+    /// — `stats` / `utils` / `graphics` / `grDevices` /
+    /// `methods`). Dispatches `SCLEX_R` (= 86, per
+    /// `SciLexer.h:102`). The descriptor at
+    /// `LexR.cxx:339-346` declares five wordlist slots but the
+    /// paint loop at `:146-158` only probes classes 0/1/2 —
+    /// classes 3 and 4 are literally labelled "Unused" and
+    /// never consulted.
+    ///
+    /// Distinctive features asserted here: **case-sensitive
+    /// byte-exact matching** (same discipline as
+    /// `D_KEYWORDS`), **`.` is a mid-word character** so
+    /// `is.numeric` / `data.frame` tokenise as one identifier
+    /// (per `IsAWordChar` at `LexR.cxx:30-32`), **five string
+    /// flavors collapsing to one visual** (`"..."`, `'...'`,
+    /// `` `...` ``, `r"(...)"`, `r'(...)'`), **infix operator
+    /// state** (`%in%`, `%*%`, etc.), and **ESCAPESEQUENCE
+    /// unmapped** (opt-in via property
+    /// `lexer.r.escape.sequence`, disabled today).
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_R)` returns `Some(&R_THEME)`.
+    ///   2. Style count == 13 (16 `SCE_R_*` slots minus
+    ///      DEFAULT (0), IDENTIFIER (9), ESCAPESEQUENCE (15)).
+    ///   3. Three wordlist classes in canonical order
+    ///      (0/1/2) matching `RWordLists[]` at
+    ///      `LexR.cxx:339-346` for the three PROBED slots.
+    ///      Order is load-bearing for `SCI_SETKEYWORDS`.
+    ///   4. All three classes non-empty (no
+    ///      empty-by-design slots for R — every class has
+    ///      real content).
+    ///   5. Every wordlist token matches `[A-Za-z0-9._]+`
+    ///      — the R identifier alphabet the lexer accepts
+    ///      per `IsAWordChar` at `LexR.cxx:30-32`
+    ///      (isalnum + `.` + `_`). Includes uppercase per
+    ///      R's case-sensitive spec (`TRUE`/`FALSE`/`NULL`/
+    ///      `NA`/`Inf`/`NaN`/`NROW`/`NCOL`/`UseMethod` etc.).
+    ///   6. No cross-list duplicates across WL0/WL1/WL2 —
+    ///      first-match-wins probe order at
+    ///      `LexR.cxx:150-156` means duplicates create dead
+    ///      code in later classes.
+    ///   7. Style-routing pins for the 13 mapped SCE
+    ///      constants.
+    ///   8. DEFAULT (0), IDENTIFIER (9), and ESCAPESEQUENCE
+    ///      (15) all unmapped.
+    ///   9. Italic set == 1 (COMMENT only — single comment
+    ///      state).
+    ///   10. Bold set == 1 (`KWORD` only — primary keyword
+    ///       class).
+    ///   11. Cross-language non-reuse — `R_STYLES` must
+    ///       not deep-equal any prior wired theme.
+    ///   12. Anchor tokens: reserved `if`, `else`, `for`,
+    ///       `function`, `TRUE`, `FALSE`, `NULL`, `NA`,
+    ///       `Inf`, `NaN`, `NA_integer_` in WL0; base
+    ///       `c`, `list`, `is.na`, `data.frame`,
+    ///       `as.numeric`, `library`, `sum`, `length` in
+    ///       WL1; other-package `lm`, `plot`, `hist`,
+    ///       `t.test`, `read.csv`, `install.packages` in
+    ///       WL2.
+    ///   13. `L_R` `LangEntry` `extensions` contains `r`
+    ///       — the canonical R script extension.
+    ///   14. `T` and `F` explicitly NOT in WL0 — CRAN
+    ///       `?Reserved` documents them as ordinary
+    ///       user-rebindable variables, not reserved
+    ///       words.
+    ///   15. `return` explicitly NOT in WL0 — it's a base
+    ///       primitive function per `?return`, so it lives
+    ///       in WL1 (`R_BASE_FUNCTIONS`).
+    #[test]
+    fn r_uses_lexr_three_class_theme() {
+        let r = lang_theme(L_R).expect("R wired");
+
+        // Invariant 2: 13 mappings.
+        assert_eq!(
+            r.styles.len(),
+            13,
+            "R_STYLES must map 13 indices (16 SCE_R_* slots minus \
+             DEFAULT (0), IDENTIFIER (9), ESCAPESEQUENCE (15) — \
+             all intentionally unmapped per framework convention \
+             + host-disabled property rule)"
+        );
+
+        // Invariant 3: three classes canonical descriptor order.
+        assert_eq!(
+            r.keywords.len(),
+            3,
+            "R_THEME must install exactly 3 wordlist classes \
+             (matches probed slots at RWordLists[] LexR.cxx:339-346 \
+             — classes 3/4 are literal 'Unused' entries and never \
+             consulted)"
+        );
+        for (i, expected) in [
+            (0, R_RESERVED),
+            (1, R_BASE_FUNCTIONS),
+            (2, R_OTHER_FUNCTIONS),
+        ] {
+            assert_eq!(r.keywords[i].0, i as u32);
+            assert_eq!(r.keywords[i].1, expected);
+        }
+
+        // Invariant 4: all three classes non-empty.
+        for (list, name) in [
+            (R_RESERVED, "RESERVED"),
+            (R_BASE_FUNCTIONS, "BASE_FUNCTIONS"),
+            (R_OTHER_FUNCTIONS, "OTHER_FUNCTIONS"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "R_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: R identifier alphabet — [A-Za-z0-9._].
+        // LexR.cxx:30-32 `IsAWordChar` accepts isalnum + `.`
+        // + `_`. Case-sensitive contract preserves uppercase
+        // constants like TRUE/FALSE/NULL/NA/Inf/NaN and
+        // CamelCase like NROW/NCOL/UseMethod.
+        for (list, name) in [
+            (R_RESERVED, "RESERVED"),
+            (R_BASE_FUNCTIONS, "BASE_FUNCTIONS"),
+            (R_OTHER_FUNCTIONS, "OTHER_FUNCTIONS"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    tok.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_'),
+                    "R_{name} token `{tok}` violates R identifier \
+                     alphabet — must be `[A-Za-z0-9._]+` so LexR's \
+                     GetCurrent + InList probe finds a match"
+                );
+            }
+        }
+
+        // Invariant 6: cross-list uniqueness across WL0/WL1/WL2.
+        // LexR.cxx:150-156 probes wordlists 0/1/2
+        // first-match-wins — a duplicate in a later class is
+        // dead code.
+        use std::collections::HashSet;
+        let sets = [
+            (
+                "RESERVED",
+                R_RESERVED.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "BASE_FUNCTIONS",
+                R_BASE_FUNCTIONS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "OTHER_FUNCTIONS",
+                R_OTHER_FUNCTIONS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                if let Some(shared) = sets[i].1.intersection(&sets[j].1).next() {
+                    panic!(
+                        "R_{} and R_{} both contain `{shared}` — \
+                         LexR.cxx:150-156 probes wordlists 0/1/2 \
+                         first-match-wins for identifier classification. \
+                         A cross-list duplicate leaves the later entry \
+                         dead code. Drop from whichever list is not the \
+                         intended-victor.",
+                        sets[i].0, sets[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 7: style-routing pins for all 13 mapped
+        // SCE constants.
+        for (idx, slot, name) in [
+            (SCE_R_COMMENT, StyleSlot::Comment, "SCE_R_COMMENT"),
+            (SCE_R_STRING, StyleSlot::String, "SCE_R_STRING"),
+            (SCE_R_STRING2, StyleSlot::String, "SCE_R_STRING2"),
+            (SCE_R_BACKTICKS, StyleSlot::String, "SCE_R_BACKTICKS"),
+            (SCE_R_RAWSTRING, StyleSlot::String, "SCE_R_RAWSTRING"),
+            (SCE_R_RAWSTRING2, StyleSlot::String, "SCE_R_RAWSTRING2"),
+            (SCE_R_NUMBER, StyleSlot::Number, "SCE_R_NUMBER"),
+            (SCE_R_KWORD, StyleSlot::Keyword, "SCE_R_KWORD"),
+            (SCE_R_BASEKWORD, StyleSlot::Keyword2, "SCE_R_BASEKWORD"),
+            (SCE_R_OTHERKWORD, StyleSlot::Keyword2, "SCE_R_OTHERKWORD"),
+            (SCE_R_OPERATOR, StyleSlot::Operator, "SCE_R_OPERATOR"),
+            (SCE_R_INFIX, StyleSlot::Operator, "SCE_R_INFIX"),
+            (SCE_R_INFIXEOL, StyleSlot::Operator, "SCE_R_INFIXEOL"),
+        ] {
+            assert!(
+                r.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: DEFAULT (0), IDENTIFIER (9),
+        // ESCAPESEQUENCE (15) all unmapped.
+        assert!(
+            !r.styles.iter().any(|(i, _)| *i == SCE_R_DEFAULT),
+            "SCE_R_DEFAULT (0) must remain unmapped"
+        );
+        assert!(
+            !r.styles.iter().any(|(i, _)| *i == SCE_R_IDENTIFIER),
+            "SCE_R_IDENTIFIER (9) must remain unmapped — bare R \
+             identifiers paint at STYLE_DEFAULT per framework \
+             convention"
+        );
+        assert!(
+            !r.styles.iter().any(|(i, _)| *i == SCE_R_ESCAPESEQUENCE),
+            "SCE_R_ESCAPESEQUENCE (15) must remain unmapped — the \
+             host does not enable `lexer.r.escape.sequence`, so \
+             the lexer never emits this state"
+        );
+
+        // Invariant 9: italic == 1 (COMMENT only).
+        assert_eq!(r.italic.len(), 1);
+        assert!(r.italic.contains(&SCE_R_COMMENT));
+
+        // Invariant 10: bold == 1 (KWORD only).
+        assert_eq!(r.bold.len(), 1);
+        assert!(r.bold.contains(&SCE_R_KWORD));
+
+        // Invariant 11: cross-language non-reuse.
+        let d = lang_theme(L_D).expect("D wired");
+        let ps = lang_theme(L_POWERSHELL).expect("PowerShell wired");
+        let cobol = lang_theme(L_COBOL).expect("COBOL wired");
+        for (other, name) in [(d, "D"), (ps, "PowerShell"), (cobol, "COBOL")] {
+            assert_ne!(r.styles, other.styles, "R must NOT reuse {name}_STYLES");
+        }
+
+        // Invariant 12: canonical anchor coverage.
+        // WL0 R reserved words + constants per CRAN ?Reserved.
+        for kw in [
+            "if",
+            "else",
+            "for",
+            "function",
+            "TRUE",
+            "FALSE",
+            "NULL",
+            "NA",
+            "Inf",
+            "NaN",
+            "NA_integer_",
+        ] {
+            assert!(
+                R_RESERVED.split_whitespace().any(|t| t == kw),
+                "R_RESERVED must include core reserved token `{kw}`"
+            );
+        }
+        // WL1 canonical base functions.
+        for f in [
+            "c",
+            "list",
+            "is.na",
+            "data.frame",
+            "as.numeric",
+            "library",
+            "sum",
+            "length",
+        ] {
+            assert!(
+                R_BASE_FUNCTIONS.split_whitespace().any(|t| t == f),
+                "R_BASE_FUNCTIONS must include canonical base function `{f}`"
+            );
+        }
+        // WL2 canonical stats/utils/graphics functions.
+        for f in [
+            "lm",
+            "plot",
+            "hist",
+            "t.test",
+            "read.csv",
+            "install.packages",
+        ] {
+            assert!(
+                R_OTHER_FUNCTIONS.split_whitespace().any(|t| t == f),
+                "R_OTHER_FUNCTIONS must include canonical other-package function `{f}`"
+            );
+        }
+
+        // Invariant 13: L_R LangEntry extensions contains `r`.
+        use codepp_core::lang::LANG_TABLE;
+        let r_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_R)
+            .expect("L_R LangEntry present in LANG_TABLE");
+        assert!(
+            r_entry.extensions.contains(&"r"),
+            "L_R extensions must contain `r` (canonical R source extension)"
+        );
+
+        // Invariant 14: `T` and `F` explicitly NOT in
+        // R_RESERVED. Per CRAN ?Reserved, T/F are ordinary
+        // base variables bound to TRUE/FALSE at startup and
+        // can be reassigned (`T <- 5` succeeds), so
+        // classifying them as parser reserved words would
+        // misrepresent the language. This is a deliberate
+        // divergence from convention-based IDE highlighters.
+        for tok in ["T", "F"] {
+            assert!(
+                !R_RESERVED.split_whitespace().any(|t| t == tok),
+                "R_RESERVED must NOT include `{tok}` — CRAN ?Reserved \
+                 documents T/F as user-rebindable base variables, not \
+                 parser reserved words. See R_RESERVED docstring."
+            );
+        }
+
+        // Invariant 15: `return` explicitly NOT in R_RESERVED
+        // (base primitive function per ?return, so lives in
+        // R_BASE_FUNCTIONS). Same rationale as invariant 14 —
+        // strict CRAN attribution.
+        assert!(
+            !R_RESERVED.split_whitespace().any(|t| t == "return"),
+            "R_RESERVED must NOT include `return` — `?return` marks it a base \
+             primitive function, not a reserved word. Lives in R_BASE_FUNCTIONS."
+        );
+        assert!(
+            R_BASE_FUNCTIONS.split_whitespace().any(|t| t == "return"),
+            "R_BASE_FUNCTIONS must include `return` (base primitive)"
+        );
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a
