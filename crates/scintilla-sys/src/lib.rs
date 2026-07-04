@@ -2700,6 +2700,235 @@ pub const SCE_KIX_OPERATOR: usize = 9;
 pub const SCE_KIX_COMMENTSTREAM: usize = 10;
 pub const SCE_KIX_IDENTIFIER: usize = 31;
 
+// LexAU3 style indices. 16 contiguous slots (0..=15) covering the
+// AutoIt3 Windows automation / scripting language as classified
+// by `ColouriseAU3Doc` at `LexAU3.cxx:199-608` (with the 900+-line
+// lexer's rich state machine covering variables, macros,
+// preprocessor directives, embedded SendKeys tokens inside string
+// literals, and the AutoIt3 Standard UDF library).
+//
+// LexAU3 is the WIDEST wordlist-class lexer we've wired — 8
+// classes at `LexAU3.cxx:900-909` (keywords / functions / macros /
+// SendKeys / preprocessors / special / expand / UDF). Each drives
+// a distinct SCE promotion path from the intermediate
+// `SCE_AU3_KEYWORD` scan state at `:314-370` (except SEND, which
+// is promoted from the STRING-embedded `SCE_AU3_SENT` state at
+// `:464-541` — SendKeys are AutoIt's inline
+// `Send("{ENTER}")`-style key names, so the classifier
+// recognises them INSIDE a string literal).
+//
+// Style semantics (paint-loop citations reference LexAU3.cxx):
+//   - DEFAULT (0)         — whitespace and unclassified
+//                           fall-through. Entry at every
+//                           state-exit site (`:262, :304, :328,
+//                           :332, :336, :340, :356, :360, :363-364,
+//                           :415, :426, :454, :526`).
+//   - COMMENT (1)         — `;...` line comment. Entry at `:548`,
+//                           terminated on `atLineEnd` at
+//                           `:293-295`.
+//   - COMMENTBLOCK (2)    — `#cs ... #ce` (or `#comments-start /
+//                           #comments-end`) block comment. Entry
+//                           at `:322-323` when the scanned
+//                           `#`-prefixed identifier is `#cs` or
+//                           `#comments-start`; exited at `:262`
+//                           when the closing `#ce` / `#comments-end`
+//                           is seen. State-machine at `:255-291`
+//                           tracks `ci` (0=start-of-line,
+//                           1=first-char-seen, 2=skip-rest).
+//   - NUMBER (3)          — Numeric literal. Entry at `:561-565`
+//                           with `ni` flag tracking the numeric
+//                           form (0=integer, 1=has-dot,
+//                           2=hex-prefixed, 3=E-notation,
+//                           9=malformed). Terminated at
+//                           `:409-416`. Hex prefix `0x` or `0X`
+//                           at `:377-380`; scientific `e`/`E` at
+//                           `:383-386`.
+//   - FUNCTION (4)        — Built-in AutoIt3 function. Promoted
+//                           from KEYWORD scan state at
+//                           `:330-333` on `keywords2.InList(s)`
+//                           hit. This is the largest built-in
+//                           function surface in Windows scripting
+//                           (~1200 built-ins in AutoIt3 core).
+//   - KEYWORD (5)         — Reserved word (control flow / decl /
+//                           `and` / `or` / `not`). Promoted from
+//                           KEYWORD scan state at `:326-329` on
+//                           `keywords.InList(s)` hit — the FIRST
+//                           wordlist probed. Also the
+//                           intermediate scan-in-progress state:
+//                           on scan exit at `:314-370` the
+//                           classifier probes 8 wordlist classes
+//                           in sequence and rewrites the state
+//                           via `ChangeState` to KEYWORD /
+//                           FUNCTION / MACRO / PREPROCESSOR /
+//                           SPECIAL / EXPAND / UDF (or falls
+//                           through to OPERATOR at `:359` for
+//                           the bare `_` line-continuation, or
+//                           DEFAULT at `:363-364` when no
+//                           wordlist matches).
+//   - MACRO (6)           — `@`-prefixed macro (`@ScriptDir`,
+//                           `@Error`, `@CR`, etc.). Entry into
+//                           SCE_AU3_KEYWORD scan state on `@`
+//                           at `:552`; promoted to MACRO at
+//                           `:334-337` on `keywords3.InList(s)`
+//                           hit. Wordlist entries include the
+//                           leading `@` (differs from KIXtart
+//                           where the `@` is stripped before
+//                           InList) because the classifier
+//                           enters the scan on `@` and includes
+//                           it in the identifier run.
+//   - STRING (7)          — Double- or single-quoted string
+//                           literal. Entry at `:555-560` on `"`
+//                           (with `si=1`) or `'` (with `si=2`).
+//                           Also entered via `:554` on `<` when
+//                           the preceding `#include` set `si=3`
+//                           (angle-bracket include-path form).
+//                           Terminated on the matching quote at
+//                           `:441-445` or line end (with
+//                           continuation-line handling) at
+//                           `:447-457`.
+//   - OPERATOR (8)        — Punctuation-class operator. Entered
+//                           at `:551` on `.` (when not
+//                           followed by a digit — a `.` before
+//                           a digit is a number's decimal
+//                           point) OR at `:567` on `IsAOperator`
+//                           match (the operator set at
+//                           `:90-97` is `+ - * / & ^ = < > ( )
+//                           [ ] ,`). Bare `_` at `:358-360` also
+//                           promotes to OPERATOR (it's the
+//                           line-continuation operator).
+//   - VARIABLE (9)        — `$var` variable reference. Entry at
+//                           `:550` on `$`; scanned via
+//                           `IsAWordChar` (extended to accept
+//                           non-ASCII at `:83-86`), terminated on
+//                           non-word at `:425-427`. On `.` at
+//                           `:422-424` promotes to OPERATOR to
+//                           handle the COM-object member-access
+//                           chain (`$obj.Method`).
+//   - SENT (10)           — SendKeys token inside a string
+//                           literal — the AutoIt classifier's
+//                           unique feature. `Send("{ENTER}")`
+//                           lexes the string as
+//                           STRING—SENT—STRING, so `{ENTER}`
+//                           paints distinctly from the
+//                           surrounding literal. Entry inside
+//                           `SCE_AU3_STRING` at `:458-461` on
+//                           `{`/`+`/`!`/`^`/`#`; validated by
+//                           `keywords4.InList(sk)` at `:483-486`
+//                           where `sk` is the brace-wrapped
+//                           token produced by `GetSendKey` at
+//                           `:106-169`. Wordlist entries include
+//                           the braces (e.g., `{ENTER}`,
+//                           `{TAB}`, `{F1}`) — see wordlist
+//                           class 3 rationale.
+//   - PREPROCESSOR (11)   — `#`-prefixed compiler directive
+//                           (`#include`, `#Region`, `#EndRegion`,
+//                           `#NoTrayIcon`, etc.). Entry into
+//                           SCE_AU3_KEYWORD scan state on `#`
+//                           at `:549`; promoted to PREPROCESSOR
+//                           at `:338-345` on
+//                           `keywords5.InList(s)` hit. Special
+//                           handling: if the matched directive
+//                           is `#include`, sets `si=3` so the
+//                           next `<...>` string is styled as
+//                           STRING (the include-path form).
+//   - SPECIAL (12)        — Rare AutoIt3-specific control tokens
+//                           reserved for the SPECIAL wordlist
+//                           class. Very small surface — most
+//                           installations leave this class
+//                           empty. Entry at `:346-348` on
+//                           `keywords6.InList(s)` hit; distinctly
+//                           uses `sc.SetState(SCE_AU3_SPECIAL)`
+//                           (not `SetState(DEFAULT)`) so
+//                           subsequent state has to explicitly
+//                           re-enter DEFAULT — see the SPECIAL
+//                           case at `:308-313`.
+//   - EXPAND (13)         — AutoIt3 `_` line-continuation and
+//                           related expand keywords. Entry at
+//                           `:350-353` on `keywords7.InList(s)`
+//                           AND the next char is NOT an operator
+//                           (so bare `_` at EOL matches EXPAND,
+//                           but `_+5` on a line matches only if
+//                           `_` isn't the wordlist).
+//   - COMOBJ (14)         — COM-object member-access token —
+//                           the identifier AFTER a `.` on a
+//                           variable / expression. Entry at
+//                           `:299-302` from OPERATOR state when
+//                           `sc.chPrev == '.'` and next char is
+//                           a word char (`$obj.MyMethod` →
+//                           `$obj` VARIABLE, `.` OPERATOR,
+//                           `MyMethod` COMOBJ). Terminated on
+//                           non-word at `:431-434`.
+//   - UDF (15)            — AutoIt3 Standard UDF Library
+//                           function. Promoted from KEYWORD scan
+//                           state at `:354-357` on
+//                           `keywords8.InList(s)` hit. Distinct
+//                           style so authors can visually
+//                           differentiate first-party built-ins
+//                           (FUNCTION) from the UDF-library
+//                           helpers (`_ArrayDisplay`,
+//                           `_GUICtrlListView_Create`, etc.
+//                           — conventionally underscore-prefixed).
+//                           Added in April 2006 per the
+//                           `LexAU3.cxx:44` change log.
+//
+// **Wordlist classes.** `AU3WordLists[]` at `LexAU3.cxx:900-909`
+// declares 8 named classes:
+//   0 = "#autoit keywords"        (KEYWORD  — control flow / decl)
+//   1 = "#autoit functions"       (FUNCTION — built-in surface)
+//   2 = "#autoit macros"          (MACRO    — `@`-prefixed macros)
+//   3 = "#autoit Sent keys"       (SENT     — `{KEYNAME}` tokens in strings)
+//   4 = "#autoit Pre-processors"  (PREPROCESSOR — `#`-prefixed directives)
+//   5 = "#autoit Special"         (SPECIAL  — rare control tokens)
+//   6 = "#autoit Expand"          (EXPAND   — `_` line-continuation)
+//   7 = "#autoit UDF"             (UDF      — AutoIt3 Std UDF Library)
+//
+// **Dispatch precedence at scan exit** (`LexAU3.cxx:314-370`):
+// The classifier probes classes in this exact order at scan exit
+// (WITH one exception): `#cs`/`#comments-start` COMMENTBLOCK
+// literal check FIRST (:320-324), then classes 0 → 1 → 2 → 4 →
+// 5 → 6 → 7. **Class 3 (SendKeys) is NEVER probed from the KEYWORD
+// scan state** — it's only reached from the SCE_AU3_SENT state
+// entered INSIDE a string. Note the OUT-OF-ORDER numbering:
+// class 4 (PREPROCESSOR) is probed BEFORE class 5, 6, 7. So
+// duplicating a token across two classes always resolves in
+// probe-order priority.
+//
+// **Case handling.** AutoIt3 is case-insensitive. The classifier
+// case-folds via `tolower` at `:247` before every wordlist probe.
+// Wordlist entries MUST be lowercase — same convention as VHDL /
+// KIXtart / PostScript.
+//
+// **Sigil handling.** Two sigil-prefixed forms:
+//   - `$var` → `SCE_AU3_VARIABLE` — the `$` sigil is INCLUDED
+//     in the emitted style run (entered at `:550`, span
+//     terminates on non-word-char at `:425`). Consistent with
+//     KIXtart, Ruby, Perl, Bash convention.
+//   - `@macro` → SCE_AU3_KEYWORD scan → promoted to MACRO —
+//     the `@` sigil is INCLUDED in the identifier that reaches
+//     `keywords3.InList(s)`, so wordlist entries MUST include
+//     the leading `@`. This is the OPPOSITE of KIXtart's
+//     LexKix, which strips the sigil via `&s[1]` before
+//     probing.
+//
+// Values match `SciLexer.h:1065-1080`. LexAU3 registers SCLEX_AU3
+// (= 60) at `LexAU3.cxx:911`.
+pub const SCE_AU3_DEFAULT: usize = 0;
+pub const SCE_AU3_COMMENT: usize = 1;
+pub const SCE_AU3_COMMENTBLOCK: usize = 2;
+pub const SCE_AU3_NUMBER: usize = 3;
+pub const SCE_AU3_FUNCTION: usize = 4;
+pub const SCE_AU3_KEYWORD: usize = 5;
+pub const SCE_AU3_MACRO: usize = 6;
+pub const SCE_AU3_STRING: usize = 7;
+pub const SCE_AU3_OPERATOR: usize = 8;
+pub const SCE_AU3_VARIABLE: usize = 9;
+pub const SCE_AU3_SENT: usize = 10;
+pub const SCE_AU3_PREPROCESSOR: usize = 11;
+pub const SCE_AU3_SPECIAL: usize = 12;
+pub const SCE_AU3_EXPAND: usize = 13;
+pub const SCE_AU3_COMOBJ: usize = 14;
+pub const SCE_AU3_UDF: usize = 15;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated

@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 36 / 🟡 52 / ⚫ 1.
+Total: 89 rows. ✅ 37 / 🟡 51 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1843,7 +1843,7 @@ further shim work needed.
 | ASN.1 | 65 | `asn1` | ⚫ | ⚫ | 🟡 |
 | ASP | 16 | `hypertext` | ✅ | ✅ | ✅ |
 | Assembly | 32 | `asm` | ✅ | ✅ | ✅ |
-| AutoIt | 40 | `au3` | ⚫ | ⚫ | 🟡 |
+| AutoIt | 40 | `au3` | ✅ | ✅ | ✅ |
 | AviSynth | 66 | `avs` | ⚫ | ⚫ | 🟡 |
 | BaanC | 60 | `baan` | ⚫ | ⚫ | 🟡 |
 | Batch | 12 | `batch` | ✅ | ✅ | ✅ |
@@ -2671,6 +2671,140 @@ functions / macros (`if`, `else`, `while`, `for`, `next`,
 `function`, `endfunction`; `getobject`, `createobject`,
 `messagebox`, `left`, `right`; `date`, `time`, `userid`,
 `wksta`, `scriptdir`).
+
+**AutoIt (2026-07-04):** uses Lexilla's `au3` lexer
+(`LexAU3.cxx`, ~910 lines including folder) — a rich lexer for
+AutoIt3, a Windows automation / scripting language. The **widest
+wordlist-class fan-out** we've wired: eight named classes at
+`LexAU3.cxx:900-909` — keywords, functions, macros, SendKeys,
+preprocessors, special, expand, UDF. Case-insensitive; `tolower`
+at `:247` case-folds before every wordlist probe, so entries
+MUST be lowercase.
+
+The classifier's unique features:
+
+- **SendKeys tokens matched INSIDE strings.** Every other AutoIt
+  wordlist matches at the identifier boundary in ordinary source;
+  SendKeys are matched inside `Send("...")` / `ControlSend(...)`
+  string arguments. The classifier's `SCE_AU3_STRING` state at
+  `:437-461` peeks for `{`/`+`/`!`/`^`/`#` and transitions into
+  `SCE_AU3_SENT`, then on the closing `}` runs `GetSendKey`
+  (`:106-169`) to produce the brace-wrapped token `sk` and
+  probes `keywords4.InList(sk)` at `:483-486`. So
+  `Send("{ENTER}")` paints as STRING—SENT—STRING with `{ENTER}`
+  distinctly coloured.
+- **Two sigil families, opposite convention from KIXtart.** The
+  `$var` sigil enters `SCE_AU3_VARIABLE` at `:550` and the `$`
+  is INCLUDED in the emitted style run. The `@macro` sigil
+  enters the SCE_AU3_KEYWORD scan state at `:552` and — unlike
+  KIXtart's LexKix which strips the `@` via `&s[1]` before
+  probing — LexAU3 keeps the `@` in the identifier that reaches
+  `InList`. So `AU3_MACROS` entries MUST have the leading `@`.
+  Same for `AU3_PREPROCESSORS` and the `#` sigil at `:549`.
+- **COM object member access.** `$obj.Method` paints as
+  `$obj` VARIABLE, `.` OPERATOR, `Method` COMOBJ (via the
+  transition at `:299-302` when `sc.chPrev == '.'` and next
+  char is a word char). Distinct SCE style so method calls on
+  COM objects paint differently from bare identifiers.
+
+Eight wordlist classes populated per `AU3WordLists[]`:
+
+- **`AU3_KEYWORDS` (class 0, 44 tokens):** AutoIt3 reserved
+  words — control flow (`if` / `else` / `elseif` / `endif` /
+  `while` / `wend` / `for` / `to` / `step` / `next` / `select`
+  / `case` / `endselect` / `switch` / `endswitch` / `do` /
+  `until` / `with` / `endwith`), function control (`func` /
+  `endfunc` / `return` / `exit` / `exitloop` / `continueloop`
+  / `continuecase`), variable declarations (`dim` / `local` /
+  `global` / `const` / `enum` / `redim` / `static` / `byref` /
+  `volatile` / `readonly`), constants (`true` / `false` /
+  `null` / `default`), and word operators (`and` / `or` /
+  `not`).
+- **`AU3_FUNCTIONS` (class 1, 370 tokens):** AutoIt3 built-in
+  functions — a representative subset of the ~1200 total
+  built-in surface (one of the largest in Windows scripting).
+  Covers strings, GUI create + control (~50 `GUICtrl*`
+  functions alone), filesystem, registry, process control,
+  windows, controls, math, arrays, mouse, clipboard, timers,
+  networking (TCP/UDP/HTTP), DLL calls, COM interop, and
+  environment. Extension slot for a future per-project override
+  covers the residual surface.
+- **`AU3_MACROS` (class 2, 101 tokens):** `@`-prefixed runtime
+  macros. Path (`@ScriptDir`, `@TempDir`, `@WindowsDir`),
+  identity (`@ComputerName`, `@UserName`), time (`@YEAR` /
+  `@MON` / `@MDAY` / `@HOUR` / `@MIN` / `@SEC`), display
+  (`@DesktopWidth` / `@DesktopHeight`), OS
+  (`@OSVersion` / `@OSArch`), error state (`@error` /
+  `@extended` / `@exitcode`), and constants (`@CR` / `@LF` /
+  `@CRLF` / `@TAB`, plus the `@SW_*` window-state constants
+  used with `Run()` / `WinSetState()`).
+- **`AU3_SENDKEYS` (class 3, 91 tokens):** brace-wrapped
+  SendKeys tokens (`{ENTER}`, `{TAB}`, `{F1}`-`{F12}`, arrow
+  keys, numpad, lock keys, modifier tokens, browser keys,
+  volume, media, launch keys, plus the literal-punctuation
+  escapes `{!}` / `{#}` / `{+}` / `{^}` / `{\{}` / `{\}}`).
+- **`AU3_PREPROCESSORS` (class 4, 34 tokens):** `#`-prefixed
+  compiler / preprocessor directives (`#include` /
+  `#include-once` / `#region` / `#endregion` /
+  `#notrayicon` / `#requireadmin` / `#pragma`, plus the full
+  `#autoit3wrapper_*` metadata set that AutoIt3Wrapper
+  understands). **Deliberately excludes** `#cs` /
+  `#comments-start` / `#ce` / `#comments-end` — those are
+  handled by dedicated literal-string branches at `:320-324`
+  and `:260-264` that promote directly to
+  `SCE_AU3_COMMENTBLOCK` before the wordlist probe would ever
+  fire.
+- **`AU3_SPECIAL` (class 5, empty):** project-extension slot.
+  Empty install required — the classifier addresses class 5
+  unconditionally at `:346`.
+- **`AU3_EXPAND` (class 6, empty):** project-extension slot for
+  multi-line expand constructs. The bare `_` line-continuation
+  is intentionally NOT here — dedicated hard-coded path at
+  `:358-360` promotes it to OPERATOR.
+- **`AU3_UDF` (class 7, 90 tokens):** AutoIt3 Standard UDF
+  Library (the underscore-prefixed helpers shipped in
+  `Include/*.au3` with the AutoIt3 compiler). Covers arrays
+  (`_Array*`), date/time (`_Date*`), file (`_File*`), GUI
+  (`_GUICtrl*`), math (`_Math_*`), string (`_String*`),
+  Windows API (`_WinAPI_*`), inet, and misc. Under 100 tokens
+  — representative subset of the ~600-1000 UDF surface.
+  Distinct SCE style so authors can visually distinguish
+  first-party built-ins (FUNCTION) from UDF-library helpers.
+
+Theme choices: KEYWORD → `Keyword` (bold-blue); FUNCTION / UDF
+/ COMOBJ → `Keyword2` (teal — three "callable helpers" the
+language provides). SPECIAL also routes to `Keyword2` but for a
+different reason — the class ships empty as a per-project
+extension slot, and the teal accent reserves a distinctive visual
+signal for whatever a future per-project override populates it
+with; the "callable helper" grouping doesn't apply. MACRO / SENT
+→ `Preprocessor`
+(purple accent for the two structured-named-token families —
+`@Error` runtime macros AND `{ENTER}` SendKeys share the visual
+"this is a named token, not string content" role); PREPROCESSOR
+→ `Macro` (C-family `#define` accent, distinct from MACRO
+because AutoIt3's preprocessor and runtime macros are
+semantically different); VARIABLE (`$name`) → `Lifetime` (matches
+Rust `'lt`, KIXtart `$var`, Ruby `SCE_RB_INSTANCE_VAR`); EXPAND
+→ `Keyword` (empty class today; visual slot reserved for a
+future per-project extension); COMMENT (`;`) + COMMENTBLOCK
+(`#cs ... #ce`) → `Comment` (both italic); STRING → `String`;
+NUMBER → `Number`; OPERATOR → `Operator`.
+
+Only KEYWORD is bolded. FUNCTION / UDF / COMOBJ share the
+Keyword2 colour accent but not weight, matching the framework's
+"one bold visual for language keywords" rule.
+
+Structural test coverage: 14 invariants including
+8-class-in-canonical-order pin, non-empty guards for classes 0
+/ 1 / 2 / 3 / 4 / 7, empty guards for classes 5 / 6, per-wordlist
+lowercase pin (guards case-insensitive contract), `@`-sigil
+required in `AU3_MACROS`, `#`-sigil required in
+`AU3_PREPROCESSORS`, brace-wrapping required in `AU3_SENDKEYS`,
+15 style-routing pins, `DEFAULT`-unmapped guard, 2-entry italic
+set (comment family), 1-entry bold set (KEYWORD), 5
+cross-language non-reuse pins, and 5+3+3+3+2 anchor pins across
+keywords / functions / macros / sendkeys / preprocessors.
 
 ## Notes
 

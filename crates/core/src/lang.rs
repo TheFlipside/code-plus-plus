@@ -5964,6 +5964,500 @@ pub const KIX_MACROS: &str = concat!(
     "computer lanroot ",
 );
 
+/// Space-separated `AutoIt3` **reserved-word** vocabulary installed
+/// via `LexAU3`'s `SCI_SETKEYWORDS(0, ...)` — class 0
+/// (`"#autoit keywords"`) at
+/// `vendor/lexilla/lexers/LexAU3.cxx:900-909`. Drives
+/// `SCE_AU3_KEYWORD` via the identifier-exit classifier at
+/// `LexAU3.cxx:326-329`: on scan exit, `keywords.InList(s)` is
+/// probed FIRST (before functions / macros / preprocessors /
+/// UDFs), and matches promote from the intermediate
+/// `SCE_AU3_KEYWORD` scan state to the final `SCE_AU3_KEYWORD`
+/// paint style.
+///
+/// **Case-insensitive language, byte-exact wordlist.** `AutoIt3`
+/// is case-insensitive: `If`, `IF`, `if` are the same reserved
+/// word. The classifier calls `tolower(sc.ch)` at
+/// `LexAU3.cxx:247` before every wordlist probe, so entries
+/// MUST be lowercase — same convention as `VHDL_KEYWORDS`,
+/// `KIX_KEYWORDS`, and `PS_LEVEL1_KEYWORDS`.
+///
+/// **Source.** `AutoIt3` 3.3.16.x language reference (the current
+/// stable branch). Cross-referenced against the `AutoIt3`
+/// documentation shipped with the compiler and the Notepad++
+/// 8.x default `AutoIt` UDL. No code copied from Notepad++.
+pub const AU3_KEYWORDS: &str = concat!(
+    // Control flow — leaders
+    "if then else elseif endif ",
+    "while wend for to step next in ",
+    "do until select case endselect switch endswitch ",
+    "with endwith ",
+    // Function / procedure control
+    "func endfunc return exit exitloop continueloop continuecase ",
+    // Variable declarations
+    "dim local global const enum redim static byref volatile ",
+    // Boolean / nil constants
+    "true false null default ",
+    // Logical operators (word form)
+    "and or not ",
+);
+
+/// Space-separated `AutoIt3` **built-in-function** vocabulary
+/// installed via `LexAU3`'s `SCI_SETKEYWORDS(1, ...)` — class 1
+/// (`"#autoit functions"`) at `LexAU3.cxx:900-909`. Drives
+/// `SCE_AU3_FUNCTION` via the classifier at `LexAU3.cxx:330-333`:
+/// on scan exit, if `keywords.InList(s)` returned false,
+/// `keywords2.InList(s)` is probed — matches promote from the
+/// intermediate `SCE_AU3_KEYWORD` scan state to `SCE_AU3_FUNCTION`.
+///
+/// **Scope.** `AutoIt3` has ~1200 built-in functions — one of the
+/// largest built-in surfaces in Windows scripting. This list
+/// covers the CORE surface — strings, GUI, filesystem, registry,
+/// process control, windows, controls, math, arrays, mouse,
+/// clipboard, timers, HTTP, and system introspection. It is
+/// representative rather than exhaustive; a project can add
+/// more via a future per-project override once that surface
+/// exists.
+///
+/// **Case-insensitive language, byte-exact wordlist.** Same
+/// case-folding rule as `AU3_KEYWORDS`. Entries lowercase.
+///
+/// **Source.** `AutoIt3` 3.3.16.x language reference. No code
+/// copied.
+pub const AU3_FUNCTIONS: &str = concat!(
+    // String
+    "stringlen stringleft stringright stringmid stringupper stringlower ",
+    "stringsplit stringreplace stringinstr stringformat ",
+    "stringregexp stringregexpreplace ",
+    "stringtrimleft stringtrimright stringstripcr stringstripws ",
+    "stringtobinary stringtoasciiarray ",
+    "stringfromasciiarray stringcompare stringaddcr stringreverse ",
+    "stringisalnum stringisalpha stringisascii stringisdigit ",
+    "stringisfloat stringisint stringislower stringisspace ",
+    "stringisupper stringisxdigit ",
+    // GUI create + control
+    "guicreate guidelete guigetmsg guigetstyle guiregistermsg ",
+    "guiswitch guistartgroup guisetaccelerators guisetbkcolor ",
+    "guisetcoord guisetcursor guisetfont guisethelp guiseticon ",
+    "guisetonevent guisetstate guisetstyle ",
+    "guictrlcreateavi guictrlcreatebutton guictrlcreatecheckbox ",
+    "guictrlcreatecombo guictrlcreatecontextmenu guictrlcreatedate ",
+    "guictrlcreatedummy guictrlcreateedit guictrlcreategraphic ",
+    "guictrlcreategroup guictrlcreateicon guictrlcreateinput ",
+    "guictrlcreatelabel guictrlcreatelist guictrlcreatelistview ",
+    "guictrlcreatelistviewitem guictrlcreatemenu guictrlcreatemenuitem ",
+    "guictrlcreatemonthcal guictrlcreateobj guictrlcreatepic ",
+    "guictrlcreateprogress guictrlcreateradio guictrlcreateslider ",
+    "guictrlcreatetab guictrlcreatetabitem guictrlcreatetreeview ",
+    "guictrlcreatetreeviewitem guictrlcreateupdown ",
+    "guictrldelete guictrlgethandle guictrlgetstate ",
+    "guictrlread guictrlrecvmsg guictrlregisterlistviewsort ",
+    "guictrlsendmsg guictrlsendtodummy guictrlsetbkcolor ",
+    "guictrlsetcolor guictrlsetcursor guictrlsetdata guictrlsetdefbkcolor ",
+    "guictrlsetdefcolor guictrlsetfont guictrlsetgraphic ",
+    "guictrlsetimage guictrlsetlimit guictrlsetonevent guictrlsetpos ",
+    "guictrlsetresizing guictrlsetstate guictrlsetstyle guictrlsettip ",
+    // File / directory / drive
+    "fileopen fileclose fileread filereadline ",
+    "filewrite filewriteline fileexists filedelete ",
+    "filemove filecopy filerecycle filerecycleempty ",
+    "filefindfirstfile filefindnextfile fileflush ",
+    "filegetattrib filegetencoding filegetlongname ",
+    "filegetshortname filegetshortcut filegetsize ",
+    "filegettime filegetversion filegetpos ",
+    "filesetattrib filesetend filesetpos filesettime ",
+    "filechangedir filecreateshortcut filecreatentfslink ",
+    "fileselectfolder filesavedialog fileopendialog ",
+    "filereadtoarray filewritefromarray ",
+    "dircreate dircopy dirmove dirremove dirgetsize ",
+    "drivegetdrive drivegetfilesystem drivegetlabel drivegetserial ",
+    "drivegettype drivemapadd drivemapdel drivemapget drivesetlabel ",
+    "drivespacefree drivespacetotal drivestatus ",
+    // Registry
+    "regread regwrite regdelete regenumkey regenumval ",
+    // Process / shell
+    "run runas runaswait runwait shellexecute shellexecutewait ",
+    "processclose processexists processgetstats processlist ",
+    "processsetpriority processwait processwaitclose ",
+    // Windows
+    "winactivate winactive winclose winexists winflash winminimizeall ",
+    "winminimizeallundo winmove winkill winlist ",
+    "wingetcaretpos wingetclasslist wingetclientsize wingethandle ",
+    "wingetpos wingetprocess wingetstate wingettext wingettitle ",
+    "winsetontop winsetstate winsettitle winsettrans ",
+    "winmenuselectitem winwait winwaitactive winwaitclose winwaitnotactive ",
+    // Controls
+    "controlclick controlcommand controldisable controlenable ",
+    "controlfocus controlgetfocus controlgethandle controlgetpos ",
+    "controlgettext controlhide controllistview controlmove ",
+    "controlsend controlsettext controlshow controltreeview ",
+    // Math
+    "abs ceiling cos sin tan atan acos asin exp log mod sqrt ",
+    "random round floor int number hex dec ",
+    "bitand bitor bitxor bitnot bitshift bitrotate ",
+    // Array / type
+    "ubound assign eval isarray isbinary isbool isdeclared ",
+    "isdllstruct isfloat isfunc ishwnd isint iskeyword ",
+    "isnumber isobj isptr isstring ",
+    "objcreate objevent objgetacc objname ",
+    // Message / UI / clipboard
+    "msgbox inputbox traytip tooltip ",
+    "clipget clipput trayitemgetstate trayitemgettext ",
+    "trayitemsetonevent trayitemsetstate trayitemsettext ",
+    "traygetmsg traysetclick trayseticon traysetonevent ",
+    "traysetpauseicon traysetstate traysettooltip ",
+    // Timer / callback
+    "sleep timerinit timerdiff adlibregister adlibunregister ",
+    "hotkeyset ",
+    // Mouse
+    "mouseclick mouseclickdrag mousedown mouseup mousemove ",
+    "mousegetpos mousegetcursor mousewheel ",
+    // Send / keyboard
+    "send sendkeepactive ",
+    // Console / stdout
+    "consoleread consolewrite consolewriteerror ",
+    // Networking / TCP / UDP / HTTP
+    "tcpaccept tcpclosesocket tcpconnect tcplisten ",
+    "tcpnametoip tcprecv tcpsend tcpshutdown tcpstartup ",
+    "udpbind udpclosesocket udpopen udprecv udpsend udpshutdown udpstartup ",
+    "inetclose inetget inetgetinfo inetgetsize inetread ",
+    // Automation / DLL / Ptr
+    "dllcall dllcallbackfree dllcallbackgetptr dllcallbackregister ",
+    "dllclose dllopen dllstructcreate dllstructgetdata dllstructgetptr ",
+    "dllstructgetsize dllstructsetdata ",
+    "ptr dllcalladdress ",
+    // Environment / config
+    "envget envset envupdate ",
+    "opt setextended seterror ",
+    "iniread iniwrite inideletesection iniwritesection ",
+    "inireadsection inireadsectionnames ",
+    // Autoit meta
+    "autoitwingettitle autoitwinsettitle autoitsetoption ",
+    "call funcname onautoitexitregister onautoitexitunregister ",
+    "execute pixelchecksum pixelgetcolor pixelsearch ",
+    "binary binarylen binarymid binarytostring ",
+    "asc chr ascw chrw ",
+    "vargettype ",
+    // Blocking / input
+    "blockinput cdtray beep memgetstats ",
+);
+
+/// Space-separated `AutoIt3` **`@`-prefixed macro** vocabulary
+/// installed via `LexAU3`'s `SCI_SETKEYWORDS(2, ...)` — class 2
+/// (`"#autoit macros"`) at `LexAU3.cxx:900-909`. Drives
+/// `SCE_AU3_MACRO` via the classifier at `LexAU3.cxx:334-337`
+/// on `keywords3.InList(s)` hit.
+///
+/// **Entries include the leading `@` sigil.** Unlike `KIXtart`'s
+/// `KIX_MACROS` (which strips the `@` via `&s[1]` at
+/// `LexKix.cxx:86` before probing), `LexAU3`'s classifier enters
+/// the `SCE_AU3_KEYWORD` scan state on `@` at `LexAU3.cxx:552`
+/// and includes the `@` in the identifier that reaches
+/// `InList(s)`. Wordlist entries MUST have the leading `@`.
+///
+/// **Case-insensitive language, byte-exact wordlist.** Same
+/// `tolower` case-folding at `:247` as the other `AutoIt`
+/// wordlists — entries lowercase (with the leading `@`).
+///
+/// **Source.** `AutoIt3` 3.3.16.x macro reference — ~95 built-in
+/// macros covering identity (user / computer / logon), time
+/// (year / month / day / hour / min / sec / mday / wday / yday),
+/// paths (script / desktop / documents / home / temp / windows /
+/// system / program-files), display (desktop resolution / depth
+/// / refresh), OS info (version / arch / build / lang), autoit
+/// meta (script name / line number / autoit-version), error
+/// state (@error / @extended / @exitcode), and constants (@CR /
+/// `@LF` / `@CRLF` / `@TAB` / `@SW_HIDE` / `@SW_SHOW` / etc.).
+pub const AU3_MACROS: &str = concat!(
+    // Path macros
+    "@appdatacommondir @appdatadir @desktopcommondir @desktopdir ",
+    "@documentscommondir @favoritescommondir @favoritesdir ",
+    "@homedrive @homepath @homeshare @mydocumentsdir ",
+    "@programfilesdir @programscommondir @programsdir ",
+    "@scriptdir @scriptfullpath @scriptname @scriptlinenumber ",
+    "@startmenucommondir @startmenudir @startupcommondir @startupdir ",
+    "@systemdir @tempdir @userprofiledir @windowsdir @workingdir ",
+    "@commonfilesdir @comspec ",
+    // Identity / logon
+    "@computername @username ",
+    "@logondnsdomain @logondomain @logonserver ",
+    // Autoit meta
+    "@autoitexe @autoitpid @autoitversion @autoitx64 ",
+    "@compiled @numparams ",
+    // Error state
+    "@error @extended @exitcode @exitmethod ",
+    // Time / date
+    "@year @mon @mday @hour @min @sec @msec ",
+    "@wday @yday ",
+    // Display
+    "@desktopdepth @desktopheight @desktoprefresh @desktopwidth ",
+    // OS
+    "@osarch @osbuild @oslang @osservicepack @ostype @osversion ",
+    "@cpuarch @processorarch @kblayout @muilang ",
+    // GUI state
+    "@gui_ctrlhandle @gui_ctrlid @gui_dragfile @gui_dragid ",
+    "@gui_dropid @gui_winhandle ",
+    // Tray
+    "@trayiconflashing @trayiconvisible ",
+    // Hotkey state
+    "@hotkeypressed ",
+    // IP address
+    "@ipaddress1 @ipaddress2 @ipaddress3 @ipaddress4 ",
+    // COM
+    "@com_eventobj ",
+    // Constants (line endings, whitespace)
+    "@cr @lf @crlf @tab ",
+    // SW_* constants used with Run / WinSetState
+    "@sw_disable @sw_enable @sw_hide @sw_lock @sw_maximize ",
+    "@sw_minimize @sw_restore @sw_show @sw_showdefault ",
+    "@sw_showmaximized @sw_showminimized @sw_showminnoactive ",
+    "@sw_showna @sw_shownoactivate @sw_shownormal @sw_unlock ",
+);
+
+/// Space-separated `AutoIt3` **`{KEYNAME}` `SendKeys`** vocabulary
+/// installed via `LexAU3`'s `SCI_SETKEYWORDS(3, ...)` — class 3
+/// (`"#autoit Sent keys"`) at `LexAU3.cxx:900-909`. Drives
+/// `SCE_AU3_SENT` via the classifier at `LexAU3.cxx:483-486`
+/// on `keywords4.InList(sk)` hit, where `sk` is the
+/// brace-wrapped token produced by `GetSendKey` at
+/// `LexAU3.cxx:106-169`.
+///
+/// **Unique property: matched INSIDE a string literal.** Every
+/// other `AutoIt` wordlist matches at the identifier boundary in
+/// normal source; `SendKeys` are matched inside `Send(...)` /
+/// `ControlSend("...", ...)` string arguments. The classifier's
+/// `SCE_AU3_STRING` state at `:437-461` peeks for
+/// `{`/`+`/`!`/`^`/`#` and transitions into `SCE_AU3_SENT`
+/// state, then on the closing `}` runs `GetSendKey` and applies
+/// **three validation paths** at `LexAU3.cxx:473-490`:
+///  1. If `GetSendKey` returns 1 (invalid trailing modifier) →
+///     downgrade to `SCE_AU3_STRING`.
+///  2. Else if the token is a **single character between braces**
+///     (`strlen(sk) == 3`, e.g. `{a}` / `{b}`) → auto-accept as
+///     `SCE_AU3_SENT` regardless of wordlist match.
+///  3. Else if `keywords4.InList(sk)` → accept as `SCE_AU3_SENT`.
+///  4. Otherwise downgrade to `SCE_AU3_STRING`.
+///
+/// So `Send("{ENTER}")` paints as STRING—SENT—STRING with
+/// `{ENTER}` distinctly coloured. Even a wordlist that omits
+/// `{ENTER}` would still highlight `Send("{a}")` correctly via
+/// the single-char auto-accept path.
+///
+/// **Entries include the enclosing braces.** `GetSendKey` fills
+/// `sk` with the brace-wrapped token — `{ENTER}`, not `ENTER` —
+/// so wordlist entries MUST have the braces.
+///
+/// **Case-insensitive language, byte-exact wordlist.** Same
+/// `tolower` case-folding — entries lowercase (with braces).
+///
+/// **Source.** `AutoIt3` 3.3.16.x `Send()` function reference. No
+/// code copied.
+pub const AU3_SENDKEYS: &str = concat!(
+    // Whitespace / editing
+    "{enter} {tab} {space} {backspace} {bs} ",
+    "{delete} {del} {insert} {ins} ",
+    // Arrow keys
+    "{up} {down} {left} {right} ",
+    // Navigation
+    "{home} {end} {pgup} {pgdn} ",
+    // Escape
+    "{esc} {escape} ",
+    // Function keys
+    "{f1} {f2} {f3} {f4} {f5} {f6} {f7} {f8} {f9} {f10} {f11} {f12} ",
+    // Lock keys
+    "{capslock} {numlock} {scrolllock} ",
+    "{pause} {break} {printscreen} ",
+    // Modifier tokens (bare modifier — used with a following key)
+    "{alt} {shift} {ctrl} ",
+    "{lalt} {lshift} {lctrl} {ralt} {rshift} {rctrl} ",
+    "{lwin} {rwin} {appskey} ",
+    // Numpad
+    "{numpad0} {numpad1} {numpad2} {numpad3} {numpad4} ",
+    "{numpad5} {numpad6} {numpad7} {numpad8} {numpad9} ",
+    "{numpadmult} {numpadadd} {numpadsub} {numpaddiv} {numpaddot} ",
+    "{numpadenter} ",
+    // Browser keys
+    "{browser_back} {browser_forward} {browser_refresh} ",
+    "{browser_stop} {browser_search} {browser_favorites} {browser_home} ",
+    // Volume
+    "{volume_mute} {volume_down} {volume_up} ",
+    // Media
+    "{media_next} {media_prev} {media_stop} {media_play_pause} ",
+    // Launch
+    "{launch_mail} {launch_media} {launch_app1} {launch_app2} ",
+    // Sleep
+    "{sleep} ",
+    // Special-char escapes (literal punctuation via braces —
+    // AutoIt's `{{}` sends literal `{`, `{}}` sends literal `}`;
+    // both are 3-char tokens with NO backslash. Rust source
+    // `"{{}"` and `"{}}"` produce the exact 3 bytes each).
+    "{!} {#} {+} {^} {{} {}} ",
+    // ASC code prefix
+    "{asc} ",
+);
+
+/// Space-separated `AutoIt3` **preprocessor-directive** vocabulary
+/// installed via `LexAU3`'s `SCI_SETKEYWORDS(4, ...)` — class 4
+/// (`"#autoit Pre-processors"`) at `LexAU3.cxx:900-909`. Drives
+/// `SCE_AU3_PREPROCESSOR` via the classifier at
+/// `LexAU3.cxx:338-345` on `keywords5.InList(s)` hit.
+///
+/// **Entries include the leading `#` sigil.** `LexAU3`'s
+/// classifier enters `SCE_AU3_KEYWORD` scan state on `#` at
+/// `LexAU3.cxx:549` and includes the `#` in the identifier
+/// that reaches `InList(s)`. So wordlist entries MUST have
+/// the leading `#`.
+///
+/// **`#cs` / `#comments-start` handled OUT-OF-BAND.** The
+/// classifier checks the literal strings `#cs` and
+/// `#comments-start` at `:320-324` BEFORE the preprocessor
+/// wordlist probe and promotes them directly to
+/// `SCE_AU3_COMMENTBLOCK`. So including those two in this
+/// wordlist would be dead code — they never reach the
+/// wordlist probe. Same for `#ce` / `#comments-end` on the
+/// closing side at `:260-264`. Deliberately excluded.
+///
+/// **`#include` special-cased.** On match, the classifier
+/// sets `si=3` at `:341-344` so the NEXT `<...>` string is
+/// styled as `SCE_AU3_STRING` (the angle-bracket include-path
+/// form). This side effect happens regardless of the
+/// preprocessor style routing — `#include` still paints as
+/// PREPROCESSOR.
+///
+/// **Case-insensitive language, byte-exact wordlist.** Same
+/// `tolower` case-folding — entries lowercase (with the `#`).
+///
+/// **Source.** `AutoIt3` 3.3.16.x compiler directives (`Au3Info` /
+/// `Aut2Exe` documentation). No code copied.
+pub const AU3_PREPROCESSORS: &str = concat!(
+    // Include + section markers
+    "#include #include-once ",
+    "#region #endregion ",
+    // Compiler options (Aut2Exe / `AutoIt3`Wrapper directives)
+    "#notrayicon #requireadmin ",
+    "#pragma ",
+    // `AutoIt3`Wrapper metadata (very common in-source directives)
+    "#autoit3wrapper_add_constants #autoit3wrapper_autoit3dir ",
+    "#autoit3wrapper_change2cui #autoit3wrapper_compression ",
+    "#autoit3wrapper_icon #autoit3wrapper_outfile ",
+    "#autoit3wrapper_outfile_x64 #autoit3wrapper_pluginsdir ",
+    "#autoit3wrapper_res_comment #autoit3wrapper_res_description ",
+    "#autoit3wrapper_res_fileversion #autoit3wrapper_res_fileversion_autoincrement ",
+    "#autoit3wrapper_res_language #autoit3wrapper_res_legalcopyright ",
+    "#autoit3wrapper_res_productname #autoit3wrapper_res_productversion ",
+    "#autoit3wrapper_res_requestedexecutionlevel #autoit3wrapper_res_savesource ",
+    "#autoit3wrapper_run_after #autoit3wrapper_run_au3check ",
+    "#autoit3wrapper_run_before #autoit3wrapper_run_debug_mode ",
+    "#autoit3wrapper_run_tidy #autoit3wrapper_useupx #autoit3wrapper_usex64 ",
+    "#autoit3wrapper_version #autoit3wrapper_versioninfo ",
+    // Comment-block markers — NOT included; see banner rationale.
+);
+
+/// Space-separated `AutoIt3` **special-token** vocabulary installed
+/// via `LexAU3`'s `SCI_SETKEYWORDS(5, ...)` — class 5
+/// (`"#autoit Special"`) at `LexAU3.cxx:900-909`. Drives
+/// `SCE_AU3_SPECIAL` via the classifier at
+/// `LexAU3.cxx:346-348`.
+///
+/// **Deliberately empty.** `LexAU3`'s SPECIAL class is a
+/// project-extension slot the author reserved for user-defined
+/// rare control tokens. `AutoIt3`'s canonical grammar has no
+/// tokens that fit here — the reserved-word / function / macro
+/// / preprocessor split above covers the entire visible surface.
+/// Notepad++'s default UDL ships this class empty too. Empty
+/// install is REQUIRED because the classifier addresses class 5
+/// unconditionally at `:346` — an unset class would still
+/// receive `InList(s)` against a fresh empty list (safe:
+/// returns false), but installing an explicit empty string via
+/// `SCI_SETKEYWORDS(5, "")` is the safer guarantee.
+pub const AU3_SPECIAL: &str = "";
+
+/// Space-separated `AutoIt3` **line-continuation / expand**
+/// vocabulary installed via `LexAU3`'s `SCI_SETKEYWORDS(6, ...)`
+/// — class 6 (`"#autoit Expand"`) at `LexAU3.cxx:900-909`.
+/// Drives `SCE_AU3_EXPAND` via the classifier at
+/// `LexAU3.cxx:350-353` on `keywords7.InList(s) &&
+/// !IsAOperator(sc.ch)` hit.
+///
+/// **Scope.** The `AutoIt3` `_` line-continuation is
+/// intentionally NOT here — the classifier has a dedicated
+/// hard-coded path at `LexAU3.cxx:358-360` that promotes the
+/// bare `_` identifier to OPERATOR (matching the language's
+/// use of `_` as the statement-continuation marker). This
+/// wordlist is for tokens that expand into multi-line
+/// constructs — a narrower category than the KEYWORD class.
+///
+/// **Deliberately empty in the shipping `AutoIt3` grammar.**
+/// The canonical `AutoIt3` vocabulary doesn't populate this
+/// class; the `SciTE` default `.properties` for `AutoIt` leaves
+/// it empty too. Reserved as the per-project extension slot.
+/// Empty install is required — same rationale as `AU3_SPECIAL`.
+pub const AU3_EXPAND: &str = "";
+
+/// Space-separated `AutoIt3` **Standard UDF Library** vocabulary
+/// installed via `LexAU3`'s `SCI_SETKEYWORDS(7, ...)` — class 7
+/// (`"#autoit UDF"`) at `LexAU3.cxx:900-909`. Drives
+/// `SCE_AU3_UDF` via the classifier at `LexAU3.cxx:354-357` on
+/// `keywords8.InList(s)` hit.
+///
+/// **Scope.** The `AutoIt3` Standard UDF Library ships with the
+/// compiler in `Include/*.au3` — hundreds of helper functions
+/// named with an underscore prefix (convention: `_Category_Name`).
+/// The wordlist here covers the major UDF surface areas: array
+/// helpers (`_Array*`), file I/O (`_File*`), date/time
+/// (`_Date*`), string extras (`_String*`), math (`_Math*`),
+/// GUI (`_GUICtrl*`), Windows API (`_Win*`), inet (`_Inet*`,
+/// `_HTTP*`), event log, misc. Under 100 tokens — a
+/// representative subset of the ~600-1000 UDF surface, not
+/// exhaustive. Distinct style so authors can visually
+/// distinguish first-party built-ins (FUNCTION class 1) from
+/// UDF helpers (this class).
+///
+/// **Case-insensitive language, byte-exact wordlist.** Same
+/// case-folding — entries lowercase.
+///
+/// **Source.** `AutoIt3` 3.3.16.x Standard UDF Library reference.
+pub const AU3_UDF: &str = concat!(
+    // Array UDFs
+    "_arraydisplay _arrayadd _arraybinarysearch _arrayconcatenate ",
+    "_arraydelete _arrayfindall _arrayinsert _arraymax _arraymaxindex ",
+    "_arraymin _arrayminindex _arraypop _arraypush _arrayreverse ",
+    "_arraysearch _arraysort _arraytoclip _arraytostring _arraytrim ",
+    "_arrayunique ",
+    // Date / time UDFs
+    "_dateadd _datediff _datedaysinmonth _datedayofweek _dateisleapyear ",
+    "_datetimeformat _datetimesplit _datetodayvalue ",
+    "_dayvaluetodate _nowcalc _nowcalcdate _nowdate _nowtime _now ",
+    "_settime ",
+    // File UDFs
+    "_filecreate _filecountlines _filelisttoarray _filelisttoarrayrec ",
+    "_filereadtoarray _filewritefromarray _filewritelog _filewritetoline ",
+    "_pathfull _pathmake _pathsplit ",
+    "_replacestringinfile ",
+    // GUI UDFs (partial — the biggest set in the UDF library)
+    "_guictrllistview_create _guictrllistview_additem ",
+    "_guictrllistview_addsubitem _guictrllistview_deleteitem ",
+    "_guictrllistview_getitemcount _guictrllistview_setitemtext ",
+    "_guictrltreeview_create _guictrltreeview_add ",
+    "_guictrlcombobox_addstring _guictrlcombobox_deletestring ",
+    "_guictrlmenu_createmenu _guictrlmenu_addmenuitem ",
+    "_guictrlstatusbar_create _guictrlstatusbar_settext ",
+    "_guictrltab_create _guictrledit_appendtext _guictrledit_getlinecount ",
+    // Math UDFs (canonical Math.au3 surface — small)
+    "_degree _mathcheckdiv _max _min _radian ",
+    // String UDFs
+    "_stringbetween _stringencrypt _stringexplode _stringinsert ",
+    "_stringproper _stringrepeat _stringreverse ",
+    // Windows API UDFs
+    "_winapi_createwindowex _winapi_destroywindow _winapi_getdesktopwindow ",
+    "_winapi_getdlgctrlid _winapi_getwindowtextlength _winapi_getwindowtext ",
+    "_winapi_getwindowlong _winapi_setwindowlong _winapi_setwindowpos ",
+    // Inet / HTTP
+    "_inetsmtpmail _inetgetsource _httprequest ",
+    // Misc
+    "_ispressed _sendmessage ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

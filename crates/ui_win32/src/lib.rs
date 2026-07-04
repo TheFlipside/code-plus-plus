@@ -102,21 +102,23 @@ use std::sync::Arc;
 
 use codepp_core::lang::{
     ASM_CPU_KEYWORDS, ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS,
-    ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2,
-    CPP_KEYWORDS, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3,
-    CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
-    HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS,
-    KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM,
-    L_ASP, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT,
-    L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS,
-    L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VHDL,
-    L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-    PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
-    RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
-    SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
-    VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
+    ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS, AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS,
+    AU3_PREPROCESSORS, AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS,
+    BATCH_KEYWORDS_2, CPP_KEYWORDS, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2,
+    CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2,
+    C_KEYWORDS, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
+    KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
+    LUA_KEYWORDS_2, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML,
+    L_INI, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC,
+    L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
+    L_SQL, L_TCL, L_TEX, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
+    RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+    SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+    VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
+    VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -129,11 +131,14 @@ use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
     SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
     SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
-    SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
-    SCE_BAT_AFTER_LABEL, SCE_BAT_COMMAND, SCE_BAT_COMMENT, SCE_BAT_HIDE, SCE_BAT_LABEL,
-    SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_B_COMMENT, SCE_B_DATE, SCE_B_KEYWORD, SCE_B_KEYWORD2,
-    SCE_B_KEYWORD3, SCE_B_KEYWORD4, SCE_B_NUMBER, SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING,
-    SCE_CSS_ATTRIBUTE, SCE_CSS_CLASS, SCE_CSS_COMMENT, SCE_CSS_DIRECTIVE, SCE_CSS_DOUBLESTRING,
+    SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_AU3_COMMENT,
+    SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
+    SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT,
+    SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_BAT_AFTER_LABEL,
+    SCE_BAT_COMMAND, SCE_BAT_COMMENT, SCE_BAT_HIDE, SCE_BAT_LABEL, SCE_BAT_OPERATOR, SCE_BAT_WORD,
+    SCE_B_COMMENT, SCE_B_DATE, SCE_B_KEYWORD, SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4,
+    SCE_B_NUMBER, SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CSS_ATTRIBUTE,
+    SCE_CSS_CLASS, SCE_CSS_COMMENT, SCE_CSS_DIRECTIVE, SCE_CSS_DOUBLESTRING,
     SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_EXTENDED_PSEUDOCLASS, SCE_CSS_EXTENDED_PSEUDOELEMENT,
     SCE_CSS_GROUP_RULE, SCE_CSS_ID, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3,
     SCE_CSS_IMPORTANT, SCE_CSS_OPERATOR, SCE_CSS_PSEUDOCLASS, SCE_CSS_PSEUDOELEMENT,
@@ -6369,6 +6374,125 @@ const KIX_THEME: LangTheme = LangTheme {
     bold: KIX_BOLD,
 };
 
+// AutoIt3 theme — 15 mappings across 16 SCE_AU3_* slots (0..=15).
+// `SCE_AU3_DEFAULT` (0) stays unmapped per the framework's
+// universal convention. `SCE_AU3_KEYWORD` (5) is doubly-used:
+// (a) the final paint style for reserved words, and (b) the
+// intermediate scan state for every identifier that will be
+// rewritten by the classifier's wordlist chain — so mapping it
+// to `StyleSlot::Keyword` correctly paints reserved words
+// (rewrites to other classes happen BEFORE paint time via
+// `sc.ChangeState`).
+//
+// **Cross-family palette choices:**
+//   - KEYWORD (reserved words: `if`, `for`, `func`, `and`,
+//     etc.) → `Keyword` — bold-blue, standard.
+//   - FUNCTION (built-in AutoIt3 functions) → `Keyword2` — teal,
+//     so the language-keyword-vs-built-in-function split is
+//     visually distinct.
+//   - UDF (`_ArrayDisplay`-style Standard UDF Library helpers) →
+//     `Keyword2` (same as FUNCTION — both are "callable helpers
+//     the language provides"). Distinct from user-defined
+//     functions which paint as default.
+//   - MACRO (`@Error`, `@ScriptDir`, etc.) → `Preprocessor` —
+//     the purple accent matches Ruby `:symbol`, Smalltalk
+//     `#symbol`, KIXtart `@macro` and the "designator that
+//     follows a sigil" family.
+//   - PREPROCESSOR (`#include`, `#Region`, etc.) → `Macro` —
+//     matches C's `#define` styling family. Distinct from
+//     MACRO because AutoIt3 preprocessor and macro are
+//     semantically different (compile-time vs runtime
+//     constants), and the visual split reflects that.
+//   - VARIABLE (`$name`) → `Lifetime` — matches Rust `'lt`,
+//     KIXtart `$var`, Ruby `SCE_RB_INSTANCE_VAR` conventions.
+//   - SENT (`{ENTER}` / `{F1}` INSIDE strings) → `Preprocessor`
+//     — matches MACRO's purple accent to signal "this is a
+//     named token, not string content." The visual match
+//     between MACRO and SENT is intentional: both are
+//     structured named tokens with fixed vocabulary that a
+//     reader needs to see as distinct from surrounding text.
+//   - COMOBJ (`$obj.Method` — the `Method` portion) →
+//     `Keyword2` (same as FUNCTION) — a method call reads as
+//     a function invocation.
+//   - SPECIAL (empty class, reserved for user extension) →
+//     `Keyword2` — the visual slot is reserved so a future
+//     per-project override that populates the class produces
+//     immediate visible highlighting.
+//   - EXPAND (empty class, reserved for user extension) →
+//     `Keyword` — the visual slot is reserved same way.
+//   - STRING → `String` — standard.
+//   - NUMBER → `Number` — standard.
+//   - OPERATOR → `Operator` — standard.
+//   - COMMENT (`;`) + COMMENTBLOCK (`#cs ... #ce`) → `Comment`.
+const AU3_STYLES: &[(usize, StyleSlot)] = &[
+    // Comments (line + block)
+    (SCE_AU3_COMMENT, StyleSlot::Comment),
+    (SCE_AU3_COMMENTBLOCK, StyleSlot::Comment),
+    // Numeric literal
+    (SCE_AU3_NUMBER, StyleSlot::Number),
+    // Built-in functions (teal)
+    (SCE_AU3_FUNCTION, StyleSlot::Keyword2),
+    // Reserved words (bold-blue)
+    (SCE_AU3_KEYWORD, StyleSlot::Keyword),
+    // `@Macro` runtime constants
+    (SCE_AU3_MACRO, StyleSlot::Preprocessor),
+    // String literal
+    (SCE_AU3_STRING, StyleSlot::String),
+    // Punctuation operator
+    (SCE_AU3_OPERATOR, StyleSlot::Operator),
+    // `$var` variables
+    (SCE_AU3_VARIABLE, StyleSlot::Lifetime),
+    // `{ENTER}` SendKeys inside strings — matches MACRO purple
+    (SCE_AU3_SENT, StyleSlot::Preprocessor),
+    // `#include` / `#Region` etc. — C-family macro accent
+    (SCE_AU3_PREPROCESSOR, StyleSlot::Macro),
+    // Empty class — reserved user-extension slot
+    (SCE_AU3_SPECIAL, StyleSlot::Keyword2),
+    // Empty class — reserved user-extension slot
+    (SCE_AU3_EXPAND, StyleSlot::Keyword),
+    // `$obj.Method` — the `Method` half
+    (SCE_AU3_COMOBJ, StyleSlot::Keyword2),
+    // Standard UDF Library helpers
+    (SCE_AU3_UDF, StyleSlot::Keyword2),
+];
+
+// Italic on both comment families — universal prose-italic
+// convention. Line (`;`) and block (`#cs ... #ce`) comments
+// both render italic.
+const AU3_ITALIC: &[usize] = &[SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK];
+
+// Bold on KEYWORD only. FUNCTION / UDF / COMOBJ share the
+// Keyword2 colour accent but not weight, matching the
+// framework's "one bold visual for language keywords" rule.
+// EXPAND (mapped to Keyword) is intentionally NOT bolded —
+// the class is empty in the canonical grammar, so bolding it
+// would matter only if a user populates the class, in which
+// case the palette slot alone is enough visual signal.
+const AU3_BOLD: &[usize] = &[SCE_AU3_KEYWORD];
+
+// Eight-class install matches `AU3WordLists[]` at
+// `LexAU3.cxx:900-909`. Class ordering matters for the
+// classifier's dispatch precedence at `LexAU3.cxx:326-357`:
+// keywords → functions → macros → preprocessors → special →
+// expand → UDF (SendKeys is class 3 but is probed only from
+// the SCE_AU3_SENT state at `:483` inside strings, not from
+// the identifier-exit path).
+const AU3_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, AU3_KEYWORDS),
+        (1, AU3_FUNCTIONS),
+        (2, AU3_MACROS),
+        (3, AU3_SENDKEYS),
+        (4, AU3_PREPROCESSORS),
+        (5, AU3_SPECIAL),
+        (6, AU3_EXPAND),
+        (7, AU3_UDF),
+    ],
+    styles: AU3_STYLES,
+    italic: AU3_ITALIC,
+    bold: AU3_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -6570,6 +6694,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&VHDL_THEME)
     } else if lang == L_KIX {
         Some(&KIX_THEME)
+    } else if lang == L_AU3 {
+        Some(&AU3_THEME)
     } else {
         None
     }
@@ -21728,6 +21854,9 @@ mod lang_theme_tests {
         SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
         SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
         SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
+        SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
+        SCE_AU3_KEYWORD, SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR,
+        SCE_AU3_SENT, SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE,
         SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3,
         SCE_DIFF_ADDED, SCE_DIFF_CHANGED, SCE_DIFF_COMMAND, SCE_DIFF_COMMENT, SCE_DIFF_DELETED,
         SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD, SCE_DIFF_PATCH_DELETE, SCE_DIFF_POSITION,
@@ -21761,22 +21890,23 @@ mod lang_theme_tests {
     // unmapped-ness, so pull the constant from codepp_scintilla_sys
     // directly rather than re-exporting through super.
     use codepp_core::lang::{
-        BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1,
-        CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
-        CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS,
-        JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS,
-        LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM, L_ASP, L_BASH, L_BATCH, L_C, L_CPP,
-        L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA,
-        L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY,
-        L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VHDL, L_XML,
-        MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-        PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-        PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
-        RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS,
-        SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
-        TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES,
-        VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES,
-        VHDL_USERWORDS, XML_KEYWORDS,
+        AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS, AU3_PREPROCESSORS, AU3_SENDKEYS,
+        AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CPP_KEYWORDS_2,
+        CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
+        CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS,
+        JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS,
+        KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ASM, L_ASP,
+        L_AU3, L_BASH, L_BATCH, L_C, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA,
+        L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL,
+        L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL,
+        L_TEX, L_TEXT, L_VB, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
+        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+        VB_KEYWORDS, VB_KEYWORDS_2, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
+        VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
     };
     use codepp_scintilla_sys::SCE_VHDL_IDENTIFIER;
 
@@ -26584,6 +26714,266 @@ mod lang_theme_tests {
                 KIX_MACROS.split_whitespace().any(|t| t == anchor),
                 "KIX_MACROS must include macro `{anchor}` (bare name, \
                  no `@` sigil)"
+            );
+        }
+    }
+
+    /// `AutoIt3` (`L_AU3`) uses Lexilla's `LexAU3` — the widest
+    /// wordlist-class lexer we've wired (8 classes at
+    /// `LexAU3.cxx:900-909`) with a rich state machine covering
+    /// variables (`$var`), macros (`@Error`), preprocessor
+    /// directives (`#include`), COM object member access
+    /// (`$obj.Method`), and — uniquely — `SendKeys` tokens
+    /// (`{ENTER}`) recognised INSIDE string literals. 16 `SCE_AU3_*`
+    /// slots (0..=15) with 15 mapped — only `DEFAULT` is
+    /// unmapped. `SCE_AU3_KEYWORD` doubly serves as the
+    /// intermediate scan-in-progress state AND the final paint
+    /// style for reserved words that survive the wordlist chain
+    /// unmatched, so mapping it correctly paints reserved words
+    /// (rewrites to other classes happen BEFORE paint time via
+    /// `sc.ChangeState`).
+    /// Case-insensitive language; `tolower` at `LexAU3.cxx:247`
+    /// case-folds before every wordlist probe, so entries MUST
+    /// be lowercase.
+    ///
+    /// Coverage invariants asserted here:
+    ///   1. `lang_theme(L_AU3)` returns `Some(&AU3_THEME)`.
+    ///   2. Style count matches `AU3_STYLES` (15 mappings — 16
+    ///      `SCE_AU3_*` slots minus `DEFAULT`).
+    ///   3. Eight wordlist classes installed in the exact order
+    ///      of `AU3WordLists[]` at `LexAU3.cxx:900-909`.
+    ///   4. Non-empty classes: 0 (KEYWORDS), 1 (FUNCTIONS), 2
+    ///      (MACROS), 3 (SENDKEYS), 4 (PREPROCESSORS), 7 (UDF).
+    ///      Empty by design: 5 (SPECIAL), 6 (EXPAND).
+    ///   5. All non-sigil wordlist entries lowercase.
+    ///   6. `AU3_MACROS` entries carry a LEADING `@` (opposite of
+    ///      `KIXtart` — `LexAU3` keeps the `@` in the identifier
+    ///      that reaches `InList`, per `:552`).
+    ///   7. `AU3_PREPROCESSORS` entries carry a LEADING `#` (same
+    ///      reason — `:549`).
+    ///   8. `AU3_SENDKEYS` entries carry BOTH enclosing braces
+    ///      (`GetSendKey` at `:106-169` fills `sk` with the
+    ///      brace-wrapped token).
+    ///   9. Style-routing pins for all 15 mapped SCE constants.
+    ///   10. `DEFAULT` remains unmapped.
+    ///   11. Italic set == 2 (COMMENT + COMMENTBLOCK).
+    ///   12. Bold set == 1 (KEYWORD only).
+    ///   13. Cross-language non-reuse of styles slice.
+    ///   14. Anchor tokens present: reserved words (`if`, `while`,
+    ///       `func`, `endfunc`, `and`), functions (`msgbox`,
+    ///       `stringlen`, `guicreate`), macros (`@error`,
+    ///       `@scriptdir`, `@cr`), sendkeys (`{enter}`, `{tab}`,
+    ///       `{f1}`), preprocessors (`#include`, `#region`).
+    #[test]
+    fn au3_uses_lexau3_eight_class_theme() {
+        // Invariant 1.
+        let au3 = lang_theme(L_AU3).expect("AutoIt wired");
+
+        // Invariant 2: 15 style mappings.
+        assert_eq!(
+            au3.styles.len(),
+            15,
+            "AU3_STYLES must map 15 indices (16 SCE_AU3_* slots \
+             minus DEFAULT)"
+        );
+
+        // Invariant 3: 8 wordlist classes in canonical order.
+        assert_eq!(
+            au3.keywords.len(),
+            8,
+            "AU3_THEME must install exactly 8 wordlist classes \
+             (matches AU3WordLists[] at LexAU3.cxx:900-909)"
+        );
+        assert_eq!(au3.keywords[0].0, 0, "class 0 = keywords");
+        assert_eq!(au3.keywords[1].0, 1, "class 1 = functions");
+        assert_eq!(au3.keywords[2].0, 2, "class 2 = macros");
+        assert_eq!(au3.keywords[3].0, 3, "class 3 = sendkeys");
+        assert_eq!(au3.keywords[4].0, 4, "class 4 = preprocessors");
+        assert_eq!(au3.keywords[5].0, 5, "class 5 = special");
+        assert_eq!(au3.keywords[6].0, 6, "class 6 = expand");
+        assert_eq!(au3.keywords[7].0, 7, "class 7 = UDF");
+        assert_eq!(au3.keywords[0].1, AU3_KEYWORDS);
+        assert_eq!(au3.keywords[1].1, AU3_FUNCTIONS);
+        assert_eq!(au3.keywords[2].1, AU3_MACROS);
+        assert_eq!(au3.keywords[3].1, AU3_SENDKEYS);
+        assert_eq!(au3.keywords[4].1, AU3_PREPROCESSORS);
+        assert_eq!(au3.keywords[5].1, AU3_SPECIAL);
+        assert_eq!(au3.keywords[6].1, AU3_EXPAND);
+        assert_eq!(au3.keywords[7].1, AU3_UDF);
+
+        // Invariant 4: which classes non-empty vs empty.
+        for (name, list) in [
+            ("AU3_KEYWORDS", AU3_KEYWORDS),
+            ("AU3_FUNCTIONS", AU3_FUNCTIONS),
+            ("AU3_MACROS", AU3_MACROS),
+            ("AU3_SENDKEYS", AU3_SENDKEYS),
+            ("AU3_PREPROCESSORS", AU3_PREPROCESSORS),
+            ("AU3_UDF", AU3_UDF),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "{name} must be non-empty"
+            );
+        }
+        assert_eq!(
+            AU3_SPECIAL.split_whitespace().count(),
+            0,
+            "AU3_SPECIAL must ship empty — see banner"
+        );
+        assert_eq!(
+            AU3_EXPAND.split_whitespace().count(),
+            0,
+            "AU3_EXPAND must ship empty — see banner"
+        );
+
+        // Invariant 5: entries lowercase (ignoring sigils / braces).
+        for (name, list) in [
+            ("AU3_KEYWORDS", AU3_KEYWORDS),
+            ("AU3_FUNCTIONS", AU3_FUNCTIONS),
+            ("AU3_MACROS", AU3_MACROS),
+            ("AU3_SENDKEYS", AU3_SENDKEYS),
+            ("AU3_PREPROCESSORS", AU3_PREPROCESSORS),
+            ("AU3_UDF", AU3_UDF),
+        ] {
+            for token in list.split_whitespace() {
+                assert!(
+                    token.chars().all(|c| !c.is_ascii_uppercase()),
+                    "{name} token `{token}` contains uppercase — \
+                     LexAU3.cxx:247 lowercases before InList, so \
+                     uppercase entries would never match"
+                );
+            }
+        }
+
+        // Invariant 6: AU3_MACROS all start with `@`.
+        for token in AU3_MACROS.split_whitespace() {
+            assert!(
+                token.starts_with('@'),
+                "AU3_MACROS token `{token}` must start with `@` — \
+                 LexAU3 keeps the sigil in the identifier at \
+                 LexAU3.cxx:552 (opposite of LexKix)"
+            );
+        }
+
+        // Invariant 7: AU3_PREPROCESSORS all start with `#`.
+        for token in AU3_PREPROCESSORS.split_whitespace() {
+            assert!(
+                token.starts_with('#'),
+                "AU3_PREPROCESSORS token `{token}` must start with \
+                 `#` — LexAU3 enters SCE_AU3_KEYWORD scan on `#` \
+                 at :549 and includes it in the InList probe"
+            );
+        }
+
+        // Invariant 8: AU3_SENDKEYS all wrapped in `{...}`.
+        for token in AU3_SENDKEYS.split_whitespace() {
+            assert!(
+                token.starts_with('{') && token.ends_with('}'),
+                "AU3_SENDKEYS token `{token}` must be brace-wrapped \
+                 — GetSendKey at LexAU3.cxx:106-169 fills the probe \
+                 buffer with `{{keyname}}` form"
+            );
+        }
+
+        // Invariant 9: style-routing pins for all 15 mapped SCE.
+        for (idx, slot, name) in [
+            (SCE_AU3_COMMENT, StyleSlot::Comment, "SCE_AU3_COMMENT"),
+            (
+                SCE_AU3_COMMENTBLOCK,
+                StyleSlot::Comment,
+                "SCE_AU3_COMMENTBLOCK",
+            ),
+            (SCE_AU3_NUMBER, StyleSlot::Number, "SCE_AU3_NUMBER"),
+            (SCE_AU3_FUNCTION, StyleSlot::Keyword2, "SCE_AU3_FUNCTION"),
+            (SCE_AU3_KEYWORD, StyleSlot::Keyword, "SCE_AU3_KEYWORD"),
+            (SCE_AU3_MACRO, StyleSlot::Preprocessor, "SCE_AU3_MACRO"),
+            (SCE_AU3_STRING, StyleSlot::String, "SCE_AU3_STRING"),
+            (SCE_AU3_OPERATOR, StyleSlot::Operator, "SCE_AU3_OPERATOR"),
+            (SCE_AU3_VARIABLE, StyleSlot::Lifetime, "SCE_AU3_VARIABLE"),
+            (SCE_AU3_SENT, StyleSlot::Preprocessor, "SCE_AU3_SENT"),
+            (
+                SCE_AU3_PREPROCESSOR,
+                StyleSlot::Macro,
+                "SCE_AU3_PREPROCESSOR",
+            ),
+            (SCE_AU3_SPECIAL, StyleSlot::Keyword2, "SCE_AU3_SPECIAL"),
+            (SCE_AU3_EXPAND, StyleSlot::Keyword, "SCE_AU3_EXPAND"),
+            (SCE_AU3_COMOBJ, StyleSlot::Keyword2, "SCE_AU3_COMOBJ"),
+            (SCE_AU3_UDF, StyleSlot::Keyword2, "SCE_AU3_UDF"),
+        ] {
+            assert!(
+                au3.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 10: DEFAULT unmapped.
+        assert!(
+            !au3.styles.iter().any(|(i, _)| *i == 0),
+            "SCE_AU3_DEFAULT (0) must remain unmapped"
+        );
+
+        // Invariant 11: italic set == 2 comment-family.
+        assert_eq!(
+            au3.italic.len(),
+            2,
+            "AU3_ITALIC must contain exactly COMMENT + COMMENTBLOCK"
+        );
+        assert!(au3.italic.contains(&SCE_AU3_COMMENT));
+        assert!(au3.italic.contains(&SCE_AU3_COMMENTBLOCK));
+
+        // Invariant 12: bold == 1 (KEYWORD).
+        assert_eq!(au3.bold.len(), 1, "AU3_BOLD must contain exactly KEYWORD");
+        assert!(au3.bold.contains(&SCE_AU3_KEYWORD));
+
+        // Invariant 13: cross-language non-reuse.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let rb = lang_theme(L_RUBY).expect("Ruby wired");
+        let ps = lang_theme(L_PS).expect("PostScript wired");
+        let vhdl = lang_theme(L_VHDL).expect("VHDL wired");
+        let kix = lang_theme(L_KIX).expect("KIXtart wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (rb, "Ruby"),
+            (ps, "PostScript"),
+            (vhdl, "VHDL"),
+            (kix, "KIXtart"),
+        ] {
+            assert_ne!(
+                au3.styles, other.styles,
+                "AutoIt must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 14: anchor tokens.
+        for anchor in ["if", "while", "func", "endfunc", "and"] {
+            assert!(
+                AU3_KEYWORDS.split_whitespace().any(|t| t == anchor),
+                "AU3_KEYWORDS must include reserved word `{anchor}`"
+            );
+        }
+        for anchor in ["msgbox", "stringlen", "guicreate"] {
+            assert!(
+                AU3_FUNCTIONS.split_whitespace().any(|t| t == anchor),
+                "AU3_FUNCTIONS must include function `{anchor}`"
+            );
+        }
+        for anchor in ["@error", "@scriptdir", "@cr"] {
+            assert!(
+                AU3_MACROS.split_whitespace().any(|t| t == anchor),
+                "AU3_MACROS must include macro `{anchor}` (with @)"
+            );
+        }
+        for anchor in ["{enter}", "{tab}", "{f1}"] {
+            assert!(
+                AU3_SENDKEYS.split_whitespace().any(|t| t == anchor),
+                "AU3_SENDKEYS must include sendkey `{anchor}` (brace-wrapped)"
+            );
+        }
+        for anchor in ["#include", "#region"] {
+            assert!(
+                AU3_PREPROCESSORS.split_whitespace().any(|t| t == anchor),
+                "AU3_PREPROCESSORS must include directive `{anchor}` (with #)"
             );
         }
     }
