@@ -115,15 +115,15 @@ use codepp_core::lang::{
     INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS,
     KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA,
     L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_CPP, L_CS, L_CSS, L_D,
-    L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX,
-    L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
-    L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
-    L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
-    NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
-    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
-    RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+    L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSP, L_KIX,
+    L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
+    L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
+    L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
+    NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
+    PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
+    POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
+    PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+    RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
     SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
     TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
     VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
@@ -7809,6 +7809,104 @@ const ASP_THEME: LangTheme = LangTheme {
     bold: HYPERTEXT_BOLD,
 };
 
+const JSP_THEME: LangTheme = LangTheme {
+    // JavaServer Pages rides the shared `hypertext` lexer (same
+    // engine as HTML / PHP / ASP / XML — Lexilla exposes no
+    // dedicated `SCLEX_JSP`). Verified against
+    // `LexHTML.cxx:2731` (`lmHTML(SCLEX_HTML, ..., "hypertext",
+    // htmlWordListDesc)`) — a `.jsp` buffer switches on lexer
+    // name `"hypertext"` per `L_JSP`'s `LangEntry`, and the
+    // hypertext state machine handles JSP's five escape
+    // syntaxes without knowing they are JSP-specific:
+    //   - `<%-- ... --%>` comment → `SCE_H_XCCOMMENT` (20),
+    //     labelled "ASP.NET, JSP Comment" per
+    //     `LexHTML.cxx:878`. Already routed to `Comment`
+    //     italic in `HYPERTEXT_STYLES`.
+    //   - `<%@ page ... %>`, `<%@ taglib ... %>`,
+    //     `<%@ include ... %>` directives enter
+    //     `SCE_H_ASPAT` (16) at `LexHTML.cxx:1645`
+    //     unconditionally and stay in that state until the
+    //     closing `%>`. `SCE_H_ASPAT` is labelled
+    //     "preprocessor" per `LexHTML.cxx:874`, so the entire
+    //     directive line renders in the `Preprocessor` colour
+    //     — a coarser highlight than a naive reading might
+    //     expect (individual tokens `page` / `import` / the
+    //     attribute values are NOT sub-styled), but internally
+    //     consistent with how the hypertext lexer treats
+    //     ASP.NET page directives too. No dedicated
+    //     JSP-directive wordlist needed.
+    //   - `<% ... %>` scriptlet, `<%= ... %>` expression,
+    //     `<%! ... %>` declaration — all three enter the
+    //     server-side script state, which for the hypertext
+    //     lexer means `SCE_HJA_*` (the "server javascript"
+    //     range at `LexHTML.cxx:913-926`). Lexilla has no
+    //     "server Java" range — JSP's Java scriptlets share
+    //     the SCE_HJA_* codepoints with ASP.NET server-side
+    //     JScript. Class 1 (JavaScript keywords) drives the
+    //     word-coloring for these blocks.
+    //   - `${ ... }` and `#{ ... }` JSP EL (Expression
+    //     Language) — parses as ordinary text runs; the
+    //     hypertext lexer has no dedicated EL state, so EL
+    //     expressions render at `SCE_H_DEFAULT`. Best-effort
+    //     baseline; matches Notepad++'s JSP row.
+    //
+    // Two wordlist classes installed:
+    //   class 0 = HTML tag names (drives `SCE_H_TAG` for the
+    //             markup body around the `<% %>` blocks —
+    //             shared with HTML / PHP / ASP)
+    //   class 1 = JAVA reserved words (drives BOTH client-side
+    //             `SCE_HJ_WORD` inside `<script>` blocks AND
+    //             server-side `SCE_HJA_WORD` inside `<% %>`
+    //             scriptlets — the hypertext lexer probes the
+    //             same wordlist class 1 for both states).
+    //             Deliberate choice of `JAVA_KEYWORDS` (not
+    //             `JAVASCRIPT_KEYWORDS` like ASP's class 1):
+    //             JSP's primary content is server-side Java,
+    //             not client-side JavaScript. Java and JS
+    //             share most control-flow keywords (`if`,
+    //             `else`, `while`, `for`, `do`, `switch`,
+    //             `case`, `default`, `break`, `continue`,
+    //             `return`, `try`, `catch`, `finally`,
+    //             `throw`, `new`, `this`, `instanceof`,
+    //             `true`, `false`, `null`), so client-side JS
+    //             blocks in a JSP file still get most keywords
+    //             coloured; the JS-only tokens (`function`,
+    //             `var`, `let`, `typeof`, `undefined`,
+    //             `debugger`, `yield`) lose their highlight
+    //             in client-side blocks — an acceptable
+    //             trade-off since JSP files overwhelmingly
+    //             weight toward server-side. Conversely, a
+    //             handful of Java-only tokens (`abstract`,
+    //             `extends`, `implements`, `package`,
+    //             `throws`, `synchronized`, `volatile`,
+    //             `transient`) would spuriously highlight
+    //             inside a client-side JS block, but the
+    //             visual effect is a bare identifier picking
+    //             up bold-blue rather than default — a very
+    //             mild false-positive.
+    //
+    // Classes 2 (VBScript) / 3 (Python) / 4 (PHP) / 5 (SGML)
+    // deliberately not installed — JSP doesn't use any of
+    // those language embeddings. SGML markup inside JSP still
+    // renders correctly via the shared `HYPERTEXT_STYLES`
+    // SGML range without a wordlist install (same pattern as
+    // HTML / XML / ASP).
+    //
+    // **No `JAVA_KEYWORDS_2` (primitives) install available.**
+    // The hypertext lexer exposes one wordlist slot per
+    // embedded language (class 1 for "JavaScript keywords"),
+    // not two — there is no `SCE_HJA_WORD2` sibling to
+    // `SCE_HJA_WORD` that would drive a primitive-type
+    // steel-blue rendering. Consequence: JSP scriptlet
+    // declarations like `int x = 5;` render `int` as a plain
+    // identifier, not Keyword2. This is inherent to
+    // `LexHTML`'s design, not fixable at the theme layer.
+    keywords: &[(0, HTML_KEYWORDS), (1, JAVA_KEYWORDS)],
+    styles: HYPERTEXT_STYLES,
+    italic: HYPERTEXT_ITALIC,
+    bold: HYPERTEXT_BOLD,
+};
+
 /// Extra fold sub-properties beyond the universal `fold` /
 /// `fold.compact` / `fold.comment` trio that
 /// [`Win32Ui::apply_lang`] issues on every language switch.
@@ -7975,6 +8073,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&POWERSHELL_THEME)
     } else if lang == L_R {
         Some(&R_THEME)
+    } else if lang == L_JSP {
+        Some(&JSP_THEME)
     } else {
         None
     }
@@ -23200,20 +23300,20 @@ mod lang_theme_tests {
         JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
         LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
         L_CMAKE, L_COBOL, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
-        L_INNO, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS,
-        L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY,
-        L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML,
-        L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
-        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
-        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS,
-        R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-        SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-        VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-        XML_KEYWORDS, YAML_KEYWORDS,
+        L_INNO, L_JAVA, L_JAVASCRIPT, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB,
+        L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC,
+        L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG,
+        L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+        POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+        POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+        PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
+        RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
+        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
+        VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -23274,6 +23374,7 @@ mod lang_theme_tests {
             (L_SCHEME, "Scheme"),
             (L_POWERSHELL, "PowerShell"),
             (L_R, "R"),
+            (L_JSP, "JSP"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -32101,6 +32202,145 @@ mod lang_theme_tests {
                  every reserved word should be all-lowercase"
             );
         }
+    }
+
+    /// `JavaServer` Pages uses Lexilla's `hypertext` lexer — same
+    /// factory as HTML / PHP / ASP / XML. `LexHTML` has no
+    /// dedicated JSP mode; JSP files simply drop through the
+    /// standard hypertext state machine, which handles the
+    /// five JSP escape forms (`<%-- --%>` comment, `<%@ %>`
+    /// directive, `<% %>` scriptlet, `<%= %>` expression,
+    /// `<%! %>` declaration) generically:
+    ///   - `<%-- --%>` → `SCE_H_XCCOMMENT` (20), labelled
+    ///     "ASP.NET, JSP Comment" per `LexHTML.cxx:878`.
+    ///   - `<%@ %>` directives enter `SCE_H_ASPAT` (16) at
+    ///     `LexHTML.cxx:1645` and stay there flat until the
+    ///     closing `%>`. `SCE_H_ASPAT` is labelled
+    ///     "preprocessor" per `LexHTML.cxx:874`, so the entire
+    ///     `<%@ page ... %>` line renders in the `Preprocessor`
+    ///     colour — a coarser highlight than the tag/attribute
+    ///     mix a naive reading of "JSP directive" might expect,
+    ///     but internally consistent with how the hypertext
+    ///     lexer treats ASP.NET page directives too.
+    ///   - `<% %>` / `<%= %>` / `<%! %>` all enter the
+    ///     server-side JS state (`SCE_HJA_*` range at
+    ///     `LexHTML.cxx:913-926`).
+    ///
+    /// Two wordlist classes installed:
+    ///   - class 0 = HTML tag names (shared with HTML / PHP /
+    ///     ASP)
+    ///   - class 1 = **Java** keywords (not JavaScript like ASP's
+    ///     class 1) — drives BOTH client-side `SCE_HJ_WORD` and
+    ///     server-side `SCE_HJA_WORD` because the hypertext
+    ///     lexer probes the same wordlist for both states.
+    ///     JSP's primary content is server-side Java, so
+    ///     `JAVA_KEYWORDS` fits the scriptlet case; Java and
+    ///     JavaScript share most control-flow keywords, so
+    ///     client-side `<script>` blocks in a JSP file still
+    ///     highlight the shared subset. Trade-off documented in
+    ///     `JSP_THEME`'s banner.
+    ///
+    /// Structural pins:
+    ///   1. Two-class install shape (class 0 + class 1).
+    ///   2. Class 0 links to canonical `HTML_KEYWORDS` (shared
+    ///      with every other hypertext-family row).
+    ///   3. Class 1 links to canonical `JAVA_KEYWORDS` — NOT
+    ///      `JAVASCRIPT_KEYWORDS` (would silently regress to
+    ///      ASP's shape).
+    ///   4. No class 2 / 3 / 4 / 5 installs (no `VBScript` /
+    ///      Python / PHP / SGML embedding in JSP).
+    ///   5. Reuses `HYPERTEXT_STYLES` / `HYPERTEXT_ITALIC` /
+    ///      `HYPERTEXT_BOLD` verbatim (same as HTML / PHP /
+    ///      ASP / XML).
+    ///   6. Cross-language non-reuse — `JSP_THEME.keywords` must
+    ///      not deep-equal any other hypertext-family theme's
+    ///      keyword installs (HTML installs class 0 only, PHP
+    ///      installs class 0 + class 4, ASP installs class 0 +
+    ///      class 1 + class 2, XML installs class 5 only).
+    ///   7. `L_JSP` `LangEntry` has `lexer: Some("hypertext")`
+    ///      and `extensions` contains `jsp`.
+    #[test]
+    fn jsp_theme_installs_html_class_0_and_java_class_1() {
+        let jsp = lang_theme(L_JSP).expect("JSP wired");
+        let html = lang_theme(L_HTML).expect("HTML wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let asp = lang_theme(L_ASP).expect("ASP wired");
+        let xml = lang_theme(L_XML).expect("XML wired");
+
+        // Invariant 5: reuses HYPERTEXT_STYLES verbatim.
+        assert_eq!(jsp.styles, php.styles, "JSP must reuse HYPERTEXT_STYLES");
+        assert_eq!(jsp.italic, php.italic, "JSP must reuse HYPERTEXT_ITALIC");
+        assert_eq!(jsp.bold, php.bold, "JSP must reuse HYPERTEXT_BOLD");
+
+        // Invariant 1: exactly two classes installed.
+        assert_eq!(
+            jsp.keywords.len(),
+            2,
+            "JSP theme installs HTML (class 0) + Java (class 1)"
+        );
+
+        // Invariant 2: class 0 = HTML_KEYWORDS.
+        assert_eq!(jsp.keywords[0].0, 0);
+        assert_eq!(jsp.keywords[0].1, HTML_KEYWORDS);
+        assert_eq!(
+            jsp.keywords[0].1, html.keywords[0].1,
+            "JSP and HTML must install the same canonical HTML tag wordlist"
+        );
+
+        // Invariant 3: class 1 = JAVA_KEYWORDS (not JAVASCRIPT).
+        assert_eq!(jsp.keywords[1].0, 1);
+        assert_eq!(jsp.keywords[1].1, JAVA_KEYWORDS);
+        assert_ne!(
+            jsp.keywords[1].1, JAVASCRIPT_KEYWORDS,
+            "JSP class 1 must be JAVA_KEYWORDS, NOT JAVASCRIPT_KEYWORDS — \
+             regression would silently paint JSP scriptlets with the wrong \
+             reserved-word set"
+        );
+
+        // Invariant 4: no class 2 / 3 / 4 / 5 installs.
+        assert!(
+            jsp.keywords.iter().all(|(class, _)| matches!(class, 0 | 1)),
+            "JSP must install classes 0 and 1 ONLY — no class 2 (VBScript), \
+             class 3 (Python), class 4 (PHP), or class 5 (SGML). JSP files \
+             do not embed any of those languages."
+        );
+
+        // Invariant 6: cross-language non-reuse against every
+        // other hypertext-family theme's keyword install.
+        assert_ne!(
+            jsp.keywords, html.keywords,
+            "JSP must NOT reuse HTML's keyword installs (HTML is class 0 only)"
+        );
+        assert_ne!(
+            jsp.keywords, php.keywords,
+            "JSP must NOT reuse PHP's keyword installs (PHP is class 0 + class 4)"
+        );
+        assert_ne!(
+            jsp.keywords, asp.keywords,
+            "JSP must NOT reuse ASP's keyword installs (ASP is class 0 + \
+             class 1 JS + class 2 VBScript)"
+        );
+        assert_ne!(
+            jsp.keywords, xml.keywords,
+            "JSP must NOT reuse XML's keyword installs (XML is class 5 only)"
+        );
+
+        // Invariant 7: L_JSP LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let jsp_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_JSP)
+            .expect("L_JSP LangEntry present in LANG_TABLE");
+        assert_eq!(
+            jsp_entry.lexer,
+            Some("hypertext"),
+            "L_JSP LangEntry.lexer must be Some(\"hypertext\") — \
+             wiring assumes the shared LexHTML factory"
+        );
+        assert!(
+            jsp_entry.extensions.contains(&"jsp"),
+            "L_JSP extensions must contain `jsp` (canonical JSP source extension)"
+        );
     }
 
     /// Unwired language → `None`. The `apply_lang` caller treats

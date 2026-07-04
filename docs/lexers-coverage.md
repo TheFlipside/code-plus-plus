@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 50 / 🟡 38 / ⚫ 1.
+Total: 89 rows. ✅ 51 / 🟡 37 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1879,7 +1879,7 @@ further shim work needed.
 | Javascript | 58 | `cpp` | ⚫ | ⚫ | 🟡 |
 | JSON | 57 | `json` | ⚫ | ⚫ | 🟡 |
 | JSON5 | 94 | `json` | ⚫ | ⚫ | 🟡 |
-| JSP | 55 | `hypertext` | ⚫ | ⚫ | 🟡 |
+| JSP | 55 | `hypertext` | ✅ | ✅ | ✅ |
 | KIXtart | 39 | `kix` | ✅ | ✅ | ✅ |
 | LaTeX | 74 | `latex` | ✅ | ✅ | ✅ |
 | Lisp | 30 | `lisp` | ✅ | ✅ | ✅ |
@@ -4753,6 +4753,99 @@ distinguishing R from convention-based highlighters:
 `T`/`F` must NOT be in WL0 (user-rebindable per CRAN
 `?Reserved`) and `return` must NOT be in WL0 (base
 primitive per `?return` — lives in WL1).
+
+**JSP (2026-07-05):** rides the shared `hypertext`
+lexer (`LexHTML.cxx`) — same factory as HTML / PHP /
+ASP / XML. There is **no `SCLEX_JSP`** — a JSP buffer
+switches on lexer name `"hypertext"` per `L_JSP`'s
+`LangEntry`, and Lexilla's HTML state machine handles
+every JSP escape form generically without knowing they
+are JSP-specific. No new `SCE_*` constants or new
+keyword constants were added by this row; the wiring
+is purely `HTML_KEYWORDS` (class 0) + `JAVA_KEYWORDS`
+(class 1) + `HYPERTEXT_STYLES`.
+
+**JSP escape-syntax coverage.** All four are already
+covered by pre-existing hypertext lexer states:
+
+- **`<%-- ... --%>` comment** → `SCE_H_XCCOMMENT` (20),
+  labelled "ASP.NET, JSP Comment" per
+  `LexHTML.cxx:878`. Already routes to `Comment`
+  italic in `HYPERTEXT_STYLES`.
+- **`<%@ page ... %>` / `<%@ taglib ... %>` /
+  `<%@ include ... %>` directives** enter `SCE_H_ASPAT`
+  (16) at `LexHTML.cxx:1645` unconditionally and stay
+  in that state until the closing `%>`. `SCE_H_ASPAT`
+  is labelled "preprocessor" per `LexHTML.cxx:874`, so
+  the entire directive line renders in the
+  `Preprocessor` colour — a coarser highlight than a
+  naive reading might expect (individual tokens `page`
+  / `import` / attribute values are NOT sub-styled),
+  but internally consistent with how the hypertext
+  lexer treats ASP.NET page directives. No dedicated
+  JSP-directive wordlist needed.
+- **`<% ... %>` scriptlet + `<%= ... %>` expression +
+  `<%! ... %>` declaration** all three enter the
+  server-side script state, which for the hypertext
+  lexer means the `SCE_HJA_*` range at
+  `LexHTML.cxx:913-926`. Lexilla has no "server Java"
+  range — JSP's Java scriptlets share the `SCE_HJA_*`
+  codepoints with ASP.NET server-side JScript. Class 1
+  drives the word-coloring for both.
+- **`${ ... }` and `#{ ... }` JSP EL** (Expression
+  Language) parse as ordinary text runs — the hypertext
+  lexer has no dedicated EL state, so EL expressions
+  render at `SCE_H_DEFAULT`. Best-effort baseline;
+  matches Notepad++'s JSP row.
+
+**Class 1 = `JAVA_KEYWORDS` (deliberate choice).**
+Unlike ASP (which installs `JAVASCRIPT_KEYWORDS` in
+class 1 because ASP's server-side blocks are JScript by
+default), JSP's `<% %>` scriptlets contain Java code.
+Since class 1 also drives client-side `<script>` block
+coloring (via `SCE_HJ_WORD`), the choice is a trade-off:
+
+- **JAVA_KEYWORDS wins** for the server-side case —
+  `public` / `private` / `class` / `extends` /
+  `implements` / `import` / etc. all highlight in
+  scriptlets. JSP files overwhelmingly weight toward
+  server-side content.
+- **Client-side JS blocks** in JSP files still get
+  most keywords coloured: Java and JS share `if` /
+  `else` / `while` / `for` / `do` / `switch` / `case` /
+  `default` / `break` / `continue` / `return` / `try` /
+  `catch` / `finally` / `throw` / `new` / `this` /
+  `instanceof` / `const` / `true` / `false` / `null`.
+  The JS-only tokens (`function` / `var` / `let` /
+  `typeof` / `undefined` / `debugger` / `yield`) lose
+  their highlight in client-side blocks. Conversely,
+  Java-only tokens (`abstract` / `extends` /
+  `implements` / `package` / `throws` /
+  `synchronized`) would spuriously highlight if a
+  client-side JS block happened to use those bare
+  identifiers.
+
+**Not installed: classes 2 / 3 / 4 / 5.** No VBScript,
+Python, PHP, or SGML embedding in JSP. SGML markup
+inside JSP still renders correctly via the shared
+`HYPERTEXT_STYLES` SGML range without a wordlist
+install (same pattern as HTML / XML / ASP). Structural
+test invariant #4 enforces the "classes 0 and 1 only"
+shape.
+
+Structural test coverage: 7 invariants — 2-class
+install shape, class 0 = canonical `HTML_KEYWORDS`
+(shared with every other hypertext-family row),
+class 1 = canonical `JAVA_KEYWORDS` (with a negative
+`assert_ne!` against `JAVASCRIPT_KEYWORDS` to catch a
+future regression that copy-pastes ASP's shape), no
+classes 2/3/4/5 install, verbatim reuse of
+`HYPERTEXT_STYLES` / `HYPERTEXT_ITALIC` /
+`HYPERTEXT_BOLD` (same as HTML / PHP / ASP / XML),
+cross-language non-reuse pins against every other
+hypertext-family theme (HTML / PHP / ASP shapes are
+each distinct), and `L_JSP` `LangEntry`'s `lexer:
+Some("hypertext")` + `.jsp` extension presence.
 
 ## Notes
 
