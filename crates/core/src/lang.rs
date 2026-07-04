@@ -6903,6 +6903,75 @@ pub const VERILOG_SYSTEM_TASKS: &str = concat!(
     "$root $unit $cast ",
 );
 
+/// MATLAB reserved words (single wordlist → `SCE_MATLAB_KEYWORD`).
+///
+/// **Source of truth: `MathWorks`' `iskeyword` function** — the
+/// canonical MATLAB reserved-word inventory that `MathWorks` itself
+/// exposes to the language. Twenty-one tokens total: the 20
+/// reserved words that `iskeyword('foo')` returns `true` for on
+/// modern MATLAB (R2019b+), plus `enumeration` (documented by
+/// `MathWorks` as a classdef-body reserved word, absent from
+/// `iskeyword`'s return set — see the classdef-body construct
+/// note below).
+///
+/// **Case-sensitive lexer.** `LexMatlab.cxx:251` calls
+/// `keywords.InList(s)` byte-exactly (no `tolower` fold), so
+/// every entry stays lowercase — MATLAB's own reserved-word
+/// grammar is all-lowercase, so this is consistent.
+///
+/// **Deliberately EXCLUDED contextual keywords.** The following
+/// four MATLAB tokens ARE keywords in the language but are NOT in
+/// this wordlist because `LexMatlab` handles them contextually
+/// INSIDE the classifier — including them here would break the
+/// contextual behaviour by over-promoting them to keyword at every
+/// site (e.g. a user-declared `properties` variable outside
+/// `classdef` would render as a keyword):
+///
+///   - `arguments` — promoted to KEYWORD only after a `function`
+///     declaration line, per `LexMatlab.cxx:270-274`. The lexer's
+///     `:269` comment says outright "arguments is a keyword here,
+///     despite not being in the keywords list".
+///   - `properties` / `methods` / `events` — promoted to KEYWORD
+///     only inside `classdef` scope (via `inClassScope` +
+///     folding-level check at `:285-292`). Otherwise
+///     ChangeState-ed to `SCE_MATLAB_IDENTIFIER`.
+///
+/// **Included classdef-body construct: `enumeration`.**
+/// `LexMatlab` does not special-case `enumeration` the way it
+/// does its siblings `properties` / `methods` / `events` at
+/// `:285-292`, so excluding it would mean it never highlights
+/// anywhere — including inside `classdef` where it should.
+/// Including it means a user-declared `enumeration` variable
+/// outside `classdef` over-highlights, an asymmetric tradeoff
+/// with the sibling three but the pragmatic call (MATLAB style
+/// strongly discourages using reserved words as identifiers, so
+/// the over-highlight cost is minor). This is the one wordlist
+/// entry that `iskeyword` does NOT return `true` for.
+///
+/// **`end` inside indexing** is handled by the lexer at `:255-257`:
+/// when `allow_end_op > 0` (indexing scope from `(`/`[`/`{`
+/// tracking), `end` is ChangeState-ed to `SCE_MATLAB_NUMBER`. This
+/// is transparent — `end` still needs to be in the wordlist so the
+/// `InList` probe fires and the classifier gets a chance to promote
+/// or demote it.
+pub const MATLAB_KEYWORDS: &str = concat!(
+    // Flow control.
+    "if else elseif end ",
+    "for while parfor spmd ",
+    "switch case otherwise ",
+    "break continue return ",
+    // Exception handling.
+    "try catch ",
+    // Function / class structure.
+    "function classdef ",
+    // Variable scope.
+    "global persistent ",
+    // Class-body construct (contextual class-body keywords like
+    // `properties` / `methods` / `events` / `arguments` are
+    // intentionally OMITTED — see docstring above).
+    "enumeration ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

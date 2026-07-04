@@ -110,17 +110,17 @@ use codepp_core::lang::{
     HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS,
     KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA,
     L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI,
-    L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL,
-    L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
-    L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS,
-    NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-    PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
-    RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-    SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-    XML_KEYWORDS,
+    L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC,
+    L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
+    L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
+    NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
+    PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+    PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
+    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+    VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
+    VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
+    VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -178,14 +178,16 @@ use codepp_scintilla_sys::{
     SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH, SCE_L_MATH2,
     SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM, SCE_MAKE_COMMENT,
     SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET,
-    SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF,
-    SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX,
-    SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ,
-    SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED,
-    SCE_NSIS_VARIABLE, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2,
-    SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER,
-    SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD,
-    SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
+    SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_KEYWORD,
+    SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_NSIS_COMMENT,
+    SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF,
+    SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF,
+    SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ,
+    SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE,
+    SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE,
+    SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER, SCE_PAS_OPERATOR,
+    SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD, SCE_PL_ARRAY,
+    SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
     SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
     SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR,
     SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR,
@@ -6827,6 +6829,56 @@ const VERILOG_THEME: LangTheme = LangTheme {
     bold: VERILOG_BOLD,
 };
 
+// LexMatlab emits 9 `SCE_MATLAB_*` slots (0..=8). **7 are mapped**;
+// `SCE_MATLAB_DEFAULT` (0) and `SCE_MATLAB_IDENTIFIER` (7) stay
+// unmapped per the framework convention — bare variable / function
+// names paint at `STYLE_DEFAULT` alongside C / C++ / Pascal / VHDL /
+// KIXtart / Caml / AutoIt / Ada / Verilog.
+//
+// Style routing rationale:
+//   - COMMENT → Comment italic green. Covers all three MATLAB
+//     comment forms (`%` line, `%{ ... %}` block with nesting,
+//     and `...` line-continuation which the classifier promotes
+//     to this state).
+//   - COMMAND → Preprocessor. `!command` shell-escape syntax at
+//     line-start is an out-of-band syntax marker rather than
+//     ordinary code — same slot the framework uses for
+//     `` `include ``-style directives elsewhere.
+//   - NUMBER → Number. Also the target for contextual `end`
+//     inside indexing (`x(end)`), which is a MATLAB idiom
+//     specifically meant to compute like a number.
+//   - KEYWORD → Keyword bold blue.
+//   - STRING → String. Single-quoted char-array literals.
+//   - OPERATOR → Operator.
+//   - IDENTIFIER — deliberately UNMAPPED. Framework convention.
+//   - DOUBLEQUOTESTRING → String. MATLAB R2017a+ `string`-type
+//     literals share the string colour lane with the traditional
+//     char-array form; the language distinguishes them by TYPE
+//     but the user's eye reads both as string content.
+const MATLAB_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_MATLAB_COMMENT, StyleSlot::Comment),
+    (SCE_MATLAB_COMMAND, StyleSlot::Preprocessor),
+    (SCE_MATLAB_NUMBER, StyleSlot::Number),
+    (SCE_MATLAB_KEYWORD, StyleSlot::Keyword),
+    (SCE_MATLAB_STRING, StyleSlot::String),
+    (SCE_MATLAB_OPERATOR, StyleSlot::Operator),
+    (SCE_MATLAB_DOUBLEQUOTESTRING, StyleSlot::String),
+];
+
+const MATLAB_ITALIC: &[usize] = &[SCE_MATLAB_COMMENT];
+
+const MATLAB_BOLD: &[usize] = &[SCE_MATLAB_KEYWORD];
+
+// Single-class install matches `matlabWordListDesc[]` at
+// `LexMatlab.cxx:516-519` — class 0 alone, with `[1]` = 0 NULL
+// sentinel.
+const MATLAB_THEME: LangTheme = LangTheme {
+    keywords: &[(0, MATLAB_KEYWORDS)],
+    styles: MATLAB_STYLES,
+    italic: MATLAB_ITALIC,
+    bold: MATLAB_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -7036,6 +7088,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&ADA_THEME)
     } else if lang == L_VERILOG {
         Some(&VERILOG_THEME)
+    } else if lang == L_MATLAB {
+        Some(&MATLAB_THEME)
     } else {
         None
     }
@@ -22246,19 +22300,23 @@ mod lang_theme_tests {
         JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS,
         LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH,
         L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT,
-        L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
-        L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
-        L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
-        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
-        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
-        VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
+        L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL,
+        L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL,
+        L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
+        NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
+        PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
+        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS,
+        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
+        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
     };
-    use codepp_scintilla_sys::{SCE_ADA_IDENTIFIER, SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER};
+    use codepp_scintilla_sys::{
+        SCE_ADA_IDENTIFIER, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
+        SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR,
+        SCE_MATLAB_STRING, SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER,
+    };
 
     /// Every wired language must:
     ///   - Return `Some(&theme)`.
@@ -27960,6 +28018,204 @@ mod lang_theme_tests {
                 "VERILOG_SYSTEM_TASKS must include system task `{kw}`"
             );
         }
+    }
+
+    /// MATLAB (`L_MATLAB`) uses Lexilla's `LexMatlab` — a
+    /// case-sensitive lexer for MATLAB / Octave with 9
+    /// `SCE_MATLAB_*` slots (0..=8). Contributed by José Fonseca
+    /// with later contextual-keyword work by Andrey Smolyakov
+    /// (2022). Compact 7-style / single-wordlist theme; MATLAB's
+    /// reserved-word set is tiny — 21 wordlist entries (20 from
+    /// `MathWorks`' `iskeyword` plus `enumeration`, which is a
+    /// classdef-body reserved word that `iskeyword` does not
+    /// return).
+    ///
+    /// **Contextual keywords excluded from the wordlist.**
+    /// `LexMatlab` handles four MATLAB tokens contextually inside
+    /// the classifier — `arguments` at `LexMatlab.cxx:270-274`,
+    /// and `properties` / `methods` / `events` at `:285-292`.
+    /// Including them in `MATLAB_KEYWORDS` would over-promote at
+    /// non-contextual sites. Test invariant #6 pins their absence
+    /// so a future edit that "helpfully" adds them regresses
+    /// visibly.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_MATLAB)` returns `Some(&MATLAB_THEME)`.
+    ///   2. Style count == 7 (9 `SCE_MATLAB_*` slots minus
+    ///      `DEFAULT` and `IDENTIFIER`, both unmapped per
+    ///      framework convention).
+    ///   3. Single wordlist class 0.
+    ///   4. `MATLAB_KEYWORDS` non-empty.
+    ///   5. Every token lowercase (`LexMatlab.cxx:251` matches
+    ///      byte-exactly, no `tolower` fold).
+    ///   6. Contextual keywords `arguments` / `properties` /
+    ///      `methods` / `events` MUST be absent — the lexer
+    ///      handles them internally and adding them here would
+    ///      break the contextual behaviour.
+    ///   7. Style-routing pins for the 7 mapped SCE constants.
+    ///   8. `DEFAULT` (0) and `IDENTIFIER` (7) remain unmapped.
+    ///   9. Italic set == 1 (`COMMENT`).
+    ///   10. Bold set == 1 (`KEYWORD` only).
+    ///   11. Cross-language non-reuse (MATLAB must NOT reuse
+    ///       Verilog / VHDL / Ada style tables verbatim).
+    ///   12. Anchor tokens present — `MathWorks` `iskeyword` core.
+    #[test]
+    fn matlab_uses_lexmatlab_compact_theme() {
+        let m = lang_theme(L_MATLAB).expect("MATLAB wired");
+
+        // Invariant 2: 7 mappings.
+        assert_eq!(
+            m.styles.len(),
+            7,
+            "MATLAB_STYLES must map 7 indices (9 SCE_MATLAB_* slots \
+             minus DEFAULT and IDENTIFIER)"
+        );
+
+        // Invariant 3: single class 0.
+        assert_eq!(
+            m.keywords.len(),
+            1,
+            "MATLAB_THEME installs exactly 1 wordlist class \
+             (matches matlabWordListDesc[] at LexMatlab.cxx:516-519)"
+        );
+        assert_eq!(m.keywords[0].0, 0);
+        assert_eq!(m.keywords[0].1, MATLAB_KEYWORDS);
+
+        // Invariant 4: non-empty.
+        assert!(
+            MATLAB_KEYWORDS.split_whitespace().count() > 0,
+            "MATLAB_KEYWORDS must be non-empty"
+        );
+
+        // Invariant 5: every token lowercase.
+        for tok in MATLAB_KEYWORDS.split_whitespace() {
+            assert!(
+                tok.bytes().all(|b| !b.is_ascii_uppercase()),
+                "MATLAB_KEYWORDS token `{tok}` contains uppercase — \
+                 LexMatlab.cxx:251 matches byte-exactly, no tolower \
+                 fold; uppercase entries would be dead code"
+            );
+        }
+
+        // Invariant 6: contextual keywords absent.
+        for contextual in ["arguments", "properties", "methods", "events"] {
+            assert!(
+                !MATLAB_KEYWORDS.split_whitespace().any(|t| t == contextual),
+                "MATLAB_KEYWORDS must NOT include `{contextual}` — \
+                 LexMatlab handles it contextually inside the \
+                 classifier (see LexMatlab.cxx:270-274 for \
+                 `arguments`, :285-292 for `properties`/`methods`/\
+                 `events`). Adding it to the wordlist would promote \
+                 it to keyword at every site, breaking the lexer's \
+                 deliberate contextual behaviour"
+            );
+        }
+
+        // Invariant 7: style-routing pins.
+        for (idx, slot, name) in [
+            (SCE_MATLAB_COMMENT, StyleSlot::Comment, "SCE_MATLAB_COMMENT"),
+            (
+                SCE_MATLAB_COMMAND,
+                StyleSlot::Preprocessor,
+                "SCE_MATLAB_COMMAND",
+            ),
+            (SCE_MATLAB_NUMBER, StyleSlot::Number, "SCE_MATLAB_NUMBER"),
+            (SCE_MATLAB_KEYWORD, StyleSlot::Keyword, "SCE_MATLAB_KEYWORD"),
+            (SCE_MATLAB_STRING, StyleSlot::String, "SCE_MATLAB_STRING"),
+            (
+                SCE_MATLAB_OPERATOR,
+                StyleSlot::Operator,
+                "SCE_MATLAB_OPERATOR",
+            ),
+            (
+                SCE_MATLAB_DOUBLEQUOTESTRING,
+                StyleSlot::String,
+                "SCE_MATLAB_DOUBLEQUOTESTRING",
+            ),
+        ] {
+            assert!(
+                m.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: DEFAULT + IDENTIFIER unmapped.
+        assert!(
+            !m.styles.iter().any(|(i, _)| *i == 0),
+            "SCE_MATLAB_DEFAULT (0) must remain unmapped"
+        );
+        assert!(
+            !m.styles.iter().any(|(i, _)| *i == SCE_MATLAB_IDENTIFIER),
+            "SCE_MATLAB_IDENTIFIER (7) must remain unmapped — bare \
+             user identifiers paint as default text, matching the \
+             framework convention for C / C++ / Pascal / VHDL / \
+             KIXtart / Caml / AutoIt / Ada / Verilog"
+        );
+
+        // Invariant 9: italic == 1.
+        assert_eq!(m.italic.len(), 1);
+        assert!(m.italic.contains(&SCE_MATLAB_COMMENT));
+
+        // Invariant 10: bold == 1.
+        assert_eq!(m.bold.len(), 1);
+        assert!(m.bold.contains(&SCE_MATLAB_KEYWORD));
+
+        // Invariant 11: cross-language non-reuse.
+        let verilog = lang_theme(L_VERILOG).expect("Verilog wired");
+        let vhdl = lang_theme(L_VHDL).expect("VHDL wired");
+        let ada = lang_theme(L_ADA).expect("Ada wired");
+        for (other, name) in [(verilog, "Verilog"), (vhdl, "VHDL"), (ada, "Ada")] {
+            assert_ne!(
+                m.styles, other.styles,
+                "MATLAB must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 12: MathWorks `iskeyword` anchor tokens.
+        for kw in [
+            "break",
+            "case",
+            "catch",
+            "classdef",
+            "continue",
+            "else",
+            "elseif",
+            "end",
+            "for",
+            "function",
+            "global",
+            "if",
+            "otherwise",
+            "parfor",
+            "persistent",
+            "return",
+            "spmd",
+            "switch",
+            "try",
+            "while",
+        ] {
+            assert!(
+                MATLAB_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "MATLAB_KEYWORDS must include MathWorks iskeyword \
+                 anchor `{kw}`"
+            );
+        }
+        // Classdef-body reserved word `enumeration` — the ONE
+        // non-iskeyword addition; pinned separately so a future
+        // "clean up to iskeyword only" edit doesn't silently
+        // regress classdef enum highlighting.
+        assert!(
+            MATLAB_KEYWORDS
+                .split_whitespace()
+                .any(|t| t == "enumeration"),
+            "MATLAB_KEYWORDS must include `enumeration` — the \
+             classdef-body reserved word that iskeyword does not \
+             return but MathWorks documents as reserved; \
+             excluding it means classdef enumeration blocks never \
+             highlight since LexMatlab does not contextually \
+             promote enumeration the way it does properties / \
+             methods / events"
+        );
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a

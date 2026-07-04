@@ -3389,6 +3389,135 @@ pub const SCE_V_OUTPUT: usize = 22;
 pub const SCE_V_INOUT: usize = 23;
 pub const SCE_V_PORT_CONNECT: usize = 24;
 
+// LexMatlab style indices. 9 contiguous slots (0..=8) for the
+// shared MATLAB / Octave lexer implementation. Contributed by
+// José Fonseca; extended by Christoph Dalitz (2003 — Octave
+// support + double-quoted strings), John Donoghue (2012-2017 —
+// nested block comments, `...` continuation-as-comment,
+// updated fold logic), and Andrey Smolyakov (2022 — Matlab
+// R2019b+ `arguments` block + classdef `properties` /
+// `methods` / `events` contextual keywords).
+// Cross-referenced against `vendor/lexilla/include/SciLexer.h`
+// lines 714-722. Dispatches SCLEX_MATLAB (= 32) via a
+// **single wordlist** at
+// `vendor/lexilla/lexers/LexMatlab.cxx:516-519`
+// (`matlabWordListDesc[]`, only class 0 "Keywords" plus the
+// NULL sentinel). Same file also registers SCLEX_OCTAVE (= 54)
+// as `lmOctave` at `:528`; Code++ does not currently wire
+// Octave separately — the Octave lexer differs primarily in
+// accepting `#` as a comment-start char AND allowing `\`
+// escapes inside double-quoted strings, but MATLAB source
+// opened with the Matlab lexer renders correctly on its own.
+//
+// **Case-sensitive lexer.** MATLAB language semantics:
+// identifier case DOES distinguish tokens (`End` and `end`
+// are not the same). LexMatlab matches wordlist entries
+// byte-exactly at `LexMatlab.cxx:251` (`keywords.InList(s)`)
+// with no `tolower` fold. All MATLAB reserved words per
+// MathWorks' `iskeyword` are lowercase, so every wordlist
+// entry stays lowercase. A `LowerCase` helper is defined at
+// `:63-67` but only used in `IsSpaceToEOL` (block-comment
+// delimiter detection at end-of-line) — not in the keyword
+// lookup path.
+//
+// **Contextual keywords (NOT in wordlist).** LexMatlab handles
+// a family of contextual-keyword tokens INSIDE the classifier
+// rather than via wordlist matching, so the host's keyword
+// list MUST NOT include them. Each contextual token is
+// documented at the wordlist definition; the summary:
+//
+//   - `arguments` at `:270-274`: promoted to KEYWORD only
+//     after a `function` declaration line (via the
+//     `expectingArgumentsBlock` flag). The lexer's
+//     `:269` comment says outright "arguments is a keyword
+//     here, despite not being in the keywords list".
+//   - `properties` / `methods` / `events` at `:285-292`:
+//     promoted to KEYWORD only inside classdef scope
+//     (via the `inClassScope` flag and folding-level
+//     check). Otherwise ChangeState to
+//     `SCE_MATLAB_IDENTIFIER` so a user-defined variable
+//     named `properties` doesn't over-highlight.
+//
+// Putting any of these four tokens in the wordlist would
+// promote them to keyword everywhere, breaking the lexer's
+// deliberate contextual behaviour. Code++'s `MATLAB_KEYWORDS`
+// respects this.
+//
+// **Context-sensitive `end`.** Inside indexing (i.e. when
+// `allow_end_op > 0` at `:143`, tracked by `(`/`[`/`{`
+// counting), the token `end` is ChangeState-ed to
+// `SCE_MATLAB_NUMBER` at `:255-257` (matching MATLAB's
+// semantics where `x(end)` returns `x`'s last element). This
+// is transparent to the host: `end` must be in the wordlist
+// so InList fires, then the classifier does the contextual
+// promote/demote.
+//
+// **Initial-state trick.** LexMatlab enters SCE_MATLAB_KEYWORD
+// as the INITIAL state for any `isalpha` run at `:399-400`,
+// then checks InList when the identifier ends. If InList
+// misses, `sc.ChangeState(SCE_MATLAB_IDENTIFIER)` at `:289`
+// demotes it. This is the reverse of most lexers (which enter
+// IDENTIFIER and promote to KEYWORD on hit) — same visible
+// result, different SCE-index history.
+//
+// Style semantics (paint-loop citations reference LexMatlab.cxx):
+//
+//   - SCE_MATLAB_DEFAULT (0) — inter-token slack, reset at
+//     every state transition back to whitespace.
+//   - SCE_MATLAB_COMMENT (1) — MATLAB has THREE comment forms
+//     all painting to this style: `%` line comment,
+//     `%{ ... %}` block comment (nested, depth tracked via
+//     `commentDepth` at `:164` and stored in line state),
+//     and `...` line-continuation which is
+//     ChangeState-promoted to COMMENT at `:236` when three
+//     consecutive dots are seen at the tail of an operator
+//     run.
+//   - SCE_MATLAB_COMMAND (2) — `!command` shell-escape at
+//     line-start (only for MATLAB, not Octave — Octave paints
+//     `!` as operator at `:387`). Set at `:385`.
+//   - SCE_MATLAB_NUMBER (3) — numeric literal. MATLAB syntax
+//     covers integer, decimal (`3.14`), scientific
+//     (`1e-3`), hex (`0xFF`), complex-suffix (`1i` / `2j`),
+//     and size suffix (`3u32` for integer types) — the
+//     numeric-continuation predicate at `:305-311` accepts
+//     all of these. Contextual `end` inside indexing also
+//     lands here (`:255-257`).
+//   - SCE_MATLAB_KEYWORD (4) — reserved word from the
+//     wordlist. Initial state for any alphabetic run
+//     (`:399-400`); promoted to IDENTIFIER on InList miss
+//     (`:289`).
+//   - SCE_MATLAB_STRING (5) — single-quoted string
+//     (traditional MATLAB char-array literal). Contextual:
+//     `'` opens a STRING literal only when NOT following a
+//     transpose-eligible token (post-identifier, post-`)`,
+//     post-`]`, post-`}`) — at `:389-394` the classifier
+//     tests the `transpose` bool and enters
+//     `SCE_MATLAB_OPERATOR` for the transpose apostrophe
+//     instead of STRING.
+//   - SCE_MATLAB_OPERATOR (6) — punctuation and operators
+//     (`+`, `-`, `*`, `/`, `\`, `^`, `.*`, `./`, `.\`, `.^`,
+//     `.'` transpose, `==`, `~=`, `<`, `>`, `<=`, `>=`, `=`,
+//     `&`, `|`, `&&`, `||`, `~`, `@`, `:`, `,`, `;`, `(`,
+//     `)`, `[`, `]`, `{`, `}`).
+//   - SCE_MATLAB_IDENTIFIER (7) — non-reserved word. The
+//     ChangeState target for wordlist misses at `:289`.
+//     Framework convention: leave unmapped so ordinary
+//     variable / function names paint at STYLE_DEFAULT.
+//   - SCE_MATLAB_DOUBLEQUOTESTRING (8) — MATLAB R2017a+
+//     double-quoted string literal (the `string` scalar
+//     type). Distinct from single-quoted char-array literals
+//     — the language has two string forms. Painted at
+//     `:395-396`.
+pub const SCE_MATLAB_DEFAULT: usize = 0;
+pub const SCE_MATLAB_COMMENT: usize = 1;
+pub const SCE_MATLAB_COMMAND: usize = 2;
+pub const SCE_MATLAB_NUMBER: usize = 3;
+pub const SCE_MATLAB_KEYWORD: usize = 4;
+pub const SCE_MATLAB_STRING: usize = 5;
+pub const SCE_MATLAB_OPERATOR: usize = 6;
+pub const SCE_MATLAB_IDENTIFIER: usize = 7;
+pub const SCE_MATLAB_DOUBLEQUOTESTRING: usize = 8;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated

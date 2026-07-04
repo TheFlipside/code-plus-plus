@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 40 / 🟡 48 / ⚫ 1.
+Total: 89 rows. ✅ 41 / 🟡 47 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1885,7 +1885,7 @@ further shim work needed.
 | Lisp | 30 | `lisp` | ✅ | ✅ | ✅ |
 | Lua | 23 | `lua` | ✅ | ✅ | ✅ |
 | Makefile | 10 | `makefile` | ✅ | ✅ | ✅ |
-| Matlab | 44 | `matlab` | ⚫ | ⚫ | 🟡 |
+| Matlab | 44 | `matlab` | ✅ | ✅ | ✅ |
 | MMIXAL | 75 | `mmixal` | ⚫ | ⚫ | 🟡 |
 | Nim | 76 | `nim` | ⚫ | ⚫ | 🟡 |
 | Nncrontab | 77 | `nncrontab` | ⚫ | ⚫ | 🟡 |
@@ -3182,6 +3182,113 @@ bold == 1 (`WORD` only), 4 cross-language non-reuse pins
 (VHDL / Ada / C++ / Caml), and 47 anchor tokens spread across
 Verilog-1995 core (15), SystemVerilog additions (12), types /
 gates (12), and system tasks (8).
+
+**MATLAB (2026-07-04):** uses Lexilla's `matlab` lexer
+(`LexMatlab.cxx`, ~530 lines) — a case-sensitive lexer for
+MATLAB and Octave, written by José Fonseca and extended over
+the years by Christoph Dalitz (2003 — Octave support +
+double-quoted strings), John Donoghue (2012-2017 — nested
+block comments, `...` continuation-as-comment, fold refinements),
+and Andrey Smolyakov (2022 — MATLAB R2019b+ `arguments` block
+and `classdef` `properties` / `methods` / `events` contextual
+keywords). Compact wiring: single-wordlist theme, 7 style
+mappings, 21 reserved words (20 from MathWorks' `iskeyword`
+plus `enumeration`, a classdef-body reserved word that
+`iskeyword` does not return).
+
+**Case-sensitive lexer.** `LexMatlab.cxx:251` calls
+`keywords.InList(s)` byte-exactly — no `tolower` fold. All
+MATLAB reserved words are lowercase per MathWorks' `iskeyword`
+output, so every wordlist entry stays lowercase. Test invariant
+#5 pins every-token-lowercase.
+
+**Contextual keywords deliberately excluded from the wordlist.**
+LexMatlab handles four MATLAB reserved-word tokens contextually
+INSIDE the classifier rather than via the wordlist:
+
+- `arguments` — promoted to `SCE_MATLAB_KEYWORD` only after a
+  `function` declaration line (via the `expectingArgumentsBlock`
+  flag at `LexMatlab.cxx:270-274`). The lexer's `:269` comment
+  says outright "arguments is a keyword here, despite not being
+  in the keywords list".
+- `properties` / `methods` / `events` — promoted to
+  `SCE_MATLAB_KEYWORD` only inside `classdef` scope (via the
+  `inClassScope` flag and folding-level check at `:285-292`).
+  Outside `classdef` they `ChangeState` to
+  `SCE_MATLAB_IDENTIFIER` — so a user-declared variable named
+  `properties` doesn't over-highlight.
+
+Putting any of these four tokens in `MATLAB_KEYWORDS` would
+break the lexer's deliberate contextual behaviour by promoting
+them at every site. Test invariant #6 pins their absence so a
+future edit that "helpfully" adds them regresses visibly. The
+enumeration constant `enumeration` IS included — MathWorks
+lists it as a reserved word and LexMatlab does not treat it
+contextually.
+
+**Context-sensitive `end`.** Inside indexing (i.e. when
+`allow_end_op > 0` — the lexer's `(`/`[`/`{` counter),
+`LexMatlab.cxx:255-257` ChangeState-s `end` to
+`SCE_MATLAB_NUMBER`. That's the MATLAB idiom where `x(end)`
+returns `x`'s last element — a "number-shaped" quantity, not a
+control-flow keyword. The wordlist entry still needs `end`
+present so InList fires and lets the classifier decide.
+
+**Initial-state trick.** LexMatlab enters `SCE_MATLAB_KEYWORD`
+as the INITIAL state for any alphabetic run at `:399-400`, then
+either keeps it (InList hit at `:251`) or downgrades to
+`SCE_MATLAB_IDENTIFIER` (InList miss at `:289`). This is the
+reverse of most lexers (which start at IDENTIFIER and promote
+to KEYWORD) — same visible outcome, opposite SCE-index
+history. No impact on the theme wiring since we map both
+states appropriately.
+
+**Style routing (7 mappings; `DEFAULT` and `IDENTIFIER`
+unmapped per framework convention):**
+
+- **COMMENT** → `Comment` italic green. Covers all three
+  MATLAB comment forms: `%` line comment, `%{ ... %}` nested
+  block comment (depth tracked in line state), and `...`
+  line-continuation which the classifier promotes to COMMENT
+  at `:236`.
+- **COMMAND** → `Preprocessor`. The `!command` shell-escape
+  syntax reads as out-of-band; same slot the framework uses
+  for `` `include ``-style markers elsewhere. Only fires
+  under the MATLAB lexer (not Octave, which routes `!` to
+  `SCE_MATLAB_OPERATOR` at `:387`).
+- **NUMBER** → `Number`. Numeric literals plus contextual
+  `end` inside indexing.
+- **KEYWORD** → `Keyword` bold blue.
+- **STRING** → `String`. Traditional single-quoted char-array
+  literals. Contextual — the classifier disambiguates opening
+  `'` between STRING literal and transpose OPERATOR via the
+  `transpose` bool at `:389-394`.
+- **OPERATOR** → `Operator`.
+- **IDENTIFIER** — deliberately UNMAPPED. Framework
+  convention (matches C / C++ / Pascal / VHDL / KIXtart /
+  Caml / AutoIt / Ada / Verilog).
+- **DOUBLEQUOTESTRING** → `String`. MATLAB R2017a+ `string`
+  scalar-type literals. The language distinguishes them from
+  char-arrays by TYPE but the user's eye reads both as
+  string content, so they share the String slot.
+
+Only KEYWORD is bold — matches the framework's "one bold
+visual for language keywords" rule.
+
+**Single-class install.** `matlabWordListDesc[]` at
+`LexMatlab.cxx:516-519` declares one class only ("Keywords"),
+plus the NULL sentinel. `MATLAB_THEME` installs class 0 alone.
+
+Structural test coverage: 12 invariants — 7 style mappings
+pin, single-class-only pin, `MATLAB_KEYWORDS` non-empty guard,
+every-token-lowercase pin (dead-code prevention),
+**contextual-keywords-must-be-absent** pin (`arguments` /
+`properties` / `methods` / `events` MUST NOT appear —
+protects the lexer's deliberate contextual promotion),
+7 style-routing pins, `DEFAULT` + `IDENTIFIER` unmapped pins,
+italic == 1 (`COMMENT`), bold == 1 (`KEYWORD` only), 3
+cross-language non-reuse pins (Verilog / VHDL / Ada), and 20
+MathWorks `iskeyword` anchor tokens.
 
 ## Notes
 
