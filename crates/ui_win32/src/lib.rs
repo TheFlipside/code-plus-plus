@@ -108,12 +108,13 @@ use codepp_core::lang::{
     CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3,
     CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
     HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
+    INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
     JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS,
     LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3,
-    L_BASH, L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS, L_DIFF, L_HASKELL, L_HTML, L_INI, L_JAVA,
-    L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL,
-    L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
-    L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
+    L_BASH, L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS, L_DIFF, L_HASKELL, L_HTML, L_INI, L_INNO,
+    L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC,
+    L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
+    L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
     NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
     PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
     PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
@@ -172,27 +173,30 @@ use codepp_scintilla_sys::{
     SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM,
     SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY,
     SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND,
-    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_KIX_COMMENT,
-    SCE_KIX_COMMENTSTREAM, SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER,
-    SCE_KIX_OPERATOR, SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT,
-    SCE_LISP_KEYWORD, SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER,
-    SCE_LISP_OPERATOR, SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER,
-    SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING,
-    SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD,
-    SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7,
-    SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH,
-    SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
-    SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR,
-    SCE_MAKE_TARGET, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
-    SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING,
-    SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF,
-    SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX,
-    SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ,
-    SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED,
-    SCE_NSIS_VARIABLE, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2,
-    SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER,
-    SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD,
-    SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
+    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_INNO_COMMENT,
+    SCE_INNO_COMMENT_PASCAL, SCE_INNO_INLINE_EXPANSION, SCE_INNO_KEYWORD, SCE_INNO_KEYWORD_PASCAL,
+    SCE_INNO_KEYWORD_USER, SCE_INNO_PARAMETER, SCE_INNO_PREPROC, SCE_INNO_SECTION,
+    SCE_INNO_STRING_DOUBLE, SCE_INNO_STRING_SINGLE, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM,
+    SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR,
+    SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT, SCE_LISP_KEYWORD,
+    SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER, SCE_LISP_OPERATOR,
+    SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER, SCE_LUA_COMMENT,
+    SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER,
+    SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD, SCE_LUA_WORD2,
+    SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7, SCE_LUA_WORD8,
+    SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH, SCE_L_MATH2,
+    SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM, SCE_MAKE_COMMENT,
+    SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET,
+    SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_KEYWORD,
+    SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_NSIS_COMMENT,
+    SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF,
+    SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF,
+    SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ,
+    SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE,
+    SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE,
+    SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER, SCE_PAS_OPERATOR,
+    SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD, SCE_PL_ARRAY,
+    SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
     SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
     SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR,
     SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR,
@@ -6989,6 +6993,89 @@ const HASKELL_THEME: LangTheme = LangTheme {
     bold: HASKELL_BOLD,
 };
 
+// LexInno emits 13 `SCE_INNO_*` slots (0..=12). **11 are mapped**;
+// `SCE_INNO_DEFAULT` (0) and `SCE_INNO_IDENTIFIER` (12) stay
+// unmapped per the framework convention (bare tokens paint at
+// `STYLE_DEFAULT`).
+//
+// **Wordlist install: five of six classes.** The `Sections` /
+// `Keywords` / `Parameters` / `Preprocessor directives` /
+// `Pascal keywords` classes are populated; the `User defined
+// keywords` class (5) is left empty as a project-override
+// customisation slot — the SCE state (`KEYWORD_USER`) is mapped
+// defensively so a future per-project wordlist populates it
+// without a theme change.
+//
+// Style routing rationale:
+//   - COMMENT + COMMENT_PASCAL → Comment italic. The `;`-line
+//     comment used at script level and the Pascal `{...}` /
+//     `(*...*)` block comment used inside `[Code]` — both read
+//     as prose to the human eye.
+//   - KEYWORD → Keyword bold blue. `[Setup]`-section directive
+//     names (`AppName`, `Compression`, …) — matches the
+//     "primary language keyword" reading.
+//   - KEYWORD_PASCAL → Keyword bold blue. Pascal reserved words
+//     inside `[Code]` share the primary-keyword lane since
+//     they're the reserved words of the script's embedded
+//     Pascal Script dialect — same visual role as KEYWORD in
+//     the outer script.
+//   - PARAMETER → Keyword2 teal. Section-item parameter names
+//     (`Source`, `DestDir`, `Flags`, …) — secondary structural
+//     accent.
+//   - KEYWORD_USER → Keyword2. Same lane as PARAMETER since the
+//     semantic intent is "known project identifier"; empty
+//     wordlist by default.
+//   - SECTION → Preprocessor purple. `[SectionName]` headers
+//     are structural markers rather than code content —
+//     matches the "out-of-band syntax marker" reading of the
+//     Preprocessor slot.
+//   - PREPROC → Preprocessor. `#`-directives (`#define`,
+//     `#include`, `#if`, …) — canonical preprocessor lane.
+//   - INLINE_EXPANSION → Macro. `{code:...}` / `{param:...}`
+//     inline preprocessor expansions read as distinct
+//     macro-like invocations; Macro slot gives them a themable
+//     accent separate from PREPROC.
+//   - STRING_DOUBLE + STRING_SINGLE → String. Both string
+//     forms share the string lane; Inno syntax accepts either.
+//   - IDENTIFIER — deliberately UNMAPPED. Framework convention.
+const INNO_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_INNO_COMMENT, StyleSlot::Comment),
+    (SCE_INNO_KEYWORD, StyleSlot::Keyword),
+    (SCE_INNO_PARAMETER, StyleSlot::Keyword2),
+    (SCE_INNO_SECTION, StyleSlot::Preprocessor),
+    (SCE_INNO_PREPROC, StyleSlot::Preprocessor),
+    (SCE_INNO_INLINE_EXPANSION, StyleSlot::Macro),
+    (SCE_INNO_COMMENT_PASCAL, StyleSlot::Comment),
+    (SCE_INNO_KEYWORD_PASCAL, StyleSlot::Keyword),
+    (SCE_INNO_KEYWORD_USER, StyleSlot::Keyword2),
+    (SCE_INNO_STRING_DOUBLE, StyleSlot::String),
+    (SCE_INNO_STRING_SINGLE, StyleSlot::String),
+];
+
+// Italic on the two comment forms.
+const INNO_ITALIC: &[usize] = &[SCE_INNO_COMMENT, SCE_INNO_COMMENT_PASCAL];
+
+// Bold on KEYWORD + KEYWORD_PASCAL — both fill the "primary
+// language keyword" role for their respective contexts (outer
+// script vs `[Code]`).
+const INNO_BOLD: &[usize] = &[SCE_INNO_KEYWORD, SCE_INNO_KEYWORD_PASCAL];
+
+// Five-class install (classes 0-4). Class 5 (User defined
+// keywords) intentionally uninstalled — empty customisation
+// slot.
+const INNO_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, INNO_SECTIONS),
+        (1, INNO_KEYWORDS),
+        (2, INNO_PARAMETERS),
+        (3, INNO_PREPROCESSOR),
+        (4, INNO_PASCAL_KEYWORDS),
+    ],
+    styles: INNO_STYLES,
+    italic: INNO_ITALIC,
+    bold: INNO_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -7202,6 +7289,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&MATLAB_THEME)
     } else if lang == L_HASKELL {
         Some(&HASKELL_THEME)
+    } else if lang == L_INNO {
+        Some(&INNO_THEME)
     } else {
         None
     }
@@ -22376,31 +22465,34 @@ mod lang_theme_tests {
         SCE_HA_COMMENTBLOCK3, SCE_HA_COMMENTLINE, SCE_HA_DATA, SCE_HA_INSTANCE, SCE_HA_KEYWORD,
         SCE_HA_LITERATE_CODEDELIM, SCE_HA_LITERATE_COMMENT, SCE_HA_MODULE, SCE_HA_NUMBER,
         SCE_HA_OPERATOR, SCE_HA_PRAGMA, SCE_HA_PREPROCESSOR, SCE_HA_RESERVED_OPERATOR,
-        SCE_HA_STRING, SCE_HA_STRINGEOL, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM, SCE_KIX_FUNCTIONS,
-        SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR, SCE_KIX_STRING1,
-        SCE_KIX_STRING2, SCE_KIX_VAR, SCE_PL_ARRAY, SCE_PL_BACKTICKS_VAR, SCE_PL_FORMAT_IDENT,
-        SCE_PL_HASH, SCE_PL_HERE_DELIM, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX_VAR, SCE_PL_REGEX_VAR,
-        SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR_VAR,
-        SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE,
-        SCE_PL_WORD, SCE_PS_BASE85STRING, SCE_PS_COMMENT, SCE_PS_DSC_COMMENT, SCE_PS_DSC_VALUE,
-        SCE_PS_HEXSTRING, SCE_PS_IMMEVAL, SCE_PS_KEYWORD, SCE_PS_LITERAL, SCE_PS_NUMBER,
-        SCE_PS_PAREN_ARRAY, SCE_PS_PAREN_DICT, SCE_PS_PAREN_PROC, SCE_PS_TEXT, SCE_RB_BACKTICKS,
-        SCE_RB_CHARACTER, SCE_RB_CLASSNAME, SCE_RB_CLASS_VAR, SCE_RB_COMMENTLINE,
-        SCE_RB_DATASECTION, SCE_RB_DEFNAME, SCE_RB_GLOBAL, SCE_RB_HERE_DELIM, SCE_RB_HERE_Q,
-        SCE_RB_HERE_QQ, SCE_RB_HERE_QX, SCE_RB_INSTANCE_VAR, SCE_RB_MODULE_NAME, SCE_RB_NUMBER,
-        SCE_RB_OPERATOR, SCE_RB_POD, SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN, SCE_RB_STDOUT,
-        SCE_RB_STRING, SCE_RB_STRING_I, SCE_RB_STRING_Q, SCE_RB_STRING_QI, SCE_RB_STRING_QQ,
-        SCE_RB_STRING_QR, SCE_RB_STRING_QS, SCE_RB_STRING_QW, SCE_RB_STRING_QX, SCE_RB_STRING_W,
-        SCE_RB_SYMBOL, SCE_RB_WORD, SCE_RB_WORD_DEMOTED, SCE_ST_ASSIGN, SCE_ST_BINARY, SCE_ST_BOOL,
-        SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL, SCE_ST_KWSEND, SCE_ST_NIL, SCE_ST_NUMBER,
-        SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL, SCE_ST_SPEC_SEL, SCE_ST_STRING, SCE_ST_SUPER,
-        SCE_ST_SYMBOL, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT,
-        SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER, SCE_VHDL_OPERATOR,
-        SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE, SCE_VHDL_STDTYPE,
-        SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCE_V_COMMENT, SCE_V_COMMENTLINE,
-        SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT, SCE_V_INPUT, SCE_V_NUMBER,
-        SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR, SCE_V_STRING,
-        SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3,
+        SCE_HA_STRING, SCE_HA_STRINGEOL, SCE_INNO_COMMENT, SCE_INNO_COMMENT_PASCAL,
+        SCE_INNO_INLINE_EXPANSION, SCE_INNO_KEYWORD, SCE_INNO_KEYWORD_PASCAL,
+        SCE_INNO_KEYWORD_USER, SCE_INNO_PARAMETER, SCE_INNO_PREPROC, SCE_INNO_SECTION,
+        SCE_INNO_STRING_DOUBLE, SCE_INNO_STRING_SINGLE, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM,
+        SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR,
+        SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_PL_ARRAY, SCE_PL_BACKTICKS_VAR,
+        SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM, SCE_PL_HERE_QQ_VAR,
+        SCE_PL_HERE_QX_VAR, SCE_PL_REGEX_VAR, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR,
+        SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR,
+        SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PS_BASE85STRING, SCE_PS_COMMENT,
+        SCE_PS_DSC_COMMENT, SCE_PS_DSC_VALUE, SCE_PS_HEXSTRING, SCE_PS_IMMEVAL, SCE_PS_KEYWORD,
+        SCE_PS_LITERAL, SCE_PS_NUMBER, SCE_PS_PAREN_ARRAY, SCE_PS_PAREN_DICT, SCE_PS_PAREN_PROC,
+        SCE_PS_TEXT, SCE_RB_BACKTICKS, SCE_RB_CHARACTER, SCE_RB_CLASSNAME, SCE_RB_CLASS_VAR,
+        SCE_RB_COMMENTLINE, SCE_RB_DATASECTION, SCE_RB_DEFNAME, SCE_RB_GLOBAL, SCE_RB_HERE_DELIM,
+        SCE_RB_HERE_Q, SCE_RB_HERE_QQ, SCE_RB_HERE_QX, SCE_RB_INSTANCE_VAR, SCE_RB_MODULE_NAME,
+        SCE_RB_NUMBER, SCE_RB_OPERATOR, SCE_RB_POD, SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN,
+        SCE_RB_STDOUT, SCE_RB_STRING, SCE_RB_STRING_I, SCE_RB_STRING_Q, SCE_RB_STRING_QI,
+        SCE_RB_STRING_QQ, SCE_RB_STRING_QR, SCE_RB_STRING_QS, SCE_RB_STRING_QW, SCE_RB_STRING_QX,
+        SCE_RB_STRING_W, SCE_RB_SYMBOL, SCE_RB_WORD, SCE_RB_WORD_DEMOTED, SCE_ST_ASSIGN,
+        SCE_ST_BINARY, SCE_ST_BOOL, SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL, SCE_ST_KWSEND,
+        SCE_ST_NIL, SCE_ST_NUMBER, SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL, SCE_ST_SPEC_SEL,
+        SCE_ST_STRING, SCE_ST_SUPER, SCE_ST_SYMBOL, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT,
+        SCE_VHDL_COMMENT, SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER,
+        SCE_VHDL_OPERATOR, SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE,
+        SCE_VHDL_STDTYPE, SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCE_V_COMMENT,
+        SCE_V_COMMENTLINE, SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT, SCE_V_INPUT,
+        SCE_V_NUMBER, SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR,
+        SCE_V_STRING, SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3,
     };
     // SCE_VHDL_IDENTIFIER is a scan-intermediate state that isn't
     // referenced in the main-scope theme (VHDL_STYLES deliberately
@@ -22413,13 +22505,14 @@ mod lang_theme_tests {
         CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1,
         CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
         CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
-        HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS,
+        HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS,
+        INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS,
         JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
         LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
-        L_CPP, L_CS, L_CSS, L_DIFF, L_HASKELL, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX,
-        L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS,
-        L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT,
-        L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
+        L_CPP, L_CS, L_CSS, L_DIFF, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_KIX,
+        L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
+        L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
+        L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
         NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
         PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
         PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
@@ -22430,10 +22523,10 @@ mod lang_theme_tests {
         VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
-        SCE_ADA_IDENTIFIER, SCE_HA_IDENTIFIER, SCE_HA_IMPORT, SCE_MATLAB_COMMAND,
-        SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_IDENTIFIER,
-        SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING,
-        SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER,
+        SCE_ADA_IDENTIFIER, SCE_HA_IDENTIFIER, SCE_HA_IMPORT, SCE_INNO_IDENTIFIER,
+        SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
+        SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR,
+        SCE_MATLAB_STRING, SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER,
     };
 
     /// Every wired language must:
@@ -28577,6 +28670,235 @@ mod lang_theme_tests {
                     .split_whitespace()
                     .any(|t| t == op),
                 "HASKELL_RESERVED_OPERATORS must include §2.4 operator `{op}`"
+            );
+        }
+    }
+
+    /// Inno Setup (`L_INNO`) uses Lexilla's `LexInno` — a
+    /// case-insensitive lexer for the `.iss` installer-script
+    /// format. 13 `SCE_INNO_*` slots (0..=12), six-class
+    /// wordlist descriptor (Sections / Keywords / Parameters /
+    /// Preprocessor / Pascal keywords / User defined). Code++
+    /// installs classes 0-4; class 5 (User defined) is a
+    /// customisation slot left empty.
+    ///
+    /// **Context-dispatch quirks.** The classifier uses TWO
+    /// dimensions: (1) section context (`isCode` flag after
+    /// `[Code]` header at `LexInno.cxx:223` switches to Pascal
+    /// dispatch); (2) token-following punctuation — class 1
+    /// (KEYWORD) fires only if followed by `=`, class 2
+    /// (PARAMETER) fires only if followed by `:`. These are
+    /// language-accurate and require no host coordination.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_INNO)` returns `Some(&INNO_THEME)`.
+    ///   2. Style count == 11 (13 `SCE_INNO_*` slots minus
+    ///      `DEFAULT` and `IDENTIFIER`, both unmapped per
+    ///      framework convention).
+    ///   3. Five wordlist classes in canonical order (0/1/2/3/4);
+    ///      class 5 (User) intentionally uninstalled.
+    ///   4. All five installed wordlists non-empty.
+    ///   5. Every token across the five wordlists is lowercase
+    ///      (`LexInno.cxx:172` / `:191` / `:232` fold before
+    ///      `InList`).
+    ///   6. Style-routing pins for the 11 mapped SCE constants.
+    ///   7. `DEFAULT` (0) and `IDENTIFIER` (12) remain unmapped.
+    ///   8. Italic set == 2 (both comment forms).
+    ///   9. Bold set == 2 (`KEYWORD` + `KEYWORD_PASCAL` — both fill
+    ///      the primary-keyword role for their contexts).
+    ///   10. Cross-language non-reuse (Inno must NOT reuse
+    ///       another lexer's style table verbatim).
+    ///   11. Anchor sections present (`setup`, `files`,
+    ///       `code`).
+    ///   12. Anchor Pascal keywords + directives + parameters +
+    ///       preprocessor directives present.
+    #[test]
+    fn inno_uses_lexinno_five_class_theme() {
+        let inno = lang_theme(L_INNO).expect("Inno wired");
+
+        // Invariant 2: 11 mappings.
+        assert_eq!(
+            inno.styles.len(),
+            11,
+            "INNO_STYLES must map 11 indices (13 SCE_INNO_* slots \
+             minus DEFAULT and IDENTIFIER)"
+        );
+
+        // Invariant 3: 5 classes.
+        assert_eq!(
+            inno.keywords.len(),
+            5,
+            "INNO_THEME must install exactly 5 wordlist classes \
+             (0-4 of the six in innoWordListDesc[]; class 5 \
+             User-defined intentionally uninstalled)"
+        );
+        assert_eq!(inno.keywords[0].0, 0);
+        assert_eq!(inno.keywords[1].0, 1);
+        assert_eq!(inno.keywords[2].0, 2);
+        assert_eq!(inno.keywords[3].0, 3);
+        assert_eq!(inno.keywords[4].0, 4);
+        assert_eq!(inno.keywords[0].1, INNO_SECTIONS);
+        assert_eq!(inno.keywords[1].1, INNO_KEYWORDS);
+        assert_eq!(inno.keywords[2].1, INNO_PARAMETERS);
+        assert_eq!(inno.keywords[3].1, INNO_PREPROCESSOR);
+        assert_eq!(inno.keywords[4].1, INNO_PASCAL_KEYWORDS);
+
+        // Invariant 4: non-empty.
+        for (name, list) in [
+            ("INNO_SECTIONS", INNO_SECTIONS),
+            ("INNO_KEYWORDS", INNO_KEYWORDS),
+            ("INNO_PARAMETERS", INNO_PARAMETERS),
+            ("INNO_PREPROCESSOR", INNO_PREPROCESSOR),
+            ("INNO_PASCAL_KEYWORDS", INNO_PASCAL_KEYWORDS),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: every token lowercase.
+        for (name, list) in [
+            ("INNO_SECTIONS", INNO_SECTIONS),
+            ("INNO_KEYWORDS", INNO_KEYWORDS),
+            ("INNO_PARAMETERS", INNO_PARAMETERS),
+            ("INNO_PREPROCESSOR", INNO_PREPROCESSOR),
+            ("INNO_PASCAL_KEYWORDS", INNO_PASCAL_KEYWORDS),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    tok.bytes().all(|b| !b.is_ascii_uppercase()),
+                    "{name} token `{tok}` contains uppercase — \
+                     LexInno.cxx:172/191/232 fold before InList; \
+                     uppercase entries would be dead code"
+                );
+            }
+        }
+
+        // Invariant 6: style-routing pins.
+        for (idx, slot, name) in [
+            (SCE_INNO_COMMENT, StyleSlot::Comment, "SCE_INNO_COMMENT"),
+            (SCE_INNO_KEYWORD, StyleSlot::Keyword, "SCE_INNO_KEYWORD"),
+            (
+                SCE_INNO_PARAMETER,
+                StyleSlot::Keyword2,
+                "SCE_INNO_PARAMETER",
+            ),
+            (
+                SCE_INNO_SECTION,
+                StyleSlot::Preprocessor,
+                "SCE_INNO_SECTION",
+            ),
+            (
+                SCE_INNO_PREPROC,
+                StyleSlot::Preprocessor,
+                "SCE_INNO_PREPROC",
+            ),
+            (
+                SCE_INNO_INLINE_EXPANSION,
+                StyleSlot::Macro,
+                "SCE_INNO_INLINE_EXPANSION",
+            ),
+            (
+                SCE_INNO_COMMENT_PASCAL,
+                StyleSlot::Comment,
+                "SCE_INNO_COMMENT_PASCAL",
+            ),
+            (
+                SCE_INNO_KEYWORD_PASCAL,
+                StyleSlot::Keyword,
+                "SCE_INNO_KEYWORD_PASCAL",
+            ),
+            (
+                SCE_INNO_KEYWORD_USER,
+                StyleSlot::Keyword2,
+                "SCE_INNO_KEYWORD_USER",
+            ),
+            (
+                SCE_INNO_STRING_DOUBLE,
+                StyleSlot::String,
+                "SCE_INNO_STRING_DOUBLE",
+            ),
+            (
+                SCE_INNO_STRING_SINGLE,
+                StyleSlot::String,
+                "SCE_INNO_STRING_SINGLE",
+            ),
+        ] {
+            assert!(
+                inno.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 7: DEFAULT + IDENTIFIER unmapped.
+        assert!(
+            !inno.styles.iter().any(|(i, _)| *i == 0),
+            "SCE_INNO_DEFAULT (0) must remain unmapped"
+        );
+        assert!(
+            !inno.styles.iter().any(|(i, _)| *i == SCE_INNO_IDENTIFIER),
+            "SCE_INNO_IDENTIFIER (12) must remain unmapped — bare \
+             tokens paint at STYLE_DEFAULT per framework convention"
+        );
+
+        // Invariant 8: italic == 2.
+        assert_eq!(inno.italic.len(), 2);
+        assert!(inno.italic.contains(&SCE_INNO_COMMENT));
+        assert!(inno.italic.contains(&SCE_INNO_COMMENT_PASCAL));
+
+        // Invariant 9: bold == 2.
+        assert_eq!(inno.bold.len(), 2);
+        assert!(inno.bold.contains(&SCE_INNO_KEYWORD));
+        assert!(inno.bold.contains(&SCE_INNO_KEYWORD_PASCAL));
+
+        // Invariant 10: cross-language non-reuse.
+        let haskell = lang_theme(L_HASKELL).expect("Haskell wired");
+        let matlab = lang_theme(L_MATLAB).expect("MATLAB wired");
+        let pascal = lang_theme(L_PASCAL).expect("Pascal wired");
+        for (other, name) in [(haskell, "Haskell"), (matlab, "MATLAB"), (pascal, "Pascal")] {
+            assert_ne!(
+                inno.styles, other.styles,
+                "Inno must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 11: canonical section anchors.
+        for sec in ["setup", "files", "code", "icons", "registry", "run"] {
+            assert!(
+                INNO_SECTIONS.split_whitespace().any(|t| t == sec),
+                "INNO_SECTIONS must include canonical section `[{sec}]`"
+            );
+        }
+
+        // Invariant 12: canonical anchor coverage across each
+        // wordlist.
+        // Setup directives.
+        for kw in ["appname", "appversion", "defaultdirname", "compression"] {
+            assert!(
+                INNO_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "INNO_KEYWORDS must include directive `{kw}`"
+            );
+        }
+        // Section-item parameters.
+        for kw in ["source", "destdir", "flags", "filename"] {
+            assert!(
+                INNO_PARAMETERS.split_whitespace().any(|t| t == kw),
+                "INNO_PARAMETERS must include parameter `{kw}`"
+            );
+        }
+        // Preprocessor directives.
+        for kw in ["define", "include", "if", "endif"] {
+            assert!(
+                INNO_PREPROCESSOR.split_whitespace().any(|t| t == kw),
+                "INNO_PREPROCESSOR must include directive `{kw}`"
+            );
+        }
+        // Pascal keywords.
+        for kw in ["begin", "end", "procedure", "function", "if", "then"] {
+            assert!(
+                INNO_PASCAL_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "INNO_PASCAL_KEYWORDS must include Pascal keyword `{kw}`"
             );
         }
     }

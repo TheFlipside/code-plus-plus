@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 42 / 🟡 46 / ⚫ 1.
+Total: 89 rows. ✅ 43 / 🟡 45 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1873,7 +1873,7 @@ further shim work needed.
 | Hollywood | 87 | `hollywood` | ⚫ | ⚫ | 🟡 |
 | HTML | 8 | `hypertext` | ✅ | ✅ | ✅ |
 | INI file | 13 | `props` | — | ✅ | ✅ |
-| Inno Setup | 46 | `inno` | ⚫ | ⚫ | 🟡 |
+| Inno Setup | 46 | `inno` | ✅ | ✅ | ✅ |
 | Intel HEX | 62 | `ihex` | ⚫ | ⚫ | 🟡 |
 | Java | 6 | `cpp` | ✅ | ✅ | ✅ |
 | Javascript | 58 | `cpp` | ⚫ | ⚫ | 🟡 |
@@ -3412,6 +3412,119 @@ plus literate-comment), bold == 1, 4 cross-language
 non-reuse pins (MATLAB / Verilog / Caml / C++), and 22 +
 3 + 5 anchor tokens across Keywords / FFI / reserved
 operators.
+
+**Inno Setup (2026-07-04):** uses Lexilla's `inno` lexer
+(`LexInno.cxx`, ~380 lines) — a case-insensitive lexer for
+the `.iss` installer-script format used by the Inno Setup
+authoring tool. Written by Friedrich Vedder (2004). Compact
+lexer with a six-class wordlist descriptor
+(`Sections` / `Keywords` / `Parameters` /
+`Preprocessor directives` / `Pascal keywords` /
+`User defined keywords`), 11 style mappings, and 13
+`SCE_INNO_*` slots.
+
+**Case-insensitive lexer.** Inno Setup language semantics:
+section names, directive names, and parameter names are all
+case-insensitive. `LexInno.cxx:172` / `:191` / `:232` call
+`tolower(ch)` on every byte before the wordlist InList
+probe, so every wordlist entry MUST be lowercase — an
+uppercase or mixed-case entry would be dead code (the probe
+key is `appname` even though Inno source conventionally
+spells directives in PascalCase). Test invariant #5 pins
+every-token-lowercase across all five installed wordlists.
+
+**Two-dimensional context dispatch.** The classifier decides
+which wordlist to consult using both section context and
+token-following punctuation:
+
+1. `isCode` flag flips true after a `[Code]` section header
+   (`LexInno.cxx:223`). While set, only `pascalKeywords`
+   (class 4) is consulted for identifier tokens;
+   `standardKeywords` / `parameterKeywords` / `userKeywords`
+   are gated off. Consequence: putting a token in both the
+   Pascal wordlist AND the standard-directive wordlist is
+   safe — the section context decides which fires, not the
+   lexer's within-token dispatch order.
+2. Token-following punctuation. Class 1 (`SCE_INNO_KEYWORD`,
+   Setup directives) fires only if the token is followed by
+   `=` (`innoNextNotBlankIs(i, styler, '=')` at `:197`);
+   class 2 (`SCE_INNO_PARAMETER`, section-item parameters)
+   fires only if followed by `:` (`:199`). This is
+   language-accurate — Inno distinguishes `AppName=...`
+   (directive assignment) from `Name: ...` (section-item
+   parameter assignment) — and means the same token can live
+   in both wordlists without dead-entry concerns.
+
+**Five wordlist classes installed; class 5 empty:**
+
+- **Class 0** (`INNO_SECTIONS`, 18 tokens): canonical `.iss`
+  section names — `[Setup]`, `[Files]`, `[Icons]`,
+  `[Registry]`, `[Run]`, `[Tasks]`, `[Types]`, `[Components]`,
+  `[Languages]`, `[Dirs]`, `[INI]`, `[UninstallRun]`,
+  `[InstallDelete]`, `[UninstallDelete]`, `[Messages]`,
+  `[CustomMessages]`, `[LangOptions]`, `[Code]`. The `[Code]`
+  entry is special — matching it flips `isCode = true` at
+  `LexInno.cxx:223`.
+- **Class 1** (`INNO_KEYWORDS`, ~90 tokens): commonly-used
+  `[Setup]`-section directive names covering app identity
+  (`AppName` / `AppVersion` / `AppPublisher`), install
+  locations (`DefaultDirName` / `DefaultGroupName`),
+  wizard/UI settings, version constraints,
+  compression/output, signing, privileges, and licence/info
+  files.
+- **Class 2** (`INNO_PARAMETERS`, ~50 tokens): section-item
+  parameter names — `Source` / `DestDir` / `Flags` /
+  `Filename` / `Parameters` / `Check` / `Root` / `Subkey` /
+  etc.
+- **Class 3** (`INNO_PREPROCESSOR`, ~20 tokens): ISPP
+  (Inno Setup Preprocessor) directives — `define` /
+  `include` / `if` / `else` / `endif` / `for` / `pragma` /
+  etc.
+- **Class 4** (`INNO_PASCAL_KEYWORDS`, ~50 tokens): Pascal
+  Script reserved words for the `[Code]` section — the
+  RemObjects Pascal Script dialect Inno uses, which is a
+  Delphi/Object Pascal subset. Includes block structure
+  (`begin` / `end`), declaration keywords (`var` / `const`
+  / `type` / `function` / `procedure`), control flow, and
+  the try/except/finally exception family.
+- **Class 5** (User defined keywords) — NOT installed. Ships
+  empty; the SCE state (`KEYWORD_USER`) is mapped
+  defensively so a future per-project override populates it
+  without a theme change.
+
+**Style routing (11 mappings; `DEFAULT` and `IDENTIFIER`
+unmapped):**
+
+- **COMMENT + COMMENT_PASCAL** → `Comment` italic. Both the
+  `;`-line comment used at script level and the Pascal
+  `{...}` / `(*...*)` block comment used inside `[Code]`
+  read as prose.
+- **KEYWORD + KEYWORD_PASCAL** → `Keyword` bold blue. Setup
+  directives and Pascal reserved words share the primary-
+  keyword lane since they play the same role in their
+  respective contexts (outer script vs `[Code]`).
+- **PARAMETER + KEYWORD_USER** → `Keyword2` teal. Secondary
+  structural accent for section-item parameter names and
+  user-project identifiers.
+- **SECTION + PREPROC** → `Preprocessor`. `[SectionName]`
+  headers and `#`-directives are both structural markers
+  rather than content.
+- **INLINE_EXPANSION** → `Macro`. `{code:...}` / `{param:...}`
+  inline preprocessor expansions get a distinct accent
+  separate from PREPROC.
+- **STRING_DOUBLE + STRING_SINGLE** → `String`. Both
+  quote forms.
+- **IDENTIFIER** — deliberately UNMAPPED per framework
+  convention.
+
+Structural test coverage: 12 invariants — 11 style mappings
+pin, five-class order pin (0/1/2/3/4), all-non-empty guard,
+every-token-lowercase pin, 11 style-routing pins, DEFAULT +
+IDENTIFIER unmapped pins, italic == 2 (both comment forms),
+bold == 2 (`KEYWORD` + `KEYWORD_PASCAL`), 3 cross-language
+non-reuse pins (Haskell / MATLAB / Pascal), 6 canonical
+section anchors, and 4+4+4+6 anchor tokens across
+directives / parameters / preprocessor / Pascal.
 
 ## Notes
 

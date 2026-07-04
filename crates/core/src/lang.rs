@@ -7102,6 +7102,192 @@ pub const HASKELL_RESERVED_OPERATORS: &str = concat!(
     "@ ~ => ",
 );
 
+/// Inno Setup section headers (class 0 → `SCE_INNO_SECTION`).
+///
+/// **Source of truth:** Inno Setup documentation (jrsoftware.org)
+/// — the canonical `.iss` script sections. Every entry is
+/// lowercase per `LexInno`'s `tolower` fold at `LexInno.cxx:232`.
+///
+/// The `[Code]` section is special: on match, `LexInno.cxx:223`
+/// sets `isCode = true` and the classifier switches to consulting
+/// `pascalKeywords` (class 4) instead of the standard-directive
+/// wordlists. `[Messages]` and `[CustomMessages]` set an
+/// `isMessages` flag at `:225-227` for a similar
+/// mode-specialisation, though the message-context flag doesn't
+/// currently gate any wordlist dispatch.
+pub const INNO_SECTIONS: &str = concat!(
+    // Structural.
+    "setup types components tasks languages ",
+    "files dirs icons registry ini run uninstallrun ",
+    "installdelete uninstalldelete ",
+    // Message / code / manifest.
+    "messages custommessages langoptions code ",
+);
+
+/// Inno Setup `[Setup]`-section directive names (class 1 →
+/// `SCE_INNO_KEYWORD`). Fires only when the token is followed
+/// by `=` per `LexInno.cxx:197-198`.
+///
+/// **Source of truth:** Inno Setup documentation — the "Setup
+/// Section" reference lists every directive. This wordlist ships
+/// the commonly-used subset (~90 tokens); users authoring less
+/// common directives can add them via a future user-wordlist
+/// override.
+///
+/// Every entry is lowercase per `LexInno`'s `tolower` fold at
+/// `LexInno.cxx:191`.
+pub const INNO_KEYWORDS: &str = concat!(
+    // App identity.
+    "appname appversion appvername appid appcopyright ",
+    "appcomments appcontact apppublisher apppublisherurl ",
+    "appsupportphone appsupporturl appupdatesurl ",
+    "appmutex appmodifypath appreadmefile ",
+    // Install locations.
+    "defaultdirname defaultgroupname disableprogramgrouppage ",
+    "disabledirpage disablereadypage disableuserinfopage ",
+    "disablewelcomepage disablestartupprompt disablefinishedpage ",
+    "createappdir createuninstallregkey ",
+    // Behaviour toggles.
+    "changesassociations changesenvironment ",
+    // Use-previous family (matches Inno's 7 canonical directives).
+    "usepreviousappdir usepreviousgroup usepreviousprivileges ",
+    "useprevioussetuptype usepreviouslanguage useprevioususerinfo ",
+    "useprevioustasks ",
+    // Wizard / UI.
+    "wizardstyle wizardimagefile wizardsmallimagefile ",
+    "wizardimagealphaformat wizardresizable wizardsizepercent ",
+    "wizardimagebackcolor showlanguagedialog showcomponentsizes ",
+    "showundisplayablelanguages ",
+    // Version constraints.
+    "minversion onlybelowversion ",
+    // Architecture.
+    "architecturesallowed architecturesinstallin64bitmode ",
+    // Compression / output.
+    "compression compressionthreads solidcompression internalcompresslevel ",
+    "lzmaalgorithm lzmablocksize lzmadictionarysize lzmamatchfinder ",
+    "lzmanumblockthreads lzmauseseparateprocess ",
+    "outputdir outputbasefilename outputmanifestfile ",
+    "diskspanning diskslicesize diskclustersize reservebytes ",
+    "backcolor backcolor2 backcolordirection ",
+    // Icons.
+    "setupiconfile uninstalliconfile ",
+    // Signing.
+    "signtool signeduninstaller signeduninstallerdir ",
+    // Privileges / restart.
+    "privilegesrequired privilegesrequiredoverridesallowed ",
+    "alwaysrestart restartifneededbyrun ",
+    "restartapplications closeapplications closeapplicationsfilter ",
+    // Misc.
+    "sourcedir mergeduplicatefiles timestamprounding uninstallrestartcomputer ",
+    "usesetupldr updateuninstalllogappname ",
+    "versioninfoversion versioninfocompany versioninfocopyright ",
+    "versioninfodescription versioninfotextversion ",
+    "versioninfoproductversion versioninfoproductname ",
+    "versioninfoproducttextversion versioninfooriginalfilename ",
+    "versioninfotrademarks ",
+    // Language support.
+    "languagedetectionmethod ",
+    // Allow overrides.
+    "allownoicons allownetworkdrive allowrootdirectory allowuncpath ",
+    "alwaysshowcomponentslist alwaysshowdironreadypage ",
+    "alwaysshowgrouponreadypage alwaysusepersonalgroup ",
+    // License / info files.
+    "licensefile infobeforefile infoafterfile ",
+    // Encrypt / password.
+    "encryption password ",
+    // Touch.
+    "touchdate touchtime ",
+);
+
+/// Inno Setup section-item parameter names (class 2 →
+/// `SCE_INNO_PARAMETER`). Fires only when the token is followed
+/// by `:` per `LexInno.cxx:199-200`.
+///
+/// **Source of truth:** Inno Setup section reference — parameter
+/// names inside `[Files]` / `[Icons]` / `[Registry]` / `[Run]` /
+/// `[Tasks]` / etc. Every entry is lowercase.
+pub const INNO_PARAMETERS: &str = concat!(
+    // Common cross-section.
+    "name description groupdescription components tasks languages ",
+    "check beforeinstall afterinstall minversion onlybelowversion ",
+    "flags parameters workingdir statusmsg runonceid ",
+    "permissions comment ",
+    // [Files] specific.
+    "source destdir destname excludes strongassemblyname ",
+    "extradiskspacerequired attribs fontinstall ",
+    // [Registry] specific.
+    "root subkey valuetype valuename valuedata ",
+    // [Icons] / [Run] / [UninstallRun].
+    "filename iconfilename iconindex hotkey verb appusermodelid ",
+    "appusermodeltoastactivatorclsid ",
+    // [Types] / [Components].
+    "types ",
+    // [INI] specific.
+    "section key string ",
+    // [Languages].
+    "messagesfile licensefile infobeforefile infoafterfile ",
+);
+
+/// Inno Setup preprocessor directives (class 3 →
+/// `SCE_INNO_PREPROC`). Fires after `#` at
+/// `LexInno.cxx:239-247`.
+///
+/// **Source of truth:** ISPP (Inno Setup Preprocessor)
+/// documentation. Every entry is lowercase.
+pub const INNO_PREPROCESSOR: &str = concat!(
+    // Definition / inclusion.
+    "define undef include ",
+    // Conditional.
+    "if ifdef ifndef ifexist ifnexist else elif endif ",
+    // Iteration.
+    "for ",
+    // Message / debug.
+    "pragma error emit ",
+    // Advanced.
+    "expr insert append sub endsub file dim redim ",
+);
+
+/// Pascal reserved words used inside Inno Setup's `[Code]`
+/// section (class 4 → `SCE_INNO_KEYWORD_PASCAL`).
+///
+/// **Source of truth:** `RemObjects` Pascal Script — the Object
+/// Pascal-derived dialect Inno Setup uses in `[Code]` sections.
+/// Every entry is lowercase per `LexInno`'s `tolower` fold.
+///
+/// **Not a full Delphi reserved-word set.** Pascal Script
+/// implements a subset — no `interface` / `implementation`
+/// (only one unit per script), no `initialization` /
+/// `finalization` sections, no `try...except` on E:Exception
+/// down-cast (bare `on` clause allowed but not the full class-
+/// down-cast syntax). This wordlist covers Pascal Script's
+/// actually-recognised reserved words.
+pub const INNO_PASCAL_KEYWORDS: &str = concat!(
+    // Block structure.
+    "begin end ",
+    "program unit uses ",
+    // Declaration keywords.
+    "var const type function procedure ",
+    "array record string set ",
+    "of ",
+    // Control flow.
+    "if then else ",
+    "case ",
+    "for to downto do while repeat until ",
+    "break continue exit ",
+    // Exception handling (Pascal Script supports try/except/finally).
+    "try except finally raise ",
+    // Boolean / bitwise operators as keywords.
+    "and or not xor div mod shl shr in is as ",
+    // Constants.
+    "nil true false ",
+    // Class support (Pascal Script has limited class support).
+    "class constructor destructor inherited ",
+    "public private protected published ",
+    "virtual override overload ",
+    // Misc.
+    "with forward external ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

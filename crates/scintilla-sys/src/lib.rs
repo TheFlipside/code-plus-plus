@@ -3667,6 +3667,131 @@ pub const SCE_HA_RESERVED_OPERATOR: usize = 20;
 pub const SCE_HA_LITERATE_COMMENT: usize = 21;
 pub const SCE_HA_LITERATE_CODEDELIM: usize = 22;
 
+// LexInno style indices. 13 contiguous slots (0..=12) for the
+// Inno Setup script lexer — `.iss` installer script format used
+// by the Inno Setup installer authoring tool. Written by
+// Friedrich Vedder (2004) as a simple table-driven lexer that
+// switches modes based on the current section (identified by
+// `[SectionName]` headers). Dispatches SCLEX_INNOSETUP (= 76)
+// via a **six-class wordlist** at
+// `vendor/lexilla/lexers/LexInno.cxx:329-337`
+// (`innoWordListDesc[]`):
+//
+//     innoWordListDesc[] = {
+//         "Sections",                // class 0 → SCE_INNO_SECTION
+//         "Keywords",                // class 1 → SCE_INNO_KEYWORD (`= `-suffix Setup directives)
+//         "Parameters",              // class 2 → SCE_INNO_PARAMETER (`:`-suffix section-item params)
+//         "Preprocessor directives", // class 3 → SCE_INNO_PREPROC
+//         "Pascal keywords",         // class 4 → SCE_INNO_KEYWORD_PASCAL (inside [Code])
+//         "User defined keywords",   // class 5 → SCE_INNO_KEYWORD_USER
+//     };
+//
+// **Case-insensitive lexer.** Inno Setup language semantics:
+// section names, directive names, and parameter names are all
+// case-insensitive. `LexInno.cxx:172` / `:191` / `:232` call
+// `tolower(ch)` on every identifier / section-name / preproc
+// byte BEFORE the `keywords.InList(buffer)` lookup, so every
+// wordlist entry MUST be lowercase — an uppercase or mixed-case
+// entry would be dead code (the InList probe key is `appname`,
+// never `AppName`, even though Inno source conventionally
+// spells directives in PascalCase).
+//
+// **Context-dispatch quirks.** LexInno's classifier uses TWO
+// dimensions to decide which wordlist to consult:
+//
+//   1. **Section context** (`isCode` flag, set true after a
+//      `[Code]` section header at `:223`). When `isCode ==
+//      true`, only the `pascalKeywords` wordlist is consulted
+//      at `:201-202`; when false, `standardKeywords` /
+//      `parameterKeywords` / `userKeywords` are all live at
+//      `:197-204`.
+//   2. **Token-following punctuation** — the `=` / `:`
+//      distinction between Setup directives and section-item
+//      parameters. Class 1 (`SCE_INNO_KEYWORD`) fires ONLY if
+//      the token is followed by `=` (`innoNextNotBlankIs(i,
+//      styler, '=')` at `:197`), and class 2
+//      (`SCE_INNO_PARAMETER`) fires ONLY if followed by `:`
+//      (`:199`). This is language-accurate — Inno Setup
+//      distinguishes `AppName=...` (Setup directive assignment)
+//      from `Name: ...` (section-item parameter assignment) —
+//      but consequence for host wordlist authors: putting the
+//      same token in both class 1 and class 2 is fine because
+//      the classifier uses the following punctuation to decide,
+//      not the wordlist membership order.
+//
+// **Style semantics (paint-loop citations reference LexInno.cxx):**
+//
+//   - SCE_INNO_DEFAULT (0) — inter-token slack.
+//   - SCE_INNO_COMMENT (1) — `;`-prefixed line comment
+//     (script-level Inno comment; the primary comment form
+//     outside `[Code]`). Only fires when the `;` is at
+//     beginning-of-line or after a run of only whitespace since
+//     BOL (`isBOLWS` guard at `:131`) — a mid-line `; note`
+//     does NOT start a comment.
+//   - SCE_INNO_KEYWORD (2) — Setup-section directive name
+//     (`AppName`, `DefaultDirName`, `Compression`, …). Fires
+//     via the `standardKeywords.InList(buffer) &&
+//     innoNextNotBlankIs(i, styler, '=')` guard at
+//     `:197-198`.
+//   - SCE_INNO_PARAMETER (3) — section-item parameter name
+//     (`Source`, `DestDir`, `Flags`, …). Fires via the
+//     `parameterKeywords.InList(buffer) &&
+//     innoNextNotBlankIs(i, styler, ':')` guard at
+//     `:199-200`.
+//   - SCE_INNO_SECTION (4) — `[SectionName]` header at
+//     `:215-231`. Matched against `sectionKeywords.InList`; on
+//     hit the whole `[...]` span paints SECTION and the
+//     classifier sets `isCode` / `isMessages` flags.
+//   - SCE_INNO_PREPROC (5) — `#`-prefixed preprocessor directive
+//     (`#define`, `#include`, `#if`, …). Fires via
+//     `preprocessorKeywords.InList(buffer)` at `:246-247`.
+//   - SCE_INNO_INLINE_EXPANSION (6) — `{code:...}` /
+//     `{param:...}` inline preprocessor expansion embedded
+//     inside string literals and directive values. Entered at
+//     `:144` on encountering `{`.
+//   - SCE_INNO_COMMENT_PASCAL (7) — Pascal `{...}` / `(*...*)`
+//     block comment AND `//` line comment style, only fires
+//     inside `[Code]` section (Pascal-style comments; the outer
+//     script uses `;` line comments instead). Entered at
+//     `:145-149` for `{`, `:150-154` for `(*`, `:155-159` for
+//     `//`.
+//   - SCE_INNO_KEYWORD_PASCAL (8) — Pascal reserved word inside
+//     `[Code]` section (`begin`, `end`, `procedure`,
+//     `function`, `if`, `then`, `else`, `for`, `while`, `try`,
+//     `except`, `finally`, …). Fires via
+//     `pascalKeywords.InList(buffer)` at `:201-202`, gated by
+//     `isCode == true`.
+//   - SCE_INNO_KEYWORD_USER (9) — user-customization slot.
+//     Code++ ships this empty; a future per-project override
+//     mechanism may populate it. Fires via
+//     `userKeywords.InList(buffer)` at `:203-204`, gated by
+//     `isCode == false` — user-defined keywords are NOT
+//     recognized inside `[Code]` (matches the
+//     two-dimensional-dispatch quirk above).
+//   - SCE_INNO_STRING_DOUBLE (10) — `"..."` double-quoted
+//     string literal. Entered at `:162-163`.
+//   - SCE_INNO_STRING_SINGLE (11) — `'...'` single-quoted
+//     string literal. Entered at `:166-167`. Both string
+//     forms are valid Inno syntax.
+//   - SCE_INNO_IDENTIFIER (12) — non-reserved word. The
+//     scanning-state target that becomes SCE_INNO_DEFAULT on
+//     wordlist miss at `:206`. Framework convention: leave
+//     unmapped so ordinary parameter values and variable
+//     names paint at STYLE_DEFAULT.
+pub const SCE_INNO_DEFAULT: usize = 0;
+pub const SCE_INNO_COMMENT: usize = 1;
+pub const SCE_INNO_KEYWORD: usize = 2;
+pub const SCE_INNO_PARAMETER: usize = 3;
+pub const SCE_INNO_SECTION: usize = 4;
+pub const SCE_INNO_PREPROC: usize = 5;
+pub const SCE_INNO_INLINE_EXPANSION: usize = 6;
+pub const SCE_INNO_COMMENT_PASCAL: usize = 7;
+pub const SCE_INNO_KEYWORD_PASCAL: usize = 8;
+pub const SCE_INNO_KEYWORD_USER: usize = 9;
+pub const SCE_INNO_STRING_DOUBLE: usize = 10;
+pub const SCE_INNO_STRING_SINGLE: usize = 11;
+pub const SCE_INNO_IDENTIFIER: usize = 12;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated
