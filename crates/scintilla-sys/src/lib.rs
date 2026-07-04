@@ -4422,6 +4422,122 @@ pub const SCE_COBOL_OPERATOR: usize = 10;
 pub const SCE_COBOL_IDENTIFIER: usize = 11;
 pub const SCE_COBOL_WORD2: usize = 16;
 
+// LexGui4Cli style indices. 10 contiguous slots (0..=9) for
+// the Gui4Cli GUI-scripting language lexer. **Constant prefix
+// is `SCE_GC_`, not `SCE_GUI4CLI_`** — this matches Lexilla's
+// own enum in `SciLexer.h:1039-1048` verbatim (the file-header
+// comment inside `LexGui4Cli.cxx:13-22` documents the same
+// `SCE_GC_*` names). Renaming to `SCE_GUI4CLI_*` on the host
+// side would break greppability against the vendor tree.
+// Dispatches SCLEX_GUI4CLI via a **five-class wordlist** at
+// `vendor\lexilla\lexers\LexGui4Cli.cxx:306-309`
+// (`gui4cliWordListDesc[]`):
+//
+//     gui4cliWordListDesc[] = {
+//         "Globals",     // class 0 → SCE_GC_GLOBAL
+//         "Events",      // class 1 → SCE_GC_EVENT
+//         "Attributes",  // class 2 → SCE_GC_ATTRIBUTE
+//         "Control",     // class 3 → SCE_GC_CONTROL
+//         "Commands",    // class 4 → SCE_GC_COMMAND
+//         0
+//     };
+//
+// **Case-fold classification — CRITICAL.** `LexGui4Cli.cxx:89-93`
+// walks the captured token buffer and does `*p = toupper(*p)`
+// before `WordList::InList` probes. Gui4Cli is case-insensitive
+// (a 90s-era GUI scripting language, keywords typed in any case);
+// wordlist entries therefore MUST be all-UPPERCASE. A single
+// lowercase entry silently never matches — same discipline as
+// `LexCOBOL`'s uppercase policy but inverted from
+// `LexAda` / `LexCmake`'s lowercase policy. Test invariant
+// enforces this.
+//
+// **Probe order at `:105-109` — NOT descriptor order.** The
+// classifier probes:
+//
+//     Globals → Attributes → Control → Commands → Events
+//                                                   ^
+//                                              Events LAST
+//
+// This is decoupled from `gui4cliWordListDesc[]`'s
+// declaration order (which SCI_SETKEYWORDS respects). First
+// match wins across the five lists — a token that appears
+// in both Globals and Events resolves as Global. Wordlists
+// must be mutually disjoint for the intended paint to fire.
+//
+// **Statement-position matching only.** `colorFirstWord`
+// (`:72-120`) is called from the main dispatch at document
+// start, after every `\n` / `\r` (`:226-236`), and after
+// every `;` statement terminator (`:191-202`). Keyword
+// highlighting fires ONLY for the leading token of a
+// statement — the same word appearing mid-statement stays
+// `SCE_GC_DEFAULT`. This is a lexer behaviour, not a host
+// concern; document it in the theme so future readers don't
+// file a false bug.
+//
+// **No number, no identifier, no preprocessor state.** The
+// lexer emits exactly the 10 states declared here — plain
+// integers and identifiers both fall through to
+// `SCE_GC_DEFAULT`. Do not attempt to map `Number` or
+// route `Preprocessor` beyond the states listed.
+//
+// **Word-char alphabet extends beyond alnum.** `IsAWordChar`
+// at `:50-52` accepts letters, digits, `.`, `_`, AND `\`
+// (backslash) — so `path\to\file` reads as a single
+// identifier. The `\` escape dispatch at `:215-224` marks
+// the backslash + next character as `SCE_GC_OPERATOR` even
+// inside strings, then restores the previous state.
+//
+// **Fold points at Globals and Events.** `FoldGui4Cli`
+// (`:271-273`) sets header points on any line whose lead
+// token classifies as `SCE_GC_GLOBAL` or `SCE_GC_EVENT`.
+// Fold behaviour is intrinsic — host doesn't cooperate.
+//
+// Style semantics (paint-loop citations reference LexGui4Cli.cxx):
+//
+//   - SCE_GC_DEFAULT (0) — whitespace, bare identifiers,
+//     `$var` payloads (the `$` sigil itself is OPERATOR at
+//     `:204-213`, but the identifier following falls
+//     through), numeric literals. Framework convention:
+//     leave unmapped.
+//   - SCE_GC_COMMENTLINE (1) — `//`-to-EOL comment
+//     (`:146-153`).
+//   - SCE_GC_COMMENTBLOCK (2) — `/* ... */` block comment
+//     (`:154-158`; closed at `:163-173`).
+//   - SCE_GC_GLOBAL (3) — wordlist class 0 hit (Globals —
+//     top-level control declarations like `G4C`, `WINDOW`,
+//     `XBUTTON`).
+//   - SCE_GC_EVENT (4) — wordlist class 1 hit (Events —
+//     handler declarations like `XONLOAD`, `XONCLICK`).
+//     Probes LAST at `:105-109`.
+//   - SCE_GC_ATTRIBUTE (5) — wordlist class 2 hit
+//     (the attribute-clause declarator `ATTR`; the sole
+//     entry per the vendor `SciTE.properties` — see
+//     `GUI4CLI_ATTRIBUTES` docstring in `codepp_core::lang`
+//     for the statement-position-matching rationale).
+//   - SCE_GC_CONTROL (6) — wordlist class 3 hit (Control —
+//     flow keywords like `IF`, `ELSE`, `ENDIF`, `GOSUB`).
+//   - SCE_GC_COMMAND (7) — wordlist class 4 hit (Commands —
+//     built-in verbs like `GUIOPEN`, `MSGBOX`,
+//     `SETWINTITLE`).
+//   - SCE_GC_STRING (8) — `'...'` or `"..."` literal
+//     (`:175-189`). Both quote characters are accepted;
+//     lexer records the opening quote at `:187` and matches
+//     the same character to close.
+//   - SCE_GC_OPERATOR (9) — arithmetic/relational
+//     operators + `;` statement terminator (`:191-202`) +
+//     `$` variable sigil + `\` escape (`:215-224`).
+pub const SCE_GC_DEFAULT: usize = 0;
+pub const SCE_GC_COMMENTLINE: usize = 1;
+pub const SCE_GC_COMMENTBLOCK: usize = 2;
+pub const SCE_GC_GLOBAL: usize = 3;
+pub const SCE_GC_EVENT: usize = 4;
+pub const SCE_GC_ATTRIBUTE: usize = 5;
+pub const SCE_GC_CONTROL: usize = 6;
+pub const SCE_GC_COMMAND: usize = 7;
+pub const SCE_GC_STRING: usize = 8;
+pub const SCE_GC_OPERATOR: usize = 9;
+
 // LexTOML style indices. The upstream enum also defines
 // `SCE_TOML_ERROR` (7), `SCE_TOML_STRINGEOL` (15), and
 // `SCE_TOML_ESCAPECHAR` (13) — those are intentionally omitted

@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 46 / 🟡 42 / ⚫ 1.
+Total: 89 rows. ✅ 47 / 🟡 41 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1868,7 +1868,7 @@ further shim work needed.
 | Freebasic | 69 | `freebasic` | ⚫ | ⚫ | 🟡 |
 | GDScript | 86 | `gdscript` | ⚫ | ⚫ | 🟡 |
 | Go | 88 | `cpp` | ⚫ | ⚫ | 🟡 |
-| Gui4Cli | 51 | `gui4cli` | ⚫ | ⚫ | 🟡 |
+| Gui4Cli | 51 | `gui4cli` | ✅ | ✅ | ✅ |
 | Haskell | 45 | `haskell` | ✅ | ✅ | ✅ |
 | Hollywood | 87 | `hollywood` | ⚫ | ⚫ | 🟡 |
 | HTML | 8 | `hypertext` | ✅ | ✅ | ✅ |
@@ -3923,6 +3923,175 @@ three comment states), bold == 2 (`WORD` + `PREPROCESSOR`),
 3 cross-language non-reuse pins (CMake / YAML / Haskell),
 and 32 + 11 + 3 canonical COBOL anchor tokens across the
 three lists plus the `random`-absent-from-C pin.
+
+**Gui4Cli (2026-07-04):** uses Lexilla's `gui4cli` lexer
+(`LexGui4Cli.cxx`, 315 lines, d. Keletsekis 2003). 10 slots
+(0..=9) with **prefix `SCE_GC_`, not `SCE_GUI4CLI_`** —
+Lexilla's own enum spelling, preserved on the host side for
+greppability against the vendor tree. Five-class wordlist
+(Globals / Events / Attributes / Control / Commands).
+Distinctive features: **statement-position matching**
+(keywords fire only on the leading token of a statement),
+**uppercase case-fold** (same discipline as COBOL, inverted
+from Ada/CMake), and **decoupled probe order vs descriptor
+order** (Events probes LAST at classification time despite
+being class 1 in the descriptor).
+
+**Uppercase case-fold classification.** `LexGui4Cli.cxx:89-93`
+walks the captured token buffer and does `*p = toupper(*p)`
+BEFORE `WordList::InList` probes at `:105-109`. Gui4Cli is
+case-insensitive at the language level (a 90s-era GUI
+scripting language — keywords typed in any case, including
+mixed like `xButton` / `xOnLoad` in Lexilla's own sample);
+the lexer folds every candidate. Wordlist entries therefore
+MUST be UPPERCASE — the same rule as COBOL. Test invariant
+#5 pins the discipline across all five lists.
+
+**Probe order at `:105-109` is NOT descriptor order.** The
+classifier at classification time probes:
+
+    Globals → Attributes → Control → Commands → Events
+
+with Events LAST, first-match-wins. This is decoupled from
+`gui4cliWordListDesc[]`'s declaration order at `:306-309`
+(which `SCI_SETKEYWORDS` respects for the host-side install:
+Globals=0, Events=1, Attributes=2, Control=3, Commands=4).
+Consequence: a token appearing in both Globals and Events
+resolves as Global — the Events entry is dead code. Test
+invariant #8 pins cross-list uniqueness across all 10
+pairwise combinations, guarding against a duplicate that
+would silently mis-route highlighting.
+
+**Statement-position matching only.** `colorFirstWord`
+(`:72-120`) is invoked from the main dispatch at document
+start, after every newline (`:226-236`), and after every
+`;` statement terminator (`:191-202`). Keyword highlighting
+fires ONLY for the leading token of a statement — the same
+word appearing mid-statement stays `SCE_GC_DEFAULT`. E.g.
+`LET a = GUIOPEN` will paint `GUIOPEN` as DEFAULT (mid-
+statement), not as `SCE_GC_COMMAND`. This is a lexer
+behaviour, not a host concern; users familiar with Gui4Cli
+expect it. Not tunable from the host.
+
+**Word-char alphabet extends beyond `[A-Z0-9_]`.**
+`isAWordChar` at `:50-52` accepts letters, digits, `.`, `_`,
+AND `\` (backslash) — so `path\to\file` reads as a single
+identifier. The `\` escape dispatch at `:215-224` marks the
+backslash + next character as `SCE_GC_OPERATOR` even inside
+strings, then restores the prior state. Standard Gui4Cli
+keyword identifiers stay within `[A-Z0-9_]`; test invariant
+#7 pins that alphabet for the wordlists themselves.
+
+**Fold points at Globals and Events.** `FoldGui4Cli` at
+`:271-273` sets fold-header points on any line whose lead
+token classifies as `SCE_GC_GLOBAL` or `SCE_GC_EVENT`. This
+motivates the theme's bold-on-GLOBAL+EVENT choice — the two
+classes are structural siblings in the folding model, so
+they share bold weight to reinforce the visual pairing.
+
+**Five wordlist classes** (~43 tokens total: 14+12+1+7+9, seeded from
+`vendor/lexilla/test/examples/gui4cli/SciTE.properties` and
+`AllStyles.gui` — the paired keyword-and-sample authored by
+`d. Keletsekis, 2/10/2003` per `LexGui4Cli.cxx:6`. Non-seed
+tokens are extrapolations from the naming conventions
+established by the vendor seed and are explicitly marked
+as such in the docstrings; unverified against a primary
+Gui4Cli reference):
+
+- **Class 0** (`GUI4CLI_GLOBALS`, 14 tokens): top-level
+  control declarators — `G4C` (Gui4Cli script marker),
+  `WINDOW`, `XBUTTON` (vendor-seed) plus 11 X-prefixed
+  control names (`XCHECKBOX` / `XCOMBOBOX` / `XDROPLIST` /
+  `XEDIT` / `XLISTVIEW` / `XPULLDOWN` / `XRADIO` / `XSTATIC`
+  / `XTEXT` / `XTREEVIEW` / `XMENU`) extrapolated from the
+  `XBUTTON` naming pattern.
+- **Class 1** (`GUI4CLI_EVENTS`, 12 tokens): `X`-prefixed
+  handler declarators — `XONLOAD` / `XONCLOSE` / `XONLVDIR`
+  (vendor-seed) plus 9 additional `XON<event>` names
+  (`XONCLICK` / `XONCHANGE` / `XONSELECT` / `XONKEY` /
+  `XONMOUSE` / `XONTIMER` / `XONLVSELECT` / `XONDROP` /
+  `XONMENU`) extrapolated from the vendor-seed naming
+  pattern.
+- **Class 2** (`GUI4CLI_ATTRIBUTES`, 1 token): the attribute-
+  clause declarator — `ATTR`. Deliberately minimal — the
+  vendor's own `SciTE.properties` keeps this list to `ATTR`
+  alone because Gui4Cli attribute syntax is
+  `attr <property> <value>` and `LexGui4Cli.cxx:72-120`
+  (`colorFirstWord`) only probes wordlists for the LEADING
+  token of a statement. Property names (`TEXTCOL`, `FONT`,
+  etc.) appear at position 2 and never reach the wordlist
+  dispatch — adding them to this list would be dead code.
+- **Class 3** (`GUI4CLI_CONTROL`, 7 tokens): flow-control
+  keywords that appear at leading statement position —
+  `IF` / `ELSE` / `ENDIF` / `GOSUB` (vendor-seed) plus
+  `GOTO` / `RETURN` / `EXIT`. **Explicitly excluded per
+  the review pass:** `THEN` (Gui4Cli's `if` is block-form
+  with implicit then — vendor sample writes `if $var >
+  9999 ... endif` with no `then`); `AND` / `OR` / `NOT`
+  (Gui4Cli uses symbolic operators `&`/`|`/`!` per
+  `LexGui4Cli.cxx:204-205`, not English word forms — and
+  these would appear mid-expression anyway, where wordlist
+  dispatch never fires).
+- **Class 4** (`GUI4CLI_COMMANDS`, 9 tokens): built-in
+  verb vocabulary at leading statement position —
+  `GUIOPEN` / `GUIQUIT` / `INPUT` / `MSGBOX` /
+  `SETWINTITLE` (vendor-seed) plus the `GUI*` family
+  extrapolations `GUICLOSE` / `GUIFRONT` / `GUIHIDE` /
+  `GUISHOW`. **Explicitly excluded per the review pass:**
+  `INPUTBOX` (vendor uses `Input`, no `InputBox` command
+  exists); `GETTEXT` / `SETTEXT` / `GETVALUE` / `SETVALUE`
+  / `ADDITEM` / `DELITEM` (Gui4Cli reads/writes widget
+  state via dot-notation property access on the element
+  handle — `$button.text`, `$edit.value` — not via these
+  getter/setter commands); `PRINT` / `LET` / `SET` /
+  `CALL` / `RUN` / `EXEC` / `WAIT` / `BEEP` (unverified
+  against a primary Gui4Cli reference; vendor sample uses
+  bare assignment `var = 9999`, not `LET var = 9999`).
+
+**Style routing (9 mappings; `DEFAULT` unmapped):**
+
+- **COMMENTLINE + COMMENTBLOCK** → `Comment` italic. `//`
+  line comments and `/* ... */` block comments collapse to
+  one visual — matches the Lua / Perl / Rust comment-family
+  precedent.
+- **GLOBAL** → `Keyword` bold. Primary structural anchor.
+- **EVENT** → `Keyword2` bold. Secondary structural anchor,
+  paired with GLOBAL as fold-header siblings.
+- **ATTRIBUTE** → `Preprocessor`. Property/config markers
+  read as out-of-band annotations — same lane as CMake's
+  `${var}` and Rust's `#[attr]`.
+- **CONTROL** → `Keyword`. Flow-control words share the
+  primary-keyword accent with GLOBAL (not bold — semantic
+  keyword weight without structural-anchor emphasis).
+- **COMMAND** → `Macro`. Built-in verbs read as "callable
+  from the runtime library" the same way Rust's `println!`
+  reads. Macro slot delivers the visual weight without a
+  new slot.
+- **STRING** → `String`.
+- **OPERATOR** → `Operator`. Arithmetic + relational +
+  statement-terminator `;` + `$` variable sigil + `\`
+  escape.
+
+**DEFAULT unmapped.** Framework convention. Numeric
+literals, `$var` identifier payloads (after the `$` sigil
+paints as OPERATOR), and bare identifiers all fall through
+to `STYLE_DEFAULT`. No dedicated Identifier or Number
+state exists in `LexGui4Cli` — do not attempt to route one.
+
+Structural test coverage: 13 invariants — 9 style mappings
+pin, five-class canonical descriptor-order pin
+(load-bearing for `SCI_SETKEYWORDS`), all-non-empty guard,
+every-token-uppercase pin (case-fold discipline) with
+vendor-seed anchors from `SciTE.properties` verified for
+each of the five lists, `SCE_GC_OPERATOR == 9` numeric-
+contract pin, `[A-Z0-9_]+` alphabet pin, **cross-list
+uniqueness** across all 10 pairwise combinations of the
+five lists (guards against dead-code duplicates under the
+Globals → Attributes → Control → Commands → Events probe
+order), 9 style-routing pins, `DEFAULT` unmapped pin,
+italic == 2 (both comment states), bold == 2 (`GLOBAL` +
+`EVENT` — the two fold-header structural anchors), and 3
+cross-language non-reuse pins (COBOL / CMake / YAML).
 
 ## Notes
 

@@ -7702,6 +7702,182 @@ pub const COBOL_KEYWORDS_C: &str = concat!(
     // collision-resolution rationale.
 );
 
+/// `Gui4Cli` "Globals" — top-level control declarators (class 0
+/// → `SCE_GC_GLOBAL`).
+///
+/// **Source of truth:** the Lexilla vendor test seed at
+/// `vendor/lexilla/test/examples/gui4cli/SciTE.properties`
+/// (authored by `d. Keletsekis, 2/10/2003` per the
+/// `LexGui4Cli.cxx:6` header) ships `G4C WINDOW XBUTTON` as
+/// the canonical Global set, with the paired sample
+/// `AllStyles.gui` demonstrating the case-insensitive match
+/// (source has `xButton` / `G4C MyGui` / `Window` and all
+/// three highlight).
+///
+/// **Non-seed X-prefixed controls extrapolated from the
+/// `XBUTTON` naming pattern.** `XCHECKBOX` / `XCOMBOBOX` /
+/// `XDROPLIST` / `XEDIT` / `XLISTVIEW` / `XPULLDOWN` /
+/// `XRADIO` / `XSTATIC` / `XTEXT` / `XTREEVIEW` / `XMENU`
+/// follow the conventional `X`-prefixed widget-declarator
+/// naming pattern established by the vendor-seed `XBUTTON`.
+/// **These are extrapolations, not vendor-verified.** They
+/// may not all exist in the actual `Gui4Cli` grammar; the
+/// worst-case failure mode is a `SCE_GC_DEFAULT` no-op if a
+/// token appears in source but isn't a real declarator. Ship
+/// only what's plausible under the naming convention; err
+/// toward inclusion since a bogus-highlight risk is
+/// preferable to a missing-highlight regression on a
+/// well-known control name.
+///
+/// **UPPERCASE-only.** `LexGui4Cli.cxx:89-93` iterates the
+/// captured token buffer and does `*p = toupper(*p)` before
+/// `WordList::InList` probes. A lowercase entry silently
+/// never matches — same discipline as `COBOL_KEYWORDS_A`.
+/// Word-char alphabet extends beyond `[A-Z0-9]` to include
+/// `.` `_` and `\` per `isAWordChar` at `:50-52`; standard
+/// `Gui4Cli` identifiers stay within `[A-Z0-9_]` so the test
+/// pins that alphabet.
+///
+/// **Probe order is A→C→D→E→B**, not descriptor order:
+/// `LexGui4Cli.cxx:105-109` probes Globals → Attributes →
+/// Control → Commands → Events, first-match-wins. Events is
+/// LAST — a token appearing in both Globals and Events
+/// resolves as Global. Wordlists must be mutually disjoint;
+/// [`GUI4CLI_EVENTS`] test invariant enforces the discipline.
+pub const GUI4CLI_GLOBALS: &str = concat!(
+    // Vendor-seed tokens (SciTE.properties line 5).
+    "G4C WINDOW XBUTTON ",
+    // X-prefixed controls extrapolated from the XBUTTON
+    // naming convention. Unverified against a primary
+    // Gui4Cli reference.
+    "XCHECKBOX XCOMBOBOX XDROPLIST XEDIT XLISTVIEW ",
+    "XPULLDOWN XRADIO XSTATIC XTEXT XTREEVIEW XMENU ",
+);
+
+/// `Gui4Cli` "Events" — `X`-prefixed handler declarators
+/// (class 1 → `SCE_GC_EVENT`).
+///
+/// **Vendor seed:** `XONCLOSE XONLVDIR XONLOAD` per
+/// `SciTE.properties` line 7. The sample `AllStyles.gui`
+/// uses `xOnLoad` in a real handler context, confirming the
+/// case-insensitive match.
+///
+/// **Non-seed handler names extrapolated from the `XON*`
+/// naming pattern.** `XONCLICK` / `XONCHANGE` / `XONSELECT`
+/// / `XONKEY` / `XONMOUSE` / `XONTIMER` / `XONLVSELECT` /
+/// `XONDROP` / `XONMENU` follow the `XON<event>` naming
+/// convention established by the vendor-seed
+/// `XONLOAD`/`XONCLOSE`/`XONLVDIR` triple. Unverified
+/// against a primary `Gui4Cli` reference; each token is a
+/// plausible handler for a common UI event. Same rationale
+/// as [`GUI4CLI_GLOBALS`] for accepting extrapolation.
+///
+/// **UPPERCASE-only.** Same case-fold contract as
+/// [`GUI4CLI_GLOBALS`].
+///
+/// **Probes LAST** at `LexGui4Cli.cxx:105-109`. Any token in
+/// this list that also appears in Globals / Attributes /
+/// Control / Commands will paint under those states — never
+/// as an event. Cross-list uniqueness is enforced by the
+/// dedicated test invariant.
+pub const GUI4CLI_EVENTS: &str = concat!(
+    // Vendor-seed tokens.
+    "XONCLOSE XONLVDIR XONLOAD ",
+    // Extrapolated handler names (XON<event> pattern).
+    // Unverified against a primary Gui4Cli reference.
+    "XONCLICK XONCHANGE XONSELECT XONKEY XONMOUSE ",
+    "XONTIMER XONLVSELECT XONDROP XONMENU ",
+);
+
+/// `Gui4Cli` "Attributes" — the attribute-clause declarator
+/// (class 2 → `SCE_GC_ATTRIBUTE`).
+///
+/// **Vendor seed:** `ATTR` per `SciTE.properties` line 9.
+/// The sample uses `attr frame sunk` demonstrating case-
+/// insensitive attribute declaration.
+///
+/// **Deliberately minimal — statement-position matching.**
+/// `LexGui4Cli.cxx:72-120` (`colorFirstWord`) only probes
+/// wordlists for the LEADING token of a statement (post-
+/// `\n`/`\r`/`;`). In `attr frame sunk`, only `attr` gets
+/// probed; `frame` and `sunk` appear at the second and
+/// third positions and never reach the wordlist dispatch.
+/// Adding property-name tokens (`TEXTCOL`, `BGCOL`, `FONT`,
+/// `VALUE`, etc.) to this list would be dead code — they
+/// would never trigger a match because they never appear
+/// at leading position. Lexilla's own SciTE.properties
+/// keeps this list to `ATTR` alone for exactly this reason.
+/// Follow the vendor convention.
+///
+/// **UPPERCASE-only.** Same case-fold contract as
+/// [`GUI4CLI_GLOBALS`].
+pub const GUI4CLI_ATTRIBUTES: &str = "ATTR ";
+
+/// `Gui4Cli` "Control" — flow-control keywords that appear
+/// at leading statement position (class 3 →
+/// `SCE_GC_CONTROL`).
+///
+/// **Vendor seed:** `IF ELSE ENDIF GOSUB` per
+/// `SciTE.properties` line 11. Sample `AllStyles.gui`
+/// exercises `if $var > 9999 ... endif`.
+///
+/// **Non-seed additions restricted to LEADING-POSITION
+/// keywords.** `GOTO` / `RETURN` / `EXIT` all appear as
+/// the first token of a statement (`goto <label>`,
+/// `return`, `exit`). Explicitly excluded per the review
+/// pass: `THEN` (`Gui4Cli`'s `if` is block-form with implicit
+/// then — the vendor sample writes `if $var > 9999 ...
+/// endif` with no `then`); `AND`/`OR`/`NOT` (`Gui4Cli` uses
+/// symbolic operators `&`/`|`/`!` per `LexGui4Cli.cxx:204-205`,
+/// not English word forms — and these would appear mid-
+/// expression anyway, where wordlist dispatch never fires).
+///
+/// **UPPERCASE-only.** Same case-fold contract as
+/// [`GUI4CLI_GLOBALS`].
+pub const GUI4CLI_CONTROL: &str = concat!(
+    // Vendor-seed tokens.
+    "IF ELSE ENDIF GOSUB ",
+    // Leading-position flow keywords.
+    "GOTO RETURN EXIT ",
+);
+
+/// `Gui4Cli` "Commands" — built-in verb vocabulary that
+/// appears at leading statement position (class 4 →
+/// `SCE_GC_COMMAND`).
+///
+/// **Vendor seed:** `GUIOPEN GUIQUIT INPUT MSGBOX SETWINTITLE`
+/// per `SciTE.properties` line 13. Sample `AllStyles.gui`
+/// exercises `Input`, `MsgBox`, `GuiOpen`, `GuiQuit`.
+///
+/// **Non-seed additions restricted to the GUI* family** that
+/// follow the vendor-seed `GUIOPEN`/`GUIQUIT` naming
+/// pattern: `GUICLOSE` / `GUIFRONT` / `GUIHIDE` / `GUISHOW`.
+/// These are extrapolations from the naming convention;
+/// unverified against a primary reference but plausible.
+///
+/// **Explicitly excluded per the review pass:** `INPUTBOX`
+/// (vendor uses `Input`, not `InputBox`; no `InputBox`
+/// command exists in `Gui4Cli`); `GETTEXT`/`SETTEXT`/
+/// `GETVALUE`/`SETVALUE`/`ADDITEM`/`DELITEM` (`Gui4Cli`
+/// reads and writes widget state via dot-notation property
+/// access on the element handle — e.g. `$button.text`,
+/// `$edit.value` — not via these getter/setter commands);
+/// `PRINT`/`LET`/`SET`/`CALL`/`RUN`/`EXEC`/`WAIT`/`BEEP`
+/// (unverified against a primary `Gui4Cli` reference; the
+/// vendor sample uses bare assignment `var = 9999`, not
+/// `LET var = 9999`).
+///
+/// **UPPERCASE-only.** Same case-fold contract as
+/// [`GUI4CLI_GLOBALS`].
+pub const GUI4CLI_COMMANDS: &str = concat!(
+    // Vendor-seed tokens.
+    "GUIOPEN GUIQUIT INPUT MSGBOX SETWINTITLE ",
+    // GUI* family extrapolated from the GUIOPEN/GUIQUIT
+    // naming pattern. Unverified against a primary Gui4Cli
+    // reference.
+    "GUICLOSE GUIFRONT GUIHIDE GUISHOW ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
