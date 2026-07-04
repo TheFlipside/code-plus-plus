@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 45 / 🟡 43 / ⚫ 1.
+Total: 89 rows. ✅ 46 / 🟡 42 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1853,7 +1853,7 @@ further shim work needed.
 | C++ | 3 | `cpp` | ✅ | ✅ | ✅ |
 | Caml | 41 | `caml` | ✅ | ✅ | ✅ |
 | CMake | 48 | `cmake` | ✅ | ✅ | ✅ |
-| COBOL | 50 | `COBOL` | ⚫ | ⚫ | 🟡 |
+| COBOL | 50 | `COBOL` | ✅ | ✅ | ✅ |
 | CoffeeScript | 56 | `coffeescript` | ⚫ | ⚫ | 🟡 |
 | CSound | 70 | `csound` | ⚫ | ⚫ | 🟡 |
 | CSS | 20 | `css` | ✅ | ✅ | ✅ |
@@ -3741,6 +3741,188 @@ cross-language non-reuse pins (CMake / Inno / Haskell), and
 11 canonical anchor tokens covering both YAML 1.2 lowercase,
 one YAML 1.1 uppercase variant per boolean/null triple, and
 the `~` compact-null spelling.
+
+**COBOL (2026-07-04):** uses Lexilla's `COBOL` lexer
+(`LexCOBOL.cxx`, 390 lines). 13 `SCE_COBOL_*` slots (0..=11
+plus non-contiguous 16), three-class wordlist (A/B/Extended
+Keywords). Dispatches `SCLEX_COBOL` (= 92, per
+`SciLexer.h:108`). Distinctive features: **column-aware
+lexer** (fixed-format COBOL comments), **case-fold
+classification** (same discipline as CMake/Ada),
+**non-sequential SCE numbering** (`SCE_COBOL_WORD2 = 16`,
+not 12), and **A→B→C sequential-probe dispatch** at
+`LexCOBOL.cxx:112-120`.
+
+**Uppercase lexer name.** The `LANG_TABLE` row's
+`lexer:` field is `Some("COBOL")` — uppercase, unique in
+`LANG_TABLE` where every other lexer is lowercase. Registration
+line `LexerModule lmCOBOL(SCLEX_COBOL, ColouriseCOBOLDoc,
+"COBOL", ...)` (`LexCOBOL.cxx:390`) uses uppercase and Lexilla's
+`CreateLexer` matches byte-exactly on the name — a well-
+intentioned "normalise to lowercase" edit would silently
+disable highlighting for `.cob`/`.cbl`/`.cpy` files. The
+existing comment on the LANG_TABLE row (line 336) defends
+the deviation and test invariant #1 pins the theme dispatch
+so a regression fails loudly.
+
+**Case-fold classification.** `LexCOBOL.cxx:76` inside
+`getRange` writes `s[i] = tolower(styler[start+i])` into the
+classification buffer BEFORE `WordList::InList` probes at
+:107-121. COBOL is case-insensitive at the language level
+(`MOVE`, `move`, `Move` are the same verb) and the lexer
+folds every candidate; wordlist entries therefore MUST be
+all-lowercase. Uppercase entries silently never match. Test
+invariant #5 pins the discipline across all three lists.
+
+**Non-sequential SCE numbering.** `SCE_COBOL_WORD2 = 16`
+(not 12). The gap 12..=15 was reserved in the historical
+Scintilla enum layout and never filled. A literal `12` in
+the theme table would target a state `LexCOBOL` never emits,
+silently breaking B-Keywords (PICTURE / VALUE / USAGE /
+figurative constants) highlighting. Test invariant #6 pins
+the value; all theme references use the named constant.
+
+**Column-based dispatches** (no host cooperation required —
+`LexCOBOL` handles fixed-format columns internally, all
+inside `ColouriseCOBOLDoc`'s main state-machine loop):
+
+- `column == 6` (indicator area col 7) with `*` or `/` →
+  `SCE_COBOL_COMMENTLINE` (`LexCOBOL.cxx:215-218`).
+- Inline `*>` anywhere (COBOL 2002+ free-format) →
+  `SCE_COBOL_COMMENTLINE` (`:219-222`).
+- `column == 0` with single `*` or `/` →
+  `SCE_COBOL_COMMENTLINE` (`:223-228`).
+- `column == 0` with `**` or `/*` →
+  `SCE_COBOL_COMMENTDOC` (`:229-234`).
+- `column == 0` with `?` → `SCE_COBOL_PREPROCESSOR` (rare)
+  (`:241-243`).
+
+**A-area division/section recognition.** The lexer tracks
+`bAarea` (whether the current token starts in cols 1-2)
+and hard-codes recognition of `division` / `declaratives`
+/ `section` / `end` to compute fold-header levels via
+bitflags (`IN_DIVISION` / `IN_DECLARATIVES` / `IN_SECTION` /
+`IN_PARAGRAPH`, `LexCOBOL.cxx:122-142` inside
+`classifyWordCOBOL`). These four tokens DO belong in
+`COBOL_KEYWORDS_A` (they colour as structural verbs) but
+their fold-level effect is separate from wordlist
+highlighting — the bitflag computation runs on the same
+lowercased buffer that fed the InList probes, via
+`strcmp`.
+
+**Hyphenated tokens are single lexemes.** `isCOBOLwordchar`
+(`LexCOBOL.cxx:47-51`) accepts `-` as an identifier
+character. `working-storage`, `end-if`, `date-written`,
+`input-output`, `high-values`, `packed-decimal`, `comp-3`
+are single lexemes — written literally with the hyphen.
+Test invariant #7 pins the `[a-z0-9-]+` alphabet on every
+wordlist token to catch a stray whitespace-inside-a-compound
+edit.
+
+**Three wordlist classes** (A→B→C sequential-probe order —
+duplicates across lists shadow to the earlier list; test
+invariant #8 enforces uniqueness):
+
+- **Class 0** (`COBOL_KEYWORDS_A`, ~130 tokens): divisions
+  (IDENTIFICATION / ENVIRONMENT / DATA / PROCEDURE),
+  section names (WORKING-STORAGE / LINKAGE / FILE /
+  CONFIGURATION / INPUT-OUTPUT), the top ~40 verbs by
+  realistic-source frequency (MOVE / PERFORM / IF / DISPLAY
+  / COMPUTE / OPEN / READ / WRITE / EVALUATE / etc.), all
+  the explicit-scope terminators (END-IF / END-PERFORM /
+  ... — 18 total), control-flow phrase words
+  (THRU / VARYING / UNTIL / GIVING / etc.), preprocessor
+  verbs (COPY / REPLACE — pull in copybooks / perform
+  source-substitution), the EVALUATE fallback selector
+  (OTHER), clause introducers attached to verbs (AT / ON
+  / INVALID / SIZE / ERROR / OVERFLOW / EXCEPTION),
+  arithmetic modifier (ROUNDED), OPEN modes (INPUT / OUTPUT
+  / I-O / EXTEND), WRITE ADVANCING vocabulary (ADVANCING /
+  BEFORE / AFTER), STRING/UNSTRING/INSPECT clause words
+  (DELIMITED / DELIMITER / TALLYING / REPLACING / CONVERTING
+  / CHARACTERS / LEADING / TRAILING), English relational
+  operators (GREATER / LESS / EQUAL), the bare `END` +
+  `DECLARATIVES` structural terminators, and `FUNCTION` as
+  the intrinsic-call introducer (the callable names live
+  in class C).
+- **Class 1** (`COBOL_KEYWORDS_B`, ~90 tokens): PICTURE /
+  VALUE / USAGE clauses (PICTURE / PIC / VALUE / OCCURS /
+  REDEFINES / RENAMES / USAGE / JUSTIFIED / SYNCHRONIZED /
+  SIGN / DEPENDING / INDEXED / KEY / etc.), the full USAGE
+  mode family (BINARY / COMPUTATIONAL-1..5 / COMP-1..5 /
+  PACKED-DECIMAL / POINTER / INDEX / NATIVE / DISPLAY-1 /
+  NATIONAL), figurative constants (ZERO / ZEROS / ZEROES /
+  SPACE / SPACES / HIGH-VALUE / HIGH-VALUES / LOW-VALUE /
+  LOW-VALUES / QUOTE / QUOTES / NULL / NULLS / ALL),
+  class-condition predicates (NUMERIC / ALPHABETIC /
+  ALPHABETIC-UPPER / ALPHABETIC-LOWER), common qualifiers
+  (FILLER / GLOBAL / EXTERNAL / IS / ARE / OF / IN / TO /
+  TRUE / FALSE), and file descriptor keywords (FD / SD /
+  SELECT / ASSIGN / ORGANIZATION / ACCESS / MODE /
+  SEQUENTIAL / RANDOM / DYNAMIC / STATUS / LABEL / RECORD /
+  BLOCK).
+- **Class 2** (`COBOL_KEYWORDS_C`, ~14 tokens): COBOL 2002
+  intrinsic function names — string (LENGTH / UPPER-CASE /
+  LOWER-CASE / REVERSE / TRIM), numeric (NUMVAL / NUMVAL-C /
+  INTEGER-OF-DATE / DATE-OF-INTEGER), date/time
+  (CURRENT-DATE / WHEN-COMPILED), aggregation (MIN / MAX /
+  SUM / MEAN / MEDIAN). **`random` deliberately excluded** —
+  it collides with the SELECT ACCESS MODE `RANDOM` in list B,
+  and the A→B→C probe order at `LexCOBOL.cxx:112-120` makes
+  list B win regardless. `FUNCTION RANDOM(seed)` therefore
+  renders at Keyword2 (list B) rather than Macro (list C);
+  the user-visible cost is small and the correctness gain
+  (list-B ACCESS MODE RANDOM painted correctly) is real.
+  `LexCOBOL` has NO lookback for the preceding token — the
+  `FUNCTION` introducer does not gate matches into this list.
+
+**Style routing (11 mappings; `DEFAULT` and `IDENTIFIER`
+unmapped):**
+
+- **COMMENT + COMMENTLINE + COMMENTDOC** → `Comment` italic.
+  Three comment forms collapse to one visual — matches the
+  Lua / Tcl / Perl comment-family collapse precedent.
+  COMMENT (state 1) is legacy — the current state machine
+  doesn't emit it — but map defensively so a future Lexilla
+  revision that revives it doesn't render un-coloured.
+- **NUMBER** → `Number`. Also catches level numbers (`01`,
+  `05`, `77`, `88`) intrinsically — those DON'T need
+  wordlist entries.
+- **WORD** (A) → `Keyword` bold. Primary structural
+  vocabulary — verbs / divisions / sections / control flow.
+- **STRING + CHARACTER** → `String`. Double-quoted and
+  single-quoted literals collapse to one slot per the
+  C / Perl / Ruby character-vs-string precedent.
+- **WORD3** (C) → `Macro`. Intrinsic functions read as
+  "known name from the runtime library"; Macro slot delivers
+  the right visual weight without inventing a new slot.
+  Mirrors Rust's `println!` at `SCE_RUST_MACRO`.
+- **PREPROCESSOR** → `Preprocessor` bold. `?` at column 0
+  (rare) — bold matches the C `#include`/`#define`
+  precedent at `SCE_C_PREPROCESSOR`.
+- **OPERATOR** → `Operator`.
+- **WORD2** (B) → `Keyword2`. Secondary structural
+  vocabulary — clauses / USAGE / figuratives / file
+  descriptors. Colours the DATA and FILE sections.
+
+**DEFAULT and IDENTIFIER unmapped.** Framework convention —
+bare data names (`customer-record`, `total-amount`,
+`account-balance`) paint at STYLE_DEFAULT rather than
+picking up an arbitrary colour.
+
+Structural test coverage: 14 invariants — 11 style
+mappings pin, three-class canonical-order pin,
+all-non-empty guard, every-token-lowercase pin (case-fold
+discipline), `SCE_COBOL_WORD2 == 16` non-sequential-slot
+pin, `[a-z0-9-]+` alphabet pin (identifier-char shape),
+**cross-list uniqueness** (A/B/C intersection empty —
+guards against dead-code duplicates under LexCOBOL's
+first-match-wins A→B→C probe), 11 style-routing pins,
+`DEFAULT` + `IDENTIFIER` unmapped pins, italic == 3 (all
+three comment states), bold == 2 (`WORD` + `PREPROCESSOR`),
+3 cross-language non-reuse pins (CMake / YAML / Haskell),
+and 32 + 11 + 3 canonical COBOL anchor tokens across the
+three lists plus the `random`-absent-from-C pin.
 
 ## Notes
 

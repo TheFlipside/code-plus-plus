@@ -4307,6 +4307,121 @@ pub const SCE_YAML_TEXT: usize = 7;
 pub const SCE_YAML_ERROR: usize = 8;
 pub const SCE_YAML_OPERATOR: usize = 9;
 
+// LexCOBOL style indices. 13 slots with a **non-contiguous
+// numbering** — `SCE_COBOL_WORD2` occupies slot 16, not 12.
+// The gap (12..=15) was reserved for future Scintilla family
+// use and never filled; treating WORD2 as 12 would silently
+// bind the theme to a state the lexer never emits. Constants
+// mirror `SciLexer.h:209-221` verbatim. Dispatches SCLEX_COBOL
+// (= 92, per `SciLexer.h:108`) via a **three-class wordlist**
+// at `vendor\lexilla\lexers\LexCOBOL.cxx:381-386`
+// (`COBOLWordListDesc[]`):
+//
+//     COBOLWordListDesc[] = {
+//         "A Keywords",         // class 0 → SCE_COBOL_WORD
+//         "B Keywords",         // class 1 → SCE_COBOL_WORD2
+//         "Extended Keywords",  // class 2 → SCE_COBOL_WORD3
+//         nullptr,
+//     };
+//
+// **Case-fold classification — CRITICAL.** `LexCOBOL.cxx:76`
+// (`getRange`) writes `s[i] = tolower(styler[start+i])` into
+// the classification buffer BEFORE the `WordList::InList`
+// probe at `:107-121`. COBOL is case-insensitive at the
+// language level (`MOVE`, `move`, `Move` are the same verb)
+// and the lexer folds every candidate; wordlist entries
+// therefore MUST be all-lowercase, same discipline as
+// `LexAda` / `LexCmake`. An uppercase entry silently never
+// matches — dead code and misleading.
+//
+// **Sequential-probe A→B→C — dispatch order matters.** The
+// classifier at `:112-120` probes list A first, then B, then
+// C, first-match-wins. Any token appearing in two lists is
+// resolved to the earlier list's SCE state; the later
+// entry is dead code. Cross-list duplicates must be
+// deliberate (host-side test invariant enforces uniqueness).
+//
+// **Hyphen is a word character.** `isCOBOLwordchar` at `:47-51`
+// treats `-` as part of an identifier, so compound tokens
+// like `working-storage`, `high-values`, `packed-decimal`,
+// `comp-3`, `end-if`, `date-written` are SINGLE lexemes.
+// Wordlist entries for them are written literally with the
+// hyphen; splitting them into two tokens breaks the match.
+//
+// **Column-based intrinsic dispatches** (no wordlist
+// involvement — the lexer decides on column position alone):
+//
+//   - `SCE_COBOL_COMMENTLINE` at column 7 (0-indexed 6) with
+//     `*` or `/` → fixed-format comment (`LexCOBOL.cxx:215-218`).
+//     Also matches inline `*>` anywhere via `:219-222` for
+//     free-format COBOL 2002+ syntax, and col-0 single
+//     `*`/`/` at `:223-228`.
+//   - `SCE_COBOL_COMMENTDOC` at column 0 with `**` or `/*`
+//     → doc comment (`:229-234`).
+//   - `SCE_COBOL_PREPROCESSOR` at column 0 with `?` →
+//     preprocessor directive (`:241-243`), for the rare
+//     COBOL preprocessors that use this convention.
+//
+// **A-area division/section recognition** (`:122-142`,
+// inside `classifyWordCOBOL`) — the lexer tracks `bAarea`
+// (whether the current token starts in cols 1-2) and
+// hard-codes recognition of `division` / `declaratives` /
+// `section` / `end` literals to compute fold levels via
+// bitflags
+// `IN_DIVISION`/`IN_DECLARATIVES`/`IN_SECTION`/`IN_PARAGRAPH`.
+// These four tokens are handled by the lexer intrinsically
+// via `strcmp` on the same lowercased buffer that fed the
+// InList probes; they DO belong in `COBOL_KEYWORDS_A` (they
+// colour as verbs/structural markers) but their fold-level
+// effect is separate from wordlist highlighting.
+//
+// Style semantics (paint-loop citations reference LexCOBOL.cxx):
+//
+//   - SCE_COBOL_DEFAULT (0) — whitespace / unstyled slack.
+//     Framework convention: leave unmapped.
+//   - SCE_COBOL_COMMENT (1) — legacy state defined in
+//     `SciLexer.h` but not emitted by the current
+//     state machine. Mapped defensively so a future Lexilla
+//     revision that revives the state doesn't render
+//     un-coloured.
+//   - SCE_COBOL_COMMENTLINE (2) — fixed-format col-7
+//     `*`/`/`, col-0 `*`/`/`, or inline `*>`.
+//   - SCE_COBOL_COMMENTDOC (3) — col-0 `**` or `/*`.
+//   - SCE_COBOL_NUMBER (4) — digit / `.` / `v` (decimal
+//     marker). Also catches COBOL level numbers (`01`, `05`,
+//     `77`, `88`) so they don't need wordlist entries.
+//   - SCE_COBOL_WORD (5) — wordlist class 0 hit (A Keywords —
+//     verbs, divisions, sections, control flow).
+//   - SCE_COBOL_STRING (6) — `"..."` double-quoted literal.
+//   - SCE_COBOL_CHARACTER (7) — `'...'` single-quoted literal.
+//     Semantically the same as STRING at the theme level.
+//   - SCE_COBOL_WORD3 (8) — wordlist class 2 hit (Extended
+//     Keywords — intrinsic functions like `function`,
+//     `length`, `upper-case`).
+//   - SCE_COBOL_PREPROCESSOR (9) — `?` at column 0.
+//   - SCE_COBOL_OPERATOR (10) — `isoperator()` classification.
+//   - SCE_COBOL_IDENTIFIER (11) — bare-identifier fallback.
+//     Framework convention: leave unmapped so plain data
+//     names (`customer-record`, `total-amount`) paint at
+//     STYLE_DEFAULT.
+//   - SCE_COBOL_WORD2 (16) — wordlist class 1 hit (B Keywords —
+//     PICTURE / VALUE / USAGE clauses, figurative constants,
+//     file descriptors). **NOTE the non-sequential 16 —
+//     slots 12..=15 are reserved and unused.**
+pub const SCE_COBOL_DEFAULT: usize = 0;
+pub const SCE_COBOL_COMMENT: usize = 1;
+pub const SCE_COBOL_COMMENTLINE: usize = 2;
+pub const SCE_COBOL_COMMENTDOC: usize = 3;
+pub const SCE_COBOL_NUMBER: usize = 4;
+pub const SCE_COBOL_WORD: usize = 5;
+pub const SCE_COBOL_STRING: usize = 6;
+pub const SCE_COBOL_CHARACTER: usize = 7;
+pub const SCE_COBOL_WORD3: usize = 8;
+pub const SCE_COBOL_PREPROCESSOR: usize = 9;
+pub const SCE_COBOL_OPERATOR: usize = 10;
+pub const SCE_COBOL_IDENTIFIER: usize = 11;
+pub const SCE_COBOL_WORD2: usize = 16;
+
 // LexTOML style indices. The upstream enum also defines
 // `SCE_TOML_ERROR` (7), `SCE_TOML_STRINGEOL` (15), and
 // `SCE_TOML_ESCAPECHAR` (13) — those are intentionally omitted

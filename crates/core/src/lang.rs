@@ -7501,6 +7501,207 @@ pub const YAML_KEYWORDS: &str = concat!(
     "~ null Null NULL ",
 );
 
+/// COBOL "A Keywords" — divisions, sections, control-flow
+/// verbs, structural markers (class 0 → `SCE_COBOL_WORD`).
+///
+/// **Source of truth:** ISO 1989:2014 COBOL reserved word
+/// list, triaged 80/20 against Notepad++'s `langs.model.xml`
+/// COBOL section. The full ISO list runs ~500 words across
+/// three classes; this bucket takes the ~130 that produce
+/// visible colour on realistic `.cob`/`.cbl` samples —
+/// divisions, sections, top-tier verbs, explicit-scope
+/// terminators, preprocessor verbs, clause introducers,
+/// OPEN modes, and WRITE/STRING/INSPECT clause vocabulary.
+///
+/// **Lowercase-only.** `LexCOBOL.cxx:76` `tolower`s every
+/// candidate byte inside `getRange` before `WordList::InList`
+/// probes. An uppercase entry silently never matches — dead
+/// code. Same discipline as [`ADA_KEYWORDS`] and
+/// [`CMAKE_COMMANDS`].
+///
+/// **Hyphenated tokens are single lexemes.** `isCOBOLwordchar`
+/// (`LexCOBOL.cxx:47-51`) treats `-` as an identifier
+/// character, so `end-if`, `end-perform`, `date-written`,
+/// `input-output`, `working-storage`, `program-id` are
+/// written literally with the hyphen; splitting them into
+/// two tokens breaks the match.
+///
+/// **`function` deliberately here, not in [`COBOL_KEYWORDS_C`].**
+/// The COBOL 2002+ intrinsic-call syntax is
+/// `FUNCTION <name>(args)` — the introducer word `function`
+/// is a structural verb, distinct from the intrinsic name
+/// that follows it. Keeping `function` in list A gives it the
+/// primary-keyword accent; the intrinsic names (`length`,
+/// `upper-case`, `numval`) live in list C at the Macro slot.
+pub const COBOL_KEYWORDS_A: &str = concat!(
+    // Divisions.
+    "identification environment data procedure division ",
+    // IDENTIFICATION-DIVISION paragraph names.
+    "program-id author date-written installation security ",
+    "date-compiled remarks ",
+    // ENVIRONMENT-DIVISION section names.
+    "configuration input-output file-control i-o-control ",
+    "source-computer object-computer special-names repository ",
+    // DATA-DIVISION section names.
+    "working-storage local-storage linkage screen file report ",
+    "communication section ",
+    // PROCEDURE-DIVISION structural — `declaratives` /
+    // `end declaratives` open/close the exception-handling
+    // sub-division; bare `end` also appears in
+    // `END PROGRAM name.` / `END CLASS name.` / `END METHOD name.`.
+    "declaratives end ",
+    // Preprocessor directives — `COPY` pulls in copybooks
+    // (`.cpy` files, ubiquitous in real-world COBOL);
+    // `REPLACE` performs source-substitution. `SCE_COBOL_PREPROCESSOR`
+    // (state 9) is reserved for the rare column-0 `?` sigil,
+    // so these mainstream verbs earn the primary-keyword
+    // accent via list A rather than the preprocessor slot.
+    "copy replace suppress ",
+    // Verbs — top ~40 by realistic-source frequency.
+    "accept add call cancel close compute continue delete display ",
+    "divide else evaluate exit go goback if initialize inspect ",
+    "invoke merge move multiply open perform read release return ",
+    "rewrite search set sort start stop string subtract unstring ",
+    "when write ",
+    // Explicit-scope terminators (COBOL 85+).
+    "end-if end-perform end-evaluate end-read end-write end-add ",
+    "end-call end-compute end-delete end-divide end-multiply ",
+    "end-return end-rewrite end-search end-start end-string ",
+    "end-subtract end-unstring ",
+    // Control-flow / phrase words.
+    "then thru through until varying by from into giving returning ",
+    "not also with using other ",
+    // EVALUATE / conditional selectors (`other` = WHEN OTHER
+    // sentinel; `any` = WHEN ANY range predicate).
+    "any ",
+    // Clause introducers attached to verbs — `AT END`,
+    // `AT END-OF-PAGE`, `ON SIZE ERROR`, `ON OVERFLOW`,
+    // `ON EXCEPTION`, `INVALID KEY`.
+    "at on invalid size error overflow exception ",
+    // Arithmetic modifier — `COMPUTE X ROUNDED = ...` /
+    // `ADD Y TO Z ROUNDED`. Nearly ubiquitous in business
+    // COBOL that touches decimal fields.
+    "rounded ",
+    // OPEN modes — `OPEN INPUT file` / `OPEN OUTPUT file` /
+    // `OPEN I-O file` / `OPEN EXTEND file`.
+    "input output i-o extend ",
+    // WRITE ADVANCING clause vocabulary (batch reporting).
+    "advancing before after ",
+    // STRING / UNSTRING / INSPECT clause vocabulary.
+    // `pointer` deliberately absent — it's an established
+    // USAGE mode in [`COBOL_KEYWORDS_B`], and per LexCOBOL's
+    // A→B→C first-match-wins order any A entry would shadow
+    // the more-canonical USAGE-mode use. STRING's `WITH POINTER`
+    // clause is niche; the USAGE-mode paint wins on the merit
+    // of coverage frequency.
+    "delimited delimiter tallying converting ",
+    "characters leading trailing count ",
+    // Relational operators (English forms used inside IF).
+    "greater less equal ",
+    // Program termination / execution.
+    "run program ",
+    // Intrinsic-call introducer. LexCOBOL has no lookback
+    // for the preceding token — `function` matches wherever
+    // it appears; it fires here as a structural verb.
+    "function ",
+);
+
+/// COBOL "B Keywords" — PICTURE/VALUE clauses, USAGE modes,
+/// figurative constants, file descriptors (class 1 →
+/// `SCE_COBOL_WORD2`).
+///
+/// **Lowercase-only.** Same case-fold contract as
+/// [`COBOL_KEYWORDS_A`].
+///
+/// **`SCE_COBOL_WORD2 = 16` non-sequential.** Slot 16 in the
+/// `SCE_COBOL_*` enum, not 12 — the theme must reference the
+/// named constant, never a literal. See the `LexCOBOL` banner
+/// in [`codepp_scintilla_sys`].
+///
+/// Coverage: data-description clauses, the full USAGE mode
+/// family, figurative constants, common data-item qualifiers,
+/// and file descriptor keywords — the "secondary structural"
+/// vocabulary that colours the DATA and FILE sections.
+pub const COBOL_KEYWORDS_B: &str = concat!(
+    // PICTURE / VALUE clauses.
+    "picture pic value values occurs redefines renames usage ",
+    "justified just blank synchronized sync sign separate ",
+    "depending indexed key ascending descending times ",
+    // USAGE modes — full family including COMP-N variants and
+    // the COBOL 2002 `national` (Unicode/DBCS field) mode.
+    "binary computational computational-1 computational-2 ",
+    "computational-3 computational-4 computational-5 ",
+    "comp comp-1 comp-2 comp-3 comp-4 comp-5 ",
+    "packed-decimal pointer index native display-1 national ",
+    // Figurative constants (ISO 1989:2014 §8.3.1.2).
+    "zero zeros zeroes space spaces high-value high-values ",
+    "low-value low-values quote quotes null nulls all ",
+    // Class-condition predicates — `IF X IS NUMERIC`,
+    // `IF Y IS ALPHABETIC`, etc. (ISO 1989 §8.8.4).
+    "numeric alphabetic alphabetic-upper alphabetic-lower ",
+    // Common data-item qualifiers / prepositions.
+    "filler global external is are of in to true false ",
+    // File descriptor keywords (SELECT ... ASSIGN, FD, ORGANIZATION).
+    // Note: `random` here means the ACCESS MODE (`SELECT ...
+    // ACCESS MODE IS RANDOM`); the intrinsic-function
+    // `FUNCTION RANDOM(...)` collides — see the COBOL_KEYWORDS_C
+    // docstring for the resolution.
+    "fd sd select assign organization access mode ",
+    "sequential random dynamic status label standard omitted ",
+    "record records block contains recording ",
+);
+
+/// COBOL "Extended Keywords" — intrinsic function names
+/// (class 2 → `SCE_COBOL_WORD3`).
+///
+/// **Lowercase-only.** Same case-fold contract as
+/// [`COBOL_KEYWORDS_A`].
+///
+/// **No context-awareness.** `LexCOBOL.cxx:107-121` probes
+/// A → B → C sequentially inside `classifyWordCOBOL` and
+/// has zero lookback to the previous token — the `function`
+/// introducer in [`COBOL_KEYWORDS_A`] does NOT gate matches
+/// against this list. A bare occurrence of `length` /
+/// `upper-case` / etc. anywhere in source will match here
+/// and paint at the Macro slot regardless of surrounding
+/// tokens. Framework acceptance: same as how Rust's
+/// `SCE_RUST_MACRO` paints `println` even without the
+/// following `!` — the visual signal survives at the cost
+/// of an occasional false-positive on identically-named
+/// data items.
+///
+/// **`random` collision resolution.** Both this list and
+/// [`COBOL_KEYWORDS_B`] would like to claim the token
+/// `random` — as an intrinsic function it belongs in list C
+/// (paints at Macro slot); as a SELECT ACCESS MODE clause
+/// (`SELECT file ASSIGN ... ACCESS MODE IS RANDOM`) it
+/// belongs in list B (paints at Keyword2 slot). The A→B→C
+/// probe order means list B always wins, so `random`
+/// ships only in list B and is deliberately absent here —
+/// invariant #6 in `cobol_uses_lexcobol_three_class_theme`
+/// pins the exclusion. The user-visible cost is small
+/// (`FUNCTION RANDOM(seed)` renders at Keyword2 instead of
+/// Macro) and the correctness gain (correct paint of the
+/// far-more-common SELECT clause) is real.
+///
+/// COBOL 2002 introduced ~40 intrinsic functions callable
+/// via `FUNCTION <name>(args)` syntax. This list ships the
+/// canonical ~15 that appear in realistic modernised COBOL
+/// (string manipulation, numeric conversion, date/time,
+/// aggregation).
+pub const COBOL_KEYWORDS_C: &str = concat!(
+    // String manipulation.
+    "length upper-case lower-case reverse trim ",
+    // Numeric conversion.
+    "numval numval-c integer-of-date date-of-integer ",
+    // Date / time.
+    "current-date when-compiled ",
+    // Aggregation / statistical.
+    "min max sum mean median ",
+    // `random` deliberately excluded — see docstring
+    // collision-resolution rationale.
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
