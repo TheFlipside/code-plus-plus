@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 41 / 🟡 47 / ⚫ 1.
+Total: 89 rows. ✅ 42 / 🟡 46 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1869,7 +1869,7 @@ further shim work needed.
 | GDScript | 86 | `gdscript` | ⚫ | ⚫ | 🟡 |
 | Go | 88 | `cpp` | ⚫ | ⚫ | 🟡 |
 | Gui4Cli | 51 | `gui4cli` | ⚫ | ⚫ | 🟡 |
-| Haskell | 45 | `haskell` | ⚫ | ⚫ | 🟡 |
+| Haskell | 45 | `haskell` | ✅ | ✅ | ✅ |
 | Hollywood | 87 | `hollywood` | ⚫ | ⚫ | 🟡 |
 | HTML | 8 | `hypertext` | ✅ | ✅ | ✅ |
 | INI file | 13 | `props` | — | ✅ | ✅ |
@@ -3289,6 +3289,129 @@ protects the lexer's deliberate contextual promotion),
 italic == 1 (`COMMENT`), bold == 1 (`KEYWORD` only), 3
 cross-language non-reuse pins (Verilog / VHDL / Ada), and 20
 MathWorks `iskeyword` anchor tokens.
+
+**Haskell (2026-07-04):** uses Lexilla's `haskell` lexer
+(`LexHaskell.cxx`, ~1120 lines) — a case-sensitive lexer for
+Haskell 2010 plus common GHC extensions (MagicHash /
+TemplateHaskell / TypeFamilies / SafeHaskell / literate
+`.lhs` files). Three-class wordlist theme with 20 style
+mappings covering the Haskell 2010 Language Report §2.4
+reserved words, the Haskell 2010 FFI Addendum
+callconv/safety qualifiers, and the §2.4 reserved-operator
+punctuation set. Same file also registers
+`SCLEX_LITERATEHASKELL` for `.lhs` files at
+`LexHaskell.cxx:1119`; Code++ wires `SCLEX_HASKELL` only
+today, but the literate-comment / codedelim SCE slots are
+mapped defensively so a future `L_LHASKELL` langtype can
+reuse the theme without a follow-up.
+
+**Case-sensitive lexer.** `LexHaskell.cxx:747` matches
+wordlist entries byte-exactly — no `tolower` fold. Haskell
+identifier case carries syntactic meaning: a bare identifier
+starting with an uppercase letter is a data constructor,
+module name, or type name (dispatched to
+`SCE_HA_CAPITAL` / `SCE_HA_MODULE` / `SCE_HA_DATA`); one
+starting with lowercase is a value binding, function, or
+type variable (`SCE_HA_IDENTIFIER`, unmapped per framework
+convention). All Haskell 2010 §2.4 reserved words are
+lowercase, so every `HASKELL_KEYWORDS` entry stays
+lowercase.
+
+**Context-driven state machine.** `LexHaskell` tracks a
+`KeywordMode` state alongside the scan state; several
+tokens are treated as contextual keywords via the mode
+transitions and MUST NOT appear in `HASKELL_KEYWORDS`:
+
+- `qualified` — recognized after `import` at
+  `LexHaskell.cxx:756-759`, promoted to `SCE_HA_KEYWORD`
+  and puts the lexer into `HA_MODE_IMPORT1` so subsequent
+  capitalized names dispatch to `SCE_HA_MODULE`.
+- `safe` — recognized after `import` when the
+  `lexer.haskell.import.safe.highlight` option is on
+  (`:760-764`).
+- `as` and `hiding` — recognized after the `import M`
+  name (`:766-771`, HA_MODE_IMPORT2 → HA_MODE_IMPORT3).
+- `family` — recognized after `type` OR `data` (both enter
+  `HA_MODE_TYPE` at `LexHaskell.cxx:793-795`) for the TypeFamilies
+  GHC extension (`:772-774`).
+- `forall` — RankNTypes quantifier; kept as an identifier
+  by the plain lexer so pre-extension code doesn't
+  over-highlight.
+
+Test invariant #6 pins the absence of all five so a future
+edit that "helpfully" adds one regresses the mode-driven
+contextual behaviour visibly.
+
+**Three wordlist classes:**
+
+- **Class 0** (`HASKELL_KEYWORDS`, 22 tokens): Haskell 2010
+  §2.4 reserved words — `case class data default deriving
+  do else foreign if import in infix infixl infixr instance
+  let module newtype of then type where`.
+- **Class 1** (`HASKELL_FFI_KEYWORDS`, 13 tokens): FFI
+  Addendum callconvs + safety qualifiers. Only recognized
+  inside `foreign import` / `foreign export` (via
+  `HA_MODE_FFI`), so entries like `ccall` or `safe` don't
+  over-highlight ordinary identifiers with those names.
+- **Class 2** (`HASKELL_RESERVED_OPERATORS`, 11 tokens):
+  the §2.4 reserved-operator punctuation set —
+  `.. : :: = \ | <- -> @ ~ =>`. Matched against
+  operator-run tokens at `LexHaskell.cxx:645-654`.
+
+**Style routing (20 mappings; `DEFAULT`, `IDENTIFIER`, and
+the legacy `IMPORT` all unmapped):**
+
+- **KEYWORD** → `Keyword` bold blue.
+- **NUMBER** → `Number`. Covers decimal, scientific, hex
+  (`0xFF`), octal (`0o755`), and MagicHash `#`-suffixed
+  unboxed variants.
+- **STRING + CHARACTER + STRINGEOL** → `String`. All three
+  literal forms share the string lane; STRINGEOL matches
+  the VHDL / Ada / Verilog / MATLAB precedent (visible in
+  lane rather than deferred to a future Error slot).
+- **CLASS + INSTANCE + CAPITAL + DATA** → `Keyword2`.
+  Type-class heads, instance-head classes, bare
+  capitalized identifiers (data constructors, type names,
+  bare type applications), and data-declaration payload —
+  all read as "known type-family identifier" in the
+  language.
+- **MODULE + PRAGMA + PREPROCESSOR +
+  LITERATE_CODEDELIM** → `Preprocessor`. Module names in
+  `import` / `module` context, `{-# LANGUAGE ... #-}`
+  compiler pragmas, C-preprocessor `#`-directives, and
+  the literate-Haskell `\begin{code}` / `>` delimiters
+  are all out-of-band syntax markers.
+- **OPERATOR + RESERVED_OPERATOR** → `Operator`. Ordinary
+  user-defined operators and the §2.4 reserved set share
+  the operator lane; a future palette could distinguish
+  them since they emit through separate SCE indices.
+- **COMMENTLINE + COMMENTBLOCK + COMMENTBLOCK2 +
+  COMMENTBLOCK3 + LITERATE_COMMENT** → `Comment` italic.
+  Nested block-comment depth is tracked by the lexer but
+  paints identically at every depth.
+- **IDENTIFIER** — deliberately UNMAPPED.
+- **IMPORT (10)** — deliberately UNMAPPED. Legacy
+  transitional state; modern LexHaskell (since 2013) routes
+  import module names to `SCE_HA_MODULE` instead, so
+  mapping this state would add a dead entry to the table.
+
+Only KEYWORD is bold — matches the framework's "one bold
+visual for language keywords" rule.
+
+Structural test coverage: 12 invariants — 20 style
+mappings pin, three-class order pin (0 / 1 / 2),
+all-non-empty guard, every-token-lowercase pin for
+KEYWORDS + FFI (reserved operators are punctuation, not
+alphabetic), **contextual-keywords-must-be-absent** pin
+(`qualified` / `safe` / `as` / `hiding` / `family`),
+20 style-routing pins, DEFAULT + IDENTIFIER + IMPORT
+unmapped pins (the IMPORT pin being the notable one —
+protects against a well-meaning future edit that maps the
+legacy state), italic == 5 (four comment-depth variants
+plus literate-comment), bold == 1, 4 cross-language
+non-reuse pins (MATLAB / Verilog / Caml / C++), and 22 +
+3 + 5 anchor tokens across Keywords / FFI / reserved
+operators.
 
 ## Notes
 

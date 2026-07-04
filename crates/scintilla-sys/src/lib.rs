@@ -3518,6 +3518,155 @@ pub const SCE_MATLAB_OPERATOR: usize = 6;
 pub const SCE_MATLAB_IDENTIFIER: usize = 7;
 pub const SCE_MATLAB_DOUBLEQUOTESTRING: usize = 8;
 
+// LexHaskell style indices. 23 contiguous slots (0..=22) for
+// Haskell 2010 + common GHC extensions (MagicHash /
+// TemplateHaskell / TypeFamilies / SafeHaskell / literate
+// `.lhs` files). Dispatches SCLEX_HASKELL (= 68) via a
+// **three-class wordlist** at
+// `vendor/lexilla/lexers/LexHaskell.cxx:224-229`
+// (`haskellWordListDesc[]`):
+//
+//     haskellWordListDesc[] = {
+//         "Keywords",           // class 0 → SCE_HA_KEYWORD
+//         "FFI",                // class 1 → SCE_HA_KEYWORD (only inside `foreign` decl)
+//         "Reserved operators", // class 2 → SCE_HA_RESERVED_OPERATOR
+//     };
+//
+// The same file registers a second lexer at `:1119` — SCLEX_LITERATEHASKELL
+// (= 108) for `.lhs` literate-programming files, which reuses the
+// same word list but treats non-`>`-prefixed lines as
+// `SCE_HA_LITERATE_COMMENT`. Code++ wires SCLEX_HASKELL only;
+// literate `.lhs` support could be added later with a dedicated
+// L_LHASKELL langtype.
+//
+// **Case-sensitive lexer.** Haskell language semantics:
+// identifier case DOES distinguish tokens AND carries syntactic
+// meaning — a bare identifier that starts with an uppercase
+// letter is a data constructor, module name, or type name; one
+// that starts with lowercase is a value binding, function, or
+// type variable. `LexHaskell.cxx:747` calls `keywords.InList(s)`
+// byte-exactly with no `tolower` fold. All Haskell reserved
+// words per the Haskell 2010 Report §2.4 are lowercase, so every
+// wordlist entry stays lowercase.
+//
+// **Context-driven state machine.** LexHaskell tracks a
+// `KeywordMode` (`HA_MODE_DEFAULT` / `HA_MODE_IMPORT1..3` /
+// `HA_MODE_MODULE` / `HA_MODE_TYPE` / `HA_MODE_FFI`) alongside
+// the usual scan state. Consequence: several tokens are treated
+// as contextual keywords by the classifier and MUST NOT be in
+// the wordlist — `qualified` (`:756-759`), `safe` (`:760-764`,
+// gated by `highlightSafe` option), `as` and `hiding`
+// (`:766-771`), `family` (`:772-774`). Adding any of them to
+// `HASKELL_KEYWORDS` would promote them to KEYWORD at every
+// site, breaking the contextual promotion the lexer performs.
+// Similarly, capitalized identifiers that syntactically must be
+// module names (in `import`/`module` context) or data
+// constructors (in `data`/`newtype` context) are dispatched to
+// SCE_HA_MODULE / SCE_HA_DATA / etc. rather than the wordlist —
+// see the mode transitions at `:750-775`.
+//
+// **Reserved-operator class (class 2).** Class 2 fires from the
+// operator-scan path at `:645-654` — an operator run is
+// assembled and then `reserved_operators.InList(s)` is checked;
+// a hit rewrites the state from `SCE_HA_OPERATOR` (11) to
+// `SCE_HA_RESERVED_OPERATOR` (20). Reserved operators per
+// Haskell 2010 §2.4 are `..` `:` `::` `=` `\` `|` `<-` `->` `@`
+// `~` `=>`. This is DISTINCT from ordinary operators — Haskell
+// permits user-defined operators (any run of `!#$%&*+./<=>?@\^|-~:`
+// characters), and only the specific reserved set gets the
+// distinct paint.
+//
+// Style semantics (paint-loop citations reference LexHaskell.cxx):
+//
+//   - SCE_HA_DEFAULT (0) — inter-token slack.
+//   - SCE_HA_IDENTIFIER (1) — non-reserved lowercase-initial
+//     word. Framework convention: leave unmapped so ordinary
+//     value bindings / functions / type variables paint at
+//     STYLE_DEFAULT.
+//   - SCE_HA_KEYWORD (2) — reserved word from the class 0
+//     wordlist. Promoted from IDENTIFIER after `keywords.InList`
+//     hit at `:747-748`. Also the target of the contextual
+//     promotions for `qualified` / `safe` / `as` / `hiding` /
+//     `family` at `:756-774`.
+//   - SCE_HA_NUMBER (3) — numeric literal. Haskell syntax
+//     covers integer, decimal, scientific, hex (`0xFF`),
+//     octal (`0o755`), and with the MagicHash extension the
+//     `#`-suffixed unboxed variants (`42#`, `3.14##`).
+//   - SCE_HA_STRING (4) — `"..."` string literal. Distinct from
+//     the CHARACTER slot so a theme can differentiate.
+//   - SCE_HA_CHARACTER (5) — `'x'` character literal.
+//   - SCE_HA_CLASS (6) — type-class name inside a `class ...`
+//     declaration. Emitted via the HA_MODE_CLASS state
+//     transition.
+//   - SCE_HA_MODULE (7) — module name in `module M where` or
+//     `import [qualified] M [as ...]` context. Emitted via the
+//     HA_MODE_MODULE / IMPORT1-3 states at `:750-755`.
+//   - SCE_HA_CAPITAL (8) — capitalized identifier not otherwise
+//     specialized. The default state for any word starting with
+//     an uppercase letter (data constructor, type name, or bare
+//     type application) — set at `:710`.
+//   - SCE_HA_DATA (9) — the data-declaration payload emitted in
+//     HA_MODE_DATA state (data constructor names inside `data
+//     T = ...`).
+//   - SCE_HA_IMPORT (10) — historical / deprecated state.
+//     Modern LexHaskell (since 2013) routes import module names
+//     to SCE_HA_MODULE instead and no longer emits this state.
+//     Code++ leaves it UNMAPPED — mapping a state the lexer no
+//     longer produces would add a dead entry to the theme table.
+//   - SCE_HA_OPERATOR (11) — user-defined operator run.
+//     Haskell permits any run of `!#$%&*+./<=>?@\^|-~:`
+//     characters as an operator name.
+//   - SCE_HA_INSTANCE (12) — type-class instance-head classes
+//     inside `instance ... where` declarations.
+//   - SCE_HA_COMMENTLINE (13) — `--` line comment.
+//   - SCE_HA_COMMENTBLOCK (14) — `{- ... -}` block comment at
+//     nesting depth 1.
+//   - SCE_HA_COMMENTBLOCK2 (15) — `{- {- ... -} -}` at nesting
+//     depth 2.
+//   - SCE_HA_COMMENTBLOCK3 (16) — nesting depth ≥ 3. Nested
+//     block comments per Haskell 2010 §2.3.
+//   - SCE_HA_PRAGMA (17) — `{-# ... #-}` compiler pragma
+//     (LANGUAGE / OPTIONS_GHC / INLINE / etc.).
+//   - SCE_HA_PREPROCESSOR (18) — CPP `#`-prefixed directive
+//     (only fires when CPP is being run over the source, e.g.
+//     `#ifdef`).
+//   - SCE_HA_STRINGEOL (19) — unterminated string (EOL inside
+//     `"..."`). Visible-error state.
+//   - SCE_HA_RESERVED_OPERATOR (20) — class 2 wordlist match
+//     from `:651-652`. The Haskell 2010 §2.4 reserved set.
+//   - SCE_HA_LITERATE_COMMENT (21) — literate-programming
+//     non-code lines (in `.lhs` files under the LiterateHaskell
+//     lexer). Not emitted by the plain Haskell lexer, but
+//     mapped defensively.
+//   - SCE_HA_LITERATE_CODEDELIM (22) — the `\begin{code}` /
+//     `\end{code}` LaTeX-literate delimiter or `>`-prefix
+//     marker at column 0. Not emitted by the plain Haskell
+//     lexer, but mapped defensively so a future L_LHASKELL
+//     wiring inherits the correct visual for these delimiters.
+pub const SCE_HA_DEFAULT: usize = 0;
+pub const SCE_HA_IDENTIFIER: usize = 1;
+pub const SCE_HA_KEYWORD: usize = 2;
+pub const SCE_HA_NUMBER: usize = 3;
+pub const SCE_HA_STRING: usize = 4;
+pub const SCE_HA_CHARACTER: usize = 5;
+pub const SCE_HA_CLASS: usize = 6;
+pub const SCE_HA_MODULE: usize = 7;
+pub const SCE_HA_CAPITAL: usize = 8;
+pub const SCE_HA_DATA: usize = 9;
+pub const SCE_HA_IMPORT: usize = 10;
+pub const SCE_HA_OPERATOR: usize = 11;
+pub const SCE_HA_INSTANCE: usize = 12;
+pub const SCE_HA_COMMENTLINE: usize = 13;
+pub const SCE_HA_COMMENTBLOCK: usize = 14;
+pub const SCE_HA_COMMENTBLOCK2: usize = 15;
+pub const SCE_HA_COMMENTBLOCK3: usize = 16;
+pub const SCE_HA_PRAGMA: usize = 17;
+pub const SCE_HA_PREPROCESSOR: usize = 18;
+pub const SCE_HA_STRINGEOL: usize = 19;
+pub const SCE_HA_RESERVED_OPERATOR: usize = 20;
+pub const SCE_HA_LITERATE_COMMENT: usize = 21;
+pub const SCE_HA_LITERATE_CODEDELIM: usize = 22;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated

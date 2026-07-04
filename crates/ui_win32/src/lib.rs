@@ -107,12 +107,13 @@ use codepp_core::lang::{
     BATCH_KEYWORDS, BATCH_KEYWORDS_2, CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CPP_KEYWORDS,
     CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3,
     CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
-    HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS,
-    KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA,
-    L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI,
-    L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC,
-    L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
-    L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
+    HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
+    JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS,
+    LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3,
+    L_BASH, L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS, L_DIFF, L_HASKELL, L_HTML, L_INI, L_JAVA,
+    L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL,
+    L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
+    L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
     NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
     PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
     PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
@@ -153,41 +154,45 @@ use codepp_scintilla_sys::{
     SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR, SCE_C_PREPROCESSOR,
     SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_DIFF_ADDED, SCE_DIFF_CHANGED, SCE_DIFF_COMMAND,
     SCE_DIFF_COMMENT, SCE_DIFF_DELETED, SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD, SCE_DIFF_PATCH_DELETE,
-    SCE_DIFF_POSITION, SCE_DIFF_REMOVED_PATCH_ADD, SCE_DIFF_REMOVED_PATCH_DELETE,
-    SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER, SCE_HBA_STRING, SCE_HBA_WORD, SCE_HB_COMMENTLINE,
-    SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD, SCE_HJA_COMMENT, SCE_HJA_COMMENTDOC,
-    SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING, SCE_HJA_KEYWORD, SCE_HJA_NUMBER, SCE_HJA_REGEX,
-    SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD, SCE_HJ_COMMENT,
-    SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD, SCE_HJ_NUMBER,
-    SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL, SCE_HJ_WORD,
-    SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING,
-    SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING,
-    SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP, SCE_H_ASPAT, SCE_H_ATTRIBUTE,
-    SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT, SCE_H_DOUBLESTRING, SCE_H_ENTITY,
-    SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM, SCE_H_SGML_COMMAND,
-    SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY, SCE_H_SGML_SIMPLESTRING,
-    SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND, SCE_H_TAGUNKNOWN, SCE_H_VALUE,
-    SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM,
-    SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR,
-    SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT, SCE_LISP_KEYWORD,
-    SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER, SCE_LISP_OPERATOR,
-    SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER, SCE_LUA_COMMENT,
-    SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER,
-    SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD, SCE_LUA_WORD2,
-    SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7, SCE_LUA_WORD8,
-    SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH, SCE_L_MATH2,
-    SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM, SCE_MAKE_COMMENT,
-    SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET,
-    SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_KEYWORD,
-    SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_NSIS_COMMENT,
-    SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF,
-    SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF,
-    SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ,
-    SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE,
-    SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE,
-    SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER, SCE_PAS_OPERATOR,
-    SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD, SCE_PL_ARRAY,
-    SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
+    SCE_DIFF_POSITION, SCE_DIFF_REMOVED_PATCH_ADD, SCE_DIFF_REMOVED_PATCH_DELETE, SCE_HA_CAPITAL,
+    SCE_HA_CHARACTER, SCE_HA_CLASS, SCE_HA_COMMENTBLOCK, SCE_HA_COMMENTBLOCK2,
+    SCE_HA_COMMENTBLOCK3, SCE_HA_COMMENTLINE, SCE_HA_DATA, SCE_HA_INSTANCE, SCE_HA_KEYWORD,
+    SCE_HA_LITERATE_CODEDELIM, SCE_HA_LITERATE_COMMENT, SCE_HA_MODULE, SCE_HA_NUMBER,
+    SCE_HA_OPERATOR, SCE_HA_PRAGMA, SCE_HA_PREPROCESSOR, SCE_HA_RESERVED_OPERATOR, SCE_HA_STRING,
+    SCE_HA_STRINGEOL, SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER, SCE_HBA_STRING, SCE_HBA_WORD,
+    SCE_HB_COMMENTLINE, SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD, SCE_HJA_COMMENT,
+    SCE_HJA_COMMENTDOC, SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING, SCE_HJA_KEYWORD, SCE_HJA_NUMBER,
+    SCE_HJA_REGEX, SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD,
+    SCE_HJ_COMMENT, SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD,
+    SCE_HJ_NUMBER, SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL,
+    SCE_HJ_WORD, SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE,
+    SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR,
+    SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP, SCE_H_ASPAT,
+    SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT, SCE_H_DOUBLESTRING,
+    SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM,
+    SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY,
+    SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND,
+    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_KIX_COMMENT,
+    SCE_KIX_COMMENTSTREAM, SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER,
+    SCE_KIX_OPERATOR, SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT,
+    SCE_LISP_KEYWORD, SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER,
+    SCE_LISP_OPERATOR, SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER,
+    SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING,
+    SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD,
+    SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7,
+    SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH,
+    SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
+    SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR,
+    SCE_MAKE_TARGET, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
+    SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING,
+    SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF,
+    SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX,
+    SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ,
+    SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED,
+    SCE_NSIS_VARIABLE, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2,
+    SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER,
+    SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD,
+    SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
     SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
     SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR,
     SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR,
@@ -6879,6 +6884,111 @@ const MATLAB_THEME: LangTheme = LangTheme {
     bold: MATLAB_BOLD,
 };
 
+// LexHaskell emits 23 `SCE_HA_*` slots (0..=22). **20 are mapped**;
+// `SCE_HA_DEFAULT` (0), `SCE_HA_IDENTIFIER` (1), and
+// `SCE_HA_IMPORT` (10) stay unmapped. DEFAULT + IDENTIFIER follow
+// the framework convention (bare value bindings paint at
+// STYLE_DEFAULT). SCE_HA_IMPORT is a legacy state — modern
+// LexHaskell (since 2013) routes import module names to
+// SCE_HA_MODULE instead; the state remains defined but is not
+// emitted, so mapping it would add a dead entry to the table.
+//
+// Style routing rationale:
+//   - KEYWORD → Keyword bold blue. Haskell 2010 §2.4 reserved
+//     words.
+//   - NUMBER → Number.
+//   - STRING + CHARACTER + STRINGEOL → String. All three literal
+//     forms share the string colour; STRINGEOL matches the
+//     VHDL / Ada / Verilog precedent (visible-in-lane rather
+//     than deferring to a future Error slot).
+//   - CLASS + INSTANCE → Keyword2. Type-class declaration
+//     heads and instance-head class names both read as
+//     "known type-family identifier".
+//   - MODULE → Preprocessor. Module names in `import` /
+//     `module` context are out-of-band syntax markers; same
+//     lane as PRAGMA and PREPROCESSOR.
+//   - CAPITAL → Keyword2. Capitalized identifiers (data
+//     constructors, type names, bare type applications) share
+//     the CLASS/INSTANCE lane since they're syntactically
+//     equivalent to type-family identifiers in most contexts.
+//   - DATA → Keyword2. Data-declaration payload (constructor
+//     names inside `data T = A | B | C`).
+//   - OPERATOR → Operator.
+//   - RESERVED_OPERATOR → Operator. Haskell 2010 §2.4 reserved
+//     operators (`..` / `::` / `=` / `->` / `=>` / `<-` / `|`
+//     / `@` / `~` / `\` / `:`) share the Operator lane —
+//     visually consistent with ordinary operators but reachable
+//     through a distinct SCE index if a future palette wants to
+//     distinguish them.
+//   - COMMENTLINE + COMMENTBLOCK + COMMENTBLOCK2 +
+//     COMMENTBLOCK3 → Comment italic. Nesting depth is
+//     tracked by the lexer but paints identically at every
+//     depth — the italic-comment convention is uniform.
+//   - PRAGMA → Preprocessor. `{-# LANGUAGE ... #-}` /
+//     `{-# INLINE ... #-}` compiler directives.
+//   - PREPROCESSOR → Preprocessor. C-preprocessor `#`
+//     directives when CPP is being run over the source.
+//   - LITERATE_COMMENT + LITERATE_CODEDELIM → mapped
+//     defensively for the `.lhs` literate-Haskell case (not
+//     emitted by the plain `haskell` lexer, but the SCE
+//     slots exist and a future L_LHASKELL wiring would
+//     benefit from the theme already covering them).
+//     COMMENT lane for LITERATE_COMMENT; Preprocessor lane
+//     for LITERATE_CODEDELIM (the `\begin{code}` / `>` code
+//     delimiter reads as an out-of-band syntax marker).
+const HASKELL_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_HA_KEYWORD, StyleSlot::Keyword),
+    (SCE_HA_NUMBER, StyleSlot::Number),
+    (SCE_HA_STRING, StyleSlot::String),
+    (SCE_HA_CHARACTER, StyleSlot::String),
+    (SCE_HA_CLASS, StyleSlot::Keyword2),
+    (SCE_HA_MODULE, StyleSlot::Preprocessor),
+    (SCE_HA_CAPITAL, StyleSlot::Keyword2),
+    (SCE_HA_DATA, StyleSlot::Keyword2),
+    (SCE_HA_OPERATOR, StyleSlot::Operator),
+    (SCE_HA_INSTANCE, StyleSlot::Keyword2),
+    (SCE_HA_COMMENTLINE, StyleSlot::Comment),
+    (SCE_HA_COMMENTBLOCK, StyleSlot::Comment),
+    (SCE_HA_COMMENTBLOCK2, StyleSlot::Comment),
+    (SCE_HA_COMMENTBLOCK3, StyleSlot::Comment),
+    (SCE_HA_PRAGMA, StyleSlot::Preprocessor),
+    (SCE_HA_PREPROCESSOR, StyleSlot::Preprocessor),
+    (SCE_HA_STRINGEOL, StyleSlot::String),
+    (SCE_HA_RESERVED_OPERATOR, StyleSlot::Operator),
+    (SCE_HA_LITERATE_COMMENT, StyleSlot::Comment),
+    (SCE_HA_LITERATE_CODEDELIM, StyleSlot::Preprocessor),
+];
+
+// Italic on every comment variant (5 total: line + block
+// depth 1/2/3 + literate).
+const HASKELL_ITALIC: &[usize] = &[
+    SCE_HA_COMMENTLINE,
+    SCE_HA_COMMENTBLOCK,
+    SCE_HA_COMMENTBLOCK2,
+    SCE_HA_COMMENTBLOCK3,
+    SCE_HA_LITERATE_COMMENT,
+];
+
+// Bold on KEYWORD only. CLASS / MODULE / CAPITAL / DATA /
+// INSTANCE / RESERVED_OPERATOR get their identity from colour,
+// not weight — matches the framework's "one bold visual for
+// language keywords" rule.
+const HASKELL_BOLD: &[usize] = &[SCE_HA_KEYWORD];
+
+// Three-class install matches `haskellWordListDesc[]` at
+// `LexHaskell.cxx:224-229` — class 0 (Keywords), class 1 (FFI),
+// class 2 (Reserved operators).
+const HASKELL_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, HASKELL_KEYWORDS),
+        (1, HASKELL_FFI_KEYWORDS),
+        (2, HASKELL_RESERVED_OPERATORS),
+    ],
+    styles: HASKELL_STYLES,
+    italic: HASKELL_ITALIC,
+    bold: HASKELL_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -7090,6 +7200,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&VERILOG_THEME)
     } else if lang == L_MATLAB {
         Some(&MATLAB_THEME)
+    } else if lang == L_HASKELL {
+        Some(&HASKELL_THEME)
     } else {
         None
     }
@@ -22259,14 +22371,18 @@ mod lang_theme_tests {
         SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3,
         SCE_DIFF_ADDED, SCE_DIFF_CHANGED, SCE_DIFF_COMMAND, SCE_DIFF_COMMENT, SCE_DIFF_DELETED,
         SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD, SCE_DIFF_PATCH_DELETE, SCE_DIFF_POSITION,
-        SCE_DIFF_REMOVED_PATCH_ADD, SCE_DIFF_REMOVED_PATCH_DELETE, SCE_KIX_COMMENT,
-        SCE_KIX_COMMENTSTREAM, SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER,
-        SCE_KIX_OPERATOR, SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_PL_ARRAY,
-        SCE_PL_BACKTICKS_VAR, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
-        SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX_VAR, SCE_PL_REGEX_VAR, SCE_PL_REGSUBST_VAR,
-        SCE_PL_SCALAR, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QX_VAR,
-        SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD,
-        SCE_PS_BASE85STRING, SCE_PS_COMMENT, SCE_PS_DSC_COMMENT, SCE_PS_DSC_VALUE,
+        SCE_DIFF_REMOVED_PATCH_ADD, SCE_DIFF_REMOVED_PATCH_DELETE, SCE_HA_CAPITAL,
+        SCE_HA_CHARACTER, SCE_HA_CLASS, SCE_HA_COMMENTBLOCK, SCE_HA_COMMENTBLOCK2,
+        SCE_HA_COMMENTBLOCK3, SCE_HA_COMMENTLINE, SCE_HA_DATA, SCE_HA_INSTANCE, SCE_HA_KEYWORD,
+        SCE_HA_LITERATE_CODEDELIM, SCE_HA_LITERATE_COMMENT, SCE_HA_MODULE, SCE_HA_NUMBER,
+        SCE_HA_OPERATOR, SCE_HA_PRAGMA, SCE_HA_PREPROCESSOR, SCE_HA_RESERVED_OPERATOR,
+        SCE_HA_STRING, SCE_HA_STRINGEOL, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM, SCE_KIX_FUNCTIONS,
+        SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR, SCE_KIX_STRING1,
+        SCE_KIX_STRING2, SCE_KIX_VAR, SCE_PL_ARRAY, SCE_PL_BACKTICKS_VAR, SCE_PL_FORMAT_IDENT,
+        SCE_PL_HASH, SCE_PL_HERE_DELIM, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX_VAR, SCE_PL_REGEX_VAR,
+        SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR_VAR,
+        SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE,
+        SCE_PL_WORD, SCE_PS_BASE85STRING, SCE_PS_COMMENT, SCE_PS_DSC_COMMENT, SCE_PS_DSC_VALUE,
         SCE_PS_HEXSTRING, SCE_PS_IMMEVAL, SCE_PS_KEYWORD, SCE_PS_LITERAL, SCE_PS_NUMBER,
         SCE_PS_PAREN_ARRAY, SCE_PS_PAREN_DICT, SCE_PS_PAREN_PROC, SCE_PS_TEXT, SCE_RB_BACKTICKS,
         SCE_RB_CHARACTER, SCE_RB_CLASSNAME, SCE_RB_CLASS_VAR, SCE_RB_COMMENTLINE,
@@ -22296,26 +22412,28 @@ mod lang_theme_tests {
         AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2,
         CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1,
         CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
-        CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS,
-        JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS,
-        LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH,
-        L_BATCH, L_C, L_CAML, L_CPP, L_CS, L_CSS, L_DIFF, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT,
-        L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL,
-        L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL,
-        L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
-        NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
-        PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
-        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS,
-        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
-        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
+        CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
+        HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS,
+        JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
+        LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
+        L_CPP, L_CS, L_CSS, L_DIFF, L_HASKELL, L_HTML, L_INI, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX,
+        L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS,
+        L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT,
+        L_VB, L_VERILOG, L_VHDL, L_XML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
+        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
+        PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
+        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
+        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
+        VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
-        SCE_ADA_IDENTIFIER, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
-        SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR,
-        SCE_MATLAB_STRING, SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER,
+        SCE_ADA_IDENTIFIER, SCE_HA_IDENTIFIER, SCE_HA_IMPORT, SCE_MATLAB_COMMAND,
+        SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_IDENTIFIER,
+        SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING,
+        SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER,
     };
 
     /// Every wired language must:
@@ -28216,6 +28334,251 @@ mod lang_theme_tests {
              promote enumeration the way it does properties / \
              methods / events"
         );
+    }
+
+    /// Haskell (`L_HASKELL`) uses Lexilla's `LexHaskell` — a
+    /// case-sensitive lexer for Haskell 2010 with common GHC
+    /// extensions (`MagicHash` / `TemplateHaskell` / `TypeFamilies` /
+    /// `SafeHaskell` / literate `.lhs`). 23 `SCE_HA_*` slots
+    /// (0..=22). Three wordlist classes: Keywords (class 0),
+    /// FFI (class 1, only recognized inside `foreign` decls),
+    /// Reserved operators (class 2, matched against
+    /// operator-run tokens).
+    ///
+    /// **Context-driven state machine.** `LexHaskell` uses a
+    /// `KeywordMode` state (`HA_MODE_IMPORT1..3` / `MODULE` /
+    /// `TYPE` / `FFI`) that promotes specific tokens
+    /// contextually — `qualified` / `safe` / `as` / `hiding` /
+    /// `family` are all handled inside the classifier and MUST
+    /// NOT appear in `HASKELL_KEYWORDS`, or the mode transitions
+    /// break. Test invariant #6 pins their absence.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_HASKELL)` returns `Some(&HASKELL_THEME)`.
+    ///   2. Style count == 20 (23 `SCE_HA_*` slots minus
+    ///      `DEFAULT`, `IDENTIFIER`, and `IMPORT` — see banner
+    ///      for the IMPORT rationale).
+    ///   3. Three wordlist classes in canonical order (0 / 1 / 2).
+    ///   4. All three wordlists non-empty.
+    ///   5. Every token in KEYWORDS + FFI lowercase (`LexHaskell`
+    ///      is case-sensitive; all Haskell 2010 §2.4 reserved
+    ///      words are lowercase).
+    ///   6. Contextual keywords `qualified` / `safe` / `as` /
+    ///      `hiding` / `family` MUST be absent from KEYWORDS.
+    ///   7. Style-routing pins for the 20 mapped SCE constants.
+    ///   8. `DEFAULT` (0), `IDENTIFIER` (1), `IMPORT` (10)
+    ///      remain unmapped.
+    ///   9. Italic set == 5 (four comment-nesting variants +
+    ///      literate comment).
+    ///   10. Bold set == 1 (`KEYWORD` only).
+    ///   11. Cross-language non-reuse (Haskell must NOT reuse
+    ///       another lexer's style table).
+    ///   12. Anchor tokens present — Haskell 2010 §2.4 reserved
+    ///       words + representative reserved operators + FFI
+    ///       callconvs.
+    #[test]
+    fn haskell_uses_lexhaskell_three_class_theme() {
+        let h = lang_theme(L_HASKELL).expect("Haskell wired");
+
+        // Invariant 2: 20 mappings.
+        assert_eq!(
+            h.styles.len(),
+            20,
+            "HASKELL_STYLES must map 20 indices (23 SCE_HA_* slots \
+             minus DEFAULT, IDENTIFIER, and IMPORT)"
+        );
+
+        // Invariant 3: three classes in canonical order.
+        assert_eq!(
+            h.keywords.len(),
+            3,
+            "HASKELL_THEME must install exactly 3 wordlist classes \
+             (matches haskellWordListDesc[] at LexHaskell.cxx:224-229)"
+        );
+        assert_eq!(h.keywords[0].0, 0);
+        assert_eq!(h.keywords[1].0, 1);
+        assert_eq!(h.keywords[2].0, 2);
+        assert_eq!(h.keywords[0].1, HASKELL_KEYWORDS);
+        assert_eq!(h.keywords[1].1, HASKELL_FFI_KEYWORDS);
+        assert_eq!(h.keywords[2].1, HASKELL_RESERVED_OPERATORS);
+
+        // Invariant 4: non-empty.
+        for (name, list) in [
+            ("HASKELL_KEYWORDS", HASKELL_KEYWORDS),
+            ("HASKELL_FFI_KEYWORDS", HASKELL_FFI_KEYWORDS),
+            ("HASKELL_RESERVED_OPERATORS", HASKELL_RESERVED_OPERATORS),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: every KEYWORDS + FFI token lowercase.
+        // (Reserved operators are punctuation, not alphabetic.)
+        for (name, list) in [
+            ("HASKELL_KEYWORDS", HASKELL_KEYWORDS),
+            ("HASKELL_FFI_KEYWORDS", HASKELL_FFI_KEYWORDS),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    tok.bytes().all(|b| !b.is_ascii_uppercase()),
+                    "{name} token `{tok}` contains uppercase — \
+                     LexHaskell is case-sensitive but all Haskell \
+                     2010 reserved words are lowercase; uppercase \
+                     entries would be dead code"
+                );
+            }
+        }
+
+        // Invariant 6: contextual keywords absent from KEYWORDS.
+        for contextual in ["qualified", "safe", "as", "hiding", "family"] {
+            assert!(
+                !HASKELL_KEYWORDS.split_whitespace().any(|t| t == contextual),
+                "HASKELL_KEYWORDS must NOT include `{contextual}` — \
+                 LexHaskell handles it contextually via KeywordMode \
+                 transitions (see LexHaskell.cxx:756-774). Adding \
+                 it to class 0 would promote it to KEYWORD at every \
+                 site, breaking the mode-driven contextual behaviour"
+            );
+        }
+
+        // Invariant 7: style-routing pins.
+        for (idx, slot, name) in [
+            (SCE_HA_KEYWORD, StyleSlot::Keyword, "SCE_HA_KEYWORD"),
+            (SCE_HA_NUMBER, StyleSlot::Number, "SCE_HA_NUMBER"),
+            (SCE_HA_STRING, StyleSlot::String, "SCE_HA_STRING"),
+            (SCE_HA_CHARACTER, StyleSlot::String, "SCE_HA_CHARACTER"),
+            (SCE_HA_CLASS, StyleSlot::Keyword2, "SCE_HA_CLASS"),
+            (SCE_HA_MODULE, StyleSlot::Preprocessor, "SCE_HA_MODULE"),
+            (SCE_HA_CAPITAL, StyleSlot::Keyword2, "SCE_HA_CAPITAL"),
+            (SCE_HA_DATA, StyleSlot::Keyword2, "SCE_HA_DATA"),
+            (SCE_HA_OPERATOR, StyleSlot::Operator, "SCE_HA_OPERATOR"),
+            (SCE_HA_INSTANCE, StyleSlot::Keyword2, "SCE_HA_INSTANCE"),
+            (SCE_HA_COMMENTLINE, StyleSlot::Comment, "SCE_HA_COMMENTLINE"),
+            (
+                SCE_HA_COMMENTBLOCK,
+                StyleSlot::Comment,
+                "SCE_HA_COMMENTBLOCK",
+            ),
+            (
+                SCE_HA_COMMENTBLOCK2,
+                StyleSlot::Comment,
+                "SCE_HA_COMMENTBLOCK2",
+            ),
+            (
+                SCE_HA_COMMENTBLOCK3,
+                StyleSlot::Comment,
+                "SCE_HA_COMMENTBLOCK3",
+            ),
+            (SCE_HA_PRAGMA, StyleSlot::Preprocessor, "SCE_HA_PRAGMA"),
+            (
+                SCE_HA_PREPROCESSOR,
+                StyleSlot::Preprocessor,
+                "SCE_HA_PREPROCESSOR",
+            ),
+            (SCE_HA_STRINGEOL, StyleSlot::String, "SCE_HA_STRINGEOL"),
+            (
+                SCE_HA_RESERVED_OPERATOR,
+                StyleSlot::Operator,
+                "SCE_HA_RESERVED_OPERATOR",
+            ),
+            (
+                SCE_HA_LITERATE_COMMENT,
+                StyleSlot::Comment,
+                "SCE_HA_LITERATE_COMMENT",
+            ),
+            (
+                SCE_HA_LITERATE_CODEDELIM,
+                StyleSlot::Preprocessor,
+                "SCE_HA_LITERATE_CODEDELIM",
+            ),
+        ] {
+            assert!(
+                h.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: DEFAULT + IDENTIFIER + IMPORT unmapped.
+        assert!(
+            !h.styles.iter().any(|(i, _)| *i == 0),
+            "SCE_HA_DEFAULT (0) must remain unmapped"
+        );
+        assert!(
+            !h.styles.iter().any(|(i, _)| *i == SCE_HA_IDENTIFIER),
+            "SCE_HA_IDENTIFIER (1) must remain unmapped — bare user \
+             identifiers paint at STYLE_DEFAULT per framework convention"
+        );
+        assert!(
+            !h.styles.iter().any(|(i, _)| *i == SCE_HA_IMPORT),
+            "SCE_HA_IMPORT (10) must remain unmapped — modern \
+             LexHaskell (since 2013) routes import module names to \
+             SCE_HA_MODULE instead; SCE_HA_IMPORT is a legacy \
+             transitional state, mapping it would add a dead entry"
+        );
+
+        // Invariant 9: italic == 5.
+        assert_eq!(h.italic.len(), 5);
+        for c in [
+            SCE_HA_COMMENTLINE,
+            SCE_HA_COMMENTBLOCK,
+            SCE_HA_COMMENTBLOCK2,
+            SCE_HA_COMMENTBLOCK3,
+            SCE_HA_LITERATE_COMMENT,
+        ] {
+            assert!(h.italic.contains(&c));
+        }
+
+        // Invariant 10: bold == 1.
+        assert_eq!(h.bold.len(), 1);
+        assert!(h.bold.contains(&SCE_HA_KEYWORD));
+
+        // Invariant 11: cross-language non-reuse.
+        let matlab = lang_theme(L_MATLAB).expect("MATLAB wired");
+        let verilog = lang_theme(L_VERILOG).expect("Verilog wired");
+        let caml = lang_theme(L_CAML).expect("Caml wired");
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        for (other, name) in [
+            (matlab, "MATLAB"),
+            (verilog, "Verilog"),
+            (caml, "Caml"),
+            (cpp, "C++"),
+        ] {
+            assert_ne!(
+                h.styles, other.styles,
+                "Haskell must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 12: Haskell 2010 §2.4 anchor tokens.
+        for kw in [
+            "case", "class", "data", "default", "deriving", "do", "else", "foreign", "if",
+            "import", "in", "infix", "infixl", "infixr", "instance", "let", "module", "newtype",
+            "of", "then", "type", "where",
+        ] {
+            assert!(
+                HASKELL_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "HASKELL_KEYWORDS must include Haskell 2010 §2.4 \
+                 reserved word `{kw}`"
+            );
+        }
+        // FFI callconvs.
+        for kw in ["ccall", "safe", "unsafe"] {
+            assert!(
+                HASKELL_FFI_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "HASKELL_FFI_KEYWORDS must include FFI qualifier `{kw}`"
+            );
+        }
+        // Reserved operators (representative).
+        for op in ["::", "->", "=>", "<-", "="] {
+            assert!(
+                HASKELL_RESERVED_OPERATORS
+                    .split_whitespace()
+                    .any(|t| t == op),
+                "HASKELL_RESERVED_OPERATORS must include §2.4 operator `{op}`"
+            );
+        }
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a

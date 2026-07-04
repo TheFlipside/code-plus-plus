@@ -6972,6 +6972,136 @@ pub const MATLAB_KEYWORDS: &str = concat!(
     "enumeration ",
 );
 
+/// Haskell 2010 reserved words (class 0 → `SCE_HA_KEYWORD`).
+///
+/// **Source of truth:** Haskell 2010 Language Report §2.4
+/// (Lexical Structure — Reserved Identifiers). Twenty-two
+/// alphabetic reserved words: `case class data default deriving
+/// do else foreign if import in infix infixl infixr instance
+/// let module newtype of then type where`. §2.4 also lists the
+/// underscore `_` as a reserved identifier, but Code++ excludes
+/// it from `HASKELL_KEYWORDS` on the following rationale:
+/// `LexHaskell.cxx:115-117` classifies `_` as a word-start
+/// character (`IsAHaskellWordStart`), so a bare `_` DOES flow
+/// through the identifier scan and gets probed against the
+/// wordlist at `:747`. Omitting `_` from the wordlist means a
+/// bare `_` wildcard renders as `SCE_HA_IDENTIFIER` (unmapped,
+/// default text colour) rather than as a bold keyword —
+/// wildcards are extremely common in Haskell pattern matches
+/// and painting every one bold blue creates too much visual
+/// noise. A future edit could add `_` for §2.4 parity if
+/// desired.
+///
+/// **Case-sensitive lexer.** `LexHaskell.cxx:747` matches
+/// wordlist entries byte-exactly (no `tolower` fold). All Haskell
+/// reserved words are lowercase per §2.4.
+///
+/// **Deliberately EXCLUDED contextual keywords.** `LexHaskell`
+/// handles several syntactic keywords contextually via its
+/// `KeywordMode` state machine, and putting them in the wordlist
+/// would break the mode transitions:
+///
+///   - `qualified` — recognized after `import` at
+///     `LexHaskell.cxx:756-759`, promoted to `SCE_HA_KEYWORD` and
+///     puts the lexer into `HA_MODE_IMPORT1` (which then treats
+///     subsequent capitalized names as `SCE_HA_MODULE`).
+///   - `safe` — recognized after `import` when the
+///     `lexer.haskell.import.safe.highlight` option is on, at
+///     `:760-764`.
+///   - `as` and `hiding` — recognized after the `import M` name,
+///     at `:766-771` (`HA_MODE_IMPORT2` → `HA_MODE_IMPORT3`
+///     transition).
+///   - `family` — recognized after `type` OR `data` (both
+///     enter `HA_MODE_TYPE` at `LexHaskell.cxx:793-795`), at
+///     `:772-774`. Supports the `TypeFamilies` extension for
+///     `type family` and the `DataFamilies` sibling for
+///     `data family`.
+///   - `forall` — GHC-extension quantifier, treated as an
+///     ordinary identifier by the plain lexer; the `RankNTypes`
+///     extension makes it syntactic but including it in the
+///     wordlist would over-highlight code that predates the
+///     extension.
+///
+/// Adding any of these five to the wordlist would break the
+/// contextual behaviour by promoting them at every site.
+pub const HASKELL_KEYWORDS: &str = concat!(
+    // Control flow / declarations.
+    "case class data default deriving do else foreign ",
+    "if import in infix infixl infixr instance let module ",
+    "newtype of then type where ",
+);
+
+/// Haskell FFI (Foreign Function Interface) keywords (class 1 →
+/// `SCE_HA_KEYWORD` via a distinct dispatch path).
+///
+/// **Source of truth:** the Haskell 2010 FFI Addendum, plus GHC
+/// extensions in common use (`CApiFFI`, `InterruptibleFFI`,
+/// `JavaScriptFFI`). The lexer at `LexHaskell.cxx:777-782` only
+/// consults this wordlist while in `HA_MODE_FFI` state (which is
+/// entered on `foreign import` / `foreign export`), so entries
+/// here are recognized ONLY as FFI callconv / safety qualifiers
+/// inside `foreign` declarations — a variable named `ccall`
+/// outside a `foreign` context won't over-highlight.
+///
+/// **`import` is a load-bearing cross-wordlist duplicate.**
+/// `import` also appears in `HASKELL_KEYWORDS` (class 0). It is
+/// deliberately duplicated here because `LexHaskell.cxx:777-782`
+/// requires `import` to appear in the FFI wordlist so that,
+/// after `foreign` triggers `HA_MODE_FFI`, the mode-preservation
+/// branch (`new_mode = HA_MODE_FFI` at :780) fires when the
+/// classifier sees the `import` token. Without it, mode falls
+/// back to `HA_MODE_DEFAULT` at :797 and the following callconv
+/// token (`ccall` / `stdcall` / …) loses highlighting. A future
+/// maintainer noticing the duplicate must NOT deduplicate it
+/// against class 0. (`export` has no duplicate in class 0 — it is
+/// a class-1-only token whose sole path to keyword styling AND
+/// mode preservation is this wordlist.)
+///
+/// **Case-sensitive.** All FFI keywords in the FFI Addendum are
+/// lowercase.
+///
+/// **Note on `dynamic` / `wrapper`.** The H2010 FFI Addendum
+/// §4.1.2 places `dynamic` and `wrapper` as alternatives within
+/// the QUOTED impent string (`foreign import ccall "dynamic"
+/// ...` / `... "wrapper" ...`), not as bare identifiers. Since
+/// `LexHaskell` tokenizes `"..."` via a separate string state
+/// that never consults the FFI wordlist, these two tokens are
+/// unreachable via standard grammar and are therefore NOT
+/// included in this wordlist.
+pub const HASKELL_FFI_KEYWORDS: &str = concat!(
+    // Calling conventions (H2010 FFI Addendum + GHC extensions).
+    "ccall stdcall cplusplus jvm dotnet ",
+    "capi prim javascript ",
+    // Safety qualifiers.
+    "safe unsafe interruptible ",
+    // Direction keywords — `import` here is a load-bearing
+    // duplicate with HASKELL_KEYWORDS class 0 (mode preservation
+    // in HA_MODE_FFI, see docstring). `export` is class-1-only.
+    "export import ",
+);
+
+/// Haskell reserved operators (class 2 →
+/// `SCE_HA_RESERVED_OPERATOR`).
+///
+/// **Source of truth:** Haskell 2010 Language Report §2.4
+/// (Lexical Structure — Reserved Operators). Eleven operators:
+/// `..`, `:`, `::`, `=`, `\`, `|`, `<-`, `->`, `@`, `~`, `=>`.
+///
+/// **Dispatch path.** `LexHaskell.cxx:645-654` assembles an
+/// operator run, then probes `reserved_operators.InList(s)`. On
+/// hit the state rewrites from `SCE_HA_OPERATOR` (11) to
+/// `SCE_HA_RESERVED_OPERATOR` (20). This means the wordlist
+/// entries must be the exact operator strings (including
+/// punctuation), not names.
+pub const HASKELL_RESERVED_OPERATORS: &str = concat!(
+    // Type / class annotation.
+    ".. : :: = ",
+    // Lambda / function.
+    "\\ | <- -> ",
+    // As-pattern / lazy / constraint.
+    "@ ~ => ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
