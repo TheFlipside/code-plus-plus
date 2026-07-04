@@ -67,14 +67,16 @@ impl LangType {
     /// **Filename-pattern matching runs first** — case-insensitive
     /// against every `LangEntry::filenames` entry. Currently this
     /// covers `Makefile` / `GNUmakefile` / `Makefile.in` and the
-    /// other Makefile filename variants under `L_MAKEFILE.filenames`;
-    /// future commits extend the mechanism to `CMakeLists.txt` /
-    /// `Dockerfile` / `Vagrantfile` / dotfiles when those rows are
-    /// wired. A `Makefile.in` (extension `.in`, but the basename
-    /// matches `Makefile.in` in the filenames list) resolves to
-    /// `L_MAKEFILE` even though `.in` is not in
-    /// `L_MAKEFILE.extensions` — the filename pattern is more
-    /// specific.
+    /// other Makefile filename variants under `L_MAKEFILE.filenames`,
+    /// plus `CMakeLists.txt` under `L_CMAKE.filenames`; future
+    /// commits extend the mechanism to `Dockerfile` / `Vagrantfile`
+    /// / dotfiles when those rows are wired. A `Makefile.in`
+    /// (extension `.in`, but the basename matches `Makefile.in` in
+    /// the filenames list) resolves to `L_MAKEFILE` even though
+    /// `.in` is not in `L_MAKEFILE.extensions` — the filename
+    /// pattern is more specific. Same principle for `CMakeLists.txt`:
+    /// the `.txt` extension would resolve to `L_TEXT`, but the
+    /// filename hook wins and returns `L_CMAKE`.
     ///
     /// **Extension fallback** runs when no filename pattern matches.
     /// Files with no extension AND no filename match return
@@ -319,7 +321,12 @@ pub const LANG_TABLE: &[LangEntry] = &[
         desc: "CMake source file",
         lexer: Some("cmake"),
         extensions: &["cmake"],
-        filenames: &[],
+        // `CMakeLists.txt` is the canonical CMake build-script filename
+        // — every CMake project has at least one at the source root and
+        // typically one per subdirectory. `.txt` extension alone would
+        // resolve to L_TEXT, so it needs a filename hook to reach the
+        // CMake lexer. Matches Notepad++'s default detection.
+        filenames: &["CMakeLists.txt"],
     },
     LangEntry {
         lang: L_COBOL,
@@ -7667,6 +7674,36 @@ mod tests {
     #[test]
     fn from_path_filename_match_takes_priority_over_extension() {
         assert_eq!(LangType::from_path(Path::new("Makefile.in")), L_MAKEFILE);
+    }
+
+    /// `CMakeLists.txt` — the canonical `CMake` build-script
+    /// filename — has extension `.txt` which alone would resolve to
+    /// `L_TEXT`. The filename hook on `L_CMAKE` wins over the
+    /// extension fallback. Case-insensitive (Windows / macOS
+    /// filesystems). Path-relative and path-absolute forms both
+    /// work — `from_path` pulls the basename via `Path::file_name`
+    /// before comparing.
+    #[test]
+    fn from_path_matches_cmakelists_txt() {
+        assert_eq!(LangType::from_path(Path::new("CMakeLists.txt")), L_CMAKE);
+        assert_eq!(LangType::from_path(Path::new("cmakelists.txt")), L_CMAKE);
+        assert_eq!(LangType::from_path(Path::new("CMAKELISTS.TXT")), L_CMAKE);
+        assert_eq!(
+            LangType::from_path(Path::new("/home/user/proj/CMakeLists.txt")),
+            L_CMAKE
+        );
+        assert_eq!(
+            LangType::from_path(Path::new(r"C:\src\proj\subdir\CMakeLists.txt")),
+            L_CMAKE
+        );
+        // Sanity: `.cmake` files still resolve via extension.
+        assert_eq!(
+            LangType::from_path(Path::new("Modules/FindZLIB.cmake")),
+            L_CMAKE
+        );
+        // Sanity: a plain `.txt` file that is NOT `CMakeLists.txt`
+        // must still fall through to `L_TEXT`.
+        assert_eq!(LangType::from_path(Path::new("README.txt")), L_TEXT);
     }
 
     #[test]
