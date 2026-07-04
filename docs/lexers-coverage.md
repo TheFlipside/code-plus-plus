@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 47 / 🟡 41 / ⚫ 1.
+Total: 89 rows. ✅ 48 / 🟡 40 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1857,7 +1857,7 @@ further shim work needed.
 | CoffeeScript | 56 | `coffeescript` | ⚫ | ⚫ | 🟡 |
 | CSound | 70 | `csound` | ⚫ | ⚫ | 🟡 |
 | CSS | 20 | `css` | ✅ | ✅ | ✅ |
-| D | 52 | `d` | ⚫ | ⚫ | 🟡 |
+| D | 52 | `d` | ✅ | ✅ | ✅ |
 | Diff | 33 | `diff` | ✅ | ✅ | ✅ |
 | Erlang | 71 | `erlang` | ⚫ | ⚫ | 🟡 |
 | ErrorList | 92 | `errorlist` | ⚫ | ⚫ | 🟡 |
@@ -4092,6 +4092,190 @@ order), 9 style-routing pins, `DEFAULT` unmapped pin,
 italic == 2 (both comment states), bold == 2 (`GLOBAL` +
 `EVENT` — the two fold-header structural anchors), and 3
 cross-language non-reuse pins (COBOL / CMake / YAML).
+
+**D (2026-07-04):** uses Lexilla's `d` lexer (`LexD.cxx`,
+571 lines, Waldemar Augustyn 2006, folding by Udo Lechner
+per `LexD.cxx:1-8`). 23 `SCE_D_*` slots (0..=22),
+seven-class wordlist (WL0 primary keywords, WL1 storage
+classes, WL2 Ddoc tags, WL3 types, WL4 specials, WL5 meta,
+WL6 reserved user-extension). Dispatches `SCLEX_D` (= 79,
+per `SciLexer.h:95`). Distinctive features:
+**case-sensitive byte-exact matching** (D 2 is
+case-sensitive at the spec level; wordlists lowercase-only,
+inverted from COBOL / CMake), **`SCE_D_WORD3` declared but
+never emitted** (LexD.cxx skips wordlist index 2 in
+identifier classification — see below), **nested `/+ +/`
+comments with per-line depth state**, **five string flavors
+collapsing to one visual**, and **`.di` interface files
+share the same lexer**.
+
+**Case-sensitive classification.** `LexerD::LexerFactoryD`
+at `LexD.cxx:198-200` constructs with `caseSensitive = true`.
+The identifier-classification cascade at `:288-311` calls
+`sc.GetCurrent(s, sizeof(s))` byte-exact when
+`caseSensitive` is true, or `sc.GetCurrentLowered(...)`
+when false. D 2 keywords are lowercase per spec, so
+wordlist tokens are lowercase; `__UPPERCASE__` special
+tokens like `__FILE__` also match byte-exact. Test invariant
+#5 pins the discipline across all six populated wordlists.
+
+**`SCE_D_WORD3` (value 8) unmapped by design.** SciLexer.h
+declares 23 SCE_D_* slots but LexD's identifier
+classification cascade at `LexD.cxx:296-307` probes
+wordlists in the order 0/1/3/4/5/6 — **skipping index 2**.
+Wordlist class 2 is instead used at `LexD.cxx:358` inside
+the `SCE_D_COMMENTDOCKEYWORD` state (only entered from
+`/** */` or `///` doc comments on a `@` / `\` sigil), NOT
+in the identifier state. Consequence: `SCE_D_WORD3` is a
+declared-but-never-emitted style; mapping it in the host
+theme would be dead code. Test invariant #6 enforces the
+exclusion.
+
+**Cross-list uniqueness EXCLUDES wordlist class 2**
+(Ddoc tags). Semantic overlap between `D_DOC_KEYWORDS`
+(`return`, `deprecated`, `version`, `throw`) and
+`D_KEYWORDS` (same tokens as D reserved words) is expected
+and correct — the state machine dispatches on context
+(WL2 only fires inside doc comments, WL0 only fires
+outside them). Test invariant #8 checks pairwise
+intersection only across WL0/WL1/WL3/WL4/WL5 which share
+the identifier-classification cascade.
+
+**Statement-position lexer quirks:**
+
+- **Nested `/+ +/` comments carry per-line depth.**
+  `SCE_D_COMMENTNESTED` state entered at `:443`;
+  `curNcLevel` counter incremented/decremented at
+  `:364-380` and `:439-444`, persisted per line via
+  `styler.SetLineState` at `:263, :369, :377, :442`.
+  Pure lexer concern — no host configuration.
+- **Five string flavors, one visual slot.**
+  `SCE_D_STRING` (`"..."`), `SCE_D_STRINGB` (`` `...` ``
+  backtick wysiwyg), `SCE_D_STRINGR` (`r"..."`/`x"..."`/`q"..."`
+  raw/hex/delimited), `SCE_D_CHARACTER` (`'c'`),
+  `SCE_D_STRINGEOL` (unterminated). All five route to
+  `StyleSlot::String` for uniform user-visible identity.
+  String suffixes `c`/`w`/`d` are consumed via
+  `IsStringSuffix` at `:63-65` (called at :387, :411, :418).
+- **Doc-comment keyword state dual-return.**
+  `SCE_D_COMMENTDOCKEYWORD` is entered from either
+  `SCE_D_COMMENTDOC` (`/**`) or `SCE_D_COMMENTLINEDOC`
+  (`///`) on the `@`/`\` sigil; `styleBeforeDCKeyword`
+  remembers which to return to after the tag identifier.
+  Wordlist class 2 validates the tag; invalid tags route
+  to `SCE_D_COMMENTDOCKEYWORDERROR`.
+
+**Seven wordlist classes** (~140 tokens across six
+populated lists + one empty by design):
+
+- **Class 0** (`D_KEYWORDS`, ~65 tokens): control flow +
+  declarations + module system + access modifiers —
+  `abstract`/`class`/`interface`/`template`/`mixin`/`module`/
+  `import`/`if`/`else`/`while`/`for`/`foreach`/
+  `foreach_reverse`/`switch`/`case`/`return`/`this`/
+  `super`/`unittest`/`invariant`/`assert`/`is`/`typeid`/
+  `typeof`/`cast`/`align`/`asm`/`pragma`/etc.
+  Includes reserved-legacy tokens `body` (replaced by
+  `do` in D 2.076 but reserved), `macro` (reserved with
+  no spec meaning), and `delete` (deprecated post-GC).
+- **Class 1** (`D_KEYWORDS_2`, ~10 tokens): type
+  qualifiers + purity contracts + parameter storage —
+  `const`/`immutable`/`shared`/`__gshared`/`pure`/
+  `nothrow`/`lazy`/`ref`/`scope`.
+- **Class 2** (`D_DOC_KEYWORDS`, ~16 tokens): JavaDoc/
+  Doxygen-style tags used in doc comments —
+  `param`/`return`/`throws`/`see`/`author`/`version`/
+  `deprecated`/`bug`/`note`/`warning`/`example`/`since`/
+  `todo`/etc. Bare tag names (no `@` sigil); the lexer
+  probes `keywords3.InList(s + 1)` at `LexD.cxx:358` to
+  skip the `@` prefix.
+- **Class 3** (`D_TYPES`, ~30 tokens): primitive types
+  from D spec §Types + standard aliases from `object.d` —
+  `bool`/`char`/`wchar`/`dchar`/`byte`/`ubyte`/`short`/
+  `ushort`/`int`/`uint`/`long`/`ulong`/`cent`/`ucent`/
+  `float`/`double`/`real`/imaginary/complex/`void`/`string`/
+  `wstring`/`dstring`/`size_t`/`ptrdiff_t`.
+  Includes deprecated imaginary (`ifloat`/`idouble`/`ireal`)
+  and complex (`cfloat`/`cdouble`/`creal`) types — removed
+  from D 2 but reserved words per spec §2.4.5.
+- **Class 4** (`D_SPECIAL`, ~15 tokens): boolean/null
+  literals + compile-time source-location + environment
+  tokens — `true`/`false`/`null`/`__FILE__`/
+  `__FILE_FULL_PATH__` (D 2.083+)/`__LINE__`/`__MODULE__`/
+  `__FUNCTION__`/`__PRETTY_FUNCTION__`/`__DATE__`/`__TIME__`/
+  `__TIMESTAMP__`/`__VENDOR__`/`__VERSION__`/`__EOF__`.
+- **Class 5** (`D_META`, 4 tokens): traits +
+  meta-programming — `__traits`/`__vector`/`__parameters`/
+  `__ctfe`.
+- **Class 6** (`D_WORD7`, empty): reserved user-extension
+  slot. Precedent: Rust doesn't ship Phobos-equivalent
+  library surface in wordlists. Users who want Phobos
+  functions to render as Keyword2 can populate this list
+  via a project-level override; the `SCE_D_WORD7` slot is
+  mapped defensively so the override takes effect without
+  a theme change.
+
+**Style routing (20 mappings; `DEFAULT`, `WORD3`,
+`IDENTIFIER` unmapped):**
+
+- **COMMENT + COMMENTLINE + COMMENTDOC + COMMENTNESTED +
+  COMMENTLINEDOC + COMMENTDOCKEYWORDERROR** → `Comment`
+  italic. Six comment forms collapse to one visual —
+  matches the Lua / Tcl / Perl / COBOL comment-family
+  collapse precedent. `COMMENTDOCKEYWORDERROR` maps to
+  Comment (not Preprocessor) because a malformed doc tag
+  is visually part of the surrounding comment, not a
+  distinct out-of-band marker.
+- **NUMBER** → `Number`. Recognises hex, binary,
+  underscore digit separators, `e±`/`p±` scientific
+  exponents, `f`/`F`/`L`/`i` suffixes.
+- **WORD** (class 0) → `Keyword` bold. Primary structural
+  vocabulary.
+- **STRING + STRINGEOL + CHARACTER + STRINGB + STRINGR**
+  → `String`. Five flavors, one slot — see string-flavor
+  note above.
+- **WORD2 + TYPEDEF + WORD5 + WORD6 + WORD7** (classes
+  1/3/4/5/6) → `Keyword2`. Secondary vocabulary — storage
+  classes, primitive types, special tokens, meta traits,
+  reserved extension slot. All share the Keyword2 accent
+  since they read as "annotations on structural code"
+  rather than the primary vocabulary.
+- **OPERATOR** → `Operator`. Punctuation + `@` attribute
+  sigil.
+- **COMMENTDOCKEYWORD** → `Macro`. Ddoc `@param`/`@return`
+  etc. Read as "known name from the doc-tag vocabulary" —
+  same semantic slot as Rust `println!` macro invocations.
+
+**DEFAULT, WORD3, IDENTIFIER unmapped.** DEFAULT and
+IDENTIFIER by framework convention (bare identifiers /
+whitespace → STYLE_DEFAULT). WORD3 by the never-emitted
+rule (see §above). Attribute names like `safe` / `nogc` /
+`property` fall through IDENTIFIER because the `@` sigil
+tokenizes separately as OPERATOR and the bare identifier
+isn't a D reserved word; adding it to a wordlist would
+create false-positives on ordinary variables.
+
+**`.di` interface files.** L_D LangEntry's `extensions`
+was extended from `["d"]` to `["d", "di"]` — D interface
+files are auto-generated module headers (parallel to
+`.h`/`.hpp` for C/C++). Same lexer.
+
+Structural test coverage: 15 invariants — 20 style
+mappings pin, seven-class canonical descriptor-order pin
+(load-bearing for `SCI_SETKEYWORDS`), non-empty guard for
+WL0-WL5 (WL6 permitted empty by design),
+every-token-`[a-zA-Z0-9_]` pin (identifier alphabet),
+`SCE_D_WORD3`-must-not-be-mapped pin
+(dead-code-prevention for the declared-but-never-emitted
+state), cross-list uniqueness across WL0/WL1/WL3/WL4/WL5
+(WL2 EXCLUDED — Ddoc tags live in a separate lexer state
+per the design rationale above), 20 style-routing pins,
+`DEFAULT` + `IDENTIFIER` unmapped pins, italic == 6 (all
+six comment states), bold == 1 (`WORD` — primary keyword
+class), 3 cross-language non-reuse pins (COBOL / CMake /
+YAML), 7 + 5 + 5 canonical D anchor tokens (spec §2.4.5
+keywords + type primitives + specials), and `.di`
+extension presence pin.
 
 ## Notes
 

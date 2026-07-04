@@ -4538,6 +4538,185 @@ pub const SCE_GC_COMMAND: usize = 7;
 pub const SCE_GC_STRING: usize = 8;
 pub const SCE_GC_OPERATOR: usize = 9;
 
+// LexD style indices. 23 contiguous slots (0..=22) for the
+// D programming language lexer. Constants mirror
+// `SciLexer.h:222-244` verbatim. Dispatches SCLEX_D (= 79,
+// per `SciLexer.h:95`) via a **seven-class wordlist** at
+// `vendor\lexilla\lexers\LexD.cxx:104-113` (`dWordLists[]`):
+//
+//     dWordLists[] = {
+//         "Primary keywords and identifiers",       // class 0 → SCE_D_WORD
+//         "Secondary keywords and identifiers",     // class 1 → SCE_D_WORD2
+//         "Documentation comment keywords",         // class 2 → SCE_D_COMMENTDOCKEYWORD
+//         "Type definitions and aliases",           // class 3 → SCE_D_TYPEDEF
+//         "Keywords 5",                             // class 4 → SCE_D_WORD5
+//         "Keywords 6",                             // class 5 → SCE_D_WORD6
+//         "Keywords 7",                             // class 6 → SCE_D_WORD7
+//         0,
+//     };
+//
+// **Case sensitivity — configurable per instance, default
+// case-sensitive.** `LexerD::LexerFactoryD` at
+// `LexD.cxx:198-200` constructs the lexer with
+// `caseSensitive = true`. The identifier classification
+// cascade at `:288-311` calls `sc.GetCurrent(s, sizeof(s))`
+// (byte-exact) when `caseSensitive` is true, and
+// `sc.GetCurrentLowered(s, sizeof(s))` (lowercased) when
+// false. Since D is a case-sensitive language at the spec
+// level and the factory default is case-sensitive,
+// wordlists MUST be exact-case (lowercase for D keywords).
+// Same discipline as `CPP_KEYWORDS` — every entry lives
+// under a byte-exact InList probe.
+//
+// **`SCE_D_WORD3` (value 8) declared but never emitted.**
+// SciLexer.h reserves the slot, but LexD.cxx's identifier
+// classification cascade at `:296-307` probes wordlists in
+// the order 0/1/3/4/5/6 (SKIPPING index 2). Wordlist index
+// 2 IS used but routes to `SCE_D_COMMENTDOCKEYWORD`, not
+// to any WORDN state — that dispatch lives at `:358` inside
+// the `SCE_D_COMMENTDOCKEYWORD` state and only fires within
+// a doc comment (`/** */` or `///`) after a `@` or `\`
+// sigil. Consequence: mapping `SCE_D_WORD3` in the host
+// theme is dead code — the lexer never emits it. Test
+// invariant enforces the exclusion.
+//
+// **Wordlist install map** (per `LexerD::WordListSet` at
+// `:210-234`):
+//
+//     class 0 → keywords  → SCE_D_WORD                (control flow / declarations)
+//     class 1 → keywords2 → SCE_D_WORD2               (storage classes / contracts)
+//     class 2 → keywords3 → SCE_D_COMMENTDOCKEYWORD   (Ddoc @-tags)
+//     class 3 → keywords4 → SCE_D_TYPEDEF             (primitive types / aliases)
+//     class 4 → keywords5 → SCE_D_WORD5               (special values / literals)
+//     class 5 → keywords6 → SCE_D_WORD6               (traits / meta-programming)
+//     class 6 → keywords7 → SCE_D_WORD7               (reserved for user extension)
+//
+// **String flavors — five distinct states for one visual
+// slot.** D's string zoo has:
+//
+//   - `SCE_D_STRING` (10) — `"..."` double-quoted literal
+//     (`LexD.cxx:381-391`, entered at `:459`).
+//   - `SCE_D_STRINGB` (18) — `` `...` `` backtick wysiwyg
+//     literal (`:409-415`, entered at `:463`).
+//   - `SCE_D_STRINGR` (19) — `r"..."` raw string, `x"..."`
+//     hex string, `q"..."` delimited string (`:416-422`,
+//     entered at `:435`).
+//   - `SCE_D_CHARACTER` (12) — `'c'` character literal
+//     (`:392-403`, entered at `:461`).
+//   - `SCE_D_STRINGEOL` (11) — unterminated string
+//     reaching EOL (`:394, :404-408`).
+//
+// All five collapse to `StyleSlot::String` at the theme
+// level for uniform visual identity.
+//
+// **String suffixes.** `c`/`w`/`d` suffixes are consumed
+// after the closing quote for all three string flavors
+// via `IsStringSuffix` at `:63-65` (called at :387, :411,
+// :418).
+//
+// **Nested `/+ +/` comments — depth tracked per line.**
+// `SCE_D_COMMENTNESTED` (4) is entered at `:443` and
+// increments/decrements `curNcLevel` at `:364-380` and
+// `:439-444`, persisted per line via
+// `styler.SetLineState` at `:263, :369, :377, :442`. Pure
+// lexer concern — no host configuration.
+//
+// **Doc-comment keyword state — bidirectional return.**
+// `SCE_D_COMMENTDOCKEYWORD` (16) is entered from either
+// `SCE_D_COMMENTDOC` (3) or `SCE_D_COMMENTLINEDOC` (15)
+// on the `@`/`\` sigil (`:322-328, :338-344`);
+// `styleBeforeDCKeyword` remembers which to return to
+// after the tag identifier (`:346-362`). Wordlist index 2
+// validates the keyword and routes invalid tags to
+// `SCE_D_COMMENTDOCKEYWORDERROR` (17) at `:348, :359`.
+//
+// **Doc-style detection.**
+//   - `/**` or `/*!` → COMMENTDOC (`:446`).
+//   - `///` (but NOT `////`) or `//!` → COMMENTLINEDOC
+//     (`:453`).
+//
+// Style semantics (paint-loop citations reference LexD.cxx):
+//
+//   - SCE_D_DEFAULT (0) — whitespace / unclassified.
+//     Framework convention: leave unmapped.
+//   - SCE_D_COMMENT (1) — `/* ... */` block comment.
+//   - SCE_D_COMMENTLINE (2) — `//`-to-EOL line comment.
+//   - SCE_D_COMMENTDOC (3) — `/** ... */` or `/*! ... */`
+//     Ddoc block comment.
+//   - SCE_D_COMMENTNESTED (4) — `/+ ... +/` nested block
+//     comment (D-specific — nests without escaping).
+//   - SCE_D_NUMBER (5) — numeric literal. Recognises hex
+//     (`0x`), binary (`0b`), underscore digit separators,
+//     `e±` / `p±` scientific exponents, and `f`/`F`/`L`/`i`
+//     suffixes.
+//   - SCE_D_WORD (6) — wordlist class 0 hit (Primary
+//     keywords — control flow / declarations).
+//   - SCE_D_WORD2 (7) — wordlist class 1 hit (Secondary
+//     keywords — storage classes / contracts).
+//   - SCE_D_WORD3 (8) — DECLARED BUT NEVER EMITTED.
+//     LexD.cxx's cascade at `:296-307` skips this index
+//     because wordlist class 2 is repurposed for
+//     `SCE_D_COMMENTDOCKEYWORD`. Framework convention:
+//     leave unmapped — mapping it would be dead code.
+//   - SCE_D_TYPEDEF (9) — wordlist class 3 hit (primitive
+//     types / aliases like `int`, `string`, `size_t`).
+//   - SCE_D_STRING (10) — `"..."` double-quoted literal.
+//   - SCE_D_STRINGEOL (11) — unterminated string reaching
+//     EOL.
+//   - SCE_D_CHARACTER (12) — `'c'` character literal.
+//   - SCE_D_OPERATOR (13) — punctuation classified via
+//     `isoperator()` at `:464-467`; the OPERATOR state
+//     terminates back to DEFAULT at `:268-270`. Includes
+//     `@` sigil — attribute keywords like `@safe` render
+//     as OPERATOR + IDENTIFIER, so bare `safe` / `nogc` /
+//     etc. would need to go into a wordlist without the
+//     `@` (see `D_KEYWORDS` docstring for why they don't).
+//   - SCE_D_IDENTIFIER (14) — bare identifier fallback.
+//     Framework convention: leave unmapped so plain
+//     identifiers paint at STYLE_DEFAULT.
+//   - SCE_D_COMMENTLINEDOC (15) — `///` or `//!` Ddoc
+//     line comment.
+//   - SCE_D_COMMENTDOCKEYWORD (16) — `@param` / `@return`
+//     etc. inside a doc comment (COMMENTDOC or
+//     COMMENTLINEDOC context).
+//   - SCE_D_COMMENTDOCKEYWORDERROR (17) — malformed doc
+//     tag (unknown `@name` inside a doc comment).
+//   - SCE_D_STRINGB (18) — `` `...` `` backtick wysiwyg
+//     string literal.
+//   - SCE_D_STRINGR (19) — raw `r"..."`, hex `x"..."`, or
+//     delimited `q"..."` string literal.
+//   - SCE_D_WORD5 (20) — wordlist class 4 hit (special
+//     values / literals — `true`, `false`, `null`,
+//     `__FILE__`, etc.).
+//   - SCE_D_WORD6 (21) — wordlist class 5 hit (traits /
+//     meta-programming — `__traits`, `__ctfe`, etc.).
+//   - SCE_D_WORD7 (22) — wordlist class 6 hit (reserved
+//     for user extension — Phobos library surface if a
+//     future palette wants it).
+pub const SCE_D_DEFAULT: usize = 0;
+pub const SCE_D_COMMENT: usize = 1;
+pub const SCE_D_COMMENTLINE: usize = 2;
+pub const SCE_D_COMMENTDOC: usize = 3;
+pub const SCE_D_COMMENTNESTED: usize = 4;
+pub const SCE_D_NUMBER: usize = 5;
+pub const SCE_D_WORD: usize = 6;
+pub const SCE_D_WORD2: usize = 7;
+pub const SCE_D_WORD3: usize = 8;
+pub const SCE_D_TYPEDEF: usize = 9;
+pub const SCE_D_STRING: usize = 10;
+pub const SCE_D_STRINGEOL: usize = 11;
+pub const SCE_D_CHARACTER: usize = 12;
+pub const SCE_D_OPERATOR: usize = 13;
+pub const SCE_D_IDENTIFIER: usize = 14;
+pub const SCE_D_COMMENTLINEDOC: usize = 15;
+pub const SCE_D_COMMENTDOCKEYWORD: usize = 16;
+pub const SCE_D_COMMENTDOCKEYWORDERROR: usize = 17;
+pub const SCE_D_STRINGB: usize = 18;
+pub const SCE_D_STRINGR: usize = 19;
+pub const SCE_D_WORD5: usize = 20;
+pub const SCE_D_WORD6: usize = 21;
+pub const SCE_D_WORD7: usize = 22;
+
 // LexTOML style indices. The upstream enum also defines
 // `SCE_TOML_ERROR` (7), `SCE_TOML_STRINGEOL` (15), and
 // `SCE_TOML_ESCAPECHAR` (13) — those are intentionally omitted

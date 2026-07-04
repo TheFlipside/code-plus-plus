@@ -370,7 +370,11 @@ pub const LANG_TABLE: &[LangEntry] = &[
         menu_label: "D",
         desc: "D source file",
         lexer: Some("d"),
-        extensions: &["d"],
+        // `.di` is D's interface-file extension — auto-generated
+        // module headers (parallel to how `.h`/`.hpp` sit
+        // alongside `.c`/`.cpp` for L_C/L_CPP). Uses the same
+        // Lexilla D lexer.
+        extensions: &["d", "di"],
         filenames: &[],
     },
     LangEntry {
@@ -7877,6 +7881,264 @@ pub const GUI4CLI_COMMANDS: &str = concat!(
     // reference.
     "GUICLOSE GUIFRONT GUIHIDE GUISHOW ",
 );
+
+/// D primary keywords — control flow, declarations, module
+/// system (class 0 → `SCE_D_WORD`).
+///
+/// **Source of truth:** D 2 language specification §2.4.5
+/// "Keywords" at `dlang.org/spec/lex.html`. Every token is a
+/// D reserved word.
+///
+/// **Case-sensitive byte-exact match.** `LexerD` at
+/// `LexD.cxx:198-200` constructs with `caseSensitive = true`
+/// by default; the identifier-classification cascade at
+/// `:288-311` probes `sc.GetCurrent(s, sizeof(s))` byte-exact.
+/// D is a case-sensitive language at the spec level, so
+/// wordlist tokens are lowercase (matching how D keywords
+/// are spelled in source). An uppercase entry would silently
+/// never match — same discipline as `CPP_KEYWORDS`, inverted
+/// from `COBOL_KEYWORDS_A`'s case-fold policy.
+///
+/// **Deliberately excluded — belong to other wordlists:**
+///   - `bool`/`byte`/`int` etc. → [`D_TYPES`] (class 3).
+///   - `true`/`false`/`null` → [`D_SPECIAL`] (class 4).
+///   - `__gshared` → [`D_KEYWORDS_2`] (class 1, storage class).
+///   - `__traits` / `__vector` / `__parameters` →
+///     [`D_META`] (class 5).
+///   - `__FILE__` / `__LINE__` etc. → [`D_SPECIAL`] (class 4).
+///
+/// **Deliberately included as legacy reserved words:**
+///   - `body` — replaced by `do` in D 2.076 (Oct 2017) but
+///     remains reserved for backward compatibility.
+///   - `macro` — reserved for future use, no current
+///     semantic per D spec §2.4.5.
+///   - `delete` — deprecated (post-GC removal) but
+///     reserved.
+///   - `ifloat`/`idouble`/`ireal`/`cfloat`/`cdouble`/`creal`
+///     — imaginary/complex primitive types deprecated in
+///     D 2 but reserved; go in [`D_TYPES`] not here.
+///
+/// **`@`-prefixed attributes NOT included.** `@safe`,
+/// `@nogc`, `@property`, etc. tokenize as
+/// `SCE_D_OPERATOR` (`@`) + `SCE_D_IDENTIFIER` (bare name).
+/// The bare identifier is not a D reserved word, so
+/// including it here would create a false-positive when the
+/// user writes an ordinary variable `int safe`. Attributes
+/// are documented at the language level, not the lexer
+/// level — same call as Rust attributes (bare `derive`,
+/// `test`, `cfg` are not in `RUST_KEYWORDS`).
+pub const D_KEYWORDS: &str = concat!(
+    // Access / linkage modifiers.
+    "abstract auto export extern final override ",
+    "package private protected public static ",
+    // Declarations / type-defining.
+    "alias class delegate enum function interface module ",
+    "struct template union ",
+    // Control flow / statements.
+    "break case catch continue default do else finally for ",
+    "foreach foreach_reverse goto if return switch synchronized ",
+    "throw try while with ",
+    // Contract / testing / assertion.
+    "assert body invariant unittest ",
+    // Memory / lifecycle.
+    "delete new ",
+    // Module system + parameter direction.
+    "import in inout out ",
+    // Meta / metaprogramming — `is` is the type-introspection
+    // operator (`is(T == int)`) per D spec §IsExpression.
+    "align asm cast debug deprecated is mixin pragma typeid typeof ",
+    // Reserved (no current spec meaning but still keywords).
+    "macro version ",
+    // Structural / OO.
+    "super this ",
+);
+
+/// D secondary keywords — storage classes, purity/nothrow
+/// contracts, `__gshared` (class 1 → `SCE_D_WORD2`).
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`D_KEYWORDS`].
+///
+/// These read as "how this identifier lives / behaves" rather
+/// than "what this identifier is" — hence a distinct visual
+/// weight from primary keywords. Matches D spec §2.4.5 which
+/// classifies these as **type qualifiers** and **attribute
+/// keywords** rather than control-flow / declaration
+/// keywords.
+///
+/// **`__gshared` included here.** Storage class for
+/// thread-unsafe global data — spelled `__gshared` per D
+/// spec, always lowercase after the underscores. Sits in
+/// WL2 alongside its sibling `shared` since both control
+/// data-sharing semantics.
+pub const D_KEYWORDS_2: &str = concat!(
+    // Type qualifiers.
+    "const immutable shared __gshared ",
+    // Purity / contracts.
+    "pure nothrow ",
+    // Parameter-passing storage classes.
+    "lazy ref scope ",
+);
+
+/// D Ddoc / Doxygen tag names — validated inside doc
+/// comments (class 2 → `SCE_D_COMMENTDOCKEYWORD`).
+///
+/// **Different state from other wordlists.** `LexD.cxx:358`
+/// probes `keywords3.InList(s + 1)` INSIDE the
+/// `SCE_D_COMMENTDOCKEYWORD` state, which is only entered
+/// from `SCE_D_COMMENTDOC` or `SCE_D_COMMENTLINEDOC` on a
+/// `@` / `\` sigil. The `s + 1` skips the sigil, so wordlist
+/// entries must be BARE tag names without `@`.
+///
+/// **Cross-list overlap permitted.** `return`, `deprecated`,
+/// `version`, `throw` also appear in [`D_KEYWORDS`] as
+/// language reserved words. This is NOT a duplication bug:
+/// `LexD`'s state machine dispatches wordlist[0] only in the
+/// identifier state (`:288-311`) and wordlist[2] only in the
+/// doc-keyword state (`:358`), so the two lookups never
+/// compete. The cross-list uniqueness test invariant
+/// deliberately EXCLUDES `D_DOC_KEYWORDS` from the
+/// intersection check.
+///
+/// **JavaDoc/Doxygen-style tags, not Ddoc-native sections.**
+/// D's official Ddoc syntax uses `Params:` / `Returns:` /
+/// `See_Also:` section-style markers, but the Lexilla lexer
+/// only catches the `@name` JavaDoc/Doxygen variant (per
+/// the entry conditions at `LexD.cxx:322-328, :338-344`).
+/// Real-world D code that uses Doxygen typically writes
+/// `@param`, `@return`, `@see` — those are what this list
+/// targets. Tokens sourced from the canonical Doxygen tag
+/// set.
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`D_KEYWORDS`]. Doxygen tags conventionally lowercase.
+pub const D_DOC_KEYWORDS: &str = concat!(
+    // Parameter / return / exception documentation.
+    // Doxygen defines `\return` + `\returns` and `\throw` +
+    // `\throws` as documented aliases; both spellings shipped.
+    "param return returns throw throws ",
+    // Cross-references.
+    "see ",
+    // Metadata. Doxygen documents `\author` and `\authors` as
+    // aliases; both shipped.
+    "author authors date version deprecated ",
+    // Notes / warnings.
+    "bug note warning ",
+    // Examples.
+    "example ",
+    // Version / TODO tracking.
+    "since todo ",
+);
+
+/// D primitive types + standard aliases (class 3 →
+/// `SCE_D_TYPEDEF`).
+///
+/// **Source of truth:** D 2 spec §Types at
+/// `dlang.org/spec/type.html` for primitives, plus the
+/// standard aliases from `object.d` (`string` = `immutable(char)[]`,
+/// `wstring` = `immutable(wchar)[]`, `dstring` =
+/// `immutable(dchar)[]`, `size_t`, `ptrdiff_t`).
+///
+/// **Includes deprecated imaginary / complex types.**
+/// `ifloat` / `idouble` / `ireal` (imaginary) and `cfloat`
+/// / `cdouble` / `creal` (complex) were deprecated in D 2
+/// (removed for numerical-computing niche) but remain
+/// reserved words per spec §2.4.5. Highlight consistently
+/// with the other primitives so legacy source doesn't
+/// mysteriously de-colour on those types.
+///
+/// **Includes reserved-but-unimplemented `cent` / `ucent`.**
+/// 128-bit integer types reserved per D spec but not yet
+/// implemented in DMD. Reserved words — highlight for
+/// forward-compatibility.
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`D_KEYWORDS`].
+pub const D_TYPES: &str = concat!(
+    // Boolean / character.
+    "bool char wchar dchar ",
+    // Signed / unsigned integers.
+    "byte ubyte short ushort int uint long ulong cent ucent ",
+    // Floating point.
+    "float double real ",
+    // Imaginary (deprecated in D 2 but reserved).
+    "ifloat idouble ireal ",
+    // Complex (deprecated in D 2 but reserved).
+    "cfloat cdouble creal ",
+    // Void / no-type.
+    "void ",
+    // Standard aliases from object.d.
+    "string wstring dstring size_t ptrdiff_t ",
+);
+
+/// D special values + literal tokens (class 4 →
+/// `SCE_D_WORD5`).
+///
+/// **Source of truth:** D 2 spec §2.4.5 keyword list
+/// (`true`, `false`, `null`) and §`SpecialTokens` at
+/// `dlang.org/spec/lex.html` for the `__`-prefixed
+/// compile-time special tokens.
+///
+/// **`__FILE_FULL_PATH__` included** — added in D 2.083
+/// (November 2018) alongside the pre-existing `__FILE__`.
+///
+/// **`__DATE__` / `__TIME__` / `__TIMESTAMP__` /
+/// `__VENDOR__` / `__VERSION__` / `__EOF__` included** — D
+/// spec §`SpecialTokens` defines these as compiler-substituted
+/// tokens that expand to string / integer literals at their
+/// use sites. User-facing D code writes them literally, so
+/// they warrant highlighting.
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`D_KEYWORDS`]. All D special tokens follow the
+/// `__UPPERCASE__` convention.
+pub const D_SPECIAL: &str = concat!(
+    // Boolean / null literals.
+    "true false null ",
+    // Compile-time source-location tokens.
+    "__FILE__ __FILE_FULL_PATH__ __LINE__ __MODULE__ ",
+    "__FUNCTION__ __PRETTY_FUNCTION__ ",
+    // Compile-time environment tokens.
+    "__DATE__ __TIME__ __TIMESTAMP__ __VENDOR__ __VERSION__ ",
+    // End-of-file sentinel.
+    "__EOF__ ",
+);
+
+/// D meta-programming / traits keywords (class 5 →
+/// `SCE_D_WORD6`).
+///
+/// **Source of truth:** D 2 spec §2.4.5 keyword list
+/// (`__traits`, `__vector`, `__parameters`) at
+/// `dlang.org/spec/lex.html` and §`CompilerConditionals` for
+/// `__ctfe`.
+///
+/// **`__ctfe`** — a special compile-time-known Boolean
+/// automatically defined in every function body per
+/// `dlang.org/spec/function.html#interpretation`. Not
+/// technically listed in §2.4.5 but part of D's
+/// meta-programming surface that users write literally.
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`D_KEYWORDS`].
+pub const D_META: &str = concat!(
+    // Traits / meta-programming.
+    "__traits __vector __parameters ",
+    // Compile-time-known Boolean.
+    "__ctfe ",
+);
+
+/// D "Keywords 7" — reserved user-extension slot (class 6
+/// → `SCE_D_WORD7`).
+///
+/// **Ships empty.** Precedent from `RUST_KEYWORDS` and
+/// prior wirings: Phobos library surface
+/// (`writeln` / `format` / `stdin` / etc.) is NOT
+/// highlighted at the keyword level. Users who want Phobos
+/// to render as `Keyword2` can populate this list via a
+/// project-level override; the `SCE_D_WORD7` slot is mapped
+/// in the theme defensively so that override takes effect
+/// without a theme change.
+pub const D_WORD7: &str = "";
 
 #[cfg(test)]
 mod tests {

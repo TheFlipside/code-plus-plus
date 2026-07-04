@@ -108,24 +108,25 @@ use codepp_core::lang::{
     CMAKE_COMMANDS, CMAKE_PARAMETERS, CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B,
     COBOL_KEYWORDS_C, CPP_KEYWORDS, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2,
     CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2,
-    C_KEYWORDS, C_KEYWORDS_2, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL,
-    GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
-    HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS,
-    INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS,
-    JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
-    LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
-    L_CMAKE, L_COBOL, L_CPP, L_CS, L_CSS, L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO,
-    L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC,
-    L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
-    L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS,
-    MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-    PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
-    RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
-    SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-    VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+    C_KEYWORDS, C_KEYWORDS_2, D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES,
+    D_WORD7, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS,
+    GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS,
+    HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR,
+    INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS,
+    KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA,
+    L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_CPP, L_CS, L_CSS, L_D,
+    L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX,
+    L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS,
+    L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG,
+    L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
+    RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+    SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+    XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -164,9 +165,13 @@ use codepp_scintilla_sys::{
     SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR, SCE_C_PREPROCESSOR,
     SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_DIFF_ADDED, SCE_DIFF_CHANGED, SCE_DIFF_COMMAND,
     SCE_DIFF_COMMENT, SCE_DIFF_DELETED, SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD, SCE_DIFF_PATCH_DELETE,
-    SCE_DIFF_POSITION, SCE_DIFF_REMOVED_PATCH_ADD, SCE_DIFF_REMOVED_PATCH_DELETE, SCE_GC_ATTRIBUTE,
-    SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_EVENT,
-    SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_CAPITAL, SCE_HA_CHARACTER, SCE_HA_CLASS,
+    SCE_DIFF_POSITION, SCE_DIFF_REMOVED_PATCH_ADD, SCE_DIFF_REMOVED_PATCH_DELETE, SCE_D_CHARACTER,
+    SCE_D_COMMENT, SCE_D_COMMENTDOC, SCE_D_COMMENTDOCKEYWORD, SCE_D_COMMENTDOCKEYWORDERROR,
+    SCE_D_COMMENTLINE, SCE_D_COMMENTLINEDOC, SCE_D_COMMENTNESTED, SCE_D_NUMBER, SCE_D_OPERATOR,
+    SCE_D_STRING, SCE_D_STRINGB, SCE_D_STRINGEOL, SCE_D_STRINGR, SCE_D_TYPEDEF, SCE_D_WORD,
+    SCE_D_WORD2, SCE_D_WORD5, SCE_D_WORD6, SCE_D_WORD7, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND,
+    SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_EVENT, SCE_GC_GLOBAL,
+    SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_CAPITAL, SCE_HA_CHARACTER, SCE_HA_CLASS,
     SCE_HA_COMMENTBLOCK, SCE_HA_COMMENTBLOCK2, SCE_HA_COMMENTBLOCK3, SCE_HA_COMMENTLINE,
     SCE_HA_DATA, SCE_HA_INSTANCE, SCE_HA_KEYWORD, SCE_HA_LITERATE_CODEDELIM,
     SCE_HA_LITERATE_COMMENT, SCE_HA_MODULE, SCE_HA_NUMBER, SCE_HA_OPERATOR, SCE_HA_PRAGMA,
@@ -7433,6 +7438,143 @@ const GUI4CLI_THEME: LangTheme = LangTheme {
     bold: GUI4CLI_BOLD,
 };
 
+// D (`L_D`) uses Lexilla's `LexD.cxx` — the D programming
+// language lexer. 23 slots (0..=22); 20 style mappings;
+// `DEFAULT` (0), `WORD3` (8), and `IDENTIFIER` (14)
+// intentionally unmapped.
+//
+// **`WORD3` unmapped is deliberate.** `LexD.cxx:296-307`
+// probes wordlists 0/1/3/4/5/6 in the identifier
+// classification cascade — index 2 is SKIPPED because
+// wordlist class 2 is repurposed for
+// `SCE_D_COMMENTDOCKEYWORD` (dispatched at `:358` inside
+// the doc-comment state). `SCE_D_WORD3` (value 8) is
+// therefore DECLARED in the SciLexer.h enum but NEVER
+// EMITTED by LexD's state machine. Mapping it would be
+// dead code — test invariant enforces the exclusion.
+//
+// **`.di` interface files** — the `L_D` LANG_TABLE row
+// carries `["d", "di"]` extensions. Both formats use the
+// same lexer.
+//
+// **Slot rationale** (per the `LexD.cxx` banner in
+// `scintilla-sys/src/lib.rs`):
+//
+//   - COMMENT + COMMENTLINE + COMMENTDOC + COMMENTNESTED
+//     + COMMENTLINEDOC + COMMENTDOCKEYWORDERROR → Comment
+//     italic. Six comment forms collapse to one visual —
+//     matches the Lua / Tcl / Perl comment-family collapse
+//     precedent. COMMENTDOCKEYWORDERROR maps here (not
+//     Preprocessor) because a malformed doc tag is
+//     visually part of the surrounding doc comment, not a
+//     distinct out-of-band marker.
+//   - NUMBER → Number. Recognises hex, binary, underscore
+//     separators, `e±`/`p±` exponents, and `f`/`F`/`L`/`i`
+//     suffixes.
+//   - WORD (class 0) → Keyword bold. Primary structural
+//     vocabulary — control flow, declarations, module
+//     system.
+//   - STRING + STRINGEOL + CHARACTER + STRINGB + STRINGR
+//     → String. Five string flavors (`"..."`, unterminated
+//     string, `'c'` character, `` `...` `` backtick
+//     wysiwyg, `r"..."`/`x"..."`/`q"..."` raw/hex/delimited)
+//     collapse to one slot per the C / Perl / COBOL
+//     precedent.
+//   - WORD2 (class 1) → Keyword2. Storage classes /
+//     purity contracts (`const`, `immutable`, `shared`,
+//     `pure`, `nothrow`, etc.). Distinct from primary
+//     keywords — "how identifiers live" vs "what they are".
+//   - TYPEDEF (class 3) → Keyword2. Primitive types +
+//     stdlib aliases (`int`, `void`, `string`, `size_t`,
+//     etc.). Same visual weight as WORD2 — they're both
+//     "annotations" on structural code.
+//   - WORD5 (class 4) → Keyword2. Special values +
+//     compile-time tokens (`true`, `false`, `null`,
+//     `__FILE__`, `__LINE__`, etc.). Framework choice:
+//     collapse specials into Keyword2 rather than inventing
+//     a dedicated slot.
+//   - WORD6 (class 5) → Keyword2. Traits / meta
+//     (`__traits`, `__vector`, `__parameters`, `__ctfe`).
+//     Same lane as specials — all `__`-prefixed
+//     compile-time surface.
+//   - WORD7 (class 6) → Keyword2. Reserved user-extension
+//     slot (empty by default; mapped defensively so a
+//     project-level Phobos override paints without a theme
+//     change).
+//   - OPERATOR → Operator. Punctuation + `@` attribute
+//     sigil.
+//   - COMMENTDOCKEYWORD → Macro. Ddoc `@param`/`@return`
+//     etc. inside doc comments — read as "known name from
+//     the doc-tag vocabulary", same semantic slot as Rust
+//     `println!` macro invocations.
+const D_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_D_COMMENT, StyleSlot::Comment),
+    (SCE_D_COMMENTLINE, StyleSlot::Comment),
+    (SCE_D_COMMENTDOC, StyleSlot::Comment),
+    (SCE_D_COMMENTNESTED, StyleSlot::Comment),
+    (SCE_D_COMMENTLINEDOC, StyleSlot::Comment),
+    (SCE_D_COMMENTDOCKEYWORDERROR, StyleSlot::Comment),
+    (SCE_D_NUMBER, StyleSlot::Number),
+    (SCE_D_WORD, StyleSlot::Keyword),
+    (SCE_D_WORD2, StyleSlot::Keyword2),
+    (SCE_D_TYPEDEF, StyleSlot::Keyword2),
+    (SCE_D_WORD5, StyleSlot::Keyword2),
+    (SCE_D_WORD6, StyleSlot::Keyword2),
+    (SCE_D_WORD7, StyleSlot::Keyword2),
+    (SCE_D_STRING, StyleSlot::String),
+    (SCE_D_STRINGEOL, StyleSlot::String),
+    (SCE_D_CHARACTER, StyleSlot::String),
+    (SCE_D_STRINGB, StyleSlot::String),
+    (SCE_D_STRINGR, StyleSlot::String),
+    (SCE_D_OPERATOR, StyleSlot::Operator),
+    (SCE_D_COMMENTDOCKEYWORD, StyleSlot::Macro),
+];
+
+// Italic on all six comment family states — matches
+// universal Code++ comment-slot convention (COBOL's
+// COMMENT + COMMENTLINE + COMMENTDOC triple, Lua's COMMENT
+// + COMMENTLINE + COMMENTDOC, Tcl's four-state collapse).
+// Also includes COMMENTDOCKEYWORDERROR — a malformed doc
+// tag is visually a comment, italicised uniformly.
+const D_ITALIC: &[usize] = &[
+    SCE_D_COMMENT,
+    SCE_D_COMMENTLINE,
+    SCE_D_COMMENTDOC,
+    SCE_D_COMMENTNESTED,
+    SCE_D_COMMENTLINEDOC,
+    SCE_D_COMMENTDOCKEYWORDERROR,
+];
+
+// Bold on primary keyword only. Matches the C / Rust /
+// Python / Lua precedent — the "one bold class = language
+// keywords" rule. Storage-class WORD2 and type-name TYPEDEF
+// use Keyword2 weight (not bold) because they're structural
+// annotations rather than the primary vocabulary.
+const D_BOLD: &[usize] = &[SCE_D_WORD];
+
+// Seven-class install matches `dWordLists[]` at
+// `LexD.cxx:104-113` with class 6 (Keywords 7) shipped
+// empty. Order is load-bearing — `SCI_SETKEYWORDS`
+// respects wordlist-descriptor order. Wordlist class 2
+// (Documentation comment keywords) routes to
+// `SCE_D_COMMENTDOCKEYWORD` inside the doc-comment state
+// only, NOT to identifier classification — see the D
+// scintilla-sys banner.
+const D_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, D_KEYWORDS),
+        (1, D_KEYWORDS_2),
+        (2, D_DOC_KEYWORDS),
+        (3, D_TYPES),
+        (4, D_SPECIAL),
+        (5, D_META),
+        (6, D_WORD7),
+    ],
+    styles: D_STYLES,
+    italic: D_ITALIC,
+    bold: D_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -7656,6 +7798,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&COBOL_THEME)
     } else if lang == L_GUI4CLI {
         Some(&GUI4CLI_THEME)
+    } else if lang == L_D {
+        Some(&D_THEME)
     } else {
         None
     }
@@ -22873,37 +23017,43 @@ mod lang_theme_tests {
         CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CMAKE_COMMANDS, CMAKE_PARAMETERS,
         CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B, COBOL_KEYWORDS_C, CPP_KEYWORDS_2,
         CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
-        CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, GUI4CLI_ATTRIBUTES,
-        GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS,
-        HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS,
-        INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
-        JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS,
-        KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM,
-        L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_CPP, L_CS, L_CSS, L_DIFF,
-        L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP,
-        L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS,
-        L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB,
-        L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
-        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
-        PHP_KEYWORDS, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS,
-        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
-        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
-        VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+        CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, D_DOC_KEYWORDS, D_KEYWORDS,
+        D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS,
+        GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
+        HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS,
+        INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS,
+        JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
+        LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
+        L_CMAKE, L_COBOL, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
+        L_INNO, L_JAVA, L_JAVASCRIPT, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS,
+        L_OBJC, L_PASCAL, L_PERL, L_PHP, L_PROPS, L_PS, L_PYTHON, L_RC, L_RUBY, L_RUST, L_SCHEME,
+        L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
+        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, PS_LEVEL1_KEYWORDS,
+        PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+        RUBY_KEYWORDS, RUST_KEYWORDS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+        SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+        VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+        XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
         SCE_COBOL_COMMENTLINE, SCE_COBOL_NUMBER, SCE_COBOL_OPERATOR, SCE_COBOL_PREPROCESSOR,
-        SCE_COBOL_STRING, SCE_COBOL_WORD, SCE_COBOL_WORD2, SCE_COBOL_WORD3, SCE_GC_ATTRIBUTE,
-        SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_DEFAULT,
-        SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_IDENTIFIER,
-        SCE_HA_IMPORT, SCE_INNO_IDENTIFIER, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT,
-        SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER,
-        SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER,
-        SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD,
-        SCE_YAML_NUMBER, SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
+        SCE_COBOL_STRING, SCE_COBOL_WORD, SCE_COBOL_WORD2, SCE_COBOL_WORD3, SCE_D_CHARACTER,
+        SCE_D_COMMENT, SCE_D_COMMENTDOC, SCE_D_COMMENTDOCKEYWORD, SCE_D_COMMENTDOCKEYWORDERROR,
+        SCE_D_COMMENTLINE, SCE_D_COMMENTLINEDOC, SCE_D_COMMENTNESTED, SCE_D_DEFAULT,
+        SCE_D_IDENTIFIER, SCE_D_NUMBER, SCE_D_OPERATOR, SCE_D_STRING, SCE_D_STRINGB,
+        SCE_D_STRINGEOL, SCE_D_STRINGR, SCE_D_TYPEDEF, SCE_D_WORD, SCE_D_WORD2, SCE_D_WORD3,
+        SCE_D_WORD5, SCE_D_WORD6, SCE_D_WORD7, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND,
+        SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_DEFAULT, SCE_GC_EVENT,
+        SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_IDENTIFIER, SCE_HA_IMPORT,
+        SCE_INNO_IDENTIFIER, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
+        SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR,
+        SCE_MATLAB_STRING, SCE_VHDL_IDENTIFIER, SCE_V_IDENTIFIER, SCE_YAML_COMMENT,
+        SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD, SCE_YAML_NUMBER,
+        SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
     };
 
     /// Every wired language must:
@@ -30352,6 +30502,345 @@ mod lang_theme_tests {
                 "Gui4Cli must NOT reuse {name}_STYLES"
             );
         }
+    }
+
+    /// D (`L_D`) uses Lexilla's `LexD` — the D programming
+    /// language lexer authored by Waldemar Augustyn (2006).
+    /// 23 `SCE_D_*` slots (0..=22); 20 style mappings.
+    /// `DEFAULT` (0), `WORD3` (8), and `IDENTIFIER` (14)
+    /// intentionally unmapped.
+    ///
+    /// **`SCE_D_WORD3` unmapped is deliberate.**
+    /// `LexD.cxx:296-307` probes wordlists 0/1/3/4/5/6 in
+    /// the identifier classification cascade (skipping
+    /// index 2 which routes to `SCE_D_COMMENTDOCKEYWORD`
+    /// via a separate dispatch at `:358` inside the
+    /// doc-comment state). Consequence: `SCE_D_WORD3` is
+    /// DECLARED in `SciLexer.h:222-244` but never emitted
+    /// by the state machine — mapping it would be dead
+    /// code. Invariant #6 enforces the exclusion.
+    ///
+    /// **Case-sensitive byte-exact match.**
+    /// `LexerD::LexerFactoryD` at `LexD.cxx:198-200`
+    /// constructs with `caseSensitive = true` (D 2 is
+    /// case-sensitive at the spec level). Wordlists MUST
+    /// be exact-case (lowercase for D keywords) — same
+    /// discipline as `CPP_KEYWORDS`, inverted from
+    /// `COBOL_KEYWORDS_A`'s case-fold policy.
+    ///
+    /// **Cross-list uniqueness EXCLUDES `D_DOC_KEYWORDS`
+    /// (wordlist class 2).** WL2 is probed only INSIDE
+    /// doc-comment context (`SCE_D_COMMENTDOCKEYWORD`
+    /// state at `LexD.cxx:358`, NOT identifier
+    /// classification at `:296-307`). Semantic overlap
+    /// between Ddoc tags and D keywords (`return`,
+    /// `deprecated`, `version`, `throw`) is expected and
+    /// correct — the state machine dispatches on context.
+    /// The cross-list uniqueness invariant (#8) checks
+    /// only WL0/WL1/WL3/WL4/WL5/WL6 which share the
+    /// identifier-classification cascade.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_D)` returns `Some(&D_THEME)`.
+    ///   2. Style count == 20 (23 `SCE_D_*` slots minus
+    ///      DEFAULT (0), WORD3 (8), IDENTIFIER (14)).
+    ///   3. Seven wordlist classes in canonical order
+    ///      (0/1/2/3/4/5/6) matching `dWordLists[]` at
+    ///      `LexD.cxx:104-113`. Order is load-bearing for
+    ///      `SCI_SETKEYWORDS`.
+    ///   4. Classes 0/1/2/3/4/5 non-empty; class 6
+    ///      (Keywords 7 / user extension) permitted empty
+    ///      by design.
+    ///   5. Every wordlist token in WL0/WL1/WL2/WL3/WL4/WL5
+    ///      matches `[a-zA-Z0-9_]+` (D identifier alphabet —
+    ///      allows uppercase because WL4 `D_SPECIAL` and WL5
+    ///      `D_META` use `__UPPERCASE__` tokens like `__FILE__`
+    ///      and `__traits`; the case-sensitive byte-exact
+    ///      contract is orthogonal, enforced by the wordlists'
+    ///      own convention of exact-case spelling per D spec).
+    ///   6. `SCE_D_WORD3` (8) MUST NOT appear in styles —
+    ///      `LexD` never emits it (see docstring).
+    ///   7. Every wordlist token matches
+    ///      `[a-zA-Z0-9_]+` — D identifier alphabet.
+    ///   8. Cross-list uniqueness across WL0/WL1/WL3/WL4/WL5
+    ///      (WL2 EXCLUDED — different lexer state).
+    ///   9. Style-routing pins for the 20 mapped SCE
+    ///      constants.
+    ///   10. DEFAULT (0) and IDENTIFIER (14) both unmapped.
+    ///   11. Italic set == 6 (all six comment family states).
+    ///   12. Bold set == 1 (`WORD` only — primary keyword
+    ///       class).
+    ///   13. Cross-language non-reuse — `D_STYLES` must
+    ///       not deep-equal any prior wired theme.
+    ///   14. Anchor tokens: D spec §2.4.5 keywords `class`,
+    ///       `template`, `mixin`, `foreach_reverse`,
+    ///       `unittest`, `import`, `module` in WL0; D spec
+    ///       type primitives `int`, `void`, `string`,
+    ///       `dchar`, `size_t` in WL3; specials `true`,
+    ///       `false`, `null`, `__FILE__`, `__LINE__` in WL4.
+    ///   15. `L_D` `LangEntry` `extensions` contains both
+    ///       `"d"` and `"di"`.
+    #[test]
+    fn d_uses_lexd_seven_class_theme() {
+        let d = lang_theme(L_D).expect("D wired");
+
+        // Invariant 2: 20 mappings.
+        assert_eq!(
+            d.styles.len(),
+            20,
+            "D_STYLES must map 20 indices (23 SCE_D_* slots \
+             minus DEFAULT (0), WORD3 (8), IDENTIFIER (14) — \
+             all intentionally unmapped per framework convention \
+             + WORD3-never-emitted rule)"
+        );
+
+        // Invariant 3: seven classes canonical descriptor order.
+        assert_eq!(
+            d.keywords.len(),
+            7,
+            "D_THEME must install exactly 7 wordlist classes \
+             (matches dWordLists[] at LexD.cxx:104-113)"
+        );
+        for (i, expected) in [
+            (0, D_KEYWORDS),
+            (1, D_KEYWORDS_2),
+            (2, D_DOC_KEYWORDS),
+            (3, D_TYPES),
+            (4, D_SPECIAL),
+            (5, D_META),
+            (6, D_WORD7),
+        ] {
+            assert_eq!(d.keywords[i].0, i as u32);
+            assert_eq!(d.keywords[i].1, expected);
+        }
+
+        // Invariant 4: WL0-WL5 non-empty; WL6 permitted empty.
+        for (list, name) in [
+            (D_KEYWORDS, "KEYWORDS"),
+            (D_KEYWORDS_2, "KEYWORDS_2"),
+            (D_DOC_KEYWORDS, "DOC_KEYWORDS"),
+            (D_TYPES, "TYPES"),
+            (D_SPECIAL, "SPECIAL"),
+            (D_META, "META"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "D_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: every populated wordlist token is
+        // lowercase-or-underscore (case-sensitive contract).
+        // D keyword identifiers use `[a-z_]+` with occasional
+        // digits (e.g. `foreach_reverse`, `__FILE__`); WL4
+        // specials + WL5 meta use `__UPPERCASE__` form.
+        // Combined check: no character outside `[a-zA-Z0-9_]`.
+        for (list, name) in [
+            (D_KEYWORDS, "KEYWORDS"),
+            (D_KEYWORDS_2, "KEYWORDS_2"),
+            (D_DOC_KEYWORDS, "DOC_KEYWORDS"),
+            (D_TYPES, "TYPES"),
+            (D_SPECIAL, "SPECIAL"),
+            (D_META, "META"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    tok.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+                    "D_{name} token `{tok}` contains a character \
+                     outside `[a-zA-Z0-9_]` — D identifier alphabet"
+                );
+            }
+        }
+
+        // Invariant 6: SCE_D_WORD3 (8) MUST NOT be mapped.
+        // LexD.cxx:296-307 skips wordlist index 2 in the
+        // identifier cascade — WORD3 is declared but never
+        // emitted. A theme entry would be dead code.
+        assert!(
+            !d.styles.iter().any(|(i, _)| *i == SCE_D_WORD3),
+            "SCE_D_WORD3 (8) must NOT be mapped — LexD.cxx:296-307 \
+             never emits it (wordlist class 2 is repurposed for \
+             SCE_D_COMMENTDOCKEYWORD via a separate dispatch at \
+             :358 inside the doc-comment state)"
+        );
+
+        // Invariant 7: identifier-char alphabet (redundant
+        // with #5 but pinned separately per framework
+        // convention).
+        for tok in D_KEYWORDS.split_whitespace() {
+            assert!(
+                tok.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+                "D_KEYWORDS token `{tok}` violates identifier alphabet"
+            );
+        }
+
+        // Invariant 8: cross-list uniqueness across
+        // WL0/WL1/WL3/WL4/WL5 (WL2 EXCLUDED — Ddoc tags
+        // live in a separate lexer state). WL6 is empty by
+        // design; skip.
+        use std::collections::HashSet;
+        let sets = [
+            (
+                "KEYWORDS",
+                D_KEYWORDS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "KEYWORDS_2",
+                D_KEYWORDS_2.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            ("TYPES", D_TYPES.split_whitespace().collect::<HashSet<_>>()),
+            (
+                "SPECIAL",
+                D_SPECIAL.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            ("META", D_META.split_whitespace().collect::<HashSet<_>>()),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                if let Some(shared) = sets[i].1.intersection(&sets[j].1).next() {
+                    panic!(
+                        "D_{} and D_{} both contain `{shared}` — \
+                         LexD.cxx:296-307 probes wordlists 0/1/3/4/5/6 \
+                         first-match-wins for identifier classification. \
+                         A cross-list duplicate leaves the later entry \
+                         dead code. Drop from whichever list is not the \
+                         intended-victor.",
+                        sets[i].0, sets[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 9: style-routing pins for all 20 mapped
+        // SCE constants.
+        for (idx, slot, name) in [
+            (SCE_D_COMMENT, StyleSlot::Comment, "SCE_D_COMMENT"),
+            (SCE_D_COMMENTLINE, StyleSlot::Comment, "SCE_D_COMMENTLINE"),
+            (SCE_D_COMMENTDOC, StyleSlot::Comment, "SCE_D_COMMENTDOC"),
+            (
+                SCE_D_COMMENTNESTED,
+                StyleSlot::Comment,
+                "SCE_D_COMMENTNESTED",
+            ),
+            (
+                SCE_D_COMMENTLINEDOC,
+                StyleSlot::Comment,
+                "SCE_D_COMMENTLINEDOC",
+            ),
+            (
+                SCE_D_COMMENTDOCKEYWORDERROR,
+                StyleSlot::Comment,
+                "SCE_D_COMMENTDOCKEYWORDERROR",
+            ),
+            (SCE_D_NUMBER, StyleSlot::Number, "SCE_D_NUMBER"),
+            (SCE_D_WORD, StyleSlot::Keyword, "SCE_D_WORD"),
+            (SCE_D_WORD2, StyleSlot::Keyword2, "SCE_D_WORD2"),
+            (SCE_D_TYPEDEF, StyleSlot::Keyword2, "SCE_D_TYPEDEF"),
+            (SCE_D_WORD5, StyleSlot::Keyword2, "SCE_D_WORD5"),
+            (SCE_D_WORD6, StyleSlot::Keyword2, "SCE_D_WORD6"),
+            (SCE_D_WORD7, StyleSlot::Keyword2, "SCE_D_WORD7"),
+            (SCE_D_STRING, StyleSlot::String, "SCE_D_STRING"),
+            (SCE_D_STRINGEOL, StyleSlot::String, "SCE_D_STRINGEOL"),
+            (SCE_D_CHARACTER, StyleSlot::String, "SCE_D_CHARACTER"),
+            (SCE_D_STRINGB, StyleSlot::String, "SCE_D_STRINGB"),
+            (SCE_D_STRINGR, StyleSlot::String, "SCE_D_STRINGR"),
+            (SCE_D_OPERATOR, StyleSlot::Operator, "SCE_D_OPERATOR"),
+            (
+                SCE_D_COMMENTDOCKEYWORD,
+                StyleSlot::Macro,
+                "SCE_D_COMMENTDOCKEYWORD",
+            ),
+        ] {
+            assert!(
+                d.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 10: DEFAULT (0) and IDENTIFIER (14) unmapped.
+        assert!(
+            !d.styles.iter().any(|(i, _)| *i == SCE_D_DEFAULT),
+            "SCE_D_DEFAULT (0) must remain unmapped"
+        );
+        assert!(
+            !d.styles.iter().any(|(i, _)| *i == SCE_D_IDENTIFIER),
+            "SCE_D_IDENTIFIER (14) must remain unmapped — bare \
+             D identifiers paint at STYLE_DEFAULT per framework \
+             convention"
+        );
+
+        // Invariant 11: italic == 6 (all six comment states).
+        assert_eq!(d.italic.len(), 6);
+        for c in [
+            SCE_D_COMMENT,
+            SCE_D_COMMENTLINE,
+            SCE_D_COMMENTDOC,
+            SCE_D_COMMENTNESTED,
+            SCE_D_COMMENTLINEDOC,
+            SCE_D_COMMENTDOCKEYWORDERROR,
+        ] {
+            assert!(d.italic.contains(&c));
+        }
+
+        // Invariant 12: bold == 1 (WORD only).
+        assert_eq!(d.bold.len(), 1);
+        assert!(d.bold.contains(&SCE_D_WORD));
+
+        // Invariant 13: cross-language non-reuse.
+        let cobol = lang_theme(L_COBOL).expect("COBOL wired");
+        let cmake = lang_theme(L_CMAKE).expect("CMake wired");
+        let yaml = lang_theme(L_YAML).expect("YAML wired");
+        for (other, name) in [(cobol, "COBOL"), (cmake, "CMake"), (yaml, "YAML")] {
+            assert_ne!(d.styles, other.styles, "D must NOT reuse {name}_STYLES");
+        }
+
+        // Invariant 14: canonical anchor coverage.
+        // WL0 primary keywords per D spec §2.4.5.
+        for kw in [
+            "class",
+            "template",
+            "mixin",
+            "foreach_reverse",
+            "unittest",
+            "import",
+            "module",
+        ] {
+            assert!(
+                D_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "D_KEYWORDS must include core keyword `{kw}`"
+            );
+        }
+        // WL3 primitive types per D spec §Types.
+        for kw in ["int", "void", "string", "dchar", "size_t"] {
+            assert!(
+                D_TYPES.split_whitespace().any(|t| t == kw),
+                "D_TYPES must include primitive `{kw}`"
+            );
+        }
+        // WL4 specials per D spec §SpecialTokens.
+        for kw in ["true", "false", "null", "__FILE__", "__LINE__"] {
+            assert!(
+                D_SPECIAL.split_whitespace().any(|t| t == kw),
+                "D_SPECIAL must include special-token `{kw}`"
+            );
+        }
+
+        // Invariant 15: L_D LangEntry extensions contains
+        // both "d" and "di".
+        use codepp_core::lang::LANG_TABLE;
+        let d_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_D)
+            .expect("L_D LangEntry present in LANG_TABLE");
+        assert!(
+            d_entry.extensions.contains(&"d"),
+            "L_D extensions must contain `d` (canonical D source extension)"
+        );
+        assert!(
+            d_entry.extensions.contains(&"di"),
+            "L_D extensions must contain `di` (D interface files — \
+             auto-generated module headers)"
+        );
     }
 
     /// Makefile uses Lexilla's `makefile` lexer (`LexMake.cxx`) — a
