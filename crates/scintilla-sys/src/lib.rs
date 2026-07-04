@@ -3792,6 +3792,128 @@ pub const SCE_INNO_STRING_DOUBLE: usize = 10;
 pub const SCE_INNO_STRING_SINGLE: usize = 11;
 pub const SCE_INNO_IDENTIFIER: usize = 12;
 
+// LexCmake style indices. 15 contiguous slots (0..=14) for
+// the CMake build-system script lexer. Dispatches SCLEX_CMAKE
+// (= 80) via a **three-class wordlist** at
+// `vendor/lexilla/lexers/LexCmake.cxx:452-457`
+// (`cmakeWordLists[]`):
+//
+//     cmakeWordLists[] = {
+//         "Commands",     // class 0 → SCE_CMAKE_COMMANDS (case-insensitive)
+//         "Parameters",   // class 1 → SCE_CMAKE_PARAMETERS (case-sensitive)
+//         "UserDefined",  // class 2 → SCE_CMAKE_USERDEFINED (case-sensitive)
+//         0, 0,           // NULL sentinels
+//     };
+//
+// **Mixed case sensitivity — critical dispatch quirk.**
+// `LexCmake.cxx:105-165` classifies each identifier through
+// `classifyWordCmake`, which builds both `word` (preserved
+// case) and `lowercaseWord` (lowered) buffers and then:
+//
+//   - Class 0 (`Commands`) uses `lowercaseWord` (`:135`) —
+//     the CMake language treats commands like `add_executable`
+//     / `ADD_EXECUTABLE` / `Add_Executable` as equivalent, so
+//     the wordlist entry MUST be lowercase and the lexer
+//     folds every candidate before probing.
+//   - Class 1 (`Parameters`) uses `word` (`:138`) —
+//     argument keywords like `PRIVATE` / `PUBLIC` /
+//     `INTERFACE` / `REQUIRED` are conventionally uppercase
+//     in CMake source and the lexer probes them
+//     byte-exactly.
+//   - Class 2 (`UserDefined`) uses `word` (`:142`) —
+//     case-sensitive same as class 1, a project-override
+//     customisation slot.
+//
+// Host wordlist consequence: `CMAKE_COMMANDS` must be all
+// lowercase (uppercase entries are dead code); `CMAKE_PARAMETERS`
+// / `CMAKE_USERDEFINED` must be exact-case (typically
+// uppercase, matching CMake community convention).
+//
+// **Hard-coded contextual keywords (NOT in any wordlist).**
+// The classifier at `:120-133` special-cases ten flow-control
+// keywords with `CompareCaseInsensitive` and dispatches them
+// to their own SCE states:
+//
+//   - `MACRO` / `ENDMACRO` → `SCE_CMAKE_MACRODEF` (`:120-121`)
+//   - `IF` / `ENDIF` / `ELSEIF` / `ELSE` →
+//     `SCE_CMAKE_IFDEFINEDEF` (`:123-127`)
+//   - `WHILE` / `ENDWHILE` → `SCE_CMAKE_WHILEDEF`
+//     (`:129-130`)
+//   - `FOREACH` / `ENDFOREACH` → `SCE_CMAKE_FOREACHDEF`
+//     (`:132-133`)
+//
+// These MUST NOT appear in `CMAKE_COMMANDS` — adding them
+// would be dead code since the classifier short-circuits
+// before reaching the wordlist dispatch, but including them
+// would also mislead future maintainers about which SCE
+// state fires.
+//
+// **Syntactic (non-wordlist) dispatches.**
+//
+//   - `SCE_CMAKE_VARIABLE` at `:145-148` — any identifier
+//     whose second char is `{` and last char is `}` (i.e.
+//     `${...}` / `$ENV{...}` / `$CACHE{...}` reference
+//     patterns).
+//   - `SCE_CMAKE_NUMBER` at `:150-162` — an identifier that
+//     starts with a digit and contains only digits (bare
+//     integer literal).
+//   - `SCE_CMAKE_STRINGVAR` at `:339-348` — variable
+//     interpolation `${var}` INSIDE any string state; a
+//     sub-span colour applied over the outer string to
+//     highlight the interpolation.
+//
+// Style semantics (paint-loop citations reference LexCmake.cxx):
+//
+//   - SCE_CMAKE_DEFAULT (0) — inter-token slack.
+//   - SCE_CMAKE_COMMENT (1) — `#`-prefixed line comment.
+//     CMake's only comment syntax.
+//   - SCE_CMAKE_STRINGDQ (2) — `"..."` double-quoted string.
+//     Entered from DEFAULT on `"` at `:318-319`. Terminated
+//     on the matching close-quote.
+//   - SCE_CMAKE_STRINGLQ (3) — `` `...` `` backtick-quoted
+//     string, historical form retained by the lexer.
+//     Entered at `:323`.
+//   - SCE_CMAKE_STRINGRQ (4) — `'...'` single-quoted string,
+//     historical form. Entered at `:328`. Modern CMake uses
+//     `"..."` almost exclusively; both LQ and RQ states are
+//     defensive.
+//   - SCE_CMAKE_COMMANDS (5) — class 0 wordlist match (case-
+//     insensitive) — CMake built-in commands.
+//   - SCE_CMAKE_PARAMETERS (6) — class 1 wordlist match
+//     (case-sensitive) — argument keywords / option names.
+//   - SCE_CMAKE_VARIABLE (7) — syntactic `${...}` variable
+//     reference at `:145-148`.
+//   - SCE_CMAKE_USERDEFINED (8) — class 2 wordlist match
+//     (case-sensitive) — user customisation slot.
+//   - SCE_CMAKE_WHILEDEF (9) — hard-coded `WHILE` /
+//     `ENDWHILE` at `:129-130`.
+//   - SCE_CMAKE_FOREACHDEF (10) — hard-coded `FOREACH` /
+//     `ENDFOREACH` at `:132-133`.
+//   - SCE_CMAKE_IFDEFINEDEF (11) — hard-coded `IF` / `ENDIF`
+//     / `ELSEIF` / `ELSE` at `:123-127`.
+//   - SCE_CMAKE_MACRODEF (12) — hard-coded `MACRO` /
+//     `ENDMACRO` at `:120-121`.
+//   - SCE_CMAKE_STRINGVAR (13) — variable interpolation
+//     `${var}` inside a string state. Distinct paint lets
+//     themes emphasise the interpolation over the outer
+//     string colour.
+//   - SCE_CMAKE_NUMBER (14) — bare integer literal, syntactic.
+pub const SCE_CMAKE_DEFAULT: usize = 0;
+pub const SCE_CMAKE_COMMENT: usize = 1;
+pub const SCE_CMAKE_STRINGDQ: usize = 2;
+pub const SCE_CMAKE_STRINGLQ: usize = 3;
+pub const SCE_CMAKE_STRINGRQ: usize = 4;
+pub const SCE_CMAKE_COMMANDS: usize = 5;
+pub const SCE_CMAKE_PARAMETERS: usize = 6;
+pub const SCE_CMAKE_VARIABLE: usize = 7;
+pub const SCE_CMAKE_USERDEFINED: usize = 8;
+pub const SCE_CMAKE_WHILEDEF: usize = 9;
+pub const SCE_CMAKE_FOREACHDEF: usize = 10;
+pub const SCE_CMAKE_IFDEFINEDEF: usize = 11;
+pub const SCE_CMAKE_MACRODEF: usize = 12;
+pub const SCE_CMAKE_STRINGVAR: usize = 13;
+pub const SCE_CMAKE_NUMBER: usize = 14;
+
 // LexLua style indices. 21 contiguous slots (0..=20) covering
 // the Lua lexer's full emission set: `--` line comments and
 // `--[[ ]]` long-bracket block comments, the `---`-initiated

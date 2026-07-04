@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 43 / 🟡 45 / ⚫ 1.
+Total: 89 rows. ✅ 44 / 🟡 44 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1852,7 +1852,7 @@ further shim work needed.
 | C# | 4 | `cpp` | ✅ | ✅ | ✅ |
 | C++ | 3 | `cpp` | ✅ | ✅ | ✅ |
 | Caml | 41 | `caml` | ✅ | ✅ | ✅ |
-| CMake | 48 | `cmake` | ⚫ | ⚫ | 🟡 |
+| CMake | 48 | `cmake` | ✅ | ✅ | ✅ |
 | COBOL | 50 | `COBOL` | ⚫ | ⚫ | 🟡 |
 | CoffeeScript | 56 | `coffeescript` | ⚫ | ⚫ | 🟡 |
 | CSound | 70 | `csound` | ⚫ | ⚫ | 🟡 |
@@ -3525,6 +3525,120 @@ bold == 2 (`KEYWORD` + `KEYWORD_PASCAL`), 3 cross-language
 non-reuse pins (Haskell / MATLAB / Pascal), 6 canonical
 section anchors, and 4+4+4+6 anchor tokens across
 directives / parameters / preprocessor / Pascal.
+
+**CMake (2026-07-04):** uses Lexilla's `cmake` lexer
+(`LexCmake.cxx`, ~460 lines). 15 `SCE_CMAKE_*` slots
+(0..=14), three-class wordlist (Commands / Parameters /
+UserDefined). Distinctive feature: **mixed case-sensitivity
+dispatch** driven by the CMake language's own semantics.
+
+**Mixed case-sensitivity dispatch.** The classifier at
+`LexCmake.cxx:105-165` builds BOTH `word` (preserved case)
+and `lowercaseWord` (folded) buffers, then:
+
+- Class 0 (`Commands`) probes `lowercaseWord` at `:135` —
+  CMake commands are case-insensitive at the language level
+  (`add_executable`, `ADD_EXECUTABLE`, `Add_Executable`
+  all invoke the same command), so the wordlist entries must
+  be lowercase and the lexer folds every candidate.
+- Class 1 (`Parameters`) probes `word` byte-exact at `:138`
+  — argument keywords are conventionally uppercase in CMake
+  source (`PRIVATE`, `PUBLIC`, `REQUIRED`) and the lexer
+  respects that convention.
+- Class 2 (`UserDefined`) also byte-exact at `:142` —
+  case-sensitive same as Parameters.
+
+Host wordlist consequence: `CMAKE_COMMANDS` MUST be
+all-lowercase (test invariant #5 pins this); `CMAKE_PARAMETERS`
+is uppercase-by-convention matching CMake community style.
+
+**Hard-coded flow-control keywords excluded from wordlists.**
+The classifier at `:120-133` special-cases ten tokens with
+`CompareCaseInsensitive` and dispatches them to their own
+SCE states BEFORE the wordlist probe fires:
+
+- `MACRO` / `ENDMACRO` → `SCE_CMAKE_MACRODEF`
+- `IF` / `ENDIF` / `ELSEIF` / `ELSE` → `SCE_CMAKE_IFDEFINEDEF`
+- `WHILE` / `ENDWHILE` → `SCE_CMAKE_WHILEDEF`
+- `FOREACH` / `ENDFOREACH` → `SCE_CMAKE_FOREACHDEF`
+
+Including any of these in `CMAKE_COMMANDS` would be dead
+code — the classifier short-circuits at :120 — AND
+documentation-misleading. Test invariant #6 pins their
+absence.
+
+**Syntactic non-wordlist dispatches.** Three SCE states fire
+without any wordlist lookup:
+
+- `SCE_CMAKE_VARIABLE` (7) at `:145-148` — any token whose
+  second char is `{` and last char is `}` (i.e. `${var}`
+  patterns).
+- `SCE_CMAKE_NUMBER` (14) at `:150-162` — bare integer
+  literal.
+- `SCE_CMAKE_STRINGVAR` (13) at `:339-348` — variable
+  interpolation `${var}` INSIDE any string state.
+
+**Three wordlist classes:**
+
+- **Class 0** (`CMAKE_COMMANDS`, ~95 tokens): CMake 3.x
+  built-in commands — script control, target definition
+  (`add_executable` / `add_library` / `add_subdirectory`),
+  target-scoped configuration (`target_link_libraries`,
+  `target_include_directories`, `target_compile_features`,
+  `target_precompile_headers`), search (`find_package` /
+  `find_library` / `find_path`), property introspection
+  (`get_property` / `set_property` / `set_target_properties`),
+  and deprecated-but-still-valid commands (`qt_wrap_cpp`,
+  `variable_requires`).
+- **Class 1** (`CMAKE_PARAMETERS`, ~190 tokens): argument
+  keywords used across `target_link_libraries`
+  (`PRIVATE`/`PUBLIC`/`INTERFACE`), `find_package`
+  (`REQUIRED`/`QUIET`/`EXACT`/`COMPONENTS`), library-type
+  qualifiers (`STATIC`/`SHARED`/`MODULE`/`OBJECT`), `set`
+  cache qualifiers (`CACHE`/`FORCE`/`PARENT_SCOPE`),
+  `file` / `list` / `string` operators
+  (`GLOB`/`GLOB_RECURSE`/`APPEND`/`REGEX`/`MATCH`), `install`
+  destination categories (`ARCHIVE`/`LIBRARY`/`RUNTIME`), `if`
+  predicates (`DEFINED`/`EQUAL`/`STREQUAL`/`MATCHES`), and
+  `message` severity levels
+  (`STATUS`/`WARNING`/`FATAL_ERROR`).
+- **Class 2** (`CMAKE_USER_DEFINED`) — ships empty. SCE
+  state mapped defensively so a future per-project override
+  populates it without a theme change.
+
+**Style routing (14 mappings; `DEFAULT` unmapped):**
+
+- **COMMENT** → `Comment` italic. CMake's `#` line comment
+  (only comment form).
+- **STRINGDQ + STRINGLQ + STRINGRQ** → `String`. Three
+  string forms — `"..."` double-quoted (the only modern
+  form), `` `...` `` backtick, and `'...'` single-quoted
+  (both LQ and RQ are historical relics but the lexer
+  still emits them).
+- **COMMANDS + WHILEDEF + FOREACHDEF + IFDEFINEDEF +
+  MACRODEF** → `Keyword` bold. All five fill the primary-
+  keyword role; the four hard-coded flow-control SCE
+  states exist so a future palette could differentiate
+  flow keywords from ordinary commands, but for now they
+  share the bold-blue accent.
+- **PARAMETERS + USERDEFINED** → `Keyword2`. Secondary
+  structural accent for argument keywords and user-project
+  identifiers.
+- **VARIABLE + STRINGVAR** → `Preprocessor`. `${var}`
+  references (bare and inside strings) read as out-of-band
+  syntax markers.
+- **NUMBER** → `Number`.
+
+Structural test coverage: 12 invariants — 14 style mappings
+pin, three-class order pin, non-empty guard for classes 0/1
+(class 2 permitted empty by design), every-token-lowercase
+pin on `CMAKE_COMMANDS` (dead-code prevention),
+**hard-coded-flow-control-must-be-absent** pin (10 tokens
+protected), 14 style-routing pins, `DEFAULT` unmapped pin,
+italic == 1 (`COMMENT`), bold == 5 (`COMMANDS` +
+`WHILEDEF` + `FOREACHDEF` + `IFDEFINEDEF` + `MACRODEF`), 3
+cross-language non-reuse pins (Inno / Haskell / MATLAB),
+and 14 + 5 canonical CMake command + parameter anchors.
 
 ## Notes
 

@@ -7288,6 +7288,169 @@ pub const INNO_PASCAL_KEYWORDS: &str = concat!(
     "with forward external ",
 );
 
+/// `CMake` built-in commands (class 0 → `SCE_CMAKE_COMMANDS`).
+///
+/// **Source of truth:** `CMake` 3.x documentation
+/// (cmake.org/cmake/help/latest/manual/cmake-commands.7.html).
+/// Every entry MUST be lowercase — `LexCmake.cxx:135` probes
+/// `Commands.InList(lowercaseWord)` after building a folded
+/// buffer, so uppercase entries would be dead code (the probe
+/// key is `add_executable`, never `ADD_EXECUTABLE`, regardless
+/// of how the user spells it in source). This is the correct
+/// case-folding for `CMake`, whose command names are
+/// case-insensitive at the language level.
+///
+/// **Deliberately EXCLUDED flow-control keywords.** The
+/// classifier at `LexCmake.cxx:120-133` hard-codes ten
+/// contextual tokens (`MACRO`, `ENDMACRO`, `IF`, `ENDIF`,
+/// `ELSEIF`, `ELSE`, `WHILE`, `ENDWHILE`, `FOREACH`,
+/// `ENDFOREACH`) and dispatches them to their own SCE states
+/// (`SCE_CMAKE_MACRODEF` / `SCE_CMAKE_IFDEFINEDEF` /
+/// `SCE_CMAKE_WHILEDEF` / `SCE_CMAKE_FOREACHDEF`). The wordlist
+/// probe at `:135` never sees them because the special-case
+/// checks fire first. Including them here would be dead code
+/// but is also documentation-misleading — future readers might
+/// think the wordlist provides the highlighting.
+pub const CMAKE_COMMANDS: &str = concat!(
+    // Script control. Note: `macro`/`endmacro`, `if`/`endif`/
+    // `elseif`/`else`, `while`/`endwhile`, `foreach`/`endforeach`
+    // are deliberately absent per the docstring — LexCmake
+    // hard-codes them at :120-133 before wordlist dispatch.
+    "block break cmake_host_system_information cmake_language ",
+    "cmake_minimum_required cmake_parse_arguments cmake_path ",
+    "cmake_policy configure_file continue endblock ",
+    "endfunction execute_process file ",
+    "function include include_guard list math message ",
+    "option return separate_arguments set set_property string ",
+    "unset variable_watch ",
+    // Search / find.
+    "find_file find_library find_package find_path find_program ",
+    // Property / target introspection.
+    "define_property get_cmake_property get_directory_property ",
+    "get_filename_component get_property get_source_file_property ",
+    "get_target_property get_test_property mark_as_advanced ",
+    "set_directory_properties set_source_files_properties ",
+    "set_target_properties set_tests_properties site_name ",
+    // Target definition.
+    "add_compile_definitions add_compile_options add_custom_command ",
+    "add_custom_target add_definitions add_dependencies add_executable ",
+    "add_library add_link_options add_subdirectory add_test ",
+    "aux_source_directory build_command create_test_sourcelist ",
+    "enable_language enable_testing export fltk_wrap_ui include_directories ",
+    "include_external_msproject include_regular_expression install ",
+    "link_directories link_libraries load_cache ",
+    "project remove_definitions source_group subdirs try_compile try_run ",
+    // Target-scoped configuration.
+    "target_compile_definitions target_compile_features ",
+    "target_compile_options target_include_directories ",
+    "target_link_directories target_link_libraries target_link_options ",
+    "target_precompile_headers target_sources ",
+    // Deprecated but still valid.
+    "output_required_files qt_wrap_cpp qt_wrap_ui remove ",
+    "use_mangled_mesa variable_requires write_file ",
+);
+
+/// `CMake` argument keywords / option names (class 1 →
+/// `SCE_CMAKE_PARAMETERS`). Case-sensitive.
+///
+/// **Source of truth:** `CMake` community convention — argument
+/// keywords are conventionally uppercase (`PRIVATE`, `PUBLIC`,
+/// `INTERFACE`, `REQUIRED`) and `LexCmake.cxx:138` probes them
+/// byte-exactly via `Parameters.InList(word)` (no case fold).
+/// Every entry MUST match the exact source spelling.
+///
+/// Coverage: the commonly-used argument keywords from
+/// `target_link_libraries`, `find_package`, `add_library` /
+/// `add_executable` type qualifiers, `install`, `file`, `list`,
+/// `set`, `get_target_property`, `execute_process`, and
+/// generator-expression scope keywords.
+pub const CMAKE_PARAMETERS: &str = concat!(
+    // Target-visibility scope.
+    "PRIVATE PUBLIC INTERFACE ",
+    // Library / target type. `MODULE` serves double duty here
+    // (add_library type qualifier) AND as the `find_package(MODULE)`
+    // mode selector — one wordlist entry covers both, since
+    // LexCmake does byte-exact InList lookups regardless of
+    // surrounding tokens.
+    "STATIC SHARED MODULE OBJECT IMPORTED ALIAS GLOBAL ",
+    "EXCLUDE_FROM_ALL ",
+    // find_package qualifiers.
+    "REQUIRED QUIET EXACT COMPONENTS OPTIONAL_COMPONENTS ",
+    "CONFIG NO_MODULE ",
+    "NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH ",
+    "NO_SYSTEM_ENVIRONMENT_PATH NO_CMAKE_SYSTEM_PATH ",
+    "CMAKE_FIND_ROOT_PATH_BOTH ONLY_CMAKE_FIND_ROOT_PATH ",
+    "NO_CMAKE_FIND_ROOT_PATH NO_POLICY_SCOPE ",
+    "PATHS HINTS PATH_SUFFIXES NAMES NAMES_PER_DIR ",
+    // set / cache qualifiers.
+    "CACHE FORCE PARENT_SCOPE TYPE DOC INTERNAL BOOL FILEPATH PATH STRING ",
+    "NO_CACHE ",
+    // file / list operators. Includes file() subcommand keywords
+    // (READ/WRITE/APPEND/MAKE_DIRECTORY/hash family/etc.) plus
+    // list() operators.
+    "GLOB GLOB_RECURSE RELATIVE CONFIGURE_DEPENDS FOLLOW_SYMLINKS ",
+    "LIST_DIRECTORIES ",
+    "READ WRITE APPEND APPEND_STRING RENAME REMOVE REMOVE_RECURSE ",
+    "COPY INSTALL DOWNLOAD UPLOAD ",
+    "GENERATE OUTPUT INPUT CONTENT ",
+    "MAKE_DIRECTORY TO_CMAKE_PATH TO_NATIVE_PATH NEWLINE_STYLE ",
+    "SIZE MD5 SHA1 SHA256 SHA512 LOCK ",
+    // get_property scope + install path shared `DIRECTORY`.
+    "PROPERTY TARGET SOURCE DIRECTORY TEST FILE ",
+    "PACKAGE VERSION LANGUAGES DESCRIPTION HOMEPAGE_URL ",
+    // execute_process / add_custom_command / add_custom_target.
+    // `COMMAND` also serves as the `if(COMMAND ...)` predicate —
+    // one wordlist entry covers both call sites.
+    "ARGS WORKING_DIRECTORY ",
+    "OUTPUT_VARIABLE ERROR_VARIABLE RESULT_VARIABLE ",
+    "OUTPUT_QUIET ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE ",
+    "ERROR_STRIP_TRAILING_WHITESPACE ",
+    "TIMEOUT COMMAND COMMAND_EXPAND_LISTS ",
+    "DEPENDS DEPFILE MAIN_DEPENDENCY IMPLICIT_DEPENDS ",
+    "VERBATIM COMMENT PRE_BUILD PRE_LINK POST_BUILD ",
+    "BYPRODUCTS USES_TERMINAL JOB_POOL ",
+    // install command. Mode selectors + destination + component
+    // family. `DIRECTORY` above already covers the install(DIRECTORY)
+    // mode; INCLUDES/FILES/PROGRAMS are the remaining install family.
+    "TARGETS SCRIPT CODE OPTIONAL ",
+    "NAMELINK_ONLY NAMELINK_SKIP NAMELINK_COMPONENT ",
+    "DESTINATION PERMISSIONS CONFIGURATIONS EXPORT ",
+    "ARCHIVE LIBRARY RUNTIME FRAMEWORK BUNDLE ",
+    "PUBLIC_HEADER PRIVATE_HEADER RESOURCE ",
+    "INCLUDES FILES PROGRAMS ",
+    // add_test / test properties.
+    "NAME ",
+    // message levels.
+    "STATUS WARNING AUTHOR_WARNING SEND_ERROR FATAL_ERROR ",
+    "DEPRECATION NOTICE VERBOSE DEBUG TRACE ",
+    "CHECK_START CHECK_PASS CHECK_FAIL ",
+    // string / list operations.
+    "TOLOWER TOUPPER LENGTH SUBSTRING STRIP REGEX MATCH MATCHALL REPLACE ",
+    "COMPARE FIND JOIN PREPEND CONCAT ",
+    "ASCII CONFIGURE HEX RANDOM TIMESTAMP UUID ",
+    "SORT REVERSE ",
+    // if predicates / operators.
+    "DEFINED POLICY ",
+    "EQUAL LESS GREATER LESS_EQUAL GREATER_EQUAL ",
+    "STREQUAL STRLESS STRGREATER STRLESS_EQUAL STRGREATER_EQUAL ",
+    "VERSION_EQUAL VERSION_LESS VERSION_GREATER ",
+    "VERSION_LESS_EQUAL VERSION_GREATER_EQUAL ",
+    "MATCHES IN_LIST ",
+    "EXISTS IS_DIRECTORY IS_ABSOLUTE IS_SYMLINK ",
+    "AND OR NOT ",
+    // Generator-expression / build-interface.
+    "BUILD_INTERFACE INSTALL_INTERFACE ",
+);
+
+/// `CMake` user-defined command / parameter customisation slot
+/// (class 2 → `SCE_CMAKE_USERDEFINED`). Case-sensitive.
+///
+/// Ships empty; a future per-project override mechanism may
+/// populate it. The SCE state is mapped defensively in the
+/// theme so a project-level customisation takes effect without
+/// a theme change.
+pub const CMAKE_USERDEFINED: &str = "";
+
 #[cfg(test)]
 mod tests {
     use super::*;
