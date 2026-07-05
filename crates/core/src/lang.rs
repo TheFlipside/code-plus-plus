@@ -8936,6 +8936,104 @@ pub const COFFEESCRIPT_GLOBAL_CLASSES: &str = concat!(
     "console globalThis ",
 );
 
+/// JSON primary keywords — the three RFC 8259 literals plus
+/// the two JSON5 extension literals (class 0 →
+/// `SCE_JSON_KEYWORD`).
+///
+/// **Source of truth:**
+///   - RFC 8259 §3 "Values" documents the three JSON literal
+///     tokens: `true`, `false`, `null`. These are the ONLY
+///     bareword identifiers strict JSON recognises.
+///   - JSON5 §4.2 "Numbers"
+///     (`https://spec.json5.org/#numbers`) adds `Infinity`,
+///     `-Infinity`, `+Infinity`, and `NaN` as valid numeric
+///     literals. The bareword forms `Infinity` and `NaN`
+///     lex through the same identifier path as `true`,
+///     since `LexJSON` classifies them via wordlist match at
+///     `LexJSON.cxx:418-420` — putting both in the shared
+///     JSON wordlist means JSON5 files highlight them
+///     correctly and strict JSON files render them via the
+///     same code path (they'd otherwise become
+///     `SCE_JSON_ERROR` which is also visible — the
+///     wordlist promotion just gives them the Keyword slot
+///     instead of the error slot, matching how a JSON5
+///     parser would see them).
+///
+/// **Case-sensitive byte-exact match.** `LexJSON.cxx:191-206`
+/// (`IsNextWordInList`) calls `styler.SafeGetCharAt`
+/// byte-exact, NOT lowered. Wordlist tokens use exact
+/// JSON / JSON5 spelling — all lowercase for the RFC 8259
+/// literals, canonical mixed case for `Infinity` / `NaN`.
+/// Same discipline as [`R_RESERVED`] /
+/// [`COFFEESCRIPT_KEYWORDS`].
+///
+/// **`undefined` deliberately EXCLUDED.** JSON5's spec at
+/// `spec.json5.org` explicitly does NOT include
+/// `undefined` — only JavaScript has that. Including it
+/// would misrepresent both JSON and JSON5.
+///
+/// **Shared between `L_JSON` and `L_JSON5`.** Both language
+/// entries in `LANG_TABLE` route to Lexilla's `json` lexer
+/// per their `lexer:` field. The host applies the same
+/// wordlist to both — strict JSON files with bare
+/// `Infinity` / `NaN` will render them as keywords, which
+/// is the friendlier reading of an edge case (the tokens
+/// were invalid at parse time under strict JSON but a JSON5
+/// parser would accept them).
+pub const JSON_KEYWORDS: &str = concat!(
+    // RFC 8259 literals.
+    "true false null ",
+    // JSON5 numeric-literal extensions.
+    "Infinity NaN ",
+);
+
+/// JSON-LD `@`-prefixed keywords per JSON-LD 1.1 spec
+/// (class 1 → `SCE_JSON_LDKEYWORD`).
+///
+/// **Source of truth:** the W3C JSON-LD 1.1 Recommendation
+/// at `www.w3.org/TR/json-ld11/#keywords`. The spec lists
+/// 23 keywords, each beginning with `@`. All are IN this
+/// wordlist.
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`JSON_KEYWORDS`]. All JSON-LD keywords are lowercase
+/// with the `@` prefix carried in the wordlist entry —
+/// `LexJSON.cxx:191-206` reads chars starting at the
+/// current position (which is the `@`) while
+/// `setKeywordJSONLD` (alpha + `:` + `@`) accepts them,
+/// then does `keywordList.InList(word)` byte-exact. An
+/// entry without the leading `@` would silently never
+/// match.
+///
+/// **Only entered inside a JSON string.** Per
+/// `LexJSON.cxx:357-361`, JSON-LD keywords fire only when
+/// an `@` character is encountered *inside* a
+/// `SCE_JSON_STRING` or `SCE_JSON_PROPERTYNAME` state.
+/// Bare `@id` outside a string never enters this state —
+/// LD keywords are string-embedded metadata markers in
+/// JSON-LD's data model, not JSON syntax at the top level.
+///
+/// **Coverage:** 23 tokens covering all documented JSON-LD
+/// 1.1 keywords: `@base`, `@container`, `@context`,
+/// `@direction`, `@graph`, `@id`, `@import`, `@included`,
+/// `@index`, `@json`, `@language`, `@list`, `@nest`,
+/// `@none`, `@prefix`, `@propagate`, `@protected`,
+/// `@reverse`, `@set`, `@type`, `@value`, `@version`,
+/// `@vocab`. JSON-LD 1.0 recognises 13 (`@base` through
+/// `@vocab` minus 10 that landed in 1.1); shipping the
+/// full 1.1 set is future-proof and matches the
+/// upstream `LexJSON` design.
+pub const JSON_LD_KEYWORDS: &str = concat!(
+    // JSON-LD 1.0 core.
+    "@context @id @value @language @type ",
+    "@container @list @set @reverse ",
+    "@index @base @vocab @graph ",
+    // JSON-LD 1.1 additions.
+    "@nest @included @import @propagate ",
+    "@prefix @protected @direction @version ",
+    "@none @json ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

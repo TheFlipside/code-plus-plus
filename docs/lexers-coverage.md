@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 52 / 🟡 36 / ⚫ 1.
+Total: 89 rows. ✅ 54 / 🟡 34 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1877,8 +1877,8 @@ further shim work needed.
 | Intel HEX | 62 | `ihex` | ⚫ | ⚫ | 🟡 |
 | Java | 6 | `cpp` | ✅ | ✅ | ✅ |
 | Javascript | 58 | `cpp` | ⚫ | ⚫ | 🟡 |
-| JSON | 57 | `json` | ⚫ | ⚫ | 🟡 |
-| JSON5 | 94 | `json` | ⚫ | ⚫ | 🟡 |
+| JSON | 57 | `json` | ✅ | ✅ | ✅ |
+| JSON5 | 94 | `json` | ✅ | ✅ | ✅ |
 | JSP | 55 | `hypertext` | ✅ | ✅ | ✅ |
 | KIXtart | 39 | `kix` | ✅ | ✅ | ✅ |
 | LaTeX | 74 | `latex` | ✅ | ✅ | ✅ |
@@ -5024,6 +5024,144 @@ classes), and TWO negative pins: `function` NOT
 in any wordlist (WL0/WL1/WL3 — parser rejects it)
 and `NaN` / `Infinity` in WL1 use canonical case
 (byte-exact classifier).
+
+**JSON / JSON5 (2026-07-05):** wires `SCLEX_JSON`
+(= 120, per `SciLexer.h:136`) end-to-end. **Both
+`L_JSON` and `L_JSON5` share a single `JSON_THEME`
+via a `L_JSON || L_JSON5` dispatcher branch** —
+they route to the same Lexilla lexer per
+`LANG_TABLE`, use identical wordlists, and differ
+only in the extensions their `LangEntry` rows
+match (`.json` vs `.json5`). Test invariant #2
+pins the pointer-equality of the two theme lookups
+to catch a future copy-paste that duplicates the
+theme.
+
+**Two Lexilla properties enabled by the host** via
+`extra_fold_properties`'s `L_JSON` / `L_JSON5`
+branch:
+- `lexer.json.escape.sequence = 1` lights up
+  `SCE_JSON_ESCAPESEQUENCE` for `\\uHHHH` / `\\n`
+  / etc. inside strings. Notepad++ default.
+- `lexer.json.allow.comments = 1` lights up
+  `SCE_JSON_LINECOMMENT` (`//`) and
+  `SCE_JSON_BLOCKCOMMENT` (`/* */`). Strict RFC
+  8259 JSON forbids these; JSON5 and JSONC (JSON
+  with Comments) permit them. Enabling for both
+  languages matches Notepad++ / VSCode defaults —
+  an errant `//` in a `.json` file renders as a
+  comment rather than an ERROR blob (still
+  parse-invalid, but the text editor is not a
+  validator).
+
+The name `extra_fold_properties` is a historical
+misnomer — the helper emits any per-lang Lexilla
+properties, not just `fold.*` ones. A future
+rename to `extra_lexer_properties` is tracked as
+follow-up.
+
+**Wordlists (source of truth: RFC 8259 §3 for JSON
+literals; JSON5 spec §4.2 for `Infinity` / `NaN`;
+W3C JSON-LD 1.1 §"Keywords" for the 23 `@`-keywords).**
+- **Class 0 → `SCE_JSON_KEYWORD`** —
+  `JSON_KEYWORDS` carries the three RFC 8259
+  literals (`true`, `false`, `null`) plus the two
+  JSON5 numeric-literal extensions (`Infinity`,
+  `NaN`). `undefined` explicitly excluded per
+  invariant #17 — JSON5's spec does NOT include
+  it (that's JavaScript-only).
+- **Class 1 → `SCE_JSON_LDKEYWORD`** —
+  `JSON_LD_KEYWORDS` carries all 23 documented
+  JSON-LD 1.1 keywords (`@base`, `@container`,
+  `@context`, `@direction`, `@graph`, `@id`,
+  `@import`, `@included`, `@index`, `@json`,
+  `@language`, `@list`, `@nest`, `@none`,
+  `@prefix`, `@propagate`, `@protected`,
+  `@reverse`, `@set`, `@type`, `@value`,
+  `@version`, `@vocab`). **The `@` prefix is
+  carried in the wordlist entry** — the byte-exact
+  classifier at `LexJSON.cxx:191-206` reads the
+  `@` as part of the word; an entry without it
+  would silently never match. Test invariant #7
+  pins this shape.
+
+**Style routing (13 mappings):** `NUMBER` (1) →
+`Number`; `STRING` (2) + `STRINGEOL` (3) →
+`String`; `PROPERTYNAME` (4) + `URI` (9) +
+`COMPACTIRI` (10) + `LDKEYWORD` (12) → `Keyword2`
+(four visual identifier categories collapse to
+one accent-color slot — same collapse discipline
+as R's `BASEKWORD` + `OTHERKWORD`, PowerShell's
+`CMDLET` + `ALIAS` + `FUNCTION`, and
+CoffeeScript's `WORD2` + `GLOBALCLASS` +
+`INSTANCEPROPERTY`); `ESCAPESEQUENCE` (5) →
+`Preprocessor` (out-of-band syntax marker inside
+strings); `LINECOMMENT` (6) + `BLOCKCOMMENT` (7)
+→ `Comment` italic; `OPERATOR` (8) → `Operator`;
+`KEYWORD` (11) → `Keyword` bold; `ERROR` (13) →
+`Preprocessor` (attention marker — makes parse
+errors visible rather than invisibly rendered at
+`STYLE_DEFAULT`; Code++'s `StyleSlot` enum has no
+dedicated "error red" so `Preprocessor` is the
+closest available signal). `DEFAULT` (0) unmapped
+per framework convention. `SCE_JSON_URI` sub-style
+fires for seven URI-scheme prefixes inside a
+string (`https://`, `http://`, `ssh://`, `git://`,
+`svn://`, `ftp://`, `mailto:`) per
+`LexJSON.cxx:347-353` — URLs inside JSON string
+values get accent-color highlighting the same way
+IDE URL detectors do it. `SCE_JSON_COMPACTIRI`
+fires on the end-quote of a string containing
+exactly one `:` with every other char in
+`CompactIRI::setCompactIRI` (alpha + `$_-`
+per `LexJSON.cxx:59`) — the JSON-LD compact IRI
+form (`prefix:suffix`).
+
+**Property-name detection is lookahead-driven.** A
+`"..."` string entered from `DEFAULT` is
+re-classified to `SCE_JSON_PROPERTYNAME` at
+`LexJSON.cxx:407-410` if `AtPropertyName` at
+`:171-189` finds the closing quote followed by
+(up-to-50-spaces of whitespace and then) `:`.
+This distinguishes JSON object keys from string
+values visually without a grammar change.
+
+**`SCE_JSON_ERROR` catches everything the lexer
+can't classify.** At `LexJSON.cxx:455-457` any
+non-whitespace char that doesn't match a
+state-entry condition transitions to ERROR. This
+includes bare identifiers not in the keyword
+wordlist (e.g., `undefined` in a JSON5 file, which
+we explicitly exclude from the wordlist),
+unterminated escapes, and stray punctuation.
+Routing ERROR to `Preprocessor` makes these
+visible in the editor.
+
+Structural test coverage: 18 invariants —
+`Some(&JSON_THEME)` return for BOTH `L_JSON` and
+`L_JSON5` (with pointer-equality pin catching a
+copy-paste divergence), 13-mapping style count,
+two-class canonical descriptor order matching
+`JSONWordListDesc[]`, both classes non-empty, WL0
+alphabet `[A-Za-z]+`, WL1 shape `@[a-z]+`
+(`@`-prefix required), cross-list uniqueness,
+style-routing pins for the 13 mapped SCE
+constants, `DEFAULT` (0) unmapped, `ERROR` →
+`Preprocessor` specific pin, italic set == 2
+(both comment states), bold set == 1 (`KEYWORD`
+only), cross-language non-reuse against R /
+CoffeeScript / PowerShell, `L_JSON` `LangEntry`'s
+`lexer: Some("json")` + `.json` extension AND
+`L_JSON5` `LangEntry`'s `lexer: Some("json")` +
+`.json5` extension, canonical anchor coverage
+(WL0 all five literals, WL1 five representative
+JSON-LD keywords), ONE negative pin (`undefined`
+NOT in WL0 — JSON5 spec doesn't include it), and
+Lexilla property enablement (both
+`lexer.json.escape.sequence = "1"` AND
+`lexer.json.allow.comments = "1"` in
+`extra_fold_properties` for BOTH `L_JSON` and
+`L_JSON5`).
 
 ## Notes
 

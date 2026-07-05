@@ -890,7 +890,117 @@ pub const SCE_P_FTRIPLE: usize = 18;
 pub const SCE_P_FTRIPLEDOUBLE: usize = 19;
 pub const SCE_P_ATTRIBUTE: usize = 20;
 
-// LexJSON style indices.
+// LexJSON style indices. 14 contiguous slots (0..=13) for
+// JSON, JSON5, and JSON-LD source. Constants mirror
+// `SciLexer.h:1882-1895` verbatim. Dispatches SCLEX_JSON
+// (= 120, per `SciLexer.h:136`) via a **two-class wordlist**
+// declared at `LexJSON.cxx:40-44`
+// (`JSONWordListDesc[]`):
+//
+//     JSONWordListDesc[] = {
+//         "JSON Keywords",   // class 0 → SCE_JSON_KEYWORD
+//         "JSON-LD Keywords", // class 1 → SCE_JSON_LDKEYWORD
+//         nullptr,
+//     };
+//
+// **Case-SENSITIVE matching.** The identifier check at
+// `LexJSON.cxx:191-206` (`IsNextWordInList`) uses
+// `styler.SafeGetCharAt` byte-exact, NOT lowered. JSON is
+// case-sensitive at the spec level (RFC 8259: literal
+// spellings are `true` / `false` / `null` only), so wordlist
+// tokens use exact case. Same discipline as
+// `D_KEYWORDS` / `R_RESERVED` / `COFFEESCRIPT_KEYWORDS`.
+//
+// **Two opt-in properties gate three states.**
+//
+//   - `lexer.json.escape.sequence` (default `0`) — when
+//     enabled, `\\`-escapes inside a string enter
+//     `SCE_JSON_ESCAPESEQUENCE` (5). Entry logic at
+//     `:340-344` and `:377-380`. Invalid escapes get
+//     re-classified to `SCE_JSON_ERROR` (13).
+//   - `lexer.json.allow.comments` (default `0`) — when
+//     enabled, `//`-to-EOL enters
+//     `SCE_JSON_LINECOMMENT` (6) at `:416-417` and
+//     `/*...*/` enters `SCE_JSON_BLOCKCOMMENT` (7) at
+//     `:413-415`. Strict RFC 8259 JSON forbids comments;
+//     JSON5 and JSONC (JSON with Comments) permit them.
+//
+// The host enables both properties in `apply_lang` for
+// `L_JSON` and `L_JSON5` (see `extra_fold_properties`) so
+// all three states are active.
+//
+// **Property-name detection is lookahead-driven.** A `"..."`
+// string entered from `DEFAULT` is re-classified to
+// `SCE_JSON_PROPERTYNAME` (4) at `:407-410` if
+// `AtPropertyName` at `:171-189` finds the closing quote
+// followed by (up-to-50-spaces of whitespace and then) `:`.
+// This distinguishes JSON object keys from string values
+// visually without a grammar change.
+//
+// **URI and JSON-LD sub-styles trigger from inside a
+// string.** At `:347-353` seven URI-scheme prefixes
+// (`https://`, `http://`, `ssh://`, `git://`, `svn://`,
+// `ftp://`, `mailto:`) cause the string to switch to
+// `SCE_JSON_URI` (9) mid-token. At `:357-361` an `@` at
+// string-position that begins an in-list JSON-LD keyword
+// switches to `SCE_JSON_LDKEYWORD` (12). Both states
+// return to the pre-switch `SCE_JSON_STRING` /
+// `SCE_JSON_PROPERTYNAME` at end-of-URI or
+// end-of-LD-keyword per `:367-373`. `SCE_JSON_COMPACTIRI`
+// (10) is set at `:329-332` when the closing quote of a
+// string is reached AND the accumulated char stream
+// contained exactly one `:` with every other char in
+// `CompactIRI::setCompactIRI` (alpha + `$_-` per `:59`)
+// — JSON-LD compact IRI form (`prefix:suffix`).
+//
+// **`SCE_JSON_ERROR` (13) catches everything the lexer
+// can't classify.** At `:455-457` any non-whitespace char
+// that doesn't match a state-entry condition transitions to
+// ERROR. This includes bare identifiers not in the keyword
+// wordlist (e.g., `Infinity` in a strict-JSON file where
+// `Infinity` isn't in the wordlist), unterminated escapes,
+// and stray punctuation.
+//
+// Style semantics (paint-loop citations reference
+// LexJSON.cxx):
+//
+//   - SCE_JSON_DEFAULT (0) — whitespace / unclassified.
+//     Framework convention: leave unmapped.
+//   - SCE_JSON_NUMBER (1) — numeric literal (integer,
+//     decimal, scientific, hex).
+//   - SCE_JSON_STRING (2) — `"..."` string value.
+//   - SCE_JSON_STRINGEOL (3) — unterminated string that
+//     hit end-of-line. Reset at `:298-302`.
+//   - SCE_JSON_PROPERTYNAME (4) — string that is followed
+//     by a `:` (JSON object key). Detected at `:407-410`
+//     via `AtPropertyName` lookahead.
+//   - SCE_JSON_ESCAPESEQUENCE (5) — `\\x` / `\\uHHHH`
+//     etc. escape inside a string. Emitted only when
+//     `lexer.json.escape.sequence` = 1.
+//   - SCE_JSON_LINECOMMENT (6) — `//`-to-EOL comment.
+//     Emitted only when `lexer.json.allow.comments` = 1.
+//   - SCE_JSON_BLOCKCOMMENT (7) — `/* ... */` block
+//     comment. Emitted only when
+//     `lexer.json.allow.comments` = 1.
+//   - SCE_JSON_OPERATOR (8) — structural punctuation per
+//     `setOperators` at `:211`: `[`, `]`, `{`, `}`, `:`,
+//     `,`.
+//   - SCE_JSON_URI (9) — URL substring inside a string
+//     starting with one of the recognised URI schemes.
+//   - SCE_JSON_COMPACTIRI (10) — JSON-LD compact IRI
+//     (`prefix:suffix` inside a string), detected on
+//     end-quote at `:329-332`.
+//   - SCE_JSON_KEYWORD (11) — wordlist class 0 hit
+//     (JSON literals: `true` / `false` / `null`;
+//     JSON5 adds `Infinity` / `NaN`).
+//   - SCE_JSON_LDKEYWORD (12) — wordlist class 1 hit
+//     (JSON-LD `@`-prefixed keywords: `@context`, `@id`,
+//     `@type`, etc.).
+//   - SCE_JSON_ERROR (13) — catch-all for unclassified
+//     non-whitespace. Routes to a distinctive "attention"
+//     slot on the theme side so parse errors surface
+//     visually.
+pub const SCE_JSON_DEFAULT: usize = 0;
 pub const SCE_JSON_NUMBER: usize = 1;
 pub const SCE_JSON_STRING: usize = 2;
 pub const SCE_JSON_STRINGEOL: usize = 3;
@@ -899,7 +1009,10 @@ pub const SCE_JSON_ESCAPESEQUENCE: usize = 5;
 pub const SCE_JSON_LINECOMMENT: usize = 6;
 pub const SCE_JSON_BLOCKCOMMENT: usize = 7;
 pub const SCE_JSON_OPERATOR: usize = 8;
+pub const SCE_JSON_URI: usize = 9;
+pub const SCE_JSON_COMPACTIRI: usize = 10;
 pub const SCE_JSON_KEYWORD: usize = 11;
+pub const SCE_JSON_LDKEYWORD: usize = 12;
 pub const SCE_JSON_ERROR: usize = 13;
 
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering

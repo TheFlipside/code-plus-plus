@@ -113,18 +113,19 @@ use codepp_core::lang::{
     GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
     HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
     INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
-    JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS,
-    LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3,
-    L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D,
-    L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSP, L_KIX,
-    L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
-    L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
-    L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
-    NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
-    PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
-    POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
-    PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
-    RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+    JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
+    KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
+    LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
+    L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO,
+    L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
+    L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R,
+    L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL,
+    L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
+    RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
     SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
     TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
     VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
@@ -199,7 +200,10 @@ use codepp_scintilla_sys::{
     SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_INNO_COMMENT,
     SCE_INNO_COMMENT_PASCAL, SCE_INNO_INLINE_EXPANSION, SCE_INNO_KEYWORD, SCE_INNO_KEYWORD_PASCAL,
     SCE_INNO_KEYWORD_USER, SCE_INNO_PARAMETER, SCE_INNO_PREPROC, SCE_INNO_SECTION,
-    SCE_INNO_STRING_DOUBLE, SCE_INNO_STRING_SINGLE, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM,
+    SCE_INNO_STRING_DOUBLE, SCE_INNO_STRING_SINGLE, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI,
+    SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD,
+    SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME,
+    SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM,
     SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR,
     SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT, SCE_LISP_KEYWORD,
     SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER, SCE_LISP_OPERATOR,
@@ -7851,6 +7855,110 @@ const COFFEESCRIPT_THEME: LangTheme = LangTheme {
     bold: COFFEESCRIPT_BOLD,
 };
 
+// LexJSON style routing. 13 mappings covering every
+// SCE_JSON_* state the lexer emits, per the state-machine
+// walk in
+// `crates\scintilla-sys\vendor\lexilla\lexers\LexJSON.cxx`.
+// Only `SCE_JSON_DEFAULT` (0) is unmapped — framework
+// convention that bare punctuation surrounded by whitespace
+// paints at `STYLE_DEFAULT`.
+//
+// **Both opt-in Lexilla properties are enabled by the host**
+// (`lexer.json.allow.comments` and `lexer.json.escape.sequence`
+// — see `extra_fold_properties` for the `L_JSON` / `L_JSON5`
+// branches). So `SCE_JSON_LINECOMMENT` (6),
+// `SCE_JSON_BLOCKCOMMENT` (7), and `SCE_JSON_ESCAPESEQUENCE`
+// (5) are ACTIVELY emitted and their theme mappings paint —
+// same as strict-mode-off in `LexJSON`. Rationale: strict
+// JSON forbids `//` and `/*` but JSON5 / JSONC (JSON with
+// Comments) permit them, and Notepad++ / VSCode both
+// default to comment-permissive JSON highlighting; keeping
+// them enabled means an errant `//` in a `.json` file
+// renders as a comment rather than an ERROR blob, matching
+// user expectations.
+//
+// Slot rationale:
+//   - Two comment states → `Comment` (italic).
+//     `LINECOMMENT` (6) is `//`-to-EOL; `BLOCKCOMMENT` (7)
+//     is `/* ... */`.
+//   - `KEYWORD` (11) → `Keyword` (bold) — the JSON literal
+//     tokens `true` / `false` / `null` (plus JSON5's
+//     `Infinity` / `NaN`).
+//   - `PROPERTYNAME` (4) + `LDKEYWORD` (12) + `URI` (9) +
+//     `COMPACTIRI` (10) → `Keyword2`. Four visual
+//     categories collapsed to one slot:
+//       * `PROPERTYNAME` — JSON object keys, the structural
+//         "identifiers" of an object.
+//       * `LDKEYWORD` — JSON-LD `@`-prefixed keywords inside
+//         strings.
+//       * `URI` — recognised URI-scheme prefixes inside
+//         strings (`https://`, `http://`, `git://`, etc.).
+//       * `COMPACTIRI` — JSON-LD compact IRI form
+//         (`prefix:suffix`) at string end. Same collapse
+//         discipline as R's `BASEKWORD` + `OTHERKWORD`,
+//         PowerShell's `CMDLET` + `ALIAS` + `FUNCTION`, and
+//         CoffeeScript's `WORD2` + `GLOBALCLASS` +
+//         `INSTANCEPROPERTY`. All four are "accent-color
+//         identifier" categories.
+//   - Two string states → `String`. `STRING` (2) is the
+//     `"..."` value; `STRINGEOL` (3) is the
+//     unterminated-string error state (routes to String so
+//     an accidental unclosed quote doesn't paint as
+//     background — reset at `LexJSON.cxx:298-302`).
+//   - `NUMBER` (1) → `Number`.
+//   - `OPERATOR` (8) → `Operator`. `setOperators` at `:211`
+//     is exactly `[{}]:,`.
+//   - `ESCAPESEQUENCE` (5) → `Preprocessor`. Distinct
+//     visual for `\\uHHHH` / `\\n` / etc. inside strings —
+//     the "out-of-band syntax marker" slot the
+//     `Preprocessor` enum variant is intended for.
+//   - `ERROR` (13) → `Preprocessor`. Same slot as
+//     `ESCAPESEQUENCE` — makes parse errors visible rather
+//     than invisibly rendered at `STYLE_DEFAULT`. Distinct
+//     colour from `String` / `Comment` so a stray character
+//     in a JSON structure surfaces immediately. Not a
+//     dedicated "error red" (Code++'s `StyleSlot` enum has
+//     no such slot); `Preprocessor` is the closest visual
+//     "attention marker" available.
+const JSON_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_JSON_NUMBER, StyleSlot::Number),
+    (SCE_JSON_STRING, StyleSlot::String),
+    (SCE_JSON_STRINGEOL, StyleSlot::String),
+    (SCE_JSON_PROPERTYNAME, StyleSlot::Keyword2),
+    (SCE_JSON_ESCAPESEQUENCE, StyleSlot::Preprocessor),
+    (SCE_JSON_LINECOMMENT, StyleSlot::Comment),
+    (SCE_JSON_BLOCKCOMMENT, StyleSlot::Comment),
+    (SCE_JSON_OPERATOR, StyleSlot::Operator),
+    (SCE_JSON_URI, StyleSlot::Keyword2),
+    (SCE_JSON_COMPACTIRI, StyleSlot::Keyword2),
+    (SCE_JSON_KEYWORD, StyleSlot::Keyword),
+    (SCE_JSON_LDKEYWORD, StyleSlot::Keyword2),
+    (SCE_JSON_ERROR, StyleSlot::Preprocessor),
+];
+
+// Italic on both comment states — matches the universal
+// Code++ comment-slot convention.
+const JSON_ITALIC: &[usize] = &[SCE_JSON_LINECOMMENT, SCE_JSON_BLOCKCOMMENT];
+
+// Bold on KEYWORD only — the "one bold class = language
+// literals" rule. `PROPERTYNAME` / `LDKEYWORD` / `URI` /
+// `COMPACTIRI` use Keyword2 weight (accent color, not
+// bold).
+const JSON_BOLD: &[usize] = &[SCE_JSON_KEYWORD];
+
+// Two-class install matches `JSONWordListDesc[]` at
+// `LexJSON.cxx:40-44`. Class 0 = JSON literals; class 1 =
+// JSON-LD `@`-keywords. Order is load-bearing —
+// `SCI_SETKEYWORDS` respects wordlist-descriptor order and
+// `LexerJSON::WordListSet` at `:241-258` explicitly probes
+// `n == 0` → `keywordsJSON`, `n == 1` → `keywordsJSONLD`.
+const JSON_THEME: LangTheme = LangTheme {
+    keywords: &[(0, JSON_KEYWORDS), (1, JSON_LD_KEYWORDS)],
+    styles: JSON_STYLES,
+    italic: JSON_ITALIC,
+    bold: JSON_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -8053,6 +8161,35 @@ fn extra_fold_properties(lang: LangType) -> &'static [(&'static str, &'static st
         // Fold triple-quoted string literals per N++'s
         // `setPythonLexer`.
         &[("fold.quotes.python", "1")]
+    } else if lang == L_JSON || lang == L_JSON5 {
+        // Note: name of this helper is a historical
+        // misnomer — it emits arbitrary Lexilla properties
+        // per lang, not only `fold.*` ones. `LexJSON.cxx`
+        // declares four `DefineProperty` slots at :123-131:
+        // `lexer.json.escape.sequence` and
+        // `lexer.json.allow.comments` are the two non-fold
+        // ones (`fold.compact` and `fold` are the fold
+        // ones, already set unconditionally in
+        // `apply_lang`).
+        //
+        // `lexer.json.escape.sequence = 1` lights up
+        // `SCE_JSON_ESCAPESEQUENCE` for `\\uHHHH` / `\\n`
+        // / etc. inside strings — Notepad++ default.
+        //
+        // `lexer.json.allow.comments = 1` lights up
+        // `SCE_JSON_LINECOMMENT` (`//`) and
+        // `SCE_JSON_BLOCKCOMMENT` (`/* */`). Strict RFC
+        // 8259 JSON forbids these; JSON5 / JSONC permit
+        // them. Enabling for both `L_JSON` and `L_JSON5`
+        // matches Notepad++ / VSCode defaults — an errant
+        // `//` in a `.json` file renders as a comment
+        // rather than an `SCE_JSON_ERROR` blob (still
+        // parse-invalid at runtime, but the text editor
+        // is not a validator).
+        &[
+            ("lexer.json.escape.sequence", "1"),
+            ("lexer.json.allow.comments", "1"),
+        ]
     } else {
         &[]
     }
@@ -8182,6 +8319,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&JSP_THEME)
     } else if lang == L_COFFEESCRIPT {
         Some(&COFFEESCRIPT_THEME)
+    } else if lang == L_JSON || lang == L_JSON5 {
+        Some(&JSON_THEME)
     } else {
         None
     }
@@ -23334,18 +23473,19 @@ mod lang_theme_tests {
     //! known language fails loudly rather than silently rendering
     //! a buffer at default colours.
     use super::{
-        lang_theme, slot_color, StyleSlot, ASM_CPU_KEYWORDS, ASM_DIRECTIVE_KEYWORDS,
-        ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS,
-        FG_COMMENT, FG_KEYWORD, FG_MACRO, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
-        SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER,
-        SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
-        SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
-        SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
-        SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
-        SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
-        SCE_AU3_KEYWORD, SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR,
-        SCE_AU3_SENT, SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE,
-        SCE_CAML_CHAR, SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
+        extra_fold_properties, lang_theme, slot_color, StyleSlot, ASM_CPU_KEYWORDS,
+        ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS,
+        ASM_REG_KEYWORDS, FG_COMMENT, FG_KEYWORD, FG_MACRO, SCE_ADA_CHARACTER,
+        SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL,
+        SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD,
+        SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE,
+        SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND,
+        SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER, SCE_ASM_OPERATOR,
+        SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_AU3_COMMENT,
+        SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
+        SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT,
+        SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_CAML_CHAR,
+        SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
         SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER,
         SCE_CAML_OPERATOR, SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS,
         SCE_CMAKE_COMMENT, SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF,
@@ -23405,24 +23545,24 @@ mod lang_theme_tests {
         GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
         HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
         INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
-        JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS,
-        KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM,
-        L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS,
-        L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT,
-        L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL,
-        L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME,
-        L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
-        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
-        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
-        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS,
-        R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-        SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-        VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-        XML_KEYWORDS, YAML_KEYWORDS,
+        JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
+        KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
+        LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
+        L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
+        L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
+        L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS,
+        L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT,
+        L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
+        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
+        PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
+        POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
+        PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+        RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
+        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
+        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -23440,16 +23580,19 @@ mod lang_theme_tests {
         SCE_D_WORD5, SCE_D_WORD6, SCE_D_WORD7, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND,
         SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_DEFAULT, SCE_GC_EVENT,
         SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_IDENTIFIER, SCE_HA_IMPORT,
-        SCE_INNO_IDENTIFIER, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
-        SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR,
-        SCE_MATLAB_STRING, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET,
-        SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM,
-        SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
-        SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER, SCE_POWERSHELL_KEYWORD,
-        SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING,
-        SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS, SCE_R_BASEKWORD,
-        SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER, SCE_R_INFIX,
-        SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
+        SCE_INNO_IDENTIFIER, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI, SCE_JSON_DEFAULT,
+        SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD,
+        SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME,
+        SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT,
+        SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER,
+        SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER,
+        SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD,
+        SCE_POWERSHELL_COMMENTSTREAM, SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION,
+        SCE_POWERSHELL_HERE_CHARACTER, SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER,
+        SCE_POWERSHELL_KEYWORD, SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR,
+        SCE_POWERSHELL_STRING, SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS,
+        SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER,
+        SCE_R_INFIX, SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
         SCE_R_RAWSTRING, SCE_R_RAWSTRING2, SCE_R_STRING, SCE_R_STRING2, SCE_VHDL_IDENTIFIER,
         SCE_V_IDENTIFIER, SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER,
         SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
@@ -32893,13 +33036,347 @@ mod lang_theme_tests {
         }
     }
 
+    /// JSON uses Lexilla's `json` lexer (`LexJSON.cxx`) — a
+    /// compact 14-state (0..=13) data-format lexer covering
+    /// RFC 8259 JSON, JSON5, and JSON-LD. The lexer enters
+    /// every one of its 14 slots; only `SCE_JSON_DEFAULT` (0)
+    /// is unmapped in `JSON_STYLES` per the framework
+    /// convention that bare punctuation surrounded by
+    /// whitespace paints at `STYLE_DEFAULT`. Both opt-in
+    /// Lexilla properties are enabled by the host
+    /// (`lexer.json.allow.comments` for `//` and `/* */`,
+    /// `lexer.json.escape.sequence` for `\uHHHH` etc. — see
+    /// the `L_JSON`/`L_JSON5` branch in
+    /// `extra_fold_properties`) so all three property-gated
+    /// states (`LINECOMMENT`, `BLOCKCOMMENT`,
+    /// `ESCAPESEQUENCE`) are actively emitted and their
+    /// theme mappings paint.
+    ///
+    /// Distinctive features asserted here: **case-sensitive
+    /// byte-exact matching**, **shared theme between
+    /// `L_JSON` and `L_JSON5`** (both dispatch through the
+    /// same else-if branch), **`PROPERTYNAME` collapse to
+    /// Keyword2** alongside `LDKEYWORD` / `URI` /
+    /// `COMPACTIRI` (four visual identifier categories share
+    /// one accent-color slot), **`ERROR` → Preprocessor**
+    /// (visible attention marker rather than invisible at
+    /// `STYLE_DEFAULT`), and **JSON-LD keyword `@`-prefix
+    /// carrying in the wordlist** (matches the byte-exact
+    /// classifier semantics; `context` without `@` would
+    /// silently never match).
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_JSON)` returns
+    ///      `Some(&JSON_THEME)`.
+    ///   2. `lang_theme(L_JSON5)` returns
+    ///      `Some(&JSON_THEME)` — same shared theme via a
+    ///      single dispatcher branch (`L_JSON || L_JSON5`),
+    ///      not a copy-paste of the theme constant.
+    ///   3. Style count == 13 (14 emitted `SCE_JSON_*`
+    ///      states minus `DEFAULT` (0), the only unmapped
+    ///      slot per framework convention).
+    ///   4. Two wordlist classes in canonical order (0/1)
+    ///      matching `JSONWordListDesc[]` at
+    ///      `LexJSON.cxx:40-44`.
+    ///   5. Both classes non-empty.
+    ///   6. `WL0` tokens match `[A-Za-z]+` (the JSON keyword
+    ///      alphabet the lexer accepts via `setKeywordJSON`
+    ///      at `:214`).
+    ///   7. `WL1` tokens all start with `@` followed by
+    ///      `[a-z]+` — the JSON-LD keyword shape per the
+    ///      W3C spec, matching `setKeywordJSONLD` at `:213`.
+    ///   8. No cross-list duplicates across WL0/WL1.
+    ///   9. Style-routing pins for the 13 mapped SCE
+    ///      constants.
+    ///   10. `SCE_JSON_DEFAULT` (0) unmapped.
+    ///   11. `SCE_JSON_ERROR` (13) routes to `Preprocessor`
+    ///       (attention marker — makes parse errors
+    ///       visible rather than invisible).
+    ///   12. Italic set == 2 (both comment states).
+    ///   13. Bold set == 1 (`KEYWORD` only).
+    ///   14. Cross-language non-reuse — `JSON_STYLES` must
+    ///       not deep-equal any prior wired theme.
+    ///   15. `L_JSON` `LangEntry` has `lexer: Some("json")`
+    ///       and `.json` extension; `L_JSON5` same
+    ///       `lexer: Some("json")` and `.json5` extension.
+    ///   16. Anchor coverage: WL0 contains the three RFC
+    ///       8259 literals (`true`, `false`, `null`) plus
+    ///       the two JSON5 additions (`Infinity`, `NaN`);
+    ///       WL1 contains canonical JSON-LD keywords
+    ///       (`@context`, `@type`, `@id`, `@graph`,
+    ///       `@value`).
+    ///   17. `undefined` explicitly NOT in WL0 — JSON5's
+    ///       spec at `spec.json5.org` does NOT include
+    ///       `undefined` (that's JavaScript-only).
+    ///   18. `extra_fold_properties(L_JSON)` and
+    ///       `extra_fold_properties(L_JSON5)` BOTH include
+    ///       `lexer.json.escape.sequence = "1"` AND
+    ///       `lexer.json.allow.comments = "1"` — the two
+    ///       properties that light up the three
+    ///       property-gated SCE states.
+    #[test]
+    fn json_uses_lexjson_two_class_theme_shared_between_json_and_json5() {
+        let json = lang_theme(L_JSON).expect("JSON wired");
+        let json5 = lang_theme(L_JSON5).expect("JSON5 wired");
+
+        // Invariant 2: shared theme via same dispatcher branch.
+        assert!(
+            std::ptr::eq(json, json5),
+            "L_JSON and L_JSON5 must resolve to the SAME &JSON_THEME \
+             reference — the else-if chain uses a shared `L_JSON || L_JSON5` \
+             branch, not two branches with copy-pasted themes"
+        );
+
+        // Invariant 3: 13 mappings.
+        assert_eq!(
+            json.styles.len(),
+            13,
+            "JSON_STYLES must map 13 indices (14 SCE_JSON_* states minus \
+             DEFAULT (0) — unmapped per framework convention)"
+        );
+
+        // Invariant 4: two classes canonical descriptor order.
+        assert_eq!(
+            json.keywords.len(),
+            2,
+            "JSON_THEME must install exactly 2 wordlist classes \
+             (matches JSONWordListDesc[] at LexJSON.cxx:40-44)"
+        );
+        for (i, (expected_class, expected_list)) in
+            [(0u32, JSON_KEYWORDS), (1u32, JSON_LD_KEYWORDS)]
+                .iter()
+                .enumerate()
+        {
+            assert_eq!(json.keywords[i].0, *expected_class);
+            assert_eq!(json.keywords[i].1, *expected_list);
+        }
+
+        // Invariant 5: both classes non-empty.
+        for (list, name) in [
+            (JSON_KEYWORDS, "KEYWORDS"),
+            (JSON_LD_KEYWORDS, "LD_KEYWORDS"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "JSON_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 6: WL0 alphabet — `[A-Za-z]+`.
+        // `LexJSON.cxx:214` setKeywordJSON = alpha + `$` + `_`,
+        // but no real JSON / JSON5 literal uses `$` / `_`, so
+        // enforce pure alpha as the tighter contract.
+        for tok in JSON_KEYWORDS.split_whitespace() {
+            assert!(
+                tok.bytes().all(|b| b.is_ascii_alphabetic()),
+                "JSON_KEYWORDS token `{tok}` violates the JSON literal \
+                 alphabet — every RFC 8259 / JSON5 keyword is pure `[A-Za-z]+`"
+            );
+        }
+
+        // Invariant 7: WL1 shape — `@[a-z]+`.
+        // `LexJSON.cxx:213` setKeywordJSONLD = alpha + `:` + `@`.
+        // Every documented JSON-LD keyword is `@`-prefixed
+        // lowercase per the W3C JSON-LD 1.1 spec.
+        for tok in JSON_LD_KEYWORDS.split_whitespace() {
+            assert!(
+                tok.starts_with('@'),
+                "JSON_LD_KEYWORDS token `{tok}` missing `@` prefix — \
+                 the byte-exact classifier at LexJSON.cxx:191-206 reads \
+                 the `@` character as part of the word and would silently \
+                 miss an entry without it"
+            );
+            assert!(
+                tok.bytes()
+                    .skip(1)
+                    .all(|b| b.is_ascii_lowercase() || b == b'_'),
+                "JSON_LD_KEYWORDS token `{tok}` violates the JSON-LD keyword \
+                 shape — after the `@` prefix the spec uses only lowercase \
+                 letters (and rare underscores in extension keywords)"
+            );
+        }
+
+        // Invariant 8: cross-list uniqueness. A duplicate is
+        // dead code — LexJSON dispatches KEYWORD vs LDKEYWORD
+        // by state (identifier context vs inside-string @),
+        // not by wordlist match order, but the discipline
+        // still catches copy-paste errors.
+        use std::collections::HashSet;
+        let wl0: HashSet<&str> = JSON_KEYWORDS.split_whitespace().collect();
+        let wl1: HashSet<&str> = JSON_LD_KEYWORDS.split_whitespace().collect();
+        if let Some(shared) = wl0.intersection(&wl1).next() {
+            panic!(
+                "JSON_KEYWORDS and JSON_LD_KEYWORDS both contain `{shared}` \
+                 — no token should live in both classes"
+            );
+        }
+
+        // Invariant 9: style-routing pins for all 13 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_JSON_NUMBER, StyleSlot::Number, "SCE_JSON_NUMBER"),
+            (SCE_JSON_STRING, StyleSlot::String, "SCE_JSON_STRING"),
+            (SCE_JSON_STRINGEOL, StyleSlot::String, "SCE_JSON_STRINGEOL"),
+            (
+                SCE_JSON_PROPERTYNAME,
+                StyleSlot::Keyword2,
+                "SCE_JSON_PROPERTYNAME",
+            ),
+            (
+                SCE_JSON_ESCAPESEQUENCE,
+                StyleSlot::Preprocessor,
+                "SCE_JSON_ESCAPESEQUENCE",
+            ),
+            (
+                SCE_JSON_LINECOMMENT,
+                StyleSlot::Comment,
+                "SCE_JSON_LINECOMMENT",
+            ),
+            (
+                SCE_JSON_BLOCKCOMMENT,
+                StyleSlot::Comment,
+                "SCE_JSON_BLOCKCOMMENT",
+            ),
+            (SCE_JSON_OPERATOR, StyleSlot::Operator, "SCE_JSON_OPERATOR"),
+            (SCE_JSON_URI, StyleSlot::Keyword2, "SCE_JSON_URI"),
+            (
+                SCE_JSON_COMPACTIRI,
+                StyleSlot::Keyword2,
+                "SCE_JSON_COMPACTIRI",
+            ),
+            (SCE_JSON_KEYWORD, StyleSlot::Keyword, "SCE_JSON_KEYWORD"),
+            (
+                SCE_JSON_LDKEYWORD,
+                StyleSlot::Keyword2,
+                "SCE_JSON_LDKEYWORD",
+            ),
+            (SCE_JSON_ERROR, StyleSlot::Preprocessor, "SCE_JSON_ERROR"),
+        ] {
+            assert!(
+                json.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 10: DEFAULT (0) unmapped.
+        assert!(
+            !json.styles.iter().any(|(i, _)| *i == SCE_JSON_DEFAULT),
+            "SCE_JSON_DEFAULT (0) must remain unmapped per framework \
+             convention"
+        );
+
+        // Invariant 11: ERROR → Preprocessor.
+        // Specific pin: makes parse errors visible with a
+        // distinct out-of-band syntax marker slot rather
+        // than invisibly rendered at STYLE_DEFAULT.
+        assert!(
+            json.styles
+                .contains(&(SCE_JSON_ERROR, StyleSlot::Preprocessor)),
+            "SCE_JSON_ERROR (13) must route to StyleSlot::Preprocessor \
+             — makes lexer parse errors visible; leaving them at \
+             STYLE_DEFAULT would hide them silently"
+        );
+
+        // Invariant 12: italic == 2 (both comment states).
+        assert_eq!(json.italic.len(), 2);
+        assert!(json.italic.contains(&SCE_JSON_LINECOMMENT));
+        assert!(json.italic.contains(&SCE_JSON_BLOCKCOMMENT));
+
+        // Invariant 13: bold == 1 (KEYWORD only).
+        assert_eq!(json.bold.len(), 1);
+        assert!(json.bold.contains(&SCE_JSON_KEYWORD));
+
+        // Invariant 14: cross-language non-reuse.
+        let r = lang_theme(L_R).expect("R wired");
+        let cs = lang_theme(L_COFFEESCRIPT).expect("CoffeeScript wired");
+        let ps = lang_theme(L_POWERSHELL).expect("PowerShell wired");
+        for (other, name) in [(r, "R"), (cs, "CoffeeScript"), (ps, "PowerShell")] {
+            assert_ne!(
+                json.styles, other.styles,
+                "JSON must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 15: L_JSON / L_JSON5 LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let json_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_JSON)
+            .expect("L_JSON LangEntry present in LANG_TABLE");
+        assert_eq!(
+            json_entry.lexer,
+            Some("json"),
+            "L_JSON LangEntry.lexer must be Some(\"json\")"
+        );
+        assert!(
+            json_entry.extensions.contains(&"json"),
+            "L_JSON extensions must contain `json`"
+        );
+        let json5_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_JSON5)
+            .expect("L_JSON5 LangEntry present in LANG_TABLE");
+        assert_eq!(
+            json5_entry.lexer,
+            Some("json"),
+            "L_JSON5 LangEntry.lexer must be Some(\"json\") — same lexer \
+             as L_JSON, differentiated only by extensions and host-side \
+             property configuration"
+        );
+        assert!(
+            json5_entry.extensions.contains(&"json5"),
+            "L_JSON5 extensions must contain `json5`"
+        );
+
+        // Invariant 16: canonical anchor coverage.
+        for kw in ["true", "false", "null", "Infinity", "NaN"] {
+            assert!(
+                JSON_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "JSON_KEYWORDS must include canonical literal `{kw}`"
+            );
+        }
+        for kw in ["@context", "@type", "@id", "@graph", "@value"] {
+            assert!(
+                JSON_LD_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "JSON_LD_KEYWORDS must include canonical JSON-LD keyword `{kw}`"
+            );
+        }
+
+        // Invariant 17: `undefined` explicitly NOT in WL0.
+        // JSON5's spec at `spec.json5.org` does NOT include
+        // `undefined`; that's JavaScript only. Including
+        // it would misrepresent both JSON and JSON5.
+        assert!(
+            !JSON_KEYWORDS.split_whitespace().any(|t| t == "undefined"),
+            "JSON_KEYWORDS must NOT include `undefined` — JSON5 spec at \
+             spec.json5.org does NOT include it; it's JavaScript-only"
+        );
+
+        // Invariant 18: extra_fold_properties for L_JSON and
+        // L_JSON5 both include both Lexilla properties.
+        for lang in [L_JSON, L_JSON5] {
+            let props = extra_fold_properties(lang);
+            assert!(
+                props.contains(&("lexer.json.escape.sequence", "1")),
+                "extra_fold_properties({lang:?}) must set \
+                 lexer.json.escape.sequence = 1 to light up ESCAPESEQUENCE"
+            );
+            assert!(
+                props.contains(&("lexer.json.allow.comments", "1")),
+                "extra_fold_properties({lang:?}) must set \
+                 lexer.json.allow.comments = 1 to light up LINECOMMENT + \
+                 BLOCKCOMMENT"
+            );
+        }
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
     /// updating in the same commit — same as for `L_C` / `L_CPP`
     /// / `L_CS` / `L_RUST` / `L_PHP` above. `L_PYTHON` was removed
     /// from this list when the Python row landed. `L_COFFEESCRIPT`
-    /// was removed when the CoffeeScript row landed in this
+    /// was removed when the CoffeeScript row landed. `L_JSON` /
+    /// `L_JSON5` were removed when the JSON row landed in this
     /// commit.
     #[test]
     fn unwired_languages_have_no_theme() {
