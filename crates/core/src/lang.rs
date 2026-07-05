@@ -8872,6 +8872,15 @@ mod tests {
             LangType::from_path(Path::new("/home/user/proj/CMakeLists.txt")),
             L_CMAKE
         );
+        // Backslash-separated path — only a real separator on
+        // Windows. `Path::new(r"C:\...\CMakeLists.txt").file_name()`
+        // on Linux/macOS returns the whole string (backslash is a
+        // literal filename byte on POSIX), so the basename never
+        // matches `CMakeLists.txt` and the row falls through to
+        // extension → `L_TEXT`. Gate the assertion so it verifies
+        // the Windows separator on Windows and doesn't fabricate
+        // a failure on POSIX.
+        #[cfg(windows)]
         assert_eq!(
             LangType::from_path(Path::new(r"C:\src\proj\subdir\CMakeLists.txt")),
             L_CMAKE
