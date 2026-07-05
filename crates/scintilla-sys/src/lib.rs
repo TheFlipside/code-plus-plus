@@ -1156,6 +1156,148 @@ pub const SCE_F_OPERATOR2: usize = 12;
 pub const SCE_F_LABEL: usize = 13;
 pub const SCE_F_CONTINUATION: usize = 14;
 
+// LexCsound style indices. 16 contiguous slots (0..=15) for
+// Csound orchestra (`.orc`) and score (`.sco`) source, plus
+// unified `.csd` files. Constants mirror `SciLexer.h:1296-1311`
+// verbatim. Dispatches SCLEX_CSOUND (= 74, per
+// `SciLexer.h:90`) via a **three-class wordlist** declared at
+// `vendor\lexilla\lexers\LexCsound.cxx:208-213`
+// (`csoundWordListDesc[]`):
+//
+//     csoundWordListDesc[] = {
+//         "Opcodes",           // class 0 → SCE_CSOUND_OPCODE
+//         "Header Statements", // class 1 → SCE_CSOUND_HEADERSTMT
+//         "User keywords",     // class 2 → SCE_CSOUND_USERKEYWORD
+//         0,
+//     };
+//
+// **Case-SENSITIVE matching.** The identifier-classification
+// cascade at `LexCsound.cxx:90-113` calls
+// `sc.GetCurrent(s, sizeof(s))` (byte-exact), NOT
+// `GetCurrentLowered`. Csound is case-sensitive per language
+// spec — wordlist tokens use exact source spelling. Since
+// Csound convention is all-lowercase opcodes, wordlists are
+// all-lowercase. Same discipline as `D_KEYWORDS` /
+// `R_RESERVED` / `COFFEESCRIPT_KEYWORDS`, inverted from
+// `POWERSHELL_KEYWORDS` / `COBOL_KEYWORDS_A` / `FORTRAN_KEYWORDS`.
+//
+// **Identifier alphabet with permissive starters.**
+// `setWordStart` at `:37-40` accepts alnum + `_` + `.` +
+// `%` + `@` + `$` + `?`. `setWord` at `:32-35` narrows to
+// alnum + `.` + `_` + `?`. The dollar sign (`$`) is for
+// macro-invocation forms like `$MACRO`; percent (`%`) and
+// at-sign (`@`) are legacy sigils.
+//
+// **Rate-prefix auto-classification.** LexCsound's identifier
+// classifier at `:101-111` has a unique fallback: if the
+// token fails all three wordlist probes, the FIRST CHARACTER
+// determines the state:
+//   - `p` prefix → `SCE_CSOUND_PARAM` (function parameter
+//     references `p1` / `p2` / `p3` / ...).
+//   - `a` prefix → `SCE_CSOUND_ARATE_VAR` (audio-rate
+//     variable, e.g., `aOut`).
+//   - `k` prefix → `SCE_CSOUND_KRATE_VAR` (control-rate
+//     variable, e.g., `kEnv`).
+//   - `i` prefix → `SCE_CSOUND_IRATE_VAR` (init-rate variable
+//     — also covers `i`-statement identifiers per source
+//     comment at `:107`).
+//   - `g` prefix → `SCE_CSOUND_GLOBAL_VAR` (global variable
+//     — `ga...`/`gk...`/`gi...` global naming convention).
+// This is Csound's signature — every variable carries its
+// evaluation rate in the name.
+//
+// **No string handling.** LexCsound's paint loop at
+// `:68-152` NEVER enters a string state. Quote characters
+// `"` / `'` are not in `IsCsoundOperator` at `:42-53` and
+// not in `IsAWordStart` at `:37-40`, so they remain in
+// `SCE_CSOUND_DEFAULT`. The `SCE_CSOUND_STRINGEOL` (15) slot
+// is defined in `SciLexer.h` but ONLY referenced at `:63-64`
+// as an `initStyle` guard (`if (initStyle == STRINGEOL)
+// initStyle = DEFAULT`) — never `SetState`d. Effectively an
+// orphan, same category as `SCE_CSOUND_INSTR` (4) and
+// `SCE_CSOUND_COMMENTBLOCK` (9) which are also defined but
+// never emitted (no `/*` `*/` block-comment handling either;
+// only `;`-to-EOL line comments at `:130-131`).
+//
+// **Fold classifier.** `FoldCsoundInstruments` at `:154-205`
+// folds on `instr` / `endin` opcode boundaries via a positive
+// trigger at `:170` — the classifier's guard
+// `stylePrev != SCE_CSOUND_OPCODE && style == SCE_CSOUND_OPCODE`
+// only enters the `strcmp` check for `instr` / `endin` when
+// the token is styled as `SCE_CSOUND_OPCODE`. So wordlist
+// class 0 membership of `instr` / `endin` is load-bearing for
+// correct folding. The host wordlist places them in class 0
+// specifically for this reason; class 1 (HEADERSTMT) holds
+// only the user-defined-opcode block markers `opcode` /
+// `endop` since the fold classifier doesn't examine those.
+//
+// Style semantics (paint-loop citations reference
+// LexCsound.cxx):
+//
+//   - SCE_CSOUND_DEFAULT (0) — whitespace / unclassified.
+//     Framework convention: leave unmapped.
+//   - SCE_CSOUND_COMMENT (1) — `;`-to-EOL line comment.
+//     Entry at `:130-131`, exit at `:116-118` on `atLineEnd`.
+//   - SCE_CSOUND_NUMBER (2) — numeric literal. Also catches
+//     header settings like `0dbfs` that start with a digit.
+//   - SCE_CSOUND_OPERATOR (3) — punctuation per
+//     `IsCsoundOperator` at `:42-53`:
+//     `* / - + ( ) = ^ [ ] < & > , | ~ % :`. `.` deliberately
+//     excluded because it's used in numbers.
+//   - SCE_CSOUND_INSTR (4) — never entered. Enum slot defined
+//     in `SciLexer.h` but no `SetState` / `ChangeState` call
+//     targets it anywhere in `ColouriseCsoundDoc`. Legacy
+//     Csound conventions used `instr`-marker semantics; the
+//     current lexer routes `instr` through the standard
+//     class-1 header-statement wordlist path instead.
+//   - SCE_CSOUND_IDENTIFIER (5) — bare identifier fallback
+//     when no wordlist match and no rate-prefix match.
+//     Framework convention: leave unmapped so identifiers
+//     paint at STYLE_DEFAULT.
+//   - SCE_CSOUND_OPCODE (6) — wordlist class 0 hit
+//     (Csound opcodes — signal generators, filters,
+//     effects, math intrinsics, I/O).
+//   - SCE_CSOUND_HEADERSTMT (7) — wordlist class 1 hit
+//     (orchestra header settings, block markers, score
+//     statements, preprocessor bare forms).
+//   - SCE_CSOUND_USERKEYWORD (8) — wordlist class 2 hit
+//     (control-flow: `if`/`then`/`else`/`while`/`goto`
+//     family / `loop_*` / `reinit`).
+//   - SCE_CSOUND_COMMENTBLOCK (9) — never entered. Enum
+//     slot defined but no `/* ... */` handling in the paint
+//     loop; only line comments at `:130-131`.
+//   - SCE_CSOUND_PARAM (10) — `p`-prefixed function parameter
+//     reference. Auto-classified from IDENTIFIER at `:101-102`
+//     when the first char is `p` and wordlist probes fail.
+//   - SCE_CSOUND_ARATE_VAR (11) — `a`-prefixed audio-rate
+//     variable. Auto-classified at `:103-104`.
+//   - SCE_CSOUND_KRATE_VAR (12) — `k`-prefixed control-rate
+//     variable. Auto-classified at `:105-106`.
+//   - SCE_CSOUND_IRATE_VAR (13) — `i`-prefixed init-rate
+//     variable / `i`-statement identifier. Auto-classified
+//     at `:107-108`.
+//   - SCE_CSOUND_GLOBAL_VAR (14) — `g`-prefixed global
+//     variable. Auto-classified at `:109-110`.
+//   - SCE_CSOUND_STRINGEOL (15) — never entered. Only
+//     referenced as `initStyle` guard at `:63-64`; no
+//     `SetState` call targets it.
+pub const SCE_CSOUND_DEFAULT: usize = 0;
+pub const SCE_CSOUND_COMMENT: usize = 1;
+pub const SCE_CSOUND_NUMBER: usize = 2;
+pub const SCE_CSOUND_OPERATOR: usize = 3;
+pub const SCE_CSOUND_INSTR: usize = 4;
+pub const SCE_CSOUND_IDENTIFIER: usize = 5;
+pub const SCE_CSOUND_OPCODE: usize = 6;
+pub const SCE_CSOUND_HEADERSTMT: usize = 7;
+pub const SCE_CSOUND_USERKEYWORD: usize = 8;
+pub const SCE_CSOUND_COMMENTBLOCK: usize = 9;
+pub const SCE_CSOUND_PARAM: usize = 10;
+pub const SCE_CSOUND_ARATE_VAR: usize = 11;
+pub const SCE_CSOUND_KRATE_VAR: usize = 12;
+pub const SCE_CSOUND_IRATE_VAR: usize = 13;
+pub const SCE_CSOUND_GLOBAL_VAR: usize = 14;
+pub const SCE_CSOUND_STRINGEOL: usize = 15;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

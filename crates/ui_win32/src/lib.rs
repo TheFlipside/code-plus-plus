@@ -107,21 +107,22 @@ use codepp_core::lang::{
     BATCH_KEYWORDS, BATCH_KEYWORDS_2, CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3,
     CMAKE_COMMANDS, CMAKE_PARAMETERS, CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B,
     COBOL_KEYWORDS_C, COFFEESCRIPT_GLOBAL_CLASSES, COFFEESCRIPT_KEYWORDS, COFFEESCRIPT_KEYWORDS_2,
-    CPP_KEYWORDS, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3,
-    CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
-    D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7,
-    FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS,
-    GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
+    CPP_KEYWORDS, CPP_KEYWORDS_2, CSOUND_HEADERSTMT, CSOUND_OPCODES, CSOUND_USERKW,
+    CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
+    CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, D_DOC_KEYWORDS,
+    D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7, FORTRAN_EXTENDED,
+    FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL,
+    GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
     HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS,
     INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS,
     JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
     KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
     LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
-    L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL,
-    L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP,
-    L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS,
-    L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB,
-    L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
+    L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI,
+    L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX,
+    L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
+    L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
+    L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
     NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
     POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
     POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
@@ -166,7 +167,10 @@ use codepp_scintilla_sys::{
     SCE_COFFEESCRIPT_NUMBER, SCE_COFFEESCRIPT_OPERATOR, SCE_COFFEESCRIPT_REGEX,
     SCE_COFFEESCRIPT_STRING, SCE_COFFEESCRIPT_VERBOSE_REGEX,
     SCE_COFFEESCRIPT_VERBOSE_REGEX_COMMENT, SCE_COFFEESCRIPT_WORD, SCE_COFFEESCRIPT_WORD2,
-    SCE_CSS_ATTRIBUTE, SCE_CSS_CLASS, SCE_CSS_COMMENT, SCE_CSS_DIRECTIVE, SCE_CSS_DOUBLESTRING,
+    SCE_CSOUND_ARATE_VAR, SCE_CSOUND_COMMENT, SCE_CSOUND_GLOBAL_VAR, SCE_CSOUND_HEADERSTMT,
+    SCE_CSOUND_IRATE_VAR, SCE_CSOUND_KRATE_VAR, SCE_CSOUND_NUMBER, SCE_CSOUND_OPCODE,
+    SCE_CSOUND_OPERATOR, SCE_CSOUND_PARAM, SCE_CSOUND_USERKEYWORD, SCE_CSS_ATTRIBUTE,
+    SCE_CSS_CLASS, SCE_CSS_COMMENT, SCE_CSS_DIRECTIVE, SCE_CSS_DOUBLESTRING,
     SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_EXTENDED_PSEUDOCLASS, SCE_CSS_EXTENDED_PSEUDOELEMENT,
     SCE_CSS_GROUP_RULE, SCE_CSS_ID, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3,
     SCE_CSS_IMPORTANT, SCE_CSS_OPERATOR, SCE_CSS_PSEUDOCLASS, SCE_CSS_PSEUDOELEMENT,
@@ -3703,6 +3707,88 @@ const FORTRAN_THEME: LangTheme = LangTheme {
     styles: FORTRAN_STYLES,
     italic: FORTRAN_ITALIC,
     bold: FORTRAN_BOLD,
+};
+
+// --- LexCsound ---
+// LexCsound serves Csound orchestra (`.orc`) and score (`.sco`)
+// source, plus unified `.csd` files. `L_CSOUND` (id 70) is the
+// only language row using this lexer. Dispatches
+// SCLEX_CSOUND (= 74) via a three-class wordlist descriptor at
+// `LexCsound.cxx:208-213`.
+//
+// **11 style mappings** covering every state the paint loop
+// actually emits. Five of the sixteen SCE_CSOUND_* enum slots
+// are unmapped:
+//   - DEFAULT (0) and IDENTIFIER (5) per framework convention.
+//   - INSTR (4) — enum slot defined but never entered by the
+//     paint loop; `instr` opcode routes through class-1
+//     HEADERSTMT instead.
+//   - COMMENTBLOCK (9) — enum slot defined but the paint loop
+//     has no `/* ... */` handling, only `;`-to-EOL line
+//     comments.
+//   - STRINGEOL (15) — only referenced as an `initStyle` guard
+//     at `LexCsound.cxx:63-64`; no `SetState` call targets it.
+//
+// **Slot rationale:**
+//   - COMMENT (1) → Comment (italic).
+//   - NUMBER (2) → Number. Also styles `0dbfs` since it starts
+//     with a digit.
+//   - OPERATOR (3) → Operator.
+//   - OPCODE (6) → Keyword (bold — the ~325 primary audio
+//     opcodes).
+//   - HEADERSTMT (7) + USERKEYWORD (8) → Keyword2. Two accent
+//     categories collapse: header/section markers +
+//     control-flow user-keywords. Same collapse discipline as
+//     R's BASEKWORD + OTHERKWORD, JSON's WORD2 + PROPERTYNAME
+//     + URI + COMPACTIRI + LDKEYWORD, and Fortran's WORD2 +
+//     WORD3.
+//   - PARAM (10) → Preprocessor. `p1`/`p2`/... instrument-
+//     parameter references are structural inputs, distinct
+//     visually from rate-typed variables.
+//   - ARATE_VAR (11) + KRATE_VAR (12) + IRATE_VAR (13) +
+//     GLOBAL_VAR (14) → Keyword2. Four rate-prefix categories
+//     collapse to the accent color — matches the collapse
+//     discipline established across the phase. Rate variables
+//     are Csound's signature (every variable carries its
+//     evaluation rate in the name), so visual grouping to
+//     Keyword2 is coherent.
+const CSOUND_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_CSOUND_COMMENT, StyleSlot::Comment),
+    (SCE_CSOUND_NUMBER, StyleSlot::Number),
+    (SCE_CSOUND_OPERATOR, StyleSlot::Operator),
+    (SCE_CSOUND_OPCODE, StyleSlot::Keyword),
+    (SCE_CSOUND_HEADERSTMT, StyleSlot::Keyword2),
+    (SCE_CSOUND_USERKEYWORD, StyleSlot::Keyword2),
+    (SCE_CSOUND_PARAM, StyleSlot::Preprocessor),
+    (SCE_CSOUND_ARATE_VAR, StyleSlot::Keyword2),
+    (SCE_CSOUND_KRATE_VAR, StyleSlot::Keyword2),
+    (SCE_CSOUND_IRATE_VAR, StyleSlot::Keyword2),
+    (SCE_CSOUND_GLOBAL_VAR, StyleSlot::Keyword2),
+];
+
+// Italic on the single COMMENT state — matches the universal
+// Code++ comment-slot convention.
+const CSOUND_ITALIC: &[usize] = &[SCE_CSOUND_COMMENT];
+
+// Bold on OPCODE only. Matches the "one bold class = language
+// reserved words" rule.
+const CSOUND_BOLD: &[usize] = &[SCE_CSOUND_OPCODE];
+
+// Three-class install matches `csoundWordListDesc[]` at
+// `LexCsound.cxx:208-213`. Order is load-bearing —
+// `SCI_SETKEYWORDS` respects wordlist-descriptor order and
+// the identifier classifier at `:95-100` probes class 0 first
+// (OPCODE), then class 1 (HEADERSTMT), then class 2
+// (USERKEYWORD).
+const CSOUND_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, CSOUND_OPCODES),
+        (1, CSOUND_HEADERSTMT),
+        (2, CSOUND_USERKW),
+    ],
+    styles: CSOUND_STYLES,
+    italic: CSOUND_ITALIC,
+    bold: CSOUND_BOLD,
 };
 
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
@@ -8435,6 +8521,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&JSON_THEME)
     } else if lang == L_FORTRAN || lang == L_FORTRAN_77 {
         Some(&FORTRAN_THEME)
+    } else if lang == L_CSOUND {
+        Some(&CSOUND_THEME)
     } else {
         None
     }
@@ -23653,21 +23741,21 @@ mod lang_theme_tests {
         CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CMAKE_COMMANDS, CMAKE_PARAMETERS,
         CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B, COBOL_KEYWORDS_C,
         COFFEESCRIPT_GLOBAL_CLASSES, COFFEESCRIPT_KEYWORDS, COFFEESCRIPT_KEYWORDS_2,
-        CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3,
-        CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2,
-        D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7,
-        FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GUI4CLI_ATTRIBUTES,
-        GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS,
-        HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS,
-        INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
+        CPP_KEYWORDS_2, CSOUND_HEADERSTMT, CSOUND_OPCODES, CSOUND_USERKW, CSS_PROPERTIES_CSS1,
+        CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
+        CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META,
+        D_SPECIAL, D_TYPES, D_WORD7, FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS,
+        GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
+        HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
+        INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
         JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS,
         JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
         LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
-        L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_FORTRAN, L_FORTRAN_77,
-        L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP,
-        L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL,
-        L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME,
-        L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
+        L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_FORTRAN,
+        L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON,
+        L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC,
+        L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST,
+        L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
         MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
         OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
         POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
@@ -23689,9 +23777,12 @@ mod lang_theme_tests {
         SCE_COFFEESCRIPT_INSTANCEPROPERTY, SCE_COFFEESCRIPT_NUMBER, SCE_COFFEESCRIPT_OPERATOR,
         SCE_COFFEESCRIPT_REGEX, SCE_COFFEESCRIPT_STRING, SCE_COFFEESCRIPT_VERBOSE_REGEX,
         SCE_COFFEESCRIPT_VERBOSE_REGEX_COMMENT, SCE_COFFEESCRIPT_WORD, SCE_COFFEESCRIPT_WORD2,
-        SCE_D_CHARACTER, SCE_D_COMMENT, SCE_D_COMMENTDOC, SCE_D_COMMENTDOCKEYWORD,
-        SCE_D_COMMENTDOCKEYWORDERROR, SCE_D_COMMENTLINE, SCE_D_COMMENTLINEDOC, SCE_D_COMMENTNESTED,
-        SCE_D_DEFAULT, SCE_D_IDENTIFIER, SCE_D_NUMBER, SCE_D_OPERATOR, SCE_D_STRING, SCE_D_STRINGB,
+        SCE_CSOUND_ARATE_VAR, SCE_CSOUND_COMMENT, SCE_CSOUND_GLOBAL_VAR, SCE_CSOUND_HEADERSTMT,
+        SCE_CSOUND_IRATE_VAR, SCE_CSOUND_KRATE_VAR, SCE_CSOUND_NUMBER, SCE_CSOUND_OPCODE,
+        SCE_CSOUND_OPERATOR, SCE_CSOUND_PARAM, SCE_CSOUND_USERKEYWORD, SCE_D_CHARACTER,
+        SCE_D_COMMENT, SCE_D_COMMENTDOC, SCE_D_COMMENTDOCKEYWORD, SCE_D_COMMENTDOCKEYWORDERROR,
+        SCE_D_COMMENTLINE, SCE_D_COMMENTLINEDOC, SCE_D_COMMENTNESTED, SCE_D_DEFAULT,
+        SCE_D_IDENTIFIER, SCE_D_NUMBER, SCE_D_OPERATOR, SCE_D_STRING, SCE_D_STRINGB,
         SCE_D_STRINGEOL, SCE_D_STRINGR, SCE_D_TYPEDEF, SCE_D_WORD, SCE_D_WORD2, SCE_D_WORD3,
         SCE_D_WORD5, SCE_D_WORD6, SCE_D_WORD7, SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_DEFAULT,
         SCE_F_IDENTIFIER, SCE_F_LABEL, SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2,
@@ -23754,6 +23845,7 @@ mod lang_theme_tests {
             (L_JSP, "JSP"),
             (L_FORTRAN, "Fortran (free form)"),
             (L_FORTRAN_77, "Fortran (fixed form)"),
+            (L_CSOUND, "CSound"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -34088,6 +34180,398 @@ mod lang_theme_tests {
         );
     }
 
+    /// Csound uses Lexilla's `csound` lexer (`LexCsound.cxx`) —
+    /// a 16-state DSL lexer for Csound orchestra (`.orc`) and
+    /// score (`.sco`) source. Distinctive features:
+    ///
+    /// - **Rate-prefix auto-classification**: `LexCsound.cxx:101-111`
+    ///   examines the first character of any identifier that
+    ///   fails all three wordlist probes and routes it to a
+    ///   rate-typed variable state — `p` → `PARAM`, `a` →
+    ///   `ARATE_VAR`, `k` → `KRATE_VAR`, `i` → `IRATE_VAR`,
+    ///   `g` → `GLOBAL_VAR`. This is Csound's signature.
+    /// - **Three-class wordlist install** matching
+    ///   `csoundWordListDesc[]` at `:208-213`: opcodes /
+    ///   header statements / user keywords.
+    /// - **Case-SENSITIVE matching** via `sc.GetCurrent` at
+    ///   `:93` (byte-exact, NOT lowered). Csound is
+    ///   case-sensitive per spec.
+    /// - **No string handling**: quote characters are not in
+    ///   `IsCsoundOperator` or `IsAWordStart`, so `"..."` /
+    ///   `'...'` remain in DEFAULT. The `STRINGEOL` (15) enum
+    ///   slot is defined but only used as an `initStyle`
+    ///   guard at `:63-64`.
+    /// - **Three orphan states** never entered by the paint
+    ///   loop: `INSTR` (4), `COMMENTBLOCK` (9), `STRINGEOL`
+    ///   (15). All unmapped by the theme; invariant #9 pins
+    ///   the deliberate non-inclusion.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_CSOUND)` returns `Some(&CSOUND_THEME)`.
+    ///   2. Style count == 11 (13 emitted `SCE_CSOUND_*` states
+    ///      minus `DEFAULT` (0) + `IDENTIFIER` (5), both
+    ///      unmapped per framework convention).
+    ///   3. Three wordlist classes in canonical order (0/1/2)
+    ///      matching `csoundWordListDesc[]` at
+    ///      `LexCsound.cxx:208-213`.
+    ///   4. All three classes non-empty.
+    ///   5. Every wordlist token matches Csound identifier
+    ///      alphabet: `[a-z0-9_]+` (all-lowercase per Csound
+    ///      convention). `LexCsound.cxx:32-35` `IsAWordChar`
+    ///      accepts alnum + `.` + `_` + `?`; wordlist entries
+    ///      restrict further to alnum + `_` (no `.` / `?` /
+    ///      `%` / `@` / `$` in practice — those are sigils
+    ///      for macros / specific token shapes never
+    ///      wordlisted).
+    ///   6. No cross-list duplicates across WL0/WL1/WL2.
+    ///      `LexCsound` probes wordlists first-match-wins per
+    ///      `:95-100` — a duplicate in a later class is dead
+    ///      code.
+    ///   7. Style-routing pins for the 11 mapped SCE
+    ///      constants.
+    ///   8. DEFAULT (0) and IDENTIFIER (5) unmapped.
+    ///   9. Three never-entered orphan states unmapped:
+    ///      INSTR (4), COMMENTBLOCK (9), STRINGEOL (15).
+    ///   10. Italic set == 1 (`COMMENT` only).
+    ///   11. Bold set == 1 (`OPCODE` only).
+    ///   12. Cross-language non-reuse — `CSOUND_STYLES`
+    ///       must not deep-equal any prior wired theme.
+    ///   13. `L_CSOUND` `LangEntry` has
+    ///       `lexer: Some("csound")` and extensions contain
+    ///       `orc`, `sco`, `csd`.
+    ///   14. Canonical anchor coverage: WL0 opcodes
+    ///       (`oscil`/`linen`/`reverb`/`out`/`pvsanal`),
+    ///       WL1 header statements (`sr`/`kr`/`instr`/
+    ///       `endin`/`ksmps`), WL2 control-flow
+    ///       (`if`/`then`/`while`/`goto`).
+    ///   15. **Control-flow keywords in class 2 only** —
+    ///       `if`/`then`/`else`/`elseif`/`endif`/`while`/
+    ///       `until`/`do`/`od`/`goto`/`igoto`/`kgoto`/`tigoto`/
+    ///       `timout`/`reinit`/`rireturn`. Class 0
+    ///       deliberately excludes these to route them to
+    ///       Keyword2 instead of Keyword (bold). Enforced via
+    ///       affirmative class-2 presence + class-0 absence.
+    ///   16. Rate-var single-letter prefixes (`a`/`k`/`i`/`g`/
+    ///       `p`) — the auto-classifier expects these first
+    ///       characters. The wordlists don't include
+    ///       `a`/`k`/`i`/`g`/`p` as bare tokens because
+    ///       `LexCsound`'s state entry at `:129-149` reaches
+    ///       `IDENTIFIER` via `IsAWordStart` first; the standalone
+    ///       `sc.ch == 'a'` etc. branches at `:138-147` are
+    ///       dead code shadowed by `IsAWordStart`.
+    ///       EXCEPT single-letter score statements `a` / `i`
+    ///       (and others) ARE in class 1 for score-file usage
+    ///       where they appear as statement leaders. Since
+    ///       class 1 is probed AFTER class 0 misses, `a` in
+    ///       score matches HEADERSTMT; longer `aOut` fails
+    ///       all wordlists and falls to `ARATE_VAR`.
+    #[test]
+    fn csound_uses_lexcsound_three_class_theme() {
+        let cs = lang_theme(L_CSOUND).expect("CSound wired");
+
+        // Invariant 2: 11 mappings.
+        assert_eq!(
+            cs.styles.len(),
+            11,
+            "CSOUND_STYLES must map 11 indices (13 emitted SCE_CSOUND_* \
+             states minus DEFAULT (0) + IDENTIFIER (5), both unmapped \
+             per framework convention)"
+        );
+
+        // Invariant 3: three classes canonical descriptor order.
+        assert_eq!(
+            cs.keywords.len(),
+            3,
+            "CSOUND_THEME must install exactly 3 wordlist classes \
+             (matches csoundWordListDesc[] at LexCsound.cxx:208-213)"
+        );
+        for (i, (expected_class, expected_list)) in [
+            (0u32, CSOUND_OPCODES),
+            (1u32, CSOUND_HEADERSTMT),
+            (2u32, CSOUND_USERKW),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(cs.keywords[i].0, *expected_class);
+            assert_eq!(cs.keywords[i].1, *expected_list);
+        }
+
+        // Invariant 4: all three classes non-empty.
+        for (list, name) in [
+            (CSOUND_OPCODES, "OPCODES"),
+            (CSOUND_HEADERSTMT, "HEADERSTMT"),
+            (CSOUND_USERKW, "USERKW"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "CSOUND_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: Csound identifier alphabet.
+        // LexCsound.cxx:32-35 IsAWordChar accepts alnum +
+        // `.` + `_` + `?`, but wordlist entries in practice
+        // restrict to `[a-z0-9_]+` — all-lowercase per Csound
+        // convention.
+        for (list, name) in [
+            (CSOUND_OPCODES, "OPCODES"),
+            (CSOUND_HEADERSTMT, "HEADERSTMT"),
+            (CSOUND_USERKW, "USERKW"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    !tok.is_empty()
+                        && tok
+                            .bytes()
+                            .all(|b| { b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' }),
+                    "CSOUND_{name} token `{tok}` violates Csound identifier \
+                     alphabet — must be `[a-z0-9_]+` so LexCsound's \
+                     GetCurrent + InList probe finds a match"
+                );
+            }
+        }
+
+        // Invariant 6: cross-list uniqueness across WL0/WL1/WL2.
+        use std::collections::HashSet;
+        let sets = [
+            (
+                "OPCODES",
+                CSOUND_OPCODES.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "HEADERSTMT",
+                CSOUND_HEADERSTMT.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "USERKW",
+                CSOUND_USERKW.split_whitespace().collect::<HashSet<_>>(),
+            ),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                if let Some(shared) = sets[i].1.intersection(&sets[j].1).next() {
+                    panic!(
+                        "CSOUND_{} and CSOUND_{} both contain `{shared}` — \
+                         LexCsound.cxx:95-100 probes wordlists 0/1/2 \
+                         first-match-wins. A cross-list duplicate leaves \
+                         the later entry dead code.",
+                        sets[i].0, sets[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 7: style-routing pins for all 11 mapped SCE constants.
+        for (idx, slot, name) in [
+            (SCE_CSOUND_COMMENT, StyleSlot::Comment, "SCE_CSOUND_COMMENT"),
+            (SCE_CSOUND_NUMBER, StyleSlot::Number, "SCE_CSOUND_NUMBER"),
+            (
+                SCE_CSOUND_OPERATOR,
+                StyleSlot::Operator,
+                "SCE_CSOUND_OPERATOR",
+            ),
+            (SCE_CSOUND_OPCODE, StyleSlot::Keyword, "SCE_CSOUND_OPCODE"),
+            (
+                SCE_CSOUND_HEADERSTMT,
+                StyleSlot::Keyword2,
+                "SCE_CSOUND_HEADERSTMT",
+            ),
+            (
+                SCE_CSOUND_USERKEYWORD,
+                StyleSlot::Keyword2,
+                "SCE_CSOUND_USERKEYWORD",
+            ),
+            (
+                SCE_CSOUND_PARAM,
+                StyleSlot::Preprocessor,
+                "SCE_CSOUND_PARAM",
+            ),
+            (
+                SCE_CSOUND_ARATE_VAR,
+                StyleSlot::Keyword2,
+                "SCE_CSOUND_ARATE_VAR",
+            ),
+            (
+                SCE_CSOUND_KRATE_VAR,
+                StyleSlot::Keyword2,
+                "SCE_CSOUND_KRATE_VAR",
+            ),
+            (
+                SCE_CSOUND_IRATE_VAR,
+                StyleSlot::Keyword2,
+                "SCE_CSOUND_IRATE_VAR",
+            ),
+            (
+                SCE_CSOUND_GLOBAL_VAR,
+                StyleSlot::Keyword2,
+                "SCE_CSOUND_GLOBAL_VAR",
+            ),
+        ] {
+            assert!(
+                cs.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8 + 9: DEFAULT (0), IDENTIFIER (5), and
+        // the three orphan slots INSTR (4), COMMENTBLOCK (9),
+        // STRINGEOL (15) all unmapped.
+        for (idx, name) in [
+            (0_usize, "DEFAULT"),
+            (4, "INSTR"),
+            (5, "IDENTIFIER"),
+            (9, "COMMENTBLOCK"),
+            (15, "STRINGEOL"),
+        ] {
+            assert!(
+                !cs.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_CSOUND_{name} ({idx}) must remain unmapped — DEFAULT / \
+                 IDENTIFIER per framework convention; INSTR / COMMENTBLOCK / \
+                 STRINGEOL are enum slots defined in SciLexer.h but never \
+                 entered by ColouriseCsoundDoc"
+            );
+        }
+
+        // Invariant 10: italic == 1 (COMMENT only).
+        assert_eq!(cs.italic.len(), 1);
+        assert!(cs.italic.contains(&SCE_CSOUND_COMMENT));
+
+        // Invariant 11: bold == 1 (OPCODE only).
+        assert_eq!(cs.bold.len(), 1);
+        assert!(cs.bold.contains(&SCE_CSOUND_OPCODE));
+
+        // Invariant 12: cross-language non-reuse.
+        let r = lang_theme(L_R).expect("R wired");
+        let cscript = lang_theme(L_COFFEESCRIPT).expect("CoffeeScript wired");
+        let f = lang_theme(L_FORTRAN).expect("Fortran wired");
+        let json = lang_theme(L_JSON).expect("JSON wired");
+        for (other, name) in [
+            (r, "R"),
+            (cscript, "CoffeeScript"),
+            (f, "Fortran"),
+            (json, "JSON"),
+        ] {
+            assert_ne!(
+                cs.styles, other.styles,
+                "CSound must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 13: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let cs_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_CSOUND)
+            .expect("L_CSOUND LangEntry present in LANG_TABLE");
+        assert_eq!(
+            cs_entry.lexer,
+            Some("csound"),
+            "L_CSOUND LangEntry.lexer must be Some(\"csound\") — wiring \
+             assumes the LexCsound module dispatched via SCLEX_CSOUND (= 74)"
+        );
+        for ext in ["orc", "sco", "csd"] {
+            assert!(
+                cs_entry.extensions.contains(&ext),
+                "L_CSOUND extensions must contain `{ext}`"
+            );
+        }
+
+        // Invariant 14: canonical anchor coverage.
+        // WL0 opcodes — includes `instr`/`endin` (block
+        // markers must be class 0 for FoldCsoundInstruments
+        // at LexCsound.cxx:170-183 to fire correctly).
+        for op in [
+            "oscil", "linen", "reverb", "out", "pvsanal", "instr", "endin", "pset", "seed",
+            "strset",
+        ] {
+            assert!(
+                CSOUND_OPCODES.split_whitespace().any(|t| t == op),
+                "CSOUND_OPCODES must include canonical opcode `{op}`"
+            );
+        }
+        // WL1 header statements — `opcode`/`endop` here
+        // (user-defined opcode block markers, distinct from
+        // `instr`/`endin` which live in WL0).
+        for hdr in ["sr", "kr", "ksmps", "opcode", "endop"] {
+            assert!(
+                CSOUND_HEADERSTMT.split_whitespace().any(|t| t == hdr),
+                "CSOUND_HEADERSTMT must include canonical header statement `{hdr}`"
+            );
+        }
+        // `instr`/`endin` explicitly NOT in class 1 — moved
+        // to class 0 to satisfy the fold classifier.
+        for op in ["instr", "endin"] {
+            assert!(
+                !CSOUND_HEADERSTMT.split_whitespace().any(|t| t == op),
+                "CSOUND_HEADERSTMT must NOT include `{op}` — moved to \
+                 CSOUND_OPCODES so FoldCsoundInstruments at \
+                 LexCsound.cxx:170-183 can fold instrument blocks"
+            );
+        }
+        for cf in ["if", "then", "while", "goto"] {
+            assert!(
+                CSOUND_USERKW.split_whitespace().any(|t| t == cf),
+                "CSOUND_USERKW must include canonical control-flow keyword `{cf}`"
+            );
+        }
+
+        // Invariant 15: ALL 25 class-2 control-flow tokens
+        // present in CSOUND_USERKW, and ABSENT from
+        // CSOUND_OPCODES. Extended from the original 16
+        // to cover the full set (conditionals, loops,
+        // uncond goto, cond goto, counted-loop, subroutine
+        // / reinit).
+        for kw in [
+            // Conditionals (5).
+            "if", "then", "else", "elseif", "endif",
+            // Loops (4). NOTE: `enduntil` deliberately NOT
+            // included — verified against Csound Reference
+            // Manual as a fabricated token (Csound loops
+            // close with `od`, not `enduntil`).
+            "while", "until", "do", "od", // Unconditional goto (5).
+            "goto", "igoto", "kgoto", "tigoto", "timout", // Conditional goto (4).
+            "cggoto", "cigoto", "ckgoto", "cngoto", // Counted-loop opcodes (4).
+            "loop_ge", "loop_gt", "loop_le", "loop_lt", // Subroutine / reinit (3).
+            "return", "reinit", "rireturn",
+        ] {
+            assert!(
+                CSOUND_USERKW.split_whitespace().any(|t| t == kw),
+                "CSOUND_USERKW must include control-flow keyword `{kw}` — \
+                 class 2 owns the control-flow surface"
+            );
+            assert!(
+                !CSOUND_OPCODES.split_whitespace().any(|t| t == kw),
+                "CSOUND_OPCODES must NOT include control-flow keyword \
+                 `{kw}` — routes through class 2 to Keyword2 (accent) \
+                 rather than Keyword (bold)"
+            );
+        }
+        // `enduntil` deliberately NOT in class 2 — verified
+        // fabricated by adversarial review against the
+        // Csound Reference Manual.
+        assert!(
+            !CSOUND_USERKW.split_whitespace().any(|t| t == "enduntil"),
+            "CSOUND_USERKW must NOT include `enduntil` — verified \
+             fabricated against the Csound Reference Manual; Csound \
+             loops close with `od`"
+        );
+
+        // Invariant 16: ALL 15 single-letter score statements
+        // in class 1. Extended from the original 6 to cover
+        // the full set.
+        for stmt in [
+            "f", "i", "a", "t", "b", "e", "s", "v", "n", "x", "q", "r", "m", "y", "d",
+        ] {
+            assert!(
+                CSOUND_HEADERSTMT.split_whitespace().any(|t| t == stmt),
+                "CSOUND_HEADERSTMT must include single-letter score \
+                 statement `{stmt}` — matches score-file bare-identifier \
+                 leader position"
+            );
+        }
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -34098,6 +34582,7 @@ mod lang_theme_tests {
     /// `L_JSON5` were removed when the JSON row landed.
     /// `L_JAVASCRIPT` was removed when the JavaScript row landed.
     /// `L_FORTRAN` / `L_FORTRAN_77` were removed when the Fortran
+    /// row landed. `L_CSOUND` was removed when the `CSound`
     /// row landed in this commit.
     #[test]
     fn unwired_languages_have_no_theme() {

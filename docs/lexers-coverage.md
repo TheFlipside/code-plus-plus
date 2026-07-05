@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 57 / 🟡 31 / ⚫ 1.
+Total: 89 rows. ✅ 58 / 🟡 30 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1862,7 +1862,7 @@ further shim work needed.
 | CMake | 48 | `cmake` | ✅ | ✅ | ✅ |
 | COBOL | 50 | `COBOL` | ✅ | ✅ | ✅ |
 | CoffeeScript | 56 | `coffeescript` | ✅ | ✅ | ✅ |
-| CSound | 70 | `csound` | ⚫ | ⚫ | 🟡 |
+| CSound | 70 | `csound` | ✅ | ✅ | ✅ |
 | CSS | 20 | `css` | ✅ | ✅ | ✅ |
 | D | 52 | `d` | ✅ | ✅ | ✅ |
 | Diff | 33 | `diff` | ✅ | ✅ | ✅ |
@@ -5502,6 +5502,157 @@ in class 0 only with affirmative
 class-1-absence pins, and operator-word `.name.`
 form absence pins (with the `not` exception
 documented and affirmatively pinned).
+
+**CSound (2026-07-05):** wires `SCLEX_CSOUND`
+(= 74) for Csound orchestra (`.orc`), score
+(`.sco`), and unified `.csd` sources. `L_CSOUND`
+(id 70) is the sole language row using this
+lexer — no shared-theme dispatch needed.
+
+**Rate-prefix auto-classification is Csound's
+signature.** `LexCsound.cxx:101-111` examines the
+first character of any identifier that fails all
+three wordlist probes and routes it to a
+rate-typed variable state — `p` → `PARAM`, `a`
+→ `ARATE_VAR`, `k` → `KRATE_VAR`, `i` →
+`IRATE_VAR`, `g` → `GLOBAL_VAR`. Every Csound
+variable carries its evaluation rate in the name
+(`aOut` is audio-rate, `kEnv` is control-rate,
+`iFreq` is init-rate, `gaMaster` is a global
+audio-rate variable, `p4`/`p5` are instrument
+parameters). The theme collapses the four
+rate-var states + HEADERSTMT + USERKEYWORD to
+`Keyword2` — six visual identifier categories
+share one accent slot. `PARAM` gets a distinct
+`Preprocessor` slot: instrument-parameter
+references are structural inputs.
+
+**Three-class wordlist (~365 + 28 + 25 = ~418
+tokens):**
+- **Class 0 (`SCE_CSOUND_OPCODE`, bold Keyword)**
+  — `CSOUND_OPCODES` carries ~365 canonical
+  Csound opcodes across 15 semantic categories,
+  including `instr` / `endin` (moved here from
+  class 1 so `FoldCsoundInstruments` at
+  `LexCsound.cxx:170-183` can fold instrument
+  blocks — the fold classifier's positive trigger
+  at `:170` requires `SCE_CSOUND_OPCODE` styling):
+  oscillators (`oscil`/`vco`/`buzz`), physical
+  models (`pluck`/`wgbow`/`fmvoice`), envelope
+  generators (`linen`/`adsr`/`transeg`), filters
+  (`butlp`/`moogladder`/`reson`), reverbs +
+  effects (`reverb`/`freeverb`/`chorus`/`delay`),
+  I/O (`out`/`in`/`monitor`), math intrinsics
+  (`abs`/`sqrt`/`sin`/`log`), conversion +
+  amplitude (`ampdb`/`cpspch`/`cpsmidi`), random
+  + noise (`rand`/`noise`/`gauss`), function
+  tables (`table`/`ftgen`/`diskin`), string +
+  print (`printf`/`sprintf`/`strcat`), MIDI
+  (`midiin`/`ampmidi`/`ctrl7`), signal + event
+  control (`chnget`/`schedule`/`event`),
+  spectral PVS suite (`pvsanal`/`pvsynth`/24
+  siblings), granular (`grain`/`fof`/
+  `syncgrain`).
+- **Class 1 (`SCE_CSOUND_HEADERSTMT`, accent
+  Keyword2)** — `CSOUND_HEADERSTMT` carries 28
+  orchestra/score/preprocessor tokens: 6 global
+  config settings (`sr`/`kr`/`ksmps`/`nchnls`/
+  `nchnls_i`/`0dbfs`), 2 user-opcode block markers
+  (`opcode`/`endop` — `instr`/`endin` moved to
+  class 0 for the fold classifier), 15
+  single-letter score statements (`f`/`i`/`a`/`t`/
+  `b`/`e`/`s`/`v`/`n`/`x`/`q`/`r`/`m`/`y`/`d`), 5
+  bare preprocessor forms (`include`/`define`/
+  `undef`/`ifdef`/`ifndef`).
+- **Class 2 (`SCE_CSOUND_USERKEYWORD`, accent
+  Keyword2)** — `CSOUND_USERKW` carries 25
+  control-flow tokens: conditionals (`if`/
+  `then`/`else`/`elseif`/`endif`), loops
+  (`while`/`until`/`do`/`od`), unconditional
+  gotos (`goto`/`igoto`/`kgoto`/`tigoto`/
+  `timout`), conditional gotos (`cggoto`/`cigoto`/
+  `ckgoto`/`cngoto`), counted-loop opcodes
+  (`loop_ge`/`loop_gt`/`loop_le`/`loop_lt`),
+  subroutine + reinit control (`return`/`reinit`/
+  `rireturn`).
+
+**Semantic rationale for class-2 control-flow
+placement.** The Csound manual formally
+documents `if`/`then`/`else`/`goto` etc. as
+"opcodes" (they appear in the opcodes manual
+index), but that's a documentation-grouping
+choice — these emit no signal and read as
+syntactic execution-flow control, not
+audio-processing primitives. Scintilla lexers
+for comparable languages routinely split control
+words into their own style slot. Placing them
+in class 2 gives them accent color (Keyword2)
+instead of bold (Keyword), matching how
+control-flow-aware Csound grammars render them.
+Test invariant #15 pins the 16 control-flow
+tokens in class 2 with affirmative class-0
+absence to catch a future regression that
+copy-pastes them into class 0.
+
+**Style routing (11 mappings):** COMMENT →
+`Comment` (italic); NUMBER → `Number`; OPERATOR
+→ `Operator`; OPCODE → `Keyword` (bold);
+HEADERSTMT + USERKEYWORD + ARATE_VAR + KRATE_VAR
++ IRATE_VAR + GLOBAL_VAR → `Keyword2` (six
+categories collapse); PARAM → `Preprocessor`
+(structural distinction). DEFAULT (0) +
+IDENTIFIER (5) unmapped per framework convention.
+
+**Three orphan enum slots** (INSTR (4),
+COMMENTBLOCK (9), STRINGEOL (15)) defined in
+`SciLexer.h` but never entered by
+`ColouriseCsoundDoc`. INSTR is a legacy slot;
+COMMENTBLOCK signals that the lexer has no
+`/* */` block-comment handling (only `;`-to-EOL);
+STRINGEOL is only referenced as an `initStyle`
+guard at `LexCsound.cxx:63-64`. Test invariant
+#9 pins the deliberate non-inclusion.
+
+**No string handling** — LexCsound's paint loop
+at `:68-152` never enters a string state. Quote
+characters `"`/`'` are not in `IsCsoundOperator`
+or `IsAWordStart`, so quoted strings remain in
+DEFAULT. Ubiquitous in Csound (`"filename.wav"`
+in `diskin`, format strings in `printf`) but
+correctly reflects the upstream lexer's
+capabilities.
+
+**`0dbfs` starts with a digit** so `LexCsound.cxx:132`
+routes it to NUMBER state before IDENTIFIER,
+meaning the wordlist probe never runs for this
+token. Kept in the class-1 wordlist for
+completeness in case a future lexer change adds
+number-vs-identifier disambiguation, but
+currently dead code for this specific token.
+
+Structural test coverage: 16 invariants —
+`Some(&CSOUND_THEME)` return, 11-mapping style
+count, three-class canonical descriptor order,
+all classes non-empty, Csound identifier
+alphabet enforcement `[a-z0-9_]+` (single-letter
+score statements permitted), cross-list
+uniqueness across WL0/WL1/WL2, style-routing
+pins for the 11 mapped SCE constants, DEFAULT +
+IDENTIFIER + INSTR + COMMENTBLOCK + STRINGEOL
+all unmapped, italic set == 1 (COMMENT only),
+bold set == 1 (OPCODE only), cross-language
+non-reuse against R / CoffeeScript / Fortran /
+JSON, `L_CSOUND` `LangEntry`'s `lexer:
+Some("csound")` + `.orc` + `.sco` + `.csd`
+extension presence, canonical anchor coverage
+(WL0 opcodes / WL1 headers / WL2 control-flow —
+including affirmative pins that `instr` / `endin`
+live in WL0 for the fold classifier and are NOT
+in WL1), 25 class-2 control-flow keywords in
+class 2 only with affirmative class-0 absence
+(plus an affirmative absence pin for the
+fabricated `enduntil` token), and 15 single-
+letter score statements in class 1.
 
 ## Notes
 

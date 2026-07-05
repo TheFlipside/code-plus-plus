@@ -9512,6 +9512,378 @@ pub const FORTRAN_EXTENDED: &str = concat!(
     "event_query get_team team_number coshape reduce ",
 );
 
+/// Csound opcodes — signal generators, filters, envelopes,
+/// effects, I/O, math intrinsics, MIDI, spectral processing
+/// (class 0 → `SCE_CSOUND_OPCODE`).
+///
+/// **Source of truth:** Csound Reference Manual §OPCODES
+/// (`csound.com/docs/manual/OpcodesOverview.html`) and the
+/// per-topic manual sections: Signal Generators, Signal
+/// Modifiers, Signal I/O, Orchestra Top, MIDI, Spectral
+/// Processing (`SpectralTop.html`).
+///
+/// **Case-sensitive byte-exact match.**
+/// `LexCsound.cxx:90-113` calls `sc.GetCurrent(s, sizeof(s))`
+/// (byte-exact), NOT `GetCurrentLowered`. Csound is
+/// case-sensitive at the spec level, and canonical convention
+/// is all-lowercase opcodes. Same discipline as
+/// [`FORTRAN_KEYWORDS`] would be inverted, matching
+/// [`R_RESERVED`] / [`COFFEESCRIPT_KEYWORDS`] instead.
+///
+/// **Coverage — ~365 tokens** grouped by semantic role
+/// (order is a human-readability choice; Scintilla's
+/// `WordList::InList` sorts internally):
+///   - **Oscillators / signal generators** (~20):
+///     `oscil`/`oscili`/`oscil3`, `poscil`/`poscil3`,
+///     `foscil`/`foscili`, `vco`/`vco2`, `buzz`/`gbuzz`,
+///     `sinsyn`, `phasor`, `lfo`, `oscilikt`, `oscbnk`.
+///   - **Physical models** (~11): `pluck`, `wgpluck`/`wgpluck2`,
+///     `wgbow`/`wgclar`/`wgflute`/`wgbrass`, `fmvoice`,
+///     `fmbell`/`fmrhode`/`fmwurlie` etc.
+///   - **Envelope generators** (~15): `linen`/`linenr`,
+///     `envlpx`/`envlpxr`, `expon`/`expseg`, `line`/`linseg`,
+///     `adsr`/`madsr`/`mxadsr`/`xadsr`, `transeg`/`transegr`,
+///     `cosseg`/`cossegr`, `xtratim`.
+///   - **Filters** (~30): butterworth family
+///     (`butlp`/`buthp`/`butbp`/`butbr`/`butter`),
+///     resonant (`reson`/`areson`/`resonz`/`resonr`/`resonx`),
+///     `tone`/`atone`/`tonek`/`atonek`, `moogladder`/`moogvcf`,
+///     `svfilter`, `statevar`, `biquad`, `hilbert`.
+///   - **Reverbs + effects** (~30): `reverb`/`reverb2`/
+///     `nreverb`/`reverbsc`/`freeverb`/`babo`, `delay`/`delayr`/
+///     `delayw`/`deltap`/`vdelay`, `chorus`/`flanger`/
+///     `phaser1`/`phaser2`, `distort`/`compress`/`limit`/
+///     `clip`/`expander`, `pan`/`pan2`, `hrtfstat`/`hrtfmove`.
+///   - **I/O** (~19): `out`/`outs`/`out1`/`out2`/`outc`/etc.,
+///     `in`/`ins`/`inch`/`inx`/`monitor`.
+///   - **Math intrinsics** (~27): `abs`/`int`/`frac`/`round`/
+///     `ceil`/`floor`, transcendentals (`sqrt`/`exp`/`log`/
+///     `log10`/`log2`/`pow`), trig (`sin`/`cos`/`tan`/`sinh`/
+///     `cosh`/`tanh`/`asin`/`acos`/`atan`/`atan2`),
+///     `divz`/`max`/`min`/`sum`.
+///   - **Conversion / amplitude** (~15): `ampdb`/`dbamp`/
+///     `dbfsamp`/`ampdbfs`, `cpspch`/`pchoct`/`cpsoct` family,
+///     `cpsmidi`/`pchmidi`/`octmidi`/`notnum`, `cent`/
+///     `semitone`, `rms`/`follow`/`balance`/`peak`.
+///   - **Random / noise** (~23): `rand`/`randh`/`randi`/
+///     `random`/`randomi`/`randomh`, `noise`/`pinker`/
+///     `pinkish`, distribution generators (`unirand`/`linrand`/
+///     `betarand`/`gauss`/`exprand`/`cauchy`/`poisson`),
+///     `jitter`/`jitter2`, `jspline`/`rspline`, `dust`/`dust2`.
+///   - **Function tables** (~19): `table`/`tablei`/`table3`,
+///     `tabread`/`tablew`/`tablewa`, `ftgen`/`ftfree`/`ftlen`/
+///     `ftlptim`/`ftsr`/`ftsave`/`ftload`, `ftaudio`/`ftconv`/
+///     `ftmorf`, `soundin`/`diskin`/`diskin2`, `loscil`/
+///     `loscil3`, `mincer`/`temposcal`.
+///   - **String / print** (~15): `print`/`prints`/`printf`/
+///     `printk`/`printks`/`println`/`printks2`, `puts`,
+///     `sprintf`, `strcat`/`strsub`/`strcpy`/`strlen`/
+///     `strindex`/`strlower`/`strupper`/`strcmp`/`strget`.
+///   - **MIDI** (~20): `midiin`/`midiout`/`midinoteoff`/
+///     `midinoteoncps`, `noteondur`/`noteondur2`/`release`/
+///     `ampmidi`, `pchbend`/`aftouch`/`veloc`/`chpress`,
+///     `midion`/`midion2`, `ctrl7`/`ctrl14`/`ctrl21`/
+///     `ctrlinit`/`initc7`, `massign`/`pgmassign`/`midichn`.
+///   - **Signal / event control** (~15): `changed`/`changed2`,
+///     `trigger`, `metro`, `seqtime`, `samphold`, `chnget`/
+///     `chnset`/`chnclear`/`chnexport`/`chnmix`, `schedule`/
+///     `schedwhen`/`schedkwhen`, `event`/`event_i`, `turnoff`/
+///     `turnoff2`/`turnon`, `active`, `tival`/`timeinsts`/
+///     `timek`.
+///   - **Spectral (PVS)** (~24): `pvsanal`/`pvsynth`/
+///     `pvsadsyn`/`pvscent`/`pvsfilter`/`pvsmaska`/`pvsmix`/
+///     `pvsvoc`/`pvsblur`/`pvsstretch`/`pvspitch`/`pvscross`/
+///     `pvsmorph`/`pvsftr`/`pvsftw`/`pvsifd`/`pvsbandp`/
+///     `pvsbandr`/`pvsfreeze`/`pvsgain`/`pvshift`/`pvsdisp`/
+///     `pvsarp`/`pvsosc`.
+///   - **Granular** (~10): `grain`/`grain2`/`grain3`,
+///     `sndwarp`/`sndwarpst`, `syncgrain`/`syncloop`,
+///     `partikkel`, `fof`/`fof2`/`fog`, `granule`.
+///   - **Miscellaneous** (~6): `downsamp`/`upsamp`,
+///     `interp`/`integ`/`diff`, `vibr`/`vibrato`.
+///
+/// **Deliberately excluded — moved to class 2
+/// [`CSOUND_USERKW`]:**
+///   - Control-flow keywords `if`/`then`/`else`/`elseif`/
+///     `endif`/`while`/`until`/`do`/`od`/`enduntil`.
+///   - Goto family `goto`/`igoto`/`kgoto`/`tigoto`/`cggoto`/
+///     `cigoto`/`ckgoto`/`cngoto`/`timout`.
+///   - Counted-loop opcodes `loop_ge`/`loop_gt`/`loop_le`/
+///     `loop_lt`.
+///   - Subroutine return / reinit-pass `return`/`reinit`/
+///     `rireturn`.
+///
+/// **Deliberately excluded — moved to class 1
+/// [`CSOUND_HEADERSTMT`]:**
+///   - Global config settings `sr`/`kr`/`ksmps`/`nchnls`/
+///     `nchnls_i`/`0dbfs`.
+///   - Block markers `instr`/`endin`/`opcode`/`endop`.
+///   - Score statements (single-letter `f`/`i`/`a`/`t`/`b`/
+///     `e`/`s`/`v`/`n`/`x`/`q`/`r`/`m`/`y`/`d`).
+///   - Preprocessor bare forms `include`/`define`/`undef`/
+///     `ifdef`/`ifndef`.
+///
+/// **Deliberately excluded — auto-classified by first
+/// character:**
+///   - Rate-prefix variable names (`aOut`, `kEnv`, `iFreq`,
+///     `gaBus`, `p4`). `LexCsound`'s identifier classifier at
+///     `:101-111` routes these to
+///     `SCE_CSOUND_ARATE_VAR` / `_KRATE_VAR` / `_IRATE_VAR` /
+///     `_GLOBAL_VAR` / `_PARAM` when they fail all three
+///     wordlist probes.
+pub const CSOUND_OPCODES: &str = concat!(
+    // Oscillators / signal generators.
+    "oscil oscili oscils oscil3 poscil poscil3 foscil foscili ",
+    "vco vco2 buzz gbuzz sinsyn phasor lfo oscilikt oscbnk ",
+    // Physical models.
+    "pluck wgpluck wgpluck2 wgbow wgclar wgflute wgbrass ",
+    "fmvoice fmb3 fmbell fmmetal fmpercfl fmrhode fmwurlie ",
+    // Envelope generators.
+    "linen linenr envlpx envlpxr expon expseg line linseg ",
+    "expsegr linsegr adsr madsr mxadsr xadsr ",
+    "transeg transegr cosseg cossegr expcurve gainslider xtratim ",
+    // Filters.
+    "lowpass2 highpass2 butlp buthp butbp butbr butter ",
+    "tone atone tonek atonek tonex atonex ",
+    "reson areson resonz resonr resonx resony ",
+    "bqrez mode svfilter statevar moogladder moogvcf tbvcf ",
+    "k35lpf k35hpf port portk dcblock dcblock2 ",
+    "biquad biquada hilbert mediank ",
+    // Reverbs + effects.
+    "reverb reverb2 nreverb reverbsc freeverb babo ",
+    "delay delayr delayw deltap deltapi deltap3 deltapn deltapx deltapxw ",
+    "vdelay vdelay3 vdelayx delayk comb alpass vcomb valpass ",
+    "chorus flanger phaser1 phaser2 distort distort1 ",
+    "compress compress2 dam expander limit clip pan pan2 hrtfstat hrtfmove ",
+    // I/O.
+    "out outs out1 out2 outc outo outq outx outh outk outs1 outs2 outq1 outq2 ",
+    "in ins inch inx inrg ino inh monitor ",
+    // Math intrinsics.
+    "abs int frac round ceil floor sqrt exp log log10 log2 pow mod ",
+    "sin cos tan sinh cosh tanh asin acos atan atan2 taninv2 ",
+    "powoftwo logbtwo divz max min maxabs minabs sum ",
+    // Conversion / amplitude.
+    "ampdb dbamp dbfsamp ampdbfs rms follow follow2 balance peak ",
+    "cpspch pchoct cpsoct octpch octcps cpsmidi pchmidi octmidi ",
+    "notnum cent semitone ",
+    // Random / noise.
+    "rand randh randi random randomi randomh noise pinker pinkish ",
+    "unirand linrand betarand gauss exprand cauchy poisson ",
+    "jitter jitter2 jspline rspline dust dust2 ",
+    // Function tables.
+    "table tablei table3 tabread tablew tablewa tablewkt tablecopy ",
+    "tableng tabsum tablera tablemix ",
+    "ftgen ftfree ftlen ftlptim ftsr ftsave ftload ftaudio ftconv ftmorf ",
+    "soundin diskin diskin2 filenchnls filelen loscil loscil3 mincer temposcal ",
+    // String / print.
+    "print prints printf printk printks println printks2 puts sprintf ",
+    "strcat strsub strcpy strlen strindex strlower strupper strcmp strget ",
+    // MIDI.
+    "midiin midiout midinoteoff midinoteoncps noteondur noteondur2 release ",
+    "ampmidi pchbend aftouch veloc chpress midion midion2 ",
+    "ctrl7 ctrl14 ctrl21 ctrlinit initc7 massign pgmassign midichn ",
+    // Signal / event control (control-flow words are
+    // in class 2, not here). Also includes once-only setup
+    // opcodes `pset` / `seed` / `strset` and — critically —
+    // `instr` / `endin` block markers, which must be in
+    // class 0 (SCE_CSOUND_OPCODE) for `FoldCsoundInstruments`
+    // at LexCsound.cxx:170-183 to fire; the fold classifier
+    // only advances levels when it sees an OPCODE-styled
+    // `instr` / `endin` transition.
+    "instr endin pset seed strset ",
+    "changed changed2 trigger metro seqtime samphold ",
+    "chnget chnset chnclear chnexport chnmix ",
+    "schedule schedwhen schedkwhen event event_i ",
+    "turnoff turnoff2 turnon active tival timeinsts timek ",
+    // Spectral (streaming phase vocoder — PVS suite).
+    "pvsanal pvsynth pvsadsyn pvscent pvsfilter pvsmaska pvsmix ",
+    "pvsvoc pvsblur pvsstretch pvspitch pvscross pvsmorph ",
+    "pvsftr pvsftw pvsifd pvsbandp pvsbandr pvsfreeze ",
+    "pvsgain pvshift pvsdisp pvsarp pvsosc ",
+    // Granular.
+    "grain grain2 grain3 sndwarp sndwarpst syncgrain syncloop partikkel ",
+    "fof fof2 fog granule ",
+    // Miscellaneous.
+    "downsamp upsamp interp integ diff vibr vibrato ",
+);
+
+/// Csound header statements — orchestra global settings,
+/// block markers, score statements, and preprocessor bare
+/// forms (class 1 → `SCE_CSOUND_HEADERSTMT`).
+///
+/// **Source of truth:** Csound Reference Manual §HEADER
+/// (`csound.com/docs/manual/OrchTop.html`), score statements
+/// (`csound.com/docs/manual/ScoreStatements.html`), and CSD
+/// document structure (`csound.com/docs/manual/CommandUnifile.html`).
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`CSOUND_OPCODES`]. All entries lowercase per Csound
+/// convention.
+///
+/// **Coverage — 28 tokens grouped by role:**
+///   - **Global config settings (6)**: `sr` (sample rate),
+///     `kr` (control rate), `ksmps` (samples per control
+///     period), `nchnls` (output channels), `nchnls_i`
+///     (input channels), `0dbfs` (normalization). NOTE:
+///     `0dbfs` starts with a digit — at `LexCsound.cxx:132`
+///     digit-starters enter `SCE_CSOUND_NUMBER` before
+///     `IsAWordStart`'s IDENTIFIER path, so `0dbfs` is
+///     styled as NUMBER, not HEADERSTMT. Kept in the
+///     wordlist for completeness in case a future lexer
+///     change adds number-vs-identifier disambiguation, but
+///     currently dead code for this specific token.
+///   - **User-opcode block markers (2)**: `opcode`, `endop`
+///     (start / end user-defined opcode). NOTE: `instr` /
+///     `endin` are NOT here — they live in
+///     [`CSOUND_OPCODES`] class 0 because
+///     `FoldCsoundInstruments` at `LexCsound.cxx:170-183`
+///     requires them to be styled as `SCE_CSOUND_OPCODE`
+///     for instrument-block folding to fire. The fold
+///     classifier's guard at `:170` (`stylePrev !=
+///     SCE_CSOUND_OPCODE && style == SCE_CSOUND_OPCODE`)
+///     is a positive trigger on transitions INTO an
+///     OPCODE-styled token — routing `instr` / `endin`
+///     through class 1 would break folding.
+///     `opcode` / `endop` don't need OPCODE styling
+///     because `FoldCsoundInstruments` only checks for
+///     `strcmp(s, "instr")` / `strcmp(s, "endin")`
+///     inside its OPCODE guard — the `opcode`
+///     user-defined block markers are folded by a
+///     different mechanism (or not at all).
+///   - **Score statements (15, all single-letter)**: `f`
+///     (function table), `i` (instrument statement — note
+///     event), `a` (advance time), `t` (tempo), `b` (offset
+///     time), `e` (end of section / score), `s` (section
+///     marker), `v` (variable), `n` (repeat), `x` (skip),
+///     `q` (quiet mode), `r` (repeat count), `m` (mark),
+///     `y` (random seed), `d` (delete infinite instrument).
+///     Single-letter tokens only match when the source has
+///     exactly one identifier char at that position — they
+///     don't collide with longer identifiers like `aOut` or
+///     `iFreq`, which enter the rate-var auto-classification
+///     path at `LexCsound.cxx:101-111`.
+///   - **Preprocessor bare forms (5)**: `include`, `define`,
+///     `undef`, `ifdef`, `ifndef`. The `#`-prefixed forms
+///     (`#include`, `#define`) can't reach the wordlist —
+///     `#` is not in `IsAWordStart` at `:37-40`. The bare
+///     forms match if they appear as bare identifiers.
+///
+/// **Deliberately excluded:**
+///   - **CSD XML tags** (`<CsoundSynthesizer>`, `<CsOptions>`,
+///     `<CsInstruments>`, `<CsScore>`, `</CsoundSynthesizer>`,
+///     etc.). `<` and `>` are NOT in `IsAWordChar` at
+///     `LexCsound.cxx:32-35`, so these tokens can't reach the
+///     wordlist probe. Would need dedicated section-tag
+///     handling in the lexer to be styled.
+///   - **`#`-prefixed preprocessor forms**. `#` is not in
+///     `IsAWordStart`, so `#include`/`#define` etc. never
+///     enter the identifier state. Only the bare
+///     `include`/`define`/etc. tail forms match.
+///   - **Uppercase `A4`** (frequency-of-A reference, Csound
+///     6.09+). Csound source uses uppercase `A4`, but our
+///     all-lowercase policy would prevent a case-sensitive
+///     lexer from matching it. Skipped for now; if a future
+///     Csound-header expansion needs it, add `A4` verbatim.
+///   - **Uppercase score statements `B` and `C`**. Genuinely
+///     uppercase-canonical in Csound score syntax
+///     (case-sensitive, distinct from lowercase `b`/`c`),
+///     but the "return tokens as lowercase" rule overrides
+///     the same way as `A4`.
+///   - **Once-only header opcodes** — `ftgen`, `ctrlinit`,
+///     `massign`, `pgmassign`, `pset`, `seed`, `strset`.
+///     These are documented in §HEADER but are truly opcodes
+///     (function call syntax with arguments and i-rate
+///     returns) — they live in [`CSOUND_OPCODES`] class 0.
+///     All seven verified present there.
+pub const CSOUND_HEADERSTMT: &str = concat!(
+    // Global config settings (0dbfs is dead code — starts
+    // with digit, enters NUMBER state before IDENTIFIER —
+    // but kept for completeness).
+    "sr kr ksmps nchnls nchnls_i 0dbfs ",
+    // User-defined opcode block markers. NOTE: `instr` /
+    // `endin` are NOT here — they live in class 0
+    // (`CSOUND_OPCODES`) because `FoldCsoundInstruments`
+    // at LexCsound.cxx:170-183 requires them to be styled
+    // as `SCE_CSOUND_OPCODE` for instrument-block folding
+    // to fire. `opcode` / `endop` block markers for
+    // user-defined opcodes are a separate mechanism the
+    // fold classifier doesn't examine — they belong here.
+    "opcode endop ",
+    // Score statements (single-letter).
+    "f i a t b e s v n x q r m y d ",
+    // Preprocessor bare forms (# prefix stripped —
+    // `#` not in IsAWordStart).
+    "include define undef ifdef ifndef ",
+);
+
+/// Csound user-defined keywords — control-flow and program-flow
+/// operators (class 2 → `SCE_CSOUND_USERKEYWORD`).
+///
+/// **Source of truth:** Csound Reference Manual §"Program
+/// Flow Control" at `csound.com/docs/manual/ControlPgmctl.html`
+/// and the individual keyword pages (`else.html`, `endif.html`,
+/// etc.). The FLOSS Manuals Csound book control-structures
+/// chapter (`flossmanual.csound.com/csound-language/control-structures`)
+/// is also authoritative.
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`CSOUND_OPCODES`]. All entries lowercase.
+///
+/// **Semantic rationale for a separate class 2.** The Csound
+/// manual formally documents `if`/`then`/`else`/`goto` etc.
+/// as "opcodes" (they appear in the opcodes manual index),
+/// but that's a documentation-grouping choice — these emit no
+/// signal and read as syntactic execution-flow control, not
+/// as audio-processing primitives. Scintilla lexers for
+/// comparable languages routinely split control words into
+/// their own style slot. Placing them in class 2 gives them a
+/// distinct visual weight from the ~325 audio opcodes in
+/// class 0, matching how VS Code / Sublime / editor plugins
+/// with control-flow-aware Csound grammars render them.
+///
+/// **Coverage — 25 tokens:**
+///   - **Conditionals (5)**: `if`, `then`, `else`, `elseif`,
+///     `endif`.
+///   - **Loops (4)**: `while`, `until`, `do`, `od`.
+///   - **Unconditional goto family (5)**: `goto`, `igoto`
+///     (init-time goto), `kgoto` (control-rate goto),
+///     `tigoto` (goto if triggered), `timout` (time-based
+///     goto).
+///   - **Conditional goto family (4)**: `cggoto`, `cigoto`,
+///     `ckgoto`, `cngoto` (conditional variants).
+///   - **Counted-loop opcodes (4)**: `loop_ge`, `loop_gt`,
+///     `loop_le`, `loop_lt` (F2003-style counted loops).
+///   - **Subroutine / reinit control (3)**: `return`,
+///     `reinit`, `rireturn`.
+///
+/// **Deliberately excluded:**
+///   - **GEN routines** (`gen01`..`gen52`) — referenced
+///     numerically in `f`-statements / `ftgen` calls, not as
+///     orchestra identifiers. Including them would highlight
+///     incidental `gen##`-shaped user identifiers.
+///   - **Macros (`$NAME`)** — user-defined at runtime, not
+///     enumerable. The leading `$` sigil already routes
+///     macro invocations through `IsAWordStart`'s
+///     handling.
+///   - **Environment variables** `SFDIR`/`SSDIR`/`SADIR`/
+///     `INCDIR`/`SFOUTYP`/`OPCODE6DIR`/`OPCODE6DIR64` —
+///     shell env vars read by the Csound binary, not
+///     orchestra/score identifiers.
+pub const CSOUND_USERKW: &str = concat!(
+    // Conditionals.
+    "if then else elseif endif ",
+    // Loops.
+    "while until do od ",
+    // Unconditional goto family.
+    "goto igoto kgoto tigoto timout ",
+    // Conditional goto family.
+    "cggoto cigoto ckgoto cngoto ",
+    // Counted-loop opcodes (F2003-style).
+    "loop_ge loop_gt loop_le loop_lt ",
+    // Subroutine / reinit control.
+    "return reinit rireturn ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
