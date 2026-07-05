@@ -113,15 +113,15 @@ use codepp_core::lang::{
     GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
     HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
     INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
-    JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
-    KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
-    LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
-    L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO,
-    L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
-    L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R,
-    L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL,
-    L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS,
+    JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
+    LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
+    L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL,
+    L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP,
+    L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS,
+    L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB,
+    L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
+    NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
     POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
     POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
     PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
@@ -3591,6 +3591,28 @@ const OBJC_THEME: LangTheme = LangTheme {
 };
 const JAVA_THEME: LangTheme = LangTheme {
     keywords: &[(0, JAVA_KEYWORDS), (1, JAVA_KEYWORDS_2)],
+    styles: CPP_STYLES,
+    italic: CPP_ITALIC,
+    bold: CPP_BOLD,
+};
+// JavaScript rides `LexCPP` (per `L_JAVASCRIPT`'s LangEntry
+// `lexer: Some("cpp")`) — same shared `CPP_STYLES` / `CPP_ITALIC`
+// / `CPP_BOLD` reused across every LexCPP-family theme
+// (C / C++ / C# / Java / Objective-C / RC). Only the class-0 +
+// class-1 keyword pair differs:
+//   - class 0 = `JAVASCRIPT_KEYWORDS` (49 tokens covering ES5 →
+//     ES2017+ reserved words + strict-mode future-reserved +
+//     language literals). Renders bold.
+//   - class 1 = `JAVASCRIPT_KEYWORDS_2` (51 tokens covering the
+//     MDN Standard built-in objects — `Array`, `Object`,
+//     `Math`, `JSON`, `Promise`, `Iterator` (ES2025), the Error
+//     hierarchy, the typed-array family including `Float16Array`
+//     (ES2025), and language / host globals `console` /
+//     `globalThis` / `NaN` / `Infinity`). Renders accent-color.
+//     See the wordlist's docstring for the class-0-excludes-these
+//     / class-1-owns-these rationale.
+const JAVASCRIPT_THEME: LangTheme = LangTheme {
+    keywords: &[(0, JAVASCRIPT_KEYWORDS), (1, JAVASCRIPT_KEYWORDS_2)],
     styles: CPP_STYLES,
     italic: CPP_ITALIC,
     bold: CPP_BOLD,
@@ -8223,6 +8245,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&OBJC_THEME)
     } else if lang == L_JAVA {
         Some(&JAVA_THEME)
+    } else if lang == L_JAVASCRIPT {
+        Some(&JAVASCRIPT_THEME)
     } else if lang == L_RC {
         Some(&RC_THEME)
     } else if lang == L_RUST {
@@ -23545,24 +23569,25 @@ mod lang_theme_tests {
         GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
         HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
         INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
-        JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
-        KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
-        LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
-        L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
-        L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
-        L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS,
-        L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT,
-        L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
-        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
-        PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
-        POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
-        PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
-        RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
-        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
-        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+        JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS,
+        JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
+        LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
+        L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL,
+        L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX,
+        L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
+        L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL,
+        L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
+        NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
+        PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS,
+        POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1,
+        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
+        R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+        SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+        VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+        XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -23614,6 +23639,7 @@ mod lang_theme_tests {
             (L_CS, "C#"),
             (L_OBJC, "Objective-C"),
             (L_JAVA, "Java"),
+            (L_JAVASCRIPT, "JavaScript"),
             (L_RC, "Resource file"),
             (L_RUST, "Rust"),
             (L_PHP, "PHP"),
@@ -23729,6 +23755,7 @@ mod lang_theme_tests {
             (L_CS, "C#", CS_KEYWORDS_2),
             (L_OBJC, "Objective-C", OBJC_KEYWORDS_2),
             (L_JAVA, "Java", JAVA_KEYWORDS_2),
+            (L_JAVASCRIPT, "JavaScript", JAVASCRIPT_KEYWORDS_2),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("{name} not wired"));
             assert_eq!(
@@ -23773,6 +23800,170 @@ mod lang_theme_tests {
         // Java's class-1 content must differ from C's — `boolean`
         // and `var` aren't C primitive types.
         assert_ne!(java.keywords[1].1, c.keywords[1].1);
+    }
+
+    /// JavaScript uses `LexCPP` (per `L_JAVASCRIPT`'s `LangEntry`
+    /// `lexer: Some("cpp")`) — same shared style table as C /
+    /// C++ / C# / Java / Objective-C. Only the two keyword lists
+    /// differ. Pins:
+    ///   - Style-table reuse (`CPP_STYLES` / `CPP_ITALIC` /
+    ///     `CPP_BOLD`).
+    ///   - Canonical class-0 link to [`JAVASCRIPT_KEYWORDS`] and
+    ///     class-1 link to [`JAVASCRIPT_KEYWORDS_2`] — a
+    ///     regression that swapped either list (or, worse,
+    ///     re-installed `JAVA_KEYWORDS` for JavaScript) would
+    ///     silently mis-colour every JS-specific token.
+    ///   - Class-0 divergence from Java: JS's `await`, `async`,
+    ///     `debugger`, `let`, `of`, `undefined` are not
+    ///     in `JAVA_KEYWORDS`. (Note: `yield` IS in
+    ///     `JAVA_KEYWORDS` — added as a contextual keyword in
+    ///     Java 14 switch expressions.) Conversely, Java's
+    ///     `abstract`, `synchronized`, `throws`, `native`
+    ///     aren't in `JAVASCRIPT_KEYWORDS`.
+    ///   - Class-1 divergence from Java: JS's built-in
+    ///     constructors (`Array`, `Object`, `Promise`) share
+    ///     zero tokens with Java's primitive-type list
+    ///     (`boolean`, `int`, `char`).
+    ///   - Presence of a canonical class-1 anchor
+    ///     (`Array` — the archetypal JS built-in) — regression
+    ///     that stripped the wordlist to primitives-only would
+    ///     fail this check.
+    ///   - Absence of DOM instances (`window`, `document`) —
+    ///     `JAVASCRIPT_KEYWORDS_2`'s docstring explicitly
+    ///     excludes them; a regression that added them (browser
+    ///     runtime globals, not ECMAScript built-ins) would fail
+    ///     this test.
+    ///   - Absence of value literals (`true`, `false`, `null`)
+    ///     from class 1 — they already live in class 0, and a
+    ///     duplicate in class 1 would be dead code (class 0
+    ///     matches first per `LexCPP`'s classifier).
+    #[test]
+    fn javascript_reuses_lexcpp_style_table_and_canonical_keywords() {
+        let c = lang_theme(L_C).expect("C wired");
+        let java = lang_theme(L_JAVA).expect("Java wired");
+        let js = lang_theme(L_JAVASCRIPT).expect("JavaScript wired");
+        assert_eq!(js.styles, c.styles, "JS must reuse CPP_STYLES");
+        assert_eq!(js.italic, c.italic, "JS must reuse CPP_ITALIC");
+        assert_eq!(js.bold, c.bold, "JS must reuse CPP_BOLD");
+        assert_eq!(js.keywords.len(), 2, "JS installs class 0 + class 1");
+        assert_eq!(js.keywords[0].0, 0);
+        assert_eq!(js.keywords[0].1, JAVASCRIPT_KEYWORDS);
+        assert_eq!(js.keywords[1].0, 1);
+        assert_eq!(js.keywords[1].1, JAVASCRIPT_KEYWORDS_2);
+        // JS's class-0 content diverges from Java's.
+        assert_ne!(
+            js.keywords[0].1, java.keywords[0].1,
+            "JS class 0 must NOT equal JAVA_KEYWORDS — regression \
+             that copy-pasted Java's list would silently misrepresent \
+             every JS-specific keyword"
+        );
+        // JS's class-1 content diverges from Java's (primitives
+        // vs built-in constructors — different worlds).
+        assert_ne!(js.keywords[1].1, java.keywords[1].1);
+        // Canonical class-1 anchor.
+        assert!(
+            JAVASCRIPT_KEYWORDS_2
+                .split_whitespace()
+                .any(|t| t == "Array"),
+            "JAVASCRIPT_KEYWORDS_2 must include `Array` — the archetypal \
+             JS built-in constructor"
+        );
+        // Other canonical anchors (spot-check a mix of
+        // categories to catch a regression that dropped a whole
+        // category).
+        for anchor in [
+            "Object",
+            "Function",
+            "Promise",
+            "Math",
+            "JSON",
+            "Error",
+            "Map",
+            "Symbol",
+            "Uint8Array",
+            "Float16Array",
+            "Iterator",
+            "globalThis",
+            "console",
+        ] {
+            assert!(
+                JAVASCRIPT_KEYWORDS_2
+                    .split_whitespace()
+                    .any(|t| t == anchor),
+                "JAVASCRIPT_KEYWORDS_2 must include canonical built-in `{anchor}`"
+            );
+        }
+        // DOM instances must NOT be in class 1 (they're browser
+        // runtime globals, not ECMAScript built-ins).
+        for dom in ["window", "document", "navigator", "localStorage"] {
+            assert!(
+                !JAVASCRIPT_KEYWORDS_2.split_whitespace().any(|t| t == dom),
+                "JAVASCRIPT_KEYWORDS_2 must NOT include DOM instance `{dom}` — \
+                 browser runtime globals belong outside the ECMAScript \
+                 built-in slot"
+            );
+        }
+        // Class-0 value literals must NOT be duplicated in
+        // class 1 — they already live in class 0, and
+        // LexCPP's classifier matches class 0 first, so a
+        // class-1 duplicate is dead code. NOTE: this list
+        // is only the four true class-0 literals; `NaN` and
+        // `Infinity` are correctly in class 1 (they are ES
+        // §21.1 Value Properties of the Global Object, not
+        // in JAVASCRIPT_KEYWORDS).
+        for lit in ["true", "false", "null", "undefined"] {
+            assert!(
+                !JAVASCRIPT_KEYWORDS_2.split_whitespace().any(|t| t == lit),
+                "JAVASCRIPT_KEYWORDS_2 must NOT include value literal `{lit}` — \
+                 already in JAVASCRIPT_KEYWORDS class 0; class-1 duplicate \
+                 is dead code"
+            );
+        }
+        // NaN and Infinity SHOULD be in class 1 — they are
+        // canonical global built-ins (ECMAScript §21.1),
+        // not in class 0. Pin their presence as an
+        // affirmative anchor so a future edit that
+        // "cleaned them up" as literals would trip this
+        // test.
+        for global in ["NaN", "Infinity"] {
+            assert!(
+                JAVASCRIPT_KEYWORDS_2
+                    .split_whitespace()
+                    .any(|t| t == global),
+                "JAVASCRIPT_KEYWORDS_2 must include ES §21.1 global \
+                 `{global}` — it is NOT in JAVASCRIPT_KEYWORDS class 0"
+            );
+        }
+        // Pin the class-0 vs class-1 literal split
+        // affirmatively so the docstring rationale doesn't
+        // drift again. Class 0 owns the four true literals;
+        // class 1 owns NaN + Infinity.
+        for lit in ["true", "false", "null", "undefined"] {
+            assert!(
+                JAVASCRIPT_KEYWORDS.split_whitespace().any(|t| t == lit),
+                "JAVASCRIPT_KEYWORDS must include class-0 literal `{lit}`"
+            );
+        }
+        for global in ["NaN", "Infinity"] {
+            assert!(
+                !JAVASCRIPT_KEYWORDS.split_whitespace().any(|t| t == global),
+                "JAVASCRIPT_KEYWORDS must NOT include `{global}` — it's an ES \
+                 §21.1 global, not a language literal; lives in class 1"
+            );
+        }
+        // No token overlap between class 0 and class 1.
+        // Regression check for a future edit that moves a token
+        // to class 1 without dropping it from class 0.
+        use std::collections::HashSet;
+        let wl0: HashSet<&str> = JAVASCRIPT_KEYWORDS.split_whitespace().collect();
+        let wl1: HashSet<&str> = JAVASCRIPT_KEYWORDS_2.split_whitespace().collect();
+        if let Some(shared) = wl0.intersection(&wl1).next() {
+            panic!(
+                "JAVASCRIPT_KEYWORDS and JAVASCRIPT_KEYWORDS_2 both contain \
+                 `{shared}` — LexCPP's classifier checks class 0 first, so \
+                 the class-1 entry is dead code"
+            );
+        }
     }
 
     /// Win32 resource scripts (`.rc`) — the first SINGLE-class
@@ -33376,11 +33567,11 @@ mod lang_theme_tests {
     /// / `L_CS` / `L_RUST` / `L_PHP` above. `L_PYTHON` was removed
     /// from this list when the Python row landed. `L_COFFEESCRIPT`
     /// was removed when the CoffeeScript row landed. `L_JSON` /
-    /// `L_JSON5` were removed when the JSON row landed in this
-    /// commit.
+    /// `L_JSON5` were removed when the JSON row landed.
+    /// `L_JAVASCRIPT` was removed when the JavaScript row landed
+    /// in this commit.
     #[test]
     fn unwired_languages_have_no_theme() {
-        assert!(lang_theme(L_JAVASCRIPT).is_none(), "JS not wired yet");
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");
     }
 

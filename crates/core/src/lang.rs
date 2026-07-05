@@ -2170,6 +2170,152 @@ pub const JAVASCRIPT_KEYWORDS: &str = concat!(
     "true false null undefined",
 );
 
+/// Space-separated JavaScript **built-in globals** — the MDN
+/// Standard built-in objects (`Array`, `Object`, `Math`, `JSON`,
+/// `Promise`, etc.) — installed as **class 1** in `LexCPP`'s
+/// wordlist descriptor so they render at `SCE_C_WORD2` (the
+/// steel-blue "types" slot). Pairs with [`JAVASCRIPT_KEYWORDS`]
+/// (class 0) exactly the way [`C_KEYWORDS_2`] pairs with
+/// [`C_KEYWORDS`] — primary reserved words in class 0, secondary
+/// type-like tokens in class 1.
+///
+/// **Rationale for a class-1 wordlist that
+/// [`JAVASCRIPT_KEYWORDS`] deliberately excludes.**
+/// The class-0 docstring lists these tokens under "Deliberate
+/// exclusions" — "identifiers bound at runtime, not keywords.
+/// Highlighting them would mis-colour a user's local
+/// `const Math = ...` shadow." That reasoning is correct for
+/// **class 0** (bold "Keyword" slot — reserved for parser
+/// keywords). It does NOT extend to **class 1** (accent
+/// "Keyword2" slot), which by LexCPP-family convention holds
+/// *type-like tokens*: primitives in C (`int`, `char`), types in
+/// C++ (`bool`, `char8_t`), primitive types + `var` in Java. For
+/// JavaScript — a language without C-style primitives — the
+/// natural class-1 population is the built-in **constructors**
+/// (`Array`, `Boolean`, `Number`, `Function`) plus the
+/// **namespace globals** (`Math`, `JSON`, `Intl`, `Atomics`,
+/// `WebAssembly`, `Reflect`) plus the concurrent primitives
+/// (`Promise`, `Proxy`), collections (`Map`, `Set`, `WeakMap`,
+/// `WeakSet`, `WeakRef`), the Error hierarchy, and the
+/// typed-array family. This is what `VS Code` / `IntelliJ` /
+/// Sublime / Notepad++ all colour distinctly as a matter of
+/// course — the "user shadows Math" edge case is dwarfed by
+/// the discoverability win of highlighting recognised
+/// built-ins.
+///
+/// **Case-sensitive byte-exact match.** JavaScript is
+/// case-sensitive at the spec level; the `LexCPP` identifier
+/// classifier calls `sc.GetCurrent(s, sizeof(s))` byte-exact.
+/// Every entry uses the canonical `PascalCase` (constructors) or
+/// exact spelling (`globalThis` camelCase, `console` lowercase)
+/// so a match hits.
+///
+/// **`console` and `globalThis` included.** Neither is a
+/// constructor:
+///   - `console` is a host-provided instance (`window.console`
+///     in browsers, `global.console` in Node) — not in the
+///     ECMAScript spec proper, but universally present across
+///     every real JS runtime. Modern IDEs colour it as a
+///     recognised global.
+///   - `globalThis` is the ES2020 universal cross-runtime
+///     reference to the global object (per ECMAScript §"The
+///     `globalThis` value"). A language global, not a class.
+///
+/// **Deliberately excluded:**
+///   - **DOM instances** — `window`, `document`, `navigator`,
+///     `localStorage`, `sessionStorage`, `history`, `location`,
+///     `screen`, `alert`. These are **browser-runtime globals**,
+///     not part of ECMAScript, and a Node.js `.js` file wouldn't
+///     have them. Class 1 is the "language built-in" slot;
+///     DOM lives one layer up.
+///   - **DOM method names** — `getElementById`,
+///     `querySelector`, `addEventListener`. Methods on host
+///     objects, not global identifiers.
+///   - **Library-specific globals** — jQuery `$`, `_` (lodash),
+///     etc. Third-party, not language built-ins.
+///   - **Value literals in class 0** — `true` / `false` /
+///     `null` / `undefined`. Already in
+///     [`JAVASCRIPT_KEYWORDS`]. `LexCPP` probes class 0
+///     first, so a class-1 duplicate would be dead code.
+///     Note `NaN` and `Infinity` are ECMAScript §21.1
+///     Value Properties of the Global Object — canonical
+///     built-in globals, same category as `console` /
+///     `globalThis` — so they DO belong in class 1
+///     (below), NOT excluded here.
+///   - **`FinalizationRegistry`** — real ES2021 global but
+///     vanishingly rare in production code; skipped to keep the
+///     wordlist to the tokens users actually see.
+///   - **`GeneratorFunction` / `AsyncFunction` /
+///     `AsyncGeneratorFunction`** — NOT global identifiers.
+///     Only accessible via `(function*(){}).constructor` etc.
+///     Including them would highlight tokens that never appear
+///     in valid code.
+///
+/// **Coverage:** 51 tokens broken down by category:
+///   - General wrappers (`Array`, `Boolean`, `Date`,
+///     `Function`, `JSON`, `Math`, `Number`, `Object`,
+///     `RegExp`, `String`, `Symbol`, `BigInt`) — 12.
+///   - Concurrent + iteration primitives (`Promise`,
+///     `Proxy`, `Reflect`, `Iterator`) — 4. `Iterator`
+///     is the ES2025 Iterator Helpers spec-level global
+///     (`Iterator.from(...)`, `Iterator.prototype.map` /
+///     `.filter` / `.take` / `.drop`) — shipping in
+///     Chrome 122+, Firefox 131+, Node 22+.
+///   - Collection primitives (`Map`, `Set`, `WeakMap`,
+///     `WeakSet`, `WeakRef`) — 5.
+///   - Error hierarchy (`Error`, `EvalError`, `RangeError`,
+///     `ReferenceError`, `SyntaxError`, `TypeError`,
+///     `URIError`, `AggregateError`) — 8.
+///   - Buffer / view primitives (`ArrayBuffer`, `DataView`,
+///     `SharedArrayBuffer`) — 3.
+///   - Typed-array family — 12 (`Float16Array`,
+///     `Float32Array`, `Float64Array`, `Int8Array`,
+///     `Int16Array`, `Int32Array`, `Uint8Array`,
+///     `Uint8ClampedArray`, `Uint16Array`, `Uint32Array`,
+///     `BigInt64Array`, `BigUint64Array`). `Float16Array`
+///     is ES2025 Stage 4 (December 2024), shipping in
+///     Chrome 135+, Safari 18.4+, Firefox 137+.
+///   - Namespace globals (`Intl`, `Atomics`, `WebAssembly`) —
+///     3.
+///   - Language / host globals (`globalThis`, `console`,
+///     `NaN`, `Infinity`) — 4. `NaN` and `Infinity` are
+///     ECMAScript §21.1 Value Properties of the Global
+///     Object — canonical built-in globals, same category
+///     as `console` / `globalThis`. They are NOT in
+///     [`JAVASCRIPT_KEYWORDS`] class 0 (that wordlist's
+///     docstring lists them under "Deliberate exclusions
+///     → Global objects and host APIs" — the exclusion
+///     applies to class 0 where they'd render bold as
+///     "keywords"; class 1 accent-color is the correct
+///     home).
+///
+/// Sum: 12 + 4 + 5 + 8 + 3 + 12 + 3 + 4 = 51.
+pub const JAVASCRIPT_KEYWORDS_2: &str = concat!(
+    // General wrappers.
+    "Array Boolean Date Function JSON Math Number Object ",
+    "RegExp String Symbol BigInt ",
+    // Concurrent + iteration primitives.
+    "Promise Proxy Reflect Iterator ",
+    // Collections.
+    "Map Set WeakMap WeakSet WeakRef ",
+    // Error hierarchy.
+    "Error EvalError RangeError ReferenceError SyntaxError ",
+    "TypeError URIError AggregateError ",
+    // Buffer / view primitives.
+    "ArrayBuffer DataView SharedArrayBuffer ",
+    // Typed-array family (Float16Array is ES2025).
+    "Float16Array Float32Array Float64Array ",
+    "Int8Array Int16Array Int32Array ",
+    "Uint8Array Uint8ClampedArray Uint16Array Uint32Array ",
+    "BigInt64Array BigUint64Array ",
+    // Namespace globals.
+    "Intl Atomics WebAssembly ",
+    // Language / host globals — NaN + Infinity are ES §21.1
+    // Value Properties of the Global Object, canonical
+    // built-ins alongside globalThis / console.
+    "globalThis console NaN Infinity",
+);
+
 /// Space-separated `VBScript` reserved-word list installed via the
 /// hypertext lexer's `SCI_SETKEYWORDS(2, ...)`. Class 2 of
 /// `htmlWordListDesc[]` drives both `SCE_HB_WORD` (client-side

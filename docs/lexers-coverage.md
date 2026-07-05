@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 54 / 🟡 34 / ⚫ 1.
+Total: 89 rows. ✅ 55 / 🟡 33 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -370,7 +370,11 @@ tags. Keyword highlighting on those blocks is the only piece
 that still requires per-theme follow-up (HTML / PHP themes don't
 yet install class 1 / class 2; tracked as a one-line follow-up
 on the HTML and PHP rows). Same future infrastructure also
-covers JSP and the future `L_JAVASCRIPT` row.
+covers JSP. `L_JAVASCRIPT` itself (the standalone `.js` /
+`.mjs` / `.cjs` LexCPP-family row) landed separately —
+that wired only the `.js`-file lexer path; the
+hypertext-embedded `<script>` block classifier remains as
+tracked on HTML / PHP.
 
 **VBScript-specific lexer quirks** documented in the new SCE
 constant block in `scintilla-sys`:
@@ -1763,9 +1767,12 @@ PHP files containing legacy HTML too. HTML attribute names
 deliberately excluded — `SCE_H_ATTRIBUTE` and
 `SCE_H_ATTRIBUTEUNKNOWN` both map to `StyleSlot::Keyword2` today,
 so adding ~330 attribute identifiers would have no visible effect.
-Embedded `<script>` JavaScript and `<style>` CSS deferred until
-`L_JAVASCRIPT` / `L_CSS` rows are wired (same scope discipline as
-PHP's `SCE_HJ_*` / `SCE_HB_*` deferral). Authored by a 7-agent
+Embedded `<script>` JavaScript and `<style>` CSS deferred to a
+follow-up: the `.js`-file `L_JAVASCRIPT` row landed but
+`HTML_THEME` still doesn't install `JAVASCRIPT_KEYWORDS` /
+`CSS_*` into the hypertext-embedded-script classes (class 1 /
+class 2 of `htmlWordListDesc`). Same scope discipline as
+PHP's `SCE_HJ_*` / `SCE_HB_*` deferral. Authored by a 7-agent
 research-and-adversarial-verify workflow; all three verifiers
 APPROVE with no blockers or warnings.
 
@@ -1876,7 +1883,7 @@ further shim work needed.
 | Inno Setup | 46 | `inno` | ✅ | ✅ | ✅ |
 | Intel HEX | 62 | `ihex` | ⚫ | ⚫ | 🟡 |
 | Java | 6 | `cpp` | ✅ | ✅ | ✅ |
-| Javascript | 58 | `cpp` | ⚫ | ⚫ | 🟡 |
+| Javascript | 58 | `cpp` | ✅ | ✅ | ✅ |
 | JSON | 57 | `json` | ✅ | ✅ | ✅ |
 | JSON5 | 94 | `json` | ✅ | ✅ | ✅ |
 | JSP | 55 | `hypertext` | ✅ | ✅ | ✅ |
@@ -5162,6 +5169,156 @@ Lexilla property enablement (both
 `lexer.json.allow.comments = "1"` in
 `extra_fold_properties` for BOTH `L_JSON` and
 `L_JSON5`).
+
+**JavaScript (2026-07-05):** rides `LexCPP` (per
+`L_JAVASCRIPT`'s `LangEntry.lexer: Some("cpp")`) —
+same shared `CPP_STYLES` / `CPP_ITALIC` /
+`CPP_BOLD` reused across the LexCPP family (C /
+C++ / C# / Java / Objective-C / RC). No new
+`SCE_*` constants and no new theme table needed;
+the wiring is purely a class-0 + class-1 keyword
+pair.
+
+**Class 0 (`SCE_C_WORD`, bold blue) —
+`JAVASCRIPT_KEYWORDS`** already existed
+pre-Phase-4.5 (installed as class 1 of the
+hypertext lexer's `htmlWordListDesc[]` for
+embedded `<script>` blocks). This commit binds
+the same wordlist to LexCPP class 0 for `.js`
+files. 49 tokens covering ES5 reserved words
+(`if` / `for` / `function` / `var` / …) + ES2015+
+block-scoped bindings (`let` / `static`) + ES2017+
+coroutines and contextual `of` (`async` / `await`
+/ `of`) + strict-mode future-reserved
+(`implements` / `interface` / `package` /
+`private` / `protected` / `public`) + language
+literals (`true` / `false` / `null` /
+`undefined`). Sourced and adversarially verified
+against ECMAScript 2024 spec / Notepad++ baseline
+/ hypertext-lexer source.
+
+**Class 1 (`SCE_C_WORD2`, accent steel-blue) —
+new `JAVASCRIPT_KEYWORDS_2`** carries 51 MDN
+Standard built-in objects covering the natural
+class-1 role in the LexCPP-family convention
+("type-like tokens"). Since JavaScript has no
+C-style primitives, the class-1 population is the
+built-in **constructors** and **namespace / global
+value** identifiers:
+
+- General wrappers (12): `Array`, `Boolean`,
+  `Date`, `Function`, `JSON`, `Math`, `Number`,
+  `Object`, `RegExp`, `String`, `Symbol`,
+  `BigInt`.
+- Concurrent + iteration primitives (4):
+  `Promise`, `Proxy`, `Reflect`, `Iterator`.
+  `Iterator` is ES2025 Iterator Helpers
+  (`Iterator.from(...)`, `Iterator.prototype.map`
+  / `.filter` / `.take` / `.drop`) — Stage 4
+  reached 2024, shipping in Chrome 122+,
+  Firefox 131+, Node 22+.
+- Collection primitives (5): `Map`, `Set`,
+  `WeakMap`, `WeakSet`, `WeakRef`.
+- Error hierarchy (8): `Error`, `EvalError`,
+  `RangeError`, `ReferenceError`, `SyntaxError`,
+  `TypeError`, `URIError`, `AggregateError`.
+- Buffer / view primitives (3): `ArrayBuffer`,
+  `DataView`, `SharedArrayBuffer`.
+- Typed-array family (12): `Float16Array`,
+  `Float32Array`, `Float64Array`, `Int8Array`,
+  `Int16Array`, `Int32Array`, `Uint8Array`,
+  `Uint8ClampedArray`, `Uint16Array`,
+  `Uint32Array`, `BigInt64Array`, `BigUint64Array`.
+  `Float16Array` is ES2025 Stage 4 (December
+  2024), shipping in Chrome 135+, Safari 18.4+,
+  Firefox 137+.
+- Namespace globals (3): `Intl`, `Atomics`,
+  `WebAssembly`.
+- Language / host globals (4): `globalThis`,
+  `console`, `NaN`, `Infinity`. `NaN` and
+  `Infinity` are ECMAScript §21.1 Value
+  Properties of the Global Object — canonical
+  built-in globals same category as
+  `console` / `globalThis`. They are NOT in
+  `JAVASCRIPT_KEYWORDS` class 0 (that wordlist's
+  docstring lists them under "Deliberate
+  exclusions → Global objects and host APIs" —
+  the exclusion applies to class 0 where they'd
+  render bold as "keywords"; class 1
+  accent-color is the correct home).
+
+Total: 12 + 4 + 5 + 8 + 3 + 12 + 3 + 4 = 51.
+
+**Class-0 vs class-1 rationale.**
+`JAVASCRIPT_KEYWORDS`'s docstring lists these
+tokens under "Deliberate exclusions" — "identifiers
+bound at runtime, not keywords. Highlighting them
+would mis-colour a user's local
+`const Math = ...` shadow." That reasoning is
+correct for class 0 (bold "Keyword" slot — reserved
+for **parser keywords**). It does NOT extend to
+class 1 (accent "Keyword2" slot), which by
+LexCPP-family convention holds *type-like tokens*.
+For JS this maps naturally onto the built-in
+constructors and namespaces — matching what VS
+Code / IntelliJ / Sublime / Notepad++ all colour
+distinctly. The "user shadows Math" edge case is
+dwarfed by the discoverability win of
+highlighting recognised built-ins.
+
+**Deliberate exclusions from class 1** (with test
+pins):
+
+- **DOM instances** (`window`, `document`,
+  `navigator`, `localStorage`) — browser runtime
+  globals, not ECMAScript built-ins. Node.js
+  `.js` files wouldn't have them. Test pin
+  asserts these four names are NOT in the
+  wordlist.
+- **Value literals in class 0** (`true`, `false`,
+  `null`, `undefined`) — already in class 0.
+  LexCPP's classifier probes class 0 first, so a
+  class-1 duplicate is dead code. Test pin
+  asserts these four names are NOT in class 1
+  AND that they ARE in class 0. Cross-list
+  uniqueness `HashSet` intersection catches any
+  future edit that moves a token to class 1
+  without dropping it from class 0. NOTE:
+  `NaN` and `Infinity` are NOT excluded — they
+  correctly live in class 1 as ECMAScript §21.1
+  global values.
+- **`FinalizationRegistry`** — real ES2021 global
+  but vanishingly rare in practice. Documented
+  exclusion; a future contributor can add it if
+  usage patterns change.
+- **`GeneratorFunction` / `AsyncFunction` /
+  `AsyncGeneratorFunction`** — NOT global
+  identifiers. Only reachable via
+  `(function*(){}).constructor` etc.
+  Highlighting them would highlight tokens that
+  never appear in valid code.
+- **DOM method names** (`getElementById`,
+  `querySelector`, `addEventListener`) — methods
+  on host objects, not global identifiers.
+- **Library-specific globals** (jQuery `$`, lodash
+  `_`) — third-party, not language built-ins.
+
+Structural test coverage — the dedicated
+`javascript_reuses_lexcpp_style_table_and_canonical_keywords`
+test pins style-table reuse (CPP_STYLES /
+CPP_ITALIC / CPP_BOLD share with C / C++), class-0
+= `JAVASCRIPT_KEYWORDS`, class-1 =
+`JAVASCRIPT_KEYWORDS_2`, class-0 divergence from
+Java's list, class-1 divergence from Java's
+primitive list, `Array` present as archetypal
+class-1 anchor, 11-anchor spot-check across every
+sub-category, DOM-instance and value-literal
+absence pins, and cross-list uniqueness via
+`HashSet::intersection`. Meta-test
+`lexcpp_family_installs_class_0_and_class_1`
+extended with `L_JAVASCRIPT`;
+`wired_languages_have_complete_themes` extended
+with `L_JAVASCRIPT`.
 
 ## Notes
 
