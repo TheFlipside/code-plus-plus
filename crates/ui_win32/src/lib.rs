@@ -110,7 +110,8 @@ use codepp_core::lang::{
     CPP_KEYWORDS, CPP_KEYWORDS_2, CSOUND_HEADERSTMT, CSOUND_OPCODES, CSOUND_USERKW,
     CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
     CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, D_DOC_KEYWORDS,
-    D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7, FORTRAN_EXTENDED,
+    D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7, ERLANG_BIFS, ERLANG_DOC,
+    ERLANG_DOC_MACRO, ERLANG_KEYWORDS, ERLANG_MODULE_ATT, ERLANG_PREPROC, FORTRAN_EXTENDED,
     FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL,
     GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
     HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS,
@@ -118,16 +119,16 @@ use codepp_core::lang::{
     JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
     KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
     LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
-    L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI,
-    L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX,
-    L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
-    L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
-    L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
-    NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
-    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
-    RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+    L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_FORTRAN, L_FORTRAN_77,
+    L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP,
+    L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
+    L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
+    L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
+    NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
+    PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
+    POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
+    PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+    RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
     SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
     TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
     VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
@@ -183,11 +184,17 @@ use codepp_scintilla_sys::{
     SCE_D_COMMENTDOCKEYWORD, SCE_D_COMMENTDOCKEYWORDERROR, SCE_D_COMMENTLINE, SCE_D_COMMENTLINEDOC,
     SCE_D_COMMENTNESTED, SCE_D_NUMBER, SCE_D_OPERATOR, SCE_D_STRING, SCE_D_STRINGB,
     SCE_D_STRINGEOL, SCE_D_STRINGR, SCE_D_TYPEDEF, SCE_D_WORD, SCE_D_WORD2, SCE_D_WORD5,
-    SCE_D_WORD6, SCE_D_WORD7, SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_LABEL, SCE_F_NUMBER,
-    SCE_F_OPERATOR, SCE_F_OPERATOR2, SCE_F_PREPROCESSOR, SCE_F_STRING1, SCE_F_STRING2,
-    SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2, SCE_F_WORD3, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND,
-    SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_EVENT, SCE_GC_GLOBAL,
-    SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_CAPITAL, SCE_HA_CHARACTER, SCE_HA_CLASS,
+    SCE_D_WORD6, SCE_D_WORD7, SCE_ERLANG_ATOM_QUOTED, SCE_ERLANG_BIFS, SCE_ERLANG_CHARACTER,
+    SCE_ERLANG_COMMENT, SCE_ERLANG_COMMENT_DOC, SCE_ERLANG_COMMENT_DOC_MACRO,
+    SCE_ERLANG_COMMENT_FUNCTION, SCE_ERLANG_COMMENT_MODULE, SCE_ERLANG_FUNCTION_NAME,
+    SCE_ERLANG_KEYWORD, SCE_ERLANG_MACRO, SCE_ERLANG_MACRO_QUOTED, SCE_ERLANG_MODULES,
+    SCE_ERLANG_MODULES_ATT, SCE_ERLANG_NODE_NAME, SCE_ERLANG_NODE_NAME_QUOTED, SCE_ERLANG_NUMBER,
+    SCE_ERLANG_OPERATOR, SCE_ERLANG_PREPROC, SCE_ERLANG_RECORD, SCE_ERLANG_RECORD_QUOTED,
+    SCE_ERLANG_STRING, SCE_ERLANG_VARIABLE, SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_LABEL,
+    SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2, SCE_F_PREPROCESSOR, SCE_F_STRING1,
+    SCE_F_STRING2, SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2, SCE_F_WORD3, SCE_GC_ATTRIBUTE,
+    SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_EVENT,
+    SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_CAPITAL, SCE_HA_CHARACTER, SCE_HA_CLASS,
     SCE_HA_COMMENTBLOCK, SCE_HA_COMMENTBLOCK2, SCE_HA_COMMENTBLOCK3, SCE_HA_COMMENTLINE,
     SCE_HA_DATA, SCE_HA_INSTANCE, SCE_HA_KEYWORD, SCE_HA_LITERATE_CODEDELIM,
     SCE_HA_LITERATE_COMMENT, SCE_HA_MODULE, SCE_HA_NUMBER, SCE_HA_OPERATOR, SCE_HA_PRAGMA,
@@ -3789,6 +3796,143 @@ const CSOUND_THEME: LangTheme = LangTheme {
     styles: CSOUND_STYLES,
     italic: CSOUND_ITALIC,
     bold: CSOUND_BOLD,
+};
+
+// --- LexErlang ---
+// LexErlang serves Erlang (`.erl` source) + Erlang headers
+// (`.hrl`). `L_ERLANG` (id 71) is the only language row using
+// this lexer. Dispatches SCLEX_ERLANG (= 53, per `SciLexer.h:69`)
+// via a **six-class wordlist descriptor** at
+// `LexErlang.cxx:616-624` (`erlangWordListDesc[]`).
+//
+// **23 style mappings** covering every emitted SCE_ERLANG_*
+// slot the paint loop actually emits. Three of the 26 defined
+// slots are unmapped per framework convention:
+//   - DEFAULT (0) — whitespace / unclassified.
+//   - ATOM (7) — bare lowercase-first identifier. Erlang atoms
+//     are the most common identifier form; framework convention
+//     is to leave the bare-identifier slot unmapped so atoms
+//     paint at STYLE_DEFAULT. Same convention as CSound
+//     IDENTIFIER, R IDENTIFIER, JSON string/property (not
+//     literally — JSON has no bare identifier).
+//   - UNKNOWN (31) — transient parse state. Never emitted; the
+//     paint loop settles UNKNOWN to a real style before commit.
+//
+// **Slot rationale:**
+//   - COMMENT (1) + COMMENT_FUNCTION (14) + COMMENT_MODULE (15)
+//     + COMMENT_DOC (16) + COMMENT_DOC_MACRO (17) → Comment
+//     (italic). Five comment states collapse — the `%`/`%%`/`%%%`
+//     ratchet levels and the embedded edoc `@tag`/`{@macro}`
+//     variants are all semantically comments, so they share the
+//     comment color. Same collapse discipline as D's four
+//     COMMENT / COMMENTDOC / COMMENTLINE / COMMENTNESTED slots.
+//   - VARIABLE (2) → Keyword2. Erlang variables (uppercase-first
+//     or `_`-prefixed) are semantically significant — pattern
+//     matching binds them, and their case distinction from atoms
+//     is meaningful. Keyword2 (the accent color) makes them
+//     visually distinct from atoms (unmapped, paints as default).
+//   - NUMBER (3) → Number.
+//   - KEYWORD (4) + BIFS (22) → Keyword (bold). Reserved words
+//     and BIFs both are "part of the language" — same bold slot,
+//     matches CPP's WORD + WORD2 → Keyword + Keyword2 (JS did
+//     it the other way; here we group both as primary since
+//     BIFs are as core to Erlang as reserved words). Same
+//     collapse discipline as Fortran's F_WORD + F_WORD2 (kept
+//     separate) — inverted here because Erlang's `is_atom` /
+//     `spawn` / etc. read as syntax-level primitives.
+//   - STRING (5) + CHARACTER (9) + ATOM_QUOTED (18) → String.
+//     All three are quoted lexical forms — double-quoted string,
+//     `$c` character, and `'quoted atom'` all share the string
+//     color. Same collapse discipline as Lua LITERALSTRING +
+//     CHARACTER + STRING.
+//   - OPERATOR (6) → Operator.
+//   - FUNCTION_NAME (8) + RECORD (11) + NODE_NAME (13) +
+//     RECORD_QUOTED (20) + NODE_NAME_QUOTED (21) + MODULES (23)
+//     → Keyword2. Six accent categories collapse: function
+//     references, records, node names (both quoted and unquoted
+//     variants), and module prefixes. All are structural
+//     markers pointing at a bound entity. Same collapse
+//     discipline as CSound's ARATE_VAR + KRATE_VAR + IRATE_VAR
+//     + GLOBAL_VAR + HEADERSTMT + USERKEYWORD → Keyword2.
+//   - MACRO (10) + MACRO_QUOTED (19) → Macro. Erlang's `?MACRO`
+//     preprocessor-style references pattern-match Rust's
+//     `macro!()` invocations well; using the Macro slot keeps
+//     them visually distinct from records (which use `#name`)
+//     and from module attributes (which use `-name` and go to
+//     Preprocessor). Reuse rationale mirrors Rust SCE_RUST_MACRO
+//     → StyleSlot::Macro.
+//   - PREPROC (12) + MODULES_ATT (24) → Preprocessor. Both are
+//     `-`-prefixed and belong to the compiler-directive family
+//     (conditional compilation + module metadata). Same collapse
+//     discipline as C's PREPROCESSOR + comment-preproc / D's
+//     PREPROCESSOR alone (single-slot).
+const ERLANG_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_ERLANG_COMMENT, StyleSlot::Comment),
+    (SCE_ERLANG_VARIABLE, StyleSlot::Keyword2),
+    (SCE_ERLANG_NUMBER, StyleSlot::Number),
+    (SCE_ERLANG_KEYWORD, StyleSlot::Keyword),
+    (SCE_ERLANG_STRING, StyleSlot::String),
+    (SCE_ERLANG_OPERATOR, StyleSlot::Operator),
+    (SCE_ERLANG_FUNCTION_NAME, StyleSlot::Keyword2),
+    (SCE_ERLANG_CHARACTER, StyleSlot::String),
+    (SCE_ERLANG_MACRO, StyleSlot::Macro),
+    (SCE_ERLANG_RECORD, StyleSlot::Keyword2),
+    (SCE_ERLANG_PREPROC, StyleSlot::Preprocessor),
+    (SCE_ERLANG_NODE_NAME, StyleSlot::Keyword2),
+    (SCE_ERLANG_COMMENT_FUNCTION, StyleSlot::Comment),
+    (SCE_ERLANG_COMMENT_MODULE, StyleSlot::Comment),
+    (SCE_ERLANG_COMMENT_DOC, StyleSlot::Comment),
+    (SCE_ERLANG_COMMENT_DOC_MACRO, StyleSlot::Comment),
+    (SCE_ERLANG_ATOM_QUOTED, StyleSlot::String),
+    (SCE_ERLANG_MACRO_QUOTED, StyleSlot::Macro),
+    (SCE_ERLANG_RECORD_QUOTED, StyleSlot::Keyword2),
+    (SCE_ERLANG_NODE_NAME_QUOTED, StyleSlot::Keyword2),
+    (SCE_ERLANG_BIFS, StyleSlot::Keyword),
+    (SCE_ERLANG_MODULES, StyleSlot::Keyword2),
+    (SCE_ERLANG_MODULES_ATT, StyleSlot::Preprocessor),
+];
+
+// Italic on all five COMMENT states — matches the universal
+// Code++ comment-slot convention. The five states correspond
+// to `%`/`%%`/`%%%` ratchet levels and embedded edoc `@tag` /
+// `{@macro}` variants; all read as comments visually.
+const ERLANG_ITALIC: &[usize] = &[
+    SCE_ERLANG_COMMENT,
+    SCE_ERLANG_COMMENT_FUNCTION,
+    SCE_ERLANG_COMMENT_MODULE,
+    SCE_ERLANG_COMMENT_DOC,
+    SCE_ERLANG_COMMENT_DOC_MACRO,
+];
+
+// Bold on KEYWORD + BIFS — matches the "bold class = language
+// reserved words" rule. Both wordlists are "part of the
+// language" (KEYWORD is `case`/`if`/`fun`/... reserved,
+// BIFS is `spawn`/`is_atom`/... built-ins), so they share
+// visual weight. Two-item bold is inside our discipline —
+// Fortran's F_WORD alone; here two related classes share it.
+const ERLANG_BOLD: &[usize] = &[SCE_ERLANG_KEYWORD, SCE_ERLANG_BIFS];
+
+// Six-class install matches `erlangWordListDesc[]` at
+// `LexErlang.cxx:616-624`. Order is load-bearing —
+// `SCI_SETKEYWORDS` respects wordlist-descriptor order and the
+// classifier at `:213-217` probes class 0 (KEYWORD) first,
+// class 1 (BIFS) second. Preprocessor state at `:397-400`
+// probes class 2 (PREPROC) first, class 3 (MODULES_ATT)
+// second. Doc-comment state at `:157-172` probes class 5
+// (DOC_MACRO) first (only when parse_state ==
+// COMMENT_DOC_MACRO), class 4 (DOC) second.
+const ERLANG_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, ERLANG_KEYWORDS),
+        (1, ERLANG_BIFS),
+        (2, ERLANG_PREPROC),
+        (3, ERLANG_MODULE_ATT),
+        (4, ERLANG_DOC),
+        (5, ERLANG_DOC_MACRO),
+    ],
+    styles: ERLANG_STYLES,
+    italic: ERLANG_ITALIC,
+    bold: ERLANG_BOLD,
 };
 
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
@@ -8523,6 +8667,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&FORTRAN_THEME)
     } else if lang == L_CSOUND {
         Some(&CSOUND_THEME)
+    } else if lang == L_ERLANG {
+        Some(&ERLANG_THEME)
     } else {
         None
     }
@@ -23677,17 +23823,17 @@ mod lang_theme_tests {
     use super::{
         extra_fold_properties, lang_theme, slot_color, StyleSlot, ASM_CPU_KEYWORDS,
         ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS,
-        ASM_REG_KEYWORDS, FG_COMMENT, FG_KEYWORD, FG_MACRO, SCE_ADA_CHARACTER,
-        SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL,
-        SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD,
-        SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE,
-        SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND,
-        SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER, SCE_ASM_OPERATOR,
-        SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_AU3_COMMENT,
-        SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
-        SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT,
-        SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_CAML_CHAR,
-        SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
+        ASM_REG_KEYWORDS, ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, FG_COMMENT, FG_KEYWORD,
+        FG_MACRO, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER,
+        SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL,
+        SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
+        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
+        SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
+        SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
+        SCE_AU3_KEYWORD, SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR,
+        SCE_AU3_SENT, SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE,
+        SCE_CAML_CHAR, SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
         SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER,
         SCE_CAML_OPERATOR, SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS,
         SCE_CMAKE_COMMENT, SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF,
@@ -23744,19 +23890,20 @@ mod lang_theme_tests {
         CPP_KEYWORDS_2, CSOUND_HEADERSTMT, CSOUND_OPCODES, CSOUND_USERKW, CSS_PROPERTIES_CSS1,
         CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
         CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META,
-        D_SPECIAL, D_TYPES, D_WORD7, FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS,
+        D_SPECIAL, D_TYPES, D_WORD7, ERLANG_BIFS, ERLANG_DOC, ERLANG_DOC_MACRO, ERLANG_KEYWORDS,
+        ERLANG_MODULE_ATT, ERLANG_PREPROC, FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS,
         GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
         HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
         INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
         JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS,
         JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
         LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
-        L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_FORTRAN,
-        L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON,
-        L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC,
-        L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST,
-        L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
-        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+        L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
+        L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT,
+        L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS,
+        L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY,
+        L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML,
+        L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
         OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
         POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
         POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
@@ -23784,25 +23931,32 @@ mod lang_theme_tests {
         SCE_D_COMMENTLINE, SCE_D_COMMENTLINEDOC, SCE_D_COMMENTNESTED, SCE_D_DEFAULT,
         SCE_D_IDENTIFIER, SCE_D_NUMBER, SCE_D_OPERATOR, SCE_D_STRING, SCE_D_STRINGB,
         SCE_D_STRINGEOL, SCE_D_STRINGR, SCE_D_TYPEDEF, SCE_D_WORD, SCE_D_WORD2, SCE_D_WORD3,
-        SCE_D_WORD5, SCE_D_WORD6, SCE_D_WORD7, SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_DEFAULT,
-        SCE_F_IDENTIFIER, SCE_F_LABEL, SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2,
-        SCE_F_PREPROCESSOR, SCE_F_STRING1, SCE_F_STRING2, SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2,
-        SCE_F_WORD3, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE,
-        SCE_GC_CONTROL, SCE_GC_DEFAULT, SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR,
-        SCE_GC_STRING, SCE_HA_IDENTIFIER, SCE_HA_IMPORT, SCE_INNO_IDENTIFIER,
-        SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI, SCE_JSON_DEFAULT, SCE_JSON_ERROR,
-        SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT,
-        SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME, SCE_JSON_STRING,
-        SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT,
-        SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER,
-        SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER,
-        SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD,
-        SCE_POWERSHELL_COMMENTSTREAM, SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION,
-        SCE_POWERSHELL_HERE_CHARACTER, SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER,
-        SCE_POWERSHELL_KEYWORD, SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR,
-        SCE_POWERSHELL_STRING, SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS,
-        SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER,
-        SCE_R_INFIX, SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
+        SCE_D_WORD5, SCE_D_WORD6, SCE_D_WORD7, SCE_ERLANG_ATOM_QUOTED, SCE_ERLANG_BIFS,
+        SCE_ERLANG_CHARACTER, SCE_ERLANG_COMMENT, SCE_ERLANG_COMMENT_DOC,
+        SCE_ERLANG_COMMENT_DOC_MACRO, SCE_ERLANG_COMMENT_FUNCTION, SCE_ERLANG_COMMENT_MODULE,
+        SCE_ERLANG_FUNCTION_NAME, SCE_ERLANG_KEYWORD, SCE_ERLANG_MACRO, SCE_ERLANG_MACRO_QUOTED,
+        SCE_ERLANG_MODULES, SCE_ERLANG_MODULES_ATT, SCE_ERLANG_NODE_NAME,
+        SCE_ERLANG_NODE_NAME_QUOTED, SCE_ERLANG_NUMBER, SCE_ERLANG_OPERATOR, SCE_ERLANG_PREPROC,
+        SCE_ERLANG_RECORD, SCE_ERLANG_RECORD_QUOTED, SCE_ERLANG_STRING, SCE_ERLANG_VARIABLE,
+        SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_DEFAULT, SCE_F_IDENTIFIER, SCE_F_LABEL,
+        SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2, SCE_F_PREPROCESSOR, SCE_F_STRING1,
+        SCE_F_STRING2, SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2, SCE_F_WORD3, SCE_GC_ATTRIBUTE,
+        SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_DEFAULT,
+        SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_IDENTIFIER,
+        SCE_HA_IMPORT, SCE_INNO_IDENTIFIER, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI,
+        SCE_JSON_DEFAULT, SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD,
+        SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR,
+        SCE_JSON_PROPERTYNAME, SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI,
+        SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
+        SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR,
+        SCE_MATLAB_STRING, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET,
+        SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM,
+        SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
+        SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER, SCE_POWERSHELL_KEYWORD,
+        SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING,
+        SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS, SCE_R_BASEKWORD,
+        SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER, SCE_R_INFIX,
+        SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
         SCE_R_RAWSTRING, SCE_R_RAWSTRING2, SCE_R_STRING, SCE_R_STRING2, SCE_VHDL_IDENTIFIER,
         SCE_V_IDENTIFIER, SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER,
         SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
@@ -23846,6 +24000,7 @@ mod lang_theme_tests {
             (L_FORTRAN, "Fortran (free form)"),
             (L_FORTRAN_77, "Fortran (fixed form)"),
             (L_CSOUND, "CSound"),
+            (L_ERLANG, "Erlang"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -34572,6 +34727,477 @@ mod lang_theme_tests {
         }
     }
 
+    /// Erlang uses Lexilla's `erlang` lexer (`LexErlang.cxx`) — a
+    /// 26-state lexer with several Erlang-specific parse-state
+    /// FSMs. Distinctive features:
+    ///
+    /// - **Six-class wordlist install** matching
+    ///   `erlangWordListDesc[]` at `LexErlang.cxx:616-624`: reserved
+    ///   words / BIFs / preproc / module-attrs / doc / doc-macro.
+    /// - **Sigil-carrying wordlists** for classes 2, 3, 4, 5: the
+    ///   preprocessor / module-attribute lists include the leading
+    ///   `-`; the doc lists include the leading `@`. The paint loop
+    ///   captures the sigil at state entry, so `sc.GetCurrent`
+    ///   returns the buffer starting with `-` / `@`, and the
+    ///   wordlist probe would silently zero-match if the sigil
+    ///   were omitted.
+    /// - **Case-SENSITIVE matching** via `sc.GetCurrent` at
+    ///   `:161` (`COMMENT_DOC` / `COMMENT_DOC_MACRO`), `:201`
+    ///   (`ATOM_UNQUOTED` module-name path), `:212`
+    ///   (`ATOM_UNQUOTED` classification), and `:396`
+    ///   (`PREPROCESSOR`) — byte-exact, NOT `GetCurrentLowered`.
+    ///   Erlang is case-sensitive per spec.
+    /// - **Multi-level comment ratchet**: `%` / `%%` / `%%%` walk
+    ///   `COMMENT` → `COMMENT_FUNCTION` → `COMMENT_MODULE` via
+    ///   fall-through switch cases at `:109-131`.
+    /// - **Fold classifier at `:508-529`** matches token spellings
+    ///   `case`/`fun`/`if`/`query`/`receive` (increment) and `end`
+    ///   (decrement) directly via `styler.Match` — all six MUST
+    ///   live in wordlist class 0 (`ERLANG_KEYWORDS`) so the
+    ///   guard `stylePrev != KEYWORD && style == KEYWORD` at
+    ///   `:558-559` fires.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_ERLANG)` returns `Some(&ERLANG_THEME)`.
+    ///   2. Style count == 23 (26 defined `SCE_ERLANG_*` slots
+    ///      minus `DEFAULT` (0), `ATOM` (7), `UNKNOWN` (31), all
+    ///      unmapped per framework convention).
+    ///   3. Six wordlist classes in canonical order (0..=5)
+    ///      matching `erlangWordListDesc[]`.
+    ///   4. All six classes non-empty.
+    ///   5. Class 0 (`ERLANG_KEYWORDS`) + class 1 (`ERLANG_BIFS`)
+    ///      contain only bare identifier tokens `[a-z0-9_]+` —
+    ///      matched at the atom-classification path, no sigil.
+    ///   6. Class 2 (`ERLANG_PREPROC`) + class 3 (`ERLANG_MODULE_ATT`)
+    ///      tokens all start with `-` — required by the paint
+    ///      loop's sigil-capture behavior at `:480-481`.
+    ///   7. Class 4 (`ERLANG_DOC`) + class 5 (`ERLANG_DOC_MACRO`)
+    ///      tokens all start with `@` — required by the
+    ///      doc-comment paint loop at `:157-172`.
+    ///   8. Cross-list uniqueness of the two sigil-sharing pairs
+    ///      that are probed first-match-wins in the same parse
+    ///      state: `ERLANG_PREPROC` ∩ `ERLANG_MODULE_ATT` = ∅ (both
+    ///      probed at `:397-400` inside `PREPROCESSOR` state).
+    ///      `ERLANG_KEYWORDS` ∩ `ERLANG_BIFS` also disjoint
+    ///      (probed at `:213-217` inside `ATOM_UNQUOTED` settle).
+    ///      `ERLANG_DOC` / `ERLANG_DOC_MACRO` are checked in
+    ///      DIFFERENT parse states (`:157-172`), so their overlap
+    ///      is deliberate and not tested for disjointness.
+    ///   9. Style-routing pins for all 23 mapped SCE constants.
+    ///   10. DEFAULT (0), ATOM (7), UNKNOWN (31) unmapped.
+    ///   11. Italic set == 5 (all comment states).
+    ///   12. Bold set == 2 (KEYWORD + BIFS).
+    ///   13. Cross-language non-reuse — `ERLANG_STYLES` must not
+    ///       deep-equal any prior wired theme.
+    ///   14. `L_ERLANG` `LangEntry` has `lexer: Some("erlang")`
+    ///       and extensions contain `erl`, `hrl`.
+    ///   15. **Fold-classifier tokens in class 0**: `case`, `fun`,
+    ///       `if`, `query`, `receive`, `end` MUST appear in
+    ///       `ERLANG_KEYWORDS`. Without this, `FoldErlangDoc`'s
+    ///       classifier at `:508-529` cannot fire, and Erlang
+    ///       source blocks won't fold at their `case ... end` /
+    ///       `if ... end` / `fun ... end` / `receive ... end`
+    ///       boundaries.
+    ///   16. **Modern-Erlang canonical anchors** in class 0:
+    ///       `maybe` and `else` (OTP 25+ maybe...else construct).
+    ///   17. **Canonical BIF anchor coverage** in class 1:
+    ///       `spawn` / `is_atom` / `list_to_binary` /
+    ///       `binary_to_term` / `self` / `apply` — one from each
+    ///       major BIF category.
+    ///   18. **Preprocessor / module-attribute sigil rendering**:
+    ///       `-define` in `PREPROC`, `-module` in `MODULE_ATT`.
+    ///       These two are the canonical anchors — every Erlang
+    ///       `.erl` file has `-module(Name).` at the top; every
+    ///       macro-using file has `-define(NAME, ...).`. If
+    ///       either is missing or mis-classified, the visual
+    ///       feedback for standard Erlang source breaks.
+    ///   19. **Doc-tag anchors**: `@doc` in `DOC`, `@link` in
+    ///       `DOC_MACRO`. edoc's two most common tags.
+    ///   20. **No duplicate tokens within any single wordlist**.
+    ///       `WordList::InList` is set-based so duplicates are
+    ///       functionally harmless for highlighting, but they
+    ///       corrupt docstring "N tokens" claims and mask typos
+    ///       (a mistyped near-clone reads at a glance as though
+    ///       the intended token were present). Enforces
+    ///       `split_whitespace().count() ==
+    ///       HashSet::from_iter(...).len()` for all six lists.
+    #[test]
+    fn erlang_uses_lexerlang_six_class_theme() {
+        let er = lang_theme(L_ERLANG).expect("Erlang wired");
+
+        // Invariant 1: deep-value identity pin — the theme returned
+        // by the dispatcher must value-equal the `ERLANG_THEME`
+        // const's individual fields. Pointer-equality (`ptr::eq`)
+        // is NOT reliable here: Rust does not guarantee `const`
+        // items have unique stable addresses, so a reference to
+        // `ERLANG_THEME` obtained inside the test may point at a
+        // different LLVM-materialised copy than the one the
+        // dispatcher returns. Deep-value comparison catches the
+        // regression we actually care about — a future contributor
+        // typoing the dispatcher to return `&FORTRAN_THEME` (or
+        // an ad-hoc `LangTheme { ... }` literal) makes the styles/
+        // keywords/italic/bold fields diverge and this assertion
+        // fires. Same discipline as `c_and_cpp_share_lexcpp_style_table`
+        // higher in this file, which deliberately picks value-
+        // equality over pointer-equality for the same reason.
+        assert_eq!(er.styles, ERLANG_STYLES);
+        assert_eq!(er.italic, ERLANG_ITALIC);
+        assert_eq!(er.bold, ERLANG_BOLD);
+        assert_eq!(er.keywords.len(), 6);
+
+        // Invariant 2: 23 mappings.
+        assert_eq!(
+            er.styles.len(),
+            23,
+            "ERLANG_STYLES must map 23 indices (26 defined SCE_ERLANG_* \
+             slots minus DEFAULT (0) + ATOM (7) + UNKNOWN (31), all \
+             unmapped per framework convention)"
+        );
+
+        // Invariant 3: six classes canonical descriptor order.
+        assert_eq!(
+            er.keywords.len(),
+            6,
+            "ERLANG_THEME must install exactly 6 wordlist classes \
+             (matches erlangWordListDesc[] at LexErlang.cxx:616-624)"
+        );
+        for (i, (expected_class, expected_list)) in [
+            (0u32, ERLANG_KEYWORDS),
+            (1u32, ERLANG_BIFS),
+            (2u32, ERLANG_PREPROC),
+            (3u32, ERLANG_MODULE_ATT),
+            (4u32, ERLANG_DOC),
+            (5u32, ERLANG_DOC_MACRO),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(er.keywords[i].0, *expected_class);
+            assert_eq!(er.keywords[i].1, *expected_list);
+        }
+
+        // Invariant 4: all six classes non-empty.
+        for (list, name) in [
+            (ERLANG_KEYWORDS, "KEYWORDS"),
+            (ERLANG_BIFS, "BIFS"),
+            (ERLANG_PREPROC, "PREPROC"),
+            (ERLANG_MODULE_ATT, "MODULE_ATT"),
+            (ERLANG_DOC, "DOC"),
+            (ERLANG_DOC_MACRO, "DOC_MACRO"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "ERLANG_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: bare-identifier alphabet for classes 0 + 1.
+        for (list, name) in [(ERLANG_KEYWORDS, "KEYWORDS"), (ERLANG_BIFS, "BIFS")] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    !tok.is_empty()
+                        && tok
+                            .bytes()
+                            .all(|b| { b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' }),
+                    "ERLANG_{name} token `{tok}` violates bare-identifier \
+                     alphabet — must be `[a-z0-9_]+` so the atom-classification \
+                     path at LexErlang.cxx:213-217 finds a match"
+                );
+            }
+        }
+
+        // Invariant 6: `-` prefix for classes 2 + 3.
+        for (list, name) in [
+            (ERLANG_PREPROC, "PREPROC"),
+            (ERLANG_MODULE_ATT, "MODULE_ATT"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    tok.starts_with('-'),
+                    "ERLANG_{name} token `{tok}` must start with `-` — \
+                     the paint loop captures the `-` at state entry \
+                     (LexErlang.cxx:480-481), so the wordlist probe \
+                     matches `-name`, not bare `name`"
+                );
+            }
+        }
+
+        // Invariant 7: `@` prefix for classes 4 + 5.
+        for (list, name) in [(ERLANG_DOC, "DOC"), (ERLANG_DOC_MACRO, "DOC_MACRO")] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    tok.starts_with('@'),
+                    "ERLANG_{name} token `{tok}` must start with `@` — \
+                     the doc-comment paint loop captures the `@` at \
+                     state entry (LexErlang.cxx:140-143), so the \
+                     wordlist probe matches `@tag`, not bare `tag`"
+                );
+            }
+        }
+
+        // Invariant 8: cross-list uniqueness for classes probed
+        // in the same parse state first-match-wins.
+        use std::collections::HashSet;
+        let kw_set: HashSet<_> = ERLANG_KEYWORDS.split_whitespace().collect();
+        let bif_set: HashSet<_> = ERLANG_BIFS.split_whitespace().collect();
+        if let Some(shared) = kw_set.intersection(&bif_set).next() {
+            panic!(
+                "ERLANG_KEYWORDS and ERLANG_BIFS both contain `{shared}` \
+                 — LexErlang.cxx:213-217 probes class 0 then class 1 \
+                 first-match-wins. A cross-list duplicate leaves the \
+                 later entry dead code."
+            );
+        }
+        let preproc_set: HashSet<_> = ERLANG_PREPROC.split_whitespace().collect();
+        let modatt_set: HashSet<_> = ERLANG_MODULE_ATT.split_whitespace().collect();
+        if let Some(shared) = preproc_set.intersection(&modatt_set).next() {
+            panic!(
+                "ERLANG_PREPROC and ERLANG_MODULE_ATT both contain `{shared}` \
+                 — LexErlang.cxx:397-400 probes class 2 then class 3 \
+                 first-match-wins. A cross-list duplicate leaves the \
+                 later entry dead code."
+            );
+        }
+
+        // Invariant 9: style-routing pins for all 23 mapped SCE constants.
+        for (idx, slot, name) in [
+            (SCE_ERLANG_COMMENT, StyleSlot::Comment, "COMMENT"),
+            (SCE_ERLANG_VARIABLE, StyleSlot::Keyword2, "VARIABLE"),
+            (SCE_ERLANG_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_ERLANG_KEYWORD, StyleSlot::Keyword, "KEYWORD"),
+            (SCE_ERLANG_STRING, StyleSlot::String, "STRING"),
+            (SCE_ERLANG_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+            (
+                SCE_ERLANG_FUNCTION_NAME,
+                StyleSlot::Keyword2,
+                "FUNCTION_NAME",
+            ),
+            (SCE_ERLANG_CHARACTER, StyleSlot::String, "CHARACTER"),
+            (SCE_ERLANG_MACRO, StyleSlot::Macro, "MACRO"),
+            (SCE_ERLANG_RECORD, StyleSlot::Keyword2, "RECORD"),
+            (SCE_ERLANG_PREPROC, StyleSlot::Preprocessor, "PREPROC"),
+            (SCE_ERLANG_NODE_NAME, StyleSlot::Keyword2, "NODE_NAME"),
+            (
+                SCE_ERLANG_COMMENT_FUNCTION,
+                StyleSlot::Comment,
+                "COMMENT_FUNCTION",
+            ),
+            (
+                SCE_ERLANG_COMMENT_MODULE,
+                StyleSlot::Comment,
+                "COMMENT_MODULE",
+            ),
+            (SCE_ERLANG_COMMENT_DOC, StyleSlot::Comment, "COMMENT_DOC"),
+            (
+                SCE_ERLANG_COMMENT_DOC_MACRO,
+                StyleSlot::Comment,
+                "COMMENT_DOC_MACRO",
+            ),
+            (SCE_ERLANG_ATOM_QUOTED, StyleSlot::String, "ATOM_QUOTED"),
+            (SCE_ERLANG_MACRO_QUOTED, StyleSlot::Macro, "MACRO_QUOTED"),
+            (
+                SCE_ERLANG_RECORD_QUOTED,
+                StyleSlot::Keyword2,
+                "RECORD_QUOTED",
+            ),
+            (
+                SCE_ERLANG_NODE_NAME_QUOTED,
+                StyleSlot::Keyword2,
+                "NODE_NAME_QUOTED",
+            ),
+            (SCE_ERLANG_BIFS, StyleSlot::Keyword, "BIFS"),
+            (SCE_ERLANG_MODULES, StyleSlot::Keyword2, "MODULES"),
+            (
+                SCE_ERLANG_MODULES_ATT,
+                StyleSlot::Preprocessor,
+                "MODULES_ATT",
+            ),
+        ] {
+            assert!(
+                er.styles.contains(&(idx, slot)),
+                "SCE_ERLANG_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 10: DEFAULT (0), ATOM (7), UNKNOWN (31) unmapped.
+        for (idx, name) in [(0_usize, "DEFAULT"), (7, "ATOM"), (31, "UNKNOWN")] {
+            assert!(
+                !er.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_ERLANG_{name} ({idx}) must remain unmapped — \
+                 framework convention for bare identifiers and \
+                 transient states"
+            );
+        }
+
+        // Invariant 11: italic == 5 (all comment states).
+        assert_eq!(er.italic.len(), 5);
+        for idx in [
+            SCE_ERLANG_COMMENT,
+            SCE_ERLANG_COMMENT_FUNCTION,
+            SCE_ERLANG_COMMENT_MODULE,
+            SCE_ERLANG_COMMENT_DOC,
+            SCE_ERLANG_COMMENT_DOC_MACRO,
+        ] {
+            assert!(
+                er.italic.contains(&idx),
+                "ERLANG_ITALIC must include comment state {idx}"
+            );
+        }
+
+        // Invariant 12: bold == 2 (KEYWORD + BIFS).
+        assert_eq!(er.bold.len(), 2);
+        assert!(er.bold.contains(&SCE_ERLANG_KEYWORD));
+        assert!(er.bold.contains(&SCE_ERLANG_BIFS));
+
+        // Invariant 13: cross-language non-reuse.
+        let cs = lang_theme(L_CSOUND).expect("CSound wired");
+        let cscript = lang_theme(L_COFFEESCRIPT).expect("CoffeeScript wired");
+        let f = lang_theme(L_FORTRAN).expect("Fortran wired");
+        let json = lang_theme(L_JSON).expect("JSON wired");
+        for (other, name) in [
+            (cs, "CSound"),
+            (cscript, "CoffeeScript"),
+            (f, "Fortran"),
+            (json, "JSON"),
+        ] {
+            assert_ne!(
+                er.styles, other.styles,
+                "Erlang must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 14: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let er_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_ERLANG)
+            .expect("L_ERLANG LangEntry present in LANG_TABLE");
+        assert_eq!(
+            er_entry.lexer,
+            Some("erlang"),
+            "L_ERLANG LangEntry.lexer must be Some(\"erlang\") — wiring \
+             assumes the LexErlang module dispatched via SCLEX_ERLANG (= 53)"
+        );
+        for ext in ["erl", "hrl"] {
+            assert!(
+                er_entry.extensions.contains(&ext),
+                "L_ERLANG extensions must contain `{ext}`"
+            );
+        }
+
+        // Invariant 15: fold-classifier tokens in class 0.
+        // `FoldErlangDoc`'s `ClassifyErlangFoldPoint` at
+        // LexErlang.cxx:508-529 matches these six token
+        // spellings directly via `styler.Match` after the
+        // `stylePrev != KEYWORD && style == KEYWORD` guard at
+        // :558-559 has fired. If a token isn't in
+        // `ERLANG_KEYWORDS`, its identifier settles to ATOM
+        // (or FUNCTION_NAME) instead of KEYWORD, the fold
+        // guard misses, and Erlang blocks won't fold at those
+        // boundaries.
+        for tok in ["case", "fun", "if", "query", "receive", "end"] {
+            assert!(
+                ERLANG_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "ERLANG_KEYWORDS must include fold-classifier token `{tok}` \
+                 — FoldErlangDoc at LexErlang.cxx:508-529 matches this \
+                 spelling via styler.Match; missing it disables the fold \
+                 at every `{tok} ... end` block"
+            );
+        }
+
+        // Invariant 16: modern-Erlang canonical anchors — OTP
+        // 25+ `maybe ... else` construct.
+        for tok in ["maybe", "else"] {
+            assert!(
+                ERLANG_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "ERLANG_KEYWORDS must include OTP 25+ keyword `{tok}` \
+                 — the `maybe ... else` expression is stable in modern \
+                 Erlang"
+            );
+        }
+
+        // Invariant 17: canonical BIF anchor coverage — one
+        // representative from each major category (process /
+        // type-check / conversion / conversion-other / core /
+        // meta).
+        for bif in [
+            "spawn",
+            "is_atom",
+            "list_to_binary",
+            "binary_to_term",
+            "self",
+            "apply",
+        ] {
+            assert!(
+                ERLANG_BIFS.split_whitespace().any(|t| t == bif),
+                "ERLANG_BIFS must include canonical BIF anchor `{bif}`"
+            );
+        }
+
+        // Invariant 18: preprocessor / module-attribute sigil
+        // rendering — `-define` and `-module` are the two
+        // most-visible sigil-carrying tokens.
+        assert!(
+            ERLANG_PREPROC.split_whitespace().any(|t| t == "-define"),
+            "ERLANG_PREPROC must include `-define` — the canonical \
+             preprocessor macro-definition directive; every \
+             macro-using Erlang file has at least one `-define(NAME, ...)`"
+        );
+        assert!(
+            ERLANG_MODULE_ATT.split_whitespace().any(|t| t == "-module"),
+            "ERLANG_MODULE_ATT must include `-module` — every Erlang \
+             `.erl` file starts with `-module(Name).` as the first \
+             non-comment attribute; missing this would leave the module \
+             declaration unhighlighted"
+        );
+
+        // Invariant 19: doc-tag anchors.
+        assert!(
+            ERLANG_DOC.split_whitespace().any(|t| t == "@doc"),
+            "ERLANG_DOC must include `@doc` — the primary edoc tag \
+             for documenting functions"
+        );
+        assert!(
+            ERLANG_DOC_MACRO.split_whitespace().any(|t| t == "@link"),
+            "ERLANG_DOC_MACRO must include `@link` — the primary \
+             edoc inline reference macro"
+        );
+
+        // Invariant 20: no duplicate tokens within any single
+        // wordlist. `WordList::InList` is set-based so duplicates
+        // are functionally harmless for highlighting, but they
+        // corrupt docstring "N tokens" claims (a duplicate makes
+        // `split_whitespace().count()` overcount) and hide typos
+        // (a mistyped token near a correct one reads at a glance
+        // as if the intended token were present). Replaces the
+        // original invariant 20 (bare-identifier sigil-absence
+        // check) which was subsumed by invariant 5's alphabet
+        // check — `is_ascii_lowercase() || is_ascii_digit() ||
+        // == b'_'` already excludes `-` (0x2D) and `@` (0x40),
+        // so the sigil-absence assertion could never fail
+        // independently.
+        for (list, name) in [
+            (ERLANG_KEYWORDS, "KEYWORDS"),
+            (ERLANG_BIFS, "BIFS"),
+            (ERLANG_PREPROC, "PREPROC"),
+            (ERLANG_MODULE_ATT, "MODULE_ATT"),
+            (ERLANG_DOC, "DOC"),
+            (ERLANG_DOC_MACRO, "DOC_MACRO"),
+        ] {
+            let total = list.split_whitespace().count();
+            let unique = list.split_whitespace().collect::<HashSet<_>>().len();
+            assert_eq!(
+                total,
+                unique,
+                "ERLANG_{name} contains {} duplicate token(s) — \
+                 `WordList::InList` is set-based so duplicates are \
+                 functionally harmless but hide typos and corrupt \
+                 docstring token-count claims",
+                total - unique
+            );
+        }
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -34582,8 +35208,9 @@ mod lang_theme_tests {
     /// `L_JSON5` were removed when the JSON row landed.
     /// `L_JAVASCRIPT` was removed when the JavaScript row landed.
     /// `L_FORTRAN` / `L_FORTRAN_77` were removed when the Fortran
-    /// row landed. `L_CSOUND` was removed when the `CSound`
-    /// row landed in this commit.
+    /// row landed. `L_CSOUND` was removed when the `CSound` row
+    /// landed. `L_ERLANG` was removed when the Erlang row landed
+    /// in this commit.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");

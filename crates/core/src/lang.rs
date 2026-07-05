@@ -9884,6 +9884,337 @@ pub const CSOUND_USERKW: &str = concat!(
     "return reinit rireturn ",
 );
 
+/// Erlang reserved words wordlist — class 0 of `LexErlang`'s
+/// six-class descriptor (`erlangWordListDesc[]` at
+/// `LexErlang.cxx:616-624`). Matched byte-exact against
+/// `ATOM_UNQUOTED` tokens at `LexErlang.cxx:213-214`; hits emit
+/// [`SCE_ERLANG_KEYWORD`](../scintilla_sys/constant.SCE_ERLANG_KEYWORD.html).
+///
+/// **Load-bearing for `FoldErlangDoc`.** The fold classifier at
+/// `LexErlang.cxx:508-529` checks the token spelling directly via
+/// `styler.Match(keyword_start,"case"/"fun"/"if"/"query"/"receive"/"end")`
+/// after guarding on `stylePrev != SCE_ERLANG_KEYWORD && style ==
+/// SCE_ERLANG_KEYWORD` at `:558-559`. So `case`, `fun`, `if`,
+/// `query`, `receive`, and `end` **must** appear here or those
+/// fold points don't fire.
+///
+/// **Source:** Erlang OTP Reference Manual §Reserved Words
+/// (<https://www.erlang.org/doc/reference_manual/introduction.html#reserved-words>).
+///
+/// **30 tokens** — 27 canonical reserved words from the OTP
+/// reference manual plus three lexer-relevant additions:
+///   - `query` (removed at R12B, 2007 — kept because the fold
+///     classifier at `:520` still matches it).
+///   - `else` (OTP 25+ context keyword for the `maybe ... else`
+///     construct).
+///   - `maybe` (OTP 25+ block opener).
+///
+/// **Deliberately excluded — moved to class 1 [`ERLANG_BIFS`]:**
+///   - Type-check functions `is_atom`/`is_binary`/... — these
+///     are BIFs, not reserved words.
+///   - Type-conversion functions `atom_to_list`/`list_to_binary`/... .
+///
+/// **Deliberately excluded — moved to class 2 [`ERLANG_PREPROC`]:**
+///   - Preprocessor directives `-define`/`-undef`/... — those
+///     carry a leading `-` sigil and are matched in a different
+///     parse state.
+///
+/// **Deliberately excluded — moved to class 3 [`ERLANG_MODULE_ATT`]:**
+///   - Module attributes `-module`/`-export`/... — also `-`-prefixed.
+pub const ERLANG_KEYWORDS: &str = concat!(
+    // Bitwise / boolean operators (bnot/band/bor/bxor/bsl/bsr are
+    // arithmetic bitwise; and/or/not/xor are strict logical;
+    // andalso/orelse are short-circuit).
+    "and andalso band begin bnot bor bsl bsr bxor ",
+    // Block openers / closers (case/fun/if/query/receive are the
+    // fold-classifier openers; end is the sole closer; catch and
+    // try wrap exceptions; after is receive's timeout clause).
+    "after case catch cond div else end fun if let maybe not of ",
+    // Short-circuit / block continuers / receive-timeout.
+    "or orelse query receive rem try when xor ",
+);
+
+/// Erlang built-in functions (BIFs) wordlist — class 1 of
+/// `LexErlang`'s six-class descriptor. Matched byte-exact at
+/// `LexErlang.cxx:215-217`; hits emit
+/// [`SCE_ERLANG_BIFS`](../scintilla_sys/constant.SCE_ERLANG_BIFS.html).
+///
+/// The lexer applies a `strcmp(cur,"erlang:")` guard on the same
+/// line to skip styling the literal `"erlang:"` module-prefix
+/// string — irrelevant for wordlist content but explains why
+/// `erlang:` doesn't need to be excluded here.
+///
+/// **Source:** Erlang OTP Reference Manual §Built-In Functions
+/// and the `erlang` module documentation
+/// (<https://www.erlang.org/doc/apps/erts/erlang.html>). Contains
+/// BIFs from the `erlang` module — both the auto-imported set
+/// (callable without the `erlang:` prefix, e.g. `spawn`, `is_atom`,
+/// `list_to_binary`) and commonly-used prefixed forms
+/// (`erlang:system_info`, `erlang:send_after`, `erlang:phash2`,
+/// `erlang:process_display`, `erlang:unique_integer`, ...) so the
+/// wordlist covers both idiomatic call-site shapes. `LexErlang`
+/// styles any identifier matching the wordlist as `SCE_ERLANG_BIFS`
+/// regardless of whether it was preceded by `erlang:` — the
+/// `strcmp(cur,"erlang:")` guard at `:216` only prevents styling
+/// the literal `"erlang:"` module-prefix string, not the identifier
+/// after it.
+///
+/// **131 tokens** grouped by category:
+///   - **Type checking** (18): `is_alive` / `is_atom` /
+///     `is_binary` / `is_bitstring` / `is_boolean` / `is_float` /
+///     `is_function` / `is_integer` / `is_list` / `is_map` /
+///     `is_map_key` / `is_number` / `is_pid` / `is_port` /
+///     `is_process_alive` / `is_record` / `is_reference` /
+///     `is_tuple`.
+///   - **Type conversion** (29 — `X_to_Y` triangle across atoms /
+///     binaries / floats / integers / lists / pids / ports / refs /
+///     tuples / terms / iovecs).
+///   - **Size accessors** (7): `bit_size`, `byte_size`,
+///     `iolist_size`, `length`, `map_size`, `size`, `tuple_size`.
+///   - **Math** (8): `abs`, `ceil`, `float`, `floor`, `max`, `min`,
+///     `round`, `trunc`.
+///   - **Process control** (23): `spawn` family, `link` / `unlink`,
+///     `register` / `unregister` / `whereis`, `monitor` /
+///     `demonitor`, `monitor_node`, `self`, `node`, `nodes`,
+///     `exit`, `halt`, `group_leader`, `process_flag` /
+///     `process_info` / `process_display`, `processes`.
+///   - **Comm / send** (4): `send`, `send_after`, `send_nosuspend`,
+///     `disconnect_node`.
+///   - **Term manipulation** (22): `apply`, `error`, `throw`,
+///     `get` / `put` / `erase` / `get_keys`, `element` /
+///     `setelement`, `make_ref`, `now` / `date` / `time`,
+///     `statistics`, `memory`, `system_info` / `system_flag` /
+///     `system_monitor` / `system_profile` / `system_time`,
+///     `unique_integer`, `phash2`.
+///   - **Map access** (1): `map_get`.
+///   - **Code / GC** (8): `check_old_code`, `check_process_code`,
+///     `delete_module`, `load_module`, `module_loaded`,
+///     `pre_loaded`, `purge_module`, `garbage_collect`.
+///   - **Binary** (2): `binary_part`, `split_binary`.
+///   - **Port** (7): `open_port` and the `port_*` family.
+///   - **List head/tail** (2): `hd`, `tl`.
+///
+/// **Deliberately excluded:**
+///   - `and` / `or` / `not` / `xor` / `andalso` / `orelse` — these
+///     are **reserved words** (short-circuit / logical operators),
+///     not BIFs. They live in class 0 [`ERLANG_KEYWORDS`].
+///   - `and_boolean` / `or_boolean` — no such BIF exists.
+pub const ERLANG_BIFS: &str = concat!(
+    // Type-check predicates (`is_*` family).
+    "is_alive is_atom is_binary is_bitstring is_boolean is_float ",
+    "is_function is_integer is_list is_map is_map_key is_number ",
+    "is_pid is_port is_process_alive is_record is_reference is_tuple ",
+    // Type-conversion functions (source-type / destination-type
+    // triangle).
+    "atom_to_binary atom_to_list binary_to_atom binary_to_existing_atom ",
+    "binary_to_float binary_to_integer binary_to_list binary_to_term ",
+    "bitstring_to_list float_to_binary float_to_list integer_to_binary ",
+    "integer_to_list iolist_to_binary list_to_atom list_to_binary ",
+    "list_to_bitstring list_to_existing_atom list_to_float list_to_integer ",
+    "list_to_pid list_to_port list_to_ref list_to_tuple pid_to_list ",
+    "port_to_list term_to_binary term_to_iovec tuple_to_list ",
+    // Size accessors.
+    "bit_size byte_size iolist_size length map_size size tuple_size ",
+    // Math intrinsics.
+    "abs ceil float floor max min round trunc ",
+    // Process control.
+    "spawn spawn_link spawn_monitor spawn_opt spawn_request ",
+    "link unlink register unregister whereis monitor demonitor ",
+    "monitor_node self node nodes exit halt group_leader ",
+    "process_flag process_info process_display processes ",
+    // Communication.
+    "send send_after send_nosuspend disconnect_node ",
+    // Term manipulation.
+    "apply error throw get put erase get_keys element setelement ",
+    "make_ref now date time statistics memory system_info system_flag ",
+    "system_monitor system_profile system_time unique_integer phash2 ",
+    // Map access.
+    "map_get ",
+    // Code loading / module management.
+    "check_old_code check_process_code delete_module load_module ",
+    "module_loaded pre_loaded purge_module garbage_collect ",
+    // Binary manipulation.
+    "binary_part split_binary ",
+    // Port operations.
+    "open_port port_close port_command port_connect port_control ",
+    "port_info ports ",
+    // List head / tail accessors.
+    "hd tl ",
+);
+
+/// Erlang preprocessor directives wordlist — class 2 of
+/// `LexErlang`'s six-class descriptor. Matched at
+/// `LexErlang.cxx:397-398` inside the `PREPROCESSOR` parse state;
+/// hits emit
+/// [`SCE_ERLANG_PREPROC`](../scintilla_sys/constant.SCE_ERLANG_PREPROC.html).
+///
+/// **Sigil-carrying wordlist.** Every entry starts with `-`
+/// because the paint loop enters PREPROCESSOR state at
+/// `LexErlang.cxx:480-481` on the `-` character with
+/// `SetState(SCE_ERLANG_UNKNOWN)`, so `sc.GetCurrent(cur, sizeof(cur))`
+/// at `:396` returns the buffer starting with `-`. Omitting the
+/// `-` prefix would silently zero-match.
+///
+/// **Source:** Erlang OTP Reference Manual §Preprocessor
+/// (<https://www.erlang.org/doc/reference_manual/macros.html>) and
+/// the `epp` module documentation.
+///
+/// **12 directives:**
+///   - Conditional compilation: `-define`, `-undef`, `-ifdef`,
+///     `-ifndef`, `-if`, `-elif` (OTP 26+), `-else`, `-endif`.
+///   - File inclusion: `-include`, `-include_lib`.
+///   - Compile-time diagnostics: `-error` (OTP 15+), `-warning`.
+///
+/// **Deliberately excluded — moved to class 3 [`ERLANG_MODULE_ATT`]:**
+///   - `-module`, `-export`, `-behaviour`, ... — module-level
+///     metadata attributes. Class 2 is probed first (`:397`), so
+///     if an attribute name appeared in both lists, this list
+///     would win. Kept disjoint to preserve the semantic
+///     distinction between preprocessor directives and module
+///     attributes.
+pub const ERLANG_PREPROC: &str = concat!(
+    // Conditional compilation. `-elif` was added in OTP 26 (May 2023).
+    "-define -undef -ifdef -ifndef -if -elif -else -endif ",
+    // File inclusion.
+    "-include -include_lib ",
+    // Compile-time diagnostics.
+    "-error -warning ",
+);
+
+/// Erlang module attributes wordlist — class 3 of `LexErlang`'s
+/// six-class descriptor. Matched at `LexErlang.cxx:399-400` inside
+/// the `PREPROCESSOR` parse state (same state as class 2 but
+/// probed second); hits emit
+/// [`SCE_ERLANG_MODULES_ATT`](../scintilla_sys/constant.SCE_ERLANG_MODULES_ATT.html).
+///
+/// **Sigil-carrying wordlist.** Every entry starts with `-` for
+/// the same reason as [`ERLANG_PREPROC`] — the paint loop
+/// captures the `-` at state entry.
+///
+/// **Source:** Erlang OTP Reference Manual §Module Attributes
+/// (<https://www.erlang.org/doc/reference_manual/modules.html#module-attributes>).
+///
+/// **24 attributes:**
+///   - **Structural** (6): `-module`, `-export`, `-import`,
+///     `-export_type`, `-on_load`, `-nifs` (OTP 25+).
+///   - **Behavior** (4): `-behaviour`, `-behavior` (US spelling —
+///     both accepted per Erlang docs), `-callback`,
+///     `-optional_callbacks`.
+///   - **Type specifications** (3): `-spec`, `-type`, `-opaque`.
+///   - **Records** (1): `-record`.
+///   - **Metadata** (5): `-vsn`, `-author`, `-copyright`,
+///     `-deprecated`, `-removed`.
+///   - **Compile control** (3): `-compile`, `-dialyzer`,
+///     `-feature` (OTP 25+ feature flags).
+///   - **Documentation** (2): `-doc` (OTP 27+ inline doc
+///     attribute), `-moduledoc` (OTP 27+ module-level doc).
+///
+/// **Deliberately excluded:**
+///   - Preprocessor directives `-define`/`-include`/etc. — live
+///     in class 2 [`ERLANG_PREPROC`]. The lexer probes class 2
+///     first at `:397`, so listing an item in both would silently
+///     mis-classify.
+pub const ERLANG_MODULE_ATT: &str = concat!(
+    // Structural.
+    "-module -export -import -export_type -on_load -nifs ",
+    // Behavior declarations. Both `-behaviour` (British) and
+    // `-behavior` (American) are accepted by the Erlang compiler.
+    "-behaviour -behavior -callback -optional_callbacks ",
+    // Type specifications.
+    "-spec -type -opaque ",
+    // Records.
+    "-record ",
+    // Metadata.
+    "-vsn -author -copyright -deprecated -removed ",
+    // Compile control.
+    "-compile -dialyzer -feature ",
+    // Documentation (OTP 27+).
+    "-doc -moduledoc ",
+);
+
+/// Erlang edoc documentation tags wordlist — class 4 of
+/// `LexErlang`'s six-class descriptor. Matched at
+/// `LexErlang.cxx:168-169` inside the `COMMENT_DOC` parse state;
+/// hits emit
+/// [`SCE_ERLANG_COMMENT_DOC`](../scintilla_sys/constant.SCE_ERLANG_COMMENT_DOC.html).
+///
+/// **Sigil-carrying wordlist.** Every entry starts with `@` for
+/// the same paint-loop reason — state entry at
+/// `LexErlang.cxx:140-143` ratchets on `@` while still within the
+/// comment context, so `sc.GetCurrent` captures the `@` prefix.
+///
+/// **Source:** edoc User Manual §Tags
+/// (<https://www.erlang.org/doc/apps/edoc/edoc_users_guide.html>).
+///
+/// **21 tags** covering the canonical edoc set:
+///   - Authorship: `@author`, `@copyright`, `@version`, `@since`.
+///   - Doc structure: `@doc`, `@docfile`, `@end`, `@equiv`,
+///     `@headerfile`, `@hidden`, `@private`, `@todo`, `@TODO`,
+///     `@deprecated`.
+///   - Function signature: `@param`, `@spec`, `@returns`,
+///     `@throws`, `@type`.
+///   - References: `@reference`, `@see`.
+///
+/// **Case-sensitive.** `@todo` and `@TODO` are treated as
+/// distinct tags per the edoc user manual (both are recognized
+/// and rendered specially).
+pub const ERLANG_DOC: &str = concat!(
+    // Authorship metadata.
+    "@author @copyright @version @since ",
+    // Documentation structure / status.
+    "@doc @docfile @end @equiv @headerfile @hidden @private ",
+    "@todo @TODO @deprecated ",
+    // Function signature tags.
+    "@param @spec @returns @throws @type ",
+    // Cross-references.
+    "@reference @see ",
+);
+
+/// Erlang edoc documentation macros wordlist — class 5 of
+/// `LexErlang`'s six-class descriptor. Matched at
+/// `LexErlang.cxx:163-166` inside the `COMMENT_DOC_MACRO` parse
+/// state (entered when the tag appears inside `{@macro}` braces);
+/// hits emit
+/// [`SCE_ERLANG_COMMENT_DOC_MACRO`](../scintilla_sys/constant.SCE_ERLANG_COMMENT_DOC_MACRO.html).
+///
+/// **Sigil-carrying wordlist.** Every entry starts with `@` —
+/// same paint-loop capture rule as [`ERLANG_DOC`].
+///
+/// **Source:** edoc User Manual §Macros
+/// (<https://www.erlang.org/doc/apps/edoc/edoc_users_guide.html>).
+///
+/// **10 macros** — the standard edoc `{@…}` inline macro set:
+///   - `@link` — inline reference to another module/function.
+///   - `@module` — module name of the enclosing file.
+///   - `@section` — inline section heading.
+///   - `@title` — document title macro.
+///   - `@type` — inline type reference.
+///   - `@version` — inline version macro.
+///   - `@time`, `@date` — timestamp macros.
+///   - `@email` — email address linkifier.
+///   - `@url` — URL linkifier.
+///
+/// **Overlap with [`ERLANG_DOC`] is deliberate.** `@type`,
+/// `@version`, and a few others appear in both. That's not a
+/// bug: the two parse states are mutually exclusive — the lexer
+/// checks class 5 only when `parse_state == COMMENT_DOC_MACRO`
+/// at `:163-164`, and class 4 only when the tag appears bare
+/// (not inside `{...}`). Same word, different styling context.
+///
+/// **Deliberately excluded — `@moduledoc`.** OTP 27+ introduces
+/// the `-moduledoc` **module attribute** (an on-disk source-file
+/// declaration) and the underlying macro token; it is NOT a
+/// standard edoc `{@…}` inline macro. Listed correctly in
+/// [`ERLANG_MODULE_ATT`] as `-moduledoc`; leaving it out of
+/// this class preserves the docstring's provenance claim
+/// ("standard edoc `{@…}` inline macro set").
+pub const ERLANG_DOC_MACRO: &str = concat!(
+    // Inline reference macros.
+    "@link @module @section @title @type @version ",
+    // Timestamp / metadata macros.
+    "@time @date @email @url ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1298,6 +1298,203 @@ pub const SCE_CSOUND_IRATE_VAR: usize = 13;
 pub const SCE_CSOUND_GLOBAL_VAR: usize = 14;
 pub const SCE_CSOUND_STRINGEOL: usize = 15;
 
+// LexErlang style indices. Constants mirror `SciLexer.h:943-968`
+// verbatim. The enum is non-contiguous: slots 0..=24 are used, 25..=30
+// are skipped, and 31 is the `UNKNOWN` transient state. Dispatches
+// SCLEX_ERLANG (= 53, per `SciLexer.h:69`) via a **six-class wordlist**
+// declared at `vendor\lexilla\lexers\LexErlang.cxx:616-624`
+// (`erlangWordListDesc[]`):
+//
+//     erlangWordListDesc[] = {
+//         "Erlang Reserved words",          // class 0 → KEYWORD
+//         "Erlang BIFs",                    // class 1 → BIFS
+//         "Erlang Preprocessor",            // class 2 → PREPROC (leading `-`)
+//         "Erlang Module Attributes",       // class 3 → MODULES_ATT (leading `-`)
+//         "Erlang Documentation",           // class 4 → COMMENT_DOC (leading `@`)
+//         "Erlang Documentation Macro",     // class 5 → COMMENT_DOC_MACRO (leading `@`)
+//         0,
+//     };
+//
+// **Case-SENSITIVE matching.** The identifier and preprocessor
+// classifier at `LexErlang.cxx:212-224` and `:394-406` call
+// `sc.GetCurrent(cur, sizeof(cur))` (byte-exact) at `:161`,
+// `:201`, `:212`, and `:396` — four distinct capture sites, NOT
+// `GetCurrentLowered`. Erlang is case-sensitive per language spec
+// — atoms start lowercase, Variables start uppercase or `_`. All
+// wordlist tokens are lowercase (Erlang convention). Same discipline
+// as `D_KEYWORDS` / `R_RESERVED` / `COFFEESCRIPT_KEYWORDS` /
+// `CSOUND_OPCODES`, inverted from `POWERSHELL_KEYWORDS` /
+// `COBOL_KEYWORDS_A` / `FORTRAN_KEYWORDS`.
+//
+// **Sigil-carrying wordlists.** Three wordlists include their
+// sigil in each token, because `sc.GetCurrent` returns the buffer
+// starting from the last `SetState`, which is the sigil character:
+//   - **Class 2 (preprocessor)** and **class 3 (module attributes)**
+//     tokens start with `-` (e.g. `-define`, `-module`). Both are
+//     probed inside the `PREPROCESSOR` parse state at
+//     `LexErlang.cxx:393-407`; the `-` was captured by
+//     `SetState(SCE_ERLANG_UNKNOWN)` at `:480-481` and remains at
+//     the head of the captured buffer.
+//   - **Class 4 (doc)** and **class 5 (doc-macro)** tokens start
+//     with `@` (e.g. `@doc`, `@link`). Probed inside the
+//     `COMMENT_DOC` / `COMMENT_DOC_MACRO` states at `:157-176`;
+//     the `@` is captured because the state ratchets at `:143`
+//     via `ForwardSetState(sc.state)` while still holding on
+//     the `@` character.
+// Consumers writing these wordlists must include the sigil verbatim.
+//
+// **Multi-level comment ratcheting.** LexErlang implements the
+// Erlang convention that comment `%` count encodes documentation
+// scope: `%` line-only (COMMENT), `%%` function-doc
+// (COMMENT_FUNCTION), `%%%` module-doc (COMMENT_MODULE). The paint
+// loop at `:109-153` uses fall-through cases in a `switch` to ratchet
+// state upward as consecutive `%` characters are consumed. The
+// `to_late_to_comment` flag at `:111,124` prevents downgrading
+// mid-line if a non-`%` character intervened. Every ratchet level
+// remains subject to embedded edoc `@tag` / `{@macro}` detection at
+// `:136-153` for a nested doc emit.
+//
+// **Fold classifier.** `FoldErlangDoc` at `:531-614` folds on
+// keyword transitions from non-KEYWORD → KEYWORD, and specifically
+// checks the token spelling for `case` / `fun` / `if` / `query` /
+// `receive` (increment) and `end` (decrement) at
+// `ClassifyErlangFoldPoint:508-529`. **These six spellings MUST
+// live in wordlist class 0** (SCE_ERLANG_KEYWORD). Two guards
+// participate: (1) the keyword-start-capture guard at `:558-559`
+// (`stylePrev != KEYWORD && style == KEYWORD`) records the token
+// boundary, and (2) the symmetrically-inverted classifier-call
+// guard at `:564-567` (`stylePrev == KEYWORD && style != KEYWORD
+// && style != ATOM`) actually invokes `ClassifyErlangFoldPoint`
+// at `:568-570`. If a spelling isn't in class 0, it settles to
+// ATOM (or FUNCTION_NAME) instead of KEYWORD; neither guard
+// fires, and the block doesn't fold. `fun` has an extra
+// negation inside the classifier — the fold only increments
+// when the following style isn't `SCE_ERLANG_FUNCTION_NAME`,
+// i.e. `fun foo/1` inline function reference doesn't open a
+// fold, only `fun () -> ... end` blocks do. `query` is an
+// obsolete Erlang keyword (removed at R12B in 2007) but the
+// fold classifier still checks it, so we keep it in the KEYWORD
+// list too.
+//
+// **Braced fold on `%{` `%}`.** At `:574-583` the fold also
+// increments on `%{` and decrements on `%}` inside any COMMENT
+// state. This is an editor-fold convention (comment markers
+// carrying explicit fold boundaries), unique to LexErlang.
+//
+// Style semantics (paint-loop citations reference LexErlang.cxx):
+//
+//   - SCE_ERLANG_DEFAULT (0) — whitespace / unclassified.
+//     Framework convention: leave unmapped.
+//   - SCE_ERLANG_COMMENT (1) — `%`-to-EOL line comment. Entry at
+//     `:457-460`, ratchets to COMMENT_FUNCTION/MODULE on
+//     consecutive `%` at `:112-131`.
+//   - SCE_ERLANG_VARIABLE (2) — uppercase-first or `_`-prefixed
+//     identifier (Erlang variable convention). Entry at `:492-493`
+//     (branch condition at `:492`, `SetState` at `:493`),
+//     exit at `:415-418`.
+//   - SCE_ERLANG_NUMBER (3) — decimal / base-N integer / float /
+//     exponent numeric literal. Multi-state numeric FSA at
+//     `:326-389` covers `42`, `16#DEAD`, `3.14`, `1.0e-3`.
+//   - SCE_ERLANG_KEYWORD (4) — wordlist class 0 hit (reserved
+//     words). Emitted at `:213-214` after ATOM_UNQUOTED settles
+//     via `sc.GetCurrent(cur, sizeof(cur))` at `:212`.
+//   - SCE_ERLANG_STRING (5) — `"..."` double-quoted string.
+//     Entry at `:455`, exit at `:419-422`.
+//   - SCE_ERLANG_OPERATOR (6) — punctuation per `isoperator`
+//     helper (Scintilla built-in, matches C-style punctuation
+//     set). Entry at `:497-500` on any char passing `isoperator`.
+//     The `|| sc.ch == '\\'` clause at `:498` extends the
+//     DEFAULT-state operator-entry condition to include a bare
+//     backslash — so `\` in DEFAULT paints as OPERATOR, not as
+//     a character-escape (that's handled inside the CHARACTER
+//     state at `:427-433`).
+//   - SCE_ERLANG_ATOM (7) — lowercase-first bare identifier
+//     (Erlang atom convention). Emitted at `:221` — the atom
+//     fallback when no wordlist / function-call context matches.
+//     Framework convention: leave unmapped so atoms paint at
+//     STYLE_DEFAULT (they're the most common identifier form).
+//   - SCE_ERLANG_FUNCTION_NAME (8) — atom followed by `(` or
+//     `/` (function-call / function-reference syntax). Emitted
+//     at `:218-219`.
+//   - SCE_ERLANG_CHARACTER (9) — `$c` character literal, one
+//     char after the `$` sigil. Entry at `:456`, exit at
+//     `:427-433` after one forward (with `\\` escape allowance).
+//   - SCE_ERLANG_MACRO (10) — `?MACRO` macro reference,
+//     unquoted form. Entry via `MACRO_START` at `:465-468`,
+//     settled at `:308-311`.
+//   - SCE_ERLANG_RECORD (11) — `#record` record reference,
+//     unquoted form. Entry via `RECORD_START` at `:461-464`,
+//     settled at `:279-282`.
+//   - SCE_ERLANG_PREPROC (12) — wordlist class 2 hit (`-define`
+//     et al). Emitted at `:397-398` inside PREPROCESSOR state.
+//   - SCE_ERLANG_NODE_NAME (13) — `atom@host` node-name form,
+//     unquoted. Entry via `ATOM_UNQUOTED` → `NODE_NAME_UNQUOTED`
+//     at `:190-191`, settled at `:247-250`.
+//   - SCE_ERLANG_COMMENT_FUNCTION (14) — `%%` function-doc
+//     comment level. Ratcheted at `:112-117`.
+//   - SCE_ERLANG_COMMENT_MODULE (15) — `%%%` module-doc comment
+//     level. Ratcheted at `:125-130`.
+//   - SCE_ERLANG_COMMENT_DOC (16) — edoc `@tag` inside a comment.
+//     Emitted at `:168-169` when the token matches the doc
+//     wordlist (class 4).
+//   - SCE_ERLANG_COMMENT_DOC_MACRO (17) — edoc `{@macro}`
+//     inside a comment. Emitted at `:163-166` when the token
+//     matches the doc-macro wordlist (class 5); on match the
+//     paint loop consumes through the closing `}` at `:166-167`.
+//   - SCE_ERLANG_ATOM_QUOTED (18) — `'quoted atom'` form.
+//     Entry via `ATOM_QUOTED` at `:469-472`, settled at
+//     `:234-238`.
+//   - SCE_ERLANG_MACRO_QUOTED (19) — `?'quoted macro'` form.
+//     Entry via `MACRO_QUOTED` at `:296-298`, settled at
+//     `:315-320`.
+//   - SCE_ERLANG_RECORD_QUOTED (20) — `#'quoted record'` form.
+//     Entry via `RECORD_QUOTED` at `:267-269`, settled at
+//     `:286-291`.
+//   - SCE_ERLANG_NODE_NAME_QUOTED (21) — `'quoted'@'quoted'`
+//     quoted node-name form. Settled at `:254-262`.
+//   - SCE_ERLANG_BIFS (22) — wordlist class 1 hit (built-in
+//     functions from the `erlang` module). Emitted at `:215-217`
+//     with the `strcmp(cur,"erlang:")` guard to avoid styling
+//     the literal `"erlang:"` prefix as a BIF.
+//   - SCE_ERLANG_MODULES (23) — atom followed by `:` (module
+//     prefix in `module:function()`). Emitted at `:200-203`
+//     after ATOM_UNQUOTED sees a `:` and a following alnum or
+//     `'`.
+//   - SCE_ERLANG_MODULES_ATT (24) — wordlist class 3 hit
+//     (`-module`, `-export`, `-behaviour`, ...). Emitted at
+//     `:399-400`.
+//   - SCE_ERLANG_UNKNOWN (31) — transient parse-in-progress
+//     state, set on characters that trigger a parse_state
+//     transition at `:463`, `:467`, `:471`, `:478`, `:481`,
+//     `:491`, `:496`. The paint loop settles it to a real style
+//     before emit. Framework convention: leave unmapped.
+pub const SCE_ERLANG_DEFAULT: usize = 0;
+pub const SCE_ERLANG_COMMENT: usize = 1;
+pub const SCE_ERLANG_VARIABLE: usize = 2;
+pub const SCE_ERLANG_NUMBER: usize = 3;
+pub const SCE_ERLANG_KEYWORD: usize = 4;
+pub const SCE_ERLANG_STRING: usize = 5;
+pub const SCE_ERLANG_OPERATOR: usize = 6;
+pub const SCE_ERLANG_ATOM: usize = 7;
+pub const SCE_ERLANG_FUNCTION_NAME: usize = 8;
+pub const SCE_ERLANG_CHARACTER: usize = 9;
+pub const SCE_ERLANG_MACRO: usize = 10;
+pub const SCE_ERLANG_RECORD: usize = 11;
+pub const SCE_ERLANG_PREPROC: usize = 12;
+pub const SCE_ERLANG_NODE_NAME: usize = 13;
+pub const SCE_ERLANG_COMMENT_FUNCTION: usize = 14;
+pub const SCE_ERLANG_COMMENT_MODULE: usize = 15;
+pub const SCE_ERLANG_COMMENT_DOC: usize = 16;
+pub const SCE_ERLANG_COMMENT_DOC_MACRO: usize = 17;
+pub const SCE_ERLANG_ATOM_QUOTED: usize = 18;
+pub const SCE_ERLANG_MACRO_QUOTED: usize = 19;
+pub const SCE_ERLANG_RECORD_QUOTED: usize = 20;
+pub const SCE_ERLANG_NODE_NAME_QUOTED: usize = 21;
+pub const SCE_ERLANG_BIFS: usize = 22;
+pub const SCE_ERLANG_MODULES: usize = 23;
+pub const SCE_ERLANG_MODULES_ATT: usize = 24;
+pub const SCE_ERLANG_UNKNOWN: usize = 31;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

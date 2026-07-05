@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 58 / 🟡 30 / ⚫ 1.
+Total: 89 rows. ✅ 59 / 🟡 29 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1866,7 +1866,7 @@ further shim work needed.
 | CSS | 20 | `css` | ✅ | ✅ | ✅ |
 | D | 52 | `d` | ✅ | ✅ | ✅ |
 | Diff | 33 | `diff` | ✅ | ✅ | ✅ |
-| Erlang | 71 | `erlang` | ⚫ | ⚫ | 🟡 |
+| Erlang | 71 | `erlang` | ✅ | ✅ | ✅ |
 | ErrorList | 92 | `errorlist` | ⚫ | ⚫ | 🟡 |
 | ESCRIPT | 72 | `escript` | ⚫ | ⚫ | 🟡 |
 | Forth | 73 | `forth` | ⚫ | ⚫ | 🟡 |
@@ -5653,6 +5653,217 @@ class 2 only with affirmative class-0 absence
 (plus an affirmative absence pin for the
 fabricated `enduntil` token), and 15 single-
 letter score statements in class 1.
+
+**Erlang (2026-07-05):** wires `SCLEX_ERLANG`
+(= 53) for Erlang source (`.erl`) and header
+(`.hrl`) files. `L_ERLANG` (id 71) is the sole
+language row using this lexer — no shared-theme
+dispatch needed.
+
+**Six-class wordlist descriptor is the widest of
+Phase 4.5 so far.** `erlangWordListDesc[]` at
+`LexErlang.cxx:616-624` splits reserved words /
+BIFs / preprocessor / module-attrs / doc / doc-macro
+into six independent lists. Two of the six carry
+a sigil prefix on every token (`-define`/`-module`
+in classes 2 + 3, `@doc`/`@link` in classes 4 +
+5) because the paint loop captures the sigil at
+state entry via `SetState(SCE_ERLANG_UNKNOWN)` at
+`:480-481` (for `-`) and `ForwardSetState` at
+`:143` (for `@`) — `sc.GetCurrent(cur, sizeof(cur))`
+then returns the buffer starting with the sigil,
+so wordlist entries must include it.
+
+**Fold classifier is spelling-literal.**
+`FoldErlangDoc` at `:531-614` and
+`ClassifyErlangFoldPoint` at `:508-529` match six
+specific token spellings directly via
+`styler.Match(keyword_start, "case"/"fun"/"if"/
+"query"/"receive"/"end")` — after the guard
+`stylePrev != SCE_ERLANG_KEYWORD && style ==
+SCE_ERLANG_KEYWORD` at `:558-559`. Load-bearing
+consequence: if any of `case`, `fun`, `if`,
+`query`, `receive`, or `end` is missing from
+`ERLANG_KEYWORDS`, its identifier settles to ATOM
+(or FUNCTION_NAME) instead of KEYWORD, the fold
+guard misses, and Erlang blocks won't fold at
+`case ... end` / `if ... end` / `fun ... end` /
+`receive ... end` boundaries. Test invariant #15
+pins all six affirmatively.
+
+**Six-class wordlist (30 + 131 + 12 + 24 + 21 + 10
+= 228 tokens):**
+- **Class 0 (`SCE_ERLANG_KEYWORD`, bold Keyword)**
+  — `ERLANG_KEYWORDS` carries all 30 Erlang OTP
+  reserved words: bitwise/boolean operators
+  (`and`/`or`/`not`/`xor`/`andalso`/`orelse`/
+  `band`/`bor`/`bxor`/`bnot`/`bsl`/`bsr`), block
+  openers/closers (`case`/`catch`/`fun`/`if`/
+  `receive`/`try`/`end`/`after`/`when`), the
+  obsolete `query`/`cond`/`let` triple (kept for
+  fold-classifier and lexer-tolerance reasons), and
+  OTP 25+ `maybe`/`else` for the `maybe ... else`
+  construct.
+- **Class 1 (`SCE_ERLANG_BIFS`, bold Keyword)** —
+  `ERLANG_BIFS` carries 131 BIFs from the `erlang`
+  module (auto-imported forms callable without the
+  `erlang:` prefix — `spawn`, `is_atom`,
+  `list_to_binary`, ... — plus commonly-used
+  prefixed forms `erlang:system_info` /
+  `erlang:send_after` / `erlang:phash2` /
+  `erlang:process_display` /
+  `erlang:unique_integer` for coverage of both
+  idiomatic call-site shapes): type
+  predicates (`is_atom`/`is_binary`/`is_list`/16
+  siblings), type conversions (29 `X_to_Y`
+  functions), size accessors (`length`/`bit_size`/
+  `byte_size`/`map_size`/`tuple_size`), math
+  intrinsics (`abs`/`ceil`/`floor`/`round`/
+  `trunc`/`max`/`min`/`float`), process control
+  (`spawn` family / `link`/`unlink`/`monitor`/
+  `demonitor`/`register`/`unregister`/`whereis`/
+  `self`/`node`/`nodes`/`exit`/`halt`/
+  `process_flag`/`process_info`), messaging
+  (`send`/`send_after`/`send_nosuspend`), term
+  manipulation (`apply`/`error`/`throw`/`get`/
+  `put`/`erase`/`element`/`setelement`/`make_ref`/
+  `date`/`time`/`statistics`/`memory`/
+  `system_info`/`unique_integer`/`phash2`), code
+  loading (`load_module`/`purge_module`/
+  `check_old_code`/`garbage_collect`), binaries
+  (`binary_part`/`split_binary`), ports
+  (`open_port`/`port_close`/`port_command`), list
+  head/tail (`hd`/`tl`).
+- **Class 2 (`SCE_ERLANG_PREPROC`, Preprocessor
+  slot)** — `ERLANG_PREPROC` carries 12
+  preprocessor directives, all `-`-prefixed:
+  conditional compilation (`-define`/`-undef`/
+  `-ifdef`/`-ifndef`/`-if`/`-elif`/`-else`/
+  `-endif`), file inclusion (`-include`/
+  `-include_lib`), compile-time diagnostics
+  (`-error`/`-warning`). `-elif` was added in OTP
+  26 (May 2023).
+- **Class 3 (`SCE_ERLANG_MODULES_ATT`,
+  Preprocessor slot)** — `ERLANG_MODULE_ATT`
+  carries 24 module attributes, all `-`-prefixed:
+  structural (`-module`/`-export`/`-import`/
+  `-export_type`/`-on_load`/`-nifs`), behavior
+  declarations (`-behaviour`/`-behavior` — both
+  spellings accepted / `-callback`/
+  `-optional_callbacks`), type specifications
+  (`-spec`/`-type`/`-opaque`), records
+  (`-record`), metadata (`-vsn`/`-author`/
+  `-copyright`/`-deprecated`/`-removed`), compile
+  control (`-compile`/`-dialyzer`/`-feature`), OTP
+  27+ documentation attributes (`-doc`/
+  `-moduledoc`).
+- **Class 4 (`SCE_ERLANG_COMMENT_DOC`, Comment
+  slot with italic)** — `ERLANG_DOC` carries 21
+  edoc tags, all `@`-prefixed: authorship
+  (`@author`/`@copyright`/`@version`/`@since`),
+  documentation structure (`@doc`/`@docfile`/
+  `@end`/`@equiv`/`@headerfile`/`@hidden`/
+  `@private`/`@todo`/`@TODO`/`@deprecated`),
+  function signatures (`@param`/`@spec`/
+  `@returns`/`@throws`/`@type`), cross-references
+  (`@reference`/`@see`). `@todo` and `@TODO` are
+  distinct per edoc case-sensitivity.
+- **Class 5 (`SCE_ERLANG_COMMENT_DOC_MACRO`,
+  Comment slot with italic)** — `ERLANG_DOC_MACRO`
+  carries 10 inline edoc `{@…}` macros:
+  `@link`/`@module`/`@section`/`@title`/`@type`/
+  `@version`/`@time`/`@date`/`@email`/`@url`.
+  Overlap with class 4 (`@type`, `@version`) is
+  deliberate: the two parse states are mutually
+  exclusive — class 5 only fires when `parse_state
+  == COMMENT_DOC_MACRO` at `:163-164`, class 4
+  only when the tag appears bare. `@moduledoc`
+  deliberately excluded — that token belongs to
+  OTP 27+'s `-moduledoc` module attribute (class
+  3), not the edoc `{@…}` inline macro set.
+
+**Style routing (23 mappings across 26 defined
+SCE slots):** COMMENT + COMMENT_FUNCTION +
+COMMENT_MODULE + COMMENT_DOC + COMMENT_DOC_MACRO
+→ `Comment` (italic — five comment levels
+collapse; the `%`/`%%`/`%%%` ratchet and embedded
+edoc variants all read as comments); VARIABLE +
+FUNCTION_NAME + RECORD + RECORD_QUOTED + NODE_NAME
++ NODE_NAME_QUOTED + MODULES → `Keyword2` (seven
+structural-marker categories collapse to accent
+color); NUMBER → `Number`; KEYWORD + BIFS →
+`Keyword` (bold — two reserved-vocabulary classes
+share the primary slot); STRING + CHARACTER +
+ATOM_QUOTED → `String` (three quoted-literal
+forms collapse); OPERATOR → `Operator`; MACRO +
+MACRO_QUOTED → `Macro` (matches Rust's Macro
+slot usage — `?MACRO` reads as a preprocessor-style
+invocation, visually distinct from records `#name`
+and module attributes `-name`); PREPROC +
+MODULES_ATT → `Preprocessor` (both `-`-prefixed,
+share the compiler-directive family). DEFAULT (0)
++ ATOM (7) + UNKNOWN (31) unmapped per framework
+convention — ATOM is Erlang's bare
+lowercase-first identifier form (the most common
+token), left at STYLE_DEFAULT so atoms paint as
+regular text and the accent goes only to
+genuinely marked identifiers.
+
+**Multi-level comment ratchet** is unique to
+LexErlang: `%` opens COMMENT, a second `%` on the
+same line ratchets to COMMENT_FUNCTION at
+`:112-117`, a third ratchets to COMMENT_MODULE at
+`:125-130`. The `to_late_to_comment` flag at
+`:111,124` prevents downgrading if a non-`%`
+character intervened. Every ratchet level remains
+subject to embedded edoc `@tag`/`{@macro}`
+detection at `:136-153` for a nested doc emit
+that overrides the outer comment style.
+
+**Sigil-carrying wordlist entries are the
+signature complication.** Four of the six classes
+require the sigil verbatim; test invariants #6
+(preproc/module-att `-` prefix) and #7
+(doc/doc-macro `@` prefix) enforce this. A future
+contributor tempted to add a bare `include` to
+`ERLANG_PREPROC` would zero-match — the paint
+loop compares `-include` (with leading `-`)
+against the wordlist, so bare `include` would
+never fire. Invariant #20 also pins the
+converse: bare-identifier classes (KEYWORDS +
+BIFS) must NOT carry sigils, because the
+atom-classification path at `:213-217` only sees
+bare identifiers stripped of any sigil context.
+
+Structural test coverage: 20 invariants —
+`Some(&ERLANG_THEME)` return, 23-mapping style
+count, six-class canonical descriptor order, all
+classes non-empty, bare-identifier alphabet
+enforcement for classes 0 + 1 (`[a-z0-9_]+`),
+`-` prefix enforcement for classes 2 + 3, `@`
+prefix enforcement for classes 4 + 5, cross-list
+uniqueness for the two same-parse-state pairs
+(KEYWORDS ∩ BIFS = ∅; PREPROC ∩ MODULE_ATT = ∅;
+DOC ∩ DOC_MACRO is deliberately allowed to
+overlap because they fire in different parse
+states), style-routing pins for all 23 mapped SCE
+constants, DEFAULT + ATOM + UNKNOWN unmapped,
+italic set == 5 (all comment states), bold set
+== 2 (KEYWORD + BIFS), cross-language non-reuse
+against CSound / CoffeeScript / Fortran / JSON,
+`L_ERLANG` `LangEntry`'s `lexer: Some("erlang")`
++ `.erl` + `.hrl` extension presence,
+fold-classifier tokens (`case`/`fun`/`if`/
+`query`/`receive`/`end`) affirmatively in class
+0, modern-Erlang OTP-25+ anchors (`maybe`/
+`else`), canonical BIF anchor coverage
+(`spawn`/`is_atom`/`list_to_binary`/
+`binary_to_term`/`self`/`apply`), sigil-carrying
+canonical anchors (`-define` in PREPROC,
+`-module` in MODULE_ATT), doc-tag anchors
+(`@doc` in DOC, `@link` in DOC_MACRO), and
+affirmative absence of `-`/`@` sigils in classes
+0 + 1.
 
 ## Notes
 
