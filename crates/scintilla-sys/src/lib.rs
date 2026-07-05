@@ -1495,6 +1495,134 @@ pub const SCE_ERLANG_MODULES: usize = 23;
 pub const SCE_ERLANG_MODULES_ATT: usize = 24;
 pub const SCE_ERLANG_UNKNOWN: usize = 31;
 
+// LexEScript style indices. 12 contiguous slots (0..=11) for
+// ESCRIPT — POL (Penultima Online)'s server-side scripting
+// language for Ultima Online emulator scripts, extension `.em`.
+// Constants mirror `SciLexer.h:831-842` verbatim. Dispatches
+// SCLEX_ESCRIPT (= 41, per `SciLexer.h:57`) via a **three-class
+// wordlist** declared at
+// `vendor\lexilla\lexers\LexEScript.cxx:270-275`
+// (`ESCRIPTWordLists[]`):
+//
+//     ESCRIPTWordLists[] = {
+//         "Primary keywords and identifiers",       // class 0 → WORD
+//         "Intrinsic functions",                    // class 1 → WORD2
+//         "Extended and user defined functions",    // class 2 → WORD3
+//         0,
+//     };
+//
+// **Case-INSENSITIVE by default.** The lexer at
+// `LexEScript.cxx:54` reads the `escript.case.sensitive` property
+// (default 0) and, when unset, calls `sc.GetCurrentLowered(s,
+// sizeof(s))` at `:87` — so wordlist tokens **must be
+// all-lowercase**. Same discipline as `PASCAL_KEYWORDS` (LexPascal
+// lowercases), inverted from `CSOUND_OPCODES` / `ERLANG_KEYWORDS`
+// / `D_KEYWORDS` (byte-exact).
+//
+// **Load-bearing fold-classifier / class-2 coupling.** The fold
+// classifier `classifyFoldPointESCRIPT` at `:152-171` and its
+// caller `FoldESCRIPTDoc` at `:232-243` **only fire when
+// `style == SCE_ESCRIPT_WORD3`** — the fold-critical control-flow
+// tokens (`for` / `foreach` / `program` / `function` / `while` /
+// `case` / `if` openers; `endfor` / `endforeach` / `endprogram` /
+// `endfunction` / `endwhile` / `endcase` / `endif` closers;
+// `else` / `elseif` half-block markers) **must** live in class 2
+// (`ESCRIPT_FOLDWORDS`) so the identifier classifier at `:92-97`
+// styles them as `SCE_ESCRIPT_WORD3`. The `if (keywords.InList(s))
+// ... else if (keywords2.InList(s)) ... else if
+// (keywords3.InList(s))` cascade is first-match-wins, so a
+// fold-critical token duplicated in class 0 gets `SCE_ESCRIPT_WORD`
+// (bold Keyword) instead of `SCE_ESCRIPT_WORD3` — the fold
+// classifier never sees it, and blocks won't fold. Class 0 is
+// therefore reserved for **non-fold** primary vocabulary
+// (declarations `var` / `const` / `struct` / `dictionary`,
+// booleans `true` / `false` / `nil`, exit statements `return` /
+// `break` / `continue` / `exit`, boolean operators `and` / `or` /
+// `not`, loop-body / iteration modifiers `do` / `then` / `to` /
+// `downto` / `step` / `in` / `repeat` / `until` / `goto`).
+//
+// **Fold-classifier prev-word memory.** `classifyFoldPointESCRIPT`
+// at `:154` short-circuits if `prevWord == "end"` (a stray `end`
+// token guard) and at `:155-156` inverts the level for `elseif`
+// alone OR `if` following `else` (bare `else if` — Pascal-style
+// with a space between the two words; the current-token check is
+// `s == "if"` gated on `prevWord == "else"`, matching source
+// order `else` then `if`). Only class-2 tokens contribute to
+// `prevWord` (updated at `:241` inside the `style ==
+// SCE_ESCRIPT_WORD3` branch), so `if` / `else` need class 2
+// membership for this coupling too.
+//
+// **Braced fold on `//{` `//}` line-comment markers.** At
+// `:215-224` inside a `SCE_ESCRIPT_COMMENTLINE` styled range,
+// `//{` opens a fold and `//}` closes one — an editor-fold
+// convention where line-comment markers carry explicit fold
+// boundaries. Same shape as LexErlang's `%{`/`%}` inside
+// COMMENT states.
+//
+// Style semantics (paint-loop citations reference LexEScript.cxx):
+//
+//   - SCE_ESCRIPT_DEFAULT (0) — whitespace / unclassified.
+//     Framework convention: leave unmapped.
+//   - SCE_ESCRIPT_COMMENT (1) — `/* ... */` block comment.
+//     Entry at `:132-134`, exit at `:102-106`.
+//   - SCE_ESCRIPT_COMMENTLINE (2) — `//`-to-EOL line comment.
+//     Entry at `:135-136`, exit at `:112-115`.
+//   - SCE_ESCRIPT_COMMENTDOC (3) — enum slot defined in
+//     `SciLexer.h` but **never entered** by
+//     `ColouriseESCRIPTDoc`; the `else if (sc.state ==
+//     SCE_ESCRIPT_COMMENTDOC)` branch at `:107-111` handles
+//     exit only. No `SetState(SCE_ESCRIPT_COMMENTDOC)` call
+//     exists anywhere in the paint loop. Legacy Javadoc-style
+//     entry point that was dropped. Mapped for
+//     forward-compatibility if a future lexer patch re-enables
+//     it, but effectively an orphan today.
+//   - SCE_ESCRIPT_NUMBER (4) — decimal / float numeric literal.
+//     Entry at `:128-129`, exit at `:77-80`.
+//   - SCE_ESCRIPT_WORD (5) — wordlist class 0 hit
+//     ("Primary keywords and identifiers"). Emitted at
+//     `:92-93` via `ChangeState` after IDENTIFIER settles.
+//   - SCE_ESCRIPT_STRING (6) — `"..."` double-quoted string
+//     with `\"` and `\\` escape support. Entry at `:137-138`,
+//     exit at `:116-123`.
+//   - SCE_ESCRIPT_OPERATOR (7) — restricted operator set:
+//     `+ - * / = < > & | ! ? :`. Entry at `:140-141`.
+//     NOTE: does NOT use `isoperator` — the commented-out
+//     `isoperator` at `:139` shows the original intent; the
+//     current cascade at `:140` explicitly enumerates the
+//     accepted operators, so `. , ; ( ) [ ]` fall through
+//     to DEFAULT.
+//   - SCE_ESCRIPT_IDENTIFIER (8) — bare identifier fallback
+//     when no wordlist match. Emitted transiently at
+//     `:130-131` (also accepts `#`-prefixed forms per
+//     `IsAWordStart || sc.ch == '#'`) and settles to
+//     `SCE_ESCRIPT_DEFAULT` at `:100` after the wordlist
+//     probe cascade at `:92-97`. Framework convention:
+//     leave unmapped so bare identifiers paint at
+//     STYLE_DEFAULT.
+//   - SCE_ESCRIPT_BRACE (9) — `{` / `}` structural braces.
+//     Distinct from OPERATOR (7). Entry at `:142-143`.
+//   - SCE_ESCRIPT_WORD2 (10) — wordlist class 1 hit
+//     ("Intrinsic functions"). Emitted at `:94-95`.
+//   - SCE_ESCRIPT_WORD3 (11) — wordlist class 2 hit
+//     ("Extended and user defined functions"). Emitted at
+//     `:96-97`. **Load-bearing for `FoldESCRIPTDoc`** at
+//     `:232-243`: only class-2 tokens contribute to
+//     `prevWord` and to the fold-classifier's level
+//     adjustments, so fold-critical control-flow keywords
+//     MUST live in this class.
+pub const SCE_ESCRIPT_DEFAULT: usize = 0;
+pub const SCE_ESCRIPT_COMMENT: usize = 1;
+pub const SCE_ESCRIPT_COMMENTLINE: usize = 2;
+pub const SCE_ESCRIPT_COMMENTDOC: usize = 3;
+pub const SCE_ESCRIPT_NUMBER: usize = 4;
+pub const SCE_ESCRIPT_WORD: usize = 5;
+pub const SCE_ESCRIPT_STRING: usize = 6;
+pub const SCE_ESCRIPT_OPERATOR: usize = 7;
+pub const SCE_ESCRIPT_IDENTIFIER: usize = 8;
+pub const SCE_ESCRIPT_BRACE: usize = 9;
+pub const SCE_ESCRIPT_WORD2: usize = 10;
+pub const SCE_ESCRIPT_WORD3: usize = 11;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

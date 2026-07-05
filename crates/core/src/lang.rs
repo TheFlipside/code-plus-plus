@@ -10215,6 +10215,226 @@ pub const ERLANG_DOC_MACRO: &str = concat!(
     "@time @date @email @url ",
 );
 
+/// ESCRIPT primary keywords wordlist — class 0 of `LexEScript`'s
+/// three-class descriptor (`ESCRIPTWordLists[]` at
+/// `LexEScript.cxx:270-275`). Matched at `LexEScript.cxx:92-93`
+/// via a `keywords.InList(s)` probe against
+/// `sc.GetCurrentLowered(s, sizeof(s))` (lowercased when the
+/// `escript.case.sensitive` property is 0, which is the default);
+/// hits emit
+/// [`SCE_ESCRIPT_WORD`](../scintilla_sys/constant.SCE_ESCRIPT_WORD.html).
+///
+/// **All-lowercase.** The lexer's `sc.GetCurrentLowered` call at
+/// `:87` means the wordlist must be all-lowercase — a mixed-case
+/// entry `"Print"` would zero-match against a lowered `"print"`
+/// buffer. Same discipline as `PASCAL_KEYWORDS` (`LexPascal`),
+/// inverted from `ERLANG_KEYWORDS` / `CSOUND_OPCODES` (both
+/// byte-exact via `GetCurrent`).
+///
+/// **Source:** POL (Penultima Online) ESCRIPT language reference
+/// (<https://docs.polserver.com/pol100/escriptguide.php>) and
+/// the ESCRIPT compiler's `basic.em` module descriptor set.
+///
+/// **27 tokens** covering non-fold-critical primary vocabulary:
+///   - **Declarations** (5): `var`, `const`, `dictionary`,
+///     `struct`, `enum`.
+///   - **Module control** (2): `use`, `include`. (`use` is
+///     ESCRIPT's Delphi-like module-import statement,
+///     `include` is a preprocessor-like file inclusion.)
+///   - **Literals** (3): `true`, `false`, `nil`.
+///   - **Boolean / type-check word operators** (4): `and`,
+///     `or`, `not`, `isa`. These are Pascal-style word
+///     operators, distinct from `&&`/`||`/`!` which are also
+///     accepted but styled by `SCE_ESCRIPT_OPERATOR`. `isa` is
+///     a binary type-check operator (`obj isa POLCLASS_XXX`,
+///     analogous to Delphi's `is`), not a callable intrinsic —
+///     it belongs to the word-operator group rather than to
+///     [`ESCRIPT_INTRINSICS`].
+///   - **Control-flow exits** (4): `return`, `break`,
+///     `continue`, `exit`.
+///   - **Iteration modifiers** (6): `do`, `then`, `to`,
+///     `downto`, `step`, `in`.
+///   - **Non-fold loop constructs** (3): `repeat`, `until`,
+///     `goto`. `repeat ... until` is a Pascal-style
+///     bottom-tested loop that `LexEScript`'s fold classifier
+///     doesn't recognise — kept in class 0 since fold isn't
+///     going to work for it regardless.
+///
+/// **Deliberately excluded — moved to class 2
+/// [`ESCRIPT_FOLDWORDS`]:**
+///   - Fold-critical block openers `for`, `foreach`,
+///     `program`, `function`, `while`, `case`, `if`.
+///   - Fold-critical block closers `endfor`, `endforeach`,
+///     `endprogram`, `endfunction`, `endwhile`, `endcase`,
+///     `endif`.
+///   - Fold-critical half-block markers `else`, `elseif`.
+///
+///   All 16 fold-critical tokens live ONLY in class 2 because
+///   `FoldESCRIPTDoc` at `LexEScript.cxx:232-243` only examines
+///   tokens styled as `SCE_ESCRIPT_WORD3` (class 2 hit). Adding
+///   them to class 0 would grant them `SCE_ESCRIPT_WORD` styling
+///   via the first-match-wins cascade at `:92-97`, and the fold
+///   classifier would never see them.
+pub const ESCRIPT_KEYWORDS: &str = concat!(
+    // Declarations.
+    "var const dictionary struct enum ",
+    // Module control (Delphi-like `use foo;` + preprocessor `include`).
+    "use include ",
+    // Boolean literals + nil.
+    "true false nil ",
+    // Boolean word operators (distinct from `&&`/`||`/`!`).
+    // `isa` joins this group: `obj isa POLCLASS_XXX` is a binary
+    // type-check word operator, analogous to Delphi's `is`. It's
+    // NOT a callable intrinsic function (no `isa(x)` syntax), so
+    // it belongs in the same class-0 slot as its syntactic peers
+    // rather than in the class-1 intrinsic wordlist.
+    "and or not isa ",
+    // Control-flow exits.
+    "return break continue exit ",
+    // Iteration modifiers.
+    "do then to downto step in ",
+    // Non-fold loop constructs (`repeat`/`until` unrecognised
+    // by `LexEScript`'s fold classifier; `goto` is standalone).
+    "repeat until goto ",
+);
+
+/// ESCRIPT intrinsic functions wordlist — class 1 of
+/// `LexEScript`'s three-class descriptor. Matched at
+/// `LexEScript.cxx:94-95` via a `keywords2.InList(s)` probe
+/// against `sc.GetCurrentLowered(s, sizeof(s))`; hits emit
+/// [`SCE_ESCRIPT_WORD2`](../scintilla_sys/constant.SCE_ESCRIPT_WORD2.html).
+///
+/// **All-lowercase** for the same `GetCurrentLowered` reason as
+/// [`ESCRIPT_KEYWORDS`].
+///
+/// **Source:** POL ESCRIPT module reference documentation
+/// (<https://docs.polserver.com/pol100/index.php>). Contains
+/// commonly-used intrinsic functions from the canonical POL
+/// modules `basic.em`, `uo.em`, `os.em`, and `math` (POL exposes
+/// math intrinsics directly, without a distinct module).
+///
+/// **50 tokens** grouped by module:
+///   - **Basic** (25): print / println, `syslog` / `debugmsg`,
+///     type conversions (`cint` / `cdbl` / `cstr` / `casc`),
+///     type introspection (`len` / `typeof` / `typeofint`),
+///     char/byte conversions (`bin` / `hex` / `chr` / `chrhex`
+///     / `ord`), randomness (`randomint` / `randomdiceroll`),
+///     math (`sqrt`), timing (`sleep` / `sleepms`), string
+///     helpers (`substr` / `strreplace` / `splitwords` /
+///     `trim`). (`isa` deliberately excluded — moved to
+///     [`ESCRIPT_KEYWORDS`] as a word operator.)
+///   - **UO** (17): character lookup (`findplayer`), item
+///     manipulation (`createitematlocation` /
+///     `createitemincontainer` / `destroyitem`), messaging
+///     (`sendsysmessage` / `sendsysmessageex`), movement
+///     (`movecharacter` / `movecharactertolocation` /
+///     `moveobject`), position (`getx` / `gety` / `getz` /
+///     `getpos`), property access (`getobjproperty` /
+///     `setobjproperty` / `eraseobjproperty`), scanning
+///     (`findobjtypeincontainer`).
+///   - **OS** (8): script control (`start_script` /
+///     `run_script` / `kill_script`), clock
+///     (`readmillisecondclock` / `system_time`), scheduling
+///     (`set_critical` / `set_priority`), event waits
+///     (`wait_for_event`).
+///
+/// **Not exhaustive.** POL exposes hundreds of intrinsics
+/// across many modules (`http.em`, `polsys.em`, `attributes.em`,
+/// `polcommands.em`, ...). This wordlist covers the ~90th
+/// percentile of what appears in typical ESCRIPT source. A
+/// future contributor can extend row-by-row without breaking
+/// the invariants; the fold classifier is oblivious to class 1
+/// content.
+pub const ESCRIPT_INTRINSICS: &str = concat!(
+    // Basic — I/O + diagnostics.
+    "print println syslog debugmsg ",
+    // Basic — type conversion.
+    "cint cdbl cstr casc ",
+    // Basic — type introspection. `isa` deliberately excluded —
+    // it's a binary type-check word operator (`obj isa
+    // POLCLASS_XXX`) not a callable intrinsic, so it lives in
+    // [`ESCRIPT_KEYWORDS`] next to `and`/`or`/`not`.
+    "len typeof typeofint ",
+    // Basic — char / byte conversions.
+    "bin hex chr chrhex ord ",
+    // Basic — randomness + math.
+    "randomint randomdiceroll sqrt ",
+    // Basic — timing.
+    "sleep sleepms ",
+    // Basic — string helpers.
+    "substr strreplace splitwords trim ",
+    // UO — character lookup.
+    "findplayer findobjtypeincontainer ",
+    // UO — item manipulation.
+    "createitematlocation createitemincontainer destroyitem ",
+    // UO — messaging.
+    "sendsysmessage sendsysmessageex ",
+    // UO — movement.
+    "movecharacter movecharactertolocation moveobject ",
+    // UO — position.
+    "getx gety getz getpos ",
+    // UO — property access.
+    "getobjproperty setobjproperty eraseobjproperty ",
+    // OS — script control.
+    "start_script run_script kill_script ",
+    // OS — clock.
+    "readmillisecondclock system_time ",
+    // OS — scheduling + event waits.
+    "set_critical set_priority wait_for_event ",
+);
+
+/// ESCRIPT fold-critical control-flow tokens wordlist — class 2
+/// of `LexEScript`'s three-class descriptor. Matched at
+/// `LexEScript.cxx:96-97`; hits emit
+/// [`SCE_ESCRIPT_WORD3`](../scintilla_sys/constant.SCE_ESCRIPT_WORD3.html).
+///
+/// **All-lowercase** for the same `GetCurrentLowered` reason as
+/// [`ESCRIPT_KEYWORDS`].
+///
+/// **Load-bearing for `FoldESCRIPTDoc`.** The fold-classifier
+/// caller at `LexEScript.cxx:232-243` only examines tokens
+/// styled as `SCE_ESCRIPT_WORD3` — the entire fold implementation
+/// is gated on class 2 membership. `classifyFoldPointESCRIPT` at
+/// `:152-171` `strcmp`s the lowered token against 16 specific
+/// spellings; each MUST live in this class for the corresponding
+/// block boundary to fold.
+///
+/// **Semantic label mismatch.** The descriptor at `:273` calls
+/// this class "Extended and user defined functions" — but the
+/// fold classifier's constraint forces us to use it for the
+/// language's core control-flow keywords instead. The theme in
+/// `ui_win32` compensates by routing `SCE_ESCRIPT_WORD3` to
+/// `StyleSlot::Keyword` (bold — matching the semantic weight of
+/// control-flow keywords), not to the `Keyword2` accent slot
+/// that would follow the descriptor's label.
+///
+/// **Source:** `LexEScript.cxx:152-171` (`classifyFoldPointESCRIPT`)
+/// — the spellings are hard-coded in the C source, so this
+/// wordlist is a mechanical mirror of that fixed set.
+///
+/// **16 tokens:**
+///   - **Block openers** (7): `for`, `foreach`, `program`,
+///     `function`, `while`, `case`, `if`.
+///   - **Block closers** (7): `endfor`, `endforeach`,
+///     `endprogram`, `endfunction`, `endwhile`, `endcase`,
+///     `endif`.
+///   - **Half-block markers** (2): `else`, `elseif`.
+///     `elseif` triggers a `-1` level adjustment on its own;
+///     `if` triggers `-1` only when the classifier's
+///     `prevWord == "else"` (Pascal-style `else if` with a
+///     space between the two words, matching source order
+///     `else` then `if` — the C code at
+///     `LexEScript.cxx:155` is `strcmp(prevWord, "else") == 0
+///     && strcmp(s, "if") == 0`).
+pub const ESCRIPT_FOLDWORDS: &str = concat!(
+    // Block openers.
+    "for foreach program function while case if ",
+    // Block closers.
+    "endfor endforeach endprogram endfunction endwhile endcase endif ",
+    // Half-block markers.
+    "else elseif ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

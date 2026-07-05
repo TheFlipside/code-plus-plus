@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 59 / 🟡 29 / ⚫ 1.
+Total: 89 rows. ✅ 60 / 🟡 28 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1868,7 +1868,7 @@ further shim work needed.
 | Diff | 33 | `diff` | ✅ | ✅ | ✅ |
 | Erlang | 71 | `erlang` | ✅ | ✅ | ✅ |
 | ErrorList | 92 | `errorlist` | ⚫ | ⚫ | 🟡 |
-| ESCRIPT | 72 | `escript` | ⚫ | ⚫ | 🟡 |
+| ESCRIPT | 72 | `escript` | ✅ | ✅ | ✅ |
 | Forth | 73 | `forth` | ⚫ | ⚫ | 🟡 |
 | Fortran (fixed form) | 59 | `f77` | ✅ | ✅ | ✅ |
 | Fortran (free form) | 25 | `fortran` | ✅ | ✅ | ✅ |
@@ -5864,6 +5864,148 @@ canonical anchors (`-define` in PREPROC,
 (`@doc` in DOC, `@link` in DOC_MACRO), and
 affirmative absence of `-`/`@` sigils in classes
 0 + 1.
+
+**ESCRIPT (2026-07-05):** wires `SCLEX_ESCRIPT`
+(= 41) for POL (Penultima Online) server-side
+scripting language `.em` sources. `L_ESCRIPT`
+(id 72) is the sole language row using this
+lexer.
+
+**Semantic-label mismatch is load-bearing.**
+`LexEScript`'s three-class descriptor at
+`LexEScript.cxx:270-275` labels class 2 as
+"Extended and user defined functions" — but the
+fold classifier `FoldESCRIPTDoc` at
+`LexEScript.cxx:232-243` only fires on tokens
+styled as `SCE_ESCRIPT_WORD3` (class 2 hit),
+`classifyFoldPointESCRIPT` at `:152-171`
+hard-codes 16 specific fold-critical control-flow
+spellings via `strcmp`. This forces the language's
+fold-critical keywords (`for`/`foreach`/`program`/
+`function`/`while`/`case`/`if` openers; the seven
+`end*` closers; `else`/`elseif` half-block markers)
+into class 2 — the semantic opposite of what the
+descriptor's label suggests. The theme compensates
+by routing `SCE_ESCRIPT_WORD3` → `Keyword` (bold,
+matching the semantic weight of language
+keywords), NOT `Keyword2` accent. This mirrors
+Erlang's KEYWORD + BIFS → Keyword collapse
+discipline: two related classes can share the
+primary bold slot when both semantically read as
+"language vocabulary".
+
+**First-match-wins cascade is a landmine.** The
+identifier classifier at `LexEScript.cxx:92-97`
+probes class 0 → class 1 → class 2 in order. A
+fold-critical token duplicated in class 0 gets
+`SCE_ESCRIPT_WORD` (bold Keyword) instead of
+`SCE_ESCRIPT_WORD3`, and the fold classifier
+never sees it — silently breaking fold at that
+block boundary. Test invariant #13 pins
+cross-list disjointness affirmatively (both
+class-2 presence AND class-0 + class-1 absence
+for every one of the 16 fold-classifier tokens);
+test invariant #6 additionally pins any
+pairwise intersection across the three wordlists.
+
+**Three-class wordlist (27 + 50 + 16 = 93
+tokens):**
+- **Class 0 (`SCE_ESCRIPT_WORD`, bold Keyword)** —
+  `ESCRIPT_KEYWORDS` carries 27 non-fold primary
+  vocabulary tokens: declarations (`var`/`const`/
+  `dictionary`/`struct`/`enum`), module control
+  (`use`/`include`), boolean literals + nil
+  (`true`/`false`/`nil`), Pascal-style boolean and
+  type-check word operators (`and`/`or`/`not`/
+  `isa` — `isa` is POL's `obj isa POLCLASS_XXX`
+  type-check operator, analogous to Delphi's `is`),
+  control-flow exits (`return`/`break`/`continue`/
+  `exit`), iteration modifiers (`do`/`then`/`to`/
+  `downto`/`step`/`in`), and non-fold-recognised
+  loop constructs (`repeat`/`until`/`goto`).
+- **Class 1 (`SCE_ESCRIPT_WORD2`, Keyword2 accent)**
+  — `ESCRIPT_INTRINSICS` carries 50 canonical POL
+  intrinsic functions across three modules:
+  `basic.em` (`print`/`println`/`syslog`/`cint`/
+  `cdbl`/`cstr`/`len`/`typeof`/`randomint`/`sqrt`/
+  `sleep`/`substr`/`strreplace` etc.), `uo.em`
+  (`sendsysmessage`/`findplayer`/
+  `createitematlocation`/`movecharacter`/`getx`/
+  `gety`/`getz`/`getobjproperty` etc.), and
+  `os.em` (`start_script`/`run_script`/
+  `system_time`/`readmillisecondclock`/
+  `set_critical`/`wait_for_event`).
+- **Class 2 (`SCE_ESCRIPT_WORD3`, bold Keyword —
+  fold-critical)** — `ESCRIPT_FOLDWORDS` carries
+  exactly the 16 spellings hard-coded in
+  `classifyFoldPointESCRIPT` at `:152-171`:
+  block openers (`for`/`foreach`/`program`/
+  `function`/`while`/`case`/`if`), block closers
+  (`endfor`/`endforeach`/`endprogram`/
+  `endfunction`/`endwhile`/`endcase`/`endif`),
+  half-block markers (`else`/`elseif`).
+
+**Style routing (10 mappings across 12 defined SCE
+slots):** COMMENT + COMMENTLINE + COMMENTDOC →
+`Comment` (italic — three comment forms collapse;
+COMMENTDOC is a currently-orphan enum slot that
+`ColouriseESCRIPTDoc` never enters but mapped
+anyway for forward-compat); NUMBER → `Number`;
+WORD + WORD3 → `Keyword` (bold — two "language
+keyword" classes collapse despite class 2's
+misleading descriptor label); STRING → `String`;
+OPERATOR + BRACE → `Operator` (two punctuation
+classes collapse — LexEScript splits `{ }` from
+other operators but semantically they're all
+punctuation); WORD2 → `Keyword2` (accent for
+intrinsic functions). DEFAULT (0) + IDENTIFIER (8)
+unmapped per framework convention.
+
+**Case-INSENSITIVE by default** via the
+`escript.case.sensitive` property (default 0) at
+`LexEScript.cxx:54`. When unset, the identifier
+classifier at `:87` calls `sc.GetCurrentLowered`
+before the wordlist probe — so all three
+wordlists must be all-lowercase. Invariant #5
+enforces `[a-z0-9_]+` alphabet across every
+wordlist.
+
+**Restricted operator set** at
+`LexEScript.cxx:140` — the paint loop explicitly
+enumerates `+ - * / = < > & | ! ? :` rather than
+using Scintilla's `isoperator`, so `. , ; ( ) [ ]`
+render as `SCE_ESCRIPT_DEFAULT` (unstyled). This
+is a known LexEScript limitation that this
+wiring inherits.
+
+Structural test coverage: 16 invariants —
+deep-value identity pin, 10-mapping style count,
+three-class canonical descriptor order, all
+classes non-empty, all-lowercase alphabet
+enforcement `[a-z0-9_]+`, cross-list disjointness
+across all three pairs (KEYWORDS ∩ INTRINSICS,
+KEYWORDS ∩ FOLDWORDS, INTRINSICS ∩ FOLDWORDS —
+load-bearing for fold correctness),
+style-routing pins for all 10 mapped SCE
+constants, DEFAULT + IDENTIFIER unmapped, italic
+set == 3 (all comment states), bold set == 2
+(WORD + WORD3 — the two language-keyword
+classes), cross-language non-reuse against
+Erlang / CSound / Fortran / JSON, `L_ESCRIPT`
+`LangEntry`'s `lexer: Some("escript")` + `.em`
+extension presence, exhaustive class-2 presence
++ class-0 + class-1 absence pin for all 16
+fold-classifier tokens (`for`/`foreach`/
+`program`/`function`/`while`/`case`/`if`/
+`endfor`/`endforeach`/`endprogram`/
+`endfunction`/`endwhile`/`endcase`/`endif`/
+`else`/`elseif`), canonical non-fold anchors
+(`var`/`const`/`return`/`true`/`false`/`nil`),
+canonical intrinsic anchors (`print`/
+`sendsysmessage`/`createitematlocation`/
+`sleep` — one from each module), and no-duplicate
+defence-in-depth check across all three
+wordlists.
 
 ## Notes
 

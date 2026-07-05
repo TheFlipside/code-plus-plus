@@ -111,29 +111,30 @@ use codepp_core::lang::{
     CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
     CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, D_DOC_KEYWORDS,
     D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7, ERLANG_BIFS, ERLANG_DOC,
-    ERLANG_DOC_MACRO, ERLANG_KEYWORDS, ERLANG_MODULE_ATT, ERLANG_PREPROC, FORTRAN_EXTENDED,
-    FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL,
-    GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
-    HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS,
-    INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS,
-    JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
-    KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
-    LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
-    L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_FORTRAN, L_FORTRAN_77,
-    L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP,
-    L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
-    L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
-    L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
-    NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
-    PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
-    POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
-    PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
-    RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
-    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-    VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
-    VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
-    VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+    ERLANG_DOC_MACRO, ERLANG_KEYWORDS, ERLANG_MODULE_ATT, ERLANG_PREPROC, ESCRIPT_FOLDWORDS,
+    ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS, FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS,
+    GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
+    HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
+    INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
+    JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS,
+    JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
+    LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
+    L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
+    L_ESCRIPT, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA,
+    L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB,
+    L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC,
+    L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML,
+    L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+    OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
+    POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
+    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+    PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
+    R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+    SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+    XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -190,54 +191,57 @@ use codepp_scintilla_sys::{
     SCE_ERLANG_KEYWORD, SCE_ERLANG_MACRO, SCE_ERLANG_MACRO_QUOTED, SCE_ERLANG_MODULES,
     SCE_ERLANG_MODULES_ATT, SCE_ERLANG_NODE_NAME, SCE_ERLANG_NODE_NAME_QUOTED, SCE_ERLANG_NUMBER,
     SCE_ERLANG_OPERATOR, SCE_ERLANG_PREPROC, SCE_ERLANG_RECORD, SCE_ERLANG_RECORD_QUOTED,
-    SCE_ERLANG_STRING, SCE_ERLANG_VARIABLE, SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_LABEL,
-    SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2, SCE_F_PREPROCESSOR, SCE_F_STRING1,
-    SCE_F_STRING2, SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2, SCE_F_WORD3, SCE_GC_ATTRIBUTE,
-    SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_EVENT,
-    SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_CAPITAL, SCE_HA_CHARACTER, SCE_HA_CLASS,
-    SCE_HA_COMMENTBLOCK, SCE_HA_COMMENTBLOCK2, SCE_HA_COMMENTBLOCK3, SCE_HA_COMMENTLINE,
-    SCE_HA_DATA, SCE_HA_INSTANCE, SCE_HA_KEYWORD, SCE_HA_LITERATE_CODEDELIM,
-    SCE_HA_LITERATE_COMMENT, SCE_HA_MODULE, SCE_HA_NUMBER, SCE_HA_OPERATOR, SCE_HA_PRAGMA,
-    SCE_HA_PREPROCESSOR, SCE_HA_RESERVED_OPERATOR, SCE_HA_STRING, SCE_HA_STRINGEOL,
-    SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER, SCE_HBA_STRING, SCE_HBA_WORD, SCE_HB_COMMENTLINE,
-    SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD, SCE_HJA_COMMENT, SCE_HJA_COMMENTDOC,
-    SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING, SCE_HJA_KEYWORD, SCE_HJA_NUMBER, SCE_HJA_REGEX,
-    SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD, SCE_HJ_COMMENT,
-    SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD, SCE_HJ_NUMBER,
-    SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL, SCE_HJ_WORD,
-    SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING,
-    SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING,
-    SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP, SCE_H_ASPAT, SCE_H_ATTRIBUTE,
-    SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT, SCE_H_DOUBLESTRING, SCE_H_ENTITY,
-    SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM, SCE_H_SGML_COMMAND,
-    SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY, SCE_H_SGML_SIMPLESTRING,
-    SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND, SCE_H_TAGUNKNOWN, SCE_H_VALUE,
-    SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_INNO_COMMENT, SCE_INNO_COMMENT_PASCAL,
-    SCE_INNO_INLINE_EXPANSION, SCE_INNO_KEYWORD, SCE_INNO_KEYWORD_PASCAL, SCE_INNO_KEYWORD_USER,
-    SCE_INNO_PARAMETER, SCE_INNO_PREPROC, SCE_INNO_SECTION, SCE_INNO_STRING_DOUBLE,
-    SCE_INNO_STRING_SINGLE, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI, SCE_JSON_ERROR,
-    SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT,
-    SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME, SCE_JSON_STRING, SCE_JSON_STRINGEOL,
-    SCE_JSON_URI, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM, SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD,
-    SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR, SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR,
-    SCE_LISP_COMMENT, SCE_LISP_KEYWORD, SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT,
-    SCE_LISP_NUMBER, SCE_LISP_OPERATOR, SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL,
-    SCE_LUA_CHARACTER, SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL,
-    SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING,
-    SCE_LUA_WORD, SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6,
-    SCE_LUA_WORD7, SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2,
-    SCE_L_MATH, SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
-    SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR,
-    SCE_MAKE_TARGET, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
-    SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING,
-    SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF,
-    SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX,
-    SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ,
-    SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED,
-    SCE_NSIS_VARIABLE, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2,
-    SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER,
-    SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD,
-    SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
+    SCE_ERLANG_STRING, SCE_ERLANG_VARIABLE, SCE_ESCRIPT_BRACE, SCE_ESCRIPT_COMMENT,
+    SCE_ESCRIPT_COMMENTDOC, SCE_ESCRIPT_COMMENTLINE, SCE_ESCRIPT_NUMBER, SCE_ESCRIPT_OPERATOR,
+    SCE_ESCRIPT_STRING, SCE_ESCRIPT_WORD, SCE_ESCRIPT_WORD2, SCE_ESCRIPT_WORD3, SCE_F_COMMENT,
+    SCE_F_CONTINUATION, SCE_F_LABEL, SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2,
+    SCE_F_PREPROCESSOR, SCE_F_STRING1, SCE_F_STRING2, SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2,
+    SCE_F_WORD3, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE,
+    SCE_GC_CONTROL, SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_CAPITAL,
+    SCE_HA_CHARACTER, SCE_HA_CLASS, SCE_HA_COMMENTBLOCK, SCE_HA_COMMENTBLOCK2,
+    SCE_HA_COMMENTBLOCK3, SCE_HA_COMMENTLINE, SCE_HA_DATA, SCE_HA_INSTANCE, SCE_HA_KEYWORD,
+    SCE_HA_LITERATE_CODEDELIM, SCE_HA_LITERATE_COMMENT, SCE_HA_MODULE, SCE_HA_NUMBER,
+    SCE_HA_OPERATOR, SCE_HA_PRAGMA, SCE_HA_PREPROCESSOR, SCE_HA_RESERVED_OPERATOR, SCE_HA_STRING,
+    SCE_HA_STRINGEOL, SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER, SCE_HBA_STRING, SCE_HBA_WORD,
+    SCE_HB_COMMENTLINE, SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD, SCE_HJA_COMMENT,
+    SCE_HJA_COMMENTDOC, SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING, SCE_HJA_KEYWORD, SCE_HJA_NUMBER,
+    SCE_HJA_REGEX, SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD,
+    SCE_HJ_COMMENT, SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD,
+    SCE_HJ_NUMBER, SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL,
+    SCE_HJ_WORD, SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE,
+    SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR,
+    SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP, SCE_H_ASPAT,
+    SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT, SCE_H_DOUBLESTRING,
+    SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM,
+    SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY,
+    SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND,
+    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_INNO_COMMENT,
+    SCE_INNO_COMMENT_PASCAL, SCE_INNO_INLINE_EXPANSION, SCE_INNO_KEYWORD, SCE_INNO_KEYWORD_PASCAL,
+    SCE_INNO_KEYWORD_USER, SCE_INNO_PARAMETER, SCE_INNO_PREPROC, SCE_INNO_SECTION,
+    SCE_INNO_STRING_DOUBLE, SCE_INNO_STRING_SINGLE, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI,
+    SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD,
+    SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME,
+    SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM,
+    SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR,
+    SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT, SCE_LISP_KEYWORD,
+    SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER, SCE_LISP_OPERATOR,
+    SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER, SCE_LUA_COMMENT,
+    SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER,
+    SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD, SCE_LUA_WORD2,
+    SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7, SCE_LUA_WORD8,
+    SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH, SCE_L_MATH2,
+    SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM, SCE_MAKE_COMMENT,
+    SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET,
+    SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_KEYWORD,
+    SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_NSIS_COMMENT,
+    SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF,
+    SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF,
+    SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ,
+    SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE,
+    SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE,
+    SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER, SCE_PAS_OPERATOR,
+    SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD, SCE_PL_ARRAY,
+    SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
     SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
     SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR,
     SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR,
@@ -3933,6 +3937,104 @@ const ERLANG_THEME: LangTheme = LangTheme {
     styles: ERLANG_STYLES,
     italic: ERLANG_ITALIC,
     bold: ERLANG_BOLD,
+};
+
+// --- LexEScript ---
+// LexEScript serves ESCRIPT — POL (Penultima Online)'s server-side
+// scripting language for Ultima Online emulator scripts, extension
+// `.em`. `L_ESCRIPT` (id 72) is the only language row using this
+// lexer. Dispatches SCLEX_ESCRIPT (= 41, per `SciLexer.h:57`) via a
+// three-class wordlist descriptor at `LexEScript.cxx:270-275`.
+//
+// **10 style mappings** covering every emitted SCE_ESCRIPT_* state
+// the paint loop actually produces (plus COMMENTDOC as best-effort
+// forward-compat for a currently-orphan enum slot). Two of the 12
+// defined slots stay unmapped per framework convention:
+//   - DEFAULT (0) — whitespace / unclassified.
+//   - IDENTIFIER (8) — transient, settles to DEFAULT / WORD /
+//     WORD2 / WORD3 before commit.
+//
+// **Semantic-label mismatch is intentional.** The upstream lexer's
+// class-2 wordlist is labelled "Extended and user defined functions"
+// (`ESCRIPTWordLists[2]` at `:273`), but the fold classifier at
+// `:232-243` only fires on class-2-styled tokens — forcing the
+// language's fold-critical control-flow keywords (`for`/`if`/
+// `while`/`endif`/etc.) into class 2. The theme compensates by
+// routing `SCE_ESCRIPT_WORD3` to `StyleSlot::Keyword` (bold,
+// matching the semantic weight of language keywords), NOT to the
+// `Keyword2` accent slot that would follow the descriptor's label.
+// Two-way collapse of WORD (5) + WORD3 (11) → Keyword mirrors the
+// same discipline as Erlang's KEYWORD + BIFS → Keyword collapse
+// (two class-membership categories with the same semantic weight
+// share the primary slot).
+//
+// **Slot rationale:**
+//   - COMMENT (1) + COMMENTLINE (2) + COMMENTDOC (3) → Comment
+//     (italic). Three comment states collapse — `/* ... */`
+//     block, `// ...` line, and the orphan `/** ... */` doc-block
+//     variant that the current lexer never emits (mapped for
+//     forward-compat if upstream re-enables the entry).
+//   - NUMBER (4) → Number.
+//   - WORD (5) → Keyword (bold — primary keyword vocabulary:
+//     declarations `var` / `const` / `struct`, booleans
+//     `true` / `false` / `nil`, exit statements `return` /
+//     `break`, boolean operators `and` / `or` / `not`).
+//   - STRING (6) → String.
+//   - OPERATOR (7) → Operator (restricted set: `+ - * / = < >
+//     & | ! ? :`).
+//   - BRACE (9) → Operator (structural braces `{ }` — LexEScript
+//     splits them from OPERATOR but semantically they're
+//     punctuation; collapse to the same slot).
+//   - WORD2 (10) → Keyword2 (intrinsic-function accent — POL
+//     `basic.em` / `uo.em` / `os.em` module intrinsics).
+//   - WORD3 (11) → Keyword (bold — fold-critical control-flow
+//     keywords, semantic collapse with WORD despite the
+//     descriptor's "user-defined functions" label).
+const ESCRIPT_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_ESCRIPT_COMMENT, StyleSlot::Comment),
+    (SCE_ESCRIPT_COMMENTLINE, StyleSlot::Comment),
+    (SCE_ESCRIPT_COMMENTDOC, StyleSlot::Comment),
+    (SCE_ESCRIPT_NUMBER, StyleSlot::Number),
+    (SCE_ESCRIPT_WORD, StyleSlot::Keyword),
+    (SCE_ESCRIPT_STRING, StyleSlot::String),
+    (SCE_ESCRIPT_OPERATOR, StyleSlot::Operator),
+    (SCE_ESCRIPT_BRACE, StyleSlot::Operator),
+    (SCE_ESCRIPT_WORD2, StyleSlot::Keyword2),
+    (SCE_ESCRIPT_WORD3, StyleSlot::Keyword),
+];
+
+// Italic on all three comment states — universal Code++ comment
+// convention. COMMENTDOC (3) is orphan per source but included for
+// forward-compat.
+const ESCRIPT_ITALIC: &[usize] = &[
+    SCE_ESCRIPT_COMMENT,
+    SCE_ESCRIPT_COMMENTLINE,
+    SCE_ESCRIPT_COMMENTDOC,
+];
+
+// Bold on WORD (5) + WORD3 (11) — both semantically "language
+// keywords" despite the descriptor's misleading class-2 label.
+// Same discipline as Erlang KEYWORD + BIFS → Keyword (two related
+// classes share bold).
+const ESCRIPT_BOLD: &[usize] = &[SCE_ESCRIPT_WORD, SCE_ESCRIPT_WORD3];
+
+// Three-class install matches `ESCRIPTWordLists[]` at
+// `LexEScript.cxx:270-275`. Order is load-bearing —
+// `SCI_SETKEYWORDS` respects wordlist-descriptor order and the
+// identifier classifier at `:92-97` probes class 0 first, class 1
+// second, class 2 third (first-match-wins cascade). This means a
+// token duplicated in class 0 wins over its class-2 sibling — the
+// wordlist invariants pin cross-list disjointness to prevent a
+// fold-critical token from being silently downgraded to WORD.
+const ESCRIPT_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, ESCRIPT_KEYWORDS),
+        (1, ESCRIPT_INTRINSICS),
+        (2, ESCRIPT_FOLDWORDS),
+    ],
+    styles: ESCRIPT_STYLES,
+    italic: ESCRIPT_ITALIC,
+    bold: ESCRIPT_BOLD,
 };
 
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
@@ -8669,6 +8771,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&CSOUND_THEME)
     } else if lang == L_ERLANG {
         Some(&ERLANG_THEME)
+    } else if lang == L_ESCRIPT {
+        Some(&ESCRIPT_THEME)
     } else {
         None
     }
@@ -23823,11 +23927,11 @@ mod lang_theme_tests {
     use super::{
         extra_fold_properties, lang_theme, slot_color, StyleSlot, ASM_CPU_KEYWORDS,
         ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS,
-        ASM_REG_KEYWORDS, ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, FG_COMMENT, FG_KEYWORD,
-        FG_MACRO, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER,
-        SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL,
-        SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
-        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        ASM_REG_KEYWORDS, ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC,
+        ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD, FG_MACRO, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
+        SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER,
+        SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
+        SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
         SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
         SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
         SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
@@ -23891,29 +23995,30 @@ mod lang_theme_tests {
         CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
         CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META,
         D_SPECIAL, D_TYPES, D_WORD7, ERLANG_BIFS, ERLANG_DOC, ERLANG_DOC_MACRO, ERLANG_KEYWORDS,
-        ERLANG_MODULE_ATT, ERLANG_PREPROC, FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS,
-        GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
-        HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
-        INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
+        ERLANG_MODULE_ATT, ERLANG_PREPROC, ESCRIPT_FOLDWORDS, ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS,
+        FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GUI4CLI_ATTRIBUTES,
+        GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS,
+        HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS,
+        INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
         JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS,
         JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
         LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
         L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
-        L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT,
-        L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS,
-        L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY,
-        L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML,
-        L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
-        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
-        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS,
-        R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-        SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-        VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-        XML_KEYWORDS, YAML_KEYWORDS,
+        L_ESCRIPT, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA,
+        L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB,
+        L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC,
+        L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG,
+        L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+        POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+        POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+        PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
+        RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
+        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
+        VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -23938,25 +24043,27 @@ mod lang_theme_tests {
         SCE_ERLANG_MODULES, SCE_ERLANG_MODULES_ATT, SCE_ERLANG_NODE_NAME,
         SCE_ERLANG_NODE_NAME_QUOTED, SCE_ERLANG_NUMBER, SCE_ERLANG_OPERATOR, SCE_ERLANG_PREPROC,
         SCE_ERLANG_RECORD, SCE_ERLANG_RECORD_QUOTED, SCE_ERLANG_STRING, SCE_ERLANG_VARIABLE,
-        SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_DEFAULT, SCE_F_IDENTIFIER, SCE_F_LABEL,
-        SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2, SCE_F_PREPROCESSOR, SCE_F_STRING1,
-        SCE_F_STRING2, SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2, SCE_F_WORD3, SCE_GC_ATTRIBUTE,
-        SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_DEFAULT,
-        SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_IDENTIFIER,
-        SCE_HA_IMPORT, SCE_INNO_IDENTIFIER, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI,
-        SCE_JSON_DEFAULT, SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD,
-        SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR,
-        SCE_JSON_PROPERTYNAME, SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI,
-        SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
-        SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR,
-        SCE_MATLAB_STRING, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET,
-        SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM,
-        SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
-        SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER, SCE_POWERSHELL_KEYWORD,
-        SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING,
-        SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS, SCE_R_BASEKWORD,
-        SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER, SCE_R_INFIX,
-        SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
+        SCE_ESCRIPT_BRACE, SCE_ESCRIPT_COMMENT, SCE_ESCRIPT_COMMENTDOC, SCE_ESCRIPT_COMMENTLINE,
+        SCE_ESCRIPT_NUMBER, SCE_ESCRIPT_OPERATOR, SCE_ESCRIPT_STRING, SCE_ESCRIPT_WORD,
+        SCE_ESCRIPT_WORD2, SCE_ESCRIPT_WORD3, SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_DEFAULT,
+        SCE_F_IDENTIFIER, SCE_F_LABEL, SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2,
+        SCE_F_PREPROCESSOR, SCE_F_STRING1, SCE_F_STRING2, SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2,
+        SCE_F_WORD3, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE,
+        SCE_GC_CONTROL, SCE_GC_DEFAULT, SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR,
+        SCE_GC_STRING, SCE_HA_IDENTIFIER, SCE_HA_IMPORT, SCE_INNO_IDENTIFIER,
+        SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI, SCE_JSON_DEFAULT, SCE_JSON_ERROR,
+        SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT,
+        SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME, SCE_JSON_STRING,
+        SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT,
+        SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER,
+        SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER,
+        SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD,
+        SCE_POWERSHELL_COMMENTSTREAM, SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION,
+        SCE_POWERSHELL_HERE_CHARACTER, SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER,
+        SCE_POWERSHELL_KEYWORD, SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR,
+        SCE_POWERSHELL_STRING, SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS,
+        SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER,
+        SCE_R_INFIX, SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
         SCE_R_RAWSTRING, SCE_R_RAWSTRING2, SCE_R_STRING, SCE_R_STRING2, SCE_VHDL_IDENTIFIER,
         SCE_V_IDENTIFIER, SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER,
         SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
@@ -24001,6 +24108,7 @@ mod lang_theme_tests {
             (L_FORTRAN_77, "Fortran (fixed form)"),
             (L_CSOUND, "CSound"),
             (L_ERLANG, "Erlang"),
+            (L_ESCRIPT, "ESCRIPT"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -35198,6 +35306,421 @@ mod lang_theme_tests {
         }
     }
 
+    /// ESCRIPT uses Lexilla's `escript` lexer (`LexEScript.cxx`)
+    /// — POL (Penultima Online)'s server-side scripting language
+    /// for Ultima Online emulator scripts. Distinctive features:
+    ///
+    /// - **Semantic-label mismatch is load-bearing.** The upstream
+    ///   descriptor labels class 2 "Extended and user defined
+    ///   functions", but the fold classifier at
+    ///   `LexEScript.cxx:232-243` only fires on
+    ///   `SCE_ESCRIPT_WORD3` (class 2 hit) — forcing the language's
+    ///   fold-critical control-flow keywords (`for`/`if`/`while`/
+    ///   `endif`/etc.) into class 2. The theme routes WORD3 to
+    ///   `StyleSlot::Keyword` (bold, matching keyword weight), not
+    ///   to `Keyword2` accent.
+    /// - **First-match-wins cascade** at `:92-97` probes classes
+    ///   0 → 1 → 2 in order. A fold-critical token duplicated in
+    ///   class 0 gets `SCE_ESCRIPT_WORD` instead of
+    ///   `SCE_ESCRIPT_WORD3`, and the fold classifier never sees
+    ///   it. Cross-list disjointness (invariant #8) is
+    ///   load-bearing for fold correctness.
+    /// - **Case-INSENSITIVE by default.** `sc.GetCurrentLowered`
+    ///   at `:87` (when the `escript.case.sensitive` property is
+    ///   0, its default) means wordlists must be all-lowercase.
+    /// - **Orphan enum slot** — `SCE_ESCRIPT_COMMENTDOC` (3) is
+    ///   defined but never entered by `ColouriseESCRIPTDoc`
+    ///   (only the exit branch at `:107-111` exists; no
+    ///   `SetState(SCE_ESCRIPT_COMMENTDOC)` call). Mapped
+    ///   anyway for forward-compat if upstream re-enables it.
+    /// - **Restricted operator set** at `:140` (explicit
+    ///   enumeration, NOT `isoperator`), so `. , ; ( ) [ ]`
+    ///   render as DEFAULT — the current lexer's known
+    ///   limitation.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. Deep-value identity pin — dispatcher-returned theme
+    ///      value-equals `ESCRIPT_STYLES` / `ITALIC` / `BOLD`.
+    ///      (Pointer-identity is unreliable for `const` items
+    ///      in Rust; same discipline as
+    ///      `c_and_cpp_share_lexcpp_style_table`.)
+    ///   2. Style count == 10 (12 defined `SCE_ESCRIPT_*` slots
+    ///      minus `DEFAULT` (0) + `IDENTIFIER` (8), both
+    ///      unmapped per framework convention).
+    ///   3. Three wordlist classes in canonical order (0/1/2)
+    ///      matching `ESCRIPTWordLists[]` at
+    ///      `LexEScript.cxx:270-275`.
+    ///   4. All three classes non-empty.
+    ///   5. All-lowercase enforcement across every wordlist —
+    ///      the lexer's `GetCurrentLowered` at `:87` means
+    ///      mixed-case wordlist entries would zero-match.
+    ///   6. **Cross-list disjointness (LOAD-BEARING for fold).**
+    ///      `ESCRIPT_KEYWORDS` ∩ `ESCRIPT_INTRINSICS` = ∅,
+    ///      `ESCRIPT_KEYWORDS` ∩ `ESCRIPT_FOLDWORDS` = ∅,
+    ///      `ESCRIPT_INTRINSICS` ∩ `ESCRIPT_FOLDWORDS` = ∅.
+    ///      A duplicate in class 0 wins over class 2 via the
+    ///      first-match-wins cascade at `:92-97` and silently
+    ///      breaks fold at that block boundary.
+    ///   7. Style-routing pins for all 10 mapped SCE constants.
+    ///   8. DEFAULT (0) and IDENTIFIER (8) unmapped.
+    ///   9. Italic set == 3 (all three comment states).
+    ///   10. Bold set == 2 (WORD + WORD3 — the two "language
+    ///       keyword" classes, semantically collapsed).
+    ///   11. Cross-language non-reuse — `ESCRIPT_STYLES` must
+    ///       not deep-equal a sampled set of four sibling
+    ///       themes (Erlang / `CSound` / Fortran / JSON).
+    ///       Matches the sampling shape used by every other
+    ///       per-language test in this file; a full iteration
+    ///       over `LANG_TABLE` would be strictly stronger but
+    ///       creates cascading test-file updates on every new
+    ///       wiring, so we intentionally sample a small
+    ///       diverse set.
+    ///   12. `L_ESCRIPT` `LangEntry` has `lexer: Some("escript")`
+    ///       and extensions contain `em`.
+    ///   13. **All 16 fold-classifier tokens present in class
+    ///       2** and ABSENT from classes 0 + 1. The
+    ///       `classifyFoldPointESCRIPT` function at
+    ///       `LexEScript.cxx:152-171` hard-codes 7 openers +
+    ///       7 closers + 2 half-block markers; each MUST be
+    ///       in `ESCRIPT_FOLDWORDS` for its corresponding
+    ///       block boundary to fold.
+    ///   14. **Canonical non-fold anchors in class 0**: `var` /
+    ///       `const` / `return` / `true` / `false` / `nil` —
+    ///       primary declarations, exits, and literals.
+    ///   15. **Canonical intrinsic anchors in class 1**:
+    ///       `print` / `sendsysmessage` / `createitematlocation`
+    ///       / `sleep` — one from each canonical POL module
+    ///       (basic / uo / uo / basic).
+    ///   16. **No duplicate tokens within any single wordlist** —
+    ///       same defence-in-depth invariant that caught the
+    ///       Erlang `is_alive` duplication in the prior commit.
+    #[test]
+    fn escript_uses_lexescript_three_class_theme() {
+        let es = lang_theme(L_ESCRIPT).expect("ESCRIPT wired");
+
+        // Invariant 1: deep-value identity pin — Rust `const`
+        // items lack stable addresses, so we compare fields.
+        assert_eq!(es.styles, ESCRIPT_STYLES);
+        assert_eq!(es.italic, ESCRIPT_ITALIC);
+        assert_eq!(es.bold, ESCRIPT_BOLD);
+        assert_eq!(es.keywords.len(), 3);
+
+        // Invariant 2: 10 mappings.
+        assert_eq!(
+            es.styles.len(),
+            10,
+            "ESCRIPT_STYLES must map 10 indices (12 defined SCE_ESCRIPT_* \
+             slots minus DEFAULT (0) + IDENTIFIER (8), both unmapped \
+             per framework convention)"
+        );
+
+        // Invariant 3: three classes canonical descriptor order.
+        for (i, (expected_class, expected_list)) in [
+            (0u32, ESCRIPT_KEYWORDS),
+            (1u32, ESCRIPT_INTRINSICS),
+            (2u32, ESCRIPT_FOLDWORDS),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                es.keywords[i].0, *expected_class,
+                "ESCRIPT_THEME.keywords[{i}].class must match \
+                 descriptor order"
+            );
+            assert_eq!(
+                es.keywords[i].1, *expected_list,
+                "ESCRIPT_THEME.keywords[{i}].list must match \
+                 canonical wordlist"
+            );
+        }
+
+        // Invariant 4: all three classes non-empty.
+        for (list, name) in [
+            (ESCRIPT_KEYWORDS, "KEYWORDS"),
+            (ESCRIPT_INTRINSICS, "INTRINSICS"),
+            (ESCRIPT_FOLDWORDS, "FOLDWORDS"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "ESCRIPT_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: all-lowercase enforcement.
+        // `LexEScript.cxx:87` calls `sc.GetCurrentLowered` when
+        // `escript.case.sensitive` is 0 (default) — mixed-case
+        // wordlist entries would zero-match against the lowered
+        // token buffer.
+        for (list, name) in [
+            (ESCRIPT_KEYWORDS, "KEYWORDS"),
+            (ESCRIPT_INTRINSICS, "INTRINSICS"),
+            (ESCRIPT_FOLDWORDS, "FOLDWORDS"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    !tok.is_empty()
+                        && tok
+                            .bytes()
+                            .all(|b| { b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' }),
+                    "ESCRIPT_{name} token `{tok}` violates all-lowercase \
+                     alphabet — LexEScript's GetCurrentLowered at :87 \
+                     lowercases the source token before the wordlist \
+                     probe, so mixed-case entries never match"
+                );
+            }
+        }
+
+        // Invariant 6: cross-list disjointness — LOAD-BEARING
+        // for fold correctness. The first-match-wins cascade
+        // at LexEScript.cxx:92-97 probes class 0 first; a
+        // fold-critical token duplicated in class 0 gets
+        // SCE_ESCRIPT_WORD (bold Keyword) instead of
+        // SCE_ESCRIPT_WORD3, and the fold classifier at
+        // :232-243 never sees it.
+        use std::collections::HashSet;
+        let kw_set: HashSet<_> = ESCRIPT_KEYWORDS.split_whitespace().collect();
+        let intr_set: HashSet<_> = ESCRIPT_INTRINSICS.split_whitespace().collect();
+        let fold_set: HashSet<_> = ESCRIPT_FOLDWORDS.split_whitespace().collect();
+        for (a_name, a_set, b_name, b_set) in [
+            ("KEYWORDS", &kw_set, "INTRINSICS", &intr_set),
+            ("KEYWORDS", &kw_set, "FOLDWORDS", &fold_set),
+            ("INTRINSICS", &intr_set, "FOLDWORDS", &fold_set),
+        ] {
+            if let Some(shared) = a_set.intersection(b_set).next() {
+                panic!(
+                    "ESCRIPT_{a_name} and ESCRIPT_{b_name} both contain \
+                     `{shared}` — LexEScript.cxx:92-97 probes classes \
+                     0/1/2 first-match-wins. A duplicate leaves the later \
+                     entry dead code; for FOLDWORDS this silently breaks \
+                     the fold classifier at the corresponding block \
+                     boundary."
+                );
+            }
+        }
+
+        // Invariant 7: style-routing pins for all 10 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_ESCRIPT_COMMENT, StyleSlot::Comment, "COMMENT"),
+            (SCE_ESCRIPT_COMMENTLINE, StyleSlot::Comment, "COMMENTLINE"),
+            (SCE_ESCRIPT_COMMENTDOC, StyleSlot::Comment, "COMMENTDOC"),
+            (SCE_ESCRIPT_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_ESCRIPT_WORD, StyleSlot::Keyword, "WORD"),
+            (SCE_ESCRIPT_STRING, StyleSlot::String, "STRING"),
+            (SCE_ESCRIPT_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+            (SCE_ESCRIPT_BRACE, StyleSlot::Operator, "BRACE"),
+            (SCE_ESCRIPT_WORD2, StyleSlot::Keyword2, "WORD2"),
+            (SCE_ESCRIPT_WORD3, StyleSlot::Keyword, "WORD3"),
+        ] {
+            assert!(
+                es.styles.contains(&(idx, slot)),
+                "SCE_ESCRIPT_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: DEFAULT (0) and IDENTIFIER (8) unmapped.
+        for (idx, name) in [(0_usize, "DEFAULT"), (8, "IDENTIFIER")] {
+            assert!(
+                !es.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_ESCRIPT_{name} ({idx}) must remain unmapped — \
+                 framework convention"
+            );
+        }
+
+        // Invariant 9: italic == 3 (all comment states).
+        assert_eq!(es.italic.len(), 3);
+        for idx in [
+            SCE_ESCRIPT_COMMENT,
+            SCE_ESCRIPT_COMMENTLINE,
+            SCE_ESCRIPT_COMMENTDOC,
+        ] {
+            assert!(
+                es.italic.contains(&idx),
+                "ESCRIPT_ITALIC must include comment state {idx}"
+            );
+        }
+
+        // Invariant 10: bold == 2 (WORD + WORD3 — the two
+        // "language keyword" classes, semantically collapsed
+        // despite class 2's descriptor label of "Extended and
+        // user defined functions").
+        assert_eq!(es.bold.len(), 2);
+        assert!(es.bold.contains(&SCE_ESCRIPT_WORD));
+        assert!(es.bold.contains(&SCE_ESCRIPT_WORD3));
+
+        // Invariant 11: cross-language non-reuse.
+        let er = lang_theme(L_ERLANG).expect("Erlang wired");
+        let cs = lang_theme(L_CSOUND).expect("CSound wired");
+        let f = lang_theme(L_FORTRAN).expect("Fortran wired");
+        let json = lang_theme(L_JSON).expect("JSON wired");
+        for (other, name) in [
+            (er, "Erlang"),
+            (cs, "CSound"),
+            (f, "Fortran"),
+            (json, "JSON"),
+        ] {
+            assert_ne!(
+                es.styles, other.styles,
+                "ESCRIPT must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 12: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let es_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_ESCRIPT)
+            .expect("L_ESCRIPT LangEntry present in LANG_TABLE");
+        assert_eq!(
+            es_entry.lexer,
+            Some("escript"),
+            "L_ESCRIPT LangEntry.lexer must be Some(\"escript\") — wiring \
+             assumes the LexEScript module dispatched via SCLEX_ESCRIPT \
+             (= 41)"
+        );
+        assert!(
+            es_entry.extensions.contains(&"em"),
+            "L_ESCRIPT extensions must contain `em`"
+        );
+
+        // Invariant 13: ALL 16 fold-classifier tokens in class 2,
+        // and ABSENT from classes 0 + 1. `classifyFoldPointESCRIPT`
+        // at LexEScript.cxx:152-171 hard-codes these spellings; if
+        // one isn't in ESCRIPT_FOLDWORDS, its identifier settles
+        // to SCE_ESCRIPT_WORD/WORD2/DEFAULT and the fold guard at
+        // :232 misses.
+        for kw in [
+            // Block openers (7).
+            "for",
+            "foreach",
+            "program",
+            "function",
+            "while",
+            "case",
+            "if",
+            // Block closers (7).
+            "endfor",
+            "endforeach",
+            "endprogram",
+            "endfunction",
+            "endwhile",
+            "endcase",
+            "endif",
+            // Half-block markers (2).
+            "else",
+            "elseif",
+        ] {
+            assert!(
+                ESCRIPT_FOLDWORDS.split_whitespace().any(|t| t == kw),
+                "ESCRIPT_FOLDWORDS must include fold-classifier token \
+                 `{kw}` — classifyFoldPointESCRIPT at \
+                 LexEScript.cxx:152-171 matches this spelling via strcmp; \
+                 missing it disables the fold at every `{kw}` block \
+                 boundary"
+            );
+            assert!(
+                !ESCRIPT_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "ESCRIPT_KEYWORDS must NOT include fold-classifier token \
+                 `{kw}` — class 0 is probed first at LexEScript.cxx:92, \
+                 so a duplicate would silently route to SCE_ESCRIPT_WORD \
+                 and break the fold at that block boundary"
+            );
+            assert!(
+                !ESCRIPT_INTRINSICS.split_whitespace().any(|t| t == kw),
+                "ESCRIPT_INTRINSICS must NOT include fold-classifier \
+                 token `{kw}` — class 1 is probed at LexEScript.cxx:94, \
+                 before class 2 at :96; a duplicate silently routes to \
+                 SCE_ESCRIPT_WORD2 and breaks the fold"
+            );
+        }
+
+        // Invariant 14: canonical non-fold anchors in class 0.
+        // At least one representative from each of the 7
+        // sub-categories the ESCRIPT_KEYWORDS docstring
+        // enumerates, so a regression that drops any single
+        // `concat!()` line's contents is caught. Without
+        // one-per-sub-category anchoring, a refactor deleting
+        // (say) the `"and or not isa "` boolean-operator line
+        // would leave the test passing while every ESCRIPT
+        // source with `if not X and Y` silently loses keyword
+        // styling on those tokens.
+        for tok in [
+            "var",    // declarations
+            "use",    // module control
+            "true",   // literals
+            "and",    // boolean / type-check word operators
+            "isa",    // boolean / type-check word operators (moved from INTRINSICS)
+            "return", // control-flow exits
+            "do",     // iteration modifiers
+            "repeat", // non-fold loop constructs
+        ] {
+            assert!(
+                ESCRIPT_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "ESCRIPT_KEYWORDS must include canonical primary keyword \
+                 `{tok}` — one anchor per sub-category to catch \
+                 a `concat!()` line deletion"
+            );
+        }
+        // Affirmative absence pin: `isa` must NOT sit in
+        // INTRINSICS (previously mis-categorised as a callable
+        // introspection intrinsic). Adversarial review flagged
+        // this as class-slot dissonance vs. its syntactic peers
+        // `and`/`or`/`not`.
+        assert!(
+            !ESCRIPT_INTRINSICS.split_whitespace().any(|t| t == "isa"),
+            "ESCRIPT_INTRINSICS must NOT include `isa` — it's a \
+             binary type-check word operator (`obj isa POLCLASS_XXX`), \
+             not a callable intrinsic; belongs in ESCRIPT_KEYWORDS \
+             next to `and`/`or`/`not`"
+        );
+
+        // Invariant 15: canonical intrinsic anchors in class 1.
+        // At least one representative from each major module
+        // (basic / uo / os) so a regression that drops a
+        // module's section is caught. `start_script` covers OS
+        // (script control — the highest-visibility OS
+        // intrinsic; without an OS anchor, a refactor deleting
+        // the OS section's three `concat!` lines would slip
+        // past the test with the basic + uo anchors still
+        // passing).
+        for tok in [
+            "print",                // basic — I/O
+            "sleep",                // basic — timing
+            "sendsysmessage",       // uo — messaging
+            "createitematlocation", // uo — item manipulation
+            "start_script",         // os — script control
+        ] {
+            assert!(
+                ESCRIPT_INTRINSICS.split_whitespace().any(|t| t == tok),
+                "ESCRIPT_INTRINSICS must include canonical intrinsic \
+                 `{tok}`"
+            );
+        }
+
+        // Invariant 16: no duplicate tokens within any single
+        // wordlist. `WordList::InList` is set-based so duplicates
+        // are functionally harmless for highlighting, but they
+        // corrupt docstring token-count claims and hide typos.
+        // Same defence-in-depth invariant as Erlang's.
+        for (list, name) in [
+            (ESCRIPT_KEYWORDS, "KEYWORDS"),
+            (ESCRIPT_INTRINSICS, "INTRINSICS"),
+            (ESCRIPT_FOLDWORDS, "FOLDWORDS"),
+        ] {
+            let total = list.split_whitespace().count();
+            let unique = list.split_whitespace().collect::<HashSet<_>>().len();
+            assert_eq!(
+                total,
+                unique,
+                "ESCRIPT_{name} contains {} duplicate token(s) — \
+                 `WordList::InList` is set-based so duplicates are \
+                 functionally harmless but hide typos and corrupt \
+                 docstring token-count claims",
+                total - unique
+            );
+        }
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -35209,8 +35732,9 @@ mod lang_theme_tests {
     /// `L_JAVASCRIPT` was removed when the JavaScript row landed.
     /// `L_FORTRAN` / `L_FORTRAN_77` were removed when the Fortran
     /// row landed. `L_CSOUND` was removed when the `CSound` row
-    /// landed. `L_ERLANG` was removed when the Erlang row landed
-    /// in this commit.
+    /// landed. `L_ERLANG` was removed when the Erlang row landed.
+    /// `L_ESCRIPT` was removed when the ESCRIPT row landed in
+    /// this commit.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");
