@@ -8681,6 +8681,261 @@ pub const R_OTHER_FUNCTIONS: &str = concat!(
     "isVirtualClass validObject setRefClass ",
 );
 
+/// CoffeeScript primary keywords — control flow, declarations,
+/// exception handling, `this`, `debugger`, async / generator
+/// (class 0 → `SCE_COFFEESCRIPT_WORD`).
+///
+/// **Source of truth:** the CoffeeScript compiler's own lexer
+/// at `github.com/jashkenas/coffeescript/blob/master/src/lexer.coffee`,
+/// specifically the `JS_KEYWORDS` array and the
+/// CoffeeScript-specific control-flow words from
+/// `COFFEE_KEYWORDS`. The definitive language keyword union
+/// the parser recognises is
+/// `JS_KEYWORDS ++ COFFEE_KEYWORDS ++ COFFEE_ALIASES` after
+/// the merging `concat` further down the file. Citations use
+/// the identifier names rather than line numbers because the
+/// upstream file churns — line numbers drift, identifier
+/// names are stable.
+///
+/// **Case-sensitive byte-exact match.**
+/// `LexCoffeeScript.cxx:193-203` calls
+/// `sc.GetCurrent(s, sizeof(s))` (byte-exact), NOT
+/// `GetCurrentLowered`. CoffeeScript is case-sensitive at
+/// the spec level, so wordlist tokens use exact CoffeeScript
+/// spelling — all lowercase for primary keywords. Same
+/// discipline as [`D_KEYWORDS`] / [`R_RESERVED`], inverted
+/// from [`POWERSHELL_KEYWORDS`] / [`COBOL_KEYWORDS_A`].
+///
+/// **Class-0 vs class-1 split — rendering convention.**
+/// The upstream lexer descriptor labels class 0 as "Keywords"
+/// and class 1 as "Secondary keywords" but does not
+/// prescribe which tokens go where — that's a theme choice.
+/// The convention this file adopts: **class 0 is bold,
+/// class 1 is accent-color (not bold)**, and the split runs
+/// along the "structural" vs "expression noise" axis. This
+/// class carries the tokens a reader scans for **structure**:
+/// control flow, declarations, and the exception-handling
+/// triad. Word-form operators (`and`, `or`, `not`, `is`,
+/// `isnt`, `typeof`, `instanceof`, `in`, `of`, `by`,
+/// `delete`), boolean-literal aliases (`yes`, `no`, `on`,
+/// `off`), value literals (`true`, `false`, `null`,
+/// `undefined`, `NaN`, `Infinity`), and module-syntax words
+/// (`import`, `export`, `from`, `as`, `default`) live in
+/// [`COFFEESCRIPT_KEYWORDS_2`]. VS Code / Sublime CoffeeScript
+/// grammars draw the line the same way.
+///
+/// **Deliberately excluded — belong in [`COFFEESCRIPT_KEYWORDS_2`]:**
+///   - Word-form operators: `and`, `or`, `not`, `is`, `isnt`,
+///     `typeof`, `instanceof`, `in`, `of`, `by`, `delete`.
+///   - Boolean-literal aliases: `yes`, `no`, `on`, `off`.
+///   - Value literals: `true`, `false`, `null`, `undefined`,
+///     `NaN`, `Infinity`.
+///   - Module-syntax words: `import`, `export`, `from`, `as`,
+///     `default`.
+///   - Contextual modifier: `own` (only meaningful in
+///     `for own key of obj`).
+///   - `STRICT_PROSCRIBED` identifier: `arguments` (rejected
+///     as an lvalue by the parser but not a `KEYWORDS` entry).
+///
+/// **Deliberately excluded — CoffeeScript actively rejects
+/// these JS-reserved tokens (per the `RESERVED` array in
+/// `lexer.coffee`):**
+///   - `case`, `function`, `var`, `let`, `const`, `void`,
+///     `with`, `enum`, `native`, `implements`, `interface`,
+///     `package`, `private`, `protected`, `public`, `static`.
+///   - Note: `function` in particular — CoffeeScript uses
+///     `->` and `=>` for function literals; the parser
+///     rejects `function` in source.
+pub const COFFEESCRIPT_KEYWORDS: &str = concat!(
+    // Control flow.
+    "if else unless switch when then ",
+    "for while until loop do ",
+    "break continue return throw ",
+    // Exception handling.
+    "try catch finally ",
+    // Declaration / OO.
+    "class extends super new this ",
+    // Async / generator / debug.
+    "await yield debugger ",
+);
+
+/// CoffeeScript secondary keywords — word-form operators,
+/// boolean-literal aliases, value literals, module-syntax
+/// words, and contextual modifiers (class 1 →
+/// `SCE_COFFEESCRIPT_WORD2`).
+///
+/// **Source of truth:** the same `lexer.coffee` file as
+/// [`COFFEESCRIPT_KEYWORDS`]. Word-form operators from the
+/// `COFFEE_ALIAS_MAP`; `own` / `from` / `as` from the
+/// module-syntax docs at `coffeescript.org/#modules`;
+/// `arguments` and `eval` from `STRICT_PROSCRIBED`. Same
+/// identifier-name citation convention as
+/// [`COFFEESCRIPT_KEYWORDS`] — upstream line numbers drift,
+/// array names are stable.
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`COFFEESCRIPT_KEYWORDS`]. Note the value literals
+/// `NaN` and `Infinity` MUST appear with their canonical
+/// case — lowercase `nan` / `infinity` would silently fail
+/// to match under the byte-exact classifier at
+/// `LexCoffeeScript.cxx:193-203`.
+///
+/// **Three visual sub-buckets, all routed to Keyword2 slot:**
+///   - **Word-form operators** — the CoffeeScript-signature
+///     `and`/`or`/`not`/`is`/`isnt` (alias-map entries) plus
+///     the JS word-form operators `typeof`/`instanceof`/
+///     `in`/`of`/`by`/`delete` that behave the same way
+///     syntactically (infix or prefix, not statement-
+///     introducing).
+///   - **Boolean-literal aliases & value literals** — `yes`
+///     / `no` / `on` / `off` (compile to `true`/`false` per
+///     `ALIAS_MAP`), plus the underlying literals themselves
+///     `true`/`false`/`null`/`undefined`/`NaN`/`Infinity`.
+///     The lexer treats these as identifier-shaped literals,
+///     not statement keywords — highlighting them alongside
+///     the aliases keeps the visual family together.
+///   - **Module-syntax noise words** — `import`/`export`/
+///     `from`/`as`/`default` (the ES-module syntax
+///     CoffeeScript adopted; they appear only inside
+///     import/export declarations, not as free-standing
+///     statement keywords).
+///
+/// **Contextual modifier `own` included** — appears only in
+/// `for own key of obj` (own-key iteration, avoiding
+/// prototype-chain traversal). Not in the lexer's KEYWORDS
+/// array (recognised only in a specific for-clause context),
+/// but IDE syntax-highlighters universally colour it as a
+/// keyword; matches Notepad++ / VS Code / Sublime conventions.
+///
+/// **`arguments` and `eval` included** — both members of
+/// the upstream `STRICT_PROSCRIBED` array in `lexer.coffee`.
+/// Neither is a parser keyword, but the parser rejects both
+/// as assignment targets (`arguments = 5` and `eval = 5`
+/// both error), so treating them as reserved tokens is the
+/// right visual signal. Notepad++'s CoffeeScript defaults
+/// treat them the same way.
+pub const COFFEESCRIPT_KEYWORDS_2: &str = concat!(
+    // Word-form operators / aliases (CoffeeScript-signature).
+    "and or not is isnt ",
+    // JS-inherited word-form operators.
+    "typeof instanceof in of by delete ",
+    // Boolean-literal aliases (`yes`=true, `no`=false, `on`=true, `off`=false).
+    "yes no on off ",
+    // Value literals — canonical case required.
+    "true false null undefined NaN Infinity ",
+    // Module syntax.
+    "import export from as default ",
+    // Contextual: `for own key of obj` loop modifier.
+    "own ",
+    // STRICT_PROSCRIBED identifiers — rejected as lvalues.
+    "arguments eval ",
+);
+
+/// CoffeeScript global classes — JavaScript / Node.js
+/// standard built-in objects (class 3 →
+/// `SCE_COFFEESCRIPT_GLOBALCLASS`).
+///
+/// **Source of truth:** MDN's Standard built-in objects
+/// index at
+/// `developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects`.
+/// Covers the constructors and namespace objects that CS
+/// code most commonly references — arrays, typed arrays,
+/// error hierarchy, JSON / Math / Reflect namespaces,
+/// concurrent-primitive types (Promise, Proxy), and the
+/// weak-collection family. `console` (host-provided) and
+/// `globalThis` (ES2020) included as language globals per
+/// wide idiomatic use.
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`COFFEESCRIPT_KEYWORDS`]. Class names are canonically
+/// `PascalCase`; `console` (lowercase) and `globalThis`
+/// (`camelCase`) match their source spelling.
+///
+/// **Deliberately excluded — DOM / host instances, not
+/// classes:**
+///   - `window`, `document`, `navigator`, `localStorage`,
+///     `sessionStorage`, `history`, `location`. These are
+///     global instance references specific to browser
+///     runtimes, not class constructors — wrong bucket for
+///     `SCE_COFFEESCRIPT_GLOBALCLASS`.
+///
+/// **Deliberately excluded — value literals, live in
+/// [`COFFEESCRIPT_KEYWORDS_2`]:**
+///   - `NaN`, `Infinity`, `undefined`, `null`, `true`,
+///     `false`. The lexer classifies these as keyword-like
+///     identifiers via WL1; also-listing them here would
+///     duplicate work (classes probed 0 → 1 → 3
+///     first-match-wins at `LexCoffeeScript.cxx:195-200`,
+///     so a duplicate in WL3 would be dead code — WL1 wins
+///     first).
+///
+/// **Deliberately excluded — namespace globals not in the
+/// initial cut:**
+///   - `Intl`, `Atomics`, `WebAssembly`, `SharedArrayBuffer`,
+///     `WeakRef`, `FinalizationRegistry`, `AggregateError`.
+///     Legitimate MDN Standard built-in objects but rare in
+///     CoffeeScript source. Candidates for a follow-on
+///     addition; not blockers for phase 4.5's ≥80% coverage
+///     target.
+///
+/// **Not global identifiers:**
+///   - `GeneratorFunction`, `AsyncFunction`,
+///     `AsyncGeneratorFunction`. These do not exist as
+///     named globals in any runtime — they're only
+///     accessible via `.constructor` of a generator /
+///     async-function instance. Including them would
+///     highlight tokens that never appear in valid code.
+///
+/// **Coverage:** 41 tokens broken down by category:
+///   - `Array` / `Boolean` / `Date` — 3.
+///   - Classic Error hierarchy (`Error`, `EvalError`,
+///     `RangeError`, `ReferenceError`, `SyntaxError`,
+///     `TypeError`, `URIError`) — 7.
+///   - Typed-array family (`ArrayBuffer`, `DataView`, plus
+///     9 typed arrays `Float32Array` / `Float64Array` /
+///     `Int8Array` / `Int16Array` / `Int32Array` /
+///     `Uint8Array` / `Uint8ClampedArray` / `Uint16Array` /
+///     `Uint32Array`) — 11.
+///   - `BigInt` family (`BigInt`, `BigInt64Array`,
+///     `BigUint64Array`) — 3. The typed 64-bit array
+///     variants are grouped here rather than under
+///     typed-array family to avoid double-counting.
+///   - Collection primitives (`Map`, `Set`, `WeakMap`,
+///     `WeakSet`) — 4.
+///   - General constructors + namespaces (`Function`,
+///     `JSON`, `Math`, `Number`, `Object`, `Promise`,
+///     `Proxy`, `Reflect`, `RegExp`, `String`, `Symbol`) —
+///     11.
+///   - Host globals (`console`, `globalThis`) — 2.
+///
+/// Sum: 3 + 7 + 11 + 3 + 4 + 11 + 2 = 41. Grouped by
+/// semantic category with alphabetical order within each
+/// group — Scintilla's `SCI_SETKEYWORDS` builds an internal
+/// hash for classification, so wordlist ordering is a
+/// human-readability choice with no functional effect.
+/// Host globals (`console` / `globalThis`) trail the
+/// `PascalCase` names because they belong to the "host
+/// globals" category.
+pub const COFFEESCRIPT_GLOBAL_CLASSES: &str = concat!(
+    // Uppercase — MDN Standard built-in objects, PascalCase.
+    "Array ArrayBuffer BigInt BigInt64Array BigUint64Array ",
+    "Boolean DataView Date ",
+    // Error hierarchy — base + 6 classic subclasses.
+    "Error EvalError RangeError ReferenceError ",
+    "SyntaxError TypeError URIError ",
+    // Typed-array family.
+    "Float32Array Float64Array ",
+    "Int8Array Int16Array Int32Array ",
+    "Uint8Array Uint8ClampedArray Uint16Array Uint32Array ",
+    // General constructors + namespaces.
+    "Function JSON Map Math Number Object ",
+    "Promise Proxy Reflect RegExp Set String Symbol ",
+    // Weak-collection family.
+    "WeakMap WeakSet ",
+    // Host-provided / language globals — lowercase / camelCase.
+    "console globalThis ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

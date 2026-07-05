@@ -106,15 +106,16 @@ use codepp_core::lang::{
     AU3_MACROS, AU3_PREPROCESSORS, AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS,
     BATCH_KEYWORDS, BATCH_KEYWORDS_2, CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3,
     CMAKE_COMMANDS, CMAKE_PARAMETERS, CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B,
-    COBOL_KEYWORDS_C, CPP_KEYWORDS, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2,
-    CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2,
-    C_KEYWORDS, C_KEYWORDS_2, D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES,
-    D_WORD7, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS,
-    GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS,
-    HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR,
-    INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS,
-    KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA,
-    L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_CPP, L_CS, L_CSS, L_D,
+    COBOL_KEYWORDS_C, COFFEESCRIPT_GLOBAL_CLASSES, COFFEESCRIPT_KEYWORDS, COFFEESCRIPT_KEYWORDS_2,
+    CPP_KEYWORDS, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3,
+    CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
+    D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7,
+    GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
+    HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
+    INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
+    JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS,
+    LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3,
+    L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D,
     L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSP, L_KIX,
     L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
     L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
@@ -158,70 +159,75 @@ use codepp_scintilla_sys::{
     SCE_CMAKE_STRINGVAR, SCE_CMAKE_USERDEFINED, SCE_CMAKE_VARIABLE, SCE_CMAKE_WHILEDEF,
     SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC, SCE_COBOL_COMMENTLINE,
     SCE_COBOL_NUMBER, SCE_COBOL_OPERATOR, SCE_COBOL_PREPROCESSOR, SCE_COBOL_STRING, SCE_COBOL_WORD,
-    SCE_COBOL_WORD2, SCE_COBOL_WORD3, SCE_CSS_ATTRIBUTE, SCE_CSS_CLASS, SCE_CSS_COMMENT,
-    SCE_CSS_DIRECTIVE, SCE_CSS_DOUBLESTRING, SCE_CSS_EXTENDED_IDENTIFIER,
-    SCE_CSS_EXTENDED_PSEUDOCLASS, SCE_CSS_EXTENDED_PSEUDOELEMENT, SCE_CSS_GROUP_RULE, SCE_CSS_ID,
-    SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3, SCE_CSS_IMPORTANT,
-    SCE_CSS_OPERATOR, SCE_CSS_PSEUDOCLASS, SCE_CSS_PSEUDOELEMENT, SCE_CSS_SINGLESTRING,
-    SCE_CSS_TAG, SCE_CSS_VARIABLE, SCE_C_CHARACTER, SCE_C_COMMENT, SCE_C_COMMENTDOC,
-    SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR, SCE_C_PREPROCESSOR,
-    SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_DIFF_ADDED, SCE_DIFF_CHANGED, SCE_DIFF_COMMAND,
-    SCE_DIFF_COMMENT, SCE_DIFF_DELETED, SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD, SCE_DIFF_PATCH_DELETE,
-    SCE_DIFF_POSITION, SCE_DIFF_REMOVED_PATCH_ADD, SCE_DIFF_REMOVED_PATCH_DELETE, SCE_D_CHARACTER,
-    SCE_D_COMMENT, SCE_D_COMMENTDOC, SCE_D_COMMENTDOCKEYWORD, SCE_D_COMMENTDOCKEYWORDERROR,
-    SCE_D_COMMENTLINE, SCE_D_COMMENTLINEDOC, SCE_D_COMMENTNESTED, SCE_D_NUMBER, SCE_D_OPERATOR,
-    SCE_D_STRING, SCE_D_STRINGB, SCE_D_STRINGEOL, SCE_D_STRINGR, SCE_D_TYPEDEF, SCE_D_WORD,
-    SCE_D_WORD2, SCE_D_WORD5, SCE_D_WORD6, SCE_D_WORD7, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND,
-    SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_EVENT, SCE_GC_GLOBAL,
-    SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_CAPITAL, SCE_HA_CHARACTER, SCE_HA_CLASS,
-    SCE_HA_COMMENTBLOCK, SCE_HA_COMMENTBLOCK2, SCE_HA_COMMENTBLOCK3, SCE_HA_COMMENTLINE,
-    SCE_HA_DATA, SCE_HA_INSTANCE, SCE_HA_KEYWORD, SCE_HA_LITERATE_CODEDELIM,
-    SCE_HA_LITERATE_COMMENT, SCE_HA_MODULE, SCE_HA_NUMBER, SCE_HA_OPERATOR, SCE_HA_PRAGMA,
-    SCE_HA_PREPROCESSOR, SCE_HA_RESERVED_OPERATOR, SCE_HA_STRING, SCE_HA_STRINGEOL,
-    SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER, SCE_HBA_STRING, SCE_HBA_WORD, SCE_HB_COMMENTLINE,
-    SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD, SCE_HJA_COMMENT, SCE_HJA_COMMENTDOC,
-    SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING, SCE_HJA_KEYWORD, SCE_HJA_NUMBER, SCE_HJA_REGEX,
-    SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD, SCE_HJ_COMMENT,
-    SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD, SCE_HJ_NUMBER,
-    SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL, SCE_HJ_WORD,
-    SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING,
-    SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING,
-    SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP, SCE_H_ASPAT, SCE_H_ATTRIBUTE,
-    SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT, SCE_H_DOUBLESTRING, SCE_H_ENTITY,
-    SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM, SCE_H_SGML_COMMAND,
-    SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY, SCE_H_SGML_SIMPLESTRING,
-    SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND, SCE_H_TAGUNKNOWN, SCE_H_VALUE,
-    SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_INNO_COMMENT, SCE_INNO_COMMENT_PASCAL,
-    SCE_INNO_INLINE_EXPANSION, SCE_INNO_KEYWORD, SCE_INNO_KEYWORD_PASCAL, SCE_INNO_KEYWORD_USER,
-    SCE_INNO_PARAMETER, SCE_INNO_PREPROC, SCE_INNO_SECTION, SCE_INNO_STRING_DOUBLE,
-    SCE_INNO_STRING_SINGLE, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM, SCE_KIX_FUNCTIONS,
-    SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR, SCE_KIX_STRING1,
-    SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT, SCE_LISP_KEYWORD, SCE_LISP_KEYWORD_KW,
-    SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER, SCE_LISP_OPERATOR, SCE_LISP_SPECIAL, SCE_LISP_STRING,
-    SCE_LISP_SYMBOL, SCE_LUA_CHARACTER, SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE,
-    SCE_LUA_LABEL, SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR,
-    SCE_LUA_STRING, SCE_LUA_WORD, SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5,
-    SCE_LUA_WORD6, SCE_LUA_WORD7, SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT,
-    SCE_L_COMMENT2, SCE_L_MATH, SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2,
-    SCE_L_VERBATIM, SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR,
-    SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT,
-    SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR,
-    SCE_MATLAB_STRING, SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION,
-    SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER,
-    SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ,
-    SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF,
-    SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT,
-    SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING,
-    SCE_PAS_NUMBER, SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING,
-    SCE_PAS_WORD, SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER,
-    SCE_PL_COMMENTLINE, SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH,
-    SCE_PL_HERE_DELIM, SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX,
-    SCE_PL_HERE_QX_VAR, SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX,
-    SCE_PL_REGEX_VAR, SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING,
-    SCE_PL_STRING_Q, SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR,
-    SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR,
-    SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT,
-    SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT,
+    SCE_COBOL_WORD2, SCE_COBOL_WORD3, SCE_COFFEESCRIPT_CHARACTER, SCE_COFFEESCRIPT_COMMENTBLOCK,
+    SCE_COFFEESCRIPT_COMMENTLINE, SCE_COFFEESCRIPT_GLOBALCLASS, SCE_COFFEESCRIPT_INSTANCEPROPERTY,
+    SCE_COFFEESCRIPT_NUMBER, SCE_COFFEESCRIPT_OPERATOR, SCE_COFFEESCRIPT_REGEX,
+    SCE_COFFEESCRIPT_STRING, SCE_COFFEESCRIPT_VERBOSE_REGEX,
+    SCE_COFFEESCRIPT_VERBOSE_REGEX_COMMENT, SCE_COFFEESCRIPT_WORD, SCE_COFFEESCRIPT_WORD2,
+    SCE_CSS_ATTRIBUTE, SCE_CSS_CLASS, SCE_CSS_COMMENT, SCE_CSS_DIRECTIVE, SCE_CSS_DOUBLESTRING,
+    SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_EXTENDED_PSEUDOCLASS, SCE_CSS_EXTENDED_PSEUDOELEMENT,
+    SCE_CSS_GROUP_RULE, SCE_CSS_ID, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3,
+    SCE_CSS_IMPORTANT, SCE_CSS_OPERATOR, SCE_CSS_PSEUDOCLASS, SCE_CSS_PSEUDOELEMENT,
+    SCE_CSS_SINGLESTRING, SCE_CSS_TAG, SCE_CSS_VARIABLE, SCE_C_CHARACTER, SCE_C_COMMENT,
+    SCE_C_COMMENTDOC, SCE_C_COMMENTLINE, SCE_C_COMMENTLINEDOC, SCE_C_NUMBER, SCE_C_OPERATOR,
+    SCE_C_PREPROCESSOR, SCE_C_STRING, SCE_C_WORD, SCE_C_WORD2, SCE_DIFF_ADDED, SCE_DIFF_CHANGED,
+    SCE_DIFF_COMMAND, SCE_DIFF_COMMENT, SCE_DIFF_DELETED, SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD,
+    SCE_DIFF_PATCH_DELETE, SCE_DIFF_POSITION, SCE_DIFF_REMOVED_PATCH_ADD,
+    SCE_DIFF_REMOVED_PATCH_DELETE, SCE_D_CHARACTER, SCE_D_COMMENT, SCE_D_COMMENTDOC,
+    SCE_D_COMMENTDOCKEYWORD, SCE_D_COMMENTDOCKEYWORDERROR, SCE_D_COMMENTLINE, SCE_D_COMMENTLINEDOC,
+    SCE_D_COMMENTNESTED, SCE_D_NUMBER, SCE_D_OPERATOR, SCE_D_STRING, SCE_D_STRINGB,
+    SCE_D_STRINGEOL, SCE_D_STRINGR, SCE_D_TYPEDEF, SCE_D_WORD, SCE_D_WORD2, SCE_D_WORD5,
+    SCE_D_WORD6, SCE_D_WORD7, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK,
+    SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR,
+    SCE_GC_STRING, SCE_HA_CAPITAL, SCE_HA_CHARACTER, SCE_HA_CLASS, SCE_HA_COMMENTBLOCK,
+    SCE_HA_COMMENTBLOCK2, SCE_HA_COMMENTBLOCK3, SCE_HA_COMMENTLINE, SCE_HA_DATA, SCE_HA_INSTANCE,
+    SCE_HA_KEYWORD, SCE_HA_LITERATE_CODEDELIM, SCE_HA_LITERATE_COMMENT, SCE_HA_MODULE,
+    SCE_HA_NUMBER, SCE_HA_OPERATOR, SCE_HA_PRAGMA, SCE_HA_PREPROCESSOR, SCE_HA_RESERVED_OPERATOR,
+    SCE_HA_STRING, SCE_HA_STRINGEOL, SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER, SCE_HBA_STRING,
+    SCE_HBA_WORD, SCE_HB_COMMENTLINE, SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD, SCE_HJA_COMMENT,
+    SCE_HJA_COMMENTDOC, SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING, SCE_HJA_KEYWORD, SCE_HJA_NUMBER,
+    SCE_HJA_REGEX, SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD,
+    SCE_HJ_COMMENT, SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD,
+    SCE_HJ_NUMBER, SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL,
+    SCE_HJ_WORD, SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE,
+    SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR,
+    SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP, SCE_H_ASPAT,
+    SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT, SCE_H_DOUBLESTRING,
+    SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM,
+    SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY,
+    SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND,
+    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_INNO_COMMENT,
+    SCE_INNO_COMMENT_PASCAL, SCE_INNO_INLINE_EXPANSION, SCE_INNO_KEYWORD, SCE_INNO_KEYWORD_PASCAL,
+    SCE_INNO_KEYWORD_USER, SCE_INNO_PARAMETER, SCE_INNO_PREPROC, SCE_INNO_SECTION,
+    SCE_INNO_STRING_DOUBLE, SCE_INNO_STRING_SINGLE, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM,
+    SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR,
+    SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT, SCE_LISP_KEYWORD,
+    SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER, SCE_LISP_OPERATOR,
+    SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER, SCE_LUA_COMMENT,
+    SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER,
+    SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD, SCE_LUA_WORD2,
+    SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7, SCE_LUA_WORD8,
+    SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH, SCE_L_MATH2,
+    SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM, SCE_MAKE_COMMENT,
+    SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET,
+    SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_KEYWORD,
+    SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_NSIS_COMMENT,
+    SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF,
+    SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF,
+    SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ,
+    SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE,
+    SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE,
+    SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER, SCE_PAS_OPERATOR,
+    SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD, SCE_PL_ARRAY,
+    SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
+    SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
+    SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR,
+    SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR,
+    SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING, SCE_PL_STRING_Q,
+    SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR, SCE_PL_STRING_QR_VAR,
+    SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR,
+    SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT, SCE_POWERSHELL_ALIAS,
+    SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT,
     SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM, SCE_POWERSHELL_FUNCTION,
     SCE_POWERSHELL_HERE_CHARACTER, SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_KEYWORD,
     SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING, SCE_POWERSHELL_USER1,
@@ -7746,6 +7752,105 @@ const R_THEME: LangTheme = LangTheme {
     bold: R_BOLD,
 };
 
+// LexCoffeeScript style routing. 13 mappings covering every
+// SCE_COFFEESCRIPT_* state the lexer actually emits, per the
+// state-machine walk in
+// `crates\scintilla-sys\vendor\lexilla\lexers\LexCoffeeScript.cxx`.
+// 11 slots are unmapped — 10 LexCPP-inherited enum slots
+// (`SCE_COFFEESCRIPT_COMMENT` / `_COMMENTDOC` / `_UUID` /
+// `_PREPROCESSOR` / `_VERBATIM` / `_COMMENTLINEDOC` /
+// `_COMMENTDOCKEYWORD` / `_COMMENTDOCKEYWORDERROR` /
+// `_STRINGRAW` / `_TRIPLEVERBATIM`) that are DEFINED in
+// `SciLexer.h:1652-1672` but NEVER entered by
+// `ColouriseCoffeeScriptDoc`, PLUS `SCE_COFFEESCRIPT_STRINGEOL`
+// (12) — an orphan case label at `LexCoffeeScript.cxx:262-266`
+// with no matching `sc.SetState` / `sc.ChangeState` anywhere
+// in the paint loop (confirmed by grep across the vendored
+// tree). The switch branch handles what to do WHILE in
+// STRINGEOL but the state is never entered, so the mapping
+// would be inert. See the scintilla-sys banner for the
+// paint-loop citations.
+//
+// Slot rationale:
+//   - Two comment states + one verbose-regex-comment state
+//     → Comment. `COMMENTLINE` (2) is the `#`-to-EOL
+//     comment; `COMMENTBLOCK` (22) is `###...###`;
+//     `VERBOSE_REGEX_COMMENT` (24) is a `#`-to-EOL comment
+//     living INSIDE a `///...///` verbose regex block.
+//   - `WORD` (5) → Keyword (bold). Primary control-flow /
+//     declaration / async keywords per
+//     [`COFFEESCRIPT_KEYWORDS`].
+//   - `WORD2` (16) + `GLOBALCLASS` (19) + `INSTANCEPROPERTY`
+//     (25) → Keyword2. Three visual categories collapsed to
+//     one slot: word-form operators / value literals /
+//     module noise (`WORD2`), MDN Standard built-in
+//     constructors (`GLOBALCLASS`), and `@`-prefixed
+//     `this.`-shorthand identifier references
+//     (`INSTANCEPROPERTY`). Same collapse discipline as R's
+//     BASEKWORD + OTHERKWORD → Keyword2 and PowerShell's
+//     CMDLET + ALIAS + FUNCTION → Keyword2.
+//   - Two string states + two regex states → String.
+//     `STRING` (6) is `"..."` with interpolation;
+//     `CHARACTER` (7) is `'...'` without interpolation;
+//     `REGEX` (14) is `/.../flags`; `VERBOSE_REGEX` (23)
+//     is `///...///`. Grouping regex under String matches
+//     the JavaScript / Ruby / Perl convention where the
+//     regex delimiters visually read as string quotes.
+//   - `NUMBER` (4) → Number.
+//   - `OPERATOR` (10) → Operator. Also the transient state
+//     briefly set on `#{` interpolation delimiters at
+//     `LexCoffeeScript.cxx:234-235`.
+const COFFEESCRIPT_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_COFFEESCRIPT_COMMENTLINE, StyleSlot::Comment),
+    (SCE_COFFEESCRIPT_COMMENTBLOCK, StyleSlot::Comment),
+    (SCE_COFFEESCRIPT_VERBOSE_REGEX_COMMENT, StyleSlot::Comment),
+    (SCE_COFFEESCRIPT_NUMBER, StyleSlot::Number),
+    (SCE_COFFEESCRIPT_WORD, StyleSlot::Keyword),
+    (SCE_COFFEESCRIPT_WORD2, StyleSlot::Keyword2),
+    (SCE_COFFEESCRIPT_GLOBALCLASS, StyleSlot::Keyword2),
+    (SCE_COFFEESCRIPT_INSTANCEPROPERTY, StyleSlot::Keyword2),
+    (SCE_COFFEESCRIPT_STRING, StyleSlot::String),
+    (SCE_COFFEESCRIPT_CHARACTER, StyleSlot::String),
+    (SCE_COFFEESCRIPT_REGEX, StyleSlot::String),
+    (SCE_COFFEESCRIPT_VERBOSE_REGEX, StyleSlot::String),
+    (SCE_COFFEESCRIPT_OPERATOR, StyleSlot::Operator),
+];
+
+// Italic on all three comment states — matches the universal
+// Code++ comment-slot convention. `VERBOSE_REGEX_COMMENT`
+// gets italic too so a `#comment` inside `///.../` reads
+// like any other comment.
+const COFFEESCRIPT_ITALIC: &[usize] = &[
+    SCE_COFFEESCRIPT_COMMENTLINE,
+    SCE_COFFEESCRIPT_COMMENTBLOCK,
+    SCE_COFFEESCRIPT_VERBOSE_REGEX_COMMENT,
+];
+
+// Bold on WORD only. Matches the C / Rust / D / COBOL /
+// PowerShell / R precedent — the "one bold class = language
+// reserved words" rule. WORD2 / GLOBALCLASS /
+// INSTANCEPROPERTY use Keyword2 weight (accent color, not
+// bold).
+const COFFEESCRIPT_BOLD: &[usize] = &[SCE_COFFEESCRIPT_WORD];
+
+// Three-class install matches `csWordLists[]` at
+// `LexCoffeeScript.cxx:486-492`. The descriptor declares four
+// slots but slot 2 ("Unused") is skipped by the identifier
+// classification cascade at `:195-200` — we install to slots
+// 0/1/3 for WORD / WORD2 / GLOBALCLASS respectively. Order
+// is load-bearing: `SCI_SETKEYWORDS` respects
+// wordlist-descriptor order.
+const COFFEESCRIPT_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, COFFEESCRIPT_KEYWORDS),
+        (1, COFFEESCRIPT_KEYWORDS_2),
+        (3, COFFEESCRIPT_GLOBAL_CLASSES),
+    ],
+    styles: COFFEESCRIPT_STYLES,
+    italic: COFFEESCRIPT_ITALIC,
+    bold: COFFEESCRIPT_BOLD,
+};
+
 const HTML_THEME: LangTheme = LangTheme {
     keywords: &[(0, HTML_KEYWORDS)],
     styles: HYPERTEXT_STYLES,
@@ -8075,6 +8180,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&R_THEME)
     } else if lang == L_JSP {
         Some(&JSP_THEME)
+    } else if lang == L_COFFEESCRIPT {
+        Some(&COFFEESCRIPT_THEME)
     } else {
         None
     }
@@ -23290,38 +23397,45 @@ mod lang_theme_tests {
         ADA_KEYWORDS, AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS, AU3_PREPROCESSORS,
         AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2,
         CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CMAKE_COMMANDS, CMAKE_PARAMETERS,
-        CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B, COBOL_KEYWORDS_C, CPP_KEYWORDS_2,
-        CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
-        CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, D_DOC_KEYWORDS, D_KEYWORDS,
-        D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS,
-        GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
-        HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS,
-        INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS,
-        JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
-        LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
-        L_CMAKE, L_COBOL, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
-        L_INNO, L_JAVA, L_JAVASCRIPT, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB,
-        L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC,
-        L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG,
-        L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-        POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
-        POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-        PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
-        RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
-        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
-        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
-        VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+        CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B, COBOL_KEYWORDS_C,
+        COFFEESCRIPT_GLOBAL_CLASSES, COFFEESCRIPT_KEYWORDS, COFFEESCRIPT_KEYWORDS_2,
+        CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3,
+        CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2,
+        D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7,
+        GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
+        HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
+        INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
+        JAVASCRIPT_KEYWORDS, JAVA_KEYWORDS, JAVA_KEYWORDS_2, KIX_FUNCTIONS, KIX_KEYWORDS,
+        KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM,
+        L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS,
+        L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT,
+        L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL,
+        L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME,
+        L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
+        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
+        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
+        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
+        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS,
+        R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+        SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+        VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+        XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
         SCE_COBOL_COMMENTLINE, SCE_COBOL_NUMBER, SCE_COBOL_OPERATOR, SCE_COBOL_PREPROCESSOR,
-        SCE_COBOL_STRING, SCE_COBOL_WORD, SCE_COBOL_WORD2, SCE_COBOL_WORD3, SCE_D_CHARACTER,
-        SCE_D_COMMENT, SCE_D_COMMENTDOC, SCE_D_COMMENTDOCKEYWORD, SCE_D_COMMENTDOCKEYWORDERROR,
-        SCE_D_COMMENTLINE, SCE_D_COMMENTLINEDOC, SCE_D_COMMENTNESTED, SCE_D_DEFAULT,
-        SCE_D_IDENTIFIER, SCE_D_NUMBER, SCE_D_OPERATOR, SCE_D_STRING, SCE_D_STRINGB,
+        SCE_COBOL_STRING, SCE_COBOL_WORD, SCE_COBOL_WORD2, SCE_COBOL_WORD3,
+        SCE_COFFEESCRIPT_CHARACTER, SCE_COFFEESCRIPT_COMMENTBLOCK, SCE_COFFEESCRIPT_COMMENTLINE,
+        SCE_COFFEESCRIPT_DEFAULT, SCE_COFFEESCRIPT_GLOBALCLASS, SCE_COFFEESCRIPT_IDENTIFIER,
+        SCE_COFFEESCRIPT_INSTANCEPROPERTY, SCE_COFFEESCRIPT_NUMBER, SCE_COFFEESCRIPT_OPERATOR,
+        SCE_COFFEESCRIPT_REGEX, SCE_COFFEESCRIPT_STRING, SCE_COFFEESCRIPT_VERBOSE_REGEX,
+        SCE_COFFEESCRIPT_VERBOSE_REGEX_COMMENT, SCE_COFFEESCRIPT_WORD, SCE_COFFEESCRIPT_WORD2,
+        SCE_D_CHARACTER, SCE_D_COMMENT, SCE_D_COMMENTDOC, SCE_D_COMMENTDOCKEYWORD,
+        SCE_D_COMMENTDOCKEYWORDERROR, SCE_D_COMMENTLINE, SCE_D_COMMENTLINEDOC, SCE_D_COMMENTNESTED,
+        SCE_D_DEFAULT, SCE_D_IDENTIFIER, SCE_D_NUMBER, SCE_D_OPERATOR, SCE_D_STRING, SCE_D_STRINGB,
         SCE_D_STRINGEOL, SCE_D_STRINGR, SCE_D_TYPEDEF, SCE_D_WORD, SCE_D_WORD2, SCE_D_WORD3,
         SCE_D_WORD5, SCE_D_WORD6, SCE_D_WORD7, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND,
         SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_DEFAULT, SCE_GC_EVENT,
@@ -32343,12 +32457,450 @@ mod lang_theme_tests {
         );
     }
 
+    /// CoffeeScript uses Lexilla's `coffeescript` lexer
+    /// (`LexCoffeeScript.cxx`) — a Ruby-modelled state machine
+    /// for CoffeeScript source (`.coffee`, `.litcoffee`) built
+    /// on top of the `LexCPP` enum numbering. The lexer enters
+    /// only 15 of the 26 `SCE_COFFEESCRIPT_*` enum slots — 11
+    /// slots are never entered by the paint loop: 10 `LexCPP`-
+    /// inherited slots (`COMMENT`, `COMMENTDOC`, `UUID`,
+    /// `PREPROCESSOR`, `VERBATIM`, `COMMENTLINEDOC`,
+    /// `COMMENTDOCKEYWORD`, `COMMENTDOCKEYWORDERROR`,
+    /// `STRINGRAW`, `TRIPLEVERBATIM`) that are DEFINED in
+    /// `SciLexer.h` but never referenced by any `sc.SetState`
+    /// / `sc.ChangeState` call, PLUS `STRINGEOL` (12) — an
+    /// orphan case label at `LexCoffeeScript.cxx:262-266`
+    /// with a switch branch that handles what to do while in
+    /// the state, but no code path ever sets it. The theme
+    /// leaves all 11 unmapped.
+    ///
+    /// Distinctive features asserted here: **case-sensitive
+    /// byte-exact matching** (same discipline as `D_KEYWORDS` /
+    /// `R_RESERVED`), **`@`-prefixed identifiers** as
+    /// `INSTANCEPROPERTY` (CoffeeScript's `this.` shorthand),
+    /// **two comment states** (`COMMENTLINE` = `#`,
+    /// `COMMENTBLOCK` = `###...###`), **two regex flavours**
+    /// (`REGEX` = `/.../`, `VERBOSE_REGEX` = `///...///`),
+    /// **string interpolation via `#{...}`** (transiently
+    /// paints `#{` as `OPERATOR` per `LexCoffeeScript.cxx:234-235`
+    /// then normal-mode-tokenises the expression), and
+    /// **class 3 wordlist install** (skipping the "Unused"
+    /// class 2 slot per `csWordLists[]` at `:486-492`).
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_COFFEESCRIPT)` returns
+    ///      `Some(&COFFEESCRIPT_THEME)`.
+    ///   2. Style count == 13 (15 emitted `SCE_COFFEESCRIPT_*`
+    ///      states minus DEFAULT (0) + IDENTIFIER (11)).
+    ///   3. Three wordlist classes in canonical order (0/1/3)
+    ///      matching `csWordLists[]` for the three PROBED
+    ///      slots at `LexCoffeeScript.cxx:117-119`. Class 2
+    ///      ("Unused") is skipped entirely.
+    ///   4. All three classes non-empty.
+    ///   5. Every wordlist token matches the CoffeeScript
+    ///      identifier alphabet the lexer accepts
+    ///      (`[A-Za-z0-9_$]` + `@` prefix for
+    ///      `INSTANCEPROPERTY`, but wordlist entries never
+    ///      carry the `@` prefix — that state is entered via
+    ///      `s[0] == '@'` at `:200-202` AFTER a wordlist miss).
+    ///   6. No cross-list duplicates across WL0/WL1/WL3.
+    ///      `LexCoffeeScript.cxx:195-200` probes wordlists
+    ///      first-match-wins for identifier classification —
+    ///      a duplicate in a later class is dead code.
+    ///   7. Style-routing pins for the 13 mapped SCE constants.
+    ///   8. DEFAULT (0) and IDENTIFIER (11) unmapped.
+    ///   9. All 11 never-entered states unmapped: 10 `LexCPP`-
+    ///      inherited slots (`COMMENT` (1), `COMMENTDOC` (3),
+    ///      `UUID` (8), `PREPROCESSOR` (9), `VERBATIM` (13),
+    ///      `COMMENTLINEDOC` (15), `COMMENTDOCKEYWORD` (17),
+    ///      COMMENTDOCKEYWORDERROR (18), STRINGRAW (20),
+    ///      TRIPLEVERBATIM (21)) plus STRINGEOL (12), an
+    ///      orphan case label at LexCoffeeScript.cxx:262-266
+    ///      that no code path ever enters.
+    ///   10. Italic set == 3 (all three comment states).
+    ///   11. Bold set == 1 (WORD only — matches the
+    ///       "one bold class = language reserved words" rule).
+    ///   12. Cross-language non-reuse — `COFFEESCRIPT_STYLES`
+    ///       must not deep-equal any prior wired theme.
+    ///   13. `L_COFFEESCRIPT` `LangEntry` has
+    ///       `lexer: Some("coffeescript")` and `extensions`
+    ///       contains `coffee`.
+    ///   14. Canonical anchor coverage: WL0 primary keywords
+    ///       (`if`/`else`/`unless`/`class`/`return`/`try`/
+    ///       `await`), WL1 secondary (`and`/`or`/`is`/`isnt`/
+    ///       `yes`/`no`/`true`/`false`/`NaN`/`import`),
+    ///       WL3 global classes (`Array`/`Object`/`Promise`/
+    ///       `Math`/`JSON`).
+    ///   15. `function` explicitly NOT in any wordlist
+    ///       (WL0 / WL1 / WL3). Per `lexer.coffee`'s
+    ///       `RESERVED` array, CoffeeScript actively rejects
+    ///       `function` in source — the parser errors on it.
+    ///       Since WL0 → Keyword, WL1 → Keyword2, and
+    ///       WL3 → Keyword2 all render styled, a
+    ///       misplacement in any of the three would produce
+    ///       the same misrepresentation (`->`/`=>` are
+    ///       CoffeeScript's function-literal forms).
+    ///   16. `NaN` / `Infinity` in WL1 use canonical case.
+    ///       Byte-exact classifier at `:193-203` — lowercase
+    ///       `nan`/`infinity` would silently miss.
+    #[test]
+    fn coffeescript_uses_lexcoffeescript_three_class_theme() {
+        let cs = lang_theme(L_COFFEESCRIPT).expect("CoffeeScript wired");
+
+        // Invariant 2: 13 mappings.
+        assert_eq!(
+            cs.styles.len(),
+            13,
+            "COFFEESCRIPT_STYLES must map 13 indices (15 emitted \
+             SCE_COFFEESCRIPT_* states minus DEFAULT (0) + \
+             IDENTIFIER (11) — both unmapped per framework \
+             convention)"
+        );
+
+        // Invariant 3: three classes at canonical descriptor slots.
+        assert_eq!(
+            cs.keywords.len(),
+            3,
+            "COFFEESCRIPT_THEME must install exactly 3 wordlist \
+             classes (matches probed slots at csWordLists[] \
+             LexCoffeeScript.cxx:486-492 — class 2 is a literal \
+             'Unused' entry and never consulted)"
+        );
+        for (i, (expected_class, expected_list)) in [
+            (0u32, COFFEESCRIPT_KEYWORDS),
+            (1u32, COFFEESCRIPT_KEYWORDS_2),
+            (3u32, COFFEESCRIPT_GLOBAL_CLASSES),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(cs.keywords[i].0, *expected_class);
+            assert_eq!(cs.keywords[i].1, *expected_list);
+        }
+        // Explicit non-inclusion of slot 2 ("Unused").
+        assert!(
+            !cs.keywords.iter().any(|(class, _)| *class == 2),
+            "class 2 is labelled 'Unused' in csWordLists[] and never \
+             probed by the identifier cascade at \
+             LexCoffeeScript.cxx:195-200 — installing to it is dead \
+             SCI_SETKEYWORDS work"
+        );
+
+        // Invariant 4: all three classes non-empty.
+        for (list, name) in [
+            (COFFEESCRIPT_KEYWORDS, "KEYWORDS"),
+            (COFFEESCRIPT_KEYWORDS_2, "KEYWORDS_2"),
+            (COFFEESCRIPT_GLOBAL_CLASSES, "GLOBAL_CLASSES"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "COFFEESCRIPT_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: CoffeeScript identifier alphabet.
+        // `LexCoffeeScript.cxx:124-125` setWord accepts alnum +
+        // `._$` + high bytes. Wordlist entries never carry the
+        // `@` prefix — that's the INSTANCEPROPERTY marker
+        // detected at `:200-202` AFTER a wordlist miss. `.` and
+        // `$` are legal in setWord but the state-exit at `:192`
+        // splits on `.` and `$` — so wordlist entries in
+        // practice use only `[A-Za-z0-9_]`.
+        for (list, name) in [
+            (COFFEESCRIPT_KEYWORDS, "KEYWORDS"),
+            (COFFEESCRIPT_KEYWORDS_2, "KEYWORDS_2"),
+            (COFFEESCRIPT_GLOBAL_CLASSES, "GLOBAL_CLASSES"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    tok.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+                    "COFFEESCRIPT_{name} token `{tok}` violates the \
+                     CoffeeScript identifier alphabet — must be \
+                     `[A-Za-z0-9_]+` so LexCoffeeScript's GetCurrent \
+                     + InList probe finds a match"
+                );
+            }
+        }
+
+        // Invariant 6: cross-list uniqueness across WL0/WL1/WL3.
+        // `LexCoffeeScript.cxx:195-200` probes wordlists
+        // first-match-wins — a duplicate in a later class is
+        // dead code.
+        use std::collections::HashSet;
+        let sets = [
+            (
+                "KEYWORDS",
+                COFFEESCRIPT_KEYWORDS
+                    .split_whitespace()
+                    .collect::<HashSet<_>>(),
+            ),
+            (
+                "KEYWORDS_2",
+                COFFEESCRIPT_KEYWORDS_2
+                    .split_whitespace()
+                    .collect::<HashSet<_>>(),
+            ),
+            (
+                "GLOBAL_CLASSES",
+                COFFEESCRIPT_GLOBAL_CLASSES
+                    .split_whitespace()
+                    .collect::<HashSet<_>>(),
+            ),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                if let Some(shared) = sets[i].1.intersection(&sets[j].1).next() {
+                    panic!(
+                        "COFFEESCRIPT_{} and COFFEESCRIPT_{} both contain \
+                         `{shared}` — LexCoffeeScript.cxx:195-200 probes \
+                         wordlists first-match-wins for identifier \
+                         classification. A cross-list duplicate leaves the \
+                         later entry dead code. Drop from whichever list is \
+                         not the intended-victor.",
+                        sets[i].0, sets[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 7: style-routing pins for all 13 mapped SCE constants.
+        for (idx, slot, name) in [
+            (
+                SCE_COFFEESCRIPT_COMMENTLINE,
+                StyleSlot::Comment,
+                "SCE_COFFEESCRIPT_COMMENTLINE",
+            ),
+            (
+                SCE_COFFEESCRIPT_COMMENTBLOCK,
+                StyleSlot::Comment,
+                "SCE_COFFEESCRIPT_COMMENTBLOCK",
+            ),
+            (
+                SCE_COFFEESCRIPT_VERBOSE_REGEX_COMMENT,
+                StyleSlot::Comment,
+                "SCE_COFFEESCRIPT_VERBOSE_REGEX_COMMENT",
+            ),
+            (
+                SCE_COFFEESCRIPT_NUMBER,
+                StyleSlot::Number,
+                "SCE_COFFEESCRIPT_NUMBER",
+            ),
+            (
+                SCE_COFFEESCRIPT_WORD,
+                StyleSlot::Keyword,
+                "SCE_COFFEESCRIPT_WORD",
+            ),
+            (
+                SCE_COFFEESCRIPT_WORD2,
+                StyleSlot::Keyword2,
+                "SCE_COFFEESCRIPT_WORD2",
+            ),
+            (
+                SCE_COFFEESCRIPT_GLOBALCLASS,
+                StyleSlot::Keyword2,
+                "SCE_COFFEESCRIPT_GLOBALCLASS",
+            ),
+            (
+                SCE_COFFEESCRIPT_INSTANCEPROPERTY,
+                StyleSlot::Keyword2,
+                "SCE_COFFEESCRIPT_INSTANCEPROPERTY",
+            ),
+            (
+                SCE_COFFEESCRIPT_STRING,
+                StyleSlot::String,
+                "SCE_COFFEESCRIPT_STRING",
+            ),
+            (
+                SCE_COFFEESCRIPT_CHARACTER,
+                StyleSlot::String,
+                "SCE_COFFEESCRIPT_CHARACTER",
+            ),
+            (
+                SCE_COFFEESCRIPT_REGEX,
+                StyleSlot::String,
+                "SCE_COFFEESCRIPT_REGEX",
+            ),
+            (
+                SCE_COFFEESCRIPT_VERBOSE_REGEX,
+                StyleSlot::String,
+                "SCE_COFFEESCRIPT_VERBOSE_REGEX",
+            ),
+            (
+                SCE_COFFEESCRIPT_OPERATOR,
+                StyleSlot::Operator,
+                "SCE_COFFEESCRIPT_OPERATOR",
+            ),
+        ] {
+            assert!(
+                cs.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: DEFAULT (0) and IDENTIFIER (11) unmapped.
+        assert!(
+            !cs.styles
+                .iter()
+                .any(|(i, _)| *i == SCE_COFFEESCRIPT_DEFAULT),
+            "SCE_COFFEESCRIPT_DEFAULT (0) must remain unmapped"
+        );
+        assert!(
+            !cs.styles
+                .iter()
+                .any(|(i, _)| *i == SCE_COFFEESCRIPT_IDENTIFIER),
+            "SCE_COFFEESCRIPT_IDENTIFIER (11) must remain unmapped \
+             — bare CoffeeScript identifiers paint at STYLE_DEFAULT \
+             per framework convention"
+        );
+
+        // Invariant 9: never-entered states all unmapped.
+        // 10 LexCPP-inherited slots (COMMENT / COMMENTDOC /
+        // UUID / PREPROCESSOR / VERBATIM / COMMENTLINEDOC /
+        // COMMENTDOCKEYWORD / COMMENTDOCKEYWORDERROR /
+        // STRINGRAW / TRIPLEVERBATIM) plus STRINGEOL (12,
+        // orphan case label at LexCoffeeScript.cxx:262-266).
+        // The lexer's paint loop at :181-337 never calls
+        // `sc.SetState` on any of them — including them in
+        // the theme is dead work and could confuse a future
+        // maintainer into thinking they're active.
+        for (idx, name) in [
+            (1_usize, "COMMENT"),
+            (3, "COMMENTDOC"),
+            (8, "UUID"),
+            (9, "PREPROCESSOR"),
+            (12, "STRINGEOL"),
+            (13, "VERBATIM"),
+            (15, "COMMENTLINEDOC"),
+            (17, "COMMENTDOCKEYWORD"),
+            (18, "COMMENTDOCKEYWORDERROR"),
+            (20, "STRINGRAW"),
+            (21, "TRIPLEVERBATIM"),
+        ] {
+            assert!(
+                !cs.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_COFFEESCRIPT_{name} ({idx}) is never entered by \
+                 ColouriseCoffeeScriptDoc — must not appear in \
+                 COFFEESCRIPT_STYLES"
+            );
+        }
+
+        // Invariant 10: italic == 3 (all comment states).
+        assert_eq!(cs.italic.len(), 3);
+        for c in [
+            SCE_COFFEESCRIPT_COMMENTLINE,
+            SCE_COFFEESCRIPT_COMMENTBLOCK,
+            SCE_COFFEESCRIPT_VERBOSE_REGEX_COMMENT,
+        ] {
+            assert!(cs.italic.contains(&c));
+        }
+
+        // Invariant 11: bold == 1 (WORD only).
+        assert_eq!(cs.bold.len(), 1);
+        assert!(cs.bold.contains(&SCE_COFFEESCRIPT_WORD));
+
+        // Invariant 12: cross-language non-reuse.
+        let r = lang_theme(L_R).expect("R wired");
+        let ps = lang_theme(L_POWERSHELL).expect("PowerShell wired");
+        let d = lang_theme(L_D).expect("D wired");
+        let cobol = lang_theme(L_COBOL).expect("COBOL wired");
+        for (other, name) in [(r, "R"), (ps, "PowerShell"), (d, "D"), (cobol, "COBOL")] {
+            assert_ne!(
+                cs.styles, other.styles,
+                "CoffeeScript must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 13: L_COFFEESCRIPT LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let cs_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_COFFEESCRIPT)
+            .expect("L_COFFEESCRIPT LangEntry present in LANG_TABLE");
+        assert_eq!(
+            cs_entry.lexer,
+            Some("coffeescript"),
+            "L_COFFEESCRIPT LangEntry.lexer must be \
+             Some(\"coffeescript\") — wiring assumes the LexCoffeeScript \
+             factory dispatched via SCLEX_COFFEESCRIPT (= 102)"
+        );
+        assert!(
+            cs_entry.extensions.contains(&"coffee"),
+            "L_COFFEESCRIPT extensions must contain `coffee` \
+             (canonical CoffeeScript source extension)"
+        );
+
+        // Invariant 14: canonical anchor coverage.
+        // WL0 primary keywords.
+        for kw in ["if", "else", "unless", "class", "return", "try", "await"] {
+            assert!(
+                COFFEESCRIPT_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "COFFEESCRIPT_KEYWORDS must include canonical primary keyword `{kw}`"
+            );
+        }
+        // WL1 secondary — mix of operator-words, aliases, literals, module noise.
+        for kw in [
+            "and", "or", "is", "isnt", "yes", "no", "true", "false", "NaN", "import",
+        ] {
+            assert!(
+                COFFEESCRIPT_KEYWORDS_2.split_whitespace().any(|t| t == kw),
+                "COFFEESCRIPT_KEYWORDS_2 must include canonical secondary \
+                 keyword `{kw}`"
+            );
+        }
+        // WL3 global classes.
+        for kw in ["Array", "Object", "Promise", "Math", "JSON"] {
+            assert!(
+                COFFEESCRIPT_GLOBAL_CLASSES
+                    .split_whitespace()
+                    .any(|t| t == kw),
+                "COFFEESCRIPT_GLOBAL_CLASSES must include canonical global \
+                 class `{kw}`"
+            );
+        }
+
+        // Invariant 15: `function` explicitly NOT in any
+        // wordlist (WL0 / WL1 / WL3). CoffeeScript actively
+        // rejects `function` in source per the `RESERVED`
+        // array in the upstream lexer. Since WL0 → Keyword,
+        // WL1 → Keyword2, and WL3 → Keyword2 all render
+        // styled, a misplacement in any of the three would
+        // misrepresent the language. `->` / `=>` are the
+        // function-literal forms.
+        for (list, name) in [
+            (COFFEESCRIPT_KEYWORDS, "KEYWORDS"),
+            (COFFEESCRIPT_KEYWORDS_2, "KEYWORDS_2"),
+            (COFFEESCRIPT_GLOBAL_CLASSES, "GLOBAL_CLASSES"),
+        ] {
+            assert!(
+                !list.split_whitespace().any(|t| t == "function"),
+                "COFFEESCRIPT_{name} must NOT include `function` — the \
+                 CoffeeScript parser errors on the token. `->` / `=>` are \
+                 the function-literal forms."
+            );
+        }
+
+        // Invariant 16: NaN / Infinity in WL1 use canonical case.
+        // LexCoffeeScript.cxx:193-203 is byte-exact — lowercase
+        // `nan` / `infinity` would silently miss.
+        for canonical in ["NaN", "Infinity"] {
+            assert!(
+                COFFEESCRIPT_KEYWORDS_2
+                    .split_whitespace()
+                    .any(|t| t == canonical),
+                "COFFEESCRIPT_KEYWORDS_2 must include canonical-case `{canonical}` \
+                 — byte-exact classifier means lowercase would silently miss"
+            );
+        }
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
     /// updating in the same commit — same as for `L_C` / `L_CPP`
     /// / `L_CS` / `L_RUST` / `L_PHP` above. `L_PYTHON` was removed
-    /// from this list when the Python row landed.
+    /// from this list when the Python row landed. `L_COFFEESCRIPT`
+    /// was removed when the CoffeeScript row landed in this
+    /// commit.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_JAVASCRIPT).is_none(), "JS not wired yet");

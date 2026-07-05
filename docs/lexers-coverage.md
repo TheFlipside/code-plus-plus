@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 51 / 🟡 37 / ⚫ 1.
+Total: 89 rows. ✅ 52 / 🟡 36 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1854,7 +1854,7 @@ further shim work needed.
 | Caml | 41 | `caml` | ✅ | ✅ | ✅ |
 | CMake | 48 | `cmake` | ✅ | ✅ | ✅ |
 | COBOL | 50 | `COBOL` | ✅ | ✅ | ✅ |
-| CoffeeScript | 56 | `coffeescript` | ⚫ | ⚫ | 🟡 |
+| CoffeeScript | 56 | `coffeescript` | ✅ | ✅ | ✅ |
 | CSound | 70 | `csound` | ⚫ | ⚫ | 🟡 |
 | CSS | 20 | `css` | ✅ | ✅ | ✅ |
 | D | 52 | `d` | ✅ | ✅ | ✅ |
@@ -4846,6 +4846,184 @@ cross-language non-reuse pins against every other
 hypertext-family theme (HTML / PHP / ASP shapes are
 each distinct), and `L_JSP` `LangEntry`'s `lexer:
 Some("hypertext")` + `.jsp` extension presence.
+
+**CoffeeScript (2026-07-05):** wires
+`SCLEX_COFFEESCRIPT` (= 102) via `LexCoffeeScript.cxx`
+— a Ruby-modelled state machine for CoffeeScript
+source (`.coffee`, `.litcoffee`) built on top of the
+LexCPP enum numbering. The lexer defines 26 SCE_*
+enum slots (0..=25) but only enters 15 of them.
+Eleven slots are never touched: 10 LexCPP-inherited
+enum slots (`COMMENT` / `COMMENTDOC` / `UUID` /
+`PREPROCESSOR` / `VERBATIM` / `COMMENTLINEDOC` /
+`COMMENTDOCKEYWORD` / `COMMENTDOCKEYWORDERROR` /
+`STRINGRAW` / `TRIPLEVERBATIM`) defined in
+`SciLexer.h:1652-1672` but never referenced by any
+`sc.SetState` / `sc.ChangeState` call, PLUS
+`STRINGEOL` (12) — an **orphan case label** at
+`LexCoffeeScript.cxx:262-266` whose switch branch
+handles what to do WHILE in the state but which no
+code path ever enters (confirmed by grep across the
+vendored tree). Unterminated strings simply fall off
+the STRING state at line end via the standard
+state-machine reset path — they don't get a
+distinctive error style. Theme leaves all 11
+unmapped; test invariant #9 pins the deliberate
+non-inclusion so a future maintainer doesn't
+accidentally add dead work.
+
+**Wordlist source of truth: `coffeescript/src/lexer.coffee`.**
+Three wordlist classes install:
+- **Class 0 → `SCE_COFFEESCRIPT_WORD`** —
+  `COFFEESCRIPT_KEYWORDS` carries structural /
+  control-flow / declaration / async keywords:
+  `if else unless switch when then / for while
+  until loop do / break continue return throw /
+  try catch finally / class extends super new this
+  / await yield debugger` (26 tokens). Rendered
+  bold-blue.
+- **Class 1 → `SCE_COFFEESCRIPT_WORD2`** —
+  `COFFEESCRIPT_KEYWORDS_2` carries expression noise:
+  word-form operators + aliases (`and or not is
+  isnt typeof instanceof in of by delete`),
+  boolean-literal aliases + value literals (`yes no
+  on off true false null undefined NaN Infinity`),
+  module-syntax words (`import export from as
+  default`), contextual modifier `own`, and the two
+  STRICT_PROSCRIBED identifiers `arguments` /
+  `eval` (29 tokens). Rendered accent-color (not
+  bold).
+- **Class 3 → `SCE_COFFEESCRIPT_GLOBALCLASS`** —
+  `COFFEESCRIPT_GLOBAL_CLASSES` carries 41 MDN
+  Standard built-in objects: 1 `Array` + 1
+  `Boolean` + 1 `Date`, the classic Error hierarchy
+  (7 — `Error`/`EvalError`/`RangeError`/
+  `ReferenceError`/`SyntaxError`/`TypeError`/
+  `URIError`), the typed-array family (11 —
+  `ArrayBuffer`/`DataView` + 9 typed arrays
+  `Float32Array`/`Float64Array`/`Int8Array`/
+  `Int16Array`/`Int32Array`/`Uint8Array`/
+  `Uint8ClampedArray`/`Uint16Array`/`Uint32Array`),
+  BigInt family (3 — `BigInt`/`BigInt64Array`/
+  `BigUint64Array`), collection primitives (4 —
+  `Map`/`Set`/`WeakMap`/`WeakSet`), general
+  constructors + namespaces (11 — `Function`/`JSON`/
+  `Math`/`Number`/`Object`/`Promise`/`Proxy`/
+  `Reflect`/`RegExp`/`String`/`Symbol`), and host
+  globals (2 — `console`/`globalThis`). Grouped by
+  semantic category with alphabetical order within
+  each group (wordlist ordering is a human-
+  readability choice — Scintilla's
+  `SCI_SETKEYWORDS` builds an internal hash for
+  classification). Same slot as WORD2.
+
+**Class-2 slot deliberately skipped.**
+`csWordLists[]` at `LexCoffeeScript.cxx:486-492`
+declares four slots but slot 2 is literally
+labelled `"Unused"` — the identifier-classification
+cascade at `:195-200` probes only slots 0, 1, and 3
+(via `keywordlists[0]` / `[1]` / `[3]`). Installing
+to slot 2 is dead `SCI_SETKEYWORDS` work. Test
+invariant #3 pins the descriptor shape
+`(0, KEYWORDS) (1, KEYWORDS_2) (3, GLOBAL_CLASSES)`
+with an explicit `not-any(class == 2)` assertion.
+
+**Style routing (13 mappings):**
+- Two comment states + one verbose-regex-comment
+  state → `Comment`. `COMMENTLINE` (2) is `#`-to-EOL;
+  `COMMENTBLOCK` (22) is `###...###`;
+  `VERBOSE_REGEX_COMMENT` (24) is `#`-to-EOL living
+  inside a `///...///` verbose regex block.
+- `WORD` (5) → `Keyword` (bold). `WORD2` (16) +
+  `GLOBALCLASS` (19) + `INSTANCEPROPERTY` (25) →
+  `Keyword2`. Three visual categories collapsed to
+  one slot — same collapse discipline as R's
+  BASEKWORD + OTHERKWORD and PowerShell's
+  CMDLET + ALIAS + FUNCTION.
+- `STRING` (6) + `CHARACTER` (7) + `REGEX` (14) +
+  `VERBOSE_REGEX` (23) → `String`. Grouping regex
+  under String matches the JavaScript / Ruby / Perl
+  convention where regex delimiters visually read as
+  string quotes.
+- `NUMBER` (4) → `Number`. `OPERATOR` (10) →
+  `Operator`.
+
+**`@`-prefixed identifiers.** CoffeeScript's `@foo`
+is shorthand for `this.foo` — the leading `@` starts
+an identifier per `setWordStart` at
+`LexCoffeeScript.cxx:124`, and the classifier at
+`:200-202` detects the `@` prefix AFTER a wordlist
+miss and re-styles the token as
+`SCE_COFFEESCRIPT_INSTANCEPROPERTY` (25). Routed to
+Keyword2 so `@name` gets the accent color that
+signals "reference to an instance property".
+
+**String interpolation via `#{...}`.** Ruby-style —
+implementation borrowed from LexRuby at `:46-73`,
+driven by stack-based tracking of up to 5
+interpolation levels (`INNER_STRINGS_MAX_COUNT` at
+`:139`). Enter at `:227` on `#{`, temporarily
+paints `#{` as `OPERATOR`, then the expression
+tokenises as normal CoffeeScript (keywords /
+identifiers / numbers all get their normal styles
+inside the interpolation) until the matching `}` at
+`:329-335` restores the string state. Single-quoted
+`CHARACTER` strings do NOT interpolate at `:238-246`
+— matching CoffeeScript language semantics.
+
+**Two regex flavours.** Inline `/pattern/flags`
+regex (state `REGEX` (14), entered after operators
+or keywords, exited on trailing `/` + lowercase
+flags gobbling) and block `///pattern///` verbose
+regex (state `VERBOSE_REGEX` (23), with `#`-to-EOL
+comment support inside).
+
+**Deliberate wordlist exclusions with test pins:**
+- **`function` not in WL0** — CoffeeScript's
+  `RESERVED` array at `lexer.coffee:1393-1398`
+  actively rejects `function` in source; the parser
+  errors on it (`->` and `=>` are the function-
+  literal forms). Test invariant #15 pins the
+  non-inclusion.
+- **`NaN` / `Infinity` in canonical case (WL1)** —
+  byte-exact classifier at
+  `LexCoffeeScript.cxx:193-203` means lowercase
+  `nan` / `infinity` would silently miss. Test
+  invariant #16 pins the canonical case.
+- **`Infinity` / `NaN` / `undefined` / `null` /
+  `true` / `false` not duplicated in WL3** — they
+  live in WL1 (secondary keywords). First-match-wins
+  probe order at `:195-200` means a duplicate in
+  WL3 is dead code. Test invariant #6 (cross-list
+  uniqueness) pins the invariant.
+- **DOM instances (`window` / `document` /
+  `navigator`) not in WL3** — these are host-
+  provided instance references, not class
+  constructors; wrong bucket for `GLOBALCLASS`.
+  Documented in `COFFEESCRIPT_GLOBAL_CLASSES` docstring.
+
+Structural test coverage: 16 invariants —
+`Some(&COFFEESCRIPT_THEME)` return, 13-mapping
+style count, three-class canonical descriptor order
+`(0, KEYWORDS) (1, KEYWORDS_2) (3, GLOBAL_CLASSES)`
+with explicit `class == 2` exclusion, all classes
+non-empty, identifier-alphabet enforcement,
+cross-list uniqueness across WL0/WL1/WL3,
+style-routing pins for the 13 mapped SCE
+constants, DEFAULT (0) + IDENTIFIER (11)
+unmapped, all 11 never-entered states unmapped
+(10 LexCPP-inherited + STRINGEOL orphan), italic
+set == 3 (all comment states), bold set == 1
+(WORD only), cross-language non-reuse against R
+/ PowerShell / D / COBOL, `L_COFFEESCRIPT`
+`LangEntry`'s `lexer: Some("coffeescript")` +
+`.coffee` extension presence, canonical anchor
+coverage (WL0 primary keywords, WL1 mix of aliases
++ literals + module noise, WL3 canonical global
+classes), and TWO negative pins: `function` NOT
+in any wordlist (WL0/WL1/WL3 — parser rejects it)
+and `NaN` / `Infinity` in WL1 use canonical case
+(byte-exact classifier).
 
 ## Notes
 

@@ -4997,6 +4997,196 @@ pub const SCE_R_RAWSTRING: usize = 13;
 pub const SCE_R_RAWSTRING2: usize = 14;
 pub const SCE_R_ESCAPESEQUENCE: usize = 15;
 
+// LexCoffeeScript style indices. 26 contiguous slots (0..=25)
+// for CoffeeScript source (`.coffee`, `.litcoffee`), a Ruby-ish
+// indentation-scoped language that compiles to JavaScript.
+// Constants mirror `SciLexer.h:1651-1676` verbatim. Dispatches
+// SCLEX_COFFEESCRIPT (= 102, per `SciLexer.h:118`) via a
+// **three-class wordlist** declared at
+// `vendor\lexilla\lexers\LexCoffeeScript.cxx:486-492`
+// (`csWordLists[]`). The descriptor declares four slots but the
+// third (class 2) is literally labelled "Unused" — the paint
+// loop at `:117-119` only assigns `keywordlists[0]`,
+// `keywordlists[1]`, and `keywordlists[3]`; the identifier
+// classification cascade at `:195-203` probes classes 0/1/3
+// (skipping 2):
+//
+//     csWordLists[] = {
+//         "Keywords",           // class 0 → SCE_COFFEESCRIPT_WORD
+//         "Secondary keywords", // class 1 → SCE_COFFEESCRIPT_WORD2
+//         "Unused",             // class 2 — never probed
+//         "Global classes",     // class 3 → SCE_COFFEESCRIPT_GLOBALCLASS
+//         0,
+//     };
+//
+// **Case-SENSITIVE matching.** The identifier-classification
+// cascade at `LexCoffeeScript.cxx:193-203` calls
+// `sc.GetCurrent(s, sizeof(s))` (byte-exact), NOT
+// `GetCurrentLowered`. CoffeeScript source is case-sensitive at
+// the spec level (per the upstream lexer source at
+// `github.com/jashkenas/coffeescript/blob/master/src/lexer.coffee`
+// lines 1366-1400), so wordlist tokens use exact case. Same
+// discipline as `D_KEYWORDS` / `R_RESERVED`, inverted from
+// `POWERSHELL_KEYWORDS`.
+//
+// **Identifier alphabet with special starters.**
+// `setWordStart` at `LexCoffeeScript.cxx:124` accepts letters,
+// `_`, `$`, and — uniquely — `@`. This is the syntactic
+// signature of CoffeeScript: `@foo` is shorthand for
+// `this.foo`, and the leading `@` starts an identifier. The
+// identifier-classifier at `:200-202` then detects the `@`
+// prefix and re-styles the token as `INSTANCEPROPERTY` (25).
+// `setWord` at `:125` extends to `.` and `$` beyond
+// `[A-Za-z0-9_]`, but the state-exit at `:192` splits on `.`
+// so `a.b` tokenises as three tokens — the `.` is a mid-word
+// character only for the number-lexer's benefit (hex/decimal
+// suffixes), not for identifier extension.
+//
+// **String interpolation (`"…#{expr}…"`).** Ruby-style
+// `#{...}` interpolation inside double-quoted strings —
+// implementation borrowed from LexRuby at `:46-73`, driven by
+// stack-based tracking of up to 5 levels
+// (`INNER_STRINGS_MAX_COUNT = 5` at `:139`). Enter at `:227` on
+// `#{`, temporarily paints `#{` as `OPERATOR`, then the
+// expression tokenises as normal CoffeeScript until the
+// matching `}` at `:329-335` restores the string state. This
+// means keywords / identifiers / numbers INSIDE
+// interpolation get their normal styles — expected behaviour.
+// Single-quoted strings (`CHARACTER`) at `:238-246` do NOT
+// interpolate — no `#{` state transition — matching CoffeeScript
+// language semantics.
+//
+// **Two regex flavours.**
+//   - `SCE_COFFEESCRIPT_REGEX` (14) — inline `/pattern/flags`
+//     regex, entered at `:304-309` after operators or
+//     keywords, exited at `:250-254` on the trailing `/`
+//     followed by lowercase-only flag gobbling.
+//   - `SCE_COFFEESCRIPT_VERBOSE_REGEX` (23) — block regex
+//     `///pattern///`, entered at `:300-303`, exited at
+//     `:277-280` on `///`. Inside a verbose regex, a `#`
+//     starts a `SCE_COFFEESCRIPT_VERBOSE_REGEX_COMMENT` (24)
+//     that runs to line end per `:287-291`.
+//
+// **Two comment flavours.**
+//   - `SCE_COFFEESCRIPT_COMMENTLINE` (2) — `#` to end of line
+//     at `:314-321`. NOT the block-comment token.
+//   - `SCE_COFFEESCRIPT_COMMENTBLOCK` (22) — `###` ... `###`
+//     block comment, entered at `:315-318`, exited at
+//     `:267-274` on the closing `###`.
+//
+// **Enum slots that this lexer never emits.** 11 slots
+// defined in `SciLexer.h` are never reached by any
+// `sc.SetState` / `sc.ChangeState` call in
+// `ColouriseCoffeeScriptDoc`:
+//
+//   - 10 LexCPP-inherited slots that share numbering with the
+//     C++ lexer: `COMMENT` (1), `COMMENTDOC` (3), `UUID` (8),
+//     `PREPROCESSOR` (9), `VERBATIM` (13), `COMMENTLINEDOC`
+//     (15), `COMMENTDOCKEYWORD` (17),
+//     `COMMENTDOCKEYWORDERROR` (18), `STRINGRAW` (20),
+//     `TRIPLEVERBATIM` (21).
+//   - `STRINGEOL` (12) — an **orphan case label** at
+//     `LexCoffeeScript.cxx:262-266`. The switch branch
+//     handles what to do WHILE in the state (reset to
+//     `DEFAULT` on `atLineStart`), but no code path
+//     anywhere in the file ever sets the state; grep
+//     across the vendored tree confirms zero
+//     `SetState(SCE_COFFEESCRIPT_STRINGEOL)` /
+//     `ChangeState(SCE_COFFEESCRIPT_STRINGEOL)` calls.
+//     Unterminated strings simply fall off the STRING
+//     state at line end via the standard state-machine
+//     reset path — they don't get a distinctive error
+//     style. The theme in `crates/ui_win32/src/lib.rs`
+//     deliberately leaves this slot unmapped for that
+//     reason.
+//
+// The switch table at `:181-292` and the state-entry
+// cascade at `:295-337` never call `sc.SetState` on any of
+// the 11.
+//
+// Style semantics (paint-loop citations reference
+// LexCoffeeScript.cxx):
+//
+//   - SCE_COFFEESCRIPT_DEFAULT (0) — whitespace /
+//     unclassified. Framework convention: leave unmapped so
+//     bare punctuation surrounded by whitespace paints at
+//     STYLE_DEFAULT.
+//   - SCE_COFFEESCRIPT_COMMENT (1) — never entered (LexCPP-
+//     inherited slot).
+//   - SCE_COFFEESCRIPT_COMMENTLINE (2) — `#` line comment.
+//   - SCE_COFFEESCRIPT_COMMENTDOC (3) — never entered.
+//   - SCE_COFFEESCRIPT_NUMBER (4) — numeric literal.
+//   - SCE_COFFEESCRIPT_WORD (5) — wordlist class 0 hit
+//     (primary keywords — control flow, declarations,
+//     exception handling, `this`, `debugger`, `await`,
+//     `yield`).
+//   - SCE_COFFEESCRIPT_STRING (6) — `"..."` double-quoted
+//     string. Supports `#{...}` interpolation.
+//   - SCE_COFFEESCRIPT_CHARACTER (7) — `'...'` single-quoted
+//     string. NO interpolation (spec).
+//   - SCE_COFFEESCRIPT_UUID (8) — never entered.
+//   - SCE_COFFEESCRIPT_PREPROCESSOR (9) — never entered.
+//   - SCE_COFFEESCRIPT_OPERATOR (10) — punctuation per
+//     `isoperator()` at `:322-337`; also transient state on
+//     `#{` interpolation delimiters at `:234-235`.
+//   - SCE_COFFEESCRIPT_IDENTIFIER (11) — bare identifier
+//     fallback. Framework convention: leave unmapped so
+//     plain identifiers paint at STYLE_DEFAULT.
+//   - SCE_COFFEESCRIPT_STRINGEOL (12) — orphan case label
+//     at `:262-266` with no `sc.SetState` / `sc.ChangeState`
+//     anywhere. Never entered — see the "Enum slots that
+//     this lexer never emits" section above.
+//   - SCE_COFFEESCRIPT_VERBATIM (13) — never entered.
+//   - SCE_COFFEESCRIPT_REGEX (14) — `/pattern/flags` regex.
+//   - SCE_COFFEESCRIPT_COMMENTLINEDOC (15) — never entered.
+//   - SCE_COFFEESCRIPT_WORD2 (16) — wordlist class 1 hit
+//     (secondary keywords — word-form operators, boolean-
+//     alias literals, module-syntax words).
+//   - SCE_COFFEESCRIPT_COMMENTDOCKEYWORD (17) — never entered.
+//   - SCE_COFFEESCRIPT_COMMENTDOCKEYWORDERROR (18) — never
+//     entered.
+//   - SCE_COFFEESCRIPT_GLOBALCLASS (19) — wordlist class 3
+//     hit (JS/Node global classes — `Array`, `Object`,
+//     `Math`, etc.).
+//   - SCE_COFFEESCRIPT_STRINGRAW (20) — never entered.
+//   - SCE_COFFEESCRIPT_TRIPLEVERBATIM (21) — never entered.
+//   - SCE_COFFEESCRIPT_COMMENTBLOCK (22) — `###...###` block
+//     comment.
+//   - SCE_COFFEESCRIPT_VERBOSE_REGEX (23) — `///pattern///`
+//     block regex.
+//   - SCE_COFFEESCRIPT_VERBOSE_REGEX_COMMENT (24) — `#`
+//     comment inside a verbose regex block, runs to line
+//     end.
+//   - SCE_COFFEESCRIPT_INSTANCEPROPERTY (25) — identifier
+//     starting with `@` (CoffeeScript's `this.` shorthand:
+//     `@name` == `this.name`). Detected at `:200-202`.
+pub const SCE_COFFEESCRIPT_DEFAULT: usize = 0;
+pub const SCE_COFFEESCRIPT_COMMENT: usize = 1;
+pub const SCE_COFFEESCRIPT_COMMENTLINE: usize = 2;
+pub const SCE_COFFEESCRIPT_COMMENTDOC: usize = 3;
+pub const SCE_COFFEESCRIPT_NUMBER: usize = 4;
+pub const SCE_COFFEESCRIPT_WORD: usize = 5;
+pub const SCE_COFFEESCRIPT_STRING: usize = 6;
+pub const SCE_COFFEESCRIPT_CHARACTER: usize = 7;
+pub const SCE_COFFEESCRIPT_UUID: usize = 8;
+pub const SCE_COFFEESCRIPT_PREPROCESSOR: usize = 9;
+pub const SCE_COFFEESCRIPT_OPERATOR: usize = 10;
+pub const SCE_COFFEESCRIPT_IDENTIFIER: usize = 11;
+pub const SCE_COFFEESCRIPT_STRINGEOL: usize = 12;
+pub const SCE_COFFEESCRIPT_VERBATIM: usize = 13;
+pub const SCE_COFFEESCRIPT_REGEX: usize = 14;
+pub const SCE_COFFEESCRIPT_COMMENTLINEDOC: usize = 15;
+pub const SCE_COFFEESCRIPT_WORD2: usize = 16;
+pub const SCE_COFFEESCRIPT_COMMENTDOCKEYWORD: usize = 17;
+pub const SCE_COFFEESCRIPT_COMMENTDOCKEYWORDERROR: usize = 18;
+pub const SCE_COFFEESCRIPT_GLOBALCLASS: usize = 19;
+pub const SCE_COFFEESCRIPT_STRINGRAW: usize = 20;
+pub const SCE_COFFEESCRIPT_TRIPLEVERBATIM: usize = 21;
+pub const SCE_COFFEESCRIPT_COMMENTBLOCK: usize = 22;
+pub const SCE_COFFEESCRIPT_VERBOSE_REGEX: usize = 23;
+pub const SCE_COFFEESCRIPT_VERBOSE_REGEX_COMMENT: usize = 24;
+pub const SCE_COFFEESCRIPT_INSTANCEPROPERTY: usize = 25;
+
 // LexTOML style indices. The upstream enum also defines
 // `SCE_TOML_ERROR` (7), `SCE_TOML_STRINGEOL` (15), and
 // `SCE_TOML_ESCAPECHAR` (13) — those are intentionally omitted
