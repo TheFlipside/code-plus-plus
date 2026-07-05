@@ -110,13 +110,14 @@ use codepp_core::lang::{
     CPP_KEYWORDS, CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3,
     CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
     D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7,
-    GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
-    HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
-    INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
-    JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS,
-    JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
-    LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
-    L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL,
+    FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS,
+    GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
+    HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS,
+    INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS,
+    JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
+    KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
+    LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
+    L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL,
     L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP,
     L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS,
     L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB,
@@ -178,52 +179,54 @@ use codepp_scintilla_sys::{
     SCE_D_COMMENTDOCKEYWORD, SCE_D_COMMENTDOCKEYWORDERROR, SCE_D_COMMENTLINE, SCE_D_COMMENTLINEDOC,
     SCE_D_COMMENTNESTED, SCE_D_NUMBER, SCE_D_OPERATOR, SCE_D_STRING, SCE_D_STRINGB,
     SCE_D_STRINGEOL, SCE_D_STRINGR, SCE_D_TYPEDEF, SCE_D_WORD, SCE_D_WORD2, SCE_D_WORD5,
-    SCE_D_WORD6, SCE_D_WORD7, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK,
-    SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR,
-    SCE_GC_STRING, SCE_HA_CAPITAL, SCE_HA_CHARACTER, SCE_HA_CLASS, SCE_HA_COMMENTBLOCK,
-    SCE_HA_COMMENTBLOCK2, SCE_HA_COMMENTBLOCK3, SCE_HA_COMMENTLINE, SCE_HA_DATA, SCE_HA_INSTANCE,
-    SCE_HA_KEYWORD, SCE_HA_LITERATE_CODEDELIM, SCE_HA_LITERATE_COMMENT, SCE_HA_MODULE,
-    SCE_HA_NUMBER, SCE_HA_OPERATOR, SCE_HA_PRAGMA, SCE_HA_PREPROCESSOR, SCE_HA_RESERVED_OPERATOR,
-    SCE_HA_STRING, SCE_HA_STRINGEOL, SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER, SCE_HBA_STRING,
-    SCE_HBA_WORD, SCE_HB_COMMENTLINE, SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD, SCE_HJA_COMMENT,
-    SCE_HJA_COMMENTDOC, SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING, SCE_HJA_KEYWORD, SCE_HJA_NUMBER,
-    SCE_HJA_REGEX, SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD,
-    SCE_HJ_COMMENT, SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD,
-    SCE_HJ_NUMBER, SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL,
-    SCE_HJ_WORD, SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE,
-    SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR,
-    SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP, SCE_H_ASPAT,
-    SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT, SCE_H_DOUBLESTRING,
-    SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM,
-    SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY,
-    SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND,
-    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_INNO_COMMENT,
-    SCE_INNO_COMMENT_PASCAL, SCE_INNO_INLINE_EXPANSION, SCE_INNO_KEYWORD, SCE_INNO_KEYWORD_PASCAL,
-    SCE_INNO_KEYWORD_USER, SCE_INNO_PARAMETER, SCE_INNO_PREPROC, SCE_INNO_SECTION,
-    SCE_INNO_STRING_DOUBLE, SCE_INNO_STRING_SINGLE, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI,
-    SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD,
-    SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME,
-    SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM,
-    SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR,
-    SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT, SCE_LISP_KEYWORD,
-    SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER, SCE_LISP_OPERATOR,
-    SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER, SCE_LUA_COMMENT,
-    SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER,
-    SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD, SCE_LUA_WORD2,
-    SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7, SCE_LUA_WORD8,
-    SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH, SCE_L_MATH2,
-    SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM, SCE_MAKE_COMMENT,
-    SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET,
-    SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_KEYWORD,
-    SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_NSIS_COMMENT,
-    SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF,
-    SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF,
-    SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ,
-    SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE,
-    SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE,
-    SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER, SCE_PAS_OPERATOR,
-    SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD, SCE_PL_ARRAY,
-    SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
+    SCE_D_WORD6, SCE_D_WORD7, SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_LABEL, SCE_F_NUMBER,
+    SCE_F_OPERATOR, SCE_F_OPERATOR2, SCE_F_PREPROCESSOR, SCE_F_STRING1, SCE_F_STRING2,
+    SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2, SCE_F_WORD3, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND,
+    SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_EVENT, SCE_GC_GLOBAL,
+    SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_CAPITAL, SCE_HA_CHARACTER, SCE_HA_CLASS,
+    SCE_HA_COMMENTBLOCK, SCE_HA_COMMENTBLOCK2, SCE_HA_COMMENTBLOCK3, SCE_HA_COMMENTLINE,
+    SCE_HA_DATA, SCE_HA_INSTANCE, SCE_HA_KEYWORD, SCE_HA_LITERATE_CODEDELIM,
+    SCE_HA_LITERATE_COMMENT, SCE_HA_MODULE, SCE_HA_NUMBER, SCE_HA_OPERATOR, SCE_HA_PRAGMA,
+    SCE_HA_PREPROCESSOR, SCE_HA_RESERVED_OPERATOR, SCE_HA_STRING, SCE_HA_STRINGEOL,
+    SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER, SCE_HBA_STRING, SCE_HBA_WORD, SCE_HB_COMMENTLINE,
+    SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD, SCE_HJA_COMMENT, SCE_HJA_COMMENTDOC,
+    SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING, SCE_HJA_KEYWORD, SCE_HJA_NUMBER, SCE_HJA_REGEX,
+    SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD, SCE_HJ_COMMENT,
+    SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD, SCE_HJ_NUMBER,
+    SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL, SCE_HJ_WORD,
+    SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING,
+    SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING,
+    SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP, SCE_H_ASPAT, SCE_H_ATTRIBUTE,
+    SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT, SCE_H_DOUBLESTRING, SCE_H_ENTITY,
+    SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM, SCE_H_SGML_COMMAND,
+    SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY, SCE_H_SGML_SIMPLESTRING,
+    SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND, SCE_H_TAGUNKNOWN, SCE_H_VALUE,
+    SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_INNO_COMMENT, SCE_INNO_COMMENT_PASCAL,
+    SCE_INNO_INLINE_EXPANSION, SCE_INNO_KEYWORD, SCE_INNO_KEYWORD_PASCAL, SCE_INNO_KEYWORD_USER,
+    SCE_INNO_PARAMETER, SCE_INNO_PREPROC, SCE_INNO_SECTION, SCE_INNO_STRING_DOUBLE,
+    SCE_INNO_STRING_SINGLE, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI, SCE_JSON_ERROR,
+    SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT,
+    SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME, SCE_JSON_STRING, SCE_JSON_STRINGEOL,
+    SCE_JSON_URI, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM, SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD,
+    SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR, SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR,
+    SCE_LISP_COMMENT, SCE_LISP_KEYWORD, SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT,
+    SCE_LISP_NUMBER, SCE_LISP_OPERATOR, SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL,
+    SCE_LUA_CHARACTER, SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL,
+    SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING,
+    SCE_LUA_WORD, SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6,
+    SCE_LUA_WORD7, SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2,
+    SCE_L_MATH, SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
+    SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR,
+    SCE_MAKE_TARGET, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
+    SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING,
+    SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF,
+    SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX,
+    SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ,
+    SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED,
+    SCE_NSIS_VARIABLE, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2,
+    SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER,
+    SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD,
+    SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
     SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
     SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR,
     SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR,
@@ -3617,6 +3620,91 @@ const JAVASCRIPT_THEME: LangTheme = LangTheme {
     italic: CPP_ITALIC,
     bold: CPP_BOLD,
 };
+
+// --- LexFortran ---
+// LexFortran serves BOTH free-form (`L_FORTRAN`, extensions
+// `.f90` / `.f95` / `.f2k` / `.f03` / `.f08` / `.f15`, Lexilla
+// name `"fortran"`, SCLEX_FORTRAN = 36) and fixed-form
+// (`L_FORTRAN_77`, extensions `.f` / `.for` / `.f77` / `.ftn`,
+// Lexilla name `"f77"`, SCLEX_F77 = 37). One `LexFortran.cxx`
+// registers two `LexerModule` instances (`:723-724`) that share
+// `ColouriseFortranDoc` with just an `isFixFormat` boolean
+// toggling column-oriented parsing at `:92-122`. Same SCE_F_*
+// enum, same three-class wordlist descriptor at `:696-701`.
+// Both language rows dispatch through the shared branch
+// `L_FORTRAN || L_FORTRAN_77 → &FORTRAN_THEME` — same
+// discipline as `L_JSON || L_JSON5 → &JSON_THEME`.
+//
+// **13 style mappings.** `SCE_F_DEFAULT` (0) and
+// `SCE_F_IDENTIFIER` (7) unmapped per framework convention
+// (bare identifiers paint at STYLE_DEFAULT). The remaining 13
+// SCE_F_* slots all map:
+//   - `COMMENT` (1) → Comment.
+//   - `NUMBER` (2) → Number.
+//   - `STRING1` (3) + `STRING2` (4) + `STRINGEOL` (5) →
+//     String. Three flavours collapse: `'...'`, `"..."`, and
+//     the unterminated-string error state.
+//   - `OPERATOR` (6) + `OPERATOR2` (12) → Operator. `.eq.` /
+//     `.and.` / `.true.` etc. `.name.` forms all get the same
+//     colour as `+`/`-`/`==`. Two operator flavours collapse
+//     — same collapse discipline as R's INFIX + INFIXEOL.
+//   - `WORD` (8) → Keyword (bold — primary language keywords).
+//   - `WORD2` (9) → Keyword2 (accent — standard intrinsic
+//     functions).
+//   - `WORD3` (10) → Keyword2 (accent — F2003+ extended
+//     intrinsics). Two intrinsic-function classes collapse to
+//     one accent slot — same collapse discipline as R's
+//     BASEKWORD + OTHERKWORD and JSON's WORD2 +
+//     PROPERTYNAME + URI + COMPACTIRI + LDKEYWORD.
+//   - `PREPROCESSOR` (11) → Preprocessor (compiler directives
+//     `!DEC$` / `!DIR$` / `!MS$` + C-preprocessor `#include` /
+//     `#define`).
+//   - `LABEL` (13) → Keyword2 (accent — statement labels are
+//     branch targets, structurally significant).
+//   - `CONTINUATION` (14) → Operator (line-continuation marker
+//     — visually similar to punctuation).
+const FORTRAN_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_F_COMMENT, StyleSlot::Comment),
+    (SCE_F_NUMBER, StyleSlot::Number),
+    (SCE_F_STRING1, StyleSlot::String),
+    (SCE_F_STRING2, StyleSlot::String),
+    (SCE_F_STRINGEOL, StyleSlot::String),
+    (SCE_F_OPERATOR, StyleSlot::Operator),
+    (SCE_F_WORD, StyleSlot::Keyword),
+    (SCE_F_WORD2, StyleSlot::Keyword2),
+    (SCE_F_WORD3, StyleSlot::Keyword2),
+    (SCE_F_PREPROCESSOR, StyleSlot::Preprocessor),
+    (SCE_F_OPERATOR2, StyleSlot::Operator),
+    (SCE_F_LABEL, StyleSlot::Keyword2),
+    (SCE_F_CONTINUATION, StyleSlot::Operator),
+];
+
+// Italic on the single COMMENT state — matches the universal
+// Code++ comment-slot convention.
+const FORTRAN_ITALIC: &[usize] = &[SCE_F_COMMENT];
+
+// Bold on WORD only. Matches the "one bold class = language
+// reserved words" rule (same as C / Rust / D / COBOL /
+// PowerShell / R / CoffeeScript). WORD2 / WORD3 / LABEL use
+// Keyword2 weight (accent, not bold).
+const FORTRAN_BOLD: &[usize] = &[SCE_F_WORD];
+
+// Three-class install matches `FortranWordLists[]` at
+// `LexFortran.cxx:696-701`. Class order is load-bearing —
+// `SCI_SETKEYWORDS` respects wordlist-descriptor order and
+// `LexerJSON`'s counterpart in LexFortran probes wordlists
+// 0/1/2 first-match-wins at `:167-179`.
+const FORTRAN_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, FORTRAN_KEYWORDS),
+        (1, FORTRAN_INTRINSICS),
+        (2, FORTRAN_EXTENDED),
+    ],
+    styles: FORTRAN_STYLES,
+    italic: FORTRAN_ITALIC,
+    bold: FORTRAN_BOLD,
+};
+
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
 // theme — RC has no primitive-type vocabulary worth a class-1 split,
 // so it installs only class 0. The rest of the family (C / C++ /
@@ -8345,6 +8433,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&COFFEESCRIPT_THEME)
     } else if lang == L_JSON || lang == L_JSON5 {
         Some(&JSON_THEME)
+    } else if lang == L_FORTRAN || lang == L_FORTRAN_77 {
+        Some(&FORTRAN_THEME)
     } else {
         None
     }
@@ -23566,23 +23656,24 @@ mod lang_theme_tests {
         CPP_KEYWORDS_2, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3,
         CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2,
         D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7,
-        GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
-        HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
-        INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
+        FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GUI4CLI_ATTRIBUTES,
+        GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS,
+        HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS,
+        INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
         JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS,
         JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
         LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
-        L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_GUI4CLI, L_HASKELL,
-        L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX,
-        L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
-        L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL,
-        L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
-        NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
-        PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS,
-        POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1,
-        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
-        R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+        L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSS, L_D, L_DIFF, L_FORTRAN, L_FORTRAN_77,
+        L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP,
+        L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL,
+        L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME,
+        L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
+        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
+        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
+        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
+        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS,
+        R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
         SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
         TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
         VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
@@ -23602,13 +23693,16 @@ mod lang_theme_tests {
         SCE_D_COMMENTDOCKEYWORDERROR, SCE_D_COMMENTLINE, SCE_D_COMMENTLINEDOC, SCE_D_COMMENTNESTED,
         SCE_D_DEFAULT, SCE_D_IDENTIFIER, SCE_D_NUMBER, SCE_D_OPERATOR, SCE_D_STRING, SCE_D_STRINGB,
         SCE_D_STRINGEOL, SCE_D_STRINGR, SCE_D_TYPEDEF, SCE_D_WORD, SCE_D_WORD2, SCE_D_WORD3,
-        SCE_D_WORD5, SCE_D_WORD6, SCE_D_WORD7, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND,
-        SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_DEFAULT, SCE_GC_EVENT,
-        SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_IDENTIFIER, SCE_HA_IMPORT,
-        SCE_INNO_IDENTIFIER, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI, SCE_JSON_DEFAULT,
-        SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD,
-        SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME,
-        SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT,
+        SCE_D_WORD5, SCE_D_WORD6, SCE_D_WORD7, SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_DEFAULT,
+        SCE_F_IDENTIFIER, SCE_F_LABEL, SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2,
+        SCE_F_PREPROCESSOR, SCE_F_STRING1, SCE_F_STRING2, SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2,
+        SCE_F_WORD3, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE,
+        SCE_GC_CONTROL, SCE_GC_DEFAULT, SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR,
+        SCE_GC_STRING, SCE_HA_IDENTIFIER, SCE_HA_IMPORT, SCE_INNO_IDENTIFIER,
+        SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI, SCE_JSON_DEFAULT, SCE_JSON_ERROR,
+        SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT,
+        SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME, SCE_JSON_STRING,
+        SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT,
         SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER,
         SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER,
         SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD,
@@ -23658,6 +23752,8 @@ mod lang_theme_tests {
             (L_POWERSHELL, "PowerShell"),
             (L_R, "R"),
             (L_JSP, "JSP"),
+            (L_FORTRAN, "Fortran (free form)"),
+            (L_FORTRAN_77, "Fortran (fixed form)"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -33560,6 +33656,438 @@ mod lang_theme_tests {
         }
     }
 
+    /// Fortran uses Lexilla's `fortran` / `f77` lexers — both
+    /// exported from `LexFortran.cxx` and sharing the same
+    /// `ColouriseFortranDoc` state machine, three-class
+    /// wordlist descriptor, and 15-state `SCE_F_*` enum. The
+    /// only runtime difference is a boolean `isFixFormat` that
+    /// toggles column-oriented parsing at
+    /// `LexFortran.cxx:92-122` (fixed-form column 1-5 label /
+    /// column 6 continuation / column 72+ comment). BOTH
+    /// language rows `L_FORTRAN` (free-form, id 25) and
+    /// `L_FORTRAN_77` (fixed-form, id 59) share a single
+    /// `FORTRAN_THEME` via a `L_FORTRAN || L_FORTRAN_77`
+    /// dispatcher branch — same discipline as
+    /// `L_JSON || L_JSON5`. Test invariant #2 pins pointer-
+    /// equality of the two theme lookups to catch a future
+    /// copy-paste divergence.
+    ///
+    /// Distinctive features asserted:
+    /// **case-INSENSITIVE byte-lowered matching** (Fortran is
+    /// case-insensitive at the spec level — `GetCurrentLowered`
+    /// at `LexFortran.cxx:170`), **three-class wordlist**
+    /// (primary keywords / standard intrinsics / F2003+
+    /// extended intrinsics), **`.name.` operator syntax** as
+    /// `SCE_F_OPERATOR2` (`.eq.` / `.and.` / `.true.`),
+    /// **compound `end<construct>` forms** in the keyword list
+    /// (`endif`/`enddo`/`endsubroutine`/etc.), and **`kind` /
+    /// `len` / `real` deliberately in class 0 only** (dual-role
+    /// type-parameter tokens; class 0 wins per LexCPP-style
+    /// probe order).
+    ///
+    /// Coverage invariants asserted:
+    ///   1. `lang_theme(L_FORTRAN)` returns
+    ///      `Some(&FORTRAN_THEME)`.
+    ///   2. `lang_theme(L_FORTRAN_77)` returns the SAME
+    ///      `&FORTRAN_THEME` reference via a single shared
+    ///      dispatcher branch, pinned via `ptr::eq`.
+    ///   3. Style count == 13 (15 emitted `SCE_F_*` states
+    ///      minus `DEFAULT` (0) + `IDENTIFIER` (7), unmapped
+    ///      per framework convention).
+    ///   4. Three wordlist classes in canonical order
+    ///      (0/1/2) matching `FortranWordLists[]` at
+    ///      `LexFortran.cxx:696-701`.
+    ///   5. All three classes non-empty.
+    ///   6. Every wordlist token matches Fortran identifier
+    ///      alphabet: lowercase `[a-z][a-z0-9_]*`. Fortran
+    ///      identifiers can contain `_` (F90+) but must start
+    ///      with a letter. `LexFortran`'s `IsAWordStart` at
+    ///      `:38-40` accepts alnum (not `_`), and
+    ///      `IsAWordChar` at `:34-36` accepts alnum + `_` +
+    ///      `%`. The `%` is for derived-type component
+    ///      access (`obj%field`) and never appears in
+    ///      wordlist entries.
+    ///   7. **All wordlist tokens are lowercase.** `LexFortran`
+    ///      lowercases the source token before every
+    ///      `keywords.InList(s)` probe at
+    ///      `LexFortran.cxx:167-179`. An uppercase entry
+    ///      would silently never match.
+    ///   8. No cross-list duplicates across WL0/WL1/WL2 —
+    ///      `LexFortran` probes wordlists first-match-wins, so
+    ///      a duplicate in a later class is dead code.
+    ///   9. Style-routing pins for the 13 mapped SCE
+    ///      constants.
+    ///   10. `DEFAULT` (0) and `IDENTIFIER` (7) unmapped.
+    ///   11. Italic set == 1 (`COMMENT` only).
+    ///   12. Bold set == 1 (`WORD` only).
+    ///   13. Cross-language non-reuse — `FORTRAN_STYLES` must
+    ///       not deep-equal any prior wired theme.
+    ///   14. `L_FORTRAN` `LangEntry` has
+    ///       `lexer: Some("fortran")` and extensions contain
+    ///       `f90`; `L_FORTRAN_77` `LangEntry` has
+    ///       `lexer: Some("f77")` and extensions contain `f`.
+    ///   15. Canonical anchor coverage: WL0 primary keywords
+    ///       (`if`/`do`/`subroutine`/`program`/`module`/
+    ///       `interface`/`select`/`case`), WL1 intrinsics
+    ///       (`abs`/`sqrt`/`sin`/`len_trim`/`trim`/`allocated`/
+    ///       `size`/`shape`), WL2 F2003+ extended
+    ///       (`move_alloc`/`c_loc`/`num_images`/
+    ///       `command_argument_count`/`co_broadcast`).
+    ///   16. **`kind` / `len` / `real` in class 0 only** —
+    ///       dual-role tokens, class 0 (bold Keyword) is the
+    ///       correct home per the type-parameter dominant
+    ///       usage. Class 1 duplicate would be dead code
+    ///       (invariant #8 catches it too, but this affirms
+    ///       the specific triple).
+    ///   17. **Operator-word `.name.` forms explicitly NOT
+    ///       in any wordlist** — `and`, `or`, `eq`, `ne`,
+    ///       `true`, `false`, `lt`, `le`, `gt`, `ge`, `eqv`,
+    ///       `neqv` are handled by `SCE_F_OPERATOR2` via
+    ///       `.name.` syntax at `LexFortran.cxx:244-245`;
+    ///       wordlist inclusion would lose the operator2
+    ///       slot's distinct colour. **`not` is an exception**
+    ///       — dual role: `.NOT. x` enters operator2, but
+    ///       `NOT(i)` is the F90 bit-manipulation intrinsic
+    ///       (class 1). Affirmative pin asserts `not` IS in
+    ///       `FORTRAN_INTRINSICS`.
+    #[test]
+    fn fortran_uses_lexfortran_three_class_theme_shared_between_free_and_fixed_form() {
+        let f = lang_theme(L_FORTRAN).expect("Fortran free-form wired");
+        let f77 = lang_theme(L_FORTRAN_77).expect("Fortran fixed-form wired");
+
+        // Invariant 2: shared theme via same dispatcher branch.
+        assert!(
+            std::ptr::eq(f, f77),
+            "L_FORTRAN and L_FORTRAN_77 must resolve to the SAME &FORTRAN_THEME \
+             reference — the dispatcher uses a shared `L_FORTRAN || L_FORTRAN_77` \
+             branch, not two branches with copy-pasted themes"
+        );
+
+        // Invariant 3: 13 mappings.
+        assert_eq!(
+            f.styles.len(),
+            13,
+            "FORTRAN_STYLES must map 13 indices (15 emitted SCE_F_* \
+             states minus DEFAULT (0) + IDENTIFIER (7), both unmapped \
+             per framework convention)"
+        );
+
+        // Invariant 4: three classes canonical descriptor order.
+        assert_eq!(
+            f.keywords.len(),
+            3,
+            "FORTRAN_THEME must install exactly 3 wordlist classes \
+             (matches FortranWordLists[] at LexFortran.cxx:696-701)"
+        );
+        for (i, (expected_class, expected_list)) in [
+            (0u32, FORTRAN_KEYWORDS),
+            (1u32, FORTRAN_INTRINSICS),
+            (2u32, FORTRAN_EXTENDED),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(f.keywords[i].0, *expected_class);
+            assert_eq!(f.keywords[i].1, *expected_list);
+        }
+
+        // Invariant 5: all three classes non-empty.
+        for (list, name) in [
+            (FORTRAN_KEYWORDS, "KEYWORDS"),
+            (FORTRAN_INTRINSICS, "INTRINSICS"),
+            (FORTRAN_EXTENDED, "EXTENDED"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "FORTRAN_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 6: Fortran identifier alphabet.
+        // `LexFortran.cxx:34-36` `IsAWordChar` accepts alnum
+        // + `_` + `%`, but `%` is never a wordlist entry
+        // (used for derived-type component access `obj%field`).
+        // Wordlist tokens use `[a-z][a-z0-9_]*` — lowercase
+        // per invariant #7.
+        for (list, name) in [
+            (FORTRAN_KEYWORDS, "KEYWORDS"),
+            (FORTRAN_INTRINSICS, "INTRINSICS"),
+            (FORTRAN_EXTENDED, "EXTENDED"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    !tok.is_empty()
+                        && tok.bytes().next().unwrap().is_ascii_lowercase()
+                        && tok
+                            .bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+                    "FORTRAN_{name} token `{tok}` violates Fortran identifier \
+                     alphabet — must be `[a-z][a-z0-9_]*` so LexFortran's \
+                     GetCurrentLowered + InList probe finds a match"
+                );
+            }
+        }
+
+        // Invariant 7: all-lowercase enforcement.
+        // Byte-lowered classifier means uppercase entries
+        // would silently never match.
+        for (list, name) in [
+            (FORTRAN_KEYWORDS, "KEYWORDS"),
+            (FORTRAN_INTRINSICS, "INTRINSICS"),
+            (FORTRAN_EXTENDED, "EXTENDED"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    !tok.bytes().any(|b| b.is_ascii_uppercase()),
+                    "FORTRAN_{name} token `{tok}` contains uppercase — \
+                     LexFortran's GetCurrentLowered means the classifier \
+                     lowercases the source token before probing, so an \
+                     uppercase wordlist entry is dead code"
+                );
+            }
+        }
+
+        // Invariant 8: cross-list uniqueness across WL0/WL1/WL2.
+        // LexFortran.cxx:171-176 probes wordlists 0/1/2
+        // first-match-wins — a duplicate in a later class is
+        // dead code.
+        use std::collections::HashSet;
+        let sets = [
+            (
+                "KEYWORDS",
+                FORTRAN_KEYWORDS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "INTRINSICS",
+                FORTRAN_INTRINSICS
+                    .split_whitespace()
+                    .collect::<HashSet<_>>(),
+            ),
+            (
+                "EXTENDED",
+                FORTRAN_EXTENDED.split_whitespace().collect::<HashSet<_>>(),
+            ),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                if let Some(shared) = sets[i].1.intersection(&sets[j].1).next() {
+                    panic!(
+                        "FORTRAN_{} and FORTRAN_{} both contain `{shared}` — \
+                         LexFortran.cxx:171-176 probes wordlists 0/1/2 \
+                         first-match-wins. A cross-list duplicate leaves the \
+                         later entry dead code.",
+                        sets[i].0, sets[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 9: style-routing pins for all 13 mapped SCE constants.
+        for (idx, slot, name) in [
+            (SCE_F_COMMENT, StyleSlot::Comment, "SCE_F_COMMENT"),
+            (SCE_F_NUMBER, StyleSlot::Number, "SCE_F_NUMBER"),
+            (SCE_F_STRING1, StyleSlot::String, "SCE_F_STRING1"),
+            (SCE_F_STRING2, StyleSlot::String, "SCE_F_STRING2"),
+            (SCE_F_STRINGEOL, StyleSlot::String, "SCE_F_STRINGEOL"),
+            (SCE_F_OPERATOR, StyleSlot::Operator, "SCE_F_OPERATOR"),
+            (SCE_F_WORD, StyleSlot::Keyword, "SCE_F_WORD"),
+            (SCE_F_WORD2, StyleSlot::Keyword2, "SCE_F_WORD2"),
+            (SCE_F_WORD3, StyleSlot::Keyword2, "SCE_F_WORD3"),
+            (
+                SCE_F_PREPROCESSOR,
+                StyleSlot::Preprocessor,
+                "SCE_F_PREPROCESSOR",
+            ),
+            (SCE_F_OPERATOR2, StyleSlot::Operator, "SCE_F_OPERATOR2"),
+            (SCE_F_LABEL, StyleSlot::Keyword2, "SCE_F_LABEL"),
+            (
+                SCE_F_CONTINUATION,
+                StyleSlot::Operator,
+                "SCE_F_CONTINUATION",
+            ),
+        ] {
+            assert!(
+                f.styles.contains(&(idx, slot)),
+                "{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 10: DEFAULT (0) and IDENTIFIER (7) unmapped.
+        assert!(
+            !f.styles.iter().any(|(i, _)| *i == SCE_F_DEFAULT),
+            "SCE_F_DEFAULT (0) must remain unmapped per framework convention"
+        );
+        assert!(
+            !f.styles.iter().any(|(i, _)| *i == SCE_F_IDENTIFIER),
+            "SCE_F_IDENTIFIER (7) must remain unmapped — bare Fortran \
+             identifiers paint at STYLE_DEFAULT per framework convention"
+        );
+
+        // Invariant 11: italic == 1 (COMMENT only).
+        assert_eq!(f.italic.len(), 1);
+        assert!(f.italic.contains(&SCE_F_COMMENT));
+
+        // Invariant 12: bold == 1 (WORD only).
+        assert_eq!(f.bold.len(), 1);
+        assert!(f.bold.contains(&SCE_F_WORD));
+
+        // Invariant 13: cross-language non-reuse.
+        let r = lang_theme(L_R).expect("R wired");
+        let cs = lang_theme(L_COFFEESCRIPT).expect("CoffeeScript wired");
+        let json = lang_theme(L_JSON).expect("JSON wired");
+        let d = lang_theme(L_D).expect("D wired");
+        for (other, name) in [(r, "R"), (cs, "CoffeeScript"), (json, "JSON"), (d, "D")] {
+            assert_ne!(
+                f.styles, other.styles,
+                "Fortran must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 14: LangEntry sanity for both rows.
+        use codepp_core::lang::LANG_TABLE;
+        let f_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_FORTRAN)
+            .expect("L_FORTRAN LangEntry present in LANG_TABLE");
+        assert_eq!(
+            f_entry.lexer,
+            Some("fortran"),
+            "L_FORTRAN LangEntry.lexer must be Some(\"fortran\") — \
+             wiring assumes the LexFortran free-format module dispatched \
+             via SCLEX_FORTRAN (= 36)"
+        );
+        assert!(
+            f_entry.extensions.contains(&"f90"),
+            "L_FORTRAN extensions must contain `f90`"
+        );
+        let f77_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_FORTRAN_77)
+            .expect("L_FORTRAN_77 LangEntry present in LANG_TABLE");
+        assert_eq!(
+            f77_entry.lexer,
+            Some("f77"),
+            "L_FORTRAN_77 LangEntry.lexer must be Some(\"f77\") — \
+             wiring assumes the LexFortran fixed-format module dispatched \
+             via SCLEX_F77 (= 37)"
+        );
+        assert!(
+            f77_entry.extensions.contains(&"f"),
+            "L_FORTRAN_77 extensions must contain `f`"
+        );
+
+        // Invariant 15: canonical anchor coverage.
+        // WL0 primary keywords.
+        for kw in [
+            "if",
+            "do",
+            "subroutine",
+            "program",
+            "module",
+            "interface",
+            "select",
+            "case",
+        ] {
+            assert!(
+                FORTRAN_KEYWORDS.split_whitespace().any(|t| t == kw),
+                "FORTRAN_KEYWORDS must include canonical primary keyword `{kw}`"
+            );
+        }
+        // WL1 canonical intrinsics.
+        for f in [
+            "abs",
+            "sqrt",
+            "sin",
+            "len_trim",
+            "trim",
+            "allocated",
+            "size",
+            "shape",
+        ] {
+            assert!(
+                FORTRAN_INTRINSICS.split_whitespace().any(|t| t == f),
+                "FORTRAN_INTRINSICS must include canonical intrinsic `{f}`"
+            );
+        }
+        // WL2 canonical F2003+ extended intrinsics.
+        for f in [
+            "move_alloc",
+            "c_loc",
+            "num_images",
+            "command_argument_count",
+            "co_broadcast",
+        ] {
+            assert!(
+                FORTRAN_EXTENDED.split_whitespace().any(|t| t == f),
+                "FORTRAN_EXTENDED must include canonical F2003+ intrinsic `{f}`"
+            );
+        }
+
+        // Invariant 16: `kind` / `len` / `real` / `precision`
+        // in class 0 only. Dual-role tokens; class 0 is the
+        // correct home per type-parameter dominant usage
+        // (already enforced by cross-list uniqueness in
+        // invariant #8, but affirm the specific quartet).
+        for tok in ["kind", "len", "real", "precision"] {
+            assert!(
+                FORTRAN_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "FORTRAN_KEYWORDS must include dual-role token `{tok}` — \
+                 type-parameter context is dominant, class 0 wins"
+            );
+            assert!(
+                !FORTRAN_INTRINSICS.split_whitespace().any(|t| t == tok),
+                "FORTRAN_INTRINSICS must NOT include `{tok}` — already in \
+                 class 0; LexFortran's class-0-first probe order at \
+                 :171-176 makes the class-1 entry dead code"
+            );
+        }
+
+        // Invariant 17: operator-word `.name.` forms NOT in
+        // any wordlist. LexFortran routes them into
+        // SCE_F_OPERATOR2 via `.name.` syntax at
+        // `LexFortran.cxx:244-245`. Wordlist inclusion would
+        // lose the operator2 slot's distinct colour.
+        //
+        // **`not` deliberately EXCLUDED from this list.**
+        // Unlike the other operator-word forms, `not` has a
+        // genuine dual usage: `.NOT. x` is the logical
+        // operator (enters SCE_F_OPERATOR2), but `NOT(i)` is
+        // the F90 bit-manipulation intrinsic (should hit
+        // class 1 as SCE_F_WORD2). LexFortran distinguishes
+        // them at the lexical level — the `.name.` handler
+        // only fires on `.` followed by alpha, so bare
+        // `not(...)` never reaches the operator2 branch and
+        // correctly goes through the identifier / wordlist
+        // path. `not` therefore belongs in
+        // `FORTRAN_INTRINSICS`.
+        for tok in [
+            "and", "or", "eq", "ne", "true", "false", "lt", "le", "gt", "ge", "eqv", "neqv",
+        ] {
+            for (list, name) in [
+                (FORTRAN_KEYWORDS, "KEYWORDS"),
+                (FORTRAN_INTRINSICS, "INTRINSICS"),
+                (FORTRAN_EXTENDED, "EXTENDED"),
+            ] {
+                assert!(
+                    !list.split_whitespace().any(|t| t == tok),
+                    "FORTRAN_{name} must NOT include `.name.` operator-word \
+                     `{tok}` — handled by SCE_F_OPERATOR2 via `.name.` syntax \
+                     at LexFortran.cxx:244-245; wordlist inclusion would lose \
+                     the operator2 colour"
+                );
+            }
+        }
+        // Affirmative pin: `not` IS in class 1 as the
+        // bitwise-NOT intrinsic (`NOT(i)`), separate from
+        // the `.NOT.` operator form.
+        assert!(
+            FORTRAN_INTRINSICS.split_whitespace().any(|t| t == "not"),
+            "FORTRAN_INTRINSICS must include `not` — F90 bit-manipulation \
+             intrinsic `NOT(i)`. The `.NOT.` operator form is handled by \
+             SCE_F_OPERATOR2 separately"
+        );
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -33568,8 +34096,9 @@ mod lang_theme_tests {
     /// from this list when the Python row landed. `L_COFFEESCRIPT`
     /// was removed when the CoffeeScript row landed. `L_JSON` /
     /// `L_JSON5` were removed when the JSON row landed.
-    /// `L_JAVASCRIPT` was removed when the JavaScript row landed
-    /// in this commit.
+    /// `L_JAVASCRIPT` was removed when the JavaScript row landed.
+    /// `L_FORTRAN` / `L_FORTRAN_77` were removed when the Fortran
+    /// row landed in this commit.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");

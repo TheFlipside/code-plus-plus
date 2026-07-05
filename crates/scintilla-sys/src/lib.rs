@@ -1015,6 +1015,147 @@ pub const SCE_JSON_KEYWORD: usize = 11;
 pub const SCE_JSON_LDKEYWORD: usize = 12;
 pub const SCE_JSON_ERROR: usize = 13;
 
+// LexFortran style indices. 15 contiguous slots (0..=14) for
+// Fortran source in both free-form (`.f90` / `.f95` / `.f2k` /
+// `.f03` / `.f08` / `.f15`) and fixed-form (`.f` / `.for` /
+// `.f77` / `.ftn`) dialects. Constants mirror `SciLexer.h:764-778`
+// verbatim. **One `LexFortran.cxx` provides TWO LexerModules**
+// (`:723-724`): `lmFortran(SCLEX_FORTRAN = 36, ..., "fortran")`
+// for free-form and `lmF77(SCLEX_F77 = 37, ..., "f77")` for
+// fixed-form. Both share `ColouriseFortranDoc` with just an
+// `isFixFormat` boolean toggling column-oriented parsing at
+// `:92-122`. Same SCE_F_* enum, same three-class wordlist
+// descriptor at `:696-701` (`FortranWordLists[]`):
+//
+//     FortranWordLists[] = {
+//         "Primary keywords and identifiers", // class 0 → SCE_F_WORD
+//         "Intrinsic functions",              // class 1 → SCE_F_WORD2
+//         "Extended and user defined functions", // class 2 → SCE_F_WORD3
+//         0,
+//     };
+//
+// **Case-INSENSITIVE matching.** The identifier-classification
+// cascade at `LexFortran.cxx:167-179` calls
+// `sc.GetCurrentLowered(s, sizeof(s))` — the classifier
+// lowercases the token before every `keywords.InList(s)` probe.
+// Fortran is case-insensitive at the spec level (per every
+// Fortran standard from FORTRAN 66 through Fortran 2023):
+// `IF`, `if`, `If`, `iF` are all the same token. Wordlist
+// tokens must therefore be all-lowercase — an uppercase entry
+// would silently never match. Same discipline as
+// `POWERSHELL_KEYWORDS` / `COBOL_KEYWORDS_A`, inverted from
+// `D_KEYWORDS` / `R_RESERVED` / `COFFEESCRIPT_KEYWORDS`.
+//
+// **Fixed-form vs free-form column semantics.** In FORTRAN 77
+// / fixed-form (`isFixFormat = true`), the paint loop at
+// `:92-122` treats columns specially. `toLineStart` here is
+// 0-indexed (position from line-start), which maps to
+// 1-indexed FORTRAN 77 columns as `toLineStart = col - 1`:
+//   - `toLineStart == 0` (col 1) and char is `c` / `C` / `*`
+//     → `SCE_F_COMMENT` runs to end-of-line (`:93-101`).
+//   - `toLineStart < 5` (cols 1..=5, the FORTRAN 77 label
+//     field) → `SCE_F_LABEL` if digit, else `SCE_F_DEFAULT`
+//     (`:107-111`).
+//   - `toLineStart == 5` (col 6, the continuation field) →
+//     `SCE_F_CONTINUATION` if non-space, non-`0`
+//     (`:112-119`). Any single character in column 6
+//     (1-indexed) is a continuation-line marker.
+//   - `toLineStart >= 72` (col 73+) → `SCE_F_COMMENT`
+//     (`:104-106`). FORTRAN 77 is column-limited to 72
+//     characters; anything past is a comment.
+// Free-form (`isFixFormat = false`) drops the column
+// restrictions entirely — `!` anywhere on the line starts a
+// comment, and `&` at end-of-line is a continuation
+// (`:125-150`).
+//
+// **`.name.` operator syntax — a Fortran signature.**
+// `SCE_F_OPERATOR2` (12) is entered at `:244-245` when a `.`
+// is followed by an alphabetic character. Fortran's relational
+// and logical operators are written `.eq.` / `.ne.` / `.lt.` /
+// `.le.` / `.gt.` / `.ge.` / `.and.` / `.or.` / `.not.` /
+// `.eqv.` / `.neqv.`, and the boolean literals `.true.` /
+// `.false.` follow the same shape. Distinct visual signal
+// from single-char punctuation `SCE_F_OPERATOR` (6) — worth a
+// separate colour slot to signal "this dot-form is an
+// operator, not a decimal fraction".
+//
+// **Compiler directives.** `SCE_F_PREPROCESSOR` (11) covers
+// three families:
+//   - `#`-directives at column 0 (`:153-158`) — C-preprocessor
+//     lines like `#include`, `#define` when using CPP wrappers.
+//   - Vendor directives `!DEC$` (Intel), `!DIR$` (Cray/PGI),
+//     `!MS$` (Microsoft) — detected at `:229-232` in free-form.
+//   - Fixed-form equivalents `Cdec$` / `*dec$` / `Cdir$` etc.
+//     at column 0 (`:94-97`).
+//
+// **Two string flavours + STRINGEOL.** `SCE_F_STRING1` (3) is
+// `'...'` single-quoted; `SCE_F_STRING2` (4) is `"..."`
+// double-quoted. Both support Fortran's doubled-quote escape
+// convention (`''` inside `'...'` embeds a `'`; `""` inside
+// `"..."` embeds a `"`), handled at `:186-191` and `:202-208`.
+// `SCE_F_STRINGEOL` (5) is the transient error state when an
+// unterminated string hits end-of-line — set at `:193-195` and
+// `:199-201`.
+//
+// **Number literal quirks.** `SCE_F_NUMBER` (2) covers the
+// usual decimal / real / exponent forms, plus Fortran's
+// `B"..."` / `O"..."` / `Z"..."` binary/octal/hex boson-quoted
+// literals at `:240-243` (`.MODIS style`).
+//
+// Style semantics (paint-loop citations reference
+// LexFortran.cxx):
+//
+//   - SCE_F_DEFAULT (0) — whitespace / unclassified. Framework
+//     convention: leave unmapped.
+//   - SCE_F_COMMENT (1) — line comment. Free-form: `!` to EOL.
+//     Fixed-form: `c` / `C` / `*` in column 0, `!` anywhere, or
+//     content past column 72.
+//   - SCE_F_NUMBER (2) — numeric literal, including
+//     Fortran-specific `B"..."` / `O"..."` / `Z"..."` forms.
+//   - SCE_F_STRING1 (3) — `'...'` single-quoted string.
+//   - SCE_F_STRING2 (4) — `"..."` double-quoted string.
+//   - SCE_F_STRINGEOL (5) — unterminated string that reached
+//     end-of-line.
+//   - SCE_F_OPERATOR (6) — punctuation per `isoperator()` at
+//     `:252-254`.
+//   - SCE_F_IDENTIFIER (7) — bare identifier fallback.
+//     Framework convention: leave unmapped so plain identifiers
+//     paint at STYLE_DEFAULT.
+//   - SCE_F_WORD (8) — wordlist class 0 hit (primary
+//     Fortran keywords — `if`, `then`, `do`, `subroutine`,
+//     `program`, `module`, `function`, etc.).
+//   - SCE_F_WORD2 (9) — wordlist class 1 hit (intrinsic
+//     functions — `abs`, `sqrt`, `sin`, `cos`, `mod`,
+//     `trim`, etc.).
+//   - SCE_F_WORD3 (10) — wordlist class 2 hit (extended and
+//     user-defined functions — F95+ additions, MPI /
+//     OpenMP intrinsics, etc.).
+//   - SCE_F_PREPROCESSOR (11) — CPP directives + vendor
+//     compiler directives (`!DEC$` / `!DIR$` / `!MS$`).
+//   - SCE_F_OPERATOR2 (12) — `.name.` operator syntax
+//     (`.eq.`, `.and.`, `.not.`, `.true.`, `.false.`, etc.).
+//   - SCE_F_LABEL (13) — statement label. Fixed-form:
+//     columns 1..=4 digits. Free-form: leading digits at
+//     line start.
+//   - SCE_F_CONTINUATION (14) — line-continuation marker.
+//     Fixed-form: column 5 non-space/non-0. Free-form: `&`
+//     at end-of-line.
+pub const SCE_F_DEFAULT: usize = 0;
+pub const SCE_F_COMMENT: usize = 1;
+pub const SCE_F_NUMBER: usize = 2;
+pub const SCE_F_STRING1: usize = 3;
+pub const SCE_F_STRING2: usize = 4;
+pub const SCE_F_STRINGEOL: usize = 5;
+pub const SCE_F_OPERATOR: usize = 6;
+pub const SCE_F_IDENTIFIER: usize = 7;
+pub const SCE_F_WORD: usize = 8;
+pub const SCE_F_WORD2: usize = 9;
+pub const SCE_F_WORD3: usize = 10;
+pub const SCE_F_PREPROCESSOR: usize = 11;
+pub const SCE_F_OPERATOR2: usize = 12;
+pub const SCE_F_LABEL: usize = 13;
+pub const SCE_F_CONTINUATION: usize = 14;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

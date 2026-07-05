@@ -9180,6 +9180,338 @@ pub const JSON_LD_KEYWORDS: &str = concat!(
     "@none @json ",
 );
 
+/// Fortran primary keywords — control flow, declarations,
+/// program units, F2003+ OO, F2008+/F2018+ additions (class 0
+/// → `SCE_F_WORD`).
+///
+/// **Source of truth:** Fortran 2018 (ISO/IEC 1539:2018) and
+/// Fortran 2023 standards (indexed at
+/// `wg5-fortran.org/documents.html`), cross-checked against
+/// gfortran's Fortran-2008-status and Fortran-2018-status
+/// pages and Notepad++'s `langs.model.xml` Fortran `instre1`
+/// baseline.
+///
+/// **Case-insensitive byte-lowered match.**
+/// `LexFortran.cxx:167-177` calls
+/// `sc.GetCurrentLowered(s, sizeof(s))` — the classifier
+/// lowercases the source token before every
+/// `keywords.InList(s)` probe. Fortran is case-insensitive at
+/// the spec level (every Fortran standard from FORTRAN 66
+/// through Fortran 2023): `IF`, `if`, `If`, `iF` are all the
+/// same token. Wordlist tokens must therefore be all-lowercase
+/// — an uppercase entry would silently never match. Same
+/// discipline as [`POWERSHELL_KEYWORDS`] /
+/// [`COBOL_KEYWORDS_A`], inverted from [`D_KEYWORDS`] /
+/// [`R_RESERVED`] / [`COFFEESCRIPT_KEYWORDS`].
+///
+/// **Compound single-word forms included** — `dowhile`,
+/// `selectcase`, `selecttype`, `doubleprecision`, `blockdata`,
+/// `endblockdata`, and every `end<construct>` collapsed form
+/// (`endif`, `enddo`, `endselect`, `endprogram`,
+/// `endsubroutine`, `endfunction`, `endmodule`,
+/// `endsubmodule`, `endinterface`, `endblock`,
+/// `endprocedure`, `endtype`, `endwhere`, `endforall`,
+/// `endassociate`, `endcritical`, `endenum`, `endteam`).
+/// These are single
+/// identifiers with no whitespace, so `LexFortran`'s identifier
+/// probe returns them as one token. Notepad++/SciTE
+/// convention — including them lights up legacy code that
+/// writes them fused.
+///
+/// **Compound multi-word forms deliberately split** —
+/// `error stop`, `fail image`, `event post`, `event wait`,
+/// `sync images`, `sync all`, `sync memory`, `sync team`,
+/// `change team`, `form team`, `notify wait`. Each
+/// contributing word is a separate token — the lexer probes
+/// one identifier at a time. `error` matches when it precedes
+/// `stop`, `fail` matches before `image`, `event` matches
+/// before `post`/`wait`, etc.
+///
+/// **Deliberately excluded:**
+///   - **Operator-word forms** (`.eq.`, `.and.`, `.or.`,
+///     `.not.`, `.true.`, `.false.`, `.eqv.`, `.neqv.`,
+///     `.lt.`, `.le.`, `.gt.`, `.ge.`) — `LexFortran` routes
+///     these into `SCE_F_OPERATOR2` via its `.name.` syntax
+///     handler at `:244-245`. Putting them in class 0 would
+///     lose the operator2 colour.
+///   - **Intrinsic functions** — `abs`, `sqrt`, `sin`, `cos`,
+///     `size`, `shape`, `len_trim`, `trim`, `char`, `ichar`,
+///     `iachar`, `mod`, `modulo`, `min`, `max`, `sum`,
+///     `product`, `matmul`, `dot_product`, `allocated`,
+///     `associated`, `present`, `precision`, `epsilon`,
+///     `huge`, `tiny`, etc. These are class 1 ([`FORTRAN_INTRINSICS`],
+///     `SCE_F_WORD2`) and class 2 ([`FORTRAN_EXTENDED`],
+///     `SCE_F_WORD3`).
+///   - **`kind` / `len` / `real` / `precision`** — these ARE
+///     Fortran intrinsics but also appear as type-parameter
+///     specifiers (`INTEGER(KIND=8)`, `CHARACTER(LEN=10)`)
+///     and type keywords (`REAL :: x`, `DOUBLE PRECISION`).
+///     Kept in class 0 (bold Keyword) rather than class 1
+///     because the type-declaration context is dominant.
+///     `LexFortran` probes class 0 first per `:171-176`, so
+///     listing them in class 1 too would be dead code — see
+///     the `HashSet::intersection` invariant in the theme
+///     test.
+///   - **`default`** — valid as `case default` marker but
+///     appears too often as an identifier / variable name in
+///     scientific code. `case` is already in class 0; `case
+///     default` still highlights `case`. Notepad++'s
+///     inclusion is a known false-positive source.
+///   - **`end` (bare)** — context-ambiguous (also legal as
+///     I/O specifier `end=`). The compound `end<construct>`
+///     forms carry the colouring instead.
+///   - **`assign`** — F95-deleted `assign 100 to L` form,
+///     truly extinct. Including it would only paint
+///     identifier names in modern code.
+///   - **`size`** — kept out of class 0 despite valid as an
+///     I/O specifier. More commonly the `SIZE()` intrinsic
+///     ([`FORTRAN_INTRINSICS`] class 1) — colouring it as
+///     class 0 everywhere would be wrong more often than
+///     right.
+///
+/// **Coverage:** 140 tokens covering all major categories —
+/// control flow, intrinsic types, declaration modifiers,
+/// program units, OO / attributes, allocation, I/O, and
+/// F2008/F2018 additions (`critical`, `concurrent`, `event`,
+/// `team`, `fail`, `image`, `notify`, `sync`, `lock`,
+/// `unlock`).
+pub const FORTRAN_KEYWORDS: &str = concat!(
+    // Control flow.
+    "if then else elseif endif ",
+    "do dowhile while enddo ",
+    "select case selectcase selecttype endselect ",
+    "where elsewhere endwhere forall endforall ",
+    "associate endassociate block endblock ",
+    "continue cycle exit return goto go to stop pause ",
+    // Intrinsic types + type constructs (kind/len/real live
+    // here rather than class 1; see docstring).
+    "integer real character complex logical double doubleprecision precision ",
+    "kind len type class endtype ",
+    // Declaration modifiers.
+    "dimension allocatable pointer target contiguous codimension ",
+    "save external intrinsic parameter volatile protected value optional asynchronous ",
+    "data common blockdata endblockdata equivalence enum endenum namelist ",
+    "implicit none ",
+    // Program units.
+    "program endprogram subroutine endsubroutine function endfunction ",
+    "module endmodule submodule endsubmodule ",
+    "interface endinterface use only contains ",
+    "procedure endprocedure entry import ",
+    // Attributes / OO.
+    "public private ",
+    "recursive pure elemental impure bind ",
+    "abstract extends deferred generic pass ",
+    "operator assignment result intent in out inout ",
+    // Allocation.
+    "allocate deallocate nullify ",
+    // I/O statements + core specifiers.
+    "open close read write print inquire ",
+    "rewind backspace endfile flush wait format call ",
+    "unit file status iostat iomsg err ",
+    // F2008 / F2018 additions.
+    "critical endcritical concurrent ",
+    "error event team endteam fail image notify sync lock unlock ",
+);
+
+/// Fortran standard intrinsic functions (F77 → F95 stable
+/// core) — class 1 → `SCE_F_WORD2`. F2003+ additions live in
+/// [`FORTRAN_EXTENDED`] (class 2).
+///
+/// **Source of truth:** Fortran 2018/2023 spec Clause 16
+/// ("Intrinsic procedures and modules"), gfortran's per-intrinsic
+/// documentation at
+/// `gcc.gnu.org/onlinedocs/gfortran/Intrinsic-Procedures.html`
+/// (each intrinsic's "Standard" field marks F77/F90/F95 origin),
+/// and the Fortran-lang intrinsics reference at
+/// `fortran-lang.org/en/learn/intrinsics/`.
+///
+/// **Case-insensitive byte-lowered match.** Same discipline as
+/// [`FORTRAN_KEYWORDS`] — lowercase entries required.
+///
+/// **Standard levels covered:**
+///   - F77 core (36): `abs`, `acos`, `aimag`, `aint`,
+///     `anint`, `asin`, `atan`, `atan2`, `char`, `cmplx`,
+///     `conjg`, `cos`, `cosh`, `dble`, `dim`, `dprod`, `exp`,
+///     `ichar`, `index`, `int`, `lge`, `lgt`, `lle`, `llt`,
+///     `log`, `log10`, `max`, `min`, `mod`, `nint`, `sign`,
+///     `sin`, `sinh`, `sqrt`, `tan`, `tanh`. Complex-family
+///     accessors (`aimag`, `conjg`) plus `dim`
+///     (positive-difference) and `dprod`
+///     (double-precision product) are all F77 core.
+///   - F90 additions (72): `achar`, `adjustl`, `adjustr`,
+///     `all`, `allocated`, `any`, `associated`, `bit_size`,
+///     `btest`, `ceiling`, `count`, `cshift`, `date_and_time`,
+///     `digits`, `dot_product`, `eoshift`, `epsilon`,
+///     `exponent`, `floor`, `fraction`, `huge`, `iachar`,
+///     `iand`, `ibclr`, `ibits`, `ibset`, `ieor`, `ior`,
+///     `ishft`, `ishftc`, `lbound`, `len_trim`, `matmul`,
+///     `maxexponent`, `maxloc`, `maxval`, `merge`,
+///     `minexponent`, `minloc`, `minval`, `modulo`, `mvbits`,
+///     `nearest`, `not`, `pack`, `present`, `product`,
+///     `radix`, `random_number`, `random_seed`, `range`,
+///     `repeat`, `reshape`, `rrspacing`, `scale`, `scan`,
+///     `selected_int_kind`, `selected_real_kind`,
+///     `set_exponent`, `shape`, `size`, `spacing`, `spread`,
+///     `sum`, `tiny`, `transfer`, `transpose`, `trim`,
+///     `ubound`, `unpack`, `verify`. `precision` moved to
+///     class 0 (dual-role token — see below).
+///   - F95 additions (2): `cpu_time`, `null` (`NULL()`
+///     inquiry function returning a disassociated pointer,
+///     used in the `ptr => null()` initialization idiom).
+///
+/// **Deliberately excluded (moved to class 0):**
+///   - `kind`, `len`, `real`, `precision` — dual-role tokens
+///     (intrinsic function AND type parameter / type keyword).
+///     Kept in class 0 only. See [`FORTRAN_KEYWORDS`]
+///     docstring.
+///
+/// **Deliberately excluded (moved to class 2):**
+///   - F2003+ intrinsics: `move_alloc`, `storage_size`,
+///     `execute_command_line`, `new_line`,
+///     `command_argument_count`, `get_command_argument`,
+///     `get_command`, `get_environment_variable`,
+///     `selected_char_kind`.
+///   - `ISO_C_BINDING` procedures (`c_loc`, `c_funloc`,
+///     `c_associated`, `c_f_pointer`, `c_f_procpointer`,
+///     `c_sizeof`).
+///   - F2008 bit intrinsics (`popcnt`, `poppar`, `leadz`,
+///     `trailz`, `shifta`, `shiftl`, `shiftr`, `dshiftl`,
+///     `dshiftr`, `maskl`, `maskr`, `merge_bits`).
+///   - F2008 array intrinsics (`findloc`, `bge`, `bgt`,
+///     `ble`, `blt`, `iall`, `iany`, `iparity`, `norm2`,
+///     `parity`, `is_contiguous`).
+///   - Coarray intrinsics (`num_images`, `this_image`,
+///     `image_index`, `lcobound`, `ucobound`).
+///   - Collective subroutines (`co_broadcast`, `co_max`,
+///     `co_min`, `co_sum`, `co_reduce`).
+///
+/// **Coverage:** 110 tokens (36 F77 + 72 F90 + 2 F95, with
+/// `precision` counted in class 0 not here).
+pub const FORTRAN_INTRINSICS: &str = concat!(
+    // Elemental numeric — F77 core plus DIM (positive
+    // difference) and DPROD (double-precision product).
+    "abs aint anint ceiling dim dprod floor mod modulo nint sign ",
+    // Elemental math (transcendental).
+    "acos asin atan atan2 cos cosh exp log log10 sin sinh sqrt tan tanh ",
+    // Elemental type conversion + complex-family accessors
+    // (AIMAG imaginary part, CONJG complex conjugate — F77).
+    "achar aimag char cmplx conjg dble iachar ichar int ",
+    // Elemental character.
+    "adjustl adjustr index lge lgt lle llt scan verify ",
+    // Elemental bit.
+    "btest iand ibclr ibits ibset ieor ior ishft ishftc not ",
+    // Numeric model / floating-point.
+    "digits epsilon exponent fraction huge maxexponent minexponent ",
+    "nearest radix range rrspacing scale set_exponent spacing tiny ",
+    // Transformational array (TRANSFER — F90 bit-level
+    // reinterpretation between storage-compatible types).
+    "all any count cshift dot_product eoshift matmul ",
+    "maxloc maxval merge minloc minval pack product ",
+    "reshape spread sum transfer transpose unpack ",
+    // Elemental min / max.
+    "max min ",
+    // Inquiry (NULL — F95 disassociated-pointer constructor,
+    // used in `ptr => null()` idiom).
+    "allocated associated bit_size lbound null present shape size ubound ",
+    "len_trim ",
+    // Kind inquiry.
+    "selected_int_kind selected_real_kind ",
+    // Character utilities.
+    "repeat trim ",
+    // Intrinsic subroutines (MVBITS — F90 bit-copy
+    // subroutine, sibling of the bit-manipulation family).
+    "cpu_time date_and_time mvbits random_number random_seed system_clock ",
+);
+
+/// Fortran extended and modern intrinsic functions (F2003 →
+/// F2023) — class 2 → `SCE_F_WORD3`.
+///
+/// **Source of truth:** Fortran 2018/2023 spec new-intrinsic
+/// additions, gfortran per-intrinsic documentation at
+/// `gcc.gnu.org/onlinedocs/gfortran/Intrinsic-Procedures.html`,
+/// J3 committee documents at
+/// `j3-fortran.org/doc/year/18/18-007r1.pdf`, and WG5
+/// documents at `wg5-fortran.org/N2201-N2250/N2212.pdf`.
+///
+/// **Case-insensitive byte-lowered match.** Same discipline as
+/// [`FORTRAN_KEYWORDS`] — lowercase entries required.
+///
+/// **Categories (55 tokens):**
+///   - **F2003 additions (7)**: `move_alloc`, `new_line`,
+///     `command_argument_count`, `get_command_argument`,
+///     `get_command`, `get_environment_variable`,
+///     `selected_char_kind`.
+///   - **F2003 I/O predicates (2)**: `is_iostat_end`,
+///     `is_iostat_eor`.
+///   - **F2008 additions (2)**: `storage_size`,
+///     `execute_command_line`. gfortran classifies these as
+///     F2008 despite some references calling them F2003 —
+///     both were formally added in ISO/IEC 1539-1:2010.
+///   - **F2003 `ISO_C_BINDING` procedures (6)**: `c_loc`,
+///     `c_funloc`, `c_associated`, `c_f_pointer`,
+///     `c_f_procpointer`, `c_sizeof`.
+///   - **F2008 bit intrinsics (12)**: `popcnt`, `poppar`,
+///     `leadz`, `trailz`, `shifta`, `shiftl`, `shiftr`,
+///     `dshiftl`, `dshiftr`, `maskl`, `maskr`, `merge_bits`.
+///   - **F2008 array / bit-compare intrinsics (10)**:
+///     `findloc`, `bge`, `bgt`, `ble`, `blt`, `iall`, `iany`,
+///     `iparity`, `norm2`, `parity`.
+///   - **F2008 array inquiry (1)**: `is_contiguous`.
+///   - **F2008 coarray intrinsics (5)**: `num_images`,
+///     `this_image`, `image_index`, `lcobound`, `ucobound`.
+///   - **F2018 collective subroutines (5)**: `co_broadcast`,
+///     `co_max`, `co_min`, `co_sum`, `co_reduce`.
+///   - **F2018 event / team intrinsics (4)**: `event_query`,
+///     `get_team`, `team_number`, `coshape`.
+///   - **F2018 array (1)**: `reduce` (generic array reduction
+///     with user OPERATION callback — spec F2018, sometimes
+///     bucketed as F2023).
+///
+/// **Deliberately excluded:**
+///   - F2003 `.true.` / `.false.` — operator-word form, enters
+///     `SCE_F_OPERATOR2` via `.name.` handling.
+///   - F2023 `at` — type-bound procedure on
+///     `iso_fortran_env` container types, not a standalone
+///     generic intrinsic.
+///     Would look wrong colored as an intrinsic where the user
+///     wrote `sem%at(...)`.
+///   - F2023 `notify_ready` — a **statement** (like
+///     `sync all`), not an intrinsic function. Would belong in
+///     class 0 (keyword) if anywhere.
+///   - F2008 atomic subroutines (`atomic_define`,
+///     `atomic_ref`, `atomic_add`, `atomic_and`, `atomic_or`,
+///     `atomic_xor`, `atomic_cas`, `atomic_fetch_add`, etc.)
+///     — user's coarray bullet did not name them; deferred.
+///   - F2008 math intrinsics (`hypot`, `erf`, `erfc`,
+///     `erfc_scaled`, `gamma`, `log_gamma`, `bessel_j0` ..
+///     `bessel_yn`, `acosh`, `asinh`, `atanh`) — legitimate
+///     class 2 candidates, deferred to a future expansion.
+///   - `ieee_arithmetic` / `ieee_exceptions` module procedures
+///     — module-scoped, not global intrinsics.
+///
+/// **Cross-list uniqueness:** none of these tokens overlap
+/// with the pre-F95 stable core in [`FORTRAN_INTRINSICS`] or
+/// the keyword set in [`FORTRAN_KEYWORDS`].
+pub const FORTRAN_EXTENDED: &str = concat!(
+    // F2003 additions.
+    "move_alloc storage_size execute_command_line new_line ",
+    "command_argument_count get_command_argument get_command get_environment_variable ",
+    "selected_char_kind is_iostat_end is_iostat_eor ",
+    // F2003 ISO_C_BINDING.
+    "c_loc c_funloc c_associated c_f_pointer c_f_procpointer c_sizeof ",
+    // F2008 bit intrinsics.
+    "popcnt poppar leadz trailz shifta shiftl shiftr dshiftl dshiftr ",
+    "maskl maskr merge_bits ",
+    // F2008 array / bit-compare intrinsics.
+    "findloc bge bgt ble blt iall iany iparity norm2 parity is_contiguous ",
+    // F2008 coarray intrinsics.
+    "num_images this_image image_index lcobound ucobound ",
+    // F2018 collective subroutines.
+    "co_broadcast co_max co_min co_sum co_reduce ",
+    // F2018 event / team / array intrinsics.
+    "event_query get_team team_number coshape reduce ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

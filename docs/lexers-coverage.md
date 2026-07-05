@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 55 / 🟡 33 / ⚫ 1.
+Total: 89 rows. ✅ 57 / 🟡 31 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1870,8 +1870,8 @@ further shim work needed.
 | ErrorList | 92 | `errorlist` | ⚫ | ⚫ | 🟡 |
 | ESCRIPT | 72 | `escript` | ⚫ | ⚫ | 🟡 |
 | Forth | 73 | `forth` | ⚫ | ⚫ | 🟡 |
-| Fortran (fixed form) | 59 | `f77` | ⚫ | ⚫ | 🟡 |
-| Fortran (free form) | 25 | `fortran` | ⚫ | ⚫ | 🟡 |
+| Fortran (fixed form) | 59 | `f77` | ✅ | ✅ | ✅ |
+| Fortran (free form) | 25 | `fortran` | ✅ | ✅ | ✅ |
 | Freebasic | 69 | `freebasic` | ⚫ | ⚫ | 🟡 |
 | GDScript | 86 | `gdscript` | ⚫ | ⚫ | 🟡 |
 | Go | 88 | `cpp` | ⚫ | ⚫ | 🟡 |
@@ -5319,6 +5319,189 @@ absence pins, and cross-list uniqueness via
 extended with `L_JAVASCRIPT`;
 `wired_languages_have_complete_themes` extended
 with `L_JAVASCRIPT`.
+
+**Fortran fixed + free form (2026-07-05):** wires
+`SCLEX_FORTRAN` (= 36, free-form) and `SCLEX_F77`
+(= 37, fixed-form) end-to-end. **Both `L_FORTRAN`
+(id 25) and `L_FORTRAN_77` (id 59) share a single
+`FORTRAN_THEME` via a `L_FORTRAN || L_FORTRAN_77`
+dispatcher branch** — one `LexFortran.cxx` exports
+two `LexerModule` instances (`:723-724`) that share
+`ColouriseFortranDoc` with just an `isFixFormat`
+boolean toggling column-oriented parsing at
+`:92-122` (columns 1-5 label / column 6
+continuation / column 72+ comment). Same SCE_F_*
+enum, same three-class wordlist descriptor at
+`:696-701` (`FortranWordLists[]`). Test invariant
+#2 pins pointer-equality of the two theme lookups
+to catch a future copy-paste divergence — same
+discipline as `L_JSON || L_JSON5`.
+
+**Case-INSENSITIVE matching.** Fortran is
+case-insensitive at the spec level (every standard
+from FORTRAN 66 through Fortran 2023). LexFortran's
+identifier classifier at `:167-179` calls
+`sc.GetCurrentLowered(s, sizeof(s))` — the source
+token is lowercased before every
+`keywords.InList(s)` probe. Wordlist tokens must
+therefore be all-lowercase. Test invariant #7
+pins the all-lowercase contract; any uppercase
+entry would silently never match.
+
+**Three-class wordlist install:**
+- **Class 0 → `SCE_F_WORD`** —
+  `FORTRAN_KEYWORDS` carries **141 tokens**
+  covering control flow (`if`/`do`/`select`/
+  `case`/`where`/`forall`/`associate`),
+  intrinsic types + type constructs
+  (`integer`/`real`/`character`/`complex`/
+  `logical`/`double`/`doubleprecision`/
+  `precision`/`kind`/`len`/`type`/`class`),
+  declaration modifiers, program units
+  (`program`/`subroutine`/`function`/`module`/
+  `submodule`/`interface`), attributes / OO
+  (`public`/`private`/`recursive`/`pure`/
+  `elemental`/`abstract`/`extends`/`deferred`),
+  I/O statements (`open`/`read`/`write`/
+  `inquire`), and F2008/F2018 additions
+  (`critical`/`concurrent`/`event`/`team`/
+  `fail`/`image`/`notify`/`sync`/`lock`/`unlock`).
+  Rendered bold-blue.
+- **Class 1 → `SCE_F_WORD2`** —
+  `FORTRAN_INTRINSICS` carries **110 tokens**
+  covering the pre-Fortran-95 stable core: 36 F77
+  intrinsics, 72 F90 additions, 2 F95 additions
+  (`cpu_time`, `null`). Elemental math (`abs`,
+  `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`,
+  `dim`, `dprod`), complex-family accessors
+  (`aimag`, `conjg`), elemental character
+  (`adjustl`, `adjustr`, `len_trim`, `index`,
+  `scan`, `verify`), elemental bit (`btest`,
+  `iand`, `ior`, `ieor`, `not`, `ishft`), type
+  conversion (`achar`, `char`, `cmplx`, `dble`,
+  `int`), inquiry (`allocated`, `associated`,
+  `present`, `shape`, `size`, `ubound`, `lbound`,
+  `bit_size`, `digits`, `epsilon`, `huge`,
+  `tiny`, `null`), transformational (`sum`,
+  `product`, `matmul`, `dot_product`, `reshape`,
+  `spread`, `pack`, `unpack`, `cshift`,
+  `eoshift`, `transpose`, `merge`, `maxval`,
+  `minval`, `transfer`), intrinsic subroutines
+  (`cpu_time`, `date_and_time`, `mvbits`,
+  `random_number`, `random_seed`,
+  `system_clock`). Rendered accent-color.
+- **Class 2 → `SCE_F_WORD3`** —
+  `FORTRAN_EXTENDED` carries **55 tokens**
+  covering F2003+ extensions: F2003 additions
+  (`move_alloc`, `storage_size`,
+  `execute_command_line`, `new_line`,
+  `command_argument_count`,
+  `get_command_argument`, `get_command`,
+  `get_environment_variable`,
+  `selected_char_kind`, `is_iostat_end`,
+  `is_iostat_eor`), F2003 ISO_C_BINDING
+  (`c_loc`, `c_funloc`, `c_associated`,
+  `c_f_pointer`, `c_f_procpointer`, `c_sizeof`),
+  F2008 bit intrinsics (`popcnt`, `poppar`,
+  `leadz`, `trailz`, `shifta`, `shiftl`,
+  `shiftr`, `dshiftl`, `dshiftr`, `maskl`,
+  `maskr`, `merge_bits`), F2008 array
+  (`findloc`, `bge`, `bgt`, `ble`, `blt`,
+  `iall`, `iany`, `iparity`, `norm2`, `parity`,
+  `is_contiguous`), F2008 coarray (`num_images`,
+  `this_image`, `image_index`, `lcobound`,
+  `ucobound`), F2018 collective subroutines
+  (`co_broadcast`, `co_max`, `co_min`,
+  `co_sum`, `co_reduce`), F2018 event/team
+  intrinsics (`event_query`, `get_team`,
+  `team_number`, `coshape`), F2018 array
+  (`reduce`). Same accent-color slot as class 1
+  — two intrinsic-function classes collapse to
+  one visual identifier category.
+
+**Style routing (13 mappings):** `COMMENT` (1) →
+`Comment` (italic); `NUMBER` (2) → `Number`;
+`STRING1` (3) + `STRING2` (4) + `STRINGEOL` (5)
+→ `String` (three string flavours collapse:
+`'...'`, `"..."`, unterminated-EOL); `OPERATOR`
+(6) + `OPERATOR2` (12) → `Operator` (`.eq.` /
+`.and.` / `.true.` etc. `.name.` forms share
+punctuation colour); `WORD` (8) → `Keyword`
+(bold); `WORD2` (9) + `WORD3` (10) → `Keyword2`
+(intrinsics collapse); `PREPROCESSOR` (11) →
+`Preprocessor` (compiler directives `!DEC$` /
+`!DIR$` / `!MS$` + `#include` / `#define`);
+`LABEL` (13) → `Keyword2` (statement labels are
+branch targets); `CONTINUATION` (14) → `Operator`
+(line-continuation marker). `DEFAULT` (0) and
+`IDENTIFIER` (7) unmapped per framework
+convention.
+
+**Dual-role tokens deliberately in class 0 only.**
+`kind`, `len`, `real`, `precision` are all
+Fortran intrinsics AND type-parameter specifiers
+(`INTEGER(KIND=8)`, `CHARACTER(LEN=10)`,
+`REAL :: x`, `DOUBLE PRECISION`). LexFortran
+probes class 0 first per `:171-176`, so listing
+them in class 1 would be dead code. Test
+invariant #16 pins the quartet in class 0 and
+their absence from class 1; cross-list
+uniqueness invariant #8 catches any future edit
+that duplicates a token.
+
+**`.name.` operator handling.** LexFortran routes
+`.eq.` / `.and.` / `.not.` / `.true.` / `.false.`
+into `SCE_F_OPERATOR2` via the `.` prefix
+handler at `:244-245`. The dot-name-dot pattern
+never reaches the wordlist probe. Invariant #17
+asserts operator-word forms (`and`, `or`, `eq`,
+`ne`, `true`, `false`, `lt`, `le`, `gt`, `ge`,
+`eqv`, `neqv`) are absent from all three
+wordlists. **`not` is the exception** — bare
+`NOT(i)` is the F90 bit-manipulation intrinsic
+and correctly hits class 1; the `.NOT.` operator
+form is disambiguated by the surrounding dots.
+Affirmative pin asserts `not` IS in
+`FORTRAN_INTRINSICS`.
+
+**Compound single-word `end<construct>` forms
+included** — `endif`, `enddo`, `endsubroutine`,
+`endfunction`, `endmodule`, `endsubmodule`,
+`endinterface`, `endblock`, `endprocedure`,
+`endtype`, `endwhere`, `endforall`,
+`endassociate`, `endcritical`, `endenum`,
+`endprogram`, `endselect`, `endblockdata`,
+`endteam`. Also
+`dowhile`, `selectcase`, `selecttype`,
+`doubleprecision`, `blockdata`. These are legal
+single-identifier tokens (no whitespace inside),
+so LexFortran's identifier probe returns them as
+one token. Notepad++/SciTE convention —
+lighting up legacy code that writes them fused.
+
+Structural test coverage: 17 invariants —
+`Some(&FORTRAN_THEME)` return for BOTH `L_FORTRAN`
+and `L_FORTRAN_77` (with pointer-equality pin
+catching a copy-paste divergence), 13-mapping
+style count, three-class canonical descriptor
+order, all classes non-empty, Fortran identifier
+alphabet enforcement, all-lowercase enforcement,
+cross-list uniqueness across WL0/WL1/WL2,
+style-routing pins for the 13 mapped SCE
+constants, DEFAULT (0) + IDENTIFIER (7) unmapped,
+italic set == 1 (COMMENT only), bold set == 1
+(WORD only), cross-language non-reuse against R
+/ CoffeeScript / JSON / D, `L_FORTRAN`
+`LangEntry`'s `lexer: Some("fortran")` + `.f90`
+extension AND `L_FORTRAN_77` `LangEntry`'s
+`lexer: Some("f77")` + `.f` extension, canonical
+anchor coverage (WL0 primary keywords, WL1
+canonical intrinsics, WL2 F2003+ extended), the
+`kind`/`len`/`real`/`precision` dual-role quartet
+in class 0 only with affirmative
+class-1-absence pins, and operator-word `.name.`
+form absence pins (with the `not` exception
+documented and affirmatively pinned).
 
 ## Notes
 
