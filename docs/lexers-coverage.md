@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 60 / 🟡 28 / ⚫ 1.
+Total: 89 rows. ✅ 61 / 🟡 27 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1869,7 +1869,7 @@ further shim work needed.
 | Erlang | 71 | `erlang` | ✅ | ✅ | ✅ |
 | ErrorList | 92 | `errorlist` | ⚫ | ⚫ | 🟡 |
 | ESCRIPT | 72 | `escript` | ✅ | ✅ | ✅ |
-| Forth | 73 | `forth` | ⚫ | ⚫ | 🟡 |
+| Forth | 73 | `forth` | ✅ | ✅ | ✅ |
 | Fortran (fixed form) | 59 | `f77` | ✅ | ✅ | ✅ |
 | Fortran (free form) | 25 | `fortran` | ✅ | ✅ | ✅ |
 | Freebasic | 69 | `freebasic` | ⚫ | ⚫ | 🟡 |
@@ -6006,6 +6006,164 @@ canonical intrinsic anchors (`print`/
 `sleep` — one from each module), and no-duplicate
 defence-in-depth check across all three
 wordlists.
+
+**Forth (2026-07-06):** wires `SCLEX_FORTH` (= 52)
+for Forth `.forth` source. `L_FORTH` (id 73) is
+the sole language row using this lexer. Widest
+wordlist descriptor of Phase 4.5 (tied with
+Erlang) — six independent classes.
+
+**Six-class wordlist (25 + 206 + 18 + 15 + 2 + 6 =
+272 tokens):**
+- **Class 0 (`SCE_FORTH_CONTROL`, bold Keyword)** —
+  `FORTH_CONTROL` carries 25 control-flow
+  structural words: `if`/`else`/`then`/`endif`
+  (conditionals), `begin`/`until`/`while`/
+  `repeat`/`again` (indefinite loops), `do`/`?do`/
+  `loop`/`+loop`/`leave`/`unloop` (counted loops),
+  `case`/`of`/`endof`/`endcase` (case-select),
+  `exit`/`quit`/`recurse` (definition-level
+  control), `[if]`/`[else]`/`[then]` (Forth-2012
+  TOOLS-EXT compile-time bracket conditionals).
+- **Class 1 (`SCE_FORTH_KEYWORD`, bold Keyword)** —
+  `FORTH_KEYWORD` carries 206 general runtime
+  vocabulary tokens across ANS Forth CORE +
+  CORE-EXT + basic FLOAT + STRING + MEMORY +
+  TOOLS: stack manipulation (`dup`/`drop`/`swap`/
+  return-stack `>r`/`r>`/loop indices `i`/`j`),
+  single/double/mixed arithmetic (`+`/`-`/`*`/`/`
+  through `um*`/`um/mod`/`m*`/`sm/rem`), comparison
+  (`=`/`<>`/`<`/`>`/`0=`/`0<>`/`within`), logic
+  (`and`/`or`/`xor`/`not`/`invert`), memory (`@`/
+  `!`/`c@`/`c!`/`+!`/`move`/`fill`), base &
+  pictured numeric output, I/O (`emit`/`type`/
+  `cr`/`.`/`.r`), dictionary primitives (`here`/
+  `allot`/`,`/`c,`/`align`), compile-time helpers
+  that don't parse names (`literal`/`compile,`/
+  `state`/`[`/`]`), search-order primitives
+  (`also`/`previous`/`only`/`definitions`),
+  string operations (`count`/`compare`/`search`),
+  parsing accessors (`source`/`parse`/`>in`),
+  exception (`abort`/`throw`/`catch`/`bye`),
+  truth values (`true`/`false`), and a basic
+  FLOAT set (`f+`/`f-`/`fdup`/`f@`/`fsqrt`/etc.).
+- **Class 2 (`SCE_FORTH_DEFWORD`, Keyword2 accent)**
+  — `FORTH_DEFWORD` carries 18 definition words:
+  `variable`/`constant`/`value` (and their double/
+  float variants), `create`/`does>`/`defer`,
+  attribute markers `immediate`/`compile-only`/
+  `recursive`, Forth-2012 `buffer:`, vocabulary
+  primitives `vocabulary`/`wordlist`. `:` and `;`
+  are DELIBERATELY EXCLUDED — the paint loop at
+  `LexForth.cxx:138-149` auto-styles these two
+  chars as `SCE_FORTH_DEFWORD` without wordlist
+  lookup, so an entry here would be dead code.
+- **Class 3 (`SCE_FORTH_PREWORD1`, Preprocessor)** —
+  `FORTH_PREWORD1` carries 15 compile-time / runtime
+  words that consume the next single token from
+  the input stream: `postpone`/`[']`/`[char]`/`'`
+  (compile-time name-parsers), `char`/`see`
+  (runtime name-parsers), `to`/`is` (value/defer
+  assignment), `include`/`?include`/`require`/
+  `needs` (file inclusion — name-parsing forms
+  only; `include-file` moved to `FORTH_KEYWORD`
+  since Forth-2012 §11.6.1.1717 defines it with
+  stack signature `( fileid -- )`),
+  `[defined]`/`[undefined]` (compile-time
+  predicates), `marker`.
+- **Class 4 (`SCE_FORTH_PREWORD2`, Preprocessor)** —
+  `FORTH_PREWORD2` carries exactly 2 tokens
+  covering the niche "2-argument preword"
+  category: `synonym` (Forth-2012 §15.6.2.2525
+  TOOLS-EXT — `SYNONYM new-name old-name`) and
+  `alias` (Gforth/ISO Forth systems — same
+  2-word signature). Test invariant #18 pins
+  the cardinality-2 to prevent future
+  fabrication.
+- **Class 5 (`SCE_FORTH_STRING`, String)** —
+  `FORTH_STRINGS` carries 6 string-parsing openers:
+  `s"` (§6.1.2165), `."` (§6.1.0190), `abort"`
+  (§6.1.0680), `c"` (§6.2.0855), `s\"` (Forth-2012
+  §11.6.1.2165.35), `z"` (Gforth/SwiftForth/iForth
+  null-terminated). **Every entry MUST end in `"`**
+  — behaviourally load-bearing at
+  `LexForth.cxx:86-87` and :98-101, invariant #19
+  pins this affirmatively.
+
+**Style routing (10 mappings across 12 defined
+SCE slots):** COMMENT + COMMENT_ML → `Comment`
+(italic — `\` line comment + `( ... )` block
+comment collapse); CONTROL + KEYWORD → `Keyword`
+(bold — two "language vocabulary" classes
+semantically collapsed, same discipline as
+Erlang KEYWORD + BIFS or ESCRIPT WORD + WORD3);
+DEFWORD → `Keyword2` (accent for definition-word
+events); PREWORD1 + PREWORD2 → `Preprocessor`
+(two tiers of compile-time next-token consumers
+collapse); NUMBER → `Number`; STRING → `String`;
+LOCALE → `Keyword2` (Forth-2012 `{ name1 name2
+... }` locals styled as a lightweight
+definition form). DEFAULT (0) + IDENTIFIER (3)
+unmapped per framework convention.
+
+**Case-INSENSITIVE by design.** Forth is
+traditionally written in uppercase but the
+lexer's `GetCurrentLowered` at
+`LexForth.cxx:73` lowercases the source before
+wordlist probing. All 272 wordlist tokens are
+lowercase.
+
+**First-match-wins cascade at :75-88** across
+all six classes in class order 0 → 5. A token
+duplicated in an earlier class silently masks
+its later-class sibling. Test invariant #6
+pins pairwise cross-class disjointness across
+all 15 class-pair combinations —
+load-bearing for correct styling.
+
+**No fold.** `FoldForthDoc` at `:157-159` is a
+no-op stub. Forth's whitespace-delimited
+nested-parenthesis grammar doesn't admit
+line-based folding.
+
+**Symbolic word alphabet.** `IsAWordStart` at
+`:31-35` accepts alnum + `!#'()*+,-./<=>?@[\]_`,
+and the identifier-continuation is
+IsASpaceChar-only at `:71` — meaning any
+non-whitespace can extend a token. Consequence:
+tokens like `>r` / `+!` / `,` / `@` / `buffer:`
+/ `s"` are all valid single-word identifiers.
+Test invariant #5 accepts this full alphabet.
+
+Structural test coverage: 20 invariants —
+deep-value identity pin, 10-mapping style
+count, six-class canonical descriptor order,
+all classes non-empty, all-lowercase Forth-word
+alphabet enforcement across every class,
+**pairwise cross-class disjointness across
+all 15 class-pair combinations**
+(load-bearing for the first-match-wins
+cascade), style-routing pins for all 10
+mapped SCE constants, DEFAULT + IDENTIFIER
+unmapped, italic set == 2 (both comment
+states), bold set == 2 (CONTROL + KEYWORD),
+cross-language non-reuse against Erlang /
+CSound / Fortran / ESCRIPT, `L_FORTH`
+`LangEntry`'s `lexer: Some("forth")` +
+`forth` extension presence, affirmative
+absence pin for `:` and `;` from DEFWORD
+(auto-styled by paint loop, wordlist entry
+dead code), canonical control anchors (`if`/
+`else`/`then`/`begin`/`do`/`case`/`recurse`/
+`[if]` — one from each sub-family), canonical
+keyword anchors spanning stack/memory/
+arithmetic/IO/loop-indices/FLOAT/booleans,
+canonical defword/preword1 anchors, class-4
+cardinality pin (exactly `synonym`/`alias`),
+**all STRINGS tokens end in `"`** (load-bearing
+for STRING-state entry/exit correctness), and
+no-duplicate defence-in-depth check across
+all six wordlists.
 
 ## Notes
 

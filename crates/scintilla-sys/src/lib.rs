@@ -1623,6 +1623,141 @@ pub const SCE_ESCRIPT_BRACE: usize = 9;
 pub const SCE_ESCRIPT_WORD2: usize = 10;
 pub const SCE_ESCRIPT_WORD3: usize = 11;
 
+// LexForth style indices. 12 contiguous slots (0..=11) for
+// Forth — the stack-based concatenative programming language
+// (extension `.forth`). Constants mirror `SciLexer.h:702-713`
+// verbatim. Dispatches SCLEX_FORTH (= 52, per `SciLexer.h:68`)
+// via a **six-class wordlist** declared at
+// `vendor\lexilla\lexers\LexForth.cxx:161-169`
+// (`forthWordLists[]`):
+//
+//     forthWordLists[] = {
+//         "control keywords",              // class 0 → CONTROL
+//         "keywords",                      // class 1 → KEYWORD
+//         "definition words",              // class 2 → DEFWORD
+//         "prewords with one argument",    // class 3 → PREWORD1
+//         "prewords with two arguments",   // class 4 → PREWORD2
+//         "string definition keywords",    // class 5 → STRING
+//         0,
+//     };
+//
+// **Case-INSENSITIVE.** The identifier-classification path at
+// `LexForth.cxx:73` calls `sc.GetCurrentLowered(s, sizeof(s))`
+// (lowercased), NOT `GetCurrent`. Forth is traditionally written
+// in uppercase but source can be any case — the lexer lowercases
+// before probing, so wordlist tokens must be lowercase. Same
+// discipline as `PASCAL_KEYWORDS` / `ESCRIPT_KEYWORDS`, inverted
+// from `ERLANG_KEYWORDS` / `CSOUND_OPCODES` (both byte-exact).
+//
+// **First-match-wins cascade across all six classes.** The
+// identifier settle path at `:75-88` probes in exact class order
+// 0 → 1 → 2 → 3 → 4 → 5. A token duplicated in an earlier class
+// silently wins over a later class. Cross-class disjointness is
+// required for correct styling; the host wordlists enforce this
+// via the invariant test.
+//
+// **Class 5 (STRING) is behaviorally distinct.** At `:86-87`,
+// when a token matches the STRING wordlist, the lexer both
+// changes state AND sets `newState = SCE_FORTH_STRING` — so the
+// paint loop stays in STRING state on subsequent characters
+// until the closing `"`. Class 5 tokens are exclusively
+// **string-parsing openers** like `s"` / `."` / `abort"` / `c"`
+// / `s\"` — words that syntactically start a string literal in
+// Forth's whitespace-delimited token stream.
+//
+// **Auto-styled word-definition markers.** The paint loop at
+// `:138-149` styles `:` and `;` as `SCE_FORTH_DEFWORD` DIRECTLY,
+// without wordlist lookup, when they appear in whitespace-
+// delimited positions. So the DEFWORD wordlist should NOT
+// include `:` / `;` — they would be dead entries. `:` opens a
+// definition (with subsequent whitespace also colored as
+// DEFWORD to highlight the definition name); `;` closes a
+// definition.
+//
+// **Symbolic word alphabet.** `IsAWordStart` at `:31-35`
+// accepts alnum plus `! # ' ( * + , - . / < = > ? @ [ \ ] _`.
+// This is unusually permissive because Forth tradition allows
+// symbolic word names like `!` (store), `@` (fetch), `>r`
+// (to-return-stack), `+!` (add-to-memory), `,` (compile-cell).
+// The lexer treats these as full words, not operators —
+// wordlist entries must include the exact symbolic form for
+// each canonical token.
+//
+// **Number literals with sigil prefixes.** `:120-129` recognises
+// `$`-prefix hex (`$DEADBEEF`) and `%`-prefix binary (`%1010`)
+// numbers, in addition to decimal / `.` / `e` / `E` scientific
+// forms. This is a Forth tradition — most implementations accept
+// both prefixes.
+//
+// **No fold.** `FoldForthDoc` at `:157-159` is a no-op stub.
+// Forth's whitespace-delimited nested-parenthesis grammar
+// doesn't admit line-based folding, so the lexer deliberately
+// declines to fold. Consequence: no fold-classifier-driven
+// wordlist constraints (unlike ESCRIPT class 2, unlike Erlang's
+// KEYWORD `case`/`fun`/`if`/etc.). Any class 0 CONTROL token
+// can be placed freely.
+//
+// **Forth-2012 locals syntax.** `SCE_FORTH_LOCALE` (11) is
+// entered at `:136-137` on `{` and exits at `:102-105` on `}`.
+// This colors the `{ name1 name2 ... }` LOCALS declaration
+// syntax from Forth-2012 §13. Contains no wordlist content —
+// the state is bounded by literal braces.
+//
+// Style semantics (paint-loop citations reference LexForth.cxx):
+//
+//   - SCE_FORTH_DEFAULT (0) — whitespace / unclassified.
+//     Framework convention: leave unmapped.
+//   - SCE_FORTH_COMMENT (1) — `\ `-to-EOL line comment. Entry
+//     at `:114-115` (requires whitespace before `\` and
+//     whitespace or line end after — Forth's `\` word is
+//     whitespace-delimited).
+//   - SCE_FORTH_COMMENT_ML (2) — `( ... )` block comment.
+//     Entry at `:116-119` (requires whitespace boundaries
+//     around `(` — Forth's `(` is itself a word), exit at
+//     `:65-66` on `)`.
+//   - SCE_FORTH_IDENTIFIER (3) — bare-identifier transient
+//     state entered at `:134-135` for any token starting with
+//     an alnum or symbolic-word char. Settles to KEYWORD /
+//     CONTROL / DEFWORD / PREWORD1 / PREWORD2 / STRING /
+//     DEFAULT at `:72-89` on whitespace, based on wordlist
+//     probes. Framework convention: leave unmapped so
+//     unmatched bare words paint at STYLE_DEFAULT.
+//   - SCE_FORTH_CONTROL (4) — wordlist class 0 hit
+//     (control-flow structural words).
+//   - SCE_FORTH_KEYWORD (5) — wordlist class 1 hit (general
+//     runtime vocabulary).
+//   - SCE_FORTH_DEFWORD (6) — wordlist class 2 hit
+//     (definition words) OR the auto-styled `:` / `;`
+//     markers at `:138-149`.
+//   - SCE_FORTH_PREWORD1 (7) — wordlist class 3 hit
+//     (prewords with one argument — compile-time next-token
+//     consumers).
+//   - SCE_FORTH_PREWORD2 (8) — wordlist class 4 hit (prewords
+//     with two arguments).
+//   - SCE_FORTH_NUMBER (9) — decimal / hex (`$` prefix) /
+//     binary (`%` prefix) / float numeric literal. Entry at
+//     `:120-133`, exit at `:91-97` (falls back to IDENTIFIER
+//     if a wordlist match is found later).
+//   - SCE_FORTH_STRING (10) — string literal. Entered from
+//     the STRING wordlist match at `:86-87`, exit at `:98-101`
+//     on closing `"`.
+//   - SCE_FORTH_LOCALE (11) — Forth-2012 `{ name1 name2 ... }`
+//     local-variable declaration. Entry at `:136-137` on
+//     `{`, exit at `:102-105` on `}`. No wordlist — the state
+//     is delimited purely by braces.
+pub const SCE_FORTH_DEFAULT: usize = 0;
+pub const SCE_FORTH_COMMENT: usize = 1;
+pub const SCE_FORTH_COMMENT_ML: usize = 2;
+pub const SCE_FORTH_IDENTIFIER: usize = 3;
+pub const SCE_FORTH_CONTROL: usize = 4;
+pub const SCE_FORTH_KEYWORD: usize = 5;
+pub const SCE_FORTH_DEFWORD: usize = 6;
+pub const SCE_FORTH_PREWORD1: usize = 7;
+pub const SCE_FORTH_PREWORD2: usize = 8;
+pub const SCE_FORTH_NUMBER: usize = 9;
+pub const SCE_FORTH_STRING: usize = 10;
+pub const SCE_FORTH_LOCALE: usize = 11;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

@@ -10435,6 +10435,410 @@ pub const ESCRIPT_FOLDWORDS: &str = concat!(
     "else elseif ",
 );
 
+/// Forth control-flow structural words — class 0 of `LexForth`'s
+/// six-class descriptor (`forthWordLists[]` at
+/// `LexForth.cxx:161-169`). Matched at `LexForth.cxx:75-76` via
+/// `control.InList(s)` after `sc.GetCurrentLowered(s, sizeof(s))`
+/// at `:73`; hits emit
+/// [`SCE_FORTH_CONTROL`](../scintilla_sys/constant.SCE_FORTH_CONTROL.html).
+///
+/// **All-lowercase.** The lexer's `GetCurrentLowered` call means
+/// wordlist tokens must be lowercase. Forth source is
+/// case-insensitive by convention (traditionally UPPER, modern
+/// mixed), so the lowered probe covers every casing.
+///
+/// **First-match-wins cascade.** `LexForth.cxx:75-88` probes
+/// classes 0 → 5 in order. A control-flow token duplicated in
+/// class 1 (keyword) would silently win via the earlier probe;
+/// cross-class disjointness is required for correct styling.
+///
+/// **Source:** ANS Forth (X3.215-1994) §6.1 CORE and §6.2
+/// CORE-EXT wordsets, plus Forth-2012 (ISO/IEC/JTC1 15145).
+///
+/// **25 tokens** covering the language's structural block
+/// markers:
+///   - **Conditional structures** (4): `if`/`else`/`then`/
+///     `endif` (Forth-2012 supports both `then` and the older
+///     `endif` alias; both are structural block closers).
+///   - **Indefinite loops** (5): `begin`/`until`/`while`/
+///     `repeat`/`again`. `begin ... until` is bottom-tested;
+///     `begin ... while ... repeat` is head-tested; `begin
+///     ... again` is unconditional infinite.
+///   - **Counted loops** (6): `do`/`?do`/`loop`/`+loop`/
+///     `leave`/`unloop`. `do ... loop` iterates limit → index;
+///     `?do` skips when limit == index at entry; `+loop`
+///     increments by an arbitrary amount; `leave`/`unloop`
+///     early-exit.
+///   - **Case-select** (4): `case`/`of`/`endof`/`endcase`
+///     (Forth-2012 §6.2.0873.30).
+///   - **Definition-level control** (3): `exit`/`quit`/
+///     `recurse`. `exit` returns from a colon-definition;
+///     `quit` returns to the outer interpreter; `recurse`
+///     compiles a self-call.
+///   - **Compile-time bracket conditionals** (3): `[if]`/
+///     `[else]`/`[then]` (Forth-2012 TOOLS-EXT §15.6.2.2531,
+///     .2532, .2533). Conditionally include text at
+///     compile-time.
+///
+/// **Deliberately excluded:**
+///   - Loop-index accessors `i` / `j` — those are runtime
+///     stack ops that push the current DO-LOOP index; belongs
+///     in class 1 [`FORTH_KEYWORD`].
+///   - Word-definition markers `:` / `;` — auto-styled by
+///     the lexer at `LexForth.cxx:138-149` as
+///     `SCE_FORTH_DEFWORD` without wordlist lookup, so a
+///     class-2 entry here would be dead code (already class 6
+///     styled by the paint loop).
+///   - `[defined]` / `[undefined]` — compile-time predicates
+///     that parse the next word (name → true/false). They
+///     read a following argument, so they belong in class 3
+///     [`FORTH_PREWORD1`] alongside `postpone`/`[']`/`to`.
+pub const FORTH_CONTROL: &str = concat!(
+    // Conditional structures.
+    "if else then endif ",
+    // Indefinite loops.
+    "begin until while repeat again ",
+    // Counted loops (DO family).
+    "do ?do loop +loop leave unloop ",
+    // Case-select.
+    "case of endof endcase ",
+    // Definition-level control.
+    "exit quit recurse ",
+    // Compile-time bracket conditionals (Forth-2012 TOOLS-EXT).
+    "[if] [else] [then] ",
+);
+
+/// Forth general runtime vocabulary — class 1 of `LexForth`'s
+/// six-class descriptor. Matched at `LexForth.cxx:77-78` via
+/// `keyword.InList(s)`; hits emit
+/// [`SCE_FORTH_KEYWORD`](../scintilla_sys/constant.SCE_FORTH_KEYWORD.html).
+///
+/// **All-lowercase** for the same `GetCurrentLowered` reason as
+/// [`FORTH_CONTROL`].
+///
+/// **Source:** ANS Forth CORE + CORE-EXT + FLOAT (basic) +
+/// STRING + MEMORY + TOOLS wordsets. Comprehensive but not
+/// exhaustive — full FLOAT-EXT / FILE / DOUBLE-EXT / LOCALS /
+/// FACILITY sets omitted per the "commonly-used" scope.
+///
+/// **206 tokens** grouped by category (per-category counts
+/// verified by whitespace-splitting the `concat!()` body):
+///   - **Stack manipulation** (25): `dup`/`drop`/`swap`/
+///     `over`/`rot`/`-rot`/`2dup`/`2drop`/`2swap`/`2over`/
+///     `nip`/`tuck`/`?dup`/`pick`/`roll`/`depth`,
+///     return-stack `>r`/`r>`/`r@`/`2>r`/`2r>`/`2r@`/`rdrop`,
+///     loop indices `i`/`j`.
+///   - **Arithmetic** (36 = single 20 + mixed/double 16):
+///     `+`/`-`/`*`/`/`/`mod`/`/mod`/`*/`/`*/mod`/`abs`/
+///     `negate`/`min`/`max`/`1+`/`1-`/`2+`/`2-`/`2*`/`2/`/
+///     `lshift`/`rshift`, mixed-precision `um*`/`um/mod`/
+///     `m*`/`m*/`/`sm/rem`/`fm/mod`/`s>d`/`d>s`, and
+///     double-precision `d+`/`d-`/`dabs`/`dnegate`/`dmax`/
+///     `dmin`/`d2*`/`d2/`.
+///   - **Comparison** (15): `=`/`<>`/`<`/`>`/`u<`/`u>`/`0=`/
+///     `0<>`/`0<`/`0>`/`within`, double `d=`/`d<`/`d0=`/
+///     `d0<`.
+///   - **Logic** (5): `and`/`or`/`xor`/`not`/`invert`.
+///   - **Memory access** (12): `@`/`!`/`c@`/`c!`/`+!`/`2@`/
+///     `2!`/`move`/`fill`/`erase`/`cmove`/`cmove>`.
+///   - **Cell / char sizing** (5): `cell`/`cells`/`cell+`/
+///     `char+`/`chars`.
+///   - **Base & pictured numeric output** (11): `base`/
+///     `decimal`/`hex`/`binary`/`>number`, `hold`/`sign`/
+///     `#`/`#s`/`#>`/`<#`.
+///   - **I/O** (19): `bl`/`space`/`spaces`/`cr`/`emit`/
+///     `type`/`.`/`.r`/`u.`/`u.r`/`d.`/`d.r`, `key`/`?key`/
+///     `key?`/`ekey`/`emit?`/`accept`/`page`.
+///   - **Dictionary primitives** (12): `find`/`execute`/
+///     `>body`/`words`/`here`/`allot`/`,`/`c,`/`align`/
+///     `aligned`/`pad`/`unused`.
+///   - **Compile-time helpers not parsing names** (7):
+///     `literal`/`2literal`/`sliteral`/`compile,`/`state`/
+///     `[`/`]`. These DO NOT read next-token operands (unlike
+///     class-3 prewords), so they belong here rather than
+///     [`FORTH_PREWORD1`].
+///   - **Search-order** (9): `also`/`previous`/`only`/
+///     `definitions`/`get-current`/`set-current`/`get-order`/
+///     `set-order`/`forth-wordlist`.
+///   - **String operations** (7): `count`/`-trailing`/
+///     `/string`/`blank`/`compare`/`search`/`bounds`.
+///   - **Parsing accessors** (7): `source`/`source-id`/
+///     `refill`/`parse`/`parse-name`/`>in`/`evaluate`.
+///   - **File input (stack-consuming)** (1): `include-file`
+///     (Forth-2012 §11.6.1.1717 — takes fileid from the data
+///     stack). Its name-parsing sibling `include` lives in
+///     [`FORTH_PREWORD1`] since it parses the next token as
+///     a filename.
+///   - **Exception & termination** (5): `abort`/`throw`/
+///     `catch`/`bye`, environment `environment?`.
+///   - **Debug / introspection** (3): `.s`/`?`/`dump`.
+///   - **Truth values** (2): `true`/`false`.
+///   - **Basic FLOAT set** (25): stack (5) `fdup`/`fdrop`/
+///     `fswap`/`fover`/`frot`, arithmetic (8) `f+`/`f-`/
+///     `f*`/`f/`/`fabs`/`fnegate`/`fmin`/`fmax`, comparison
+///     (4) `f=`/`f<`/`f0=`/`f0<`, memory + printing (5)
+///     `f@`/`f!`/`f.`/`fe.`/`fs.`, math (3) `fsqrt`/
+///     `represent`/`>float`.
+///
+/// **Deliberately excluded:**
+///   - Control-flow structural words (class 0 [`FORTH_CONTROL`]).
+///   - Definition words `variable`/`constant`/`create` etc.
+///     (class 2 [`FORTH_DEFWORD`]).
+///   - Compile-time next-token consumers `postpone`/`[']`/
+///     `to`/`is` (class 3 [`FORTH_PREWORD1`]).
+///   - `alias`/`synonym` (class 4 [`FORTH_PREWORD2`]).
+///   - String-parsing openers `s"`/`."`/`abort"` etc.
+///     (class 5 [`FORTH_STRINGS`]).
+pub const FORTH_KEYWORD: &str = concat!(
+    // Stack manipulation (data + return + loop indices).
+    "dup drop swap over rot -rot 2dup 2drop 2swap 2over ",
+    "nip tuck ?dup pick roll depth ",
+    ">r r> r@ 2>r 2r> 2r@ rdrop ",
+    "i j ",
+    // Single-precision arithmetic.
+    "+ - * / mod /mod */ */mod abs negate min max ",
+    "1+ 1- 2+ 2- 2* 2/ lshift rshift ",
+    // Mixed & double-precision arithmetic.
+    "um* um/mod m* m*/ sm/rem fm/mod s>d d>s ",
+    "d+ d- dabs dnegate dmax dmin d2* d2/ ",
+    // Comparison (single + double + unsigned).
+    "= <> < > u< u> 0= 0<> 0< 0> within ",
+    "d= d< d0= d0< ",
+    // Logic.
+    "and or xor not invert ",
+    // Memory access.
+    "@ ! c@ c! +! 2@ 2! move fill erase cmove cmove> ",
+    // Cell / char sizing.
+    "cell cells cell+ char+ chars ",
+    // Base & pictured numeric output.
+    "base decimal hex binary >number ",
+    "hold sign # #s #> <# ",
+    // I/O.
+    "bl space spaces cr emit type . .r u. u.r d. d.r ",
+    "key ?key key? ekey emit? accept page ",
+    // Dictionary primitives.
+    "find execute >body words here allot , c, align aligned pad unused ",
+    // Compile-time helpers that don't parse a name.
+    "literal 2literal sliteral compile, state [ ] ",
+    // Search-order.
+    "also previous only definitions ",
+    "get-current set-current get-order set-order forth-wordlist ",
+    // String operations.
+    "count -trailing /string blank compare search bounds ",
+    // Parsing accessors.
+    "source source-id refill parse parse-name >in evaluate ",
+    // File input (stack-consuming — Forth-2012 §11.6.1.1717).
+    "include-file ",
+    // Exception & termination.
+    "abort throw catch bye environment? ",
+    // Debug / introspection.
+    ".s ? dump ",
+    // Truth values.
+    "true false ",
+    // Basic FLOAT set.
+    "fdup fdrop fswap fover frot ",
+    "f+ f- f* f/ fabs fnegate fmin fmax ",
+    "f= f< f0= f0< ",
+    "f@ f! f. fe. fs. ",
+    "fsqrt represent >float ",
+);
+
+/// Forth definition words — class 2 of `LexForth`'s six-class
+/// descriptor. Matched at `LexForth.cxx:79-80` via
+/// `defword.InList(s)`; hits emit
+/// [`SCE_FORTH_DEFWORD`](../scintilla_sys/constant.SCE_FORTH_DEFWORD.html).
+///
+/// **All-lowercase** for the same `GetCurrentLowered` reason as
+/// [`FORTH_CONTROL`].
+///
+/// **Source:** ANS Forth CORE + Forth-2012 additions
+/// (`BUFFER:` at §6.2.0855.30).
+///
+/// **18 tokens** covering words that create new dictionary
+/// entries or mark word attributes at compile time:
+///   - **Data-defining words** (9): `variable`/`constant`/
+///     `value` and their double- and float-precision
+///     counterparts `2variable`/`2constant`/`2value`/
+///     `fvariable`/`fconstant`/`fvalue`.
+///   - **Word-defining primitives** (3): `create`/`does>`/
+///     `defer`. `create` allocates a header + reserves body
+///     space; `does>` supplies runtime action for
+///     CREATE-defined words; `defer` creates a runtime-
+///     assignable execution vector.
+///   - **Word-attribute markers** (3): `immediate`/
+///     `compile-only`/`recursive`. Modify the most-recently-
+///     defined word's flags.
+///   - **Buffer definitions** (1): `buffer:` (Forth-2012 —
+///     defines a named data buffer).
+///   - **Vocabulary primitives** (2): `vocabulary`/`wordlist`.
+///
+/// **Deliberately excluded:**
+///   - `:` and `;` — auto-styled by the paint loop at
+///     `LexForth.cxx:138-149` as `SCE_FORTH_DEFWORD` without
+///     wordlist lookup. Including them here would be dead
+///     code — the lexer never reaches the wordlist probe
+///     because `:`/`;` are handled directly in the DEFAULT
+///     state entry cascade.
+///   - `postpone`/`to`/`is`/`marker` — consume the next
+///     token, belongs in class 3 [`FORTH_PREWORD1`].
+///   - `alias`/`synonym` — consume two following tokens,
+///     class 4 [`FORTH_PREWORD2`].
+pub const FORTH_DEFWORD: &str = concat!(
+    // Data-defining words (single / double / float).
+    "variable constant value ",
+    "2variable 2constant 2value ",
+    "fvariable fconstant fvalue ",
+    // Word-defining primitives.
+    "create does> defer ",
+    // Word-attribute markers.
+    "immediate compile-only recursive ",
+    // Buffer definitions (Forth-2012).
+    "buffer: ",
+    // Vocabulary primitives.
+    "vocabulary wordlist ",
+);
+
+/// Forth prewords with one argument — class 3 of `LexForth`'s
+/// six-class descriptor. Matched at `LexForth.cxx:81-82` via
+/// `preword1.InList(s)`; hits emit
+/// [`SCE_FORTH_PREWORD1`](../scintilla_sys/constant.SCE_FORTH_PREWORD1.html).
+///
+/// **All-lowercase** for the same `GetCurrentLowered` reason as
+/// [`FORTH_CONTROL`].
+///
+/// **Source:** ANS Forth CORE / TOOLS / FILE wordsets.
+///
+/// **15 tokens** covering compile-time and runtime words that
+/// consume the NEXT single token from the input stream:
+///   - **Compile-time name-parsers** (4): `postpone` (postpones
+///     compilation of the next word), `[']` (compile-time
+///     execution-token literal — reads next word),
+///     `[char]` (compile-time char literal — reads next
+///     char), `'` (runtime tick — reads next word,
+///     returns xt).
+///   - **Runtime name-parsers** (2): `char` (reads next
+///     char, pushes ASCII value), `see` (decompiler — reads
+///     next word).
+///   - **Value / defer assignment** (2): `to` (writes to next
+///     VALUE), `is` (assigns next DEFER — Forth-2012).
+///   - **File inclusion (name-parsing)** (4): `include`/
+///     `?include`/`require`/`needs` (Gforth compatibility).
+///     All read a following filename or word. `include-file`
+///     deliberately excluded — it's a stack-consuming word
+///     (Forth-2012 §11.6.1.1717 signature `( fileid -- )`)
+///     and lives in [`FORTH_KEYWORD`] instead.
+///   - **Compile-time predicates** (2): `[defined]` and
+///     `[undefined]` (Forth-2012 TOOLS-EXT §15.6.2.2530.30
+///     and .2532.30) — both parse the next name and push
+///     true/false based on dictionary presence.
+///   - **Marker** (1): `marker` (Forth-2012 CORE-EXT
+///     §6.2.1850) — creates a named point that when
+///     executed, restores the dictionary to that state.
+///
+/// **Deliberately excluded:**
+///   - `literal`/`2literal`/`sliteral`/`compile,` — these
+///     act on stack values, not input-stream tokens. They
+///     live in class 1 [`FORTH_KEYWORD`].
+///   - `alias`/`synonym` — consume TWO following tokens,
+///     class 4 [`FORTH_PREWORD2`].
+pub const FORTH_PREWORD1: &str = concat!(
+    // Compile-time name-parsers.
+    "postpone ['] [char] ' ",
+    // Runtime name-parsers.
+    "char see ",
+    // Value / defer assignment.
+    "to is ",
+    // File inclusion — name-parsing forms only. `include-file`
+    // deliberately NOT here: Forth-2012 §11.6.1.1717 defines it
+    // with stack signature `( i*x fileid -- j*x )` — it takes a
+    // fileid from the DATA STACK, not the input stream, so it
+    // belongs in [`FORTH_KEYWORD`] as general vocabulary.
+    "include ?include require needs ",
+    // Compile-time predicates.
+    "[defined] [undefined] ",
+    // Marker.
+    "marker ",
+);
+
+/// Forth prewords with two arguments — class 4 of `LexForth`'s
+/// six-class descriptor. Matched at `LexForth.cxx:83-84` via
+/// `preword2.InList(s)`; hits emit
+/// [`SCE_FORTH_PREWORD2`](../scintilla_sys/constant.SCE_FORTH_PREWORD2.html).
+///
+/// **All-lowercase** for the same `GetCurrentLowered` reason as
+/// [`FORTH_CONTROL`].
+///
+/// **Source:** Forth-2012 TOOLS-EXT §15.6.2.2525 (SYNONYM),
+/// Gforth manual §5.15.5 (ALIAS).
+///
+/// **2 tokens** — this is a NICHE category. The ANS Forth
+/// standard names very few words that consume two following
+/// tokens; keeping the wordlist small (rather than fabricating
+/// entries) is deliberate:
+///   - `synonym` (Forth-2012 §15.6.2.2525) — `SYNONYM
+///     <new-name> <old-name>` creates a new alias for an
+///     existing word.
+///   - `alias` (Gforth / ISO Forth systems) — same 2-word
+///     signature: `ALIAS <new-name> <old-name>`.
+///
+/// **Deliberately NOT included:**
+///   - 1-argument compile-time forms `postpone`/`[']`/`char`/
+///     `to`/`is`/`see`/`marker` — class 3 [`FORTH_PREWORD1`].
+///   - Words with variable-length input signatures (e.g.
+///     locals `{ ... }` — handled by `SCE_FORTH_LOCALE`
+///     state directly, not the wordlist).
+// Forth-2012 §15.6.2.2525 + Gforth ALIAS.
+pub const FORTH_PREWORD2: &str = "synonym alias ";
+
+/// Forth string-definition keywords — class 5 of `LexForth`'s
+/// six-class descriptor. Matched at `LexForth.cxx:85-88` via
+/// `strings.InList(s)`; hits are behaviorally distinct — the
+/// lexer both emits `SCE_FORTH_STRING` for the token AND sets
+/// `newState = SCE_FORTH_STRING` so subsequent characters
+/// continue in STRING state until the closing `"` (exit at
+/// `:98-101`).
+///
+/// **All-lowercase** for the same `GetCurrentLowered` reason as
+/// [`FORTH_CONTROL`].
+///
+/// **Source:** ANS Forth CORE + Forth-2012 STRING wordset.
+///
+/// **6 tokens** — each is a string-parsing opener:
+///   - `s"` (§6.1.2165) — parse string, push (addr len).
+///   - `."` (§6.1.0190) — parse string, print at execution.
+///   - `abort"` (§6.1.0680) — parse string, conditional abort
+///     with message.
+///   - `c"` (§6.2.0855) — parse string, push counted string
+///     address.
+///   - `s\"` (Forth-2012 §11.6.1.2165.35, STRING wordset) —
+///     escaped-string literal supporting `\n`, `\t`, etc.
+///   - `z"` (Gforth / `SwiftForth` / iForth) — null-terminated
+///     C-style string literal.
+///
+/// **All entries end in `"`** — the trailing double-quote is
+/// part of the token because `LexForth.cxx`'s identifier scan
+/// continues until whitespace via the `IsASpaceChar` check at
+/// `:71` (identifier-continuation is space-terminated, NOT
+/// `IsAWordStart`-restricted). So `s"` tokenizes as a single
+/// 2-char word.
+///
+/// **Deliberately excluded:**
+///   - `["]` — no clear ANS Forth / Forth-2012 attestation.
+///     Some systems have `[STRING]` but not `["]`.
+///   - `,"` — some Forth systems have comma-quote for
+///     compile-time string append, but it's not standard.
+///   - Other quote-terminated words that don't ENTER STRING
+///     state (they'd be miscategorised — must live in a
+///     different class).
+pub const FORTH_STRINGS: &str = concat!(
+    // ANS Forth CORE string-parsing openers.
+    "s\" .\" abort\" c\" ",
+    // Forth-2012 STRING wordset (escaped strings).
+    "s\\\" ",
+    // Common extensions.
+    "z\" ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

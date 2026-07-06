@@ -112,29 +112,30 @@ use codepp_core::lang::{
     CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, D_DOC_KEYWORDS,
     D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7, ERLANG_BIFS, ERLANG_DOC,
     ERLANG_DOC_MACRO, ERLANG_KEYWORDS, ERLANG_MODULE_ATT, ERLANG_PREPROC, ESCRIPT_FOLDWORDS,
-    ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS, FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS,
-    GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
-    HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS,
-    INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
-    JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS,
-    JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
-    LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
-    L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
-    L_ESCRIPT, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA,
-    L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB,
-    L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC,
-    L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML,
-    L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-    OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
-    POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-    PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
-    R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-    SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-    XML_KEYWORDS, YAML_KEYWORDS,
+    ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS, FORTH_CONTROL, FORTH_DEFWORD, FORTH_KEYWORD,
+    FORTH_PREWORD1, FORTH_PREWORD2, FORTH_STRINGS, FORTRAN_EXTENDED, FORTRAN_INTRINSICS,
+    FORTRAN_KEYWORDS, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS,
+    GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS,
+    HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR,
+    INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
+    JSON_KEYWORDS, JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS,
+    LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH,
+    L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF,
+    L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
+    L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
+    L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS,
+    L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB,
+    L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
+    NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
+    RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+    VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
+    VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
+    VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -193,8 +194,10 @@ use codepp_scintilla_sys::{
     SCE_ERLANG_OPERATOR, SCE_ERLANG_PREPROC, SCE_ERLANG_RECORD, SCE_ERLANG_RECORD_QUOTED,
     SCE_ERLANG_STRING, SCE_ERLANG_VARIABLE, SCE_ESCRIPT_BRACE, SCE_ESCRIPT_COMMENT,
     SCE_ESCRIPT_COMMENTDOC, SCE_ESCRIPT_COMMENTLINE, SCE_ESCRIPT_NUMBER, SCE_ESCRIPT_OPERATOR,
-    SCE_ESCRIPT_STRING, SCE_ESCRIPT_WORD, SCE_ESCRIPT_WORD2, SCE_ESCRIPT_WORD3, SCE_F_COMMENT,
-    SCE_F_CONTINUATION, SCE_F_LABEL, SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2,
+    SCE_ESCRIPT_STRING, SCE_ESCRIPT_WORD, SCE_ESCRIPT_WORD2, SCE_ESCRIPT_WORD3, SCE_FORTH_COMMENT,
+    SCE_FORTH_COMMENT_ML, SCE_FORTH_CONTROL, SCE_FORTH_DEFWORD, SCE_FORTH_KEYWORD,
+    SCE_FORTH_LOCALE, SCE_FORTH_NUMBER, SCE_FORTH_PREWORD1, SCE_FORTH_PREWORD2, SCE_FORTH_STRING,
+    SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_LABEL, SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2,
     SCE_F_PREPROCESSOR, SCE_F_STRING1, SCE_F_STRING2, SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2,
     SCE_F_WORD3, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE,
     SCE_GC_CONTROL, SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_CAPITAL,
@@ -4035,6 +4038,99 @@ const ESCRIPT_THEME: LangTheme = LangTheme {
     styles: ESCRIPT_STYLES,
     italic: ESCRIPT_ITALIC,
     bold: ESCRIPT_BOLD,
+};
+
+// --- LexForth ---
+// LexForth serves Forth — the stack-based concatenative
+// programming language, extension `.forth`. `L_FORTH` (id 73) is
+// the only language row using this lexer. Dispatches SCLEX_FORTH
+// (= 52, per `SciLexer.h:68`) via a six-class wordlist descriptor
+// at `LexForth.cxx:161-169`.
+//
+// **10 style mappings** covering every SCE_FORTH_* state the paint
+// loop actually emits. Two of the 12 defined slots stay unmapped:
+//   - DEFAULT (0) — whitespace / unclassified.
+//   - IDENTIFIER (3) — transient bare-identifier state that
+//     settles to CONTROL / KEYWORD / DEFWORD / PREWORD1 /
+//     PREWORD2 / STRING / DEFAULT before commit. Framework
+//     convention: leave unmapped so unmatched bare words paint
+//     at STYLE_DEFAULT.
+//
+// **Six-class descriptor is the widest of Phase 4.5** (tied with
+// Erlang's six-class set). LexForth uses class-slot granularity
+// to express Forth's traditional word categorization: structural
+// control-flow, general vocabulary, definition words, and two
+// tiers of compile-time next-token consumers.
+//
+// **Slot rationale:**
+//   - COMMENT (1) + COMMENT_ML (2) → Comment (italic). Line
+//     comments start with `\ ` (whitespace-delimited backslash);
+//     block comments use `( ... )`. Both are semantically
+//     comments and share the italic slot.
+//   - CONTROL (4) + KEYWORD (5) → Keyword (bold). Two class
+//     categories collapse to the primary bold slot — control-
+//     flow structural words and general runtime vocabulary
+//     both read as "language keywords". Same collapse
+//     discipline as Erlang's KEYWORD + BIFS → Keyword, and
+//     ESCRIPT's WORD + WORD3 → Keyword.
+//   - DEFWORD (6) → Keyword2 (accent). Definition words that
+//     create new dictionary entries deserve the accent color
+//     to visually mark word-boundary events. Also styles the
+//     auto-emitted `:` and `;` markers at LexForth.cxx:138-149.
+//   - PREWORD1 (7) + PREWORD2 (8) → Preprocessor. Two tiers
+//     of compile-time next-token consumers collapse to the
+//     preprocessor slot — semantically equivalent to Erlang's
+//     `-`-prefixed preprocessor + module-attribute pair
+//     (PREPROC + MODULES_ATT → Preprocessor).
+//   - NUMBER (9) → Number.
+//   - STRING (10) → String.
+//   - LOCALE (11) → Keyword2. Forth-2012 `{ name1 name2 ... }`
+//     local-variable declarations. Keyword2 accent matches
+//     DEFWORD since locals define named bindings, semantically
+//     a lightweight definition form.
+const FORTH_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_FORTH_COMMENT, StyleSlot::Comment),
+    (SCE_FORTH_COMMENT_ML, StyleSlot::Comment),
+    (SCE_FORTH_CONTROL, StyleSlot::Keyword),
+    (SCE_FORTH_KEYWORD, StyleSlot::Keyword),
+    (SCE_FORTH_DEFWORD, StyleSlot::Keyword2),
+    (SCE_FORTH_PREWORD1, StyleSlot::Preprocessor),
+    (SCE_FORTH_PREWORD2, StyleSlot::Preprocessor),
+    (SCE_FORTH_NUMBER, StyleSlot::Number),
+    (SCE_FORTH_STRING, StyleSlot::String),
+    (SCE_FORTH_LOCALE, StyleSlot::Keyword2),
+];
+
+// Italic on both comment states — universal Code++ comment
+// convention.
+const FORTH_ITALIC: &[usize] = &[SCE_FORTH_COMMENT, SCE_FORTH_COMMENT_ML];
+
+// Bold on CONTROL + KEYWORD — the two "language vocabulary"
+// classes semantically collapsed. Same discipline as Erlang
+// KEYWORD + BIFS → bold, ESCRIPT WORD + WORD3 → bold.
+const FORTH_BOLD: &[usize] = &[SCE_FORTH_CONTROL, SCE_FORTH_KEYWORD];
+
+// Six-class install matches `forthWordLists[]` at
+// `LexForth.cxx:161-169`. Order is load-bearing —
+// `SCI_SETKEYWORDS` respects wordlist-descriptor order and the
+// identifier classifier at `:75-88` probes class 0 → 5 in exactly
+// this order first-match-wins. A token duplicated in an earlier
+// class silently wins over its later-class sibling, so
+// cross-class disjointness is required for correct styling; the
+// invariant test enforces this pairwise across all 15 class
+// pairs.
+const FORTH_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, FORTH_CONTROL),
+        (1, FORTH_KEYWORD),
+        (2, FORTH_DEFWORD),
+        (3, FORTH_PREWORD1),
+        (4, FORTH_PREWORD2),
+        (5, FORTH_STRINGS),
+    ],
+    styles: FORTH_STYLES,
+    italic: FORTH_ITALIC,
+    bold: FORTH_BOLD,
 };
 
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
@@ -8773,6 +8869,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&ERLANG_THEME)
     } else if lang == L_ESCRIPT {
         Some(&ESCRIPT_THEME)
+    } else if lang == L_FORTH {
+        Some(&FORTH_THEME)
     } else {
         None
     }
@@ -23928,10 +24026,11 @@ mod lang_theme_tests {
         extra_fold_properties, lang_theme, slot_color, StyleSlot, ASM_CPU_KEYWORDS,
         ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS,
         ASM_REG_KEYWORDS, ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC,
-        ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD, FG_MACRO, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
-        SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER,
-        SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
-        SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES,
+        SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER,
+        SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL,
+        SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
+        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
         SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
         SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
         SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
@@ -23996,6 +24095,7 @@ mod lang_theme_tests {
         CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META,
         D_SPECIAL, D_TYPES, D_WORD7, ERLANG_BIFS, ERLANG_DOC, ERLANG_DOC_MACRO, ERLANG_KEYWORDS,
         ERLANG_MODULE_ATT, ERLANG_PREPROC, ESCRIPT_FOLDWORDS, ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS,
+        FORTH_CONTROL, FORTH_DEFWORD, FORTH_KEYWORD, FORTH_PREWORD1, FORTH_PREWORD2, FORTH_STRINGS,
         FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GUI4CLI_ATTRIBUTES,
         GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS,
         HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS,
@@ -24004,21 +24104,21 @@ mod lang_theme_tests {
         JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
         LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
         L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
-        L_ESCRIPT, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA,
-        L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB,
-        L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC,
-        L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG,
-        L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-        POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
-        POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-        PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
-        RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
-        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
-        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
-        VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+        L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO,
+        L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
+        L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON,
+        L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB,
+        L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
+        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
+        PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
+        POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
+        PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+        RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
+        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
+        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -24045,16 +24145,18 @@ mod lang_theme_tests {
         SCE_ERLANG_RECORD, SCE_ERLANG_RECORD_QUOTED, SCE_ERLANG_STRING, SCE_ERLANG_VARIABLE,
         SCE_ESCRIPT_BRACE, SCE_ESCRIPT_COMMENT, SCE_ESCRIPT_COMMENTDOC, SCE_ESCRIPT_COMMENTLINE,
         SCE_ESCRIPT_NUMBER, SCE_ESCRIPT_OPERATOR, SCE_ESCRIPT_STRING, SCE_ESCRIPT_WORD,
-        SCE_ESCRIPT_WORD2, SCE_ESCRIPT_WORD3, SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_DEFAULT,
-        SCE_F_IDENTIFIER, SCE_F_LABEL, SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2,
-        SCE_F_PREPROCESSOR, SCE_F_STRING1, SCE_F_STRING2, SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2,
-        SCE_F_WORD3, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE,
-        SCE_GC_CONTROL, SCE_GC_DEFAULT, SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR,
-        SCE_GC_STRING, SCE_HA_IDENTIFIER, SCE_HA_IMPORT, SCE_INNO_IDENTIFIER,
-        SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI, SCE_JSON_DEFAULT, SCE_JSON_ERROR,
-        SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT,
-        SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME, SCE_JSON_STRING,
-        SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT,
+        SCE_ESCRIPT_WORD2, SCE_ESCRIPT_WORD3, SCE_FORTH_COMMENT, SCE_FORTH_COMMENT_ML,
+        SCE_FORTH_CONTROL, SCE_FORTH_DEFWORD, SCE_FORTH_KEYWORD, SCE_FORTH_LOCALE,
+        SCE_FORTH_NUMBER, SCE_FORTH_PREWORD1, SCE_FORTH_PREWORD2, SCE_FORTH_STRING, SCE_F_COMMENT,
+        SCE_F_CONTINUATION, SCE_F_DEFAULT, SCE_F_IDENTIFIER, SCE_F_LABEL, SCE_F_NUMBER,
+        SCE_F_OPERATOR, SCE_F_OPERATOR2, SCE_F_PREPROCESSOR, SCE_F_STRING1, SCE_F_STRING2,
+        SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2, SCE_F_WORD3, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND,
+        SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_DEFAULT, SCE_GC_EVENT,
+        SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_IDENTIFIER, SCE_HA_IMPORT,
+        SCE_INNO_IDENTIFIER, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI, SCE_JSON_DEFAULT,
+        SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD,
+        SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME,
+        SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT,
         SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER,
         SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER,
         SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD,
@@ -24109,6 +24211,7 @@ mod lang_theme_tests {
             (L_CSOUND, "CSound"),
             (L_ERLANG, "Erlang"),
             (L_ESCRIPT, "ESCRIPT"),
+            (L_FORTH, "Forth"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -35721,6 +35824,540 @@ mod lang_theme_tests {
         }
     }
 
+    /// Forth uses Lexilla's `forth` lexer (`LexForth.cxx`) — the
+    /// stack-based concatenative programming language. Distinctive
+    /// features:
+    ///
+    /// - **Six-class descriptor**, the widest of Phase 4.5 (tied
+    ///   with Erlang). Classes 0 → 5 map to CONTROL / KEYWORD /
+    ///   DEFWORD / PREWORD1 / PREWORD2 / STRING per
+    ///   `forthWordLists[]` at `LexForth.cxx:161-169`.
+    /// - **First-match-wins cascade** at `:75-88` probes classes
+    ///   0 → 5 in order. Cross-class disjointness is REQUIRED —
+    ///   a duplicate in an earlier class silently wins over the
+    ///   later-class sibling. Test invariant #6 enforces this
+    ///   pairwise across all 15 class-pair combinations.
+    /// - **Case-INSENSITIVE** via `sc.GetCurrentLowered` at
+    ///   `:73` — wordlists must be lowercase.
+    /// - **Class 5 STRING is behaviorally distinct.** At `:86-87`
+    ///   a class-5 hit sets `newState = SCE_FORTH_STRING`, so
+    ///   the lexer stays in STRING state through subsequent
+    ///   characters until the closing `"` at `:98-101`. This
+    ///   makes STRING wordlist entries exclusively
+    ///   string-parsing openers (`s"` / `."` / `abort"` / etc.).
+    /// - **Auto-styled `:` and `;`** at `:138-149` bypass the
+    ///   wordlist probe — the paint loop emits
+    ///   `SCE_FORTH_DEFWORD` directly for these two chars in
+    ///   whitespace-delimited positions.
+    /// - **No fold** — `FoldForthDoc` at `:157-159` is a no-op
+    ///   stub. Forth's whitespace-delimited nested-parenthesis
+    ///   grammar doesn't admit line-based folding.
+    /// - **Symbolic word alphabet.** `IsAWordStart` at `:31-35`
+    ///   accepts alnum + `!#'(*+,-./<=>?@[\]_` — Forth
+    ///   traditionally allows symbolic word names like `!`,
+    ///   `@`, `>r`, `+!`, `,`. (Note: `(` is accepted but `)`
+    ///   is NOT — the block-comment terminator is not a legal
+    ///   word-start character in `LexForth`'s alphabet.)
+    ///
+    /// Coverage invariants asserted:
+    ///   1. Deep-value identity pin — dispatcher-returned theme
+    ///      value-equals `FORTH_STYLES` / `ITALIC` / `BOLD`.
+    ///      (Pointer-equality is unreliable for `const` items.)
+    ///   2. Style count == 10 (12 defined `SCE_FORTH_*` slots
+    ///      minus `DEFAULT` (0) + `IDENTIFIER` (3), both
+    ///      unmapped per framework convention).
+    ///   3. Six wordlist classes in canonical order (0..=5)
+    ///      matching `forthWordLists[]` at `:161-169`.
+    ///   4. All six classes non-empty.
+    ///   5. Lowercase-only Forth-word alphabet enforcement,
+    ///      applied UNIFORMLY across all six classes. The
+    ///      `is_forth_word_char` predicate accepts the union of:
+    ///      alnum, `LexForth`'s `IsAWordStart` symbolic set
+    ///      (`! # ' ( * + , - . / < = > ? @ [ \ ] _`), and the
+    ///      identifier-continuation-only chars `:` and `"` (Forth
+    ///      terminates identifiers on whitespace at
+    ///      `LexForth.cxx:71`, so any non-space char can extend a
+    ///      token once started).
+    ///   6. **Cross-class disjointness for ALL 15 class-pair
+    ///      combinations** — LOAD-BEARING for correct styling.
+    ///      The first-match-wins cascade at
+    ///      `LexForth.cxx:75-88` means a duplicate in an
+    ///      earlier class silently masks its later-class
+    ///      sibling.
+    ///   7. Style-routing pins for all 10 mapped SCE constants.
+    ///   8. DEFAULT (0) and IDENTIFIER (3) unmapped.
+    ///   9. Italic set == 2 (both comment states).
+    ///   10. Bold set == 2 (CONTROL + KEYWORD).
+    ///   11. Cross-language non-reuse — `FORTH_STYLES` must
+    ///       not deep-equal a sampled set of four sibling
+    ///       themes (Erlang / `CSound` / Fortran / ESCRIPT).
+    ///   12. `L_FORTH` `LangEntry` has `lexer: Some("forth")`
+    ///       and extensions contain `forth`.
+    ///   13. **Auto-styled markers `:` and `;` absent from
+    ///       DEFWORD wordlist.** The paint loop at
+    ///       `LexForth.cxx:138-149` emits `SCE_FORTH_DEFWORD`
+    ///       directly for these two chars — a wordlist entry
+    ///       would be dead code, and if a future contributor
+    ///       adds them and then removes them from the
+    ///       auto-styling in a lexer bump, the wordlist
+    ///       fallback would silently hide the regression.
+    ///   14. **Canonical control anchors in class 0**: `if`,
+    ///       `else`, `then`, `begin`, `do`, `case`, `recurse`,
+    ///       `[if]` — one from each sub-family (conditional,
+    ///       indefinite loop, counted loop, case-select,
+    ///       definition-control, compile-time bracket).
+    ///   15. **Canonical keyword anchors in class 1**: `dup`,
+    ///       `drop`, `swap`, `@`, `!`, `+`, `emit`, `i`, `j`,
+    ///       `f+`, `true`, `false` — spanning stack ops,
+    ///       memory, arithmetic, I/O, loop indices, FLOAT,
+    ///       truth values.
+    ///   16. **Canonical defword anchors in class 2**:
+    ///       `variable`, `constant`, `create`, `does>`,
+    ///       `immediate`, `buffer:`.
+    ///   17. **Canonical preword1 anchors in class 3**:
+    ///       `postpone`, `[']`, `to`, `is`, `include`,
+    ///       `marker`, `[defined]`.
+    ///   18. **Class 4 exactly 2 tokens**: `synonym` and
+    ///       `alias`. Pinning cardinality prevents a future
+    ///       contributor from fabricating additional
+    ///       "2-argument prewords" without ANS Forth /
+    ///       Forth-2012 attestation.
+    ///   19. **All 6 STRING tokens end in `"`** — LOAD-BEARING
+    ///       for class-5 behavior. The lexer at
+    ///       `LexForth.cxx:86-87` transitions to STRING state
+    ///       on match; if a class-5 token DOESN'T end in `"`,
+    ///       the STRING state's exit condition (`sc.ch ==
+    ///       '\"'` at `:99`) never fires and the lexer stays
+    ///       stuck in STRING for the remainder of the buffer.
+    ///   20. **No duplicate tokens within any single wordlist**
+    ///       — defence-in-depth invariant.
+    #[test]
+    fn forth_uses_lexforth_six_class_theme() {
+        let fo = lang_theme(L_FORTH).expect("Forth wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(fo.styles, FORTH_STYLES);
+        assert_eq!(fo.italic, FORTH_ITALIC);
+        assert_eq!(fo.bold, FORTH_BOLD);
+        assert_eq!(fo.keywords.len(), 6);
+
+        // Invariant 2: 10 mappings.
+        assert_eq!(
+            fo.styles.len(),
+            10,
+            "FORTH_STYLES must map 10 indices (12 defined SCE_FORTH_* \
+             slots minus DEFAULT (0) + IDENTIFIER (3), both unmapped \
+             per framework convention)"
+        );
+
+        // Invariant 3: six classes canonical descriptor order.
+        for (i, (expected_class, expected_list)) in [
+            (0u32, FORTH_CONTROL),
+            (1u32, FORTH_KEYWORD),
+            (2u32, FORTH_DEFWORD),
+            (3u32, FORTH_PREWORD1),
+            (4u32, FORTH_PREWORD2),
+            (5u32, FORTH_STRINGS),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                fo.keywords[i].0, *expected_class,
+                "FORTH_THEME.keywords[{i}].class must match descriptor order"
+            );
+            assert_eq!(
+                fo.keywords[i].1, *expected_list,
+                "FORTH_THEME.keywords[{i}].list must match canonical wordlist"
+            );
+        }
+
+        // Invariant 4: all six classes non-empty.
+        for (list, name) in [
+            (FORTH_CONTROL, "CONTROL"),
+            (FORTH_KEYWORD, "KEYWORD"),
+            (FORTH_DEFWORD, "DEFWORD"),
+            (FORTH_PREWORD1, "PREWORD1"),
+            (FORTH_PREWORD2, "PREWORD2"),
+            (FORTH_STRINGS, "STRINGS"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "FORTH_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: all-lowercase alphabet across every class.
+        // `LexForth.cxx:73` GetCurrentLowered means any uppercase
+        // letter would zero-match. IsAWordStart at :31-35 controls
+        // which chars can START an identifier — alnum plus
+        // symbolic `! # ' ( ) * + , - . / < = > ? @ [ \ ] _`. But
+        // the identifier-continuation is IsASpaceChar-only at :71,
+        // meaning any non-whitespace char can extend a token once
+        // started. So mid-token chars like `:` (in `buffer:`) or
+        // `"` (in class 5 STRINGS) are valid even though
+        // IsAWordStart excludes them. The alphabet check below
+        // uses the WORD-CONTINUE alphabet: alnum + the full
+        // IsAWordStart symbolic set + `:` + `"`.
+        let is_forth_word_char = |b: u8| {
+            b.is_ascii_lowercase()
+                || b.is_ascii_digit()
+                || matches!(
+                    b,
+                    // IsAWordStart alphabet from LexForth.cxx:34
+                    // (verified by direct read of the vendored
+                    // source): `!` `#` `'` `(` `*` `+` `,` `-`
+                    // `.` `/` `<` `=` `>` `?` `@` `[` `\` `]` `_`.
+                    // Note `)` is deliberately absent — the
+                    // block-comment terminator is not a legal
+                    // word-start character. Additionally allow `:`
+                    // and `"` mid-token (identifier-continuation
+                    // is IsASpaceChar-only at :71, so any
+                    // non-whitespace can extend a token once
+                    // started).
+                    b'!' | b'#'
+                        | b'\''
+                        | b'('
+                        | b'*'
+                        | b'+'
+                        | b','
+                        | b'-'
+                        | b'.'
+                        | b'/'
+                        | b':'
+                        | b'<'
+                        | b'='
+                        | b'>'
+                        | b'?'
+                        | b'@'
+                        | b'['
+                        | b'\\'
+                        | b']'
+                        | b'_'
+                        | b'"'
+                )
+        };
+        for (list, name) in [
+            (FORTH_CONTROL, "CONTROL"),
+            (FORTH_KEYWORD, "KEYWORD"),
+            (FORTH_DEFWORD, "DEFWORD"),
+            (FORTH_PREWORD1, "PREWORD1"),
+            (FORTH_PREWORD2, "PREWORD2"),
+            (FORTH_STRINGS, "STRINGS"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    !tok.is_empty() && tok.bytes().all(is_forth_word_char),
+                    "FORTH_{name} token `{tok}` violates lowercase-only \
+                     Forth-word alphabet — LexForth's GetCurrentLowered \
+                     at :73 lowercases the source, so all wordlist \
+                     entries must be lowercase; word-continuation chars \
+                     from IsAWordStart at :31-35 plus `:` `\"` mid-token"
+                );
+            }
+        }
+
+        // Invariant 6: cross-class disjointness across ALL 15
+        // class-pair combinations. LOAD-BEARING — the
+        // first-match-wins cascade at LexForth.cxx:75-88 makes a
+        // duplicate in an earlier class silently mask its
+        // later-class sibling.
+        use std::collections::HashSet;
+        let sets = [
+            (
+                "CONTROL",
+                FORTH_CONTROL.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "KEYWORD",
+                FORTH_KEYWORD.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "DEFWORD",
+                FORTH_DEFWORD.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "PREWORD1",
+                FORTH_PREWORD1.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "PREWORD2",
+                FORTH_PREWORD2.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "STRINGS",
+                FORTH_STRINGS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                if let Some(shared) = sets[i].1.intersection(&sets[j].1).next() {
+                    panic!(
+                        "FORTH_{} and FORTH_{} both contain `{shared}` — \
+                         LexForth.cxx:75-88 probes classes 0..=5 \
+                         first-match-wins. Cross-class duplicate leaves \
+                         the later entry dead code.",
+                        sets[i].0, sets[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 7: style-routing pins for all 10 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_FORTH_COMMENT, StyleSlot::Comment, "COMMENT"),
+            (SCE_FORTH_COMMENT_ML, StyleSlot::Comment, "COMMENT_ML"),
+            (SCE_FORTH_CONTROL, StyleSlot::Keyword, "CONTROL"),
+            (SCE_FORTH_KEYWORD, StyleSlot::Keyword, "KEYWORD"),
+            (SCE_FORTH_DEFWORD, StyleSlot::Keyword2, "DEFWORD"),
+            (SCE_FORTH_PREWORD1, StyleSlot::Preprocessor, "PREWORD1"),
+            (SCE_FORTH_PREWORD2, StyleSlot::Preprocessor, "PREWORD2"),
+            (SCE_FORTH_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_FORTH_STRING, StyleSlot::String, "STRING"),
+            (SCE_FORTH_LOCALE, StyleSlot::Keyword2, "LOCALE"),
+        ] {
+            assert!(
+                fo.styles.contains(&(idx, slot)),
+                "SCE_FORTH_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: DEFAULT (0) and IDENTIFIER (3) unmapped.
+        for (idx, name) in [(0_usize, "DEFAULT"), (3, "IDENTIFIER")] {
+            assert!(
+                !fo.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_FORTH_{name} ({idx}) must remain unmapped — \
+                 framework convention"
+            );
+        }
+
+        // Invariant 9: italic == 2 (both comment states).
+        assert_eq!(fo.italic.len(), 2);
+        assert!(fo.italic.contains(&SCE_FORTH_COMMENT));
+        assert!(fo.italic.contains(&SCE_FORTH_COMMENT_ML));
+
+        // Invariant 10: bold == 2 (CONTROL + KEYWORD — the two
+        // "language vocabulary" classes semantically collapsed).
+        assert_eq!(fo.bold.len(), 2);
+        assert!(fo.bold.contains(&SCE_FORTH_CONTROL));
+        assert!(fo.bold.contains(&SCE_FORTH_KEYWORD));
+
+        // Invariant 11: cross-language non-reuse (sampled set).
+        let er = lang_theme(L_ERLANG).expect("Erlang wired");
+        let cs = lang_theme(L_CSOUND).expect("CSound wired");
+        let f = lang_theme(L_FORTRAN).expect("Fortran wired");
+        let es = lang_theme(L_ESCRIPT).expect("ESCRIPT wired");
+        for (other, name) in [
+            (er, "Erlang"),
+            (cs, "CSound"),
+            (f, "Fortran"),
+            (es, "ESCRIPT"),
+        ] {
+            assert_ne!(
+                fo.styles, other.styles,
+                "Forth must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 12: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let fo_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_FORTH)
+            .expect("L_FORTH LangEntry present in LANG_TABLE");
+        assert_eq!(
+            fo_entry.lexer,
+            Some("forth"),
+            "L_FORTH LangEntry.lexer must be Some(\"forth\") — wiring \
+             assumes the LexForth module dispatched via SCLEX_FORTH (= 52)"
+        );
+        assert!(
+            fo_entry.extensions.contains(&"forth"),
+            "L_FORTH extensions must contain `forth`"
+        );
+
+        // Invariant 13: `:` and `;` absent from DEFWORD wordlist —
+        // auto-styled by paint loop at :138-149, wordlist entry
+        // would be dead code.
+        for tok in [":", ";"] {
+            assert!(
+                !FORTH_DEFWORD.split_whitespace().any(|t| t == tok),
+                "FORTH_DEFWORD must NOT include `{tok}` — auto-styled \
+                 as SCE_FORTH_DEFWORD by paint loop at \
+                 LexForth.cxx:138-149 without wordlist lookup; \
+                 duplicating here is dead code"
+            );
+        }
+
+        // Invariant 14: canonical control anchors — one from each
+        // sub-family.
+        for tok in [
+            "if", "else", "then", "begin", "do", "case", "recurse", "[if]",
+        ] {
+            assert!(
+                FORTH_CONTROL.split_whitespace().any(|t| t == tok),
+                "FORTH_CONTROL must include canonical control token `{tok}`"
+            );
+        }
+
+        // Invariant 15: canonical keyword anchors — at least one
+        // representative from each of the 16 docstring-declared
+        // sub-families so a `concat!()` line deletion in any
+        // section is caught. Extended from the original 12-anchor
+        // set after adversarial review flagged 9 sub-families
+        // with zero coverage; the anchor rule now matches
+        // Invariant 14's "one anchor per sub-family" discipline.
+        for tok in [
+            // Stack manipulation.
+            "dup",
+            "drop",
+            "swap",
+            // Arithmetic.
+            "+",
+            "mod",
+            // Comparison.
+            "=",
+            "within",
+            // Logic.
+            "and",
+            // Memory access.
+            "@",
+            "!",
+            // Cell / char sizing.
+            "cell",
+            // Base & pictured numeric output.
+            "base",
+            // I/O.
+            "emit",
+            // Dictionary primitives.
+            "find",
+            "align",
+            // Compile-time helpers not parsing names.
+            "state",
+            // Search-order.
+            "only",
+            // String operations.
+            "count",
+            // Parsing accessors.
+            "refill",
+            // File input (stack-consuming).
+            "include-file",
+            // Exception & termination.
+            "abort",
+            // Debug / introspection.
+            "dump",
+            // Truth values.
+            "true",
+            "false",
+            // Loop indices.
+            "i",
+            "j",
+            // Basic FLOAT set.
+            "f+",
+        ] {
+            assert!(
+                FORTH_KEYWORD.split_whitespace().any(|t| t == tok),
+                "FORTH_KEYWORD must include canonical keyword `{tok}` — \
+                 one anchor per sub-family to catch a `concat!()` line \
+                 deletion"
+            );
+        }
+
+        // Invariant 16: canonical defword anchors.
+        for tok in [
+            "variable",
+            "constant",
+            "create",
+            "does>",
+            "immediate",
+            "buffer:",
+        ] {
+            assert!(
+                FORTH_DEFWORD.split_whitespace().any(|t| t == tok),
+                "FORTH_DEFWORD must include canonical defword `{tok}`"
+            );
+        }
+
+        // Invariant 17: canonical preword1 anchors.
+        for tok in [
+            "postpone",
+            "[']",
+            "to",
+            "is",
+            "include",
+            "marker",
+            "[defined]",
+        ] {
+            assert!(
+                FORTH_PREWORD1.split_whitespace().any(|t| t == tok),
+                "FORTH_PREWORD1 must include canonical preword1 `{tok}`"
+            );
+        }
+        // Affirmative absence pin: `include-file` must NOT sit in
+        // PREWORD1. Forth-2012 §11.6.1.1717 defines it with stack
+        // signature `( i*x fileid -- j*x )` — it consumes a fileid
+        // from the data stack, not the input stream, so it's a
+        // general vocabulary word (class 1 KEYWORD), not a preword.
+        assert!(
+            !FORTH_PREWORD1
+                .split_whitespace()
+                .any(|t| t == "include-file"),
+            "FORTH_PREWORD1 must NOT include `include-file` — Forth-2012 \
+             §11.6.1.1717 defines it as `( fileid -- )`, stack-consuming; \
+             belongs in FORTH_KEYWORD as general vocabulary"
+        );
+
+        // Invariant 18: class 4 exactly 2 tokens (synonym + alias).
+        // Pinning cardinality prevents future fabrication.
+        let preword2_tokens: Vec<&str> = FORTH_PREWORD2.split_whitespace().collect();
+        assert_eq!(
+            preword2_tokens.len(),
+            2,
+            "FORTH_PREWORD2 must contain exactly 2 tokens (synonym + \
+             alias); any additional 'preword with 2 arguments' entry \
+             requires ANS Forth / Forth-2012 attestation"
+        );
+        assert!(preword2_tokens.contains(&"synonym"));
+        assert!(preword2_tokens.contains(&"alias"));
+
+        // Invariant 19: all STRINGS tokens end in `"` — LOAD-BEARING
+        // for class-5 STRING-state entry/exit correctness at
+        // LexForth.cxx:86-87 and :98-101.
+        for tok in FORTH_STRINGS.split_whitespace() {
+            assert!(
+                tok.ends_with('"'),
+                "FORTH_STRINGS token `{tok}` must end in `\"` — \
+                 LexForth.cxx:86-87 transitions to STRING state on \
+                 class-5 match and only exits at :98-101 on the next \
+                 `\"`; a class-5 token without a trailing quote would \
+                 leave the lexer stuck in STRING for the remainder \
+                 of the buffer"
+            );
+        }
+
+        // Invariant 20: no duplicate tokens within any single wordlist.
+        for (list, name) in [
+            (FORTH_CONTROL, "CONTROL"),
+            (FORTH_KEYWORD, "KEYWORD"),
+            (FORTH_DEFWORD, "DEFWORD"),
+            (FORTH_PREWORD1, "PREWORD1"),
+            (FORTH_PREWORD2, "PREWORD2"),
+            (FORTH_STRINGS, "STRINGS"),
+        ] {
+            let total = list.split_whitespace().count();
+            let unique = list.split_whitespace().collect::<HashSet<_>>().len();
+            assert_eq!(
+                total,
+                unique,
+                "FORTH_{name} contains {} duplicate token(s) — \
+                 `WordList::InList` is set-based so duplicates are \
+                 functionally harmless but hide typos and corrupt \
+                 docstring token-count claims",
+                total - unique
+            );
+        }
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -35733,8 +36370,9 @@ mod lang_theme_tests {
     /// `L_FORTRAN` / `L_FORTRAN_77` were removed when the Fortran
     /// row landed. `L_CSOUND` was removed when the `CSound` row
     /// landed. `L_ERLANG` was removed when the Erlang row landed.
-    /// `L_ESCRIPT` was removed when the ESCRIPT row landed in
-    /// this commit.
+    /// `L_ESCRIPT` was removed when the ESCRIPT row landed.
+    /// `L_FORTH` was removed when the Forth row landed in this
+    /// commit.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");
