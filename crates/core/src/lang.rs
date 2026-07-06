@@ -10839,6 +10839,266 @@ pub const FORTH_STRINGS: &str = concat!(
     "z\" ",
 );
 
+/// MMIXAL operation codes — class 0 of `LexMMIXAL`'s three-class
+/// descriptor (`MMIXALWordListDesc[]` at
+/// `LexMMIXAL.cxx:178-183`). Matched at `LexMMIXAL.cxx:123-127`
+/// via `opcodes.InList(s)` after `sc.GetCurrent(s, sizeof(s))`
+/// at `:123`; hits change state to
+/// [`SCE_MMIXAL_OPCODE_VALID`](../scintilla_sys/constant.SCE_MMIXAL_OPCODE_VALID.html),
+/// misses fall through to `SCE_MMIXAL_OPCODE_UNKNOWN`.
+///
+/// **Byte-exact case-sensitive.** MMIXAL convention writes
+/// opcodes in uppercase (`ADD`, `TRAP`, `LDO`); the lexer's
+/// `GetCurrent` (not `GetCurrentLowered`) probes the wordlist
+/// verbatim, so entries here must be uppercase.
+///
+/// **Source:** Donald Knuth, *The Art of Computer Programming*
+/// Vol 1 Fascicle 1 §MMIX Assembly Language, and `MMIXware` Vol 1
+/// (opcode table, Appendix D). The 256 MMIX byte-code opcodes
+/// group into two-byte families where one byte is the
+/// register-register form and the neighbour is the immediate
+/// form (suffixed `I` in the mnemonic). MMIXAL accepts either
+/// form explicitly, and Knuth's assembler auto-selects when the
+/// programmer writes only the base mnemonic — so this wordlist
+/// includes BOTH forms.
+///
+/// **Forward/backward branch encoding.** Branch opcodes have
+/// paired forward-vs-backward byte encodings (e.g. `BN`=0x40,
+/// `BNB`=0x41), but MMIXAL SOURCE writes only the base
+/// mnemonic (`BN`); the assembler picks the encoding based on
+/// whether the branch offset is positive or negative. So the
+/// wordlist has `BN`, `BZ`, ..., not the `-B`-suffixed variants.
+///
+/// **Digit-prefix mnemonics.** `2ADDU`, `4ADDU`, `8ADDU`,
+/// `16ADDU` (and their `-I` immediate forms) are legitimate
+/// opcode mnemonics. `LexMMIXAL.cxx:117-119` transitions from
+/// `OPCODE_PRE` to `OPCODE` on ANY non-space (not
+/// `IsAWordStart`-restricted), so the digit starter is accepted
+/// into the opcode-collect state; the subsequent
+/// `IsAWordChar` sweep collects the full alphanumeric span.
+///
+/// **239 tokens** organised by opcode family:
+///   - **Floating-point** (15): `FCMP`, `FUN`, `FEQL`, `FADD`,
+///     `FIX`, `FSUB`, `FIXU`, `FMUL`, `FCMPE`, `FUNE`, `FEQLE`,
+///     `FDIV`, `FSQRT`, `FREM`, `FINT`.
+///   - **Integer multiply/divide/add/sub** (16, base + `I`):
+///     `MUL`/`MULI`, `MULU`/`MULUI`, `DIV`/`DIVI`, `DIVU`/`DIVUI`,
+///     `ADD`/`ADDI`, `ADDU`/`ADDUI`, `SUB`/`SUBI`, `SUBU`/`SUBUI`.
+///   - **Scaled-add + compare + negate** (16, base + `I`):
+///     `2ADDU`/`2ADDUI`, `4ADDU`/`4ADDUI`, `8ADDU`/`8ADDUI`,
+///     `16ADDU`/`16ADDUI`, `CMP`/`CMPI`, `CMPU`/`CMPUI`,
+///     `NEG`/`NEGI`, `NEGU`/`NEGUI`.
+///   - **Shifts** (8, base + `I`): `SL`/`SLI`, `SLU`/`SLUI`,
+///     `SR`/`SRI`, `SRU`/`SRUI`.
+///   - **Branches (base only, `-B` fwd/back suffix is
+///     encoding-level, not source-level)** (16):
+///     `BN`, `BZ`, `BP`, `BOD`, `BNN`, `BNZ`, `BNP`, `BEV`,
+///     `PBN`, `PBZ`, `PBP`, `PBOD`, `PBNN`, `PBNZ`, `PBNP`, `PBEV`.
+///   - **Conditional-set / zero-or-set** (32, base + `I`):
+///     `CSN`/`CSNI`, `CSZ`/`CSZI`, `CSP`/`CSPI`, `CSOD`/`CSODI`,
+///     `CSNN`/`CSNNI`, `CSNZ`/`CSNZI`, `CSNP`/`CSNPI`,
+///     `CSEV`/`CSEVI`, `ZSN`/`ZSNI`, `ZSZ`/`ZSZI`, `ZSP`/`ZSPI`,
+///     `ZSOD`/`ZSODI`, `ZSNN`/`ZSNNI`, `ZSNZ`/`ZSNZI`,
+///     `ZSNP`/`ZSNPI`, `ZSEV`/`ZSEVI`.
+///   - **Loads** (24, base + `I`): `LDB`/`LDBI`, `LDBU`/`LDBUI`,
+///     `LDW`/`LDWI`, `LDWU`/`LDWUI`, `LDT`/`LDTI`, `LDTU`/`LDTUI`,
+///     `LDO`/`LDOI`, `LDOU`/`LDOUI`, `LDSF`/`LDSFI`,
+///     `LDHT`/`LDHTI`, `CSWAP`/`CSWAPI`, `LDUNC`/`LDUNCI`.
+///   - **Load-associated + GO** (8, base + `I`):
+///     `LDVTS`/`LDVTSI`, `PRELD`/`PRELDI`, `PREGO`/`PREGOI`,
+///     `GO`/`GOI`.
+///   - **Stores** (24, base + `I`): `STB`/`STBI`, `STBU`/`STBUI`,
+///     `STW`/`STWI`, `STWU`/`STWUI`, `STT`/`STTI`, `STTU`/`STTUI`,
+///     `STO`/`STOI`, `STOU`/`STOUI`, `STSF`/`STSFI`,
+///     `STHT`/`STHTI`, `STCO`/`STCOI`, `STUNC`/`STUNCI`.
+///   - **Store-associated + PUSHGO** (8, base + `I`):
+///     `SYNCD`/`SYNCDI`, `PREST`/`PRESTI`, `SYNCID`/`SYNCIDI`,
+///     `PUSHGO`/`PUSHGOI`.
+///   - **Bitwise / byte-wise-difference / multiplex** (32, base +
+///     `I`): `OR`/`ORI`, `ORN`/`ORNI`, `NOR`/`NORI`, `XOR`/`XORI`,
+///     `AND`/`ANDI`, `ANDN`/`ANDNI`, `NAND`/`NANDI`,
+///     `NXOR`/`NXORI`, `BDIF`/`BDIFI`, `WDIF`/`WDIFI`,
+///     `TDIF`/`TDIFI`, `ODIF`/`ODIFI`, `MUX`/`MUXI`,
+///     `SADD`/`SADDI`, `MOR`/`MORI`, `MXOR`/`MXORI`.
+///   - **Set/increment high/low, byte-wise or/andn** (16):
+///     `SETH`, `SETMH`, `SETML`, `SETL`, `INCH`, `INCMH`, `INCML`,
+///     `INCL`, `ORH`, `ORMH`, `ORML`, `ORL`, `ANDNH`, `ANDNMH`,
+///     `ANDNML`, `ANDNL`.
+///   - **Jump / call / stack** (5): `JMP`, `PUSHJ`, `GETA`, `PUT`,
+///     `POP`. (No `-B` fwd/back suffixes at source level.)
+///   - **System / privileged** (8): `RESUME`, `SAVE`, `UNSAVE`,
+///     `SYNC`, `SWYM`, `GET`, `TRAP`, `TRIP`.
+///   - **Immediate-form privileged** (1): `PUTI`. `PUT` is the
+///     only opcode in this group with a distinct immediate byte
+///     pair (0xF6/0xF7); TRAP/RESUME/SAVE/UNSAVE/SYNC/SWYM/GET/
+///     TRIP don't have `-I` mnemonics because their operand
+///     patterns don't admit a register-vs-immediate distinction
+///     (many take X as a small literal code with Y=Z=0, or are
+///     PC-relative).
+///   - **Assembler pseudo-ops** (10): `BYTE`, `WYDE`, `TETRA`,
+///     `OCTA`, `LOC`, `GREG`, `PREFIX`, `BSPEC`, `ESPEC`, `IS`.
+///     `IS` declares an equate (`sym IS value`); `LOC` sets the
+///     assembly location; `GREG` reserves a global register;
+///     `PREFIX` scopes label names; `BSPEC`/`ESPEC` bracket
+///     lexicographically-special sections. `BYTE`/`WYDE`/
+///     `TETRA`/`OCTA` emit data of 1/2/4/8 bytes respectively.
+pub const MMIXAL_OPCODES: &str = concat!(
+    // Floating-point (15).
+    "FCMP FUN FEQL FADD FIX FSUB FIXU FMUL FCMPE FUNE FEQLE FDIV FSQRT FREM FINT ",
+    // Integer multiply/divide/add/sub (16).
+    "MUL MULI MULU MULUI DIV DIVI DIVU DIVUI ",
+    "ADD ADDI ADDU ADDUI SUB SUBI SUBU SUBUI ",
+    // Scaled-add + compare + negate (16).
+    "2ADDU 2ADDUI 4ADDU 4ADDUI 8ADDU 8ADDUI 16ADDU 16ADDUI ",
+    "CMP CMPI CMPU CMPUI NEG NEGI NEGU NEGUI ",
+    // Shifts (8).
+    "SL SLI SLU SLUI SR SRI SRU SRUI ",
+    // Branches — source uses base mnemonic; assembler picks fwd/back byte (16).
+    "BN BZ BP BOD BNN BNZ BNP BEV ",
+    "PBN PBZ PBP PBOD PBNN PBNZ PBNP PBEV ",
+    // Conditional-set / zero-or-set (32).
+    "CSN CSNI CSZ CSZI CSP CSPI CSOD CSODI ",
+    "CSNN CSNNI CSNZ CSNZI CSNP CSNPI CSEV CSEVI ",
+    "ZSN ZSNI ZSZ ZSZI ZSP ZSPI ZSOD ZSODI ",
+    "ZSNN ZSNNI ZSNZ ZSNZI ZSNP ZSNPI ZSEV ZSEVI ",
+    // Loads (24).
+    "LDB LDBI LDBU LDBUI LDW LDWI LDWU LDWUI ",
+    "LDT LDTI LDTU LDTUI LDO LDOI LDOU LDOUI ",
+    "LDSF LDSFI LDHT LDHTI CSWAP CSWAPI LDUNC LDUNCI ",
+    // Load-associated + GO (8).
+    "LDVTS LDVTSI PRELD PRELDI PREGO PREGOI GO GOI ",
+    // Stores (24).
+    "STB STBI STBU STBUI STW STWI STWU STWUI ",
+    "STT STTI STTU STTUI STO STOI STOU STOUI ",
+    "STSF STSFI STHT STHTI STCO STCOI STUNC STUNCI ",
+    // Store-associated + PUSHGO (8).
+    "SYNCD SYNCDI PREST PRESTI SYNCID SYNCIDI PUSHGO PUSHGOI ",
+    // Bitwise / byte-wise-difference / multiplex (32).
+    "OR ORI ORN ORNI NOR NORI XOR XORI ",
+    "AND ANDI ANDN ANDNI NAND NANDI NXOR NXORI ",
+    "BDIF BDIFI WDIF WDIFI TDIF TDIFI ODIF ODIFI ",
+    "MUX MUXI SADD SADDI MOR MORI MXOR MXORI ",
+    // Set/increment high/low, byte-wise or/andn (16).
+    "SETH SETMH SETML SETL INCH INCMH INCML INCL ",
+    "ORH ORMH ORML ORL ANDNH ANDNMH ANDNML ANDNL ",
+    // Jump / call / stack (5).
+    "JMP PUSHJ GETA PUT POP ",
+    // System / privileged (8) + immediate-form privileged (1).
+    "RESUME SAVE UNSAVE SYNC SWYM GET TRAP TRIP PUTI ",
+    // Assembler pseudo-ops (10).
+    "BYTE WYDE TETRA OCTA LOC GREG PREFIX BSPEC ESPEC IS ",
+);
+
+/// MMIXAL special registers — class 1 of `LexMMIXAL`'s
+/// three-class descriptor. Matched at `LexMMIXAL.cxx:109-110`
+/// via `special_register.InList(s)` after `sc.GetCurrent(s0,
+/// ...)` at `:104` (with optional leading `:` stripped at
+/// `:106-108` for the `:GlobalName` base-prefix syntax); hits
+/// change state to
+/// [`SCE_MMIXAL_REGISTER`](../scintilla_sys/constant.SCE_MMIXAL_REGISTER.html).
+///
+/// **Byte-exact case-sensitive.** MMIXAL convention writes
+/// special registers as lowercase `r` followed by uppercase
+/// letters (`rA`, `rBB`, `rZZ`). Knuth's MMIXAL specification
+/// mandates this exact spelling.
+///
+/// **Source:** Knuth, `MMIXware` Vol 1 §1.4 (Special registers).
+/// MMIX has exactly 32 special registers: 26 named `rA`
+/// through `rZ` and 6 "shadow" registers used for privileged
+/// mode saves — `rBB`, `rTT`, `rWW`, `rXX`, `rYY`, `rZZ`.
+///
+/// **32 tokens** covering every MMIX special register:
+///   - `rA` (arithmetic status register — trip bits for FP
+///     exceptions, division by zero, overflow).
+///   - `rB` (bootstrap register 0), `rC` (cycle counter),
+///     `rD` (dividend), `rE` (epsilon for FP compare),
+///     `rF` (failure location), `rG` (global threshold),
+///     `rH` (himult).
+///   - `rI` (interval counter), `rJ` (return-jump), `rK` (interrupt
+///     mask), `rL` (local threshold), `rM` (multiplex mask),
+///     `rN` (serial number), `rO` (register stack offset),
+///     `rP` (prediction).
+///   - `rQ` (interrupt request), `rR` (remainder), `rS` (register
+///     stack pointer), `rT` (trap address), `rU` (usage
+///     counter), `rV` (virtual translation), `rW` (where
+///     interrupted), `rX` (execution register).
+///   - `rY` (Y operand), `rZ` (Z operand).
+///   - Shadow-of-B/T/W/X/Y/Z used on interrupt save: `rBB`, `rTT`,
+///     `rWW`, `rXX`, `rYY`, `rZZ`.
+pub const MMIXAL_SPECIAL_REGISTERS: &str = concat!(
+    // Primary specials (26 — one per uppercase letter).
+    "rA rB rC rD rE rF rG rH rI rJ rK rL rM ",
+    "rN rO rP rQ rR rS rT rU rV rW rX rY rZ ",
+    // Shadow specials (6 — used on privileged interrupt save).
+    "rBB rTT rWW rXX rYY rZZ ",
+);
+
+/// MMIXAL predefined symbols — class 2 of `LexMMIXAL`'s
+/// three-class descriptor. Matched at `LexMMIXAL.cxx:111-112`
+/// via `predef_symbols.InList(s)` after the class-1 miss;
+/// hits change state to
+/// [`SCE_MMIXAL_SYMBOL`](../scintilla_sys/constant.SCE_MMIXAL_SYMBOL.html).
+///
+/// **Byte-exact case-sensitive.** MMIXAL's predefined symbols
+/// use specific mixed-case spellings (`Fputs`, `StdOut`,
+/// `ROUND_NEAR`) that must match verbatim.
+///
+/// **First-match-wins cascade.** `LexMMIXAL.cxx:101-115` probes
+/// class 1 (`special_register`) FIRST, then class 2
+/// (`predef_symbols`) — so a token duplicated in class 1 would
+/// silently win. The special-register set is symbolic (`rX`
+/// pattern) and cannot conflict with the predefined-symbol
+/// spellings, but the disjointness is checked by the invariant
+/// test regardless.
+///
+/// **Source:** Knuth, `MMIXware` Vol 1 §1.4.3 and Fascicle 1
+/// §MMIXAL Assembly Conventions. MMIXAL's assembler ships a
+/// small set of predefined identifiers for the system I/O TRAP
+/// interface, standard streams, rounding modes, and memory
+/// segments.
+///
+/// **28 tokens**:
+///   - **Floating-point constant** (1): `Inf` (positive
+///     infinity).
+///   - **Rounding modes for FIX/FIXU/FINT** (5):
+///     `ROUND_CURRENT`, `ROUND_OFF`, `ROUND_UP`, `ROUND_DOWN`,
+///     `ROUND_NEAR`.
+///   - **Memory segment origins** (3): `Data_Segment`,
+///     `Pool_Segment`, `Stack_Segment`. Each names the top-of-
+///     segment octabyte offset.
+///   - **I/O TRAP function codes** (11): `Halt`, `Fopen`,
+///     `Fclose`, `Fread`, `Fgets`, `Fgetws`, `Fwrite`, `Fputs`,
+///     `Fputws`, `Fseek`, `Ftell`. Passed as the Y operand to
+///     `TRAP` to dispatch the OS-emulation handler.
+///   - **File-open modes** (5): `TextRead`, `TextWrite`,
+///     `BinaryRead`, `BinaryWrite`, `BinaryReadWrite`. Passed
+///     in the arg pair to `Fopen`.
+///   - **Standard stream file handles** (3): `StdIn`, `StdOut`,
+///     `StdErr`. Pre-bound file handles.
+///
+/// **Deliberately excluded:**
+///   - `V_BIT` / `W_BIT` / `Z_BIT` / etc. — the exception-bit
+///     symbols for the arithmetic status register `rA` are
+///     mentioned in `MMIXware`'s exception discussion but their
+///     status as *predefined MMIXAL identifiers* varies across
+///     assembler implementations. Better to leave them
+///     unmapped (paint at `STYLE_DEFAULT`) than to false-positive
+///     a plain user identifier that happened to share the name.
+pub const MMIXAL_PREDEF_SYMBOLS: &str = concat!(
+    // Floating-point constant.
+    "Inf ",
+    // Rounding modes.
+    "ROUND_CURRENT ROUND_OFF ROUND_UP ROUND_DOWN ROUND_NEAR ",
+    // Memory segments.
+    "Data_Segment Pool_Segment Stack_Segment ",
+    // I/O TRAP function codes.
+    "Halt Fopen Fclose Fread Fgets Fgetws Fwrite Fputs Fputws Fseek Ftell ",
+    // File-open modes.
+    "TextRead TextWrite BinaryRead BinaryWrite BinaryReadWrite ",
+    // Standard streams.
+    "StdIn StdOut StdErr ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

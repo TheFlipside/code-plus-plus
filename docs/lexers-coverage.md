@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 61 / 🟡 27 / ⚫ 1.
+Total: 89 rows. ✅ 62 / 🟡 26 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1893,7 +1893,7 @@ further shim work needed.
 | Lua | 23 | `lua` | ✅ | ✅ | ✅ |
 | Makefile | 10 | `makefile` | ✅ | ✅ | ✅ |
 | Matlab | 44 | `matlab` | ✅ | ✅ | ✅ |
-| MMIXAL | 75 | `mmixal` | ⚫ | ⚫ | 🟡 |
+| MMIXAL | 75 | `mmixal` | ✅ | ✅ | ✅ |
 | Nim | 76 | `nim` | ⚫ | ⚫ | 🟡 |
 | Nncrontab | 77 | `nncrontab` | ⚫ | ⚫ | 🟡 |
 | NSIS | 28 | `nsis` | ✅ | ✅ | ✅ |
@@ -6164,6 +6164,216 @@ cardinality pin (exactly `synonym`/`alias`),
 for STRING-state entry/exit correctness), and
 no-duplicate defence-in-depth check across
 all six wordlists.
+
+**MMIXAL (2026-07-06):** wires `SCLEX_MMIXAL`
+(= 44) for MMIXAL `.mms` source — Donald
+Knuth's MMIX assembly language from *The Art
+of Computer Programming* Vol 1 Fascicle 1.
+`L_MMIXAL` (id 75) is the sole language row
+using this lexer. Same three-class descriptor
+count as CSound and ESCRIPT.
+
+**Three-class wordlist (239 + 32 + 28 = 299
+tokens):**
+- **Class 0 (`SCE_MMIXAL_OPCODE_VALID`, bold
+  Keyword)** — `MMIXAL_OPCODES` carries the
+  MMIX 256-opcode table's mnemonic surface
+  plus 10 assembler pseudo-ops. Structured by
+  functional family: 15 floating-point
+  (`FADD`/`FSUB`/`FMUL`/…/`FSQRT`), 16 integer
+  arithmetic (base + `-I` immediate:
+  `MUL`/`MULI`/…/`SUB`/`SUBUI`), 16 scaled-add
+  + compare + negate (`2ADDU`/…/`16ADDUI`/
+  `CMP`/`NEG`), 8 shifts, 16 branches (source-
+  level base only — `BN`/`BZ`/…/`PBEV`; the
+  `-B` fwd/back suffix is byte-encoding-level,
+  handled by the assembler), 32 conditional-
+  set / zero-or-set (`CSN`/`CSNI`/…/`ZSEV`/
+  `ZSEVI`), 24 loads (`LDB`/…/`CSWAP`/
+  `LDUNC`), 8 load-associated + GO
+  (`LDVTS`/`PRELD`/`PREGO`/`GO`), 24 stores
+  (`STB`/…/`STCO`/`STUNC`), 8 store-associated
+  + PUSHGO (`SYNCD`/`PREST`/`SYNCID`/`PUSHGO`),
+  32 bitwise / byte-wise-difference /
+  multiplex (`OR`/…/`MXOR`), 16 set/increment
+  high/low + byte-wise or/andn (`SETH`/…/
+  `ANDNL`), 5 jump/call/stack (`JMP`/`PUSHJ`/
+  `GETA`/`PUT`/`POP`), 8 system/privileged
+  (`RESUME`/`SAVE`/`UNSAVE`/`SYNC`/`SWYM`/
+  `GET`/`TRAP`/`TRIP`), 1 immediate-form
+  privileged (`PUTI` — the only opcode in the
+  0xF0–0xFF group with a distinct immediate
+  byte pair), 10 assembler
+  pseudo-ops (`BYTE`/`WYDE`/`TETRA`/`OCTA`/
+  `LOC`/`GREG`/`PREFIX`/`BSPEC`/`ESPEC`/`IS`).
+  **Digit-prefix mnemonics** `2ADDU`/`4ADDU`/
+  `8ADDU`/`16ADDU` (and immediates) present
+  verbatim — the OPCODE_PRE transition at
+  `LexMMIXAL.cxx:117-119` fires on any
+  non-space (not `IsAWordStart`-restricted),
+  so the digit-first mnemonic is captured
+  and probed byte-exact.
+- **Class 1 (`SCE_MMIXAL_REGISTER`, Keyword2
+  accent)** — `MMIXAL_SPECIAL_REGISTERS`
+  carries the 32 MMIX special registers per
+  MMIXware Vol 1 §1.4: 26 primary (`rA`
+  through `rZ`) + 6 shadow (`rBB`/`rTT`/
+  `rWW`/`rXX`/`rYY`/`rZZ`) used on privileged-
+  mode interrupt saves.
+- **Class 2 (`SCE_MMIXAL_SYMBOL`, Keyword2
+  accent)** — `MMIXAL_PREDEF_SYMBOLS` carries
+  28 predefined MMIXAL identifiers: `Inf` (FP
+  constant), 5 rounding modes (`ROUND_CURRENT`/
+  `ROUND_OFF`/`ROUND_UP`/`ROUND_DOWN`/
+  `ROUND_NEAR`), 3 memory-segment origins
+  (`Data_Segment`/`Pool_Segment`/
+  `Stack_Segment`), 11 I/O TRAP function codes
+  (`Halt`/`Fopen`/`Fclose`/`Fread`/`Fgets`/
+  `Fgetws`/`Fwrite`/`Fputs`/`Fputws`/`Fseek`/
+  `Ftell`), 5 file-open modes (`TextRead`/
+  `TextWrite`/`BinaryRead`/`BinaryWrite`/
+  `BinaryReadWrite`), 3 standard streams
+  (`StdIn`/`StdOut`/`StdErr`).
+
+**Style routing (11 mappings across 18
+defined SCE slots):** COMMENT → `Comment`
+(italic — MMIXAL comments are anything after
+operands with no comment-char prefix); LABEL
+→ `Keyword2` (accent for column-0 label
+declarations); OPCODE_VALID → `Keyword` (bold
+— CPU instruction mnemonics as visual anchor,
+same discipline as Erlang KEYWORD / Forth
+CONTROL+KEYWORD); NUMBER + HEX → `Number`
+(decimal + `#`-prefixed hex); CHAR + STRING →
+`String` (both `'...'` char and `"..."`
+string literals); REGISTER + SYMBOL →
+`Keyword2` (register aliases like `rA` and
+predefined symbols like `Fputs` share the
+accent slot with LABEL — all three name
+storage or named values); OPERATOR →
+`Operator` (`+-|^*/%<>&~$,()[]` from
+`isMMIXALOperator` at `:39-49`); INCLUDE →
+`Preprocessor` (`@include` directive). Seven
+slots unmapped per framework convention:
+LEADWS (0), OPCODE (3), OPCODE_PRE (4),
+OPCODE_UNKNOWN (6), OPCODE_POST (7), OPERANDS
+(8), REF (10) — transient states and
+STYLE_DEFAULT fallbacks. OPCODE_UNKNOWN in
+particular stays unmapped so unrecognized
+opcode-position tokens (likely user-defined
+macros) paint at STYLE_DEFAULT rather than
+being mis-styled.
+
+**Case-SENSITIVE by design.** MMIXAL
+convention writes opcodes in uppercase
+(`ADD`/`TRAP`/`LDO`), special registers as
+lowercase `r` + uppercase (`rA`/`rBB`/`rZZ`),
+predefined symbols in mixed case (`Fputs`/
+`StdOut`/`ROUND_NEAR`). The lexer's
+`GetCurrent` at `:104, :123` (NOT
+`GetCurrentLowered`) probes wordlists
+byte-exact — exact spelling required.
+
+**Line-based lexer.** Unlike most Scintilla
+lexers, `LexMMIXAL.cxx:64-70` starts every
+line in `SCE_MMIXAL_LEADWS` or (for
+`@i`-prefix lines) `SCE_MMIXAL_INCLUDE`. The
+first non-whitespace character in a LEADWS
+line dispatches at `:72-83`: column-0 word
+char → LABEL, column-0 non-word char →
+COMMENT (no `%` required — anything not
+label-shaped starts a comment), post-
+whitespace word char → OPCODE_PRE → OPCODE.
+After the opcode, `:154-172` dispatches
+operands: digit → NUMBER, word or `@` → REF,
+`"` → STRING, `'` → CHAR, `$` → REGISTER
+(numeric $-register), `#` → HEX, symbolic
+operator → OPERATOR, whitespace → COMMENT.
+
+**REF settle with base-prefix stripping.**
+At `:101-115`, when the REF collect state
+ends, `sc.GetCurrent(s0, ...)` captures the
+identifier byte-exact; if it begins with `:`,
+`:106-108` strips the leading colon before
+probing. This handles MMIXAL's `:GlobalName`
+base-prefix syntax at the lexer level, so
+wordlist entries here are NOT `:`-prefixed.
+Probes class 1 (`special_register`) → 2
+(`predef_symbols`) first-match-wins.
+
+**No fold.** `LexMMIXAL.cxx:185` registers
+`0` as the fold function.
+
+**Cross-class disjointness — 3 pairs
+enforced.** REF settle at `:101-115` probes
+class 1 before class 2 first-match-wins; a
+duplicate in class 1 would silently mask its
+class-2 sibling. Class 0 is probed in a
+distinct state (OPCODE), so its disjointness
+with 1 and 2 is structural rather than
+first-match-wins-critical, but Invariant #6
+pins all three pairs anyway.
+
+Structural test coverage: 19 invariants —
+deep-value identity pin, 11-mapping style
+count (18 defined slots minus 7 unmapped),
+three-class canonical descriptor order, all
+classes non-empty, case-sensitive byte-exact
+alphabet enforcement (ASCII alnum + `_` +
+`:`) applied uniformly across every class,
+plus a hard no-leading-`:` pin per token
+(load-bearing — LexMMIXAL.cxx:106-108 strips
+one leading `:` before the InList probe, so
+`:`-prefixed wordlist entries are dead code),
+**pairwise cross-class disjointness across
+all 3 class-pair combinations**, style-
+routing pins for all 11 mapped SCE constants,
+7 unmapped slots confirmed absent (LEADWS +
+OPCODE + OPCODE_PRE + OPCODE_UNKNOWN +
+OPCODE_POST + OPERANDS + REF), italic set ==
+1 (COMMENT only), bold set == 1
+(OPCODE_VALID only — single-class bold
+matches CSound's OPCODE precedent among
+three-class siblings; wider-class lexers pair
+in a second class), cross-language non-reuse
+against Forth / Erlang / ESCRIPT / CSound,
+`L_MMIXAL` `LangEntry`'s `lexer:
+Some("mmixal")` + `mms` extension presence,
+canonical opcode anchors covering **every
+`concat!()` line-literal** in
+`MMIXAL_OPCODES` (35 anchors across all
+opcode families) so a silent deletion of any
+single line-literal is caught, canonical
+special-register anchors (`rA`/`rJ`/`rZ` +
+`rBB`/`rZZ` — both primary and shadow
+families pinned), canonical predefined-symbol
+anchors (`Inf`/`ROUND_NEAR`/`Data_Segment`/
+`Fputs`/`BinaryRead`/`StdOut` — one per
+sub-family), **digit-prefix opcodes present**
+(`2ADDU`/`2ADDUI`/`4ADDU`/`4ADDUI`/`8ADDU`/
+`8ADDUI`/`16ADDU`/`16ADDUI` all pinned),
+**no `-B` fwd/back-suffix branch mnemonics
+at source level** across three families:
+plain branches (`BNB`/`BZB`/`BPB`/`BODB`/
+`BNNB`/`BNZB`/`BNPB`/`BEVB`), predict
+branches (`PBNB`/`PBZB`/`PBPB`/`PBODB`/
+`PBNNB`/`PBNZB`/`PBNPB`/`PBEVB`), and jump
+(`JMPB`) — 17 affirmative-absence tokens
+total. No-duplicate defence-in-depth check
+across all three wordlists. **Highest
+defined SCE_MMIXAL_* pin** — `SCE_MMIXAL_INCLUDE`
+(17) is the top slot, and no `MMIXAL_STYLES`
+entry may reference a higher index; catches
+a future Lexilla submodule bump that appends
+a slot (would otherwise leave the style-count
+and unmapped-slot pins silently passing while
+the new slot renders at `STYLE_DEFAULT`).
+**`OPCODE_UNKNOWN` (6) is deliberately
+excluded from the deferred-`StyleSlot::Error`
+migration list** — user-defined macros
+legitimately hit that state (unlike
+STRINGEOL / *_ERROR which are unambiguous
+parse failures).
 
 ## Notes
 

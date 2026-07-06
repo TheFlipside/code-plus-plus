@@ -123,19 +123,20 @@ use codepp_core::lang::{
     L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF,
     L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
     L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
-    L_MAKEFILE, L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS,
-    L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB,
-    L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
-    NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
-    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
-    RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
-    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-    VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
-    VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
-    VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+    L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS,
+    L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB,
+    L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+    MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+    OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
+    POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
+    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+    PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
+    R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+    SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+    XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -236,23 +237,25 @@ use codepp_scintilla_sys::{
     SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM, SCE_MAKE_COMMENT,
     SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET,
     SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_KEYWORD,
-    SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_NSIS_COMMENT,
-    SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF,
-    SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF,
-    SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ,
-    SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE,
-    SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE,
-    SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER, SCE_PAS_OPERATOR,
-    SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD, SCE_PL_ARRAY,
-    SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
-    SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
-    SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR,
-    SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR,
-    SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING, SCE_PL_STRING_Q,
-    SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR, SCE_PL_STRING_QR_VAR,
-    SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR,
-    SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT, SCE_POWERSHELL_ALIAS,
-    SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT,
+    SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_MMIXAL_CHAR, SCE_MMIXAL_COMMENT,
+    SCE_MMIXAL_HEX, SCE_MMIXAL_INCLUDE, SCE_MMIXAL_LABEL, SCE_MMIXAL_NUMBER,
+    SCE_MMIXAL_OPCODE_VALID, SCE_MMIXAL_OPERATOR, SCE_MMIXAL_REGISTER, SCE_MMIXAL_STRING,
+    SCE_MMIXAL_SYMBOL, SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION,
+    SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER,
+    SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ,
+    SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF,
+    SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT,
+    SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING,
+    SCE_PAS_NUMBER, SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING,
+    SCE_PAS_WORD, SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER,
+    SCE_PL_COMMENTLINE, SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH,
+    SCE_PL_HERE_DELIM, SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX,
+    SCE_PL_HERE_QX_VAR, SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX,
+    SCE_PL_REGEX_VAR, SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING,
+    SCE_PL_STRING_Q, SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR,
+    SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR,
+    SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT,
+    SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT,
     SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM, SCE_POWERSHELL_FUNCTION,
     SCE_POWERSHELL_HERE_CHARACTER, SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_KEYWORD,
     SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING, SCE_POWERSHELL_USER1,
@@ -4131,6 +4134,136 @@ const FORTH_THEME: LangTheme = LangTheme {
     styles: FORTH_STYLES,
     italic: FORTH_ITALIC,
     bold: FORTH_BOLD,
+};
+
+// --- LexMMIXAL ---
+// LexMMIXAL serves MMIXAL — Donald Knuth's MMIX assembly language
+// from The Art of Computer Programming Vol 1 Fascicle 1, extension
+// `.mms`. `L_MMIXAL` (id 75) is the only language row using this
+// lexer. Dispatches SCLEX_MMIXAL (= 44, per `SciLexer.h:60`) via
+// a three-class wordlist descriptor at `LexMMIXAL.cxx:178-183`.
+//
+// **11 style mappings** covering every SCE_MMIXAL_* state the
+// paint loop reliably emits as a semantically visible token.
+// Seven of the 18 defined slots stay unmapped:
+//   - LEADWS (0) — leading-whitespace entry state per line.
+//   - OPCODE (3) — transient collect state for the opcode
+//     mnemonic; settles to OPCODE_VALID or OPCODE_UNKNOWN.
+//   - OPCODE_PRE (4) — transient whitespace between label and
+//     opcode.
+//   - OPCODE_UNKNOWN (6) — opcode mnemonic that missed the
+//     opcodes wordlist. Leave unmapped so unrecognized
+//     opcodes paint at STYLE_DEFAULT — a MMIXAL source file
+//     with user-defined macros or an incomplete wordlist
+//     should show those tokens plainly rather than mis-styled.
+//     **Deliberately excluded from the deferred-`StyleSlot::Error`
+//     migration list** (SCE_H_SGML_ERROR / SCE_SQL_COMMENTDOCKEYWORDERROR
+//     / STRINGEOL family / SCE_PL_ERROR / …) because user
+//     macros legitimately hit this state — unlike STRINGEOL /
+//     *_ERROR which are unambiguous parse failures. If a
+//     future `StyleSlot::Error` migration lands, do NOT sweep
+//     `SCE_MMIXAL_OPCODE_UNKNOWN` into it; the "invalid"
+//     signal here is ambiguous, not authoritative.
+//   - OPCODE_POST (7) — transient state after opcode
+//     validation.
+//   - OPERANDS (8) — transient dispatch state between operands.
+//   - REF (10) — bare identifier that missed both class 1
+//     (special_register) and class 2 (predef_symbols). Almost
+//     always a user-defined label reference — paint at
+//     STYLE_DEFAULT so the label reads plainly.
+//
+// **Three-class descriptor** (like CSound / ESCRIPT). LexMMIXAL
+// splits its identifiable tokens into opcodes (class 0),
+// special registers (class 1), and predefined symbols (class 2)
+// — the three "vocabulary" categories MMIXAL programmers rely
+// on. All three are byte-exact `sc.GetCurrent(s, ...)` probes,
+// not `GetCurrentLowered`.
+//
+// **Slot rationale:**
+//   - COMMENT (1) → Comment (italic). MMIXAL comments are
+//     everything on a line after the operands (no leading
+//     comment char required — the lexer switches to COMMENT
+//     state as soon as whitespace-terminated operand parsing
+//     ends at `:156-157`, and any line whose first non-space
+//     token isn't word-like enters COMMENT at `:74-75`).
+//   - LABEL (2) → Keyword2 (accent). Column-0 label
+//     declarations mark the start of a symbolic address —
+//     semantically a definition. Same accent-slot treatment
+//     as Forth's DEFWORD and ESCRIPT's WORD2 (types).
+//   - OPCODE_VALID (5) → Keyword (bold). The CPU instruction
+//     mnemonics — the visual anchor of any assembly source.
+//     Bold on the primary-vocabulary class matches CSound's
+//     OPCODE → bold — the closest three-class sibling using
+//     single-class bold. (Larger-class lexers pair a second
+//     class into bold: Erlang KEYWORD+BIFS, ESCRIPT WORD+WORD3,
+//     Forth CONTROL+KEYWORD.) MMIXAL's `OPCODE_UNKNOWN` sibling
+//     stays unmapped so unrecognized opcode-position tokens
+//     paint at STYLE_DEFAULT, keeping bold reserved for
+//     wordlist-validated CPU mnemonics only.
+//   - NUMBER (9) + HEX (14) → Number. `#`-prefixed hex and
+//     decimal are both numeric literals.
+//   - CHAR (11) + STRING (12) → String. `'a'` char literal and
+//     `"..."` string literal are both quoted-literal forms.
+//   - REGISTER (13) → Keyword2. Two entry paths converge on
+//     this state: `$`-prefixed numeric registers via `:166-167`
+//     and named special registers (`rA`, `rZZ`) via the REF
+//     settle at `:109-110`. Both are addressing-mode markers
+//     that name storage — accent slot matches LABEL and SYMBOL.
+//   - OPERATOR (15) → Operator. `+-|^*/%<>&~$,()[]` from
+//     `isMMIXALOperator` at `:39-49`.
+//   - SYMBOL (16) → Keyword2. Predefined symbol via REF hit on
+//     class 2 (`Fputs`, `StdOut`, `ROUND_NEAR`). Same accent as
+//     LABEL and REGISTER — these are all named-storage or
+//     named-value markers semantically.
+//   - INCLUDE (17) → Preprocessor. `@include` directive — the
+//     one MMIXAL preprocessor mechanism.
+const MMIXAL_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_MMIXAL_COMMENT, StyleSlot::Comment),
+    (SCE_MMIXAL_LABEL, StyleSlot::Keyword2),
+    (SCE_MMIXAL_OPCODE_VALID, StyleSlot::Keyword),
+    (SCE_MMIXAL_NUMBER, StyleSlot::Number),
+    (SCE_MMIXAL_CHAR, StyleSlot::String),
+    (SCE_MMIXAL_STRING, StyleSlot::String),
+    (SCE_MMIXAL_REGISTER, StyleSlot::Keyword2),
+    (SCE_MMIXAL_HEX, StyleSlot::Number),
+    (SCE_MMIXAL_OPERATOR, StyleSlot::Operator),
+    (SCE_MMIXAL_SYMBOL, StyleSlot::Keyword2),
+    (SCE_MMIXAL_INCLUDE, StyleSlot::Preprocessor),
+];
+
+// Italic on comment — universal Code++ comment convention.
+const MMIXAL_ITALIC: &[usize] = &[SCE_MMIXAL_COMMENT];
+
+// Bold on OPCODE_VALID only — the CPU instruction mnemonics
+// are the visual anchor of assembly source. Same
+// single-class-bold shape as CSound's OPCODE (its closest
+// three-class sibling); larger-class lexers pair a second
+// class in (Erlang KEYWORD+BIFS, ESCRIPT WORD+WORD3, Forth
+// CONTROL+KEYWORD), but MMIXAL's three-class descriptor
+// doesn't have a natural second-vocabulary-class sibling to
+// pair here — special_register (class 1) and predef_symbols
+// (class 2) both live in the accent slot (Keyword2), not the
+// bold slot.
+const MMIXAL_BOLD: &[usize] = &[SCE_MMIXAL_OPCODE_VALID];
+
+// Three-class install matches `MMIXALWordListDesc[]` at
+// `LexMMIXAL.cxx:178-183`. Order is load-bearing —
+// `SCI_SETKEYWORDS` respects wordlist-descriptor order and the
+// REF settle at `:101-115` probes class 1 before class 2
+// first-match-wins; class 0 (opcodes) is probed in a distinct
+// state (OPCODE) so its cross-class disjointness with 1 and 2 is
+// definitional (an OPCODE-state probe cannot cross into a REF-
+// state probe). The invariant test enforces disjointness across
+// all three pairs anyway.
+const MMIXAL_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, MMIXAL_OPCODES),
+        (1, MMIXAL_SPECIAL_REGISTERS),
+        (2, MMIXAL_PREDEF_SYMBOLS),
+    ],
+    styles: MMIXAL_STYLES,
+    italic: MMIXAL_ITALIC,
+    bold: MMIXAL_BOLD,
 };
 
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
@@ -8871,6 +9004,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&ESCRIPT_THEME)
     } else if lang == L_FORTH {
         Some(&FORTH_THEME)
+    } else if lang == L_MMIXAL {
+        Some(&MMIXAL_THEME)
     } else {
         None
     }
@@ -24027,10 +24162,10 @@ mod lang_theme_tests {
         ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS,
         ASM_REG_KEYWORDS, ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC,
         ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES,
-        SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER,
-        SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL,
-        SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
-        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
+        SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER,
+        SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
+        SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
         SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
         SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
         SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
@@ -24106,19 +24241,20 @@ mod lang_theme_tests {
         L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
         L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO,
         L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
-        L_MATLAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON,
-        L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB,
-        L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, NSIS_FUNCTIONS,
-        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
-        PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
-        POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
-        PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
-        RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
-        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
-        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+        L_MATLAB, L_MMIXAL, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS,
+        L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT,
+        L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+        MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+        POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+        POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+        PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
+        RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
+        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
+        VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -24158,14 +24294,17 @@ mod lang_theme_tests {
         SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME,
         SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT,
         SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER,
-        SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER,
-        SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD,
-        SCE_POWERSHELL_COMMENTSTREAM, SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION,
-        SCE_POWERSHELL_HERE_CHARACTER, SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER,
-        SCE_POWERSHELL_KEYWORD, SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR,
-        SCE_POWERSHELL_STRING, SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS,
-        SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER,
-        SCE_R_INFIX, SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
+        SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_MMIXAL_CHAR, SCE_MMIXAL_COMMENT,
+        SCE_MMIXAL_HEX, SCE_MMIXAL_INCLUDE, SCE_MMIXAL_LABEL, SCE_MMIXAL_NUMBER,
+        SCE_MMIXAL_OPCODE_VALID, SCE_MMIXAL_OPERATOR, SCE_MMIXAL_REGISTER, SCE_MMIXAL_STRING,
+        SCE_MMIXAL_SYMBOL, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET,
+        SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM,
+        SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
+        SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER, SCE_POWERSHELL_KEYWORD,
+        SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING,
+        SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS, SCE_R_BASEKWORD,
+        SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER, SCE_R_INFIX,
+        SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
         SCE_R_RAWSTRING, SCE_R_RAWSTRING2, SCE_R_STRING, SCE_R_STRING2, SCE_VHDL_IDENTIFIER,
         SCE_V_IDENTIFIER, SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER,
         SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
@@ -24212,6 +24351,7 @@ mod lang_theme_tests {
             (L_ERLANG, "Erlang"),
             (L_ESCRIPT, "ESCRIPT"),
             (L_FORTH, "Forth"),
+            (L_MMIXAL, "MMIXAL"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -36358,6 +36498,565 @@ mod lang_theme_tests {
         }
     }
 
+    /// MMIXAL uses Lexilla's `mmixal` lexer (`LexMMIXAL.cxx`) —
+    /// Donald Knuth's MMIX assembly language from *The Art of
+    /// Computer Programming* Vol 1 Fascicle 1. Distinctive features:
+    ///
+    /// - **Three-class descriptor** (opcodes / special registers /
+    ///   predefined symbols) per `MMIXALWordListDesc[]` at
+    ///   `LexMMIXAL.cxx:178-183`. Same class count as `CSound`
+    ///   and ESCRIPT.
+    /// - **Line-based lexer.** Every line begins in
+    ///   `SCE_MMIXAL_LEADWS` at `:64-70`; comments are anything
+    ///   after operands (no comment char required) and column-0
+    ///   non-word chars.
+    /// - **Case-SENSITIVE** via `sc.GetCurrent` at `:104, :123`
+    ///   (NOT `GetCurrentLowered`). Opcodes are uppercase,
+    ///   special registers are `r`-lowercase-prefixed uppercase,
+    ///   predefined symbols are mixed case (`Fputs`, `StdOut`,
+    ///   `ROUND_NEAR`).
+    /// - **Digit-prefix opcodes.** `2ADDU`, `4ADDU`, `8ADDU`,
+    ///   `16ADDU` (and immediate variants) are legitimate opcode
+    ///   mnemonics per Knuth. The lexer transitions from
+    ///   `OPCODE_PRE` to `OPCODE` on any non-space at
+    ///   `LexMMIXAL.cxx:117-119`, so the digit-first mnemonic is
+    ///   captured and probed byte-exact.
+    /// - **First-match-wins REF cascade** at `:101-115`. Special
+    ///   register (class 1) is probed FIRST, then predefined
+    ///   symbol (class 2); a token duplicated in class 1 would
+    ///   silently win over class 2. Register spellings (`rX`
+    ///   pattern) and predefined-symbol spellings can't collide
+    ///   in practice, but the invariant test checks disjointness
+    ///   anyway.
+    /// - **Base-prefix stripping.** The REF settle at `:106-108`
+    ///   drops a leading `:` from the token before probing —
+    ///   MMIXAL's `:GlobalName` syntax. Wordlist entries here
+    ///   are NOT `:`-prefixed.
+    /// - **No fold** — `LexMMIXAL.cxx:185` registers `0` as the
+    ///   fold function.
+    /// - **`@include` directive.** Column-0 `@i` prefix at
+    ///   `:65-66` enters `SCE_MMIXAL_INCLUDE` for the whole
+    ///   line.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. Deep-value identity pin — dispatcher-returned theme
+    ///      value-equals `MMIXAL_STYLES` / `ITALIC` / `BOLD`.
+    ///   2. Style count == 11 (18 defined `SCE_MMIXAL_*` slots
+    ///      minus 7 unmapped: `LEADWS`, `OPCODE`, `OPCODE_PRE`,
+    ///      `OPCODE_UNKNOWN`, `OPCODE_POST`, `OPERANDS`, `REF`).
+    ///   3. Three wordlist classes in canonical order (0..=2)
+    ///      matching `MMIXALWordListDesc[]` at `:178-183`.
+    ///   4. All three classes non-empty.
+    ///   5. Case-sensitive byte-exact alphabet enforcement,
+    ///      applied UNIFORMLY across all three classes. The
+    ///      predicate accepts ASCII alphanumerics, `_`, and
+    ///      `:` (identifier-continuation per `IsAWordChar` at
+    ///      `LexMMIXAL.cxx:35-37`).
+    ///   6. **Cross-class disjointness across all 3 class-pair
+    ///      combinations** — LOAD-BEARING for correct REF-state
+    ///      styling. The first-match-wins cascade at `:101-115`
+    ///      would let a class-1 duplicate silently mask its
+    ///      class-2 sibling. (Class 0 is probed in a distinct
+    ///      state — OPCODE vs REF — so its disjointness with
+    ///      1/2 is structural rather than semantic, but pinning
+    ///      it prevents accidental cross-class typing.)
+    ///   7. Style-routing pins for all 11 mapped SCE constants.
+    ///   8. Seven framework-unmapped slots confirmed absent:
+    ///      `LEADWS` (0), `OPCODE` (3), `OPCODE_PRE` (4),
+    ///      `OPCODE_UNKNOWN` (6), `OPCODE_POST` (7), `OPERANDS`
+    ///      (8), `REF` (10).
+    ///   9. Italic set == 1 (`COMMENT` only).
+    ///   10. Bold set == 1 (`OPCODE_VALID` only — the CPU
+    ///       instruction mnemonics as visual anchor).
+    ///   11. Cross-language non-reuse — `MMIXAL_STYLES` must not
+    ///       deep-equal a sampled set of four sibling themes
+    ///       (Forth / Erlang / ESCRIPT / `CSound`). All four are
+    ///       three-or-six-class themes with distinct SCE
+    ///       constants, so a bit-for-bit collision would signal
+    ///       a copy-paste bug.
+    ///   12. `L_MMIXAL` `LangEntry` has `lexer: Some("mmixal")`
+    ///       and extensions contain `mms`.
+    ///   13. **Canonical opcode anchors** — at least one
+    ///       representative from each major opcode family so a
+    ///       `concat!()` line deletion in any section is caught:
+    ///       `TRAP` (system), `FADD` (float), `ADD` (int add),
+    ///       `MUL` (int mult), `2ADDU` (scaled-add), `SL`
+    ///       (shift), `BN` (branch), `PBP` (predict-branch),
+    ///       `CSN` (cond-set), `ZSZ` (zero-or-set), `LDO`
+    ///       (load), `STO` (store), `OR` (bitwise), `MOR`
+    ///       (matrix-or), `SETH` (set-high), `JMP` (jump),
+    ///       `PUSHJ` (call), `SAVE` (system), `SWYM`
+    ///       (no-op), `BYTE` (pseudo-op), `GREG` (pseudo-op),
+    ///       `IS` (pseudo-op).
+    ///   14. **Canonical special-register anchors**: `rA`, `rJ`,
+    ///       `rZ` from the primary set + `rBB` and `rZZ` from
+    ///       the shadow set — pins presence of both families.
+    ///   15. **Canonical predefined-symbol anchors** — one per
+    ///       sub-family so a section deletion is caught: `Inf`
+    ///       (constant), `ROUND_NEAR` (rounding), `Data_Segment`
+    ///       (segment), `Fputs` (TRAP code), `BinaryRead`
+    ///       (file mode), `StdOut` (stream).
+    ///   16. **Digit-prefix opcodes present** — `2ADDU`, `4ADDU`,
+    ///       `8ADDU`, `16ADDU`. These are unusual mnemonics
+    ///       (start with a digit) and easy to omit accidentally;
+    ///       the lexer accepts them via the `!isspace(sc.ch)`
+    ///       `OPCODE_PRE` transition at `:117-119`.
+    ///   17. **No fwd/back-suffix branch mnemonics at source
+    ///       level** across all three affected families: plain
+    ///       branches `BNB`..`BEVB`, predict-branches
+    ///       `PBNB`..`PBEVB`, and jump `JMPB`. `-B` variants
+    ///       are byte-encoding artefacts — the assembler picks
+    ///       the byte based on offset sign. Source uses only
+    ///       the base mnemonic.
+    ///   18. No duplicate tokens within any single wordlist —
+    ///       defence-in-depth invariant.
+    ///   19. **Highest defined `SCE_MMIXAL_*` pin.**
+    ///       `SCE_MMIXAL_INCLUDE` (17) is asserted as the top
+    ///       slot; the styles table must not reference any
+    ///       index above it. Catches a future Lexilla submodule
+    ///       bump that appends a slot (would otherwise leave
+    ///       Invariants 2 + 8 silently passing while the new
+    ///       slot renders at `STYLE_DEFAULT`).
+    #[test]
+    fn mmixal_uses_lexmmixal_three_class_theme() {
+        let mm = lang_theme(L_MMIXAL).expect("MMIXAL wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(mm.styles, MMIXAL_STYLES);
+        assert_eq!(mm.italic, MMIXAL_ITALIC);
+        assert_eq!(mm.bold, MMIXAL_BOLD);
+        assert_eq!(mm.keywords.len(), 3);
+
+        // Invariant 2: 11 mappings (18 defined slots minus 7 unmapped).
+        assert_eq!(
+            mm.styles.len(),
+            11,
+            "MMIXAL_STYLES must map 11 indices (18 defined SCE_MMIXAL_* \
+             slots minus 7 unmapped: LEADWS, OPCODE, OPCODE_PRE, \
+             OPCODE_UNKNOWN, OPCODE_POST, OPERANDS, REF — per framework \
+             convention)"
+        );
+
+        // Invariant 3: three classes in canonical descriptor order.
+        for (i, (expected_class, expected_list)) in [
+            (0u32, MMIXAL_OPCODES),
+            (1u32, MMIXAL_SPECIAL_REGISTERS),
+            (2u32, MMIXAL_PREDEF_SYMBOLS),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                mm.keywords[i].0, *expected_class,
+                "MMIXAL_THEME.keywords[{i}].class must match descriptor order"
+            );
+            assert_eq!(
+                mm.keywords[i].1, *expected_list,
+                "MMIXAL_THEME.keywords[{i}].list must match canonical wordlist"
+            );
+        }
+
+        // Invariant 4: all three classes non-empty.
+        for (list, name) in [
+            (MMIXAL_OPCODES, "OPCODES"),
+            (MMIXAL_SPECIAL_REGISTERS, "SPECIAL_REGISTERS"),
+            (MMIXAL_PREDEF_SYMBOLS, "PREDEF_SYMBOLS"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "MMIXAL_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: case-sensitive byte-exact alphabet enforcement
+        // across every class. `LexMMIXAL.cxx:35-37`'s `IsAWordChar`
+        // accepts ASCII alnum + `:` + `_`. `sc.GetCurrent` (NOT
+        // `GetCurrentLowered`) at `:104, :123` means case must
+        // survive verbatim into the wordlist probe — so both
+        // uppercase and lowercase are allowed but must match the
+        // source spelling exactly.
+        let is_mmixal_word_char = |b: u8| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    // IsAWordChar alphabet per LexMMIXAL.cxx:35-37:
+                    // alnum + `:` + `_`. `:` is accepted as an
+                    // identifier char to support MMIXAL's
+                    // `:GlobalName` base-prefix syntax at the
+                    // language level, though wordlist entries here
+                    // are NOT `:`-prefixed (the REF settle strips
+                    // any leading `:` at :106-108 before probing).
+                    b'_' | b':'
+                )
+        };
+        for (list, name) in [
+            (MMIXAL_OPCODES, "OPCODES"),
+            (MMIXAL_SPECIAL_REGISTERS, "SPECIAL_REGISTERS"),
+            (MMIXAL_PREDEF_SYMBOLS, "PREDEF_SYMBOLS"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    !tok.is_empty() && tok.bytes().all(is_mmixal_word_char),
+                    "MMIXAL_{name} token `{tok}` violates the \
+                     IsAWordChar alphabet at LexMMIXAL.cxx:35-37 \
+                     (ASCII alnum + `:` + `_`) — the byte-exact \
+                     GetCurrent probe at :104 / :123 requires every \
+                     wordlist token to pass through the same \
+                     identifier alphabet the paint loop accepts"
+                );
+                // Load-bearing: LexMMIXAL.cxx:106-108 strips ONE
+                // leading `:` from the identifier BEFORE probing
+                // `special_register` / `predef_symbols`. So a
+                // wordlist entry `:rA` would be dead code — the
+                // lexer only probes `rA` after the strip. Same
+                // applies to `MMIXAL_OPCODES` because the OPCODE
+                // collect state at `:120-129` doesn't take that
+                // strip path but the invariant is uniform for
+                // human readability: NO wordlist entry ever
+                // starts with `:`. The `:GlobalName` syntax lives
+                // in the source file, never in the wordlist.
+                assert!(
+                    !tok.starts_with(':'),
+                    "MMIXAL_{name} token `{tok}` must NOT start \
+                     with `:` — LexMMIXAL.cxx:106-108 strips one \
+                     leading `:` before the `special_register` / \
+                     `predef_symbols` InList probe, so a \
+                     `:`-prefixed wordlist entry is dead code. \
+                     The `:GlobalName` base-prefix syntax belongs \
+                     in MMIXAL source, not the wordlist"
+                );
+            }
+        }
+
+        // Invariant 6: cross-class disjointness across all 3
+        // class-pair combinations. LOAD-BEARING for the class-1 →
+        // class-2 first-match-wins REF cascade at :101-115. Class 0
+        // is probed in a distinct state (OPCODE not REF), but pinning
+        // its disjointness with 1 and 2 catches accidental
+        // cross-typing.
+        use std::collections::HashSet;
+        let sets = [
+            (
+                "OPCODES",
+                MMIXAL_OPCODES.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "SPECIAL_REGISTERS",
+                MMIXAL_SPECIAL_REGISTERS
+                    .split_whitespace()
+                    .collect::<HashSet<_>>(),
+            ),
+            (
+                "PREDEF_SYMBOLS",
+                MMIXAL_PREDEF_SYMBOLS
+                    .split_whitespace()
+                    .collect::<HashSet<_>>(),
+            ),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                if let Some(shared) = sets[i].1.intersection(&sets[j].1).next() {
+                    panic!(
+                        "MMIXAL_{} and MMIXAL_{} both contain `{shared}` — \
+                         the REF settle at LexMMIXAL.cxx:101-115 probes \
+                         class 1 before class 2 first-match-wins; a \
+                         cross-class duplicate leaves the later entry \
+                         dead code",
+                        sets[i].0, sets[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 7: style-routing pins for all 11 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_MMIXAL_COMMENT, StyleSlot::Comment, "COMMENT"),
+            (SCE_MMIXAL_LABEL, StyleSlot::Keyword2, "LABEL"),
+            (SCE_MMIXAL_OPCODE_VALID, StyleSlot::Keyword, "OPCODE_VALID"),
+            (SCE_MMIXAL_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_MMIXAL_CHAR, StyleSlot::String, "CHAR"),
+            (SCE_MMIXAL_STRING, StyleSlot::String, "STRING"),
+            (SCE_MMIXAL_REGISTER, StyleSlot::Keyword2, "REGISTER"),
+            (SCE_MMIXAL_HEX, StyleSlot::Number, "HEX"),
+            (SCE_MMIXAL_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+            (SCE_MMIXAL_SYMBOL, StyleSlot::Keyword2, "SYMBOL"),
+            (SCE_MMIXAL_INCLUDE, StyleSlot::Preprocessor, "INCLUDE"),
+        ] {
+            assert!(
+                mm.styles.contains(&(idx, slot)),
+                "SCE_MMIXAL_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: seven framework-unmapped slots confirmed
+        // absent — LEADWS (0), OPCODE (3), OPCODE_PRE (4),
+        // OPCODE_UNKNOWN (6), OPCODE_POST (7), OPERANDS (8), REF
+        // (10). Any future addition to `MMIXAL_STYLES` for these
+        // slots must be a deliberate framework-convention
+        // deviation, not a silent regression.
+        for (idx, name) in [
+            (0_usize, "LEADWS"),
+            (3, "OPCODE"),
+            (4, "OPCODE_PRE"),
+            (6, "OPCODE_UNKNOWN"),
+            (7, "OPCODE_POST"),
+            (8, "OPERANDS"),
+            (10, "REF"),
+        ] {
+            assert!(
+                !mm.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_MMIXAL_{name} ({idx}) must remain unmapped — \
+                 framework convention (transient state or \
+                 STYLE_DEFAULT fallback)"
+            );
+        }
+
+        // Invariant 9: italic == 1 (COMMENT only).
+        assert_eq!(mm.italic.len(), 1);
+        assert!(mm.italic.contains(&SCE_MMIXAL_COMMENT));
+
+        // Invariant 10: bold == 1 (OPCODE_VALID only — the CPU
+        // instruction mnemonics as the visual anchor of assembly
+        // source, matching Erlang KEYWORD → bold, Forth
+        // CONTROL+KEYWORD → bold).
+        assert_eq!(mm.bold.len(), 1);
+        assert!(mm.bold.contains(&SCE_MMIXAL_OPCODE_VALID));
+
+        // Invariant 11: cross-language non-reuse (sampled).
+        let fo = lang_theme(L_FORTH).expect("Forth wired");
+        let er = lang_theme(L_ERLANG).expect("Erlang wired");
+        let es = lang_theme(L_ESCRIPT).expect("ESCRIPT wired");
+        let cs = lang_theme(L_CSOUND).expect("CSound wired");
+        for (other, name) in [
+            (fo, "Forth"),
+            (er, "Erlang"),
+            (es, "ESCRIPT"),
+            (cs, "CSound"),
+        ] {
+            assert_ne!(
+                mm.styles, other.styles,
+                "MMIXAL must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 12: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let mm_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_MMIXAL)
+            .expect("L_MMIXAL LangEntry present in LANG_TABLE");
+        assert_eq!(
+            mm_entry.lexer,
+            Some("mmixal"),
+            "L_MMIXAL LangEntry.lexer must be Some(\"mmixal\") — wiring \
+             assumes the LexMMIXAL module dispatched via SCLEX_MMIXAL (= 44)"
+        );
+        assert!(
+            mm_entry.extensions.contains(&"mms"),
+            "L_MMIXAL extensions must contain `mms`"
+        );
+
+        // Invariant 13: canonical opcode anchors — one per
+        // `concat!()` line so a silent deletion of any single
+        // string literal is caught. `MMIXAL_OPCODES` composes
+        // ~29 whitespace-separated string literals via
+        // `concat!()`; extending this list per-literal (not just
+        // per opcode family) means a slip like deleting the
+        // `STSF STSFI STHT STHTI STCO STCOI STUNC STUNCI` line
+        // wipes out 8 real MMIX opcodes and the test fails on
+        // the missing `STSF` anchor — exactly the discipline
+        // this invariant's docstring commits to.
+        for tok in [
+            "TRAP",   // system
+            "FADD",   // floating-point (opcodes 0x01-0x0F)
+            "ADD",    // integer add (0x18-0x1B)
+            "MUL",    // integer multiply (0x10-0x13)
+            "2ADDU",  // scaled-add (digit-prefix, 0x20-0x27)
+            "CMP",    // compare / negate (0x28-0x2F)
+            "SL",     // shift-left (0x30-0x37)
+            "BN",     // branch (0x40-0x47)
+            "PBP",    // predict-branch (0x48-0x57)
+            "CSN",    // conditional-set (0x58-0x67)
+            "CSEV",   // second conditional-set line (CSNN family)
+            "ZSZ",    // zero-or-set (0x68-0x77)
+            "ZSNN",   // second zero-or-set line (ZSNN family)
+            "LDB",    // load-byte (0x80-0x87)
+            "LDO",    // load-octabyte (0x88-0x8F)
+            "CSWAP",  // load-associated (LDSF/CSWAP/LDUNC group)
+            "GO",     // load-associated + GO (0x98-0x9F)
+            "STB",    // store-byte (0xA0-0xA7)
+            "STO",    // store-octabyte (0xA8-0xAF)
+            "STSF",   // store-associated (STSF/STHT/STCO/STUNC group)
+            "PUSHGO", // store-assoc + PUSHGO (0xB8-0xBF)
+            "OR",     // bitwise-or (0xC0-0xC7)
+            "AND",    // bitwise-and (0xC8-0xCF)
+            "BDIF",   // byte-wise-difference (0xD0-0xD7)
+            "MOR",    // matrix-or (0xD8-0xDF)
+            "SETH",   // set-high-wyde (0xE0-0xE7)
+            "ORH",    // or-high / andn-high (0xE8-0xEF)
+            "JMP",    // jump (0xF0)
+            "PUSHJ",  // call (0xF2)
+            "SAVE",   // system context save (0xFA)
+            "SWYM",   // no-op ("sympathize with your machinery", 0xFD)
+            "PUTI",   // immediate-form privileged (PUT special reg)
+            "BYTE",   // pseudo-op: emit byte
+            "GREG",   // pseudo-op: global register
+            "IS",     // pseudo-op: symbol equate
+        ] {
+            assert!(
+                MMIXAL_OPCODES.split_whitespace().any(|t| t == tok),
+                "MMIXAL_OPCODES must include canonical opcode `{tok}` — \
+                 one anchor per `concat!()` line to catch a silent \
+                 line-literal deletion. Every anchor represents a \
+                 distinct family/line pair; a missing anchor means \
+                 the string-literal at `MMIXAL_OPCODES`'s corresponding \
+                 line was deleted or the wordlist rearrangement \
+                 dropped it from its cohort"
+            );
+        }
+
+        // Invariant 14: canonical special-register anchors — both
+        // families present.
+        for tok in [
+            "rA", "rJ", "rZ", // primary set (26)
+            "rBB", "rZZ", // shadow set (6)
+        ] {
+            assert!(
+                MMIXAL_SPECIAL_REGISTERS
+                    .split_whitespace()
+                    .any(|t| t == tok),
+                "MMIXAL_SPECIAL_REGISTERS must include canonical \
+                 register `{tok}` — pins presence of both the primary \
+                 (`rA`..`rZ`) and shadow (`rBB`..`rZZ`) families"
+            );
+        }
+
+        // Invariant 15: canonical predefined-symbol anchors — one
+        // per sub-family.
+        for tok in [
+            "Inf",          // FP constant
+            "ROUND_NEAR",   // rounding mode
+            "Data_Segment", // memory segment
+            "Fputs",        // I/O TRAP code
+            "BinaryRead",   // file open mode
+            "StdOut",       // standard stream handle
+        ] {
+            assert!(
+                MMIXAL_PREDEF_SYMBOLS.split_whitespace().any(|t| t == tok),
+                "MMIXAL_PREDEF_SYMBOLS must include canonical predefined \
+                 symbol `{tok}` — one anchor per sub-family (FP constant, \
+                 rounding, segment, TRAP code, file mode, stream)"
+            );
+        }
+
+        // Invariant 16: digit-prefix opcodes present. `2ADDU`,
+        // `4ADDU`, `8ADDU`, `16ADDU` (and immediate variants) are
+        // unusual mnemonics that start with a digit; easy to omit
+        // accidentally. Their `-I` immediates are pinned too.
+        for tok in [
+            "2ADDU", "2ADDUI", "4ADDU", "4ADDUI", "8ADDU", "8ADDUI", "16ADDU", "16ADDUI",
+        ] {
+            assert!(
+                MMIXAL_OPCODES.split_whitespace().any(|t| t == tok),
+                "MMIXAL_OPCODES must include digit-prefix mnemonic \
+                 `{tok}` — LexMMIXAL.cxx:117-119 transitions from \
+                 OPCODE_PRE to OPCODE on any non-space (not \
+                 IsAWordStart-restricted), so the digit-first mnemonic \
+                 is captured; it must be present in the wordlist to \
+                 be recognized as SCE_MMIXAL_OPCODE_VALID"
+            );
+        }
+
+        // Invariant 17: no `-B` fwd/back-suffix branch mnemonics
+        // at source level. `BNB`/`BZB`/`BPB`/etc. are
+        // byte-encoding artefacts — the assembler picks the
+        // encoding byte based on the branch offset's sign. If a
+        // contributor adds any to the wordlist thinking they're
+        // distinct source mnemonics, they'd be dead entries.
+        // **Three families covered:** (1) plain branches
+        // `BN`..`BEV` at 0x40-0x47; (2) predict branches
+        // `PBN`..`PBEV` at 0x48-0x57 — each pair (base + `-B`
+        // backward encoding); (3) the `JMP` opcode at 0xF0 which
+        // pairs with `JMPB` at 0xF1. NO `-F` forward-suffix
+        // tokens are checked — the forward form IS the base
+        // mnemonic in MMIX, so there is no such thing as `BNF` /
+        // `JMPF` / etc.
+        for tok in [
+            // Plain branches (0x40-0x47 have `-B` at 0x41-0x47 odd).
+            "BNB", "BZB", "BPB", "BODB", "BNNB", "BNZB", "BNPB", "BEVB",
+            // Predict-branches (0x48-0x57 have `-B` at 0x49-0x57 odd).
+            "PBNB", "PBZB", "PBPB", "PBODB", "PBNNB", "PBNZB", "PBNPB", "PBEVB",
+            // Jump (JMP=0xF0, JMPB=0xF1).
+            "JMPB",
+        ] {
+            assert!(
+                !MMIXAL_OPCODES.split_whitespace().any(|t| t == tok),
+                "MMIXAL_OPCODES must NOT include `{tok}` — the `-B` \
+                 fwd/back distinction is byte-encoding-level; MMIXAL \
+                 source writes only the base mnemonic (e.g. `BN` / \
+                 `PBN` / `JMP`), and the assembler picks the encoding \
+                 byte based on the branch offset's sign"
+            );
+        }
+
+        // Invariant 18: no duplicate tokens within any single wordlist.
+        // `WordList::InList` is set-based so duplicates are functionally
+        // harmless for highlighting, but they corrupt docstring
+        // token-count claims and hide typos.
+        for (list, name) in [
+            (MMIXAL_OPCODES, "OPCODES"),
+            (MMIXAL_SPECIAL_REGISTERS, "SPECIAL_REGISTERS"),
+            (MMIXAL_PREDEF_SYMBOLS, "PREDEF_SYMBOLS"),
+        ] {
+            let total = list.split_whitespace().count();
+            let unique = list.split_whitespace().collect::<HashSet<_>>().len();
+            assert_eq!(
+                total,
+                unique,
+                "MMIXAL_{name} contains {} duplicate token(s) — \
+                 `WordList::InList` is set-based so duplicates are \
+                 functionally harmless but hide typos and corrupt \
+                 docstring token-count claims",
+                total - unique
+            );
+        }
+
+        // Invariant 19: `SCE_MMIXAL_INCLUDE` (17) is the highest
+        // defined slot in Lexilla's LexMMIXAL emission set today.
+        // A future Lexilla submodule bump that appends a slot
+        // (`SCE_MMIXAL_ANNOTATION = 18`, or any higher index)
+        // would leave `mm.styles.len() == 11` (Invariant 2) and
+        // the seven-unmapped affirmative-absence pin (Invariant
+        // 8) both silently passing while the new slot rendered
+        // at `STYLE_DEFAULT`. This pin catches the vendor bump
+        // at test time so the wiring gets deliberately
+        // considered — either mapped, or explicitly added to the
+        // unmapped list with a rationale.
+        assert_eq!(
+            SCE_MMIXAL_INCLUDE, 17,
+            "SCE_MMIXAL_INCLUDE has drifted from 17 — Lexilla \
+             may have renumbered slots. Verify against \
+             SciLexer.h:895 and, if intentional, update this \
+             assertion together with the seven-unmapped set \
+             (Invariant 8) and the style count (Invariant 2)"
+        );
+        // The pin also enforces that no `SCE_MMIXAL_*` above
+        // INCLUDE is silently accepted: the styles / italic /
+        // bold tables should never reference index 18+, and if
+        // Lexilla appends new slots the paint loop starts
+        // emitting them BEFORE the vendor bump surfaces here.
+        for (idx, _) in mm.styles {
+            assert!(
+                *idx <= SCE_MMIXAL_INCLUDE,
+                "MMIXAL_STYLES references slot {idx}, which is \
+                 higher than SCE_MMIXAL_INCLUDE ({SCE_MMIXAL_INCLUDE}) — \
+                 either a typo or an out-of-band Lexilla \
+                 addition; verify against SciLexer.h and the \
+                 emission set at LexMMIXAL.cxx"
+            );
+        }
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -36371,8 +37070,8 @@ mod lang_theme_tests {
     /// row landed. `L_CSOUND` was removed when the `CSound` row
     /// landed. `L_ERLANG` was removed when the Erlang row landed.
     /// `L_ESCRIPT` was removed when the ESCRIPT row landed.
-    /// `L_FORTH` was removed when the Forth row landed in this
-    /// commit.
+    /// `L_FORTH` was removed when the Forth row landed. `L_MMIXAL`
+    /// was removed when the MMIXAL row landed in this commit.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");

@@ -1758,6 +1758,150 @@ pub const SCE_FORTH_NUMBER: usize = 9;
 pub const SCE_FORTH_STRING: usize = 10;
 pub const SCE_FORTH_LOCALE: usize = 11;
 
+// LexMMIXAL style indices. 18 contiguous slots (0..=17) for
+// MMIXAL — Donald Knuth's MMIX assembly language from The Art of
+// Computer Programming Vol 1 Fascicle 1 (extension `.mms`).
+// Constants mirror `SciLexer.h:878-895` verbatim. Dispatches
+// SCLEX_MMIXAL (= 44, per `SciLexer.h:60`) via a **three-class
+// wordlist** declared at
+// `vendor\lexilla\lexers\LexMMIXAL.cxx:178-183`
+// (`MMIXALWordListDesc[]`):
+//
+//     MMIXALWordListDesc[] = {
+//         "Operation Codes",   // class 0 → OPCODE_VALID
+//         "Special Register",  // class 1 → REGISTER
+//         "Predefined Symbols",// class 2 → SYMBOL
+//         0,
+//     };
+//
+// **Case-SENSITIVE.** The identifier-classification paths at
+// `LexMMIXAL.cxx:104, :123` call `sc.GetCurrent(s, sizeof(s))`
+// (NOT `GetCurrentLowered`). MMIXAL by convention writes opcodes
+// in uppercase (`ADD`, `TRAP`, `LDO`), registers with lowercase
+// `r` prefix (`rA`, `rBB`), and predefined symbols in mixed case
+// (`Fputs`, `StdOut`, `ROUND_NEAR`) — the exact spelling must
+// match, byte-for-byte.
+//
+// **Line-based lexer.** Unlike most Scintilla lexers, MMIXAL is
+// structurally line-oriented. At `:64-70` every line begins in
+// `SCE_MMIXAL_LEADWS` (or `SCE_MMIXAL_INCLUDE` if the line
+// starts with `@i`). At `:72-83` the first non-whitespace
+// character in a LEADWS line transitions to:
+//
+//   - `SCE_MMIXAL_COMMENT` if it isn't a word character (comments
+//      don't need `%` — anything not-a-label starts a comment);
+//   - `SCE_MMIXAL_LABEL` if it IS a word character AND we're still
+//     at line start (labels ride column 0);
+//   - `SCE_MMIXAL_OPCODE_PRE` → `SCE_MMIXAL_OPCODE` if the token
+//     appears after leading whitespace (indented instruction).
+//
+// After the opcode, at `:154-172` the OPERANDS state dispatches
+// on the character class of the first non-whitespace character:
+// digit → NUMBER, word/@ → REF, `"` → STRING, `'` → CHAR, `$` →
+// REGISTER (numeric $-register), `#` → HEX, symbolic operator →
+// OPERATOR, whitespace → COMMENT (rest of line is a comment,
+// MMIXAL style).
+//
+// **Opcode validation.** At `:120-129`, when the OPCODE-collect
+// state ends on a non-word char, the collected token is probed
+// against the opcodes wordlist (class 0). Match →
+// `OPCODE_VALID`, no-match → `OPCODE_UNKNOWN`. Then transitions
+// to `OPCODE_POST`.
+//
+// **REF settle with base-prefix stripping.** At `:101-115`, when
+// the REF collect state ends, `sc.GetCurrent(s0, ...)` captures
+// the identifier byte-exact, then if it begins with `:` the
+// leading `:` is stripped for the wordlist probe (MMIXAL's
+// `:Global` base-prefix syntax). Probes special_register
+// (class 1) → `REGISTER`, else predef_symbols (class 2) →
+// `SYMBOL`, else stays `REF`.
+//
+// **`@include` directive.** At `:65-66`, a line beginning with
+// literal `@i` transitions to `SCE_MMIXAL_INCLUDE` for the
+// entire line — MMIXAL's file-inclusion preprocessor directive.
+//
+// **IsAWordChar at `:35-37`**: alnum (ASCII) + `:` + `_`. `:` is
+// accepted inside identifiers so MMIXAL's base-prefix syntax
+// (`:GlobalLabel`) parses as one token. Note this means opcode
+// mnemonics starting with a digit — `2ADDU`, `4ADDU`, `8ADDU`,
+// `16ADDU` — enter OPCODE state via the `!isspace(sc.ch)`
+// transition at `:117-119` (any non-space in OPCODE_PRE), collect
+// full alnum span, then probe the opcodes wordlist byte-exact.
+// These four `NADD` opcodes must be present verbatim as MMIXAL
+// source strings.
+//
+// **No fold.** LexMMIXAL registers `0` as the fold function at
+// `:185` (`extern const LexerModule lmMMIXAL(SCLEX_MMIXAL,
+// ColouriseMMIXALDoc, "mmixal", 0, MMIXALWordListDesc);`). No
+// fold-classifier constraints on wordlist content.
+//
+// Style semantics (paint-loop citations reference LexMMIXAL.cxx):
+//
+//   - SCE_MMIXAL_LEADWS (0) — leading whitespace, transient
+//     entry state per line. Framework convention: leave unmapped.
+//   - SCE_MMIXAL_COMMENT (1) — MMIXAL comment. Any line-leading
+//     non-word char starts a comment (`:74-75`); after operands
+//     any whitespace-then-anything is a trailing comment
+//     (`:156-157`).
+//   - SCE_MMIXAL_LABEL (2) — column-0 identifier declaring a
+//     label. Entry at `:77-78`.
+//   - SCE_MMIXAL_OPCODE (3) — transient collect state for the
+//     opcode mnemonic. Framework convention: leave unmapped.
+//   - SCE_MMIXAL_OPCODE_PRE (4) — transient whitespace between
+//     label and opcode. Framework convention: leave unmapped.
+//   - SCE_MMIXAL_OPCODE_VALID (5) — opcode mnemonic that hit
+//     wordlist class 0. Entry at `:124-125`.
+//   - SCE_MMIXAL_OPCODE_UNKNOWN (6) — opcode mnemonic that
+//     missed wordlist class 0. Entry at `:126-127`. Framework
+//     convention: leave unmapped so unrecognized opcodes paint
+//     at STYLE_DEFAULT (they may be user-defined macros).
+//   - SCE_MMIXAL_OPCODE_POST (7) — transient state after opcode
+//     validation. Framework convention: leave unmapped.
+//   - SCE_MMIXAL_OPERANDS (8) — transient dispatch state
+//     between operands. Framework convention: leave unmapped.
+//   - SCE_MMIXAL_NUMBER (9) — decimal literal. Entry at
+//     `:158-159`; exits to OPERANDS on non-digit or degrades to
+//     REF at `:90-92` if a word char follows.
+//   - SCE_MMIXAL_REF (10) — bare identifier reference. Entry at
+//     `:160-161`; settles to REGISTER / SYMBOL / stays-REF at
+//     `:101-115`. Framework convention: leave unmapped so
+//     unmatched refs paint at STYLE_DEFAULT.
+//   - SCE_MMIXAL_CHAR (11) — `'`-delimited char literal. Entry
+//     at `:164-165`, exit at `:138-142`.
+//   - SCE_MMIXAL_STRING (12) — `"`-delimited string literal.
+//     Entry at `:162-163`, exit at `:132-136`.
+//   - SCE_MMIXAL_REGISTER (13) — `$`-prefixed numeric register
+//     (`$0`..`$255`) via direct entry at `:166-167`, OR a REF
+//     that hit wordlist class 1 (special register like `rA`) via
+//     `:109-110`.
+//   - SCE_MMIXAL_HEX (14) — `#`-prefixed hex literal
+//     (`#DEADBEEF`). Entry at `:168-169`.
+//   - SCE_MMIXAL_OPERATOR (15) — MMIXAL operator char from
+//     `isMMIXALOperator` at `:39-49` (`+-|^*/%<>&~$,()[]`).
+//     Entry at `:170-171`.
+//   - SCE_MMIXAL_SYMBOL (16) — predefined symbol via REF hit on
+//     wordlist class 2 at `:111-112`.
+//   - SCE_MMIXAL_INCLUDE (17) — `@include` directive line.
+//     Entry at `:65-66`.
+pub const SCE_MMIXAL_LEADWS: usize = 0;
+pub const SCE_MMIXAL_COMMENT: usize = 1;
+pub const SCE_MMIXAL_LABEL: usize = 2;
+pub const SCE_MMIXAL_OPCODE: usize = 3;
+pub const SCE_MMIXAL_OPCODE_PRE: usize = 4;
+pub const SCE_MMIXAL_OPCODE_VALID: usize = 5;
+pub const SCE_MMIXAL_OPCODE_UNKNOWN: usize = 6;
+pub const SCE_MMIXAL_OPCODE_POST: usize = 7;
+pub const SCE_MMIXAL_OPERANDS: usize = 8;
+pub const SCE_MMIXAL_NUMBER: usize = 9;
+pub const SCE_MMIXAL_REF: usize = 10;
+pub const SCE_MMIXAL_CHAR: usize = 11;
+pub const SCE_MMIXAL_STRING: usize = 12;
+pub const SCE_MMIXAL_REGISTER: usize = 13;
+pub const SCE_MMIXAL_HEX: usize = 14;
+pub const SCE_MMIXAL_OPERATOR: usize = 15;
+pub const SCE_MMIXAL_SYMBOL: usize = 16;
+pub const SCE_MMIXAL_INCLUDE: usize = 17;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals
