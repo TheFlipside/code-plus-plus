@@ -11099,6 +11099,125 @@ pub const MMIXAL_PREDEF_SYMBOLS: &str = concat!(
     "StdIn StdOut StdErr ",
 );
 
+/// Nim reserved keywords — sole wordlist of `LexNim`'s
+/// single-class descriptor (`nimWordListDesc[]` at
+/// `LexNim.cxx:182-185` = `{ "Keywords", nullptr }`). Matched at
+/// `LexNim.cxx:446-462` via `keywords.InList(s)` after
+/// `sc.GetCurrent(s, sizeof(s))` at `:447`; hits change state to
+/// [`SCE_NIM_WORD`](../scintilla_sys/constant.SCE_NIM_WORD.html)
+/// (unless the token is a definition keyword like `proc`/`func`/
+/// `template`/etc., in which case the paint loop additionally
+/// sets `funcNameExists = true` so the NEXT identifier or
+/// backtick span gets auto-styled `SCE_NIM_FUNCNAME` per
+/// `LexNim.cxx:453-459` and `:681-687`).
+///
+/// **Byte-exact case-sensitive.** `LexNim` uses `sc.GetCurrent`
+/// (NOT `GetCurrentLowered`) at `:447` for the wordlist probe,
+/// so tokens must appear in the exact case used by Nim source.
+/// Nim's language-level identifier comparison is
+/// partial-case-insensitive with underscore collapse
+/// (`fooBar` == `foo_bar` == `FOOBAR`), but the LEXER uses a
+/// plain `WordList::InList` bytewise match — and Nim source
+/// overwhelmingly writes keywords lowercase per the official
+/// style guide.
+///
+/// **Source:** Nim manual §3.2 Identifiers & Keywords
+/// (<https://nim-lang.org/docs/manual.html#lexical-analysis-identifiers-amp-keywords>),
+/// verified via two independent `WebFetch` retrievals of the
+/// manual which returned an identical 66-token reserved-word
+/// table, then adversarially verified per-token in the
+/// research workflow.
+///
+/// **66 tokens** across seven functional groups:
+///   - **Word operators (15)**: `and`, `or`, `not`, `xor`,
+///     `shl`, `shr`, `div`, `mod`, `in`, `notin`, `is`,
+///     `isnot`, `of`, `as`, `from`. `LexNim` does NOT emit
+///     these as `SCE_NIM_OPERATOR` — they're routed through
+///     the identifier collect path at `:689-690` → `:446-462`
+///     wordlist probe → `SCE_NIM_WORD`. The symbolic operator
+///     set at `:713` is disjoint from these word operators.
+///   - **Control flow (18)**: `if`, `elif`, `else`, `when`,
+///     `case`, `of`, `for`, `while`, `break`, `continue`,
+///     `return`, `yield`, `discard`, `raise`, `try`, `except`,
+///     `finally`, `defer`. (`of` shared with word-operators —
+///     Nim reuses the token across both `case OBJ of PAT` and
+///     `x of T` type-check contexts; single reserved token.)
+///   - **Declaration / routine (12)**: `proc`, `func`,
+///     `method`, `iterator`, `converter`, `template`, `macro`,
+///     `type`, `const`, `let`, `var`, `using`.
+///   - **Module system (4)**: `import`, `from`, `export`,
+///     `include`. (`from` shared with word-operators bucket —
+///     serves both `from X import Y` and `x from y` grammar
+///     positions.)
+///   - **Type / structure (7)**: `object`, `tuple`, `enum`,
+///     `ref`, `ptr`, `distinct`, `concept`.
+///   - **Meta / low-level (8)**: `static`, `asm`, `bind`,
+///     `mixin`, `addr`, `cast`, `out`, `do`.
+///   - **Blocks + reserved-for-future (3)**: `block`, `end`,
+///     `interface`. `end` and `interface` are reserved but
+///     currently unused by the compiler per the manual's
+///     footnote — reserved for language evolution.
+///   - **Special value (1)**: `nil`. The manual lists `nil`
+///     inside the reserved-keyword table, not as a predefined
+///     identifier (contrast with `true` / `false` which are
+///     `system.bool` values, exported identifiers, not
+///     keywords).
+///
+/// (Buckets sum to more than 66 because `of` and `from`
+/// legitimately belong to two functional groupings each; each
+/// is counted once in the wordlist.)
+///
+/// **Deliberately excluded:**
+///   - `true`, `false` — NOT in §3.2's reserved-word table.
+///     They are pre-defined boolean identifiers exported from
+///     `system` (type `bool`), shadowable. Some Nim editors
+///     highlight them as literals on semantic grounds, but
+///     `LexNim` treats them as ordinary identifiers via the
+///     paint loop's identifier collect path — a wordlist
+///     entry would silently accept them into `SCE_NIM_WORD`
+///     which the manual doesn't sanction.
+///   - `echo` — stdlib proc in `system`, freely shadowable,
+///     not a keyword.
+///   - `result` — implicit local variable inserted by the
+///     compiler into every proc/func with a return type. Magic
+///     identifier, not a reserved keyword.
+///   - `generic`, `atomic` — historically reserved (Nimrod
+///     era) but removed from modern Nim; not in current
+///     §3.2's table.
+///   - Pragma names (`raises`, `gcsafe`, `pure`, `inline`,
+///     `noSideEffect`, etc.) — contextual only inside
+///     `{. ... .}` blocks. Ordinary identifiers everywhere
+///     else, not part of the reserved-keyword set.
+///   - Built-in type identifiers (`int`, `int8`..`int64`,
+///     `uint*`, `float*`, `string`, `cstring`, `bool`, `char`,
+///     `seq`, `array`, `openArray`, `set`, `range`, `pointer`,
+///     `void`, `auto`, `any`) — exported by `system`, not
+///     reserved. Would need a separate wordlist to highlight
+///     as a distinct class, but `LexNim`'s single-class
+///     descriptor cannot split them out; they paint at
+///     `STYLE_DEFAULT` through the framework-unmapped
+///     `SCE_NIM_IDENTIFIER` slot.
+pub const NIM_KEYWORDS: &str = concat!(
+    // Word operators (15).
+    "and or not xor shl shr div mod in notin is isnot of as from ",
+    // Control flow (18 — `of` shared with word-operators).
+    "if elif else when case for while break continue return yield ",
+    "discard raise try except finally defer ",
+    // Declaration / routine (12).
+    "proc func method iterator converter template macro type ",
+    "const let var using ",
+    // Module system (4 — `from` shared with word-operators).
+    "import export include ",
+    // Type / structure (7).
+    "object tuple enum ref ptr distinct concept ",
+    // Meta / low-level (8).
+    "static asm bind mixin addr cast out do ",
+    // Blocks + reserved-for-future (3).
+    "block end interface ",
+    // Special value (1).
+    "nil ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

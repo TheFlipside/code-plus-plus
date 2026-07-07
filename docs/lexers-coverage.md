@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 62 / 🟡 26 / ⚫ 1.
+Total: 89 rows. ✅ 63 / 🟡 25 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1894,7 +1894,7 @@ further shim work needed.
 | Makefile | 10 | `makefile` | ✅ | ✅ | ✅ |
 | Matlab | 44 | `matlab` | ✅ | ✅ | ✅ |
 | MMIXAL | 75 | `mmixal` | ✅ | ✅ | ✅ |
-| Nim | 76 | `nim` | ⚫ | ⚫ | 🟡 |
+| Nim | 76 | `nim` | ✅ | ✅ | ✅ |
 | Nncrontab | 77 | `nncrontab` | ⚫ | ⚫ | 🟡 |
 | NSIS | 28 | `nsis` | ✅ | ✅ | ✅ |
 | Objective-C | 5 | `cpp` | ✅ | ✅ | ✅ |
@@ -6374,6 +6374,183 @@ migration list** — user-defined macros
 legitimately hit that state (unlike
 STRINGEOL / *_ERROR which are unambiguous
 parse failures).
+
+**Nim (2026-07-07):** wires `SCLEX_NIM`
+(= 126) for Nim `.nim` source — the
+statically-typed compiled systems programming
+language with Python-like indentation-based
+syntax. `L_NIM` (id 76) is the sole language
+row using this lexer.
+
+**Single-class wordlist (66 tokens).** Nim's
+grammar reserves exactly 66 keywords per
+manual §3.2, WebFetch-verified via two
+independent retrievals and adversarially
+verified per-token in the research workflow.
+`NIM_KEYWORDS` covers seven functional
+groups:
+- **Word operators (15)**: `and`/`or`/`not`/
+  `xor`/`shl`/`shr`/`div`/`mod`/`in`/`notin`/
+  `is`/`isnot`/`of`/`as`/`from`. Routed
+  through the identifier collect path
+  (`LexNim.cxx:689-690` → `:446-462` wordlist
+  probe → `SCE_NIM_WORD`), NOT the symbolic
+  operator set at `:713`.
+- **Control flow (18)**: `if`/`elif`/`else`/
+  `when`/`case`/`of`/`for`/`while`/`break`/
+  `continue`/`return`/`yield`/`discard`/
+  `raise`/`try`/`except`/`finally`/`defer`.
+- **Declaration / routine (12)**: `proc`/
+  `func`/`method`/`iterator`/`converter`/
+  `template`/`macro`/`type`/`const`/`let`/
+  `var`/`using`. The seven definition
+  keywords (`proc`/`func`/`method`/`iterator`/
+  `converter`/`template`/`macro`) are
+  load-bearing — `IsFuncName` at
+  `LexNim.cxx:85-103` hardcodes exactly this
+  set to trigger the `funcNameExists` flag
+  that auto-styles the following identifier
+  as `SCE_NIM_FUNCNAME`. Invariant 14 pins
+  their presence in the wordlist.
+- **Module system (4)**: `import`/`from`/
+  `export`/`include`.
+- **Type / structure (7)**: `object`/`tuple`/
+  `enum`/`ref`/`ptr`/`distinct`/`concept`.
+- **Meta / low-level (8)**: `static`/`asm`/
+  `bind`/`mixin`/`addr`/`cast`/`out`/`do`.
+- **Blocks + reserved-for-future (3)**:
+  `block`/`end`/`interface`. Manual
+  footnote: `end` and `interface` are
+  reserved but currently unused by the
+  compiler.
+- **Special value (1)**: `nil`. Manual lists
+  it inside the reserved-keyword table, NOT
+  as a predefined identifier (contrast with
+  `true`/`false` which are `system.bool`
+  values).
+
+(Group counts sum to more than 66 because
+`of` and `from` each belong to two functional
+groupings — single reserved tokens each,
+counted once in the wordlist.)
+
+**Style routing (13 mappings across 17
+defined SCE slots):** All four comment
+sub-styles (COMMENT + COMMENTDOC +
+COMMENTLINE + COMMENTLINEDOC) → `Comment`
+(italic — universal Code++ comment
+convention); WORD → `Keyword` (bold —
+reserved-keyword hits as visual anchor,
+matching Python's WORD → bold as the closest
+single-class sibling); NUMBER → `Number`;
+STRING + CHARACTER + TRIPLE + TRIPLEDOUBLE →
+`String` (four string variants collapse to
+the shared String slot); BACKTICKS +
+FUNCNAME → `Keyword2` (accent for
+identifier-definition markers — backtick-
+quoted spans name operators or use reserved
+words as identifiers; FUNCNAME is auto-
+styled after `proc`/`func`/`macro`/`method`/
+`template`/`iterator`/`converter` per the
+paint loop); OPERATOR → `Operator`. Four
+slots unmapped: DEFAULT (0), STRINGEOL (13)
++ NUMERROR (14) both belong to the
+deferred-`StyleSlot::Error` migration list —
+sweep into `StyleSlot::Error` when that
+migration lands (unlike MMIXAL's
+`OPCODE_UNKNOWN`, Nim's STRINGEOL / NUMERROR
+are unambiguous parse failures), IDENTIFIER
+(16) is the transient identifier-collect
+state (per framework convention, unmatched
+identifiers paint at `STYLE_DEFAULT`).
+
+**Case-SENSITIVE.** `LexNim.cxx:447` uses
+`sc.GetCurrent` (NOT `GetCurrentLowered`)
+for the wordlist probe. Nim's language-level
+identifier comparison is partial-case-
+insensitive with underscore collapse
+(`fooBar` == `foo_bar` == `FOOBAR`), but the
+lexer's wordlist probe is a plain byte-exact
+`WordList::InList` lookup. Nim source
+overwhelmingly writes keywords lowercase per
+the official style guide, so all 66
+wordlist tokens are lowercase.
+
+**Auto-styled FUNCNAME after definition
+keywords.** At `LexNim.cxx:446-465` and
+`:681-687`, when a keyword identifier
+matches `IsFuncName(s)` (one of the seven
+def keywords) the paint loop sets
+`funcNameExists = true`; the NEXT identifier
+or backtick span gets emitted as
+`SCE_NIM_FUNCNAME` instead of `IDENTIFIER`/
+`BACKTICKS`. Entirely paint-loop-driven — no
+wordlist support needed — but the seven def
+keywords must be in the wordlist for the
+`InList` probe at `:452` to return true and
+trigger the flag flip.
+
+**Rich string family — 6 entry paths.**
+LexNim's paint loop at `:625-679` covers:
+bare `"..."` → STRING; `"""..."""` triple-
+double → TRIPLEDOUBLE (with special handling
+for up-to-5 opening quotes); `'x'` char →
+CHARACTER; `'''...'''` triple-single →
+TRIPLE; `r"..."` / `R"..."` raw string →
+STRING with `isStylingRawString` flag;
+generalized raw `xyz"..."` → configurable via
+`lexer.nim.raw.strings.highlight.ident`.
+
+**Comment family — 4 sub-styles.** At
+`:693-711`: `##[` → COMMENTDOC (nestable
+block doc); `#[` → COMMENT (nestable block);
+`##` → COMMENTLINEDOC (line doc); `#` →
+COMMENTLINE. Block comments are nestable per
+Nim spec — the lexer tracks `commentNestLevel`
+in `styler.SetLineState`.
+
+**Fold** uses indentation levels via
+`IndentAmount` at `:164-168` (Python-style
+indent-based folding), NOT brace or
+keyword-based folding.
+
+Structural test coverage: 16 invariants —
+deep-value identity pin, 13-mapping style
+count (17 defined slots minus 4 unmapped),
+single wordlist class 0 → `NIM_KEYWORDS`
+mapping, **exact 66-token count** matching
+Nim manual §3.2, all-lowercase alphabet
+enforcement, style-routing pins for all 13
+mapped SCE constants, 4 unmapped slots
+confirmed absent (`DEFAULT` + `STRINGEOL` +
+`NUMERROR` + `IDENTIFIER`), italic set == 4
+(all four comment sub-styles), bold set == 1
+(WORD only), cross-language non-reuse
+against Forth / Rust / MMIXAL / CSound,
+`L_NIM` `LangEntry`'s `lexer: Some("nim")` +
+`nim` extension presence, canonical keyword
+anchors covering all seven functional groups
+(50+ anchor tokens), **affirmative absence
+pins** for 16 tokens commonly assumed to be
+Nim keywords but aren't (`true`/`false`/
+`echo`/`result`/`int`/`string`/`bool`/
+`float`/`char`/`seq`/`array`/`generic`/
+`atomic`/`raises`/`gcsafe`/`inline` — load-
+bearing because a wordlist entry for any of
+these would silently mis-style ordinary
+identifiers as `SCE_NIM_WORD`), **all seven
+definition keywords** (`proc`/`func`/`macro`/
+`method`/`template`/`iterator`/`converter`)
+pinned as present because `IsFuncName` at
+`LexNim.cxx:85-103` requires each of them
+individually — a missing keyword breaks the
+`funcNameExists` flag flip for that def
+style, cascading into missing `FUNCNAME`
+styling for the following identifier —
+**highest defined `SCE_NIM_*` pin**
+(`SCE_NIM_IDENTIFIER` (16) as top slot;
+catches future Lexilla submodule bumps), and
+no-duplicate defence-in-depth check.
 
 ## Notes
 

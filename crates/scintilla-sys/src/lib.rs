@@ -1902,6 +1902,174 @@ pub const SCE_MMIXAL_OPERATOR: usize = 15;
 pub const SCE_MMIXAL_SYMBOL: usize = 16;
 pub const SCE_MMIXAL_INCLUDE: usize = 17;
 
+// LexNim style indices. 17 contiguous slots (0..=16) for
+// Nim — the statically-typed compiled systems programming
+// language with Python-like indentation-based syntax
+// (extension `.nim`). Constants mirror `SciLexer.h:1933-1949`
+// verbatim. Dispatches SCLEX_NIM (= 126, per `SciLexer.h:142`)
+// via a **single-class wordlist** declared at
+// `vendor\lexilla\lexers\LexNim.cxx:182-185`
+// (`nimWordListDesc[]`):
+//
+//     nimWordListDesc[] = { "Keywords", nullptr };
+//
+// **Case-SENSITIVE.** The identifier-classification path at
+// `LexNim.cxx:446-462` calls `sc.GetCurrent(s, sizeof(s))`
+// (NOT `GetCurrentLowered`), then probes `keywords.InList(s)`.
+// Nim's identifier-comparison at the language level is
+// case-insensitive-except-first-char with underscore collapse
+// (`fooBar` == `foo_bar` == `FOOBAR` when the first char
+// matches), but the lexer's wordlist probe is a plain
+// byte-exact `strcmp`-family lookup via `WordList::InList`.
+// Nim source overwhelmingly writes keywords lowercase, so
+// wordlist tokens must be lowercase to match.
+//
+// **`IsAWordChar` at `:65-67`** accepts ASCII alnum + `_` + `.`.
+// The `.` inclusion does NOT mean the lexer collects `x.foo`
+// as a single identifier span — `SCE_NIM_IDENTIFIER` exits
+// immediately on `.` via the explicit disjunct at `:447`
+// (`sc.ch == '.' || !IsAWordChar(sc.ch)`), and `.` is in the
+// operator strchr set at `:713`, so `x.foo` tokenizes as
+// three states: IDENTIFIER (`x`) → OPERATOR (`.`) →
+// IDENTIFIER (`foo`). The `.` presence in `IsAWordChar` is
+// instead used by (a) the NUMBER state's decimal-continuation
+// check at `:387` (recognising `1.5`-style floats without
+// re-tokenising the decimal point separately) and (b)
+// sub-identifier keyword-suppression checks that need to
+// know when a `.` sits between two identifier-shaped spans.
+// Wordlist entries are single identifier tokens with no
+// dots.
+//
+// **Auto-styled FUNCNAME after definition keywords.** At
+// `:446-465`, when a keyword identifier hits the wordlist
+// AND `IsFuncName(s)` returns true (the token is one of
+// `proc`/`func`/`macro`/`method`/`template`/`iterator`/
+// `converter` per `:85-103`), the lexer sets a
+// `funcNameExists` flag; the NEXT identifier or backtick-
+// quoted identifier gets emitted as `SCE_NIM_FUNCNAME`
+// instead of the usual IDENTIFIER/BACKTICKS style. This is
+// entirely paint-loop-driven — no wordlist support required
+// for FUNCNAME styling.
+//
+// **String literal families.** Nim's string syntax is rich —
+// six distinct entry paths at `:624-679`:
+//   1. Bare double-quote `"..."` → `SCE_NIM_STRING` (`:669`).
+//   2. Triple double-quote `"""..."""` → `SCE_NIM_TRIPLEDOUBLE`
+//      (`:656`), with special handling for up-to-5 opening
+//      quotes at `:660-667`.
+//   3. Raw string `r"..."` / `R"..."` → `SCE_NIM_STRING` with
+//      `isStylingRawString` flag (`:625-640`).
+//   4. Generalized raw string `xyz"..."` (any identifier before
+//      the quote) → configurable via
+//      `lexer.nim.raw.strings.highlight.ident`; defaults to
+//      styling the identifier as IDENTIFIER, the quote as
+//      STRING.
+//   5. Single-quote character `'x'` → `SCE_NIM_CHARACTER`
+//      (`:677`).
+//   6. Triple single-quote `'''...'''` → `SCE_NIM_TRIPLE`
+//      (`:675`).
+//
+// **Backtick-quoted identifiers.** Nim allows `` `identifier` ``
+// for using keywords as identifiers (e.g. `` `if` ``). At
+// `:681-687`, the paint loop enters `SCE_NIM_FUNCNAME` if
+// `funcNameExists` (backtick immediately after a def keyword)
+// or `SCE_NIM_BACKTICKS` otherwise.
+//
+// **Comment family.** Four distinct comment states at
+// `:693-711`:
+//   - `##[` → `SCE_NIM_COMMENTDOC` (nestable block doc comment).
+//   - `#[` → `SCE_NIM_COMMENT` (nestable block comment).
+//   - `##` → `SCE_NIM_COMMENTLINEDOC` (line doc comment).
+//   - `#` → `SCE_NIM_COMMENTLINE` (line comment).
+// Block comments are nestable per Nim spec; the lexer tracks
+// `commentNestLevel` in `styler.SetLineState` at `:697`.
+//
+// **STRINGEOL is an error state.** At `:495`/`:555`/`:567`/
+// `:575`, an unterminated `FUNCNAME` (backtick-quoted def-name
+// span) / `STRING` / `CHARACTER` / `BACKTICKS` (that hits an
+// unescaped newline) has its state `ChangeState`'d to
+// `SCE_NIM_STRINGEOL`. Four sources total — `:495` is the
+// FUNCNAME case (def-position backtick span never closed
+// before EOL), not just the three literal-string states.
+// Similarly `SCE_NIM_NUMERROR` marks a malformed numeric
+// literal per `:52-58` and `:443`.
+//
+// **Operator set at `:713`.** `"()[]{}:=;-\\/&%$!+<>|^?,.*~@"`
+// — a wide set covering Nim's rich operator vocabulary
+// including `not`/`and`/`or` word-operators (which are
+// keywords, not `SCE_NIM_OPERATOR` tokens).
+//
+// **Fold** at `:728-812` uses indentation levels via
+// `IndentAmount` at `:164-168` (Python-style indent-based
+// folding), NOT brace or keyword-based folding.
+//
+// Style semantics (paint-loop citations reference LexNim.cxx):
+//
+//   - SCE_NIM_DEFAULT (0) — whitespace / unclassified.
+//     Framework convention: leave unmapped.
+//   - SCE_NIM_COMMENT (1) — `#[ ... ]#` nestable block comment.
+//     Entry at `:704`, exit at `:499-516`.
+//   - SCE_NIM_COMMENTDOC (2) — `##[ ... ]##` nestable block
+//     doc comment. Entry at `:701-702`, exit at `:518-535`.
+//   - SCE_NIM_COMMENTLINE (3) — `# ...` line comment. Entry
+//     at `:709`, exit at `:537-541`.
+//   - SCE_NIM_COMMENTLINEDOC (4) — `## ...` line doc comment.
+//     Entry at `:706-707`, exit at `:537-541`.
+//   - SCE_NIM_NUMBER (5) — decimal / hex (`0x`) / binary
+//     (`0b`) / octal (`0o`) / exponent numeric literal.
+//     Entry at `:605`, exit at `:368-444`.
+//   - SCE_NIM_STRING (6) — `"..."` string literal (also raw
+//     `r"..."`). Entry at `:633`/`:669`, exit at `:543-556`.
+//   - SCE_NIM_CHARACTER (7) — `'x'` single-char literal.
+//     Entry at `:677`, exit at `:559-568`.
+//   - SCE_NIM_WORD (8) — identifier that hit the keywords
+//     wordlist. Entry at `:455-456`.
+//   - SCE_NIM_TRIPLE (9) — `'''...'''` triple-quote literal
+//     (rare). Entry at `:675`, exit at `:594-598`.
+//   - SCE_NIM_TRIPLEDOUBLE (10) — `"""..."""` triple-double-
+//     quote literal. Entry at `:631`/`:656`, exit at
+//     `:579-591`.
+//   - SCE_NIM_BACKTICKS (11) — `` `identifier` `` backtick-
+//     quoted identifier. Entry at `:685`, exit at `:571-576`.
+//   - SCE_NIM_FUNCNAME (12) — identifier or backtick-span
+//     immediately following a `proc`/`func`/`macro`/`method`/
+//     `template`/`iterator`/`converter` keyword. Entry via
+//     `:459` (identifier path) or `:683` (backtick path).
+//     Auto-styled — no wordlist support needed.
+//   - SCE_NIM_STRINGEOL (13) — unterminated backtick def-name
+//     (`:495`, FUNCNAME source) / string (`:555`) / char
+//     (`:567`) / backticks (`:575`) that hit end-of-line.
+//     Four distinct paint-loop sources.
+//   - SCE_NIM_NUMERROR (14) — malformed numeric literal
+//     (invalid digit for base, multiple decimal points, etc.).
+//     Entry at `:443` via `GetNumStyle(numType == FormatError)`.
+//   - SCE_NIM_OPERATOR (15) — operator char from
+//     `"()[]{}:=;-\\/&%$!+<>|^?,.*~@"` at `:713`. Entry at
+//     `:714`, exit at `:364-366`.
+//   - SCE_NIM_IDENTIFIER (16) — transient identifier-collect
+//     state entered at `:690`. Settles to WORD / FUNCNAME /
+//     stays-IDENTIFIER at `:446-465` based on the wordlist
+//     probe and `funcNameExists`. Framework convention: leave
+//     unmapped so unmatched bare identifiers paint at
+//     STYLE_DEFAULT.
+pub const SCE_NIM_DEFAULT: usize = 0;
+pub const SCE_NIM_COMMENT: usize = 1;
+pub const SCE_NIM_COMMENTDOC: usize = 2;
+pub const SCE_NIM_COMMENTLINE: usize = 3;
+pub const SCE_NIM_COMMENTLINEDOC: usize = 4;
+pub const SCE_NIM_NUMBER: usize = 5;
+pub const SCE_NIM_STRING: usize = 6;
+pub const SCE_NIM_CHARACTER: usize = 7;
+pub const SCE_NIM_WORD: usize = 8;
+pub const SCE_NIM_TRIPLE: usize = 9;
+pub const SCE_NIM_TRIPLEDOUBLE: usize = 10;
+pub const SCE_NIM_BACKTICKS: usize = 11;
+pub const SCE_NIM_FUNCNAME: usize = 12;
+pub const SCE_NIM_STRINGEOL: usize = 13;
+pub const SCE_NIM_NUMERROR: usize = 14;
+pub const SCE_NIM_OPERATOR: usize = 15;
+pub const SCE_NIM_IDENTIFIER: usize = 16;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

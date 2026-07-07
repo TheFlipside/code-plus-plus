@@ -123,20 +123,20 @@ use codepp_core::lang::{
     L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF,
     L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
     L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
-    L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS,
-    L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB,
-    L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
-    MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-    OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
-    POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-    PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
-    R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-    SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-    XML_KEYWORDS, YAML_KEYWORDS,
+    L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
+    L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
+    L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+    MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
+    RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
+    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
+    VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
+    VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
+    VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -240,22 +240,25 @@ use codepp_scintilla_sys::{
     SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_MMIXAL_CHAR, SCE_MMIXAL_COMMENT,
     SCE_MMIXAL_HEX, SCE_MMIXAL_INCLUDE, SCE_MMIXAL_LABEL, SCE_MMIXAL_NUMBER,
     SCE_MMIXAL_OPCODE_VALID, SCE_MMIXAL_OPERATOR, SCE_MMIXAL_REGISTER, SCE_MMIXAL_STRING,
-    SCE_MMIXAL_SYMBOL, SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION,
-    SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER,
-    SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ,
-    SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF,
-    SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT,
-    SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING,
-    SCE_PAS_NUMBER, SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING,
-    SCE_PAS_WORD, SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER,
-    SCE_PL_COMMENTLINE, SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH,
-    SCE_PL_HERE_DELIM, SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX,
-    SCE_PL_HERE_QX_VAR, SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX,
-    SCE_PL_REGEX_VAR, SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING,
-    SCE_PL_STRING_Q, SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR,
-    SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR,
-    SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT,
-    SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT,
+    SCE_MMIXAL_SYMBOL, SCE_NIM_BACKTICKS, SCE_NIM_CHARACTER, SCE_NIM_COMMENT, SCE_NIM_COMMENTDOC,
+    SCE_NIM_COMMENTLINE, SCE_NIM_COMMENTLINEDOC, SCE_NIM_FUNCNAME, SCE_NIM_NUMBER,
+    SCE_NIM_OPERATOR, SCE_NIM_STRING, SCE_NIM_TRIPLE, SCE_NIM_TRIPLEDOUBLE, SCE_NIM_WORD,
+    SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF,
+    SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX,
+    SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ,
+    SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED,
+    SCE_NSIS_VARIABLE, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2,
+    SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER,
+    SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD,
+    SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
+    SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
+    SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR,
+    SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR,
+    SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING, SCE_PL_STRING_Q,
+    SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR, SCE_PL_STRING_QR_VAR,
+    SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR,
+    SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT, SCE_POWERSHELL_ALIAS,
+    SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT,
     SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM, SCE_POWERSHELL_FUNCTION,
     SCE_POWERSHELL_HERE_CHARACTER, SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_KEYWORD,
     SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING, SCE_POWERSHELL_USER1,
@@ -4264,6 +4267,162 @@ const MMIXAL_THEME: LangTheme = LangTheme {
     styles: MMIXAL_STYLES,
     italic: MMIXAL_ITALIC,
     bold: MMIXAL_BOLD,
+};
+
+// --- LexNim ---
+// LexNim serves Nim — the statically-typed compiled systems
+// programming language with Python-like indentation-based
+// syntax, extension `.nim`. `L_NIM` (id 76) is the only
+// language row using this lexer. Dispatches SCLEX_NIM (= 126,
+// per `SciLexer.h:142`) via a single-class wordlist descriptor
+// at `LexNim.cxx:182-185`.
+//
+// **13 style mappings** covering every SCE_NIM_* state the
+// paint loop emits as a semantically visible token. Four of
+// the 17 defined slots stay unmapped:
+//   - DEFAULT (0) — whitespace / unclassified.
+//   - STRINGEOL (13) — unterminated backtick def-name
+//     (FUNCNAME source, `LexNim.cxx:495`) / string (`:555`) /
+//     char (`:567`) / backticks (`:575`) that hit
+//     end-of-line — four distinct paint-loop sources.
+//     Deliberately excluded from the visible-style set;
+//     belongs to the deferred-`StyleSlot::Error` migration
+//     list (SCE_H_SGML_ERROR / SCE_SQL_COMMENTDOCKEYWORDERROR
+//     / SCE_B_STRINGEOL / SCE_PL_ERROR / …) tracked at the
+//     sibling-lexer sites. When `StyleSlot::Error` lands,
+//     sweep this into it with the rest of the STRINGEOL /
+//     *_ERROR family — the signal here IS authoritative
+//     (parse failure), unlike MMIXAL's `OPCODE_UNKNOWN` which
+//     is ambiguous.
+//   - NUMERROR (14) — malformed numeric literal. Same
+//     deferred-`StyleSlot::Error` family as STRINGEOL —
+//     authoritative parse failure, sweep into `StyleSlot::Error`
+//     when that migration lands.
+//   - IDENTIFIER (16) — transient identifier-collect state
+//     entered at `:690`, settles to WORD / FUNCNAME /
+//     stays-IDENTIFIER at `:446-465` on completion. Framework
+//     convention: leave unmapped so unmatched bare identifiers
+//     paint at STYLE_DEFAULT.
+//
+// **Single-class descriptor** — the sole wordlist is just
+// `"Keywords"`. `LexRust` is the only other same-family
+// theme in this file that stays single-class (Python /
+// Lua / most Phase 4.5 hosts install ≥ 2 wordlist classes;
+// see `PYTHON_THEME` / `LUA_THEME` above). `LexNim` expresses
+// its entire vocabulary through paint-loop mechanics: comments
+// have four sub-styles distinguished by the `#`/`##`/`#[`/
+// `##[` prefix, strings have **four** sub-styles (`STRING` +
+// `CHARACTER` + `TRIPLE` + `TRIPLEDOUBLE`) distinguished by
+// delimiter shape (BACKTICKS is a separate "operator
+// definition" state per `LexNim.cxx:213`, not a string), and
+// the identifier-vs-keyword-vs-definition-name distinction is
+// fully paint-loop-driven. The single wordlist just says
+// "which identifier tokens are reserved keywords" — one class
+// is enough.
+//
+// **Slot rationale:**
+//   - COMMENT + COMMENTDOC + COMMENTLINE + COMMENTLINEDOC →
+//     Comment (italic). All four comment sub-styles collapse
+//     to the italic slot — same discipline as Rust's
+//     `COMMENTBLOCK` + `COMMENTLINE` + `COMMENTBLOCKDOC` +
+//     `COMMENTLINEDOC` four-way collapse (see `RUST_STYLES`
+//     above).
+//   - WORD → Keyword (bold). The reserved-keyword hits (one
+//     of 66 tokens per Nim manual §3.2) — the visual anchor
+//     for control flow, declarations, and word operators.
+//     Bold matches Rust's `RUST_WORD` → bold — the closest
+//     genuinely single-class sibling.
+//   - STRING + CHARACTER + TRIPLE + TRIPLEDOUBLE → String.
+//     Four string variants — bare double-quote, single-quote
+//     char, triple-single-quote, triple-double-quote — all
+//     read as "quoted-literal" semantically and collapse to
+//     the shared String slot. Same discipline as Rust's
+//     `STRING` + `CHARACTER` → String pair, extended for
+//     Nim's richer string syntax.
+//   - BACKTICKS → Keyword2 (accent). At `LexNim.cxx:681-687`,
+//     the paint loop enters BACKTICKS ONLY when the backtick
+//     span is NOT immediately following one of the seven
+//     routine-def keywords (proc/func/macro/method/template/
+//     iterator/converter tracked by `funcNameExists` via
+//     `IsFuncName` at `:85-103`) — def-position backtick
+//     spans go to FUNCNAME instead (`:682-683`). So
+//     BACKTICKS covers **identifier references** that escape
+//     reserved words / symbolic operators for use in
+//     identifier position (e.g. the `` `+` `` in
+//     `a.` + `(b)`, or `` `if` `` used as a variable name in
+//     `let `` `if` `` = 5`). It is NOT a definition marker —
+//     LexNim's own `lexicalClasses[]` row at `:213` has
+//     category tag "operator definition" but display-name
+//     "Identifiers"; the display column is the semantic
+//     truth. Keyword2 here is a visual-disambiguation
+//     compromise: the framework has no dedicated
+//     "identifier accent" slot and backtick-quoted
+//     identifiers are a distinctive Nim form worth
+//     surfacing. **TODO:** if Keyword2 is later specialized
+//     for definition markers (e.g. bold-italic on
+//     FUNCNAME/DEFWORD/LABEL/WORD2 in a future theme pass),
+//     revisit BACKTICKS — reference sites would then inherit
+//     definition styling, which is semantically wrong.
+//   - FUNCNAME → Keyword2 (accent). Auto-styled identifier
+//     immediately following a definition keyword (`proc`/
+//     `func`/`macro`/`method`/`template`/`iterator`/
+//     `converter`) or a backtick-quoted def-position span
+//     from `:682-683`. Names a new routine — accent color
+//     visually marks the definition event. Same slot as
+//     Forth's DEFWORD, ESCRIPT's WORD2, MMIXAL's LABEL.
+//     BACKTICKS above lands in the same visible slot for a
+//     different reason (visual disambiguation of the
+//     backtick-quoted identifier form, not a shared
+//     definition-marker semantic).
+//   - NUMBER → Number.
+//   - OPERATOR → Operator. Nim's symbolic operator set from
+//     `:713` (`"()[]{}:=;-\\/&%$!+<>|^?,.*~@"`); the word
+//     operators `and`/`or`/`not`/`xor`/`shl`/`shr`/`div`/
+//     `mod`/`in`/`notin`/`is`/`isnot`/`of`/`as`/`from` route
+//     through WORD (not OPERATOR) because they're reserved
+//     keywords collected by the identifier path.
+const NIM_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_NIM_COMMENT, StyleSlot::Comment),
+    (SCE_NIM_COMMENTDOC, StyleSlot::Comment),
+    (SCE_NIM_COMMENTLINE, StyleSlot::Comment),
+    (SCE_NIM_COMMENTLINEDOC, StyleSlot::Comment),
+    (SCE_NIM_NUMBER, StyleSlot::Number),
+    (SCE_NIM_STRING, StyleSlot::String),
+    (SCE_NIM_CHARACTER, StyleSlot::String),
+    (SCE_NIM_WORD, StyleSlot::Keyword),
+    (SCE_NIM_TRIPLE, StyleSlot::String),
+    (SCE_NIM_TRIPLEDOUBLE, StyleSlot::String),
+    (SCE_NIM_BACKTICKS, StyleSlot::Keyword2),
+    (SCE_NIM_FUNCNAME, StyleSlot::Keyword2),
+    (SCE_NIM_OPERATOR, StyleSlot::Operator),
+];
+
+// Italic on all four comment states — universal Code++ comment
+// convention.
+const NIM_ITALIC: &[usize] = &[
+    SCE_NIM_COMMENT,
+    SCE_NIM_COMMENTDOC,
+    SCE_NIM_COMMENTLINE,
+    SCE_NIM_COMMENTLINEDOC,
+];
+
+// Bold on WORD only — the reserved-keyword hits. Same
+// single-class-bold shape as Rust's `RUST_WORD` → bold —
+// `LexRust` is the closest genuinely single-class sibling in
+// this file (Python's `LexPython` has 2 wordlists, Lua's
+// `LexLua` has 8 — neither is single-class).
+const NIM_BOLD: &[usize] = &[SCE_NIM_WORD];
+
+// Single-class install matches `nimWordListDesc[]` at
+// `LexNim.cxx:182-185` — one wordlist, `"Keywords"`. Order is
+// trivially load-bearing (only one class exists); the
+// framework's invariant-test discipline still pins the single
+// class's index (0) and the wordlist content.
+const NIM_THEME: LangTheme = LangTheme {
+    keywords: &[(0, NIM_KEYWORDS)],
+    styles: NIM_STYLES,
+    italic: NIM_ITALIC,
+    bold: NIM_BOLD,
 };
 
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
@@ -9006,6 +9165,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&FORTH_THEME)
     } else if lang == L_MMIXAL {
         Some(&MMIXAL_THEME)
+    } else if lang == L_NIM {
+        Some(&NIM_THEME)
     } else {
         None
     }
@@ -24162,10 +24323,11 @@ mod lang_theme_tests {
         ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS,
         ASM_REG_KEYWORDS, ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC,
         ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES,
-        MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
-        SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER,
-        SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
-        SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC, NIM_STYLES,
+        SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER,
+        SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL,
+        SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
+        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
         SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
         SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
         SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
@@ -24241,20 +24403,21 @@ mod lang_theme_tests {
         L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
         L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO,
         L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
-        L_MATLAB, L_MMIXAL, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS,
-        L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT,
-        L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
-        MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-        OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-        POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
-        POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-        PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
-        RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
-        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-        TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
-        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
-        VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+        L_MATLAB, L_MMIXAL, L_NIM, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS,
+        L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
+        L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
+        MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS,
+        NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
+        PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS,
+        POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1,
+        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
+        R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+        SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+        VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+        XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -24297,14 +24460,17 @@ mod lang_theme_tests {
         SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_MMIXAL_CHAR, SCE_MMIXAL_COMMENT,
         SCE_MMIXAL_HEX, SCE_MMIXAL_INCLUDE, SCE_MMIXAL_LABEL, SCE_MMIXAL_NUMBER,
         SCE_MMIXAL_OPCODE_VALID, SCE_MMIXAL_OPERATOR, SCE_MMIXAL_REGISTER, SCE_MMIXAL_STRING,
-        SCE_MMIXAL_SYMBOL, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET,
-        SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM,
-        SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
-        SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER, SCE_POWERSHELL_KEYWORD,
-        SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING,
-        SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS, SCE_R_BASEKWORD,
-        SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER, SCE_R_INFIX,
-        SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
+        SCE_MMIXAL_SYMBOL, SCE_NIM_BACKTICKS, SCE_NIM_CHARACTER, SCE_NIM_COMMENT,
+        SCE_NIM_COMMENTDOC, SCE_NIM_COMMENTLINE, SCE_NIM_COMMENTLINEDOC, SCE_NIM_FUNCNAME,
+        SCE_NIM_IDENTIFIER, SCE_NIM_NUMBER, SCE_NIM_OPERATOR, SCE_NIM_STRING, SCE_NIM_TRIPLE,
+        SCE_NIM_TRIPLEDOUBLE, SCE_NIM_WORD, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER,
+        SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD,
+        SCE_POWERSHELL_COMMENTSTREAM, SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION,
+        SCE_POWERSHELL_HERE_CHARACTER, SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER,
+        SCE_POWERSHELL_KEYWORD, SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR,
+        SCE_POWERSHELL_STRING, SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS,
+        SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER,
+        SCE_R_INFIX, SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
         SCE_R_RAWSTRING, SCE_R_RAWSTRING2, SCE_R_STRING, SCE_R_STRING2, SCE_VHDL_IDENTIFIER,
         SCE_V_IDENTIFIER, SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER,
         SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
@@ -24352,6 +24518,7 @@ mod lang_theme_tests {
             (L_ESCRIPT, "ESCRIPT"),
             (L_FORTH, "Forth"),
             (L_MMIXAL, "MMIXAL"),
+            (L_NIM, "Nim"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -37057,6 +37224,486 @@ mod lang_theme_tests {
         }
     }
 
+    /// Nim uses Lexilla's `nim` lexer (`LexNim.cxx`) — the
+    /// statically-typed compiled systems programming language with
+    /// Python-like indentation-based syntax. Distinctive features:
+    ///
+    /// - **Single-class descriptor** (`nimWordListDesc[]` at
+    ///   `LexNim.cxx:182-185` = `{ "Keywords", nullptr }`).
+    ///   `LexNim` expresses vocabulary through paint-loop mechanics —
+    ///   comments have four sub-styles distinguished by the
+    ///   `#`/`##`/`#[`/`##[` prefix, strings have four
+    ///   sub-styles (STRING + CHARACTER + TRIPLE +
+    ///   TRIPLEDOUBLE) distinguished by delimiter shape
+    ///   (BACKTICKS is a separate "operator definition" state
+    ///   at `:213`, not a string), and the identifier-vs-
+    ///   keyword-vs-definition-name distinction is fully
+    ///   paint-loop-driven. Among Phase 4.5 hosts in this
+    ///   file only Rust's `LexRust` shares the single-class
+    ///   shape — Python's `LexPython` has 2 wordlists, Lua's
+    ///   `LexLua` has 8.
+    /// - **Case-SENSITIVE** via `sc.GetCurrent` (NOT
+    ///   `GetCurrentLowered`) at `LexNim.cxx:447`. Nim's
+    ///   language-level identifier comparison is partial-case-
+    ///   insensitive with underscore collapse, but the lexer's
+    ///   wordlist probe is a plain byte-exact `WordList::InList`
+    ///   lookup — Nim source overwhelmingly writes keywords
+    ///   lowercase per the official style guide.
+    /// - **`IsAWordChar` at `:65-67`** accepts ASCII alnum +
+    ///   `_` + `.`. The `.` presence does NOT collect
+    ///   `x.foo` as a single span — `SCE_NIM_IDENTIFIER`
+    ///   exits immediately on `.` at `:447`, and `.` is in
+    ///   the operator strchr set at `:713`, so `x.foo`
+    ///   tokenizes as three states IDENTIFIER → OPERATOR →
+    ///   IDENTIFIER. The `.` is in the alphabet to serve the
+    ///   NUMBER state's decimal-continuation check at `:387`
+    ///   for `1.5`-style float literals.
+    /// - **Auto-styled FUNCNAME after definition keywords.** At
+    ///   `:446-465` and `:681-687`, when a keyword hit matches
+    ///   `IsFuncName(s)` — one of `proc`/`func`/`macro`/`method`/
+    ///   `template`/`iterator`/`converter` per `:85-103` — the
+    ///   lexer sets `funcNameExists = true`; the NEXT identifier
+    ///   or backtick span gets emitted as `SCE_NIM_FUNCNAME`.
+    ///   Entirely paint-loop-driven — no wordlist support needed.
+    /// - **STRINGEOL + NUMERROR are authoritative error
+    ///   states** (unlike MMIXAL's `OPCODE_UNKNOWN` which is
+    ///   ambiguous). Both deliberately unmapped and belong to
+    ///   the deferred-`StyleSlot::Error` migration list —
+    ///   sweep into `StyleSlot::Error` when that migration
+    ///   lands.
+    /// - **Rich string family** — six paint-loop entry paths
+    ///   at `:625-679` cover bare `"..."` → STRING,
+    ///   `"""..."""` triple-double → TRIPLEDOUBLE, `'x'` char
+    ///   → CHARACTER, `'''...'''` triple-single → TRIPLE,
+    ///   `r"..."` raw → STRING (with `isStylingRawString`
+    ///   flag), and generalized raw `xyz"..."` (configurable
+    ///   via `lexer.nim.raw.strings.highlight.ident`). Four
+    ///   distinct `SCE_NIM_*` sub-styles emitted (STRING,
+    ///   CHARACTER, TRIPLE, TRIPLEDOUBLE) — the 5th and 6th
+    ///   paths reuse STRING with a flag or fall back to
+    ///   IDENTIFIER + STRING.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. Deep-value identity pin — dispatcher-returned theme
+    ///      value-equals `NIM_STYLES` / `ITALIC` / `BOLD`.
+    ///   2. Style count == 13 (17 defined `SCE_NIM_*` slots
+    ///      minus 4 unmapped: `DEFAULT`, `STRINGEOL`,
+    ///      `NUMERROR`, `IDENTIFIER`).
+    ///   3. Single wordlist class (0) mapped to `NIM_KEYWORDS`.
+    ///   4. `NIM_KEYWORDS` non-empty and exactly 66 tokens
+    ///      matching Nim manual §3.2's canonical count.
+    ///   5. All-lowercase alphabet enforcement on every
+    ///      wordlist token. The predicate accepts ASCII
+    ///      lowercase letters ONLY — `IsAWordChar` at
+    ///      `LexNim.cxx:65-67` accepts more (alnum + `_` +
+    ///      `.`), but no legitimate Nim RESERVED keyword
+    ///      contains uppercase, digits, underscores, or dots
+    ///      per the manual, so the stricter check catches
+    ///      every reasonable regression.
+    ///   6. Style-routing pins for all 13 mapped SCE constants.
+    ///   7. Four framework-unmapped slots confirmed absent:
+    ///      `DEFAULT` (0), `STRINGEOL` (13), `NUMERROR` (14),
+    ///      `IDENTIFIER` (16).
+    ///   8. Italic set == 4 (all four comment sub-styles).
+    ///   9. Bold set == 1 (`WORD` only — the reserved-keyword
+    ///      hits as visual anchor).
+    ///   10. Cross-language non-reuse — `NIM_STYLES` must not
+    ///       deep-equal a sampled set of four sibling themes
+    ///       (Forth / Rust / MMIXAL / `CSound`).
+    ///   11. `L_NIM` `LangEntry` has `lexer: Some("nim")` and
+    ///       extensions contain `nim`.
+    ///   12. **Canonical keyword anchors** covering all eight
+    ///       functional groups from the wordlist's `concat!()`
+    ///       structure: word operators (`and`/`not`/`isnot`),
+    ///       control flow (`if`/`while`/`try`/`defer`),
+    ///       declaration (`proc`/`func`/`template`/`macro`/
+    ///       `iterator`/`converter`/`method`), module system
+    ///       (`import`/`from`/`export`/`include`), type /
+    ///       structure (`object`/`tuple`/`enum`/`ref`/`ptr`/
+    ///       `distinct`/`concept`), meta / low-level (`cast`/
+    ///       `bind`/`mixin`), blocks + reserved-for-future
+    ///       (`block`/`end`/`interface`), and special value
+    ///       (`nil`). (Splitting "blocks + reserved-for-future"
+    ///       and "special value" separately matches the two
+    ///       distinct `concat!()` rows in `NIM_KEYWORDS` — a
+    ///       silent deletion of either row is caught by the
+    ///       per-row anchor coverage.)
+    ///   13. **Affirmative absence pins** for tokens
+    ///       commonly assumed to be Nim keywords but aren't.
+    ///       Split into two cohorts: (a) Nim-lore false
+    ///       positives — `true`/`false` (`system.bool` values),
+    ///       `echo` (stdlib proc), `result` (magic implicit
+    ///       local), `int`/`string`/`bool`/`float`/`char`/
+    ///       `seq`/`array` (built-in type identifiers),
+    ///       `generic`/`atomic` (removed since Nimrod era),
+    ///       `raises`/`gcsafe`/`inline` (pragma names,
+    ///       contextual only); and (b) cross-language false
+    ///       positives that Nim's Python-like syntax makes
+    ///       especially plausible for migrating contributors
+    ///       — `def`/`class`/`pass`/`lambda`/`None`/`True`/
+    ///       `False` (Python), `elseif`/`elsif`/`endif`/`then`
+    ///       (Perl/VB/Ruby/Fortran spellings for what Nim
+    ///       calls `elif`), `fn` (Rust). Load-bearing: a
+    ///       wordlist entry for any of these would silently
+    ///       mis-style ordinary identifiers as `SCE_NIM_WORD`.
+    ///   14. **Definition-keyword coverage.** All seven
+    ///       identifiers that `IsFuncName` at
+    ///       `LexNim.cxx:85-103` checks — `proc`, `func`,
+    ///       `macro`, `method`, `template`, `iterator`,
+    ///       `converter` — must be in the wordlist. If any
+    ///       one is missing, the `funcNameExists` flag never
+    ///       flips for that definition style, so the
+    ///       subsequent identifier stays `IDENTIFIER` instead
+    ///       of getting `SCE_NIM_FUNCNAME` styling.
+    ///   15. **Highest defined `SCE_NIM_*` pin.**
+    ///       `SCE_NIM_IDENTIFIER` (16) is asserted as the top
+    ///       slot; `NIM_STYLES` must not reference any index
+    ///       above it. Catches a future Lexilla submodule bump
+    ///       that appends a slot.
+    ///   16. No duplicate tokens within the wordlist —
+    ///       defence-in-depth invariant.
+    #[test]
+    fn nim_uses_lexnim_single_class_theme() {
+        let ni = lang_theme(L_NIM).expect("Nim wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(ni.styles, NIM_STYLES);
+        assert_eq!(ni.italic, NIM_ITALIC);
+        assert_eq!(ni.bold, NIM_BOLD);
+        assert_eq!(ni.keywords.len(), 1);
+
+        // Invariant 2: 13 mappings (17 defined slots minus 4 unmapped).
+        assert_eq!(
+            ni.styles.len(),
+            13,
+            "NIM_STYLES must map 13 indices (17 defined SCE_NIM_* \
+             slots minus 4 unmapped: DEFAULT (0), STRINGEOL (13), \
+             NUMERROR (14), IDENTIFIER (16). STRINGEOL + NUMERROR \
+             both belong to the deferred-StyleSlot::Error migration \
+             list — authoritative error states, unlike MMIXAL's \
+             OPCODE_UNKNOWN)"
+        );
+
+        // Invariant 3: single class 0 mapped to NIM_KEYWORDS.
+        assert_eq!(
+            ni.keywords[0].0, 0,
+            "NIM_THEME.keywords[0].class must be 0 (single-class descriptor)"
+        );
+        assert_eq!(
+            ni.keywords[0].1, NIM_KEYWORDS,
+            "NIM_THEME.keywords[0].list must be NIM_KEYWORDS"
+        );
+
+        // Invariant 4: exactly 66 tokens per Nim manual §3.2.
+        let token_count = NIM_KEYWORDS.split_whitespace().count();
+        assert_eq!(
+            token_count, 66,
+            "NIM_KEYWORDS must contain exactly 66 tokens per Nim \
+             manual §3.2's canonical reserved-word table \
+             (WebFetch-verified via two independent retrievals in \
+             the research workflow); got {token_count}"
+        );
+
+        // Invariant 5: all-lowercase alphabet — no legitimate Nim
+        // reserved keyword contains uppercase, `_`, or `.` per the
+        // manual. The lexer's `IsAWordChar` at LexNim.cxx:65-67
+        // accepts a broader set (for identifier collection), but
+        // Nim's reserved keywords are all pure-lowercase ASCII.
+        let is_nim_keyword_char = |b: u8| b.is_ascii_lowercase();
+        for tok in NIM_KEYWORDS.split_whitespace() {
+            assert!(
+                !tok.is_empty() && tok.bytes().all(is_nim_keyword_char),
+                "NIM_KEYWORDS token `{tok}` violates the lowercase-only \
+                 alphabet — every reserved keyword in Nim manual §3.2 is \
+                 pure lowercase ASCII. The lexer's IsAWordChar accepts a \
+                 broader set for identifier collection, but reserved \
+                 KEYWORDS are lowercase; `WordList::InList` is \
+                 byte-exact so uppercase entries would never match"
+            );
+        }
+
+        // Invariant 6: style-routing pins for all 13 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_NIM_COMMENT, StyleSlot::Comment, "COMMENT"),
+            (SCE_NIM_COMMENTDOC, StyleSlot::Comment, "COMMENTDOC"),
+            (SCE_NIM_COMMENTLINE, StyleSlot::Comment, "COMMENTLINE"),
+            (SCE_NIM_COMMENTLINEDOC, StyleSlot::Comment, "COMMENTLINEDOC"),
+            (SCE_NIM_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_NIM_STRING, StyleSlot::String, "STRING"),
+            (SCE_NIM_CHARACTER, StyleSlot::String, "CHARACTER"),
+            (SCE_NIM_WORD, StyleSlot::Keyword, "WORD"),
+            (SCE_NIM_TRIPLE, StyleSlot::String, "TRIPLE"),
+            (SCE_NIM_TRIPLEDOUBLE, StyleSlot::String, "TRIPLEDOUBLE"),
+            (SCE_NIM_BACKTICKS, StyleSlot::Keyword2, "BACKTICKS"),
+            (SCE_NIM_FUNCNAME, StyleSlot::Keyword2, "FUNCNAME"),
+            (SCE_NIM_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+        ] {
+            assert!(
+                ni.styles.contains(&(idx, slot)),
+                "SCE_NIM_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 7: four framework-unmapped slots confirmed
+        // absent. DEFAULT (0) is whitespace; STRINGEOL (13) +
+        // NUMERROR (14) belong to the deferred-`StyleSlot::Error`
+        // migration list — do NOT map them here, sweep them into
+        // the Error slot when that migration lands; IDENTIFIER
+        // (16) is the transient collect state.
+        for (idx, name) in [
+            (0_usize, "DEFAULT"),
+            (13, "STRINGEOL"),
+            (14, "NUMERROR"),
+            (16, "IDENTIFIER"),
+        ] {
+            assert!(
+                !ni.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_NIM_{name} ({idx}) must remain unmapped — \
+                 framework convention (transient state, \
+                 STYLE_DEFAULT fallback, or deferred-Error-slot \
+                 migration target)"
+            );
+        }
+
+        // Invariant 8: italic == 4 (all four comment sub-styles).
+        assert_eq!(ni.italic.len(), 4);
+        for idx in [
+            SCE_NIM_COMMENT,
+            SCE_NIM_COMMENTDOC,
+            SCE_NIM_COMMENTLINE,
+            SCE_NIM_COMMENTLINEDOC,
+        ] {
+            assert!(
+                ni.italic.contains(&idx),
+                "NIM_ITALIC must contain SCE_NIM_ index {idx}"
+            );
+        }
+
+        // Invariant 9: bold == 1 (WORD only — the reserved-keyword
+        // hits as visual anchor).
+        assert_eq!(ni.bold.len(), 1);
+        assert!(ni.bold.contains(&SCE_NIM_WORD));
+
+        // Invariant 10: cross-language non-reuse (sampled).
+        let fo = lang_theme(L_FORTH).expect("Forth wired");
+        let ru = lang_theme(L_RUST).expect("Rust wired");
+        let mm = lang_theme(L_MMIXAL).expect("MMIXAL wired");
+        let cs = lang_theme(L_CSOUND).expect("CSound wired");
+        for (other, name) in [(fo, "Forth"), (ru, "Rust"), (mm, "MMIXAL"), (cs, "CSound")] {
+            assert_ne!(ni.styles, other.styles, "Nim must NOT reuse {name}_STYLES");
+        }
+
+        // Invariant 11: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let ni_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_NIM)
+            .expect("L_NIM LangEntry present in LANG_TABLE");
+        assert_eq!(
+            ni_entry.lexer,
+            Some("nim"),
+            "L_NIM LangEntry.lexer must be Some(\"nim\") — wiring \
+             assumes the LexNim module dispatched via SCLEX_NIM (= 126)"
+        );
+        assert!(
+            ni_entry.extensions.contains(&"nim"),
+            "L_NIM extensions must contain `nim`"
+        );
+
+        // Invariant 12: canonical keyword anchors — coverage of all
+        // eight functional groups matching NIM_KEYWORDS's
+        // `concat!()` row structure — one anchor per row so a
+        // silent line-literal deletion is caught (same
+        // discipline as MMIXAL's Invariant 13).
+        for tok in [
+            // Word operators.
+            "and",
+            "not",
+            "isnot",
+            "in",
+            "notin",
+            // Control flow.
+            "if",
+            "elif",
+            "else",
+            "when",
+            "case",
+            "for",
+            "while",
+            "try",
+            "defer",
+            "discard",
+            "yield",
+            // Declaration / routine.
+            "proc",
+            "func",
+            "template",
+            "macro",
+            "iterator",
+            "converter",
+            "method",
+            "type",
+            "const",
+            "let",
+            "var",
+            "using",
+            // Module system.
+            "import",
+            "from",
+            "export",
+            "include",
+            // Type / structure.
+            "object",
+            "tuple",
+            "enum",
+            "ref",
+            "ptr",
+            "distinct",
+            "concept",
+            // Meta / low-level.
+            "cast",
+            "bind",
+            "mixin",
+            "addr",
+            "asm",
+            "static",
+            "do",
+            "out",
+            // Blocks + reserved-for-future.
+            "block",
+            "end",
+            "interface",
+            // Special value.
+            "nil",
+        ] {
+            assert!(
+                NIM_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "NIM_KEYWORDS must include canonical keyword `{tok}` — \
+                 one anchor per functional group to catch a `concat!()` \
+                 line deletion"
+            );
+        }
+
+        // Invariant 13: affirmative absence pins for tokens
+        // commonly assumed to be Nim keywords but AREN'T. A
+        // wordlist entry for any of these would silently mis-style
+        // ordinary identifiers as `SCE_NIM_WORD`.
+        for tok in [
+            // Nim-lore false positives.
+            "true",    // system.bool value (exported identifier), NOT keyword
+            "false",   // system.bool value (exported identifier), NOT keyword
+            "echo",    // stdlib proc, freely shadowable
+            "result",  // magic implicit local variable
+            "int",     // built-in type identifier
+            "string",  // built-in type identifier
+            "bool",    // built-in type identifier
+            "float",   // built-in type identifier
+            "char",    // built-in type identifier
+            "seq",     // built-in type identifier
+            "array",   // built-in type identifier
+            "generic", // historically reserved (Nimrod era), removed
+            "atomic",  // historically reserved (Nimrod era), removed
+            "raises",  // pragma name (contextual inside `{. .}` only)
+            "gcsafe",  // pragma name
+            "inline",  // pragma name
+            // Cross-language false positives — Nim's Python-like
+            // syntax makes these especially plausible contributor
+            // errors from Python migrants.
+            "def",    // Python def — Nim uses `proc`
+            "class",  // Python/C++/Java — Nim uses `type` + `object`
+            "pass",   // Python pass — Nim uses `discard`
+            "lambda", // Python lambda — Nim uses `proc` expression
+            "None",   // Python None — Nim uses `nil`
+            "True",   // Python True — Nim's `true` is lowercase
+            "False",  // Python False — Nim's `false` is lowercase
+            // Cross-language false positives from other syntaxes.
+            "elseif", // Perl/VB/Lua spelling — correct Nim form is `elif`
+            "elsif",  // Perl/Ruby spelling — correct Nim form is `elif`
+            "endif",  // Fortran / C preprocessor — Nim closes blocks by dedent
+            "then",   // Ruby/Bash — Nim's `if`/`when` don't use `then`
+            "fn",     // Rust — Nim uses `proc`/`func`
+        ] {
+            assert!(
+                !NIM_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "NIM_KEYWORDS must NOT include `{tok}` — not a reserved \
+                 keyword per Nim manual §3.2. Adding it would silently \
+                 mis-style ordinary identifiers as SCE_NIM_WORD"
+            );
+        }
+
+        // Invariant 14: `IsFuncName` coverage. LexNim.cxx:85-103
+        // hardcodes the seven definition-keyword tokens that flip
+        // `funcNameExists = true`. If any of them is missing from
+        // the wordlist, the paint loop's `keywords.InList(s)`
+        // probe at `:452` returns false, so `funcNameExists` is
+        // never set for that definition style — and the subsequent
+        // identifier stays `IDENTIFIER` instead of getting
+        // `SCE_NIM_FUNCNAME` styling. This is a load-bearing
+        // per-token requirement, not just a docstring anchor.
+        for tok in [
+            "proc",
+            "func",
+            "macro",
+            "method",
+            "template",
+            "iterator",
+            "converter",
+        ] {
+            assert!(
+                NIM_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "NIM_KEYWORDS must include `{tok}` — LexNim.cxx:85-103's \
+                 `IsFuncName` hardcodes this token as a definition \
+                 keyword. If it's missing here, the wordlist probe at \
+                 :452 returns false, `funcNameExists` never flips, and \
+                 the following identifier stays SCE_NIM_IDENTIFIER \
+                 instead of getting the auto-styled SCE_NIM_FUNCNAME \
+                 accent treatment"
+            );
+        }
+
+        // Invariant 15: `SCE_NIM_IDENTIFIER` (16) is the highest
+        // defined slot in Lexilla's LexNim emission set today.
+        // A future Lexilla submodule bump appending a slot would
+        // leave `mm.styles.len() == 13` (Invariant 2) and the
+        // four-unmapped set (Invariant 7) both silently passing
+        // while the new slot rendered at STYLE_DEFAULT.
+        assert_eq!(
+            SCE_NIM_IDENTIFIER, 16,
+            "SCE_NIM_IDENTIFIER has drifted from 16 — Lexilla may \
+             have renumbered slots. Verify against SciLexer.h:1949 \
+             and, if intentional, update this assertion together \
+             with the four-unmapped set (Invariant 7) and the style \
+             count (Invariant 2)"
+        );
+        for (idx, _) in ni.styles {
+            assert!(
+                *idx <= SCE_NIM_IDENTIFIER,
+                "NIM_STYLES references slot {idx}, which is higher \
+                 than SCE_NIM_IDENTIFIER ({SCE_NIM_IDENTIFIER}) — \
+                 either a typo or an out-of-band Lexilla addition; \
+                 verify against SciLexer.h and the emission set at \
+                 LexNim.cxx"
+            );
+        }
+
+        // Invariant 16: no duplicate tokens.
+        use std::collections::HashSet;
+        let total = NIM_KEYWORDS.split_whitespace().count();
+        let unique = NIM_KEYWORDS
+            .split_whitespace()
+            .collect::<HashSet<_>>()
+            .len();
+        assert_eq!(
+            total,
+            unique,
+            "NIM_KEYWORDS contains {} duplicate token(s) — \
+             `WordList::InList` is set-based so duplicates are \
+             functionally harmless but hide typos and corrupt \
+             docstring token-count claims",
+            total - unique
+        );
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -37071,7 +37718,8 @@ mod lang_theme_tests {
     /// landed. `L_ERLANG` was removed when the Erlang row landed.
     /// `L_ESCRIPT` was removed when the ESCRIPT row landed.
     /// `L_FORTH` was removed when the Forth row landed. `L_MMIXAL`
-    /// was removed when the MMIXAL row landed in this commit.
+    /// was removed when the MMIXAL row landed. `L_NIM` was removed
+    /// when the Nim row landed in this commit.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");
