@@ -11218,6 +11218,311 @@ pub const NIM_KEYWORDS: &str = concat!(
     "nil ",
 );
 
+/// `NNCRONTAB` section keywords + Forth core words — class 0 of
+/// `LexCrontab`'s three-class descriptor (`cronWordListDesc[]`
+/// at `LexCrontab.cxx:220-225`). Matched at
+/// `LexCrontab.cxx:185-186` via `section.InList(buffer)`
+/// after the collect state at `:173-199`; hits change state to
+/// [`SCE_NNCRONTAB_SECTION`](../scintilla_sys/constant.SCE_NNCRONTAB_SECTION.html).
+///
+/// **Byte-exact case-sensitive.** `LexCrontab.cxx:185-196` uses
+/// `WordList::InList` with no lowering — nnCron writes section
+/// markers in mixed case (`Task`, `Time`, `Rule`, `When`) and
+/// Forth core words in UPPERCASE (`IF`, `THEN`, `BEGIN`,
+/// `UNTIL`, `DO`, `LOOP`, `AGAIN`). Every entry here is in the
+/// canonical spelling nnCron source uses.
+///
+/// **First-match-wins cascade.** `LexCrontab.cxx:185-196`
+/// probes classes 0 → 1 → 2 in exact order; a token duplicated
+/// in class 0 silently wins over classes 1 or 2. The invariant
+/// test enforces pairwise cross-class disjointness.
+///
+/// **Source:** `nncrontab.properties` from `SciTE`'s
+/// language-config catalog
+/// (<https://raw.githubusercontent.com/SciTe-Community/color-highlighter/master/nncrontab.properties>).
+/// Cross-referenced against nnCron's own documentation at
+/// <https://nncron.ru/help/EN/> for section-marker and
+/// task-option coverage.
+///
+/// **44 tokens** across two functional families:
+///   - **nnCron section markers (11)**: `Action`, `Days`,
+///     `Hours`, `Minutes`, `Months`, `Rule`, `Task`, `Time`,
+///     `WeekDays`, `When`, `Years`. These label the
+///     structural sections of a task definition — every
+///     nnCron file uses these to delimit fields.
+///   - **Forth core control + arithmetic + memory words (33)**:
+///     `AGAIN`, `ALLOT`, `AND`, `BEGIN`, `CASE`, `COMPARE`,
+///     `CONSTANT`, `CREATE`, `DO`, `ELSE`, `ENDCASE`, `ENDOF`,
+///     `EVAL-SUBST`, `EVALUATE`, `FALSE`, `I`, `IF`, `LEAVE`,
+///     `LOOP`, `NOT`, `OF`, `OFF`, `ON`, `OR`, `PAD`, `REPEAT`,
+///     `SET`, `THEN`, `TRUE`, `UNTIL`, `VALUE`, `VARIABLE`,
+///     `WHILE`. nnCron embeds Forth as its scripting language,
+///     so these control-flow / stack / definition / scratch-
+///     buffer words show up alongside cron syntax. `PAD` is
+///     Forth's scratch-buffer accessor (returns the address of
+///     a small transient buffer used by number-conversion
+///     words like `<#`/`#S`/`#>`), NOT an nnCron section
+///     marker — but `SciTE`'s canonical descriptor bundles
+///     "Section keywords and Forth words" into a single
+///     class-0 wordlist, so both categories map to
+///     `SCE_NNCRONTAB_SECTION` regardless.
+pub const NNCRONTAB_SECTIONS: &str = concat!(
+    // nnCron section markers.
+    "Action Days Hours Minutes Months Rule Task Time WeekDays When Years ",
+    // Forth core control words.
+    "AGAIN BEGIN CASE DO ELSE ENDCASE ENDOF I IF LEAVE LOOP OF REPEAT THEN UNTIL WHILE ",
+    // Forth core arithmetic / logic / defining words.
+    "AND COMPARE CONSTANT CREATE EVAL-SUBST EVALUATE FALSE NOT OFF ON OR SET TRUE VALUE VARIABLE ",
+    // Forth memory / scratch-buffer words.
+    "ALLOT PAD ",
+);
+
+/// `NNCRONTAB` action directives + built-in variables — class 1
+/// of `LexCrontab`'s three-class descriptor. Matched at
+/// `LexCrontab.cxx:187-188` via `keyword.InList(buffer)` after
+/// the class-0 miss; hits change state to
+/// [`SCE_NNCRONTAB_KEYWORD`](../scintilla_sys/constant.SCE_NNCRONTAB_KEYWORD.html).
+///
+/// **Byte-exact case-sensitive.** nnCron's action-directive
+/// vocabulary is written UPPERCASE-with-dashes (`FILE-COPY`,
+/// `MOUSE-LBCLK`, `WIN-ACTIVATE`) and its built-in variables
+/// use suffixed-`@` reader convention (`Day@`, `Hour@`, `Min@`,
+/// `Sec@`, `Mon@`, `Year@`, `WDay@`, `TimeSec@`) or CamelCase
+/// (`Password`, `Domain`, `User`, `LogonBatch`,
+/// `MonitorResponseTime`). The wide identifier alphabet at
+/// `LexCrontab.cxx:175-177` (alnum + `_` + `-` + `/` + `$` +
+/// `.` + `<` + `>` + `@`) supports every one of these forms as
+/// a single-token identifier.
+///
+/// **Script-embedding markers.** `<JScript>` / `</JScript>` /
+/// `<VBScript>` / `</VBScript>` / `</SCRIPT>` and `<SCRIPT>`
+/// tokens delimit blocks of embedded `JavaScript` / `VBScript`
+/// inside nnCron tasks. The `<` in the identifier alphabet
+/// allows them to be captured as identifiers and probed
+/// against the wordlist. (The bare `<SCRIPT>` opener is
+/// intentionally absent from the canonical `SciTE` properties —
+/// nnCron treats the five variants listed as the observed
+/// spellings; the sixth canonical spelling, `<SCRIPT>`, is
+/// omitted intentionally.)
+///
+/// **Source:** `nncrontab.properties` from `SciTE`'s
+/// language-config catalog. Cross-referenced against nnCron's
+/// task-options documentation at
+/// <https://nncron.ru/help/EN/commands/task_options.htm> and
+/// watch-directive documentation at
+/// <https://nncron.ru/help/EN/commands/watch.htm>.
+///
+/// **174 tokens** covering nnCron's action-directive
+/// vocabulary across functional families:
+///   - **File / directory operations** (29): `FILE-COPY`,
+///     `FILE-MOVE`, `FILE-RENAME`, `FILE-DELETE`,
+///     `FILE-APPEND`, `FILE-WRITE`, `FILE-CREATE`, `FILE-CROP`,
+///     `FILE-SIZE`, `FILE-EXIST`, `FILE-EMPTY`, `FILE-DATE`,
+///     `FILE-ACCESS-DATE`, `FILE-CREATION-DATE`,
+///     `FILE-WRITE-DATE`, `DIR-CREATE`, `DIR-DELETE`,
+///     `DIR-EMPTY`, `DIR-SIZE`, `FOR-FILES`, `IS-DIR`,
+///     `IS-ARCHIVE`, `IS-HIDDEN`, `IS-READONLY`, `IS-SYSTEM`,
+///     `FREE-SPACE`, `PURGE-OLD`, `PURGE-OLDA`, `PURGE-OLDW`.
+///   - **Window manipulation** (21): `WIN-ACTIVATE`,
+///     `WIN-ACTIVE`, `WIN-CLICK`, `WIN-CLOSE`, `WIN-EXIST`,
+///     `WIN-HIDE`, `WIN-HWND`, `WIN-MAXIMIZE`, `WIN-MINIMIZE`,
+///     `WIN-MOVE`, `WIN-MOVER`, `WIN-RESTORE`, `WIN-SEND-KEYS`,
+///     `WIN-SHOW`, `WIN-TERMINATE`, `WIN-TOPMOST`, `WIN-VER`,
+///     `WIN-WAIT`, `FOR-WINDOWS`, `FOR-CHILD-WINDOWS`,
+///     `WINAPI`.
+///   - **Mouse + keyboard** (~14): `MOUSE-LBCLK`,
+///     `MOUSE-LBDCLK`, `MOUSE-LBDN`, `MOUSE-LBUP`, `MOUSE-MOVE`,
+///     `MOUSE-MOVER`, `MOUSE-MOVEW`, `MOUSE-RBCLK`,
+///     `MOUSE-RBDCLK`, `MOUSE-RBDN`, `MOUSE-RBUP`, `SEND-KEYS`,
+///     `SEND-KEYS-DELAY`, `CHAR`.
+///   - **Time / date accessors** (16): `CUR-DATE`,
+///     `GET-CUR-TIME`, `START-TIME`, `Day@`, `Hour@`, `Min@`,
+///     `Mon@`, `Sec@`, `TimeSec@`, `WDay@`, `Year@`,
+///     `DATE-INTERVAL`, `DATE-`, `WRITE-DATE`,
+///     `ACCESS-DATE`, `CREATION-DATE`.
+///   - **Watch triggers** (~13): `WatchClipboard`,
+///     `WatchConnect`, `WatchDir`, `WatchDisconnect`,
+///     `WatchDriveInsert`, `WatchDriveRemove`, `WatchFile`,
+///     `WatchProc`, `WatchProcStop`, `WatchWinActivate`,
+///     `WatchWinCreate`, `WatchWinDestroy`, `WatchWindow`.
+///   - **RAS / dialup** (~11): `CALL_DIAL`, `CALL_HANGUP`,
+///     `DIAL`, `HANGUP`, `HOST-EXIST`, `NHOST-EXIST`,
+///     `ONLINE`, `RASDomain`, `RASError`, `RASPassword`,
+///     `RASPhone`, `RASSecPassword`, `RASUser`.
+///   - **Logon / credentials** (~9): `Domain`, `LOGGEDON`,
+///     `LOGOFF`, `LogonBatch`, `LogonInteractive`,
+///     `LogonNetwork`, `Password`, `SecPassword`, `User`.
+///   - **Registry** (~5): `REG-DELETE-KEY`, `REG-DELETE-VALUE`,
+///     `REG-DWORD`, `REG-SZ`, `GET-REG`.
+///   - **Dialogs / notifications** (~14): `MSG`, `TMSG`,
+///     `HINT`, `HINTW`, `HINT-OFF`, `HINT-POS`, `HINT-SIZE`,
+///     `THINT`, `THINTW`, `QUERY`, `TQUERY`, `POPUP`,
+///     `REMINDER`, `SHOW-ICON`, `HIDE-ICON`.
+///   - **Sound / power / system** (~13): `BEEP`, `PLAY-SOUND`,
+///     `PLAY-SOUNDW`, `POWEROFF`, `REBOOT`, `SHUTDOWN`,
+///     `PAUSE`, `DELAY`, `IDLE`, `INTERVAL`, `QUIT`,
+///     `START-QUIT`, `WinNT`.
+///   - **Process control** (~9): `RUN`, `LAUNCH`, `START-APP`,
+///     `START-APPW`, `QSTART-APP`, `QSTART-APPW`, `KILL`,
+///     `PROC-EXIST`, `PROC-TIME`.
+///   - **POP3 / clipboard / logging** (~5): `POP3-CHECK`,
+///     `CLIPBOARD`, `CONSOLE`, `ERR-MSG`, `LOG`.
+///   - **Regex** (2): `RE-ALL`, `RE-MATCH`.
+///   - **Misc utilities** (6): `EXIST`, `GET-VER`,
+///     `GetTickCount`, `MonitorResponseTime`, `No`, `Yes`.
+///   - **Script embedding markers** (5 listed; the sixth
+///     canonical spelling `<SCRIPT>` bare opener is
+///     explicitly omitted): `<JScript>`, `</JScript>`,
+///     `<VBScript>`, `</VBScript>`, `</SCRIPT>`. See the
+///     `<SCRIPT>` omission note in the banner above.
+pub const NNCRONTAB_KEYWORDS: &str = concat!(
+    // Script embedding markers.
+    "</JScript> </SCRIPT> </VBScript> <JScript> <VBScript> ",
+    // File / directory / IO / archive attribute operations.
+    "DIR-CREATE DIR-DELETE DIR-EMPTY DIR-SIZE ",
+    "FILE-APPEND FILE-COPY FILE-CREATE FILE-CROP FILE-DELETE ",
+    "FILE-EMPTY FILE-EXIST FILE-MOVE FILE-RENAME FILE-SIZE ",
+    "FILE-WRITE ",
+    "FOR-CHILD-WINDOWS FOR-FILES FOR-WINDOWS FREE-SPACE ",
+    "IS-ARCHIVE IS-DIR IS-HIDDEN IS-READONLY IS-SYSTEM ",
+    "PURGE-OLD PURGE-OLDA PURGE-OLDW ",
+    // Time / date accessors (`FILE-*-DATE` file-time readers,
+    // standalone `*-DATE` date readers, and `@`-suffixed
+    // built-in variable readers).
+    "ACCESS-DATE CREATION-DATE CUR-DATE DATE- DATE-INTERVAL ",
+    "FILE-ACCESS-DATE FILE-CREATION-DATE FILE-DATE ",
+    "FILE-WRITE-DATE WRITE-DATE ",
+    "Day@ Hour@ Min@ Mon@ Sec@ TimeSec@ WDay@ Year@ ",
+    "GET-CUR-TIME START-TIME ",
+    // Watch triggers.
+    "WatchClipboard WatchConnect WatchDir WatchDisconnect ",
+    "WatchDriveInsert WatchDriveRemove WatchFile WatchProc ",
+    "WatchProcStop WatchWinActivate WatchWinCreate ",
+    "WatchWinDestroy WatchWindow ",
+    // RAS / dialup / online status.
+    "CALL_DIAL CALL_HANGUP DIAL HANGUP HOST-EXIST NHOST-EXIST ",
+    "ONLINE RASDomain RASError RASPassword RASPhone ",
+    "RASSecPassword RASUser ",
+    // Logon / credentials.
+    "Domain LOGGEDON LOGOFF LogonBatch LogonInteractive ",
+    "LogonNetwork Password SecPassword User ",
+    // Registry.
+    "GET-REG REG-DELETE-KEY REG-DELETE-VALUE REG-DWORD REG-SZ ",
+    // Dialogs / notifications / icons.
+    "HIDE-ICON HINT HINT-OFF HINT-POS HINT-SIZE HINTW ",
+    "MSG QUERY REMINDER SHOW-ICON THINT THINTW TMSG TQUERY ",
+    // Mouse + keyboard.
+    "CHAR MOUSE-LBCLK MOUSE-LBDCLK MOUSE-LBDN MOUSE-LBUP ",
+    "MOUSE-MOVE MOUSE-MOVER MOUSE-MOVEW MOUSE-RBCLK ",
+    "MOUSE-RBDCLK MOUSE-RBDN MOUSE-RBUP SEND-KEYS ",
+    "SEND-KEYS-DELAY ",
+    // Sound / power / system state.
+    "BEEP DELAY IDLE INTERVAL PAUSE PLAY-SOUND PLAY-SOUNDW ",
+    "POWEROFF QUIT REBOOT SHUTDOWN START-QUIT WinNT ",
+    // Process control.
+    "KILL LAUNCH PROC-EXIST PROC-TIME QSTART-APP QSTART-APPW ",
+    "RUN START-APP START-APPW ",
+    // Windows manipulation / API.
+    "WIN-ACTIVATE WIN-ACTIVE WIN-CLICK WIN-CLOSE WIN-EXIST ",
+    "WIN-HIDE WIN-HWND WIN-MAXIMIZE WIN-MINIMIZE WIN-MOVE ",
+    "WIN-MOVER WIN-RESTORE WIN-SEND-KEYS WIN-SHOW ",
+    "WIN-TERMINATE WIN-TOPMOST WIN-VER WIN-WAIT WINAPI ",
+    // POP3 / clipboard / logging.
+    "CLIPBOARD CONSOLE ERR-MSG LOG POP3-CHECK ",
+    // Regex.
+    "RE-ALL RE-MATCH ",
+    // Misc utilities + boolean-ish constants.
+    "EXIST GET-VER GetTickCount MonitorResponseTime No Yes ",
+);
+
+/// `NNCRONTAB` task-execution modifiers — class 2 of
+/// `LexCrontab`'s three-class descriptor. Matched at
+/// `LexCrontab.cxx:192-193` via `modifier.InList(buffer)` after
+/// class-0 and class-1 misses; hits change state to
+/// [`SCE_NNCRONTAB_MODIFIER`](../scintilla_sys/constant.SCE_NNCRONTAB_MODIFIER.html).
+///
+/// **Byte-exact case-sensitive.** nnCron modifiers use
+/// CamelCase (`AboveNormalPriority`, `WithoutProfile`,
+/// `WaitFor`), UPPERCASE-with-dashes for watch flags
+/// (`WATCH-CHANGE-ATTRIBUTES`), or bare UPPERCASE
+/// (`RECURSIVE`, `TODEPTH`, `FILESONLY`, `ALL`). The wide
+/// identifier alphabet at `LexCrontab.cxx:175-177` handles
+/// every form.
+///
+/// **Source:** `nncrontab.properties` from `SciTE`'s
+/// language-config catalog, cross-referenced against nnCron's
+/// task-options documentation
+/// (<https://nncron.ru/help/EN/commands/task_options.htm>) for
+/// priority / window-state / profile / watch-flag / run-once
+/// modifiers.
+///
+/// **First-match-wins cascade.** Class 2 is probed LAST at
+/// `LexCrontab.cxx:192-193` after class-0 (SECTIONS) and
+/// class-1 (KEYWORDS) both miss. A modifier duplicated in
+/// either earlier class would silently mask its class-2
+/// sibling — the invariant test enforces disjointness.
+///
+/// **38 tokens** covering task-execution attributes:
+///   - **Priority (6)**: `AboveNormalPriority`,
+///     `BelowNormalPriority`, `HighPriority`, `IdlePriority`,
+///     `NormalPriority`, `RealtimePriority`. Correspond to
+///     Windows process-priority classes; set via task
+///     option to control CPU scheduling weight.
+///   - **Window state (5)**: `ShowMaximized`, `ShowMinimized`,
+///     `ShowNormal`, `ShowNoActivate`, `SWHide`. Passed to
+///     `ShowWindow` when the task launches a process.
+///   - **Startup positioning (3)**: `StartIn`, `StartPos`,
+///     `StartSize`. Working directory + geometry hints.
+///   - **Once-a-N scheduling (4)**: `OnceADay`, `OnceAHour`,
+///     `OnceAMonth`, `OnceAWeek`. Coalesce repeated triggers.
+///   - **Run-once / service / no-flags (7)**: `RunOnce`,
+///     `AsService`, `LoadProfile`, `WithoutProfile`,
+///     `NoActive`, `NoDel`, `NoLog`.
+///   - **Auth (2)**: `NoRunAs`, `WaitFor`.
+///   - **Recursion / depth / kind flags (4)**: `RECURSIVE`,
+///     `TODEPTH`, `FILESONLY`, `ALL`. Modify
+///     recursive-directory-walk semantics for `FOR-FILES` etc.
+///   - **File-watcher change flags (6)**:
+///     `WATCH-CHANGE-ATTRIBUTES`, `WATCH-CHANGE-DIR-NAME`,
+///     `WATCH-CHANGE-FILE-NAME`, `WATCH-CHANGE-LAST-WRITE`,
+///     `WATCH-CHANGE-SECURITY`, `WATCH-CHANGE-SIZE`. Windows
+///     `FindFirstChangeNotification`-style filter flags.
+///   - **Watch subtree (1)**: `WatchSubtree`.
+///
+/// **Deliberately excluded:**
+///   - Time-window quantifiers `only`/`first`/`last`/
+///     `nearest`/`every` — these are cron time-pattern
+///     modifiers (e.g. `[Time: first monday]`,
+///     `[every 5 minute]`) that fall through to
+///     `SCE_NNCRONTAB_DEFAULT` upstream; `SciTE`'s canonical
+///     `nncrontab.properties` puts them in NO wordlist and
+///     nnCron parses them contextually inside brackets. Adding
+///     them here would silently promote plain identifier text
+///     to modifier styling in non-brackets contexts.
+pub const NNCRONTAB_MODIFIERS: &str = concat!(
+    // Priority classes.
+    "AboveNormalPriority BelowNormalPriority HighPriority ",
+    "IdlePriority NormalPriority RealtimePriority ",
+    // Window state.
+    "ShowMaximized ShowMinimized ShowNoActivate ShowNormal SWHide ",
+    // Startup positioning.
+    "StartIn StartPos StartSize ",
+    // Once-a-N scheduling.
+    "OnceADay OnceAHour OnceAMonth OnceAWeek ",
+    // Run-once / service / no-flags.
+    "AsService LoadProfile NoActive NoDel NoLog RunOnce WithoutProfile ",
+    // Auth.
+    "NoRunAs WaitFor ",
+    // Recursion / depth / kind flags.
+    "ALL FILESONLY RECURSIVE TODEPTH ",
+    // File-watcher change flags.
+    "WATCH-CHANGE-ATTRIBUTES WATCH-CHANGE-DIR-NAME ",
+    "WATCH-CHANGE-FILE-NAME WATCH-CHANGE-LAST-WRITE ",
+    "WATCH-CHANGE-SECURITY WATCH-CHANGE-SIZE ",
+    // Watch subtree.
+    "WatchSubtree ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 63 / 🟡 25 / ⚫ 1.
+Total: 89 rows. ✅ 64 / 🟡 24 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1895,7 +1895,7 @@ further shim work needed.
 | Matlab | 44 | `matlab` | ✅ | ✅ | ✅ |
 | MMIXAL | 75 | `mmixal` | ✅ | ✅ | ✅ |
 | Nim | 76 | `nim` | ✅ | ✅ | ✅ |
-| Nncrontab | 77 | `nncrontab` | ⚫ | ⚫ | 🟡 |
+| Nncrontab | 77 | `nncrontab` | ✅ | ✅ | ✅ |
 | NSIS | 28 | `nsis` | ✅ | ✅ | ✅ |
 | Objective-C | 5 | `cpp` | ✅ | ✅ | ✅ |
 | OScript | 78 | `oscript` | ⚫ | ⚫ | 🟡 |
@@ -6551,6 +6551,184 @@ styling for the following identifier —
 (`SCE_NIM_IDENTIFIER` (16) as top slot;
 catches future Lexilla submodule bumps), and
 no-duplicate defence-in-depth check.
+
+**NNCrontab (2026-07-07):** wires
+`SCLEX_NNCRONTAB` (= 26) for nnCron's
+extended crontab format — a Windows scheduler
+/ event monitor by Nick Nemtsev
+(<https://www.nncron.ru/>) that uses Forth as
+its embedded scripting language on top of
+cron-style time specifications (extension
+`.tab`). `L_NNCRONTAB` (id 77) is the sole
+language row using this lexer. Three-class
+descriptor same shape as CSound / MMIXAL /
+ESCRIPT.
+
+**Three-class wordlist (44 + 174 + 38 = 256
+tokens):**
+- **Class 0 (`SCE_NNCRONTAB_SECTION`, bold
+  Keyword)** — `NNCRONTAB_SECTIONS` carries
+  44 tokens: 11 nnCron section markers
+  (`Task`/`Time`/`Rule`/`When`/`Action`/
+  `Days`/`Hours`/`Minutes`/`Months`/
+  `WeekDays`/`Years`) that label a task
+  definition's structural fields, plus 33
+  Forth core control/arithmetic/logic/
+  defining words (`IF`/`THEN`/`ELSE`/`BEGIN`/
+  `UNTIL`/`WHILE`/`REPEAT`/`AGAIN`/`DO`/
+  `LOOP`/`LEAVE`/`CASE`/`OF`/`ENDOF`/
+  `ENDCASE`/`AND`/`OR`/`NOT`/`TRUE`/`FALSE`/
+  `ON`/`OFF`/`SET`/`I`/`CONSTANT`/
+  `VARIABLE`/`CREATE`/`VALUE`/`ALLOT`/`PAD`/
+  `EVALUATE`/`EVAL-SUBST`/`COMPARE`) — nnCron
+  embeds Forth as its scripting language
+  (`PAD` is Forth's scratch-buffer word,
+  bundled into class 0 with the other Forth
+  core words per SciTE's canonical
+  descriptor).
+- **Class 1 (`SCE_NNCRONTAB_KEYWORD`, bold
+  Keyword)** — `NNCRONTAB_KEYWORDS` carries
+  174 tokens across 14 functional groups:
+  file/directory operations, time/date
+  built-in variable readers (`Day@`/`Hour@`/
+  etc. with `@`-suffix), watch triggers,
+  RAS/dialup, logon credentials, registry,
+  dialogs, mouse+keyboard, sound/power,
+  process control, windows manipulation,
+  POP3/clipboard/logging, regex, and script
+  embedding markers (`<JScript>`/`<VBScript>`
+  etc.). Collapses to the same bold slot as
+  SECTION — both are "language vocabulary"
+  semantically, same discipline as Forth
+  CONTROL + KEYWORD → bold.
+- **Class 2 (`SCE_NNCRONTAB_MODIFIER`,
+  Keyword2 accent)** — `NNCRONTAB_MODIFIERS`
+  carries 38 task-execution attributes: 6
+  priority classes (`AboveNormalPriority`,
+  `HighPriority`, `RealtimePriority`, etc.),
+  5 window-state hints (`ShowMaximized` etc.),
+  3 startup positioning, 4 once-a-N
+  scheduling qualifiers (`OnceADay`/`OnceAHour`
+  etc.), run-once/service/no-flags, auth,
+  recursion/depth flags, 6
+  `WATCH-CHANGE-*` file-watcher change flags,
+  and watch-subtree. Cross-referenced against
+  nnCron's task-options and watch
+  documentation.
+
+**Style routing (9 mappings across 11
+defined SCE slots):** COMMENT → `Comment`
+(italic — both `#`-to-EOL and Forth-style
+`\ `-to-EOL); TASK → `Preprocessor` (the
+`#(...)` and `)#` task-delimiter markers
+structurally frame each task definition —
+same "meta-file-structure" slot as MMIXAL's
+`@include` directive); SECTION + KEYWORD →
+`Keyword` (bold — two "language vocabulary"
+classes collapse, same discipline as Forth
+CONTROL + KEYWORD → bold); MODIFIER →
+`Keyword2` (accent for task-execution
+attributes distinguishing them from action
+verbs); ASTERISK → `Operator` (the `*` cron
+wildcard is semantically an operator on the
+time-field grammar); NUMBER → `Number`;
+STRING → `String`; ENVIRONMENT → `Keyword2`
+(`%VAR%` and `<%VAR%>` environment expansions
+are named-value references, accent matches
+MMIXAL SYMBOL, Nim FUNCNAME). Two slots
+unmapped: DEFAULT (0) and IDENTIFIER (10) —
+transient states / STYLE_DEFAULT fallback
+per framework convention (unmatched
+identifiers paint plainly).
+
+**Source:** `nncrontab.properties` from
+SciTE's language-config catalog
+(<https://raw.githubusercontent.com/SciTe-Community/color-highlighter/master/nncrontab.properties>),
+cross-referenced against nnCron's own
+documentation for section markers, task
+options, and watch directives.
+
+**Case-SENSITIVE.** `LexCrontab.cxx:181-196`
+uses `WordList::InList` with no lowering.
+Every entry is in the canonical spelling
+nnCron source uses.
+
+**Hand-rolled state machine, no `StyleContext`.**
+Unlike most Lexilla lexers, `LexCrontab.cxx`
+uses a raw `switch(state)` loop with manual
+`styler.ColourTo` calls (`:63-215`) rather
+than the modern `StyleContext` API. This is
+a legacy Lexilla lexer with vintage-1998
+idioms — even a hand-allocated `char*
+buffer = new char[length+1]` at `:40` and a
+matching `delete[]` at `:217`. Paint-loop-
+internal, no host-visible impact.
+
+**Wide identifier alphabet** at `:175-177`:
+alnum + `_` + `-` + `/` + `$` + `.` + `<` +
+`>` + `@`. Supports directive-argument
+identifiers with embedded delimiters:
+`FILE-COPY` (hyphen), `Day@`/`Hour@`
+(at-suffix reader convention), `<JScript>`
+(angle-bracketed script embedding markers).
+Invariant 5 pins this alphabet across every
+wordlist token — any byte outside the set
+would produce a dead entry the paint loop's
+identifier-collect state could never emit.
+
+**First-match-wins cascade** at `:181-196`
+probes classes 0 → 1 → 2 in exact order.
+Cross-class disjointness is required —
+Invariant 6 enforces it pairwise across all
+three class-pair combinations.
+
+**String / environment interleaving.** Inside
+STRING at `:141-146`, a `%` transitions to
+ENVIRONMENT with `insideString = true`; from
+ENVIRONMENT at `:159-163`, a `%` with
+`insideString` true transitions back to
+STRING. Supports `"...text %ENV_VAR% more
+text..."` where the environment expansion is
+styled distinctly inside a string.
+
+**No fold.** `LexCrontab.cxx:227` registers
+`0` as the fold function.
+
+Structural test coverage: 17 invariants —
+deep-value identity pin, 9-mapping style
+count (11 defined slots minus 2 unmapped),
+three-class canonical descriptor order, all
+classes non-empty, byte-exact `IsAWordChar`
+alphabet enforcement (alnum + `_` + `-` +
+`/` + `$` + `.` + `<` + `>` + `@`) applied
+uniformly across every class, **pairwise
+cross-class disjointness across all 3
+class-pair combinations** (load-bearing for
+the first-match-wins cascade at
+`:181-196`), style-routing pins for all 9
+mapped SCE constants, 2 unmapped slots
+confirmed absent (DEFAULT + IDENTIFIER),
+italic set == 1 (COMMENT only), bold set ==
+2 (SECTION + KEYWORD), cross-language
+non-reuse (Forth / Erlang / MMIXAL /
+CSound), `L_NNCRONTAB` `LangEntry`'s
+`lexer: Some("nncrontab")` + `tab`
+extension presence, canonical section
+anchors (`Task`/`IF`/`TRUE`/`ALLOT` — one
+per `concat!()` line), canonical keyword
+anchors (20 anchors covering all 14
+functional groups — `RUN`/`FILE-COPY`/
+`WIN-ACTIVATE`/`MOUSE-LBCLK`/`Day@`/
+`WatchFile`/`DIAL`/`Password`/`REG-DWORD`/
+`MSG`/`BEEP`/`POP3-CHECK`/`RE-MATCH`/
+`<JScript>`/`SEND-KEYS`/`GetTickCount`/
+`EXIST`/`CONSOLE`/`PLAY-SOUND`/`CHAR`),
+canonical modifier anchors (9 anchors — one
+per sub-family), highest-defined
+`SCE_NNCRONTAB_*` pin
+(`SCE_NNCRONTAB_IDENTIFIER=10` as top slot;
+catches future Lexilla submodule bumps),
+and no-duplicate defence-in-depth check.
 
 ## Notes
 

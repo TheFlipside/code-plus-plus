@@ -2070,6 +2070,143 @@ pub const SCE_NIM_NUMERROR: usize = 14;
 pub const SCE_NIM_OPERATOR: usize = 15;
 pub const SCE_NIM_IDENTIFIER: usize = 16;
 
+// LexNncrontab style indices. 11 contiguous slots (0..=10) for
+// nnCron's extended crontab format — a Windows scheduler / event
+// monitor / automation manager by Nick Nemtsev
+// (<http://www.nncron.ru/en_index.shtml>) that uses Forth as its
+// embedded scripting language on top of cron-style time
+// specifications (extension `.tab`). Constants mirror
+// `SciLexer.h:691-701` verbatim. Dispatches SCLEX_NNCRONTAB
+// (= 26, per `SciLexer.h:44`) via a **three-class wordlist**
+// declared at `vendor\lexilla\lexers\LexCrontab.cxx:220-225`
+// (`cronWordListDesc[]`):
+//
+//     cronWordListDesc[] = {
+//         "Section keywords and Forth words",   // class 0 → SECTION
+//         "nnCrontab keywords",                  // class 1 → KEYWORD
+//         "Modifiers",                           // class 2 → MODIFIER
+//         0,
+//     };
+//
+// **Case-SENSITIVE.** The identifier-classification path at
+// `LexCrontab.cxx:185-196` compares the collected buffer
+// byte-exact via `WordList::InList` — no lowering, no folding.
+// nnCron source is typically lowercase for keywords / modifiers
+// and mixed-case for section markers (`Task`, `Time`, `Rule`,
+// `When`, `Action`, `Days`, `Hours`, `Minutes`, …).
+//
+// **Hand-rolled state machine, no `StyleContext`.** Unlike most
+// Lexilla lexers, `LexCrontab.cxx` uses a raw `switch(state)`
+// loop with manual `styler.ColourTo` calls (`:63-215`) rather
+// than the modern `StyleContext` API. Character transitions are
+// hard-coded per state, and the identifier alphabet at
+// `:175-177` is unusually wide: `isalnum` + `_` + `-` + `/` +
+// `$` + `.` + `<` + `>` + `@`. This wide alphabet supports
+// nnCron's directive-argument syntax where identifiers can
+// carry inline delimiters (e.g. path-like fragments,
+// less-than / greater-than window brackets).
+//
+// **Line-oriented STATE MACHINE.** Every line begins with the
+// default state at `:64`. Nine entry paths dispatch from
+// DEFAULT:
+//   1. `#(` at `:69-72` → SCE_NNCRONTAB_TASK (task-start marker).
+//   2. `)#` at `:83-86` → SCE_NNCRONTAB_TASK (task-end marker).
+//   3. `\ ` / `\\t` (backslash + whitespace) at `:74-78` →
+//      SCE_NNCRONTAB_COMMENT (extended Forth-style
+//      whitespace-required backslash comment).
+//   4. `#` (any other position) at `:79-82` → SCE_NNCRONTAB_COMMENT
+//      (plain hash-to-EOL comment).
+//   5. `"` at `:87-89` → SCE_NNCRONTAB_STRING.
+//   6. `%` at `:90-93` or `<%` at `:94-97` → SCE_NNCRONTAB_ENVIRONMENT
+//      (environment variable expansion `%VAR%` or `<%VAR%>` bracket
+//      form).
+//   7. `*` at `:98-101` → SCE_NNCRONTAB_ASTERISK (single-char
+//      state, no transition — cron's "every" wildcard).
+//   8. Alpha or `<` at `:102-106` → SCE_NNCRONTAB_IDENTIFIER
+//      collect state.
+//   9. Digit at `:107-111` → SCE_NNCRONTAB_NUMBER collect state.
+//
+// **Identifier settle at `:185-196`.** When the IDENTIFIER
+// state's non-word char terminates the collect, the buffer is
+// probed in class order 0 → 1 → 2:
+//   - `section.InList(buffer)` → `SCE_NNCRONTAB_SECTION`
+//   - else `keyword.InList(buffer)` → `SCE_NNCRONTAB_KEYWORD`
+//   - else `modifier.InList(buffer)` → `SCE_NNCRONTAB_MODIFIER`
+//   - else stays `SCE_NNCRONTAB_DEFAULT` (no styling).
+// **First-match-wins cascade** in class order — a token
+// duplicated in an earlier class silently masks its later-class
+// sibling.
+//
+// **String / environment interleaving.** Inside STRING at
+// `:141-146`, a `%` transitions to ENVIRONMENT with
+// `insideString = true`; from ENVIRONMENT at `:159-163`, a `%`
+// with `insideString` true transitions back to STRING. This
+// supports `"...text %ENV_VAR% more text..."` syntax where the
+// environment expansion is styled distinctly inside a string.
+//
+// **`<%...%>` environment bracket.** The ENVIRONMENT state
+// entered via `<%` at `:94-97` exits on `>` at `:164-165`,
+// matching the bracketed form. The plain `%VAR%` form exits on
+// the closing `%`.
+//
+// **Delete-new memory management.** `LexCrontab.cxx:40` allocates
+// a `char *buffer = new char[length+1]` and deletes it at
+// `:217`. This is legacy-style Lexilla (not the modern
+// `StyleContext` GetCurrent path). No security implication
+// for the host — it's paint-loop-internal.
+//
+// **No fold.** Registered with `0` fold-function at `:227`.
+//
+// Style semantics (paint-loop citations reference LexCrontab.cxx):
+//
+//   - SCE_NNCRONTAB_DEFAULT (0) — whitespace / unclassified /
+//     unmatched identifier. Framework convention: leave
+//     unmapped.
+//   - SCE_NNCRONTAB_COMMENT (1) — `#`-to-EOL or `\ `-to-EOL
+//     line comment. Entry at `:74-82`, exit at `:122-127`
+//     (newline).
+//   - SCE_NNCRONTAB_TASK (2) — `#(` opening or `)#` closing
+//     task-delimiter marker. Entry at `:69-86`, exit at
+//     `:133-138` (newline).
+//   - SCE_NNCRONTAB_SECTION (3) — identifier that hit wordlist
+//     class 0. Entry at `:185-186` via `section.InList` probe.
+//   - SCE_NNCRONTAB_KEYWORD (4) — identifier that hit wordlist
+//     class 1. Entry at `:187-188` via `keyword.InList` probe
+//     (after class-0 miss).
+//   - SCE_NNCRONTAB_MODIFIER (5) — identifier that hit wordlist
+//     class 2. Entry at `:192-193` via `modifier.InList` probe
+//     (after class-0 and class-1 misses).
+//   - SCE_NNCRONTAB_ASTERISK (6) — `*` wildcard cron marker.
+//     Single-char state, entered and exited on the same char
+//     at `:98-101`.
+//   - SCE_NNCRONTAB_NUMBER (7) — decimal numeric literal.
+//     Entry at `:107-111`, exit at `:202-213` (non-digit).
+//   - SCE_NNCRONTAB_STRING (8) — `"..."` string literal.
+//     Entry at `:87-89`, exit at `:149-152` (closing `"` or
+//     newline).
+//   - SCE_NNCRONTAB_ENVIRONMENT (9) — `%VAR%` or `<%VAR%>`
+//     environment variable expansion. Entry at `:90-97` from
+//     DEFAULT, or at `:141-146` from STRING (with
+//     `insideString = true`). Exit at `:159-171` on closing
+//     `%` / `>` / newline.
+//   - SCE_NNCRONTAB_IDENTIFIER (10) — transient collect state
+//     entered at `:102-106` for any alpha-starting token.
+//     Settles to SECTION / KEYWORD / MODIFIER / DEFAULT at
+//     `:185-196` on completion. Framework convention: leave
+//     unmapped so unmatched bare identifiers paint at
+//     STYLE_DEFAULT.
+pub const SCE_NNCRONTAB_DEFAULT: usize = 0;
+pub const SCE_NNCRONTAB_COMMENT: usize = 1;
+pub const SCE_NNCRONTAB_TASK: usize = 2;
+pub const SCE_NNCRONTAB_SECTION: usize = 3;
+pub const SCE_NNCRONTAB_KEYWORD: usize = 4;
+pub const SCE_NNCRONTAB_MODIFIER: usize = 5;
+pub const SCE_NNCRONTAB_ASTERISK: usize = 6;
+pub const SCE_NNCRONTAB_NUMBER: usize = 7;
+pub const SCE_NNCRONTAB_STRING: usize = 8;
+pub const SCE_NNCRONTAB_ENVIRONMENT: usize = 9;
+pub const SCE_NNCRONTAB_IDENTIFIER: usize = 10;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

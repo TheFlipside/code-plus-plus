@@ -123,10 +123,11 @@ use codepp_core::lang::{
     L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF,
     L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
     L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
-    L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
-    L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
-    L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
-    MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+    L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
+    L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
+    L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
+    MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS,
+    NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES,
     OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
     POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
     POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
@@ -243,14 +244,17 @@ use codepp_scintilla_sys::{
     SCE_MMIXAL_SYMBOL, SCE_NIM_BACKTICKS, SCE_NIM_CHARACTER, SCE_NIM_COMMENT, SCE_NIM_COMMENTDOC,
     SCE_NIM_COMMENTLINE, SCE_NIM_COMMENTLINEDOC, SCE_NIM_FUNCNAME, SCE_NIM_NUMBER,
     SCE_NIM_OPERATOR, SCE_NIM_STRING, SCE_NIM_TRIPLE, SCE_NIM_TRIPLEDOUBLE, SCE_NIM_WORD,
-    SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX, SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF,
-    SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL, SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX,
-    SCE_NSIS_SECTIONDEF, SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ,
-    SCE_NSIS_STRINGRQ, SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED,
-    SCE_NSIS_VARIABLE, SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2,
-    SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER,
-    SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD,
-    SCE_PL_ARRAY, SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
+    SCE_NNCRONTAB_ASTERISK, SCE_NNCRONTAB_COMMENT, SCE_NNCRONTAB_ENVIRONMENT,
+    SCE_NNCRONTAB_KEYWORD, SCE_NNCRONTAB_MODIFIER, SCE_NNCRONTAB_NUMBER, SCE_NNCRONTAB_SECTION,
+    SCE_NNCRONTAB_STRING, SCE_NNCRONTAB_TASK, SCE_NSIS_COMMENT, SCE_NSIS_COMMENTBOX,
+    SCE_NSIS_FUNCTION, SCE_NSIS_FUNCTIONDEF, SCE_NSIS_IFDEFINEDEF, SCE_NSIS_LABEL,
+    SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF,
+    SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ,
+    SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE,
+    SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE,
+    SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER, SCE_PAS_OPERATOR,
+    SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD, SCE_PL_ARRAY,
+    SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
     SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
     SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR,
     SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR,
@@ -4423,6 +4427,106 @@ const NIM_THEME: LangTheme = LangTheme {
     styles: NIM_STYLES,
     italic: NIM_ITALIC,
     bold: NIM_BOLD,
+};
+
+// --- LexNncrontab ---
+// LexNncrontab (compiled from `LexCrontab.cxx`) serves NNCrontab
+// — nnCron's extended crontab format for a Windows scheduler /
+// event monitor by Nick Nemtsev. Extension `.tab`. `L_NNCRONTAB`
+// (id 77) is the only language row using this lexer. Dispatches
+// SCLEX_NNCRONTAB (= 26, per `SciLexer.h:44`) via a three-class
+// wordlist descriptor at `LexCrontab.cxx:220-225`.
+//
+// **9 style mappings** covering every SCE_NNCRONTAB_* state
+// the paint loop emits as a semantically visible token. Two
+// slots stay unmapped:
+//   - DEFAULT (0) — whitespace / unclassified / unmatched
+//     identifier. Framework convention: leave unmapped so
+//     unmatched bare identifiers paint at STYLE_DEFAULT.
+//   - IDENTIFIER (10) — transient collect state entered at
+//     `LexCrontab.cxx:102-106`, settles to SECTION / KEYWORD /
+//     MODIFIER / DEFAULT at `:185-196`. Framework convention:
+//     leave unmapped.
+//
+// **Three-class descriptor.** The wordlist descriptor names the
+// classes `"Section keywords and Forth words"` (class 0),
+// `"nnCrontab keywords"` (class 1), and `"Modifiers"` (class 2).
+// `LexCrontab.cxx:185-196` probes classes 0 → 1 → 2 in exact
+// order first-match-wins — cross-class disjointness is
+// required, enforced by the invariant test.
+//
+// **Slot rationale:**
+//   - COMMENT (1) → Comment (italic). `#`-to-EOL and
+//     `\ `-to-EOL line comments (nnCron / Forth conventions).
+//   - TASK (2) → Preprocessor. `#(` / `)#` task-delimiter
+//     markers structurally frame each task definition —
+//     preprocessor slot matches similar "meta-file-structure"
+//     markers in sibling lexers (e.g. NSIS section headers,
+//     `@include` in MMIXAL).
+//   - SECTION (3) → Keyword (bold). nnCron section markers
+//     (`Task`/`Time`/`Rule`/`When`) and Forth control words
+//     (`IF`/`THEN`/`DO`/`LOOP`) — the structural vocabulary of
+//     a task definition. Bold matches other primary-keyword
+//     slots (Forth CONTROL, MMIXAL OPCODE_VALID, Erlang
+//     KEYWORD).
+//   - KEYWORD (4) → Keyword (bold). nnCron's directive
+//     vocabulary (`RUN`/`FILE-COPY`/`WIN-ACTIVATE`) — action
+//     verbs and built-in variable readers. Collapses to the
+//     same bold slot as SECTION; both classes are "language
+//     vocabulary" semantically and the collapse discipline
+//     matches Forth CONTROL + KEYWORD → bold.
+//   - MODIFIER (5) → Keyword2 (accent). Task-execution
+//     modifiers (`HighPriority`, `ShowMaximized`, `RunOnce`,
+//     `WatchSubtree`) that qualify how a task or watch
+//     directive behaves. Accent color visually distinguishes
+//     modifiers from action verbs.
+//   - ASTERISK (6) → Operator. The `*` cron wildcard —
+//     "match every value in this field" is semantically an
+//     operator on the time-field grammar.
+//   - NUMBER (7) → Number.
+//   - STRING (8) → String.
+//   - ENVIRONMENT (9) → Keyword2 (accent). `%VAR%` and
+//     `<%VAR%>` environment-variable expansions are
+//     named-value references — accent slot matches similar
+//     named-value markers (MMIXAL SYMBOL, Nim FUNCNAME).
+const NNCRONTAB_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_NNCRONTAB_COMMENT, StyleSlot::Comment),
+    (SCE_NNCRONTAB_TASK, StyleSlot::Preprocessor),
+    (SCE_NNCRONTAB_SECTION, StyleSlot::Keyword),
+    (SCE_NNCRONTAB_KEYWORD, StyleSlot::Keyword),
+    (SCE_NNCRONTAB_MODIFIER, StyleSlot::Keyword2),
+    (SCE_NNCRONTAB_ASTERISK, StyleSlot::Operator),
+    (SCE_NNCRONTAB_NUMBER, StyleSlot::Number),
+    (SCE_NNCRONTAB_STRING, StyleSlot::String),
+    (SCE_NNCRONTAB_ENVIRONMENT, StyleSlot::Keyword2),
+];
+
+// Italic on COMMENT — universal Code++ comment convention.
+const NNCRONTAB_ITALIC: &[usize] = &[SCE_NNCRONTAB_COMMENT];
+
+// Bold on SECTION + KEYWORD — two "language vocabulary"
+// classes semantically collapsed to bold. Same discipline as
+// Forth CONTROL + KEYWORD → bold and Erlang KEYWORD + BIFS →
+// bold.
+const NNCRONTAB_BOLD: &[usize] = &[SCE_NNCRONTAB_SECTION, SCE_NNCRONTAB_KEYWORD];
+
+// Three-class install matches `cronWordListDesc[]` at
+// `LexCrontab.cxx:220-225`. Order is load-bearing —
+// `SCI_SETKEYWORDS` respects wordlist-descriptor order and
+// `LexCrontab.cxx:185-196`'s InList cascade probes classes 0 →
+// 1 → 2 first-match-wins. A token duplicated in an earlier
+// class silently masks its later-class sibling; the invariant
+// test enforces pairwise cross-class disjointness across all
+// three pairs.
+const NNCRONTAB_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, NNCRONTAB_SECTIONS),
+        (1, NNCRONTAB_KEYWORDS),
+        (2, NNCRONTAB_MODIFIERS),
+    ],
+    styles: NNCRONTAB_STYLES,
+    italic: NNCRONTAB_ITALIC,
+    bold: NNCRONTAB_BOLD,
 };
 
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
@@ -9167,6 +9271,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&MMIXAL_THEME)
     } else if lang == L_NIM {
         Some(&NIM_THEME)
+    } else if lang == L_NNCRONTAB {
+        Some(&NNCRONTAB_THEME)
     } else {
         None
     }
@@ -24324,16 +24430,17 @@ mod lang_theme_tests {
         ASM_REG_KEYWORDS, ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC,
         ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES,
         MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC, NIM_STYLES,
-        SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER,
-        SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL,
-        SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
-        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
-        SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
-        SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
-        SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
-        SCE_AU3_KEYWORD, SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR,
-        SCE_AU3_SENT, SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE,
-        SCE_CAML_CHAR, SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
+        NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, SCE_ADA_CHARACTER,
+        SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL,
+        SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD,
+        SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE,
+        SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND,
+        SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER, SCE_ASM_OPERATOR,
+        SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_AU3_COMMENT,
+        SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
+        SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT,
+        SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_CAML_CHAR,
+        SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
         SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER,
         SCE_CAML_OPERATOR, SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS,
         SCE_CMAKE_COMMENT, SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF,
@@ -24403,21 +24510,21 @@ mod lang_theme_tests {
         L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
         L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO,
         L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
-        L_MATLAB, L_MMIXAL, L_NIM, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS,
-        L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX,
-        L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
-        MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS,
-        NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS,
-        PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS,
-        POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1,
-        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
-        R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-        SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-        VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-        XML_KEYWORDS, YAML_KEYWORDS,
+        L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
+        L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
+        L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS,
+        MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS,
+        NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS,
+        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
+        PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
+        POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
+        PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+        RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
+        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
+        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -24463,14 +24570,17 @@ mod lang_theme_tests {
         SCE_MMIXAL_SYMBOL, SCE_NIM_BACKTICKS, SCE_NIM_CHARACTER, SCE_NIM_COMMENT,
         SCE_NIM_COMMENTDOC, SCE_NIM_COMMENTLINE, SCE_NIM_COMMENTLINEDOC, SCE_NIM_FUNCNAME,
         SCE_NIM_IDENTIFIER, SCE_NIM_NUMBER, SCE_NIM_OPERATOR, SCE_NIM_STRING, SCE_NIM_TRIPLE,
-        SCE_NIM_TRIPLEDOUBLE, SCE_NIM_WORD, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER,
-        SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD,
-        SCE_POWERSHELL_COMMENTSTREAM, SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION,
-        SCE_POWERSHELL_HERE_CHARACTER, SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER,
-        SCE_POWERSHELL_KEYWORD, SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR,
-        SCE_POWERSHELL_STRING, SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS,
-        SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER,
-        SCE_R_INFIX, SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
+        SCE_NIM_TRIPLEDOUBLE, SCE_NIM_WORD, SCE_NNCRONTAB_ASTERISK, SCE_NNCRONTAB_COMMENT,
+        SCE_NNCRONTAB_ENVIRONMENT, SCE_NNCRONTAB_IDENTIFIER, SCE_NNCRONTAB_KEYWORD,
+        SCE_NNCRONTAB_MODIFIER, SCE_NNCRONTAB_NUMBER, SCE_NNCRONTAB_SECTION, SCE_NNCRONTAB_STRING,
+        SCE_NNCRONTAB_TASK, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET,
+        SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM,
+        SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
+        SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER, SCE_POWERSHELL_KEYWORD,
+        SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING,
+        SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS, SCE_R_BASEKWORD,
+        SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER, SCE_R_INFIX,
+        SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
         SCE_R_RAWSTRING, SCE_R_RAWSTRING2, SCE_R_STRING, SCE_R_STRING2, SCE_VHDL_IDENTIFIER,
         SCE_V_IDENTIFIER, SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER,
         SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
@@ -24519,6 +24629,7 @@ mod lang_theme_tests {
             (L_FORTH, "Forth"),
             (L_MMIXAL, "MMIXAL"),
             (L_NIM, "Nim"),
+            (L_NNCRONTAB, "NNCrontab"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -37704,6 +37815,444 @@ mod lang_theme_tests {
         );
     }
 
+    /// `NNCrontab` uses Lexilla's `nncrontab` lexer
+    /// (`LexCrontab.cxx`) — nnCron's extended crontab format
+    /// for a Windows scheduler / event monitor by Nick Nemtsev.
+    /// Distinctive features:
+    ///
+    /// - **Three-class descriptor** (`cronWordListDesc[]` at
+    ///   `LexCrontab.cxx:220-225`): "Section keywords and
+    ///   Forth words" / "nnCrontab keywords" / "Modifiers".
+    /// - **Hand-rolled state machine, no `StyleContext`.**
+    ///   Legacy Lexilla lexer using raw `switch(state)` with
+    ///   manual `styler.ColourTo` calls.
+    /// - **First-match-wins cascade** at `:185-196` probes
+    ///   classes 0 → 1 → 2 in order.
+    /// - **Case-SENSITIVE** — `WordList::InList` byte-exact
+    ///   probe with no lowering.
+    /// - **Wide identifier alphabet** at `:175-177`: alnum +
+    ///   `_` + `-` + `/` + `$` + `.` + `<` + `>` + `@`.
+    ///   Supports directive-argument identifiers with
+    ///   embedded delimiters (`FILE-COPY`, `Day@`, `<JScript>`,
+    ///   etc.).
+    /// - **`#(...)`  / `)#` task delimiters** (`SCE_NNCRONTAB_TASK`)
+    ///   frame each task definition.
+    /// - **Two comment forms**: `#`-to-EOL (plain) and
+    ///   `\ `-to-EOL (Forth-style whitespace-required
+    ///   backslash comment).
+    /// - **`%VAR%` / `<%VAR%>` environment expansion**
+    ///   (`SCE_NNCRONTAB_ENVIRONMENT`), interleaves with STRING
+    ///   state at `:141-146` and `:159-163`.
+    /// - **No fold** — `LexCrontab.cxx:227` registers `0` as
+    ///   the fold function.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. Deep-value identity pin — dispatcher-returned theme
+    ///      value-equals `NNCRONTAB_STYLES` / `ITALIC` / `BOLD`.
+    ///   2. Style count == 9 (11 defined `SCE_NNCRONTAB_*`
+    ///      slots minus 2 unmapped: `DEFAULT` (0),
+    ///      `IDENTIFIER` (10)).
+    ///   3. Three wordlist classes in canonical descriptor
+    ///      order (0..=2) matching `cronWordListDesc[]` at
+    ///      `:220-225`.
+    ///   4. All three classes non-empty.
+    ///   5. Byte-exact alphabet enforcement across every
+    ///      class. The predicate accepts the exact `IsAWordChar`
+    ///      alphabet at `LexCrontab.cxx:175-177`: ASCII alnum +
+    ///      `_` + `-` + `/` + `$` + `.` + `<` + `>` + `@`. Any
+    ///      wordlist token containing bytes outside this
+    ///      alphabet would be dead code — the paint loop's
+    ///      identifier-collect state cannot emit a buffer that
+    ///      matches such an entry.
+    ///   6. **Cross-class disjointness across all 3 class-pair
+    ///      combinations** — LOAD-BEARING for the class-0 →
+    ///      class-1 → class-2 first-match-wins cascade at
+    ///      `:185-196`. A token duplicated in an earlier class
+    ///      silently masks its later-class sibling.
+    ///   7. Style-routing pins for all 9 mapped SCE constants.
+    ///   8. Two framework-unmapped slots confirmed absent:
+    ///      `DEFAULT` (0) and `IDENTIFIER` (10).
+    ///   9. Italic set == 1 (`COMMENT` only).
+    ///   10. Bold set == 2 (`SECTION` + `KEYWORD` — two
+    ///       "language vocabulary" classes semantically
+    ///       collapsed, matching Forth CONTROL + KEYWORD → bold
+    ///       and Erlang KEYWORD + BIFS → bold).
+    ///   11. Cross-language non-reuse — `NNCRONTAB_STYLES` must
+    ///       not deep-equal a sampled set of four sibling
+    ///       themes (Forth / Erlang / MMIXAL / `CSound`).
+    ///   12. `L_NNCRONTAB` `LangEntry` has `lexer:
+    ///       Some("nncrontab")` and extensions contain `tab`.
+    ///   13. **Canonical section anchors** — one per
+    ///       `concat!()` line so a silent line-literal deletion
+    ///       is caught: `Task` (nnCron section marker), `IF`
+    ///       (Forth control), `TRUE` (Forth arithmetic/logic),
+    ///       `ALLOT` (Forth memory).
+    ///   14. **Canonical keyword anchors** — 20 anchors
+    ///       spanning the major functional groups in
+    ///       `NNCRONTAB_KEYWORDS`, with a second spelling-
+    ///       family anchor where a group covers distinct
+    ///       sub-families (mouse+keyboard splits into
+    ///       `MOUSE-LBCLK` / `SEND-KEYS` / `CHAR`; sound
+    ///       splits into `BEEP` / `PLAY-SOUND`; misc utilities
+    ///       split into `EXIST` / `GetTickCount` / `CONSOLE`).
+    ///       Anchor list: `RUN` (process control), `FILE-COPY`
+    ///       (file ops), `WIN-ACTIVATE` (window manipulation),
+    ///       `MOUSE-LBCLK` + `SEND-KEYS` + `CHAR` (mouse +
+    ///       keyboard), `Day@` (time built-in variable),
+    ///       `WatchFile` (watch trigger), `DIAL` (RAS),
+    ///       `Password` (logon credential), `REG-DWORD`
+    ///       (registry), `MSG` (dialog), `BEEP` +
+    ///       `PLAY-SOUND` (sound), `POP3-CHECK` (POP3),
+    ///       `RE-MATCH` (regex), `<JScript>` (script
+    ///       embedding), `GetTickCount` + `EXIST` (misc
+    ///       utilities), `CONSOLE` (console I/O).
+    ///   15. **Canonical modifier anchors** — one per
+    ///       sub-family: `HighPriority` (priority),
+    ///       `ShowMaximized` (window state), `StartIn`
+    ///       (startup), `OnceADay` (once-a-N), `RunOnce`
+    ///       (run-once), `WATCH-CHANGE-SIZE` (watch flag),
+    ///       `WatchSubtree` (subtree), `RECURSIVE` (recursion),
+    ///       `WaitFor` (auth).
+    ///   16. **Highest defined `SCE_NNCRONTAB_*` pin.**
+    ///       `SCE_NNCRONTAB_IDENTIFIER` (10) is the top slot;
+    ///       the styles table must not reference any index
+    ///       above it. Catches a future Lexilla submodule bump.
+    ///   17. No duplicate tokens within any single wordlist —
+    ///       defence-in-depth invariant.
+    #[test]
+    fn nncrontab_uses_lexcrontab_three_class_theme() {
+        let nc = lang_theme(L_NNCRONTAB).expect("NNCrontab wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(nc.styles, NNCRONTAB_STYLES);
+        assert_eq!(nc.italic, NNCRONTAB_ITALIC);
+        assert_eq!(nc.bold, NNCRONTAB_BOLD);
+        assert_eq!(nc.keywords.len(), 3);
+
+        // Invariant 2: 9 mappings (11 defined slots minus 2 unmapped).
+        assert_eq!(
+            nc.styles.len(),
+            9,
+            "NNCRONTAB_STYLES must map 9 indices (11 defined \
+             SCE_NNCRONTAB_* slots minus 2 unmapped: DEFAULT (0) \
+             and IDENTIFIER (10) — both transient / STYLE_DEFAULT \
+             fallback per framework convention)"
+        );
+
+        // Invariant 3: three classes in canonical descriptor order.
+        for (i, (expected_class, expected_list)) in [
+            (0u32, NNCRONTAB_SECTIONS),
+            (1u32, NNCRONTAB_KEYWORDS),
+            (2u32, NNCRONTAB_MODIFIERS),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                nc.keywords[i].0, *expected_class,
+                "NNCRONTAB_THEME.keywords[{i}].class must match descriptor order"
+            );
+            assert_eq!(
+                nc.keywords[i].1, *expected_list,
+                "NNCRONTAB_THEME.keywords[{i}].list must match canonical wordlist"
+            );
+        }
+
+        // Invariant 4: all three classes non-empty.
+        for (list, name) in [
+            (NNCRONTAB_SECTIONS, "SECTIONS"),
+            (NNCRONTAB_KEYWORDS, "KEYWORDS"),
+            (NNCRONTAB_MODIFIERS, "MODIFIERS"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "NNCRONTAB_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: byte-exact IsAWordChar alphabet enforcement
+        // per LexCrontab.cxx:175-177 — alnum + `_` + `-` + `/` +
+        // `$` + `.` + `<` + `>` + `@`. Any wordlist token with a
+        // byte outside this set would be dead code (the paint
+        // loop's identifier-collect state cannot emit a buffer
+        // containing such bytes).
+        let is_nncron_word_char = |b: u8| {
+            b.is_ascii_alphanumeric()
+                || matches!(b, b'_' | b'-' | b'/' | b'$' | b'.' | b'<' | b'>' | b'@')
+        };
+        // The paint loop's IDENTIFIER-entry alt-condition at
+        // LexCrontab.cxx:102 restricts the FIRST byte to
+        // `(IsASCII(ch) && isalpha(ch)) || ch == '<'` — digits
+        // divert to NUMBER at :107-111 (which never consults any
+        // wordlist per :202-214), and other non-alpha, non-`<`
+        // bytes fall through to DEFAULT. So a wordlist token
+        // whose first byte is not ASCII-alpha or `<` can never
+        // be matched from IDENTIFIER state. This is a stricter
+        // constraint than the continuation alphabet.
+        let is_nncron_ident_start = |b: u8| b.is_ascii_alphabetic() || b == b'<';
+        for (list, name) in [
+            (NNCRONTAB_SECTIONS, "SECTIONS"),
+            (NNCRONTAB_KEYWORDS, "KEYWORDS"),
+            (NNCRONTAB_MODIFIERS, "MODIFIERS"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    !tok.is_empty() && tok.bytes().all(is_nncron_word_char),
+                    "NNCRONTAB_{name} token `{tok}` violates the \
+                     IsAWordChar alphabet at LexCrontab.cxx:175-177 \
+                     (ASCII alnum + `_` + `-` + `/` + `$` + `.` + \
+                     `<` + `>` + `@`) — bytes outside this set can \
+                     never appear in a captured identifier, so a \
+                     wordlist entry with such bytes is dead code"
+                );
+                // Load-bearing: LexCrontab.cxx:102's IDENTIFIER-
+                // entry condition. A token starting with `-`, `/`,
+                // `$`, `.`, `>`, `@`, `_` (or a digit) can never
+                // be reached from the paint loop's IDENTIFIER
+                // state — the leading byte would either divert to
+                // NUMBER (digits) or fall through to DEFAULT (all
+                // others).
+                let first_byte = tok.as_bytes()[0];
+                assert!(
+                    is_nncron_ident_start(first_byte),
+                    "NNCRONTAB_{name} token `{tok}` starts with a \
+                     byte that is not ASCII-alpha or `<` — \
+                     LexCrontab.cxx:102 restricts IDENTIFIER-state \
+                     entry to `(isalpha(ch)) || ch == '<'`, so the \
+                     paint loop can never emit a buffer that would \
+                     match this entry"
+                );
+            }
+        }
+
+        // Invariant 6: cross-class disjointness across all 3
+        // class-pair combinations. LOAD-BEARING for the
+        // first-match-wins cascade at LexCrontab.cxx:185-196.
+        use std::collections::HashSet;
+        let sets = [
+            (
+                "SECTIONS",
+                NNCRONTAB_SECTIONS
+                    .split_whitespace()
+                    .collect::<HashSet<_>>(),
+            ),
+            (
+                "KEYWORDS",
+                NNCRONTAB_KEYWORDS
+                    .split_whitespace()
+                    .collect::<HashSet<_>>(),
+            ),
+            (
+                "MODIFIERS",
+                NNCRONTAB_MODIFIERS
+                    .split_whitespace()
+                    .collect::<HashSet<_>>(),
+            ),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                if let Some(shared) = sets[i].1.intersection(&sets[j].1).next() {
+                    panic!(
+                        "NNCRONTAB_{} and NNCRONTAB_{} both contain \
+                         `{shared}` — LexCrontab.cxx:185-196 probes \
+                         classes 0 → 1 → 2 first-match-wins. \
+                         Cross-class duplicate leaves the later entry \
+                         dead code.",
+                        sets[i].0, sets[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 7: style-routing pins for all 9 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_NNCRONTAB_COMMENT, StyleSlot::Comment, "COMMENT"),
+            (SCE_NNCRONTAB_TASK, StyleSlot::Preprocessor, "TASK"),
+            (SCE_NNCRONTAB_SECTION, StyleSlot::Keyword, "SECTION"),
+            (SCE_NNCRONTAB_KEYWORD, StyleSlot::Keyword, "KEYWORD"),
+            (SCE_NNCRONTAB_MODIFIER, StyleSlot::Keyword2, "MODIFIER"),
+            (SCE_NNCRONTAB_ASTERISK, StyleSlot::Operator, "ASTERISK"),
+            (SCE_NNCRONTAB_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_NNCRONTAB_STRING, StyleSlot::String, "STRING"),
+            (
+                SCE_NNCRONTAB_ENVIRONMENT,
+                StyleSlot::Keyword2,
+                "ENVIRONMENT",
+            ),
+        ] {
+            assert!(
+                nc.styles.contains(&(idx, slot)),
+                "SCE_NNCRONTAB_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: framework-unmapped slots confirmed absent.
+        for (idx, name) in [(0_usize, "DEFAULT"), (10, "IDENTIFIER")] {
+            assert!(
+                !nc.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_NNCRONTAB_{name} ({idx}) must remain unmapped — \
+                 framework convention (transient collect state or \
+                 STYLE_DEFAULT fallback)"
+            );
+        }
+
+        // Invariant 9: italic == 1 (COMMENT only).
+        assert_eq!(nc.italic.len(), 1);
+        assert!(nc.italic.contains(&SCE_NNCRONTAB_COMMENT));
+
+        // Invariant 10: bold == 2 (SECTION + KEYWORD — two
+        // "language vocabulary" classes semantically collapsed).
+        assert_eq!(nc.bold.len(), 2);
+        assert!(nc.bold.contains(&SCE_NNCRONTAB_SECTION));
+        assert!(nc.bold.contains(&SCE_NNCRONTAB_KEYWORD));
+
+        // Invariant 11: cross-language non-reuse (sampled).
+        let fo = lang_theme(L_FORTH).expect("Forth wired");
+        let er = lang_theme(L_ERLANG).expect("Erlang wired");
+        let mm = lang_theme(L_MMIXAL).expect("MMIXAL wired");
+        let cs = lang_theme(L_CSOUND).expect("CSound wired");
+        for (other, name) in [
+            (fo, "Forth"),
+            (er, "Erlang"),
+            (mm, "MMIXAL"),
+            (cs, "CSound"),
+        ] {
+            assert_ne!(
+                nc.styles, other.styles,
+                "NNCrontab must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 12: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let nc_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_NNCRONTAB)
+            .expect("L_NNCRONTAB LangEntry present in LANG_TABLE");
+        assert_eq!(
+            nc_entry.lexer,
+            Some("nncrontab"),
+            "L_NNCRONTAB LangEntry.lexer must be Some(\"nncrontab\") \
+             — wiring assumes the LexNncrontab module dispatched via \
+             SCLEX_NNCRONTAB (= 26)"
+        );
+        assert!(
+            nc_entry.extensions.contains(&"tab"),
+            "L_NNCRONTAB extensions must contain `tab`"
+        );
+
+        // Invariant 13: canonical section anchors — one per
+        // `concat!()` line to catch a silent line-literal deletion.
+        for tok in [
+            "Task",  // nnCron section marker (row 1)
+            "IF",    // Forth control (row 2)
+            "TRUE",  // Forth arithmetic/logic/defining (row 3)
+            "ALLOT", // Forth memory (row 4)
+        ] {
+            assert!(
+                NNCRONTAB_SECTIONS.split_whitespace().any(|t| t == tok),
+                "NNCRONTAB_SECTIONS must include canonical section \
+                 anchor `{tok}` — one anchor per `concat!()` line to \
+                 catch silent line-literal deletion"
+            );
+        }
+
+        // Invariant 14: canonical keyword anchors — one per major
+        // functional group.
+        for tok in [
+            "RUN",          // process control
+            "FILE-COPY",    // file ops
+            "WIN-ACTIVATE", // window manipulation
+            "MOUSE-LBCLK",  // mouse
+            "Day@",         // time built-in variable
+            "WatchFile",    // watch trigger
+            "DIAL",         // RAS
+            "Password",     // logon credential
+            "REG-DWORD",    // registry
+            "MSG",          // dialog
+            "BEEP",         // sound
+            "POP3-CHECK",   // POP3
+            "RE-MATCH",     // regex
+            "<JScript>",    // script embedding
+            "SEND-KEYS",    // keyboard
+            "GetTickCount", // Windows API utility
+            "EXIST",        // misc utility
+            "CONSOLE",      // console I/O
+            "PLAY-SOUND",   // sound
+            "CHAR",         // keyboard char emit
+        ] {
+            assert!(
+                NNCRONTAB_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "NNCRONTAB_KEYWORDS must include canonical keyword \
+                 `{tok}` — one anchor per functional group"
+            );
+        }
+
+        // Invariant 15: canonical modifier anchors — one per
+        // sub-family.
+        for tok in [
+            "HighPriority",      // priority
+            "ShowMaximized",     // window state
+            "StartIn",           // startup positioning
+            "OnceADay",          // once-a-N scheduling
+            "RunOnce",           // run-once
+            "WATCH-CHANGE-SIZE", // file-watcher change flag
+            "WatchSubtree",      // watch subtree
+            "RECURSIVE",         // recursion flag
+            "WaitFor",           // auth / wait
+        ] {
+            assert!(
+                NNCRONTAB_MODIFIERS.split_whitespace().any(|t| t == tok),
+                "NNCRONTAB_MODIFIERS must include canonical modifier \
+                 `{tok}` — one anchor per sub-family"
+            );
+        }
+
+        // Invariant 16: highest defined SCE_NNCRONTAB_* pin.
+        // `SCE_NNCRONTAB_IDENTIFIER` (10) is Lexilla's top slot
+        // today; catches a future Lexilla submodule bump that
+        // would leave the style-count and unmapped-slot pins
+        // silently passing while the new slot rendered at
+        // STYLE_DEFAULT.
+        assert_eq!(
+            SCE_NNCRONTAB_IDENTIFIER, 10,
+            "SCE_NNCRONTAB_IDENTIFIER has drifted from 10 — Lexilla \
+             may have renumbered slots. Verify against SciLexer.h:701 \
+             and, if intentional, update this assertion together with \
+             the two-unmapped set (Invariant 8) and the style count \
+             (Invariant 2)"
+        );
+        for (idx, _) in nc.styles {
+            assert!(
+                *idx <= SCE_NNCRONTAB_IDENTIFIER,
+                "NNCRONTAB_STYLES references slot {idx}, which is \
+                 higher than SCE_NNCRONTAB_IDENTIFIER \
+                 ({SCE_NNCRONTAB_IDENTIFIER}) — either a typo or an \
+                 out-of-band Lexilla addition; verify against \
+                 SciLexer.h and the emission set at LexCrontab.cxx"
+            );
+        }
+
+        // Invariant 17: no duplicate tokens within any single wordlist.
+        for (list, name) in [
+            (NNCRONTAB_SECTIONS, "SECTIONS"),
+            (NNCRONTAB_KEYWORDS, "KEYWORDS"),
+            (NNCRONTAB_MODIFIERS, "MODIFIERS"),
+        ] {
+            let total = list.split_whitespace().count();
+            let unique = list.split_whitespace().collect::<HashSet<_>>().len();
+            assert_eq!(
+                total,
+                unique,
+                "NNCRONTAB_{name} contains {} duplicate token(s) — \
+                 `WordList::InList` is set-based so duplicates are \
+                 functionally harmless but hide typos and corrupt \
+                 docstring token-count claims",
+                total - unique
+            );
+        }
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -37719,7 +38268,8 @@ mod lang_theme_tests {
     /// `L_ESCRIPT` was removed when the ESCRIPT row landed.
     /// `L_FORTH` was removed when the Forth row landed. `L_MMIXAL`
     /// was removed when the MMIXAL row landed. `L_NIM` was removed
-    /// when the Nim row landed in this commit.
+    /// when the Nim row landed. `L_NNCRONTAB` was removed when the
+    /// `NNCrontab` row landed in this commit.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");
