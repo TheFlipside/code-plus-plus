@@ -2207,6 +2207,184 @@ pub const SCE_NNCRONTAB_STRING: usize = 8;
 pub const SCE_NNCRONTAB_ENVIRONMENT: usize = 9;
 pub const SCE_NNCRONTAB_IDENTIFIER: usize = 10;
 
+// LexOScript style indices. 19 contiguous slots (0..=18) for
+// OScript — the object-oriented programming language for
+// OpenText Livelink (now OpenText Content Server), extension
+// `.osx`. Constants mirror `SciLexer.h:1720-1738` verbatim.
+// Dispatches SCLEX_OSCRIPT (= 106, per `SciLexer.h:122`) via
+// a **six-class wordlist** declared at
+// `vendor\lexilla\lexers\LexOScript.cxx:539-547`
+// (`oscriptWordListDesc[]`) — the widest wordlist descriptor
+// of Phase 4.5, ahead of Forth's 6 and Erlang's 6:
+//
+//     oscriptWordListDesc[] = {
+//         "Keywords and reserved words",       // class 0 → KEYWORD
+//         "Literal constants",                 // class 1 → CONSTANT
+//         "Literal operators",                 // class 2 → OPERATOR
+//         "Built-in value and reference types", // class 3 → TYPE
+//         "Built-in global functions",         // class 4 → FUNCTION
+//         "Built-in static objects",           // class 5 → OBJECT
+//         0,
+//     };
+//
+// **Case-INSENSITIVE.** `LexOScript.cxx` calls
+// `sc.GetCurrentLowered(s, sizeof(s))` on both classification
+// paths — once at `:141` inside `if (sc.Match('('))` at
+// `:139-153` (paren path, populates the buffer probed by
+// KEYWORD/OPERATOR/FUNCTION at `:144-152`), and again at
+// `:156` inside the `else` at `:154-180` (no-paren path,
+// populates the buffer probed by OBJECT/KEYWORD/CONSTANT/
+// OPERATOR/TYPE/FUNCTION at `:163-176`). Two separate buffer
+// scopes — every wordlist token must be lowercase to match
+// either. Same discipline as `PASCAL_KEYWORDS` /
+// `ESCRIPT_KEYWORDS` / `FORTH_KEYWORD`.
+//
+// **Context-sensitive classification** (`IdentifierClassifier`
+// at `:114-182`). Unlike simple first-match-wins lexers, the
+// classifier at `:132-181` performs a **two-phase probe**:
+//   - **Parenthesis-suffix path** (`sc.Match('(')`, `:139-153`):
+//     probes keywords → operators → functions → METHOD (default
+//     if no wordlist matches). Any identifier immediately
+//     followed by `(` is treated as a potential function call
+//     unless it's a keyword or operator.
+//   - **No-parenthesis path** (`:154-180`): if followed by `.`
+//     AND matches objects (class 5), styles as OBJECT then
+//     enters OPERATOR state for the dot. Otherwise probes
+//     keywords → constants → operators → types → functions in
+//     order first-match-wins.
+//
+// **Cross-class disjointness is context-scoped.** Because the
+// two probe paths differ, the same token can theoretically hit
+// different classes in different syntactic positions — e.g. a
+// class-4 function name would style as FUNCTION on both paths
+// (KEYWORD/OPERATOR/CONSTANT/TYPE probes all miss); a class-5
+// object name styles as OBJECT only when followed by `.` and
+// stays IDENTIFIER (styled DEFAULT) otherwise. Still, the
+// wordlists should be cross-class disjoint to avoid ambiguous
+// intent — the invariant test enforces pairwise disjointness
+// across all 15 class-pair combinations.
+//
+// **Auto-styled LABEL and PROPERTY / METHOD.** Two paint-loop
+// mechanics without wordlist support:
+//   - **LABEL** (`SCE_OSCRIPT_LABEL`, `:13`): identifier at
+//     the start of a line followed by `:` (colon). Entry at
+//     `:241-243` after the IDENTIFIER collect state.
+//   - **PROPERTY / METHOD** (`:17` / `:18`): `.identifier`
+//     enters PROPERTY at `:345-355`; if the property span is
+//     followed by `(`, `:262-263` upgrades it to METHOD.
+//
+// **GLOBAL** (`SCE_OSCRIPT_GLOBAL`, `:10`): `$xxx` or `$$xxx`
+// process/thread-global variables. Entry at `:336-339`.
+//
+// **PREPROCESSOR + DOC_COMMENT.** OScript's `#`-directives
+// (`#ifdef`, `#ifndef`, `#endif`, etc.) enter
+// `SCE_OSCRIPT_PREPROCESSOR` at `:334-335`. A specific
+// `#ifdef DOC` line at `:94-102, :303-305` transitions to
+// `SCE_OSCRIPT_DOC_COMMENT` which stays active across lines
+// until a `#endif` closes it at `:310-319`.
+//
+// **String literals.** Both single-quote (`'...'`) and
+// double-quote (`"..."`) strings supported at `:271-292`, with
+// doubled-quote escaping (`''` inside single, `""` inside
+// double). Strings must terminate on the same line —
+// unterminated strings roll to DEFAULT at end-of-line.
+//
+// **Fold** at `:419-534` is keyword-driven, NOT indentation-
+// based. `UpdateKeywordFoldLevel` at `:435-450` opens on
+// `if`/`for`/`switch`/`function`/`while`/`repeat` and closes
+// on `end`/`until` (fires only when style ==
+// SCE_OSCRIPT_KEYWORD per the guard at `:501-508`).
+// `UpdatePreprocessorFoldLevel` at `:419-433` handles
+// `#ifdef`/`#ifndef`/`#endif` block folding. Block-comment
+// style transitions at `:478-486` and line-comment
+// transitions at `:487-494` also emit fold levels.
+//
+// **Six-class descriptor is the widest of Phase 4.5** (tied
+// with Forth's 6 and Erlang's 6). LexOScript uses class-slot
+// granularity to express OScript's rich vocabulary
+// categorization: syntactic keywords, literal constants
+// (TRUE/FALSE/undefined), word operators (and/or/not), built-in
+// types (Integer/String), library functions (Echo/Length), and
+// Livelink singletons (DAPI/WAPI).
+//
+// Style semantics (paint-loop citations reference LexOScript.cxx):
+//
+//   - SCE_OSCRIPT_DEFAULT (0) — whitespace / unclassified /
+//     bare identifier that missed all wordlist probes.
+//     Framework convention: leave unmapped.
+//   - SCE_OSCRIPT_LINE_COMMENT (1) — `//`-to-EOL line
+//     comment. Entry at `:328-330`, exit at `:298-301`.
+//   - SCE_OSCRIPT_BLOCK_COMMENT (2) — `/* ... */` block
+//     comment. Entry at `:331-333`, exit at `:293-297`.
+//   - SCE_OSCRIPT_DOC_COMMENT (3) — `#ifdef DOC ... #endif`
+//     conditional-preprocessor documentation block. Entry
+//     via `:303-305` after PREPROCESSOR detects
+//     `#ifdef DOC`, exit at `:315-319`.
+//   - SCE_OSCRIPT_PREPROCESSOR (4) — `#`-directive line
+//     (except the DOC-comment starter). Entry at `:334-335`,
+//     exit at `:306-308` on line end.
+//   - SCE_OSCRIPT_NUMBER (5) — decimal / floating / signed-
+//     exponent numeric literal. Entry at `:340-344`, exit
+//     at `:267-270`.
+//   - SCE_OSCRIPT_SINGLEQUOTE_STRING (6) — `'...'` string.
+//     Entry at `:324-325`, exit at `:271-281`.
+//   - SCE_OSCRIPT_DOUBLEQUOTE_STRING (7) — `"..."` string.
+//     Entry at `:326-327`, exit at `:282-292`.
+//   - SCE_OSCRIPT_CONSTANT (8) — identifier that hit
+//     wordlist class 1. Entry via `:169-170` in the
+//     no-parenthesis path.
+//   - SCE_OSCRIPT_IDENTIFIER (9) — transient collect state
+//     entered at `:356-357`. Settles to a specific style at
+//     `:232-250`. Framework convention: leave unmapped so
+//     unmatched bare identifiers paint at STYLE_DEFAULT.
+//   - SCE_OSCRIPT_GLOBAL (10) — `$xxx` or `$$xxx`
+//     process/thread-global variable. Entry at `:336-339`,
+//     exit at `:251-254`.
+//   - SCE_OSCRIPT_KEYWORD (11) — identifier that hit
+//     wordlist class 0. Entry via `:144-145` (parenthesis
+//     path) or `:167-168` (no-paren path).
+//   - SCE_OSCRIPT_OPERATOR (12) — symbolic operator from
+//     `IsOperator` at `:83-85` (`%^&*()-+={}[]:;<>,/?!.~|\`)
+//     OR word operator via wordlist class 2 hit at `:146-147`
+//     / `:171-172`. Entry at `:358-359`.
+//   - SCE_OSCRIPT_LABEL (13) — column-0 identifier followed
+//     by `:`. Auto-styled at `:241-243` in the IDENTIFIER
+//     settle path.
+//   - SCE_OSCRIPT_TYPE (14) — identifier that hit wordlist
+//     class 3. Entry via `:173-174` in the no-paren path.
+//   - SCE_OSCRIPT_FUNCTION (15) — identifier that hit
+//     wordlist class 4. Entry via `:148-149` (paren path) or
+//     `:175-176` (no-paren path).
+//   - SCE_OSCRIPT_OBJECT (16) — identifier followed by `.`
+//     that hit wordlist class 5. Entry at `:163-164`.
+//   - SCE_OSCRIPT_PROPERTY (17) — `.identifier` after an
+//     object-access dot. Entry at `:345-355`, exit at
+//     `:255-266`.
+//   - SCE_OSCRIPT_METHOD (18) — identifier immediately
+//     followed by `(` that missed all wordlist probes at
+//     `:150-151` (default for un-classified call sites), OR
+//     PROPERTY upgraded to METHOD when a property span is
+//     followed by `(` at `:262-263`.
+pub const SCE_OSCRIPT_DEFAULT: usize = 0;
+pub const SCE_OSCRIPT_LINE_COMMENT: usize = 1;
+pub const SCE_OSCRIPT_BLOCK_COMMENT: usize = 2;
+pub const SCE_OSCRIPT_DOC_COMMENT: usize = 3;
+pub const SCE_OSCRIPT_PREPROCESSOR: usize = 4;
+pub const SCE_OSCRIPT_NUMBER: usize = 5;
+pub const SCE_OSCRIPT_SINGLEQUOTE_STRING: usize = 6;
+pub const SCE_OSCRIPT_DOUBLEQUOTE_STRING: usize = 7;
+pub const SCE_OSCRIPT_CONSTANT: usize = 8;
+pub const SCE_OSCRIPT_IDENTIFIER: usize = 9;
+pub const SCE_OSCRIPT_GLOBAL: usize = 10;
+pub const SCE_OSCRIPT_KEYWORD: usize = 11;
+pub const SCE_OSCRIPT_OPERATOR: usize = 12;
+pub const SCE_OSCRIPT_LABEL: usize = 13;
+pub const SCE_OSCRIPT_TYPE: usize = 14;
+pub const SCE_OSCRIPT_FUNCTION: usize = 15;
+pub const SCE_OSCRIPT_OBJECT: usize = 16;
+pub const SCE_OSCRIPT_PROPERTY: usize = 17;
+pub const SCE_OSCRIPT_METHOD: usize = 18;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

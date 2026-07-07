@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 64 / 🟡 24 / ⚫ 1.
+Total: 89 rows. ✅ 65 / 🟡 23 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1898,7 +1898,7 @@ further shim work needed.
 | Nncrontab | 77 | `nncrontab` | ✅ | ✅ | ✅ |
 | NSIS | 28 | `nsis` | ✅ | ✅ | ✅ |
 | Objective-C | 5 | `cpp` | ✅ | ✅ | ✅ |
-| OScript | 78 | `oscript` | ⚫ | ⚫ | 🟡 |
+| OScript | 78 | `oscript` | ✅ | ✅ | ✅ |
 | Pascal | 11 | `pascal` | ✅ | ✅ | ✅ |
 | Perl | 21 | `perl` | ✅ | ✅ | ✅ |
 | PHP | 1 | `hypertext` | ✅ | ✅ | ✅ |
@@ -6729,6 +6729,212 @@ per sub-family), highest-defined
 (`SCE_NNCRONTAB_IDENTIFIER=10` as top slot;
 catches future Lexilla submodule bumps),
 and no-duplicate defence-in-depth check.
+
+**OScript (2026-07-07):** wires `SCLEX_OSCRIPT`
+(= 106) for OScript `.osx` source — the
+object-oriented programming language for
+OpenText Livelink (now OpenText Content
+Server). `L_OSCRIPT` (id 78) is the sole
+language row using this lexer. Six-class
+descriptor — the widest of Phase 4.5 (tied
+with Forth 6 and Erlang 6).
+
+**Six-class wordlist (32 + 22 + 10 + 69 +
+23 + 17 = 173 tokens, all lowercase because
+`LexOScript.cxx:141` calls
+`sc.GetCurrentLowered` before every wordlist
+probe):**
+- **Class 0 (`SCE_OSCRIPT_KEYWORD`, bold
+  Keyword)** — `OSCRIPT_KEYWORDS` carries 32
+  tokens: 17 control-flow words (`if`/`else`/
+  `elseif`/`end`/`for`/`while`/`repeat`/
+  `until`/`switch`/`case`/`default`/`break`/
+  `breakif`/`continue`/`continueif`/`goto`/
+  `return`), 4 loop-range qualifiers
+  (`by`/`downto`/`in`/`to` used in `for i =
+  1 to 10 by 2` / `for x in list`), 5
+  function/declaration keywords (`function`/
+  `void`/`dll`/`xcmd`/`xfcn` — the latter
+  two are HyperCard-legacy external-command
+  and external-function markers), and 6
+  modifiers (`inbyref`/`inout`/`linked`/
+  `nodebug`/`super`/`this`). `end` is
+  OScript's universal block terminator — no
+  `then`/`endif`/`wend` in the grammar.
+- **Class 1 (`SCE_OSCRIPT_CONSTANT`,
+  Keyword2 accent)** — `OSCRIPT_CONSTANTS`
+  carries 22 tokens: 3 value literals
+  (`true`/`false`/`undefined` — `undefined`
+  returns from unbound identifier lookups),
+  and 19 type-identifier constants
+  (`integertype`/`stringtype`/`assoctype`/
+  etc.) used in reflection comparisons like
+  `x.DataType == IntegerType`. Distinct from
+  class 3 (TYPES) which holds the declaration-
+  side type keywords.
+- **Class 2 (`SCE_OSCRIPT_OPERATOR`,
+  Operator)** — `OSCRIPT_OPERATORS` carries
+  10 word-form operators: 4 logical
+  (`and`/`or`/`not`/`xor`) and 6 relational
+  (`eq`/`ne`/`lt`/`le`/`gt`/`ge`). OScript
+  accepts both symbolic (`==`/`!=`/`<`/etc.)
+  and word forms for readability. `in`
+  deliberately excluded — it's a `for-in`
+  loop KEYWORD, not an operator.
+- **Class 3 (`SCE_OSCRIPT_TYPE`, Keyword2
+  accent)** — `OSCRIPT_TYPES` carries 69
+  tokens across four families: 18 primitive
+  value types (`integer`/`string`/`boolean`/
+  `real`/`list`/`assoc`/etc.), ~31 Livelink
+  CAPI/DAPI/UAPI/WAPI object types
+  (`dapinode`/`dapisession`/`capilogin`/
+  `wapisession`/`sqlconnection`/`socket`/
+  etc.), 18 DOM Level 1/2 interfaces
+  (`domdocument`/`domelement`/`domattr`/
+  `domnodelist`/etc.), and 2 XML parser
+  types (`saxparser`/`xslprocessor`).
+- **Class 4 (`SCE_OSCRIPT_FUNCTION`,
+  Keyword2 accent)** — `OSCRIPT_FUNCTIONS`
+  carries 23 tokens: 6 debug/echo output
+  (`echo`/`echodebug`/`echoerror`/`echoinfo`/
+  `echostamp`/`echowarn`), 9 `is*` type /
+  state predicates (`isdefined`/`iserror`/
+  `isobject`/`isset`/`isundefined`/etc.), 6
+  reflection helpers (`datatypename`/
+  `getfeatures`/`length`/`nparameters`/
+  `parameters`/`type`), and 2 point
+  constructors (`pointh`/`pointv`).
+- **Class 5 (`SCE_OSCRIPT_OBJECT`, Keyword2
+  accent)** — `OSCRIPT_OBJECTS` carries 17
+  Livelink singletons: 5 Livelink Content
+  Server APIs (`capi`/`dapi`/`uapi`/`wapi`/
+  `web`), 3 utility namespaces (`math`/
+  `str`/`system`), 3 logging channels
+  (`console`/`debug`/`err`), 5 file/kernel/
+  parser/patch/prgctx namespaces, and 1
+  script namespace. Class 5 is probed ONLY
+  in the dot-suffix path at
+  `LexOScript.cxx:163` — disjoint from
+  classes 0-4 at the paint-loop level, so
+  `script` and `file` legitimately appear
+  in BOTH TYPES (class 3) and OBJECTS
+  (class 5): `Script s = ...` styles as
+  TYPE, `Script.Compile(...)` styles as
+  OBJECT.
+
+**Style routing (17 mappings across 19
+defined SCE slots):** LINE_COMMENT +
+BLOCK_COMMENT + DOC_COMMENT → `Comment`
+(italic — three sub-styles collapse;
+DOC_COMMENT covers the `#ifdef DOC ...
+#endif` conditional-preprocessor
+documentation block); PREPROCESSOR →
+`Preprocessor` (`#ifdef`/`#ifndef`/
+`#endif`); NUMBER → `Number`;
+SINGLEQUOTE_STRING + DOUBLEQUOTE_STRING →
+`String`; CONSTANT + GLOBAL + LABEL + TYPE
++ FUNCTION + OBJECT + PROPERTY + METHOD →
+`Keyword2` (all named-value markers share
+the accent slot — literal constants,
+`$var`/`$$var` process/thread globals,
+column-0 labels, declaration-side types,
+library functions, Livelink singletons,
+bare-access property spans, and auto-styled
+method names); KEYWORD → `Keyword` (bold —
+the single visual anchor, matching MMIXAL
+OPCODE_VALID and CSound OPCODE precedents
+for single-class bold amongst
+multi-class-vocabulary lexers). OPERATOR →
+`Operator` (both symbolic and word forms).
+Two slots unmapped: DEFAULT (0) and
+IDENTIFIER (9) transient collect state —
+the wordlist-miss path relies on
+IDENTIFIER's unmapping to paint plainly.
+**PROPERTY (17) IS mapped** (accent) —
+bare `.identifier` NOT followed by `(`
+commits with state 17 via
+`LexOScript.cxx:255-266`'s
+`SetState(DEFAULT)` and would otherwise
+render at STYLE_DEFAULT, breaking the
+common `obj.propertyName := ...` idiom.
+
+**Two-phase context-sensitive classifier.**
+Unlike single-cascade lexers,
+`IdentifierClassifier` at `LexOScript.cxx:132-181`
+dispatches by syntactic context:
+- **Parenthesis path** (`sc.Match('(')`):
+  probes KEYWORD → OPERATOR → FUNCTION →
+  METHOD (default when identifier followed
+  by `(` misses all wordlist classes).
+- **Dot-suffix path** (`sc.Match('.') &&
+  objects.InList(s)`): probes OBJECT only.
+- **No-paren, no-dot path**: probes KEYWORD
+  → CONSTANT → OPERATOR → TYPE → FUNCTION
+  first-match-wins.
+
+**Case-INSENSITIVE.** OScript source may
+write reserved words in any case (`If`, `IF`,
+`if` all valid). The lexer lowercases before
+probing.
+
+**Auto-styled LABEL / PROPERTY / METHOD**
+without wordlist support: column-0
+`identifier:` becomes LABEL at `:241-243`;
+`.identifier` enters PROPERTY at `:345-355`
+and upgrades to METHOD at `:262-263` if
+followed by `(`.
+
+**GLOBAL** (`SCE_OSCRIPT_GLOBAL`): `$xxx` /
+`$$xxx` process / thread-global variables at
+`:336-339`.
+
+**Source:** SciTE's `oscript.properties`
+catalog, cross-referenced against Ferdinand
+Prantl's Notepad++ OScript UDL (same author
+as `LexOScript.cxx` per file header at
+`:1-9`).
+
+Structural test coverage: 22 invariants —
+deep-value identity pin, 17-mapping style
+count (19 defined slots minus 2 unmapped —
+DEFAULT + IDENTIFIER; PROPERTY IS mapped),
+six-class canonical descriptor order, all
+classes non-empty, all-lowercase
+alphanumeric+underscore alphabet enforcement
+across every class, **cross-class
+disjointness across classes 0-4** (the
+first-match-wins paren + no-paren cascade at
+`:139-176`; class 5 OBJECT is EXEMPT because
+it's probed only in the dot-suffix path at
+`:163` and legitimately overlaps class 3
+TYPES on `script`/`file`), style-routing
+pins for all 16 mapped SCE constants, 3
+unmapped slots confirmed absent
+(DEFAULT/IDENTIFIER/PROPERTY), italic set
+== 3 (all three comment sub-styles), bold
+set == 1 (KEYWORD only), cross-language
+non-reuse (Forth / Nim / MMIXAL / CSound),
+`L_OSCRIPT` `LangEntry`'s `lexer:
+Some("oscript")` + `osx` extension
+presence, 4 canonical keyword anchors (one
+per functional group), 5 canonical constant
+anchors, 7 canonical operator anchors
+covering logical + relational, 4 canonical
+type anchors (one per family), 4 canonical
+function anchors (one per family), 4
+canonical object anchors (one per family),
+**highest-defined `SCE_OSCRIPT_*` pin**
+(`SCE_OSCRIPT_METHOD` (18) as top slot),
+**affirmative absence pins** for tokens
+commonly assumed to be OScript keywords but
+aren't (`then`/`endif`/`wend` in KEYWORDS,
+`mod`/`div`/`in` in OPERATORS),
+no-duplicate defence-in-depth check, and
+**class-5 legitimate-overlap pin** (`script`
+and `file` MUST appear in both TYPES and
+OBJECTS — the paint-loop's context-scoped
+probe makes this legal; removing them from
+either would break OScript idioms).
 
 ## Notes
 

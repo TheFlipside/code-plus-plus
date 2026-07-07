@@ -123,16 +123,17 @@ use codepp_core::lang::{
     L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF,
     L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
     L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
-    L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
-    L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SQL,
-    L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
-    MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS,
+    L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
+    L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME,
+    L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS,
+    MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS,
     NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-    OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
-    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS,
-    RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+    OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS,
+    OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS,
+    PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
+    POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
+    PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+    RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
     SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
     TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
     VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
@@ -251,40 +252,44 @@ use codepp_scintilla_sys::{
     SCE_NSIS_MACRODEF, SCE_NSIS_NUMBER, SCE_NSIS_PAGEEX, SCE_NSIS_SECTIONDEF,
     SCE_NSIS_SECTIONGROUP, SCE_NSIS_STRINGDQ, SCE_NSIS_STRINGLQ, SCE_NSIS_STRINGRQ,
     SCE_NSIS_STRINGVAR, SCE_NSIS_SUBSECTIONDEF, SCE_NSIS_USERDEFINED, SCE_NSIS_VARIABLE,
-    SCE_PAS_ASM, SCE_PAS_CHARACTER, SCE_PAS_COMMENT, SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE,
-    SCE_PAS_HEXNUMBER, SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER, SCE_PAS_OPERATOR,
-    SCE_PAS_PREPROCESSOR, SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD, SCE_PL_ARRAY,
-    SCE_PL_BACKTICKS, SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE,
-    SCE_PL_DATASECTION, SCE_PL_FORMAT, SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM,
-    SCE_PL_HERE_Q, SCE_PL_HERE_QQ, SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR,
-    SCE_PL_NUMBER, SCE_PL_OPERATOR, SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR,
-    SCE_PL_REGSUBST, SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING, SCE_PL_STRING_Q,
-    SCE_PL_STRING_QQ, SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR, SCE_PL_STRING_QR_VAR,
-    SCE_PL_STRING_QW, SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR,
-    SCE_PL_SUB_PROTOTYPE, SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT, SCE_POWERSHELL_ALIAS,
-    SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT,
-    SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM, SCE_POWERSHELL_FUNCTION,
-    SCE_POWERSHELL_HERE_CHARACTER, SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_KEYWORD,
-    SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING, SCE_POWERSHELL_USER1,
-    SCE_POWERSHELL_VARIABLE, SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL,
-    SCE_PROPS_KEY, SCE_PROPS_SECTION, SCE_PS_BASE85STRING, SCE_PS_COMMENT, SCE_PS_DSC_COMMENT,
-    SCE_PS_DSC_VALUE, SCE_PS_HEXSTRING, SCE_PS_IMMEVAL, SCE_PS_KEYWORD, SCE_PS_LITERAL,
-    SCE_PS_NUMBER, SCE_PS_PAREN_ARRAY, SCE_PS_PAREN_DICT, SCE_PS_PAREN_PROC, SCE_PS_TEXT,
-    SCE_P_ATTRIBUTE, SCE_P_CHARACTER, SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE,
-    SCE_P_DECORATOR, SCE_P_DEFNAME, SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE,
-    SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER, SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE,
-    SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2, SCE_RB_BACKTICKS, SCE_RB_CHARACTER,
-    SCE_RB_CLASSNAME, SCE_RB_CLASS_VAR, SCE_RB_COMMENTLINE, SCE_RB_DATASECTION, SCE_RB_DEFNAME,
-    SCE_RB_GLOBAL, SCE_RB_HERE_DELIM, SCE_RB_HERE_Q, SCE_RB_HERE_QQ, SCE_RB_HERE_QX,
-    SCE_RB_INSTANCE_VAR, SCE_RB_MODULE_NAME, SCE_RB_NUMBER, SCE_RB_OPERATOR, SCE_RB_POD,
-    SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN, SCE_RB_STDOUT, SCE_RB_STRING, SCE_RB_STRING_I,
-    SCE_RB_STRING_Q, SCE_RB_STRING_QI, SCE_RB_STRING_QQ, SCE_RB_STRING_QR, SCE_RB_STRING_QS,
-    SCE_RB_STRING_QW, SCE_RB_STRING_QX, SCE_RB_STRING_W, SCE_RB_SYMBOL, SCE_RB_WORD,
-    SCE_RB_WORD_DEMOTED, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC,
-    SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO,
-    SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2,
-    SCE_R_BACKTICKS, SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_INFIX, SCE_R_INFIXEOL, SCE_R_KWORD,
-    SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD, SCE_R_RAWSTRING, SCE_R_RAWSTRING2,
+    SCE_OSCRIPT_BLOCK_COMMENT, SCE_OSCRIPT_CONSTANT, SCE_OSCRIPT_DOC_COMMENT,
+    SCE_OSCRIPT_DOUBLEQUOTE_STRING, SCE_OSCRIPT_FUNCTION, SCE_OSCRIPT_GLOBAL, SCE_OSCRIPT_KEYWORD,
+    SCE_OSCRIPT_LABEL, SCE_OSCRIPT_LINE_COMMENT, SCE_OSCRIPT_METHOD, SCE_OSCRIPT_NUMBER,
+    SCE_OSCRIPT_OBJECT, SCE_OSCRIPT_OPERATOR, SCE_OSCRIPT_PREPROCESSOR, SCE_OSCRIPT_PROPERTY,
+    SCE_OSCRIPT_SINGLEQUOTE_STRING, SCE_OSCRIPT_TYPE, SCE_PAS_ASM, SCE_PAS_CHARACTER,
+    SCE_PAS_COMMENT, SCE_PAS_COMMENT2, SCE_PAS_COMMENTLINE, SCE_PAS_HEXNUMBER,
+    SCE_PAS_MULTILINESTRING, SCE_PAS_NUMBER, SCE_PAS_OPERATOR, SCE_PAS_PREPROCESSOR,
+    SCE_PAS_PREPROCESSOR2, SCE_PAS_STRING, SCE_PAS_WORD, SCE_PL_ARRAY, SCE_PL_BACKTICKS,
+    SCE_PL_BACKTICKS_VAR, SCE_PL_CHARACTER, SCE_PL_COMMENTLINE, SCE_PL_DATASECTION, SCE_PL_FORMAT,
+    SCE_PL_FORMAT_IDENT, SCE_PL_HASH, SCE_PL_HERE_DELIM, SCE_PL_HERE_Q, SCE_PL_HERE_QQ,
+    SCE_PL_HERE_QQ_VAR, SCE_PL_HERE_QX, SCE_PL_HERE_QX_VAR, SCE_PL_NUMBER, SCE_PL_OPERATOR,
+    SCE_PL_POD, SCE_PL_POD_VERB, SCE_PL_REGEX, SCE_PL_REGEX_VAR, SCE_PL_REGSUBST,
+    SCE_PL_REGSUBST_VAR, SCE_PL_SCALAR, SCE_PL_STRING, SCE_PL_STRING_Q, SCE_PL_STRING_QQ,
+    SCE_PL_STRING_QQ_VAR, SCE_PL_STRING_QR, SCE_PL_STRING_QR_VAR, SCE_PL_STRING_QW,
+    SCE_PL_STRING_QX, SCE_PL_STRING_QX_VAR, SCE_PL_STRING_VAR, SCE_PL_SUB_PROTOTYPE,
+    SCE_PL_SYMBOLTABLE, SCE_PL_WORD, SCE_PL_XLAT, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER,
+    SCE_POWERSHELL_CMDLET, SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD,
+    SCE_POWERSHELL_COMMENTSTREAM, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
+    SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_KEYWORD, SCE_POWERSHELL_NUMBER,
+    SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING, SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE,
+    SCE_PROPS_ASSIGNMENT, SCE_PROPS_COMMENT, SCE_PROPS_DEFVAL, SCE_PROPS_KEY, SCE_PROPS_SECTION,
+    SCE_PS_BASE85STRING, SCE_PS_COMMENT, SCE_PS_DSC_COMMENT, SCE_PS_DSC_VALUE, SCE_PS_HEXSTRING,
+    SCE_PS_IMMEVAL, SCE_PS_KEYWORD, SCE_PS_LITERAL, SCE_PS_NUMBER, SCE_PS_PAREN_ARRAY,
+    SCE_PS_PAREN_DICT, SCE_PS_PAREN_PROC, SCE_PS_TEXT, SCE_P_ATTRIBUTE, SCE_P_CHARACTER,
+    SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE, SCE_P_DECORATOR, SCE_P_DEFNAME,
+    SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE, SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER,
+    SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE, SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2,
+    SCE_RB_BACKTICKS, SCE_RB_CHARACTER, SCE_RB_CLASSNAME, SCE_RB_CLASS_VAR, SCE_RB_COMMENTLINE,
+    SCE_RB_DATASECTION, SCE_RB_DEFNAME, SCE_RB_GLOBAL, SCE_RB_HERE_DELIM, SCE_RB_HERE_Q,
+    SCE_RB_HERE_QQ, SCE_RB_HERE_QX, SCE_RB_INSTANCE_VAR, SCE_RB_MODULE_NAME, SCE_RB_NUMBER,
+    SCE_RB_OPERATOR, SCE_RB_POD, SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN, SCE_RB_STDOUT,
+    SCE_RB_STRING, SCE_RB_STRING_I, SCE_RB_STRING_Q, SCE_RB_STRING_QI, SCE_RB_STRING_QQ,
+    SCE_RB_STRING_QR, SCE_RB_STRING_QS, SCE_RB_STRING_QW, SCE_RB_STRING_QX, SCE_RB_STRING_W,
+    SCE_RB_SYMBOL, SCE_RB_WORD, SCE_RB_WORD_DEMOTED, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK,
+    SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME,
+    SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD,
+    SCE_RUST_WORD2, SCE_R_BACKTICKS, SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_INFIX, SCE_R_INFIXEOL,
+    SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD, SCE_R_RAWSTRING, SCE_R_RAWSTRING2,
     SCE_R_STRING, SCE_R_STRING2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE,
     SCE_SH_HERE_DELIM, SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR,
     SCE_SH_STRING, SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC,
@@ -4527,6 +4532,181 @@ const NNCRONTAB_THEME: LangTheme = LangTheme {
     styles: NNCRONTAB_STYLES,
     italic: NNCRONTAB_ITALIC,
     bold: NNCRONTAB_BOLD,
+};
+
+// --- LexOScript ---
+// LexOScript serves OScript — the object-oriented programming
+// language for OpenText `Livelink` (now OpenText Content Server),
+// extension `.osx`. `L_OSCRIPT` (id 78) is the only language row
+// using this lexer. Dispatches SCLEX_OSCRIPT (= 106, per
+// `SciLexer.h:122`) via a **six-class wordlist** descriptor at
+// `LexOScript.cxx:539-547`. Tied with Forth and Erlang for the
+// widest wordlist descriptor of Phase 4.5.
+//
+// **17 style mappings** covering every SCE_OSCRIPT_* state the
+// paint loop emits as a semantically visible token. Two of
+// the 19 defined slots stay unmapped:
+//   - DEFAULT (0) — whitespace / unclassified.
+//   - IDENTIFIER (9) — transient bare-identifier collect state.
+//     Settles to a specific style at `:232-250` via the
+//     `IdentifierClassifier` at `:132-181`. Framework
+//     convention: leave unmapped so unmatched bare identifiers
+//     paint at STYLE_DEFAULT.
+//
+// **PROPERTY (17) IS a visible paint state**, not a transient
+// collect state. `LexOScript.cxx:255-266` exits PROPERTY via
+// `SetState(DEFAULT)` with only a conditional
+// `ChangeState(METHOD)` guarded by `sc.Match('(')` at `:262`.
+// When the identifier is NOT followed by `(` — the very common
+// `obj.propertyName := ...`, `dapi.rootNode.title`, `msg.body`
+// idiom — the range commits with state 17 (PROPERTY) and
+// paints as its mapped style. Both PROPERTY (bare access) and
+// METHOD (call site) get Keyword2 accent — otherwise `obj`
+// would style but `.prop` and `.method(...)` would fall to
+// STYLE_DEFAULT for the bare-access half.
+//
+// **Six-class descriptor** (tied with Forth 6 and Erlang 6 for
+// widest of Phase 4.5). LexOScript uses class-slot granularity
+// to categorize OScript's rich vocabulary: syntactic keywords,
+// value literals (TRUE/FALSE/undefined constants), word operators
+// (and/or/eq/ne), built-in types (Integer/String), library
+// functions (Echo/Length), and Livelink singletons (DAPI/WAPI).
+//
+// **Case-INSENSITIVE.** LexOScript calls `sc.GetCurrentLowered`
+// on both classification paths — the paren-path at `:141`
+// (inside `if (sc.Match('('))` at `:139-153`) and the no-paren
+// path at `:156` (inside the `else` at `:154-180`) — so
+// wordlist tokens must be lowercase. Same discipline as
+// PASCAL_KEYWORDS / ESCRIPT_KEYWORDS / FORTH_KEYWORD.
+//
+// **Two-phase classifier.** `IdentifierClassifier` at
+// `:132-181` dispatches by syntactic context:
+//   - **Parenthesis path** (`sc.Match('(')`): probes KEYWORD →
+//     OPERATOR → FUNCTION → METHOD (default). Any identifier
+//     followed by `(` is treated as a call site.
+//   - **Dot-suffix path** (`sc.Match('.') && objects.InList`):
+//     probes OBJECT only. If matched, the `.` becomes
+//     OPERATOR.
+//   - **No-paren, no-dot path**: probes KEYWORD → CONSTANT →
+//     OPERATOR → TYPE → FUNCTION in order via `sc.ChangeState`.
+//     If any probe hits, the identifier's state moves to the
+//     matched class; if ALL miss, the identifier span STAYS
+//     as `SCE_OSCRIPT_IDENTIFIER` (9) — the trailing
+//     `SetState(DEFAULT)` at `:178` sets the state that begins
+//     at the NEXT character, not this one. The wordlist-miss
+//     path only paints as STYLE_DEFAULT because
+//     `SCE_OSCRIPT_IDENTIFIER` is unmapped in `OSCRIPT_STYLES`
+//     (framework convention).
+//
+// **Slot rationale:**
+//   - LINE_COMMENT (1) + BLOCK_COMMENT (2) + DOC_COMMENT (3) →
+//     Comment (italic). All three comment sub-styles collapse
+//     to the italic slot. DOC_COMMENT covers the
+//     `#ifdef DOC ... #endif` conditional-preprocessor
+//     documentation block.
+//   - PREPROCESSOR (4) → Preprocessor. OScript's
+//     `#ifdef`/`#ifndef`/`#endif` directives.
+//   - NUMBER (5) → Number.
+//   - SINGLEQUOTE_STRING (6) + DOUBLEQUOTE_STRING (7) → String.
+//   - CONSTANT (8) → Keyword2 (accent). Literal-value
+//     constants (TRUE/FALSE/undefined) plus the *Type
+//     identifier constants used in reflection.
+//   - GLOBAL (10) → Keyword2 (accent). `$xxx` / `$$xxx`
+//     process/thread-global variables. Named-value marker,
+//     matches CONSTANT accent slot.
+//   - KEYWORD (11) → Keyword (bold). Reserved words and
+//     control-flow keywords — the visual anchor.
+//   - OPERATOR (12) → Operator. Symbolic operators plus word
+//     operators from wordlist class 2 (and/or/not/xor/eq/ne
+//     etc.).
+//   - LABEL (13) → Keyword2 (accent). Column-0
+//     `identifier:` label — auto-styled without wordlist
+//     lookup. Matches other label-like markers (MMIXAL LABEL,
+//     Nim FUNCNAME).
+//   - TYPE (14) → Keyword2 (accent). Built-in value and
+//     reference types.
+//   - FUNCTION (15) → Keyword2 (accent). Built-in global
+//     functions and unclassified call-site identifiers via
+//     the paren-path FUNCTION probe.
+//   - OBJECT (16) → Keyword2 (accent). Livelink singleton
+//     identifiers (DAPI/WAPI/etc.) when followed by `.`.
+//   - PROPERTY (17) → Keyword2 (accent). Bare property
+//     access `.identifier` NOT followed by `(` — settles from
+//     the PROPERTY collect state at `LexOScript.cxx:255-266`
+//     via `SetState(DEFAULT)`, committing the identifier span
+//     with state 17. Accent matches OBJECT / METHOD so the
+//     three components of an `obj.prop.method(...)` chain all
+//     get consistent styling.
+//   - METHOD (18) → Keyword2 (accent). Auto-styled method
+//     names — either the paren-path default at `:150-151`
+//     when the identifier is followed by `(` and misses all
+//     wordlists, or a PROPERTY upgraded to METHOD at
+//     `:262-263` when followed by `(`.
+const OSCRIPT_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_OSCRIPT_LINE_COMMENT, StyleSlot::Comment),
+    (SCE_OSCRIPT_BLOCK_COMMENT, StyleSlot::Comment),
+    (SCE_OSCRIPT_DOC_COMMENT, StyleSlot::Comment),
+    (SCE_OSCRIPT_PREPROCESSOR, StyleSlot::Preprocessor),
+    (SCE_OSCRIPT_NUMBER, StyleSlot::Number),
+    (SCE_OSCRIPT_SINGLEQUOTE_STRING, StyleSlot::String),
+    (SCE_OSCRIPT_DOUBLEQUOTE_STRING, StyleSlot::String),
+    (SCE_OSCRIPT_CONSTANT, StyleSlot::Keyword2),
+    (SCE_OSCRIPT_GLOBAL, StyleSlot::Keyword2),
+    (SCE_OSCRIPT_KEYWORD, StyleSlot::Keyword),
+    (SCE_OSCRIPT_OPERATOR, StyleSlot::Operator),
+    (SCE_OSCRIPT_LABEL, StyleSlot::Keyword2),
+    (SCE_OSCRIPT_TYPE, StyleSlot::Keyword2),
+    (SCE_OSCRIPT_FUNCTION, StyleSlot::Keyword2),
+    (SCE_OSCRIPT_OBJECT, StyleSlot::Keyword2),
+    (SCE_OSCRIPT_PROPERTY, StyleSlot::Keyword2),
+    (SCE_OSCRIPT_METHOD, StyleSlot::Keyword2),
+];
+
+// Italic on all three comment sub-styles — universal Code++
+// comment convention.
+const OSCRIPT_ITALIC: &[usize] = &[
+    SCE_OSCRIPT_LINE_COMMENT,
+    SCE_OSCRIPT_BLOCK_COMMENT,
+    SCE_OSCRIPT_DOC_COMMENT,
+];
+
+// Bold on KEYWORD only — reserved-word hits are the visual
+// anchor. Same single-class-bold discipline as MMIXAL
+// (OPCODE_VALID) and CSound (OPCODE) — both six-class
+// alternatives (Forth CONTROL+KEYWORD, Erlang KEYWORD+BIFS)
+// pair a second class in, but OScript's six-class split
+// distributes named-value markers across CONSTANT / TYPE /
+// FUNCTION / OBJECT / METHOD (all Keyword2 accent) leaving
+// KEYWORD as the natural single-class bold.
+const OSCRIPT_BOLD: &[usize] = &[SCE_OSCRIPT_KEYWORD];
+
+// Six-class install matches `oscriptWordListDesc[]` at
+// `LexOScript.cxx:539-547`. Order is load-bearing —
+// `SCI_SETKEYWORDS` respects wordlist-descriptor order and the
+// `IdentifierClassifier` cascade at `:132-181` probes:
+//   - Paren path: KEYWORD (0) → OPERATOR (2) → FUNCTION (4).
+//   - No-paren path: KEYWORD (0) → CONSTANT (1) → OPERATOR (2)
+//     → TYPE (3) → FUNCTION (4).
+//   - Dot-suffix path: OBJECT (5) only.
+// Classes 0-4 share the no-paren cascade first-match-wins, so
+// cross-class disjointness across those five classes is
+// strictly enforced. Class 5 (OBJECT) is disjoint from 0-4 at
+// the paint-loop level (dot-suffix vs no-dot syntactic
+// contexts), so `script` and `file` legitimately appear in
+// both TYPES (class 3) and OBJECTS (class 5) — the invariant
+// test relaxes cross-class disjointness for class-5 pairs.
+const OSCRIPT_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, OSCRIPT_KEYWORDS),
+        (1, OSCRIPT_CONSTANTS),
+        (2, OSCRIPT_OPERATORS),
+        (3, OSCRIPT_TYPES),
+        (4, OSCRIPT_FUNCTIONS),
+        (5, OSCRIPT_OBJECTS),
+    ],
+    styles: OSCRIPT_STYLES,
+    italic: OSCRIPT_ITALIC,
+    bold: OSCRIPT_BOLD,
 };
 
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
@@ -9273,6 +9453,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&NIM_THEME)
     } else if lang == L_NNCRONTAB {
         Some(&NNCRONTAB_THEME)
+    } else if lang == L_OSCRIPT {
+        Some(&OSCRIPT_THEME)
     } else {
         None
     }
@@ -24430,17 +24612,17 @@ mod lang_theme_tests {
         ASM_REG_KEYWORDS, ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC,
         ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES,
         MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC, NIM_STYLES,
-        NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, SCE_ADA_CHARACTER,
-        SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL,
-        SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD,
-        SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE,
-        SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND,
-        SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER, SCE_ASM_OPERATOR,
-        SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_AU3_COMMENT,
-        SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
-        SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT,
-        SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_CAML_CHAR,
-        SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
+        NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD, OSCRIPT_ITALIC,
+        OSCRIPT_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE,
+        SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING,
+        SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
+        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
+        SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
+        SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
+        SCE_AU3_KEYWORD, SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR,
+        SCE_AU3_SENT, SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE,
+        SCE_CAML_CHAR, SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
         SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER,
         SCE_CAML_OPERATOR, SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS,
         SCE_CMAKE_COMMENT, SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF,
@@ -24510,21 +24692,23 @@ mod lang_theme_tests {
         L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
         L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO,
         L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
-        L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_PASCAL, L_PERL, L_PHP,
+        L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP,
         L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
         L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS,
         MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS,
         NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS,
-        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, PASCAL_KEYWORDS, PERL_KEYWORDS,
-        PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
-        POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
-        PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
-        RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
-        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS,
-        SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS,
+        OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS,
+        PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS,
+        POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1,
+        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
+        R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+        SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+        VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+        XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -24573,7 +24757,12 @@ mod lang_theme_tests {
         SCE_NIM_TRIPLEDOUBLE, SCE_NIM_WORD, SCE_NNCRONTAB_ASTERISK, SCE_NNCRONTAB_COMMENT,
         SCE_NNCRONTAB_ENVIRONMENT, SCE_NNCRONTAB_IDENTIFIER, SCE_NNCRONTAB_KEYWORD,
         SCE_NNCRONTAB_MODIFIER, SCE_NNCRONTAB_NUMBER, SCE_NNCRONTAB_SECTION, SCE_NNCRONTAB_STRING,
-        SCE_NNCRONTAB_TASK, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET,
+        SCE_NNCRONTAB_TASK, SCE_OSCRIPT_BLOCK_COMMENT, SCE_OSCRIPT_CONSTANT,
+        SCE_OSCRIPT_DOC_COMMENT, SCE_OSCRIPT_DOUBLEQUOTE_STRING, SCE_OSCRIPT_FUNCTION,
+        SCE_OSCRIPT_GLOBAL, SCE_OSCRIPT_KEYWORD, SCE_OSCRIPT_LABEL, SCE_OSCRIPT_LINE_COMMENT,
+        SCE_OSCRIPT_METHOD, SCE_OSCRIPT_NUMBER, SCE_OSCRIPT_OBJECT, SCE_OSCRIPT_OPERATOR,
+        SCE_OSCRIPT_PREPROCESSOR, SCE_OSCRIPT_PROPERTY, SCE_OSCRIPT_SINGLEQUOTE_STRING,
+        SCE_OSCRIPT_TYPE, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET,
         SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM,
         SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
         SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER, SCE_POWERSHELL_KEYWORD,
@@ -24630,6 +24819,7 @@ mod lang_theme_tests {
             (L_MMIXAL, "MMIXAL"),
             (L_NIM, "Nim"),
             (L_NNCRONTAB, "NNCrontab"),
+            (L_OSCRIPT, "OScript"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -38253,6 +38443,551 @@ mod lang_theme_tests {
         }
     }
 
+    /// `OScript` uses Lexilla's `oscript` lexer
+    /// (`LexOScript.cxx`) — the object-oriented programming
+    /// language for `OpenText` Livelink / Content Server.
+    /// Distinctive features:
+    ///
+    /// - **Six-class descriptor** — tied with Forth 6 and
+    ///   Erlang 6 for the widest of Phase 4.5.
+    ///   `oscriptWordListDesc[]` at `LexOScript.cxx:539-547`
+    ///   defines classes: KEYWORD / CONSTANT / OPERATOR /
+    ///   TYPE / FUNCTION / OBJECT.
+    /// - **Case-INSENSITIVE** via `sc.GetCurrentLowered` at
+    ///   `:141` — all wordlist tokens must be lowercase.
+    /// - **Two-phase classifier** (`IdentifierClassifier` at
+    ///   `:132-181`): paren-suffix path probes KEYWORD →
+    ///   OPERATOR → FUNCTION → METHOD; dot-suffix path probes
+    ///   OBJECT only; otherwise KEYWORD → CONSTANT → OPERATOR
+    ///   → TYPE → FUNCTION → DEFAULT.
+    /// - **Auto-styled LABEL / PROPERTY / METHOD** without
+    ///   wordlist support: column-0 `identifier:` → LABEL;
+    ///   `.identifier(...)` upgrades PROPERTY to METHOD at
+    ///   `:262-263`.
+    /// - **`$xxx` / `$$xxx` GLOBAL** variables at `:336-339`.
+    /// - **`#ifdef DOC ... #endif` `DOC_COMMENT`** — a specific
+    ///   preprocessor pattern promoted to documentation
+    ///   comment styling at `:94-102, :303-305`.
+    /// - **Fold** at `:419-534` uses indentation levels and
+    ///   comment/preprocessor level markers.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. Deep-value identity pin — dispatcher-returned
+    ///      theme value-equals `OSCRIPT_STYLES` / `ITALIC` /
+    ///      `BOLD`.
+    ///   2. Style count == 17 (19 defined `SCE_OSCRIPT_*`
+    ///      slots minus 2 unmapped: `DEFAULT` (0) and
+    ///      `IDENTIFIER` (9)). `PROPERTY` (17) IS mapped —
+    ///      bare `.identifier` not followed by `(` commits
+    ///      with state 17 via `LexOScript.cxx:255-266`'s
+    ///      `SetState(DEFAULT)` and would otherwise render at
+    ///      `STYLE_DEFAULT`.
+    ///   3. Six wordlist classes in canonical descriptor
+    ///      order (0..=5).
+    ///   4. All six classes non-empty.
+    ///   5. All-lowercase ASCII alphabet enforcement across
+    ///      every class. `GetCurrentLowered` at `:141` means
+    ///      any uppercase entry would zero-match.
+    ///   6. **Cross-class disjointness ACROSS CLASSES 0-4**
+    ///      (the paren-path + no-paren-path shared cascade).
+    ///      LOAD-BEARING for the first-match-wins classifier
+    ///      at `:139-176`. **Class 5 (OBJECT) is exempted** —
+    ///      it's probed only in the dot-suffix path
+    ///      (`sc.Match('.') && objects.InList`) at `:163`
+    ///      which is disjoint from the no-dot cascade at the
+    ///      paint-loop level; so `script` and `file` legitimately
+    ///      appear in both TYPES (class 3) and OBJECTS (class
+    ///      5), styling as TYPE in `Script s = ...` and as
+    ///      OBJECT in `Script.Compile(...)`.
+    ///   7. Style-routing pins for all 17 mapped SCE
+    ///      constants.
+    ///   8. Two framework-unmapped slots confirmed absent:
+    ///      `DEFAULT` (0) and `IDENTIFIER` (9). `PROPERTY`
+    ///      (17) is deliberately excluded from the unmapped
+    ///      set — see Invariant 2's docstring.
+    ///   9. Italic set == 3 (all three comment sub-styles:
+    ///      `LINE_COMMENT` + `BLOCK_COMMENT` + `DOC_COMMENT`).
+    ///   10. Bold set == 1 (`KEYWORD` only — reserved words
+    ///       as visual anchor).
+    ///   11. Cross-language non-reuse — `OSCRIPT_STYLES` must
+    ///       not deep-equal a sampled set of four sibling
+    ///       themes (Forth / Nim / MMIXAL / `CSound`).
+    ///   12. `L_OSCRIPT` `LangEntry` has `lexer:
+    ///       Some("oscript")` and extensions contain `osx`.
+    ///   13. **Canonical keyword anchors** — one per
+    ///       functional group in `OSCRIPT_KEYWORDS`: `if`
+    ///       (control flow), `to` (loop range), `function`
+    ///       (declaration), `this` (modifier).
+    ///   14. **Canonical constant anchors** — Boolean literal
+    ///       + type-identifier constant: `true`, `false`,
+    ///         `undefined`, `integertype`, `stringtype`.
+    ///   15. **Canonical operator anchors** — logical +
+    ///       relational: `and`, `or`, `not`, `eq`, `ne`,
+    ///       `lt`, `ge`.
+    ///   16. **Canonical type anchors** — one per family:
+    ///       `integer` (primitive), `dapinode` (Livelink),
+    ///       `domelement` (DOM), `saxparser` (XML).
+    ///   17. **Canonical function anchors** — one per family:
+    ///       `echo` (debug output), `isdefined` (predicate),
+    ///       `length` (reflection), `pointh` (component accessor).
+    ///   18. **Canonical object anchors** — one per family:
+    ///       `dapi` (Livelink API), `str` (utility), `console`
+    ///       (logging), `kernel` (VM primitive).
+    ///   19. **Highest defined `SCE_OSCRIPT_*` pin.**
+    ///       `SCE_OSCRIPT_METHOD` (18) is asserted as the top
+    ///       slot; the styles table must not reference any
+    ///       index above it. Catches a future Lexilla
+    ///       submodule bump.
+    ///   20. **Affirmative absence pins** — tokens commonly
+    ///       assumed to be OSCRIPT keywords but aren't:
+    ///       `then` (`OScript` uses colon or block form),
+    ///       `endif` / `wend` (`OScript` uses universal `end`),
+    ///       `mod` / `div` (`OScript` uses symbolic `%`/`/`),
+    ///       `in` (a KEYWORD not OPERATOR — pinned absent
+    ///       from OPERATORS).
+    ///   21. No duplicate tokens within any single wordlist.
+    ///   22. **Class 5 legitimate overlap.** `script` and
+    ///       `file` are asserted present in both `TYPES` and
+    ///       `OBJECTS` — the paint-loop's context-scoped
+    ///       probe makes this legal (dot-suffix → OBJECT,
+    ///       no-dot → TYPE).
+    #[test]
+    fn oscript_uses_lexoscript_six_class_theme() {
+        let os = lang_theme(L_OSCRIPT).expect("OScript wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(os.styles, OSCRIPT_STYLES);
+        assert_eq!(os.italic, OSCRIPT_ITALIC);
+        assert_eq!(os.bold, OSCRIPT_BOLD);
+        assert_eq!(os.keywords.len(), 6);
+
+        // Invariant 2: 17 mappings (19 defined slots minus 2 unmapped).
+        assert_eq!(
+            os.styles.len(),
+            17,
+            "OSCRIPT_STYLES must map 17 indices (19 defined \
+             SCE_OSCRIPT_* slots minus 2 unmapped: DEFAULT (0) + \
+             IDENTIFIER (9) — per framework convention). PROPERTY \
+             (17) IS mapped — bare `.identifier` NOT followed by \
+             `(` commits with state 17 via LexOScript.cxx:255-266's \
+             SetState(DEFAULT), so leaving it unmapped would render \
+             every `obj.propertyName` (non-call dotted access) at \
+             STYLE_DEFAULT"
+        );
+
+        // Invariant 3: six classes in canonical descriptor order.
+        for (i, (expected_class, expected_list)) in [
+            (0u32, OSCRIPT_KEYWORDS),
+            (1u32, OSCRIPT_CONSTANTS),
+            (2u32, OSCRIPT_OPERATORS),
+            (3u32, OSCRIPT_TYPES),
+            (4u32, OSCRIPT_FUNCTIONS),
+            (5u32, OSCRIPT_OBJECTS),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                os.keywords[i].0, *expected_class,
+                "OSCRIPT_THEME.keywords[{i}].class must match descriptor order"
+            );
+            assert_eq!(
+                os.keywords[i].1, *expected_list,
+                "OSCRIPT_THEME.keywords[{i}].list must match canonical wordlist"
+            );
+        }
+
+        // Invariant 4: all six classes non-empty.
+        for (list, name) in [
+            (OSCRIPT_KEYWORDS, "KEYWORDS"),
+            (OSCRIPT_CONSTANTS, "CONSTANTS"),
+            (OSCRIPT_OPERATORS, "OPERATORS"),
+            (OSCRIPT_TYPES, "TYPES"),
+            (OSCRIPT_FUNCTIONS, "FUNCTIONS"),
+            (OSCRIPT_OBJECTS, "OBJECTS"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "OSCRIPT_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: two-alphabet check across every class.
+        // LexOScript has two identifier alphabets:
+        //   - IsIdentifierStart at `:49-53` = alpha + `_` (no digit)
+        //     — first byte constraint.
+        //   - IsIdentifierChar at `:43-47` = alnum + `_`
+        //     — continuation-byte constraint.
+        // Digit-leading tokens tokenize as NUMBER at `:340-344`
+        // BEFORE the IDENTIFIER-start check at `:356`, so a
+        // digit-first wordlist entry could never match.
+        // GetCurrentLowered on both paths (`:141` paren, `:156`
+        // no-paren) means every byte must additionally be
+        // lowercase.
+        let is_oscript_ident_start = |b: u8| b.is_ascii_lowercase() || b == b'_';
+        let is_oscript_ident_cont =
+            |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_';
+        for (list, name) in [
+            (OSCRIPT_KEYWORDS, "KEYWORDS"),
+            (OSCRIPT_CONSTANTS, "CONSTANTS"),
+            (OSCRIPT_OPERATORS, "OPERATORS"),
+            (OSCRIPT_TYPES, "TYPES"),
+            (OSCRIPT_FUNCTIONS, "FUNCTIONS"),
+            (OSCRIPT_OBJECTS, "OBJECTS"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(!tok.is_empty(), "OSCRIPT_{name} has empty token");
+                let bytes = tok.as_bytes();
+                assert!(
+                    is_oscript_ident_start(bytes[0]),
+                    "OSCRIPT_{name} token `{tok}` violates \
+                     IsIdentifierStart at LexOScript.cxx:49-53 \
+                     (lowercase alpha + `_`) — a digit-leading \
+                     wordlist entry can never match, the paint \
+                     loop tokenizes digit-first as NUMBER at \
+                     :340-344 before the IDENTIFIER-start check \
+                     at :356"
+                );
+                assert!(
+                    bytes.iter().all(|&b| is_oscript_ident_cont(b)),
+                    "OSCRIPT_{name} token `{tok}` violates \
+                     IsIdentifierChar at LexOScript.cxx:43-47 \
+                     (lowercase alnum + `_`) — GetCurrentLowered \
+                     at :141/:156 requires every byte to be \
+                     lowercase, so any uppercase/non-alnum entry \
+                     cannot match"
+                );
+            }
+        }
+
+        // Invariant 6: cross-class disjointness across CLASSES 0-4
+        // (the paren-path + no-paren-path shared cascade at
+        // LexOScript.cxx:139-176). LOAD-BEARING —
+        // first-match-wins masks later classes. Class 5 (OBJECT)
+        // is intentionally EXEMPT because it's probed only in the
+        // dot-suffix path at :163 which is paint-loop-disjoint
+        // from the no-dot cascade.
+        use std::collections::HashSet;
+        let sets_0_to_4 = [
+            (
+                "KEYWORDS",
+                OSCRIPT_KEYWORDS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "CONSTANTS",
+                OSCRIPT_CONSTANTS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "OPERATORS",
+                OSCRIPT_OPERATORS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "TYPES",
+                OSCRIPT_TYPES.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "FUNCTIONS",
+                OSCRIPT_FUNCTIONS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+        ];
+        for i in 0..sets_0_to_4.len() {
+            for j in (i + 1)..sets_0_to_4.len() {
+                if let Some(shared) = sets_0_to_4[i].1.intersection(&sets_0_to_4[j].1).next() {
+                    panic!(
+                        "OSCRIPT_{} and OSCRIPT_{} both contain \
+                         `{shared}` — LexOScript.cxx:139-176 probes \
+                         classes 0-4 first-match-wins across both the \
+                         paren and no-paren paths. Cross-class \
+                         duplicate leaves the later entry dead code.",
+                        sets_0_to_4[i].0, sets_0_to_4[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 7: style-routing pins for all 16 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_OSCRIPT_LINE_COMMENT, StyleSlot::Comment, "LINE_COMMENT"),
+            (
+                SCE_OSCRIPT_BLOCK_COMMENT,
+                StyleSlot::Comment,
+                "BLOCK_COMMENT",
+            ),
+            (SCE_OSCRIPT_DOC_COMMENT, StyleSlot::Comment, "DOC_COMMENT"),
+            (
+                SCE_OSCRIPT_PREPROCESSOR,
+                StyleSlot::Preprocessor,
+                "PREPROCESSOR",
+            ),
+            (SCE_OSCRIPT_NUMBER, StyleSlot::Number, "NUMBER"),
+            (
+                SCE_OSCRIPT_SINGLEQUOTE_STRING,
+                StyleSlot::String,
+                "SINGLEQUOTE_STRING",
+            ),
+            (
+                SCE_OSCRIPT_DOUBLEQUOTE_STRING,
+                StyleSlot::String,
+                "DOUBLEQUOTE_STRING",
+            ),
+            (SCE_OSCRIPT_CONSTANT, StyleSlot::Keyword2, "CONSTANT"),
+            (SCE_OSCRIPT_GLOBAL, StyleSlot::Keyword2, "GLOBAL"),
+            (SCE_OSCRIPT_KEYWORD, StyleSlot::Keyword, "KEYWORD"),
+            (SCE_OSCRIPT_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+            (SCE_OSCRIPT_LABEL, StyleSlot::Keyword2, "LABEL"),
+            (SCE_OSCRIPT_TYPE, StyleSlot::Keyword2, "TYPE"),
+            (SCE_OSCRIPT_FUNCTION, StyleSlot::Keyword2, "FUNCTION"),
+            (SCE_OSCRIPT_OBJECT, StyleSlot::Keyword2, "OBJECT"),
+            (SCE_OSCRIPT_PROPERTY, StyleSlot::Keyword2, "PROPERTY"),
+            (SCE_OSCRIPT_METHOD, StyleSlot::Keyword2, "METHOD"),
+        ] {
+            assert!(
+                os.styles.contains(&(idx, slot)),
+                "SCE_OSCRIPT_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: two framework-unmapped slots confirmed absent.
+        // PROPERTY (17) is intentionally mapped — see Invariant 2's
+        // docstring for the paint-loop rationale.
+        for (idx, name) in [(0_usize, "DEFAULT"), (9, "IDENTIFIER")] {
+            assert!(
+                !os.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_OSCRIPT_{name} ({idx}) must remain unmapped — \
+                 framework convention (transient collect state or \
+                 STYLE_DEFAULT fallback)"
+            );
+        }
+
+        // Invariant 9: italic == 3 (all three comment sub-styles).
+        assert_eq!(os.italic.len(), 3);
+        for idx in [
+            SCE_OSCRIPT_LINE_COMMENT,
+            SCE_OSCRIPT_BLOCK_COMMENT,
+            SCE_OSCRIPT_DOC_COMMENT,
+        ] {
+            assert!(
+                os.italic.contains(&idx),
+                "OSCRIPT_ITALIC must contain SCE_OSCRIPT_ idx {idx}"
+            );
+        }
+
+        // Invariant 10: bold == 1 (KEYWORD only).
+        assert_eq!(os.bold.len(), 1);
+        assert!(os.bold.contains(&SCE_OSCRIPT_KEYWORD));
+
+        // Invariant 11: cross-language non-reuse (sampled).
+        let fo = lang_theme(L_FORTH).expect("Forth wired");
+        let ni = lang_theme(L_NIM).expect("Nim wired");
+        let mm = lang_theme(L_MMIXAL).expect("MMIXAL wired");
+        let cs = lang_theme(L_CSOUND).expect("CSound wired");
+        for (other, name) in [(fo, "Forth"), (ni, "Nim"), (mm, "MMIXAL"), (cs, "CSound")] {
+            assert_ne!(
+                os.styles, other.styles,
+                "OScript must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 12: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let os_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_OSCRIPT)
+            .expect("L_OSCRIPT LangEntry present in LANG_TABLE");
+        assert_eq!(
+            os_entry.lexer,
+            Some("oscript"),
+            "L_OSCRIPT LangEntry.lexer must be Some(\"oscript\") — \
+             wiring assumes the LexOScript module dispatched via \
+             SCLEX_OSCRIPT (= 106)"
+        );
+        assert!(
+            os_entry.extensions.contains(&"osx"),
+            "L_OSCRIPT extensions must contain `osx`"
+        );
+
+        // Invariant 13: canonical keyword anchors — one per
+        // functional group, PLUS every fold-load-bearing token.
+        // LexOScript.cxx's `UpdateKeywordFoldLevel` at :435-450
+        // recognizes exactly 6 fold openers (`if`/`for`/`switch`/
+        // `function`/`while`/`repeat`) and 2 fold closers (`end`/
+        // `until`). A silent deletion from the wordlist would
+        // break the paint-loop's KEYWORD state at :167-168, which
+        // in turn gates the fold classifier at :501-508 (fires
+        // only when style == SCE_OSCRIPT_KEYWORD). So each of the
+        // 8 fold tokens is pinned individually.
+        for tok in [
+            "if",       // control flow + fold opener (:441)
+            "for",      // control flow + fold opener (:442)
+            "switch",   // control flow + fold opener (:443)
+            "while",    // control flow + fold opener (:445)
+            "repeat",   // control flow + fold opener (:446)
+            "end",      // universal block terminator + fold closer (:448)
+            "until",    // repeat-until terminator + fold closer (:449)
+            "to",       // loop range qualifier
+            "function", // declaration + fold opener (:444)
+            "this",     // modifier
+        ] {
+            assert!(
+                OSCRIPT_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "OSCRIPT_KEYWORDS must include canonical keyword `{tok}`"
+            );
+        }
+
+        // Invariant 14: canonical constant anchors.
+        for tok in ["true", "false", "undefined", "integertype", "stringtype"] {
+            assert!(
+                OSCRIPT_CONSTANTS.split_whitespace().any(|t| t == tok),
+                "OSCRIPT_CONSTANTS must include canonical constant `{tok}`"
+            );
+        }
+
+        // Invariant 15: canonical operator anchors.
+        for tok in [
+            "and", "or", "not", "xor", // all 4 logical
+            "eq", "ne", "lt", "le", "gt", "ge", // all 6 relational
+        ] {
+            assert!(
+                OSCRIPT_OPERATORS.split_whitespace().any(|t| t == tok),
+                "OSCRIPT_OPERATORS must include canonical operator `{tok}`"
+            );
+        }
+
+        // Invariant 16: canonical type anchors — one per family.
+        for tok in [
+            "integer",    // primitive
+            "dapinode",   // Livelink CAPI/DAPI/UAPI/WAPI
+            "domelement", // DOM
+            "saxparser",  // XML parser
+        ] {
+            assert!(
+                OSCRIPT_TYPES.split_whitespace().any(|t| t == tok),
+                "OSCRIPT_TYPES must include canonical type `{tok}`"
+            );
+        }
+
+        // Invariant 17: canonical function anchors — one per family.
+        for tok in [
+            "echo",      // debug output
+            "isdefined", // predicate
+            "length",    // reflection
+            "pointh",    // component accessor
+        ] {
+            assert!(
+                OSCRIPT_FUNCTIONS.split_whitespace().any(|t| t == tok),
+                "OSCRIPT_FUNCTIONS must include canonical function `{tok}`"
+            );
+        }
+
+        // Invariant 18: canonical object anchors — one per family.
+        for tok in [
+            "dapi",    // Livelink API
+            "str",     // utility namespace
+            "console", // logging
+            "kernel",  // VM primitive
+        ] {
+            assert!(
+                OSCRIPT_OBJECTS.split_whitespace().any(|t| t == tok),
+                "OSCRIPT_OBJECTS must include canonical object `{tok}`"
+            );
+        }
+
+        // Invariant 19: highest defined SCE_OSCRIPT_* pin.
+        assert_eq!(
+            SCE_OSCRIPT_METHOD, 18,
+            "SCE_OSCRIPT_METHOD has drifted from 18 — Lexilla may \
+             have renumbered slots. Verify against SciLexer.h:1738 \
+             and, if intentional, update this assertion together \
+             with the three-unmapped set (Invariant 8) and the \
+             style count (Invariant 2)"
+        );
+        for (idx, _) in os.styles {
+            assert!(
+                *idx <= SCE_OSCRIPT_METHOD,
+                "OSCRIPT_STYLES references slot {idx}, which is \
+                 higher than SCE_OSCRIPT_METHOD ({SCE_OSCRIPT_METHOD}) \
+                 — either a typo or an out-of-band Lexilla addition"
+            );
+        }
+
+        // Invariant 20: affirmative absence pins.
+        for (list, listname, tok) in [
+            // OScript uses `end` as universal block terminator — no
+            // `then`/`endif`/`wend`.
+            (OSCRIPT_KEYWORDS, "KEYWORDS", "then"),
+            (OSCRIPT_KEYWORDS, "KEYWORDS", "endif"),
+            (OSCRIPT_KEYWORDS, "KEYWORDS", "wend"),
+            // OScript's modulo/integer-division are symbolic `%`/`/`.
+            (OSCRIPT_OPERATORS, "OPERATORS", "mod"),
+            (OSCRIPT_OPERATORS, "OPERATORS", "div"),
+            // `in` is a for-loop KEYWORD (class 0), NOT an operator.
+            (OSCRIPT_OPERATORS, "OPERATORS", "in"),
+        ] {
+            assert!(
+                !list.split_whitespace().any(|t| t == tok),
+                "OSCRIPT_{listname} must NOT include `{tok}` — not \
+                 a canonical OScript token for this class"
+            );
+        }
+
+        // Invariant 21: no duplicate tokens.
+        for (list, name) in [
+            (OSCRIPT_KEYWORDS, "KEYWORDS"),
+            (OSCRIPT_CONSTANTS, "CONSTANTS"),
+            (OSCRIPT_OPERATORS, "OPERATORS"),
+            (OSCRIPT_TYPES, "TYPES"),
+            (OSCRIPT_FUNCTIONS, "FUNCTIONS"),
+            (OSCRIPT_OBJECTS, "OBJECTS"),
+        ] {
+            let total = list.split_whitespace().count();
+            let unique = list.split_whitespace().collect::<HashSet<_>>().len();
+            assert_eq!(
+                total,
+                unique,
+                "OSCRIPT_{name} contains {} duplicate token(s)",
+                total - unique
+            );
+        }
+
+        // Invariant 22: class-5 legitimate overlap with class 3.
+        // `script` and `file` appear in BOTH TYPES and OBJECTS —
+        // load-bearing per the paint-loop's context-scoped probe.
+        // Removing them from either list would break OScript
+        // idioms (`Script.Compile(...)` vs `Script s = ...`).
+        let types: HashSet<&str> = OSCRIPT_TYPES.split_whitespace().collect();
+        let objects: HashSet<&str> = OSCRIPT_OBJECTS.split_whitespace().collect();
+        for tok in ["script", "file"] {
+            assert!(
+                types.contains(tok),
+                "OSCRIPT_TYPES must include `{tok}` — legitimately \
+                 both a TYPE (`{tok} x`) and an OBJECT namespace \
+                 (`{tok}.foo(...)`). Paint loop resolves by dot-suffix \
+                 context."
+            );
+            assert!(
+                objects.contains(tok),
+                "OSCRIPT_OBJECTS must include `{tok}` — legitimately \
+                 both a TYPE (`{tok} x`) and an OBJECT namespace \
+                 (`{tok}.foo(...)`). Paint loop resolves by dot-suffix \
+                 context."
+            );
+        }
+        // Cardinality pin: the class-3 vs class-5 intersection
+        // MUST be EXACTLY {script, file} — any third overlap is
+        // a regression Invariant 6's disjointness-sweep can't
+        // catch (Invariant 6 excludes class 5 by design).
+        let overlap: HashSet<&str> = types.intersection(&objects).copied().collect();
+        let expected: HashSet<&str> = ["script", "file"].into_iter().collect();
+        assert_eq!(
+            overlap, expected,
+            "TYPES ∩ OBJECTS must be exactly {{`script`, `file`}} — \
+             any additional overlap is a load-bearing regression \
+             (Invariant 6's disjointness sweep excludes class 5 by \
+             design, so this is the only guard against class-3-vs-5 \
+             cross-contamination)"
+        );
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -38269,7 +39004,8 @@ mod lang_theme_tests {
     /// `L_FORTH` was removed when the Forth row landed. `L_MMIXAL`
     /// was removed when the MMIXAL row landed. `L_NIM` was removed
     /// when the Nim row landed. `L_NNCRONTAB` was removed when the
-    /// `NNCrontab` row landed in this commit.
+    /// `NNCrontab` row landed. `L_OSCRIPT` was removed when the
+    /// `OScript` row landed in this commit.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");

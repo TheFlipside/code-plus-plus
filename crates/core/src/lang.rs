@@ -11523,6 +11523,293 @@ pub const NNCRONTAB_MODIFIERS: &str = concat!(
     "WatchSubtree ",
 );
 
+/// `OScript` reserved words and control-flow keywords — class 0 of
+/// `LexOScript`'s six-class descriptor (`oscriptWordListDesc[]`
+/// at `LexOScript.cxx:539-547`). Matched at both `LexOScript.cxx:144-145`
+/// (parenthesis-suffix path) and `:167-168` (no-parenthesis path);
+/// hits change state to
+/// [`SCE_OSCRIPT_KEYWORD`](../scintilla_sys/constant.SCE_OSCRIPT_KEYWORD.html).
+///
+/// **All-lowercase, case-INSENSITIVE lexer.** `LexOScript.cxx:141`
+/// calls `sc.GetCurrentLowered(s, sizeof(s))` before every wordlist
+/// probe. `OScript` source may write reserved words in any case (`If`,
+/// `IF`, `if` all valid); the lexer lowercases before probing, so
+/// wordlist tokens must be lowercase.
+///
+/// **Source:** Ferdinand Prantl's `oscript.properties` in `SciTE`'s
+/// language-config catalog. Same author wrote `LexOScript.cxx` per
+/// its file header at `LexOScript.cxx:1-9`.
+///
+/// **32 tokens** organised by functional group:
+///   - **Control flow** (17): `break`, `breakif`, `case`,
+///     `continue`, `continueif`, `default`, `else`, `elseif`,
+///     `end`, `for`, `goto`, `if`, `repeat`, `return`,
+///     `switch`, `until`, `while`. `end` is `OScript`'s
+///     universal block terminator (no `then`/`endif`/`wend` in
+///     the grammar).
+///   - **Loop range qualifiers** (4): `by`, `downto`, `in`,
+///     `to`. Used in `for i = 1 to 10 by 2` / `for i = 10 downto
+///     1` / `for x in list` iteration forms.
+///   - **Function / declaration** (5): `function`, `void`,
+///     `dll`, `xcmd`, `xfcn`. `dll` marks external DLL binding;
+///     `xcmd` / `xfcn` are HyperCard-legacy external-command
+///     and external-function markers.
+///   - **Modifiers** (6): `inbyref`, `inout`, `linked`,
+///     `nodebug`, `super`, `this`. Parameter-passing and
+///     scope-marker keywords.
+pub const OSCRIPT_KEYWORDS: &str = concat!(
+    // Control flow.
+    "break breakif case continue continueif default else elseif ",
+    "end for goto if repeat return switch until while ",
+    // Loop range qualifiers.
+    "by downto in to ",
+    // Function / declaration.
+    "dll function void xcmd xfcn ",
+    // Modifiers.
+    "inbyref inout linked nodebug super this ",
+);
+
+/// `OScript` literal constants — class 1 of `LexOScript`'s six-class
+/// descriptor. Matched at `LexOScript.cxx:169-170` in the no-paren
+/// path; hits change state to
+/// [`SCE_OSCRIPT_CONSTANT`](../scintilla_sys/constant.SCE_OSCRIPT_CONSTANT.html).
+///
+/// **Not probed on the parenthesis path.** `LexOScript.cxx:139-153`
+/// only checks keywords / operators / functions before defaulting
+/// to METHOD, so a constant identifier followed by `(` would not
+/// match here — that's fine because `OScript` constants like
+/// `TRUE`/`FALSE`/`undefined` are never function-called.
+///
+/// **All-lowercase** per `GetCurrentLowered` at `:156`
+/// (no-paren-path buffer; the paren-path buffer at `:141` is
+/// a separate scope and does not probe class 1).
+///
+/// **22 tokens**:
+///   - **Boolean / value literals** (3): `false`, `true`,
+///     `undefined`. The runtime-reflection literal values —
+///     `undefined` returns from unbound identifier lookups.
+///   - **Type-identifier constants** (19): `assoctype`,
+///     `booleantype`, `bytestype`, `datetype`, `dynamictype`,
+///     `errortype`, `externtype`, `integertype`, `listtype`,
+///     `longtype`, `objecttype`, `objreftype`, `pointtype`,
+///     `realtype`, `recarraytype`, `scripttype`, `stringtype`,
+///     `undefinedtype`, `voidtype`. These are the values
+///     returned by `DataTypeName()` and used in reflection
+///     comparisons like `x.DataType == IntegerType`. NOT
+///     type-declaration keywords (those live in `OSCRIPT_TYPES`
+///     class 3).
+pub const OSCRIPT_CONSTANTS: &str = concat!(
+    // Boolean / value literals.
+    "false true undefined ",
+    // Type-identifier constants (used in reflection).
+    "assoctype booleantype bytestype datetype dynamictype ",
+    "errortype externtype integertype listtype longtype ",
+    "objecttype objreftype pointtype realtype recarraytype ",
+    "scripttype stringtype undefinedtype voidtype ",
+);
+
+/// `OScript` word operators — class 2 of `LexOScript`'s six-class
+/// descriptor. Matched at both `LexOScript.cxx:146-147`
+/// (parenthesis path) and `:171-172` (no-paren path); hits change
+/// state to
+/// [`SCE_OSCRIPT_OPERATOR`](../scintilla_sys/constant.SCE_OSCRIPT_OPERATOR.html).
+///
+/// **All-lowercase** per `GetCurrentLowered` at `:141`.
+///
+/// **10 tokens**: word-form logical and relational operators.
+/// `OScript` accepts both symbolic (`==`, `<`, `>`, `!=`, `<=`,
+/// `>=`, `&&`, `||`, `!`) and word forms for readability.
+///   - **Logical** (4): `and`, `or`, `not`, `xor`.
+///   - **Relational** (6): `eq` (==), `ne` (!=), `lt` (<),
+///     `le` (<=), `gt` (>), `ge` (>=).
+///
+/// **Deliberately excluded:**
+///   - `in` — `OScript` uses `in` as a `for-in` loop keyword,
+///     NOT as an operator. It's in [`OSCRIPT_KEYWORDS`] class 0.
+///   - `mod`, `div` — `OScript`'s modulo/integer-division use
+///     the symbolic `%` and `/` (with integer types).
+///   - `andalso`, `orelse` — Erlang-style short-circuit
+///     operators; `OScript`'s `and`/`or` are already
+///     short-circuit.
+pub const OSCRIPT_OPERATORS: &str = concat!(
+    // Logical.
+    "and or not xor ",
+    // Relational.
+    "eq ne lt le gt ge ",
+);
+
+/// `OScript` built-in value and reference types — class 3 of
+/// `LexOScript`'s six-class descriptor. Matched at
+/// `LexOScript.cxx:173-174` in the no-paren path; hits change
+/// state to
+/// [`SCE_OSCRIPT_TYPE`](../scintilla_sys/constant.SCE_OSCRIPT_TYPE.html).
+///
+/// **Not probed on the parenthesis path.** Types followed by `(`
+/// look like function calls to `LexOScript` and route through the
+/// paren-path chain → METHOD default.
+///
+/// **All-lowercase** per `GetCurrentLowered` at `:156`
+/// (no-paren-path buffer; the paren-path buffer at `:141` is
+/// a separate scope and does not probe class 3).
+///
+/// **Source:** `SciTE`'s `oscript.properties` `keywords4` slot
+/// verbatim.
+///
+/// **69 tokens** across four families:
+///   - **Primitive value types (18)**: `assoc`, `boolean`,
+///     `bytes`, `date`, `dynamic`, `error`, `extern`, `file`,
+///     `integer`, `list`, `long`, `object`, `point`, `real`,
+///     `recarray`, `record`, `script`, `string`. The `extern`
+///     modifier upstream places in this slot too — `OScript`'s
+///     declared external types.
+///   - **Livelink CAPI / DAPI / UAPI / WAPI object types
+///     (31)**: `cachetree`, `capiconnect`, `capierr`,
+///     `capilog`, `capilogin`, `compiler`, `dapinode`,
+///     `dapisession`, `dapistream`, `dapiversion`,
+///     `filecopy`, `fileprefs`, `frame`, `javaobject`,
+///     `mailmessage`, `patchange`, `patfind`, `pop3session`,
+///     `regex`, `smtpsession`, `socket`, `sqlconnection`,
+///     `sqlcursor`, `ssloptions`, `uapisession`, `uapiuser`,
+///     `wapimap`, `wapimaptask`, `wapisession`, `wapisubwork`,
+///     `wapiwork`. Livelink's document-management, workflow,
+///     database, and networking API type surfaces. (`extern`
+///     is a modifier in the primitive-value-types bullet
+///     above — listed once in the wordlist.)
+///   - **DOM Level 1/2 interface set (18)**: `domattr`,
+///     `domcdatasection`, `domcharacterdata`, `domcomment`,
+///     `domdocument`, `domdocumentfragment`, `domdocumenttype`,
+///     `domelement`, `domentity`, `domentityreference`,
+///     `domimplementation`, `domnamednodemap`, `domnode`,
+///     `domnodelist`, `domnotation`, `domparser`,
+///     `domprocessinginstruction`, `domtext`. Standard W3C DOM
+///     interfaces exposed to `OScript` for XML manipulation.
+///   - **XML parser types (2)**: `saxparser`, `xslprocessor`.
+pub const OSCRIPT_TYPES: &str = concat!(
+    // Primitive value types.
+    "assoc boolean bytes date dynamic error extern file ",
+    "integer list long object point real recarray record ",
+    "script string ",
+    // Livelink CAPI / DAPI / UAPI / WAPI object types.
+    "cachetree capiconnect capierr capilog capilogin compiler ",
+    "dapinode dapisession dapistream dapiversion ",
+    "filecopy fileprefs frame javaobject mailmessage ",
+    "patchange patfind pop3session regex smtpsession socket ",
+    "sqlconnection sqlcursor ssloptions ",
+    "uapisession uapiuser ",
+    "wapimap wapimaptask wapisession wapisubwork wapiwork ",
+    // DOM Level 1/2 interfaces.
+    "domattr domcdatasection domcharacterdata domcomment ",
+    "domdocument domdocumentfragment domdocumenttype ",
+    "domelement domentity domentityreference domimplementation ",
+    "domnamednodemap domnode domnodelist domnotation ",
+    "domparser domprocessinginstruction domtext ",
+    // XML parser types.
+    "saxparser xslprocessor ",
+);
+
+/// `OScript` built-in global functions — class 4 of `LexOScript`'s
+/// six-class descriptor. Matched at both `LexOScript.cxx:148-149`
+/// (parenthesis path — most common site) and `:175-176` (no-paren
+/// path); hits change state to
+/// [`SCE_OSCRIPT_FUNCTION`](../scintilla_sys/constant.SCE_OSCRIPT_FUNCTION.html).
+///
+/// **All-lowercase** per `GetCurrentLowered` at `:141`.
+///
+/// **23 tokens** across four families:
+///   - **Debug / echo output (6)**: `echo`, `echodebug`,
+///     `echoerror`, `echoinfo`, `echostamp`, `echowarn`.
+///     Livelink-standard structured logging entry points; the
+///     stamped form prepends timestamp + severity.
+///   - **`is*` type / state predicates (9)**: `isdefined`,
+///     `iserror`, `isfeature`, `isinvokable`, `isnoterror`,
+///     `isnotset`, `isobject`, `isset`, `isundefined`. Boolean
+///     tests used in flow control (e.g. `if isdefined(x)`).
+///   - **Reflection / type helpers (6)**: `datatypename`,
+///     `getfeatures`, `length`, `nparameters`, `parameters`,
+///     `type`. `type` returns a value's data-type constant
+///     (compare against `IntegerType`/`StringType`/etc. from
+///     [`OSCRIPT_CONSTANTS`]).
+///   - **Point component accessors (2)**: `pointh`, `pointv`.
+///     Component readers for `OScript`'s `Point` value type
+///     (extract horizontal / vertical components — NOT
+///     constructors; the `point` type in `OSCRIPT_TYPES` is
+///     the constructor-side vocabulary).
+pub const OSCRIPT_FUNCTIONS: &str = concat!(
+    // Debug / echo output.
+    "echo echodebug echoerror echoinfo echostamp echowarn ",
+    // `is*` type / state predicates.
+    "isdefined iserror isfeature isinvokable isnoterror ",
+    "isnotset isobject isset isundefined ",
+    // Reflection / type helpers.
+    "datatypename getfeatures length nparameters parameters type ",
+    // Point component accessors.
+    "pointh pointv ",
+);
+
+/// `OScript` built-in static objects — class 5 of `LexOScript`'s
+/// six-class descriptor. Matched at `LexOScript.cxx:163-164` in
+/// the **dot-suffix path only** — probed when the collected
+/// identifier is immediately followed by `.` (object member
+/// access). Hits change state to
+/// [`SCE_OSCRIPT_OBJECT`](../scintilla_sys/constant.SCE_OSCRIPT_OBJECT.html),
+/// then the `.` enters `SCE_OSCRIPT_OPERATOR` at `:165`.
+///
+/// **All-lowercase** per `GetCurrentLowered` at `:156`
+/// (no-paren-path buffer — the dot-suffix probe runs on the
+/// same buffer). The paren-path buffer at `:141` does not
+/// probe class 5.
+///
+/// **Source:** extends `SciTE`'s `oscript.properties`
+/// `keywords6` slot with additional Livelink singletons
+/// (`console`, `debug`, `err`, `file`, `kernel`, `parser`,
+/// `patch`, `prgctx`, `script`) attested in Notepad++'s
+/// langs.model.xml baseline for `OScript`. The upstream
+/// Prantl-authored `oscript.properties` `keywords6` slot is
+/// a narrower set (~8 tokens); the extended set here is
+/// deliberate coverage-widening for common Content Server
+/// idioms.
+///
+/// **Context-scoped disjointness with class 3.** `OScript`'s
+/// `script` and `file` identifiers legitimately serve **both**
+/// as declaration-side types (`Script s = ...`, `File f = ...`)
+/// AND as static-object namespaces (`Script.Compile(...)`,
+/// `File.Open(...)`). The paint loop's dot-suffix probe at
+/// `:163` fires ONLY when a `.` follows — so `Script.foo`
+/// styles as OBJECT while `Script s` styles as TYPE. The
+/// class-3-vs-class-5 collision on `script` and `file` is
+/// therefore paint-loop-legal and appears in both wordlists.
+/// The invariant test relaxes cross-class disjointness for
+/// class 5 vs classes 0-4 with this load-bearing rationale;
+/// disjointness across classes 0-4 (which share the no-paren
+/// probe cascade at `:167-176`) is strictly enforced.
+///
+/// **17 tokens** covering Livelink Server singletons:
+///   - **Livelink Content Server APIs (5)**: `capi`, `dapi`,
+///     `uapi`, `wapi`, `web`. Content API, Document API, User
+///     API, Web API, and the general web-request namespace.
+///   - **Utility / math namespaces (3)**: `math`, `str`,
+///     `system`. Standard number / string / OS helpers.
+///   - **Logging / diagnostics (3)**: `console`, `debug`,
+///     `err`. Runtime output channels.
+///   - **File / kernel / parser (5)**: `file`, `kernel`,
+///     `parser`, `patch`, `prgctx`. File namespace, VM /
+///     kernel primitives, expression / script parser, patch
+///     manager, program-context accessor.
+///   - **Script namespace (1)**: `script`. Namespace for
+///     script-management utilities (compile / load / execute).
+pub const OSCRIPT_OBJECTS: &str = concat!(
+    // Livelink Content Server APIs.
+    "capi dapi uapi wapi web ",
+    // Utility / math namespaces.
+    "math str system ",
+    // Logging / diagnostics.
+    "console debug err ",
+    // File / kernel / parser / patch / program-context.
+    "file kernel parser patch prgctx ",
+    // Script namespace.
+    "script ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
