@@ -126,7 +126,7 @@ use codepp_core::lang::{
     L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
     L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY,
     L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TXT2TAGS, L_VB, L_VERILOG,
-    L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+    L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
     MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
     NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
     OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
@@ -140,7 +140,9 @@ use codepp_core::lang::{
     SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
     VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
     VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
+    VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
+    XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -324,36 +326,41 @@ use codepp_scintilla_sys::{
     SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT, SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD,
     SCE_VHDL_NUMBER, SCE_VHDL_OPERATOR, SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR,
     SCE_VHDL_STDPACKAGE, SCE_VHDL_STDTYPE, SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD,
-    SCE_V_COMMENT, SCE_V_COMMENTLINE, SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT,
-    SCE_V_INPUT, SCE_V_NUMBER, SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT,
-    SCE_V_PREPROCESSOR, SCE_V_STRING, SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2,
-    SCE_V_WORD3, SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD,
-    SCE_YAML_NUMBER, SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT, SCI_BEGINUNDOACTION,
-    SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER,
-    SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
-    SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES,
-    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
-    SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
-    SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
-    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
-    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
-    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
-    SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
-    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
-    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
-    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO,
-    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
-    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
-    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
-    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED,
-    SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER,
-    SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
-    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
-    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
-    SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
-    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
-    SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT,
-    STYLE_LINENUMBER,
+    SCE_VISUALPROLOG_ANONYMOUS, SCE_VISUALPROLOG_COMMENT_BLOCK, SCE_VISUALPROLOG_COMMENT_KEY,
+    SCE_VISUALPROLOG_COMMENT_KEY_ERROR, SCE_VISUALPROLOG_COMMENT_LINE, SCE_VISUALPROLOG_EMBEDDED,
+    SCE_VISUALPROLOG_KEY_DIRECTIVE, SCE_VISUALPROLOG_KEY_MAJOR, SCE_VISUALPROLOG_KEY_MINOR,
+    SCE_VISUALPROLOG_NUMBER, SCE_VISUALPROLOG_OPERATOR, SCE_VISUALPROLOG_PLACEHOLDER,
+    SCE_VISUALPROLOG_STRING, SCE_VISUALPROLOG_STRING_EOL, SCE_VISUALPROLOG_STRING_ESCAPE,
+    SCE_VISUALPROLOG_STRING_QUOTE, SCE_VISUALPROLOG_VARIABLE, SCE_V_COMMENT, SCE_V_COMMENTLINE,
+    SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT, SCE_V_INPUT, SCE_V_NUMBER,
+    SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR, SCE_V_STRING,
+    SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3, SCE_YAML_COMMENT,
+    SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR,
+    SCE_YAML_REFERENCE, SCE_YAML_TEXT, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY,
+    SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
+    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
+    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
+    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
+    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
+    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
+    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
+    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
+    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
+    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
+    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
+    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE,
+    SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED,
+    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
+    SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE,
+    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
+    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
+    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS,
+    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY,
+    SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION,
+    SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
@@ -5233,6 +5240,165 @@ const TXT2TAGS_THEME: LangTheme = LangTheme {
     bold: TXT2TAGS_BOLD,
 };
 
+// --- LexVisualProlog ---
+// Visual Prolog (extension `.vip`) — Prolog Development Center's
+// OOP-flavoured Prolog dialect with typed classes and interfaces.
+// `L_VISUALPROLOG` (id 84) is the only language row using this
+// lexer. Four-class wordlist descriptor per
+// `LexVisualProlog.cxx:60-66` (Major / Minor / Directive / Doc).
+// See the `LexVisualProlog` banner in
+// `scintilla-sys/src/lib.rs` for the paint-loop citations.
+//
+// **Case-sensitive** — the lexer uses `GetCurrent` + `strcmp`
+// throughout, no lowercasing anywhere. Visual Prolog is
+// strictly case-sensitive: lowercase-lead identifiers are
+// atoms/predicates (IDENTIFIER), UPPERCASE-lead are variables
+// (VARIABLE), `_`-lead are anonymous variables (ANONYMOUS).
+//
+// **Cross-class disjointness.** Classes 0 and 1 share the
+// same call site at `LexVisualProlog.cxx:411-415` (forward
+// first-match-wins), so they must be strictly disjoint —
+// enforced by the invariant test. Classes 2 (directives) and
+// 3 (doc keywords) are guarded by distinct entry points (`#`-lead
+// for directive, `@`-lead in comment for doc), so token
+// overlap between them and classes 0/1 CANNOT collide at paint
+// time. Per upstream `visualprolog/SciTE.properties`,
+// `externally` is the single documented cross-class overlap:
+// it appears in BOTH class 1 (a modifier keyword) AND class 2
+// (`#externally` compiler directive form). Invariant 7
+// affirmatively asserts this documented overlap.
+//
+// Style-to-slot decisions (17 mappings across 25 defined slots):
+//
+//   * `KEY_MAJOR` (1) → Keyword (bold blue) — class 0
+//     structural declarations (`class`, `predicates`,
+//     `clauses`, ...). PRIMARY structural anchors of a `.vip`
+//     module.
+//   * `KEY_MINOR` (2) → Keyword2 — class 1 primitive types /
+//     control flow (`if`, `foreach`, `try`, `integer64`, ...)
+//     — secondary accent for statement-level structure and
+//     type vocabulary.
+//   * `KEY_DIRECTIVE` (3) → Preprocessor — class 2 `#`-lead
+//     preprocessor directives (`#include`, `#requires`). Same
+//     Preprocessor slot as C/C++ `#include`.
+//   * `COMMENT_BLOCK` (4) → Comment (italic) — `/* ... */`
+//     multiline. Universal comment slot.
+//   * `COMMENT_LINE` (5) → Comment (italic) — `%`-to-EOL
+//     line comment. **Note**: Visual Prolog uses `%` for line
+//     comments (Prolog tradition, contra `//` in C-family).
+//   * `COMMENT_KEY` (6) → Keyword2 — class 3 doc keyword
+//     (`@short`, `@detail`, `@end`, ...) inside a comment.
+//     Javadoc-analogous accent inside comment prose.
+//   * `COMMENT_KEY_ERROR` (7) → Comment (italic) — `@xxx` that
+//     misses docKeywords. Stays comment-coloured so
+//     unrecognised tags don't visually leap out; the missing
+//     accent tells the user something's off.
+//   * `VARIABLE` (9) → Lifetime — UPPERCASE-lead Prolog
+//     variable. `Lifetime` slot is Code++'s "distinct-
+//     identifier form" accent (used by Rust `'a` lifetimes,
+//     Registry escape sequences); Prolog variables fit the
+//     semantic role (a special identifier form that reads
+//     structurally).
+//   * `ANONYMOUS` (10) → Lifetime — `_`-lead anonymous
+//     variable. Same slot as VARIABLE for consistent
+//     variable-family highlighting.
+//   * `NUMBER` (11) → Number — decimal / hex / octal
+//     literal.
+//   * `OPERATOR` (12) → Operator — punctuation, `\`, or `@`
+//     when verbatim-strings option disabled.
+//   * `STRING_QUOTE` (16) → String — literal string delimiter
+//     characters (opening/closing quote).
+//   * `STRING_ESCAPE` (17) → Lifetime — recognised `\`-escapes
+//     (`\n`, `\t`, `ሴ`). Same accent slot as Rust
+//     lifetimes / Registry escapes (small distinct
+//     highlighting adjacent to strings).
+//   * `STRING` (20) → String — string body. Universal string
+//     slot.
+//   * `STRING_EOL` (22) → String — verbatim-string end-of-line
+//     continuation marker. **Not** an anomaly — it's the
+//     benign multi-line continuation form used by verbatim
+//     strings when `ls.verbatim` is true at `LexVisualProlog.cxx:494`.
+//     Matches the convention established by 7 sibling lexers
+//     (`SCE_VHDL_STRINGEOL` / `SCE_ADA_STRINGEOL` /
+//     `SCE_V_STRINGEOL` / `SCE_HA_STRINGEOL` /
+//     `SCE_D_STRINGEOL` / …), all mapped to `StyleSlot::String`
+//     to blend with the surrounding string colour.
+//   * `EMBEDDED` (23) → Macro — `[| ... |]` embedded-syntax
+//     literal. `Macro` slot for distinct special-construct
+//     accent, matching how Rust `println!` uses the same slot.
+//   * `PLACEHOLDER` (24) → Macro — `{| ... |}:ident`
+//     placeholder in embedded syntax. Same Macro slot as
+//     EMBEDDED for family cohesion.
+//
+// Unmapped slots (framework convention, 8 total):
+//
+//   * `DEFAULT` (0) — plain body text.
+//   * `IDENTIFIER` (8) — transient collect state; unmatched
+//     lowercase-lead identifiers (atoms / predicates) paint
+//     at STYLE_DEFAULT. Same convention as `SCE_C_IDENTIFIER`.
+//   * `UNUSED1` (13) — DEAD STATE per `lexicalClasses[:92]`
+//     (`"unused"` tag, empty description). Verified: zero
+//     call sites emit the slot.
+//   * `UNUSED2` (14) — DEAD STATE per `:93`.
+//   * `UNUSED3` (15) — DEAD STATE per `:94`.
+//   * `STRING_ESCAPE_ERROR` (18) — invalid or incomplete
+//     escape sequence. **Authoritative parse failure** —
+//     belongs to the deferred-`StyleSlot::Error` migration
+//     list already tracked at ~20+ sibling lexer sites
+//     (Nim's STRINGEOL / NUMERROR, VHDL / SQL / Basic /
+//     Perl `_ERROR` variants). Left unmapped until
+//     `StyleSlot::Error` lands, then sweep this in with the
+//     rest of the family. Paints at STYLE_DEFAULT for now.
+//   * `UNUSED4` (19) — DEAD STATE per `:98`.
+//   * `UNUSED5` (21) — DEAD STATE per `:100`.
+const VISUALPROLOG_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_VISUALPROLOG_KEY_MAJOR, StyleSlot::Keyword),
+    (SCE_VISUALPROLOG_KEY_MINOR, StyleSlot::Keyword2),
+    (SCE_VISUALPROLOG_KEY_DIRECTIVE, StyleSlot::Preprocessor),
+    (SCE_VISUALPROLOG_COMMENT_BLOCK, StyleSlot::Comment),
+    (SCE_VISUALPROLOG_COMMENT_LINE, StyleSlot::Comment),
+    (SCE_VISUALPROLOG_COMMENT_KEY, StyleSlot::Keyword2),
+    (SCE_VISUALPROLOG_COMMENT_KEY_ERROR, StyleSlot::Comment),
+    (SCE_VISUALPROLOG_VARIABLE, StyleSlot::Lifetime),
+    (SCE_VISUALPROLOG_ANONYMOUS, StyleSlot::Lifetime),
+    (SCE_VISUALPROLOG_NUMBER, StyleSlot::Number),
+    (SCE_VISUALPROLOG_OPERATOR, StyleSlot::Operator),
+    (SCE_VISUALPROLOG_STRING_QUOTE, StyleSlot::String),
+    (SCE_VISUALPROLOG_STRING_ESCAPE, StyleSlot::Lifetime),
+    (SCE_VISUALPROLOG_STRING, StyleSlot::String),
+    (SCE_VISUALPROLOG_STRING_EOL, StyleSlot::String),
+    (SCE_VISUALPROLOG_EMBEDDED, StyleSlot::Macro),
+    (SCE_VISUALPROLOG_PLACEHOLDER, StyleSlot::Macro),
+];
+
+// Italic on all four comment states — universal Code++ comment
+// convention plus the two `@`-in-comment sub-states.
+const VISUALPROLOG_ITALIC: &[usize] = &[
+    SCE_VISUALPROLOG_COMMENT_BLOCK,
+    SCE_VISUALPROLOG_COMMENT_LINE,
+    SCE_VISUALPROLOG_COMMENT_KEY,
+    SCE_VISUALPROLOG_COMMENT_KEY_ERROR,
+];
+
+// Bold on KEY_MAJOR (class 0 — primary structural anchor).
+// Same single-class-bold discipline as REBOL (WORD), OScript
+// (KEYWORD), SPICE (KEYWORD), Registry (ADDEDKEY).
+const VISUALPROLOG_BOLD: &[usize] = &[SCE_VISUALPROLOG_KEY_MAJOR];
+
+// Four-class install matching descriptor order at
+// `LexVisualProlog.cxx:60-66`. All four populated.
+const VISUALPROLOG_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, VISUALPROLOG_MAJOR_KEYWORDS),
+        (1, VISUALPROLOG_MINOR_KEYWORDS),
+        (2, VISUALPROLOG_DIRECTIVE_KEYWORDS),
+        (3, VISUALPROLOG_DOC_KEYWORDS),
+    ],
+    styles: VISUALPROLOG_STYLES,
+    italic: VISUALPROLOG_ITALIC,
+    bold: VISUALPROLOG_BOLD,
+};
+
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
 // theme — RC has no primitive-type vocabulary worth a class-1 split,
 // so it installs only class 0. The rest of the family (C / C++ /
@@ -9987,6 +10153,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&SPICE_THEME)
     } else if lang == L_TXT2TAGS {
         Some(&TXT2TAGS_THEME)
+    } else if lang == L_VISUALPROLOG {
+        Some(&VISUALPROLOG_THEME)
     } else {
         None
     }
@@ -25198,6 +25366,7 @@ mod lang_theme_tests {
         SCE_V_NUMBER, SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR,
         SCE_V_STRING, SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3,
         SPICE_BOLD, SPICE_ITALIC, SPICE_STYLES, TXT2TAGS_BOLD, TXT2TAGS_ITALIC, TXT2TAGS_STYLES,
+        VISUALPROLOG_BOLD, VISUALPROLOG_ITALIC, VISUALPROLOG_STYLES,
     };
     // SCE_VHDL_IDENTIFIER is a scan-intermediate state that isn't
     // referenced in the main-scope theme (VHDL_STYLES deliberately
@@ -25229,7 +25398,7 @@ mod lang_theme_tests {
         L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP,
         L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST,
         L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TEXT, L_TXT2TAGS, L_VB, L_VERILOG,
-        L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+        L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
         MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
         NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
         OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
@@ -25243,8 +25412,9 @@ mod lang_theme_tests {
         SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
         TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS,
         VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
-        VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
-        YAML_KEYWORDS,
+        VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+        VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
+        VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -25363,6 +25533,7 @@ mod lang_theme_tests {
             (L_NNCRONTAB, "NNCrontab"),
             (L_OSCRIPT, "OScript"),
             (L_REBOL, "REBOL"),
+            (L_VISUALPROLOG, "Visual Prolog"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -40968,6 +41139,503 @@ mod lang_theme_tests {
         assert!(!t2t.bold.contains(&SCE_TXT2TAGS_EM2));
     }
 
+    /// Visual Prolog uses Lexilla's `visualprolog` lexer
+    /// (`LexVisualProlog.cxx`) — a four-class-wordlist state
+    /// machine for Visual Prolog (`.vip`) source. Included in
+    /// `wired_languages_have_complete_themes` since it has
+    /// four populated keyword classes and 18 style mappings —
+    /// well above the shared floors. This dedicated test pins:
+    ///
+    ///   1. Deep-value identity (styles / italic / bold / four
+    ///      populated keyword classes).
+    ///   2. 18-mapping style-count (25 defined `SCE_VISUALPROLOG_*`
+    ///      slots minus 7 unmapped: DEFAULT, IDENTIFIER
+    ///      (transient), UNUSED1-3 + UNUSED4-5 (5 verified DEAD
+    ///      STATES per lexicalClasses table)).
+    ///   3. Four populated classes in canonical descriptor
+    ///      order matching `LexVisualProlog.cxx:60-66`.
+    ///   4. All four populated classes non-empty.
+    ///   5. **Case-sensitive alphabet enforcement** — every
+    ///      wordlist entry must satisfy Visual Prolog's
+    ///      lowercase-lead atom / predicate convention (major /
+    ///      minor / directive / doc keywords are conventionally
+    ///      lowercase). `LexVisualProlog.cxx` uses `GetCurrent` +
+    ///      `strcmp` throughout, no lowercasing — uppercase
+    ///      entries would only match if source text used matching
+    ///      casing.
+    ///   6. **Cross-class disjointness for classes 0 vs 1** —
+    ///      LOAD-BEARING. Same call site at
+    ///      `LexVisualProlog.cxx:411-415` (forward first-match-
+    ///      wins); a class-1 duplicate of a class-0 token would
+    ///      be dead code.
+    ///   7. **Documented class-1-vs-class-2 overlap** —
+    ///      `externally` legitimately appears in BOTH class 1
+    ///      (modifier keyword) AND class 2 (`#externally`
+    ///      compiler directive form), per upstream Lexilla
+    ///      `visualprolog/SciTE.properties`. Cannot collide
+    ///      because class 2 is only probed from the DIRECTIVE
+    ///      state (post-`#`).
+    ///   8. Style-routing pins for all 17 mapped constants.
+    ///   9. Framework-unmapped slots confirmed absent
+    ///      (DEFAULT, IDENTIFIER, `STRING_ESCAPE_ERROR`,
+    ///      UNUSED1-5) with drift-pin assertions.
+    ///   10. Italic == 4 (all four comment states — BLOCK,
+    ///       LINE, KEY, `KEY_ERROR`).
+    ///   11. Bold == 1 (`KEY_MAJOR` only — class 0, primary
+    ///       structural anchor).
+    ///   12. Cross-language non-reuse (sampled).
+    ///   13. `L_VISUALPROLOG` `LangEntry` has `lexer:
+    ///       Some("visualprolog")` and the `.vip` extension.
+    ///   14. Canonical MAJOR anchors (`class`, `predicates`,
+    ///       `clauses`, `end`).
+    ///   15. Canonical MINOR anchors (`if`, `foreach`, `try`,
+    ///       `succeed`).
+    ///   16. Canonical DIRECTIVE anchors (`include`, `requires`).
+    ///   17. Canonical DOC anchors (`short`, `param`, `return`).
+    ///   18. **Hash/at-prefix-stripped stems only** — no
+    ///       directive keyword starts with `#`, no doc keyword
+    ///       starts with `@`. Load-bearing: the paint loop calls
+    ///       `.InList(s + 1)` for both classes 2 (skipping `#`)
+    ///       and 3 (skipping `@`); prefixed entries never match.
+    ///   19. Highest-defined `SCE_VISUALPROLOG_*` pin —
+    ///       `SCE_VISUALPROLOG_PLACEHOLDER` (24) is the top
+    ///       slot per `SciLexer.h:1763`.
+    ///   20. **Variable-family cohesion pin** — VARIABLE and
+    ///       ANONYMOUS both route to Lifetime for consistent
+    ///       Prolog-variable highlighting.
+    ///   21. **String-family cohesion pin** — `STRING_QUOTE`,
+    ///       STRING, and `STRING_EOL` all route to String;
+    ///       `STRING_ESCAPE` routes to Lifetime;
+    ///       `STRING_ESCAPE_ERROR` stays unmapped (deferred to
+    ///       `StyleSlot::Error` migration).
+    ///   22. **Embedded-syntax cohesion pin** — EMBEDDED and
+    ///       PLACEHOLDER both route to Macro for consistent
+    ///       special-construct highlighting.
+    ///   23. No duplicate tokens within any wordlist.
+    #[test]
+    fn visualprolog_uses_lexvisualprolog_four_class_theme() {
+        use super::{
+            SCE_VISUALPROLOG_ANONYMOUS, SCE_VISUALPROLOG_COMMENT_BLOCK,
+            SCE_VISUALPROLOG_COMMENT_KEY, SCE_VISUALPROLOG_COMMENT_KEY_ERROR,
+            SCE_VISUALPROLOG_COMMENT_LINE, SCE_VISUALPROLOG_EMBEDDED,
+            SCE_VISUALPROLOG_KEY_DIRECTIVE, SCE_VISUALPROLOG_KEY_MAJOR, SCE_VISUALPROLOG_KEY_MINOR,
+            SCE_VISUALPROLOG_NUMBER, SCE_VISUALPROLOG_OPERATOR, SCE_VISUALPROLOG_PLACEHOLDER,
+            SCE_VISUALPROLOG_STRING, SCE_VISUALPROLOG_STRING_EOL, SCE_VISUALPROLOG_STRING_ESCAPE,
+            SCE_VISUALPROLOG_STRING_QUOTE, SCE_VISUALPROLOG_VARIABLE,
+        };
+        use codepp_scintilla_sys::{
+            SCE_VISUALPROLOG_DEFAULT, SCE_VISUALPROLOG_IDENTIFIER,
+            SCE_VISUALPROLOG_STRING_ESCAPE_ERROR, SCE_VISUALPROLOG_UNUSED1,
+            SCE_VISUALPROLOG_UNUSED2, SCE_VISUALPROLOG_UNUSED3, SCE_VISUALPROLOG_UNUSED4,
+            SCE_VISUALPROLOG_UNUSED5,
+        };
+        let vp = lang_theme(L_VISUALPROLOG).expect("Visual Prolog wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(vp.styles, VISUALPROLOG_STYLES);
+        assert_eq!(vp.italic, VISUALPROLOG_ITALIC);
+        assert_eq!(vp.bold, VISUALPROLOG_BOLD);
+        assert_eq!(vp.keywords.len(), 4);
+
+        // Invariant 2: 17 mappings (25 defined slots minus 8 unmapped).
+        assert_eq!(
+            vp.styles.len(),
+            17,
+            "VISUALPROLOG_STYLES must map 17 indices (25 defined \
+             SCE_VISUALPROLOG_* slots minus 8 unmapped: DEFAULT, \
+             IDENTIFIER (transient), STRING_ESCAPE_ERROR (deferred \
+             to StyleSlot::Error migration), UNUSED1/2/3 + UNUSED4/5 \
+             (five verified DEAD STATES per lexicalClasses[]))"
+        );
+
+        // Invariant 3: four populated classes in canonical order.
+        for (i, (expected_class, expected_list)) in [
+            (0u32, VISUALPROLOG_MAJOR_KEYWORDS),
+            (1u32, VISUALPROLOG_MINOR_KEYWORDS),
+            (2u32, VISUALPROLOG_DIRECTIVE_KEYWORDS),
+            (3u32, VISUALPROLOG_DOC_KEYWORDS),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                vp.keywords[i].0, *expected_class,
+                "VISUALPROLOG_THEME.keywords[{i}].class must match \
+                 descriptor order at LexVisualProlog.cxx:60-66"
+            );
+            assert_eq!(
+                vp.keywords[i].1, *expected_list,
+                "VISUALPROLOG_THEME.keywords[{i}].list must match canonical wordlist"
+            );
+        }
+
+        // Invariant 4: all four populated classes non-empty.
+        for (list, name) in [
+            (VISUALPROLOG_MAJOR_KEYWORDS, "MAJOR"),
+            (VISUALPROLOG_MINOR_KEYWORDS, "MINOR"),
+            (VISUALPROLOG_DIRECTIVE_KEYWORDS, "DIRECTIVE"),
+            (VISUALPROLOG_DOC_KEYWORDS, "DOC"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "VISUALPROLOG_{name}_KEYWORDS must be non-empty"
+            );
+        }
+
+        // Invariant 5: lowercase-lead alphanumeric + `_` across
+        // every class. `LexVisualProlog.cxx` uses GetCurrent +
+        // strcmp — case-sensitive — and canonical PDC / upstream
+        // vocabulary is lowercase-lead but may contain internal
+        // uppercase for camelCase types (e.g. `binaryNonAtomic`,
+        // `compareResult`, `integerNative`, `unsignedNative`).
+        for (list, name) in [
+            (VISUALPROLOG_MAJOR_KEYWORDS, "MAJOR"),
+            (VISUALPROLOG_MINOR_KEYWORDS, "MINOR"),
+            (VISUALPROLOG_DIRECTIVE_KEYWORDS, "DIRECTIVE"),
+            (VISUALPROLOG_DOC_KEYWORDS, "DOC"),
+        ] {
+            for tok in list.split_whitespace() {
+                let first = tok.bytes().next();
+                assert!(
+                    matches!(first, Some(b) if b.is_ascii_lowercase()),
+                    "VISUALPROLOG_{name}_KEYWORDS token `{tok}` \
+                     must start with a lowercase letter — Visual \
+                     Prolog reserves UPPERCASE-lead for variables \
+                     (SCE_VISUALPROLOG_VARIABLE at :582), `_`-lead \
+                     for anonymous variables"
+                );
+                assert!(
+                    tok.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'),
+                    "VISUALPROLOG_{name}_KEYWORDS token `{tok}` \
+                     contains a non-alnum-non-`_` byte — canonical \
+                     Visual Prolog identifiers are [a-zA-Z0-9_]+"
+                );
+            }
+        }
+
+        // Invariant 6: cross-class disjointness for classes 0
+        // vs 1. LOAD-BEARING — same call site at :411-415
+        // (forward first-match-wins).
+        use std::collections::HashSet;
+        let major_set: HashSet<&str> = VISUALPROLOG_MAJOR_KEYWORDS.split_whitespace().collect();
+        let minor_set: HashSet<&str> = VISUALPROLOG_MINOR_KEYWORDS.split_whitespace().collect();
+        if let Some(shared) = major_set.intersection(&minor_set).next() {
+            panic!(
+                "VISUALPROLOG_MAJOR_KEYWORDS and \
+                 VISUALPROLOG_MINOR_KEYWORDS both contain `{shared}` — \
+                 LexVisualProlog.cxx:411-415 probes 0 → 1 forward-\
+                 first-match-wins. Cross-class duplicate leaves the \
+                 CLASS-1 entry dead code."
+            );
+        }
+
+        // Invariant 7: documented cross-class overlap between
+        // classes 1 and 2 — `externally` legitimately appears in
+        // BOTH (minor keyword AND `#externally` directive per
+        // upstream `visualprolog/SciTE.properties`). Cannot
+        // collide at paint time because class 2 is probed only
+        // from the DIRECTIVE state (post-`#`).
+        let directive_set: HashSet<&str> =
+            VISUALPROLOG_DIRECTIVE_KEYWORDS.split_whitespace().collect();
+        assert!(
+            minor_set.contains("externally") && directive_set.contains("externally"),
+            "`externally` must appear in BOTH class 1 (minor — \
+             a modifier keyword) AND class 2 (directive — \
+             `#externally` compiler directive form). Documented \
+             cross-class overlap; safe because class 2 is probed \
+             only from the DIRECTIVE state (post-`#`)."
+        );
+
+        // Invariant 8: style-routing pins for all 17 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_VISUALPROLOG_KEY_MAJOR, StyleSlot::Keyword, "KEY_MAJOR"),
+            (SCE_VISUALPROLOG_KEY_MINOR, StyleSlot::Keyword2, "KEY_MINOR"),
+            (
+                SCE_VISUALPROLOG_KEY_DIRECTIVE,
+                StyleSlot::Preprocessor,
+                "KEY_DIRECTIVE",
+            ),
+            (
+                SCE_VISUALPROLOG_COMMENT_BLOCK,
+                StyleSlot::Comment,
+                "COMMENT_BLOCK",
+            ),
+            (
+                SCE_VISUALPROLOG_COMMENT_LINE,
+                StyleSlot::Comment,
+                "COMMENT_LINE",
+            ),
+            (
+                SCE_VISUALPROLOG_COMMENT_KEY,
+                StyleSlot::Keyword2,
+                "COMMENT_KEY",
+            ),
+            (
+                SCE_VISUALPROLOG_COMMENT_KEY_ERROR,
+                StyleSlot::Comment,
+                "COMMENT_KEY_ERROR",
+            ),
+            (SCE_VISUALPROLOG_VARIABLE, StyleSlot::Lifetime, "VARIABLE"),
+            (SCE_VISUALPROLOG_ANONYMOUS, StyleSlot::Lifetime, "ANONYMOUS"),
+            (SCE_VISUALPROLOG_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_VISUALPROLOG_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+            (
+                SCE_VISUALPROLOG_STRING_QUOTE,
+                StyleSlot::String,
+                "STRING_QUOTE",
+            ),
+            (
+                SCE_VISUALPROLOG_STRING_ESCAPE,
+                StyleSlot::Lifetime,
+                "STRING_ESCAPE",
+            ),
+            (SCE_VISUALPROLOG_STRING, StyleSlot::String, "STRING"),
+            (SCE_VISUALPROLOG_STRING_EOL, StyleSlot::String, "STRING_EOL"),
+            (SCE_VISUALPROLOG_EMBEDDED, StyleSlot::Macro, "EMBEDDED"),
+            (
+                SCE_VISUALPROLOG_PLACEHOLDER,
+                StyleSlot::Macro,
+                "PLACEHOLDER",
+            ),
+        ] {
+            assert!(
+                vp.styles.contains(&(idx, slot)),
+                "SCE_VISUALPROLOG_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 9: framework-unmapped slots confirmed absent.
+        assert_eq!(
+            SCE_VISUALPROLOG_DEFAULT, 0,
+            "SCE_VISUALPROLOG_DEFAULT has drifted from 0 — verify against SciLexer.h:1739"
+        );
+        assert_eq!(
+            SCE_VISUALPROLOG_IDENTIFIER, 8,
+            "SCE_VISUALPROLOG_IDENTIFIER has drifted from 8 — verify against SciLexer.h:1747"
+        );
+        assert_eq!(
+            SCE_VISUALPROLOG_STRING_ESCAPE_ERROR, 18,
+            "SCE_VISUALPROLOG_STRING_ESCAPE_ERROR has drifted from 18 — \
+             verify against SciLexer.h:1757"
+        );
+        for (idx, name) in [
+            (SCE_VISUALPROLOG_DEFAULT, "DEFAULT"),
+            (SCE_VISUALPROLOG_IDENTIFIER, "IDENTIFIER"),
+            (SCE_VISUALPROLOG_UNUSED1, "UNUSED1"),
+            (SCE_VISUALPROLOG_UNUSED2, "UNUSED2"),
+            (SCE_VISUALPROLOG_UNUSED3, "UNUSED3"),
+            (SCE_VISUALPROLOG_STRING_ESCAPE_ERROR, "STRING_ESCAPE_ERROR"),
+            (SCE_VISUALPROLOG_UNUSED4, "UNUSED4"),
+            (SCE_VISUALPROLOG_UNUSED5, "UNUSED5"),
+        ] {
+            assert!(
+                !vp.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_VISUALPROLOG_{name} ({idx}) must remain unmapped \
+                 — framework convention (DEFAULT / IDENTIFIER \
+                 transient; STRING_ESCAPE_ERROR deferred to \
+                 StyleSlot::Error migration list; UNUSED1-5 are DEAD \
+                 STATES per lexicalClasses table)"
+            );
+        }
+
+        // Invariant 10: italic == 4 (all four comment states).
+        assert_eq!(vp.italic.len(), 4);
+        for idx in [
+            SCE_VISUALPROLOG_COMMENT_BLOCK,
+            SCE_VISUALPROLOG_COMMENT_LINE,
+            SCE_VISUALPROLOG_COMMENT_KEY,
+            SCE_VISUALPROLOG_COMMENT_KEY_ERROR,
+        ] {
+            assert!(
+                vp.italic.contains(&idx),
+                "VISUALPROLOG_ITALIC must contain SCE_VISUALPROLOG_ idx {idx}"
+            );
+        }
+
+        // Invariant 11: bold == 1 (KEY_MAJOR only).
+        assert_eq!(vp.bold.len(), 1);
+        assert!(vp.bold.contains(&SCE_VISUALPROLOG_KEY_MAJOR));
+
+        // Invariant 12: cross-language non-reuse (sampled).
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let re = lang_theme(L_REBOL).expect("REBOL wired");
+        let os = lang_theme(L_OSCRIPT).expect("OScript wired");
+        let sp = lang_theme(L_SPICE).expect("Spice wired");
+        for (other, name) in [(cpp, "C++"), (re, "REBOL"), (os, "OScript"), (sp, "Spice")] {
+            assert_ne!(
+                vp.styles, other.styles,
+                "Visual Prolog must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 13: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let vp_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_VISUALPROLOG)
+            .expect("L_VISUALPROLOG LangEntry present in LANG_TABLE");
+        assert_eq!(
+            vp_entry.lexer,
+            Some("visualprolog"),
+            "L_VISUALPROLOG LangEntry.lexer must be Some(\"visualprolog\")"
+        );
+        assert!(
+            vp_entry.extensions.contains(&"vip"),
+            "L_VISUALPROLOG extensions must contain `vip`"
+        );
+
+        // Invariant 14: canonical MAJOR anchors. `end` is NOT
+        // here — it's in the doc-keyword class per upstream
+        // convention; bare `end` in code is handled by
+        // endLookAhead at LexVisualProlog.cxx:240-253 which
+        // re-classifies based on the following keyword.
+        for tok in ["class", "predicates", "clauses", "domains"] {
+            assert!(
+                VISUALPROLOG_MAJOR_KEYWORDS
+                    .split_whitespace()
+                    .any(|t| t == tok),
+                "VISUALPROLOG_MAJOR_KEYWORDS must include canonical `{tok}`"
+            );
+        }
+
+        // Invariant 15: canonical MINOR anchors.
+        for tok in ["if", "foreach", "try", "procedure"] {
+            assert!(
+                VISUALPROLOG_MINOR_KEYWORDS
+                    .split_whitespace()
+                    .any(|t| t == tok),
+                "VISUALPROLOG_MINOR_KEYWORDS must include canonical `{tok}`"
+            );
+        }
+
+        // Invariant 16: canonical DIRECTIVE anchors.
+        for tok in ["include", "requires"] {
+            assert!(
+                VISUALPROLOG_DIRECTIVE_KEYWORDS
+                    .split_whitespace()
+                    .any(|t| t == tok),
+                "VISUALPROLOG_DIRECTIVE_KEYWORDS must include canonical `{tok}`"
+            );
+        }
+
+        // Invariant 17: canonical DOC anchors per upstream.
+        for tok in ["short", "detail", "end", "exception", "withdomain"] {
+            assert!(
+                VISUALPROLOG_DOC_KEYWORDS
+                    .split_whitespace()
+                    .any(|t| t == tok),
+                "VISUALPROLOG_DOC_KEYWORDS must include canonical `{tok}`"
+            );
+        }
+
+        // Invariant 18: hash/at-prefix-stripped stems only.
+        // LexVisualProlog.cxx:429 calls .InList(s + 1) for
+        // directives (skipping `#`); :461 does the same for doc
+        // keywords (skipping `@`). Prefixed entries would never
+        // match.
+        for tok in VISUALPROLOG_DIRECTIVE_KEYWORDS.split_whitespace() {
+            assert!(
+                !tok.starts_with('#'),
+                "VISUALPROLOG_DIRECTIVE_KEYWORDS token `{tok}` starts \
+                 with `#` — LexVisualProlog.cxx:429 calls .InList(s + \
+                 1), so `#<stem>` entries never match. Use the bare \
+                 stem"
+            );
+        }
+        for tok in VISUALPROLOG_DOC_KEYWORDS.split_whitespace() {
+            assert!(
+                !tok.starts_with('@'),
+                "VISUALPROLOG_DOC_KEYWORDS token `{tok}` starts with `@` \
+                 — LexVisualProlog.cxx:461 calls .InList(s + 1), so \
+                 `@<stem>` entries never match. Use the bare stem"
+            );
+        }
+
+        // Invariant 19: highest-defined SCE_VISUALPROLOG_* pin.
+        assert_eq!(
+            SCE_VISUALPROLOG_PLACEHOLDER, 24,
+            "SCE_VISUALPROLOG_PLACEHOLDER has drifted from 24 — \
+             Lexilla may have renumbered slots. Verify against \
+             SciLexer.h:1763"
+        );
+        for (idx, _) in vp.styles {
+            assert!(
+                *idx <= SCE_VISUALPROLOG_PLACEHOLDER,
+                "VISUALPROLOG_STYLES references slot {idx}, which is \
+                 higher than SCE_VISUALPROLOG_PLACEHOLDER \
+                 ({SCE_VISUALPROLOG_PLACEHOLDER})"
+            );
+        }
+
+        // Invariant 20: variable-family cohesion.
+        assert!(
+            vp.styles
+                .contains(&(SCE_VISUALPROLOG_VARIABLE, StyleSlot::Lifetime))
+                && vp
+                    .styles
+                    .contains(&(SCE_VISUALPROLOG_ANONYMOUS, StyleSlot::Lifetime)),
+            "SCE_VISUALPROLOG_VARIABLE and SCE_VISUALPROLOG_ANONYMOUS \
+             must both route to Lifetime for consistent Prolog-variable \
+             highlighting"
+        );
+
+        // Invariant 21: string-family cohesion.
+        // STRING + STRING_QUOTE + STRING_EOL all route to String
+        // (STRING_EOL is the benign verbatim multi-line
+        // continuation form; matches the 7-sibling _STRINGEOL →
+        // String convention in this file). STRING_ESCAPE →
+        // Lifetime (small distinct highlighting adjacent to
+        // strings). STRING_ESCAPE_ERROR stays unmapped (deferred
+        // to StyleSlot::Error migration).
+        assert!(
+            vp.styles
+                .contains(&(SCE_VISUALPROLOG_STRING, StyleSlot::String))
+                && vp
+                    .styles
+                    .contains(&(SCE_VISUALPROLOG_STRING_QUOTE, StyleSlot::String))
+                && vp
+                    .styles
+                    .contains(&(SCE_VISUALPROLOG_STRING_EOL, StyleSlot::String)),
+            "STRING + STRING_QUOTE + STRING_EOL must all route to \
+             String — STRING_EOL is the benign verbatim multi-line \
+             continuation form, matching the 7-sibling _STRINGEOL \
+             convention"
+        );
+        assert!(
+            vp.styles
+                .contains(&(SCE_VISUALPROLOG_STRING_ESCAPE, StyleSlot::Lifetime)),
+            "STRING_ESCAPE must route to Lifetime"
+        );
+
+        // Invariant 22: embedded-syntax cohesion.
+        assert!(
+            vp.styles
+                .contains(&(SCE_VISUALPROLOG_EMBEDDED, StyleSlot::Macro))
+                && vp
+                    .styles
+                    .contains(&(SCE_VISUALPROLOG_PLACEHOLDER, StyleSlot::Macro)),
+            "EMBEDDED + PLACEHOLDER must both route to Macro for \
+             consistent special-construct highlighting"
+        );
+
+        // Invariant 23: no duplicate tokens.
+        for (list, name) in [
+            (VISUALPROLOG_MAJOR_KEYWORDS, "MAJOR"),
+            (VISUALPROLOG_MINOR_KEYWORDS, "MINOR"),
+            (VISUALPROLOG_DIRECTIVE_KEYWORDS, "DIRECTIVE"),
+            (VISUALPROLOG_DOC_KEYWORDS, "DOC"),
+        ] {
+            let total = list.split_whitespace().count();
+            let unique = list.split_whitespace().collect::<HashSet<_>>().len();
+            assert_eq!(
+                total,
+                unique,
+                "VISUALPROLOG_{name}_KEYWORDS contains {} duplicate token(s)",
+                total - unique
+            );
+        }
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -40988,8 +41656,9 @@ mod lang_theme_tests {
     /// `OScript` row landed. `L_REBOL` was removed when the REBOL
     /// row landed. `L_REGISTRY` was removed when the Registry row
     /// landed. `L_SPICE` was removed when the Spice row landed.
-    /// `L_TXT2TAGS` was removed when the txt2tags row landed in
-    /// this commit.
+    /// `L_TXT2TAGS` was removed when the txt2tags row landed.
+    /// `L_VISUALPROLOG` was removed when the Visual Prolog row
+    /// landed in this commit.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");

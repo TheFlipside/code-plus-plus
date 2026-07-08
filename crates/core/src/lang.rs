@@ -12313,6 +12313,212 @@ pub const SPICE_KEYWORDS3: &str = concat!(
     "gmin reltol abstol vntol chgtol trtol tnom method itl1 itl4 ",
 );
 
+/// Visual Prolog class 0 vocabulary — **major keywords**:
+/// structural declarations and API-level named predicates.
+/// Consumed by
+/// [`SCE_VISUALPROLOG_KEY_MAJOR`](../scintilla_sys/constant.SCE_VISUALPROLOG_KEY_MAJOR.html)
+/// via `LexVisualProlog.cxx:411-412`.
+///
+/// **Case-sensitivity contract.** `LexVisualProlog.cxx` uses
+/// `GetCurrent` + `strcmp` throughout — no lowercasing anywhere.
+/// Visual Prolog is strictly case-sensitive: **lowercase-lead**
+/// identifiers are atoms/predicates (`SCE_VISUALPROLOG_IDENTIFIER`
+/// at `:580`), UPPERCASE-lead identifiers are Prolog variables
+/// (`SCE_VISUALPROLOG_VARIABLE` at `:582`). Wordlist entries must
+/// match byte-exactly; canonical Visual Prolog vocabulary is
+/// lowercase-lead (may contain internal camelCase, e.g.
+/// `binaryNonAtomic` — see [`VISUALPROLOG_MINOR_KEYWORDS`]).
+///
+/// **Forward first-match-wins** at `LexVisualProlog.cxx:411-415`:
+/// majorKeywords probes BEFORE minorKeywords, so cross-class
+/// duplicates silently mask their higher-class sibling. Invariant
+/// test enforces strict class-0-vs-class-1 disjointness.
+///
+/// **Provenance.** Wordlists mirror upstream Lexilla's own
+/// `visualprolog/SciTE.properties` fixture (bundled at
+/// `crates/scintilla-sys/vendor/lexilla/test/examples/`) —
+/// the authoritative reference for what PDC / `SciTE` / Notepad++
+/// ship for `.vip` highlighting.
+///
+/// Major keywords group into three functional families:
+///
+///   - **Object model (10)**: `class`, `interface`, `implement`,
+///     `namespace`, `inherits`, `supports`, `resolve`, `delegate`,
+///     `monitor`, `open`. Visual Prolog is an OOP-flavoured
+///     Prolog with typed classes and interfaces; these open the
+///     structural scopes.
+///   - **Section declarations (8)**: `domains`, `predicates`,
+///     `constants`, `constructors`, `properties`, `clauses`,
+///     `facts`, `goal`. Section headings inside a class body,
+///     each opening a distinct declaration scope.
+///   - **API-level predicates (4)**: `string_lower`,
+///     `atom_codes`, `sort`. Common built-in predicates that
+///     PDC / `SciTE` ship in the "major" list to distinguish them
+///     from user code; kept for parity.
+///
+/// Total: 10 + 8 + 3 = 21 tokens (matches upstream 21-token
+/// major keywords list — `goal` is in section declarations, not
+/// double-counted).
+///
+/// **`end` note.** The keyword `end` is not in class 0. Visual
+/// Prolog uses a lookahead mechanism (`endLookAhead` at
+/// `LexVisualProlog.cxx:240-253`, invoked at `:408-410`) that
+/// re-classifies bare `end` based on the following keyword's
+/// class. So `end class` paints as two `KEY_MAJOR` tokens (both
+/// because `class` matches majorKeywords); `end` itself never
+/// needs its own class-0 entry. Upstream places `end` in the
+/// doc-keyword class instead (`@end` block-end marker in
+/// documentation comments).
+pub const VISUALPROLOG_MAJOR_KEYWORDS: &str = concat!(
+    // Object model.
+    "class interface implement namespace inherits supports resolve delegate monitor open ",
+    // Section declarations.
+    "domains predicates constants constructors properties clauses facts goal ",
+    // API-level predicates (PDC / SciTE convention).
+    "string_lower atom_codes sort ",
+);
+
+/// Visual Prolog class 1 vocabulary — **minor keywords**:
+/// control flow, exception handling, primitive type names,
+/// determinism modes, calling conventions, and Prolog logical
+/// operators. Consumed by
+/// [`SCE_VISUALPROLOG_KEY_MINOR`](../scintilla_sys/constant.SCE_VISUALPROLOG_KEY_MINOR.html)
+/// via `LexVisualProlog.cxx:413-414`.
+///
+/// Case-sensitive per [`VISUALPROLOG_MAJOR_KEYWORDS`]'s contract.
+/// Forward first-match-wins — this class probes AFTER
+/// majorKeywords, so any token present in both classes would
+/// resolve to `KEY_MAJOR`; cross-class disjointness invariant
+/// enforces strict non-overlap.
+///
+/// Provenance: upstream Lexilla's
+/// `visualprolog/SciTE.properties` fixture.
+///
+/// Minor keywords group into six functional families:
+///
+///   - **Primitive types (25)**: `any`, `binary`,
+///     `binaryNonAtomic`, `boolean`, `char`, `compareResult`,
+///     `factDB`, `guard`, `handle`, `integer64`, `integerNative`,
+///     `language`, `null`, `pointer`, `real`, `real32`,
+///     `stdcall`, `string8`, `symbol`, `apicall`, `c`,
+///     `thiscall`, `prolog`, `unsigned`, `unsignedNative`. Type
+///     names (some camelCase per PDC convention), calling
+///     conventions (`stdcall` / `apicall` / `thiscall` / `c` /
+///     `prolog`), and access qualifiers. Notably `c` — the
+///     single-letter C-calling-convention keyword.
+///   - **Numeric / precision (5)**: `digits`, `unsigned64`,
+///     `real32` (also in Primitive types), plus arithmetic
+///     `div`, `mod`, `rem`, `quot`. Integer / real precision
+///     specifiers and division operators.
+///   - **Conditional / iteration (10)**: `if`, `then`, `else`,
+///     `elseif`, `endif`, `foreach`, `do`, `try`, `catch`,
+///     `finally`. Structured control flow and exception
+///     handling.
+///   - **Determinism modes (6)**: `erroneous`, `failure`,
+///     `procedure`, `determ`, `multi`, `nondeterm`. Predicate-
+///     signature qualifiers for Visual Prolog's typed
+///     determinism system.
+///   - **Logical / Prolog primitives (7)**: `anyflow`, `and`,
+///     `or`, `orelse`, `otherwise`, `in`, `from`. Traditional
+///     Prolog logical operators plus Visual Prolog extensions.
+///   - **Miscellaneous (1)**: `externally`. Also present in
+///     class 2 (directive) — documented cross-class overlap;
+///     safe because class 2 is probed via a distinct entry
+///     point.
+///
+/// Total: matches upstream's 50-token minor-keyword list
+/// verbatim.
+///
+/// **Cross-class overlap.** `externally` legitimately appears
+/// in both class 1 (minor — a modifier keyword) and class 2
+/// (directive — an `#externally` compiler directive form).
+/// Invariant 7 affirmatively asserts this overlap. The overlap
+/// cannot collide at paint time because class 2 is only probed
+/// from the DIRECTIVE state (post-`#`), which class 1 never
+/// enters.
+pub const VISUALPROLOG_MINOR_KEYWORDS: &str = concat!(
+    // Primitive types (mixed case per PDC convention).
+    "any binary binaryNonAtomic boolean char compareResult factDB guard handle integer64 ",
+    "integerNative language null pointer real real32 stdcall string8 symbol apicall c thiscall ",
+    "prolog unsigned unsignedNative ",
+    // Numeric precision / arithmetic operators.
+    "digits unsigned64 div mod rem quot ",
+    // Conditional / iteration / exception handling.
+    "if then else elseif endif foreach do try catch finally ",
+    // Determinism modes.
+    "erroneous failure procedure determ multi nondeterm ",
+    // Logical / Prolog primitives.
+    "anyflow and or orelse otherwise in from ",
+    // Miscellaneous (overlaps class 2 externally per doc).
+    "externally ",
+);
+
+/// Visual Prolog class 2 vocabulary — **directive keywords
+/// without the `#` prefix**. Consumed by
+/// [`SCE_VISUALPROLOG_KEY_DIRECTIVE`](../scintilla_sys/constant.SCE_VISUALPROLOG_KEY_DIRECTIVE.html)
+/// via `LexVisualProlog.cxx:425-434`.
+///
+/// **Hash prefix stripped.** Source directives are written
+/// `#include` / `#requires` / `#externally` etc., but the lexer
+/// at `:429` calls `directiveKeywords.InList(s + 1)` — the `+1`
+/// skips the leading `#`. Wordlist entries hold the HASHLESS
+/// stem. Entries starting with `#` would never match.
+///
+/// Case-sensitive per [`VISUALPROLOG_MAJOR_KEYWORDS`]'s contract.
+/// Provenance: upstream Lexilla's
+/// `visualprolog/SciTE.properties` fixture.
+///
+/// Directives split into three families:
+///
+///   - **File inclusion (4)**: `include`, `bininclude`,
+///     `requires`, `orrequires`. Source-file / binary-file /
+///     alternative-requirement inclusion.
+///   - **Compiler messages (2)**: `error`, `message`. Emit
+///     compile-time diagnostics.
+///   - **Symbol scope / options (3)**: `export`, `externally`,
+///     `options`. External linkage / compiler options.
+///     `externally` is also present in class 1 (minor —
+///     documented cross-class overlap).
+///
+/// Total: 4 + 2 + 3 = 9 tokens (matches upstream).
+pub const VISUALPROLOG_DIRECTIVE_KEYWORDS: &str = concat!(
+    // File inclusion.
+    "include bininclude requires orrequires ",
+    // Compiler messages.
+    "error message ",
+    // Symbol scope / options (externally overlaps class 1 per doc).
+    "export externally options ",
+);
+
+/// Visual Prolog class 3 vocabulary — **documentation keywords
+/// without the `@` prefix**. Consumed by
+/// [`SCE_VISUALPROLOG_COMMENT_KEY`](../scintilla_sys/constant.SCE_VISUALPROLOG_COMMENT_KEY.html)
+/// via `LexVisualProlog.cxx:457-476`.
+///
+/// **At-prefix stripped.** Doc tags are written `@short` /
+/// `@detail` / `@end` etc. in source comments, but the lexer at
+/// `:461` calls `docKeywords.InList(s + 1)` — the `+1` skips
+/// the leading `@`. Wordlist entries hold the AT-LESS stem.
+/// Doc keywords consumed inside `%`-line-comments and
+/// `/* */`-block-comments via the `styleBeforeDocKeyword`
+/// context tracking at `:440, :453`.
+///
+/// Case-sensitive per [`VISUALPROLOG_MAJOR_KEYWORDS`]'s contract.
+/// Provenance: upstream Lexilla's
+/// `visualprolog/SciTE.properties` fixture — the authoritative
+/// upstream list is intentionally minimal (5 tokens), reflecting
+/// PDC's typical doc-tag usage:
+///
+///   - `short`, `detail` — brief and extended prose description.
+///   - `end` — closing marker for multi-block doc comments
+///     (`@end` follows the last content line).
+///   - `exception` — throws / raises documentation.
+///   - `withdomain` — parametrised-domain documentation
+///     (Visual Prolog's generic-type doc form).
+///
+/// Total: 5 tokens (matches upstream verbatim).
+pub const VISUALPROLOG_DOC_KEYWORDS: &str = "short detail end exception withdomain ";
+
 #[cfg(test)]
 mod tests {
     use super::*;

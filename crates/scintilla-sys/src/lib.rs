@@ -2941,6 +2941,198 @@ pub const SCE_TXT2TAGS_OPTION: usize = 23;
 pub const SCE_TXT2TAGS_PREPROC: usize = 24;
 pub const SCE_TXT2TAGS_POSTPROC: usize = 25;
 
+// LexVisualProlog style indices. 25 contiguous slots (0..=24)
+// for Visual Prolog (extension `.vip`) — Prolog Development
+// Center's OOP-flavoured Prolog dialect with typed classes,
+// interfaces, and clause bodies. Constants mirror
+// `SciLexer.h:1739-1763` verbatim. Dispatches
+// SCLEX_VISUALPROLOG (= 107, per `SciLexer.h:123`) via
+// `vendor/lexilla/lexers/LexVisualProlog.cxx:700`.
+//
+// **Four-class wordlist descriptor.** `visualPrologWordLists[]`
+// at `LexVisualProlog.cxx:60-66` declares four named slots:
+//   - Class 0: "Major keywords (class, predicates, ...)" — the
+//     class / interface / implement / domains / predicates /
+//     clauses / facts / constants / goal / namespace structural
+//     declaration keywords.
+//   - Class 1: "Minor keywords (if, then, try, ...)" — control
+//     flow (if/then/else/foreach/while), exception handling
+//     (try/catch/finally), Prolog primitives (succeed/fail/
+//     true/false/not), and mode declarations
+//     (procedure/determ/nondeterm/multi/erroneous/failure).
+//   - Class 2: "Directive keywords without the '#' (include,
+//     requires, ...)" — `#include`, `#requires`, `#import` etc.
+//     Wordlist entries are DOTLESS / HASHLESS: the lexer at
+//     `:429` uses `directiveKeywords.InList(s + 1)` (skipping
+//     the leading `#`).
+//   - Class 3: "Documentation keywords without the '@' (short,
+//     detail, ...)" — `@short`, `@detail`, `@param`, `@return`
+//     etc. Wordlist entries are AT-LESS: `docKeywords.InList(s
+//     + 1)` at `:461` skips the leading `@`.
+//
+// **First-match-wins cascade** for the IDENTIFIER path at
+// `:411-415`: probes majorKeywords → minorKeywords in forward
+// order, then falls through to `SCE_VISUALPROLOG_IDENTIFIER`.
+// Directive keywords (class 2) and doc keywords (class 3) live
+// in their own scope-guarded probe sites at `:429` and `:461`
+// respectively — not part of the identifier cascade.
+//
+// **Case-SENSITIVE.** `LexVisualProlog.cxx` uses `GetCurrent`
+// and `strcmp` throughout — no `MakeLowerCase` /
+// `GetCurrentLowered` anywhere. Visual Prolog is a strictly
+// case-sensitive language: **lowercase-lead** identifiers are
+// atoms/predicates (SCE_VISUALPROLOG_IDENTIFIER at `:580`),
+// **UPPERCASE-lead** identifiers are variables
+// (SCE_VISUALPROLOG_VARIABLE at `:582`), and `_`-lead
+// identifiers are anonymous variables
+// (SCE_VISUALPROLOG_ANONYMOUS at `:584`) — this is Prolog
+// convention. Wordlist entries must match source casing
+// byte-exactly; major/minor keywords are conventionally
+// lowercase.
+//
+// **`end` lookahead.** Special-case at `:408-410`: when the
+// IDENTIFIER settle path collects `end`, `endLookAhead` at
+// `:240-253` peeks past whitespace to the following keyword,
+// then re-uses `s` to lookup THAT keyword's class. So `end`
+// itself never changes state via this path — but a following
+// `class` / `interface` / `foreach` gives the shared `end`
+// its display class colour. Effect: `end class` paints as
+// KEY_MAJOR + KEY_MAJOR (both same colour), `end if` paints
+// as KEY_MINOR + KEY_MINOR. Wordlist entries must include
+// each `end` variant word (`end`, plus every keyword that
+// can follow it).
+//
+// **String verbatim contract.** Strings enter via
+// `SCE_VISUALPROLOG_STRING_QUOTE` (16) at the opening
+// delimiter: plain `'...'` / `"..."` / (optional) `` `...` ``
+// at `:611-620`, or verbatim `@<...>` / `@(...)` / etc. at
+// `:573-576` (any Unicode paired-bracket delimiter accepted via
+// `isStringVerbatimOpenClose` at `:230-233`). The body then
+// settles to `SCE_VISUALPROLOG_STRING` (20) via the shared
+// fallthrough at `:489`. Verbatim strings escape their closing
+// quote by doubling it (`ls.verbatim && ls.closingQuote ==
+// sc.chNext` at `:500`); non-verbatim strings use `\`-escapes
+// at `:508-531`. String state stack
+// (verbatim flag + closing quote + `kindStack` for nested
+// comments / embedded / placeholder) is persisted in the line
+// state via `setState`/`getState` at `:313-321` for incremental
+// re-lex support.
+//
+// **Nested constructs.** `[| ... |]` embedded-syntax literal
+// strings (`SCE_VISUALPROLOG_EMBEDDED` at `:591-593`) nest
+// inside themselves via `ls.enter(embedded)` at `:541`;
+// `{| ... |}` syntax placeholders
+// (`SCE_VISUALPROLOG_PLACEHOLDER` at `:595-597`) escape to
+// `SCE_VISUALPROLOG_EMBEDDED` when nested inside an embedded-
+// syntax region (`:554-555`) or to `SCE_VISUALPROLOG_DEFAULT`
+// at top-level (`:557`) — the embedded case is the more common
+// real use since PLACEHOLDER's `lexicalClasses[]` description
+// literally says "in embedded syntax". `/* ... */` block
+// comments nest too via `ls.enter(comment)` at `:587`, `:451`. The `kindStack` (2 bits per level, up to
+// 16 levels) supports this at `:322-350`.
+//
+// **UNUSED slots are DEAD STATES.** UNUSED1 (13), UNUSED2 (14),
+// UNUSED3 (15), UNUSED4 (19), UNUSED5 (21) are all documented
+// as `"unused"` in the `lexicalClasses[]` table at `:92-100`
+// with empty descriptions. Verified by exhaustive grep: zero
+// call sites emit any UNUSED* state. Framework convention:
+// leave unmapped since no bytes ever paint into them. Reserved
+// slots that Lexilla may activate in a future revision without
+// renumbering; the map is safely additive.
+//
+// Style semantics (paint-loop citations reference LexVisualProlog.cxx):
+//
+//   - SCE_VISUALPROLOG_DEFAULT (0) — whitespace / unclassified.
+//     Framework convention: leave unmapped.
+//   - SCE_VISUALPROLOG_KEY_MAJOR (1) — class-0 wordlist hit.
+//     Emitted via `ChangeState` at `:412`.
+//   - SCE_VISUALPROLOG_KEY_MINOR (2) — class-1 wordlist hit.
+//     Emitted via `ChangeState` at `:414`.
+//   - SCE_VISUALPROLOG_KEY_DIRECTIVE (3) — `#`-lead directive.
+//     Entered at `:622`. Falls back to IDENTIFIER at `:430`
+//     if the identifier following `#` doesn't match
+//     directiveKeywords.
+//   - SCE_VISUALPROLOG_COMMENT_BLOCK (4) — `/* ... */`
+//     multiline comment. Entered at `:586`. Nesting-aware via
+//     `ls.enter(comment)` at `:587, :451`.
+//   - SCE_VISUALPROLOG_COMMENT_LINE (5) — `%`-to-EOL line
+//     comment. Entered at `:590`.
+//   - SCE_VISUALPROLOG_COMMENT_KEY (6) — `@keyword` doc tag
+//     that matches docKeywords. Emitted via `ChangeState` at
+//     `:462`.
+//   - SCE_VISUALPROLOG_COMMENT_KEY_ERROR (7) — `@xxx` that
+//     doesn't match docKeywords. Entered at `:441` (in line
+//     comment) or `:454` (in block comment).
+//   - SCE_VISUALPROLOG_IDENTIFIER (8) — lowercase-lead
+//     identifier (transient collect state). Entered at
+//     `:580`. Settles via first-match-wins at `:411-415` to
+//     KEY_MAJOR / KEY_MINOR, or falls through to DEFAULT at
+//     `:416`. Framework convention: leave unmapped so
+//     unmatched atoms / predicates paint at STYLE_DEFAULT.
+//   - SCE_VISUALPROLOG_VARIABLE (9) — uppercase-lead
+//     identifier (Prolog variable convention). Entered at
+//     `:582`.
+//   - SCE_VISUALPROLOG_ANONYMOUS (10) — `_`-lead identifier
+//     (Prolog anonymous variable). Entered at `:584`.
+//   - SCE_VISUALPROLOG_NUMBER (11) — decimal / hex `0x` /
+//     octal `0o` numeric literal. Entered at `:578`.
+//   - SCE_VISUALPROLOG_OPERATOR (12) — operator character
+//     (`isoperator` in C-lib), `\`, or `@` when
+//     verbatim-strings option is disabled. Entered at `:625`.
+//   - SCE_VISUALPROLOG_UNUSED1 (13) — DEAD STATE. Framework
+//     convention: leave unmapped.
+//   - SCE_VISUALPROLOG_UNUSED2 (14) — DEAD STATE.
+//   - SCE_VISUALPROLOG_UNUSED3 (15) — DEAD STATE.
+//   - SCE_VISUALPROLOG_STRING_QUOTE (16) — literal string
+//     opening/closing quote character. Entered at `:575,
+//     :505, :612, :616, :620`.
+//   - SCE_VISUALPROLOG_STRING_ESCAPE (17) — recognised
+//     `\`-escape (`\n`, `\t`, `ሴ`, etc.). Emitted via
+//     `ChangeState` at `:515, :525` or `SetState` at `:501`.
+//   - SCE_VISUALPROLOG_STRING_ESCAPE_ERROR (18) — invalid or
+//     incomplete escape sequence. Entered at `:497`
+//     (unterminated non-verbatim string on EOL) and `:509`
+//     (backslash-lead but next char is not a recognised
+//     escape). Distinct from COMMENT_KEY_ERROR (7), which
+//     handles `@xxx` doc-tag failures at `:441` / `:454`.
+//   - SCE_VISUALPROLOG_UNUSED4 (19) — DEAD STATE.
+//   - SCE_VISUALPROLOG_STRING (20) — string body. Fall-through
+//     state after STRING_QUOTE / STRING_ESCAPE / STRING_EOL
+//     via the shared switch cases at `:485-490`.
+//   - SCE_VISUALPROLOG_UNUSED5 (21) — DEAD STATE.
+//   - SCE_VISUALPROLOG_STRING_EOL (22) — verbatim-string
+//     end-of-line marker. Entered at `:494`.
+//   - SCE_VISUALPROLOG_EMBEDDED (23) — `[| ... |]`
+//     embedded-syntax literal string. Entered at `:592`.
+//     Nests via `ls.enter(embedded)` at `:541`.
+//   - SCE_VISUALPROLOG_PLACEHOLDER (24) — `{| ... |}:ident`
+//     placeholder in embedded syntax. Entered at `:596, :600`.
+pub const SCE_VISUALPROLOG_DEFAULT: usize = 0;
+pub const SCE_VISUALPROLOG_KEY_MAJOR: usize = 1;
+pub const SCE_VISUALPROLOG_KEY_MINOR: usize = 2;
+pub const SCE_VISUALPROLOG_KEY_DIRECTIVE: usize = 3;
+pub const SCE_VISUALPROLOG_COMMENT_BLOCK: usize = 4;
+pub const SCE_VISUALPROLOG_COMMENT_LINE: usize = 5;
+pub const SCE_VISUALPROLOG_COMMENT_KEY: usize = 6;
+pub const SCE_VISUALPROLOG_COMMENT_KEY_ERROR: usize = 7;
+pub const SCE_VISUALPROLOG_IDENTIFIER: usize = 8;
+pub const SCE_VISUALPROLOG_VARIABLE: usize = 9;
+pub const SCE_VISUALPROLOG_ANONYMOUS: usize = 10;
+pub const SCE_VISUALPROLOG_NUMBER: usize = 11;
+pub const SCE_VISUALPROLOG_OPERATOR: usize = 12;
+pub const SCE_VISUALPROLOG_UNUSED1: usize = 13;
+pub const SCE_VISUALPROLOG_UNUSED2: usize = 14;
+pub const SCE_VISUALPROLOG_UNUSED3: usize = 15;
+pub const SCE_VISUALPROLOG_STRING_QUOTE: usize = 16;
+pub const SCE_VISUALPROLOG_STRING_ESCAPE: usize = 17;
+pub const SCE_VISUALPROLOG_STRING_ESCAPE_ERROR: usize = 18;
+pub const SCE_VISUALPROLOG_UNUSED4: usize = 19;
+pub const SCE_VISUALPROLOG_STRING: usize = 20;
+pub const SCE_VISUALPROLOG_UNUSED5: usize = 21;
+pub const SCE_VISUALPROLOG_STRING_EOL: usize = 22;
+pub const SCE_VISUALPROLOG_EMBEDDED: usize = 23;
+pub const SCE_VISUALPROLOG_PLACEHOLDER: usize = 24;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

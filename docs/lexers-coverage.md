@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 69 / 🟡 19 / ⚫ 1.
+Total: 89 rows. ✅ 70 / 🟡 18 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1931,7 +1931,7 @@ further shim work needed.
 | Verilog | 43 | `verilog` | ✅ | ✅ | ✅ |
 | VHDL | 38 | `vhdl` | ✅ | ✅ | ✅ |
 | Visual Basic | 18 | `vb` | ✅ | ✅ | ✅ |
-| Visual Prolog | 84 | `visualprolog` | ⚫ | ⚫ | 🟡 |
+| Visual Prolog | 84 | `visualprolog` | ✅ | ✅ | ✅ |
 | XML | 9 | `xml` | ✅ | ✅ | ✅ |
 | YAML | 49 | `yaml` | ✅ | ✅ | ✅ |
 
@@ -7533,6 +7533,191 @@ route to String), and
 **emphasis-family cohesion pin**
 (STRONG1 bold, EM1 italic, EM2
 italic — semantic markup styling).
+
+**Visual Prolog (2026-07-08):** wires
+`SCLEX_VISUALPROLOG` (= 107, per
+`SciLexer.h:123`) for Visual Prolog
+(extension `.vip`) — Prolog Development
+Center's OOP-flavoured Prolog dialect
+with typed classes, interfaces, and
+clause bodies. Four-class wordlist
+descriptor per `LexVisualProlog.cxx:60-66`
+(Major / Minor / Directive / Doc).
+Wordlists mirror upstream Lexilla's own
+`visualprolog/SciTE.properties` fixture
+verbatim: **major** (class 0, 21 tokens
+— object model + section declarations +
+API-level predicates), **minor** (class
+1, 50 tokens — primitive types, control
+flow, determinism modes, calling
+conventions, Prolog logical operators),
+**directive** (class 2, 9 tokens —
+`#include` / `#requires` etc. stored
+HASHLESS), and **doc** (class 3, 5
+tokens — `@short` / `@detail` / `@end`
+/ `@exception` / `@withdomain` stored
+AT-LESS). 85 total tokens.
+
+**Case-SENSITIVE.** `LexVisualProlog.cxx`
+uses `GetCurrent` + `strcmp` throughout,
+no lowercasing anywhere. Visual Prolog
+is strictly case-sensitive: lowercase-
+lead identifiers are atoms/predicates
+(IDENTIFIER at `:580`), UPPERCASE-lead
+are Prolog variables (VARIABLE at
+`:582`), `_`-lead are anonymous
+variables (ANONYMOUS at `:584`).
+Canonical PDC vocabulary is lowercase-
+lead but may contain internal camelCase
+for type names (e.g. `binaryNonAtomic`,
+`compareResult`, `integerNative`,
+`unsignedNative`); invariant 5
+enforces lowercase-LEAD + `[a-zA-Z0-9_]`.
+
+**Prefix stripping.** Class 2 entries
+hold the HASHLESS stem: source
+`#include` parses as OPERATOR `#` +
+KEY_DIRECTIVE identifier, then
+`directiveKeywords.InList(s + 1)` at
+`:429` probes the identifier minus the
+leading `#`. Class 3 doc keywords
+similarly stored AT-LESS: `@short` in a
+comment triggers `docKeywords.InList(s +
+1)` at `:461`. Invariant 18 enforces
+both prefix strips.
+
+**Cross-class disjointness matrix.**
+Classes 0 and 1 share the same call
+site at `:411-415` (forward first-match-
+wins) — strict disjointness enforced.
+Classes 2 (directive) and 3 (doc) are
+guarded by distinct entry points
+(`#`-lead / `@`-lead), so cross-class
+overlap between them and classes 0/1
+CANNOT collide at paint time. Per
+upstream, `externally` is the single
+documented cross-class overlap: it
+appears in BOTH class 1 (a modifier
+keyword) AND class 2 (`#externally`
+compiler directive form). Invariant 7
+affirmatively asserts this overlap.
+
+**`end` lookahead.** Special-case at
+`:408-410`: when the IDENTIFIER settle
+path collects the word `end`,
+`endLookAhead` at `:240-253` peeks past
+whitespace to the following keyword,
+then re-uses `s` to look up THAT
+keyword's class. So `end class` paints
+as two KEY_MAJOR tokens (because `class`
+matches majorKeywords), `end if` paints
+as two KEY_MINOR tokens (because `if`
+matches minorKeywords). `end` itself is
+NOT in class 0 — it lives in class 3
+(doc keywords) per upstream, where
+`@end` is a block-end marker in
+documentation comments. Bare `end` in
+code works purely because the following
+keyword drives the reclassification.
+
+**Seventeen-mapping style routing** —
+25 defined slots minus 8 unmapped:
+DEFAULT (framework convention),
+IDENTIFIER (transient collect state,
+unmatched atoms fall through to
+STYLE_DEFAULT), **STRING_ESCAPE_ERROR
+(18) deferred to the `StyleSlot::Error`
+migration** (authoritative parse
+failure — belongs on the same tracked
+migration list as Nim's STRINGEOL /
+NUMERROR and the ~20+ sibling `_ERROR`
+variants; unmapped until the Error
+slot lands), and **UNUSED1/2/3 (13-15)
++ UNUSED4 (19) + UNUSED5 (21) are
+DEAD STATES** — all five documented as
+`"unused"` in `lexicalClasses[]` at
+`:92-100` with empty descriptions,
+zero call sites verified by exhaustive
+grep. Mapped: KEY_MAJOR → Keyword
+(bold); KEY_MINOR → Keyword2;
+KEY_DIRECTIVE → Preprocessor; two
+Comment forms + COMMENT_KEY_ERROR →
+Comment (italic); COMMENT_KEY →
+Keyword2 (Javadoc-style inside prose);
+**VARIABLE / ANONYMOUS → Lifetime**
+(Prolog variables are distinctive-
+identifier forms — same slot as Rust
+`'a` lifetimes / Registry escapes);
+NUMBER / OPERATOR / STRING /
+STRING_QUOTE / **STRING_EOL → String**
+(STRING_EOL is the benign verbatim
+multi-line continuation, matching the
+7-sibling `_STRINGEOL` → String
+convention already established in the
+file — not an anomaly marker);
+**STRING_ESCAPE → Lifetime** (same
+accent as Registry ESCAPED); **EMBEDDED
+/ PLACEHOLDER → Macro** — `[| ... |]`
+embedded-syntax and `{| ... |}:ident`
+placeholder literals are distinctive
+special-construct forms.
+
+**Nesting support.** `/* ... */` block
+comments nest via `ls.enter(comment)`
+at `:587, :451`. `[| ... |]` embedded
+syntax nests via `ls.enter(embedded)`
+at `:541`. `{| ... |}` placeholders
+escape to EMBEDDED when nested inside
+an embedded region (`:554-555`) or to
+DEFAULT at top-level (`:557`); the
+EMBEDDED escape is the more common case
+per PLACEHOLDER's `lexicalClasses[]`
+description ("in embedded syntax"). The
+`kindStack` (2 bits per level, up to 16
+levels) supports this at `:322-350`.
+
+Structural test coverage: 23 invariants
+— deep-value identity pin, 17-mapping
+style count (25 defined slots minus 8
+unmapped), four populated classes in
+canonical descriptor order, **lowercase-
+LEAD + `[a-zA-Z0-9_]` alphabet**
+enforcement across every class (accepts
+canonical camelCase types like
+`binaryNonAtomic`), **strict cross-
+class disjointness for classes 0 vs 1**
+(load-bearing for forward first-match-
+wins), **affirmative overlap assertion
+for classes 1 vs 2** (documented
+`externally` upstream overlap), style-
+routing pins for all 17 mapped
+constants, 8 unmapped slots confirmed
+absent with drift-pin assertions
+(DEFAULT + IDENTIFIER +
+STRING_ESCAPE_ERROR + 5 UNUSED slots),
+italic set == 4 (all four comment
+states), bold set == 1 (KEY_MAJOR —
+primary structural anchor), cross-
+language non-reuse (C++ / REBOL /
+OScript / Spice), `L_VISUALPROLOG`
+`LangEntry`'s `lexer: Some("visualprolog")`
++ `.vip` extension, canonical MAJOR /
+MINOR / DIRECTIVE / DOC anchors,
+**hash/at-prefix-stripped stems only
+pin** (LOAD-BEARING — `#`/`@` entries
+never match), highest-defined
+`SCE_VISUALPROLOG_*` pin
+(`SCE_VISUALPROLOG_PLACEHOLDER` (24) as
+top slot), **variable-family cohesion
+pin** (VARIABLE + ANONYMOUS both
+Lifetime), **string-family cohesion
+pin** (STRING + STRING_QUOTE +
+STRING_EOL all String; STRING_ESCAPE
+Lifetime; STRING_ESCAPE_ERROR deferred
+to `StyleSlot::Error`), **embedded-
+syntax cohesion pin** (EMBEDDED +
+PLACEHOLDER both Macro), and no-
+duplicate defence-in-depth check.
 
 ## Notes
 
