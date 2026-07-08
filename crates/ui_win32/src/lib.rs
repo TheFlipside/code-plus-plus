@@ -125,24 +125,24 @@ use codepp_core::lang::{
     L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
     L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
     L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY,
-    L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TXT2TAGS, L_VB, L_VERILOG,
-    L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
-    MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
-    NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-    OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
-    OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
-    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2,
-    REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
-    R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+    L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB,
+    L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
+    MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS,
+    NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+    OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS,
+    OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS,
+    PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
+    POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
+    PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+    REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS,
+    R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
     SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS,
     SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-    VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
-    VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
-    XML_KEYWORDS, YAML_KEYWORDS,
+    TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+    VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
+    VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -3674,6 +3674,40 @@ const JAVA_THEME: LangTheme = LangTheme {
 //     / class-1-owns-these rationale.
 const JAVASCRIPT_THEME: LangTheme = LangTheme {
     keywords: &[(0, JAVASCRIPT_KEYWORDS), (1, JAVASCRIPT_KEYWORDS_2)],
+    styles: CPP_STYLES,
+    italic: CPP_ITALIC,
+    bold: CPP_BOLD,
+};
+// TypeScript rides `LexCPP` (per `L_TYPESCRIPT`'s LangEntry
+// `lexer: Some("cpp")`, extensions `.ts` / `.tsx`) — the SAME
+// shared `CPP_STYLES` / `CPP_ITALIC` / `CPP_BOLD` reused across
+// every LexCPP-family theme. Only the class-0 + class-1 keyword
+// pair differs from JavaScript:
+//   - class 0 = `TYPESCRIPT_KEYWORDS` (66 tokens — the 49-token
+//     JavaScript baseline plus 17 TS-specific reserved words:
+//     `type` / `namespace` / `declare` / `abstract` / `readonly`
+//     / `override` / `accessor` / `is` / `asserts` / `keyof` /
+//     `infer` / `as` / `satisfies` / `unique` / `intrinsic` /
+//     `using` / `out`).
+//   - class 1 = `TYPESCRIPT_KEYWORDS_2` (60 tokens — the
+//     9 TS primitive-type identifiers `string` / `number` /
+//     `boolean` / `any` / `never` / `unknown` / `object` /
+//     `symbol` / `bigint` plus the 51-token JavaScript
+//     built-ins baseline from `JAVASCRIPT_KEYWORDS_2`).
+//
+// **Superset discipline.** TypeScript is a strict syntactic
+// superset of JavaScript at the grammar level — every JS
+// reserved word is also a TS reserved word, and every JS
+// built-in constructor is also a TS built-in. That's why the
+// baseline is duplicated (each list is independently valid
+// input to `SCI_SETKEYWORDS`); the alternative — sharing the
+// underlying storage — would fight `LexCPP`'s wordlist contract
+// (each descriptor slot is one flat wordlist). Content drift
+// between JS and TS would break intended TS-runs-on-JS-runtime
+// semantics; the invariant test in `tests` pins the
+// baseline-equality contract affirmatively.
+const TYPESCRIPT_THEME: LangTheme = LangTheme {
+    keywords: &[(0, TYPESCRIPT_KEYWORDS), (1, TYPESCRIPT_KEYWORDS_2)],
     styles: CPP_STYLES,
     italic: CPP_ITALIC,
     bold: CPP_BOLD,
@@ -10153,6 +10187,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&SPICE_THEME)
     } else if lang == L_TXT2TAGS {
         Some(&TXT2TAGS_THEME)
+    } else if lang == L_TYPESCRIPT {
+        Some(&TYPESCRIPT_THEME)
     } else if lang == L_VISUALPROLOG {
         Some(&VISUALPROLOG_THEME)
     } else {
@@ -25397,24 +25433,25 @@ mod lang_theme_tests {
         L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
         L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP,
         L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST,
-        L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TEXT, L_TXT2TAGS, L_VB, L_VERILOG,
-        L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
-        MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
-        NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-        OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
-        OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-        POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
-        POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-        PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD,
-        REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS,
-        R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-        SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3,
-        SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
-        TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS,
-        VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
-        VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-        VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
-        VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+        L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TEXT, L_TXT2TAGS, L_TYPESCRIPT,
+        L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
+        MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS,
+        NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS,
+        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS,
+        OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS,
+        PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS,
+        POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1,
+        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+        PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4,
+        REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
+        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS,
+        SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS,
+        TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
+        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
+        VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
+        XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -25533,6 +25570,7 @@ mod lang_theme_tests {
             (L_NNCRONTAB, "NNCrontab"),
             (L_OSCRIPT, "OScript"),
             (L_REBOL, "REBOL"),
+            (L_TYPESCRIPT, "TypeScript"),
             (L_VISUALPROLOG, "Visual Prolog"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
@@ -25836,6 +25874,232 @@ mod lang_theme_tests {
         if let Some(shared) = wl0.intersection(&wl1).next() {
             panic!(
                 "JAVASCRIPT_KEYWORDS and JAVASCRIPT_KEYWORDS_2 both contain \
+                 `{shared}` — LexCPP's classifier checks class 0 first, so \
+                 the class-1 entry is dead code"
+            );
+        }
+    }
+
+    /// TypeScript uses `LexCPP` (per `L_TYPESCRIPT`'s `LangEntry`
+    /// `lexer: Some("cpp")`) — same shared style table as C / C++ /
+    /// C# / Java / Objective-C / JavaScript. Only the two keyword
+    /// lists differ.
+    ///
+    /// **TypeScript is a strict syntactic superset of JavaScript at
+    /// the grammar level.** Every JS reserved word is a TS reserved
+    /// word; every JS built-in constructor is a TS built-in. The two
+    /// keyword classes are therefore duplicated (not cross-referenced)
+    /// because `SCI_SETKEYWORDS` takes a flat wordlist per slot —
+    /// there is no "include" primitive. Pins:
+    ///   - Style-table reuse (`CPP_STYLES` / `CPP_ITALIC` /
+    ///     `CPP_BOLD`).
+    ///   - Canonical class-0 link to [`TYPESCRIPT_KEYWORDS`] and
+    ///     class-1 link to [`TYPESCRIPT_KEYWORDS_2`] — a regression
+    ///     that swapped either list (or, worse, re-installed
+    ///     `JAVASCRIPT_KEYWORDS` for TypeScript and silently
+    ///     dropped `type`/`interface`/`keyof`/etc.) would fail this
+    ///     test.
+    ///   - **JS baseline superset** — every token in
+    ///     `JAVASCRIPT_KEYWORDS` appears in `TYPESCRIPT_KEYWORDS`,
+    ///     and every token in `JAVASCRIPT_KEYWORDS_2` appears in
+    ///     `TYPESCRIPT_KEYWORDS_2`. This is the language-spec
+    ///     contract; a regression that dropped a JS keyword from
+    ///     the TS list would silently break TS parsing of valid
+    ///     JS-embedded-in-TS code.
+    ///   - Presence of TS-specific reserved keywords in class 0
+    ///     (`type` / `namespace` / `declare` / `abstract` /
+    ///     `readonly` / `override` / `accessor` / `is` /
+    ///     `asserts` / `keyof` / `infer` / `as` / `satisfies` /
+    ///     `unique` / `intrinsic` / `using` / `out`).
+    ///   - Presence of TS primitive-type identifiers in class 1
+    ///     (`string` / `number` / `boolean` / `any` / `never` /
+    ///     `unknown` / `object` / `symbol` / `bigint`) — the
+    ///     lowercase type-position spellings distinct from the JS
+    ///     constructors (`String` / `Number` / `Boolean` / etc.)
+    ///     already in the baseline.
+    ///   - Class-0 vs class-1 disjointness (per `LexCPP` classifier
+    ///     order: class-0 matches first, so a class-1 duplicate
+    ///     would be dead code).
+    ///   - Absence of DOM instances / Node globals / TS utility
+    ///     types / `JSX` from class 1 — matches the framework-scope
+    ///     exclusion rationale documented on the wordlist itself.
+    ///   - Absence of `constructor` / `require` / `from` / `get` /
+    ///     `set` / `global` from class 0 — same identifier-collision
+    ///     rationale as JavaScript's exclusion of the same tokens.
+    #[test]
+    fn typescript_reuses_lexcpp_style_table_and_extends_js_keywords() {
+        let c = lang_theme(L_C).expect("C wired");
+        let js = lang_theme(L_JAVASCRIPT).expect("JavaScript wired");
+        let ts = lang_theme(L_TYPESCRIPT).expect("TypeScript wired");
+        assert_eq!(ts.styles, c.styles, "TS must reuse CPP_STYLES");
+        assert_eq!(ts.italic, c.italic, "TS must reuse CPP_ITALIC");
+        assert_eq!(ts.bold, c.bold, "TS must reuse CPP_BOLD");
+        assert_eq!(ts.keywords.len(), 2, "TS installs class 0 + class 1");
+        assert_eq!(ts.keywords[0].0, 0);
+        assert_eq!(ts.keywords[0].1, TYPESCRIPT_KEYWORDS);
+        assert_eq!(ts.keywords[1].0, 1);
+        assert_eq!(ts.keywords[1].1, TYPESCRIPT_KEYWORDS_2);
+        // Superset contract: class-0 content differs from JS
+        // (superset != equal — TS adds `type`/`namespace`/etc.).
+        assert_ne!(
+            ts.keywords[0].1, js.keywords[0].1,
+            "TS class 0 must NOT equal JS class 0 — TS is a strict \
+             superset and adds `type`/`namespace`/`keyof`/etc.; a copy \
+             of the JS list without those additions would silently \
+             mis-classify every TS-specific keyword"
+        );
+        assert_ne!(
+            ts.keywords[1].1, js.keywords[1].1,
+            "TS class 1 must NOT equal JS class 1 — TS adds primitive-\
+             type identifiers (`string`/`number`/`boolean`/etc.); a \
+             copy of the JS list without those would drop the \
+             type-position keywords to STYLE_DEFAULT"
+        );
+        // Superset contract: every JS class-0 token must be in TS
+        // class 0. `LexCPP` per-language wordlists don't inherit —
+        // the TS list must carry the JS baseline explicitly.
+        use std::collections::HashSet;
+        let js0: HashSet<&str> = JAVASCRIPT_KEYWORDS.split_whitespace().collect();
+        let ts0: HashSet<&str> = TYPESCRIPT_KEYWORDS.split_whitespace().collect();
+        for tok in &js0 {
+            assert!(
+                ts0.contains(tok),
+                "TYPESCRIPT_KEYWORDS missing JS class-0 token `{tok}` — \
+                 TS is a JS superset; this token must appear in TS class \
+                 0 to preserve TS-parses-valid-JS semantics"
+            );
+        }
+        let js1: HashSet<&str> = JAVASCRIPT_KEYWORDS_2.split_whitespace().collect();
+        let ts1: HashSet<&str> = TYPESCRIPT_KEYWORDS_2.split_whitespace().collect();
+        for tok in &js1 {
+            assert!(
+                ts1.contains(tok),
+                "TYPESCRIPT_KEYWORDS_2 missing JS class-1 token `{tok}` — \
+                 TS runs on a JS runtime; all JS built-ins must remain \
+                 accent-highlighted in TS"
+            );
+        }
+        // Class-0 must include the 17 TS-specific reserved keywords.
+        // Spot-check every anchor by name so a regression that
+        // dropped a token (declaration keywords / class modifiers /
+        // type operators / resource management / variance) is
+        // caught by name, not by count.
+        for anchor in [
+            "type",
+            "namespace",
+            "declare",
+            "abstract",
+            "readonly",
+            "override",
+            "accessor",
+            "is",
+            "asserts",
+            "keyof",
+            "infer",
+            "as",
+            "satisfies",
+            "unique",
+            "intrinsic",
+            "using",
+            "out",
+        ] {
+            assert!(
+                ts0.contains(anchor),
+                "TYPESCRIPT_KEYWORDS must include TS-specific reserved \
+                 keyword `{anchor}`"
+            );
+        }
+        // Class-1 must include the 9 TS primitive-type identifiers.
+        for anchor in [
+            "string", "number", "boolean", "any", "never", "unknown", "object", "symbol", "bigint",
+        ] {
+            assert!(
+                ts1.contains(anchor),
+                "TYPESCRIPT_KEYWORDS_2 must include TS primitive-type \
+                 identifier `{anchor}`"
+            );
+        }
+        // Explicit-exclusion pins (class 0). Same identifier-collision
+        // rationale as JS: these tokens are contextual and would
+        // mis-colour user-code identifiers of the same name.
+        // `module` is here because the legacy TS 1.x
+        // `module Foo { ... }` syntax collides with the ubiquitous
+        // CommonJS `module.exports = ...` runtime binding in real-world
+        // `.ts` config/build/Node code — see `TYPESCRIPT_KEYWORDS`
+        // docstring's exclusions section. `assert` (deprecated import-
+        // attributes) and `defer` (Stage-3 proposal) also excluded per
+        // that same section.
+        for excluded in [
+            "constructor",
+            "require",
+            "from",
+            "get",
+            "set",
+            "global",
+            "module",
+            "assert",
+            "defer",
+        ] {
+            assert!(
+                !ts0.contains(excluded),
+                "TYPESCRIPT_KEYWORDS must NOT include contextual token \
+                 `{excluded}` — it's an identifier at most positions and \
+                 including it would mis-colour user code"
+            );
+        }
+        // Explicit-exclusion pins (class 1). DOM / Node / utility
+        // types belong to framework scope, not TS language.
+        for excluded in [
+            "window",
+            "document",
+            "navigator",
+            "localStorage",
+            "Buffer",
+            "process",
+            "Partial",
+            "Required",
+            "Readonly",
+            "Record",
+            "Pick",
+            "Omit",
+            "JSX",
+        ] {
+            assert!(
+                !ts1.contains(excluded),
+                "TYPESCRIPT_KEYWORDS_2 must NOT include out-of-scope \
+                 identifier `{excluded}` — DOM instances, Node globals, \
+                 utility types, and framework namespaces belong outside \
+                 the language built-in slot"
+            );
+        }
+        // Class-0 value literals must NOT be duplicated in class 1
+        // (LexCPP matches class 0 first — a duplicate is dead code).
+        for lit in ["true", "false", "null", "undefined", "void"] {
+            assert!(
+                !ts1.contains(lit),
+                "TYPESCRIPT_KEYWORDS_2 must NOT include value literal `{lit}` \
+                 — already in class 0; class-1 duplicate is dead code"
+            );
+        }
+        // NaN + Infinity stay in class 1 only (per the ES §21.1
+        // Global Value Properties rationale, same as JS).
+        for global in ["NaN", "Infinity"] {
+            assert!(
+                ts1.contains(global),
+                "TYPESCRIPT_KEYWORDS_2 must include ES §21.1 global `{global}`"
+            );
+            assert!(
+                !ts0.contains(global),
+                "TYPESCRIPT_KEYWORDS must NOT include `{global}` — it's an ES \
+                 §21.1 global, not a language literal; lives in class 1"
+            );
+        }
+        // No token overlap between class 0 and class 1 (LexCPP's
+        // classifier probes class 0 first — a class-1 duplicate
+        // is dead code).
+        if let Some(shared) = ts0.intersection(&ts1).next() {
+            panic!(
+                "TYPESCRIPT_KEYWORDS and TYPESCRIPT_KEYWORDS_2 both contain \
                  `{shared}` — LexCPP's classifier checks class 0 first, so \
                  the class-1 entry is dead code"
             );

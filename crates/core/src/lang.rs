@@ -2316,6 +2316,255 @@ pub const JAVASCRIPT_KEYWORDS_2: &str = concat!(
     "globalThis console NaN Infinity",
 );
 
+/// Space-separated TypeScript reserved-word list installed as **class 0**
+/// of `LexCPP`'s wordlist descriptor (`SCE_C_WORD`, bold "Keyword" slot).
+/// TypeScript rides `LexCPP` (per `L_TYPESCRIPT`'s [`LangEntry`] with
+/// `lexer: Some("cpp")`) — same style table as C / C++ / JavaScript;
+/// only the two keyword classes differ.
+///
+/// **Case sensitive.** TypeScript is case-sensitive at the spec level
+/// (Microsoft/TypeScript §"Grammar"); `LexCPP`'s identifier classifier
+/// calls `sc.GetCurrent(s, sizeof(s))` byte-exact.
+///
+/// **Superset relationship with [`JAVASCRIPT_KEYWORDS`].** TypeScript
+/// is a strict syntactic superset of JavaScript — every JS reserved
+/// word is also a TS reserved word, with no divergence. The two
+/// class-0 wordlists therefore share the same 49-token JS baseline,
+/// and TypeScript adds 16 TS-specific reserved keywords on top. The
+/// baseline is duplicated (not cross-referenced) because
+/// `SCI_SETKEYWORDS` takes a plain space-separated list — there is
+/// no "include" primitive — and the two lists must remain
+/// independently readable per `SCE_C_WORD` slot.
+///
+/// **Categories** (66 entries):
+///
+/// 1. **JavaScript baseline** — every entry from
+///    [`JAVASCRIPT_KEYWORDS`], grouped identically:
+///    - ES5 reserved words (34) — `break` … `yield`.
+///    - ES2015+ block-scoped bindings (2) — `let` / `static`.
+///    - ES2017+ coroutines and contextual for-of (3) — `async` /
+///      `await` / `of`.
+///    - Strict-mode future-reserved (6) — `implements` / `interface` /
+///      `package` / `private` / `protected` / `public`. `interface`
+///      and `implements` are additionally **first-class TypeScript
+///      keywords** with real parser rules, but their JS
+///      classification already places them in class 0, so no move
+///      is needed.
+///    - Language literals (4) — `true` / `false` / `null` / `undefined`.
+/// 2. **TypeScript-specific reserved keywords** (17) — the tokens
+///    that gate TS parsing at spec level:
+///    - **Declaration keywords** — `type` (type-alias declaration —
+///      TS 1.4+), `namespace` (module system — TS 1.5+),
+///      `declare` (ambient declaration — TS 0.8+). Legacy
+///      `module Foo { ... }` syntax is deliberately excluded — see
+///      below.
+///    - **Class-member modifiers** — `abstract` (TS 1.6+), `readonly`
+///      (TS 2.0+), `override` (TS 4.3+), `accessor` (auto-accessor —
+///      TS 4.9+).
+///    - **Type-system operators** — `is` (type predicate — TS 1.6+),
+///      `keyof` (index type query — TS 2.1+), `infer` (conditional
+///      type inference — TS 2.8+), `as` (type assertion + import
+///      alias — TS 1.6+, introduced alongside JSX/`.tsx` support to
+///      disambiguate `<T>value` casts from JSX syntax),
+///      `satisfies` (expression validation against a type — TS 4.9+),
+///      `unique` (part of `unique symbol` nominal type — TS 2.7+),
+///      `intrinsic` (compiler-intrinsic type marker used by
+///      `Uppercase` / `Lowercase` / `Capitalize` / `Uncapitalize` —
+///      TS 4.1+), `asserts` (assertion-function type predicate —
+///      `function assert(x: unknown): asserts x is Foo` — TS 3.7+;
+///      sibling to `is` in the type-predicate grammar).
+///    - **Resource management** — `using` (explicit resource-
+///      management `using x = disposable` / `await using x = ...` —
+///      TS 5.2+; ES2026 Stage 4 tracker).
+///    - **Variance annotations** — `out` (covariant parameter
+///      annotation — TS 4.7+; `in` for contravariance is already
+///      in the JS baseline as the `in` operator).
+///
+/// **Deliberate exclusions:**
+///
+/// - **`get` / `set`** — auto-accessor keywords, but only in class
+///   method-shorthand position. In non-class-body position they are
+///   ordinary identifiers (`const set = new Set()`). Highlighting
+///   them as keywords everywhere would mis-colour every `Set`
+///   variable and every user function named `get`. Same rationale
+///   as [`JAVASCRIPT_KEYWORDS`]'s exclusion of `get`/`set`.
+/// - **`from`** — only meaningful in module-import position
+///   (`import { x } from 'y'`). At other positions it's an
+///   identifier. Excluded to avoid mis-colouring a user variable
+///   named `from`.
+/// - **`global`** — only meaningful inside `declare global { ... }`
+///   ambient blocks. Extremely rare in application code; commonly
+///   used as an identifier for the runtime global object in Node
+///   compatibility shims. Excluded.
+/// - **`constructor`** — the special method name, but a bare
+///   identifier at every other position (`obj.constructor`,
+///   `type X = { constructor(...): void }`). `LexCPP` treats it as
+///   an identifier if class 0 doesn't list it, which is exactly
+///   what we want — bare identifiers paint at `STYLE_DEFAULT` via
+///   the framework's universal identifier-omission convention.
+/// - **`require`** — a `CommonJS` runtime function, not a language
+///   keyword. `import` is TypeScript's ES-module keyword.
+/// - **`module`** — LEGACY TypeScript 1.x namespace-declaration
+///   keyword (`module Foo { ... }`), superseded by `namespace` in
+///   TS 1.5 and effectively removed from modern code. Including it
+///   would silently bold-highlight every `module.exports = ...`
+///   line in the Node/CommonJS idiom that permeates real-world `.ts`
+///   config, build, and Node application files — a mis-colour that
+///   affects far more code than the legacy syntax it would help
+///   with. `namespace` (its modern replacement) is included above.
+/// - **`assert`** — deprecated ES2022 import-attributes keyword
+///   (`import x from 'y' assert { type: 'json' }`), superseded by
+///   `with` in ES2024 (TS 5.3). Also collides with the common
+///   `console.assert` and unit-test `assert(x)` runtime idioms.
+/// - **`defer`** — TC39 Stage 3 proposal for deferred module
+///   imports (`import defer * as x from 'y'`); not yet ratified,
+///   not present in any shipping TS/tsc version at time of writing.
+///   Add when the proposal reaches Stage 4.
+///
+/// **TypeScript primitive-type identifiers (`string` / `number` /
+/// `boolean` / `any` / `never` / `unknown` / `object` / `symbol` /
+/// `bigint`) belong in class 1**, not here — they are contextual
+/// type identifiers, structurally the same slot as C's `int` / `char`
+/// (primitive-type keywords) and JavaScript's built-in constructors
+/// (`Array` / `Object`). See [`TYPESCRIPT_KEYWORDS_2`].
+///
+/// Sourced from the TypeScript Language Specification §2.2.3 and
+/// §3 (types), the reference lists in
+/// <https://github.com/microsoft/TypeScript/tree/main/src/compiler/scanner.ts>
+/// (canonical `textToKeyword` map), and Notepad++'s stylers.xml
+/// TypeScript defaults.
+pub const TYPESCRIPT_KEYWORDS: &str = concat!(
+    // JavaScript baseline (49 tokens) — mirrors JAVASCRIPT_KEYWORDS.
+    // ES5 reserved words.
+    "break case catch class const continue debugger default delete do ",
+    "else enum export extends finally for function if import in ",
+    "instanceof new return super switch this throw try typeof var ",
+    "void while with yield ",
+    // ES2015+ block-scoped bindings.
+    "let static ",
+    // ES2017+ coroutines and contextual for-of.
+    "async await of ",
+    // Strict-mode future-reserved.
+    "implements interface package private protected public ",
+    // Language literals.
+    "true false null undefined ",
+    // TypeScript-specific reserved keywords (17 tokens).
+    // Declaration keywords (legacy `module` omitted — see
+    // docstring's CommonJS `module.exports` collision rationale).
+    "type namespace declare ",
+    // Class-member modifiers.
+    "abstract readonly override accessor ",
+    // Type-system operators (`asserts` is the sibling of `is` for
+    // assertion-function predicates — `asserts x is Foo`).
+    "is asserts keyof infer as satisfies unique intrinsic ",
+    // Resource management (TS 5.2+).
+    "using ",
+    // Variance annotation (`in` reused from JS baseline as
+    // the `in` operator).
+    "out",
+);
+
+/// Space-separated TypeScript **built-in-types + built-in-globals**
+/// list installed as **class 1** of `LexCPP`'s wordlist descriptor
+/// (`SCE_C_WORD2`, accent "Keyword2" slot). Same class-1 slot
+/// occupied by C's primitive types (`int`, `char`) and JavaScript's
+/// built-in constructors (`Array`, `Object`).
+///
+/// **Superset relationship with [`JAVASCRIPT_KEYWORDS_2`].** Every
+/// JavaScript built-in is also a TypeScript built-in — TS runs on a
+/// JS runtime, so `Array`, `Promise`, `Math`, the Error hierarchy,
+/// the typed-array family, and the ES §21.1 language globals
+/// (`globalThis`, `console`, `NaN`, `Infinity`) all remain in scope.
+/// TypeScript adds the 9 primitive **type identifiers** on top —
+/// `string` / `number` / `boolean` / `any` / `never` / `unknown` /
+/// `object` / `symbol` / `bigint` — the lowercase type-position
+/// spellings distinct from the JS constructors (`String` / `Number`
+/// / `Boolean` / `Object` / `Symbol` / `BigInt`) already in the
+/// baseline. Case-sensitive lookup means the two spellings don't
+/// collide.
+///
+/// **Case-sensitive byte-exact match.** Same classifier discipline
+/// as [`JAVASCRIPT_KEYWORDS_2`] — `LexCPP` byte-matches identifiers.
+///
+/// **Categories** (60 entries):
+///
+/// 1. **TypeScript primitive-type identifiers** (9) — contextual
+///    keywords used in type position:
+///    - `string` — string primitive (TS 0.8+).
+///    - `number` — number primitive (TS 0.8+).
+///    - `boolean` — boolean primitive (TS 0.8+).
+///    - `any` — dynamic escape hatch (TS 0.8+).
+///    - `never` — bottom type (TS 2.0+).
+///    - `unknown` — top type (TS 3.0+).
+///    - `object` — non-primitive marker (TS 2.2+).
+///    - `symbol` — symbol primitive (TS 2.0+).
+///    - `bigint` — `BigInt` primitive (TS 3.2+).
+/// 2. **JavaScript baseline** (51) — every entry from
+///    [`JAVASCRIPT_KEYWORDS_2`], grouped identically:
+///    - General wrappers (12) — `Array` … `BigInt`.
+///    - Concurrent + iteration primitives (4) — `Promise`,
+///      `Proxy`, `Reflect`, `Iterator` (ES2025).
+///    - Collections (5) — `Map` … `WeakRef`.
+///    - Error hierarchy (8) — `Error` … `AggregateError`.
+///    - Buffer / view primitives (3) — `ArrayBuffer`, `DataView`,
+///      `SharedArrayBuffer`.
+///    - Typed-array family (12) — `Float16Array` (ES2025) …
+///      `BigUint64Array`.
+///    - Namespace globals (3) — `Intl`, `Atomics`, `WebAssembly`.
+///    - Language / host globals (4) — `globalThis`, `console`,
+///      `NaN`, `Infinity`.
+///
+/// Sum: 9 + 12 + 4 + 5 + 8 + 3 + 12 + 3 + 4 = 60.
+///
+/// **Deliberately excluded:**
+///
+/// - **`void`** — reserved as an ES operator, already in
+///   [`TYPESCRIPT_KEYWORDS`] class 0; also a return-type keyword in
+///   TypeScript, but class-0 owns it. A class-1 duplicate would be
+///   dead code (`LexCPP` matches class 0 first).
+/// - **`null` / `undefined`** — same as above; already class-0
+///   literals per [`TYPESCRIPT_KEYWORDS`].
+/// - **DOM instances** (`window`, `document`, `navigator`,
+///   `localStorage`, `history`) — browser-runtime globals, not
+///   ECMAScript or TypeScript built-ins. Same exclusion rationale
+///   as [`JAVASCRIPT_KEYWORDS_2`]. A `.ts` file compiled for Node
+///   wouldn't have them.
+/// - **Node globals** (`Buffer`, `process`, `__dirname`, `require`,
+///   `module`, `exports`) — Node runtime, not TypeScript language.
+/// - **Utility types** (`Partial`, `Required`, `Readonly`, `Pick`,
+///   `Omit`, `Record`, `Exclude`, `Extract`, `Parameters`,
+///   `ReturnType`, `Uppercase`, `Lowercase`) — TypeScript
+///   `lib.d.ts` type aliases, not runtime globals. They only exist
+///   in type-position and are ambient-declared per compilation.
+///   Including them would render an identifier `Record` at
+///   accent-colour in JS code compiled to TS.
+/// - **`JSX`** — namespace declared by React's ambient
+///   `lib.dom.d.ts`, not a TypeScript language built-in. Framework
+///   scope, not language.
+///
+/// Sourced and adversarially verified across three lenses
+/// (TypeScript Language Specification §3 / `lib.d.ts` / Notepad++
+/// baseline).
+pub const TYPESCRIPT_KEYWORDS_2: &str = concat!(
+    // TypeScript primitive-type identifiers.
+    "string number boolean any never unknown object symbol bigint ",
+    // JavaScript baseline (51 tokens) — mirrors
+    // JAVASCRIPT_KEYWORDS_2 verbatim.
+    "Array Boolean Date Function JSON Math Number Object ",
+    "RegExp String Symbol BigInt ",
+    "Promise Proxy Reflect Iterator ",
+    "Map Set WeakMap WeakSet WeakRef ",
+    "Error EvalError RangeError ReferenceError SyntaxError ",
+    "TypeError URIError AggregateError ",
+    "ArrayBuffer DataView SharedArrayBuffer ",
+    "Float16Array Float32Array Float64Array ",
+    "Int8Array Int16Array Int32Array ",
+    "Uint8Array Uint8ClampedArray Uint16Array Uint32Array ",
+    "BigInt64Array BigUint64Array ",
+    "Intl Atomics WebAssembly ",
+    "globalThis console NaN Infinity",
+);
+
 /// Space-separated `VBScript` reserved-word list installed via the
 /// hypertext lexer's `SCI_SETKEYWORDS(2, ...)`. Class 2 of
 /// `htmlWordListDesc[]` drives both `SCE_HB_WORD` (client-side

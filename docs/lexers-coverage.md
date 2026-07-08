@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 70 / 🟡 18 / ⚫ 1.
+Total: 89 rows. ✅ 71 / 🟡 17 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1927,7 +1927,7 @@ further shim work needed.
 | TeX | 24 | `tex` | ✅ | ✅ | ✅ |
 | TOML | 90 | `toml` | ⚫ | ⚫ | 🟡 |
 | txt2tags | 83 | `txt2tags` | — | ✅ | ✅ |
-| TypeScript | 85 | `cpp` | ⚫ | ⚫ | 🟡 |
+| TypeScript | 85 | `cpp` | ✅ | ✅ | ✅ |
 | Verilog | 43 | `verilog` | ✅ | ✅ | ✅ |
 | VHDL | 38 | `vhdl` | ✅ | ✅ | ✅ |
 | Visual Basic | 18 | `vb` | ✅ | ✅ | ✅ |
@@ -7718,6 +7718,160 @@ to `StyleSlot::Error`), **embedded-
 syntax cohesion pin** (EMBEDDED +
 PLACEHOLDER both Macro), and no-
 duplicate defence-in-depth check.
+
+**TypeScript (2026-07-08):** rides
+`LexCPP` (per `L_TYPESCRIPT`'s
+`LangEntry` `lexer: Some("cpp")`,
+extensions `.ts` / `.tsx`, same
+statically-linked `LexCPP.cxx` module
+that powers C / C++ / C# / Java /
+Objective-C / JavaScript / Resource
+file / Swift / Go). Reuses the shared
+`CPP_STYLES` / `CPP_ITALIC` /
+`CPP_BOLD` table verbatim — only the
+class-0 + class-1 keyword pair differs
+from JavaScript. **Strict-superset
+discipline**: TypeScript is a syntactic
+superset of JavaScript at the grammar
+level, so every JS reserved word and
+every JS built-in constructor must
+appear in the corresponding TS
+wordlist. The two lists are duplicated
+(not cross-referenced) because
+`SCI_SETKEYWORDS` takes a flat list
+per slot — the invariant test pins
+the baseline-superset contract
+affirmatively across both classes.
+
+`TYPESCRIPT_KEYWORDS` (class 0, bold —
+66 tokens) = the 49-token JS baseline
+(ES5 reserved + ES2015+ block-scoped
++ ES2017+ coroutines/for-of + strict-
+mode future-reserved + literals) plus
+17 TS-specific reserved keywords:
+**declaration keywords** (`type` /
+`namespace` / `declare` — legacy
+`module` deliberately excluded, see
+below), **class-member modifiers**
+(`abstract` / `readonly` / `override`
+/ `accessor`), **type-system
+operators** (`is` / `asserts` (TS
+3.7+, sibling of `is` for assertion-
+function predicates) / `keyof` /
+`infer` / `as` / `satisfies` /
+`unique` / `intrinsic`), **resource
+management** (`using` — TS 5.2+
+explicit resource-management with
+`using x = disposable` / `await using
+x = ...`), and the **variance
+annotation** `out` (TS 4.7+; `in`
+reuses the JS baseline where it's
+already the `in` operator).
+
+`TYPESCRIPT_KEYWORDS_2` (class 1,
+accent — 60 tokens) = 9 TS
+primitive-type identifiers (`string` /
+`number` / `boolean` / `any` / `never`
+/ `unknown` / `object` / `symbol` /
+`bigint` — the lowercase type-position
+spellings distinct from the JS
+constructors already in the baseline)
+plus the 51-token JS built-ins
+baseline from `JAVASCRIPT_KEYWORDS_2`
+(general wrappers + concurrent/
+iteration primitives + collections +
+Error hierarchy + buffer/view + typed
+arrays + namespace globals + language/
+host globals).
+
+**Deliberate exclusions:** `get` /
+`set` / `from` / `global` /
+`constructor` / `require` stay out of
+class 0 — same identifier-collision
+rationale as JavaScript's exclusion
+of the same tokens (each is
+identifier-shaped in most positions
+and highlighting would mis-colour
+common user code). **`module`** is
+also excluded from class 0: the
+legacy TS 1.x `module Foo { ... }`
+namespace-declaration syntax was
+superseded by `namespace` in TS 1.5,
+and including `module` would silently
+bold-highlight every `module.exports
+= ...` line in the CommonJS idiom
+that permeates real-world `.ts`
+config / build / Node application
+code. `namespace` (its modern
+replacement) IS included above.
+**`assert`** (deprecated ES2022
+import-attributes keyword — replaced
+by `with` in ES2024 / TS 5.3) and
+**`defer`** (TC39 Stage-3 proposal
+for deferred module imports, not
+ratified) are also excluded pending
+their respective spec outcomes. DOM
+instances (`window` / `document` /
+`navigator` / `localStorage`), Node
+globals (`Buffer` / `process` /
+`__dirname`), TS utility types
+(`Partial` / `Required` / `Readonly`
+/ `Record` / `Pick` / `Omit`), and
+framework namespaces (`JSX`) stay
+out of class 1 — these are
+framework-scope or ambient-declared,
+not TS language built-ins.
+
+Structural test coverage: **13
+invariants** — style-table reuse pin
+(reuses C's `CPP_STYLES` / `CPP_ITALIC`
+/ `CPP_BOLD` deep-equal), two-class
+descriptor shape (`0 → KEYWORDS`, `1 →
+KEYWORDS_2`), **JS-superset
+affirmative check** (every
+`JAVASCRIPT_KEYWORDS` token verified
+present in `TYPESCRIPT_KEYWORDS`, and
+every `JAVASCRIPT_KEYWORDS_2` token
+verified present in
+`TYPESCRIPT_KEYWORDS_2`),
+TS-differs-from-JS pins (both class 0
+and class 1 must be `assert_ne!` from
+JS's — TS adds tokens, so equality
+would silently mean the additions
+were dropped), **17 TS-specific
+class-0 anchors** (`type` /
+`namespace` / `declare` / `abstract`
+/ `readonly` / `override` /
+`accessor` / `is` / `asserts` /
+`keyof` / `infer` / `as` /
+`satisfies` / `unique` / `intrinsic`
+/ `using` / `out`), 9 TS primitive-
+type class-1 anchors (`string` /
+`number` / `boolean` / `any` /
+`never` / `unknown` / `object` /
+`symbol` / `bigint`), **9 class-0
+exclusion pins** (`constructor` /
+`require` / `from` / `get` / `set` /
+`global` — identifier-shaped in most
+positions — plus `module` for the
+CommonJS `module.exports` collision,
+plus `assert` (deprecated) and
+`defer` (Stage-3 proposal) for spec-
+maturity reasons), 13 class-1
+exclusion pins (DOM instances + Node
+globals + utility types + `JSX`), 5
+class-1 value-literal absence pins
+(`true` / `false` / `null` /
+`undefined` / `void` — all live in
+class 0 only, `LexCPP` matches class
+0 first so class-1 duplicates would
+be dead code), `NaN` + `Infinity`
+class-1 presence + class-0 absence
+(ES §21.1 Global Value Properties
+rationale inherited from JS), and
+cross-class disjointness check
+(`intersection` must be empty — same
+regression net as JavaScript's).
 
 ## Notes
 
