@@ -35,7 +35,7 @@ residual rows formally tracked).
 | ✅ | Keywords + theme both wired in `Win32Ui::apply_lang`'s table. Pick this language from the Language menu and a sample file picks up visibly distinct colours for comments, strings, numbers, and keywords. |
 | 🟡 | Lexer attached and tokenising; no host keyword list and no host theme. Buffer renders uniformly black-on-white because every `SCE_*_*` style resolves to `STYLE_DEFAULT` after `SCI_STYLECLEARALL`. (Pre-2026-05-13: this row also covered "lexer compiled but unregistered in `LexillaShim.cxx`'s catalog"; that gap is now closed for every `LANG_TABLE` row with a non-`None` lexer.) |
 | ⚫ | No Lexilla lexer (`LANG_TABLE` row has `lexer: None`). Either by design (`L_TEXT` — plain text never highlights) or because no Lexilla lexer matches the language. Effectively a permanent state for the named row. |
-| — (Keywords column only) | Not applicable. The lexer takes no wordlists at all — host installs none by design. Currently used for `props` (INI / Properties — a pure line-prefix classifier that ignores its `WordList *[]` parameter), `registry` (Windows Registry files — a state-machine lexer whose `WordListSet` unconditionally returns -1, actively REJECTING any keyword install), `txt2tags` (structural markup — the `LexerModule` registration takes no `wordListDesc` argument at all and the paint function's `WordList **` parameter is unnamed and never referenced), and `srec` (Motorola S-Record ROM files — the `LexerModule` constructor takes 5 args ending in NULL `wordListDesc[]` and the paint function's unnamed `WordList *[]` parameter is never referenced). A row with `—` in the Keywords column and ✅ in the Theme column is still ✅ overall: the wiring is complete, there are simply no keywords to wire. |
+| — (Keywords column only) | Not applicable. The lexer takes no wordlists at all — host installs none by design. Currently used for `props` (INI / Properties — a pure line-prefix classifier that ignores its `WordList *[]` parameter), `registry` (Windows Registry files — a state-machine lexer whose `WordListSet` unconditionally returns -1, actively REJECTING any keyword install), `txt2tags` (structural markup — the `LexerModule` registration takes no `wordListDesc` argument at all and the paint function's `WordList **` parameter is unnamed and never referenced), `srec` (Motorola S-Record ROM files — the `LexerModule` constructor takes 5 args ending in NULL `wordListDesc[]` and the paint function's unnamed `WordList *[]` parameter is never referenced), and `ihex` (Intel HEX ROM files — same `LexHex.cxx` source as `srec` with the same 5-arg NULL-`wordListDesc[]` LexerModule registration). A row with `—` in the Keywords column and ✅ in the Theme column is still ✅ overall: the wiring is complete, there are simply no keywords to wire. |
 | ⏸ | Reserved for future host-side opt-out (e.g. a lexer the host deliberately leaves off the menu pending review). None today. |
 
 ## How to mark a row ✅
@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 76 / 🟡 12 / ⚫ 1.
+Total: 89 rows. ✅ 77 / 🟡 11 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1881,7 +1881,7 @@ further shim work needed.
 | HTML | 8 | `hypertext` | ✅ | ✅ | ✅ |
 | INI file | 13 | `props` | — | ✅ | ✅ |
 | Inno Setup | 46 | `inno` | ✅ | ✅ | ✅ |
-| Intel HEX | 62 | `ihex` | ⚫ | ⚫ | 🟡 |
+| Intel HEX | 62 | `ihex` | — | ✅ | ✅ |
 | Java | 6 | `cpp` | ✅ | ✅ | ✅ |
 | Javascript | 58 | `cpp` | ✅ | ✅ | ✅ |
 | JSON | 57 | `json` | ✅ | ✅ | ✅ |
@@ -8719,6 +8719,93 @@ non-reuse pins (SREC_STYLES must
 differ from REBOL / Registry /
 Spice / txt2tags / Visual
 Prolog).
+
+**Intel HEX (2026-07-08):** rides
+Lexilla's `ihex` lexer
+(`LexHex.cxx`'s `ColouriseIHexDoc`
+at `:775-894`) — sibling to
+S-Record. Same `LexHex.cxx` source
+file, same 19-slot `SCE_HEX_*`
+style-constant namespace, same
+zero-wordlist contract
+(`LexerModule lmIHex(SCLEX_IHEX,
+ColouriseIHexDoc, "ihex",
+FoldIHexDoc, NULL)` at `:1047`,
+5-arg constructor with NULL
+`wordListDesc[]`). Extensions
+`.hex` / `.ihex`. Each line is
+`:<count><address><type><data...>
+<checksum>` (colon-leader
+distinguishes it from S-Record's
+`S`-leader form).
+
+**Differences from S-Record's
+wiring** (per the field-layout
+matrix at `LexHex.cxx:40-52`):
+- **`SCE_HEX_RECCOUNT` is NOT
+  used** by IHEX (Srec-only S5
+  record-count field with no
+  IHEX equivalent). Unmapped in
+  `IHEX_STYLES` — would be dead
+  code.
+- **`SCE_HEX_EXTENDEDADDRESS` IS
+  used** by IHEX (record types
+  0x02 = extended-segment-address
+  and 0x04 = extended-linear-
+  address populate it via
+  `LexHex.cxx:519, :863`). Mapped
+  to Number.
+- Net: same 11-mapping total as
+  Srec, with RECCOUNT swapped for
+  EXTENDEDADDRESS.
+
+**Italic + bold slices IDENTICAL
+to Srec's.** `IHEX_THEME` reuses
+`SREC_ITALIC` (DATA_EMPTY alone)
+and `SREC_BOLD` (RECSTART +
+RECTYPE) verbatim via aliased
+pointer references — cross-lexer
+const aliasing is safe here
+because both lexers share the
+`SCE_HEX_*` namespace (constants
+encode style-slot indices, not
+per-language semantics). Only
+`IHEX_STYLES` differs from
+`SREC_STYLES` (the swap). The
+invariant test's `std::ptr::eq`
+check pins the aliasing so a
+future edit that copy-paste
+duplicates the slices trips the
+gate.
+
+Structural test coverage: **12
+invariants** — deep-value
+identity pin, empty-`keywords`
+LOAD-BEARING pin, 11-mapping
+style count, exact style-routing
+pins for all 11 mapped
+constants, **RECCOUNT-unmapped +
+EXTENDEDADDRESS-mapped** the
+load-bearing IHEX ↔ SREC swap
+pin, same-as-Srec 7-state
+unmapped drift check (DEFAULT +
+6 authoritative parse-failure
+states), 4-flavour address-field
+collapse (NOADDRESS +
+DATAADDRESS + STARTADDRESS +
+EXTENDEDADDRESS all → Number),
+DATA_ODD/EVEN → String
+collapse, RECSTART + RECTYPE
+structural pair, DATA_EMPTY →
+Comment italic, CHECKSUM →
+Lifetime sigil-anchor,
+**italic+bold aliasing pin**
+(`std::ptr::eq(ihex.italic,
+srec.italic)` +
+`std::ptr::eq(ihex.bold,
+srec.bold)`), and cross-lexer
+styles non-reuse (IHEX_STYLES ≠
+SREC_STYLES).
 
 ## Notes
 

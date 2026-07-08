@@ -123,7 +123,7 @@ use codepp_core::lang::{
     LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3,
     L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS,
     L_D, L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GOLANG,
-    L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON,
+    L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON,
     L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM,
     L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS,
     L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
@@ -222,19 +222,19 @@ use codepp_scintilla_sys::{
     SCE_HA_STRINGEOL, SCE_HBA_COMMENTLINE, SCE_HBA_NUMBER, SCE_HBA_STRING, SCE_HBA_WORD,
     SCE_HB_COMMENTLINE, SCE_HB_NUMBER, SCE_HB_STRING, SCE_HB_WORD, SCE_HEX_BYTECOUNT,
     SCE_HEX_CHECKSUM, SCE_HEX_DATAADDRESS, SCE_HEX_DATA_EMPTY, SCE_HEX_DATA_EVEN, SCE_HEX_DATA_ODD,
-    SCE_HEX_NOADDRESS, SCE_HEX_RECCOUNT, SCE_HEX_RECSTART, SCE_HEX_RECTYPE, SCE_HEX_STARTADDRESS,
-    SCE_HJA_COMMENT, SCE_HJA_COMMENTDOC, SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING,
-    SCE_HJA_KEYWORD, SCE_HJA_NUMBER, SCE_HJA_REGEX, SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS,
-    SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD, SCE_HJ_COMMENT, SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE,
-    SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD, SCE_HJ_NUMBER, SCE_HJ_REGEX, SCE_HJ_SINGLESTRING,
-    SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL, SCE_HJ_WORD, SCE_HOLLYWOOD_COMMENT,
-    SCE_HOLLYWOOD_COMMENTBLOCK, SCE_HOLLYWOOD_CONSTANT, SCE_HOLLYWOOD_HEXNUMBER,
-    SCE_HOLLYWOOD_KEYWORD, SCE_HOLLYWOOD_NUMBER, SCE_HOLLYWOOD_OPERATOR, SCE_HOLLYWOOD_PLUGINAPI,
-    SCE_HOLLYWOOD_PLUGINMETHOD, SCE_HOLLYWOOD_PREPROCESSOR, SCE_HOLLYWOOD_STDAPI,
-    SCE_HOLLYWOOD_STRING, SCE_HOLLYWOOD_STRINGBLOCK, SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE,
-    SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER,
-    SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP,
-    SCE_H_ASPAT, SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT,
+    SCE_HEX_EXTENDEDADDRESS, SCE_HEX_NOADDRESS, SCE_HEX_RECCOUNT, SCE_HEX_RECSTART,
+    SCE_HEX_RECTYPE, SCE_HEX_STARTADDRESS, SCE_HJA_COMMENT, SCE_HJA_COMMENTDOC,
+    SCE_HJA_COMMENTLINE, SCE_HJA_DOUBLESTRING, SCE_HJA_KEYWORD, SCE_HJA_NUMBER, SCE_HJA_REGEX,
+    SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD, SCE_HJ_COMMENT,
+    SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD, SCE_HJ_NUMBER,
+    SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL, SCE_HJ_WORD,
+    SCE_HOLLYWOOD_COMMENT, SCE_HOLLYWOOD_COMMENTBLOCK, SCE_HOLLYWOOD_CONSTANT,
+    SCE_HOLLYWOOD_HEXNUMBER, SCE_HOLLYWOOD_KEYWORD, SCE_HOLLYWOOD_NUMBER, SCE_HOLLYWOOD_OPERATOR,
+    SCE_HOLLYWOOD_PLUGINAPI, SCE_HOLLYWOOD_PLUGINMETHOD, SCE_HOLLYWOOD_PREPROCESSOR,
+    SCE_HOLLYWOOD_STDAPI, SCE_HOLLYWOOD_STRING, SCE_HOLLYWOOD_STRINGBLOCK, SCE_HPHP_COMMENT,
+    SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE,
+    SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD,
+    SCE_H_ASP, SCE_H_ASPAT, SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT,
     SCE_H_DOUBLESTRING, SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION,
     SCE_H_SGML_1ST_PARAM, SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING,
     SCE_H_SGML_ENTITY, SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG,
@@ -4255,6 +4255,77 @@ const SREC_BOLD: &[usize] = &[SCE_HEX_RECSTART, SCE_HEX_RECTYPE];
 const SREC_THEME: LangTheme = LangTheme {
     keywords: &[],
     styles: SREC_STYLES,
+    italic: SREC_ITALIC,
+    bold: SREC_BOLD,
+};
+
+// --- LexHex (Intel HEX) ---
+// Intel HEX files (extensions `.hex` / `.ihex`) — a text-based
+// ROM-image record format where each line is
+// `:<count><address><type><data...><checksum>`. `L_IHEX` (id 62)
+// is the only language row using the `ihex` lexer name;
+// dispatches `SCLEX_IHEX` (= 118) via
+// `LexerModule lmIHex(SCLEX_IHEX, ColouriseIHexDoc, "ihex",
+// FoldIHexDoc, NULL)` at `LexHex.cxx:1047`. **Sibling to S-Record**:
+// same `LexHex.cxx` source file, same shared `SCE_HEX_*` style
+// constant namespace, same zero-wordlist contract (NULL
+// `wordListDesc[]` argument; `WordList *[]` unnamed + never
+// referenced in `ColouriseIHexDoc` at `:775`).
+//
+// **Differences from S-Record's wiring** (see SCE_HEX_* banner
+// in `crates/scintilla-sys/src/lib.rs` for the full state
+// matrix and per-lexer state usage from `LexHex.cxx:40-52`):
+//   - **Line-leader differs**: Intel HEX uses `:` (colon) as
+//     the RECSTART character; Srec uses `S`. Framework
+//     consequence: none — the `SCE_HEX_RECSTART` state itself
+//     is emitted identically by both paint loops; only the
+//     source byte that triggers it differs.
+//   - **`SCE_HEX_RECCOUNT` (8) is NOT used** by IHEX
+//     (`LexHex.cxx:40-52` records-layout comment omits it).
+//     Srec uses it for the S5 record-count-of-preceding-data-
+//     records field; IHEX has no equivalent record type.
+//     Framework consequence: RECCOUNT is unmapped in
+//     `IHEX_STYLES` (would be dead code — never emitted).
+//   - **`SCE_HEX_EXTENDEDADDRESS` (11) IS used** by IHEX
+//     (record types 0x02 = extended-segment-address and
+//     0x04 = extended-linear-address populate it via the
+//     data-field classifier at `LexHex.cxx:519, :863`).
+//     Framework consequence: EXTENDEDADDRESS → Number in
+//     `IHEX_STYLES` (Srec left it unmapped as dead code).
+//
+// Net effect: 11 style mappings, same TOTAL count as SREC but
+// with RECCOUNT swapped for EXTENDEDADDRESS.
+//
+// **Italic + bold sets are IDENTICAL to Srec's** — DATA_EMPTY
+// alone italic; RECSTART + RECTYPE bold. Both bold sets carry
+// the same "structural-marker + primary-keyword" pair
+// discipline documented in the SREC_STYLES banner. Rather than
+// duplicate the const definitions, `IHEX_THEME` **reuses
+// `SREC_ITALIC` + `SREC_BOLD` verbatim** — cross-lexer const
+// aliasing is safe here because both lexers share the same
+// SCE_HEX_* namespace (the constants encode style-slot indices,
+// not per-language semantics). Precedent: Fortran's free-form
+// + fixed-form sharing `FORTRAN_THEME` at `L_FORTRAN ||
+// L_FORTRAN_77 → &FORTRAN_THEME`. In IHEX's case only the
+// styles table differs (RECCOUNT ↔ EXTENDEDADDRESS swap) so
+// full theme sharing isn't possible; italic + bold sharing is.
+const IHEX_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_HEX_RECSTART, StyleSlot::Preprocessor),
+    (SCE_HEX_RECTYPE, StyleSlot::Keyword),
+    (SCE_HEX_BYTECOUNT, StyleSlot::Number),
+    (SCE_HEX_NOADDRESS, StyleSlot::Number),
+    (SCE_HEX_DATAADDRESS, StyleSlot::Number),
+    (SCE_HEX_STARTADDRESS, StyleSlot::Number),
+    (SCE_HEX_EXTENDEDADDRESS, StyleSlot::Number),
+    (SCE_HEX_DATA_ODD, StyleSlot::String),
+    (SCE_HEX_DATA_EVEN, StyleSlot::String),
+    (SCE_HEX_DATA_EMPTY, StyleSlot::Comment),
+    (SCE_HEX_CHECKSUM, StyleSlot::Lifetime),
+];
+
+const IHEX_THEME: LangTheme = LangTheme {
+    keywords: &[],
+    styles: IHEX_STYLES,
     italic: SREC_ITALIC,
     bold: SREC_BOLD,
 };
@@ -10635,6 +10706,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&RAKU_THEME)
     } else if lang == L_SREC {
         Some(&SREC_THEME)
+    } else if lang == L_IHEX {
+        Some(&IHEX_THEME)
     } else if lang == L_CSOUND {
         Some(&CSOUND_THEME)
     } else if lang == L_ERLANG {
@@ -25820,8 +25893,8 @@ mod lang_theme_tests {
         ASM_REG_KEYWORDS, ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC,
         ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES,
         GDSCRIPT_BOLD, GDSCRIPT_ITALIC, GDSCRIPT_STYLES, HOLLYWOOD_BOLD, HOLLYWOOD_ITALIC,
-        HOLLYWOOD_STYLES, MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC,
-        NIM_STYLES, NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD,
+        HOLLYWOOD_STYLES, IHEX_STYLES, MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD,
+        NIM_ITALIC, NIM_STYLES, NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD,
         OSCRIPT_ITALIC, OSCRIPT_STYLES, RAKU_BOLD, RAKU_ITALIC, RAKU_STYLES, REBOL_BOLD,
         REBOL_ITALIC, REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC, REGISTRY_STYLES,
         SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER,
@@ -25906,25 +25979,25 @@ mod lang_theme_tests {
         LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
         L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
         L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL,
-        L_HOLLYWOOD, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX,
-        L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC,
-        L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RAKU,
-        L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC,
-        L_TCL, L_TEX, L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG,
-        L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
-        MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
-        NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-        OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
-        OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
-        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
-        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RAKU_ADVERBS, RAKU_FUNCTIONS, RAKU_KEYWORDS,
-        RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION,
-        RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS,
-        RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
-        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2,
-        SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
+        L_HOLLYWOOD, L_HTML, L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP,
+        L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS,
+        L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R,
+        L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL,
+        L_SREC, L_TCL, L_TEX, L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL,
+        L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+        MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
+        NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
+        OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+        POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+        POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+        PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RAKU_ADVERBS, RAKU_FUNCTIONS,
+        RAKU_KEYWORDS, RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN,
+        RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4,
+        REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
+        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS,
+        SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS,
+        TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
         VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
         VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
         VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
@@ -42751,6 +42824,240 @@ mod lang_theme_tests {
                 "SREC_STYLES must NOT be identical to {other_name}_STYLES"
             );
         }
+    }
+
+    /// Intel HEX rides Lexilla's `ihex` lexer — sibling to S-Record,
+    /// both handled by `LexHex.cxx` (different paint functions:
+    /// `ColouriseIHexDoc` at `:775-894` for IHEX vs `ColouriseSrecDoc`
+    /// at `:649-892` for Srec) but sharing the same 19-slot
+    /// `SCE_HEX_*` style-constant namespace and the same
+    /// zero-wordlist contract. NOT included in
+    /// `wired_languages_have_complete_themes`: same discipline as
+    /// [`S-Record`] and other zero-wordlist lexers.
+    ///
+    /// Invariants (12):
+    ///   1. **Deep-value identity pin** — `IHEX_THEME`'s
+    ///      individual fields (`keywords` / `styles` / `italic` /
+    ///      `bold`) must value-equal what the dispatcher returns.
+    ///   2. **Empty `keywords` slice** — LOAD-BEARING for the
+    ///      zero-wordlist contract at `LexHex.cxx:1047`
+    ///      (5-arg `LexerModule` with NULL `wordListDesc[]`).
+    ///   3. **11 style mappings** — same count as SREC but with
+    ///      the RECCOUNT ↔ EXTENDEDADDRESS swap. IHEX doesn't
+    ///      use `SCE_HEX_RECCOUNT` (Srec-only S5 record-count
+    ///      field); IHEX DOES use `SCE_HEX_EXTENDEDADDRESS`
+    ///      (record types 0x02 / 0x04 populate it via
+    ///      `LexHex.cxx:519, :863`).
+    ///   4. **Style-routing pins** for all 11 mapped constants.
+    ///   5. **RECCOUNT unmapped for IHEX** (Srec-only, would be
+    ///      dead code here) + **EXTENDEDADDRESS mapped** to
+    ///      Number.
+    ///   6. **Address-field family collapse** — NOADDRESS +
+    ///      DATAADDRESS + STARTADDRESS + EXTENDEDADDRESS all →
+    ///      Number (four-flavour collapse, mirroring Srec's
+    ///      four-flavour collapse but with EXTENDEDADDRESS
+    ///      replacing RECCOUNT).
+    ///   7. **`DATA_ODD` + `DATA_EVEN` collapse** to String.
+    ///   8. **RECSTART → Preprocessor + RECTYPE → Keyword**
+    ///      structural-marker + primary-keyword pins.
+    ///   9. **`DATA_EMPTY` → Comment italic** — padding follows
+    ///      comment-family convention.
+    ///   10. **CHECKSUM → Lifetime** — structural integrity
+    ///       anchor matching Bash `SCALAR` / Lisp `SYMBOL` /
+    ///       `GDScript` `NODEPATH` / Perl `SCALAR` sigil-anchor
+    ///       precedent.
+    ///   11. **Italic + bold slices IDENTICAL to Srec's** —
+    ///       `IHEX_THEME` reuses `SREC_ITALIC` + `SREC_BOLD`
+    ///       verbatim (aliased pointers). Both bold sets carry
+    ///       the same "structural-marker + primary-keyword" pair
+    ///       and both italic sets carry `DATA_EMPTY` alone. Framework
+    ///       consequence: two `LangTheme.italic` and `LangTheme.bold`
+    ///       fields point to the exact same `&[usize]` slice —
+    ///       verified by `std::ptr::eq`.
+    ///   12. **Cross-lexer non-reuse for styles** — `IHEX_STYLES`
+    ///       must NOT be identical to `SREC_STYLES` (the
+    ///       RECCOUNT ↔ EXTENDEDADDRESS swap makes them distinct
+    ///       even though both are 11 mappings).
+    #[test]
+    fn ihex_uses_lexhex_zero_class_theme() {
+        let ihex = lang_theme(L_IHEX).expect("Intel HEX wired");
+        let srec = lang_theme(L_SREC).expect("S-Record wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(ihex.styles, IHEX_STYLES);
+        assert_eq!(ihex.italic, SREC_ITALIC);
+        assert_eq!(ihex.bold, SREC_BOLD);
+
+        // Invariant 2: empty keywords LOAD-BEARING pin.
+        assert!(
+            ihex.keywords.is_empty(),
+            "IHEX_THEME.keywords MUST be empty — LexHex's ihex \
+             LexerModule at :1047 uses the 5-arg constructor with \
+             NULL wordListDesc[]"
+        );
+
+        // Invariant 3: 11 style mappings.
+        assert_eq!(
+            ihex.styles.len(),
+            11,
+            "IHEX_STYLES must map 11 indices (19 SCE_HEX_* states \
+             0..=18 minus DEFAULT + RECCOUNT (Srec-only) + 6 error \
+             states — mirror of SREC's 8-state omission set but with \
+             RECCOUNT/EXTENDEDADDRESS swap)"
+        );
+
+        // Invariant 4: every mapped constant present exactly.
+        for (sce, slot, name) in [
+            (
+                SCE_HEX_RECSTART,
+                StyleSlot::Preprocessor,
+                "SCE_HEX_RECSTART",
+            ),
+            (SCE_HEX_RECTYPE, StyleSlot::Keyword, "SCE_HEX_RECTYPE"),
+            (SCE_HEX_BYTECOUNT, StyleSlot::Number, "SCE_HEX_BYTECOUNT"),
+            (SCE_HEX_NOADDRESS, StyleSlot::Number, "SCE_HEX_NOADDRESS"),
+            (
+                SCE_HEX_DATAADDRESS,
+                StyleSlot::Number,
+                "SCE_HEX_DATAADDRESS",
+            ),
+            (
+                SCE_HEX_STARTADDRESS,
+                StyleSlot::Number,
+                "SCE_HEX_STARTADDRESS",
+            ),
+            (
+                SCE_HEX_EXTENDEDADDRESS,
+                StyleSlot::Number,
+                "SCE_HEX_EXTENDEDADDRESS",
+            ),
+            (SCE_HEX_DATA_ODD, StyleSlot::String, "SCE_HEX_DATA_ODD"),
+            (SCE_HEX_DATA_EVEN, StyleSlot::String, "SCE_HEX_DATA_EVEN"),
+            (SCE_HEX_DATA_EMPTY, StyleSlot::Comment, "SCE_HEX_DATA_EMPTY"),
+            (SCE_HEX_CHECKSUM, StyleSlot::Lifetime, "SCE_HEX_CHECKSUM"),
+        ] {
+            assert!(
+                ihex.styles.contains(&(sce, slot)),
+                "IHEX_STYLES must route {name} to {slot:?}"
+            );
+        }
+
+        // Invariant 5: RECCOUNT unmapped, EXTENDEDADDRESS mapped —
+        // the load-bearing IHEX ↔ SREC swap.
+        assert!(
+            !ihex.styles.iter().any(|(s, _)| *s == SCE_HEX_RECCOUNT),
+            "IHEX_STYLES must NOT map SCE_HEX_RECCOUNT — Srec-only \
+             field (S5 record-count records); mapping it here would \
+             be dead code"
+        );
+        assert!(
+            ihex.styles
+                .iter()
+                .any(|(s, _)| *s == SCE_HEX_EXTENDEDADDRESS),
+            "IHEX_STYLES must map SCE_HEX_EXTENDEDADDRESS — IHEX \
+             record types 0x02 / 0x04 emit it via LexHex.cxx:519, :863"
+        );
+
+        // Same 6 authoritative parse-failure states + DEFAULT
+        // unmapped as Srec.
+        for (sce, name) in [
+            (SCE_HEX_DEFAULT, "SCE_HEX_DEFAULT"),
+            (SCE_HEX_RECTYPE_UNKNOWN, "SCE_HEX_RECTYPE_UNKNOWN"),
+            (SCE_HEX_BYTECOUNT_WRONG, "SCE_HEX_BYTECOUNT_WRONG"),
+            (SCE_HEX_ADDRESSFIELD_UNKNOWN, "SCE_HEX_ADDRESSFIELD_UNKNOWN"),
+            (SCE_HEX_DATA_UNKNOWN, "SCE_HEX_DATA_UNKNOWN"),
+            (SCE_HEX_CHECKSUM_WRONG, "SCE_HEX_CHECKSUM_WRONG"),
+            (SCE_HEX_GARBAGE, "SCE_HEX_GARBAGE"),
+        ] {
+            assert!(
+                !ihex.styles.iter().any(|(s, _)| *s == sce),
+                "IHEX_STYLES must NOT map {name} — reserved for \
+                 STYLE_DEFAULT paint / deferred StyleSlot::Error"
+            );
+        }
+
+        // Invariant 6: 4-flavour address collapse (RECCOUNT ↔
+        // EXTENDEDADDRESS swap vs Srec).
+        for sce in [
+            SCE_HEX_NOADDRESS,
+            SCE_HEX_DATAADDRESS,
+            SCE_HEX_STARTADDRESS,
+            SCE_HEX_EXTENDEDADDRESS,
+        ] {
+            assert!(
+                ihex.styles.contains(&(sce, StyleSlot::Number)),
+                "all four IHEX address-field flavours must collapse \
+                 to Number (Srec's NOADDRESS + DATAADDRESS + RECCOUNT \
+                 + STARTADDRESS four-way with RECCOUNT swapped for \
+                 EXTENDEDADDRESS)"
+            );
+        }
+
+        // Invariant 7: DATA_ODD/EVEN collapse to String.
+        for sce in [SCE_HEX_DATA_ODD, SCE_HEX_DATA_EVEN] {
+            assert!(ihex.styles.contains(&(sce, StyleSlot::String)));
+        }
+
+        // Invariant 8: RECSTART + RECTYPE structural pair.
+        assert!(
+            ihex.styles
+                .contains(&(SCE_HEX_RECSTART, StyleSlot::Preprocessor)),
+            "RECSTART (`:` leader for IHEX) must route to Preprocessor"
+        );
+        assert!(
+            ihex.styles.contains(&(SCE_HEX_RECTYPE, StyleSlot::Keyword)),
+            "RECTYPE must route to Keyword"
+        );
+
+        // Invariant 9: DATA_EMPTY → Comment italic.
+        assert!(ihex
+            .styles
+            .contains(&(SCE_HEX_DATA_EMPTY, StyleSlot::Comment)));
+        assert!(ihex.italic.contains(&SCE_HEX_DATA_EMPTY));
+
+        // Invariant 10: CHECKSUM → Lifetime.
+        assert!(ihex
+            .styles
+            .contains(&(SCE_HEX_CHECKSUM, StyleSlot::Lifetime)));
+
+        // Invariant 11: italic + bold IDENTICAL to Srec's — the two
+        // themes share the same &[usize] slices via aliasing.
+        //
+        // NOTE on `ptr::eq`: this pin exploits rustc's CTFE
+        // memoization of const items — two references to the SAME
+        // named const (`SREC_ITALIC` / `SREC_BOLD`) substitute the
+        // same evaluated (ptr, len). The Rust language spec doesn't
+        // *guarantee* this property (const-item address stability
+        // is unspecified in the reference), so a future rustc bump
+        // could in principle produce a false-negative failure with
+        // zero behavioural regression. Value equality against
+        // `SREC_ITALIC` / `SREC_BOLD` in invariant 1 covers the real
+        // correctness contract — this pin only adds "someone
+        // copy-paste-duplicated the slice rather than aliasing it"
+        // drift detection. If it ever spuriously fails after a
+        // toolchain bump, drop these two `ptr::eq` assertions.
+        assert!(
+            std::ptr::eq(ihex.italic, srec.italic),
+            "IHEX_THEME.italic should alias SREC_ITALIC (implementation-\
+             detail pin on rustc CTFE memoization; value equality is \
+             the real correctness contract, verified in invariant 1)"
+        );
+        assert!(
+            std::ptr::eq(ihex.bold, srec.bold),
+            "IHEX_THEME.bold should alias SREC_BOLD (implementation-\
+             detail pin — see italic assertion note above)"
+        );
+        assert_eq!(ihex.italic.len(), 1);
+        assert_eq!(ihex.bold.len(), 2);
+
+        // Invariant 12: cross-lexer styles non-reuse — the swap
+        // makes them distinct even though both are 11 mappings.
+        assert_ne!(
+            ihex.styles, srec.styles,
+            "IHEX_STYLES must NOT equal SREC_STYLES — the RECCOUNT ↔ \
+             EXTENDEDADDRESS swap makes them distinct even though \
+             both are 11-mapping tables"
+        );
     }
 
     /// Spice uses Lexilla's `spice` lexer (`LexSpice.cxx`) — a

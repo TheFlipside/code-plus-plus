@@ -3685,10 +3685,17 @@ pub const SCE_RAKU_CLASS: usize = 28;
 // convention for the idle state).
 //
 // **`SCE_HEX_EXTENDEDADDRESS` (11)** is unmapped in S-Record's
-// theme — the state is IHEX-only per `LexHex.cxx:49`. Included
-// as a constant here for use by future IHEX / TEHEX theme
-// wirings; a mapping in SREC_STYLES would be dead code.
+// theme — the state is IHEX-only per `LexHex.cxx:49`. Mapped
+// to `StyleSlot::Number` in `IHEX_STYLES` (record types 0x02 /
+// 0x04 populate it via `LexHex.cxx:519, :863`). Constant is
+// declared here (not in an IHEX-scoped module) because
+// `SCE_HEX_*` is a lexer-family-shared namespace covering
+// SREC / IHEX / TEHEX. `SREC_STYLES` omits the mapping (dead
+// code for Srec); a future TEHEX theme wiring will inherit
+// the constant unchanged.
 pub const SCLEX_SREC: usize = 117;
+pub const SCLEX_IHEX: usize = 118;
+pub const SCLEX_TEHEX: usize = 119;
 pub const SCE_HEX_DEFAULT: usize = 0;
 pub const SCE_HEX_RECSTART: usize = 1;
 pub const SCE_HEX_RECTYPE: usize = 2;
