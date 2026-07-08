@@ -102,51 +102,52 @@ use std::sync::Arc;
 
 use codepp_core::lang::{
     ADA_KEYWORDS, ASM_CPU_KEYWORDS, ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS,
-    ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS, AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS,
-    AU3_MACROS, AU3_PREPROCESSORS, AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS,
-    BATCH_KEYWORDS, BATCH_KEYWORDS_2, CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3,
-    CMAKE_COMMANDS, CMAKE_PARAMETERS, CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B,
-    COBOL_KEYWORDS_C, COFFEESCRIPT_GLOBAL_CLASSES, COFFEESCRIPT_KEYWORDS, COFFEESCRIPT_KEYWORDS_2,
-    CPP_KEYWORDS, CPP_KEYWORDS_2, CSOUND_HEADERSTMT, CSOUND_OPCODES, CSOUND_USERKW,
-    CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
-    CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, D_DOC_KEYWORDS,
-    D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7, ERLANG_BIFS, ERLANG_DOC,
-    ERLANG_DOC_MACRO, ERLANG_KEYWORDS, ERLANG_MODULE_ATT, ERLANG_PREPROC, ESCRIPT_FOLDWORDS,
-    ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS, FORTH_CONTROL, FORTH_DEFWORD, FORTH_KEYWORD,
-    FORTH_PREWORD1, FORTH_PREWORD2, FORTH_STRINGS, FORTRAN_EXTENDED, FORTRAN_INTRINSICS,
-    FORTRAN_KEYWORDS, GDSCRIPT_KEYWORDS, GDSCRIPT_KEYWORDS_2, GO_KEYWORDS, GO_KEYWORDS_2,
-    GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
-    HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HOLLYWOOD_KEYWORDS,
-    HOLLYWOOD_STDAPI, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS,
-    INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS,
-    JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS,
-    LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3,
-    L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS,
-    L_D, L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GOLANG,
-    L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON,
-    L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM,
-    L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS,
-    L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
-    L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL, L_TEHEX, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB,
-    L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
-    MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS,
-    NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-    OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS,
-    OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS,
-    PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
-    POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
-    PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RAKU_ADVERBS,
-    RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN,
-    RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4,
-    REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
-    SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS,
-    SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, SWIFT_KEYWORDS,
-    SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-    TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-    VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
-    VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+    ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS, ASN1_ATTRIBUTES, ASN1_DESCRIPTORS,
+    ASN1_KEYWORDS, ASN1_TYPES, AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS,
+    AU3_PREPROCESSORS, AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS,
+    BATCH_KEYWORDS_2, CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CMAKE_COMMANDS,
+    CMAKE_PARAMETERS, CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B, COBOL_KEYWORDS_C,
+    COFFEESCRIPT_GLOBAL_CLASSES, COFFEESCRIPT_KEYWORDS, COFFEESCRIPT_KEYWORDS_2, CPP_KEYWORDS,
+    CPP_KEYWORDS_2, CSOUND_HEADERSTMT, CSOUND_OPCODES, CSOUND_USERKW, CSS_PROPERTIES_CSS1,
+    CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS,
+    CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META,
+    D_SPECIAL, D_TYPES, D_WORD7, ERLANG_BIFS, ERLANG_DOC, ERLANG_DOC_MACRO, ERLANG_KEYWORDS,
+    ERLANG_MODULE_ATT, ERLANG_PREPROC, ESCRIPT_FOLDWORDS, ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS,
+    FORTH_CONTROL, FORTH_DEFWORD, FORTH_KEYWORD, FORTH_PREWORD1, FORTH_PREWORD2, FORTH_STRINGS,
+    FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GDSCRIPT_KEYWORDS, GDSCRIPT_KEYWORDS_2,
+    GO_KEYWORDS, GO_KEYWORDS_2, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL,
+    GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
+    HASKELL_RESERVED_OPERATORS, HOLLYWOOD_KEYWORDS, HOLLYWOOD_STDAPI, HTML_KEYWORDS, INNO_KEYWORDS,
+    INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS,
+    JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
+    KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
+    LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASN1, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE,
+    L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_ESCRIPT,
+    L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL, L_HOLLYWOOD,
+    L_HTML, L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX,
+    L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT,
+    L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL,
+    L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL,
+    L_TEHEX, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML,
+    L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+    MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
+    NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
+    OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
+    POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
+    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+    PYTHON_KEYWORDS_2, RAKU_ADVERBS, RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC,
+    RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD,
+    REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS,
+    R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+    SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS,
+    SQL_KEYWORDS_2, SWIFT_KEYWORDS, SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
+    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+    VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
+    VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
+    XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -161,7 +162,9 @@ use codepp_scintilla_sys::{
     SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
     SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
     SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
-    SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_AU3_COMMENT,
+    SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
+    SCE_ASN1_ATTRIBUTE, SCE_ASN1_COMMENT, SCE_ASN1_DESCRIPTOR, SCE_ASN1_KEYWORD, SCE_ASN1_OID,
+    SCE_ASN1_OPERATOR, SCE_ASN1_SCALAR, SCE_ASN1_STRING, SCE_ASN1_TYPE, SCE_AU3_COMMENT,
     SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
     SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT,
     SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_BAT_AFTER_LABEL,
@@ -5809,6 +5812,105 @@ const SPICE_THEME: LangTheme = LangTheme {
     bold: SPICE_BOLD,
 };
 
+// --- LexAsn1 ---
+// ASN.1 / SNMP MIB modules — extension `.asn1`. `L_ASN1` (id 65)
+// is the only language row using this lexer. Four-wordlist lexer
+// (Keywords / Attributes / Descriptors / Types) with first-match-
+// wins classification per `LexAsn1.cxx:95-106`. See the `LexAsn1`
+// banner in `scintilla-sys/src/lib.rs` for the paint-loop
+// citations and per-state emission analysis.
+//
+// **9 style mappings** covering 11 defined SCE_ASN1_* states
+// (0..=10). `SCE_ASN1_DEFAULT` (0) and `SCE_ASN1_IDENTIFIER` (2)
+// stay unmapped per the framework's fall-through-to-STYLE_DEFAULT
+// convention for the boundary + bareword-collect slots — same
+// discipline as [`SCE_C_DEFAULT`] / [`SCE_C_IDENTIFIER`] /
+// [`SCE_REBOL_DEFAULT`] / [`SCE_SPICE_DEFAULT`] /
+// [`SCE_SPICE_IDENTIFIER`].
+//
+// Mapped slots (first-match-wins colour discipline matching the
+// classifier's Keyword → Attribute → Descriptor → Type probe
+// order):
+//   * `COMMENT` (1) → Comment (green italic) — `--`-to-EOL line
+//     comments. Universal Code++ comment slot.
+//   * `STRING` (3) → String — `"..."` double-quoted strings.
+//   * `OID` (4) → Number — decimal digits inside a `{...}` OID
+//     definition following `::=`. Semantic-distinct from SCALAR
+//     at the lexer level (see the SCE_ASN1_* banner) but shares
+//     the Number colour slot; a future palette pass could add a
+//     dedicated "OID accent" slot.
+//   * `SCALAR` (5) → Number — bare decimal digit runs at any
+//     other position.
+//   * `KEYWORD` (6) → Keyword (bold blue) — class 0 structural
+//     reserved words (`SEQUENCE` / `BEGIN` / `IMPORTS` / ...).
+//     Primary anchor slot.
+//   * `ATTRIBUTE` (7) → Keyword2 (steel blue) — class 1 SMI
+//     macro headers + attribute field names (`OBJECT-TYPE` /
+//     `SYNTAX` / `ACCESS` / ...). Secondary anchor slot.
+//     Matches the `SCE_C_WORD2` → Keyword2 convention (primitive
+//     types get the accent slot in LexCPP family; here the SMI
+//     macro headers do).
+//   * `DESCRIPTOR` (8) → Preprocessor — class 2 lowercase MIB
+//     descriptors (`current` / `read-only` / `iso` / ...).
+//     Distinct third colour so the ACCESS / STATUS enumeration
+//     values paint separately from the structural macros that
+//     invoke them.
+//   * `TYPE` (9) → Lifetime — class 3 primitive types + SMI
+//     TCs (`INTEGER` / `Counter32` / `DisplayString` / ...).
+//     Distinct fourth colour so leaf types paint separately
+//     from the type-BUILDER keywords in class 0.
+//   * `OPERATOR` (10) → Operator — the `::=` affectation
+//     operator's bytes. Other punctuation stays in DEFAULT per
+//     the state machine at `LexAsn1.cxx:66-83`.
+//
+// Palette rationale for the 4-way keyword-class spread: LexAsn1's
+// 4-class descriptor is unusual for a Scintilla lexer (most have
+// 1-2 classes). Mapping each to a distinct StyleSlot lets the
+// SNMP MIB reader visually distinguish the four archetypes
+// simultaneously without needing to squint at font-weight or
+// consult the outline view. The Keyword / Keyword2 / Preprocessor
+// / Lifetime spread reuses established Code++ palette slots
+// without inventing new ones — same rationale as Raku's 7-class
+// classifier collapsing to StyleSlot { Keyword, Function,
+// Typedef, Class, Grammar, Adverb, ... }.
+const ASN1_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_ASN1_COMMENT, StyleSlot::Comment),
+    (SCE_ASN1_STRING, StyleSlot::String),
+    (SCE_ASN1_OID, StyleSlot::Number),
+    (SCE_ASN1_SCALAR, StyleSlot::Number),
+    (SCE_ASN1_KEYWORD, StyleSlot::Keyword),
+    (SCE_ASN1_ATTRIBUTE, StyleSlot::Keyword2),
+    (SCE_ASN1_DESCRIPTOR, StyleSlot::Preprocessor),
+    (SCE_ASN1_TYPE, StyleSlot::Lifetime),
+    (SCE_ASN1_OPERATOR, StyleSlot::Operator),
+];
+
+// Italic on COMMENT — universal Code++ comment convention.
+const ASN1_ITALIC: &[usize] = &[SCE_ASN1_COMMENT];
+
+// Bold on KEYWORD (class 0 — structural reserved words) — primary
+// anchor slot. Same single-class-bold discipline as SPICE (KEYWORD),
+// PROPS (SECTION), Makefile (TARGET), REBOL (WORD), OScript
+// (KEYWORD), and every LexCPP-family theme (WORD).
+const ASN1_BOLD: &[usize] = &[SCE_ASN1_KEYWORD];
+
+// Four-class install matching `asn1WordLists[]` order at
+// `LexAsn1.cxx:181-186`. All four populated; first-match-wins
+// cascade at `:95-106` probes class 0 → 1 → 2 → 3 in forward order
+// so cross-class disjointness is strictly enforced by the invariant
+// test (see the `asn1_wordlists_are_disjoint` case in `tests`).
+const ASN1_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, ASN1_KEYWORDS),
+        (1, ASN1_ATTRIBUTES),
+        (2, ASN1_DESCRIPTORS),
+        (3, ASN1_TYPES),
+    ],
+    styles: ASN1_STYLES,
+    italic: ASN1_ITALIC,
+    bold: ASN1_BOLD,
+};
+
 // --- LexTxt2tags ---
 // txt2tags — lightweight-markup / plain-text-to-many-formats
 // converter (extension `.t2t`). `L_TXT2TAGS` (id 83) is the only
@@ -10888,6 +10990,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&REGISTRY_THEME)
     } else if lang == L_SPICE {
         Some(&SPICE_THEME)
+    } else if lang == L_ASN1 {
+        Some(&ASN1_THEME)
     } else if lang == L_TXT2TAGS {
         Some(&TXT2TAGS_THEME)
     } else if lang == L_TYPESCRIPT {
@@ -26048,33 +26152,36 @@ mod lang_theme_tests {
     use super::{
         extra_fold_properties, lang_theme, slot_color, StyleSlot, ASM_CPU_KEYWORDS,
         ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS,
-        ASM_REG_KEYWORDS, ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC,
-        ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES,
-        GDSCRIPT_BOLD, GDSCRIPT_ITALIC, GDSCRIPT_STYLES, HOLLYWOOD_BOLD, HOLLYWOOD_ITALIC,
-        HOLLYWOOD_STYLES, IHEX_STYLES, MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD,
-        NIM_ITALIC, NIM_STYLES, NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD,
-        OSCRIPT_ITALIC, OSCRIPT_STYLES, RAKU_BOLD, RAKU_ITALIC, RAKU_STYLES, REBOL_BOLD,
-        REBOL_ITALIC, REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC, REGISTRY_STYLES,
-        SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER,
-        SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL,
-        SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
-        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
-        SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
-        SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
-        SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
-        SCE_AU3_KEYWORD, SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR,
-        SCE_AU3_SENT, SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE,
-        SCE_CAML_CHAR, SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
-        SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER,
-        SCE_CAML_OPERATOR, SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS,
-        SCE_CMAKE_COMMENT, SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF,
-        SCE_CMAKE_NUMBER, SCE_CMAKE_PARAMETERS, SCE_CMAKE_STRINGDQ, SCE_CMAKE_STRINGLQ,
-        SCE_CMAKE_STRINGRQ, SCE_CMAKE_STRINGVAR, SCE_CMAKE_USERDEFINED, SCE_CMAKE_VARIABLE,
-        SCE_CMAKE_WHILEDEF, SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2,
-        SCE_CSS_IDENTIFIER3, SCE_DIFF_ADDED, SCE_DIFF_CHANGED, SCE_DIFF_COMMAND, SCE_DIFF_COMMENT,
-        SCE_DIFF_DELETED, SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD, SCE_DIFF_PATCH_DELETE,
-        SCE_DIFF_POSITION, SCE_DIFF_REMOVED_PATCH_ADD, SCE_DIFF_REMOVED_PATCH_DELETE,
-        SCE_HA_CAPITAL, SCE_HA_CHARACTER, SCE_HA_CLASS, SCE_HA_COMMENTBLOCK, SCE_HA_COMMENTBLOCK2,
+        ASM_REG_KEYWORDS, ASN1_BOLD, ASN1_ITALIC, ASN1_STYLES, ERLANG_BOLD, ERLANG_ITALIC,
+        ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC, ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD,
+        FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES, GDSCRIPT_BOLD, GDSCRIPT_ITALIC,
+        GDSCRIPT_STYLES, HOLLYWOOD_BOLD, HOLLYWOOD_ITALIC, HOLLYWOOD_STYLES, IHEX_STYLES,
+        MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC, NIM_STYLES,
+        NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD, OSCRIPT_ITALIC,
+        OSCRIPT_STYLES, RAKU_BOLD, RAKU_ITALIC, RAKU_STYLES, REBOL_BOLD, REBOL_ITALIC,
+        REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC, REGISTRY_STYLES, SCE_ADA_CHARACTER,
+        SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL,
+        SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD,
+        SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE,
+        SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND,
+        SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER, SCE_ASM_OPERATOR,
+        SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_ASN1_ATTRIBUTE,
+        SCE_ASN1_COMMENT, SCE_ASN1_DESCRIPTOR, SCE_ASN1_KEYWORD, SCE_ASN1_OID, SCE_ASN1_OPERATOR,
+        SCE_ASN1_SCALAR, SCE_ASN1_STRING, SCE_ASN1_TYPE, SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK,
+        SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD, SCE_AU3_MACRO,
+        SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT, SCE_AU3_SPECIAL,
+        SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_CAML_CHAR, SCE_CAML_COMMENT,
+        SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD,
+        SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR,
+        SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS, SCE_CMAKE_COMMENT,
+        SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF, SCE_CMAKE_NUMBER,
+        SCE_CMAKE_PARAMETERS, SCE_CMAKE_STRINGDQ, SCE_CMAKE_STRINGLQ, SCE_CMAKE_STRINGRQ,
+        SCE_CMAKE_STRINGVAR, SCE_CMAKE_USERDEFINED, SCE_CMAKE_VARIABLE, SCE_CMAKE_WHILEDEF,
+        SCE_CSS_EXTENDED_IDENTIFIER, SCE_CSS_IDENTIFIER, SCE_CSS_IDENTIFIER2, SCE_CSS_IDENTIFIER3,
+        SCE_DIFF_ADDED, SCE_DIFF_CHANGED, SCE_DIFF_COMMAND, SCE_DIFF_COMMENT, SCE_DIFF_DELETED,
+        SCE_DIFF_HEADER, SCE_DIFF_PATCH_ADD, SCE_DIFF_PATCH_DELETE, SCE_DIFF_POSITION,
+        SCE_DIFF_REMOVED_PATCH_ADD, SCE_DIFF_REMOVED_PATCH_DELETE, SCE_HA_CAPITAL,
+        SCE_HA_CHARACTER, SCE_HA_CLASS, SCE_HA_COMMENTBLOCK, SCE_HA_COMMENTBLOCK2,
         SCE_HA_COMMENTBLOCK3, SCE_HA_COMMENTLINE, SCE_HA_DATA, SCE_HA_INSTANCE, SCE_HA_KEYWORD,
         SCE_HA_LITERATE_CODEDELIM, SCE_HA_LITERATE_COMMENT, SCE_HA_MODULE, SCE_HA_NUMBER,
         SCE_HA_OPERATOR, SCE_HA_PRAGMA, SCE_HA_PREPROCESSOR, SCE_HA_RESERVED_OPERATOR,
@@ -26116,33 +26223,34 @@ mod lang_theme_tests {
     // unmapped-ness, so pull the constant from codepp_scintilla_sys
     // directly rather than re-exporting through super.
     use codepp_core::lang::{
-        ADA_KEYWORDS, AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS, AU3_PREPROCESSORS,
-        AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2,
-        CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CMAKE_COMMANDS, CMAKE_PARAMETERS,
-        CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B, COBOL_KEYWORDS_C,
-        COFFEESCRIPT_GLOBAL_CLASSES, COFFEESCRIPT_KEYWORDS, COFFEESCRIPT_KEYWORDS_2,
-        CPP_KEYWORDS_2, CSOUND_HEADERSTMT, CSOUND_OPCODES, CSOUND_USERKW, CSS_PROPERTIES_CSS1,
-        CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
-        CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META,
-        D_SPECIAL, D_TYPES, D_WORD7, ERLANG_BIFS, ERLANG_DOC, ERLANG_DOC_MACRO, ERLANG_KEYWORDS,
-        ERLANG_MODULE_ATT, ERLANG_PREPROC, ESCRIPT_FOLDWORDS, ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS,
-        FORTH_CONTROL, FORTH_DEFWORD, FORTH_KEYWORD, FORTH_PREWORD1, FORTH_PREWORD2, FORTH_STRINGS,
-        FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GDSCRIPT_KEYWORDS,
-        GDSCRIPT_KEYWORDS_2, GO_KEYWORDS, GO_KEYWORDS_2, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS,
-        GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
-        HASKELL_RESERVED_OPERATORS, HOLLYWOOD_KEYWORDS, HOLLYWOOD_STDAPI, HTML_KEYWORDS,
-        INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
-        JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS,
-        JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
-        LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
-        L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
-        L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL,
-        L_HOLLYWOOD, L_HTML, L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP,
-        L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS,
-        L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R,
-        L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL,
-        L_SREC, L_SWIFT, L_TCL, L_TEHEX, L_TEX, L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG,
-        L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+        ADA_KEYWORDS, ASN1_ATTRIBUTES, ASN1_DESCRIPTORS, ASN1_KEYWORDS, ASN1_TYPES, AU3_EXPAND,
+        AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS, AU3_PREPROCESSORS, AU3_SENDKEYS, AU3_SPECIAL,
+        AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CAML_KEYWORDS, CAML_KEYWORDS2,
+        CAML_KEYWORDS3, CMAKE_COMMANDS, CMAKE_PARAMETERS, CMAKE_USERDEFINED, COBOL_KEYWORDS_A,
+        COBOL_KEYWORDS_B, COBOL_KEYWORDS_C, COFFEESCRIPT_GLOBAL_CLASSES, COFFEESCRIPT_KEYWORDS,
+        COFFEESCRIPT_KEYWORDS_2, CPP_KEYWORDS_2, CSOUND_HEADERSTMT, CSOUND_OPCODES, CSOUND_USERKW,
+        CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
+        CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS_2, D_DOC_KEYWORDS, D_KEYWORDS,
+        D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7, ERLANG_BIFS, ERLANG_DOC,
+        ERLANG_DOC_MACRO, ERLANG_KEYWORDS, ERLANG_MODULE_ATT, ERLANG_PREPROC, ESCRIPT_FOLDWORDS,
+        ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS, FORTH_CONTROL, FORTH_DEFWORD, FORTH_KEYWORD,
+        FORTH_PREWORD1, FORTH_PREWORD2, FORTH_STRINGS, FORTRAN_EXTENDED, FORTRAN_INTRINSICS,
+        FORTRAN_KEYWORDS, GDSCRIPT_KEYWORDS, GDSCRIPT_KEYWORDS_2, GO_KEYWORDS, GO_KEYWORDS_2,
+        GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
+        HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HOLLYWOOD_KEYWORDS,
+        HOLLYWOOD_STDAPI, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS,
+        INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2,
+        JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS, KIX_FUNCTIONS,
+        KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2,
+        L_ADA, L_ASM, L_ASN1, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
+        L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH,
+        L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML,
+        L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX,
+        L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC,
+        L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RAKU,
+        L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC,
+        L_SWIFT, L_TCL, L_TEHEX, L_TEX, L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL,
+        L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
         MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
         NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
         OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
@@ -26307,6 +26415,7 @@ mod lang_theme_tests {
             (L_REBOL, "REBOL"),
             (L_TYPESCRIPT, "TypeScript"),
             (L_VISUALPROLOG, "Visual Prolog"),
+            (L_ASN1, "ASN.1"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -44161,6 +44270,433 @@ mod lang_theme_tests {
                 unique,
                 "SPICE_{name} contains {} duplicate token(s)",
                 total - unique
+            );
+        }
+    }
+
+    /// ASN.1 uses Lexilla's `asn1` lexer (`LexAsn1.cxx`) — one of
+    /// the oldest Lexilla lexers (2004, Herr Pfarrer rpfarrer). A
+    /// four-class-wordlist state machine designed around SNMP MIB
+    /// (Structure of Management Information — RFC 1155 / 1902 /
+    /// 2578) parsing on top of X.680 ASN.1 syntax. Extensions
+    /// `.asn1`. Included in
+    /// `wired_languages_have_complete_themes` — 9 style mappings
+    /// (11 defined `SCE_ASN1_*` slots minus 2 unmapped: DEFAULT,
+    /// IDENTIFIER) meets the ≥8 floor with room to spare. This
+    /// dedicated test pins the ASN.1-specific structural
+    /// invariants that the shared shape test can't see:
+    ///
+    ///   1. Deep-value identity (styles / italic / bold / four
+    ///      populated keyword classes).
+    ///   2. 9-mapping style-count (11 defined `SCE_ASN1_*` slots
+    ///      minus 2 unmapped: DEFAULT, IDENTIFIER).
+    ///   3. Four populated classes in canonical descriptor order
+    ///      matching `asn1WordLists[]` at `LexAsn1.cxx:181-186`.
+    ///   4. All four populated classes non-empty.
+    ///   5. **Cross-class disjointness** across all 6 pairs of
+    ///      populated classes — LOAD-BEARING for the forward
+    ///      first-match-wins cascade at `LexAsn1.cxx:95-106` (a
+    ///      duplicate silently masks its lower-priority sibling).
+    ///   6. Style-routing pins for all 9 mapped constants.
+    ///   7. Framework-unmapped slots confirmed absent (DEFAULT,
+    ///      IDENTIFIER) with drift-pin assertions.
+    ///   8. Italic == 1 (COMMENT only).
+    ///   9. Bold == 1 (KEYWORD only — class 0, primary structural
+    ///      anchor).
+    ///   10. Cross-language non-reuse (sampled).
+    ///   11. `L_ASN1` `LangEntry` has `lexer: Some("asn1")` and
+    ///       `.asn1` extension.
+    ///   12. **Canonical class-0 KEYWORD anchors** — `DEFINITIONS`,
+    ///       `BEGIN`, `END`, `SEQUENCE`, `CHOICE`, `IMPORTS`.
+    ///   13. **Canonical class-1 ATTRIBUTE anchors** — `OBJECT-TYPE`,
+    ///       `MODULE-IDENTITY`, `SYNTAX`, `ACCESS`, `STATUS`.
+    ///   14. **Canonical class-2 DESCRIPTOR anchors** — `current`,
+    ///       `read-only`, `iso`, `internet`.
+    ///   15. **Canonical class-3 TYPE anchors** — `INTEGER`,
+    ///       `Counter32`, `DisplayString`, `IpAddress`.
+    ///   16. **Hyphen-glued token pin** — LOAD-BEARING per
+    ///       `LexAsn1.cxx:42-45`'s `isAsn1Char` grammar (hyphen is
+    ///       part of identifier). Assert that `MAX-ACCESS` /
+    ///       `read-only` / `OBJECT-TYPE` tokenise as single
+    ///       tokens in their respective wordlists.
+    ///   17. **Case-sensitive placement pins** — `PRIVATE` (class 0
+    ///       X.680 tag class) vs `private` (class 2 IANA sub-tree
+    ///       anchor). `LexAsn1` is case-sensitive per
+    ///       `LexAsn1.cxx:94`'s unmodified `sc.GetCurrent(s, ...)`;
+    ///       both must exist in their canonical class without
+    ///       conflict.
+    ///   18. Highest-defined `SCE_ASN1_*` pin — `SCE_ASN1_OPERATOR`
+    ///       (10) is the top slot per `SciLexer.h:1118`.
+    ///   19. No duplicate tokens within any wordlist.
+    ///   20. **Ambiguous-token placement pins** — the class-0-vs-
+    ///       class-3 dominance calls: `NULL` → class 0 (X.680
+    ///       null-value keyword dominates over null-type), `BIT` /
+    ///       `OCTET` / `STRING` → class 0 (structural type-builder
+    ///       role dominates over standalone-type role); `INTEGER` /
+    ///       `REAL` / `BOOLEAN` → class 3 only (leaf value types).
+    #[test]
+    fn asn1_uses_lexasn1_four_class_theme() {
+        use codepp_scintilla_sys::{SCE_ASN1_DEFAULT, SCE_ASN1_IDENTIFIER};
+        let asn1 = lang_theme(L_ASN1).expect("ASN.1 wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(asn1.styles, ASN1_STYLES);
+        assert_eq!(asn1.italic, ASN1_ITALIC);
+        assert_eq!(asn1.bold, ASN1_BOLD);
+        assert_eq!(asn1.keywords.len(), 4);
+
+        // Invariant 2: 9 mappings (11 defined slots minus 2 unmapped).
+        assert_eq!(
+            asn1.styles.len(),
+            9,
+            "ASN1_STYLES must map 9 indices (11 defined SCE_ASN1_* \
+             slots minus 2 unmapped: DEFAULT (whitespace fall-through), \
+             IDENTIFIER (bareword-collect fall-through))"
+        );
+
+        // Invariant 3: four populated classes in canonical order.
+        for (i, (expected_class, expected_list)) in [
+            (0u32, ASN1_KEYWORDS),
+            (1u32, ASN1_ATTRIBUTES),
+            (2u32, ASN1_DESCRIPTORS),
+            (3u32, ASN1_TYPES),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                asn1.keywords[i].0, *expected_class,
+                "ASN1_THEME.keywords[{i}].class must match \
+                 descriptor order at LexAsn1.cxx:181-186"
+            );
+            assert_eq!(
+                asn1.keywords[i].1, *expected_list,
+                "ASN1_THEME.keywords[{i}].list must match \
+                 canonical wordlist"
+            );
+        }
+
+        // Invariant 4: all four populated classes non-empty.
+        for (list, name) in [
+            (ASN1_KEYWORDS, "KEYWORDS"),
+            (ASN1_ATTRIBUTES, "ATTRIBUTES"),
+            (ASN1_DESCRIPTORS, "DESCRIPTORS"),
+            (ASN1_TYPES, "TYPES"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "ASN1_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: cross-class disjointness. LOAD-BEARING for the
+        // forward first-match-wins cascade at LexAsn1.cxx:95-106 — a
+        // higher-priority (lower-numbered) class always wins, so a
+        // cross-class duplicate silently leaves the lower-priority
+        // entry as dead code. Common trap: class 0 KEYWORD list
+        // includes `PRIVATE` (X.680 tag class) and class 2 has
+        // `private` (IANA sub-tree anchor); those are different
+        // tokens under case-sensitive matching per LexAsn1.cxx:94.
+        use std::collections::HashSet;
+        let sets = [
+            (
+                "KEYWORDS",
+                ASN1_KEYWORDS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "ATTRIBUTES",
+                ASN1_ATTRIBUTES.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "DESCRIPTORS",
+                ASN1_DESCRIPTORS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "TYPES",
+                ASN1_TYPES.split_whitespace().collect::<HashSet<_>>(),
+            ),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                if let Some(shared) = sets[i].1.intersection(&sets[j].1).next() {
+                    panic!(
+                        "ASN1_{} and ASN1_{} both contain `{shared}` \
+                         — LexAsn1.cxx:95-106 probes classes 0 → 1 → 2 \
+                         → 3 forward-first-match-wins. Cross-class \
+                         duplicate leaves the HIGHER-numbered entry \
+                         dead code.",
+                        sets[i].0, sets[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 6: style-routing pins for all 9 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_ASN1_COMMENT, StyleSlot::Comment, "COMMENT"),
+            (SCE_ASN1_STRING, StyleSlot::String, "STRING"),
+            (SCE_ASN1_OID, StyleSlot::Number, "OID"),
+            (SCE_ASN1_SCALAR, StyleSlot::Number, "SCALAR"),
+            (SCE_ASN1_KEYWORD, StyleSlot::Keyword, "KEYWORD"),
+            (SCE_ASN1_ATTRIBUTE, StyleSlot::Keyword2, "ATTRIBUTE"),
+            (SCE_ASN1_DESCRIPTOR, StyleSlot::Preprocessor, "DESCRIPTOR"),
+            (SCE_ASN1_TYPE, StyleSlot::Lifetime, "TYPE"),
+            (SCE_ASN1_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+        ] {
+            assert!(
+                asn1.styles.contains(&(idx, slot)),
+                "SCE_ASN1_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 7: framework-unmapped slots confirmed absent.
+        assert_eq!(
+            SCE_ASN1_DEFAULT, 0,
+            "SCE_ASN1_DEFAULT has drifted from 0 — verify against SciLexer.h:1108"
+        );
+        assert_eq!(
+            SCE_ASN1_IDENTIFIER, 2,
+            "SCE_ASN1_IDENTIFIER has drifted from 2 — verify against SciLexer.h:1110"
+        );
+        for (idx, name) in [
+            (SCE_ASN1_DEFAULT, "DEFAULT"),
+            (SCE_ASN1_IDENTIFIER, "IDENTIFIER"),
+        ] {
+            assert!(
+                !asn1.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_ASN1_{name} ({idx}) must remain unmapped — \
+                 framework convention (DEFAULT falls through to \
+                 STYLE_DEFAULT for whitespace; IDENTIFIER falls \
+                 through for barewords not matching any wordlist)"
+            );
+        }
+
+        // Invariant 8: italic == 1 (COMMENT only).
+        assert_eq!(asn1.italic.len(), 1);
+        assert!(
+            asn1.italic.contains(&SCE_ASN1_COMMENT),
+            "ASN1_ITALIC must contain SCE_ASN1_COMMENT"
+        );
+
+        // Invariant 9: bold == 1 (KEYWORD only — class 0, primary
+        // structural anchor).
+        assert_eq!(asn1.bold.len(), 1);
+        assert!(
+            asn1.bold.contains(&SCE_ASN1_KEYWORD),
+            "ASN1_BOLD must contain SCE_ASN1_KEYWORD (class 0 — \
+             X.680 structural reserved words, the primary anchor \
+             of every ASN.1 module)"
+        );
+
+        // Invariant 10: cross-language non-reuse (sampled).
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let sp = lang_theme(L_SPICE).expect("Spice wired");
+        let raku = lang_theme(L_RAKU).expect("Raku wired");
+        let re = lang_theme(L_REBOL).expect("REBOL wired");
+        for (other, name) in [(cpp, "C++"), (sp, "Spice"), (raku, "Raku"), (re, "REBOL")] {
+            assert_ne!(
+                asn1.styles, other.styles,
+                "ASN.1 must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 11: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_ASN1)
+            .expect("L_ASN1 LangEntry present in LANG_TABLE");
+        assert_eq!(
+            entry.lexer,
+            Some("asn1"),
+            "L_ASN1 LangEntry.lexer must be Some(\"asn1\")"
+        );
+        assert!(
+            entry.extensions.contains(&"asn1"),
+            "L_ASN1 extensions must contain `asn1`"
+        );
+
+        // Invariant 12: canonical class-0 KEYWORD anchors — X.680
+        // structural reserved words.
+        for tok in [
+            "DEFINITIONS",
+            "BEGIN",
+            "END",
+            "SEQUENCE",
+            "CHOICE",
+            "IMPORTS",
+        ] {
+            assert!(
+                ASN1_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "ASN1_KEYWORDS must include canonical X.680 reserved word `{tok}`"
+            );
+        }
+
+        // Invariant 13: canonical class-1 ATTRIBUTE anchors — SMI
+        // macro headers + field names.
+        for tok in [
+            "OBJECT-TYPE",
+            "MODULE-IDENTITY",
+            "SYNTAX",
+            "ACCESS",
+            "STATUS",
+        ] {
+            assert!(
+                ASN1_ATTRIBUTES.split_whitespace().any(|t| t == tok),
+                "ASN1_ATTRIBUTES must include canonical SMI attribute `{tok}`"
+            );
+        }
+
+        // Invariant 14: canonical class-2 DESCRIPTOR anchors — MIB
+        // status/access values and IANA sub-tree roots.
+        for tok in ["current", "read-only", "iso", "internet"] {
+            assert!(
+                ASN1_DESCRIPTORS.split_whitespace().any(|t| t == tok),
+                "ASN1_DESCRIPTORS must include canonical MIB descriptor `{tok}`"
+            );
+        }
+
+        // Invariant 15: canonical class-3 TYPE anchors — X.680
+        // primitives + SMI TCs.
+        for tok in ["INTEGER", "Counter32", "DisplayString", "IpAddress"] {
+            assert!(
+                ASN1_TYPES.split_whitespace().any(|t| t == tok),
+                "ASN1_TYPES must include canonical ASN.1/SMI type `{tok}`"
+            );
+        }
+
+        // Invariant 16: hyphen-glued token pin. LOAD-BEARING per
+        // LexAsn1.cxx:42-45's isAsn1Char grammar — hyphen is part
+        // of identifier, so `MAX-ACCESS` / `read-only` /
+        // `OBJECT-TYPE` MUST tokenise as single tokens (not `MAX`
+        // + `-` + `ACCESS`). Wordlist entries must match source
+        // spelling exactly.
+        for (list, name, tok) in [
+            (ASN1_ATTRIBUTES, "ATTRIBUTES", "MAX-ACCESS"),
+            (ASN1_ATTRIBUTES, "ATTRIBUTES", "OBJECT-TYPE"),
+            (ASN1_ATTRIBUTES, "ATTRIBUTES", "TEXTUAL-CONVENTION"),
+            (ASN1_DESCRIPTORS, "DESCRIPTORS", "read-only"),
+            (ASN1_DESCRIPTORS, "DESCRIPTORS", "not-accessible"),
+            (ASN1_DESCRIPTORS, "DESCRIPTORS", "mib-2"),
+            (ASN1_KEYWORDS, "KEYWORDS", "TYPE-IDENTIFIER"),
+            (ASN1_KEYWORDS, "KEYWORDS", "ABSTRACT-SYNTAX"),
+            (ASN1_TYPES, "TYPES", "RELATIVE-OID"),
+            (ASN1_TYPES, "TYPES", "OID-IRI"),
+        ] {
+            assert!(
+                list.split_whitespace().any(|t| t == tok),
+                "ASN1_{name} must include hyphen-glued canonical `{tok}` \
+                 — LexAsn1.cxx:42-45 treats hyphen as part of \
+                 identifier, so `{tok}` tokenises as a single unit"
+            );
+        }
+
+        // Invariant 17: case-sensitive placement pins. LexAsn1 is
+        // case-sensitive per LexAsn1.cxx:94's unmodified GetCurrent
+        // call, so `PRIVATE` (UPPERCASE — X.680 tag class in class 0)
+        // and `private` (lowercase — IANA private sub-tree anchor
+        // in class 2) are DIFFERENT tokens with distinct semantic
+        // roles. Both must exist in their canonical class.
+        assert!(
+            ASN1_KEYWORDS.split_whitespace().any(|t| t == "PRIVATE"),
+            "ASN1_KEYWORDS must include `PRIVATE` (UPPERCASE — X.680 \
+             tag class)"
+        );
+        assert!(
+            ASN1_DESCRIPTORS.split_whitespace().any(|t| t == "private"),
+            "ASN1_DESCRIPTORS must include `private` (lowercase — IANA \
+             sub-tree anchor for private-enterprise OID space)"
+        );
+        // And they must not be swapped.
+        assert!(
+            !ASN1_KEYWORDS.split_whitespace().any(|t| t == "private"),
+            "ASN1_KEYWORDS must NOT contain lowercase `private` — \
+             belongs in ASN1_DESCRIPTORS"
+        );
+        assert!(
+            !ASN1_DESCRIPTORS.split_whitespace().any(|t| t == "PRIVATE"),
+            "ASN1_DESCRIPTORS must NOT contain uppercase `PRIVATE` — \
+             belongs in ASN1_KEYWORDS"
+        );
+
+        // Invariant 18: highest-defined SCE_ASN1_* pin.
+        assert_eq!(
+            SCE_ASN1_OPERATOR, 10,
+            "SCE_ASN1_OPERATOR has drifted from 10 — Lexilla may have \
+             renumbered slots. Verify against SciLexer.h:1118"
+        );
+        for (idx, _) in asn1.styles {
+            assert!(
+                *idx <= SCE_ASN1_OPERATOR,
+                "ASN1_STYLES references slot {idx}, which is higher \
+                 than SCE_ASN1_OPERATOR ({SCE_ASN1_OPERATOR})"
+            );
+        }
+
+        // Invariant 19: no duplicate tokens within any wordlist.
+        for (list, name) in [
+            (ASN1_KEYWORDS, "KEYWORDS"),
+            (ASN1_ATTRIBUTES, "ATTRIBUTES"),
+            (ASN1_DESCRIPTORS, "DESCRIPTORS"),
+            (ASN1_TYPES, "TYPES"),
+        ] {
+            let total = list.split_whitespace().count();
+            let unique = list.split_whitespace().collect::<HashSet<_>>().len();
+            assert_eq!(
+                total,
+                unique,
+                "ASN1_{name} contains {} duplicate token(s)",
+                total - unique
+            );
+        }
+
+        // Invariant 20: ambiguous-token placement pins. These pin
+        // the class-0-vs-class-3 dominance calls for tokens that
+        // have both a structural-keyword and a leaf-type role in
+        // X.680 / SMI. First-match-wins at LexAsn1.cxx:95-106 means
+        // whichever class holds the token gets its colour everywhere.
+        //
+        //   * `NULL` → class 0 (X.680 null-value keyword AND
+        //     null-type; keyword role wins by first-match).
+        //   * `BIT` / `OCTET` / `STRING` → class 0 (structural
+        //     type-builder role: `BIT STRING`, `OCTET STRING`).
+        //   * `OBJECT` / `IDENTIFIER` → class 0 (structural
+        //     type-builder: `OBJECT IDENTIFIER`).
+        //   * `INTEGER` / `REAL` / `BOOLEAN` → class 3 only
+        //     (leaf value types on the RHS of `::=`).
+        for tok in [
+            "NULL",
+            "BIT",
+            "OCTET",
+            "STRING",
+            "OBJECT",
+            "IDENTIFIER",
+            "SEQUENCE",
+            "SET",
+            "CHOICE",
+        ] {
+            assert!(
+                ASN1_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "`{tok}` must be in ASN1_KEYWORDS (structural role \
+                 dominates)"
+            );
+            assert!(
+                !ASN1_TYPES.split_whitespace().any(|t| t == tok),
+                "`{tok}` must NOT be in ASN1_TYPES — class 0 already \
+                 wins by first-match-wins; class-3 duplicate would be \
+                 dead code"
+            );
+        }
+        for tok in ["INTEGER", "REAL", "BOOLEAN"] {
+            assert!(
+                ASN1_TYPES.split_whitespace().any(|t| t == tok),
+                "`{tok}` must be in ASN1_TYPES (leaf value type)"
+            );
+            assert!(
+                !ASN1_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "`{tok}` must NOT be in ASN1_KEYWORDS — leaf types \
+                 stay class-3 only; class-0 duplicate would move the \
+                 paint to the structural keyword slot"
             );
         }
     }

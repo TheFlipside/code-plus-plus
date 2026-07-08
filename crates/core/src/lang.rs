@@ -14006,6 +14006,246 @@ pub const RAKU_ADVERBS: &str = concat!(
     "sym to v val w words ww x",
 );
 
+/// Space-separated **ASN.1 / SMI structural reserved words** installed
+/// as **class 0** of `LexAsn1`'s wordlist descriptor (`SCE_ASN1_KEYWORD`,
+/// primary blue slot).
+///
+/// **Case-sensitive byte-exact match.** `LexAsn1.cxx:94` populates the
+/// identifier buffer via unmodified `sc.GetCurrent(s, sizeof(s))`. ASN.1
+/// convention: structural keywords are `UPPERCASE` or `UPPER-HYPHEN-CASE`
+/// (`ABSTRACT-SYNTAX` / `TYPE-IDENTIFIER`) — no case-folding at either
+/// the lexer or wordlist layer.
+///
+/// **Contents authored clean-room from ITU-T X.680 (ASN.1 Syntax)** —
+/// no upstream Lexilla fixture exists for asn1 (checked
+/// `crates/scintilla-sys/vendor/lexilla/test/examples/` — no `asn1/`
+/// subdirectory). Curated from the X.680 §12.38 reserved-word table.
+///
+/// **Categories** (53 tokens):
+///   - **Module structure** (7): `DEFINITIONS` / `BEGIN` / `END` /
+///     `IMPORTS` / `EXPORTS` / `FROM` / `MODULE`.
+///   - **Type builders** (13): `SEQUENCE` / `SET` / `OF` / `CHOICE`
+///     / `ENUMERATED` / `OPTIONAL` / `DEFAULT` / `BIT` / `OCTET` /
+///     `STRING` / `OBJECT` / `IDENTIFIER` / `NULL`.
+///   - **Tagging + visibility** (6): `IMPLICIT` / `EXPLICIT` /
+///     `TAGS` / `APPLICATION` / `UNIVERSAL` / `PRIVATE`.
+///   - **Constraints** (12): `MIN` / `MAX` / `SIZE` / `INCLUDES` /
+///     `PRESENT` / `ABSENT` / `WITH` / `PATTERN` / `CONSTRAINED` /
+///     `BY` / `CONTAINING` / `ENCODED`.
+///   - **Set operators** (3): `UNION` / `INTERSECTION` / `EXCEPT`.
+///   - **Value literals** (2): `TRUE` / `FALSE`.
+///   - **Composition** (4): `COMPONENTS` / `COMPONENT` /
+///     `ABSTRACT-SYNTAX` / `TYPE-IDENTIFIER`.
+///   - **Extensibility** (3): `EXTENSIBILITY` / `IMPLIED` /
+///     `INSTANCE`.
+///   - **Information object classes** (3): `CLASS` / `UNIQUE` /
+///     `SETTINGS`.
+///
+/// **Cross-class disjointness with `ASN1_ATTRIBUTES` / `ASN1_DESCRIPTORS`
+/// / `ASN1_TYPES`** is invariant-tested. First-match-wins at
+/// `LexAsn1.cxx:95-106` means class 0 already masks any accidental
+/// duplicate in classes 1..3 — the disjointness pin catches authorship
+/// mistakes early rather than letting them silently degrade to the
+/// wrong style slot.
+pub const ASN1_KEYWORDS: &str = concat!(
+    "ABSENT ABSTRACT-SYNTAX APPLICATION BEGIN BIT BY CHOICE CLASS ",
+    "COMPONENT COMPONENTS CONSTRAINED CONTAINING DEFAULT DEFINITIONS ",
+    "ENCODED END ENUMERATED EXCEPT EXPLICIT EXPORTS EXTENSIBILITY ",
+    "FALSE FROM IDENTIFIER IMPLICIT IMPLIED IMPORTS INCLUDES INSTANCE ",
+    "INTERSECTION MAX MIN MODULE NULL OBJECT OCTET OF OPTIONAL PATTERN ",
+    "PRESENT PRIVATE SEQUENCE SET SETTINGS SIZE STRING TAGS TRUE ",
+    "TYPE-IDENTIFIER UNION UNIQUE UNIVERSAL WITH",
+);
+
+/// Space-separated **SMI macro headers + MIB attribute field names**
+/// installed as **class 1** of `LexAsn1`'s wordlist descriptor
+/// (`SCE_ASN1_ATTRIBUTE`, accent slot).
+///
+/// `LexAsn1`'s design intent traces to SNMP MIB (Structure of Management
+/// Information — RFC 1155 / 1902 / 2578) parsing; the "Attributes"
+/// bucket covers the SMI macro headers (`OBJECT-TYPE` /
+/// `MODULE-IDENTITY` / `TEXTUAL-CONVENTION` / etc.) that declare MIB
+/// nodes plus the field names those macros expose (`SYNTAX` / `ACCESS`
+/// / `STATUS` / `DESCRIPTION` / etc.). Structurally distinct from X.680
+/// core keywords (class 0) — SMI macros are an SNMP-specific
+/// vocabulary layered on top of pure ASN.1.
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`ASN1_KEYWORDS`]. All entries are `UPPERCASE` or
+/// `UPPER-HYPHEN-CASE` (`MAX-ACCESS` / `MIN-ACCESS` / `WRITE-SYNTAX`)
+/// — hyphens are part of the token per `LexAsn1.cxx:42-45`'s
+/// `isAsn1Char` grammar (`-` OR digit OR letter).
+///
+/// **Contents authored clean-room from RFC 1215 (`SMIv1` `TRAP-TYPE`
+/// macro) + RFC 2578 (`SMIv2` core macros) + RFC 2580 (`SMIv2`
+/// Conformance Statements — `MODULE-COMPLIANCE` / `OBJECT-GROUP` /
+/// `NOTIFICATION-GROUP` / `AGENT-CAPABILITIES` and their `GROUP` /
+/// `MANDATORY-GROUPS` / `SUPPORTS` / `VARIATION` / `CREATION-REQUIRES`
+/// / `WRITE-SYNTAX` / `PRODUCT-RELEASE` clauses)** — the canonical
+/// SMI macro + attribute vocabulary. `VARIABLES` / `ENTERPRISE` trace
+/// specifically to RFC 1215's `TRAP-TYPE` macro.
+///
+/// **Categories** (~37 tokens):
+///   - **SMI macro headers** (11): `OBJECT-TYPE` / `MODULE-IDENTITY` /
+///     `MODULE-COMPLIANCE` / `OBJECT-IDENTITY` / `NOTIFICATION-TYPE` /
+///     `TRAP-TYPE` (`SMIv1` legacy) / `TEXTUAL-CONVENTION` /
+///     `OBJECT-GROUP` / `NOTIFICATION-GROUP` / `AGENT-CAPABILITIES` /
+///     `GROUP`.
+///   - **Attribute field names** (12): `SYNTAX` / `ACCESS` /
+///     `MAX-ACCESS` / `MIN-ACCESS` / `STATUS` / `DESCRIPTION` /
+///     `REFERENCE` / `INDEX` / `AUGMENTS` / `DEFVAL` / `UNITS` /
+///     `DISPLAY-HINT`.
+///   - **Module header fields** (5): `ORGANIZATION` / `CONTACT-INFO` /
+///     `LAST-UPDATED` / `REVISION` / `PRODUCT-RELEASE`.
+///   - **AGENT-CAPABILITIES specifics** (4): `SUPPORTS` / `VARIATION`
+///     / `CREATION-REQUIRES` / `WRITE-SYNTAX`.
+///   - **Trap / notification body fields** (5): `VARIABLES` /
+///     `NOTIFICATIONS` / `OBJECTS` / `MANDATORY-GROUPS` / `ENTERPRISE`.
+///
+/// **Cross-class disjointness with `ASN1_KEYWORDS` / `ASN1_DESCRIPTORS`
+/// / `ASN1_TYPES`** is invariant-tested.
+pub const ASN1_ATTRIBUTES: &str = concat!(
+    "ACCESS AGENT-CAPABILITIES AUGMENTS CONTACT-INFO CREATION-REQUIRES ",
+    "DEFVAL DESCRIPTION DISPLAY-HINT ENTERPRISE GROUP INDEX ",
+    "LAST-UPDATED MANDATORY-GROUPS MAX-ACCESS MIN-ACCESS ",
+    "MODULE-COMPLIANCE MODULE-IDENTITY NOTIFICATION-GROUP ",
+    "NOTIFICATION-TYPE NOTIFICATIONS OBJECT-GROUP OBJECT-IDENTITY ",
+    "OBJECT-TYPE OBJECTS ORGANIZATION PRODUCT-RELEASE REFERENCE ",
+    "REVISION STATUS SUPPORTS SYNTAX TEXTUAL-CONVENTION TRAP-TYPE ",
+    "UNITS VARIABLES VARIATION WRITE-SYNTAX",
+);
+
+/// Space-separated **SNMP MIB lowercase descriptor constants**
+/// installed as **class 2** of `LexAsn1`'s wordlist descriptor
+/// (`SCE_ASN1_DESCRIPTOR`, tertiary slot).
+///
+/// The "Descriptors" bucket covers MIB-well-known lowercase and
+/// camelCase constants — the ACCESS / STATUS enumerations
+/// (`read-only` / `current` / `mandatory`) and the standardized
+/// OID sub-tree names that anchor MIB module definitions (`iso` /
+/// `internet` / `mib-2` / `enterprises`).
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`ASN1_KEYWORDS`]. All entries are lowercase (`current` /
+/// `read-only`) or camelCase (`snmpV2` / `snmpMIBObjects`) —
+/// disjoint from the UPPERCASE tokens in classes 0 and 1 by
+/// spelling alone. `LexAsn1.cxx:42-45`'s `isAsn1Char` grammar
+/// includes `-`, so hyphenated forms (`read-only` /
+/// `not-accessible` / `mib-2`) tokenise as single tokens.
+///
+/// **Contents authored clean-room from RFC 1155 (`SMIv1`) + RFC 2578
+/// (`SMIv2`) + RFC 3411 (`SNMPv3` framework)** — the canonical SNMP
+/// well-known descriptor vocabulary. The `iso` / `ccitt` /
+/// `joint-iso-ccitt` root OIDs come from X.660 (ITU-T OID
+/// registration).
+///
+/// **Categories** (~34 tokens):
+///   - **STATUS values** (5): `current` / `deprecated` / `obsolete`
+///     / `mandatory` (`SMIv1`) / `optional` (`SMIv1`).
+///   - **MAX-ACCESS / ACCESS values** (6): `not-accessible` /
+///     `accessible-for-notify` / `read-only` / `read-write` /
+///     `read-create` / `write-only`.
+///   - **X.660 root OIDs** (3): `iso` / `ccitt` / `joint-iso-ccitt`.
+///   - **IANA-registered sub-tree anchors** (14): `internet` /
+///     `directory` / `mgmt` / `experimental` / `private` /
+///     `mib-2` / `security` / `snmpV2` / `snmpModules` /
+///     `snmpDomains` / `snmpProxys` / `snmpMIB` / `snmpMIBObjects`
+///     / `snmpTrap`.
+///   - **`DoD` sub-tree + top-level MIB II groups** (6): `dod` /
+///     `org` / `enterprises` / `transmission` / `system` /
+///     `interfaces`.
+///
+/// **Cross-class disjointness with `ASN1_KEYWORDS` / `ASN1_ATTRIBUTES`
+/// / `ASN1_TYPES`** is invariant-tested under the lexer's case-
+/// sensitive matching. Case-folded collisions **do** exist by
+/// design — `private` (class 2, IANA sub-tree anchor) vs `PRIVATE`
+/// (class 0, X.680 tag class); `optional` (class 2, `SMIv1` STATUS
+/// value) vs `OPTIONAL` (class 0, X.680 field modifier). Both
+/// spellings are valid tokens in the ASN.1 / SMI ecosystem with
+/// distinct semantic roles; the case-sensitive contract from
+/// `LexAsn1.cxx:94` keeps them safely separate.
+pub const ASN1_DESCRIPTORS: &str = concat!(
+    "accessible-for-notify ccitt current deprecated directory dod ",
+    "enterprises experimental interfaces internet iso joint-iso-ccitt ",
+    "mandatory mgmt mib-2 not-accessible obsolete optional org private ",
+    "read-create read-only read-write security snmpDomains snmpMIB ",
+    "snmpMIBObjects snmpModules snmpProxys snmpTrap snmpV2 system ",
+    "transmission write-only",
+);
+
+/// Space-separated **X.680 primitive types + SMI textual conventions**
+/// installed as **class 3** of `LexAsn1`'s wordlist descriptor
+/// (`SCE_ASN1_TYPE`, distinct type-accent slot).
+///
+/// The "Types" bucket covers value-carrying primitive types
+/// (`INTEGER` / `REAL` / `BOOLEAN`), the X.680 restricted-character
+/// string type family (`IA5String` / `PrintableString` /
+/// `UTF8String` / etc.), and the RFC 2579 `SMIv2` textual conventions
+/// (`Counter32` / `Gauge32` / `TimeTicks` / `IpAddress` / etc.).
+/// Structurally distinct from class 0's *type builders* (`SEQUENCE` /
+/// `SET` / `OF` are keywords that combine types; the entries here are
+/// leaf types that can appear standalone on the RHS of `::=`).
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`ASN1_KEYWORDS`]. Class-3 tokens are `UPPERCASE` (`INTEGER` /
+/// `REAL` / `BOOLEAN`), `MixedCase` (`IA5String` / `Counter32` /
+/// `DisplayString`), or `UPPER-HYPHEN-CASE` (`RELATIVE-OID` /
+/// `OID-IRI`).
+///
+/// **Contents authored clean-room from ITU-T X.680 + RFC 2579
+/// (Textual Conventions for `SMIv2`) + RFC 3411 (`SNMPv3`)**.
+///
+/// **Categories** (49 tokens):
+///   - **X.680 primitive value types** (3): `INTEGER` / `REAL` /
+///     `BOOLEAN`.
+///   - **X.680 restricted character string types** (14):
+///     `IA5String` / `BMPString` / `UTF8String` /
+///     `PrintableString` / `NumericString` / `VisibleString` /
+///     `GraphicString` / `GeneralString` / `UniversalString` /
+///     `TeletexString` / `T61String` / `VideotexString` /
+///     `ISO646String` / `ObjectDescriptor`.
+///   - **X.680 useful types** (4): `UTCTime` / `GeneralizedTime` /
+///     `RELATIVE-OID` / `OID-IRI`.
+///   - **`SMIv2` base counters + gauges** (6): `Counter` (`SMIv1`) /
+///     `Counter32` / `Counter64` / `Gauge` (`SMIv1`) / `Gauge32` /
+///     `Unsigned32`.
+///   - **`SMIv2` fixed-width integers** (1): `Integer32`.
+///   - **`SMIv2` SNMP-domain types** (4): `TimeTicks` / `IpAddress`
+///     / `Opaque` / `NetworkAddress` (`SMIv1`).
+///   - **RFC 2579 `SMIv2` TCs** (7): `PhysAddress` / `MacAddress` /
+///     `DisplayString` / `DateAndTime` / `RowStatus` /
+///     `StorageType` / `TruthValue`.
+///   - **RFC 2579 time / instrumentation TCs** (3): `TimeInterval`
+///     / `TimeStamp` / `TestAndIncr`.
+///   - **RFC 2579 pointer TCs** (4): `AutonomousType` /
+///     `InstancePointer` / `VariablePointer` / `RowPointer`.
+///   - **`SNMPv3` framework TCs** (3): `TAddress` / `TDomain` /
+///     `SnmpAdminString`.
+///
+/// **Cross-class disjointness with `ASN1_KEYWORDS` /
+/// `ASN1_ATTRIBUTES` / `ASN1_DESCRIPTORS`** is invariant-tested.
+/// `INTEGER` / `REAL` / `BOOLEAN` stay class-3 only — they're
+/// **leaf types** on the RHS of `::=`. Only the *type builders*
+/// (`SEQUENCE` / `SET` / `OF` / `CHOICE` / `ENUMERATED` / `BIT` /
+/// `OCTET` / `STRING` / `OBJECT` / `IDENTIFIER`) go in class 0.
+/// `NULL` and `TRUE` / `FALSE` are X.680 keyword-values with a
+/// dual keyword-or-type role; class 0 wins by first-match-wins.
+/// `BITS` (`SMIv2` alternative to `BIT STRING`) is deliberately
+/// omitted — it's rarely misclassified in real MIBs and the
+/// classifier already routes `BIT` + `STRING` correctly via
+/// class 0.
+pub const ASN1_TYPES: &str = concat!(
+    "AutonomousType BMPString BOOLEAN Counter Counter32 Counter64 ",
+    "DateAndTime DisplayString GeneralString GeneralizedTime GraphicString ",
+    "Gauge Gauge32 IA5String INTEGER Integer32 InstancePointer IpAddress ",
+    "ISO646String MacAddress NetworkAddress NumericString ObjectDescriptor ",
+    "OID-IRI Opaque PhysAddress PrintableString REAL RELATIVE-OID ",
+    "RowPointer RowStatus SnmpAdminString StorageType T61String TAddress ",
+    "TDomain TeletexString TestAndIncr TimeInterval TimeStamp TimeTicks ",
+    "TruthValue UTCTime UTF8String UniversalString Unsigned32 VariablePointer ",
+    "VideotexString VisibleString",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8537,6 +8537,146 @@ pub const SCE_HBA_STRING: usize = 85;
 pub const SCE_HBA_IDENTIFIER: usize = 86;
 pub const SCE_HBA_STRINGEOL: usize = 87;
 
+// LexAsn1 style indices. 11 contiguous slots (0..=10) covering the
+// ASN.1 lexer's full emission set: `--`-to-EOL comments (COMMENT),
+// `"..."` double-quoted strings (STRING), decimal digit-only
+// numerals (SCALAR) at generic positions, decimal-only numerals
+// **inside** a `{...}` OID definition (OID — distinguished so the
+// host can paint object identifier digits differently from bare
+// scalars), identifier-shaped tokens (IDENTIFIER) resolving via
+// wordlist probe into KEYWORD / ATTRIBUTE / DESCRIPTOR / TYPE
+// (LexAsn1's four-class descriptor), and the affectation operator
+// `::=` plus punctuation (OPERATOR). Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 1108-1118, the
+// `SCE_ASN1_*` block in `vendor/lexilla/include/LexicalStyles.iface`
+// lines 1241-1252 (line 1240 is the `# Lexical states for SCLEX_ASN1`
+// header comment), and the `LexerModule lmAsn1(SCLEX_ASN1,
+// ColouriseAsn1Doc, "asn1", FoldAsn1Doc, asn1WordLists)`
+// registration at `vendor/lexilla/lexers/LexAsn1.cxx:189`.
+//
+// Dispatches SCLEX_ASN1 (= 63, per `SciLexer.h:79`) — one of the
+// oldest Lexilla lexers (2004, Herr Pfarrer rpfarrer). The lexer's
+// design intent is **SNMP MIB / ASN.1 module parsing** — the
+// `SCE_ASN1_OID` slot and the `ATTRIBUTE` / `DESCRIPTOR` split
+// (unusual for a pure ASN.1 grammar) both trace to SNMP MIB
+// conventions (RFC 1155 / 1902 / 2578 SMI). Extensions `.asn1`
+// (LANG_TABLE row for `L_ASN1`).
+//
+// **Four wordlists.** `asn1WordLists[]` at `LexAsn1.cxx:181-186`
+// declares four named classes with **first-match-wins semantics**
+// via the `if` / `else if` chain at `:95-106` inside the
+// `SCE_ASN1_IDENTIFIER` collect-state closer:
+//   - class 0 = "Keywords" — X.680 structural reserved words
+//     (`DEFINITIONS` / `BEGIN` / `END` / `SEQUENCE` / `CHOICE` /
+//     `IMPORTS` / `EXPORTS` / etc.). Highest priority.
+//   - class 1 = "Attributes" — SMI macro headers + field names
+//     (`OBJECT-TYPE` / `MODULE-IDENTITY` / `SYNTAX` / `ACCESS` /
+//     `STATUS` / `DESCRIPTION` / etc.). Second priority.
+//   - class 2 = "Descriptors" — SNMP MIB lowercase constants
+//     (`current` / `read-only` / `mandatory` / `iso` / `internet`
+//     / etc.). Third priority.
+//   - class 3 = "Types" — X.680 primitive types + SMI textual
+//     conventions (`INTEGER` / `IA5String` / `Counter32` /
+//     `DisplayString` / etc.). Lowest priority.
+//
+// **Classifier order.** `LexAsn1.cxx:95-106` probes wordlists in
+// this fixed order after the identifier-collect state closes:
+//   1. If `Keywords.InList(s)` → `SCE_ASN1_KEYWORD`.
+//   2. Else if `Attributes.InList(s)` → `SCE_ASN1_ATTRIBUTE`.
+//   3. Else if `Descriptors.InList(s)` → `SCE_ASN1_DESCRIPTOR`.
+//   4. Else if `Types.InList(s)` → `SCE_ASN1_TYPE`.
+//   5. Else → `SCE_ASN1_IDENTIFIER` (bareword — the state never
+//      transitions away, so the collected bytes retain the
+//      `IDENTIFIER` style at paint time). Cross-class duplicates
+//      are silently masked by the earlier class. Framework
+//      enforces disjointness in the invariant test to keep the
+//      wordlist authorship intent visible.
+//
+// **Case-SENSITIVE identifier lookup.** `LexAsn1.cxx:94` populates
+// the identifier buffer via `sc.GetCurrent(s, sizeof(s))`, which
+// copies raw source bytes verbatim without any tolower step —
+// confirmed by grep (no `tolower` / `MakeLowerCase` /
+// `GetCurrentLowered` anywhere in the file). Wordlist entries
+// must match source spelling exactly. ASN.1 / SMI convention:
+// structural keywords + SMI macro headers are `UPPERCASE` or
+// `UPPER-HYPHEN-CASE` (`DEFINITIONS` / `OBJECT-TYPE`), MIB
+// descriptors are `lowercase` or `lower-hyphen-case` (`current`
+// / `read-only`), primitive types are `MixedCase` (`INTEGER` /
+// `IA5String` / `Counter32`).
+//
+// **`isAsn1Char` identifier grammar.** `LexAsn1.cxx:42-45`
+// defines identifier characters as `-` OR ASCII digit OR ASCII
+// letter — no `_` (unlike C / Python / most other languages) and
+// no Unicode support. Structural consequence: SMI's hyphen-glued
+// macro names (`OBJECT-TYPE` / `MAX-ACCESS` / `read-only`) all
+// tokenise as SINGLE identifiers. The classifier probe treats
+// `MAX-ACCESS` as one wordlist entry, NOT `MAX` + `-` + `ACCESS`.
+// Wordlists MUST use hyphen-glued spelling matching source form.
+//
+// **`SCE_ASN1_OID` (4) vs `SCE_ASN1_SCALAR` (5)** — both paint
+// decimal digit runs, but distinct emission sites. SCALAR is
+// entered at `:76` from `SCE_ASN1_DEFAULT` when the classifier
+// sees a leading digit (ASN.1 identifiers must start with a
+// letter, so a bareword digit run is always a plain number). OID
+// is entered at `:135` and `:154` from inside the `SCE_ASN1_OPERATOR`
+// sub-loop that follows a `::=` — the sub-loop starts on `{`
+// (OID definition, e.g. `::= { iso 3 6 1 }`) or a bare digit
+// (trap number, e.g. `::= 42 trap`). Inside the `{...}` variant,
+// digit runs that BEGIN a new numeric token get OID — the `:133`
+// condition requires `!isAsn1Char(sc.chPrev) || isAsn1Number(
+// sc.chPrev)`, i.e. either the first digit at a token boundary or
+// a continuation of an existing digit run; digits embedded within
+// an identifier-shaped token (e.g. `iso3` written without a
+// separator) instead fall into the `isAsn1Char` branch at `:136`
+// and route to `IDENTIFIER` — an edge case that doesn't arise in
+// canonical OID syntax but is worth flagging. Framework routes
+// BOTH OID and SCALAR to `StyleSlot::Number` — same paint colour,
+// but the lexer-level distinction is real and worth preserving
+// for future palette tweaks (e.g., a dedicated "OID" slot with a
+// subtle accent).
+//
+// **`SCE_ASN1_IDENTIFIER` (2)** — the transient collect state at
+// `:79` covering identifier-shaped bytes as they accumulate. Two
+// exit paths:
+//   1. Match found via `Keywords` / `Attributes` / `Descriptors`
+//      / `Types` list → `sc.ChangeState(SCE_ASN1_KEYWORD |
+//      ATTRIBUTE | DESCRIPTOR | TYPE)` at `:97, :100, :103, :106`
+//      retroactively re-styles the collected bytes.
+//   2. No match → state stays `IDENTIFIER` when `SetState(
+//      SCE_ASN1_DEFAULT)` fires at `:109`; the bytes emitted so
+//      far keep the `IDENTIFIER` style at paint. Bareword
+//      identifiers (net names / user-defined type references /
+//      OID parent names inside `{...}`) paint distinctly. Framework
+//      leaves `IDENTIFIER` unmapped so bareword tokens fall
+//      through to `STYLE_DEFAULT` — same convention as
+//      `SCE_C_IDENTIFIER` / `SCE_REBOL_IDENTIFIER` /
+//      `SCE_OSCRIPT_IDENTIFIER` / `SCE_SPICE_IDENTIFIER`.
+//
+// **`SCE_ASN1_OPERATOR` (10)** — entered at `:82` only on `:`
+// (the `::=` affectation operator's first byte). The state
+// contains a sub-loop that consumes subsequent `:` / `=` / space
+// and then either enters an OID definition on `{` or a trap-
+// number scalar on a bare digit. Other operators (`,` / `;` /
+// `(` / `)` / `[` / `]`) actually paint as `SCE_ASN1_DEFAULT`
+// because the state machine at `:66-83` only recognises `-`
+// (comment start), `"` (string start), digit (scalar), letter
+// (identifier), and `:` (operator) as state triggers — all
+// other punctuation stays in DEFAULT. Framework maps OPERATOR
+// to `StyleSlot::Operator` for the `::=` bytes; other
+// punctuation gets the fall-through STYLE_DEFAULT.
+pub const SCLEX_ASN1: usize = 63;
+pub const SCE_ASN1_DEFAULT: usize = 0;
+pub const SCE_ASN1_COMMENT: usize = 1;
+pub const SCE_ASN1_IDENTIFIER: usize = 2;
+pub const SCE_ASN1_STRING: usize = 3;
+pub const SCE_ASN1_OID: usize = 4;
+pub const SCE_ASN1_SCALAR: usize = 5;
+pub const SCE_ASN1_KEYWORD: usize = 6;
+pub const SCE_ASN1_ATTRIBUTE: usize = 7;
+pub const SCE_ASN1_DESCRIPTOR: usize = 8;
+pub const SCE_ASN1_TYPE: usize = 9;
+pub const SCE_ASN1_OPERATOR: usize = 10;
+
 // SCN_* notification codes (delivered via WM_NOTIFY's NMHDR.code) are added
 // when Phase 2+ first dispatches them. Each constant must be cross-checked
 // against `vendor/scintilla/include/Scintilla.h` at the time of addition;

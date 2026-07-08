@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 79 / 🟡 9 / ⚫ 1.
+Total: 89 rows. ✅ 80 / 🟡 8 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1847,7 +1847,7 @@ further shim work needed.
 | --- | --- | --- | --- | --- | --- |
 | Normal Text | 0 | — | — | — | ⚫ |
 | Ada | 42 | `ada` | ✅ | ✅ | ✅ |
-| ASN.1 | 65 | `asn1` | ⚫ | ⚫ | 🟡 |
+| ASN.1 | 65 | `asn1` | ✅ | ✅ | ✅ |
 | ASP | 16 | `hypertext` | ✅ | ✅ | ✅ |
 | Assembly | 32 | `asm` | ✅ | ✅ | ✅ |
 | AutoIt | 40 | `au3` | ✅ | ✅ | ✅ |
@@ -9100,6 +9100,234 @@ Same discipline as
 Fortran's free-form + fixed-
 form sharing FORTRAN_THEME
 verbatim.
+
+**ASN.1 (2026-07-08):** rides
+Lexilla's `asn1` lexer
+(`LexAsn1.cxx`) — one of the
+oldest Lexilla lexers (2004,
+Herr Pfarrer rpfarrer). Extension
+`.asn1`. Four-class wordlist
+descriptor designed around
+**SNMP MIB** (Structure of
+Management Information —
+RFC 1155 / 1902 / 2578) parsing
+on top of X.680 ASN.1 syntax.
+Distinctive features:
+`SCE_ASN1_OID` (dedicated
+paint state for object-
+identifier digits inside a
+`{...}` following `::=`), the
+attribute / descriptor split
+(unusual for a pure ASN.1
+grammar — both slots trace to
+SMI conventions), and hyphen-
+glued identifier tokens
+(`MAX-ACCESS` / `OBJECT-TYPE`
+/ `read-only` all tokenise as
+single tokens per
+`LexAsn1.cxx:42-45`'s `isAsn1Char`
+grammar).
+
+**Four-class wordlist install** —
+`asn1WordLists[]` at
+`LexAsn1.cxx:181-186` declares
+four named classes with
+**first-match-wins semantics**
+via the classifier chain at
+`:95-106`:
+- **Class 0 — `ASN1_KEYWORDS`**
+  (bold Keyword, 53 tokens):
+  X.680 structural reserved
+  words (`DEFINITIONS` / `BEGIN`
+  / `END` / `SEQUENCE` / `SET`
+  / `CHOICE` / `IMPORTS` /
+  `EXPORTS` / `IMPLICIT` /
+  `EXPLICIT` / `OPTIONAL` /
+  `DEFAULT` / `MIN` / `MAX` /
+  `SIZE` / `TAGS` / `APPLICATION`
+  / `UNIVERSAL` / `PRIVATE` /
+  `TRUE` / `FALSE` / `NULL` /
+  ...). Highest priority — the
+  structural anchor of every
+  ASN.1 module.
+- **Class 1 — `ASN1_ATTRIBUTES`**
+  (Keyword2 accent, 37 tokens):
+  SMI macro headers +
+  attribute field names
+  (`OBJECT-TYPE` /
+  `MODULE-IDENTITY` /
+  `MODULE-COMPLIANCE` /
+  `TEXTUAL-CONVENTION` /
+  `OBJECT-GROUP` /
+  `NOTIFICATION-TYPE` /
+  `TRAP-TYPE` / `SYNTAX` /
+  `ACCESS` / `MAX-ACCESS` /
+  `STATUS` / `DESCRIPTION` /
+  `REFERENCE` / `INDEX` /
+  `AUGMENTS` / `DEFVAL` /
+  `UNITS` / `DISPLAY-HINT` /
+  ...). Second priority.
+- **Class 2 — `ASN1_DESCRIPTORS`**
+  (Preprocessor, 34 tokens):
+  MIB lowercase constants —
+  `current` / `deprecated` /
+  `obsolete` / `mandatory` /
+  `read-only` / `read-write` /
+  `read-create` /
+  `not-accessible` /
+  `accessible-for-notify` /
+  `write-only` / `iso` /
+  `ccitt` / `joint-iso-ccitt`
+  / `internet` / `mgmt` /
+  `experimental` / `private`
+  (lowercase, distinct from
+  class-0 `PRIVATE`) / `mib-2`
+  / `enterprises` / ... Third
+  priority.
+- **Class 3 — `ASN1_TYPES`**
+  (Lifetime, 49 tokens): X.680
+  primitives + SMI textual
+  conventions (`INTEGER` /
+  `REAL` / `BOOLEAN` /
+  `IA5String` / `UTF8String` /
+  `PrintableString` /
+  `NumericString` /
+  `VisibleString` /
+  `GraphicString` / `UTCTime`
+  / `GeneralizedTime` /
+  `RELATIVE-OID` / `OID-IRI`
+  / `Counter` / `Counter32` /
+  `Counter64` / `Gauge32` /
+  `Unsigned32` / `Integer32` /
+  `TimeTicks` / `IpAddress` /
+  `Opaque` / `PhysAddress` /
+  `MacAddress` /
+  `DisplayString` /
+  `DateAndTime` / `RowStatus`
+  / `StorageType` /
+  `TruthValue` / ...). Lowest
+  priority — leaf value types
+  on the RHS of `::=`.
+
+**Contents authored clean-room**
+from ITU-T X.680 (ASN.1 Syntax)
++ RFC 1155 (SMIv1 core) + RFC
+1215 (SMIv1 TRAP-TYPE macro) +
+RFC 2578 (SMIv2 core macros) +
+RFC 2579 (SMIv2 Textual
+Conventions) + RFC 2580 (SMIv2
+Conformance Statements —
+`MODULE-COMPLIANCE` /
+`OBJECT-GROUP` /
+`NOTIFICATION-GROUP` /
+`AGENT-CAPABILITIES` and their
+GROUP / MANDATORY-GROUPS /
+SUPPORTS / VARIATION /
+CREATION-REQUIRES /
+WRITE-SYNTAX /
+PRODUCT-RELEASE clauses) + RFC
+3411 (SNMPv3 framework) — no
+upstream Lexilla fixture exists
+for asn1 (checked
+`crates/scintilla-sys/vendor/
+lexilla/test/examples/` — no
+`asn1/` subdirectory).
+
+**9-style-mapping table**
+covering 11 defined `SCE_ASN1_*`
+states — `DEFAULT` (0) and
+`IDENTIFIER` (2) stay unmapped
+per the framework fall-through-
+to-`STYLE_DEFAULT` convention
+for whitespace + bareword-
+collect slots. The nine
+mapped states: `COMMENT` →
+Comment italic (`--`-to-EOL
+line comments), `STRING` →
+String (`"..."` double-quoted),
+`OID` → Number (decimal digits
+inside `{...}` following
+`::=`), `SCALAR` → Number
+(bare decimal digit runs at
+generic positions), `KEYWORD`
+→ Keyword bold, `ATTRIBUTE` →
+Keyword2 accent (SMI macros /
+fields), `DESCRIPTOR` →
+Preprocessor (MIB
+enumeration values / IANA
+sub-tree anchors), `TYPE` →
+Lifetime (X.680 primitives +
+SMI TCs), `OPERATOR` →
+Operator (the `::=`
+affectation operator's bytes).
+
+**Palette rationale for the
+4-way keyword-class spread.**
+LexAsn1's 4-class descriptor
+is unusual for a Scintilla
+lexer (most have 1-2 classes).
+Mapping each class to a
+distinct StyleSlot lets the
+SNMP MIB reader visually
+distinguish the four
+archetypes simultaneously —
+structural / macro / value /
+type — without needing to
+consult the outline view.
+The Keyword / Keyword2 /
+Preprocessor / Lifetime
+spread reuses established
+Code++ palette slots without
+inventing new ones — same
+rationale as Raku's 7-class
+classifier collapsing to
+{Keyword, Function, Typedef,
+Class, Grammar, Adverb, ...}.
+
+**Case-sensitive discipline.**
+`LexAsn1.cxx:94` populates
+identifier buffer via
+unmodified
+`sc.GetCurrent(s, sizeof(s))`
+— no `tolower` / `MakeLowerCase`
+/ `GetCurrentLowered` anywhere
+in the file. `PRIVATE`
+(class 0, X.680 tag class) and
+`private` (class 2, IANA
+sub-tree anchor for private-
+enterprise OID space) are
+distinct tokens; both live in
+their canonical class without
+conflict. Similarly `NULL`
+(class 0, X.680 null-value
+keyword) vs no lowercase form
+in class 2.
+
+Structural test coverage: **20
+invariants** including
+disjointness across all 6
+pairs of populated classes,
+canonical anchor pins for
+each class (X.680 reserved
+words / SMI macros / MIB
+descriptors / X.680 + SMI
+types), hyphen-glued token
+pins (`MAX-ACCESS` /
+`OBJECT-TYPE` /
+`TEXTUAL-CONVENTION` /
+`RELATIVE-OID` all
+single-token), case-sensitive
+placement pins (`PRIVATE`
+UPPERCASE vs `private`
+lowercase — both must exist,
+must not be swapped), and
+ambiguous-token dominance
+pins (`NULL` / `BIT` /
+`OCTET` / `STRING` / `OBJECT`
+/ `IDENTIFIER` / `SEQUENCE` /
+`SET` / `CHOICE` → class 0
+only; `INTEGER` / `REAL` /
+`BOOLEAN` → class 3 only).
 
 ## Notes
 
