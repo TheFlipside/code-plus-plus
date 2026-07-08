@@ -391,7 +391,7 @@ use codepp_scintilla_sys::{
     SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
     SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
     SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
+    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETFONTQUALITY,
     SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
     SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTARGETEND,
     SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE,
@@ -399,10 +399,10 @@ use codepp_scintilla_sys::{
     SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
     SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
     SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
-    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED,
-    SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER,
-    SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
-    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
+    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_EOL_CR, SC_EOL_CRLF,
+    SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL,
+    SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL,
+    SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
     SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
     SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
     SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
@@ -1416,6 +1416,35 @@ impl UiPlatform for Win32Ui {
         eol: Eol,
         _byte_len: u64,
     ) {
+        // Sync Scintilla's per-document EOL mode with the tab's
+        // authoritative EOL. Fires on every normal user-visible
+        // tab-activation and metadata-refresh path —
+        // `handle_tab_selchange`'s lazy-populate, the tab-close
+        // lazy-materialise, the initial post-load status refresh,
+        // and the plugin-driven apply_lang / apply_default_style
+        // follow-ups — because the Shell layer routes every such
+        // transition through `update_status`. Without this,
+        // Scintilla's built-in CRLF default (Windows) applies
+        // universally, breaking the EOL-preservation contract per
+        // DESIGN.md §5.2: pressing Enter in a pure-LF file would
+        // inject CRLF-terminated lines into an otherwise LF file.
+        //
+        // **Known gaps** (tracked follow-ups, not blockers for the
+        // common tab-activation paths):
+        //   - `Shell::save_all` reactivates each dirty tab via
+        //     `ui.activate_tab(idx, stored_doc)` in a loop without
+        //     a subsequent `update_status` call. Only reachable
+        //     when a tab loaded in the background never had its
+        //     Scintilla doc materialised — the deeper bug there
+        //     is that `save_all` would then save an empty file,
+        //     so the EOL slice is subsumed.
+        //   - `Shell::set_buffer_format` (the NPPM_SETBUFFERFORMAT
+        //     dispatcher) flips `tab.eol` metadata but doesn't
+        //     call `SCI_CONVERTEOLS` or `update_status` on the
+        //     active tab. Full fix requires the doc-pointer-swap
+        //     dance already tracked as Phase 5 polish work in
+        //     DESIGN.md §7.4.
+        apply_eol_mode(&self.editor, eol);
         // Multi-part status bar (see `setup_status_parts` for the
         // 7-slot layout). This call writes the metadata-driven
         // parts (lang / EOL / encoding); the caret-driven parts
@@ -3183,6 +3212,45 @@ fn apply_brace_styles(editor: &EditorHandle) {
 /// the toolbar's `ID_VIEW_SHOW_INDENT_GUIDE` handler.
 fn apply_indent_guide_style(editor: &EditorHandle) {
     editor.style_set_fore(STYLE_INDENTGUIDE, FG_INDENT_GUIDE);
+}
+
+/// Map [`Eol`] to Scintilla's `SC_EOL_*` code and issue
+/// `SCI_SETEOLMODE` on the currently-bound document. Sets the
+/// byte sequence Scintilla inserts when the user presses Enter
+/// (and the target sequence for a subsequent `SCI_CONVERTEOLS`).
+///
+/// **Per-document Scintilla state.** `SCI_SETEOLMODE` mutates
+/// `pdoc->eolMode`, so every fresh document minted via
+/// `SCI_CREATEDOCUMENT` starts at Scintilla's built-in default
+/// (CRLF on Windows) regardless of the loaded file's actual EOL.
+/// Called from [`Win32Ui::update_status`] on every tab switch
+/// (which already receives the tab's authoritative `eol` from
+/// the Shell layer), plus once at editor construction in
+/// [`Win32Ui::run`] with [`Eol::default`] for the initial
+/// implicit document.
+///
+/// **`Eol::Mixed` maps to LF.** Scintilla has no "mixed" mode —
+/// the enum is a Code++-level bookkeeping construct for
+/// "preserve each line's original ending on re-write." When the
+/// user presses Enter in a Mixed buffer, LF is the least
+/// surprising choice and matches [`Eol::bytes`]'s own Mixed
+/// fall-through convention.
+///
+/// Without this call, Scintilla's built-in default of CRLF on
+/// Windows applies universally — pressing Enter in a pure-LF
+/// file silently starts injecting CRLF-terminated lines into an
+/// otherwise LF file, breaking the EOL-preservation contract
+/// documented in DESIGN.md §5.2.
+fn apply_eol_mode(editor: &EditorHandle, eol: Eol) {
+    let sc_eol = match eol {
+        Eol::CrLf => SC_EOL_CRLF,
+        Eol::Cr => SC_EOL_CR,
+        // Mixed collapses to LF, matching `Eol::bytes()`'s own
+        // convention for "preserve on re-write, but if we must
+        // pick one here, use LF."
+        Eol::Lf | Eol::Mixed => SC_EOL_LF,
+    };
+    editor.send(SCI_SETEOLMODE, sc_eol, 0);
 }
 
 /// Set the visible TAB-character width to [`TAB_WIDTH_DEFAULT`]
@@ -21970,6 +22038,17 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // match modern-language convention; without it Scintilla
         // uses 8, which mis-draws guides on 4-space-indented code.
         apply_tab_width(&editor);
+
+        // EOL mode for the initial implicit document. Per-document
+        // Scintilla state (see `apply_eol_mode` doc). Subsequent
+        // tab activations pass their authoritative eol through
+        // `update_status`, which re-applies via `apply_eol_mode`.
+        // Without this initial call the implicit doc holds
+        // Scintilla's built-in CRLF default on Windows before the
+        // first real tab loads — visible only if the user typed
+        // into the pre-first-tab implicit doc, but harmless to
+        // pin defensively.
+        apply_eol_mode(&editor, Eol::default());
 
         // Fold margin GEOMETRY: allocate margin index 2, install the
         // box-style markers, set colours, enable automatic click-

@@ -146,6 +146,27 @@ pub const SCI_SETINDENT: u32 = 2122;
 /// `STYLE_BRACELIGHT` / `STYLE_BRACEBAD` (34/35). Verified
 /// against `vendor/scintilla/include/Scintilla.h:218`.
 pub const STYLE_INDENTGUIDE: usize = 37;
+/// `SCI_SETEOLMODE(int eolMode)` — set the byte sequence
+/// Scintilla inserts when the user presses Enter (and the
+/// target sequence used by `SCI_CONVERTEOLS`). Per-document
+/// Scintilla state (mutates `pdoc->eolMode` per
+/// `vendor/scintilla/src/Document.h`), so every fresh document
+/// minted via `SCI_CREATEDOCUMENT` starts at Scintilla's
+/// built-in default (CRLF on Windows) regardless of the loaded
+/// file's actual EOL — requiring re-application per-doc, same
+/// discipline as `SCI_SETTABWIDTH`. Verified against
+/// `vendor/scintilla/include/Scintilla.h:95` (2031).
+pub const SCI_SETEOLMODE: u32 = 2031;
+/// `SC_EOL_CRLF = 0` — Windows / DOS / HTTP two-byte `\r\n`.
+/// Scintilla's built-in default (see `vendor/scintilla/src/
+/// Document.cxx` constructor).
+pub const SC_EOL_CRLF: usize = 0;
+/// `SC_EOL_CR = 1` — pre-OS-X classic Macintosh one-byte `\r`.
+pub const SC_EOL_CR: usize = 1;
+/// `SC_EOL_LF = 2` — Unix / modern Linux / modern macOS one-
+/// byte `\n`. Verified against
+/// `vendor/scintilla/include/Scintilla.h:90-92`.
+pub const SC_EOL_LF: usize = 2;
 pub const SCI_ZOOMIN: u32 = 2333;
 pub const SCI_ZOOMOUT: u32 = 2334;
 pub const SCI_SETZOOM: u32 = 2373;
