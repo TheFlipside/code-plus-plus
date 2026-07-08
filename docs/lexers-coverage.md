@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 71 / 🟡 17 / ⚫ 1.
+Total: 89 rows. ✅ 72 / 🟡 16 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1873,7 +1873,7 @@ further shim work needed.
 | Fortran (fixed form) | 59 | `f77` | ✅ | ✅ | ✅ |
 | Fortran (free form) | 25 | `fortran` | ✅ | ✅ | ✅ |
 | Freebasic | 69 | `freebasic` | ⚫ | ⚫ | 🟡 |
-| GDScript | 86 | `gdscript` | ⚫ | ⚫ | 🟡 |
+| GDScript | 86 | `gdscript` | ✅ | ✅ | ✅ |
 | Go | 88 | `cpp` | ⚫ | ⚫ | 🟡 |
 | Gui4Cli | 51 | `gui4cli` | ✅ | ✅ | ✅ |
 | Haskell | 45 | `haskell` | ✅ | ✅ | ✅ |
@@ -7872,6 +7872,210 @@ rationale inherited from JS), and
 cross-class disjointness check
 (`intersection` must be empty — same
 regression net as JavaScript's).
+
+**GDScript (2026-07-08):** rides
+Lexilla's `gdscript` lexer
+(`LexGDScript.cxx`) — Godot Engine's
+scripting language, Python-inspired-
+syntax but with its own dedicated
+lexer (NOT `LexPython`). Case-
+sensitive, byte-exact identifier
+match at
+`LexGDScript.cxx:459-465`. Godot 4.x
+baseline: excludes Godot-3-deprecated
+bare keywords (`yield`, `onready`,
+`tool`, `remote`, `master`, `puppet`
+— all superseded by `await` or
+`@`-annotations in Godot 4).
+
+**17 SCE_GD_* states** (0..=16) with
+**15-mapping** `GDSCRIPT_STYLES` —
+DEFAULT (0) and IDENTIFIER (11)
+intentionally unmapped per framework
+convention (bare identifiers paint at
+STYLE_DEFAULT). Comment-family
+collapse: COMMENTLINE (`#`) +
+COMMENTBLOCK (`##`) → Comment
+italic. **Five string-flavour
+collapse**: STRING (`"..."`) +
+CHARACTER (`'...'`) + TRIPLE
+(`'''..'''`) + TRIPLEDOUBLE
+(`"""..."""`) + STRINGEOL → String
+(matching the established
+_STRINGEOL → String convention
+across JS / TypeScript / VHDL / D /
+Ada / Verilog / Haskell). WORD
+(class-0 hit) → Keyword bold; WORD2
+(class-1 hit) → Keyword2 accent.
+**Position-derived declaration slots**
+CLASSNAME (identifier after `class`)
+and FUNCNAME (identifier after
+`func`) both → Keyword2 — matches
+Python's `SCE_P_CLASSNAME` /
+`SCE_P_DEFNAME` and Ruby's
+`SCE_RB_CLASSNAME` / `SCE_RB_DEFNAME`
+precedent. **`@`-annotations**
+(`@onready`, `@export`, `@rpc`,
+`@tool`, `@icon`) enter ANNOTATION
+only at line-start positions
+(`LexGDScript.cxx:594-598`) →
+Preprocessor (bold), matching
+Python's `SCE_P_DECORATOR` — same
+`@name` mechanism, same structural
+role. **NodePath sigils** (`$Node/
+Path`, `%SceneName`) enter NODEPATH →
+Lifetime — structural sigil-tagged
+scene-tree reference, same slot
+convention as Bash SCALAR / Lisp
+SYMBOL / Perl SCALAR.
+
+`GDSCRIPT_KEYWORDS` (class 0, bold —
+35 tokens): 12 control-flow (`if`
+/ `elif` / `else` / `for` / `while`
+/ `break` / `continue` / `pass` /
+`return` / `match` / `when` /
+`breakpoint`), 10 declaration (`var`
+/ `const` / `func` / `class` /
+`class_name` / `enum` / `signal` /
+`extends` / `static` / `abstract`),
+6 keyword-operators (`and` / `or` /
+`not` / `in` / `is` / `as`), 1
+coroutine (`await`), 3 special
+identifiers (`self` / `super` /
+`void`), 3 literals (`true` /
+`false` / `null`). **`class_name`
+is ONE compound token** — Godot's
+script-global class declarator, not
+`class` + `_name`.
+
+`GDSCRIPT_KEYWORDS_2` (class 1,
+accent — 132 tokens): 3 primitive
+types (`bool` / `int` / `float`),
+35 Variant types (`String`,
+`StringName`, `NodePath`,
+`Callable`, `Signal`, `Dictionary`,
+`Array`, `Rect2` / `Rect2i`,
+`Vector2` / `Vector2i` / `Vector3`
+/ `Vector3i` / `Vector4` /
+`Vector4i`, `Transform2D` /
+`Transform3D`, `Plane`,
+`Quaternion`, `AABB`, `Basis`,
+`Color`, `RID`, `Object`, and the
+Godot 4 typed-packed-array family
+`PackedByteArray` /
+`PackedInt32Array` /
+`PackedInt64Array` /
+`PackedFloat32Array` /
+`PackedFloat64Array` /
+`PackedStringArray` /
+`PackedVector2Array` /
+`PackedVector3Array` /
+`PackedVector4Array` /
+`PackedColorArray`, plus `Variant`
+universal wrapper), 4 mathematical
+constants (`PI` / `TAU` / `INF` /
+`NAN`), 8 printing / diagnostics,
+5 conversion/control (`str` /
+`range` / `preload` / `load` /
+`assert`), and ~77 Global Scope
+built-in functions (Godot's
+`@GDScript` / `@GlobalScope`
+utility surface: absolute value /
+rounding + typed int/float
+variants, range clamping,
+power/log/modulo, trigonometry,
+angle conversion, interpolation,
+random, predicates, introspection/
+serialisation, wrap).
+
+**Deliberate exclusions:** `get` /
+`set` (property-accessor
+contextual keywords) stay out of
+class 0 to avoid mis-colouring
+Dictionary `.get()` / Array
+`.set()` method calls. Godot-3-
+deprecated bare `yield` /
+`onready` / `tool` / `remote` /
+`master` / `puppet` / `slave` /
+`remotesync` / `mastersync` /
+`puppetsync` stay out — all became
+`@`-annotations in Godot 4 (handled
+by SCE_GD_ANNOTATION). Node
+instance methods (`add_child` /
+`queue_free` / `get_node` /
+`_ready` / `_process` /
+`_physics_process`) stay out of
+class 1 — they're inherited on
+Node, not Global Scope, and would
+mis-colour user object methods of
+the same name. Engine singletons
+(`Input` / `OS` / `Engine` /
+`Time` / `Performance` /
+`ProjectSettings` /
+`RenderingServer` /
+`PhysicsServer2D` /
+`PhysicsServer3D` /
+`DisplayServer`) stay out —
+deliberately excluded per
+framework-specific-dynamic-set
+rationale, since the singleton set
+churns across Godot 4.x minor
+versions.
+
+Structural test coverage: **16
+invariants** — deep-value identity
+pin (`styles` / `italic` / `bold`
+value-equal `GDSCRIPT_STYLES` /
+`GDSCRIPT_ITALIC` / `GDSCRIPT_BOLD`),
+15-mapping style count, two-class
+descriptor shape (matches
+`gdscriptWordListDesc[]` at
+`LexGDScript.cxx:171-175`),
+canonical class-0 + class-1
+wordlist links, exact style-routing
+pin for all 15 mapped constants,
+DEFAULT + IDENTIFIER unmapped drift
+check, five-string-flavour cohesion
+pin (all → String), two-comment
+cohesion pin (both → Comment),
+CLASSNAME + FUNCNAME declaration-
+slot cohesion pin (both →
+Keyword2), italic == 2 comment
+states, bold == 2 (WORD +
+ANNOTATION — matches Python's
+`SCE_P_WORD` + `SCE_P_DECORATOR`
+bold pair), **`class_name`
+one-compound-token** presence,
+strict class-0 vs class-1
+disjointness (LexGDScript probes
+class 0 first at `:459` — a
+duplicate in class 1 is dead code),
+**Godot-4-specific exclusion pins**
+(10 deprecated bare keywords + 2
+property-accessor contextuals in
+class 0; 6 Node instance methods +
+10 engine singletons in class 1),
+20 canonical class-0 anchors and
+21 canonical class-1 anchors, and
+cross-language non-reuse check
+(`GDSCRIPT_STYLES` distinct from
+`PYTHON_STYLES`).
+
+**Phase 4.5 gate retained.** Per
+DESIGN.md §7.2's `Normal Text` (⚫
+by design) exclusion from the
+percentage, coverage sits at ✅ 72
+/ 88 wired-eligible rows (81.8%)
+after this commit — comfortably
+past the ≥80% Phase 4.5 completion
+gate. The gate was actually crossed
+by the preceding TypeScript commit
+at ✅ 71 / 88 = 80.7%; this
+GDScript commit keeps coverage
+past the gate with a further
+1.1-point margin. The residual 🟡
+rows continue to be tracked for
+follow-on commits.
 
 ## Notes
 

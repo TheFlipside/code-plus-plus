@@ -12768,6 +12768,298 @@ pub const VISUALPROLOG_DIRECTIVE_KEYWORDS: &str = concat!(
 /// Total: 5 tokens (matches upstream verbatim).
 pub const VISUALPROLOG_DOC_KEYWORDS: &str = "short detail end exception withdomain ";
 
+/// Space-separated `GDScript` reserved-word list installed as **class 0**
+/// of `LexGDScript`'s wordlist descriptor (`SCE_GD_WORD`, bold
+/// "Keyword" slot). `GDScript` is Godot Engine's scripting language —
+/// case-sensitive, Python-inspired-syntax but with a distinct
+/// `LexGDScript.cxx` lexer (NOT `LexPython`). See the `SCE_GD_*`
+/// banner in `crates/scintilla-sys/src/lib.rs` for the state
+/// machine and classifier order.
+///
+/// **Case sensitive, byte-exact match.** `LexGDScript.cxx:459` calls
+/// `keywords.InList(s)` where `s` comes from
+/// `sc.GetCurrent(s, sizeof(s))` — no case folding. Every entry
+/// must match source spelling exactly (all-lowercase; the language
+/// convention is lowercase for keywords).
+///
+/// **Godot 4.x baseline.** This list targets Godot 4.0+ (the current
+/// LTS-track release family). Godot 3.x specifics (`yield`, bare
+/// `onready` / `export` / `tool` / `remote` / `master` — now
+/// `@`-annotations) are deliberately excluded — Godot 3 is EOL for
+/// new development, and highlighting `onready` bold as a keyword
+/// would silently mis-colour common `.gd` files where a user has a
+/// variable named `onready` (very common — it's a semantically
+/// familiar English word). The `@`-prefixed annotation form is
+/// tokenised by `SCE_GD_ANNOTATION` at line-start positions
+/// (`LexGDScript.cxx:594-598`) — no wordlist lookup, so annotations
+/// don't need to appear in either class.
+///
+/// **`class_name` is a single compound token.** `GDScript`'s
+/// `class_name` (used at top-of-file to name a script's own class
+/// for global scope registration) tokenises as ONE identifier per
+/// `IsAWordChar` semantics — the underscore is a word character.
+/// A single `class_name` entry covers it. `class` (a separate
+/// declaration keyword) sits alongside.
+///
+/// **Categories** (35 entries):
+///
+/// 1. **Control flow** (12) — `if` / `elif` / `else` / `for` /
+///    `while` / `break` / `continue` / `pass` / `return` / `match`
+///    (pattern matching, Godot 4.0+) / `when` (pattern-guard,
+///    Godot 4.2+) / `breakpoint` (debugger pause).
+/// 2. **Declaration** (10) — `var` / `const` / `func` / `class` /
+///    `class_name` / `enum` / `signal` / `extends` / `static` /
+///    `abstract` (abstract class, Godot 4.4+).
+/// 3. **Keyword operators** (6) — `and` / `or` / `not` (boolean),
+///    `in` (membership), `is` (type check), `as` (type cast).
+///    These are spec-level reserved words in `GDScript`, NOT
+///    punctuation — the language uses English boolean operators
+///    like Python, not `&&` / `||`.
+/// 4. **Coroutine** (1) — `await` (Godot 4.0+ replacement for
+///    Godot 3's `yield`).
+/// 5. **Special identifiers** (3) — `self` (current instance),
+///    `super` (parent-class dispatch), `void` (function return-
+///    type marker).
+/// 6. **Literals** (3) — `true` / `false` / `null`.
+///
+/// **Deliberate exclusions:**
+///
+/// - **`yield`** — deprecated in Godot 4.0 (replaced by `await`).
+///   Kept out to avoid legitimising a keyword that raises a parse
+///   error in the target Godot 4 runtime.
+/// - **`onready` / `export` / `tool` / `remote` / `master` /
+///   `puppet` / `slave` / `remotesync` / `mastersync` /
+///   `puppetsync`** (bare, unprefixed) — Godot 3 keywords, all
+///   converted to `@`-annotations in Godot 4. Included as bare
+///   keywords would mis-highlight identifiers in Godot 4 code;
+///   the `@`-prefixed forms are handled by
+///   `SCE_GD_ANNOTATION`.
+/// - **`preload` / `assert` / `PI` / `TAU` / `INF` / `NAN`** —
+///   **editorial placement, not semantic classification.** These
+///   ARE reserved tokens per Godot's `gdscript_tokenizer.cpp`
+///   (dedicated `ASSERT` / `PRELOAD` token types; `PI` / `TAU` /
+///   `INF` / `NAN` are reserved literal-keyword tokens with the
+///   same grammatical status as `true` / `false` / `null`). But
+///   they render more usefully as class-1 (`Keyword2` accent — the
+///   "built-in globals" slot alongside `Vector3` / `randi` /
+///   `print`) than as class-0 (`Keyword` bold — the "language
+///   flow-control" slot alongside `if` / `func` / `class`). The
+///   canonical stylers in every mainstream `GDScript` editor
+///   (Godot's own editor, VS Code's `GDScript` extension, `SciTE`'s
+///   `gdscript.properties`) route them the same way — a purely
+///   visual choice, not a claim they aren't tokenizer keywords.
+///   Placed in [`GDSCRIPT_KEYWORDS_2`] for that rendering
+///   discipline.
+/// - **`range` / `print`** — genuine `@GDScript` /
+///   `@GlobalScope` utility functions (not tokenizer keywords),
+///   live in [`GDSCRIPT_KEYWORDS_2`] alongside the rest of the
+///   built-in-function API surface.
+/// - **`get` / `set`** — property-accessor contextual keywords
+///   only meaningful inside a `var foo: type: get: ... set: ...`
+///   block. Identifiers everywhere else. Excluded to avoid mis-
+///   colouring the ubiquitous `.get()` / `.set()` Dictionary /
+///   Array method calls.
+///
+/// Sourced from Godot 4.x's `modules/gdscript/gdscript_tokenizer.cpp`
+/// (canonical `keywords[]` table).
+pub const GDSCRIPT_KEYWORDS: &str = concat!(
+    // Control flow.
+    "if elif else for while break continue pass return match when breakpoint ",
+    // Declaration.
+    "var const func class class_name enum signal extends static abstract ",
+    // Keyword operators (boolean / membership / type).
+    "and or not in is as ",
+    // Coroutine (Godot 4.0+).
+    "await ",
+    // Special identifiers.
+    "self super void ",
+    // Literals.
+    "true false null",
+);
+
+/// Space-separated `GDScript` **built-in identifiers** list installed
+/// as **class 1** of `LexGDScript`'s wordlist descriptor
+/// (`SCE_GD_WORD2`, accent "Keyword2" slot). Godot's built-in global
+/// scope: Variant types, global functions, and mathematical
+/// constants that are visible in every `.gd` file without any
+/// `import` / `preload` / `extends` statement.
+///
+/// **Case sensitive, byte-exact match.** Same byte-exact discipline
+/// as [`GDSCRIPT_KEYWORDS`]. `keywords2.InList(s)` at
+/// `LexGDScript.cxx:465` uses the raw identifier. Godot API
+/// convention: types are `PascalCase` (`Vector3`, `PackedByteArray`),
+/// primitives are lowercase (`int`, `float`), global functions are
+/// `snake_case` (`randi`, `deg_to_rad`), constants are `SCREAMING`
+/// (`PI`, `TAU`, `INF`, `NAN`).
+///
+/// **`keywords2NoSubIdentifiers` option.** `LexGDScript` at
+/// `LexGDScript.cxx:466-475` supports an opt-in flag
+/// (`lexer.gdscript.keywords2.no.sub.identifiers`, default off) that
+/// suppresses class-1 highlighting when the token appears after a
+/// `.` — so `obj.print()` would NOT paint `print` as WORD2, while
+/// bare `print()` would. Code++ doesn't set this property, so
+/// every occurrence of a class-1 token paints regardless of
+/// dot-prefix. This matches Notepad++ default behaviour.
+///
+/// **Categories** (132 entries):
+///
+/// 1. **Primitive types** (3) — `bool` / `int` / `float`. Lowercase
+///    per Godot convention; distinct from the `PascalCase` Variant
+///    types below.
+/// 2. **Variant types** (35) — Godot's core value-type system:
+///    - Text-like: `String`, `StringName`, `NodePath`.
+///    - Callables + signals: `Callable`, `Signal`.
+///    - Containers: `Dictionary`, `Array`.
+///    - Rectangles (Godot 4 split int / float versions): `Rect2`,
+///      `Rect2i`.
+///    - Vectors (four dimensions × int / float): `Vector2`,
+///      `Vector2i`, `Vector3`, `Vector3i`, `Vector4`, `Vector4i`.
+///    - Transforms + affine: `Transform2D`, `Transform3D`, `Plane`,
+///      `Quaternion`, `AABB`, `Basis`.
+///    - Colour + resource ID + universal-base: `Color`, `RID`,
+///      `Object`.
+///    - Typed packed arrays (Godot 4 zero-allocation container
+///      family): `PackedByteArray`, `PackedInt32Array`,
+///      `PackedInt64Array`, `PackedFloat32Array`,
+///      `PackedFloat64Array`, `PackedStringArray`,
+///      `PackedVector2Array`, `PackedVector3Array`,
+///      `PackedVector4Array` (Godot 4.3+), `PackedColorArray`.
+///    - Universal wrapper: `Variant`.
+/// 3. **Constants** (4) — `PI` / `TAU` / `INF` / `NAN`.
+///    Mathematical constants that live in Global Scope; `TAU` is
+///    2π (Godot-specific convention). `INF` and `NAN` are float
+///    special values.
+/// 4. **Printing / diagnostics** (8) — `print`, `print_debug`,
+///    `printerr`, `printraw`, `prints`, `printt`, `push_error`,
+///    `push_warning`.
+/// 5. **Conversion / control** (5) — `str` (any-to-string),
+///    `range` (integer sequence generator, Python-style),
+///    `preload` (compile-time resource load), `load` (runtime
+///    resource load), `assert` (runtime assertion — a keyword in
+///    Python, but a built-in FUNCTION in `GDScript`).
+/// 6. **Absolute value / rounding** (15) — `abs`, `absi`, `absf`;
+///    `ceil`, `ceili`, `ceilf`; `floor`, `floori`, `floorf`;
+///    `round`, `roundi`, `roundf`; `sign`, `signi`, `signf`. The
+///    `i` / `f` suffixes are typed variants (int / float) added
+///    in Godot 4.
+/// 7. **Range clamping** (12) — `min`, `mini`, `minf`; `max`,
+///    `maxi`, `maxf`; `clamp`, `clampi`, `clampf`; `snapped`,
+///    `snappedi`, `snappedf`.
+/// 8. **Power / logarithm / modulo** (7) — `sqrt`, `pow`, `log`,
+///    `exp`, `fmod`, `fposmod`, `posmod`.
+/// 9. **Trigonometry** (6) — `cos`, `cosh`, `sin`, `sinh`, `tan`,
+///    `tanh`.
+/// 10. **Angle conversion** (2) — `deg_to_rad`, `rad_to_deg`.
+///     Godot 4 renamed `deg2rad` / `rad2deg` to these underscore
+///     forms.
+/// 11. **Interpolation** (8) — `lerp`, `lerp_angle`, `lerpf`,
+///     `move_toward`, `remap`, `smoothstep`, `ease`, `pingpong`.
+/// 12. **Random** (6) — `randi`, `randf`, `randf_range`,
+///     `randi_range`, `randomize`, `seed`.
+/// 13. **Predicates** (8) — `is_equal_approx`, `is_finite`,
+///     `is_inf`, `is_nan`, `is_zero_approx`, `is_instance_of`,
+///     `is_instance_valid`, `is_same`. `is_instance_of` is
+///     Godot 4's replacement for the deprecated `is` operator on
+///     built-in types (`is` on built-in types was allowed in
+///     Godot 3 but is a compile error on some in Godot 4).
+/// 14. **Introspection / serialisation** (10) — `typeof`, `hash`,
+///     `weakref`, `str_to_var`, `var_to_str`, `var_to_bytes`,
+///     `bytes_to_var`, `type_convert`, `step_decimals`,
+///     `nearest_po2`.
+/// 15. **Wrap** (3) — `wrap`, `wrapi`, `wrapf`.
+///
+/// Sum: 3 + 35 + 4 + 8 + 5 + 15 + 12 + 7 + 6 + 2 + 8 + 6 + 8 + 10 + 3 = 132.
+///
+/// **Deliberately excluded:**
+///
+/// - **Node methods** (`add_child`, `queue_free`, `get_node`,
+///   `_ready`, `_process`, `_physics_process`) — instance methods
+///   on `Node`, not global scope. Available only via `self.` /
+///   inherited-from-Node context; not identifiers you can use
+///   bare in a non-Node context.
+/// - **Engine singletons** (`Input`, `RenderingServer`,
+///   `PhysicsServer2D`, `PhysicsServer3D`, `DisplayServer`,
+///   `OS`, `Engine`, `ProjectSettings`, `Time`, `Performance`) —
+///   these DO exist in global scope, but the singleton set
+///   changes across Godot 4.x minor versions (`Time` added in
+///   4.1, `RenderingServer` renamed from `VisualServer` in 4.0,
+///   etc.). Including them tempts drift; excluded here as
+///   "framework-specific dynamic set" pending a wired opt-in
+///   later. A user who wants them highlighted can add them via
+///   a plugin-provided wordlist.
+/// - **Class hierarchy names** (`Node`, `Node2D`, `Node3D`,
+///   `Sprite2D`, `CharacterBody2D`, `AnimationPlayer`, `Label`,
+///   `Button`, `Timer`) — several hundred, versioned per Godot
+///   minor. Same reasoning as singletons; excluded as framework
+///   scope.
+/// - **`get` / `set`** — property-accessor contextual keywords
+///   at the `var foo: type: get: ...` block level only; ordinary
+///   identifiers everywhere else. Same rationale as their
+///   class-0 exclusion.
+/// - **`export_range` / `export_group` / `onready` / `tool` etc.**
+///   — these are `@`-annotations in Godot 4, painted by
+///   `SCE_GD_ANNOTATION` without wordlist lookup.
+///
+/// Sourced from Godot 4.x's `modules/gdscript/gdscript_utility_functions.cpp`
+/// (`_register_builtin_utility_functions`) and Godot's
+/// documentation for the `@GlobalScope` and `@GDScript` classes.
+pub const GDSCRIPT_KEYWORDS_2: &str = concat!(
+    // Primitive types.
+    "bool int float ",
+    // Variant types — text-like.
+    "String StringName NodePath ",
+    // Variant types — callables + signals.
+    "Callable Signal ",
+    // Variant types — containers.
+    "Dictionary Array ",
+    // Variant types — rectangles.
+    "Rect2 Rect2i ",
+    // Variant types — vectors.
+    "Vector2 Vector2i Vector3 Vector3i Vector4 Vector4i ",
+    // Variant types — transforms + affine.
+    "Transform2D Transform3D Plane Quaternion AABB Basis ",
+    // Variant types — colour / resource ID / universal base.
+    "Color RID Object ",
+    // Variant types — packed arrays (Godot 4 typed containers).
+    "PackedByteArray PackedInt32Array PackedInt64Array ",
+    "PackedFloat32Array PackedFloat64Array PackedStringArray ",
+    "PackedVector2Array PackedVector3Array PackedVector4Array ",
+    "PackedColorArray ",
+    // Variant types — universal wrapper.
+    "Variant ",
+    // Mathematical constants.
+    "PI TAU INF NAN ",
+    // Printing / diagnostics.
+    "print print_debug printerr printraw prints printt ",
+    "push_error push_warning ",
+    // Conversion / control.
+    "str range preload load assert ",
+    // Absolute value / rounding.
+    "abs absi absf ceil ceili ceilf floor floori floorf ",
+    "round roundi roundf sign signi signf ",
+    // Range clamping.
+    "min mini minf max maxi maxf clamp clampi clampf ",
+    "snapped snappedi snappedf ",
+    // Power / logarithm / modulo.
+    "sqrt pow log exp fmod fposmod posmod ",
+    // Trigonometry.
+    "cos cosh sin sinh tan tanh ",
+    // Angle conversion.
+    "deg_to_rad rad_to_deg ",
+    // Interpolation.
+    "lerp lerp_angle lerpf move_toward remap smoothstep ease pingpong ",
+    // Random.
+    "randi randf randf_range randi_range randomize seed ",
+    // Predicates.
+    "is_equal_approx is_finite is_inf is_nan is_zero_approx ",
+    "is_instance_of is_instance_valid is_same ",
+    // Introspection / serialisation.
+    "typeof hash weakref str_to_var var_to_str var_to_bytes ",
+    "bytes_to_var type_convert step_decimals nearest_po2 ",
+    // Wrap.
+    "wrap wrapi wrapf",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

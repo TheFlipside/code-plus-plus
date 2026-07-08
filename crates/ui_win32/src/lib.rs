@@ -114,28 +114,29 @@ use codepp_core::lang::{
     ERLANG_DOC_MACRO, ERLANG_KEYWORDS, ERLANG_MODULE_ATT, ERLANG_PREPROC, ESCRIPT_FOLDWORDS,
     ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS, FORTH_CONTROL, FORTH_DEFWORD, FORTH_KEYWORD,
     FORTH_PREWORD1, FORTH_PREWORD2, FORTH_STRINGS, FORTRAN_EXTENDED, FORTRAN_INTRINSICS,
-    FORTRAN_KEYWORDS, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS,
-    GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS,
-    HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR,
-    INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
-    JSON_KEYWORDS, JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS,
-    LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH,
-    L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF,
-    L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
-    L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
-    L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
-    L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY,
-    L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB,
-    L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
-    MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS,
-    NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-    OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS,
-    OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS,
-    PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
-    POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
-    PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
-    REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS,
-    R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+    FORTRAN_KEYWORDS, GDSCRIPT_KEYWORDS, GDSCRIPT_KEYWORDS_2, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS,
+    GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
+    HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS,
+    INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS,
+    JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
+    KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
+    LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
+    L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH,
+    L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA,
+    L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB,
+    L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
+    L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
+    L_SPICE, L_SQL, L_TCL, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL,
+    L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+    MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
+    NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+    OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
+    OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2,
+    REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
+    R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
     SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS,
     SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
     TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
@@ -207,7 +208,10 @@ use codepp_scintilla_sys::{
     SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_LABEL, SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2,
     SCE_F_PREPROCESSOR, SCE_F_STRING1, SCE_F_STRING2, SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2,
     SCE_F_WORD3, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE,
-    SCE_GC_CONTROL, SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_CAPITAL,
+    SCE_GC_CONTROL, SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_GD_ANNOTATION,
+    SCE_GD_CHARACTER, SCE_GD_CLASSNAME, SCE_GD_COMMENTBLOCK, SCE_GD_COMMENTLINE, SCE_GD_FUNCNAME,
+    SCE_GD_NODEPATH, SCE_GD_NUMBER, SCE_GD_OPERATOR, SCE_GD_STRING, SCE_GD_STRINGEOL,
+    SCE_GD_TRIPLE, SCE_GD_TRIPLEDOUBLE, SCE_GD_WORD, SCE_GD_WORD2, SCE_HA_CAPITAL,
     SCE_HA_CHARACTER, SCE_HA_CLASS, SCE_HA_COMMENTBLOCK, SCE_HA_COMMENTBLOCK2,
     SCE_HA_COMMENTBLOCK3, SCE_HA_COMMENTLINE, SCE_HA_DATA, SCE_HA_INSTANCE, SCE_HA_KEYWORD,
     SCE_HA_LITERATE_CODEDELIM, SCE_HA_LITERATE_COMMENT, SCE_HA_MODULE, SCE_HA_NUMBER,
@@ -3795,6 +3799,89 @@ const FORTRAN_THEME: LangTheme = LangTheme {
     styles: FORTRAN_STYLES,
     italic: FORTRAN_ITALIC,
     bold: FORTRAN_BOLD,
+};
+
+// --- LexGDScript ---
+// LexGDScript serves Godot Engine's GDScript source (extension `.gd`).
+// `L_GDSCRIPT` (id 86) is the only language row using this lexer.
+// Dispatches `SCLEX_GDSCRIPT` (= 135) via a two-class wordlist
+// descriptor at `LexGDScript.cxx:171-175` ("Keywords" and
+// "Highlighted identifiers"). See the SCE_GD_* banner in
+// `crates/scintilla-sys/src/lib.rs` for the state machine, the
+// four-flavour string handling, `@`-annotation position gating,
+// and `$`/`%` nodepath sigil rules.
+//
+// **15 style mappings** covering 17 defined SCE_GD_* states (0..=16).
+// `SCE_GD_DEFAULT` (0) and `SCE_GD_IDENTIFIER` (11) are intentionally
+// unmapped per the universal framework convention (bare identifiers
+// paint at STYLE_DEFAULT — same discipline as C's `SCE_C_IDENTIFIER`
+// and Python's `SCE_P_IDENTIFIER`).
+//
+//   - `COMMENTLINE` (1) + `COMMENTBLOCK` (12) → Comment. Both `#`
+//     and `##` line-comment forms collapse to the same paint;
+//     italic on both per `GDSCRIPT_ITALIC`. Same collapse
+//     discipline as Bash's `SCE_SH_COMMENTLINE` / D's
+//     `SCE_D_COMMENTLINE` + `SCE_D_COMMENTLINEDOC`.
+//   - `NUMBER` (2) → Number. Covers decimal, hex (`0x`), binary
+//     (`0b`), octal (`0o`).
+//   - `STRING` (3) + `CHARACTER` (4) + `TRIPLE` (6) +
+//     `TRIPLEDOUBLE` (7) + `STRINGEOL` (13) → String. Five
+//     string flavours collapse to one paint — same collapse
+//     discipline as Python's SCE_P_STRING / _CHARACTER / _TRIPLE
+//     / _TRIPLEDOUBLE / _STRINGEOL unification, and matches the
+//     `_STRINGEOL → String` established convention (JS / VHDL /
+//     Ada / Verilog / Haskell / D / TypeScript precedent).
+//   - `WORD` (5) → Keyword (bold — class-0 wordlist hit).
+//   - `WORD2` (14) → Keyword2 (accent — class-1 wordlist hit,
+//     Godot built-in globals).
+//   - `CLASSNAME` (8) + `FUNCNAME` (9) → Keyword2. Position-
+//     derived declaration slots (identifier after `class` or
+//     `func`). Matches Python's `SCE_P_CLASSNAME` /
+//     `SCE_P_DEFNAME` and Ruby's `SCE_RB_CLASSNAME` /
+//     `SCE_RB_DEFNAME` precedent — the same "declaration-site
+//     identifier gets the type-slot colour" convention across
+//     the framework.
+//   - `OPERATOR` (10) → Operator.
+//   - `ANNOTATION` (15) → Preprocessor (bold — matches Python's
+//     `SCE_P_DECORATOR` precedent; `@onready` / `@export` /
+//     `@rpc` are structurally decorators, same `@name` mechanism
+//     as Python's `@decorator`, same rendering role).
+//   - `NODEPATH` (16) → Lifetime. Structural sigil-tagged scene-
+//     tree reference (`$Node/Path`, `%SceneName`). Matches the
+//     established Lifetime-slot precedent for sigil-prefixed
+//     structural anchors (Bash `SCE_SH_SCALAR` / `SCE_SH_PARAM`,
+//     Lisp `SCE_LISP_SYMBOL`, Perl `SCE_PL_SCALAR`).
+//
+// Italic on both comment states matches the universal
+// framework convention; bold on both `WORD` (primary reserved-word
+// class) and `ANNOTATION` (structural decorator anchor) matches
+// Python's `SCE_P_WORD` + `SCE_P_DECORATOR` bold pair.
+const GDSCRIPT_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_GD_COMMENTLINE, StyleSlot::Comment),
+    (SCE_GD_NUMBER, StyleSlot::Number),
+    (SCE_GD_STRING, StyleSlot::String),
+    (SCE_GD_CHARACTER, StyleSlot::String),
+    (SCE_GD_WORD, StyleSlot::Keyword),
+    (SCE_GD_TRIPLE, StyleSlot::String),
+    (SCE_GD_TRIPLEDOUBLE, StyleSlot::String),
+    (SCE_GD_CLASSNAME, StyleSlot::Keyword2),
+    (SCE_GD_FUNCNAME, StyleSlot::Keyword2),
+    (SCE_GD_OPERATOR, StyleSlot::Operator),
+    (SCE_GD_COMMENTBLOCK, StyleSlot::Comment),
+    (SCE_GD_STRINGEOL, StyleSlot::String),
+    (SCE_GD_WORD2, StyleSlot::Keyword2),
+    (SCE_GD_ANNOTATION, StyleSlot::Preprocessor),
+    (SCE_GD_NODEPATH, StyleSlot::Lifetime),
+];
+
+const GDSCRIPT_ITALIC: &[usize] = &[SCE_GD_COMMENTLINE, SCE_GD_COMMENTBLOCK];
+const GDSCRIPT_BOLD: &[usize] = &[SCE_GD_WORD, SCE_GD_ANNOTATION];
+
+const GDSCRIPT_THEME: LangTheme = LangTheme {
+    keywords: &[(0, GDSCRIPT_KEYWORDS), (1, GDSCRIPT_KEYWORDS_2)],
+    styles: GDSCRIPT_STYLES,
+    italic: GDSCRIPT_ITALIC,
+    bold: GDSCRIPT_BOLD,
 };
 
 // --- LexCsound ---
@@ -10163,6 +10250,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&JSON_THEME)
     } else if lang == L_FORTRAN || lang == L_FORTRAN_77 {
         Some(&FORTRAN_THEME)
+    } else if lang == L_GDSCRIPT {
+        Some(&GDSCRIPT_THEME)
     } else if lang == L_CSOUND {
         Some(&CSOUND_THEME)
     } else if lang == L_ERLANG {
@@ -25347,13 +25436,13 @@ mod lang_theme_tests {
         ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS,
         ASM_REG_KEYWORDS, ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC,
         ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES,
-        MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC, NIM_STYLES,
-        NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD, OSCRIPT_ITALIC,
-        OSCRIPT_STYLES, REBOL_BOLD, REBOL_ITALIC, REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC,
-        REGISTRY_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE,
-        SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING,
-        SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
-        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        GDSCRIPT_BOLD, GDSCRIPT_ITALIC, GDSCRIPT_STYLES, MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES,
+        NIM_BOLD, NIM_ITALIC, NIM_STYLES, NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES,
+        OSCRIPT_BOLD, OSCRIPT_ITALIC, OSCRIPT_STYLES, REBOL_BOLD, REBOL_ITALIC, REBOL_STYLES,
+        REGISTRY_BOLD, REGISTRY_ITALIC, REGISTRY_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
+        SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER,
+        SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
+        SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
         SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
         SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
         SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
@@ -25421,37 +25510,37 @@ mod lang_theme_tests {
         D_SPECIAL, D_TYPES, D_WORD7, ERLANG_BIFS, ERLANG_DOC, ERLANG_DOC_MACRO, ERLANG_KEYWORDS,
         ERLANG_MODULE_ATT, ERLANG_PREPROC, ESCRIPT_FOLDWORDS, ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS,
         FORTH_CONTROL, FORTH_DEFWORD, FORTH_KEYWORD, FORTH_PREWORD1, FORTH_PREWORD2, FORTH_STRINGS,
-        FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GUI4CLI_ATTRIBUTES,
-        GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS,
-        HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS,
-        INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
-        JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS,
-        JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
-        LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
-        L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
-        L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO,
-        L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
-        L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP,
-        L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST,
-        L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TEXT, L_TXT2TAGS, L_TYPESCRIPT,
-        L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
-        MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS,
-        NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS,
-        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS,
-        OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS,
-        PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS,
-        POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1,
-        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-        PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4,
-        REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
-        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS,
-        SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS,
-        TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
-        VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
-        XML_KEYWORDS, YAML_KEYWORDS,
+        FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GDSCRIPT_KEYWORDS,
+        GDSCRIPT_KEYWORDS_2, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS,
+        GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS,
+        HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR,
+        INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
+        JSON_KEYWORDS, JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS,
+        LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH,
+        L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D,
+        L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GUI4CLI,
+        L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX,
+        L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC,
+        L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC,
+        L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX,
+        L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML,
+        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+        MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
+        NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+        OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
+        OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
+        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
+        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
+        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3,
+        REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
+        R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+        SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3,
+        SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
+        TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS,
+        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
+        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
+        VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS,
+        VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -25485,27 +25574,31 @@ mod lang_theme_tests {
         SCE_F_OPERATOR, SCE_F_OPERATOR2, SCE_F_PREPROCESSOR, SCE_F_STRING1, SCE_F_STRING2,
         SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2, SCE_F_WORD3, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND,
         SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_DEFAULT, SCE_GC_EVENT,
-        SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_HA_IDENTIFIER, SCE_HA_IMPORT,
-        SCE_INNO_IDENTIFIER, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI, SCE_JSON_DEFAULT,
-        SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD,
-        SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME,
-        SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT,
-        SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER,
-        SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_MMIXAL_CHAR, SCE_MMIXAL_COMMENT,
-        SCE_MMIXAL_HEX, SCE_MMIXAL_INCLUDE, SCE_MMIXAL_LABEL, SCE_MMIXAL_NUMBER,
-        SCE_MMIXAL_OPCODE_VALID, SCE_MMIXAL_OPERATOR, SCE_MMIXAL_REGISTER, SCE_MMIXAL_STRING,
-        SCE_MMIXAL_SYMBOL, SCE_NIM_BACKTICKS, SCE_NIM_CHARACTER, SCE_NIM_COMMENT,
-        SCE_NIM_COMMENTDOC, SCE_NIM_COMMENTLINE, SCE_NIM_COMMENTLINEDOC, SCE_NIM_FUNCNAME,
-        SCE_NIM_IDENTIFIER, SCE_NIM_NUMBER, SCE_NIM_OPERATOR, SCE_NIM_STRING, SCE_NIM_TRIPLE,
-        SCE_NIM_TRIPLEDOUBLE, SCE_NIM_WORD, SCE_NNCRONTAB_ASTERISK, SCE_NNCRONTAB_COMMENT,
-        SCE_NNCRONTAB_ENVIRONMENT, SCE_NNCRONTAB_IDENTIFIER, SCE_NNCRONTAB_KEYWORD,
-        SCE_NNCRONTAB_MODIFIER, SCE_NNCRONTAB_NUMBER, SCE_NNCRONTAB_SECTION, SCE_NNCRONTAB_STRING,
-        SCE_NNCRONTAB_TASK, SCE_OSCRIPT_BLOCK_COMMENT, SCE_OSCRIPT_CONSTANT,
-        SCE_OSCRIPT_DOC_COMMENT, SCE_OSCRIPT_DOUBLEQUOTE_STRING, SCE_OSCRIPT_FUNCTION,
-        SCE_OSCRIPT_GLOBAL, SCE_OSCRIPT_KEYWORD, SCE_OSCRIPT_LABEL, SCE_OSCRIPT_LINE_COMMENT,
-        SCE_OSCRIPT_METHOD, SCE_OSCRIPT_NUMBER, SCE_OSCRIPT_OBJECT, SCE_OSCRIPT_OPERATOR,
-        SCE_OSCRIPT_PREPROCESSOR, SCE_OSCRIPT_PROPERTY, SCE_OSCRIPT_SINGLEQUOTE_STRING,
-        SCE_OSCRIPT_TYPE, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET,
+        SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_GD_ANNOTATION, SCE_GD_CHARACTER,
+        SCE_GD_CLASSNAME, SCE_GD_COMMENTBLOCK, SCE_GD_COMMENTLINE, SCE_GD_DEFAULT, SCE_GD_FUNCNAME,
+        SCE_GD_IDENTIFIER, SCE_GD_NODEPATH, SCE_GD_NUMBER, SCE_GD_OPERATOR, SCE_GD_STRING,
+        SCE_GD_STRINGEOL, SCE_GD_TRIPLE, SCE_GD_TRIPLEDOUBLE, SCE_GD_WORD, SCE_GD_WORD2,
+        SCE_HA_IDENTIFIER, SCE_HA_IMPORT, SCE_INNO_IDENTIFIER, SCE_JSON_BLOCKCOMMENT,
+        SCE_JSON_COMPACTIRI, SCE_JSON_DEFAULT, SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE,
+        SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER,
+        SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME, SCE_JSON_STRING, SCE_JSON_STRINGEOL,
+        SCE_JSON_URI, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
+        SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR,
+        SCE_MATLAB_STRING, SCE_MMIXAL_CHAR, SCE_MMIXAL_COMMENT, SCE_MMIXAL_HEX, SCE_MMIXAL_INCLUDE,
+        SCE_MMIXAL_LABEL, SCE_MMIXAL_NUMBER, SCE_MMIXAL_OPCODE_VALID, SCE_MMIXAL_OPERATOR,
+        SCE_MMIXAL_REGISTER, SCE_MMIXAL_STRING, SCE_MMIXAL_SYMBOL, SCE_NIM_BACKTICKS,
+        SCE_NIM_CHARACTER, SCE_NIM_COMMENT, SCE_NIM_COMMENTDOC, SCE_NIM_COMMENTLINE,
+        SCE_NIM_COMMENTLINEDOC, SCE_NIM_FUNCNAME, SCE_NIM_IDENTIFIER, SCE_NIM_NUMBER,
+        SCE_NIM_OPERATOR, SCE_NIM_STRING, SCE_NIM_TRIPLE, SCE_NIM_TRIPLEDOUBLE, SCE_NIM_WORD,
+        SCE_NNCRONTAB_ASTERISK, SCE_NNCRONTAB_COMMENT, SCE_NNCRONTAB_ENVIRONMENT,
+        SCE_NNCRONTAB_IDENTIFIER, SCE_NNCRONTAB_KEYWORD, SCE_NNCRONTAB_MODIFIER,
+        SCE_NNCRONTAB_NUMBER, SCE_NNCRONTAB_SECTION, SCE_NNCRONTAB_STRING, SCE_NNCRONTAB_TASK,
+        SCE_OSCRIPT_BLOCK_COMMENT, SCE_OSCRIPT_CONSTANT, SCE_OSCRIPT_DOC_COMMENT,
+        SCE_OSCRIPT_DOUBLEQUOTE_STRING, SCE_OSCRIPT_FUNCTION, SCE_OSCRIPT_GLOBAL,
+        SCE_OSCRIPT_KEYWORD, SCE_OSCRIPT_LABEL, SCE_OSCRIPT_LINE_COMMENT, SCE_OSCRIPT_METHOD,
+        SCE_OSCRIPT_NUMBER, SCE_OSCRIPT_OBJECT, SCE_OSCRIPT_OPERATOR, SCE_OSCRIPT_PREPROCESSOR,
+        SCE_OSCRIPT_PROPERTY, SCE_OSCRIPT_SINGLEQUOTE_STRING, SCE_OSCRIPT_TYPE,
+        SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET,
         SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM,
         SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
         SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER, SCE_POWERSHELL_KEYWORD,
@@ -25561,6 +25654,7 @@ mod lang_theme_tests {
             (L_JSP, "JSP"),
             (L_FORTRAN, "Fortran (free form)"),
             (L_FORTRAN_77, "Fortran (fixed form)"),
+            (L_GDSCRIPT, "GDScript"),
             (L_CSOUND, "CSound"),
             (L_ERLANG, "Erlang"),
             (L_ESCRIPT, "ESCRIPT"),
@@ -36129,6 +36223,373 @@ mod lang_theme_tests {
             "FORTRAN_INTRINSICS must include `not` — F90 bit-manipulation \
              intrinsic `NOT(i)`. The `.NOT.` operator form is handled by \
              SCE_F_OPERATOR2 separately"
+        );
+    }
+
+    /// `GDScript` uses Lexilla's `gdscript` lexer (`LexGDScript.cxx`) —
+    /// Godot Engine's scripting language, a Python-inspired syntax
+    /// but with its own dedicated lexer (NOT `LexPython`). See the
+    /// `SCE_GD_*` banner in `crates/scintilla-sys/src/lib.rs` for
+    /// state-machine details, classifier order, `@`-annotation
+    /// position gating, and `$` / `%` nodepath sigil rules.
+    ///
+    /// Invariants (16):
+    ///   1. **Deep-value identity pin** — `GDSCRIPT_THEME`'s
+    ///      individual fields (`keywords` / `styles` / `italic` /
+    ///      `bold`) must value-equal what the dispatcher returns.
+    ///      Rust does not guarantee unique addresses for `const`
+    ///      slice items, so pointer-equality is unreliable across
+    ///      compiler versions; value-equality catches the failure
+    ///      mode that actually matters (content drift).
+    ///   2. **15 style mappings** (17 total `SCE_GD_*` states 0..=16
+    ///      minus DEFAULT (0) + IDENTIFIER (11), both unmapped per
+    ///      framework convention).
+    ///   3. **Two-class wordlist descriptor** at slots 0 and 1
+    ///      matching `gdscriptWordListDesc[]` at
+    ///      `LexGDScript.cxx:171-175` ("Keywords" and "Highlighted
+    ///      identifiers").
+    ///   4. **Canonical class-0 link to `GDSCRIPT_KEYWORDS`** and
+    ///      class-1 link to `GDSCRIPT_KEYWORDS_2`. Swapping either
+    ///      would silently mis-classify every language token.
+    ///   5. **Style-routing pins** for all 15 mapped constants —
+    ///      each `(SCE_GD_*, StyleSlot::*)` entry present exactly.
+    ///   6. **DEFAULT + IDENTIFIER unmapped** — pinned absent via
+    ///      drift-check.
+    ///   7. **Four string-flavour collapse** — STRING, CHARACTER,
+    ///      TRIPLE, TRIPLEDOUBLE, STRINGEOL all → `String`
+    ///      (matching Python's `SCE_P_STRING` / `SCE_P_CHARACTER` /
+    ///      `SCE_P_TRIPLE` / `SCE_P_TRIPLEDOUBLE` / `SCE_P_STRINGEOL`
+    ///      unification precedent).
+    ///   8. **Two comment-flavour collapse** — COMMENTLINE (`#`)
+    ///      and COMMENTBLOCK (`##`) both → `Comment`.
+    ///   9. **Declaration-slot pair (CLASSNAME + FUNCNAME) →
+    ///      Keyword2** — matches Python's `SCE_P_CLASSNAME` /
+    ///      `SCE_P_DEFNAME` precedent for identifier-after-declarator
+    ///      position.
+    ///   10. **ANNOTATION → Preprocessor** — same routing as
+    ///       Python's `SCE_P_DECORATOR` (identical `@name` mechanism,
+    ///       identical structural role).
+    ///   11. **NODEPATH → Lifetime** — structural-anchor sigil-
+    ///       tagged reference, matching the Bash `SCE_SH_SCALAR` /
+    ///       Lisp `SCE_LISP_SYMBOL` / Perl `SCE_PL_SCALAR` precedent.
+    ///   12. **Italic set == 2** — both comment states (COMMENTLINE,
+    ///       COMMENTBLOCK) get italic per the universal comment-
+    ///       italic convention.
+    ///   13. **Bold set == 2** — WORD (primary reserved words) plus
+    ///       ANNOTATION (structural decorator anchor). Matches
+    ///       Python's `SCE_P_WORD` / `SCE_P_DECORATOR` bold pair.
+    ///   14. **`class_name` is ONE compound token** in class 0 —
+    ///       `GDScript`'s `class_name` (script-global class declarator)
+    ///       is a single identifier, not `class` + `_name`, because
+    ///       `LexGDScript`'s `IsAWordChar` accepts `_` as a word
+    ///       character.
+    ///   15. **Class-0 vs class-1 strict disjointness** — `LexGDScript`'s
+    ///       classifier at `:459-465` probes class 0 first; a token in
+    ///       both lists renders as `SCE_GD_WORD`, making the class-1
+    ///       entry dead code. Same discipline as JS / TypeScript.
+    ///   16. **Godot-4-specific exclusion pins**:
+    ///       - Class 0 must NOT include Godot-3-deprecated bare
+    ///         keywords `yield` (superseded by `await`), `onready`
+    ///         / `tool` / `remote` / `master` / `puppet`
+    ///         (superseded by `@`-annotations).
+    ///       - Class 0 must NOT include `get` / `set` (property-
+    ///         accessor contextual keywords only meaningful inside
+    ///         a `var: type: get: ...` block).
+    ///       - Class 1 must NOT include instance-method names
+    ///         (`add_child`, `queue_free`, `get_node`, `_ready`,
+    ///         `_process`) — those live on `Node` and derived
+    ///         classes, not in Global Scope.
+    ///       - Class 1 must NOT include engine singletons (`Input`,
+    ///         `OS`, `Engine`, `Time`, `Performance`,
+    ///         `ProjectSettings`) — deliberately excluded per
+    ///         "framework-specific dynamic set" rationale (they
+    ///         churn across Godot 4.x minor versions).
+    #[test]
+    fn gdscript_uses_lexgdscript_two_class_theme() {
+        let gd = lang_theme(L_GDSCRIPT).expect("GDScript wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(gd.styles, GDSCRIPT_STYLES);
+        assert_eq!(gd.italic, GDSCRIPT_ITALIC);
+        assert_eq!(gd.bold, GDSCRIPT_BOLD);
+
+        // Invariant 2: 15 style mappings.
+        assert_eq!(
+            gd.styles.len(),
+            15,
+            "GDSCRIPT_STYLES must map 15 indices (17 SCE_GD_* states \
+             0..=16 minus DEFAULT (0) + IDENTIFIER (11), both unmapped \
+             per framework convention)"
+        );
+
+        // Invariants 3 + 4: two-class descriptor with canonical
+        // wordlist links.
+        assert_eq!(
+            gd.keywords.len(),
+            2,
+            "GDSCRIPT_THEME must install exactly 2 wordlist classes \
+             (matches gdscriptWordListDesc[] at LexGDScript.cxx:171-175)"
+        );
+        assert_eq!(gd.keywords[0].0, 0);
+        assert_eq!(gd.keywords[0].1, GDSCRIPT_KEYWORDS);
+        assert_eq!(gd.keywords[1].0, 1);
+        assert_eq!(gd.keywords[1].1, GDSCRIPT_KEYWORDS_2);
+
+        // Invariant 5: every mapped constant present exactly.
+        for (sce, slot, name) in [
+            (SCE_GD_COMMENTLINE, StyleSlot::Comment, "SCE_GD_COMMENTLINE"),
+            (SCE_GD_NUMBER, StyleSlot::Number, "SCE_GD_NUMBER"),
+            (SCE_GD_STRING, StyleSlot::String, "SCE_GD_STRING"),
+            (SCE_GD_CHARACTER, StyleSlot::String, "SCE_GD_CHARACTER"),
+            (SCE_GD_WORD, StyleSlot::Keyword, "SCE_GD_WORD"),
+            (SCE_GD_TRIPLE, StyleSlot::String, "SCE_GD_TRIPLE"),
+            (
+                SCE_GD_TRIPLEDOUBLE,
+                StyleSlot::String,
+                "SCE_GD_TRIPLEDOUBLE",
+            ),
+            (SCE_GD_CLASSNAME, StyleSlot::Keyword2, "SCE_GD_CLASSNAME"),
+            (SCE_GD_FUNCNAME, StyleSlot::Keyword2, "SCE_GD_FUNCNAME"),
+            (SCE_GD_OPERATOR, StyleSlot::Operator, "SCE_GD_OPERATOR"),
+            (
+                SCE_GD_COMMENTBLOCK,
+                StyleSlot::Comment,
+                "SCE_GD_COMMENTBLOCK",
+            ),
+            (SCE_GD_STRINGEOL, StyleSlot::String, "SCE_GD_STRINGEOL"),
+            (SCE_GD_WORD2, StyleSlot::Keyword2, "SCE_GD_WORD2"),
+            (
+                SCE_GD_ANNOTATION,
+                StyleSlot::Preprocessor,
+                "SCE_GD_ANNOTATION",
+            ),
+            (SCE_GD_NODEPATH, StyleSlot::Lifetime, "SCE_GD_NODEPATH"),
+        ] {
+            assert!(
+                gd.styles.contains(&(sce, slot)),
+                "GDSCRIPT_STYLES must route {name} to {slot:?}"
+            );
+        }
+
+        // Invariant 6: DEFAULT + IDENTIFIER absent (drift check).
+        for (sce, name) in [
+            (SCE_GD_DEFAULT, "SCE_GD_DEFAULT"),
+            (SCE_GD_IDENTIFIER, "SCE_GD_IDENTIFIER"),
+        ] {
+            assert!(
+                !gd.styles.iter().any(|(s, _)| *s == sce),
+                "GDSCRIPT_STYLES must NOT map {name} — reserved for \
+                 STYLE_DEFAULT paint per framework convention"
+            );
+        }
+
+        // Invariants 7-11: category-specific routing pins already
+        // covered by invariant 5's exact checks; add affirmative
+        // sanity assertions on the routing shape.
+        //
+        // Invariant 7: all four string-flavour states + STRINGEOL
+        // collapse to StyleSlot::String.
+        let string_states = [
+            SCE_GD_STRING,
+            SCE_GD_CHARACTER,
+            SCE_GD_TRIPLE,
+            SCE_GD_TRIPLEDOUBLE,
+            SCE_GD_STRINGEOL,
+        ];
+        for sce in string_states {
+            assert!(
+                gd.styles.contains(&(sce, StyleSlot::String)),
+                "all string-family states must route to String \
+                 (five-flavour collapse discipline)"
+            );
+        }
+
+        // Invariant 8: both comment states collapse to Comment.
+        for sce in [SCE_GD_COMMENTLINE, SCE_GD_COMMENTBLOCK] {
+            assert!(
+                gd.styles.contains(&(sce, StyleSlot::Comment)),
+                "both comment states (# and ##) must route to Comment"
+            );
+        }
+
+        // Invariant 9: CLASSNAME + FUNCNAME both → Keyword2
+        // (declaration-slot cohesion).
+        for sce in [SCE_GD_CLASSNAME, SCE_GD_FUNCNAME] {
+            assert!(
+                gd.styles.contains(&(sce, StyleSlot::Keyword2)),
+                "declaration-position states (CLASSNAME + FUNCNAME) \
+                 must both route to Keyword2 — matches Python's \
+                 SCE_P_CLASSNAME / SCE_P_DEFNAME precedent"
+            );
+        }
+
+        // Invariants 12 + 13: italic + bold sets.
+        assert_eq!(
+            gd.italic.len(),
+            2,
+            "GDSCRIPT_ITALIC must contain exactly 2 states (COMMENTLINE + COMMENTBLOCK)"
+        );
+        assert!(gd.italic.contains(&SCE_GD_COMMENTLINE));
+        assert!(gd.italic.contains(&SCE_GD_COMMENTBLOCK));
+        assert_eq!(
+            gd.bold.len(),
+            2,
+            "GDSCRIPT_BOLD must contain exactly 2 states (WORD + ANNOTATION)"
+        );
+        assert!(gd.bold.contains(&SCE_GD_WORD));
+        assert!(gd.bold.contains(&SCE_GD_ANNOTATION));
+
+        // Invariant 14: `class_name` is ONE compound token in class 0.
+        // LexGDScript's IsAWordChar accepts `_` — so the whole
+        // `class_name` identifier is looked up as one string.
+        assert!(
+            GDSCRIPT_KEYWORDS
+                .split_whitespace()
+                .any(|t| t == "class_name"),
+            "GDSCRIPT_KEYWORDS must include `class_name` as a single \
+             compound token — the script-global class declarator"
+        );
+
+        // Invariant 15: strict cross-class disjointness (LexGDScript's
+        // classifier probes class 0 first; a class-1 duplicate is
+        // dead code).
+        use std::collections::HashSet;
+        let wl0: HashSet<&str> = GDSCRIPT_KEYWORDS.split_whitespace().collect();
+        let wl1: HashSet<&str> = GDSCRIPT_KEYWORDS_2.split_whitespace().collect();
+        if let Some(shared) = wl0.intersection(&wl1).next() {
+            panic!(
+                "GDSCRIPT_KEYWORDS and GDSCRIPT_KEYWORDS_2 both contain \
+                 `{shared}` — LexGDScript's classifier probes class 0 \
+                 first at LexGDScript.cxx:459, so the class-1 entry is \
+                 dead code"
+            );
+        }
+
+        // Invariant 16a: Godot-3 deprecated bare keywords must NOT
+        // appear in class 0.
+        for deprecated in [
+            "yield",
+            "onready",
+            "tool",
+            "remote",
+            "master",
+            "puppet",
+            "slave",
+            "remotesync",
+            "mastersync",
+            "puppetsync",
+        ] {
+            assert!(
+                !wl0.contains(deprecated),
+                "GDSCRIPT_KEYWORDS must NOT include Godot-3 deprecated \
+                 bare keyword `{deprecated}` — Godot 4 converted it to \
+                 either `await` (yield) or an `@`-annotation. Including \
+                 it would mis-colour a Godot 4 script's ordinary \
+                 identifiers"
+            );
+        }
+        // Invariant 16b: property-accessor contextual keywords must
+        // NOT appear in class 0.
+        for accessor in ["get", "set"] {
+            assert!(
+                !wl0.contains(accessor),
+                "GDSCRIPT_KEYWORDS must NOT include property-accessor \
+                 contextual token `{accessor}` — it's only meaningful \
+                 inside a `var: type: get: ...` block and would mis- \
+                 colour the ubiquitous `.get()` / `.set()` Dictionary \
+                 / Array method calls"
+            );
+        }
+        // Invariant 16c: instance methods on Node must NOT appear in
+        // class 1 — those aren't Global Scope.
+        for method in [
+            "add_child",
+            "queue_free",
+            "get_node",
+            "_ready",
+            "_process",
+            "_physics_process",
+        ] {
+            assert!(
+                !wl1.contains(method),
+                "GDSCRIPT_KEYWORDS_2 must NOT include Node instance \
+                 method `{method}` — inherited from Node, not Global \
+                 Scope, and highlighting them here would mis-colour a \
+                 user's plain-object method of the same name"
+            );
+        }
+        // Invariant 16d: engine singletons must NOT appear in class 1
+        // (deliberately excluded per framework-specific-dynamic-set
+        // rationale — they churn across Godot 4.x minors).
+        for singleton in [
+            "Input",
+            "OS",
+            "Engine",
+            "Time",
+            "Performance",
+            "ProjectSettings",
+            "RenderingServer",
+            "PhysicsServer2D",
+            "PhysicsServer3D",
+            "DisplayServer",
+        ] {
+            assert!(
+                !wl1.contains(singleton),
+                "GDSCRIPT_KEYWORDS_2 must NOT include engine singleton \
+                 `{singleton}` — deliberately excluded per framework-\
+                 specific-dynamic-set rationale (singleton set changes \
+                 across Godot 4.x minor versions)"
+            );
+        }
+
+        // Canonical class-0 anchors — one from each category.
+        for anchor in [
+            "if", "func", "class", "extends", "await", "self", "super", "signal", "match", "when",
+            "abstract", "true", "false", "null", "and", "or", "not", "in", "is", "as",
+        ] {
+            assert!(
+                wl0.contains(anchor),
+                "GDSCRIPT_KEYWORDS must include canonical class-0 anchor `{anchor}`"
+            );
+        }
+        // Canonical class-1 anchors — Variant types + constants +
+        // core built-in functions (one from each subcategory).
+        for anchor in [
+            "bool",
+            "int",
+            "float",
+            "String",
+            "Vector3",
+            "Color",
+            "PackedByteArray",
+            "Variant",
+            "PI",
+            "TAU",
+            "INF",
+            "NAN",
+            "print",
+            "range",
+            "preload",
+            "load",
+            "assert",
+            "randi",
+            "lerp",
+            "typeof",
+            "is_instance_of",
+        ] {
+            assert!(
+                wl1.contains(anchor),
+                "GDSCRIPT_KEYWORDS_2 must include canonical class-1 anchor `{anchor}`"
+            );
+        }
+
+        // Cross-language non-reuse — GDSCRIPT_STYLES / _ITALIC /
+        // _BOLD must NOT alias any other language's tables.
+        let py = lang_theme(L_PYTHON).expect("Python wired");
+        assert_ne!(
+            gd.styles, py.styles,
+            "GDSCRIPT_STYLES must NOT be identical to PYTHON_STYLES — \
+             different SCE_* index sets"
         );
     }
 

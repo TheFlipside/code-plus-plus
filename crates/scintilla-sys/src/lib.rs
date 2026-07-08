@@ -3133,6 +3133,142 @@ pub const SCE_VISUALPROLOG_STRING_EOL: usize = 22;
 pub const SCE_VISUALPROLOG_EMBEDDED: usize = 23;
 pub const SCE_VISUALPROLOG_PLACEHOLDER: usize = 24;
 
+// LexGDScript style indices. 17 contiguous slots (0..=16) covering
+// Godot Engine's GDScript source (extension `.gd`). Constants mirror
+// `SciLexer.h:2073-2089` verbatim. Dispatches SCLEX_GDSCRIPT (= 135,
+// per `SciLexer.h:151`) via
+// `vendor/lexilla/lexers/LexGDScript.cxx:771-772`, which registers
+// `LexerModule lmGDScript(SCLEX_GDSCRIPT, LexerFactoryGDScript,
+// "gdscript", gdscriptWordListDesc)`.
+//
+// **Two wordlists.** `gdscriptWordListDesc[]` at
+// `LexGDScript.cxx:171-175` declares two named classes:
+//   - class 0 = "Keywords" — reserved words like `if` / `func` /
+//     `class` / `extends` / `await` / `self` / `null` / `true` /
+//     `false`. First-match-wins per the classifier logic below.
+//   - class 1 = "Highlighted identifiers" — Godot's built-in
+//     global scope: Variant types (`Vector3` / `Color` / `String`),
+//     built-in functions (`print` / `range` / `randi`),
+//     mathematical constants (`PI` / `TAU` / `INF` / `NAN`).
+//
+// **Classifier order matters.** The identifier-exit path at
+// `LexGDScript.cxx:454-495` probes wordlists in this fixed order:
+//   1. If `keywords.InList(s)` → `SCE_GD_WORD`.
+//   2. Else if `kwLast == kwClass` (previous WORD was `class`) →
+//      `SCE_GD_CLASSNAME`. Applies to `class Foo:` / `class Foo
+//      extends Bar:`.
+//   3. Else if `kwLast == kwDef` (previous WORD was `func`) →
+//      `SCE_GD_FUNCNAME`. Applies to `func my_method():`.
+//   4. Else if `keywords2.InList(s)` → `SCE_GD_WORD2`.
+//   5. Else → `SCE_GD_IDENTIFIER`.
+//
+// Because class 0 is probed FIRST, class-0 vs class-1 disjointness
+// is load-bearing: a token in both lists renders as `SCE_GD_WORD`,
+// making the class-1 entry dead code. Same discipline as JS's
+// `LexCPP` classifier at `LexCPP.cxx:995-999`.
+//
+// **`kwExtends` is a dead branch.** The `enum kwType` at `:41`
+// declares `kwExtends` and the classifier at `:490` sets `kwLast =
+// kwExtends` after the `extends` keyword — but no downstream code
+// tests `kwLast == kwExtends`. The identifier immediately after
+// `extends` therefore falls through to `keywords2` or `IDENTIFIER`
+// via the standard path. This is an upstream implementation gap
+// (Ruby-style parent-class highlighting was likely intended);
+// framework consequence: `extends Player` renders `Player` as
+// `IDENTIFIER` (STYLE_DEFAULT) unless `Player` happens to also be
+// a class-1 built-in like `Node` (renders WORD2).
+//
+// **`@`-annotations.** GDScript decorators (`@onready`,
+// `@export`, `@rpc`, `@tool`, `@icon`, `@warning_ignore`,
+// `@export_range`, `@export_group`, …) enter `SCE_GD_ANNOTATION`
+// only when the `@` is the first non-whitespace character on its
+// line (`LexGDScript.cxx:594-598`). An `@` mid-expression falls
+// through to `SCE_GD_OPERATOR` — GDScript has no `@decorator`
+// expression form outside statement position. The annotation
+// itself is not name-looked-up against a wordlist; the classifier
+// paints every alphanumeric run after the leading `@` as
+// annotation until whitespace, so `@my_custom_annotation` and
+// `@onready` both paint the same. Framework routes ANNOTATION
+// through `StyleSlot::Preprocessor` (matches Python's
+// `SCE_P_DECORATOR` precedent — same `@name` mechanism, same
+// structural role).
+//
+// **NodePath sigils.** `$Node/Path` and `%SceneName` enter
+// `SCE_GD_NODEPATH` at `:586-588`. `$` always enters NODEPATH; `%`
+// only enters NODEPATH when the previous non-open-bracket
+// character permits it (`percentIsNodePath` flag at `:586-590,
+// :590` — inhibited by closing `)` / `]` / `}` because those
+// suggest `%` is the modulo operator following an expression).
+// Framework routes NODEPATH through `StyleSlot::Lifetime` —
+// structural sigil-tagged references matching the Bash SCALAR /
+// Lisp SYMBOL precedent for `$`/`&`/`:kw`/`'quoted` prefixed
+// tokens.
+//
+// **Position-derived styles.** CLASSNAME / FUNCNAME are NOT
+// keyword-lookup hits — they're pure position-derived. `class`
+// keyword bumps `kwLast = kwClass`, the following identifier
+// becomes CLASSNAME, and `kwLast` resets on the next OPERATOR or
+// non-keyword identifier via `:447` and `:494`. Framework routes
+// both through `StyleSlot::Keyword2` — matches Python's
+// `SCE_P_CLASSNAME` / `SCE_P_DEFNAME` and Ruby's
+// `SCE_RB_CLASSNAME` / `SCE_RB_DEFNAME` precedent.
+//
+// **String flavours (four).** Single-quoted `'...'` → CHARACTER
+// (:601-604 via `GetGDStringState`), double-quoted `"..."` →
+// STRING, triple-single `'''..'''` → TRIPLE, triple-double
+// `"""..."""` → TRIPLEDOUBLE. All four collapse to
+// `StyleSlot::String` — same discipline as Python's SCE_P_STRING /
+// SCE_P_CHARACTER / SCE_P_TRIPLE / SCE_P_TRIPLEDOUBLE unification,
+// and matches most editors' rendering of GDScript's docstring
+// convention (triple-quoted at the top of a class/function).
+//
+// **STRINGEOL is REACHABLE.** Unterminated string at `:364-365`
+// fires `sc.ChangeState(SCE_GD_STRINGEOL); sc.ForwardSetState(
+// SCE_GD_DEFAULT)`. Routes to `StyleSlot::String` per the
+// established `_STRINGEOL → String` collapse (JS / VHDL / Ada /
+// Verilog / Haskell / D precedent — the error state gets the same
+// paint as the successful state so partially-typed source
+// doesn't flicker into a different colour).
+//
+// **`##`-doc-comment vs `#`-line-comment.** At `:592-593`, a
+// `#` character followed by another `#` enters COMMENTBLOCK;
+// otherwise COMMENTLINE. Both route to `StyleSlot::Comment` +
+// italic — matches Godot editor convention where `##` marks
+// doc-comments (equivalent to Python's `"""docstring"""` but
+// line-oriented) but visually indistinguishable from ordinary
+// `#`-line-comments.
+//
+// **Comment / Annotation state exits.** COMMENTLINE / COMMENTBLOCK
+// exit on `\r` / `\n` at `:497-500`. ANNOTATION exits on first
+// non-word character at `:501-504`. NODEPATH exits on first non-
+// nodepath character at `:505-516` (nodepaths may contain nested
+// strings — `$"Node With Spaces"` — via `nodePathStringState` at
+// `:506-509`, painted as one NODEPATH span).
+//
+// **Numeric literals.** SCE_GD_NUMBER covers decimal, hex (`0x`),
+// binary (`0b`), and octal (`0o`) — the last two gated by
+// `options.base2or8Literals` (default true). Float exponent
+// `1e5` / `1.5e-3` handled via `:451-452` (`sc.chPrev == 'e' ||
+// sc.chPrev == 'E'` allows `+` / `-` continuation).
+pub const SCLEX_GDSCRIPT: usize = 135;
+pub const SCE_GD_DEFAULT: usize = 0;
+pub const SCE_GD_COMMENTLINE: usize = 1;
+pub const SCE_GD_NUMBER: usize = 2;
+pub const SCE_GD_STRING: usize = 3;
+pub const SCE_GD_CHARACTER: usize = 4;
+pub const SCE_GD_WORD: usize = 5;
+pub const SCE_GD_TRIPLE: usize = 6;
+pub const SCE_GD_TRIPLEDOUBLE: usize = 7;
+pub const SCE_GD_CLASSNAME: usize = 8;
+pub const SCE_GD_FUNCNAME: usize = 9;
+pub const SCE_GD_OPERATOR: usize = 10;
+pub const SCE_GD_IDENTIFIER: usize = 11;
+pub const SCE_GD_COMMENTBLOCK: usize = 12;
+pub const SCE_GD_STRINGEOL: usize = 13;
+pub const SCE_GD_WORD2: usize = 14;
+pub const SCE_GD_ANNOTATION: usize = 15;
+pub const SCE_GD_NODEPATH: usize = 16;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals
