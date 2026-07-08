@@ -114,36 +114,37 @@ use codepp_core::lang::{
     ERLANG_DOC_MACRO, ERLANG_KEYWORDS, ERLANG_MODULE_ATT, ERLANG_PREPROC, ESCRIPT_FOLDWORDS,
     ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS, FORTH_CONTROL, FORTH_DEFWORD, FORTH_KEYWORD,
     FORTH_PREWORD1, FORTH_PREWORD2, FORTH_STRINGS, FORTRAN_EXTENDED, FORTRAN_INTRINSICS,
-    FORTRAN_KEYWORDS, GDSCRIPT_KEYWORDS, GDSCRIPT_KEYWORDS_2, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS,
-    GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
-    HASKELL_RESERVED_OPERATORS, HOLLYWOOD_KEYWORDS, HOLLYWOOD_STDAPI, HTML_KEYWORDS, INNO_KEYWORDS,
-    INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS,
-    JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
-    KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
-    LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
-    L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH,
-    L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_INI, L_INNO,
-    L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
-    L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP,
-    L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST,
-    L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG,
-    L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
-    MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
-    NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-    OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
-    OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
-    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2,
-    REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
-    R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-    SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS,
-    SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-    TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-    VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
-    VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+    FORTRAN_KEYWORDS, GDSCRIPT_KEYWORDS, GDSCRIPT_KEYWORDS_2, GO_KEYWORDS, GO_KEYWORDS_2,
+    GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS,
+    HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HOLLYWOOD_KEYWORDS,
+    HOLLYWOOD_STDAPI, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS,
+    INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS,
+    JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS,
+    LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3,
+    L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS,
+    L_D, L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GOLANG,
+    L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON,
+    L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM,
+    L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS,
+    L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE,
+    L_SQL, L_TCL, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML,
+    L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+    MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
+    NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
+    OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
+    POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
+    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+    PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5,
+    RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2,
+    SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
+    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+    VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
+    VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
+    XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -3715,6 +3716,51 @@ const JAVASCRIPT_THEME: LangTheme = LangTheme {
 // baseline-equality contract affirmatively.
 const TYPESCRIPT_THEME: LangTheme = LangTheme {
     keywords: &[(0, TYPESCRIPT_KEYWORDS), (1, TYPESCRIPT_KEYWORDS_2)],
+    styles: CPP_STYLES,
+    italic: CPP_ITALIC,
+    bold: CPP_BOLD,
+};
+// Go rides `LexCPP` (per `L_GOLANG`'s LangEntry
+// `lexer: Some("cpp")`, extension `.go`) — reuses the shared
+// `CPP_STYLES` / `CPP_ITALIC` / `CPP_BOLD` table verbatim. Same
+// class-0 + class-1 shape as every other LexCPP-family theme;
+// only the wordlist content differs:
+//   - class 0 = `GO_KEYWORDS` (29 tokens — the 25 Go reserved
+//     words from Go spec §"Keywords": `break` / `case` / `chan`
+//     / `const` / `continue` / `default` / `defer` / `else` /
+//     `fallthrough` / `for` / `func` / `go` / `goto` / `if` /
+//     `import` / `interface` / `map` / `package` / `range` /
+//     `return` / `select` / `struct` / `switch` / `type` /
+//     `var`, plus the 4 predeclared-literal identifiers
+//     `true` / `false` / `nil` / `iota`, placed in class 0 per
+//     editorial convention — matches every mainstream Go styler).
+//   - class 1 = `GO_KEYWORDS_2` (40 tokens — 20 predeclared
+//     primitive types `bool` / `byte` / `int*` / `uint*` /
+//     `float*` / `complex*` / `rune` / `string` / `uintptr` /
+//     `error`, plus 2 Go 1.18+ generic-typing predeclared
+//     identifiers `any` / `comparable`, plus 18 built-in
+//     functions `append` / `cap` / `clear` (1.21+) / `close` /
+//     `complex` / `copy` / `delete` / `imag` / `len` / `make` /
+//     `max` (1.21+) / `min` (1.21+) / `new` / `panic` /
+//     `print` / `println` / `real` / `recover`).
+//
+// **Spec adherence.** Go's reserved-word set is a **closed
+// enumeration** — the Go language spec explicitly lists all 25
+// keywords, and no additions have been made in any 1.x release
+// since Go 1.0. `true` / `false` / `nil` / `iota` are strictly
+// speaking predeclared identifiers per spec §"Predeclared
+// identifiers" (they live in the universe block, not the
+// reserved-words list), but they're placed in class 0 for the
+// same editorial-placement reason `null` / `undefined` land in
+// `JAVASCRIPT_KEYWORDS` class 0: they read as language flow-
+// control keywords in every real Go program. The class-1
+// wordlist owns the predeclared *types* (`bool`, `int`,
+// `string`, `error`) and predeclared *functions* (`make`,
+// `new`, `append`, `len`, `cap`, `panic`, `recover`, etc.)
+// where the accent-color "types + built-ins" convention
+// applies uniformly.
+const GO_THEME: LangTheme = LangTheme {
+    keywords: &[(0, GO_KEYWORDS), (1, GO_KEYWORDS_2)],
     styles: CPP_STYLES,
     italic: CPP_ITALIC,
     bold: CPP_BOLD,
@@ -10346,6 +10392,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&JSON_THEME)
     } else if lang == L_FORTRAN || lang == L_FORTRAN_77 {
         Some(&FORTRAN_THEME)
+    } else if lang == L_GOLANG {
+        Some(&GO_THEME)
     } else if lang == L_GDSCRIPT {
         Some(&GDSCRIPT_THEME)
     } else if lang == L_HOLLYWOOD {
@@ -25610,37 +25658,37 @@ mod lang_theme_tests {
         ERLANG_MODULE_ATT, ERLANG_PREPROC, ESCRIPT_FOLDWORDS, ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS,
         FORTH_CONTROL, FORTH_DEFWORD, FORTH_KEYWORD, FORTH_PREWORD1, FORTH_PREWORD2, FORTH_STRINGS,
         FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GDSCRIPT_KEYWORDS,
-        GDSCRIPT_KEYWORDS_2, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS,
-        GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS,
-        HOLLYWOOD_KEYWORDS, HOLLYWOOD_STDAPI, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS,
-        INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS,
-        JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
-        KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
-        LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
-        L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH,
-        L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_INI,
-        L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
-        L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
-        L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY,
-        L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TEXT, L_TXT2TAGS,
-        L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS,
-        MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS,
-        NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS,
-        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS,
-        OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS,
-        PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS,
-        POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1,
-        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-        PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4,
-        REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
-        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS,
-        SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS,
-        TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
-        VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
-        XML_KEYWORDS, YAML_KEYWORDS,
+        GDSCRIPT_KEYWORDS_2, GO_KEYWORDS, GO_KEYWORDS_2, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS,
+        GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
+        HASKELL_RESERVED_OPERATORS, HOLLYWOOD_KEYWORDS, HOLLYWOOD_STDAPI, HTML_KEYWORDS,
+        INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS,
+        JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS,
+        JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW,
+        LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML,
+        L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
+        L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL,
+        L_HOLLYWOOD, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX,
+        L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC,
+        L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC,
+        L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX,
+        L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML,
+        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+        MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
+        NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+        OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
+        OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
+        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
+        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
+        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3,
+        REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
+        R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+        SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3,
+        SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
+        TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS,
+        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
+        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
+        VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS,
+        VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -25760,6 +25808,7 @@ mod lang_theme_tests {
             (L_FORTRAN, "Fortran (free form)"),
             (L_FORTRAN_77, "Fortran (fixed form)"),
             (L_GDSCRIPT, "GDScript"),
+            (L_GOLANG, "Go"),
             (L_HOLLYWOOD, "Hollywood"),
             (L_CSOUND, "CSound"),
             (L_ERLANG, "Erlang"),
@@ -26304,6 +26353,228 @@ mod lang_theme_tests {
                  the class-1 entry is dead code"
             );
         }
+    }
+
+    /// Go uses `LexCPP` (per `L_GOLANG`'s `LangEntry`
+    /// `lexer: Some("cpp")`) — same shared style table as C / C++
+    /// / C# / Java / Objective-C / JavaScript / TypeScript. Only
+    /// the two keyword classes differ.
+    ///
+    /// **Go's reserved-word set is a closed enumeration.** The Go
+    /// language spec explicitly lists all 25 keywords, and no
+    /// additions have been made in any 1.x release since Go 1.0.
+    /// The invariant test pins exact count (25 spec-reserved + 4
+    /// predeclared-literal editorials = 29 class-0 tokens) so any
+    /// future edit adding a spurious token fails loudly.
+    ///
+    /// Pins:
+    ///   - Style-table reuse (`CPP_STYLES` / `CPP_ITALIC` /
+    ///     `CPP_BOLD`).
+    ///   - Canonical class-0 link to [`GO_KEYWORDS`] and class-1
+    ///     link to [`GO_KEYWORDS_2`] — a regression that swapped
+    ///     either list (or, worse, re-installed a different
+    ///     LexCPP-family list) would silently mis-classify every
+    ///     Go-specific token.
+    ///   - Spec-25 reserved words present by name — every keyword
+    ///     from Go spec §"Keywords" verified.
+    ///   - Predeclared-literal editorial placement in class 0
+    ///     (`true` / `false` / `nil` / `iota`).
+    ///   - Predeclared types present in class 1 — 20 primitives
+    ///     (`bool` / `int*` / `uint*` / `float*` / `complex*` /
+    ///     `rune` / `string` / `error` / etc.) + 2 Go 1.18+
+    ///     generic-typing identifiers (`any` / `comparable`).
+    ///   - Built-in functions present in class 1 — all 18
+    ///     (including Go 1.21+ additions `clear` / `max` / `min`).
+    ///   - Class-0 vs class-1 strict disjointness — `LexCPP`'s
+    ///     classifier at `LexCPP.cxx:995-999` probes class 0
+    ///     first, so a duplicate in class 1 is dead code.
+    ///   - Go-specific exclusion pins: standard-library package
+    ///     names (`fmt`, `os`, `io`) must NOT appear in either
+    ///     class (host doesn't ship stdlib symbol tables); user-
+    ///     convention identifiers (`err`, `ok`) must NOT appear
+    ///     (they're plain identifiers, not language reserved).
+    #[test]
+    fn go_reuses_lexcpp_style_table_with_spec_reserved_words() {
+        let c = lang_theme(L_C).expect("C wired");
+        let go = lang_theme(L_GOLANG).expect("Go wired");
+        assert_eq!(go.styles, c.styles, "Go must reuse CPP_STYLES");
+        assert_eq!(go.italic, c.italic, "Go must reuse CPP_ITALIC");
+        assert_eq!(go.bold, c.bold, "Go must reuse CPP_BOLD");
+        assert_eq!(go.keywords.len(), 2, "Go installs class 0 + class 1");
+        assert_eq!(go.keywords[0].0, 0);
+        assert_eq!(go.keywords[0].1, GO_KEYWORDS);
+        assert_eq!(go.keywords[1].0, 1);
+        assert_eq!(go.keywords[1].1, GO_KEYWORDS_2);
+
+        use std::collections::HashSet;
+        let wl0: HashSet<&str> = GO_KEYWORDS.split_whitespace().collect();
+        let wl1: HashSet<&str> = GO_KEYWORDS_2.split_whitespace().collect();
+
+        // Exact class-0 count: 25 spec-reserved + 4 predeclared-
+        // literal editorials = 29. A spurious addition or removal
+        // trips this.
+        assert_eq!(
+            wl0.len(),
+            29,
+            "GO_KEYWORDS must contain exactly 29 tokens (Go spec's \
+             closed set of 25 reserved words + 4 predeclared literals \
+             true/false/nil/iota)"
+        );
+
+        // Every spec §"Keywords" reserved word must be present by name.
+        for kw in [
+            "break",
+            "case",
+            "chan",
+            "const",
+            "continue",
+            "default",
+            "defer",
+            "else",
+            "fallthrough",
+            "for",
+            "func",
+            "go",
+            "goto",
+            "if",
+            "import",
+            "interface",
+            "map",
+            "package",
+            "range",
+            "return",
+            "select",
+            "struct",
+            "switch",
+            "type",
+            "var",
+        ] {
+            assert!(
+                wl0.contains(kw),
+                "GO_KEYWORDS must include Go spec §\"Keywords\" reserved word `{kw}`"
+            );
+        }
+
+        // Predeclared literals in class 0 per editorial convention.
+        for lit in ["true", "false", "nil", "iota"] {
+            assert!(
+                wl0.contains(lit),
+                "GO_KEYWORDS must include predeclared literal `{lit}` \
+                 (class-0 editorial placement — matches every mainstream \
+                 Go styler)"
+            );
+        }
+
+        // Every predeclared TYPE from spec §"Predeclared identifiers"
+        // must be in class 1.
+        for ty in [
+            "bool",
+            "byte",
+            "complex64",
+            "complex128",
+            "error",
+            "float32",
+            "float64",
+            "int",
+            "int8",
+            "int16",
+            "int32",
+            "int64",
+            "rune",
+            "string",
+            "uint",
+            "uint8",
+            "uint16",
+            "uint32",
+            "uint64",
+            "uintptr",
+        ] {
+            assert!(
+                wl1.contains(ty),
+                "GO_KEYWORDS_2 must include predeclared primitive type `{ty}`"
+            );
+        }
+
+        // Go 1.18+ generic-typing predeclared identifiers.
+        for anchor in ["any", "comparable"] {
+            assert!(
+                wl1.contains(anchor),
+                "GO_KEYWORDS_2 must include Go 1.18+ generic-typing \
+                 predeclared identifier `{anchor}`"
+            );
+        }
+
+        // All 18 built-in functions per spec §"Built-in functions"
+        // (including Go 1.21+ additions).
+        for f in [
+            "append", "cap", "clear", "close", "complex", "copy", "delete", "imag", "len", "make",
+            "max", "min", "new", "panic", "print", "println", "real", "recover",
+        ] {
+            assert!(
+                wl1.contains(f),
+                "GO_KEYWORDS_2 must include built-in function `{f}`"
+            );
+        }
+
+        // Class-0 vs class-1 strict disjointness. LexCPP probes
+        // class 0 first at :995-999; a class-1 duplicate is dead code.
+        if let Some(shared) = wl0.intersection(&wl1).next() {
+            panic!(
+                "GO_KEYWORDS and GO_KEYWORDS_2 both contain `{shared}` — \
+                 LexCPP's classifier checks class 0 first, so the class-1 \
+                 entry is dead code"
+            );
+        }
+
+        // Go-specific class-0 exclusion pins: predeclared types /
+        // built-in functions must NOT leak into class 0 (they belong
+        // in class 1 for the accent "types + built-ins" slot).
+        for wrong in [
+            "int", "string", "bool", "make", "new", "len", "append", "panic",
+        ] {
+            assert!(
+                !wl0.contains(wrong),
+                "GO_KEYWORDS must NOT include predeclared type / built-in \
+                 function `{wrong}` — belongs in class 1 GO_KEYWORDS_2"
+            );
+        }
+
+        // Standard-library package names must NOT appear in either
+        // class. Go's stdlib symbol table is not shipped by the
+        // host (users get IDE-style completion from gopls, not from
+        // a lexer wordlist).
+        for pkg in [
+            "fmt", "os", "io", "sync", "context", "http", "json", "strings", "strconv", "bytes",
+            "errors",
+        ] {
+            assert!(
+                !wl0.contains(pkg) && !wl1.contains(pkg),
+                "Go wordlists must NOT include standard-library package \
+                 name `{pkg}` — host doesn't ship stdlib symbol tables"
+            );
+        }
+
+        // User-convention identifiers must NOT be reserved.
+        for id in ["err", "ok", "i", "s"] {
+            assert!(
+                !wl0.contains(id) && !wl1.contains(id),
+                "Go wordlists must NOT include user-convention \
+                 identifier `{id}` — it's ordinary user code, not \
+                 language-reserved"
+            );
+        }
+
+        // Cross-language divergence check — Go's wordlists must
+        // differ from every other LexCPP-family row.
+        let js = lang_theme(L_JAVASCRIPT).expect("JS wired");
+        let ts = lang_theme(L_TYPESCRIPT).expect("TS wired");
+        let java = lang_theme(L_JAVA).expect("Java wired");
+        assert_ne!(go.keywords[0].1, js.keywords[0].1);
+        assert_ne!(go.keywords[0].1, ts.keywords[0].1);
+        assert_ne!(go.keywords[0].1, java.keywords[0].1);
+        assert_ne!(go.keywords[1].1, js.keywords[1].1);
+        assert_ne!(go.keywords[1].1, ts.keywords[1].1);
+        assert_ne!(go.keywords[1].1, java.keywords[1].1);
     }
 
     /// Win32 resource scripts (`.rc`) — the first SINGLE-class

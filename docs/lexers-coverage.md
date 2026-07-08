@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 73 / 🟡 15 / ⚫ 1.
+Total: 89 rows. ✅ 74 / 🟡 14 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1874,7 +1874,7 @@ further shim work needed.
 | Fortran (free form) | 25 | `fortran` | ✅ | ✅ | ✅ |
 | Freebasic | 69 | `freebasic` | ⚫ | ⚫ | 🟡 |
 | GDScript | 86 | `gdscript` | ✅ | ✅ | ✅ |
-| Go | 88 | `cpp` | ⚫ | ⚫ | 🟡 |
+| Go | 88 | `cpp` | ✅ | ✅ | ✅ |
 | Gui4Cli | 51 | `gui4cli` | ✅ | ✅ | ✅ |
 | Haskell | 45 | `haskell` | ✅ | ✅ | ✅ |
 | Hollywood | 87 | `hollywood` | ✅ | ✅ | ✅ |
@@ -8308,6 +8308,136 @@ silently promote duplicates to
 STDAPI), 30 canonical class-0
 anchors + 20 canonical class-1
 anchors.
+
+**Go (2026-07-08):** rides `LexCPP`
+(per `L_GOLANG`'s `LangEntry`
+`lexer: Some("cpp")`, extension
+`.go`) — reuses the shared
+`CPP_STYLES` / `CPP_ITALIC` /
+`CPP_BOLD` table verbatim, same as
+C / C++ / C# / Java / Objective-C /
+JavaScript / TypeScript / Resource
+file / Swift. Only the class-0 +
+class-1 keyword pair differs.
+
+**Closed reserved-word set.** Go's
+language spec §"Keywords"
+explicitly enumerates all 25
+reserved words, and no additions
+have been made in any 1.x release
+since Go 1.0 (December 2011). The
+invariant test pins exact count
+(25 spec-reserved + 4 predeclared-
+literal editorials = 29 class-0
+tokens) so any future edit adding
+a spurious token trips loudly.
+
+`GO_KEYWORDS` (class 0, bold — 29
+tokens): the 25 spec reserved
+words `break` / `case` / `chan` /
+`const` / `continue` / `default` /
+`defer` / `else` / `fallthrough` /
+`for` / `func` / `go` / `goto` /
+`if` / `import` / `interface` /
+`map` / `package` / `range` /
+`return` / `select` / `struct` /
+`switch` / `type` / `var`, plus 4
+predeclared literals (`true` /
+`false` / `nil` / `iota`). The
+literals are strictly speaking
+predeclared identifiers per spec
+§"Predeclared identifiers" (they
+live in the universe block, not
+the reserved-words list) — placed
+in class 0 per editorial
+convention, matching every
+mainstream Go styler (the Go
+Playground, Goland default, VS
+Code Go extension, `SciTE`'s
+`go.properties`, Notepad++ stock).
+Same editorial-placement
+discipline as
+`JAVASCRIPT_KEYWORDS`'s `null` /
+`undefined`.
+
+`GO_KEYWORDS_2` (class 1, accent —
+40 tokens): 20 predeclared
+primitive types (`bool` / `byte` /
+`complex64` / `complex128` /
+`error` — the built-in interface
+type — / `float32` / `float64` /
+`int` / `int8` / `int16` / `int32`
+/ `int64` / `rune` — alias for
+`int32` — / `string` / `uint` /
+`uint8` / `uint16` / `uint32` /
+`uint64` / `uintptr`), 2 Go 1.18+
+generic-typing predeclared
+identifiers (`any` — alias for
+`interface{}` — and `comparable`
+— the constraint interface), 18
+built-in functions (`append` /
+`cap` / `clear` (1.21+) / `close`
+/ `complex` / `copy` / `delete` /
+`imag` / `len` / `make` / `max`
+(1.21+) / `min` (1.21+) / `new` /
+`panic` / `print` / `println` /
+`real` / `recover`).
+
+**Deliberate exclusions:**
+standard-library package names
+(`fmt` / `os` / `io` / `sync` /
+`context` / `http` / `json` /
+`strings` / `strconv` / `bytes` /
+`errors`) stay out of both classes
+— Go's stdlib surface is ~200
+packages with thousands of
+exported identifiers; users get
+IDE-style stdlib completion from
+`gopls` (Go's LSP), not from a
+lexer wordlist. User-convention
+identifiers (`err` / `ok` / `i` /
+`s`) stay out — they're plain
+identifiers, not language-
+reserved. The blank identifier `_`
+tokenises as a plain identifier by
+`LexCPP` and never sees the
+wordlist path.
+
+Structural test coverage: **the
+LexCPP-family test pattern** —
+style-table reuse pin (reuses C's
+`CPP_STYLES` / `CPP_ITALIC` /
+`CPP_BOLD` deep-equal), two-class
+descriptor shape (`0 → KEYWORDS`,
+`1 → KEYWORDS_2`), canonical
+wordlist links, **exact class-0
+count == 29** (25 spec + 4
+predeclared literals), 25
+spec-reserved-word anchors
+verified by name, 4 predeclared-
+literal anchors (`true`/`false`/
+`nil`/`iota` in class 0), 20
+predeclared-type anchors in class
+1, 2 Go 1.18+ generic-typing
+anchors (`any` / `comparable`),
+18 built-in-function anchors in
+class 1 (including Go 1.21+
+additions `clear` / `max` /
+`min`), strict cross-class
+disjointness (`intersection`
+empty — `LexCPP` probes class 0
+first at `:995-999`, duplicates
+would be dead code), 8 class-0
+exclusion pins (predeclared
+types / built-in functions must
+NOT leak into class 0), 11
+stdlib-package exclusion pins,
+4 user-convention identifier
+exclusion pins, and 6 cross-
+language divergence pins
+(GO_KEYWORDS / GO_KEYWORDS_2
+must not equal JS / TS / Java
+class-0 or class-1 lists).
 
 ## Notes
 

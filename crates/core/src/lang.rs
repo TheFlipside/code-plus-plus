@@ -2565,6 +2565,168 @@ pub const TYPESCRIPT_KEYWORDS_2: &str = concat!(
     "globalThis console NaN Infinity",
 );
 
+/// Space-separated Go reserved-word list installed as **class 0**
+/// of `LexCPP`'s wordlist descriptor (`SCE_C_WORD`, bold "Keyword"
+/// slot). Go rides `LexCPP` (per `L_GOLANG`'s [`LangEntry`] with
+/// `lexer: Some("cpp")`) — same style table as C / C++ / Java /
+/// JavaScript / TypeScript; only the two keyword classes differ.
+///
+/// **Case sensitive.** Go is case-sensitive at the spec level
+/// (Go language spec §"Identifiers"). `LexCPP`'s identifier
+/// classifier calls `sc.GetCurrent(s, sizeof(s))` byte-exact —
+/// same discipline as JS/TS/Java/C.
+///
+/// **Categories** (29 entries):
+///
+/// 1. **Go 25 reserved words** — the complete set from Go language
+///    spec §"Keywords" (verbatim, alphabetical): `break` / `case` /
+///    `chan` / `const` / `continue` / `default` / `defer` /
+///    `else` / `fallthrough` / `for` / `func` / `go` / `goto` /
+///    `if` / `import` / `interface` / `map` / `package` /
+///    `range` / `return` / `select` / `struct` / `switch` /
+///    `type` / `var`. This is the CANONICAL closed-set; the Go
+///    spec explicitly enumerates these 25 as reserved.
+/// 2. **Predeclared literals + constant-generator identifier** —
+///    `true` / `false` / `nil` (the three predeclared literal
+///    values) plus `iota` (which is strictly speaking a
+///    predeclared *identifier* that generates successive untyped
+///    integer constants inside a `const` block, NOT a literal
+///    per Go spec's terminology — grouped here per functional
+///    role, not spec taxonomy). All four are technically
+///    **predeclared identifiers** per Go spec §"Predeclared
+///    identifiers" (they live in the universe block, not the
+///    reserved-keywords list), but every mainstream Go styler
+///    renders them bold alongside the 25 reserved words: the Go
+///    Playground, Goland's default scheme, VS Code's `Go`
+///    extension, `SciTE`'s `go.properties`, Notepad++'s stock
+///    styler. Same editorial-placement discipline as
+///    [`TYPESCRIPT_KEYWORDS`]'s `null` / `undefined` (technically
+///    literals, but bold-highlighted for language-flow prominence).
+///
+/// **Deliberate exclusions:**
+///
+/// - **Predeclared types** (`bool` / `byte` / `int` / `string` /
+///   `float64` / `error` / etc.) — spec-level predeclared
+///   identifiers, NOT keywords. Live in [`GO_KEYWORDS_2`] class 1
+///   (the accent "type-like tokens" slot, matching C's `int` /
+///   `char` and TypeScript's `string` / `number` precedent).
+/// - **Built-in functions** (`make` / `new` / `append` / `len` /
+///   `cap` / `panic` / etc.) — predeclared function identifiers,
+///   NOT keywords. Also live in [`GO_KEYWORDS_2`] class 1
+///   (matching JavaScript's built-in-constructors placement in
+///   `JAVASCRIPT_KEYWORDS_2`).
+/// - **`_` (blank identifier)** — reserved in every Go
+///   declaration slot but tokenises as a plain identifier by
+///   `LexCPP`; the wordlist path never sees it. Excluded here.
+/// - **`comparable` / `any`** — Go 1.18+ predeclared interface
+///   type aliases (`any = interface{}`, `comparable` is the
+///   constraint interface used in generic type parameters). Class
+///   1 territory, not class 0.
+///
+/// Sourced from the Go language specification at
+/// <https://go.dev/ref/spec> (spec §"Keywords" for the closed
+/// set, §"Predeclared identifiers" for `true`/`false`/`nil`/
+/// `iota`). Fully verified — Go's reserved-word set is closed
+/// and stable since Go 1.0 (no additions in any 1.x release).
+pub const GO_KEYWORDS: &str = concat!(
+    // Go 25 reserved words (spec §"Keywords").
+    "break case chan const continue default defer else fallthrough for ",
+    "func go goto if import interface map package range return ",
+    "select struct switch type var ",
+    // Predeclared literals (spec §"Predeclared identifiers" — placed
+    // in class 0 per editorial convention, not spec classification).
+    "true false nil iota",
+);
+
+/// Space-separated Go **predeclared identifiers** list installed as
+/// **class 1** of `LexCPP`'s wordlist descriptor (`SCE_C_WORD2`,
+/// accent "Keyword2" slot). Same class-1 slot occupied by C's
+/// primitive types (`int` / `char`) and JavaScript's built-in
+/// constructors (`Array` / `Object`).
+///
+/// Contents split into two categories per Go language spec
+/// §"Predeclared identifiers":
+///   - **Predeclared types** — the universe-block type names
+///     (`bool`, `int`, `string`, etc.), which behave as
+///     identifiers-not-keywords at the spec level but are always
+///     rendered accent-color as the "types" slot.
+///   - **Predeclared functions** — the universe-block function
+///     names (`make`, `new`, `append`, etc.), similarly universe-
+///     block-scoped identifiers.
+///
+/// **Case-sensitive byte-exact match.** Same classifier discipline
+/// as [`GO_KEYWORDS`]. `LexCPP` byte-matches identifiers.
+///
+/// **Categories** (40 entries):
+///
+/// 1. **Primitive types** (20) — `bool`, `byte` (alias for
+///    `uint8`), `complex64`, `complex128`, `error` (the built-in
+///    interface type), `float32`, `float64`, `int`, `int8`,
+///    `int16`, `int32`, `int64`, `rune` (alias for `int32`),
+///    `string`, `uint`, `uint8`, `uint16`, `uint32`, `uint64`,
+///    `uintptr`.
+/// 2. **Go 1.18+ generic-typing predeclared identifiers** (2) —
+///    `any` (alias for `interface{}`) and `comparable` (the
+///    generic constraint interface). Both landed in Go 1.18
+///    (March 2022) alongside generics. Note the spec's
+///    universe-block list groups these together with the 20
+///    primitive types as one 22-item "Types" group — the split
+///    here is editorial (highlights their Go 1.18+ vintage and
+///    generics-only semantics) rather than spec-structural.
+///    Both land in class 1 either way; a future contributor
+///    "fixing" the split to match spec grouping would be a
+///    no-op at the runtime layer.
+/// 3. **Built-in functions** (18) — `append`, `cap`, `clear`
+///    (Go 1.21+), `close`, `complex`, `copy`, `delete`, `imag`,
+///    `len`, `make`, `max` (Go 1.21+), `min` (Go 1.21+), `new`,
+///    `panic`, `print`, `println`, `real`, `recover`.
+///
+/// Sum: 20 + 2 + 18 = 40.
+///
+/// **Deliberate exclusions:**
+///
+/// - **Standard library packages** (`fmt`, `os`, `io`, `sync`,
+///   `context`, `net/http`, `encoding/json`, etc.) — Go's stdlib
+///   surface is ~200 packages with thousands of exported
+///   identifiers. Highlighting them here would require the
+///   host to import Go's full stdlib symbol table (which
+///   changes per Go release), and any variable named `fmt` in
+///   user code would mis-colour. Users get IDE-style stdlib
+///   completion from `gopls` (Go's LSP), not from a lexer
+///   wordlist.
+/// - **Named-return values / method receivers / short-variable-
+///   declaration idioms** (`err`, `ok`, `i`, `s`) — these are
+///   user-code identifier conventions, not language reserved
+///   names.
+/// - **`_` (blank identifier)** — same reasoning as
+///   [`GO_KEYWORDS`]'s exclusion; tokenises as plain identifier.
+///
+/// **Sub-identifier caveat.** `LexCPP` has an
+/// `SCE_C_WORD2`-classification code path that lowercases and
+/// byte-matches identifiers, but does NOT gate on dot-position
+/// (unlike `LexGDScript`'s `keywords2NoSubIdentifiers` option).
+/// A method call like `x.len()` would render `len` as WORD2 if
+/// present in the wordlist. This is expected behaviour and
+/// matches Notepad++'s default styler — the accent-color
+/// association with `len` / `cap` / `make` is durable across
+/// dotted / bare positions.
+///
+/// Sourced from the Go language specification at
+/// <https://go.dev/ref/spec> §"Predeclared identifiers". Fully
+/// verified against Go 1.22 (the current minor release family
+/// as of authoring).
+pub const GO_KEYWORDS_2: &str = concat!(
+    // Primitive types (20 tokens per spec §"Predeclared identifiers").
+    "bool byte complex64 complex128 error float32 float64 ",
+    "int int8 int16 int32 int64 rune string ",
+    "uint uint8 uint16 uint32 uint64 uintptr ",
+    // Go 1.18+ generic-typing predeclared identifiers.
+    "any comparable ",
+    // Built-in functions (18 tokens; `clear`/`max`/`min` added Go 1.21+).
+    "append cap clear close complex copy delete imag len make ",
+    "max min new panic print println real recover",
+);
+
 /// Space-separated `VBScript` reserved-word list installed via the
 /// hypertext lexer's `SCI_SETKEYWORDS(2, ...)`. Class 2 of
 /// `htmlWordListDesc[]` drives both `SCE_HB_WORD` (client-side
