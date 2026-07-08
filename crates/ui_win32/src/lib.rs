@@ -125,8 +125,8 @@ use codepp_core::lang::{
     L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
     L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
     L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY,
-    L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
-    MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+    L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML,
+    L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
     MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
     NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
     OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
@@ -135,11 +135,12 @@ use codepp_core::lang::{
     POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
     PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5,
     RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
-    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
-    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
-    VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
-    VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
-    VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2,
+    SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+    XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -301,18 +302,20 @@ use codepp_scintilla_sys::{
     SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD, SCE_R_RAWSTRING,
     SCE_R_RAWSTRING2, SCE_R_STRING, SCE_R_STRING2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER,
     SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM, SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR,
-    SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING, SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT,
-    SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC,
-    SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT,
-    SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCE_ST_ASSIGN,
-    SCE_ST_BINARY, SCE_ST_BOOL, SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL, SCE_ST_KWSEND,
-    SCE_ST_NIL, SCE_ST_NUMBER, SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL, SCE_ST_SPEC_SEL,
-    SCE_ST_STRING, SCE_ST_SUPER, SCE_ST_SYMBOL, SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT,
-    SCE_TCL_COMMENTLINE, SCE_TCL_COMMENT_BOX, SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER,
-    SCE_TCL_NUMBER, SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD,
-    SCE_TCL_WORD2, SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7,
-    SCE_TCL_WORD8, SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP,
-    SCE_TEX_SPECIAL, SCE_TEX_SYMBOL, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT,
+    SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING, SCE_SH_WORD, SCE_SPICE_COMMENTLINE,
+    SCE_SPICE_DELIMITER, SCE_SPICE_KEYWORD, SCE_SPICE_KEYWORD2, SCE_SPICE_KEYWORD3,
+    SCE_SPICE_NUMBER, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC,
+    SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER,
+    SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT,
+    SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCE_ST_ASSIGN, SCE_ST_BINARY, SCE_ST_BOOL,
+    SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL, SCE_ST_KWSEND, SCE_ST_NIL, SCE_ST_NUMBER,
+    SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL, SCE_ST_SPEC_SEL, SCE_ST_STRING, SCE_ST_SUPER,
+    SCE_ST_SYMBOL, SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE,
+    SCE_TCL_COMMENT_BOX, SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER, SCE_TCL_NUMBER,
+    SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD, SCE_TCL_WORD2,
+    SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7, SCE_TCL_WORD8,
+    SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL,
+    SCE_TEX_SYMBOL, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT,
     SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER, SCE_VHDL_OPERATOR,
     SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE, SCE_VHDL_STDTYPE,
     SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCE_V_COMMENT, SCE_V_COMMENTLINE,
@@ -4973,6 +4976,103 @@ const REGISTRY_THEME: LangTheme = LangTheme {
     styles: REGISTRY_STYLES,
     italic: REGISTRY_ITALIC,
     bold: REGISTRY_BOLD,
+};
+
+// --- LexSpice ---
+// SPICE (Simulation Program with Integrated Circuit Emphasis)
+// circuit netlist files (extensions `.sp` / `.spice`). `L_SPICE`
+// (id 82) is the only language row using this lexer.
+// Three-class wordlist descriptor (Keywords / Keywords2 /
+// Keywords3) per `LexSpice.cxx:42-46`. First-match-wins cascade
+// class 0 → 1 → 2 (forward order, unlike REBOL's reverse
+// cascade) — see the `LexSpice` banner in
+// `scintilla-sys/src/lib.rs` for the paint-loop citations.
+//
+// Style-to-slot decisions (6 mappings across 9 defined slots):
+//   * `KEYWORD` (2) → Keyword (bold blue) — SPICE simulator
+//     directive stems (`tran` / `dc` / `model` / `subckt` /
+//     …). These are the PRIMARY structural anchors of a
+//     `.SPICE` netlist — every simulation-command line begins
+//     with one, prefixed by a `.` delimiter. Same bold-blue
+//     Keyword treatment as C `if` / Rust `fn` / SPICE's own
+//     dot prefix (rendered as Operator via DELIMITER).
+//   * `KEYWORD2` (3) → Keyword2 — expression functions
+//     (`sin` / `cos` / `exp` / `if` / `ddt` / …) used inside
+//     `{...}` behavioural sources. Same accent role as
+//     Python's `len`/`range` builtins → Keyword2.
+//   * `KEYWORD3` (4) → Preprocessor — model type / source
+//     waveform / sweep specifier tokens (`nmos` / `pulse` /
+//     `dec` / `gmin` / …). These read as declaration
+//     modifiers rather than structural anchors — same
+//     Preprocessor accent used for INI's `DEFVAL`, Batch's
+//     leading `@`, Registry's `DELETEDKEY` / `PARAMETER`.
+//   * `NUMBER` (5) → Number — decimal / floating-point /
+//     scientific-notation / SPICE-engineering-suffix
+//     (`1u` / `10k` / `1meg`) numeric literals plus the
+//     `#`-lead numeric form. All go through the same
+//     `ColouriseNumber` state.
+//   * `DELIMITER` (6) → Operator — single-char delimiter set
+//     `& ' ( ) * + , - . / : ; < = > |`. Universal Operator
+//     slot. Notably the `.` in `.tran` paints as Operator,
+//     not as part of the keyword (dot is a lexer-level
+//     delimiter — see the banner).
+//   * `COMMENTLINE` (8) → Comment (green italic) — line
+//     comments starting with `*` in column 0 (traditional
+//     Berkeley SPICE) or `*~` mid-line (SciTE / LTspice
+//     extension). Universal Comment slot.
+//
+// Unmapped slots (framework convention):
+//   * `DEFAULT` (0) — leave unmapped, fall through to
+//     STYLE_DEFAULT. Standard framework convention for
+//     whitespace / unclassified regions.
+//   * `IDENTIFIER` (1) — transient collect state that stays
+//     visible when a bare word misses all three wordlist
+//     probes. Framework convention leaves it unmapped so
+//     unmatched user-defined names (net names, component
+//     designators like `Vin1`, subckt-parameter references)
+//     paint at STYLE_DEFAULT. Same convention as
+//     `SCE_C_IDENTIFIER` / `SCE_REBOL_IDENTIFIER` /
+//     `SCE_OSCRIPT_IDENTIFIER`.
+//   * `VALUE` (7) — DEAD STATE. Verified: the paint loop has
+//     ZERO call sites emitting `SCE_SPICE_VALUE` (no
+//     `SetState` / `ChangeState` / `ForwardSetState`). The
+//     slot is reserved in `SciLexer.h` but never entered at
+//     runtime. Leave unmapped since no bytes ever paint into
+//     it. If a future Lexilla update ever activates this
+//     slot, the invariant test's highest-defined-pin would
+//     still pass and the map is safely additive.
+const SPICE_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_SPICE_KEYWORD, StyleSlot::Keyword),
+    (SCE_SPICE_KEYWORD2, StyleSlot::Keyword2),
+    (SCE_SPICE_KEYWORD3, StyleSlot::Preprocessor),
+    (SCE_SPICE_NUMBER, StyleSlot::Number),
+    (SCE_SPICE_DELIMITER, StyleSlot::Operator),
+    (SCE_SPICE_COMMENTLINE, StyleSlot::Comment),
+];
+
+// Italic on COMMENTLINE — universal Code++ comment convention.
+const SPICE_ITALIC: &[usize] = &[SCE_SPICE_COMMENTLINE];
+
+// Bold on KEYWORD (class 0 — simulator directive stems) —
+// primary structural anchor. Same single-class-bold discipline
+// as PROPS (SECTION), Makefile (TARGET), REBOL (WORD), OScript
+// (KEYWORD), and every LexCPP-family theme (WORD).
+const SPICE_BOLD: &[usize] = &[SCE_SPICE_KEYWORD];
+
+// Three-class install matching descriptor order at
+// `LexSpice.cxx:42-46`. All three populated; first-match-wins
+// cascade at `:113-130` probes class 0 → 1 → 2 in forward order
+// so cross-class disjointness is strictly enforced by the
+// invariant test.
+const SPICE_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, SPICE_KEYWORDS),
+        (1, SPICE_KEYWORDS2),
+        (2, SPICE_KEYWORDS3),
+    ],
+    styles: SPICE_STYLES,
+    italic: SPICE_ITALIC,
+    bold: SPICE_BOLD,
 };
 
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
@@ -9725,6 +9825,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&REBOL_THEME)
     } else if lang == L_REGISTRY {
         Some(&REGISTRY_THEME)
+    } else if lang == L_SPICE {
+        Some(&SPICE_THEME)
     } else {
         None
     }
@@ -24935,6 +25037,7 @@ mod lang_theme_tests {
         SCE_V_COMMENTLINE, SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT, SCE_V_INPUT,
         SCE_V_NUMBER, SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR,
         SCE_V_STRING, SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3,
+        SPICE_BOLD, SPICE_ITALIC, SPICE_STYLES,
     };
     // SCE_VHDL_IDENTIFIER is a scan-intermediate state that isn't
     // referenced in the main-scope theme (VHDL_STYLES deliberately
@@ -24965,8 +25068,8 @@ mod lang_theme_tests {
         L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
         L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP,
         L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST,
-        L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
-        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+        L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL,
+        L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
         MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
         NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
         OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
@@ -24976,11 +25079,12 @@ mod lang_theme_tests {
         PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3,
         REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
         R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-        SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-        VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-        XML_KEYWORDS, YAML_KEYWORDS,
+        SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3,
+        SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
+        TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS,
+        VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
+        VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS,
+        YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -39979,6 +40083,409 @@ mod lang_theme_tests {
         );
     }
 
+    /// Spice uses Lexilla's `spice` lexer (`LexSpice.cxx`) — a
+    /// three-class-wordlist state machine for SPICE
+    /// (Simulation Program with Integrated Circuit Emphasis)
+    /// circuit netlist files (`.sp` / `.spice`). NOT included in
+    /// `wired_languages_have_complete_themes`: that test's
+    /// `theme.styles.len() >= 8` floor calibrates for richly-
+    /// styled lexers, but SPICE is a legitimately compact
+    /// 9-slot lexer with only 6 emission categories worth
+    /// mapping (DEFAULT / IDENTIFIER / VALUE unmapped per the
+    /// `SPICE_STYLES` banner). Same precedent as TeX's compact
+    /// 5-mapping / LaTeX's compact 11-mapping tables. This
+    /// dedicated test pins:
+    ///
+    ///   1. Deep-value identity (styles / italic / bold / three
+    ///      populated keyword classes).
+    ///   2. 6-mapping style-count (9 defined `SCE_SPICE_*` slots
+    ///      minus 3 unmapped: DEFAULT, IDENTIFIER, VALUE).
+    ///   3. Three populated classes in canonical descriptor
+    ///      order matching `LexSpice.cxx:42-46`.
+    ///   4. All three populated classes non-empty.
+    ///   5. All-lowercase alphabet enforcement across every
+    ///      class (LexSpice.cxx:110 lowercases before probe).
+    ///   6. Cross-class disjointness across all 3 pairs of
+    ///      populated classes — LOAD-BEARING for the forward
+    ///      first-match-wins cascade at `LexSpice.cxx:113-130`
+    ///      (a duplicate silently masks its higher-class
+    ///      sibling).
+    ///   7. Style-routing pins for all 6 mapped constants.
+    ///   8. Framework-unmapped slots confirmed absent (DEFAULT,
+    ///      IDENTIFIER, VALUE) with drift-pin assertions.
+    ///   9. Italic == 1 (COMMENTLINE only).
+    ///   10. Bold == 1 (KEYWORD only — class 0, primary
+    ///       structural anchor).
+    ///   11. Cross-language non-reuse (sampled).
+    ///   12. `L_SPICE` `LangEntry` has `lexer: Some("spice")`
+    ///       and both `sp` and `spice` extensions.
+    ///   13. Canonical KEYWORD anchors — `tran`, `dc`, `model`,
+    ///       `subckt`, `end`.
+    ///   14. Canonical KEYWORD2 anchors — `sin`, `cos`, `exp`,
+    ///       `if`.
+    ///   15. Canonical KEYWORD3 anchors — `nmos`, `pnp`, `pulse`,
+    ///       `dec`.
+    ///   16. **Dot-stripped stems only** — no keyword may start
+    ///       with `.`. `LexSpice`'s `IsDelimiterCharacter` emits
+    ///       `.` as DELIMITER separately; leading-dot entries
+    ///       would never match.
+    ///   17. Highest-defined `SCE_SPICE_*` pin — `SCE_SPICE_COMMENTLINE`
+    ///       (8) is the top slot per `SciLexer.h:1343`.
+    ///   18. **Ambiguous-token placement pins** — cosmetic
+    ///       assertions on the class-0-vs-class-1 dominance
+    ///       calls: `if` → class 1 (function role dominates),
+    ///       `temp` → class 0 (directive role dominates),
+    ///       `sin`/`exp` → class 1 (function role dominates
+    ///       over source waveform).
+    ///   19. No duplicate tokens within any wordlist.
+    #[test]
+    fn spice_uses_lexspice_three_class_theme() {
+        use super::{
+            SCE_SPICE_COMMENTLINE, SCE_SPICE_DELIMITER, SCE_SPICE_KEYWORD, SCE_SPICE_KEYWORD2,
+            SCE_SPICE_KEYWORD3, SCE_SPICE_NUMBER,
+        };
+        use codepp_scintilla_sys::{SCE_SPICE_DEFAULT, SCE_SPICE_IDENTIFIER, SCE_SPICE_VALUE};
+        let sp = lang_theme(L_SPICE).expect("Spice wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(sp.styles, SPICE_STYLES);
+        assert_eq!(sp.italic, SPICE_ITALIC);
+        assert_eq!(sp.bold, SPICE_BOLD);
+        assert_eq!(sp.keywords.len(), 3);
+
+        // Invariant 2: 6 mappings (9 defined slots minus 3 unmapped).
+        assert_eq!(
+            sp.styles.len(),
+            6,
+            "SPICE_STYLES must map 6 indices (9 defined SCE_SPICE_* \
+             slots minus 3 unmapped: DEFAULT, IDENTIFIER (transient), \
+             VALUE (dead state — never emitted by paint loop))"
+        );
+
+        // Invariant 3: three populated classes in canonical order.
+        for (i, (expected_class, expected_list)) in [
+            (0u32, SPICE_KEYWORDS),
+            (1u32, SPICE_KEYWORDS2),
+            (2u32, SPICE_KEYWORDS3),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                sp.keywords[i].0, *expected_class,
+                "SPICE_THEME.keywords[{i}].class must match \
+                 descriptor order at LexSpice.cxx:42-46"
+            );
+            assert_eq!(
+                sp.keywords[i].1, *expected_list,
+                "SPICE_THEME.keywords[{i}].list must match \
+                 canonical wordlist"
+            );
+        }
+
+        // Invariant 4: all three populated classes non-empty.
+        for (list, name) in [
+            (SPICE_KEYWORDS, "KEYWORDS"),
+            (SPICE_KEYWORDS2, "KEYWORDS2"),
+            (SPICE_KEYWORDS3, "KEYWORDS3"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "SPICE_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: all-lowercase alphabet across every class.
+        // LexSpice.cxx:110 lowercases every collected byte before
+        // the wordlist probe — uppercase entries would never match.
+        // Allowed chars: lowercase alnum (SPICE identifiers can
+        // include digits like `itl4`).
+        for (list, name) in [
+            (SPICE_KEYWORDS, "KEYWORDS"),
+            (SPICE_KEYWORDS2, "KEYWORDS2"),
+            (SPICE_KEYWORDS3, "KEYWORDS3"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    !tok.is_empty()
+                        && tok
+                            .bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()),
+                    "SPICE_{name} token `{tok}` violates the \
+                     lowercase-alnum alphabet — LexSpice.cxx:110 \
+                     lowercases every byte before wordlist probe, \
+                     so uppercase / punctuation entries never match"
+                );
+            }
+        }
+
+        // Invariant 6: cross-class disjointness. LOAD-BEARING for
+        // the forward first-match-wins cascade at LexSpice.cxx:113-130
+        // — a higher-class duplicate silently masks its lower-class
+        // sibling. Rare in Spice's small vocabulary but a real
+        // hazard (see `sin`/`exp` between class 1 and 2, `ac`/`dc`
+        // between class 0 and 2, `temp` between class 0 and 1 —
+        // all resolved by canonical-class-only placement).
+        use std::collections::HashSet;
+        let sets = [
+            (
+                "KEYWORDS",
+                SPICE_KEYWORDS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "KEYWORDS2",
+                SPICE_KEYWORDS2.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "KEYWORDS3",
+                SPICE_KEYWORDS3.split_whitespace().collect::<HashSet<_>>(),
+            ),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                if let Some(shared) = sets[i].1.intersection(&sets[j].1).next() {
+                    panic!(
+                        "SPICE_{} and SPICE_{} both contain `{shared}` \
+                         — LexSpice.cxx:113-130 probes classes 0 → 1 \
+                         → 2 forward-first-match-wins. Cross-class \
+                         duplicate leaves the HIGHER-numbered entry \
+                         dead code.",
+                        sets[i].0, sets[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 7: style-routing pins for all 6 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_SPICE_KEYWORD, StyleSlot::Keyword, "KEYWORD"),
+            (SCE_SPICE_KEYWORD2, StyleSlot::Keyword2, "KEYWORD2"),
+            (SCE_SPICE_KEYWORD3, StyleSlot::Preprocessor, "KEYWORD3"),
+            (SCE_SPICE_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_SPICE_DELIMITER, StyleSlot::Operator, "DELIMITER"),
+            (SCE_SPICE_COMMENTLINE, StyleSlot::Comment, "COMMENTLINE"),
+        ] {
+            assert!(
+                sp.styles.contains(&(idx, slot)),
+                "SCE_SPICE_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: framework-unmapped slots confirmed absent.
+        // Slot numbers referenced via named SCE_SPICE_* constants
+        // so a Lexilla renumbering breaks these assertions rather
+        // than silently skipping.
+        assert_eq!(
+            SCE_SPICE_DEFAULT, 0,
+            "SCE_SPICE_DEFAULT has drifted from 0 — verify against SciLexer.h:1335"
+        );
+        assert_eq!(
+            SCE_SPICE_IDENTIFIER, 1,
+            "SCE_SPICE_IDENTIFIER has drifted from 1 — verify against SciLexer.h:1336"
+        );
+        assert_eq!(
+            SCE_SPICE_VALUE, 7,
+            "SCE_SPICE_VALUE has drifted from 7 — verify against SciLexer.h:1342"
+        );
+        for (idx, name) in [
+            (SCE_SPICE_DEFAULT, "DEFAULT"),
+            (SCE_SPICE_IDENTIFIER, "IDENTIFIER"),
+            (SCE_SPICE_VALUE, "VALUE"),
+        ] {
+            assert!(
+                !sp.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_SPICE_{name} ({idx}) must remain unmapped — \
+                 framework convention (DEFAULT/IDENTIFIER fall through \
+                 to STYLE_DEFAULT; VALUE is a dead state never emitted \
+                 by LexSpice's paint loop)"
+            );
+        }
+
+        // Invariant 9: italic == 1 (COMMENTLINE only).
+        assert_eq!(sp.italic.len(), 1);
+        assert!(
+            sp.italic.contains(&SCE_SPICE_COMMENTLINE),
+            "SPICE_ITALIC must contain SCE_SPICE_COMMENTLINE"
+        );
+
+        // Invariant 10: bold == 1 (KEYWORD only — class 0, primary
+        // structural anchor).
+        assert_eq!(sp.bold.len(), 1);
+        assert!(
+            sp.bold.contains(&SCE_SPICE_KEYWORD),
+            "SPICE_BOLD must contain SCE_SPICE_KEYWORD (class 0 — \
+             SPICE simulator directive stems, the primary \
+             structural anchor of a netlist)"
+        );
+
+        // Invariant 11: cross-language non-reuse (sampled).
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let re = lang_theme(L_REBOL).expect("REBOL wired");
+        let os = lang_theme(L_OSCRIPT).expect("OScript wired");
+        let reg = lang_theme(L_REGISTRY).expect("Registry wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (re, "REBOL"),
+            (os, "OScript"),
+            (reg, "Registry"),
+        ] {
+            assert_ne!(
+                sp.styles, other.styles,
+                "Spice must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 12: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let sp_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_SPICE)
+            .expect("L_SPICE LangEntry present in LANG_TABLE");
+        assert_eq!(
+            sp_entry.lexer,
+            Some("spice"),
+            "L_SPICE LangEntry.lexer must be Some(\"spice\")"
+        );
+        assert!(
+            sp_entry.extensions.contains(&"sp"),
+            "L_SPICE extensions must contain `sp`"
+        );
+        assert!(
+            sp_entry.extensions.contains(&"spice"),
+            "L_SPICE extensions must contain `spice`"
+        );
+
+        // Invariant 13: canonical KEYWORD anchors — simulator directives.
+        for tok in ["tran", "dc", "model", "subckt", "end"] {
+            assert!(
+                SPICE_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "SPICE_KEYWORDS must include canonical directive `{tok}`"
+            );
+        }
+
+        // Invariant 14: canonical KEYWORD2 anchors — expression
+        // functions.
+        for tok in ["sin", "cos", "exp", "if"] {
+            assert!(
+                SPICE_KEYWORDS2.split_whitespace().any(|t| t == tok),
+                "SPICE_KEYWORDS2 must include canonical function `{tok}`"
+            );
+        }
+
+        // Invariant 15: canonical KEYWORD3 anchors — model types
+        // / source waveforms / sweep specifiers.
+        for tok in ["nmos", "pnp", "pulse", "dec"] {
+            assert!(
+                SPICE_KEYWORDS3.split_whitespace().any(|t| t == tok),
+                "SPICE_KEYWORDS3 must include canonical model / \
+                 waveform / sweep token `{tok}`"
+            );
+        }
+
+        // Invariant 16: dot-stripped stems only. LOAD-BEARING —
+        // LexSpice.cxx:179-201 IsDelimiterCharacter includes `.`,
+        // so `.tran` parses as DELIMITER + KEYWORD (bare stem
+        // `tran`). Leading-dot entries would never match.
+        for (list, name) in [
+            (SPICE_KEYWORDS, "KEYWORDS"),
+            (SPICE_KEYWORDS2, "KEYWORDS2"),
+            (SPICE_KEYWORDS3, "KEYWORDS3"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    !tok.starts_with('.'),
+                    "SPICE_{name} token `{tok}` starts with `.` — \
+                     LexSpice.cxx:179-201 emits `.` as DELIMITER \
+                     separately, so `.<stem>` entries would never \
+                     match. Use the bare stem"
+                );
+            }
+        }
+
+        // Invariant 17: highest-defined SCE_SPICE_* pin.
+        assert_eq!(
+            SCE_SPICE_COMMENTLINE, 8,
+            "SCE_SPICE_COMMENTLINE has drifted from 8 — Lexilla may \
+             have renumbered slots. Verify against SciLexer.h:1343"
+        );
+        for (idx, _) in sp.styles {
+            assert!(
+                *idx <= SCE_SPICE_COMMENTLINE,
+                "SPICE_STYLES references slot {idx}, which is higher \
+                 than SCE_SPICE_COMMENTLINE ({SCE_SPICE_COMMENTLINE})"
+            );
+        }
+
+        // Invariant 18: ambiguous-token placement pins. These pin
+        // the class-membership decisions for tokens that have both
+        // a class-0 and class-1 (or class-1 and class-2) legitimate
+        // role. Forward first-match-wins means whichever class
+        // holds the token gets its colour everywhere.
+        assert!(
+            SPICE_KEYWORDS2.split_whitespace().any(|t| t == "if"),
+            "`if` must be in SPICE_KEYWORDS2 (function role \
+             dominates over conditional-compilation directive)"
+        );
+        assert!(
+            !SPICE_KEYWORDS.split_whitespace().any(|t| t == "if"),
+            "`if` must NOT be in SPICE_KEYWORDS (would starve the \
+             function-role placement)"
+        );
+        assert!(
+            SPICE_KEYWORDS.split_whitespace().any(|t| t == "temp"),
+            "`temp` must be in SPICE_KEYWORDS (directive `.temp` \
+             role dominates over temperature-function role — the \
+             long spelling `temper` lives in KEYWORDS2)"
+        );
+        assert!(
+            SPICE_KEYWORDS2.split_whitespace().any(|t| t == "temper"),
+            "`temper` must be in SPICE_KEYWORDS2 (function-only \
+             spelling — no `.temper` directive exists)"
+        );
+        for tok in ["sin", "exp"] {
+            assert!(
+                SPICE_KEYWORDS2.split_whitespace().any(|t| t == tok),
+                "`{tok}` must be in SPICE_KEYWORDS2 (function role \
+                 dominates over source-waveform specifier)"
+            );
+            assert!(
+                !SPICE_KEYWORDS3.split_whitespace().any(|t| t == tok),
+                "`{tok}` must NOT be in SPICE_KEYWORDS3 — first-match- \
+                 wins in class 1 already picks it up; class-3 duplicate \
+                 would be dead code"
+            );
+        }
+        for tok in ["ac", "dc"] {
+            assert!(
+                SPICE_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "`{tok}` must be in SPICE_KEYWORDS (directive role \
+                 `.{tok}` dominates over source-line inline modifier)"
+            );
+            assert!(
+                !SPICE_KEYWORDS3.split_whitespace().any(|t| t == tok),
+                "`{tok}` must NOT be in SPICE_KEYWORDS3 — first-match- \
+                 wins in class 0 already picks it up; class-3 duplicate \
+                 would be dead code"
+            );
+        }
+
+        // Invariant 19: no duplicate tokens.
+        for (list, name) in [
+            (SPICE_KEYWORDS, "KEYWORDS"),
+            (SPICE_KEYWORDS2, "KEYWORDS2"),
+            (SPICE_KEYWORDS3, "KEYWORDS3"),
+        ] {
+            let total = list.split_whitespace().count();
+            let unique = list.split_whitespace().collect::<HashSet<_>>().len();
+            assert_eq!(
+                total,
+                unique,
+                "SPICE_{name} contains {} duplicate token(s)",
+                total - unique
+            );
+        }
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -39998,7 +40505,8 @@ mod lang_theme_tests {
     /// `NNCrontab` row landed. `L_OSCRIPT` was removed when the
     /// `OScript` row landed. `L_REBOL` was removed when the REBOL
     /// row landed. `L_REGISTRY` was removed when the Registry row
-    /// landed in this commit.
+    /// landed. `L_SPICE` was removed when the Spice row landed in
+    /// this commit.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");

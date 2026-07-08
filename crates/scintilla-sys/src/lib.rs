@@ -2667,6 +2667,116 @@ pub const SCE_REG_STRING_GUID: usize = 10;
 pub const SCE_REG_PARAMETER: usize = 11;
 pub const SCE_REG_OPERATOR: usize = 12;
 
+// LexSpice style indices. 9 contiguous slots (0..=8) for SPICE
+// (Simulation Program with Integrated Circuit Emphasis) circuit
+// files (extensions `.sp` / `.spice`). Constants mirror
+// `SciLexer.h:1335-1343` verbatim. Dispatches SCLEX_SPICE
+// (= 78, per `SciLexer.h:94`) via
+// `vendor/lexilla/lexers/LexSpice.cxx:49`.
+//
+// **Three-class wordlist descriptor.** `spiceWordListDesc[]` at
+// `LexSpice.cxx:42-46` declares three named slots: `"Keywords"`
+// (SPICE simulator directive stems), `"Keywords2"` (expression
+// functions), `"Keywords3"` (model types / source waveforms /
+// sweep / options). All three extracted from `keywordlists[]`
+// at `:143-145` inside `ColouriseDocument`, then passed as
+// separate `WordList` refs into the `ColouriseWord` call at
+// `:173`.
+//
+// **First-match-wins cascade** at `:113-130` probes class 0 → 1
+// → 2 in FORWARD order (unlike REBOL's reverse cascade). Higher-
+// class duplicates silently masked by lower-class siblings —
+// cross-class disjointness invariant test enforces strict
+// non-overlap.
+//
+// **Case-INsensitive.** `LexSpice.cxx:110` lowercases every
+// collected byte before wordlist lookup (`word +=
+// static_cast<char>(tolower(sc.ch));`). SPICE source may write
+// `.TRAN`/`.tran`/`.Tran` interchangeably; wordlist entries must
+// be lowercase.
+//
+// **Dot-prefix stripping.** `IsDelimiterCharacter` at `:179-201`
+// includes `.` — so `.tran` parses as `SCE_SPICE_DELIMITER` +
+// `SCE_SPICE_KEYWORD` (bare stem `tran`), not one keyword token
+// with a literal dot. Wordlists hold the dotless stems.
+//
+// **Comment convention.** Two entry paths at `:160`:
+//   - Line-start `*` — traditional Berkeley SPICE line-comment
+//     (any line starting with `*` in column 0).
+//   - Mid-line `*~` — SciTE / LTspice extended in-line comment
+//     starter.
+// Both consume to end-of-line at `:64-69`.
+//
+// **Line-state carry.** `apostropheStartsAttribute` at `:148,
+// :155` is persisted in `styler.SetLineState(lineCurrent, ...)`
+// so incremental re-lex from mid-file preserves the flag that
+// gates whether an apostrophe opens an attribute vs is a bare
+// tick delimiter. Wordlist hits toggle this except for the
+// literal `all` token (special-cased at `:115-117, :121-123,
+// :127-129`).
+//
+// **SCE_SPICE_VALUE (7) is a DEAD STATE.** Verified by
+// exhaustive grep of `LexSpice.cxx`: the paint loop has ZERO
+// call sites that emit `SCE_SPICE_VALUE` (neither `SetState`,
+// `ChangeState`, nor `ForwardSetState`). The slot is reserved
+// in `SciLexer.h` but never entered at runtime. Framework
+// convention: leave unmapped since no bytes ever paint into it;
+// documented so a future Lexilla update wiring the slot won't
+// surprise a maintainer.
+//
+// **SCE_SPICE_IDENTIFIER (1) is a transient collect state**
+// entered at `:107` while `ColouriseWord` gathers bytes until
+// hitting a separator / delimiter / line-end. If any of the
+// three wordlist probes match at `:113-130`, `ChangeState`
+// retroactively repaints the whole span to the matched
+// `SCE_SPICE_KEYWORD*` slot. If none match, the span stays
+// as `SCE_SPICE_IDENTIFIER` (visible-state for unmatched
+// bare identifiers). Framework convention: leave unmapped so
+// unmatched user-defined identifiers (net names, component
+// designators like `Vin1`, subckt-parameter references) paint
+// at `STYLE_DEFAULT`.
+//
+// Style semantics (paint-loop citations reference LexSpice.cxx):
+//
+//   - SCE_SPICE_DEFAULT (0) — whitespace / unclassified.
+//     Entered on every line-start reset at `:157`, on the
+//     unconditional post-cascade fall-through at `:131` (runs
+//     after every `ColouriseWord` return whether or not a
+//     wordlist matched — `ChangeState` at `:114`/`:120`/`:126`
+//     retro-repaints the span but the transition to DEFAULT
+//     for the next byte is unconditional), on every
+//     `ColouriseWhiteSpace` visit at `:101-102`, and on every
+//     `ColouriseDelimiter` / `ColouriseNumber` exit at `:74` /
+//     `:97`. Framework convention: leave unmapped.
+//   - SCE_SPICE_IDENTIFIER (1) — transient collect state; see
+//     above. Framework convention: leave unmapped.
+//   - SCE_SPICE_KEYWORD (2) — class-0 wordlist hit. Emitted
+//     via `ChangeState` at `:114`.
+//   - SCE_SPICE_KEYWORD2 (3) — class-1 wordlist hit. Emitted
+//     via `ChangeState` at `:120`.
+//   - SCE_SPICE_KEYWORD3 (4) — class-2 wordlist hit. Emitted
+//     via `ChangeState` at `:126`.
+//   - SCE_SPICE_NUMBER (5) — numeric literal. Entered at `:80`
+//     on digit-lead or `#`-lead (`:169`), exits at `:97` after
+//     exponent-with-sign handling at `:88-96`.
+//   - SCE_SPICE_DELIMITER (6) — single-char span for one of
+//     `& ' ( ) * + , - . / : ; < = > |` per
+//     `IsDelimiterCharacter` at `:179-201`. Entered at `:73`,
+//     exits to DEFAULT at `:74`.
+//   - SCE_SPICE_VALUE (7) — DEAD STATE, never emitted. See
+//     above.
+//   - SCE_SPICE_COMMENTLINE (8) — line-comment span. Entered
+//     at `:65`, consumes to EOL at `:66-68`.
+pub const SCE_SPICE_DEFAULT: usize = 0;
+pub const SCE_SPICE_IDENTIFIER: usize = 1;
+pub const SCE_SPICE_KEYWORD: usize = 2;
+pub const SCE_SPICE_KEYWORD2: usize = 3;
+pub const SCE_SPICE_KEYWORD3: usize = 4;
+pub const SCE_SPICE_NUMBER: usize = 5;
+pub const SCE_SPICE_DELIMITER: usize = 6;
+pub const SCE_SPICE_VALUE: usize = 7;
+pub const SCE_SPICE_COMMENTLINE: usize = 8;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

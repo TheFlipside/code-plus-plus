@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 67 / 🟡 21 / ⚫ 1.
+Total: 89 rows. ✅ 68 / 🟡 20 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1919,7 +1919,7 @@ further shim work needed.
 | Scheme | 31 | `lisp` | ✅ | ✅ | ✅ |
 | Shell | 26 | `bash` | ✅ | ✅ | ✅ |
 | Smalltalk | 37 | `smalltalk` | ✅ | ✅ | ✅ |
-| Spice | 82 | `spice` | ⚫ | ⚫ | 🟡 |
+| Spice | 82 | `spice` | ✅ | ✅ | ✅ |
 | SQL | 17 | `sql` | ✅ | ✅ | ✅ |
 | Swift | 64 | `cpp` | ⚫ | ⚫ | 🟡 |
 | TCL | 29 | `tcl` | ✅ | ✅ | ✅ |
@@ -7313,6 +7313,119 @@ consistent GUID highlighting), and
 **directive-pair pin** (DELETEDKEY +
 PARAMETER both route to Preprocessor
 as out-of-band-marker semantics).
+
+**Spice (2026-07-08):** wires
+`SCLEX_SPICE` (= 78, per
+`SciLexer.h:94`) for SPICE (Simulation
+Program with Integrated Circuit
+Emphasis) circuit netlist files
+(extensions `.sp` / `.spice`).
+Three-class wordlist descriptor per
+`LexSpice.cxx:42-46`
+(`Keywords`/`Keywords2`/`Keywords3`)
+covering **simulator directive stems**
+(class 0, 43 tokens), **expression
+functions** (class 1, 44 tokens), and
+**model / waveform / sweep / options**
+(class 2, 31 tokens) — 118 total.
+
+**Case-INsensitive** cascade
+(`LexSpice.cxx:110` lowercases every
+byte before wordlist probe), and
+**dot-prefix stripping**
+(`IsDelimiterCharacter` at `:179-201`
+includes `.`, so `.tran` parses as
+DELIMITER + KEYWORD with the bare stem
+`tran`; wordlist entries hold the
+dotless stems).
+
+**Forward first-match-wins cascade** at
+`:113-130` probes class 0 → 1 → 2 in
+forward order (unlike REBOL's reverse
+cascade). Cross-class disjointness is
+LOAD-BEARING — invariant 6 enforces
+strict non-overlap. Real ambiguity
+cases resolved by canonical-class-only
+placement: `if` → class 1 (function
+`if(cond, a, b)` inside `{...}`
+expressions dominates over `.if`
+conditional-compilation directive);
+`temp` → class 0 (directive `.temp`
+dominates; long spelling `temper` is
+in class 1); `sin` / `exp` → class 1
+(math-function role dominates over
+independent-source waveform
+specifier); `ac` / `dc` → class 0
+(analysis directives `.ac` / `.dc`
+dominate over source-line inline
+modifier).
+
+**Six-mapping style routing** — 9
+defined SCE_SPICE_* slots minus 3
+unmapped: DEFAULT (framework
+convention), IDENTIFIER (transient
+collect state — visible for unmatched
+bare identifiers, falls through to
+STYLE_DEFAULT to match
+SCE_C_IDENTIFIER convention), and
+**VALUE (7) is a DEAD STATE**
+(verified: zero call sites in
+`LexSpice.cxx` emit the slot — no
+`SetState`, `ChangeState`, or
+`ForwardSetState` references; reserved
+in `SciLexer.h` but never entered at
+runtime). Mapped: KEYWORD → Keyword
+(bold); KEYWORD2 → Keyword2; KEYWORD3
+→ Preprocessor; NUMBER → Number;
+DELIMITER → Operator (includes the
+`.` prefix of directives); COMMENTLINE
+→ Comment (italic).
+
+**Comment convention** — two entry
+paths per `:160`: line-start `*`
+(traditional Berkeley SPICE) or
+`*~` (SciTE / LTspice extended
+in-line comment starter). Both
+consume to EOL.
+
+Structural test coverage: 19
+invariants — deep-value identity pin,
+6-mapping style count (9 slots minus
+3 unmapped), three populated classes
+in canonical descriptor order,
+all-lowercase-alnum alphabet
+enforcement, **pairwise cross-class
+disjointness across all 3 pairs**
+(load-bearing for forward
+first-match-wins), style-routing pins
+for all 6 mapped constants, three
+unmapped slots (DEFAULT, IDENTIFIER,
+VALUE) confirmed absent with
+drift-pin assertions, italic set == 1
+(COMMENTLINE only), bold set == 1
+(KEYWORD only — primary structural
+anchor), cross-language non-reuse
+(C++ / REBOL / OScript / Registry),
+`L_SPICE` `LangEntry`'s `lexer:
+Some("spice")` + both `sp` and
+`spice` extensions, canonical
+KEYWORD anchors
+(`tran`/`dc`/`model`/`subckt`/`end`),
+canonical KEYWORD2 anchors
+(`sin`/`cos`/`exp`/`if`), canonical
+KEYWORD3 anchors
+(`nmos`/`pnp`/`pulse`/`dec`),
+**dot-stripped-stems-only pin**
+(LOAD-BEARING — `.<stem>` entries
+would never match), highest-defined
+`SCE_SPICE_*` pin (`SCE_SPICE_COMMENTLINE`
+(8) as top slot), **ambiguous-token
+placement pins** (`if` → class 1,
+`temp` → class 0, `temper` → class 1,
+`sin`/`exp` → class 1, `ac`/`dc` →
+class 0 with affirmative absence
+pins from the sibling class), and
+no-duplicate defence-in-depth check.
 
 ## Notes
 

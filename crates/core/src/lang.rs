@@ -12110,6 +12110,209 @@ pub const REBOL_WORD5: &str = concat!(
     "alter detab entab free ",
 );
 
+/// SPICE (Simulation Program with Integrated Circuit Emphasis)
+/// class 0 vocabulary — **simulator directive stems**. Consumed
+/// by [`SCE_SPICE_KEYWORD`](../scintilla_sys/constant.SCE_SPICE_KEYWORD.html)
+/// via `LexSpice.cxx:113-118`.
+///
+/// **Dot-prefix stripped by the paint loop.** SPICE directives
+/// are written `.tran` / `.model` / etc. in source, but
+/// `LexSpice.cxx:179-201`'s `IsDelimiterCharacter` includes
+/// `.` — so the dispatcher at `:166-167` emits `.` as
+/// [`SCE_SPICE_DELIMITER`](../scintilla_sys/constant.SCE_SPICE_DELIMITER.html),
+/// then the following identifier
+/// enters `ColouriseWord` separately. The wordlist probe sees
+/// the DOTLESS stem (`tran`, `model`, …). Entries with a
+/// literal `.` prefix would never match. This class holds the
+/// stems.
+///
+/// **Case-insensitivity contract.** `LexSpice.cxx:110` lowercases
+/// every collected byte before the wordlist probe (`word +=
+/// static_cast<char>(tolower(sc.ch));`) — SPICE source may write
+/// `.TRAN` / `.tran` / `.Tran` interchangeably, but wordlist
+/// entries must be lowercase. Case-INsensitive lexer.
+///
+/// **First-match-wins cascade** at `LexSpice.cxx:113-130` probes
+/// class 0 → 1 → 2 in forward order. Cross-class duplicates
+/// silently mask their sibling in higher classes — invariant
+/// test enforces strict disjointness across all three pairs.
+///
+/// Directive stems group into six functional families:
+///
+///   - **Analysis (11)**: `ac`, `dc`, `op`, `tran`, `tf`,
+///     `noise`, `disto`, `sens`, `pz`, `fourier`, `four`.
+///     The core simulator run modes — small-signal AC sweep,
+///     DC sweep, operating-point calc, transient time-domain,
+///     transfer-function, noise, distortion, sensitivity,
+///     pole-zero, Fourier-transform (both spellings ship).
+///     `ac` / `dc` also appear as inline source-line modifiers
+///     (`Vin 1 0 dc 5v ac 1`); first-match-wins in class 0
+///     paints them as Keyword everywhere — acceptable
+///     trade-off since the primary user-scan target is
+///     `.ac`/`.dc` directives.
+///   - **Model / subcircuit / include (9)**: `model`,
+///     `subckt`, `ends`, `include`, `inc`, `lib`, `options`,
+///     `option`, `param`. Structural declarations — device
+///     model definitions, subcircuit templates and their
+///     `ends` terminator, file inclusion (long/short forms),
+///     library references, simulator-option overrides,
+///     symbolic parameters.
+///   - **Control (10)**: `end`, `print`, `plot`, `probe`,
+///     `save`, `ic`, `nodeset`, `temp`, `width`, `func`.
+///     Output requests, initial conditions, node presets,
+///     temperature setting, print-column width, user-defined
+///     functions.
+///   - **Sweep / measurement (5)**: `step`, `mc`, `meas`,
+///     `measure`, `global`. Parameter-sweep, Monte-Carlo,
+///     measurement (both spellings), global-node declaration.
+///   - **Conditional (5)**: `else`, `elseif`, `endif`,
+///     `endl`, `backanno`. Conditional-compilation
+///     directive-only tokens (`LTspice` / HSPICE extension),
+///     library-terminator for `.lib name ... .endl name`
+///     blocks, and `PSpice` back-annotation. `if` is placed in
+///     [`SPICE_KEYWORDS2`] instead so it colours correctly
+///     inside `{if(cond, a, b)}` behavioural expressions —
+///     the ternary function is more widely used than the
+///     conditional-compilation `.if` directive, and
+///     first-match-wins would otherwise starve the function
+///     tokenisation.
+///   - **Miscellaneous (3)**: `connect`, `csparam`,
+///     `loadbias`. Node-connect, circuit-scope parameter,
+///     saved-bias-point restore.
+///
+/// Total: 11 + 9 + 10 + 5 + 5 + 3 = 43 tokens.
+pub const SPICE_KEYWORDS: &str = concat!(
+    // Analysis directives.
+    "ac dc op tran tf noise disto sens pz fourier four ",
+    // Model / subcircuit / include.
+    "model subckt ends include inc lib options option param ",
+    // Control.
+    "end print plot probe save ic nodeset temp width func ",
+    // Sweep / measurement.
+    "step mc meas measure global ",
+    // Conditional.
+    "else elseif endif endl backanno ",
+    // Miscellaneous.
+    "connect csparam loadbias ",
+);
+
+/// SPICE class 1 vocabulary — **expression functions** used
+/// inside `{...}` behavioural expressions on B-source /
+/// E-source / G-source / `.param` right-hand-sides. Consumed by
+/// [`SCE_SPICE_KEYWORD2`](../scintilla_sys/constant.SCE_SPICE_KEYWORD2.html)
+/// via `LexSpice.cxx:119-124`.
+///
+/// Case-insensitive per [`SPICE_KEYWORDS`]'s contract. Tokens
+/// span the standard mathematical / control-flow / time-domain
+/// / AC-analysis / random function families shared across
+/// ngspice / `LTspice` / HSPICE / `PSpice`:
+///
+///   - **Trigonometric (8)**: `sin`, `cos`, `tan`, `asin`,
+///     `acos`, `atan`, `atan2`, `hypot`. `sin` doubles as an
+///     independent-source waveform specifier in `Vin 1 0
+///     sin(0 1 1k)`; retained here because the mathematical
+///     use inside behavioural `{sin(2*pi*f*t)}` expressions
+///     is more universally applicable — first-match-wins
+///     leaves source-line `sin` painted as Keyword2 which
+///     still reads correctly.
+///   - **Hyperbolic (3)**: `sinh`, `cosh`, `tanh`.
+///   - **Exp / log (5)**: `exp`, `ln`, `log`, `log10`, `sqrt`.
+///     `exp` doubles as source-waveform specifier — same
+///     precedence choice as `sin`.
+///   - **Numeric / utility (10)**: `abs`, `sgn`, `min`, `max`,
+///     `floor`, `ceil`, `round`, `int`, `pwr`, `pow`.
+///   - **Control-flow (1)**: `if` (ternary — `if(cond, a, b)`
+///     inside expressions; also `.if` directive but function
+///     use is more common).
+///   - **Signal-shaping (4)**: `u` (step), `stp` (step),
+///     `uramp` (unit ramp), `delay`.
+///   - **Calculus (2)**: `ddt` (time derivative), `sdt` (time
+///     integral).
+///   - **Time / temperature (2)**: `time`, `temper` (long
+///     temperature spelling). Short spelling `temp` lives in
+///     [`SPICE_KEYWORDS`] as the `.temp` directive stem —
+///     directive role dominates.
+///   - **AC magnitude / phase (5)**: `db`, `mag`, `ph`, `re`,
+///     `im`. Complex-number decomposition used inside AC-
+///     analysis measurement expressions.
+///   - **Random (4)**: `rand`, `gauss`, `urand`, `ugauss`.
+///     Monte-Carlo random-number generators.
+///
+/// Total: 8 + 3 + 5 + 10 + 1 + 4 + 2 + 2 + 5 + 4 = 44 tokens.
+pub const SPICE_KEYWORDS2: &str = concat!(
+    // Trigonometric.
+    "sin cos tan asin acos atan atan2 hypot ",
+    // Hyperbolic.
+    "sinh cosh tanh ",
+    // Exp / log / sqrt.
+    "exp ln log log10 sqrt ",
+    // Numeric / utility.
+    "abs sgn min max floor ceil round int pwr pow ",
+    // Control-flow.
+    "if ",
+    // Signal-shaping.
+    "u stp uramp delay ",
+    // Calculus.
+    "ddt sdt ",
+    // Time / temperature.
+    "time temper ",
+    // AC magnitude / phase.
+    "db mag ph re im ",
+    // Random.
+    "rand gauss urand ugauss ",
+);
+
+/// SPICE class 2 vocabulary — **model-type tokens, source
+/// waveform types, and sweep specifiers**. Consumed by
+/// [`SCE_SPICE_KEYWORD3`](../scintilla_sys/constant.SCE_SPICE_KEYWORD3.html)
+/// via `LexSpice.cxx:125-130`.
+///
+/// Case-insensitive per [`SPICE_KEYWORDS`]'s contract.
+/// Cross-class disjointness is strictly enforced by the
+/// invariant test — tokens that would collide with
+/// [`SPICE_KEYWORDS`] or [`SPICE_KEYWORDS2`] are kept in the
+/// higher-priority class per SPICE user-scan value:
+///
+///   - `ac` / `dc` live in [`SPICE_KEYWORDS`] (directive role
+///     dominates over source-line modifier).
+///   - `sin` / `exp` live in [`SPICE_KEYWORDS2`] (function
+///     role dominates over source-waveform specifier).
+///
+/// These are the enumerable non-directive vocabulary that
+/// appear as arguments to `.model`, source declarations, and
+/// `.step` / `.dc` / `.ac` sweep clauses:
+///
+///   - **Device-model types (12)**: `nmos`, `pmos`, `njf`,
+///     `pjf`, `nmf`, `pmf` (MOSFETs and JFETs), `npn`, `pnp`
+///     (bipolar), `d` (diode), `r` (resistor model), `c`
+///     (capacitor model), `l` (inductor model). Two-character
+///     `sw`/`vsw` and single-letter transmission-line `t` /
+///     lossless-tline `o` intentionally omitted — reserved
+///     for future ngspice-extension pass.
+///   - **Time-domain source waveforms (4)**: `pulse`, `sffm`
+///     (single-frequency FM), `pwl` (piecewise linear), `am`.
+///   - **Distortion-analysis input (1)**: `distof1`.
+///   - **Sweep specifiers (4)**: `dec`, `oct`, `lin`, `list`.
+///     Consumed by `.ac`/`.dc`/`.step` after the source name.
+///   - **Simulator options (10)**: `gmin`, `reltol`, `abstol`,
+///     `vntol`, `chgtol`, `trtol`, `tnom`, `method`, `itl1`,
+///     `itl4`. Numerical-tolerance and Newton-iteration
+///     controls set via `.options`.
+///
+/// Total: 12 + 4 + 1 + 4 + 10 = 31 tokens.
+pub const SPICE_KEYWORDS3: &str = concat!(
+    // Device-model types.
+    "nmos pmos njf pjf nmf pmf npn pnp d r c l ",
+    // Time-domain source waveforms (sin / exp live in class 1).
+    "pulse sffm pwl am ",
+    // Distortion-analysis input.
+    "distof1 ",
+    // Sweep specifiers.
+    "dec oct lin list ",
+    // Simulator options.
+    "gmin reltol abstol vntol chgtol trtol tnom method itl1 itl4 ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
