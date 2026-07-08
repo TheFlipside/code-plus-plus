@@ -393,20 +393,21 @@ use codepp_scintilla_sys::{
     SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
     SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
     SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
-    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
-    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE,
-    SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED,
-    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
-    SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE,
-    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
-    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
-    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS,
-    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY,
-    SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS,
-    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION,
-    SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTARGETEND,
+    SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE,
+    SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN,
+    SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
+    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
+    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
+    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED,
+    SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER,
+    SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
+    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
+    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
+    SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
+    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
+    SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT,
+    STYLE_INDENTGUIDE, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
@@ -1325,6 +1326,12 @@ impl UiPlatform for Win32Ui {
         // their own creation site, so the call would be a no-op.
         if freshly_created {
             enable_change_history(&self.editor);
+            // Tab width is per-document Scintilla state (mutates
+            // `pdoc->tabInChars`), so every fresh doc needs it
+            // re-applied — otherwise the doc starts with
+            // Scintilla's built-in default of 8, mis-drawing
+            // indent guides for 4-space-indented code.
+            apply_tab_width(&self.editor);
         }
         // Always refresh the visible window's line numbers on
         // attach: a brand-new doc needs line 0 seeded; an existing
@@ -1608,13 +1615,14 @@ impl UiPlatform for Win32Ui {
             .style_set_underline(STYLE_DEFAULT, entry.underline);
 
         // Propagate STYLE_DEFAULT to every other style index, then
-        // re-apply the line-number margin and brace-highlight styles
-        // (all sit in the 32-39 predefined-style range that
-        // `SCI_STYLECLEARALL` resets to `STYLE_DEFAULT`, losing their
-        // per-slot colour pairs).
+        // re-apply the line-number margin, brace-highlight styles,
+        // and indent-guide style (all sit in the 32-39 predefined-
+        // style range that `SCI_STYLECLEARALL` resets to
+        // `STYLE_DEFAULT`, losing their per-slot colour pairs).
         self.editor.style_clear_all();
         apply_line_number_margin(&self.editor);
         apply_brace_styles(&self.editor);
+        apply_indent_guide_style(&self.editor);
 
         // Transparency. WS_EX_LAYERED is required for
         // `SetLayeredWindowAttributes` to take effect; when
@@ -2892,6 +2900,34 @@ const FG_MACRO: u32 = 0x00_80_30_80; // violet
 const BG_LINE_NUMBER: u32 = 0x00_E4_E4_E4; // ~RGB(228,228,228) near-white
 const FG_LINE_NUMBER: u32 = 0x00_70_70_70; // ~RGB(112,112,112) medium grey
 
+/// Foreground colour of Scintilla's indent-guide dotted lines
+/// (`STYLE_INDENTGUIDE`, index 37). N++ uses `#BEBEBE`
+/// (RGB(190,190,190), palindromic BBGGRR) — a light-mid grey that
+/// reads clearly on the white editor body without competing with
+/// text. Must be re-applied in [`apply_default_styles`] after
+/// every `SCI_STYLECLEARALL` — same re-application discipline as
+/// [`STYLE_LINENUMBER`] / [`STYLE_BRACELIGHT`] / [`STYLE_BRACEBAD`],
+/// all of which live in the 32-39 predefined range Scintilla
+/// resets on clear.
+const FG_INDENT_GUIDE: u32 = 0x00_BE_BE_BE;
+
+/// Visible width of a TAB character in units of one space, and
+/// (via Scintilla's `SCI_SETINDENT = 0` default fall-through) the
+/// effective indent-level width the indent-guide algorithm uses.
+/// 4 matches the modern language convention (Rust / Python / TS
+/// / JSON / YAML — every wired lexer with a canonical style guide
+/// prescribes 4 spaces). Scintilla's own default is 8, which
+/// mis-draws guides on 4-space-indented code: a function body at
+/// column 4 sits before the first guide column at width=8, so
+/// no guide appears at level 1. **Per-document Scintilla state**
+/// (mutates `pdoc->tabInChars` per `vendor/scintilla/src/
+/// Editor.cxx:7011-7015`), so [`apply_tab_width`] must fire at
+/// every `SCI_CREATEDOCUMENT` site — same discipline as
+/// [`enable_change_history`]. Per-language overrides (e.g.
+/// Makefile → 8) are future work; when they land, the override
+/// must repeat at every doc creation for the same reason.
+const TAB_WIDTH_DEFAULT: usize = 4;
+
 /// Background tint Scintilla paints behind the caret's line so the
 /// user always sees which line is active. `0x00FAE8D6` is BGR for
 /// RGB(214, 232, 250) — a soft pale blue that's clearly distinct
@@ -2941,10 +2977,12 @@ fn apply_default_styles(editor: &EditorHandle) {
     // of the 32–39 predefined styles), so the line-number margin's
     // colours and width — which are font-metric-dependent — must be
     // re-applied after every clear. Same reasoning for the brace-
-    // highlight pair (STYLE_BRACELIGHT = 34, STYLE_BRACEBAD = 35) —
-    // both live inside the 32-39 range `SCI_STYLECLEARALL` resets.
+    // highlight pair (STYLE_BRACELIGHT = 34, STYLE_BRACEBAD = 35)
+    // and the indent-guide colour (STYLE_INDENTGUIDE = 37) — all
+    // live inside the 32-39 range `SCI_STYLECLEARALL` resets.
     apply_line_number_margin(editor);
     apply_brace_styles(editor);
+    apply_indent_guide_style(editor);
 }
 
 /// Configure the line-number margin: type, width, and the
@@ -3125,6 +3163,62 @@ fn apply_brace_styles(editor: &EditorHandle) {
     editor.style_set_fore(STYLE_BRACEBAD, FG_BRACE_BAD);
     editor.style_set_back(STYLE_BRACEBAD, BG_BRACE_LIGHT);
     editor.style_set_bold(STYLE_BRACEBAD, false);
+}
+
+/// Configure the `STYLE_INDENTGUIDE` (37) foreground colour for
+/// Scintilla's vertical dotted indent guides. Idempotent — safe
+/// to call after any `SCI_STYLECLEARALL`. Same re-application
+/// pattern as [`apply_line_number_margin`] and
+/// [`apply_brace_styles`]: `STYLE_INDENTGUIDE` sits in the 32-39
+/// predefined range that `SCI_STYLECLEARALL` resets to
+/// `STYLE_DEFAULT`, so without re-application the guides would
+/// take whatever the current per-language `STYLE_DEFAULT`
+/// foreground is (often matching the text colour, which reads
+/// as invisible-or-wrong depending on the theme). Called at
+/// editor creation in [`Win32Ui::run`] AND from the tail of
+/// [`apply_default_styles`] so every per-language re-style
+/// preserves the guide's grey. The `SCI_SETINDENTATIONGUIDES`
+/// mode itself is view state (not a style-index), so it doesn't
+/// need re-application here — its toggle is handled entirely by
+/// the toolbar's `ID_VIEW_SHOW_INDENT_GUIDE` handler.
+fn apply_indent_guide_style(editor: &EditorHandle) {
+    editor.style_set_fore(STYLE_INDENTGUIDE, FG_INDENT_GUIDE);
+}
+
+/// Set the visible TAB-character width to [`TAB_WIDTH_DEFAULT`]
+/// (4 columns) on the currently-bound document. Also implicitly
+/// sets the effective indent-level width the indent-guide
+/// algorithm uses, because Scintilla's per-document
+/// `SCI_SETINDENT` defaults to 0 (which means "use tab width").
+///
+/// **Per-document Scintilla state.** `SCI_SETTABWIDTH` mutates
+/// `pdoc->tabInChars` on the currently-bound document
+/// (`vendor/scintilla/src/Editor.cxx:7011-7015`) and does NOT
+/// survive `SCI_SETDOCPOINTER` onto a different document.
+/// Every fresh document minted via `SCI_CREATEDOCUMENT` starts
+/// with Scintilla's built-in `tabInChars = 8`, so this must be
+/// called immediately after each such creation — same
+/// discipline as [`enable_change_history`]. Currently called at
+/// four sites: editor creation in [`Win32Ui::run`], and each of
+/// the three real-doc `SCI_CREATEDOCUMENT` sites in
+/// [`Win32Ui::activate_tab`], the post-close-tab lazy-materialise
+/// path, and the `handle_tab_selchange` lazy-populate path. The
+/// short-lived placeholder doc in the tab-close path
+/// deliberately skips this call — the doc is bound for one
+/// paint cycle and immediately released, and no indent-guide
+/// paint on a blank buffer would be observable.
+///
+/// Without this call, Scintilla defaults to 8 and the
+/// indent-guide algorithm draws guides at multiples of 8 —
+/// which mis-aligns entirely with the 4-space convention used
+/// by every Lexilla-linked lexer with a canonical style guide
+/// (Rust / Python / TS / JSON / YAML): a function body at
+/// column 4 sits *before* the first guide column (8), so no
+/// guide appears at indent level 1, only at level 2. Per-
+/// language overrides (e.g. Makefile → 8) are future work; when
+/// they land, the same per-doc-repeat discipline applies.
+fn apply_tab_width(editor: &EditorHandle) {
+    editor.send(SCI_SETTABWIDTH, TAB_WIDTH_DEFAULT, 0);
 }
 
 /// Configure the fold margin's view state: allocate margin 2 as a
@@ -12470,10 +12564,13 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                     .send(SCI_CREATEDOCUMENT, 0, SC_DOCUMENTOPTION_DEFAULT);
                 state.editor.send(SCI_SETDOCPOINTER, 0, new_doc);
                 // Per-doc state — every fresh document needs
-                // change-history enabled; the view-side margin
+                // change-history enabled AND tab width re-applied
+                // (`SCI_SETTABWIDTH` is per-document; see the
+                // `apply_tab_width` doc). The view-side margin
                 // already exists from `apply_change_history_margin`
                 // at editor creation.
                 enable_change_history(&state.editor);
+                apply_tab_width(&state.editor);
                 let mut bytes = Vec::with_capacity(text.len() + 1);
                 bytes.extend_from_slice(text.as_bytes());
                 bytes.push(0);
@@ -12616,13 +12713,15 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
             .send(SCI_CREATEDOCUMENT, 0, SC_DOCUMENTOPTION_DEFAULT);
         state.editor.send(SCI_SETDOCPOINTER, 0, doc);
         // Per-doc state — every fresh document needs change-history
-        // enabled. Margin configuration was applied once at editor
-        // creation and lives on the view, so it carries through
-        // every doc swap; only the per-doc enable repeats here.
-        // Critical to call BEFORE `SCI_SETTEXT` so the initial
-        // text-insert is treated as the document's starting state
-        // (not as edits to track).
+        // enabled AND tab width re-applied (`SCI_SETTABWIDTH` is
+        // per-document; see the `apply_tab_width` doc). Margin
+        // configuration was applied once at editor creation and
+        // lives on the view, so it carries through every doc swap.
+        // Critical to call `enable_change_history` BEFORE
+        // `SCI_SETTEXT` so the initial text-insert is treated as
+        // the document's starting state (not as edits to track).
         enable_change_history(&state.editor);
+        apply_tab_width(&state.editor);
         let mut bytes = Vec::with_capacity(text.len() + 1);
         bytes.extend_from_slice(text.as_bytes());
         bytes.push(0);
@@ -21853,6 +21952,24 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // mate (or the caret's bracket alone when unmatched) as the
         // cursor moves.
         apply_brace_styles(&editor);
+
+        // Indent-guide visual: initialise STYLE_INDENTGUIDE (37) with
+        // N++'s light-grey (`#BEBEBE`) so the vertical dotted guide
+        // lines are readable when the user toggles them on via the
+        // toolbar. STYLE_INDENTGUIDE lives in the 32-39 predefined
+        // range that `SCI_STYLECLEARALL` resets, so this must also
+        // fire from the tail of `apply_default_styles` — same
+        // re-application pattern as line-number and brace styles.
+        apply_indent_guide_style(&editor);
+
+        // Tab-width + implicit indent-level width for the indent-
+        // guide algorithm on the initial implicit document. Per-
+        // document Scintilla state (see `apply_tab_width` doc), so
+        // subsequent `SCI_CREATEDOCUMENT` sites in `activate_tab`
+        // and elsewhere each repeat this call. Defaults to 4 to
+        // match modern-language convention; without it Scintilla
+        // uses 8, which mis-draws guides on 4-space-indented code.
+        apply_tab_width(&editor);
 
         // Fold margin GEOMETRY: allocate margin index 2, install the
         // box-style markers, set colours, enable automatic click-

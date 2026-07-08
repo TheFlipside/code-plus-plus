@@ -115,6 +115,37 @@ pub const SC_IV_NONE: usize = 0;
 /// lines (the most useful general-purpose setting; matches what
 /// Notepad++ enables when the user toggles "Show indent guide").
 pub const SC_IV_LOOKBOTH: usize = 3;
+/// `SCI_SETTABWIDTH(int tabWidth)` — set the visible width of a
+/// TAB character in units of one space, and (when
+/// [`SCI_SETINDENT`] is left at its default of 0) also the
+/// effective indent-level width used by the indent-guide
+/// algorithm. Scintilla defaults to 8, which mis-draws guides
+/// for the modern 4-space convention (Rust / Python / TS / JSON
+/// / YAML) — a 4-space-indented function body sits at column 4,
+/// but the first guide column with width=8 is 8, so no guide
+/// appears at level 1. Verified against
+/// `vendor/scintilla/include/Scintilla.h:100` (2036) and
+/// `ScintillaDoc.html` §"Tabs and Indentation Guides."
+pub const SCI_SETTABWIDTH: u32 = 2036;
+/// `SCI_SETINDENT(int indentSize)` — set the number of spaces
+/// used for one level of indentation. A value of 0 (Scintilla
+/// default) means "use tab width" per
+/// `ScintillaDoc.html` §"Tabs and Indentation Guides", which is
+/// what Code++ relies on so a single [`SCI_SETTABWIDTH`] call
+/// covers both semantics. Included in the FFI surface for
+/// completeness and for future per-language overrides. Verified
+/// against `vendor/scintilla/include/Scintilla.h:478` (2122).
+pub const SCI_SETINDENT: u32 = 2122;
+/// `STYLE_INDENTGUIDE = 37` — the framework-reserved style slot
+/// controlling the foreground colour of the vertical dotted
+/// lines the indent-guide algorithm draws. Lives inside the
+/// 32..=39 predefined range that `SCI_STYLECLEARALL` resets to
+/// `STYLE_DEFAULT`, so the per-language theme wiring in
+/// `apply_default_styles` must re-apply it after every clear —
+/// same discipline as `STYLE_LINENUMBER` (33) and
+/// `STYLE_BRACELIGHT` / `STYLE_BRACEBAD` (34/35). Verified
+/// against `vendor/scintilla/include/Scintilla.h:218`.
+pub const STYLE_INDENTGUIDE: usize = 37;
 pub const SCI_ZOOMIN: u32 = 2333;
 pub const SCI_ZOOMOUT: u32 = 2334;
 pub const SCI_SETZOOM: u32 = 2373;
