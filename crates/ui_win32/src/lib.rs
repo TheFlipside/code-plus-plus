@@ -127,8 +127,8 @@ use codepp_core::lang::{
     L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM,
     L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS,
     L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
-    L_SPICE, L_SQL, L_SREC, L_TCL, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL,
-    L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+    L_SPICE, L_SQL, L_SREC, L_TCL, L_TEHEX, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG,
+    L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
     MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
     NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
     OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
@@ -4327,6 +4327,99 @@ const IHEX_THEME: LangTheme = LangTheme {
     keywords: &[],
     styles: IHEX_STYLES,
     italic: SREC_ITALIC,
+    bold: SREC_BOLD,
+};
+
+// --- LexHex (Tektronix extended HEX) ---
+// Tektronix extended HEX files (extension `.tek` — note: this
+// is the FILE extension per `L_TEHEX`'s `LangEntry` in
+// `crates/core/src/lang.rs`; `tehex` is only the Lexilla lexer
+// name string, matching `LexerModule lmTEHex(..., "tehex", ...)`
+// registration). A text-based ROM-image record format where
+// each line is `%<length><type><checksum><address><data...>`.
+// Third and final
+// LexHex.cxx-family lexer completing the trio (Srec / IHEX /
+// TEHEX). `L_TEHEX` (id 63) dispatches `SCLEX_TEHEX` (= 119) via
+// `LexerModule lmTEHex(SCLEX_TEHEX, ColouriseTEHexDoc, "tehex",
+// 0, NULL)` at `LexHex.cxx:1048`. Same zero-wordlist contract
+// (5-arg NULL `wordListDesc[]`, `WordList *[]` parameter unnamed
+// + never referenced in `ColouriseTEHexDoc` at `:939-1044`).
+//
+// **Distinctive record-line structure** (per the field-layout
+// matrix at `LexHex.cxx:66-86` — differs from both Srec and IHEX):
+//   - `%` leader (NOT `S` like Srec, NOT `:` like IHEX).
+//   - **length** field (2 hex digits — is BYTECOUNT in the
+//     SCE_HEX_* namespace).
+//   - **type** field (1 hex digit — NOT 2 like IHEX, NOT the
+//     single-digit-after-S like Srec).
+//   - **checksum** BEFORE address (unique to TEHEX — Srec and
+//     IHEX have checksum LAST). This layout choice makes TEHEX
+//     parsers robust against arbitrary-length data fields.
+//   - **address** field (9 hex digits — matches IHEX's 8-digit
+//     linear-address max plus type-digit continuation).
+//   - **data** field (0..241 hex digits — half the size of
+//     Srec/IHEX max because of the fixed 8-digit address).
+//
+// **Style emissions used** (verified by grepping the paint-loop
+// SCE_HEX_* references at `LexHex.cxx:949-1039`):
+//   - RECSTART / BYTECOUNT / BYTECOUNT_WRONG / RECTYPE /
+//     RECTYPE_UNKNOWN / CHECKSUM / CHECKSUM_WRONG / DATAADDRESS /
+//     STARTADDRESS / ADDRESSFIELD_UNKNOWN / DATA_ODD / DATA_EVEN /
+//     GARBAGE / DEFAULT.
+//
+// **Style emissions NOT used** by TEHEX (mapping would be dead
+// code):
+//   - `SCE_HEX_NOADDRESS` — Srec S0-header-style zero-address
+//     flavour has no TEHEX equivalent.
+//   - `SCE_HEX_RECCOUNT` — Srec-only (S5 record-count field).
+//   - `SCE_HEX_EXTENDEDADDRESS` — IHEX-only (record types
+//     0x02 / 0x04).
+//   - `SCE_HEX_DATA_EMPTY` — TEHEX doesn't classify padding
+//     bytes separately; malformed / empty data lines emit
+//     GARBAGE instead.
+//   - `SCE_HEX_DATA_UNKNOWN` — never emitted (paint loop
+//     goes GARBAGE for malformed data).
+//
+// **8 style mappings** — smallest of the three LexHex-family
+// themes (SREC = 11, IHEX = 11, TEHEX = 8) because TEHEX's
+// simpler grammar means fewer classification flavours.
+//
+//   - `SCE_HEX_RECSTART` (1) → Preprocessor bold. Structural
+//     per-line marker (`%` leader).
+//   - `SCE_HEX_RECTYPE` (2) → Keyword bold.
+//   - `SCE_HEX_BYTECOUNT` (4) → Number.
+//   - `SCE_HEX_DATAADDRESS` (7) + `SCE_HEX_STARTADDRESS` (9) →
+//     Number. **Two-flavour address collapse** — smaller than
+//     Srec's four-flavour or IHEX's four-flavour because
+//     TEHEX only distinguishes DATAADDRESS (data records) from
+//     STARTADDRESS (terminator records).
+//   - `SCE_HEX_DATA_ODD` (12) + `SCE_HEX_DATA_EVEN` (13) →
+//     String.
+//   - `SCE_HEX_CHECKSUM` (16) → Lifetime. Same sigil-anchor
+//     structural role as in Srec/IHEX.
+//
+// **Italic set is EMPTY** — TEHEX has no DATA_EMPTY equivalent
+// so there's no comment-family state to italicise. Framework
+// consequence: `TEHEX_ITALIC = &[]`. Bold set matches Srec/IHEX
+// (RECSTART + RECTYPE) — reused verbatim via `SREC_BOLD` aliased
+// pointer.
+const TEHEX_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_HEX_RECSTART, StyleSlot::Preprocessor),
+    (SCE_HEX_RECTYPE, StyleSlot::Keyword),
+    (SCE_HEX_BYTECOUNT, StyleSlot::Number),
+    (SCE_HEX_DATAADDRESS, StyleSlot::Number),
+    (SCE_HEX_STARTADDRESS, StyleSlot::Number),
+    (SCE_HEX_DATA_ODD, StyleSlot::String),
+    (SCE_HEX_DATA_EVEN, StyleSlot::String),
+    (SCE_HEX_CHECKSUM, StyleSlot::Lifetime),
+];
+
+const TEHEX_ITALIC: &[usize] = &[];
+
+const TEHEX_THEME: LangTheme = LangTheme {
+    keywords: &[],
+    styles: TEHEX_STYLES,
+    italic: TEHEX_ITALIC,
     bold: SREC_BOLD,
 };
 
@@ -10708,6 +10801,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&SREC_THEME)
     } else if lang == L_IHEX {
         Some(&IHEX_THEME)
+    } else if lang == L_TEHEX {
+        Some(&TEHEX_THEME)
     } else if lang == L_CSOUND {
         Some(&CSOUND_THEME)
     } else if lang == L_ERLANG {
@@ -25948,9 +26043,9 @@ mod lang_theme_tests {
         SCE_V_COMMENTLINE, SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT, SCE_V_INPUT,
         SCE_V_NUMBER, SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR,
         SCE_V_STRING, SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3,
-        SPICE_BOLD, SPICE_ITALIC, SPICE_STYLES, SREC_BOLD, SREC_ITALIC, SREC_STYLES, TXT2TAGS_BOLD,
-        TXT2TAGS_ITALIC, TXT2TAGS_STYLES, VISUALPROLOG_BOLD, VISUALPROLOG_ITALIC,
-        VISUALPROLOG_STYLES,
+        SPICE_BOLD, SPICE_ITALIC, SPICE_STYLES, SREC_BOLD, SREC_ITALIC, SREC_STYLES, TEHEX_ITALIC,
+        TEHEX_STYLES, TXT2TAGS_BOLD, TXT2TAGS_ITALIC, TXT2TAGS_STYLES, VISUALPROLOG_BOLD,
+        VISUALPROLOG_ITALIC, VISUALPROLOG_STYLES,
     };
     // SCE_VHDL_IDENTIFIER is a scan-intermediate state that isn't
     // referenced in the main-scope theme (VHDL_STYLES deliberately
@@ -25983,7 +26078,7 @@ mod lang_theme_tests {
         L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS,
         L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R,
         L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL,
-        L_SREC, L_TCL, L_TEX, L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL,
+        L_SREC, L_TCL, L_TEHEX, L_TEX, L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL,
         L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
         MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
         NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
@@ -43057,6 +43152,208 @@ mod lang_theme_tests {
             "IHEX_STYLES must NOT equal SREC_STYLES — the RECCOUNT ↔ \
              EXTENDEDADDRESS swap makes them distinct even though \
              both are 11-mapping tables"
+        );
+    }
+
+    /// Tektronix extended HEX (TEHEX) — third and final
+    /// LexHex-family lexer, completing the trio (Srec / IHEX /
+    /// TEHEX). `ColouriseTEHexDoc` at `LexHex.cxx:939-1044` shares
+    /// the same `LexHex.cxx` source, same `SCE_HEX_*` namespace,
+    /// and same zero-wordlist contract as its siblings, but has
+    /// the **simplest grammar** of the three — hence the smallest
+    /// style table (8 mappings vs Srec's 11 vs IHEX's 11). NOT
+    /// included in `wired_languages_have_complete_themes`
+    /// (zero-wordlist contract).
+    ///
+    /// Invariants (11):
+    ///   1. **Deep-value identity pin** — `TEHEX_THEME`'s fields
+    ///      value-equal what the dispatcher returns.
+    ///   2. **Empty `keywords` slice** — LOAD-BEARING for the
+    ///      zero-wordlist contract at `LexHex.cxx:1048`
+    ///      (5-arg `LexerModule` with NULL `wordListDesc[]`).
+    ///   3. **8 style mappings** — smallest of the three
+    ///      LexHex-family themes. Reflects TEHEX's simpler
+    ///      grammar: no NOADDRESS (no S0-header equivalent), no
+    ///      RECCOUNT (Srec-only), no EXTENDEDADDRESS (IHEX-only),
+    ///      no `DATA_EMPTY` (TEHEX doesn't classify padding
+    ///      separately).
+    ///   4. **Style-routing pins** for all 8 mapped constants.
+    ///   5. **11 states unmapped total** (19 SCE_HEX_* − 8
+    ///      mapped): DEFAULT + **5 genuine parse-failure states
+    ///      that TEHEX DOES emit** (RECTYPE_UNKNOWN,
+    ///      BYTECOUNT_WRONG, ADDRESSFIELD_UNKNOWN,
+    ///      CHECKSUM_WRONG, GARBAGE — per framework convention
+    ///      / deferred `StyleSlot::Error` migration) + **5
+    ///      unused-by-TEHEX states** (NOADDRESS, RECCOUNT,
+    ///      EXTENDEDADDRESS, `DATA_EMPTY`, `DATA_UNKNOWN` —
+    ///      mapping any would be dead code because
+    ///      `ColouriseTEHexDoc` never emits them; verified by
+    ///      grep of `LexHex.cxx:939-1044`).
+    ///   6. **Two-flavour address collapse** — DATAADDRESS +
+    ///      STARTADDRESS both → Number. Smaller than Srec's
+    ///      four-way or IHEX's four-way collapse.
+    ///   7. **`DATA_ODD` + `DATA_EVEN` collapse** to String.
+    ///   8. **RECSTART → Preprocessor + RECTYPE → Keyword**
+    ///      structural-marker + primary-keyword pins.
+    ///   9. **CHECKSUM → Lifetime** sigil-anchor.
+    ///   10. **EMPTY italic set** — TEHEX has no `DATA_EMPTY`
+    ///       equivalent, so no comment-family state exists to
+    ///       italicise. `TEHEX_ITALIC = &[]` pins this.
+    ///   11. **`bold` aliases `SREC_BOLD` verbatim** — RECSTART +
+    ///       RECTYPE bold in all three LexHex-family themes.
+    ///       Aliased via `std::ptr::eq` (implementation-detail
+    ///       pin per the IHEX test's docstring note; value
+    ///       equality in invariant 1 is the real correctness
+    ///       contract).
+    #[test]
+    fn tehex_uses_lexhex_zero_class_theme() {
+        let tehex = lang_theme(L_TEHEX).expect("Tektronix HEX wired");
+        let srec = lang_theme(L_SREC).expect("S-Record wired");
+        let ihex = lang_theme(L_IHEX).expect("Intel HEX wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(tehex.styles, TEHEX_STYLES);
+        assert_eq!(tehex.italic, TEHEX_ITALIC);
+        assert_eq!(tehex.bold, SREC_BOLD);
+
+        // Invariant 2: empty keywords LOAD-BEARING pin.
+        assert!(
+            tehex.keywords.is_empty(),
+            "TEHEX_THEME.keywords MUST be empty — zero-wordlist \
+             contract at LexHex.cxx:1048"
+        );
+
+        // Invariant 3: 8 style mappings — smallest of the trio.
+        assert_eq!(
+            tehex.styles.len(),
+            8,
+            "TEHEX_STYLES must map 8 indices — the smallest of the \
+             three LexHex-family themes (SREC = 11, IHEX = 11, \
+             TEHEX = 8) reflecting TEHEX's simpler grammar"
+        );
+
+        // Invariant 4: every mapped constant present exactly.
+        for (sce, slot, name) in [
+            (
+                SCE_HEX_RECSTART,
+                StyleSlot::Preprocessor,
+                "SCE_HEX_RECSTART",
+            ),
+            (SCE_HEX_RECTYPE, StyleSlot::Keyword, "SCE_HEX_RECTYPE"),
+            (SCE_HEX_BYTECOUNT, StyleSlot::Number, "SCE_HEX_BYTECOUNT"),
+            (
+                SCE_HEX_DATAADDRESS,
+                StyleSlot::Number,
+                "SCE_HEX_DATAADDRESS",
+            ),
+            (
+                SCE_HEX_STARTADDRESS,
+                StyleSlot::Number,
+                "SCE_HEX_STARTADDRESS",
+            ),
+            (SCE_HEX_DATA_ODD, StyleSlot::String, "SCE_HEX_DATA_ODD"),
+            (SCE_HEX_DATA_EVEN, StyleSlot::String, "SCE_HEX_DATA_EVEN"),
+            (SCE_HEX_CHECKSUM, StyleSlot::Lifetime, "SCE_HEX_CHECKSUM"),
+        ] {
+            assert!(
+                tehex.styles.contains(&(sce, slot)),
+                "TEHEX_STYLES must route {name} to {slot:?}"
+            );
+        }
+
+        // Invariant 5: 11 states unmapped total (19 SCE_HEX_* − 8
+        // mapped): DEFAULT + 5 genuine parse-failure states that
+        // TEHEX emits + 5 unused-by-TEHEX states (never emitted).
+        for (sce, name) in [
+            (SCE_HEX_DEFAULT, "SCE_HEX_DEFAULT"),
+            // 5 genuine parse-failure states TEHEX DOES emit:
+            (SCE_HEX_RECTYPE_UNKNOWN, "SCE_HEX_RECTYPE_UNKNOWN"),
+            (SCE_HEX_BYTECOUNT_WRONG, "SCE_HEX_BYTECOUNT_WRONG"),
+            (SCE_HEX_ADDRESSFIELD_UNKNOWN, "SCE_HEX_ADDRESSFIELD_UNKNOWN"),
+            (SCE_HEX_CHECKSUM_WRONG, "SCE_HEX_CHECKSUM_WRONG"),
+            (SCE_HEX_GARBAGE, "SCE_HEX_GARBAGE"),
+            // 5 unused-by-TEHEX states (mapping would be dead code —
+            // ColouriseTEHexDoc at :939-1044 never SetState's any
+            // of these; malformed data emits GARBAGE instead of
+            // DATA_UNKNOWN):
+            (SCE_HEX_NOADDRESS, "SCE_HEX_NOADDRESS"),
+            (SCE_HEX_RECCOUNT, "SCE_HEX_RECCOUNT"),
+            (SCE_HEX_EXTENDEDADDRESS, "SCE_HEX_EXTENDEDADDRESS"),
+            (SCE_HEX_DATA_EMPTY, "SCE_HEX_DATA_EMPTY"),
+            (SCE_HEX_DATA_UNKNOWN, "SCE_HEX_DATA_UNKNOWN"),
+        ] {
+            assert!(
+                !tehex.styles.iter().any(|(s, _)| *s == sce),
+                "TEHEX_STYLES must NOT map {name} — reserved for \
+                 STYLE_DEFAULT paint / deferred StyleSlot::Error / \
+                 unused by ColouriseTEHexDoc (mapping would be \
+                 dead code)"
+            );
+        }
+
+        // Invariant 6: two-flavour address collapse.
+        for sce in [SCE_HEX_DATAADDRESS, SCE_HEX_STARTADDRESS] {
+            assert!(
+                tehex.styles.contains(&(sce, StyleSlot::Number)),
+                "both TEHEX address flavours must collapse to Number"
+            );
+        }
+
+        // Invariant 7: DATA_ODD/EVEN collapse to String.
+        for sce in [SCE_HEX_DATA_ODD, SCE_HEX_DATA_EVEN] {
+            assert!(tehex.styles.contains(&(sce, StyleSlot::String)));
+        }
+
+        // Invariant 8: RECSTART + RECTYPE structural pair.
+        assert!(
+            tehex
+                .styles
+                .contains(&(SCE_HEX_RECSTART, StyleSlot::Preprocessor)),
+            "RECSTART (`%` leader for TEHEX) must route to Preprocessor"
+        );
+        assert!(tehex
+            .styles
+            .contains(&(SCE_HEX_RECTYPE, StyleSlot::Keyword)));
+
+        // Invariant 9: CHECKSUM → Lifetime.
+        assert!(tehex
+            .styles
+            .contains(&(SCE_HEX_CHECKSUM, StyleSlot::Lifetime)));
+
+        // Invariant 10: EMPTY italic set. TEHEX has no DATA_EMPTY
+        // equivalent — nothing to italicise.
+        assert_eq!(
+            tehex.italic.len(),
+            0,
+            "TEHEX_ITALIC must be empty — TEHEX has no DATA_EMPTY \
+             or other comment-family state to italicise"
+        );
+
+        // Invariant 11: bold aliases SREC_BOLD verbatim
+        // (implementation-detail pin — see IHEX test's docstring
+        // for the rustc-CTFE-memoization rationale).
+        assert!(
+            std::ptr::eq(tehex.bold, srec.bold),
+            "TEHEX_THEME.bold should alias SREC_BOLD (both share the \
+             RECSTART + RECTYPE structural-pair discipline)"
+        );
+        assert_eq!(tehex.bold.len(), 2);
+        assert!(tehex.bold.contains(&SCE_HEX_RECSTART));
+        assert!(tehex.bold.contains(&SCE_HEX_RECTYPE));
+
+        // Cross-lexer styles non-reuse — TEHEX_STYLES must differ
+        // from both SREC_STYLES and IHEX_STYLES.
+        assert_ne!(
+            tehex.styles, srec.styles,
+            "TEHEX_STYLES must NOT equal SREC_STYLES — TEHEX has 8 \
+             mappings, SREC has 11"
+        );
+        assert_ne!(
+            tehex.styles, ihex.styles,
+            "TEHEX_STYLES must NOT equal IHEX_STYLES — TEHEX has 8 \
+             mappings, IHEX has 11 (RECCOUNT ↔ EXTENDEDADDRESS \
+             swap makes IHEX distinct from SREC; TEHEX drops \
+             RECCOUNT + EXTENDEDADDRESS + NOADDRESS + DATA_EMPTY)"
         );
     }
 

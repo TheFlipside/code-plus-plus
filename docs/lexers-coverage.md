@@ -35,7 +35,7 @@ residual rows formally tracked).
 | ✅ | Keywords + theme both wired in `Win32Ui::apply_lang`'s table. Pick this language from the Language menu and a sample file picks up visibly distinct colours for comments, strings, numbers, and keywords. |
 | 🟡 | Lexer attached and tokenising; no host keyword list and no host theme. Buffer renders uniformly black-on-white because every `SCE_*_*` style resolves to `STYLE_DEFAULT` after `SCI_STYLECLEARALL`. (Pre-2026-05-13: this row also covered "lexer compiled but unregistered in `LexillaShim.cxx`'s catalog"; that gap is now closed for every `LANG_TABLE` row with a non-`None` lexer.) |
 | ⚫ | No Lexilla lexer (`LANG_TABLE` row has `lexer: None`). Either by design (`L_TEXT` — plain text never highlights) or because no Lexilla lexer matches the language. Effectively a permanent state for the named row. |
-| — (Keywords column only) | Not applicable. The lexer takes no wordlists at all — host installs none by design. Currently used for `props` (INI / Properties — a pure line-prefix classifier that ignores its `WordList *[]` parameter), `registry` (Windows Registry files — a state-machine lexer whose `WordListSet` unconditionally returns -1, actively REJECTING any keyword install), `txt2tags` (structural markup — the `LexerModule` registration takes no `wordListDesc` argument at all and the paint function's `WordList **` parameter is unnamed and never referenced), `srec` (Motorola S-Record ROM files — the `LexerModule` constructor takes 5 args ending in NULL `wordListDesc[]` and the paint function's unnamed `WordList *[]` parameter is never referenced), and `ihex` (Intel HEX ROM files — same `LexHex.cxx` source as `srec` with the same 5-arg NULL-`wordListDesc[]` LexerModule registration). A row with `—` in the Keywords column and ✅ in the Theme column is still ✅ overall: the wiring is complete, there are simply no keywords to wire. |
+| — (Keywords column only) | Not applicable. The lexer takes no wordlists at all — host installs none by design. Currently used for `props` (INI / Properties — a pure line-prefix classifier that ignores its `WordList *[]` parameter), `registry` (Windows Registry files — a state-machine lexer whose `WordListSet` unconditionally returns -1, actively REJECTING any keyword install), `txt2tags` (structural markup — the `LexerModule` registration takes no `wordListDesc` argument at all and the paint function's `WordList **` parameter is unnamed and never referenced), `srec` (Motorola S-Record ROM files — the `LexerModule` constructor takes 5 args ending in NULL `wordListDesc[]` and the paint function's unnamed `WordList *[]` parameter is never referenced), `ihex` (Intel HEX ROM files — same `LexHex.cxx` source as `srec` with the same 5-arg NULL-`wordListDesc[]` LexerModule registration), and `tehex` (Tektronix extended HEX ROM files — third and final member of the `LexHex.cxx` trio with the same zero-wordlist contract). A row with `—` in the Keywords column and ✅ in the Theme column is still ✅ overall: the wiring is complete, there are simply no keywords to wire. |
 | ⏸ | Reserved for future host-side opt-out (e.g. a lexer the host deliberately leaves off the menu pending review). None today. |
 
 ## How to mark a row ✅
@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 77 / 🟡 11 / ⚫ 1.
+Total: 89 rows. ✅ 78 / 🟡 10 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1923,7 +1923,7 @@ further shim work needed.
 | SQL | 17 | `sql` | ✅ | ✅ | ✅ |
 | Swift | 64 | `cpp` | ⚫ | ⚫ | 🟡 |
 | TCL | 29 | `tcl` | ✅ | ✅ | ✅ |
-| Tektronix extended HEX | 63 | `tehex` | ⚫ | ⚫ | 🟡 |
+| Tektronix extended HEX | 63 | `tehex` | — | ✅ | ✅ |
 | TeX | 24 | `tex` | ✅ | ✅ | ✅ |
 | TOML | 90 | `toml` | ⚫ | ⚫ | 🟡 |
 | txt2tags | 83 | `txt2tags` | — | ✅ | ✅ |
@@ -8806,6 +8806,126 @@ srec.italic)` +
 srec.bold)`), and cross-lexer
 styles non-reuse (IHEX_STYLES ≠
 SREC_STYLES).
+
+**Tektronix extended HEX
+(2026-07-08):** rides Lexilla's
+`tehex` lexer (`LexHex.cxx`'s
+`ColouriseTEHexDoc` at
+`:939-1044`) — **third and final
+member of the `LexHex.cxx` trio**
+(SREC / IHEX / TEHEX). Same
+zero-wordlist contract as its
+siblings (`LexerModule
+lmTEHex(SCLEX_TEHEX,
+ColouriseTEHexDoc, "tehex", 0,
+NULL)` at `:1048`, 5-arg
+constructor with NULL
+`wordListDesc[]`). Extension
+`.tek` (the file extension —
+`tehex` is only the Lexilla
+lexer name string). Each line
+is `%<length><type><checksum>
+<address><data...>` —
+distinctive `%`
+leader, and uniquely among the
+three, the **checksum appears
+BEFORE the address** (Srec and
+IHEX put checksum last).
+
+**Simplest grammar of the trio**
+— hence the **smallest style
+table** (8 mappings vs SREC = 11
+vs IHEX = 11). TEHEX doesn't use
+several SCE_HEX_* states that
+its siblings do:
+- **`SCE_HEX_NOADDRESS`** — no
+  S0-header-style zero-address
+  flavour.
+- **`SCE_HEX_RECCOUNT`** —
+  Srec-only S5 record-count
+  field.
+- **`SCE_HEX_EXTENDEDADDRESS`**
+  — IHEX-only 0x02 / 0x04 record
+  types.
+- **`SCE_HEX_DATA_EMPTY`** —
+  TEHEX doesn't classify padding
+  bytes; malformed data emits
+  GARBAGE.
+- **`SCE_HEX_DATA_UNKNOWN`** —
+  paint loop goes GARBAGE
+  instead.
+
+All five states unmapped in
+`TEHEX_STYLES` since mapping any
+would be dead code (never
+emitted by `ColouriseTEHexDoc`).
+
+**Style routing** (8 mappings):
+RECSTART → Preprocessor bold
+(`%` leader); RECTYPE → Keyword
+bold; BYTECOUNT + DATAADDRESS +
+STARTADDRESS → Number (**two-
+flavour address collapse** —
+smaller than Srec's four-way or
+IHEX's four-way); DATA_ODD +
+DATA_EVEN → String; CHECKSUM →
+Lifetime sigil-anchor.
+
+**EMPTY italic set** — TEHEX
+has no DATA_EMPTY equivalent so
+no comment-family state exists
+to italicise. `TEHEX_ITALIC =
+&[]` pins this contract
+explicitly. **Bold aliases
+`SREC_BOLD` verbatim** (RECSTART
++ RECTYPE — same structural
+discipline as SREC and IHEX;
+verified via `std::ptr::eq`
+implementation-detail pin).
+
+Structural test coverage: **11
+invariants** — deep-value
+identity pin, empty-`keywords`
+LOAD-BEARING pin, **8-mapping
+style count** (smallest of the
+trio pin), exact style-routing
+pins for all 8 mapped constants,
+**11-state unmapped drift check**
+(DEFAULT + 5 genuine parse-
+failure states that TEHEX emits
++ 5 unused-by-TEHEX states —
+mapping any of the latter would
+be dead code),
+two-flavour address collapse,
+DATA_ODD/EVEN → String, RECSTART
++ RECTYPE structural pair,
+CHECKSUM → Lifetime,
+**EMPTY-italic pin**
+(`italic.len() == 0`), **bold
+aliasing pin** to SREC_BOLD via
+`std::ptr::eq`, and cross-lexer
+styles non-reuse against SREC
+and IHEX (TEHEX_STYLES must
+differ from both).
+
+**LexHex.cxx trio COMPLETE.**
+With this commit, all three
+Motorola-family / Intel / Tek
+ROM-image record formats are
+wired. The three themes
+demonstrate the framework's
+**cross-lexer const sharing
+pattern**: shared bold set via
+alias, per-lexer style tables
+that differ only where the
+underlying grammar demands
+(RECCOUNT ↔ EXTENDEDADDRESS
+swap between SREC and IHEX;
+smaller state set for TEHEX).
+Same discipline as
+Fortran's free-form + fixed-
+form sharing FORTRAN_THEME
+verbatim.
 
 ## Notes
 
