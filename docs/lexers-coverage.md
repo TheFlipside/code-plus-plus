@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 83 / 🟡 5 / ⚫ 1.
+Total: 89 rows. ✅ 84 / 🟡 4 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1872,7 +1872,7 @@ further shim work needed.
 | Forth | 73 | `forth` | ✅ | ✅ | ✅ |
 | Fortran (fixed form) | 59 | `f77` | ✅ | ✅ | ✅ |
 | Fortran (free form) | 25 | `fortran` | ✅ | ✅ | ✅ |
-| Freebasic | 69 | `freebasic` | ⚫ | ⚫ | 🟡 |
+| Freebasic | 69 | `freebasic` | ✅ | ✅ | ✅ |
 | GDScript | 86 | `gdscript` | ✅ | ✅ | ✅ |
 | Go | 88 | `cpp` | ✅ | ✅ | ✅ |
 | Gui4Cli | 51 | `gui4cli` | ✅ | ✅ | ✅ |
@@ -9919,6 +9919,248 @@ constant to Keyword2 — proving
 the two themes really do
 differ where the wordlist
 descriptors say they should.
+
+**Freebasic (2026-07-08):** rides
+Lexilla's `freebasic` lexer
+(`LexBasic.cxx`) — the **third
+and final** `LexBasic` family
+member, completing the shared-
+lexer trio (BlitzBasic +
+PureBasic + FreeBasic). Extension
+`.bas`. QuickBASIC-compatible
+language with modern
+object-oriented extensions
+(properties / constructors /
+destructors / namespaces / OO
+inheritance).
+
+**Per-family differences from
+BlitzBasic + PureBasic:**
+- **Comment character:** `'`
+  (apostrophe) per
+  `LexerFactoryFreeBasic` at
+  `LexBasic.cxx:283`. THE ONLY
+  family member using
+  apostrophe; BB + PB both use
+  `;`.
+- **Fold-check function:**
+  `CheckFreeFoldPoint` at
+  `:133-156` recognises EIGHT
+  fold points
+  (`function` / `sub` / `enum`
+  / `type` / `union` /
+  `property` / `destructor` /
+  `constructor`) vs
+  BlitzBasic's 2 and
+  PureBasic's 4. Reflects
+  FreeBASIC's richer OO
+  surface.
+- **Wordlist descriptor:**
+  class 1 named "FreeBasic
+  PreProcessor Keywords" — same
+  semantic assignment as
+  PureBasic (SCE_B_KEYWORD2 →
+  Preprocessor).
+
+**Dead-state status
+INVERSION.** Four SCE_B_*
+states that were dead in
+BlitzBasic + PureBasic are LIVE
+in FreeBASIC because their
+triggers are gated on the
+apostrophe comment char:
+- `SCE_B_PREPROCESSOR`:
+  `'$Include` (deprecated
+  QBASIC syntax preserved via
+  the `LexBasic.cxx:435-438`
+  hack).
+- `SCE_B_DOCLINE`: `'*` / `'!`
+  line-doc comments — the
+  QBASIC / FreeBASIC idiom.
+  Trigger at `:439-441`
+  hard-codes `\'`; only fires
+  when comment_char is `'`.
+- `SCE_B_DOCBLOCK`: `/'*` /
+  `/'!` block-doc — technically
+  fires in all three families
+  (trigger at `:444-449` uses
+  `/'` regardless of
+  comment_char) but only
+  semantically meaningful in
+  FB.
+- `SCE_B_DOCKEYWORD`:
+  `\keyword` / `@keyword`
+  inside DOCLINE / DOCBLOCK.
+  Live in FB via DOCLINE.
+
+**Two-class wordlist install
+matching PureBasic shape.**
+Classes 2 (user defined 1)
+and 3 (user defined 2)
+remain uninstalled by design.
+
+- **Class 0 —
+  `FREEBASIC_KEYWORDS`** (bold
+  Keyword, 110 tokens):
+  language grammar — procedure
+  declaration (`sub` /
+  `function` / `property` /
+  `constructor` / `destructor`
+  / `operator` / `declare`),
+  type declaration (`type` /
+  `extends` / `union` /
+  `namespace` / `enum`),
+  access + storage modifiers
+  (`public` / `private` /
+  `protected` / `friend` /
+  `static` / `shared` /
+  `const` / `common` /
+  `threaded` / `local` /
+  `global` / `var`), method
+  modifiers (`overload` /
+  `override` / `virtual` /
+  `abstract` / `export`),
+  control flow (`if` / `for`
+  / `do` / `loop` / `while` /
+  `wend` / `until` /
+  `continue` / `break`),
+  boolean literals (`true` /
+  `false` — bareword form,
+  unlike PureBasic), word
+  operators (`and` / `or` /
+  `not` / `xor` / `andalso` /
+  `orelse` / `mod` / `shl` /
+  `shr` / `eqv` / `imp`),
+  comparison (`is` / `isnot`),
+  memory (`new` / `delete`),
+  data statement (`data` /
+  `read` / `restore`),
+  variable declaration (`dim`
+  / `redim` / `let`), types
+  (18 including
+  unsigned + wide-string
+  family: `byte` / `ubyte` /
+  `short` / `ushort` / `long`
+  / `ulong` / `integer` /
+  `uinteger` / `longint` /
+  `ulongint` / `single` /
+  `double` / `string` /
+  `zstring` / `wstring` /
+  `boolean` / `any` / `ptr`),
+  I/O (`print` / `input` /
+  `open` / `close`), and
+  compilation directives
+  (`option` / `base` /
+  `explicit`).
+- **Class 1 —
+  `FREEBASIC_PREPROCESSOR`**
+  (Preprocessor, 9 tokens):
+  bareword compile-time
+  operators — `sizeof` /
+  `typeof` / `alignof` /
+  `offsetof` / `cast` /
+  `varptr` / `procptr` /
+  `strptr` / `sadd`.
+
+**Class-1 population
+rationale.** FreeBASIC's
+canonical preprocessor
+directives (`#include` /
+`#define` / `#ifdef` /
+`#endif` / `#macro`) are
+`#`-prefixed and get
+`SCE_B_CONSTANT` paint via the
+`LexBasic.cxx:459-460` sigil
+path — the `#` triggers
+CONSTANT state and consumes
+identifier chars without
+wordlist involvement. They
+CANNOT reach the class-1
+wordlist regardless of what we
+install. So class 1 instead
+covers the **bareword
+compile-time operators** that
+ARE tokenised as
+`SCE_B_IDENTIFIER` and DO
+probe the wordlists —
+`sizeof(x)` / `typeof(x)` /
+`cast(t, x)` / etc. These are
+semantically preprocessor-
+adjacent (compile-time
+evaluated) so grouping them in
+the class labeled
+"PreProcessor Keywords" and
+painting Preprocessor magenta
+is defensible even though
+they're technically runtime-
+visible operators.
+
+**Style-table aliasing.**
+`FREEBASIC_STYLES` /
+`FREEBASIC_ITALIC` /
+`FREEBASIC_BOLD` **alias**
+verbatim to the corresponding
+`PUREBASIC_*` constants — same
+class-1 = preprocessor
+descriptor assignment means
+the tables are semantically
+identical. Same const-aliasing
+discipline as the SREC / IHEX
+/ TEHEX trio's cross-lexer
+bold/italic sharing. Invariant
+20 pins pointer-equal identity
+so a future well-meaning
+"extract to own literal" edit
+would break the test.
+
+**Contents authored clean-room**
+from the FreeBASIC language
+reference at
+<https://www.freebasic.net/wiki/DocToc>
+— no upstream Lexilla fixture
+exists for freebasic (checked
+`crates/scintilla-sys/vendor/
+lexilla/test/examples/` — no
+`freebasic/` subdirectory).
+
+Structural test coverage: **20
+invariants** including const-
+alias verification (invariant
+2 + invariant 20 pointer-
+equal pin), FreeBASIC-specific
+type keyword pin (10 unsigned
++ wide-string tokens),
+bareword boolean pin (`true`
+/ `false` unlike PureBasic),
+short-circuit operator pin
+(`andalso` / `orelse`
+FB-specific additions), and
+cross-family style-alias
+assertion (equal to PureBasic
+via alias, not-equal to
+BlitzBasic which uses
+Keyword2).
+
+**LexBasic family COMPLETE.**
+With this commit, all three
+BASIC-family LexBasic dialects
+are wired — the trio
+demonstrates the framework's
+**cross-lexer const sharing +
+divergence pattern**: shared
+SCE_B_* namespace with per-
+family theme differences
+driven by the wordlist
+descriptor's class-1
+semantic assignment.
+BlitzBasic diverges to
+Keyword2 accent; PureBasic +
+FreeBasic converge on
+Preprocessor per their
+respective "PureBasic
+PreProcessor Keywords" /
+"FreeBasic PreProcessor
+Keywords" descriptor names.
 
 ## Notes
 

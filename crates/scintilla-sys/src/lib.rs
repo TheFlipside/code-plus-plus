@@ -7044,6 +7044,7 @@ pub const SCE_SQL_QUOTEDIDENTIFIER: usize = 23;
 // / LexAVS. Wordlist entries must be byte-canonical lowercase.
 pub const SCLEX_BLITZBASIC: usize = 66;
 pub const SCLEX_PUREBASIC: usize = 67;
+pub const SCLEX_FREEBASIC: usize = 75;
 pub const SCE_B_DEFAULT: usize = 0;
 pub const SCE_B_COMMENT: usize = 1;
 pub const SCE_B_NUMBER: usize = 2;

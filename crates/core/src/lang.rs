@@ -14912,6 +14912,179 @@ pub const PUREBASIC_PREPROCESSOR: &str = concat!(
     "enableasm disableasm",
 );
 
+/// Space-separated **`FreeBASIC` language keywords** installed as
+/// **class 0** of `LexBasic`'s wordlist descriptor
+/// (`SCE_B_KEYWORD`, primary bold slot) for `SCLEX_FREEBASIC`.
+///
+/// **Case-INSENSITIVE lookup** per `LexBasic.cxx:347` (shared with
+/// [`BLITZBASIC_KEYWORDS`] and [`PUREBASIC_KEYWORDS`]). Wordlist
+/// entries MUST be byte-canonical lowercase — `FreeBASIC` source
+/// conventionally uses `PascalCase` but the lexer lowers before
+/// probing.
+///
+/// **Contents authored clean-room from the `FreeBASIC` language
+/// reference** at <https://www.freebasic.net/wiki/DocToc> — no
+/// upstream Lexilla fixture exists for freebasic (checked
+/// `crates/scintilla-sys/vendor/lexilla/test/examples/` — no
+/// `freebasic/` subdirectory).
+///
+/// **Categories** (110 tokens):
+///   - **Procedure declaration** (7): `sub` / `function` /
+///     `property` / `constructor` / `destructor` / `operator` /
+///     `declare`.
+///   - **Type declaration** (5): `type` / `extends` / `union` /
+///     `namespace` / `enum`.
+///   - **Access modifiers** (4): `public` / `private` /
+///     `protected` / `friend`.
+///   - **Storage modifiers** (7): `static` / `shared` / `const`
+///     / `common` / `threadvar` / `global` / `var`.
+///   - **Method modifiers** (5): `overload` / `override` /
+///     `virtual` / `abstract` / `export`.
+///   - **Control flow — decisions** (7): `if` / `then` / `else`
+///     / `elseif` / `endif` / `select` / `case`.
+///   - **Control flow — loops** (11): `for` / `to` / `step` /
+///     `next` / `do` / `loop` / `while` / `wend` / `until` /
+///     `continue` / `exit`.
+///   - **Jump + terminator** (4): `return` / `goto` / `gosub` /
+///     `end`.
+///   - **Boolean literals** (2): `true` / `false`.
+///   - **Word operators** (11): `and` / `or` / `not` / `xor` /
+///     `andalso` / `orelse` / `mod` / `shl` / `shr` / `eqv` /
+///     `imp`.
+///   - **Comparison operators** (1): `is`.
+///   - **Memory management** (2): `new` / `delete`.
+///   - **Data statement** (3): `data` / `read` / `restore`.
+///   - **Variable declaration** (3): `dim` / `redim` / `let`.
+///   - **Types** (18): `byte` / `ubyte` / `short` / `ushort` /
+///     `long` / `ulong` / `integer` / `uinteger` / `longint` /
+///     `ulongint` / `single` / `double` / `string` / `zstring`
+///     / `wstring` / `boolean` / `any` / `ptr`.
+///   - **Parameter passing** (3): `byval` / `byref` / `as`.
+///   - **I/O statements** (8): `print` / `input` / `write` /
+///     `open` / `close` / `put` / `get` / `seek`.
+///   - **Compilation directives (bareword)** (3): `option` /
+///     `base` / `explicit`.
+///   - **Debug / termination** (2): `error` / `stop`.
+///   - **Miscellaneous** (5): `with` / `using` / `each` / `in`
+///     / `rem`.
+///
+/// Note: `FreeBASIC` supports both traditional QBASIC-inherited
+/// keywords (`PRINT` / `INPUT` / `DATA` / `READ`) and modern
+/// object-oriented additions (`CONSTRUCTOR` / `DESTRUCTOR` /
+/// `PROPERTY` / `EXTENDS` / `VIRTUAL`). The lexer's case-
+/// insensitive match means `FreeBASIC`'s `PascalCase` convention
+/// (`If`, `EndIf`, `Sub`) all match the lowercase wordlist
+/// entries. Bareword `true` / `false` ARE valid `FreeBASIC`
+/// tokens (unlike `PureBasic` which requires `#True` / `#False`)
+/// — the boolean-literal keywords go in class 0.
+///
+/// `#`-prefixed preprocessor directives (`#include` / `#define` /
+/// `#ifdef` / `#endif` / `#macro`) get `SCE_B_CONSTANT` paint via
+/// the sigil-entry path at `LexBasic.cxx:459-460` — the `#`
+/// triggers CONSTANT state and consumes identifier chars without
+/// wordlist consultation. So `#`-prefixed directives never route
+/// through the class-1 wordlist even though the descriptor is
+/// named `"FreeBasic PreProcessor Keywords"`.
+///
+/// **Cross-class disjointness with [`FREEBASIC_PREPROCESSOR`]** is
+/// invariant-tested per the shared `LexBasic` last-match-wins
+/// discipline (see [`BLITZBASIC_KEYWORDS`] docstring for the
+/// full rationale).
+pub const FREEBASIC_KEYWORDS: &str = concat!(
+    // Procedure declaration.
+    "sub function property constructor destructor operator declare ",
+    // Type declaration.
+    "type extends union namespace enum ",
+    // Access + storage modifiers.
+    "public private protected friend ",
+    "static shared const common threadvar global var ",
+    // Method modifiers.
+    "overload override virtual abstract export ",
+    // Control flow — decisions.
+    "if then else elseif endif select case ",
+    // Control flow — loops.
+    "for to step next do loop while wend until continue exit ",
+    // Jump + terminator.
+    "return goto gosub end ",
+    // Boolean literals.
+    "true false ",
+    // Word operators.
+    "and or not xor andalso orelse mod shl shr eqv imp ",
+    // Comparison operators.
+    "is ",
+    // Memory management.
+    "new delete ",
+    // Data statement.
+    "data read restore ",
+    // Variable declaration.
+    "dim redim let ",
+    // Types.
+    "byte ubyte short ushort long ulong integer uinteger longint ulongint ",
+    "single double string zstring wstring boolean any ptr ",
+    // Parameter passing.
+    "byval byref as ",
+    // I/O statements.
+    "print input write open close put get seek ",
+    // Compilation directives (bareword).
+    "option base explicit ",
+    // Debug / termination.
+    "error stop ",
+    // Miscellaneous.
+    "with using each in rem",
+);
+
+/// Space-separated **`FreeBASIC` compile-time / preprocessor-
+/// adjacent bareword operators** installed as **class 1** of
+/// `LexBasic`'s wordlist descriptor (`SCE_B_KEYWORD2`, secondary
+/// slot) for `SCLEX_FREEBASIC`.
+///
+/// `LexBasic.cxx:196-202` labels class 1 as `"FreeBasic
+/// PreProcessor Keywords"` — the second `LexBasic` family member
+/// (alongside `PureBasic`) whose class 1 has a specific semantic
+/// assignment.
+///
+/// **Case-INSENSITIVE lookup** per [`FREEBASIC_KEYWORDS`]. All
+/// entries lowercase.
+///
+/// **Class-1 population rationale.** `FreeBASIC`'s canonical
+/// preprocessor directives (`#include` / `#define` / `#ifdef` /
+/// `#endif` / `#macro`) are `#`-prefixed and get
+/// `SCE_B_CONSTANT` paint via `LexBasic.cxx:459-460` (the `#`
+/// triggers CONSTANT state, consuming identifier chars without
+/// wordlist involvement) — they CANNOT reach the class-1
+/// wordlist regardless of what we install. So class 1 instead
+/// covers the **bareword compile-time operators** that ARE
+/// tokenised as `SCE_B_IDENTIFIER` and DO probe the wordlists:
+/// `sizeof(expr)` / `typeof(expr)` / `cast(type, expr)` /
+/// `alignof(expr)` / `offsetof(type, field)` / `varptr(x)` /
+/// `procptr(sub)` / `strptr(str)` / `sadd(str)`. These are
+/// semantically preprocessor-adjacent (compile-time-evaluated,
+/// no runtime overhead) so grouping them in the class labeled
+/// `"PreProcessor Keywords"` and painting them Preprocessor
+/// magenta is defensible even though they're technically
+/// runtime-visible operators.
+///
+/// **Contents authored clean-room from the `FreeBASIC` language
+/// reference** at
+/// <https://www.freebasic.net/wiki/CatPgProgrammer>.
+///
+/// **Categories** (9 tokens):
+///   - **Type introspection** (4): `sizeof` / `typeof` /
+///     `alignof` / `offsetof`.
+///   - **Type conversion** (1): `cast`.
+///   - **Pointer operators** (4): `varptr` / `procptr` /
+///     `strptr` / `sadd`.
+///
+/// **Cross-class disjointness with [`FREEBASIC_KEYWORDS`]** is
+/// invariant-tested — see the class-0 docstring for the
+/// last-match-wins rationale.
+pub const FREEBASIC_PREPROCESSOR: &str = concat!(
+    // Type introspection + conversion.
+    "sizeof typeof alignof offsetof cast ",
+    // Pointer operators.
+    "varptr procptr strptr sadd",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
