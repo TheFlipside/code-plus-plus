@@ -2385,6 +2385,161 @@ pub const SCE_OSCRIPT_OBJECT: usize = 16;
 pub const SCE_OSCRIPT_PROPERTY: usize = 17;
 pub const SCE_OSCRIPT_METHOD: usize = 18;
 
+// LexRebol style indices. 29 contiguous slots (0..=28) for
+// REBOL — Carl Sassenrath's homoiconic message-passing
+// dialect language (extensions `.reb` / `.rebol`). Constants
+// mirror `SciLexer.h:1195-1223` verbatim. Dispatches
+// SCLEX_REBOL (= 71, per `SciLexer.h:87`) via an
+// **eight-class wordlist** at
+// `vendor\lexilla\lexers\LexRebol.cxx:74-81`. The descriptor
+// registration at `:320-323` declares only `{"Keywords", 0}`
+// (single-class), but the paint loop `ColouriseRebolDoc`
+// accesses ALL EIGHT wordlist slots via
+// `keywordlists[0..7]` and emits the corresponding
+// `SCE_REBOL_WORD..WORD8` states from `:162-178`. Notepad++
+// / SciTE populate the additional slots via
+// `SCI_SETKEYWORDS(N, ...)` even though only slot 0's
+// descriptor label is exposed by upstream.
+//
+// **Reverse-first-match-wins cascade.** Unlike every prior
+// Phase 4.5 wordlist descriptor (Erlang / Forth /
+// ESCRIPT / MMIXAL / Nim / OScript), LexRebol probes classes
+// **7 → 6 → 5 → 4 → 3 → 2 → 1 → 0** in REVERSE order at
+// `:162-178`. Higher-numbered classes SHADOW lower-numbered
+// ones on collision. Cross-class disjointness is still
+// checked by the invariant test to prevent inadvertent
+// masking.
+//
+// **Case-INSENSITIVE.** `LexRebol.cxx:160` calls
+// `sc.GetCurrentLowered(s, sizeof(s))` before every wordlist
+// probe. REBOL source may write words in any case (`If`,
+// `IF`, `if` all valid); wordlist tokens must be lowercase.
+//
+// **Very wide identifier alphabet.** `IsAWordChar` at
+// `:37-39` accepts alnum + `? ! . ' + - * & | = _ ~`, and
+// `IsAWordStart` at `:41-44` additionally allows `+`/`-`/`.`
+// as first byte (when NOT followed by digit — which would
+// tokenize as NUMBER). Consequence: REBOL word names can be
+// e.g. `+`/`-`/`?`/`!`/`empty?`/`found?`/`type-of`/`+->`/
+// symbolic pseudo-operators. Wordlist entries must match
+// this alphabet.
+//
+// **Homoiconic value literals** — REBOL treats many syntactic
+// forms as first-class values, each with its own SCE_ state.
+// The IDENTIFIER settle path at `:145-153` retroactively
+// re-classifies collected identifier spans:
+//   - `identifier:` (colon suffix, no following space) →
+//     `SCE_REBOL_URL`.
+//   - `identifier@` → `SCE_REBOL_EMAIL`.
+//   - `identifier$` → `SCE_REBOL_MONEY`.
+// Then at `:156-183` if IDENTIFIER survived without such a
+// suffix, the wordlist probe fires (settling to
+// WORD..WORD8) or falls back to `SCE_REBOL_IDENTIFIER`.
+//
+// **NUMBER post-settle.** At `:185-197`, a NUMBER-state span
+// upgrades to:
+//   - `PAIR` on `x` (e.g. `640x480`).
+//   - `TIME` on `:` (e.g. `12:30`).
+//   - `DATE` on `-` or `/` (e.g. `12-Jun-2024`, `2024/06/12`).
+//   - `TUPLE` on multiple `.` (e.g. `1.2.3`).
+//
+// **Braced string with nesting.** `{...}` strings can nest
+// balanced braces per `:206-213` — `stringLevel` tracks
+// depth so the outer `}` terminates only when nesting drops
+// to zero. Same for the `comment {...}` block comment.
+//
+// **Binary literal.** `#{...}` / `2#{...}` / `NN#{...}`
+// hexadecimal / binary literals recognised by
+// `IsBinaryStart` at `:65-69` — a `#{` with optional
+// leading base (2 / 16 / 64) enters `SCE_REBOL_BINARY`.
+//
+// **Preface state.** `SCE_REBOL_PREFACE` (3) covers text
+// BEFORE the first `REBOL [...]` header block — REBOL
+// convention treats everything before the header as
+// documentation prose, not code. Entered at
+// `:100` (initial state).
+//
+// **Fold** at `:275+` uses brace / bracket / paren nesting
+// levels, plus block-comment style transitions.
+//
+// Style semantics (paint-loop citations reference LexRebol.cxx):
+//
+//   - SCE_REBOL_DEFAULT (0) — whitespace / unclassified.
+//     Framework convention: leave unmapped.
+//   - SCE_REBOL_COMMENTLINE (1) — `;`-to-EOL line comment.
+//   - SCE_REBOL_COMMENTBLOCK (2) — `comment {...}` block
+//     comment. Entered when a `{...}` string starts while the
+//     `blockComment` flag is set. That flag is updated at
+//     `:161` via `blockComment = strcmp(s, "comment") == 0;`
+//     — an UNCONDITIONAL byte-exact test on the collected
+//     identifier text that runs BEFORE any wordlist probe.
+//     Whether `comment` is present in any keyword class has
+//     no bearing on the flag flip; wordlist membership only
+//     affects how the `comment` word itself is styled.
+//   - SCE_REBOL_PREFACE (3) — preamble text before the
+//     first `REBOL [...]` header block. Entered at `:100`.
+//   - SCE_REBOL_OPERATOR (4) — symbolic operator from
+//     `IsAnOperator` at `:46-63` (`+ - * / < > = ?` alone
+//     or paired forms `** // <= >= == =? ??` and `<>`).
+//   - SCE_REBOL_CHARACTER (5) — `#"..."` character literal.
+//   - SCE_REBOL_QUOTEDSTRING (6) — `"..."` string literal.
+//     Exit on unescaped `"` at `:203-205`.
+//   - SCE_REBOL_BRACEDSTRING (7) — `{...}` multi-line
+//     string, nesting-aware.
+//   - SCE_REBOL_NUMBER (8) — numeric literal. Post-settles
+//     to PAIR / TIME / DATE / TUPLE on suffix.
+//   - SCE_REBOL_PAIR (9) — `WxH` pair value.
+//   - SCE_REBOL_TUPLE (10) — `x.y.z` tuple value.
+//   - SCE_REBOL_BINARY (11) — `#{...}` binary literal.
+//   - SCE_REBOL_MONEY (12) — `$xxx` money value.
+//   - SCE_REBOL_ISSUE (13) — `#xxx` issue value.
+//   - SCE_REBOL_TAG (14) — `<xxx>` tag value.
+//   - SCE_REBOL_FILE (15) — `%xxx` file path value.
+//   - SCE_REBOL_EMAIL (16) — `foo@bar` email value.
+//   - SCE_REBOL_URL (17) — `scheme:xxx` URL value.
+//   - SCE_REBOL_DATE (18) — `12-Jun-2024` date value.
+//   - SCE_REBOL_TIME (19) — `12:30` time value.
+//   - SCE_REBOL_IDENTIFIER (20) — transient collect state.
+//     Settles to WORD..WORD8 / URL / EMAIL / MONEY at
+//     `:145-183`. Framework convention: leave unmapped.
+//   - SCE_REBOL_WORD (21) — class-0 wordlist hit.
+//   - SCE_REBOL_WORD2 (22) — class-1 wordlist hit.
+//   - SCE_REBOL_WORD3 (23) — class-2 wordlist hit.
+//   - SCE_REBOL_WORD4 (24) — class-3 wordlist hit.
+//   - SCE_REBOL_WORD5 (25) — class-4 wordlist hit.
+//   - SCE_REBOL_WORD6 (26) — class-5 wordlist hit.
+//   - SCE_REBOL_WORD7 (27) — class-6 wordlist hit.
+//   - SCE_REBOL_WORD8 (28) — class-7 wordlist hit.
+pub const SCE_REBOL_DEFAULT: usize = 0;
+pub const SCE_REBOL_COMMENTLINE: usize = 1;
+pub const SCE_REBOL_COMMENTBLOCK: usize = 2;
+pub const SCE_REBOL_PREFACE: usize = 3;
+pub const SCE_REBOL_OPERATOR: usize = 4;
+pub const SCE_REBOL_CHARACTER: usize = 5;
+pub const SCE_REBOL_QUOTEDSTRING: usize = 6;
+pub const SCE_REBOL_BRACEDSTRING: usize = 7;
+pub const SCE_REBOL_NUMBER: usize = 8;
+pub const SCE_REBOL_PAIR: usize = 9;
+pub const SCE_REBOL_TUPLE: usize = 10;
+pub const SCE_REBOL_BINARY: usize = 11;
+pub const SCE_REBOL_MONEY: usize = 12;
+pub const SCE_REBOL_ISSUE: usize = 13;
+pub const SCE_REBOL_TAG: usize = 14;
+pub const SCE_REBOL_FILE: usize = 15;
+pub const SCE_REBOL_EMAIL: usize = 16;
+pub const SCE_REBOL_URL: usize = 17;
+pub const SCE_REBOL_DATE: usize = 18;
+pub const SCE_REBOL_TIME: usize = 19;
+pub const SCE_REBOL_IDENTIFIER: usize = 20;
+pub const SCE_REBOL_WORD: usize = 21;
+pub const SCE_REBOL_WORD2: usize = 22;
+pub const SCE_REBOL_WORD3: usize = 23;
+pub const SCE_REBOL_WORD4: usize = 24;
+pub const SCE_REBOL_WORD5: usize = 25;
+pub const SCE_REBOL_WORD6: usize = 26;
+pub const SCE_REBOL_WORD7: usize = 27;
+pub const SCE_REBOL_WORD8: usize = 28;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

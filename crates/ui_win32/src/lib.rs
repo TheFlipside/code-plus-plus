@@ -124,15 +124,16 @@ use codepp_core::lang::{
     L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
     L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
     L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
-    L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME,
-    L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS,
-    MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS,
-    NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-    OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS,
-    OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS,
-    PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
-    POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
-    PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS,
+    L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_RUBY, L_RUST,
+    L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
+    MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+    MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
+    NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
+    OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
+    POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
+    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+    PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5,
     RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
     SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2,
     TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS,
@@ -285,11 +286,17 @@ use codepp_scintilla_sys::{
     SCE_RB_OPERATOR, SCE_RB_POD, SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN, SCE_RB_STDOUT,
     SCE_RB_STRING, SCE_RB_STRING_I, SCE_RB_STRING_Q, SCE_RB_STRING_QI, SCE_RB_STRING_QQ,
     SCE_RB_STRING_QR, SCE_RB_STRING_QS, SCE_RB_STRING_QW, SCE_RB_STRING_QX, SCE_RB_STRING_W,
-    SCE_RB_SYMBOL, SCE_RB_WORD, SCE_RB_WORD_DEMOTED, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK,
-    SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME,
-    SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD,
-    SCE_RUST_WORD2, SCE_R_BACKTICKS, SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_INFIX, SCE_R_INFIXEOL,
-    SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD, SCE_R_RAWSTRING, SCE_R_RAWSTRING2,
+    SCE_RB_SYMBOL, SCE_RB_WORD, SCE_RB_WORD_DEMOTED, SCE_REBOL_BINARY, SCE_REBOL_BRACEDSTRING,
+    SCE_REBOL_CHARACTER, SCE_REBOL_COMMENTBLOCK, SCE_REBOL_COMMENTLINE, SCE_REBOL_DATE,
+    SCE_REBOL_EMAIL, SCE_REBOL_FILE, SCE_REBOL_ISSUE, SCE_REBOL_MONEY, SCE_REBOL_NUMBER,
+    SCE_REBOL_OPERATOR, SCE_REBOL_PAIR, SCE_REBOL_PREFACE, SCE_REBOL_QUOTEDSTRING, SCE_REBOL_TAG,
+    SCE_REBOL_TIME, SCE_REBOL_TUPLE, SCE_REBOL_URL, SCE_REBOL_WORD, SCE_REBOL_WORD2,
+    SCE_REBOL_WORD3, SCE_REBOL_WORD4, SCE_REBOL_WORD5, SCE_REBOL_WORD6, SCE_REBOL_WORD7,
+    SCE_REBOL_WORD8, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC,
+    SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO,
+    SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2,
+    SCE_R_BACKTICKS, SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_INFIX, SCE_R_INFIXEOL, SCE_R_KWORD,
+    SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD, SCE_R_RAWSTRING, SCE_R_RAWSTRING2,
     SCE_R_STRING, SCE_R_STRING2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE,
     SCE_SH_HERE_DELIM, SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR,
     SCE_SH_STRING, SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC,
@@ -4707,6 +4714,160 @@ const OSCRIPT_THEME: LangTheme = LangTheme {
     styles: OSCRIPT_STYLES,
     italic: OSCRIPT_ITALIC,
     bold: OSCRIPT_BOLD,
+};
+
+// --- LexRebol ---
+// LexRebol serves REBOL — Carl Sassenrath's homoiconic
+// message-passing dialect language (extensions `.reb` /
+// `.rebol`). `L_REBOL` (id 79) is the only language row using
+// this lexer. Dispatches SCLEX_REBOL (= 71, per
+// `SciLexer.h:87`) via an eight-class wordlist at
+// `LexRebol.cxx:74-81` (upstream registers only one descriptor
+// slot at `:320-323` but the paint loop accesses all 8).
+//
+// **27 style mappings** covering every SCE_REBOL_* state the
+// paint loop emits as a semantically visible token. Two of
+// the 29 defined slots stay unmapped:
+//   - DEFAULT (0) — whitespace / unclassified.
+//   - IDENTIFIER (20) — transient bare-identifier collect
+//     state. Settles to URL / EMAIL / MONEY at `:145-153` or
+//     to WORD..WORD8 at `:156-183`. Framework convention:
+//     leave unmapped so unmatched bare identifiers paint at
+//     STYLE_DEFAULT.
+//
+// **Eight-class descriptor** — widest of Phase 4.5, exceeding
+// Forth 6, Erlang 6, and OScript 6. LexRebol uses class-slot
+// granularity to categorize REBOL's rich vocabulary across
+// semantic tiers: primary keywords, datatypes, math, I/O,
+// series ops, plus 3 additional reserved tiers for
+// domain-specific dialects (currently unpopulated per SciTE
+// convention).
+//
+// **Reverse-first-match-wins cascade.** `LexRebol.cxx:162-178`
+// probes classes **7 → 0** in REVERSE. Higher classes
+// SHADOW lower classes on collision — the invariant test
+// enforces cross-class disjointness across all populated
+// pairs to prevent silent shadowing.
+//
+// **Case-INSENSITIVE** via `sc.GetCurrentLowered` at
+// `:160` — wordlist tokens must be lowercase.
+//
+// **Slot rationale:**
+//   - COMMENTLINE (1) + COMMENTBLOCK (2) → Comment (italic).
+//     Both `;`-to-EOL and `comment {...}` block forms.
+//   - PREFACE (3) → Comment (italic). Preamble prose before
+//     the `REBOL [...]` header — semantically documentation,
+//     same italic treatment.
+//   - OPERATOR (4) → Operator. Symbolic operators from
+//     `IsAnOperator` at `:46-63`.
+//   - CHARACTER (5) + QUOTEDSTRING (6) + BRACEDSTRING (7) →
+//     String. Three string sub-styles collapse.
+//   - NUMBER (8) → Number.
+//   - PAIR (9) + TUPLE (10) + BINARY (11) → Number. REBOL's
+//     first-class syntactic value types that carry numeric
+//     semantics (`640x480` pair, `1.2.3` tuple, `#{DEADBEEF}`
+//     binary).
+//   - MONEY (12) → Number. `$xxx` monetary literal — numeric
+//     value with currency semantics.
+//   - ISSUE (13) → String. `#xxx` issue values are REBOL
+//     `issue!` value literals — arbitrary user-authored
+//     symbolic constants that behave semantically like
+//     strings with `#` prefix. Same String slot as the
+//     other prefix-delimited value literals (FILE / EMAIL /
+//     URL) — Keyword2 would misplace them in the bounded-
+//     vocabulary class.
+//   - TAG (14) → String. `<xxx>` tag values are REBOL
+//     first-class `tag!` value literals (strings with `<>`
+//     delimiters), not markup metadata. Same String slot
+//     as CHARACTER / QUOTEDSTRING / BRACEDSTRING / FILE /
+//     EMAIL / URL for uniform value-literal treatment.
+//   - FILE (15) → String. `%xxx` file paths are semantically
+//     path literals.
+//   - EMAIL (16) + URL (17) → String. Value-literal
+//     references to external resources.
+//   - DATE (18) + TIME (19) → Number. Post-settled from
+//     NUMBER; semantically numeric literals with unit
+//     interpretation.
+//   - WORD (21) → Keyword (bold). Primary keyword hits —
+//     control flow, definition, evaluators. Visual anchor.
+//   - WORD2 (22) → Keyword2 (accent). Datatypes.
+//   - WORD3 (23) → Keyword2 (accent). Math / conversion
+//     natives.
+//   - WORD4 (24) → Keyword2 (accent). I/O / system natives.
+//   - WORD5 (25) → Keyword2 (accent). Series / block ops.
+//   - WORD6 (26) + WORD7 (27) + WORD8 (28) → Keyword2
+//     (accent). Additional wordlist tiers — mapped
+//     defensively so a future populated tier renders with
+//     accent styling instead of falling to STYLE_DEFAULT.
+const REBOL_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_REBOL_COMMENTLINE, StyleSlot::Comment),
+    (SCE_REBOL_COMMENTBLOCK, StyleSlot::Comment),
+    (SCE_REBOL_PREFACE, StyleSlot::Comment),
+    (SCE_REBOL_OPERATOR, StyleSlot::Operator),
+    (SCE_REBOL_CHARACTER, StyleSlot::String),
+    (SCE_REBOL_QUOTEDSTRING, StyleSlot::String),
+    (SCE_REBOL_BRACEDSTRING, StyleSlot::String),
+    (SCE_REBOL_NUMBER, StyleSlot::Number),
+    (SCE_REBOL_PAIR, StyleSlot::Number),
+    (SCE_REBOL_TUPLE, StyleSlot::Number),
+    (SCE_REBOL_BINARY, StyleSlot::Number),
+    (SCE_REBOL_MONEY, StyleSlot::Number),
+    (SCE_REBOL_ISSUE, StyleSlot::String),
+    (SCE_REBOL_TAG, StyleSlot::String),
+    (SCE_REBOL_FILE, StyleSlot::String),
+    (SCE_REBOL_EMAIL, StyleSlot::String),
+    (SCE_REBOL_URL, StyleSlot::String),
+    (SCE_REBOL_DATE, StyleSlot::Number),
+    (SCE_REBOL_TIME, StyleSlot::Number),
+    (SCE_REBOL_WORD, StyleSlot::Keyword),
+    (SCE_REBOL_WORD2, StyleSlot::Keyword2),
+    (SCE_REBOL_WORD3, StyleSlot::Keyword2),
+    (SCE_REBOL_WORD4, StyleSlot::Keyword2),
+    (SCE_REBOL_WORD5, StyleSlot::Keyword2),
+    (SCE_REBOL_WORD6, StyleSlot::Keyword2),
+    (SCE_REBOL_WORD7, StyleSlot::Keyword2),
+    (SCE_REBOL_WORD8, StyleSlot::Keyword2),
+];
+
+// Italic on comment / preface — universal Code++ comment
+// convention. PREFACE (3) is semantically documentation prose
+// before the REBOL header block, so it gets the same italic
+// treatment as COMMENTLINE / COMMENTBLOCK.
+const REBOL_ITALIC: &[usize] = &[
+    SCE_REBOL_COMMENTLINE,
+    SCE_REBOL_COMMENTBLOCK,
+    SCE_REBOL_PREFACE,
+];
+
+// Bold on WORD only — the primary keyword tier. Same
+// single-class-bold discipline as MMIXAL (OPCODE_VALID),
+// CSound (OPCODE), and OScript (KEYWORD) — WORD2..WORD8 all
+// carry Keyword2 accent rather than sharing bold.
+const REBOL_BOLD: &[usize] = &[SCE_REBOL_WORD];
+
+// Eight-class install — only five slots (0-4) are installed
+// with canonical REBOL vocabulary tiers. Classes 5/6/7 are
+// intentionally NOT registered here at all; the `WordList`
+// instances inside Scintilla for those descriptor indices
+// stay default-constructed, and the paint loop's `InList`
+// probe at `LexRebol.cxx:162-166` returns false for every
+// identifier — so `SCE_REBOL_WORD6`/`WORD7`/`WORD8` states
+// never fire in practice. The theme still maps those SCE
+// slots to `Keyword2` defensively (see the `REBOL_STYLES`
+// banner above) so that if a future host populates class
+// 5/6/7 the WORD6/7/8 states render with accent styling
+// instead of falling to `STYLE_DEFAULT`.
+const REBOL_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, REBOL_WORD),
+        (1, REBOL_WORD2),
+        (2, REBOL_WORD3),
+        (3, REBOL_WORD4),
+        (4, REBOL_WORD5),
+    ],
+    styles: REBOL_STYLES,
+    italic: REBOL_ITALIC,
+    bold: REBOL_BOLD,
 };
 
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
@@ -9455,6 +9616,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&NNCRONTAB_THEME)
     } else if lang == L_OSCRIPT {
         Some(&OSCRIPT_THEME)
+    } else if lang == L_REBOL {
+        Some(&REBOL_THEME)
     } else {
         None
     }
@@ -24613,16 +24776,17 @@ mod lang_theme_tests {
         ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES,
         MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC, NIM_STYLES,
         NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD, OSCRIPT_ITALIC,
-        OSCRIPT_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE,
-        SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING,
-        SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
-        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
-        SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
-        SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
-        SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
-        SCE_AU3_KEYWORD, SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR,
-        SCE_AU3_SENT, SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE,
-        SCE_CAML_CHAR, SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
+        OSCRIPT_STYLES, REBOL_BOLD, REBOL_ITALIC, REBOL_STYLES, SCE_ADA_CHARACTER,
+        SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL,
+        SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD,
+        SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE,
+        SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND,
+        SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER, SCE_ASM_OPERATOR,
+        SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_AU3_COMMENT,
+        SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
+        SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT,
+        SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_CAML_CHAR,
+        SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
         SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER,
         SCE_CAML_OPERATOR, SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS,
         SCE_CMAKE_COMMENT, SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF,
@@ -24693,16 +24857,17 @@ mod lang_theme_tests {
         L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO,
         L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
         L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP,
-        L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
-        L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS,
-        MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS,
-        NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS,
-        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS,
-        OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS,
-        PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS,
-        POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1,
-        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-        PYTHON_KEYWORDS_2, RC_KEYWORDS, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
+        L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_RUBY, L_RUST, L_SCHEME,
+        L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
+        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+        MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
+        NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+        OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
+        OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
+        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
+        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
+        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3,
+        REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
         R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
         SMALLTALK_SPECIAL_SELECTORS, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
         TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
@@ -24767,7 +24932,13 @@ mod lang_theme_tests {
         SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
         SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER, SCE_POWERSHELL_KEYWORD,
         SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING,
-        SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_R_BACKTICKS, SCE_R_BASEKWORD,
+        SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_REBOL_BINARY, SCE_REBOL_BRACEDSTRING,
+        SCE_REBOL_CHARACTER, SCE_REBOL_COMMENTBLOCK, SCE_REBOL_COMMENTLINE, SCE_REBOL_DATE,
+        SCE_REBOL_DEFAULT, SCE_REBOL_EMAIL, SCE_REBOL_FILE, SCE_REBOL_IDENTIFIER, SCE_REBOL_ISSUE,
+        SCE_REBOL_MONEY, SCE_REBOL_NUMBER, SCE_REBOL_OPERATOR, SCE_REBOL_PAIR, SCE_REBOL_PREFACE,
+        SCE_REBOL_QUOTEDSTRING, SCE_REBOL_TAG, SCE_REBOL_TIME, SCE_REBOL_TUPLE, SCE_REBOL_URL,
+        SCE_REBOL_WORD, SCE_REBOL_WORD2, SCE_REBOL_WORD3, SCE_REBOL_WORD4, SCE_REBOL_WORD5,
+        SCE_REBOL_WORD6, SCE_REBOL_WORD7, SCE_REBOL_WORD8, SCE_R_BACKTICKS, SCE_R_BASEKWORD,
         SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER, SCE_R_INFIX,
         SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
         SCE_R_RAWSTRING, SCE_R_RAWSTRING2, SCE_R_STRING, SCE_R_STRING2, SCE_VHDL_IDENTIFIER,
@@ -24820,6 +24991,7 @@ mod lang_theme_tests {
             (L_NIM, "Nim"),
             (L_NNCRONTAB, "NNCrontab"),
             (L_OSCRIPT, "OScript"),
+            (L_REBOL, "REBOL"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -38988,6 +39160,479 @@ mod lang_theme_tests {
         );
     }
 
+    /// REBOL uses Lexilla's `rebol` lexer (`LexRebol.cxx`) —
+    /// Carl Sassenrath's homoiconic message-passing dialect
+    /// language. Distinctive features:
+    ///
+    /// - **Eight-class descriptor** — widest of Phase 4.5,
+    ///   exceeding Forth 6 / Erlang 6 / `OScript` 6. The
+    ///   upstream registration at `LexRebol.cxx:320-323`
+    ///   declares only `{"Keywords", 0}` (single-class), but
+    ///   the paint loop accesses all 8 wordlist slots via
+    ///   `keywordlists[0..7]` at `:74-81`.
+    /// - **Reverse-first-match-wins cascade** at
+    ///   `:162-178` — classes probed 7 → 0 in REVERSE order.
+    ///   Higher classes SHADOW lower ones on collision.
+    /// - **Case-INSENSITIVE** via `sc.GetCurrentLowered` at
+    ///   `:160`.
+    /// - **Very wide identifier alphabet**: alnum + `?` +
+    ///   `!` + `.` + `'` + `+` + `-` + `*` + `&` + `|` + `=` +
+    ///   `_` + `~` per `IsAWordChar` at `:37-39`. REBOL word
+    ///   names include `empty?`, `found?`, `type-of`, and
+    ///   even symbolic names like `+`/`-`/`?`/`!`.
+    /// - **Homoiconic value literals** — many syntactic forms
+    ///   are first-class values with dedicated SCE states
+    ///   (PAIR / TUPLE / DATE / TIME / MONEY / TAG / FILE /
+    ///   EMAIL / URL / BINARY / ISSUE / CHARACTER).
+    /// - **Braced strings with nesting**. `{...}` strings
+    ///   track balanced brace depth per `:206-213`.
+    /// - **Preface state** covers preamble prose before the
+    ///   REBOL `[...]` header block.
+    /// - **Fold** at `:275+` uses brace / bracket / paren
+    ///   nesting plus block-comment style transitions.
+    ///
+    /// Coverage invariants asserted:
+    ///   1. Deep-value identity pin.
+    ///   2. Style count == 27 (29 defined `SCE_REBOL_*` slots
+    ///      minus 2 unmapped: `DEFAULT` (0) and `IDENTIFIER`
+    ///      (20)).
+    ///   3. Five populated wordlist classes in canonical
+    ///      descriptor order (0..=4). Classes 5-7 registered
+    ///      empty (paint loop's `InList` returns false for
+    ///      every identifier), NOT installed in `keywords`
+    ///      because empty wordlists have no meaningful
+    ///      `SCI_SETKEYWORDS` payload.
+    ///   4. All five populated classes non-empty.
+    ///   5. All-lowercase alphabet enforcement across every
+    ///      class — the wide `IsAWordChar` alphabet accepts
+    ///      lowercase alpha + digit + `? ! . ' + - * & | =
+    ///      _ ~` continuation bytes.
+    ///   6. **Cross-class disjointness across all 10 pairs
+    ///      of populated classes 0-4** — LOAD-BEARING for
+    ///      the reverse-first-match-wins cascade at
+    ///      `:162-178`. A duplicate in a HIGHER-numbered
+    ///      class silently masks its LOWER-numbered sibling.
+    ///   7. Style-routing pins for all 27 mapped SCE
+    ///      constants (verify the WORD/WORD2/…/WORD8
+    ///      routing scheme and the value-literal collapses).
+    ///   8. Two framework-unmapped slots confirmed absent:
+    ///      `DEFAULT` (0) and `IDENTIFIER` (20).
+    ///   9. Italic set == 3 (COMMENTLINE + COMMENTBLOCK +
+    ///      PREFACE — the three "documentation prose"
+    ///      states).
+    ///   10. Bold set == 1 (`WORD` only — primary keyword
+    ///       tier).
+    ///   11. Cross-language non-reuse (Forth / `OScript` /
+    ///       MMIXAL / `CSound`).
+    ///   12. `L_REBOL` `LangEntry` has `lexer:
+    ///       Some("rebol")` and extensions contain `reb` +
+    ///       `rebol`.
+    ///   13. **Canonical WORD anchors** — one per group:
+    ///       `if` (control flow), `func` (definition),
+    ///       `comment` (special — load-bearing for the
+    ///       `blockComment` flag flip at `:161`), `any`
+    ///       (short-circuit logical).
+    ///   14. **Canonical WORD2 anchors** — `!`-suffixed
+    ///       datatypes: `integer!`, `string!`, `block!`,
+    ///       `object!`, `series!`.
+    ///   15. **Canonical WORD3 anchors** — math + to-*
+    ///       conversion: `absolute`, `round`, `to-string`,
+    ///       `to-integer`.
+    ///   16. **Canonical WORD4 anchors** — I/O:
+    ///       `print`, `probe`, `read`, `open`, `layout`.
+    ///   17. **Canonical WORD5 anchors** — series ops:
+    ///       `append`, `find`, `first`, `length?`.
+    ///   18. **`comment` present in WORD (class 0)** —
+    ///       cosmetic pin. `comment` is the word that
+    ///       introduces `comment {...}` block comments and
+    ///       deserves Keyword-bold styling to signal that
+    ///       role visually. NOTE: the
+    ///       `blockComment` flag flip at `LexRebol.cxx:161`
+    ///       (`blockComment = strcmp(s, "comment") == 0;`)
+    ///       runs UNCONDITIONALLY, independent of any
+    ///       wordlist membership — removing `comment` from
+    ///       WORD would NOT break block-comment detection,
+    ///       only change the word's paint style to default.
+    ///       Pin is retained because the styling is expected
+    ///       by REBOL users.
+    ///   19. **Class 1 all end in `!`** — REBOL datatype
+    ///       convention. Any WORD2 entry without a trailing
+    ///       `!` is a mis-classification (belongs in
+    ///       another class).
+    ///   20. **Highest defined `SCE_REBOL_*` pin.**
+    ///       `SCE_REBOL_WORD8` (28) is the top slot.
+    ///   21. **Affirmative absence pins** — tokens that
+    ///       LOOK like REBOL keywords but aren't:
+    ///       `abs` (canonical is `absolute` in WORD3),
+    ///       `sqrt` (canonical is `square-root`),
+    ///       `symbol!` (not a REBOL datatype — REBOL uses
+    ///       `word!`).
+    ///   22. No duplicate tokens within any wordlist.
+    #[test]
+    fn rebol_uses_lexrebol_eight_class_theme() {
+        let re = lang_theme(L_REBOL).expect("REBOL wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(re.styles, REBOL_STYLES);
+        assert_eq!(re.italic, REBOL_ITALIC);
+        assert_eq!(re.bold, REBOL_BOLD);
+        assert_eq!(re.keywords.len(), 5);
+
+        // Invariant 2: 27 mappings (29 defined slots minus 2 unmapped).
+        assert_eq!(
+            re.styles.len(),
+            27,
+            "REBOL_STYLES must map 27 indices (29 defined \
+             SCE_REBOL_* slots minus 2 unmapped: DEFAULT (0) and \
+             IDENTIFIER (20) — per framework convention)"
+        );
+
+        // Invariant 3: five populated classes in canonical order.
+        for (i, (expected_class, expected_list)) in [
+            (0u32, REBOL_WORD),
+            (1u32, REBOL_WORD2),
+            (2u32, REBOL_WORD3),
+            (3u32, REBOL_WORD4),
+            (4u32, REBOL_WORD5),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                re.keywords[i].0, *expected_class,
+                "REBOL_THEME.keywords[{i}].class must match descriptor order"
+            );
+            assert_eq!(
+                re.keywords[i].1, *expected_list,
+                "REBOL_THEME.keywords[{i}].list must match canonical wordlist"
+            );
+        }
+
+        // Invariant 4: all five populated classes non-empty.
+        for (list, name) in [
+            (REBOL_WORD, "WORD"),
+            (REBOL_WORD2, "WORD2"),
+            (REBOL_WORD3, "WORD3"),
+            (REBOL_WORD4, "WORD4"),
+            (REBOL_WORD5, "WORD5"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "REBOL_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: all-lowercase alphabet across every class.
+        // LexRebol.cxx:37-39 IsAWordChar accepts alnum + `? ! . '
+        // + - * & | = _ ~`. GetCurrentLowered at :160 requires
+        // every entry to be lowercase.
+        let is_rebol_word_char = |b: u8| {
+            b.is_ascii_lowercase()
+                || b.is_ascii_digit()
+                || matches!(
+                    b,
+                    b'?' | b'!'
+                        | b'.'
+                        | b'\''
+                        | b'+'
+                        | b'-'
+                        | b'*'
+                        | b'&'
+                        | b'|'
+                        | b'='
+                        | b'_'
+                        | b'~'
+                )
+        };
+        for (list, name) in [
+            (REBOL_WORD, "WORD"),
+            (REBOL_WORD2, "WORD2"),
+            (REBOL_WORD3, "WORD3"),
+            (REBOL_WORD4, "WORD4"),
+            (REBOL_WORD5, "WORD5"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    !tok.is_empty() && tok.bytes().all(is_rebol_word_char),
+                    "REBOL_{name} token `{tok}` violates the \
+                     IsAWordChar alphabet at LexRebol.cxx:37-39 \
+                     (ASCII lowercase alnum + `? ! . ' + - * & | \
+                     = _ ~`) — bytes outside this set can never \
+                     appear in a captured identifier"
+                );
+            }
+        }
+
+        // Invariant 6: cross-class disjointness across all 10
+        // pairs of populated classes 0-4. LOAD-BEARING for the
+        // reverse-first-match-wins cascade at :162-178 — a
+        // higher-class duplicate silently masks its lower-class
+        // sibling.
+        use std::collections::HashSet;
+        let sets = [
+            (
+                "WORD",
+                REBOL_WORD.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "WORD2",
+                REBOL_WORD2.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "WORD3",
+                REBOL_WORD3.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "WORD4",
+                REBOL_WORD4.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "WORD5",
+                REBOL_WORD5.split_whitespace().collect::<HashSet<_>>(),
+            ),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                if let Some(shared) = sets[i].1.intersection(&sets[j].1).next() {
+                    panic!(
+                        "REBOL_{} and REBOL_{} both contain `{shared}` — \
+                         LexRebol.cxx:162-178 probes classes 7 → 0 \
+                         reverse-first-match-wins. Cross-class duplicate \
+                         leaves the LOWER-numbered entry dead code.",
+                        sets[i].0, sets[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 7: style-routing pins for all 27 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_REBOL_COMMENTLINE, StyleSlot::Comment, "COMMENTLINE"),
+            (SCE_REBOL_COMMENTBLOCK, StyleSlot::Comment, "COMMENTBLOCK"),
+            (SCE_REBOL_PREFACE, StyleSlot::Comment, "PREFACE"),
+            (SCE_REBOL_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+            (SCE_REBOL_CHARACTER, StyleSlot::String, "CHARACTER"),
+            (SCE_REBOL_QUOTEDSTRING, StyleSlot::String, "QUOTEDSTRING"),
+            (SCE_REBOL_BRACEDSTRING, StyleSlot::String, "BRACEDSTRING"),
+            (SCE_REBOL_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_REBOL_PAIR, StyleSlot::Number, "PAIR"),
+            (SCE_REBOL_TUPLE, StyleSlot::Number, "TUPLE"),
+            (SCE_REBOL_BINARY, StyleSlot::Number, "BINARY"),
+            (SCE_REBOL_MONEY, StyleSlot::Number, "MONEY"),
+            (SCE_REBOL_ISSUE, StyleSlot::String, "ISSUE"),
+            (SCE_REBOL_TAG, StyleSlot::String, "TAG"),
+            (SCE_REBOL_FILE, StyleSlot::String, "FILE"),
+            (SCE_REBOL_EMAIL, StyleSlot::String, "EMAIL"),
+            (SCE_REBOL_URL, StyleSlot::String, "URL"),
+            (SCE_REBOL_DATE, StyleSlot::Number, "DATE"),
+            (SCE_REBOL_TIME, StyleSlot::Number, "TIME"),
+            (SCE_REBOL_WORD, StyleSlot::Keyword, "WORD"),
+            (SCE_REBOL_WORD2, StyleSlot::Keyword2, "WORD2"),
+            (SCE_REBOL_WORD3, StyleSlot::Keyword2, "WORD3"),
+            (SCE_REBOL_WORD4, StyleSlot::Keyword2, "WORD4"),
+            (SCE_REBOL_WORD5, StyleSlot::Keyword2, "WORD5"),
+            (SCE_REBOL_WORD6, StyleSlot::Keyword2, "WORD6"),
+            (SCE_REBOL_WORD7, StyleSlot::Keyword2, "WORD7"),
+            (SCE_REBOL_WORD8, StyleSlot::Keyword2, "WORD8"),
+        ] {
+            assert!(
+                re.styles.contains(&(idx, slot)),
+                "SCE_REBOL_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 8: framework-unmapped slots confirmed absent.
+        // Slot numbers referenced via the named `SCE_REBOL_*`
+        // constants so a Lexilla renumbering breaks this
+        // assertion rather than silently skipping the check.
+        assert_eq!(
+            SCE_REBOL_DEFAULT, 0,
+            "SCE_REBOL_DEFAULT has drifted from 0 — verify against SciLexer.h:1195"
+        );
+        assert_eq!(
+            SCE_REBOL_IDENTIFIER, 20,
+            "SCE_REBOL_IDENTIFIER has drifted from 20 — verify against SciLexer.h:1215"
+        );
+        for (idx, name) in [
+            (SCE_REBOL_DEFAULT, "DEFAULT"),
+            (SCE_REBOL_IDENTIFIER, "IDENTIFIER"),
+        ] {
+            assert!(
+                !re.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_REBOL_{name} ({idx}) must remain unmapped — \
+                 framework convention"
+            );
+        }
+
+        // Invariant 9: italic == 3 (all three prose states).
+        assert_eq!(re.italic.len(), 3);
+        for idx in [
+            SCE_REBOL_COMMENTLINE,
+            SCE_REBOL_COMMENTBLOCK,
+            SCE_REBOL_PREFACE,
+        ] {
+            assert!(
+                re.italic.contains(&idx),
+                "REBOL_ITALIC must contain SCE_REBOL_ idx {idx}"
+            );
+        }
+
+        // Invariant 10: bold == 1 (WORD only).
+        assert_eq!(re.bold.len(), 1);
+        assert!(re.bold.contains(&SCE_REBOL_WORD));
+
+        // Invariant 11: cross-language non-reuse (sampled).
+        let fo = lang_theme(L_FORTH).expect("Forth wired");
+        let os = lang_theme(L_OSCRIPT).expect("OScript wired");
+        let mm = lang_theme(L_MMIXAL).expect("MMIXAL wired");
+        let cs = lang_theme(L_CSOUND).expect("CSound wired");
+        for (other, name) in [
+            (fo, "Forth"),
+            (os, "OScript"),
+            (mm, "MMIXAL"),
+            (cs, "CSound"),
+        ] {
+            assert_ne!(
+                re.styles, other.styles,
+                "REBOL must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 12: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let re_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_REBOL)
+            .expect("L_REBOL LangEntry present in LANG_TABLE");
+        assert_eq!(
+            re_entry.lexer,
+            Some("rebol"),
+            "L_REBOL LangEntry.lexer must be Some(\"rebol\")"
+        );
+        assert!(re_entry.extensions.contains(&"reb"));
+        assert!(re_entry.extensions.contains(&"rebol"));
+
+        // Invariant 13: canonical WORD anchors.
+        for tok in ["if", "func", "comment", "any"] {
+            assert!(
+                REBOL_WORD.split_whitespace().any(|t| t == tok),
+                "REBOL_WORD must include canonical keyword `{tok}`"
+            );
+        }
+
+        // Invariant 14: canonical WORD2 anchors (datatypes).
+        for tok in ["integer!", "string!", "block!", "object!", "series!"] {
+            assert!(
+                REBOL_WORD2.split_whitespace().any(|t| t == tok),
+                "REBOL_WORD2 must include canonical datatype `{tok}`"
+            );
+        }
+
+        // Invariant 15: canonical WORD3 anchors (math + to-*).
+        for tok in ["absolute", "round", "to-string", "to-integer"] {
+            assert!(
+                REBOL_WORD3.split_whitespace().any(|t| t == tok),
+                "REBOL_WORD3 must include canonical math/conversion `{tok}`"
+            );
+        }
+
+        // Invariant 16: canonical WORD4 anchors (I/O).
+        for tok in ["print", "probe", "read", "open", "layout"] {
+            assert!(
+                REBOL_WORD4.split_whitespace().any(|t| t == tok),
+                "REBOL_WORD4 must include canonical I/O `{tok}`"
+            );
+        }
+
+        // Invariant 17: canonical WORD5 anchors (series ops).
+        for tok in ["append", "find", "first", "length?"] {
+            assert!(
+                REBOL_WORD5.split_whitespace().any(|t| t == tok),
+                "REBOL_WORD5 must include canonical series op `{tok}`"
+            );
+        }
+
+        // Invariant 18: `comment` present in WORD (class 0)
+        // for cosmetic Keyword styling — `comment` is the word
+        // that introduces `comment {...}` block comments and
+        // deserves visual emphasis. NOTE: this pin is
+        // cosmetic, not load-bearing. The `blockComment` flag
+        // flip at `LexRebol.cxx:161`
+        // (`blockComment = strcmp(s, "comment") == 0;`) runs
+        // UNCONDITIONALLY before any wordlist probe — a
+        // byte-exact test on the collected identifier text.
+        // Whether `comment` is in a wordlist has no effect on
+        // block-comment detection, only on the word's paint
+        // style.
+        assert!(
+            REBOL_WORD.split_whitespace().any(|t| t == "comment"),
+            "REBOL_WORD should include `comment` for cosmetic \
+             Keyword styling — `comment` is the word that \
+             introduces `comment {{...}}` block comments and \
+             REBOL users expect it highlighted. This is a \
+             styling pin; the block-comment detection at \
+             `LexRebol.cxx:161` is independent of wordlist \
+             membership"
+        );
+
+        // Invariant 19: all WORD2 tokens end in `!`.
+        for tok in REBOL_WORD2.split_whitespace() {
+            assert!(
+                tok.ends_with('!'),
+                "REBOL_WORD2 token `{tok}` must end in `!` — REBOL \
+                 datatype convention. A `!`-less entry is a \
+                 mis-classification (belongs in another class)"
+            );
+        }
+
+        // Invariant 20: highest defined SCE_REBOL_* pin.
+        assert_eq!(
+            SCE_REBOL_WORD8, 28,
+            "SCE_REBOL_WORD8 has drifted from 28 — Lexilla may have \
+             renumbered slots. Verify against SciLexer.h:1223"
+        );
+        for (idx, _) in re.styles {
+            assert!(
+                *idx <= SCE_REBOL_WORD8,
+                "REBOL_STYLES references slot {idx}, which is higher \
+                 than SCE_REBOL_WORD8 ({SCE_REBOL_WORD8})"
+            );
+        }
+
+        // Invariant 21: affirmative absence pins.
+        for (list, listname, tok) in [
+            // Canonical spellings are `absolute` / `square-root`.
+            (REBOL_WORD3, "WORD3", "abs"),
+            (REBOL_WORD3, "WORD3", "sqrt"),
+            // REBOL uses `word!` as the symbol type — no `symbol!`.
+            (REBOL_WORD2, "WORD2", "symbol!"),
+        ] {
+            assert!(
+                !list.split_whitespace().any(|t| t == tok),
+                "REBOL_{listname} must NOT include `{tok}` — not a \
+                 canonical REBOL 2/3 token"
+            );
+        }
+
+        // Invariant 22: no duplicate tokens.
+        for (list, name) in [
+            (REBOL_WORD, "WORD"),
+            (REBOL_WORD2, "WORD2"),
+            (REBOL_WORD3, "WORD3"),
+            (REBOL_WORD4, "WORD4"),
+            (REBOL_WORD5, "WORD5"),
+        ] {
+            let total = list.split_whitespace().count();
+            let unique = list.split_whitespace().collect::<HashSet<_>>().len();
+            assert_eq!(
+                total,
+                unique,
+                "REBOL_{name} contains {} duplicate token(s)",
+                total - unique
+            );
+        }
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -39005,7 +39650,8 @@ mod lang_theme_tests {
     /// was removed when the MMIXAL row landed. `L_NIM` was removed
     /// when the Nim row landed. `L_NNCRONTAB` was removed when the
     /// `NNCrontab` row landed. `L_OSCRIPT` was removed when the
-    /// `OScript` row landed in this commit.
+    /// `OScript` row landed. `L_REBOL` was removed when the REBOL
+    /// row landed in this commit.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");

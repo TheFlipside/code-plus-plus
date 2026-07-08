@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 65 / 🟡 23 / ⚫ 1.
+Total: 89 rows. ✅ 66 / 🟡 22 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1909,7 +1909,7 @@ further shim work needed.
 | Python | 22 | `python` | ✅ | ✅ | ✅ |
 | R | 54 | `r` | ✅ | ✅ | ✅ |
 | Raku | 89 | `raku` | ⚫ | ⚫ | 🟡 |
-| REBOL | 79 | `rebol` | ⚫ | ⚫ | 🟡 |
+| REBOL | 79 | `rebol` | ✅ | ✅ | ✅ |
 | Registry | 80 | `registry` | ⚫ | ⚫ | 🟡 |
 | Resource file | 7 | `cpp` | ✅ | ✅ | ✅ |
 | Ruby | 36 | `ruby` | ✅ | ✅ | ✅ |
@@ -6935,6 +6935,264 @@ and `file` MUST appear in both TYPES and
 OBJECTS — the paint-loop's context-scoped
 probe makes this legal; removing them from
 either would break OScript idioms).
+
+**REBOL (2026-07-07):** wires `SCLEX_REBOL`
+(= 71) for REBOL `.reb` / `.rebol` source —
+Carl Sassenrath's homoiconic message-passing
+dialect language. `L_REBOL` (id 79) is the
+sole language row using this lexer.
+**Eight-class descriptor** — widest of
+Phase 4.5, exceeding Forth 6, Erlang 6, and
+OScript 6. Even though upstream registration
+at `LexRebol.cxx:320-323` declares only
+`{"Keywords", 0}` (single-class), the paint
+loop `ColouriseRebolDoc` accesses all 8
+wordlist slots via `keywordlists[0..7]`
+at `:74-81` and emits the corresponding
+`SCE_REBOL_WORD..WORD8` states — SciTE /
+Notepad++ populate the additional slots
+via `SCI_SETKEYWORDS(N, ...)` even though
+only slot 0 is exposed by descriptor.
+
+**Five populated classes (47 + 59 + 71 + 79
++ 50 = 306 tokens):**
+- **Class 0 (`SCE_REBOL_WORD`, bold
+  Keyword)** — `REBOL_WORD` carries 47
+  primary keywords: 24 control-flow
+  (`if`/`either`/`unless`/`while`/`until`/
+  `loop`/`repeat`/`for`/`forall`/`foreach`/
+  `forever`/`forskip`/`break`/`continue`/
+  `return`/`exit`/`catch`/`throw`/`halt`/
+  `try`/`attempt`/`switch`/`case`), 15
+  definition / evaluation (`do`/`does`/
+  `func`/`function`/`has`/`use`/`make`/
+  `context`/`construct`/`bind`/`in`/
+  `reduce`/`compose`/`get`/`set`), 2
+  special (`quit`/`comment` — `comment`
+  gets Keyword styling here for the word
+  that introduces `comment {...}` block
+  comments; NOTE the block-comment flag
+  flip at `LexRebol.cxx:161`
+  (`blockComment = strcmp(s, "comment")
+  == 0;`) runs UNCONDITIONALLY before any
+  wordlist probe, so wordlist membership
+  is purely cosmetic — removing `comment`
+  from WORD would not break block-comment
+  detection, only its paint style),
+  and 6 logical / short-circuit
+  (`not`/`and`/`or`/`xor`/`any`/`all`).
+- **Class 1 (`SCE_REBOL_WORD2`, Keyword2
+  accent)** — `REBOL_WORD2` carries 59
+  datatypes, all with trailing `!` per
+  REBOL convention: 27 value types
+  (`integer!`/`string!`/`block!`/`char!`/
+  `binary!`/`bitset!`/`file!`/`date!`/
+  etc.), 7 function-like (`action!`/
+  `function!`/`native!`/`op!`/`routine!`/
+  `command!`/`closure!`), 6 word / path
+  variants (`get-word!`/`lit-word!`/
+  `set-word!`/`refinement!`/`lit-path!`/
+  `set-path!`), 11 typesets / collections
+  (`any-block!`/`any-function!`/
+  `any-string!`/`any-type!`/`any-word!`/
+  `series!`/`number!`/`typeset!`/
+  `datatype!`/`list!`/`library!`), and 8
+  REBOL 3 additions (`vector!`/`map!`/
+  `percent!`/`gob!`/`handle!`/`port!`/
+  `object!`/`struct!`).
+- **Class 2 (`SCE_REBOL_WORD3`, Keyword2
+  accent)** — `REBOL_WORD3` carries 71
+  math + conversion natives: 31 arithmetic
+  / trig (`absolute`/`sine`/`cosine`/`round`/
+  `random`/`power`/`negate`/`shift`/`etc.`),
+  35 `to-*` conversions (`to`/`to-integer`/
+  `to-string`/`to-binary`/`to-file`/etc.),
+  and 5 encoding helpers (`as-pair`/
+  `charset`/`debase`/`dehex`/`enbase`).
+- **Class 3 (`SCE_REBOL_WORD4`, Keyword2
+  accent)** — `REBOL_WORD4` carries 79 I/O
+  and system natives across 10 groups:
+  console I/O (`print`/`prin`/`input`/
+  `ask`/`probe`), file / network I/O
+  (`open`/`close`/`read`/`write`/`save`/
+  `load`/`delete`/`wait`/`send`/etc.),
+  requests / dialogs (`request-file`/
+  `request-color`/etc.), query /
+  introspection (`query`/`exists?`/
+  `script?`/`modified?`/`info?`/etc.),
+  file-system helpers (`make-dir`/
+  `change-dir`/`clean-path`/etc.), view /
+  display (`layout`/`view`/`focus`/`show`/
+  `hide`/etc.), security / protection
+  (`secure`/`protect`/`recycle`), program
+  control (`launch`/`browse`/`echo`/
+  `trace`/etc.), confirmation / parsing
+  (`confirm`/`import-email`/`decode-cgi`/
+  `parse-xml`/`build-tag`), compression /
+  encoding (`compress`/`decompress`/
+  `load-image`), and system / event
+  (`now`/`do-events`/`resend`).
+- **Class 4 (`SCE_REBOL_WORD5`, Keyword2
+  accent)** — `REBOL_WORD5` carries 50
+  series / block operations across 8
+  groups: mutating (`append`/`insert`/
+  `remove`/`change`/`clear`/`poke`),
+  non-mutating access (`copy`/`find`/
+  `at`/`back`/`next`/`head`/`tail`/`pick`/
+  `select`/`extract`/`skip`/`remove-each`),
+  reordering (`reverse`/`sort`/`unique`),
+  set-like operations (`intersect`/
+  `union`/`difference`/`exclude`),
+  positional accessors (`first`/`second`/
+  `third`/`fourth`/`fifth`/`last`), query
+  (`index?`/`length?`/`offset?`/`size?`/
+  `series?`), string helpers (`repend`/
+  `replace`/`join`/`rejoin`/`parse`/
+  `trim`/`remold`/`reform`), casing
+  (`lowercase`/`uppercase`), and misc
+  (`alter`/`detab`/`entab`/`free`).
+
+**Classes 5-7 left EMPTY** per SciTE
+convention. LexRebol's paint-loop probes
+them via `InList` which returns false for
+every identifier — no runtime cost, and
+the theme maps WORD6/WORD7/WORD8 to
+Keyword2 defensively so a future
+population wires visible styling
+automatically.
+
+**Reverse-first-match-wins cascade** at
+`LexRebol.cxx:162-178` — probes classes
+**7 → 6 → 5 → 4 → 3 → 2 → 1 → 0** in
+REVERSE order. Higher-numbered classes
+SHADOW lower-numbered ones on collision.
+Invariant 6 enforces cross-class
+disjointness across all 10 pairs of
+populated classes 0-4 — a duplicate in a
+HIGHER-numbered class silently masks its
+LOWER-numbered sibling, so this discipline
+is load-bearing.
+
+**Style routing (27 mappings across 29
+defined SCE slots):** COMMENTLINE +
+COMMENTBLOCK + PREFACE → `Comment`
+(italic — three "documentation prose"
+states, where PREFACE is preamble text
+before the `REBOL [...]` header block);
+OPERATOR → `Operator` (symbolic operators
+from `IsAnOperator` at `:46-63`);
+CHARACTER + QUOTEDSTRING + BRACEDSTRING +
+FILE + EMAIL + URL + ISSUE + TAG →
+`String` (eight prefix/suffix-delimited
+value literals — REBOL's first-class
+`file!`/`email!`/`url!`/`issue!`/`tag!`
+types all behave semantically like
+strings with different delimiters);
+NUMBER + PAIR + TUPLE + BINARY + MONEY +
+DATE + TIME → `Number` (seven numeric
+literal forms — REBOL's first-class
+syntactic value types carrying numeric
+semantics); WORD → `Keyword` (bold visual
+anchor); WORD2/WORD3/WORD4/WORD5/WORD6/
+WORD7/WORD8 → `Keyword2` (accent — seven
+tiers of vocabulary accent). Two slots
+unmapped: DEFAULT (0), IDENTIFIER (20)
+transient collect state.
+
+**Case-INSENSITIVE** via `sc.GetCurrentLowered`
+at `:160` — wordlist tokens must be
+lowercase.
+
+**Very wide identifier alphabet.**
+`IsAWordChar` at `:37-39` accepts alnum +
+`? ! . ' + - * & | = _ ~` — REBOL word
+names include `empty?`, `found?`,
+`type-of`, and even symbolic names like
+`+`/`-`/`?`/`!`. Invariant 5 enforces
+this wide alphabet across every wordlist
+token.
+
+**Homoiconic value literals.** REBOL treats
+many syntactic forms as first-class
+values, each with its own SCE state and
+paint-loop mechanic:
+`identifier:` (colon suffix, no space) →
+URL; `identifier@` → EMAIL; `identifier$`
+→ MONEY (retroactively re-classified at
+LexRebol.cxx:145-153); NUMBER post-settles
+to PAIR on `x` / TIME on `:` / DATE on
+`-`/`/` / TUPLE on multiple `.` at
+`:185-197`; `{...}` strings nest balanced
+braces at `:206-213`; `#{...}` /
+`2#{...}` / `NN#{...}` binary literals at
+`:65-69`.
+
+**Preface state.** `SCE_REBOL_PREFACE` (3)
+covers preamble text BEFORE the first
+`REBOL [...]` header block — REBOL
+convention treats everything before the
+header as documentation prose, not code.
+Entered at `:100` (initial state).
+
+**Fold** at `:275+` uses brace / bracket /
+paren nesting levels plus block-comment
+style transitions.
+
+**Source:** SciTE community `rebol.properties`
+(https://raw.githubusercontent.com/SciTe-Community/color-highlighter/master/rebol.properties)
+re-partitioned across LexRebol's 5
+populated slots to match the semantic
+buckets emitted by the paint loop. Upstream
+ships 3 keyword slots (general vocab,
+`?`-predicates, `!`-datatypes); Code++
+splits them further to align with the
+lexer's WORD/WORD2/WORD3/WORD4/WORD5
+routing.
+
+Structural test coverage: 22 invariants —
+deep-value identity pin, 27-mapping style
+count (29 defined slots minus 2
+unmapped), five populated classes in
+canonical descriptor order (classes 5-7
+left empty per SciTE convention), all
+five populated classes non-empty,
+**very-wide alphabet enforcement**
+(lowercase alnum + `? ! . ' + - * & | = _
+~`) across every class, **pairwise
+cross-class disjointness across all 10
+pairs of populated classes 0-4**
+(load-bearing for the reverse-first-
+match-wins cascade), style-routing pins
+for all 27 mapped SCE constants
+including all 8 WORD tiers, 2 unmapped
+slots confirmed absent, italic set == 3
+(COMMENTLINE + COMMENTBLOCK + PREFACE),
+bold set == 1 (WORD only),
+cross-language non-reuse (Forth /
+OScript / MMIXAL / `CSound`),
+`L_REBOL` `LangEntry`'s `lexer:
+Some("rebol")` + both `reb` and `rebol`
+extensions, canonical WORD anchors
+(`if`/`func`/`comment`/`any`), canonical
+WORD2 datatypes (all `!`-suffixed),
+canonical WORD3/WORD4/WORD5 anchors per
+functional group, **`comment` cosmetic
+styling pin** (retained in WORD for
+Keyword-bold styling of REBOL's block-
+comment-introducing word; note the
+`blockComment` flag flip at
+`LexRebol.cxx:161` is UNCONDITIONAL and
+independent of wordlist membership),
+**all WORD2 tokens end in
+`!`** (REBOL datatype convention —
+`!`-less entries are mis-classifications),
+highest-defined `SCE_REBOL_*` pin
+(`SCE_REBOL_WORD8` (28) as top slot),
+**affirmative absence pins** (`abs`/
+`sqrt`/`symbol!` — non-canonical
+spellings; REBOL's canonical forms are
+`absolute` / `square-root` / `word!`),
+and no-duplicate defence-in-depth check.
 
 ## Notes
 

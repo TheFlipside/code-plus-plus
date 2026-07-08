@@ -11810,6 +11810,306 @@ pub const OSCRIPT_OBJECTS: &str = concat!(
     "script ",
 );
 
+/// REBOL primary keywords — class 0 of `LexRebol`'s
+/// eight-class wordlist. Matched at `LexRebol.cxx:176-177`
+/// via `keywords.InList(s)` after `sc.GetCurrentLowered(s,
+/// sizeof(s))` at `:160`; hits change state to
+/// [`SCE_REBOL_WORD`](../scintilla_sys/constant.SCE_REBOL_WORD.html).
+///
+/// **Reverse-first-match-wins cascade at `:162-178`.** `LexRebol`
+/// probes classes **7 → 6 → 5 → 4 → 3 → 2 → 1 → 0** in reverse
+/// order — higher-numbered classes shadow lower-numbered ones
+/// on collision. Class 0 is the LAST resort. Cross-class
+/// disjointness is enforced by the invariant test to prevent
+/// silent shadowing.
+///
+/// **Case-INSENSITIVE.** `GetCurrentLowered` at `:160` means
+/// wordlist tokens must be lowercase. REBOL source may write
+/// words in any case (`If`, `IF`, `if` all valid).
+///
+/// **Source:** `SciTE` community `rebol.properties`
+/// (<https://raw.githubusercontent.com/SciTe-Community/color-highlighter/master/rebol.properties>),
+/// re-partitioned across `LexRebol`'s 5 populated slots
+/// (upstream ships 3 keyword slots — general vocab, `?`-
+/// predicates, `!`-datatypes — remapped here to `LexRebol`'s
+/// 8-class descriptor by semantic bucket).
+///
+/// **47 tokens** across four functional groups:
+///   - **Control flow (24)**: `if`, `either`, `else`, `unless`,
+///     `while`, `until`, `loop`, `repeat`, `for`, `forall`,
+///     `foreach`, `forever`, `forskip`, `break`, `continue`,
+///     `return`, `exit`, `catch`, `throw`, `halt`, `try`,
+///     `attempt`, `switch`, `case`.
+///   - **Definition / evaluation (15)**: `do`, `does`, `func`,
+///     `function`, `has`, `use`, `make`, `context`,
+///     `construct`, `bind`, `in`, `reduce`, `compose`, `get`,
+///     `set`.
+///   - **Special (2)**: `quit`, `comment`. `comment` gets
+///     Keyword styling here as the word that introduces
+///     `comment {...}` block comments. NOTE: the block-
+///     comment flag flip at `LexRebol.cxx:161`
+///     (`blockComment = strcmp(s, "comment") == 0;`) runs
+///     UNCONDITIONALLY before any wordlist probe — it's a
+///     byte-exact test on the collected identifier text.
+///     Removing `comment` from this wordlist would not
+///     break block-comment detection; the token would just
+///     paint at `STYLE_DEFAULT` instead of bold Keyword.
+///   - **Logical / short-circuit (6)**: `not`, `and`, `or`,
+///     `xor`, `any`, `all`. `any` / `all` are REBOL's
+///     short-circuit evaluators (test each expression until
+///     one is truthy / falsy).
+///
+/// **Deliberately excluded:**
+///   - Boolean literals `true`, `false`, `on`, `off`, `yes`,
+///     `no`, `none` — value literals, not control flow.
+///   - `?`-suffixed predicates (`empty?`, `found?`, `equal?`,
+///     etc.) — testing natives, would belong in a predicates
+///     class if REBOL wordlists exposed one.
+///   - I/O primitives `print`, `probe`, `prin`, `ask`,
+///     `input` — in [`REBOL_WORD4`] (I/O / system) since they
+///     side-effect on stdout / stdin.
+pub const REBOL_WORD: &str = concat!(
+    // Control flow.
+    "if either else unless while until loop repeat for forall ",
+    "foreach forever forskip break continue return exit ",
+    "catch throw halt try attempt switch case ",
+    // Definition / evaluation.
+    "do does func function has use make context construct ",
+    "bind in reduce compose get set ",
+    // Special.
+    "quit comment ",
+    // Logical / short-circuit.
+    "not and or xor any all ",
+);
+
+/// REBOL datatypes — class 1 of `LexRebol`'s eight-class
+/// wordlist. Matched at `LexRebol.cxx:174-175`; hits change
+/// state to
+/// [`SCE_REBOL_WORD2`](../scintilla_sys/constant.SCE_REBOL_WORD2.html).
+///
+/// **All tokens end in `!`.** REBOL's syntactic convention:
+/// datatype identifiers carry a trailing `!` to distinguish
+/// them from ordinary words. `LexRebol.cxx:37-39`'s
+/// `IsAWordChar` accepts `!` as an identifier char, so
+/// `integer!` tokenizes as a single word.
+///
+/// **All-lowercase** per `GetCurrentLowered` at `:160`.
+///
+/// **59 tokens** covering REBOL 2 + REBOL 3 (Red-compatible)
+/// datatype vocabulary:
+///   - **Value types (27)**: `binary!`, `bitset!`, `block!`,
+///     `char!`, `date!`, `decimal!`, `email!`, `error!`,
+///     `event!`, `file!`, `hash!`, `image!`, `integer!`,
+///     `issue!`, `logic!`, `money!`, `none!`, `pair!`, `paren!`,
+///     `path!`, `string!`, `tag!`, `time!`, `tuple!`,
+///     `url!`, `word!`, `unset!`.
+///   - **Function-like types (7)**: `action!`, `function!`,
+///     `native!`, `op!`, `routine!`, `command!`, `closure!`.
+///   - **Word variants (4)**: `get-word!`, `lit-word!`,
+///     `set-word!`, `refinement!`.
+///   - **Path variants (2)**: `lit-path!`, `set-path!`.
+///   - **Typesets / collections (11)**: `any-block!`,
+///     `any-function!`, `any-string!`, `any-type!`,
+///     `any-word!`, `series!`, `number!`, `typeset!`,
+///     `datatype!`, `list!`, `library!`.
+///   - **REBOL 3 additions (8)**: `vector!`, `map!`,
+///     `percent!`, `gob!` (graphic object), `handle!`
+///     (opaque host resource), `port!`, `object!`, `struct!`.
+///
+/// **Deliberately excluded:**
+///   - `symbol!` — NOT a REBOL datatype. REBOL uses `word!`
+///     (and its `get-`/`lit-`/`set-` variants) as the
+///     symbol type.
+pub const REBOL_WORD2: &str = concat!(
+    // Value types.
+    "binary! bitset! block! char! date! decimal! email! ",
+    "error! event! file! hash! image! integer! issue! ",
+    "logic! money! none! pair! paren! path! string! tag! ",
+    "time! tuple! unset! url! word! ",
+    // Function-like types.
+    "action! function! native! op! routine! command! closure! ",
+    // Word / path variants.
+    "get-word! lit-path! lit-word! refinement! set-path! set-word! ",
+    // Typesets / collections.
+    "any-block! any-function! any-string! any-type! any-word! ",
+    "datatype! library! list! number! series! typeset! ",
+    // REBOL 3 additions.
+    "gob! handle! map! object! percent! port! struct! vector! ",
+);
+
+/// REBOL math and conversion natives — class 2 of `LexRebol`'s
+/// eight-class wordlist. Matched at `LexRebol.cxx:172-173`;
+/// hits change state to
+/// [`SCE_REBOL_WORD3`](../scintilla_sys/constant.SCE_REBOL_WORD3.html).
+///
+/// **All-lowercase** per `GetCurrentLowered` at `:160`.
+///
+/// **71 tokens** across three families:
+///   - **Arithmetic / trig (31)**: `absolute`, `add`,
+///     `arccosine`, `arcsine`, `arctangent`, `checksum`,
+///     `complement`, `cosine`, `divide`, `exp`, `log-10`,
+///     `log-2`, `log-e`, `max`, `maximum`, `maximum-of`,
+///     `min`, `minimum`, `minimum-of`, `modulo`, `multiply`,
+///     `negate`, `power`, `random`, `remainder`, `round`,
+///     `shift`, `sine`, `square-root`, `subtract`,
+///     `tangent`.
+///   - **`to-*` conversions (35)**: `to`, `to-binary`,
+///     `to-bitset`, `to-block`, `to-char`, `to-date`,
+///     `to-decimal`, `to-email`, `to-file`, `to-get-word`,
+///     `to-hash`, `to-hex`, `to-idate`, `to-image`,
+///     `to-integer`, `to-issue`, `to-list`, `to-lit-path`,
+///     `to-lit-word`, `to-local-file`, `to-logic`,
+///     `to-money`, `to-pair`, `to-paren`, `to-path`,
+///     `to-rebol-file`, `to-refinement`, `to-set-path`,
+///     `to-set-word`, `to-string`, `to-tag`, `to-time`,
+///     `to-tuple`, `to-url`, `to-word`.
+///   - **Encoding helpers (5)**: `as-pair`, `charset`,
+///     `debase`, `dehex`, `enbase`.
+///
+/// **Deliberately excluded:**
+///   - `abs`, `sqrt` — canonical REBOL spellings are
+///     `absolute` and `square-root` (already present); the
+///     short aliases don't exist in REBOL 2/3.
+pub const REBOL_WORD3: &str = concat!(
+    // Arithmetic / trig.
+    "absolute add arccosine arcsine arctangent checksum ",
+    "complement cosine divide exp log-10 log-2 log-e ",
+    "max maximum maximum-of min minimum minimum-of ",
+    "modulo multiply negate power random remainder round ",
+    "shift sine square-root subtract tangent ",
+    // `to-*` conversions.
+    "to to-binary to-bitset to-block to-char to-date ",
+    "to-decimal to-email to-file to-get-word to-hash ",
+    "to-hex to-idate to-image to-integer to-issue to-list ",
+    "to-lit-path to-lit-word to-local-file to-logic ",
+    "to-money to-pair to-paren to-path to-rebol-file ",
+    "to-refinement to-set-path to-set-word to-string ",
+    "to-tag to-time to-tuple to-url to-word ",
+    // Encoding helpers.
+    "as-pair charset debase dehex enbase ",
+);
+
+/// REBOL I/O and system natives — class 3 of `LexRebol`'s
+/// eight-class wordlist. Matched at `LexRebol.cxx:170-171`;
+/// hits change state to
+/// [`SCE_REBOL_WORD4`](../scintilla_sys/constant.SCE_REBOL_WORD4.html).
+///
+/// **All-lowercase** per `GetCurrentLowered` at `:160`.
+///
+/// **79 tokens** covering console I/O, file / network I/O,
+/// requests / dialogs, view / display, security /
+/// introspection, and event pump:
+///   - **Console I/O (5)**: `print`, `prin`, `input`, `ask`,
+///     `probe`. Foundational REBOL output / input primitives.
+///   - **File / network I/O (11)**: `open`, `close`, `read`,
+///     `write`, `save`, `load`, `delete`, `wait`, `send`,
+///     `read-io`, `write-io`.
+///   - **Requests / dialogs (8)**: `request`, `request-file`,
+///     `request-download`, `request-color`, `request-date`,
+///     `request-list`, `request-pass`, `request-text`.
+///   - **Query / introspection (14)**: `query`, `exists?`,
+///     `dir?`, `script?`, `modified?`, `info?`, `suffix?`,
+///     `set-modes`, `get-modes`, `set-net`, `help`, `license`,
+///     `source`, `usage`.
+///   - **File-system helpers (7)**: `make-dir`, `change-dir`,
+///     `list-dir`, `what-dir`, `clean-path`, `split-path`,
+///     `dirize`.
+///   - **View / display (11)**: `layout`, `stylize`, `view`,
+///     `unview`, `focus`, `unfocus`, `update`, `show`,
+///     `hide`, `flash`, `inform`.
+///   - **Security / protection (5)**: `secure`, `protect`,
+///     `protect-system`, `unprotect`, `recycle`.
+///   - **Program control (7)**: `launch`, `browse`, `echo`,
+///     `alert`, `disarm`, `trace`, `upgrade`.
+///   - **Confirmation / parsing (5)**: `confirm`,
+///     `import-email`, `decode-cgi`, `parse-xml`,
+///     `build-tag`.
+///   - **Compression / encoding (3)**: `compress`,
+///     `decompress`, `load-image`.
+///   - **System / event (3)**: `now`, `do-events`, `resend`.
+///
+/// **Deliberately excluded:**
+///   - `form`, `mold` — value-to-string conversion, not I/O.
+///     Would belong in class 2 (conversions) or a series
+///     class.
+///   - `connect` — not standard REBOL vocabulary; network
+///     I/O uses `open tcp://...`.
+pub const REBOL_WORD4: &str = concat!(
+    // Console I/O.
+    "print prin input ask probe ",
+    // File / network I/O.
+    "open close read write save load delete wait send ",
+    "read-io write-io ",
+    // Requests / dialogs.
+    "request request-color request-date request-download ",
+    "request-file request-list request-pass request-text ",
+    // Query / introspection.
+    "query exists? dir? script? modified? info? suffix? ",
+    "set-modes get-modes set-net help license source usage ",
+    // File-system helpers.
+    "make-dir change-dir list-dir what-dir clean-path ",
+    "split-path dirize ",
+    // View / display.
+    "layout stylize view unview focus unfocus update show ",
+    "hide flash inform ",
+    // Security / protection.
+    "secure protect protect-system unprotect recycle ",
+    // Program control.
+    "launch browse echo alert disarm trace upgrade ",
+    // Confirmation / parsing.
+    "confirm import-email decode-cgi parse-xml build-tag ",
+    // Compression / encoding.
+    "compress decompress load-image ",
+    // System / event.
+    "now do-events resend ",
+);
+
+/// REBOL series and block operations — class 4 of `LexRebol`'s
+/// eight-class wordlist. Matched at `LexRebol.cxx:168-169`;
+/// hits change state to
+/// [`SCE_REBOL_WORD5`](../scintilla_sys/constant.SCE_REBOL_WORD5.html).
+///
+/// **All-lowercase** per `GetCurrentLowered` at `:160`.
+///
+/// **50 tokens** across nine families:
+///   - **Mutating series ops (6)**: `append`, `insert`,
+///     `remove`, `change`, `clear`, `poke`.
+///   - **Non-mutating access (12)**: `copy`, `find`, `at`,
+///     `back`, `next`, `head`, `tail`, `pick`, `select`,
+///     `extract`, `skip`, `remove-each`.
+///   - **Reordering (3)**: `reverse`, `sort`, `unique`.
+///   - **Set-like operations (4)**: `intersect`, `union`,
+///     `difference`, `exclude`.
+///   - **Positional accessors (6)**: `first`, `second`,
+///     `third`, `fourth`, `fifth`, `last`.
+///   - **Query (5)**: `index?`, `length?`, `offset?`,
+///     `size?`, `series?`.
+///   - **String helpers (8)**: `repend`, `replace`, `join`,
+///     `rejoin`, `parse`, `trim`, `remold`, `reform`.
+///   - **Casing (2)**: `lowercase`, `uppercase`.
+///   - **Misc (4)**: `alter`, `detab`, `entab`, `free`.
+pub const REBOL_WORD5: &str = concat!(
+    // Mutating series ops.
+    "append insert remove change clear poke ",
+    // Non-mutating access.
+    "copy find at back next head tail pick select extract ",
+    "skip remove-each ",
+    // Reordering.
+    "reverse sort unique ",
+    // Set-like operations.
+    "intersect union difference exclude ",
+    // Positional accessors.
+    "first second third fourth fifth last ",
+    // Query.
+    "index? length? offset? size? series? ",
+    // String helpers.
+    "repend replace join rejoin parse trim remold reform ",
+    // Casing.
+    "lowercase uppercase ",
+    // Misc.
+    "alter detab entab free ",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
