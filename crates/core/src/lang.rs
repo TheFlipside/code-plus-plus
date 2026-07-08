@@ -14582,6 +14582,170 @@ pub const AVS_CLIPPROPS: &str = concat!(
     "current_frame last",
 );
 
+/// Space-separated **`BlitzBasic` (`Blitz3D`) language keywords**
+/// installed as **class 0** of `LexBasic`'s wordlist descriptor
+/// (`SCE_B_KEYWORD`, primary bold slot).
+///
+/// **Case-INSENSITIVE lookup.** `LexBasic.cxx:347` lower-cases the
+/// identifier buffer via `sc.GetCurrentLowered(s, sizeof(s))` before
+/// probing wordlists. Wordlist entries MUST be byte-canonical
+/// lowercase — source `Function`, `FUNCTION`, `function` all match
+/// the single lowercase entry `function`.
+///
+/// **Contents authored clean-room from the `Blitz3D` language
+/// reference** (<https://www.blitzbasic.com/b3ddocs/manual.php>) —
+/// no upstream Lexilla fixture exists for blitzbasic (checked
+/// `crates/scintilla-sys/vendor/lexilla/test/examples/` — no
+/// `blitzbasic/` subdirectory).
+///
+/// **Categories** (60 tokens):
+///   - **Declarations + structural** (13): `function` / `end` /
+///     `type` / `field` / `include` / `insert` / `return` /
+///     `dim` / `redim` / `local` / `global` / `const` / `rem`.
+///   - **Object lifetime** (5): `new` / `delete` / `each` /
+///     `first` / `last`.
+///   - **List positioning** (3): `before` / `after` / `handle`.
+///   - **Control flow — decisions** (8): `if` / `then` / `else` /
+///     `elseif` / `endif` / `select` / `case` / `default`.
+///   - **Control flow — loops** (12): `while` / `wend` / `repeat`
+///     / `until` / `forever` / `for` / `to` / `step` / `next` /
+///     `exit` / `goto` / `gosub`.
+///   - **Terminators** (1): `stop`.
+///   - **Boolean + null** (3): `true` / `false` / `null`.
+///   - **Word operators** (8): `and` / `or` / `not` / `xor` /
+///     `sar` / `shl` / `shr` / `mod`.
+///   - **Data statement family** (3): `data` / `read` / `restore`.
+///   - **I/O keywords** (3): `input` / `print` / `write`.
+///   - **Debug** (1): `debuglog`.
+///
+/// Note: `Blitz3D` uses **sigils** (`$` / `%` / `#`) for type
+/// declarations, not bareword type keywords. The sigils are handled
+/// at the lexer level per `LexBasic.cxx:355-358` — after keyword
+/// classification, `sc.SetState → OPERATOR` for the sigil
+/// character; the sigil itself paints as OPERATOR and the
+/// identifier before it retains its own paint. Bareword type
+/// keywords like `int` / `float` / `str` are `BlitzMax` additions
+/// (post-`Blitz3D`) and deliberately excluded from this class-0 list
+/// — `str` in particular is a class-1 built-in function (`Str()`
+/// value-to-string conversion) whose paint would be masked if
+/// duplicated in class 0 (last-match-wins).
+///
+/// **Cross-class disjointness with `BLITZBASIC_BUILTINS`** is
+/// invariant-tested. `LexBasic`'s classifier at `:348-352` uses
+/// **last-match-wins** (loop iterates classes 0..=3, `ChangeState`
+/// overwrites on every match) — a token in both class 0 and class
+/// 1 renders as `SCE_B_KEYWORD2` (class 1 wins), NOT `SCE_B_KEYWORD`.
+/// Disjointness eliminates that ambiguity.
+pub const BLITZBASIC_KEYWORDS: &str = concat!(
+    // Declarations + structural.
+    "function end type field include insert return dim redim ",
+    "local global const rem ",
+    // Object lifetime.
+    "new delete each first last ",
+    // List positioning.
+    "before after handle ",
+    // Control flow — decisions.
+    "if then else elseif endif select case default ",
+    // Control flow — loops + terminators.
+    "while wend repeat until forever for to step next exit goto gosub stop ",
+    // Boolean + null.
+    "true false null ",
+    // Word operators.
+    "and or not xor sar shl shr mod ",
+    // Data + I/O + debug.
+    "data read restore input print write debuglog",
+);
+
+/// Space-separated **`BlitzBasic` (`Blitz3D`) built-in functions**
+/// installed as **class 1** of `LexBasic`'s wordlist descriptor
+/// (`SCE_B_KEYWORD2`, accent slot).
+///
+/// **Case-INSENSITIVE lookup** per [`BLITZBASIC_KEYWORDS`]. All
+/// entries lowercase.
+///
+/// **`LexBasic`'s user1 / user2 / user3 slots.** The descriptor at
+/// `LexBasic.cxx:180-186` labels classes 1..=3 as `"user1"` /
+/// `"user2"` / `"user3"` — user-customization slots left empty by
+/// `N++` default. Code++ repurposes class 1 for the `Blitz3D` standard
+/// library (built-in commands + functions), giving them a distinct
+/// Keyword2 accent versus language keywords in class 0. Classes 2
+/// and 3 stay uninstalled — dead by config, same discipline as
+/// `AviSynth`'s class 5 `UserDFN`.
+///
+/// **Contents authored clean-room from the `Blitz3D` command reference**
+/// at <https://www.blitzbasic.com/b3ddocs/> — the canonical built-in
+/// command list covering math / string / timer / file-I/O / 2D
+/// graphics / image / 3D / input / sound.
+///
+/// **Categories** (107 tokens):
+///   - **Math functions** (15): `abs` / `sgn` / `pi` / `sin` /
+///     `cos` / `tan` / `asin` / `acos` / `atan` / `atan2` /
+///     `sqr` / `floor` / `ceil` / `exp` / `log`.
+///   - **Random** (3): `rand` / `rnd` / `seedrnd`.
+///   - **String functions** (16): `chr` / `str` / `asc` / `len` /
+///     `left` / `right` / `mid` / `instr` / `trim` / `upper` /
+///     `lower` / `lset` / `rset` / `replace` / `hex` / `bin`.
+///   - **Timer** (4): `millisecs` / `createtimer` / `freetimer` /
+///     `waittimer`.
+///   - **File I/O** (18): `openfile` / `closefile` / `readbyte` /
+///     `readshort` / `readint` / `readfloat` / `readstring` /
+///     `readline` / `writebyte` / `writeshort` / `writeint` /
+///     `writefloat` / `writestring` / `writeline` / `eof` /
+///     `filepos` / `seekfile` / `filesize`.
+///   - **File system** (2): `copyfile` / `deletefile`.
+///   - **Graphics setup** (7): `graphics` / `graphics3d` /
+///     `endgraphics` / `flip` / `cls` / `color` / `clscolor`.
+///   - **2D drawing primitives** (5): `text` / `plot` / `line` /
+///     `rect` / `oval`.
+///   - **Image (2D)** (7): `loadimage` / `saveimage` / `freeimage`
+///     / `drawimage` / `imagewidth` / `imageheight` / `createimage`.
+///   - **3D essentials** (14): `createcamera` / `createlight` /
+///     `ambientlight` / `createmesh` / `loadmesh` / `freeentity`
+///     / `positionentity` / `rotateentity` / `moveentity` /
+///     `entityx` / `entityy` / `entityz` / `renderworld` /
+///     `updateworld`. Bare `camera` / `light` / `mesh` deliberately
+///     omitted — `Blitz3D` exposes only the constructor forms
+///     (`CreateCamera` / `CreateLight` / `CreateMesh` / `LoadMesh`).
+///   - **Input** (11): `keyhit` / `keydown` / `mousex` / `mousey`
+///     / `mousehit` / `mousedown` / `waitkey` / `waitmouse` /
+///     `flushkeys` / `flushmouse` / `getkey`.
+///   - **Sound** (4): `loadsound` / `playsound` / `stopsound` /
+///     `freesound`.
+///   - **Runtime** (1): `runtimeerror`.
+///
+/// **Cross-class disjointness with `BLITZBASIC_KEYWORDS`** is
+/// invariant-tested. See the class-0 docstring for the last-match-
+/// wins rationale.
+pub const BLITZBASIC_BUILTINS: &str = concat!(
+    // Math + random.
+    "abs sgn pi sin cos tan asin acos atan atan2 sqr floor ceil ",
+    "exp log rand rnd seedrnd ",
+    // String functions.
+    "chr str asc len left right mid instr trim upper lower ",
+    "lset rset replace hex bin ",
+    // Timer.
+    "millisecs createtimer freetimer waittimer ",
+    // File I/O + file system.
+    "openfile closefile readbyte readshort readint readfloat ",
+    "readstring readline writebyte writeshort writeint writefloat ",
+    "writestring writeline eof filepos seekfile filesize ",
+    "copyfile deletefile ",
+    // Graphics setup + 2D primitives.
+    "graphics graphics3d endgraphics flip cls color clscolor ",
+    "text plot line rect oval ",
+    // Image (2D).
+    "loadimage saveimage freeimage drawimage imagewidth imageheight createimage ",
+    // 3D essentials.
+    "createcamera createlight ambientlight createmesh loadmesh ",
+    "freeentity positionentity rotateentity moveentity ",
+    "entityx entityy entityz renderworld updateworld ",
+    // Input.
+    "keyhit keydown mousex mousey mousehit mousedown waitkey waitmouse ",
+    "flushkeys flushmouse getkey ",
+    // Sound + runtime.
+    "loadsound playsound stopsound freesound runtimeerror",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7003,10 +7003,46 @@ pub const SCE_SQL_QUOTEDIDENTIFIER: usize = 23;
 // Indices 13-22 (`SCE_B_CONSTANT` / `SCE_B_ASM` / `SCE_B_LABEL` /
 // `SCE_B_ERROR` / `SCE_B_HEXNUMBER` / `SCE_B_BINNUMBER` /
 // `SCE_B_COMMENTBLOCK` / `SCE_B_DOCLINE` / `SCE_B_DOCBLOCK` /
-// `SCE_B_DOCKEYWORD`) ARE declared in `SciLexer.h` but are emitted
-// by sibling lexers (`LexBasic.cxx` for FreeBASIC / PureBasic /
-// BlitzBasic, sharing the SCE_B_ namespace) — `LexVB` itself never
-// emits them. Omitted here; add when those lexers are wired.
+// `SCE_B_DOCKEYWORD`) are `LexBasic`-family emissions (used by
+// BlitzBasic / PureBasic / FreeBasic — the three-way shared lexer
+// at `vendor/lexilla/lexers/LexBasic.cxx`). `LexVB` itself never
+// emits them; the paint-loop analysis of when each is entered lives
+// in each family member's `LangTheme` banner in
+// `crates/ui_win32/src/lib.rs` (see `BLITZBASIC_THEME`).
+//
+// **`LexBasic` dispatch registration** at `LexBasic.cxx:569-573`:
+//   - `lmBlitzBasic(SCLEX_BLITZBASIC = 66, LexerFactoryBlitzBasic,
+//     "blitzbasic", blitzbasicWordListDesc)` — `';'` comment char.
+//   - `lmPureBasic(SCLEX_PUREBASIC = 67, ..., "purebasic",
+//     purebasicWordListDesc)` — `';'` comment char.
+//   - `lmFreeBasic(SCLEX_FREEBASIC = 75, ..., "freebasic",
+//     freebasicWordListDesc)` — `'\''` (apostrophe) comment char.
+// All three share the same paint function
+// (`LexerBasic::Lex` at `LexBasic.cxx:322`) and per-language fold
+// point checker (`CheckBlitzFoldPoint` / `CheckPureFoldPoint` /
+// `CheckFreeFoldPoint` at `:103-156`). The comment character and
+// wordlist descriptor are the only per-family differences at the
+// lexer level; the SCE_B_* namespace is fully shared.
+//
+// **Last-match-wins keyword classification** at
+// `LexBasic.cxx:348-352`. Unlike LexAsn1 / LexSpice / LexAVS /
+// most other Lexilla lexers (first-match-wins), the LexBasic
+// classifier iterates `for (int i = 0; i < 4; i++)` and calls
+// `ChangeState(kstates[i])` on EACH match — the loop does not
+// break. So a token in both class 0 and class 3 ends up as
+// `SCE_B_KEYWORD4` (the last matching class wins). Framework
+// consequence: BlitzBasic / PureBasic / FreeBasic themes that
+// install multiple wordlist classes must treat higher class
+// indices as VISUALLY DOMINANT — the opposite of the usual
+// first-match-wins mental model. Code++'s BlitzBasic theme
+// deliberately keeps class 0 and class 1 disjoint to avoid the
+// interaction entirely; a class-0-vs-class-1 duplicate would
+// silently render as `SCE_B_KEYWORD2` instead of `SCE_B_KEYWORD`.
+//
+// **Case-INSENSITIVE keyword lookup** at `LexBasic.cxx:347` via
+// `sc.GetCurrentLowered(s, sizeof(s))` — same discipline as LexVB
+// / LexAVS. Wordlist entries must be byte-canonical lowercase.
+pub const SCLEX_BLITZBASIC: usize = 66;
 pub const SCE_B_DEFAULT: usize = 0;
 pub const SCE_B_COMMENT: usize = 1;
 pub const SCE_B_NUMBER: usize = 2;
@@ -7020,6 +7056,16 @@ pub const SCE_B_STRINGEOL: usize = 9;
 pub const SCE_B_KEYWORD2: usize = 10;
 pub const SCE_B_KEYWORD3: usize = 11;
 pub const SCE_B_KEYWORD4: usize = 12;
+pub const SCE_B_CONSTANT: usize = 13;
+pub const SCE_B_ASM: usize = 14;
+pub const SCE_B_LABEL: usize = 15;
+pub const SCE_B_ERROR: usize = 16;
+pub const SCE_B_HEXNUMBER: usize = 17;
+pub const SCE_B_BINNUMBER: usize = 18;
+pub const SCE_B_COMMENTBLOCK: usize = 19;
+pub const SCE_B_DOCLINE: usize = 20;
+pub const SCE_B_DOCBLOCK: usize = 21;
+pub const SCE_B_DOCKEYWORD: usize = 22;
 
 // LexYAML style indices. 10 contiguous slots (0..=9) for the
 // YAML line-oriented scalar-value lexer. Dispatches SCLEX_YAML

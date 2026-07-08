@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 81 / 🟡 7 / ⚫ 1.
+Total: 89 rows. ✅ 82 / 🟡 6 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1854,7 +1854,7 @@ further shim work needed.
 | AviSynth | 66 | `avs` | ✅ | ✅ | ✅ |
 | BaanC | 60 | `baan` | ⚫ | ⚫ | 🟡 |
 | Batch | 12 | `batch` | ✅ | ✅ | ✅ |
-| Blitzbasic | 67 | `blitzbasic` | ⚫ | ⚫ | 🟡 |
+| Blitzbasic | 67 | `blitzbasic` | ✅ | ✅ | ✅ |
 | C | 2 | `cpp` | ✅ | ✅ | ✅ |
 | C# | 4 | `cpp` | ✅ | ✅ | ✅ |
 | C++ | 3 | `cpp` | ✅ | ✅ | ✅ |
@@ -9530,6 +9530,213 @@ pins (`trim` → class 1;
 `import` → class 3, not
 class 0; `last` → class 4,
 not class 0).
+
+**Blitzbasic (2026-07-08):** rides
+Lexilla's `blitzbasic` lexer
+(`LexBasic.cxx`) — a **shared
+three-family lexer** by Neil
+Hodgson (1998-2003) also
+serving PureBasic and FreeBasic
+(the other two `LexBasic.cxx`
+family members register as
+distinct `SCLEX_PUREBASIC` /
+`SCLEX_FREEBASIC` at
+`LexBasic.cxx:569-573` and remain
+🟡 unwired pending their own
+themes). The SCE_B_* namespace
+is shared across all three;
+per-family differences are just
+the comment character (`;` for
+Blitz + Pure, `'` for Free) and
+the wordlist descriptor. `.bb`
+extension. First BASIC-family
+Code++ lexer beyond VB.
+
+**Two-class wordlist install.**
+`blitzbasicWordListDesc[]` at
+`LexBasic.cxx:180-186` declares
+four slots: `"BlitzBasic
+Keywords"` + `user1` + `user2` +
+`user3`. Notepad++ leaves classes
+1-3 as user-customization slots.
+Code++ repurposes class 1 for
+the Blitz3D standard library,
+giving built-in commands a
+distinct Keyword2 accent
+alongside language keywords in
+class 0 — same class-split
+discipline as `AVS_KEYWORDS` /
+`AVS_FILTERS`.
+
+- **Class 0 — `BLITZBASIC_KEYWORDS`**
+  (bold Keyword, 60 tokens):
+  language grammar —
+  declarations (`function` /
+  `type` / `field` / `dim` /
+  `local` / `global` / `const`
+  / `include`), control flow
+  (`if` / `else` / `while` /
+  `wend` / `for` / `next` /
+  `repeat` / `until` / `select`
+  / `case` / `goto` / `gosub`),
+  word operators (`and` / `or`
+  / `not` / `xor` / `mod`),
+  boolean + null (`true` /
+  `false` / `null`), data-
+  statement family (`data` /
+  `read` / `restore`), I/O
+  (`input` / `print` / `write`).
+  **No bareword type keywords** —
+  Blitz3D uses sigils
+  (`$` / `%` / `#`) for type
+  declarations. Bareword types
+  like `int` / `float` / `str`
+  are `BlitzMax` additions and
+  deliberately excluded; `str`
+  in particular is a class-1
+  built-in function (`Str()`)
+  whose paint would be masked
+  by a class-0 duplicate per
+  last-match-wins.
+- **Class 1 — `BLITZBASIC_BUILTINS`**
+  (Keyword2 accent, 107 tokens):
+  Blitz3D standard library —
+  math (`sin` / `cos` / `sqr`
+  / `atan2`), string (`chr` /
+  `left` / `right` / `mid` /
+  `instr` / `replace`), timer
+  (`millisecs` / `createtimer`),
+  file I/O (`openfile` /
+  `readbyte` / `writestring`),
+  graphics (`graphics3d` /
+  `flip` / `cls` / `plot` /
+  `line` / `rect`), image
+  (`loadimage` / `drawimage`),
+  3D (`createcamera` /
+  `createmesh` / `loadmesh` /
+  `positionentity` /
+  `renderworld`), input
+  (`keyhit` / `mousex` /
+  `waitkey`), sound
+  (`loadsound` / `playsound`).
+- **Classes 2 / 3** (user2 /
+  user3): NOT installed. Slots
+  KEYWORD3 / KEYWORD4 mapped in
+  the theme so a future user
+  config that populates them via
+  wordlist injection gets a
+  defined paint immediately;
+  same "dead by config" pattern
+  as AviSynth's class-5 UserDFN.
+
+**Last-match-wins classifier.**
+`LexBasic.cxx:348-352` iterates
+`for (int i = 0; i < 4; i++)`
+and calls `ChangeState` on
+EACH match — the loop does not
+break. So a token in both
+class 0 and class 3 ends up as
+`SCE_B_KEYWORD4` (the last
+matching class wins). This is
+the OPPOSITE of the
+first-match-wins semantics used
+by LexAsn1 / LexSpice /
+LexAVS / most other Lexilla
+lexers. Code++'s BlitzBasic
+theme deliberately keeps class
+0 and class 1 disjoint to
+sidestep the interaction; a
+cross-class duplicate would
+silently render as `KEYWORD2`
+instead of `KEYWORD`, masking
+the intended Keyword paint.
+
+**Contents authored clean-room**
+from the Blitz3D language
+reference at
+<https://www.blitzbasic.com/b3ddocs/manual.php>
+— no upstream Lexilla fixture
+exists for blitzbasic (checked
+`crates/scintilla-sys/vendor/
+lexilla/test/examples/` — no
+`blitzbasic/` subdirectory).
+
+**17-style-mapping table**
+covering 23 defined `SCE_B_*`
+states. Six unmapped:
+- `DEFAULT` (0), `IDENTIFIER`
+  (7): framework fall-through
+  convention.
+- `DATE` (8): dead state —
+  reserved for LexVB's date
+  literals; LexBasic never
+  enters it.
+- `STRINGEOL` (9): dead state
+  — LexBasic uses `SCE_B_ERROR`
+  instead per `:385-388`.
+- `ASM` (14): dead state —
+  reserved-only slot with no
+  SetState site anywhere in
+  LexBasic.
+- `ERROR` (16): deferred
+  `StyleSlot::Error` migration
+  (same discipline as Visual
+  Prolog).
+
+The 17 mapped states: three
+comment families (COMMENT +
+COMMENTBLOCK + DOCLINE +
+DOCBLOCK → Comment italic —
+DOCLINE/DOCBLOCK dead in
+BlitzBasic but preserved for
+future FreeBasic reuse), numeric
+trio (NUMBER + HEXNUMBER +
+BINNUMBER → Number), KEYWORD →
+Keyword bold, KEYWORD2 →
+Keyword2, KEYWORD3 →
+Preprocessor, KEYWORD4 →
+Lifetime, CONSTANT + LABEL →
+Macro (both are sigil-prefixed
+anchors), STRING → String,
+OPERATOR → Operator,
+PREPROCESSOR → Preprocessor
+(dead in BB — trigger gated
+on `comment_char == '\''`;
+mapped for FreeBasic reuse),
+DOCKEYWORD → Preprocessor
+(inline `\keyword` / `@keyword`
+doc tags).
+
+**Case-insensitive discipline.**
+`LexBasic.cxx:347` populates
+identifier buffer via
+`sc.GetCurrentLowered(s, sizeof(s))`
+— every collected byte is
+lowered before wordlist probe.
+Wordlist entries must be
+byte-canonical lowercase;
+source `Function` / `FUNCTION`
+/ `function` all match the
+single lowercase entry
+`function`. Same discipline as
+LexVB / LexAVS.
+
+Structural test coverage: **20
+invariants** including
+cross-class disjointness pin
+(critical given the inverted
+last-match-wins semantics),
+canonical anchor pins for each
+class, all-lowercase alphabet
+enforcement, numeric-trio
+collapse pin, multi-comment
+italic pin, anchor-slot Macro
+pin (CONSTANT + LABEL sharing),
+and ambiguous-token dominance
+(`read` → class 0 data-
+statement keyword, NOT class 1
+built-in — Blitz3D has no
+bareword `read` function).
 
 ## Notes
 
