@@ -105,52 +105,52 @@ use codepp_core::lang::{
     ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS, ASN1_ATTRIBUTES, ASN1_DESCRIPTORS,
     ASN1_KEYWORDS, ASN1_TYPES, AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS,
     AU3_PREPROCESSORS, AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, AVS_CLIPPROPS, AVS_FILTERS,
-    AVS_FUNCTIONS, AVS_KEYWORDS, AVS_PLUGINS, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2,
-    BLITZBASIC_BUILTINS, BLITZBASIC_KEYWORDS, CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3,
-    CMAKE_COMMANDS, CMAKE_PARAMETERS, CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B,
-    COBOL_KEYWORDS_C, COFFEESCRIPT_GLOBAL_CLASSES, COFFEESCRIPT_KEYWORDS, COFFEESCRIPT_KEYWORDS_2,
-    CPP_KEYWORDS, CPP_KEYWORDS_2, CSOUND_HEADERSTMT, CSOUND_OPCODES, CSOUND_USERKW,
-    CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES,
-    CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2, D_DOC_KEYWORDS,
-    D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7, ERLANG_BIFS, ERLANG_DOC,
-    ERLANG_DOC_MACRO, ERLANG_KEYWORDS, ERLANG_MODULE_ATT, ERLANG_PREPROC, ESCRIPT_FOLDWORDS,
-    ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS, FORTH_CONTROL, FORTH_DEFWORD, FORTH_KEYWORD,
-    FORTH_PREWORD1, FORTH_PREWORD2, FORTH_STRINGS, FORTRAN_EXTENDED, FORTRAN_INTRINSICS,
-    FORTRAN_KEYWORDS, FREEBASIC_KEYWORDS, FREEBASIC_PREPROCESSOR, GDSCRIPT_KEYWORDS,
-    GDSCRIPT_KEYWORDS_2, GO_KEYWORDS, GO_KEYWORDS_2, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS,
-    GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
-    HASKELL_RESERVED_OPERATORS, HOLLYWOOD_KEYWORDS, HOLLYWOOD_STDAPI, HTML_KEYWORDS, INNO_KEYWORDS,
-    INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS,
-    JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
-    KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
-    LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASN1, L_ASP, L_AU3, L_AVS, L_BASH, L_BATCH, L_BLITZBASIC, L_C,
-    L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
-    L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_FREEBASIC, L_GDSCRIPT, L_GOLANG, L_GUI4CLI,
-    L_HASKELL, L_HOLLYWOOD, L_HTML, L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5,
-    L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB,
-    L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PUREBASIC,
-    L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
-    L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL, L_TEHEX, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB,
-    L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
-    MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS,
-    NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES,
-    OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS,
-    OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS,
-    PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
-    POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
-    PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PUREBASIC_KEYWORDS, PUREBASIC_PREPROCESSOR,
-    PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RAKU_ADVERBS, RAKU_FUNCTIONS, RAKU_KEYWORDS,
-    RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION, RC_KEYWORDS,
-    REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS,
-    R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-    SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS,
-    SQL_KEYWORDS_2, SWIFT_KEYWORDS, SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
-    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-    VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
-    VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
-    XML_KEYWORDS, YAML_KEYWORDS,
+    AVS_FUNCTIONS, AVS_KEYWORDS, AVS_PLUGINS, BAAN_KEYWORDS, BASH_KEYWORDS, BATCH_KEYWORDS,
+    BATCH_KEYWORDS_2, BLITZBASIC_BUILTINS, BLITZBASIC_KEYWORDS, CAML_KEYWORDS, CAML_KEYWORDS2,
+    CAML_KEYWORDS3, CMAKE_COMMANDS, CMAKE_PARAMETERS, CMAKE_USERDEFINED, COBOL_KEYWORDS_A,
+    COBOL_KEYWORDS_B, COBOL_KEYWORDS_C, COFFEESCRIPT_GLOBAL_CLASSES, COFFEESCRIPT_KEYWORDS,
+    COFFEESCRIPT_KEYWORDS_2, CPP_KEYWORDS, CPP_KEYWORDS_2, CSOUND_HEADERSTMT, CSOUND_OPCODES,
+    CSOUND_USERKW, CSS_PROPERTIES_CSS1, CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3,
+    CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS, CS_KEYWORDS_2, C_KEYWORDS, C_KEYWORDS_2,
+    D_DOC_KEYWORDS, D_KEYWORDS, D_KEYWORDS_2, D_META, D_SPECIAL, D_TYPES, D_WORD7, ERLANG_BIFS,
+    ERLANG_DOC, ERLANG_DOC_MACRO, ERLANG_KEYWORDS, ERLANG_MODULE_ATT, ERLANG_PREPROC,
+    ESCRIPT_FOLDWORDS, ESCRIPT_INTRINSICS, ESCRIPT_KEYWORDS, FORTH_CONTROL, FORTH_DEFWORD,
+    FORTH_KEYWORD, FORTH_PREWORD1, FORTH_PREWORD2, FORTH_STRINGS, FORTRAN_EXTENDED,
+    FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, FREEBASIC_KEYWORDS, FREEBASIC_PREPROCESSOR,
+    GDSCRIPT_KEYWORDS, GDSCRIPT_KEYWORDS_2, GO_KEYWORDS, GO_KEYWORDS_2, GUI4CLI_ATTRIBUTES,
+    GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS,
+    HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS, HOLLYWOOD_KEYWORDS, HOLLYWOOD_STDAPI,
+    HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR,
+    INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
+    JSON_KEYWORDS, JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS,
+    LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASN1, L_ASP, L_AU3, L_AVS,
+    L_BAANC, L_BASH, L_BATCH, L_BLITZBASIC, L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP,
+    L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77,
+    L_FREEBASIC, L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_IHEX, L_INI,
+    L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
+    L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
+    L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PUREBASIC, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL,
+    L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL,
+    L_TEHEX, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML,
+    L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+    MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
+    NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+    OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
+    OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
+    POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
+    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
+    PUREBASIC_KEYWORDS, PUREBASIC_PREPROCESSOR, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RAKU_ADVERBS,
+    RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN,
+    RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4,
+    REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
+    SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS,
+    SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, SWIFT_KEYWORDS,
+    SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+    TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+    VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
+    VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -173,20 +173,25 @@ use codepp_scintilla_sys::{
     SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_AVS_CLIPPROP,
     SCE_AVS_COMMENTBLOCK, SCE_AVS_COMMENTBLOCKN, SCE_AVS_COMMENTLINE, SCE_AVS_FILTER,
     SCE_AVS_FUNCTION, SCE_AVS_KEYWORD, SCE_AVS_NUMBER, SCE_AVS_OPERATOR, SCE_AVS_PLUGIN,
-    SCE_AVS_STRING, SCE_AVS_TRIPLESTRING, SCE_BAT_AFTER_LABEL, SCE_BAT_COMMAND, SCE_BAT_COMMENT,
-    SCE_BAT_HIDE, SCE_BAT_LABEL, SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_B_BINNUMBER, SCE_B_COMMENT,
-    SCE_B_COMMENTBLOCK, SCE_B_CONSTANT, SCE_B_DATE, SCE_B_DOCBLOCK, SCE_B_DOCKEYWORD,
-    SCE_B_DOCLINE, SCE_B_HEXNUMBER, SCE_B_KEYWORD, SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4,
-    SCE_B_LABEL, SCE_B_NUMBER, SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CAML_CHAR,
-    SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD,
-    SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR,
-    SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS, SCE_CMAKE_COMMENT,
-    SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF, SCE_CMAKE_NUMBER,
-    SCE_CMAKE_PARAMETERS, SCE_CMAKE_STRINGDQ, SCE_CMAKE_STRINGLQ, SCE_CMAKE_STRINGRQ,
-    SCE_CMAKE_STRINGVAR, SCE_CMAKE_USERDEFINED, SCE_CMAKE_VARIABLE, SCE_CMAKE_WHILEDEF,
-    SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC, SCE_COBOL_COMMENTLINE,
-    SCE_COBOL_NUMBER, SCE_COBOL_OPERATOR, SCE_COBOL_PREPROCESSOR, SCE_COBOL_STRING, SCE_COBOL_WORD,
-    SCE_COBOL_WORD2, SCE_COBOL_WORD3, SCE_COFFEESCRIPT_CHARACTER, SCE_COFFEESCRIPT_COMMENTBLOCK,
+    SCE_AVS_STRING, SCE_AVS_TRIPLESTRING, SCE_BAAN_COMMENT, SCE_BAAN_COMMENTDOC,
+    SCE_BAAN_DEFINEDEF, SCE_BAAN_DOMDEF, SCE_BAAN_FUNCDEF, SCE_BAAN_FUNCTION, SCE_BAAN_NUMBER,
+    SCE_BAAN_OBJECTDEF, SCE_BAAN_OPERATOR, SCE_BAAN_PREPROCESSOR, SCE_BAAN_STRING,
+    SCE_BAAN_TABLEDEF, SCE_BAAN_TABLESQL, SCE_BAAN_WORD, SCE_BAAN_WORD2, SCE_BAAN_WORD3,
+    SCE_BAAN_WORD4, SCE_BAAN_WORD5, SCE_BAAN_WORD6, SCE_BAAN_WORD7, SCE_BAAN_WORD8, SCE_BAAN_WORD9,
+    SCE_BAT_AFTER_LABEL, SCE_BAT_COMMAND, SCE_BAT_COMMENT, SCE_BAT_HIDE, SCE_BAT_LABEL,
+    SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_B_BINNUMBER, SCE_B_COMMENT, SCE_B_COMMENTBLOCK,
+    SCE_B_CONSTANT, SCE_B_DATE, SCE_B_DOCBLOCK, SCE_B_DOCKEYWORD, SCE_B_DOCLINE, SCE_B_HEXNUMBER,
+    SCE_B_KEYWORD, SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4, SCE_B_LABEL, SCE_B_NUMBER,
+    SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CAML_CHAR, SCE_CAML_COMMENT,
+    SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2,
+    SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR, SCE_CAML_STRING,
+    SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS, SCE_CMAKE_COMMENT, SCE_CMAKE_FOREACHDEF,
+    SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF, SCE_CMAKE_NUMBER, SCE_CMAKE_PARAMETERS,
+    SCE_CMAKE_STRINGDQ, SCE_CMAKE_STRINGLQ, SCE_CMAKE_STRINGRQ, SCE_CMAKE_STRINGVAR,
+    SCE_CMAKE_USERDEFINED, SCE_CMAKE_VARIABLE, SCE_CMAKE_WHILEDEF, SCE_COBOL_CHARACTER,
+    SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC, SCE_COBOL_COMMENTLINE, SCE_COBOL_NUMBER,
+    SCE_COBOL_OPERATOR, SCE_COBOL_PREPROCESSOR, SCE_COBOL_STRING, SCE_COBOL_WORD, SCE_COBOL_WORD2,
+    SCE_COBOL_WORD3, SCE_COFFEESCRIPT_CHARACTER, SCE_COFFEESCRIPT_COMMENTBLOCK,
     SCE_COFFEESCRIPT_COMMENTLINE, SCE_COFFEESCRIPT_GLOBALCLASS, SCE_COFFEESCRIPT_INSTANCEPROPERTY,
     SCE_COFFEESCRIPT_NUMBER, SCE_COFFEESCRIPT_OPERATOR, SCE_COFFEESCRIPT_REGEX,
     SCE_COFFEESCRIPT_STRING, SCE_COFFEESCRIPT_VERBOSE_REGEX,
@@ -5918,6 +5923,157 @@ const ASN1_THEME: LangTheme = LangTheme {
     bold: ASN1_BOLD,
 };
 
+// --- LexBaan ---
+// Baan 4GL — proprietary ERP scripting language (extension `.baan`).
+// `L_BAANC` (id 60) is the only language row using this lexer.
+// Nine-wordlist descriptor with first-match-wins classification per
+// `LexBaan.cxx:556-599` plus position-tracked overrides
+// (`lineHasDomain` / `lineHasFunction` promote the next identifier
+// to DOMDEF / FUNCDEF regardless of wordlist). See the `LexBaan`
+// banner in `scintilla-sys/src/lib.rs` for the paint-loop citations
+// and per-state emission analysis.
+//
+// **22 style mappings** covering 25 defined SCE_BAAN_* states
+// (0..=24). Three unmapped per the framework's fall-through-to-
+// STYLE_DEFAULT convention:
+//   * `DEFAULT` (0) — whitespace / unclassified.
+//   * `IDENTIFIER` (8) — bareword collect state at
+//     `LexBaan.cxx:678`. Barewords that don't match any wordlist
+//     AND don't match any `IsAnyOtherIdentifier` pattern fall
+//     through to STYLE_DEFAULT. Same convention as
+//     [`SCE_C_IDENTIFIER`] / [`SCE_ASN1_IDENTIFIER`].
+//   * `STRINGEOL` (9) — parse-failure state emitted at `:653`
+//     when a string doesn't terminate before line end. Left
+//     unmapped per the framework's deferred `StyleSlot::Error`
+//     convention. Same discipline as Visual Prolog / LexBasic
+//     (which uses SCE_B_ERROR for the same purpose).
+//
+// **Framework routing choices:**
+//   * `COMMENT` (1) → Comment italic — `|`-prefixed line
+//     comments (Baan 4GL's distinctive comment syntax, unlike
+//     `;` / `//` / `#`).
+//   * `COMMENTDOC` (2) → Comment italic — `dllusage...enddllusage`
+//     and `functionusage...endfunctionusage` doc blocks.
+//   * `NUMBER` (3) → Number.
+//   * `WORD` (4) → Keyword bold — class 0 reserved keywords
+//     (`if` / `for` / `while` / `function` / ...).
+//   * `STRING` (5) → String.
+//   * `PREPROCESSOR` (6) → Preprocessor — `#`-prefixed built-in
+//     directives (`#define` / `#include` / `#pragma` / `#ifdef`
+//     / etc. — the 13-token whitelist at `LexBaan.cxx:518-521`).
+//   * `OPERATOR` (7) → Operator.
+//   * `WORD2` (10) → Keyword2 accent — class 1 "Baan Standard
+//     functions". Slot mapped for future user config; empty by
+//     default so state never emits with stock wordlist install.
+//   * `WORD3` (11) → Keyword2 — class 2 "Baan Functions
+//     Abridged" (only fires if next char is `(` per
+//     `LexBaan.cxx:577-580`). Same slot as WORD2 since both are
+//     function-call archetypes.
+//   * `WORD4` (12) → Preprocessor — class 3 section headers
+//     ("Baan Main Sections"). Structurally similar to
+//     `#`-directive paint. Empty by default.
+//   * `WORD5` (13) → Macro — class 4 sub-section headers ("Baan
+//     Sub Sections"). Distinct slot so main/sub sections paint
+//     differently. Empty by default.
+//   * `WORD6` (14) → Lifetime — class 5 pre-defined variables.
+//     Empty by default.
+//   * `WORD7` (15) → Lifetime — class 6 pre-defined attributes.
+//     Same slot as WORD6 (attribute/variable archetype).
+//   * `WORD8` (16) → Macro — class 7 enumerates.
+//   * `WORD9` (17) → Macro — class 8 unused slot (no descriptor
+//     name at `LexBaan.cxx:71-81`; only accessible via
+//     `WordListSet` case 8 at `:484-486`). Slot mapped for a
+//     hypothetical future user extension.
+//   * `TABLEDEF` (18) → Macro — pattern-matched table names
+//     (`^^^^^###` etc. per `IsAnyOtherIdentifier` at `:135-206`).
+//   * `TABLESQL` (19) → Macro — pattern-matched SQL table
+//     references.
+//   * `FUNCTION` (20) → Lifetime — pattern-matched function
+//     names (`^^^^^.dll####.` etc.).
+//   * `DOMDEF` (21) → Preprocessor — identifier following the
+//     `domain` keyword (position-tracked at `:565-567`). Marks
+//     a domain-declaration site.
+//   * `FUNCDEF` (22) → Preprocessor — identifier following the
+//     `function` keyword. Marks a function-declaration site.
+//   * `OBJECTDEF` (23) → Macro — identifier following `#pragma`
+//     / `#include` (position-tracked at `:600-603`).
+//   * `DEFINEDEF` (24) → Macro — identifier following `#define`
+//     / `#undef` / `#ifdef` / etc. (position-tracked at
+//     `:604-607`).
+//
+// Palette rationale: Baan 4GL's 25-state / 9-wordlist descriptor
+// is the richest in Lexilla. The seven semantic-position states
+// (TABLEDEF / TABLESQL / FUNCTION / DOMDEF / FUNCDEF / OBJECTDEF
+// / DEFINEDEF) plus the nine wordlist-driven WORD* states each
+// get a distinct StyleSlot along the Keyword / Keyword2 /
+// Preprocessor / Lifetime / Macro axes, giving the Baan reader
+// visual
+// distinction between reserved words, function calls, section
+// markers, declaration sites, and pattern-matched identifiers.
+// Same "map ahead" discipline as AviSynth's class-5 USERDFN
+// (mapped even though unpopulated by config).
+//
+// **Default install: class 0 only.** [`BAAN_KEYWORDS`] covers
+// ~44 reserved keywords; the other 8 wordlist classes stay
+// empty by design. States WORD2..=WORD9 don't emit with the
+// stock install; the mappings are inert until a user extends
+// the config. Position-tracked states (DOMDEF / FUNCDEF /
+// OBJECTDEF / DEFINEDEF) DO fire regardless of wordlist config
+// since they're triggered by class-0 keyword matches (`domain`
+// / `function`) or preprocessor state (`#define` / `#pragma`).
+// Pattern-matched states (TABLEDEF / TABLESQL / FUNCTION) also
+// fire regardless of wordlist install since
+// `IsAnyOtherIdentifier` at `:135-206` runs on every unmatched
+// identifier.
+const BAAN_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_BAAN_COMMENT, StyleSlot::Comment),
+    (SCE_BAAN_COMMENTDOC, StyleSlot::Comment),
+    (SCE_BAAN_NUMBER, StyleSlot::Number),
+    (SCE_BAAN_WORD, StyleSlot::Keyword),
+    (SCE_BAAN_STRING, StyleSlot::String),
+    (SCE_BAAN_PREPROCESSOR, StyleSlot::Preprocessor),
+    (SCE_BAAN_OPERATOR, StyleSlot::Operator),
+    (SCE_BAAN_WORD2, StyleSlot::Keyword2),
+    (SCE_BAAN_WORD3, StyleSlot::Keyword2),
+    (SCE_BAAN_WORD4, StyleSlot::Preprocessor),
+    (SCE_BAAN_WORD5, StyleSlot::Macro),
+    (SCE_BAAN_WORD6, StyleSlot::Lifetime),
+    (SCE_BAAN_WORD7, StyleSlot::Lifetime),
+    (SCE_BAAN_WORD8, StyleSlot::Macro),
+    (SCE_BAAN_WORD9, StyleSlot::Macro),
+    (SCE_BAAN_TABLEDEF, StyleSlot::Macro),
+    (SCE_BAAN_TABLESQL, StyleSlot::Macro),
+    (SCE_BAAN_FUNCTION, StyleSlot::Lifetime),
+    (SCE_BAAN_DOMDEF, StyleSlot::Preprocessor),
+    (SCE_BAAN_FUNCDEF, StyleSlot::Preprocessor),
+    (SCE_BAAN_OBJECTDEF, StyleSlot::Macro),
+    (SCE_BAAN_DEFINEDEF, StyleSlot::Macro),
+];
+
+// Italic on both comment forms — universal Code++ comment
+// convention.
+const BAAN_ITALIC: &[usize] = &[SCE_BAAN_COMMENT, SCE_BAAN_COMMENTDOC];
+
+// Bold on WORD (class 0 — Baan reserved keywords) — primary
+// structural anchor. Same discipline as every other Code++
+// theme.
+const BAAN_BOLD: &[usize] = &[SCE_BAAN_WORD];
+
+// One-class install. Only [`BAAN_KEYWORDS`] (class 0) is
+// populated by default. Classes 1..=8 (standard functions,
+// abridged functions, main sections, sub sections, predefined
+// variables, predefined attributes, enumerates, unused-slot)
+// stay uninstalled — their SCE_BAAN_WORD*/WORD*/WORD9 states
+// don't emit with the stock config. Their mappings in
+// `BAAN_STYLES` are preserved so a future user-config
+// extension gets defined paint immediately.
+const BAAN_THEME: LangTheme = LangTheme {
+    keywords: &[(0, BAAN_KEYWORDS)],
+    styles: BAAN_STYLES,
+    italic: BAAN_ITALIC,
+    bold: BAAN_BOLD,
+};
+
 // --- LexAVS ---
 // AviSynth — video-editing scripting language (extensions `.avs` /
 // `.avsi`). `L_AVS` (id 66) is the only language row using this
@@ -11492,6 +11648,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&SPICE_THEME)
     } else if lang == L_ASN1 {
         Some(&ASN1_THEME)
+    } else if lang == L_BAANC {
+        Some(&BAAN_THEME)
     } else if lang == L_AVS {
         Some(&AVS_THEME)
     } else if lang == L_BLITZBASIC {
@@ -26661,29 +26819,34 @@ mod lang_theme_tests {
         extra_fold_properties, lang_theme, slot_color, StyleSlot, ASM_CPU_KEYWORDS,
         ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS,
         ASM_REG_KEYWORDS, ASN1_BOLD, ASN1_ITALIC, ASN1_STYLES, AVS_BOLD, AVS_ITALIC, AVS_STYLES,
-        BLITZBASIC_BOLD, BLITZBASIC_ITALIC, BLITZBASIC_STYLES, ERLANG_BOLD, ERLANG_ITALIC,
-        ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC, ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD,
-        FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES, FREEBASIC_BOLD, FREEBASIC_ITALIC,
-        FREEBASIC_STYLES, GDSCRIPT_BOLD, GDSCRIPT_ITALIC, GDSCRIPT_STYLES, HOLLYWOOD_BOLD,
-        HOLLYWOOD_ITALIC, HOLLYWOOD_STYLES, IHEX_STYLES, MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES,
-        NIM_BOLD, NIM_ITALIC, NIM_STYLES, NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES,
-        OSCRIPT_BOLD, OSCRIPT_ITALIC, OSCRIPT_STYLES, PUREBASIC_BOLD, PUREBASIC_ITALIC,
-        PUREBASIC_STYLES, RAKU_BOLD, RAKU_ITALIC, RAKU_STYLES, REBOL_BOLD, REBOL_ITALIC,
-        REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC, REGISTRY_STYLES, SCE_ADA_CHARACTER,
-        SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL,
-        SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD,
-        SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE,
-        SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND,
-        SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER, SCE_ASM_OPERATOR,
-        SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_ASN1_ATTRIBUTE,
-        SCE_ASN1_COMMENT, SCE_ASN1_DESCRIPTOR, SCE_ASN1_KEYWORD, SCE_ASN1_OID, SCE_ASN1_OPERATOR,
-        SCE_ASN1_SCALAR, SCE_ASN1_STRING, SCE_ASN1_TYPE, SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK,
-        SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD, SCE_AU3_MACRO,
-        SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT, SCE_AU3_SPECIAL,
-        SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_AVS_CLIPPROP, SCE_AVS_COMMENTBLOCK,
-        SCE_AVS_COMMENTBLOCKN, SCE_AVS_COMMENTLINE, SCE_AVS_FILTER, SCE_AVS_FUNCTION,
-        SCE_AVS_KEYWORD, SCE_AVS_NUMBER, SCE_AVS_OPERATOR, SCE_AVS_PLUGIN, SCE_AVS_STRING,
-        SCE_AVS_TRIPLESTRING, SCE_B_BINNUMBER, SCE_B_COMMENT, SCE_B_COMMENTBLOCK, SCE_B_CONSTANT,
+        BAAN_BOLD, BAAN_ITALIC, BAAN_STYLES, BLITZBASIC_BOLD, BLITZBASIC_ITALIC, BLITZBASIC_STYLES,
+        ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC, ESCRIPT_STYLES,
+        FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES, FREEBASIC_BOLD,
+        FREEBASIC_ITALIC, FREEBASIC_STYLES, GDSCRIPT_BOLD, GDSCRIPT_ITALIC, GDSCRIPT_STYLES,
+        HOLLYWOOD_BOLD, HOLLYWOOD_ITALIC, HOLLYWOOD_STYLES, IHEX_STYLES, MMIXAL_BOLD,
+        MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC, NIM_STYLES, NNCRONTAB_BOLD,
+        NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD, OSCRIPT_ITALIC, OSCRIPT_STYLES,
+        PUREBASIC_BOLD, PUREBASIC_ITALIC, PUREBASIC_STYLES, RAKU_BOLD, RAKU_ITALIC, RAKU_STYLES,
+        REBOL_BOLD, REBOL_ITALIC, REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC, REGISTRY_STYLES,
+        SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER,
+        SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL,
+        SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
+        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
+        SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
+        SCE_ASN1_ATTRIBUTE, SCE_ASN1_COMMENT, SCE_ASN1_DESCRIPTOR, SCE_ASN1_KEYWORD, SCE_ASN1_OID,
+        SCE_ASN1_OPERATOR, SCE_ASN1_SCALAR, SCE_ASN1_STRING, SCE_ASN1_TYPE, SCE_AU3_COMMENT,
+        SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
+        SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT,
+        SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_AVS_CLIPPROP,
+        SCE_AVS_COMMENTBLOCK, SCE_AVS_COMMENTBLOCKN, SCE_AVS_COMMENTLINE, SCE_AVS_FILTER,
+        SCE_AVS_FUNCTION, SCE_AVS_KEYWORD, SCE_AVS_NUMBER, SCE_AVS_OPERATOR, SCE_AVS_PLUGIN,
+        SCE_AVS_STRING, SCE_AVS_TRIPLESTRING, SCE_BAAN_COMMENT, SCE_BAAN_COMMENTDOC,
+        SCE_BAAN_DEFINEDEF, SCE_BAAN_DOMDEF, SCE_BAAN_FUNCDEF, SCE_BAAN_FUNCTION, SCE_BAAN_NUMBER,
+        SCE_BAAN_OBJECTDEF, SCE_BAAN_OPERATOR, SCE_BAAN_PREPROCESSOR, SCE_BAAN_STRING,
+        SCE_BAAN_TABLEDEF, SCE_BAAN_TABLESQL, SCE_BAAN_WORD, SCE_BAAN_WORD2, SCE_BAAN_WORD3,
+        SCE_BAAN_WORD4, SCE_BAAN_WORD5, SCE_BAAN_WORD6, SCE_BAAN_WORD7, SCE_BAAN_WORD8,
+        SCE_BAAN_WORD9, SCE_B_BINNUMBER, SCE_B_COMMENT, SCE_B_COMMENTBLOCK, SCE_B_CONSTANT,
         SCE_B_DOCBLOCK, SCE_B_DOCKEYWORD, SCE_B_DOCLINE, SCE_B_HEXNUMBER, SCE_B_KEYWORD,
         SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4, SCE_B_LABEL, SCE_B_NUMBER, SCE_B_OPERATOR,
         SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CAML_CHAR, SCE_CAML_COMMENT, SCE_CAML_COMMENT1,
@@ -26742,9 +26905,9 @@ mod lang_theme_tests {
         ADA_KEYWORDS, ASN1_ATTRIBUTES, ASN1_DESCRIPTORS, ASN1_KEYWORDS, ASN1_TYPES, AU3_EXPAND,
         AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS, AU3_PREPROCESSORS, AU3_SENDKEYS, AU3_SPECIAL,
         AU3_UDF, AVS_CLIPPROPS, AVS_FILTERS, AVS_FUNCTIONS, AVS_KEYWORDS, AVS_PLUGINS,
-        BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, BLITZBASIC_BUILTINS, BLITZBASIC_KEYWORDS,
-        CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CMAKE_COMMANDS, CMAKE_PARAMETERS,
-        CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B, COBOL_KEYWORDS_C,
+        BAAN_KEYWORDS, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, BLITZBASIC_BUILTINS,
+        BLITZBASIC_KEYWORDS, CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CMAKE_COMMANDS,
+        CMAKE_PARAMETERS, CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B, COBOL_KEYWORDS_C,
         COFFEESCRIPT_GLOBAL_CLASSES, COFFEESCRIPT_KEYWORDS, COFFEESCRIPT_KEYWORDS_2,
         CPP_KEYWORDS_2, CSOUND_HEADERSTMT, CSOUND_OPCODES, CSOUND_USERKW, CSS_PROPERTIES_CSS1,
         CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS,
@@ -26760,15 +26923,15 @@ mod lang_theme_tests {
         INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2,
         JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS, KIX_FUNCTIONS,
         KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2,
-        L_ADA, L_ASM, L_ASN1, L_ASP, L_AU3, L_AVS, L_BASH, L_BATCH, L_BLITZBASIC, L_C, L_CAML,
-        L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
-        L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_FREEBASIC, L_GDSCRIPT, L_GOLANG, L_GUI4CLI,
-        L_HASKELL, L_HOLLYWOOD, L_HTML, L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON,
-        L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM,
-        L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS,
-        L_PS, L_PUREBASIC, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST,
-        L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL, L_TEHEX, L_TEX, L_TEXT,
-        L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML,
+        L_ADA, L_ASM, L_ASN1, L_ASP, L_AU3, L_AVS, L_BAANC, L_BASH, L_BATCH, L_BLITZBASIC, L_C,
+        L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF,
+        L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_FREEBASIC, L_GDSCRIPT, L_GOLANG,
+        L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT,
+        L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL,
+        L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
+        L_PROPS, L_PS, L_PUREBASIC, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY,
+        L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL, L_TEHEX, L_TEX,
+        L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML,
         MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
         MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
         NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
@@ -26937,6 +27100,7 @@ mod lang_theme_tests {
             (L_VISUALPROLOG, "Visual Prolog"),
             (L_ASN1, "ASN.1"),
             (L_AVS, "AviSynth"),
+            (L_BAANC, "BaanC"),
             (L_BLITZBASIC, "Blitzbasic"),
             (L_PUREBASIC, "Purebasic"),
             (L_FREEBASIC, "Freebasic"),
@@ -45223,6 +45387,382 @@ mod lang_theme_tests {
                  paint to the structural keyword slot"
             );
         }
+    }
+
+    /// `BaanC` uses Lexilla's `baan` lexer (`LexBaan.cxx`) — a 2001
+    /// lexer by Vamsi Potluru + Praveen Ambekar for the Baan ERP
+    /// scripting language (later Infor ERP LN). The **richest
+    /// wordlist descriptor in Lexilla** (9 classes) with **25
+    /// `SCE_BAAN_*` states** — the most complex lexer Code++ has
+    /// wired. Extension `.baan`. Included in
+    /// `wired_languages_have_complete_themes` — 22 style mappings
+    /// (25 defined slots minus 3 unmapped: DEFAULT / IDENTIFIER /
+    /// STRINGEOL).
+    ///
+    /// This dedicated test pins the Baan-specific structural
+    /// invariants:
+    ///
+    ///   1. Deep-value identity (styles / italic / bold / one
+    ///      populated keyword class).
+    ///   2. 22-mapping style-count (25 defined slots minus 3
+    ///      unmapped: DEFAULT (whitespace), IDENTIFIER (bareword
+    ///      collect), STRINGEOL (deferred `StyleSlot::Error`)).
+    ///   3. One populated class in canonical order — class 0
+    ///      "Baan & `BaanSQL` Reserved Keywords". Classes 1..=8
+    ///      remain uninstalled by design.
+    ///   4. Populated class non-empty.
+    ///   5. Style-routing pins for all 22 mapped constants,
+    ///      covering: three comment/string slots (COMMENT +
+    ///      COMMENTDOC → Comment; STRING → String), NUMBER,
+    ///      WORD → Keyword bold, PREPROCESSOR, OPERATOR, nine
+    ///      wordlist-classifier states (WORD2..=WORD9) mapped
+    ///      even though empty by default, plus **seven
+    ///      semantic-position states** unique to `LexBaan`
+    ///      (TABLEDEF / TABLESQL / FUNCTION / DOMDEF / FUNCDEF /
+    ///      OBJECTDEF / DEFINEDEF).
+    ///   6. Framework-unmapped slots confirmed absent (DEFAULT,
+    ///      IDENTIFIER, STRINGEOL).
+    ///   7. Italic == 2 (COMMENT + COMMENTDOC).
+    ///   8. Bold == 1 (WORD only — class 0 primary anchor).
+    ///   9. Cross-language non-reuse (sampled).
+    ///   10. `L_BAANC` `LangEntry` has `lexer: Some("baan")` and
+    ///       `.baan` extension.
+    ///   11. All-lowercase alphabet enforcement (LexBaan.cxx:550
+    ///       lowercases every collected byte).
+    ///   12. **Canonical class-0 KEYWORD anchors** — includes
+    ///       tokens hard-coded in the `LexBaan` source: `table` /
+    ///       `extern` / `long` / `double` / `boolean` /
+    ///       `string` / `domain` (from `IsDeclarationLine` at
+    ///       :312-314), `for` / `if` / `on` / `repeat` /
+    ///       `select` / `while` (from :749 startTags),
+    ///       `endcase` / `endfor` / `endif` / `endselect` /
+    ///       `endwhile` / `until` (from :750 endTags),
+    ///       `selectdo` / `selecteos` / `selectempty` /
+    ///       `selecterror` (from :751 selectCloseTags), `case`
+    ///       / `default` / `else` / `function` (from :558-563
+    ///       + :343-345 `IsInnerLevelFold`).
+    ///   13. **Semantic-position state routing pins** —
+    ///       TABLEDEF / TABLESQL / OBJECTDEF / DEFINEDEF →
+    ///       Macro; FUNCTION → Lifetime; DOMDEF / FUNCDEF →
+    ///       Preprocessor. These states fire regardless of
+    ///       wordlist config (position-tracked or
+    ///       pattern-matched), so the routings must be pinned.
+    ///   14. **Nine WORD*/WORDN state coverage** — all nine
+    ///       classifier states (WORD, WORD2..=WORD9) are mapped
+    ///       even though only class 0 is populated by default,
+    ///       so a future user config extension gets defined
+    ///       paint immediately.
+    ///   15. Highest-defined `SCE_BAAN_*` pin — `SCE_BAAN_DEFINEDEF`
+    ///       (24) is the top slot per `SciLexer.h:669`.
+    ///   16. No duplicate tokens.
+    ///   17. **`domain` + `function` keywords MUST be in class 0**
+    ///       — LexBaan.cxx:558-563 uses raw `strcmp` on the
+    ///       collected identifier (not wordlist match) to set
+    ///       the `lineHasDomain` / `lineHasFunction` flags that
+    ///       promote the next identifier to DOMDEF / FUNCDEF.
+    ///       So these two tokens have DUAL PATH:
+    ///       Match class 0 → paint WORD (Keyword). Also trigger
+    ///       position-tracker → NEXT identifier becomes DOMDEF /
+    ///       FUNCDEF (Preprocessor). Both mechanisms must be
+    ///       pinned working correctly.
+    ///   18. `for` / `if` / `while` / `select` / `repeat` /
+    ///       `on` are present as fold openers per LexBaan.cxx:749
+    ///       — these are the load-bearing class-0 control-flow
+    ///       tokens the folder relies on.
+    ///   19. Comment routing pin — `|`-prefixed line comments
+    ///       are Baan's DISTINCTIVE syntax (unlike `;` / `//`
+    ///       / `#` / `--` used by other languages). Verify
+    ///       COMMENT → Comment.
+    ///   20. **STRINGEOL deferred-Error pin** — `SCE_BAAN_STRINGEOL`
+    ///       (9) MUST remain unmapped so the deferred
+    ///       `StyleSlot::Error` migration lands consistently.
+    #[test]
+    fn baan_uses_lexbaan_one_class_theme() {
+        use codepp_scintilla_sys::{SCE_BAAN_DEFAULT, SCE_BAAN_IDENTIFIER, SCE_BAAN_STRINGEOL};
+        let baan = lang_theme(L_BAANC).expect("BaanC wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(baan.styles, BAAN_STYLES);
+        assert_eq!(baan.italic, BAAN_ITALIC);
+        assert_eq!(baan.bold, BAAN_BOLD);
+        assert_eq!(baan.keywords.len(), 1);
+
+        // Invariant 2: 22 mappings (25 defined slots minus 3 unmapped).
+        assert_eq!(
+            baan.styles.len(),
+            22,
+            "BAAN_STYLES must map 22 indices (25 defined \
+             SCE_BAAN_* slots minus 3 unmapped: DEFAULT, \
+             IDENTIFIER, STRINGEOL)"
+        );
+
+        // Invariant 3: one populated class (class 0 only).
+        assert_eq!(baan.keywords[0].0, 0);
+        assert_eq!(baan.keywords[0].1, BAAN_KEYWORDS);
+
+        // Invariant 4: class 0 non-empty.
+        assert!(
+            BAAN_KEYWORDS.split_whitespace().count() > 0,
+            "BAAN_KEYWORDS must be non-empty"
+        );
+
+        // Invariant 5: style-routing pins for all 22 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_BAAN_COMMENT, StyleSlot::Comment, "COMMENT"),
+            (SCE_BAAN_COMMENTDOC, StyleSlot::Comment, "COMMENTDOC"),
+            (SCE_BAAN_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_BAAN_WORD, StyleSlot::Keyword, "WORD"),
+            (SCE_BAAN_STRING, StyleSlot::String, "STRING"),
+            (
+                SCE_BAAN_PREPROCESSOR,
+                StyleSlot::Preprocessor,
+                "PREPROCESSOR",
+            ),
+            (SCE_BAAN_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+            (SCE_BAAN_WORD2, StyleSlot::Keyword2, "WORD2"),
+            (SCE_BAAN_WORD3, StyleSlot::Keyword2, "WORD3"),
+            (SCE_BAAN_WORD4, StyleSlot::Preprocessor, "WORD4"),
+            (SCE_BAAN_WORD5, StyleSlot::Macro, "WORD5"),
+            (SCE_BAAN_WORD6, StyleSlot::Lifetime, "WORD6"),
+            (SCE_BAAN_WORD7, StyleSlot::Lifetime, "WORD7"),
+            (SCE_BAAN_WORD8, StyleSlot::Macro, "WORD8"),
+            (SCE_BAAN_WORD9, StyleSlot::Macro, "WORD9"),
+            (SCE_BAAN_TABLEDEF, StyleSlot::Macro, "TABLEDEF"),
+            (SCE_BAAN_TABLESQL, StyleSlot::Macro, "TABLESQL"),
+            (SCE_BAAN_FUNCTION, StyleSlot::Lifetime, "FUNCTION"),
+            (SCE_BAAN_DOMDEF, StyleSlot::Preprocessor, "DOMDEF"),
+            (SCE_BAAN_FUNCDEF, StyleSlot::Preprocessor, "FUNCDEF"),
+            (SCE_BAAN_OBJECTDEF, StyleSlot::Macro, "OBJECTDEF"),
+            (SCE_BAAN_DEFINEDEF, StyleSlot::Macro, "DEFINEDEF"),
+        ] {
+            assert!(
+                baan.styles.contains(&(idx, slot)),
+                "SCE_BAAN_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 6: framework-unmapped slots confirmed absent.
+        for (idx, name) in [
+            (SCE_BAAN_DEFAULT, "DEFAULT"),
+            (SCE_BAAN_IDENTIFIER, "IDENTIFIER"),
+            (SCE_BAAN_STRINGEOL, "STRINGEOL"),
+        ] {
+            assert!(
+                !baan.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_BAAN_{name} ({idx}) must remain unmapped"
+            );
+        }
+
+        // Invariant 7: italic == 2 (COMMENT + COMMENTDOC).
+        assert_eq!(baan.italic.len(), 2);
+        for idx in [SCE_BAAN_COMMENT, SCE_BAAN_COMMENTDOC] {
+            assert!(baan.italic.contains(&idx));
+        }
+
+        // Invariant 8: bold == 1 (WORD only).
+        assert_eq!(baan.bold.len(), 1);
+        assert!(baan.bold.contains(&SCE_BAAN_WORD));
+
+        // Invariant 9: cross-language non-reuse (sampled).
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let asn1 = lang_theme(L_ASN1).expect("ASN.1 wired");
+        let avs = lang_theme(L_AVS).expect("AviSynth wired");
+        for (other, name) in [(cpp, "C++"), (asn1, "ASN.1"), (avs, "AviSynth")] {
+            assert_ne!(
+                baan.styles, other.styles,
+                "BaanC must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 10: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_BAANC)
+            .expect("L_BAANC LangEntry present in LANG_TABLE");
+        assert_eq!(
+            entry.lexer,
+            Some("baan"),
+            "L_BAANC LangEntry.lexer must be Some(\"baan\")"
+        );
+        assert!(
+            entry.extensions.contains(&"baan"),
+            "L_BAANC extensions must contain `baan`"
+        );
+
+        // Invariant 11: all-lowercase alphabet enforcement.
+        // LexBaan.cxx:550 lowercases every collected byte before
+        // wordlist probe. Baan identifier chars include `.` and
+        // `_` and `$` per IsAWordChar at :117-119.
+        for tok in BAAN_KEYWORDS.split_whitespace() {
+            assert!(
+                !tok.is_empty()
+                    && tok.bytes().all(|b| b.is_ascii_lowercase()
+                        || b.is_ascii_digit()
+                        || b == b'_'
+                        || b == b'.'
+                        || b == b'$'),
+                "BAAN_KEYWORDS token `{tok}` violates the \
+                 lowercase-alnum-`_`-`.`-`$` alphabet — LexBaan.cxx:550 \
+                 lowercases before wordlist probe"
+            );
+        }
+
+        // Invariant 12: canonical class-0 KEYWORD anchors.
+        // Coverage: LexBaan.cxx:312-314 (IsDeclarationLine),
+        // :749-751 (fold openers/closers/select-sub-clauses),
+        // :343-345 (IsInnerLevelFold), :558-563 (domain/function
+        // position-tracker triggers).
+        for tok in [
+            "table",
+            "extern",
+            "long",
+            "double",
+            "boolean",
+            "string",
+            "domain",
+            "for",
+            "if",
+            "on",
+            "repeat",
+            "select",
+            "while",
+            "endcase",
+            "endfor",
+            "endif",
+            "endselect",
+            "endwhile",
+            "until",
+            "selectdo",
+            "selecteos",
+            "selectempty",
+            "selecterror",
+            "case",
+            "default",
+            "else",
+            "function",
+        ] {
+            assert!(
+                BAAN_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "BAAN_KEYWORDS must include canonical LexBaan.cxx-referenced token `{tok}`"
+            );
+        }
+
+        // Invariant 13: semantic-position state routing pins.
+        // These states fire regardless of wordlist config
+        // (position-tracked or pattern-matched), so the routings
+        // must be pinned.
+        for (idx, slot, name) in [
+            (SCE_BAAN_TABLEDEF, StyleSlot::Macro, "TABLEDEF"),
+            (SCE_BAAN_TABLESQL, StyleSlot::Macro, "TABLESQL"),
+            (SCE_BAAN_FUNCTION, StyleSlot::Lifetime, "FUNCTION"),
+            (SCE_BAAN_DOMDEF, StyleSlot::Preprocessor, "DOMDEF"),
+            (SCE_BAAN_FUNCDEF, StyleSlot::Preprocessor, "FUNCDEF"),
+            (SCE_BAAN_OBJECTDEF, StyleSlot::Macro, "OBJECTDEF"),
+            (SCE_BAAN_DEFINEDEF, StyleSlot::Macro, "DEFINEDEF"),
+        ] {
+            assert!(
+                baan.styles.contains(&(idx, slot)),
+                "SCE_BAAN_{name} (semantic-position state, fires \
+                 regardless of wordlist config) must route to {slot:?}"
+            );
+        }
+
+        // Invariant 14: nine WORD*/WORDN state coverage.
+        for idx in [
+            SCE_BAAN_WORD,
+            SCE_BAAN_WORD2,
+            SCE_BAAN_WORD3,
+            SCE_BAAN_WORD4,
+            SCE_BAAN_WORD5,
+            SCE_BAAN_WORD6,
+            SCE_BAAN_WORD7,
+            SCE_BAAN_WORD8,
+            SCE_BAAN_WORD9,
+        ] {
+            assert!(
+                baan.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_BAAN_WORD* slot {idx} must be mapped (even \
+                 though empty by default) so a future user config \
+                 gets defined paint"
+            );
+        }
+
+        // Invariant 15: highest-defined SCE_BAAN_* pin.
+        assert_eq!(
+            SCE_BAAN_DEFINEDEF, 24,
+            "SCE_BAAN_DEFINEDEF has drifted from 24 — verify against SciLexer.h:669"
+        );
+        for (idx, _) in baan.styles {
+            assert!(
+                *idx <= SCE_BAAN_DEFINEDEF,
+                "BAAN_STYLES references slot {idx}, higher than \
+                 SCE_BAAN_DEFINEDEF ({SCE_BAAN_DEFINEDEF})"
+            );
+        }
+
+        // Invariant 16: no duplicate tokens.
+        use std::collections::HashSet;
+        let total = BAAN_KEYWORDS.split_whitespace().count();
+        let unique = BAAN_KEYWORDS
+            .split_whitespace()
+            .collect::<HashSet<_>>()
+            .len();
+        assert_eq!(
+            total,
+            unique,
+            "BAAN_KEYWORDS contains {} duplicate token(s)",
+            total - unique
+        );
+
+        // Invariant 17: `domain` + `function` MUST be in class 0.
+        // These have DUAL PATH — wordlist match paints WORD, AND
+        // position-tracker at LexBaan.cxx:558-563 uses raw strcmp
+        // to promote NEXT identifier to DOMDEF/FUNCDEF. Both
+        // mechanisms are load-bearing.
+        for tok in ["domain", "function"] {
+            assert!(
+                BAAN_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "BAAN_KEYWORDS MUST include `{tok}` — LexBaan.cxx:558-563 \
+                 uses raw strcmp (not wordlist match) to set \
+                 lineHas{{Domain,Function}} flags that promote NEXT \
+                 identifier to DOMDEF/FUNCDEF. Missing here would \
+                 leave the token unpainted while still triggering the \
+                 position-tracker — asymmetric and confusing."
+            );
+        }
+
+        // Invariant 18: fold-opener load-bearing tokens per :749.
+        for tok in ["for", "if", "on", "repeat", "select", "while"] {
+            assert!(
+                BAAN_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "BAAN_KEYWORDS MUST include fold-opener `{tok}` — \
+                 LexBaan.cxx:749 startTags relies on this token being \
+                 painted WORD for the syntax-based folder to trigger"
+            );
+        }
+
+        // Invariant 19: comment routing pin — `|`-prefixed line
+        // comments are Baan's distinctive syntax.
+        assert!(
+            baan.styles
+                .contains(&(SCE_BAAN_COMMENT, StyleSlot::Comment)),
+            "SCE_BAAN_COMMENT (|-prefixed line comments) must route \
+             to Comment — Baan's distinctive comment syntax"
+        );
+
+        // Invariant 20: STRINGEOL deferred-Error pin. Must remain
+        // unmapped so the future `StyleSlot::Error` migration lands
+        // consistently across all deferred-error states.
+        assert_eq!(
+            SCE_BAAN_STRINGEOL, 9,
+            "SCE_BAAN_STRINGEOL drift from 9 — verify SciLexer.h:654"
+        );
+        assert!(
+            !baan.styles.iter().any(|(i, _)| *i == SCE_BAAN_STRINGEOL),
+            "SCE_BAAN_STRINGEOL MUST remain unmapped — deferred \
+             `StyleSlot::Error` migration"
+        );
     }
 
     /// `AviSynth` uses Lexilla's `avs` lexer (`LexAVS.cxx`) — a 2012

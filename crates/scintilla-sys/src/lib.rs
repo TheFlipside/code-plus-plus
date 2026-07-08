@@ -8866,6 +8866,152 @@ pub const SCE_AVS_FUNCTION: usize = 12;
 pub const SCE_AVS_CLIPPROP: usize = 13;
 pub const SCE_AVS_USERDFN: usize = 14;
 
+// LexBaan style indices. 25 contiguous slots (0..=24) covering the
+// Baan / BaanC lexer's full emission set: `|`-prefixed line comments
+// (COMMENT), `dllusage`/`functionusage`-delimited doc blocks
+// (COMMENTDOC), decimal + hex + scientific numeric literals (NUMBER),
+// nine keyword classes (WORD..WORD9) covering reserved words + std
+// functions + sections + predefined variables/attributes/enumerates,
+// `"..."` double-quoted strings (STRING), `#`-prefixed preprocessor
+// directives (PREPROCESSOR) with `^`-prefixed line-continuation
+// support, punctuation operators (OPERATOR), identifier-shaped tokens
+// (IDENTIFIER), unterminated-string parse-failure (STRINGEOL), and
+// seven **semantically-typed identifier states** emitted by the
+// pattern-matcher / position-tracker: `TABLEDEF` / `TABLESQL`
+// (schema-name patterns like `^^^^^###` matched at
+// `LexBaan.cxx:145-206`), `FUNCTION` (pattern-matched function
+// names), `DOMDEF` / `FUNCDEF` (identifier following `domain` /
+// `function` keyword), `OBJECTDEF` (identifier after `#pragma` /
+// `#include`), and `DEFINEDEF` (identifier after `#define` /
+// `#undef` / `#if*`). Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 645-669 and
+// `vendor/lexilla/lexers/LexBaan.cxx:995` (the `LexerModule lmBaan(
+// SCLEX_BAAN, LexerBaan::LexerFactoryBaan, "baan", baanWordLists)`
+// registration).
+//
+// Dispatches SCLEX_BAAN (= 31, per `SciLexer.h:47`) — a 2001 lexer
+// by Vamsi Potluru + Praveen Ambekar, maintained by "oirfeodent" —
+// "based heavily on LexCPP.cxx" (`LexBaan.cxx:4`). Baan 4GL is the
+// scripting language of the Baan ERP system (later Infor ERP LN).
+// Extension `.baan`.
+//
+// **Nine wordlists** at `LexBaan.cxx:71-81` — the richest wordlist
+// descriptor of any Lexilla lexer that Code++ currently wires
+// (Raku's 7-class is a distant second):
+//   - class 0 = "Baan & BaanSQL Reserved Keywords " (trailing
+//     space per source) — the core language grammar. Matches at
+//     `:556` → `SCE_BAAN_WORD`.
+//   - class 1 = "Baan Standard functions" — the built-in
+//     function library. Matches at `:573` → `SCE_BAAN_WORD2`.
+//   - class 2 = "Baan Functions Abridged" — user-defined
+//     functions expressed with the `~` abridged-list separator
+//     (see `WordListAbridged` at `:368-382`). Only matches at
+//     `:576-580` if the NEXT char is `(` (function-call context);
+//     otherwise the token stays `IDENTIFIER`. Emits `SCE_BAAN_WORD3`.
+//   - class 3 = "Baan Main Sections " (trailing space) — section
+//     headers like `declaration:` / `code:` / `functions:`.
+//     Matches at `:582` → `SCE_BAAN_WORD4`. Section entries
+//     typically end with `:` — `LexBaan.cxx:495` sets
+//     `kwHasSection = strchr(wl, ':') != NULL` and the classifier
+//     at `:556` uses `s1` (with trailing `:`) instead of `s` when
+//     the section flag is set.
+//   - class 4 = "Baan Sub Sections" — sub-section markers. Matches
+//     at `:585` → `SCE_BAAN_WORD5`.
+//   - class 5 = "PreDefined Variables" — Baan pre-defined system
+//     variables. Matches at `:588` → `SCE_BAAN_WORD6`.
+//   - class 6 = "PreDefined Attributes" — Baan attribute names.
+//     Matches at `:591` → `SCE_BAAN_WORD7`.
+//   - class 7 = "Enumerates" — enumerated values. Matches at
+//     `:594` → `SCE_BAAN_WORD8`.
+//   - class 8 = **unnamed** — 9th slot handled by the
+//     `WordListSet` switch at `:484-486` but absent from the
+//     descriptor array at `:71-81` (which has 8 named entries +
+//     nullptr terminator). Emits `SCE_BAAN_WORD9` at `:597`.
+//     Effectively a reserved user-customization slot.
+//
+// **Classifier order.** `LexBaan.cxx:556-599` probes wordlists in
+// this fixed sequence, with **first-match-wins** across classes 0..=8
+// (each is `else if`). Plus two position-tracked overrides at
+// `:565-572`:
+//   1. `lineHasDomain` (set when `domain` keyword seen earlier on
+//      this line) → force `SCE_BAAN_DOMDEF` regardless of wordlist.
+//   2. `lineHasFunction` (set when `function` keyword seen) → force
+//      `SCE_BAAN_FUNCDEF`.
+// These override class-0..=8 classification for the identifier
+// immediately following `domain` or `function`.
+//
+// **Case-INSENSITIVE identifier lookup.** `LexBaan.cxx:550` calls
+// `sc.GetCurrentLowered(s, sizeof(s))` — same discipline as LexVB /
+// LexAVS / LexBasic. Wordlist entries MUST be byte-canonical
+// lowercase. Baan 4GL source convention is lowercase already
+// (`if` / `for` / `function` / `endfunction`) so this rarely
+// surprises.
+//
+// **Pattern-matched semantic states.** `IsAnyOtherIdentifier` at
+// `LexBaan.cxx:135-209` matches identifier byte patterns against
+// Baan naming conventions:
+//   - 8 chars, `^^^^^###` (5 letters + 3 digits) → `TABLEDEF`.
+//   - 9 chars, `t^^^^^###` → `TABLEDEF`.
+//   - 9 chars, `^^^^^###.` → `TABLESQL`.
+//   - 13 chars, `^^^^^###.****` → `TABLESQL`.
+//   - 13 chars, `rcd.t^^^^^###` → `TABLEDEF`.
+//   - 14-15 chars, `^^^^^###.******` (no `:` at position 13) →
+//     `TABLESQL`.
+//   - 16-17 chars, `^^^^^###._index##` → `TABLEDEF`.
+//   - 16-17 chars, `^^^^^###._compnr` → `TABLEDEF`.
+//   - `^^^^^.dll####.` (>14 chars) → `FUNCTION`.
+//   - `^^int.dll^^^^^.` (>15 chars) → `FUNCTION`.
+//   - `i^^^^^####.` (>11 chars) → `FUNCTION`.
+// These pattern rules encode Baan ERP's schema/module naming
+// conventions (`ttadv100` = table advertising module 100,
+// `tcadv001.dll012.` = function ID in transaction module, etc.)
+// directly into the lexer.
+//
+// **`SCE_BAAN_WORD3` gating.** Unlike the other WORD* states,
+// WORD3 only emits if the identifier is in class 2 AND the next
+// char is `(` — see `:577-580`. This makes WORD3 specifically the
+// "abridged function-call" state. If class 2 isn't populated,
+// WORD3 never emits.
+//
+// **`SCE_BAAN_STRINGEOL` (9)** — parse-failure state. Emitted at
+// `:653` when a string doesn't terminate before line end (unless
+// the line ends with `^` continuation). Left unmapped per the
+// framework's deferred `StyleSlot::Error` convention. Same
+// discipline as Visual Prolog's error state.
+//
+// **`SCE_BAAN_IDENTIFIER` (8)** — the transient collect state at
+// `:678`. Bareword identifiers that don't match any wordlist and
+// don't match any pattern-based semantic slot fall through to
+// `IDENTIFIER` and paint at STYLE_DEFAULT. Framework leaves
+// unmapped per the [`SCE_C_IDENTIFIER`] / [`SCE_ASN1_IDENTIFIER`]
+// / [`SCE_SPICE_IDENTIFIER`] convention.
+pub const SCLEX_BAAN: usize = 31;
+pub const SCE_BAAN_DEFAULT: usize = 0;
+pub const SCE_BAAN_COMMENT: usize = 1;
+pub const SCE_BAAN_COMMENTDOC: usize = 2;
+pub const SCE_BAAN_NUMBER: usize = 3;
+pub const SCE_BAAN_WORD: usize = 4;
+pub const SCE_BAAN_STRING: usize = 5;
+pub const SCE_BAAN_PREPROCESSOR: usize = 6;
+pub const SCE_BAAN_OPERATOR: usize = 7;
+pub const SCE_BAAN_IDENTIFIER: usize = 8;
+pub const SCE_BAAN_STRINGEOL: usize = 9;
+pub const SCE_BAAN_WORD2: usize = 10;
+pub const SCE_BAAN_WORD3: usize = 11;
+pub const SCE_BAAN_WORD4: usize = 12;
+pub const SCE_BAAN_WORD5: usize = 13;
+pub const SCE_BAAN_WORD6: usize = 14;
+pub const SCE_BAAN_WORD7: usize = 15;
+pub const SCE_BAAN_WORD8: usize = 16;
+pub const SCE_BAAN_WORD9: usize = 17;
+pub const SCE_BAAN_TABLEDEF: usize = 18;
+pub const SCE_BAAN_TABLESQL: usize = 19;
+pub const SCE_BAAN_FUNCTION: usize = 20;
+pub const SCE_BAAN_DOMDEF: usize = 21;
+pub const SCE_BAAN_FUNCDEF: usize = 22;
+pub const SCE_BAAN_OBJECTDEF: usize = 23;
+pub const SCE_BAAN_DEFINEDEF: usize = 24;
+
 // SCN_* notification codes (delivered via WM_NOTIFY's NMHDR.code) are added
 // when Phase 2+ first dispatches them. Each constant must be cross-checked
 // against `vendor/scintilla/include/Scintilla.h` at the time of addition;

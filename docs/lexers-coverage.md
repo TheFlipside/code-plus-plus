@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 84 / 🟡 4 / ⚫ 1.
+Total: 89 rows. ✅ 85 / 🟡 3 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1852,7 +1852,7 @@ further shim work needed.
 | Assembly | 32 | `asm` | ✅ | ✅ | ✅ |
 | AutoIt | 40 | `au3` | ✅ | ✅ | ✅ |
 | AviSynth | 66 | `avs` | ✅ | ✅ | ✅ |
-| BaanC | 60 | `baan` | ⚫ | ⚫ | 🟡 |
+| BaanC | 60 | `baan` | ✅ | ✅ | ✅ |
 | Batch | 12 | `batch` | ✅ | ✅ | ✅ |
 | Blitzbasic | 67 | `blitzbasic` | ✅ | ✅ | ✅ |
 | C | 2 | `cpp` | ✅ | ✅ | ✅ |
@@ -10161,6 +10161,243 @@ respective "PureBasic
 PreProcessor Keywords" /
 "FreeBasic PreProcessor
 Keywords" descriptor names.
+
+**BaanC (2026-07-08):** rides
+Lexilla's `baan` lexer
+(`LexBaan.cxx`) — a 2001 lexer
+by Vamsi Potluru + Praveen
+Ambekar for the Baan ERP
+scripting language (later Infor
+ERP LN). **Richest wordlist
+descriptor in Lexilla** (9
+classes at
+`LexBaan.cxx:71-81`) and **25
+SCE_BAAN_* states** (0..=24) —
+the most complex lexer wired
+into Code++ so far. Extension
+`.baan`.
+
+**Distinctive features:**
+- **`|`-prefixed line comments**
+  (unlike `;` / `//` / `#` /
+  `--` used by every other
+  language Code++ supports).
+  `dllusage...enddllusage` and
+  `functionusage...endfunctionusage`
+  doc-comment blocks.
+- **`^`-prefixed line
+  continuation** inside strings
+  and preprocessor directives —
+  `LexBaan.cxx:624, :652`
+  suppress newline-terminates
+  when next char is `^`.
+- **Nine wordlist classifier
+  classes** (WORD..=WORD9)
+  covering reserved keywords,
+  standard functions, abridged
+  functions (using the `~`
+  WordListAbridged separator),
+  main sections, sub sections,
+  predefined variables,
+  predefined attributes,
+  enumerates, and one unnamed
+  reserved slot.
+- **Seven semantic-position
+  states** — TABLEDEF /
+  TABLESQL / FUNCTION are
+  pattern-matched by
+  `IsAnyOtherIdentifier` at
+  `LexBaan.cxx:135-206` against
+  Baan schema naming
+  conventions (`^^^^^###` = 5
+  letters + 3 digits = table
+  ID; `^^^^^.dll####.` =
+  function ID). DOMDEF / FUNCDEF
+  are triggered by the
+  `lineHasDomain` /
+  `lineHasFunction` position
+  trackers set when the class-0
+  `domain` / `function`
+  keywords fire. OBJECTDEF /
+  DEFINEDEF are triggered by
+  the preprocessor tracker
+  (after `#pragma` / `#include`
+  / `#define` / `#undef` /
+  `#if*`).
+
+**Wordlist install: class 0
+only** by default. The nine
+descriptor classes are:
+`"Baan & BaanSQL Reserved
+Keywords "` (class 0, populated
+here — 41 tokens), `"Baan
+Standard functions"` (class 1),
+`"Baan Functions Abridged"`
+(class 2 — uses `~` separator
+for abridged names), `"Baan
+Main Sections "` (class 3 —
+uses `:` suffix, e.g.
+`declaration:`), `"Baan Sub
+Sections"` (class 4), `"PreDefined
+Variables"` (class 5),
+`"PreDefined Attributes"`
+(class 6), `"Enumerates"`
+(class 7), and one unnamed
+slot (class 8). Classes 1..=8
+stay uninstalled — their SCE_
+states don't emit with stock
+wordlist config, but the theme
+maps them anyway so a future
+user extension gets defined
+paint immediately.
+
+**Why single-class default:**
+Baan 4GL is a proprietary
+niche language for Baan ERP /
+Infor ERP LN. Sourcing
+authoritative wordlist content
+for the 8 additional classes
+would require access to
+proprietary Baan documentation
+that's not publicly available.
+Cleaner to ship a minimal
+correct baseline (class 0 with
+41 verifiable reserved
+keywords sourced from
+`LexBaan.cxx`'s own hard-coded
+strings + Baan 4GL primer
+material) than to fabricate
+uncertain content across 8
+more classes. Users who work
+professionally with Baan can
+extend their local config with
+the site-specific vocabulary.
+
+- **Class 0 — `BAAN_KEYWORDS`**
+  (bold Keyword, 41 tokens):
+  declaration keywords sourced
+  from `LexBaan.cxx:312-314`
+  (`table` / `extern` / `long`
+  / `double` / `boolean` /
+  `string` / `domain`),
+  fold openers from `:749`
+  (`for` / `if` / `on` /
+  `repeat` / `select` /
+  `while`), fold closers from
+  `:750` (`endcase` / `endfor`
+  / `endif` / `endselect` /
+  `endwhile` / `until`),
+  select sub-clauses from
+  `:751` (`selectdo` /
+  `selecteos` / `selectempty`
+  / `selecterror`), inner-
+  level fold triggers from
+  `:343-345` (`else` / `case`
+  / `default`), position-
+  tracker triggers from
+  `:558-563` (`domain` /
+  `function`), plus common
+  Baan 4GL keywords
+  (`endfunction` / `char` /
+  `date` / `then` / `to` /
+  `update` / `break` /
+  `continue` / `return` /
+  `and` / `or` / `not` /
+  `true` / `false`).
+  Post-review removals:
+  `integer` / `elseif` /
+  bareword `include` were
+  dropped as unverified (see
+  `BAAN_KEYWORDS` docstring
+  for source-grounding tiers).
+
+**22-style-mapping table**
+covering 25 defined
+`SCE_BAAN_*` states. Three
+unmapped:
+- `DEFAULT` (0) — framework
+  fall-through convention.
+- `IDENTIFIER` (8) — bareword
+  collect state at
+  `LexBaan.cxx:678`. Barewords
+  that don't match wordlist
+  AND don't match any
+  `IsAnyOtherIdentifier`
+  pattern fall through to
+  STYLE_DEFAULT.
+- `STRINGEOL` (9) — parse-
+  failure state emitted at
+  `:653` when a string doesn't
+  terminate before line end.
+  Left unmapped per the
+  framework's deferred
+  `StyleSlot::Error`
+  convention.
+
+The 22 mapped states route
+along the standard Keyword /
+Keyword2 / Preprocessor /
+Lifetime / Macro axes, with
+the seven semantic-position
+states each getting a distinct
+slot: TABLEDEF / TABLESQL /
+OBJECTDEF / DEFINEDEF → Macro
+(pattern-matched or
+preprocessor-tracked names);
+FUNCTION → Lifetime (pattern-
+matched function calls);
+DOMDEF / FUNCDEF →
+Preprocessor (declaration-site
+markers). The nine wordlist-
+driven WORD states get
+Keyword bold (class 0),
+Keyword2 (classes 1-2 —
+functions), Preprocessor
+(class 3 — main sections),
+Macro (classes 4, 7, 8 — sub
+sections, enumerates, unused),
+and Lifetime (classes 5-6 —
+predefined variables +
+attributes).
+
+**Case-insensitive discipline**
+per `LexBaan.cxx:550` shared
+paint loop. Wordlist entries
+must be byte-canonical
+lowercase; Baan 4GL source
+convention is lowercase
+already.
+
+**Contents authored clean-room**
+from `LexBaan.cxx` hard-coded
+keyword references (the
+definitive per-language source
+when no upstream fixture
+exists) plus Baan 4GL language
+reference material — no
+upstream Lexilla fixture
+exists for baan (checked
+`crates/scintilla-sys/vendor/
+lexilla/test/examples/` — no
+`baan/` subdirectory).
+
+Structural test coverage: **20
+invariants** including
+semantic-position state routing
+pins (7 states firing
+regardless of wordlist config),
+nine WORD*/WORDN coverage
+(mapped even when empty),
+`domain`/`function` dual-path
+pin (class-0 match paints WORD
+AND triggers position-tracker
+for DOMDEF/FUNCDEF), fold-
+opener load-bearing pin (class
+0 MUST contain the tokens the
+folder relies on), Baan-
+distinctive `|`-comment
+routing pin, and STRINGEOL
+deferred-Error pin.
 
 ## Notes
 

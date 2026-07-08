@@ -15085,6 +15085,132 @@ pub const FREEBASIC_PREPROCESSOR: &str = concat!(
     "varptr procptr strptr sadd",
 );
 
+/// Space-separated **Baan 4GL reserved keywords** installed as
+/// **class 0** of `LexBaan`'s wordlist descriptor
+/// (`SCE_BAAN_WORD`, primary bold slot). This is the "Baan &
+/// `BaanSQL` Reserved Keywords" bucket per
+/// `LexBaan.cxx:72` — the core language grammar.
+///
+/// **Case-INSENSITIVE lookup.** `LexBaan.cxx:550` calls
+/// `sc.GetCurrentLowered(s, sizeof(s))` before probing wordlists.
+/// Wordlist entries MUST be byte-canonical lowercase. Baan 4GL
+/// convention is lowercase already.
+///
+/// **Contents authored clean-room from `LexBaan.cxx`'s own
+/// hard-coded keyword references** (the definitive per-language
+/// source when no upstream fixture exists) plus the Baan 4GL
+/// language reference. Keywords extracted from the lexer source
+/// itself include:
+///
+///   - Declaration keywords the `IsDeclarationLine` folder at
+///     `LexBaan.cxx:312-314` checks: `table` / `extern` /
+///     `long` / `double` / `boolean` / `string` / `domain`.
+///   - Control-flow openers the folder at `:749` uses:
+///     `for` / `if` / `on` / `repeat` / `select` / `while`.
+///   - Control-flow closers at `:750`: `endcase` / `endfor` /
+///     `endif` / `endselect` / `endwhile` / `until`.
+///   - Select sub-clause markers at `:751`: `selectdo` /
+///     `selecteos` / `selectempty` / `selecterror`.
+///   - Inner-level fold triggers at `:343-345`: `else` /
+///     `case` / `default`.
+///   - Line-scope side-effect keywords at `:558-563`: `domain`
+///     (sets `lineHasDomain` → next identifier becomes
+///     `SCE_BAAN_DOMDEF`), `function` (sets `lineHasFunction` →
+///     next identifier becomes `SCE_BAAN_FUNCDEF`).
+///
+/// **Categories** (41 tokens):
+///   - **Declaration keywords** (7 — grounded in
+///     `LexBaan.cxx:312-314`): `table` / `extern` / `long` /
+///     `double` / `boolean` / `string` / `domain`.
+///   - **Type keywords** (2): `char` / `date`.
+///   - **Function declaration** (2): `function` /
+///     `endfunction`. `function` is grounded in
+///     `LexBaan.cxx:561` as the position-tracker trigger for
+///     FUNCDEF; `endfunction` is the paired terminator by Baan
+///     4GL convention.
+///   - **Control flow — decisions** (4): `if` / `else` /
+///     `endif` / `then`. `else` grounded in `:343`
+///     (`IsInnerLevelFold`).
+///   - **Control flow — case** (4): `on` / `case` / `default` /
+///     `endcase`. All grounded in `:749-750` (`startTags` /
+///     `endTags`) and `:343-345` (`IsInnerLevelFold`).
+///   - **Control flow — loops** (7): `for` / `while` /
+///     `endwhile` / `endfor` / `repeat` / `until` / `to`.
+///     `for` / `while` / `repeat` grounded in `:749`;
+///     `endfor` / `endwhile` / `until` grounded in `:750`.
+///     `to` is the standard `FOR ... TO ... STEP ... NEXT`
+///     loop counter keyword.
+///   - **Control flow — select** (7): `select` / `selectdo` /
+///     `selecteos` / `selectempty` / `selecterror` /
+///     `endselect` / `update`. `select` grounded in `:749`;
+///     `endselect` in `:750`; `selectdo` / `selecteos` /
+///     `selectempty` / `selecterror` in `:751`
+///     (`selectCloseTags`); `update` in `:853` (the "for
+///     update" special-case suppression at `:850-857`).
+///   - **Loop control** (3): `break` / `continue` / `return`.
+///   - **Word operators** (3): `and` / `or` / `not`.
+///   - **Boolean literals** (2): `true` / `false`.
+///
+/// **Source grounding tiers:** the tokens above are broken
+/// into two confidence tiers. **HIGH confidence** (sourced
+/// directly from `LexBaan` hardcoded strings via grep of the
+/// vendored source): all seven declaration keywords, all six
+/// fold openers (`for` / `if` / `on` / `repeat` / `select` /
+/// `while`), all six fold closers (`endcase` / `endfor` /
+/// `endif` / `endselect` / `endwhile` / `until`), all four
+/// select sub-clauses, three inner-level fold triggers
+/// (`else` / `case` / `default`), `function` +
+/// position-tracker peer `domain`, and `update`. **MEDIUM
+/// confidence** (common Baan 4GL vocabulary, plausible but
+/// not grep-verifiable): `endfunction` / `then` / `to` /
+/// `char` / `date` / `break` / `continue` / `return` / `and`
+/// / `or` / `not` / `true` / `false`.
+///
+/// **Deliberate exclusions** post-review: `integer`, `elseif`,
+/// and bareword `include` were REMOVED after review flagged
+/// them as unverified — `LexBaan`'s hardcoded declaration list
+/// uses `long`/`double`/`boolean`/`string`/`domain`/`table`/
+/// `extern` (no `integer`); grep for `elseif` returns no hits
+/// (`LexBaan` only knows `else`); and `#include` gets
+/// `SCE_BAAN_PREPROCESSOR` paint via the sigil-entry path at
+/// `LexBaan.cxx:686-712` and never touches the class-0
+/// wordlist.
+///
+/// Note: bareword type keywords (`long` / `double` / `boolean`
+/// / `string` / `domain` / `table` / `extern`) match the same
+/// list the `IsDeclarationLine` folder at `LexBaan.cxx:312-314`
+/// treats as "start of a declaration line" — putting them in
+/// class 0 preserves that folding semantic AND paints them as
+/// Keyword.
+///
+/// **Cross-class disjointness** with any populated class-1..=8
+/// wordlist is invariant-tested. `LexBaan` uses first-match-wins
+/// (each classifier probe at `LexBaan.cxx:556-599` is an `else
+/// if` chain), so a class-0 duplicate in higher classes is
+/// dead code.
+pub const BAAN_KEYWORDS: &str = concat!(
+    // Declaration keywords (matched by IsDeclarationLine at :311-313).
+    "table extern long double boolean string domain ",
+    // Type keywords.
+    "char date ",
+    // Function declaration.
+    "function endfunction ",
+    // Control flow — decisions.
+    "if else endif then ",
+    // Control flow — case.
+    "on case default endcase ",
+    // Control flow — loops.
+    "for while endwhile endfor repeat until to ",
+    // Control flow — select.
+    "select selectdo selecteos selectempty selecterror endselect update ",
+    // Loop control.
+    "break continue return ",
+    // Word operators.
+    "and or not ",
+    // Boolean literals.
+    "true false",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
