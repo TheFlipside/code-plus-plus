@@ -131,8 +131,8 @@ use codepp_core::lang::{
     L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
     L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PUREBASIC, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL,
     L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL,
-    L_TEHEX, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML,
-    L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+    L_TEHEX, L_TEX, L_TOML, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG,
+    L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
     MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
     NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
     OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
@@ -146,11 +146,11 @@ use codepp_core::lang::{
     SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS,
     SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, SWIFT_KEYWORDS,
     SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-    TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-    VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
-    VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+    TOML_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS,
+    VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES,
+    VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES,
+    VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS,
+    VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -350,17 +350,19 @@ use codepp_scintilla_sys::{
     SCE_TCL_NUMBER, SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD,
     SCE_TCL_WORD2, SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7,
     SCE_TCL_WORD8, SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP,
-    SCE_TEX_SPECIAL, SCE_TEX_SYMBOL, SCE_TXT2TAGS_BLOCKQUOTE, SCE_TXT2TAGS_CODE,
-    SCE_TXT2TAGS_CODE2, SCE_TXT2TAGS_CODEBK, SCE_TXT2TAGS_COMMENT, SCE_TXT2TAGS_EM1,
-    SCE_TXT2TAGS_EM2, SCE_TXT2TAGS_HEADER1, SCE_TXT2TAGS_HEADER2, SCE_TXT2TAGS_HEADER3,
-    SCE_TXT2TAGS_HEADER4, SCE_TXT2TAGS_HEADER5, SCE_TXT2TAGS_HEADER6, SCE_TXT2TAGS_HRULE,
-    SCE_TXT2TAGS_LINK, SCE_TXT2TAGS_OLIST_ITEM, SCE_TXT2TAGS_OPTION, SCE_TXT2TAGS_POSTPROC,
-    SCE_TXT2TAGS_PREPROC, SCE_TXT2TAGS_STRIKEOUT, SCE_TXT2TAGS_STRONG1, SCE_TXT2TAGS_ULIST_ITEM,
-    SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT, SCE_VHDL_COMMENTLINEBANG,
-    SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER, SCE_VHDL_OPERATOR, SCE_VHDL_STDFUNCTION,
-    SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE, SCE_VHDL_STDTYPE, SCE_VHDL_STRING,
-    SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCE_VISUALPROLOG_ANONYMOUS,
-    SCE_VISUALPROLOG_COMMENT_BLOCK, SCE_VISUALPROLOG_COMMENT_KEY,
+    SCE_TEX_SPECIAL, SCE_TEX_SYMBOL, SCE_TOML_COMMENT, SCE_TOML_DATETIME, SCE_TOML_ESCAPECHAR,
+    SCE_TOML_KEY, SCE_TOML_KEYWORD, SCE_TOML_NUMBER, SCE_TOML_OPERATOR, SCE_TOML_STRING_DQ,
+    SCE_TOML_STRING_SQ, SCE_TOML_TABLE, SCE_TOML_TRIPLE_STRING_DQ, SCE_TOML_TRIPLE_STRING_SQ,
+    SCE_TXT2TAGS_BLOCKQUOTE, SCE_TXT2TAGS_CODE, SCE_TXT2TAGS_CODE2, SCE_TXT2TAGS_CODEBK,
+    SCE_TXT2TAGS_COMMENT, SCE_TXT2TAGS_EM1, SCE_TXT2TAGS_EM2, SCE_TXT2TAGS_HEADER1,
+    SCE_TXT2TAGS_HEADER2, SCE_TXT2TAGS_HEADER3, SCE_TXT2TAGS_HEADER4, SCE_TXT2TAGS_HEADER5,
+    SCE_TXT2TAGS_HEADER6, SCE_TXT2TAGS_HRULE, SCE_TXT2TAGS_LINK, SCE_TXT2TAGS_OLIST_ITEM,
+    SCE_TXT2TAGS_OPTION, SCE_TXT2TAGS_POSTPROC, SCE_TXT2TAGS_PREPROC, SCE_TXT2TAGS_STRIKEOUT,
+    SCE_TXT2TAGS_STRONG1, SCE_TXT2TAGS_ULIST_ITEM, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT,
+    SCE_VHDL_COMMENT, SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER,
+    SCE_VHDL_OPERATOR, SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE,
+    SCE_VHDL_STDTYPE, SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD,
+    SCE_VISUALPROLOG_ANONYMOUS, SCE_VISUALPROLOG_COMMENT_BLOCK, SCE_VISUALPROLOG_COMMENT_KEY,
     SCE_VISUALPROLOG_COMMENT_KEY_ERROR, SCE_VISUALPROLOG_COMMENT_LINE, SCE_VISUALPROLOG_EMBEDDED,
     SCE_VISUALPROLOG_KEY_DIRECTIVE, SCE_VISUALPROLOG_KEY_MAJOR, SCE_VISUALPROLOG_KEY_MINOR,
     SCE_VISUALPROLOG_NUMBER, SCE_VISUALPROLOG_OPERATOR, SCE_VISUALPROLOG_PLACEHOLDER,
@@ -6719,6 +6721,112 @@ const TXT2TAGS_THEME: LangTheme = LangTheme {
     bold: TXT2TAGS_BOLD,
 };
 
+// --- LexTOML ---
+// TOML (Tom's Obvious, Minimal Language) — configuration file
+// format (extension `.toml`). `L_TOML` (id 90) is the only
+// language row using this lexer. Single-wordlist descriptor (just
+// bareword literals `true` / `false` / `inf` / `nan`) with a
+// complex state machine covering four string flavours, ISO date-
+// time literals, and TOML-specific TABLE / KEY structural anchor
+// states. See the `LexTOML` banner in `scintilla-sys/src/lib.rs`
+// for the paint-loop citations.
+//
+// **12 style mappings** covering 16 defined SCE_TOML_* states
+// (0..=15). Four unmapped per the framework's fall-through-to-
+// STYLE_DEFAULT convention:
+//   * `DEFAULT` (0) — whitespace / unclassified.
+//   * `IDENTIFIER` (2) — transient bareword-collect state at
+//     `LexTOML.cxx:207-214`. The state never survives to paint —
+//     `IsTOMLKey` at `:122-142` either promotes to KEY (when the
+//     next non-whitespace is `=`/`.`/`-` in inline-table context)
+//     or KEYWORD (when the collected token is in the wordlist),
+//     or falls through to DEFAULT. Framework leaves unmapped per
+//     the transient-collect-fallthrough convention.
+//   * `ERROR` (7) — parse-failure state at `:353` for bad line-
+//     start characters. Left unmapped per the framework's
+//     deferred `StyleSlot::Error`-migration convention.
+//   * `STRINGEOL` (15) — parse-failure state at `:281-282` for
+//     unterminated single-line strings (SQ or DQ, NOT triple
+//     variants which span lines). Same deferred `Error`
+//     convention.
+//
+// Mapped slots (12):
+//   * `COMMENT` (1) → Comment italic — `#`-to-EOL line comments.
+//   * `KEYWORD` (3) → Keyword bold — TOML's four bareword
+//     literals (`true`/`false`/`inf`/`nan` per the upstream
+//     fixture at `crates/scintilla-sys/vendor/lexilla/test/
+//     examples/toml/SciTE.properties`).
+//   * `NUMBER` (4) → Number — integer + float + hex (`0x`) +
+//     octal (`0o`) + binary (`0b`) + `_`-separator numeric
+//     literals per TOML v1.0.0 §Integer and §Float.
+//   * `TABLE` (5) → Preprocessor — `[table]` and
+//     `[[array.of.tables]]` header lines. Structural anchor
+//     archetype, same slot as `[section]` markers in PROPS /
+//     Registry / INI.
+//   * `KEY` (6) → Keyword2 — key names on LHS of `key = value`
+//     assignments, including dot-separated (`foo.bar.baz`) and
+//     quoted variants. Distinct accent from KEYWORD so a TOML
+//     reader visually separates keys from values.
+//   * `OPERATOR` (8) → Operator — TOML operator set
+//     (`[`/`]`/`{`/`}`/`,`/`=`/`.`/`+`/`-` per `IsTOMLOperator`
+//     at `LexTOML.cxx:91-93`).
+//   * `STRING_SQ` (9) → String — single-quoted literal strings.
+//   * `STRING_DQ` (10) → String — double-quoted basic strings
+//     (with escape processing).
+//   * `TRIPLE_STRING_SQ` (11) → String — `'''...'''` multi-line
+//     literal.
+//   * `TRIPLE_STRING_DQ` (12) → String — `"""..."""` multi-line
+//     basic (with escapes).
+//   * `ESCAPECHAR` (13) → Preprocessor — escape sequences inside
+//     DQ / TRIPLE_STRING_DQ variants (`\n` / `\uXXXX` / `\xNN` /
+//     etc.). Distinct accent from surrounding string content —
+//     matches the `SCE_RUST_BYTEESCAPE` convention for "escape
+//     stands out visually".
+//   * `DATETIME` (14) → Number — RFC 3339 ISO date-time literals
+//     (`1979-05-27T07:32:00-07:00` and local variants). Numeric-
+//     literal archetype per TOML spec — datetimes ARE numeric
+//     constants.
+//
+// Palette rationale: TOML's spec-mandated four string flavours
+// all collapse to String (same discipline as Python / Raku
+// multi-quote unification). The TABLE / KEY split is TOML-
+// specific — Preprocessor for headers (structural markers) and
+// Keyword2 for keys (LHS accent) — gives the reader visual
+// hierarchy that matches TOML's "sections of key = value"
+// document model.
+const TOML_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_TOML_COMMENT, StyleSlot::Comment),
+    (SCE_TOML_KEYWORD, StyleSlot::Keyword),
+    (SCE_TOML_NUMBER, StyleSlot::Number),
+    (SCE_TOML_TABLE, StyleSlot::Preprocessor),
+    (SCE_TOML_KEY, StyleSlot::Keyword2),
+    (SCE_TOML_OPERATOR, StyleSlot::Operator),
+    (SCE_TOML_STRING_SQ, StyleSlot::String),
+    (SCE_TOML_STRING_DQ, StyleSlot::String),
+    (SCE_TOML_TRIPLE_STRING_SQ, StyleSlot::String),
+    (SCE_TOML_TRIPLE_STRING_DQ, StyleSlot::String),
+    (SCE_TOML_ESCAPECHAR, StyleSlot::Preprocessor),
+    (SCE_TOML_DATETIME, StyleSlot::Number),
+];
+
+// Italic on COMMENT — universal Code++ comment convention.
+const TOML_ITALIC: &[usize] = &[SCE_TOML_COMMENT];
+
+// Bold on KEYWORD — primary structural anchor (the four bareword
+// literals). Same single-class-bold discipline as every other
+// Code++ theme.
+const TOML_BOLD: &[usize] = &[SCE_TOML_KEYWORD];
+
+// Single-class install matching `tomlWordListDesc[]` at
+// `LexTOML.cxx:489-492` — one wordlist entry `"Keywords"`
+// carrying the four bareword literals.
+const TOML_THEME: LangTheme = LangTheme {
+    keywords: &[(0, TOML_KEYWORDS)],
+    styles: TOML_STYLES,
+    italic: TOML_ITALIC,
+    bold: TOML_BOLD,
+};
+
 // --- LexVisualProlog ---
 // Visual Prolog (extension `.vip`) — Prolog Development Center's
 // OOP-flavoured Prolog dialect with typed classes and interfaces.
@@ -11658,6 +11766,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&PUREBASIC_THEME)
     } else if lang == L_FREEBASIC {
         Some(&FREEBASIC_THEME)
+    } else if lang == L_TOML {
+        Some(&TOML_THEME)
     } else if lang == L_TXT2TAGS {
         Some(&TXT2TAGS_THEME)
     } else if lang == L_TYPESCRIPT {
@@ -26893,8 +27003,8 @@ mod lang_theme_tests {
         SCE_V_NUMBER, SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR,
         SCE_V_STRING, SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3,
         SPICE_BOLD, SPICE_ITALIC, SPICE_STYLES, SREC_BOLD, SREC_ITALIC, SREC_STYLES, TEHEX_ITALIC,
-        TEHEX_STYLES, TXT2TAGS_BOLD, TXT2TAGS_ITALIC, TXT2TAGS_STYLES, VISUALPROLOG_BOLD,
-        VISUALPROLOG_ITALIC, VISUALPROLOG_STYLES,
+        TEHEX_STYLES, TOML_BOLD, TOML_ITALIC, TOML_STYLES, TXT2TAGS_BOLD, TXT2TAGS_ITALIC,
+        TXT2TAGS_STYLES, VISUALPROLOG_BOLD, VISUALPROLOG_ITALIC, VISUALPROLOG_STYLES,
     };
     // SCE_VHDL_IDENTIFIER is a scan-intermediate state that isn't
     // referenced in the main-scope theme (VHDL_STYLES deliberately
@@ -26931,8 +27041,8 @@ mod lang_theme_tests {
         L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
         L_PROPS, L_PS, L_PUREBASIC, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY,
         L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL, L_TEHEX, L_TEX,
-        L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML,
-        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+        L_TEXT, L_TOML, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML,
+        L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
         MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
         NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
         OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
@@ -26946,12 +27056,12 @@ mod lang_theme_tests {
         R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
         SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3,
         SQL_KEYWORDS, SQL_KEYWORDS_2, SWIFT_KEYWORDS, SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS,
-        TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
-        VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
-        XML_KEYWORDS, YAML_KEYWORDS,
+        TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TOML_KEYWORDS, TYPESCRIPT_KEYWORDS,
+        TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS,
+        VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
+        VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+        VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
+        VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -27104,6 +27214,7 @@ mod lang_theme_tests {
             (L_BLITZBASIC, "Blitzbasic"),
             (L_PUREBASIC, "Purebasic"),
             (L_FREEBASIC, "Freebasic"),
+            (L_TOML, "TOML"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -47304,6 +47415,289 @@ mod lang_theme_tests {
              fails, either the aliasing was replaced with a \
              duplicate literal (breaking the semantic sharing \
              contract) or Rust's const dedup changed behaviour."
+        );
+    }
+
+    /// TOML uses Lexilla's `toml` lexer (`LexTOML.cxx`) — a 2024
+    /// lexer by Jiri Techet, ported from Zufu Liu's Notepad4 TOML
+    /// lexer. Single-wordlist descriptor (`"Keywords"`) with 4
+    /// spec-mandated bareword literals per the upstream fixture.
+    /// Extension `.toml`. TOML v1.0.0 syntax. Included in
+    /// `wired_languages_have_complete_themes`.
+    ///
+    /// This dedicated test pins:
+    ///
+    ///   1. Deep-value identity (styles / italic / bold /
+    ///      populated keyword class).
+    ///   2. 12-mapping style-count (16 defined `SCE_TOML_*`
+    ///      slots minus 4 unmapped: DEFAULT / IDENTIFIER /
+    ///      ERROR / STRINGEOL).
+    ///   3. One populated class in canonical order.
+    ///   4. Class 0 non-empty and equal to `TOML_KEYWORDS`.
+    ///   5. Style-routing pins for all 12 mapped constants.
+    ///   6. Framework-unmapped slots confirmed absent (DEFAULT,
+    ///      IDENTIFIER, ERROR, STRINGEOL).
+    ///   7. Italic == 1 (COMMENT only).
+    ///   8. Bold == 1 (KEYWORD only).
+    ///   9. Cross-language non-reuse (sampled).
+    ///   10. `L_TOML` `LangEntry` has `lexer: Some("toml")` and
+    ///       `.toml` extension.
+    ///   11. **Upstream-fixture-verbatim wordlist pin** — content
+    ///       MUST match the upstream fixture at
+    ///       `crates/scintilla-sys/vendor/lexilla/test/examples/
+    ///       toml/SciTE.properties` byte-for-byte. TOML has a
+    ///       tiny wordlist (4 tokens) so verbatim mirroring is
+    ///       trivial to verify. Same mirror-not-curate discipline
+    ///       as Raku.
+    ///   12. **All 4 spec-mandated bareword literals present** —
+    ///       `true` / `false` (TOML v1.0.0 §Boolean) and `inf` /
+    ///       `nan` (TOML v1.0.0 §Float non-finite).
+    ///   13. **All-lowercase alphabet enforcement** — LexTOML.cxx:132
+    ///       lowercases every collected byte before wordlist
+    ///       probe; entries must be byte-canonical lowercase.
+    ///   14. **Four string flavours collapse to String** — SQ,
+    ///       DQ, `TRIPLE_STRING_SQ`, `TRIPLE_STRING_DQ` all route
+    ///       to `StyleSlot::String`. Load-bearing for the
+    ///       "one visual string" contract.
+    ///   15. **TABLE + KEY structural anchor pin** — TABLE →
+    ///       Preprocessor, KEY → Keyword2. TOML-specific paint
+    ///       distinguishing structural markers (`[section]`)
+    ///       from key names (`foo.bar = ...`).
+    ///   16. **DATETIME → Number pin** — RFC 3339 date-time
+    ///       literals paint as numeric-family (they ARE numeric
+    ///       constants per TOML spec).
+    ///   17. **ESCAPECHAR → Preprocessor pin** — escape sequences
+    ///       inside DQ / `TRIPLE_STRING_DQ` stand out from the
+    ///       surrounding string content. Matches the
+    ///       `SCE_RUST_BYTEESCAPE` accent convention.
+    ///   18. Highest-defined `SCE_TOML_*` pin — `SCE_TOML_STRINGEOL`
+    ///       (15) is the top slot per `SciLexer.h:2105`.
+    ///   19. No duplicate tokens within the wordlist.
+    ///   20. **STRINGEOL + ERROR both stay unmapped** — deferred
+    ///       `StyleSlot::Error` migration. Two separate parse-
+    ///       failure states so both must be pinned.
+    #[test]
+    fn toml_uses_lextoml_one_class_theme() {
+        use codepp_scintilla_sys::{
+            SCE_TOML_COMMENT, SCE_TOML_DATETIME, SCE_TOML_DEFAULT, SCE_TOML_ERROR,
+            SCE_TOML_ESCAPECHAR, SCE_TOML_IDENTIFIER, SCE_TOML_KEY, SCE_TOML_KEYWORD,
+            SCE_TOML_NUMBER, SCE_TOML_OPERATOR, SCE_TOML_STRINGEOL, SCE_TOML_STRING_DQ,
+            SCE_TOML_STRING_SQ, SCE_TOML_TABLE, SCE_TOML_TRIPLE_STRING_DQ,
+            SCE_TOML_TRIPLE_STRING_SQ,
+        };
+        let toml = lang_theme(L_TOML).expect("TOML wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(toml.styles, TOML_STYLES);
+        assert_eq!(toml.italic, TOML_ITALIC);
+        assert_eq!(toml.bold, TOML_BOLD);
+        assert_eq!(toml.keywords.len(), 1);
+
+        // Invariant 2: 12 mappings (16 defined slots minus 4 unmapped).
+        assert_eq!(
+            toml.styles.len(),
+            12,
+            "TOML_STYLES must map 12 indices (16 defined SCE_TOML_* \
+             slots minus 4 unmapped: DEFAULT, IDENTIFIER (transient), \
+             ERROR (deferred StyleSlot::Error), STRINGEOL (deferred))"
+        );
+
+        // Invariant 3: one populated class in canonical order.
+        assert_eq!(toml.keywords[0].0, 0);
+        assert_eq!(toml.keywords[0].1, TOML_KEYWORDS);
+
+        // Invariant 4: class 0 non-empty.
+        assert!(
+            TOML_KEYWORDS.split_whitespace().count() > 0,
+            "TOML_KEYWORDS must be non-empty"
+        );
+
+        // Invariant 5: style-routing pins for all 12 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_TOML_COMMENT, StyleSlot::Comment, "COMMENT"),
+            (SCE_TOML_KEYWORD, StyleSlot::Keyword, "KEYWORD"),
+            (SCE_TOML_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_TOML_TABLE, StyleSlot::Preprocessor, "TABLE"),
+            (SCE_TOML_KEY, StyleSlot::Keyword2, "KEY"),
+            (SCE_TOML_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+            (SCE_TOML_STRING_SQ, StyleSlot::String, "STRING_SQ"),
+            (SCE_TOML_STRING_DQ, StyleSlot::String, "STRING_DQ"),
+            (
+                SCE_TOML_TRIPLE_STRING_SQ,
+                StyleSlot::String,
+                "TRIPLE_STRING_SQ",
+            ),
+            (
+                SCE_TOML_TRIPLE_STRING_DQ,
+                StyleSlot::String,
+                "TRIPLE_STRING_DQ",
+            ),
+            (SCE_TOML_ESCAPECHAR, StyleSlot::Preprocessor, "ESCAPECHAR"),
+            (SCE_TOML_DATETIME, StyleSlot::Number, "DATETIME"),
+        ] {
+            assert!(
+                toml.styles.contains(&(idx, slot)),
+                "SCE_TOML_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 6: framework-unmapped slots confirmed absent.
+        for (idx, name) in [
+            (SCE_TOML_DEFAULT, "DEFAULT"),
+            (SCE_TOML_IDENTIFIER, "IDENTIFIER"),
+            (SCE_TOML_ERROR, "ERROR"),
+            (SCE_TOML_STRINGEOL, "STRINGEOL"),
+        ] {
+            assert!(
+                !toml.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_TOML_{name} ({idx}) must remain unmapped"
+            );
+        }
+
+        // Invariant 7: italic == 1 (COMMENT only).
+        assert_eq!(toml.italic.len(), 1);
+        assert!(toml.italic.contains(&SCE_TOML_COMMENT));
+
+        // Invariant 8: bold == 1 (KEYWORD only).
+        assert_eq!(toml.bold.len(), 1);
+        assert!(toml.bold.contains(&SCE_TOML_KEYWORD));
+
+        // Invariant 9: cross-language non-reuse (sampled).
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let yaml = lang_theme(L_YAML).expect("YAML wired");
+        let ini = lang_theme(L_INI).expect("INI wired");
+        for (other, name) in [(cpp, "C++"), (yaml, "YAML"), (ini, "INI")] {
+            assert_ne!(
+                toml.styles, other.styles,
+                "TOML must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 10: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_TOML)
+            .expect("L_TOML LangEntry present in LANG_TABLE");
+        assert_eq!(
+            entry.lexer,
+            Some("toml"),
+            "L_TOML LangEntry.lexer must be Some(\"toml\")"
+        );
+        assert!(
+            entry.extensions.contains(&"toml"),
+            "L_TOML extensions must contain `toml`"
+        );
+
+        // Invariant 11: upstream-fixture-verbatim wordlist pin.
+        // Fixture at crates/scintilla-sys/vendor/lexilla/test/
+        // examples/toml/SciTE.properties says: `false inf nan true`.
+        assert_eq!(
+            TOML_KEYWORDS, "false inf nan true",
+            "TOML_KEYWORDS must exactly match the upstream Lexilla \
+             fixture at crates/scintilla-sys/vendor/lexilla/test/ \
+             examples/toml/SciTE.properties (mirror-not-curate)"
+        );
+
+        // Invariant 12: all 4 spec-mandated bareword literals present.
+        for tok in ["true", "false", "inf", "nan"] {
+            assert!(
+                TOML_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "TOML_KEYWORDS must include TOML v1.0.0 bareword literal `{tok}`"
+            );
+        }
+
+        // Invariant 13: all-lowercase alphabet enforcement.
+        for tok in TOML_KEYWORDS.split_whitespace() {
+            assert!(
+                !tok.is_empty() && tok.bytes().all(|b| b.is_ascii_lowercase()),
+                "TOML_KEYWORDS token `{tok}` violates the \
+                 lowercase-only alphabet — LexTOML.cxx:132 lowercases \
+                 every byte before wordlist probe"
+            );
+        }
+
+        // Invariant 14: four string flavours collapse to String.
+        for tok in [
+            SCE_TOML_STRING_SQ,
+            SCE_TOML_STRING_DQ,
+            SCE_TOML_TRIPLE_STRING_SQ,
+            SCE_TOML_TRIPLE_STRING_DQ,
+        ] {
+            assert!(
+                toml.styles.contains(&(tok, StyleSlot::String)),
+                "SCE_TOML_* string slot {tok} must route to String \
+                 — load-bearing four-quote-flavour collapse"
+            );
+        }
+
+        // Invariant 15: TABLE + KEY structural anchor pin.
+        assert!(
+            toml.styles
+                .contains(&(SCE_TOML_TABLE, StyleSlot::Preprocessor)),
+            "SCE_TOML_TABLE (`[section]` / `[[array.of.tables]]` \
+             headers) must route to Preprocessor"
+        );
+        assert!(
+            toml.styles.contains(&(SCE_TOML_KEY, StyleSlot::Keyword2)),
+            "SCE_TOML_KEY (LHS of `key = value`) must route to Keyword2"
+        );
+
+        // Invariant 16: DATETIME → Number pin.
+        assert!(
+            toml.styles
+                .contains(&(SCE_TOML_DATETIME, StyleSlot::Number)),
+            "SCE_TOML_DATETIME (RFC 3339 ISO date-time literals) \
+             must route to Number — datetimes are numeric constants \
+             per TOML spec"
+        );
+
+        // Invariant 17: ESCAPECHAR → Preprocessor pin.
+        assert!(
+            toml.styles
+                .contains(&(SCE_TOML_ESCAPECHAR, StyleSlot::Preprocessor)),
+            "SCE_TOML_ESCAPECHAR (escape sequences inside DQ / \
+             TRIPLE_STRING_DQ) must route to Preprocessor — distinct \
+             accent from surrounding string content"
+        );
+
+        // Invariant 18: highest-defined SCE_TOML_* pin.
+        assert_eq!(
+            SCE_TOML_STRINGEOL, 15,
+            "SCE_TOML_STRINGEOL drift from 15 — verify SciLexer.h:2105"
+        );
+        for (idx, _) in toml.styles {
+            assert!(
+                *idx <= SCE_TOML_STRINGEOL,
+                "TOML_STYLES references slot {idx}, higher than \
+                 SCE_TOML_STRINGEOL ({SCE_TOML_STRINGEOL})"
+            );
+        }
+
+        // Invariant 19: no duplicate tokens.
+        use std::collections::HashSet;
+        let total = TOML_KEYWORDS.split_whitespace().count();
+        let unique = TOML_KEYWORDS
+            .split_whitespace()
+            .collect::<HashSet<_>>()
+            .len();
+        assert_eq!(
+            total,
+            unique,
+            "TOML_KEYWORDS contains {} duplicate token(s)",
+            total - unique
+        );
+
+        // Invariant 20: STRINGEOL + ERROR both deferred-unmapped.
+        assert!(
+            !toml.styles.iter().any(|(i, _)| *i == SCE_TOML_STRINGEOL),
+            "SCE_TOML_STRINGEOL MUST remain unmapped — deferred \
+             `StyleSlot::Error` migration"
+        );
+        assert!(
+            !toml.styles.iter().any(|(i, _)| *i == SCE_TOML_ERROR),
+            "SCE_TOML_ERROR MUST remain unmapped — deferred \
+             `StyleSlot::Error` migration"
         );
     }
 

@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 85 / 🟡 3 / ⚫ 1.
+Total: 89 rows. ✅ 86 / 🟡 2 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1925,7 +1925,7 @@ further shim work needed.
 | TCL | 29 | `tcl` | ✅ | ✅ | ✅ |
 | Tektronix extended HEX | 63 | `tehex` | — | ✅ | ✅ |
 | TeX | 24 | `tex` | ✅ | ✅ | ✅ |
-| TOML | 90 | `toml` | ⚫ | ⚫ | 🟡 |
+| TOML | 90 | `toml` | ✅ | ✅ | ✅ |
 | txt2tags | 83 | `txt2tags` | — | ✅ | ✅ |
 | TypeScript | 85 | `cpp` | ✅ | ✅ | ✅ |
 | Verilog | 43 | `verilog` | ✅ | ✅ | ✅ |
@@ -10398,6 +10398,144 @@ folder relies on), Baan-
 distinctive `|`-comment
 routing pin, and STRINGEOL
 deferred-Error pin.
+
+**TOML (2026-07-08):** rides
+Lexilla's `toml` lexer
+(`LexTOML.cxx`) — a 2024 lexer
+by Jiri Techet, ported from
+Zufu Liu's Notepad4 TOML lexer.
+Extension `.toml`. TOML v1.0.0
+(Tom's Obvious, Minimal Language)
+— configuration file format
+widely used for Rust
+`Cargo.toml`, Python
+`pyproject.toml`, and similar
+tooling.
+
+**Single-wordlist descriptor**
+per `LexTOML.cxx:489-492` —
+`tomlWordListDesc[]` has just
+one `"Keywords"` slot carrying
+the four TOML v1.0.0 bareword
+literals (`true` / `false` /
+`inf` / `nan`). Content
+**mirrors the upstream Lexilla
+fixture verbatim** at
+`crates/scintilla-sys/vendor/
+lexilla/test/examples/toml/
+SciTE.properties`. Mirror-not-
+curate discipline.
+
+- **Class 0 — `TOML_KEYWORDS`**
+  (bold Keyword, 4 tokens):
+  bareword literals — `true`
+  / `false` (TOML v1.0.0
+  §Boolean), `inf` / `nan`
+  (TOML v1.0.0 §Float — used
+  as `+inf` / `-inf` / `+nan`
+  / `-nan` with the `+` / `-`
+  sign painted separately as
+  OPERATOR).
+
+**Complex state machine for a
+tiny wordlist.** LexTOML has 16
+SCE_TOML_* states (0..=15)
+covering: comments, four
+string flavours (`'`, `"`,
+`'''`, `"""`), integer + float
++ hex + octal + binary numeric
+literals, ISO 8601 date-time
+literals, TABLE headers, KEY
+LHS-of-assignment (including
+dot-separated and quoted
+variants), operator set, and
+two parse-failure states
+(ERROR for bad line-start
+characters; STRINGEOL for
+unterminated single-line
+strings).
+
+**12-style-mapping table**
+covering 16 defined
+`SCE_TOML_*` states. Four
+unmapped:
+- `DEFAULT` (0) — framework
+  fall-through convention.
+- `IDENTIFIER` (2) — transient
+  bareword-collect state at
+  `LexTOML.cxx:207-214`. The
+  state never survives to
+  paint — `IsTOMLKey` at
+  `:122-142` either promotes
+  to KEY (inline-table
+  context) or KEYWORD
+  (wordlist match), or falls
+  through to DEFAULT.
+- `ERROR` (7) — deferred
+  `StyleSlot::Error` migration.
+- `STRINGEOL` (15) — same
+  deferred convention.
+
+The 12 mapped states: COMMENT
+→ Comment italic; KEYWORD →
+Keyword bold; NUMBER → Number;
+TABLE → Preprocessor
+(structural anchor —
+`[section]` / `[[array.of.
+tables]]` headers, same slot
+family as PROPS / Registry /
+INI section markers); KEY →
+Keyword2 (LHS-of-assignment
+accent, distinct from KEYWORD
+so keys and value-literals
+paint differently); OPERATOR
+→ Operator; four string
+flavours (SQ / DQ /
+TRIPLE_STRING_SQ /
+TRIPLE_STRING_DQ) all →
+String (spec-mandated 4-quote-
+form collapse); ESCAPECHAR →
+Preprocessor (escape sequences
+inside DQ variants —
+`\uXXXX` / `\xNN` / `\n` /
+etc. — accent color matches
+`SCE_RUST_BYTEESCAPE`
+convention); DATETIME → Number
+(RFC 3339 ISO date-time
+literals are numeric constants
+per TOML spec).
+
+**Case-insensitive lookup**
+per `LexTOML.cxx:132`. Wordlist
+entries must be byte-canonical
+lowercase (all 4 fixture
+tokens are). Note: TOML v1.0.0
+per spec is CASE-SENSITIVE for
+these literals; the lexer's
+case-insensitive probe is
+permissive — source `TRUE` /
+`True` will over-paint as
+KEYWORD despite being a syntax
+error.
+
+Structural test coverage: **20
+invariants** including
+upstream-fixture-verbatim
+wordlist pin (byte-for-byte
+match against
+`SciTE.properties`), all 4
+spec-mandated bareword literal
+pins, four-string-flavour
+collapse pin, TABLE + KEY
+structural anchor routing pin
+(Preprocessor vs Keyword2 —
+the TOML-specific distinction),
+DATETIME → Number pin,
+ESCAPECHAR → Preprocessor pin,
+and BOTH ERROR + STRINGEOL
+deferred-Error pins (two
+separate parse-failure states
+so both must be pinned).
 
 ## Notes
 

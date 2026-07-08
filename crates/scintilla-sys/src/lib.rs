@@ -8049,26 +8049,6 @@ pub const SCE_COFFEESCRIPT_VERBOSE_REGEX: usize = 23;
 pub const SCE_COFFEESCRIPT_VERBOSE_REGEX_COMMENT: usize = 24;
 pub const SCE_COFFEESCRIPT_INSTANCEPROPERTY: usize = 25;
 
-// LexTOML style indices. The upstream enum also defines
-// `SCE_TOML_ERROR` (7), `SCE_TOML_STRINGEOL` (15), and
-// `SCE_TOML_ESCAPECHAR` (13) — those are intentionally omitted
-// from the scaffolding because Phase 4.5's TOML theme will not
-// colour them differently from the surrounding string / default
-// styles. A future contributor wiring a custom error/EOL theme
-// can add them back at their numeric values verbatim.
-pub const SCE_TOML_COMMENT: usize = 1;
-pub const SCE_TOML_IDENTIFIER: usize = 2;
-pub const SCE_TOML_KEYWORD: usize = 3;
-pub const SCE_TOML_NUMBER: usize = 4;
-pub const SCE_TOML_TABLE: usize = 5;
-pub const SCE_TOML_KEY: usize = 6;
-pub const SCE_TOML_OPERATOR: usize = 8;
-pub const SCE_TOML_STRING_SQ: usize = 9;
-pub const SCE_TOML_STRING_DQ: usize = 10;
-pub const SCE_TOML_TRIPLE_STRING_SQ: usize = 11;
-pub const SCE_TOML_TRIPLE_STRING_DQ: usize = 12;
-pub const SCE_TOML_DATETIME: usize = 14;
-
 // LexCSS style indices. 24 contiguous slots (0..=23) covering CSS
 // selectors (tag / class / id / attribute / pseudo-class / pseudo-
 // element), CSS1 / CSS2 / CSS3 property names via a four-way
@@ -9011,6 +8991,132 @@ pub const SCE_BAAN_DOMDEF: usize = 21;
 pub const SCE_BAAN_FUNCDEF: usize = 22;
 pub const SCE_BAAN_OBJECTDEF: usize = 23;
 pub const SCE_BAAN_DEFINEDEF: usize = 24;
+
+// LexTOML style indices. 16 contiguous slots (0..=15) covering the
+// TOML (Tom's Obvious, Minimal Language) lexer's full emission set:
+// `#`-to-EOL line comments (COMMENT), identifier-collect state
+// (IDENTIFIER — transient), bareword literal keywords (KEYWORD —
+// `true` / `false` / `inf` / `nan`), integer + float + hex / octal /
+// binary + underscore-separated numeric literals (NUMBER),
+// `[table]` / `[[array.of.tables]]` headers (TABLE),
+// key-part on the LHS of `key = value` including dot-separated
+// `foo.bar.baz` and quoted `"quoted"`/`'quoted'` key forms (KEY),
+// unrecoverable parse-failure states (ERROR — bad-line-start
+// character; STRINGEOL — string not terminated before EOL for
+// single-line quote variants), TOML-specific operators (OPERATOR
+// — `[`/`]`/`{`/`}`/`,`/`=`/`.`/`+`/`-`), four string flavours
+// (STRING_SQ single-quoted literal, STRING_DQ double-quoted basic,
+// TRIPLE_STRING_SQ multi-line literal, TRIPLE_STRING_DQ multi-line
+// basic), escape sequences inside double-quoted strings only
+// (ESCAPECHAR — TOML's `\uXXXX` / `\UXXXXXXXX` / `\xNN` / `\n` /
+// etc.), and RFC 3339 date-time literals (DATETIME — full ISO
+// `YYYY-MM-DDTHH:MM:SS+ZZ` and local variants). Cross-referenced
+// against `vendor/lexilla/include/SciLexer.h` lines 2090-2105 and
+// the `LexerModule lmTOML(SCLEX_TOML, ColouriseTOMLDoc, "toml",
+// FoldTOMLDoc, tomlWordListDesc)` registration at
+// `vendor/lexilla/lexers/LexTOML.cxx:494`.
+//
+// Dispatches SCLEX_TOML (= 136, per `SciLexer.h:152`) — a 2024
+// lexer by Jiri Techet, ported from Zufu Liu's Notepad4 TOML
+// lexer (`LexTOML.cxx:5-6`). Extension `.toml`. TOML v1.0.0 syntax.
+//
+// **One wordlist class** — `tomlWordListDesc[]` at
+// `LexTOML.cxx:489-492` declares a single `"Keywords"` slot.
+// Content per the upstream fixture at
+// `crates/scintilla-sys/vendor/lexilla/test/examples/toml/
+// SciTE.properties`: `false inf nan true` (4 tokens — TOML v1.0.0's
+// full bareword-literal vocabulary).
+//
+// **Case-INSENSITIVE identifier lookup.** `LexTOML.cxx:132` calls
+// `sc.GetCurrentLowered(s, sizeof(s))` before probing the
+// wordlist. Wordlist entries MUST be byte-canonical lowercase.
+// Note that TOML per the v1.0.0 spec is CASE-SENSITIVE for its
+// literal keywords (`true` / `false` / `inf` / `nan` all lowercase
+// per grammar), so the lexer's case-insensitive lookup is
+// permissive — source `TRUE` / `True` would ALSO paint as
+// SCE_TOML_KEYWORD despite being a syntax error per the spec.
+// The paint is unconditionally correct for spec-conformant source;
+// non-conformant source gets a "helpful" over-highlight.
+//
+// **KEY vs IDENTIFIER routing.** `LexTOML.cxx:207-214` sets
+// `IDENTIFIER` for a lowercase-leading bareword run at `:372-373`
+// (in DEFAULT-state entry), then at end-of-identifier calls
+// `IsTOMLKey(sc, braceCount, keywordLists[0])` at `:209` which
+// either (a) promotes to `SCE_TOML_KEY` if the next non-whitespace
+// char is `=` / `.` / `-` inside an inline table (braceCount > 0
+// case at `:122-129`), (b) promotes to `SCE_TOML_KEYWORD` if the
+// collected token matches the wordlist (at `:136-138`), or (c)
+// falls through to `SCE_TOML_DEFAULT` — the `IDENTIFIER` state
+// itself never survives to paint. Framework leaves `IDENTIFIER`
+// unmapped per the framework's transient-collect-fallthrough
+// convention.
+//
+// **`SCE_TOML_TABLE` (5) and `SCE_TOML_KEY` (6)** — the two
+// structural anchor states unique to TOML. TABLE fires on `[` at
+// line start (`:337-344`, always at column 0 per TOML grammar);
+// KEY fires either at line start on a bareword / quote-start
+// (`:345-350`) or inline via the `IsTOMLKey` promotion
+// (`:122-142`). Both consume dot-separated sub-key sequences
+// (`foo.bar.baz` at `:244-253`) plus quoted variants (`'literal'`
+// and `"basic"` per `TOMLKeyState::Literal` / `Quoted` at
+// `:150-155`). Framework routes TABLE to Preprocessor (structural
+// header archetype — same slot family as `[section]` markers in
+// PROPS / Registry / INI) and KEY to Keyword2 (LHS-of-assignment
+// archetype).
+//
+// **Four string flavours share `StyleSlot::String`.** TOML's
+// spec-mandated four quote forms — `'...'` literal (no escapes),
+// `"..."` basic (with escapes), `'''...'''` multi-line literal,
+// `"""..."""` multi-line basic — all paint as String. The
+// distinction matters for ESCAPECHAR handling (only DQ variants
+// process `\`-escapes per `:283-287`) but not for framework paint.
+// Same collapse discipline as Python's `SCE_P_STRING` /
+// `_CHARACTER` / `_TRIPLE` / `_TRIPLEDOUBLE` and Raku's Q-language
+// unification.
+//
+// **`SCE_TOML_ESCAPECHAR` (13)** — the entire escape sequence
+// paints as a single ESCAPECHAR span (`:283-287, :308-313`).
+// Includes `\b` / `\t` / `\n` / `\f` / `\r` / `\"` / `\\` / `\/`
+// single-char forms, plus `\xNN` / `\uNNNN` / `\UNNNNNNNN` Unicode
+// hex forms. Framework routes to Preprocessor for a distinct
+// accent color — matches the `SCE_RUST_BYTEESCAPE` /
+// `SCE_HJA_TEMPLATELITERAL` precedent for "escape sequence
+// standing out from surrounding string content".
+//
+// **`SCE_TOML_DATETIME` (14)** — RFC 3339 date-time literals like
+// `1979-05-27T07:32:00-07:00` per TOML spec §Local Date-Time. The
+// lexer initially enters NUMBER state on the leading digit at
+// `:370-371`, then re-classifies to DATETIME at `:189-190` when
+// it detects an ISO-date-time-continuation character (`+`/`-`/`:`
+// followed by a digit, per `IsISODateTime` at `:48-51`). Framework
+// routes to Number (numeric-literal archetype) — datetimes are
+// conceptually numeric constants in TOML.
+//
+// **`SCE_TOML_ERROR` (7)** — parse-failure state entered at
+// `:353` when a line-start character isn't `#`, `[`, `'`, `"`, or
+// an unquoted-key char. `SCE_TOML_STRINGEOL` (15) — separate
+// parse-failure state entered at `:281-282` when a single-line
+// string (SQ or DQ, NOT triple-string) doesn't terminate before
+// line end. Both left unmapped per the framework's deferred
+// `StyleSlot::Error`-migration convention. Same discipline as
+// Visual Prolog / LexBasic ERROR states.
+pub const SCLEX_TOML: usize = 136;
+pub const SCE_TOML_DEFAULT: usize = 0;
+pub const SCE_TOML_COMMENT: usize = 1;
+pub const SCE_TOML_IDENTIFIER: usize = 2;
+pub const SCE_TOML_KEYWORD: usize = 3;
+pub const SCE_TOML_NUMBER: usize = 4;
+pub const SCE_TOML_TABLE: usize = 5;
+pub const SCE_TOML_KEY: usize = 6;
+pub const SCE_TOML_ERROR: usize = 7;
+pub const SCE_TOML_OPERATOR: usize = 8;
+pub const SCE_TOML_STRING_SQ: usize = 9;
+pub const SCE_TOML_STRING_DQ: usize = 10;
+pub const SCE_TOML_TRIPLE_STRING_SQ: usize = 11;
+pub const SCE_TOML_TRIPLE_STRING_DQ: usize = 12;
+pub const SCE_TOML_ESCAPECHAR: usize = 13;
+pub const SCE_TOML_DATETIME: usize = 14;
+pub const SCE_TOML_STRINGEOL: usize = 15;
 
 // SCN_* notification codes (delivered via WM_NOTIFY's NMHDR.code) are added
 // when Phase 2+ first dispatches them. Each constant must be cross-checked

@@ -15211,6 +15211,35 @@ pub const BAAN_KEYWORDS: &str = concat!(
     "true false",
 );
 
+/// Space-separated **TOML v1.0.0 bareword literal keywords**
+/// installed as **class 0** (the only class — `LexTOML.cxx:489-492`
+/// declares a single `"Keywords"` slot) of `LexTOML`'s wordlist
+/// descriptor (`SCE_TOML_KEYWORD`, primary bold slot).
+///
+/// **Contents mirror the upstream Lexilla test fixture verbatim**
+/// at `crates/scintilla-sys/vendor/lexilla/test/examples/toml/
+/// SciTE.properties` — the four spec-mandated bareword literals
+/// per TOML v1.0.0 §Boolean and §Float. Mirror-not-curate
+/// discipline.
+///
+/// **Case-INSENSITIVE lookup.** `LexTOML.cxx:132` calls
+/// `sc.GetCurrentLowered(s, sizeof(s))` before probing. Wordlist
+/// entries MUST be byte-canonical lowercase. Note: TOML per the
+/// v1.0.0 spec is CASE-SENSITIVE for these literals (all lowercase
+/// per grammar), so the lexer's case-insensitive lookup is
+/// permissive — source `TRUE` / `True` will over-paint as
+/// `SCE_TOML_KEYWORD` despite being a syntax error per the spec.
+///
+/// **Contents** (4 tokens, verbatim from upstream fixture):
+///   - **Booleans** (2): `true` / `false` (TOML v1.0.0 §Boolean).
+///   - **Float non-finite values** (2): `inf` / `nan` (TOML
+///     v1.0.0 §Float — `+inf` / `-inf` / `+nan` / `-nan` supported
+///     with the `+`/`-` sign painted separately as OPERATOR).
+///
+/// Cross-class disjointness is trivially satisfied — TOML has
+/// only one wordlist class.
+pub const TOML_KEYWORDS: &str = "false inf nan true";
+
 #[cfg(test)]
 mod tests {
     use super::*;
