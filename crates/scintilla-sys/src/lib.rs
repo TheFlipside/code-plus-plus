@@ -2540,6 +2540,133 @@ pub const SCE_REBOL_WORD6: usize = 26;
 pub const SCE_REBOL_WORD7: usize = 27;
 pub const SCE_REBOL_WORD8: usize = 28;
 
+// LexRegistry style indices. 13 contiguous slots (0..=12) for
+// Windows Registry Editor export files (extension `.reg`).
+// Constants mirror `SciLexer.h:1843-1855` verbatim. Dispatches
+// SCLEX_REGISTRY (= 115, per `SciLexer.h:131`) via
+// `vendor/lexilla/lexers/LexRegistry.cxx:415-418`.
+//
+// **Zero wordlists.** `RegistryWordListDesc[]` at
+// `LexRegistry.cxx:38-40` is `{ 0 }` — a bare null terminator.
+// `LexerRegistry::WordListSet` at `:191-193` unconditionally
+// returns -1, REJECTING any attempt to install keywords via
+// `SCI_SETKEYWORDS`. Registry is a pure syntax-driven lexer —
+// classification is line-shape based, not identifier-lookup
+// based. This is the strongest zero-wordlist contract in Phase
+// 4.5: [`SCE_PROPS_KEY`] (INI / Properties) ignores wordlists
+// but tolerates the install; Registry rejects it outright.
+// Framework consequence: `REGISTRY_THEME.keywords` MUST be
+// empty; installing anything is a no-op at best and gets
+// silently dropped by Scintilla on the `-1` return.
+//
+// **State-machine driven.** `LexerRegistry::Lex` at `:213-355`
+// runs a StyleContext state machine with lookahead helpers:
+//   - `AtValueName` at `:98-119` — string `"..."` is a
+//     VALUENAME iff the closing `"` is followed by `=` (only
+//     whitespace between). Otherwise it's a plain STRING.
+//   - `AtKeyPathEnd` at `:121-135` — `]` closes a keypath only
+//     if no further `]` appears before EOL (guards against
+//     GUIDs / nested brackets in the middle of a keypath).
+//   - `AtValueType` at `:67-79` — a wordStart alpha token
+//     (`dword` / `hex` / `hex(b)`) becomes VALUETYPE iff a `:`
+//     appears within the next 10 chars.
+//   - `AtGUID` at `:137-161` — a `{` opens a GUID span iff
+//     exactly `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}` follows.
+//   - `IsNextNonWhitespace` at `:81-95` — the `[` opens a
+//     DELETEDKEY (`[-HKEY...]`) iff `-` is the next
+//     non-whitespace character, else ADDEDKEY.
+//
+// **The `highlight` flag** at `:222-229, :338, :347` gates the
+// operator / hexdigit emission on the LHS of an `=` assignment.
+// Set true after any `=` or `@` (default-value marker); reset
+// per line unless the previous line ended with `\` (continuation).
+// Without this, arbitrary hex-looking prose in a comment before
+// `=` would paint as HEXDIGIT — the flag ensures HEXDIGIT only
+// paints in the value tail of `key=value` lines.
+//
+// **String → GUID → String nesting.** Inside a VALUENAME /
+// STRING at `:245-249`, encountering `{` transitions to
+// STRING_GUID if `AtGUID` confirms a well-formed GUID follows.
+// The GUID's closing `}` at `:300-303` returns to `beforeGUID`
+// (the saved outer VALUENAME/STRING state), and the outer
+// string's closing `"` still terminates normally. Same nesting
+// for ADDEDKEY / DELETEDKEY → KEYPATH_GUID at `:279-284` and
+// return-to-outer at `:300-303` (shared case-label fall-through
+// with STRING_GUID at `:298-299`); outer-keypath exit at
+// `:307-310` fires only after the return-to-outer has restored
+// the state to ADDEDKEY / DELETEDKEY.
+//
+// **`\`-escape sequences.** At `:241-244`, backslash inside a
+// string enters ESCAPED, saving the outer state. `:287-296`
+// handles the escape body: `\"` closes the outer string, `\\`
+// consumes the second backslash, anything else returns to the
+// outer state after one char. Same behaviour for backslashes
+// inside GUID strings via `:311-315`.
+//
+// **Format parameters.** `%0`, `%1`, `%*` inside a STRING (not
+// VALUENAME) enter PARAMETER at `:251-255`. Single-char span
+// per `:258-263` — one digit / `*` after the `%`, then return
+// to STRING, or terminate the whole string if followed by `"`.
+//
+// **Fold** at `:358-413` is header-driven: any line containing
+// a KEYPATH-styled span becomes a fold header (level BASE +
+// HEADERFLAG). Following non-header lines fold into the
+// previous header's body. Similar to LexOthers' FoldPropsDoc.
+//
+// Style semantics (paint-loop citations reference LexRegistry.cxx):
+//
+//   - SCE_REG_DEFAULT (0) — whitespace / unclassified /
+//     free text on lines without an `=` or `[` opener.
+//     Framework convention: leave unmapped.
+//   - SCE_REG_COMMENT (1) — `;`-to-EOL line comment. Entry at
+//     `:322-323`, exit at `:231-234`.
+//   - SCE_REG_VALUENAME (2) — `"..."` string on LHS of `=`.
+//     Distinguished from STRING by `AtValueName` lookahead at
+//     `:325-329`.
+//   - SCE_REG_STRING (3) — `"..."` string on RHS of `=` or
+//     unassigned. Entered at `:327-329` when `AtValueName`
+//     returns false.
+//   - SCE_REG_HEXDIGIT (4) — hex digit run in the value tail
+//     (post-`=` on same line). Entry at `:344-346`. Covers
+//     comma-separated `41,42,43` binary data, dword hex
+//     `00000001`, etc.
+//   - SCE_REG_VALUETYPE (5) — `dword` / `hex` / `hex(b)` /
+//     `hex(7)` value-type prefix before the `:` in
+//     `Name=dword:...`. Entered at `:340-343`.
+//   - SCE_REG_ADDEDKEY (6) — `[HKEY_...\path]` full keypath
+//     declaration (primary structural anchor). Entered at
+//     `:334`.
+//   - SCE_REG_DELETEDKEY (7) — `[-HKEY_...\path]` deletion
+//     directive. Entered at `:332` when `IsNextNonWhitespace`
+//     detects `-` after `[`.
+//   - SCE_REG_ESCAPED (8) — `\"` / `\\` escape sequences
+//     inside strings. Transient state that returns to the
+//     outer STRING/VALUENAME after consuming the escape body.
+//   - SCE_REG_KEYPATH_GUID (9) — `{XXXXXXXX-...-XXXXXXXXXXXX}`
+//     GUID span inside an ADDEDKEY / DELETEDKEY. Entered at
+//     `:279-283`, exits back to the outer keypath at `:300-303`.
+//   - SCE_REG_STRING_GUID (10) — same GUID recognition but
+//     inside a VALUENAME / STRING. Entered at `:245-249`.
+//   - SCE_REG_PARAMETER (11) — `%0` / `%1` / `%*` format
+//     parameter inside a STRING (not VALUENAME). Entered at
+//     `:251-255`.
+//   - SCE_REG_OPERATOR (12) — one of `-,.=:\\@()` (the
+//     `setOperators` set at `:219`) in the value-tail region.
+//     Entered at `:348-350`.
+pub const SCE_REG_DEFAULT: usize = 0;
+pub const SCE_REG_COMMENT: usize = 1;
+pub const SCE_REG_VALUENAME: usize = 2;
+pub const SCE_REG_STRING: usize = 3;
+pub const SCE_REG_HEXDIGIT: usize = 4;
+pub const SCE_REG_VALUETYPE: usize = 5;
+pub const SCE_REG_ADDEDKEY: usize = 6;
+pub const SCE_REG_DELETEDKEY: usize = 7;
+pub const SCE_REG_ESCAPED: usize = 8;
+pub const SCE_REG_KEYPATH_GUID: usize = 9;
+pub const SCE_REG_STRING_GUID: usize = 10;
+pub const SCE_REG_PARAMETER: usize = 11;
+pub const SCE_REG_OPERATOR: usize = 12;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

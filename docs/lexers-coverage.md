@@ -35,7 +35,7 @@ residual rows formally tracked).
 | ✅ | Keywords + theme both wired in `Win32Ui::apply_lang`'s table. Pick this language from the Language menu and a sample file picks up visibly distinct colours for comments, strings, numbers, and keywords. |
 | 🟡 | Lexer attached and tokenising; no host keyword list and no host theme. Buffer renders uniformly black-on-white because every `SCE_*_*` style resolves to `STYLE_DEFAULT` after `SCI_STYLECLEARALL`. (Pre-2026-05-13: this row also covered "lexer compiled but unregistered in `LexillaShim.cxx`'s catalog"; that gap is now closed for every `LANG_TABLE` row with a non-`None` lexer.) |
 | ⚫ | No Lexilla lexer (`LANG_TABLE` row has `lexer: None`). Either by design (`L_TEXT` — plain text never highlights) or because no Lexilla lexer matches the language. Effectively a permanent state for the named row. |
-| — (Keywords column only) | Not applicable. The lexer takes no wordlists at all — host installs none by design. Currently used for `props` (INI / Properties), a pure line-prefix classifier. A row with `—` in the Keywords column and ✅ in the Theme column is still ✅ overall: the wiring is complete, there are simply no keywords to wire. |
+| — (Keywords column only) | Not applicable. The lexer takes no wordlists at all — host installs none by design. Currently used for `props` (INI / Properties — a pure line-prefix classifier that ignores its `WordList *[]` parameter) and `registry` (Windows Registry files — a state-machine lexer whose `WordListSet` unconditionally returns -1, actively REJECTING any keyword install). A row with `—` in the Keywords column and ✅ in the Theme column is still ✅ overall: the wiring is complete, there are simply no keywords to wire. |
 | ⏸ | Reserved for future host-side opt-out (e.g. a lexer the host deliberately leaves off the menu pending review). None today. |
 
 ## How to mark a row ✅
@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 66 / 🟡 22 / ⚫ 1.
+Total: 89 rows. ✅ 67 / 🟡 21 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1910,7 +1910,7 @@ further shim work needed.
 | R | 54 | `r` | ✅ | ✅ | ✅ |
 | Raku | 89 | `raku` | ⚫ | ⚫ | 🟡 |
 | REBOL | 79 | `rebol` | ✅ | ✅ | ✅ |
-| Registry | 80 | `registry` | ⚫ | ⚫ | 🟡 |
+| Registry | 80 | `registry` | — | ✅ | ✅ |
 | Resource file | 7 | `cpp` | ✅ | ✅ | ✅ |
 | Ruby | 36 | `ruby` | ✅ | ✅ | ✅ |
 | Rust | 81 | `rust` | ✅ | ✅ | ✅ |
@@ -7193,6 +7193,126 @@ highest-defined `SCE_REBOL_*` pin
 spellings; REBOL's canonical forms are
 `absolute` / `square-root` / `word!`),
 and no-duplicate defence-in-depth check.
+
+**Registry (2026-07-08):** wires
+`SCLEX_REGISTRY` (= 115, per
+`SciLexer.h:131`) for Windows Registry
+Editor export files (extension `.reg`).
+The strongest **zero-wordlist** lexer in
+Phase 4.5: `RegistryWordListDesc[]` at
+`LexRegistry.cxx:38-40` is a bare
+`{ 0 }` terminator, and
+`LexerRegistry::WordListSet` at
+`:191-193` unconditionally returns -1,
+REJECTING any keyword install.
+Classification is purely state-machine
+driven — the LexRegistry `Lex` method
+at `:213-355` runs a `StyleContext`
+state machine with five lookahead
+helpers (`AtValueName` / `AtKeyPathEnd`
+/ `AtValueType` / `AtGUID` /
+`IsNextNonWhitespace`) that
+retroactively classify tokens based on
+line shape, not identifier lookup. Same
+`—` glyph in the Keywords column as
+INI / Properties (both route to
+`props`, another zero-wordlist lexer)
+— a `—` + ✅ theme still counts as ✅
+overall since there is nothing to
+wire.
+
+**12-mapping style routing.**
+`REGISTRY_STYLES` maps every SCE
+constant except `SCE_REG_DEFAULT`:
+`COMMENT` (1, `;`-to-EOL) → Comment;
+`VALUENAME` (2, `"..."` on LHS of `=`)
++ `STRING` (3, `"..."` on RHS) →
+String; `HEXDIGIT` (4, comma-separated
+binary or dword hex value tails) →
+Number; `VALUETYPE` (5, `dword` /
+`hex` / `hex(b)` / `hex(7)` type-tag
+tokens) → Keyword2; `ADDEDKEY` (6,
+`[HKEY_...\path]` full keypath — the
+PRIMARY structural anchor) → Keyword
+(bold); `DELETEDKEY` (7, `[-HKEY_...]`
+deletion directive) + `PARAMETER` (11,
+`%0`/`%1`/`%*` runtime-substitution
+markers) → Preprocessor (both are
+out-of-band directives); `ESCAPED` (8,
+`\"` / `\\` escape sequences) →
+Lifetime (adjacent to strings, small
+distinct highlighting); `KEYPATH_GUID`
+(9) + `STRING_GUID` (10, both
+`{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`
+GUID sub-tokens) → Macro (consistent
+GUID highlighting across keypath and
+string contexts); `OPERATOR` (12, the
+`-,.=:\@()` character set from
+`setOperators` at `:219`) → Operator.
+
+**State-machine mechanics.** The
+`highlight` flag at `:222-229, :338,
+:347` gates HEXDIGIT / OPERATOR
+emission on the LHS of `=`: set true
+after any `=` or `@` (default-value
+marker), reset per line unless the
+previous line ended with `\`
+(continuation). Without this, hex-
+looking prose in a comment before `=`
+would paint as HEXDIGIT — the flag
+scopes value-tail emission correctly.
+String → GUID → String nesting at
+`:245-249, :300-303`: encountering `{`
+inside a VALUENAME/STRING transitions
+to STRING_GUID if `AtGUID` confirms a
+well-formed GUID follows; the GUID's
+closing `}` returns to the saved outer
+state. Same nesting for ADDEDKEY /
+DELETEDKEY → KEYPATH_GUID at
+`:279-284, :300-303` (shared
+case-label fall-through with
+STRING_GUID at `:298-299`; the
+outer-keypath exit at `:307-310`
+fires only after the return-to-outer
+has restored the state to ADDEDKEY /
+DELETEDKEY).
+
+**Fold** at `:358-413` is
+header-driven: any line containing a
+KEYPATH-styled span becomes a fold
+header; following non-header lines
+fold into the previous header's body.
+Similar shape to LexOthers'
+FoldPropsDoc.
+
+Structural test coverage: 12
+invariants — deep-value identity pin,
+12-mapping style count (13 defined
+slots minus DEFAULT), **empty-keywords
+LOAD-BEARING** (WordListSet returns
+-1), cross-language non-reuse across
+13 sibling themes (C++ / Makefile /
+Pascal / PHP / Batch / SQL / VB / CSS
+/ Rust / REBOL + explicit PROPS /
+LaTeX / TeX cross-pins since all four
+are zero-wordlist and must remain
+structurally distinct), style-routing
+pins for all 12 mapped constants, 1
+unmapped slot (DEFAULT) confirmed
+absent with drift-pin assertion,
+italic set == 1 (COMMENT only), bold
+set == 1 (ADDEDKEY only — primary
+structural anchor), highest-defined
+`SCE_REG_*` pin (`SCE_REG_OPERATOR`
+(12) as top slot), `L_REGISTRY`
+`LangEntry`'s `lexer:
+Some("registry")` + `.reg` extension,
+**GUID-pair pin** (KEYPATH_GUID +
+STRING_GUID both route to Macro for
+consistent GUID highlighting), and
+**directive-pair pin** (DELETEDKEY +
+PARAMETER both route to Preprocessor
+as out-of-band-marker semantics).
 
 ## Notes
 

@@ -124,8 +124,8 @@ use codepp_core::lang::{
     L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI,
     L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
     L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
-    L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_RUBY, L_RUST,
-    L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
+    L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY,
+    L_RUST, L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
     MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
     MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
     NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
@@ -292,25 +292,27 @@ use codepp_scintilla_sys::{
     SCE_REBOL_OPERATOR, SCE_REBOL_PAIR, SCE_REBOL_PREFACE, SCE_REBOL_QUOTEDSTRING, SCE_REBOL_TAG,
     SCE_REBOL_TIME, SCE_REBOL_TUPLE, SCE_REBOL_URL, SCE_REBOL_WORD, SCE_REBOL_WORD2,
     SCE_REBOL_WORD3, SCE_REBOL_WORD4, SCE_REBOL_WORD5, SCE_REBOL_WORD6, SCE_REBOL_WORD7,
-    SCE_REBOL_WORD8, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC,
-    SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO,
-    SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2,
-    SCE_R_BACKTICKS, SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_INFIX, SCE_R_INFIXEOL, SCE_R_KWORD,
-    SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD, SCE_R_RAWSTRING, SCE_R_RAWSTRING2,
-    SCE_R_STRING, SCE_R_STRING2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE,
-    SCE_SH_HERE_DELIM, SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR,
-    SCE_SH_STRING, SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC,
-    SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER,
-    SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT,
-    SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCE_ST_ASSIGN, SCE_ST_BINARY, SCE_ST_BOOL,
-    SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL, SCE_ST_KWSEND, SCE_ST_NIL, SCE_ST_NUMBER,
-    SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL, SCE_ST_SPEC_SEL, SCE_ST_STRING, SCE_ST_SUPER,
-    SCE_ST_SYMBOL, SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE,
-    SCE_TCL_COMMENT_BOX, SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER, SCE_TCL_NUMBER,
-    SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD, SCE_TCL_WORD2,
-    SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7, SCE_TCL_WORD8,
-    SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL,
-    SCE_TEX_SYMBOL, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT,
+    SCE_REBOL_WORD8, SCE_REG_ADDEDKEY, SCE_REG_COMMENT, SCE_REG_DELETEDKEY, SCE_REG_ESCAPED,
+    SCE_REG_HEXDIGIT, SCE_REG_KEYPATH_GUID, SCE_REG_OPERATOR, SCE_REG_PARAMETER, SCE_REG_STRING,
+    SCE_REG_STRING_GUID, SCE_REG_VALUENAME, SCE_REG_VALUETYPE, SCE_RUST_CHARACTER,
+    SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC,
+    SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
+    SCE_RUST_WORD, SCE_RUST_WORD2, SCE_R_BACKTICKS, SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_INFIX,
+    SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD, SCE_R_RAWSTRING,
+    SCE_R_RAWSTRING2, SCE_R_STRING, SCE_R_STRING2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER,
+    SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM, SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR,
+    SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING, SCE_SH_WORD, SCE_SQL_CHARACTER, SCE_SQL_COMMENT,
+    SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC,
+    SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT,
+    SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCE_ST_ASSIGN,
+    SCE_ST_BINARY, SCE_ST_BOOL, SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL, SCE_ST_KWSEND,
+    SCE_ST_NIL, SCE_ST_NUMBER, SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL, SCE_ST_SPEC_SEL,
+    SCE_ST_STRING, SCE_ST_SUPER, SCE_ST_SYMBOL, SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT,
+    SCE_TCL_COMMENTLINE, SCE_TCL_COMMENT_BOX, SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER,
+    SCE_TCL_NUMBER, SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD,
+    SCE_TCL_WORD2, SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7,
+    SCE_TCL_WORD8, SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP,
+    SCE_TEX_SPECIAL, SCE_TEX_SYMBOL, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT,
     SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER, SCE_VHDL_OPERATOR,
     SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE, SCE_VHDL_STDTYPE,
     SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCE_V_COMMENT, SCE_V_COMMENTLINE,
@@ -4868,6 +4870,109 @@ const REBOL_THEME: LangTheme = LangTheme {
     styles: REBOL_STYLES,
     italic: REBOL_ITALIC,
     bold: REBOL_BOLD,
+};
+
+// --- LexRegistry ---
+// Windows Registry Editor export files (`.reg`). `L_REGISTRY`
+// (id 80) is the only language row using this lexer. LexRegistry
+// is the strongest ZERO-WORDLIST lexer in Phase 4.5:
+// `RegistryWordListDesc[]` at `LexRegistry.cxx:38-40` is
+// `{ 0 }` and `WordListSet` at `:191-193` unconditionally
+// REJECTS any keyword install (returns -1). Classification is
+// purely state-machine driven — see the `LexRegistry` banner
+// in `scintilla-sys/src/lib.rs` for the paint-loop citations.
+//
+// Style-to-slot decisions:
+//   * `COMMENT` (1) → Comment (green italic) — `;`-to-EOL
+//     comments. Universal Code++ comment convention.
+//   * `VALUENAME` (2) → String — value names are quoted strings
+//     (`"ValueName"=...`). Painting them the same as string
+//     literals matches Notepad++ defaults and preserves the
+//     visual pairing with `SCE_REG_STRING` on the RHS.
+//   * `STRING` (3) → String — value string literals on RHS of
+//     `=`. Universal string slot.
+//   * `HEXDIGIT` (4) → Number — hex-comma data like
+//     `41,42,43,ff` in `hex:` / `hex(b):` value tails, and
+//     dword hex `00000001`. All numeric, all Number slot.
+//   * `VALUETYPE` (5) → Keyword2 — `dword` / `hex` / `hex(b)` /
+//     `hex(7)` type-tag tokens that precede the `:` in
+//     `Name=type:...` — a small enumerable vocabulary that
+//     reads as secondary-keyword accent.
+//   * `ADDEDKEY` (6) → Keyword (bold blue) — `[HKEY_...\path]`
+//     full keypath declarations. These are the PRIMARY
+//     structural anchors a reader scans for, playing the same
+//     role as `SCE_C_WORD` (C keywords) / `SCE_MAKE_TARGET`
+//     (Makefile targets) / `SCE_PROPS_SECTION` (INI sections).
+//     Gets bold treatment.
+//   * `DELETEDKEY` (7) → Preprocessor — `[-HKEY_...\path]`
+//     deletion directives are out-of-band "remove this" markers,
+//     same semantic role as C's `#undef` or Batch's leading `@`
+//     echo-suppress — all Preprocessor.
+//   * `ESCAPED` (8) → Lifetime — `\"` / `\\` escape sequences
+//     inside strings. Small distinct highlighting that reads as
+//     "not the surrounding string" — same accent slot used for
+//     Rust lifetime tags, which sit adjacent to strings and
+//     want visual separation without dominating.
+//   * `KEYPATH_GUID` (9) → Macro — `{XXXXXXXX-...-XXXXXXXXXXXX}`
+//     GUID sub-tokens inside a keypath. GUIDs deserve a
+//     distinctive colour so a reader can spot them at a glance
+//     inside otherwise-uniform keypaths; Macro is the accent
+//     slot for "special identifier form".
+//   * `STRING_GUID` (10) → Macro — same GUID recognition inside
+//     a string / value name. Same Macro accent for consistent
+//     visual treatment across both host contexts.
+//   * `PARAMETER` (11) → Preprocessor — `%0` / `%1` / `%*`
+//     format parameters inside strings are out-of-band markers
+//     for runtime substitution, same "directive" semantics as
+//     DELETEDKEY.
+//   * `OPERATOR` (12) → Operator — the `-,.=:\\@()` character
+//     set from `setOperators` at `LexRegistry.cxx:219`.
+//     Universal Operator slot.
+//
+// `SCE_REG_DEFAULT` (0) intentionally unmapped — free text on
+// lines without an `=` or `[` opener stays at `STYLE_DEFAULT`
+// foreground. Same convention as every other Phase 4.5 theme.
+const REGISTRY_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_REG_COMMENT, StyleSlot::Comment),
+    (SCE_REG_VALUENAME, StyleSlot::String),
+    (SCE_REG_STRING, StyleSlot::String),
+    (SCE_REG_HEXDIGIT, StyleSlot::Number),
+    (SCE_REG_VALUETYPE, StyleSlot::Keyword2),
+    (SCE_REG_ADDEDKEY, StyleSlot::Keyword),
+    (SCE_REG_DELETEDKEY, StyleSlot::Preprocessor),
+    (SCE_REG_ESCAPED, StyleSlot::Lifetime),
+    (SCE_REG_KEYPATH_GUID, StyleSlot::Macro),
+    (SCE_REG_STRING_GUID, StyleSlot::Macro),
+    (SCE_REG_PARAMETER, StyleSlot::Preprocessor),
+    (SCE_REG_OPERATOR, StyleSlot::Operator),
+];
+
+// Italic on COMMENT only — universal Code++ comment convention.
+const REGISTRY_ITALIC: &[usize] = &[SCE_REG_COMMENT];
+
+// Bold on ADDEDKEY only — `[HKEY_...\path]` full keypath
+// declarations are the primary structural anchor a reader
+// scans for. Same single-class-bold discipline as PROPS
+// (SECTION), Makefile (TARGET), and every LexCPP-family theme
+// (WORD).
+const REGISTRY_BOLD: &[usize] = &[SCE_REG_ADDEDKEY];
+
+// Zero-wordlist theme — same pattern as PROPS / LaTeX / TeX.
+// `keywords: &[]` is REQUIRED here, not just a preference: the
+// lexer's `WordListSet` at `LexRegistry.cxx:191-193`
+// unconditionally returns -1, so installing anything would be
+// silently rejected by Scintilla. Excluded from
+// `wired_languages_have_complete_themes` for the same reason
+// PROPS / LaTeX are: that test's `!keywords.is_empty()` floor
+// calibrates for the majority of lexers that have at least one
+// wordlist. The dedicated `registry_uses_lexregistry_zero_class_theme`
+// test below pins the empty-keywords invariant, the 12-mapping
+// shape, style-routing pins, and cross-language non-reuse.
+const REGISTRY_THEME: LangTheme = LangTheme {
+    keywords: &[],
+    styles: REGISTRY_STYLES,
+    italic: REGISTRY_ITALIC,
+    bold: REGISTRY_BOLD,
 };
 
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
@@ -9618,6 +9723,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&OSCRIPT_THEME)
     } else if lang == L_REBOL {
         Some(&REBOL_THEME)
+    } else if lang == L_REGISTRY {
+        Some(&REGISTRY_THEME)
     } else {
         None
     }
@@ -24776,17 +24883,17 @@ mod lang_theme_tests {
         ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES,
         MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC, NIM_STYLES,
         NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD, OSCRIPT_ITALIC,
-        OSCRIPT_STYLES, REBOL_BOLD, REBOL_ITALIC, REBOL_STYLES, SCE_ADA_CHARACTER,
-        SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL,
-        SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD,
-        SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE,
-        SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND,
-        SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER, SCE_ASM_OPERATOR,
-        SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_AU3_COMMENT,
-        SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
-        SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT,
-        SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_CAML_CHAR,
-        SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
+        OSCRIPT_STYLES, REBOL_BOLD, REBOL_ITALIC, REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC,
+        REGISTRY_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE,
+        SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING,
+        SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
+        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
+        SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
+        SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
+        SCE_AU3_KEYWORD, SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR,
+        SCE_AU3_SENT, SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE,
+        SCE_CAML_CHAR, SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3,
         SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER,
         SCE_CAML_OPERATOR, SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS,
         SCE_CMAKE_COMMENT, SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF,
@@ -24857,8 +24964,8 @@ mod lang_theme_tests {
         L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO,
         L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
         L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP,
-        L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_RUBY, L_RUST, L_SCHEME,
-        L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
+        L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST,
+        L_SCHEME, L_SMALLTALK, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL, L_XML, L_YAML,
         MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
         MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
         NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
@@ -24938,9 +25045,9 @@ mod lang_theme_tests {
         SCE_REBOL_MONEY, SCE_REBOL_NUMBER, SCE_REBOL_OPERATOR, SCE_REBOL_PAIR, SCE_REBOL_PREFACE,
         SCE_REBOL_QUOTEDSTRING, SCE_REBOL_TAG, SCE_REBOL_TIME, SCE_REBOL_TUPLE, SCE_REBOL_URL,
         SCE_REBOL_WORD, SCE_REBOL_WORD2, SCE_REBOL_WORD3, SCE_REBOL_WORD4, SCE_REBOL_WORD5,
-        SCE_REBOL_WORD6, SCE_REBOL_WORD7, SCE_REBOL_WORD8, SCE_R_BACKTICKS, SCE_R_BASEKWORD,
-        SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER, SCE_R_INFIX,
-        SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
+        SCE_REBOL_WORD6, SCE_REBOL_WORD7, SCE_REBOL_WORD8, SCE_REG_DEFAULT, SCE_R_BACKTICKS,
+        SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_DEFAULT, SCE_R_ESCAPESEQUENCE, SCE_R_IDENTIFIER,
+        SCE_R_INFIX, SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD,
         SCE_R_RAWSTRING, SCE_R_RAWSTRING2, SCE_R_STRING, SCE_R_STRING2, SCE_VHDL_IDENTIFIER,
         SCE_V_IDENTIFIER, SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER,
         SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT,
@@ -39633,6 +39740,245 @@ mod lang_theme_tests {
         }
     }
 
+    /// Registry uses Lexilla's `registry` lexer
+    /// (`LexRegistry.cxx`) — a state-machine lexer for Windows
+    /// Registry Editor export files (`.reg`). The strongest
+    /// ZERO-WORDLIST lexer in Phase 4.5:
+    /// `RegistryWordListDesc[]` at `LexRegistry.cxx:38-40` is
+    /// `{ 0 }` and `LexerRegistry::WordListSet` at `:191-193`
+    /// unconditionally returns -1, REJECTING any attempt to
+    /// install keywords. NOT included in
+    /// `wired_languages_have_complete_themes` because
+    /// `REGISTRY_THEME.keywords = &[]` violates the iteration's
+    /// `!keywords.is_empty()` floor — matches the `PROPS_THEME`
+    /// / `LATEX_THEME` precedents which are excluded for the
+    /// same reason. This dedicated test pins:
+    ///
+    ///   1. Deep-value identity (styles / italic / bold /
+    ///      keywords).
+    ///   2. 12-mapping shape (13 `SCE_REG_*` slots minus DEFAULT
+    ///      per framework convention).
+    ///   3. Empty-keywords invariant — LOAD-BEARING per the
+    ///      lexer's `-1` return from `WordListSet`.
+    ///   4. Cross-language non-reuse — 10 sibling non-reuse
+    ///      pins + explicit PROPS / LaTeX / TeX pins since all
+    ///      four are zero-wordlist and must remain
+    ///      structurally distinct.
+    ///   5. Style-routing pins for all 12 mapped constants —
+    ///      the specific slot each `SCE_REG_*` state resolves
+    ///      to.
+    ///   6. Explicit-omission pin — `SCE_REG_DEFAULT` (0)
+    ///      remains unmapped so free text on lines without
+    ///      `=` or `[` falls through to `STYLE_DEFAULT`.
+    ///   7. Italic on COMMENT only.
+    ///   8. Bold on ADDEDKEY only — primary structural anchor.
+    ///   9. Highest defined `SCE_REG_*` pin — `SCE_REG_OPERATOR`
+    ///      (12) is the top slot per `SciLexer.h:1855`. Drift
+    ///      detection.
+    ///   10. `L_REGISTRY` `LangEntry` has `lexer:
+    ///       Some("registry")` and includes the `.reg` extension.
+    ///   11. GUID-pair pin — `KEYPATH_GUID` and `STRING_GUID`
+    ///       both route to `Macro` for consistent GUID
+    ///       highlighting across keypath and string contexts.
+    ///   12. Directive-pair pin — `DELETEDKEY` and `PARAMETER`
+    ///       both route to `Preprocessor` for consistent
+    ///       out-of-band-marker highlighting.
+    #[test]
+    fn registry_uses_lexregistry_zero_class_theme() {
+        use super::{
+            SCE_REG_ADDEDKEY, SCE_REG_COMMENT, SCE_REG_DELETEDKEY, SCE_REG_ESCAPED,
+            SCE_REG_HEXDIGIT, SCE_REG_KEYPATH_GUID, SCE_REG_OPERATOR, SCE_REG_PARAMETER,
+            SCE_REG_STRING, SCE_REG_STRING_GUID, SCE_REG_VALUENAME, SCE_REG_VALUETYPE,
+        };
+        // `SCE_REG_DEFAULT` is already in scope from the tests
+        // module's outer `use codepp_scintilla_sys::{...}` block
+        // (same precedent as `SCE_REBOL_DEFAULT` / `SCE_REBOL_IDENTIFIER`
+        // in the REBOL test).
+        let reg = lang_theme(L_REGISTRY).expect("Registry wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(reg.styles, REGISTRY_STYLES);
+        assert_eq!(reg.italic, REGISTRY_ITALIC);
+        assert_eq!(reg.bold, REGISTRY_BOLD);
+        assert!(reg.keywords.is_empty());
+
+        // Invariant 2: 12 mappings (13 defined slots minus 1 unmapped).
+        assert_eq!(
+            reg.styles.len(),
+            12,
+            "REGISTRY_STYLES must map 12 indices (13 defined \
+             SCE_REG_* slots minus 1 unmapped: DEFAULT (0) — \
+             per framework convention)"
+        );
+
+        // Invariant 3: empty-keywords LOAD-BEARING.
+        // `LexerRegistry::WordListSet` at LexRegistry.cxx:191-193
+        // unconditionally returns -1, REJECTING any keyword
+        // install. Installing anything is silently dropped by
+        // Scintilla and violates the zero-wordlist contract.
+        assert!(
+            reg.keywords.is_empty(),
+            "REGISTRY_THEME.keywords must be empty — LexRegistry \
+             rejects all keyword installs (WordListSet returns -1 \
+             per LexRegistry.cxx:191-193)"
+        );
+
+        // Invariant 4: cross-language non-reuse pins. 10 sibling
+        // themes + explicit PROPS / LaTeX / TeX pins (all four
+        // are zero-wordlist and must remain structurally
+        // distinct — otherwise the compact zero-wordlist
+        // themes would collide as identical `&[(usize, StyleSlot)]`
+        // slices).
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let css = lang_theme(L_CSS).expect("CSS wired");
+        let rust = lang_theme(L_RUST).expect("Rust wired");
+        let rebol = lang_theme(L_REBOL).expect("REBOL wired");
+        let props = lang_theme(L_INI).expect("INI wired");
+        let latex = lang_theme(L_LATEX).expect("LaTeX wired");
+        let tex = lang_theme(L_TEX).expect("TeX wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (mk, "Makefile"),
+            (pas, "Pascal"),
+            (php, "PHP"),
+            (bat, "Batch"),
+            (sql, "SQL"),
+            (vb, "VB"),
+            (css, "CSS"),
+            (rust, "Rust"),
+            (rebol, "REBOL"),
+            (props, "INI"),
+            (latex, "LaTeX"),
+            (tex, "TeX"),
+        ] {
+            assert_ne!(
+                reg.styles, other.styles,
+                "Registry must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 5: style-routing pins for all 12 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_REG_COMMENT, StyleSlot::Comment, "COMMENT"),
+            (SCE_REG_VALUENAME, StyleSlot::String, "VALUENAME"),
+            (SCE_REG_STRING, StyleSlot::String, "STRING"),
+            (SCE_REG_HEXDIGIT, StyleSlot::Number, "HEXDIGIT"),
+            (SCE_REG_VALUETYPE, StyleSlot::Keyword2, "VALUETYPE"),
+            (SCE_REG_ADDEDKEY, StyleSlot::Keyword, "ADDEDKEY"),
+            (SCE_REG_DELETEDKEY, StyleSlot::Preprocessor, "DELETEDKEY"),
+            (SCE_REG_ESCAPED, StyleSlot::Lifetime, "ESCAPED"),
+            (SCE_REG_KEYPATH_GUID, StyleSlot::Macro, "KEYPATH_GUID"),
+            (SCE_REG_STRING_GUID, StyleSlot::Macro, "STRING_GUID"),
+            (SCE_REG_PARAMETER, StyleSlot::Preprocessor, "PARAMETER"),
+            (SCE_REG_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+        ] {
+            assert!(
+                reg.styles.contains(&(idx, slot)),
+                "SCE_REG_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 6: framework-unmapped slot confirmed absent.
+        // Slot number referenced via the named `SCE_REG_DEFAULT`
+        // constant so a Lexilla renumbering breaks this
+        // assertion rather than silently skipping the check.
+        assert_eq!(
+            SCE_REG_DEFAULT, 0,
+            "SCE_REG_DEFAULT has drifted from 0 — verify against SciLexer.h:1843"
+        );
+        assert!(
+            !reg.styles.iter().any(|(i, _)| *i == SCE_REG_DEFAULT),
+            "SCE_REG_DEFAULT (0) must remain unmapped — \
+             framework convention (free text on non-`=`/-`[` lines \
+             falls through to STYLE_DEFAULT)"
+        );
+
+        // Invariant 7: italic == 1 (COMMENT only).
+        assert_eq!(reg.italic.len(), 1);
+        assert!(
+            reg.italic.contains(&SCE_REG_COMMENT),
+            "REGISTRY_ITALIC must contain SCE_REG_COMMENT"
+        );
+
+        // Invariant 8: bold == 1 (ADDEDKEY only — primary
+        // structural anchor).
+        assert_eq!(reg.bold.len(), 1);
+        assert!(
+            reg.bold.contains(&SCE_REG_ADDEDKEY),
+            "REGISTRY_BOLD must contain SCE_REG_ADDEDKEY \
+             (primary structural anchor — `[HKEY_...\\path]` \
+             keypath declarations)"
+        );
+
+        // Invariant 9: highest defined SCE_REG_* pin.
+        assert_eq!(
+            SCE_REG_OPERATOR, 12,
+            "SCE_REG_OPERATOR has drifted from 12 — Lexilla may \
+             have renumbered slots. Verify against SciLexer.h:1855"
+        );
+        for (idx, _) in reg.styles {
+            assert!(
+                *idx <= SCE_REG_OPERATOR,
+                "REGISTRY_STYLES references slot {idx}, which is \
+                 higher than SCE_REG_OPERATOR ({SCE_REG_OPERATOR})"
+            );
+        }
+
+        // Invariant 10: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let reg_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_REGISTRY)
+            .expect("L_REGISTRY LangEntry present in LANG_TABLE");
+        assert_eq!(
+            reg_entry.lexer,
+            Some("registry"),
+            "L_REGISTRY LangEntry.lexer must be Some(\"registry\")"
+        );
+        assert!(
+            reg_entry.extensions.contains(&"reg"),
+            "L_REGISTRY extensions must contain `reg`"
+        );
+
+        // Invariant 11: GUID-pair pin. Both KEYPATH_GUID and
+        // STRING_GUID must route to Macro for consistent GUID
+        // highlighting across keypath and string contexts.
+        // Load-bearing — a mismatched routing would paint the
+        // same `{XXXXXXXX-...}` GUID differently depending on
+        // whether it appears inside `[...]` or `"..."`, which
+        // is visually confusing.
+        assert!(
+            reg.styles
+                .contains(&(SCE_REG_KEYPATH_GUID, StyleSlot::Macro))
+                && reg
+                    .styles
+                    .contains(&(SCE_REG_STRING_GUID, StyleSlot::Macro)),
+            "SCE_REG_KEYPATH_GUID and SCE_REG_STRING_GUID must \
+             both route to Macro for consistent GUID highlighting"
+        );
+
+        // Invariant 12: directive-pair pin. Both DELETEDKEY and
+        // PARAMETER must route to Preprocessor — both are
+        // out-of-band markers (`[-HKEY_...]` deletion directive
+        // and `%0`/`%1`/`%*` runtime-substitution markers). Same
+        // "directive" semantics warrant the same accent slot.
+        assert!(
+            reg.styles
+                .contains(&(SCE_REG_DELETEDKEY, StyleSlot::Preprocessor))
+                && reg
+                    .styles
+                    .contains(&(SCE_REG_PARAMETER, StyleSlot::Preprocessor)),
+            "SCE_REG_DELETEDKEY and SCE_REG_PARAMETER must both \
+             route to Preprocessor (both are out-of-band directives)"
+        );
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -39651,7 +39997,8 @@ mod lang_theme_tests {
     /// when the Nim row landed. `L_NNCRONTAB` was removed when the
     /// `NNCrontab` row landed. `L_OSCRIPT` was removed when the
     /// `OScript` row landed. `L_REBOL` was removed when the REBOL
-    /// row landed in this commit.
+    /// row landed. `L_REGISTRY` was removed when the Registry row
+    /// landed in this commit.
     #[test]
     fn unwired_languages_have_no_theme() {
         assert!(lang_theme(L_TEXT).is_none(), "Normal Text has no lexer");
