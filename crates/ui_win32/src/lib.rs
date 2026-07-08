@@ -126,17 +126,19 @@ use codepp_core::lang::{
     L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON,
     L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM,
     L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS,
-    L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE,
-    L_SQL, L_TCL, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML,
-    L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
-    MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
-    NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-    OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
-    OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
-    POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-    PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5,
-    RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+    L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
+    L_SPICE, L_SQL, L_TCL, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL,
+    L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+    MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
+    NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+    OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
+    OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RAKU_ADVERBS, RAKU_FUNCTIONS,
+    RAKU_KEYWORDS, RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION,
+    RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS,
+    RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
     SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2,
     SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
     TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
@@ -291,50 +293,56 @@ use codepp_scintilla_sys::{
     SCE_P_CLASSNAME, SCE_P_COMMENTBLOCK, SCE_P_COMMENTLINE, SCE_P_DECORATOR, SCE_P_DEFNAME,
     SCE_P_FCHARACTER, SCE_P_FSTRING, SCE_P_FTRIPLE, SCE_P_FTRIPLEDOUBLE, SCE_P_NUMBER,
     SCE_P_OPERATOR, SCE_P_STRING, SCE_P_TRIPLE, SCE_P_TRIPLEDOUBLE, SCE_P_WORD, SCE_P_WORD2,
-    SCE_RB_BACKTICKS, SCE_RB_CHARACTER, SCE_RB_CLASSNAME, SCE_RB_CLASS_VAR, SCE_RB_COMMENTLINE,
-    SCE_RB_DATASECTION, SCE_RB_DEFNAME, SCE_RB_GLOBAL, SCE_RB_HERE_DELIM, SCE_RB_HERE_Q,
-    SCE_RB_HERE_QQ, SCE_RB_HERE_QX, SCE_RB_INSTANCE_VAR, SCE_RB_MODULE_NAME, SCE_RB_NUMBER,
-    SCE_RB_OPERATOR, SCE_RB_POD, SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN, SCE_RB_STDOUT,
-    SCE_RB_STRING, SCE_RB_STRING_I, SCE_RB_STRING_Q, SCE_RB_STRING_QI, SCE_RB_STRING_QQ,
-    SCE_RB_STRING_QR, SCE_RB_STRING_QS, SCE_RB_STRING_QW, SCE_RB_STRING_QX, SCE_RB_STRING_W,
-    SCE_RB_SYMBOL, SCE_RB_WORD, SCE_RB_WORD_DEMOTED, SCE_REBOL_BINARY, SCE_REBOL_BRACEDSTRING,
-    SCE_REBOL_CHARACTER, SCE_REBOL_COMMENTBLOCK, SCE_REBOL_COMMENTLINE, SCE_REBOL_DATE,
-    SCE_REBOL_EMAIL, SCE_REBOL_FILE, SCE_REBOL_ISSUE, SCE_REBOL_MONEY, SCE_REBOL_NUMBER,
-    SCE_REBOL_OPERATOR, SCE_REBOL_PAIR, SCE_REBOL_PREFACE, SCE_REBOL_QUOTEDSTRING, SCE_REBOL_TAG,
-    SCE_REBOL_TIME, SCE_REBOL_TUPLE, SCE_REBOL_URL, SCE_REBOL_WORD, SCE_REBOL_WORD2,
-    SCE_REBOL_WORD3, SCE_REBOL_WORD4, SCE_REBOL_WORD5, SCE_REBOL_WORD6, SCE_REBOL_WORD7,
-    SCE_REBOL_WORD8, SCE_REG_ADDEDKEY, SCE_REG_COMMENT, SCE_REG_DELETEDKEY, SCE_REG_ESCAPED,
-    SCE_REG_HEXDIGIT, SCE_REG_KEYPATH_GUID, SCE_REG_OPERATOR, SCE_REG_PARAMETER, SCE_REG_STRING,
-    SCE_REG_STRING_GUID, SCE_REG_VALUENAME, SCE_REG_VALUETYPE, SCE_RUST_CHARACTER,
-    SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC, SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC,
-    SCE_RUST_LIFETIME, SCE_RUST_MACRO, SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING,
-    SCE_RUST_WORD, SCE_RUST_WORD2, SCE_R_BACKTICKS, SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_INFIX,
-    SCE_R_INFIXEOL, SCE_R_KWORD, SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD, SCE_R_RAWSTRING,
-    SCE_R_RAWSTRING2, SCE_R_STRING, SCE_R_STRING2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER,
-    SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM, SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR,
-    SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING, SCE_SH_WORD, SCE_SPICE_COMMENTLINE,
-    SCE_SPICE_DELIMITER, SCE_SPICE_KEYWORD, SCE_SPICE_KEYWORD2, SCE_SPICE_KEYWORD3,
-    SCE_SPICE_NUMBER, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC,
-    SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER,
-    SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT,
-    SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCE_ST_ASSIGN, SCE_ST_BINARY, SCE_ST_BOOL,
-    SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL, SCE_ST_KWSEND, SCE_ST_NIL, SCE_ST_NUMBER,
-    SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL, SCE_ST_SPEC_SEL, SCE_ST_STRING, SCE_ST_SUPER,
-    SCE_ST_SYMBOL, SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE,
-    SCE_TCL_COMMENT_BOX, SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER, SCE_TCL_NUMBER,
-    SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD, SCE_TCL_WORD2,
-    SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7, SCE_TCL_WORD8,
-    SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL,
-    SCE_TEX_SYMBOL, SCE_TXT2TAGS_BLOCKQUOTE, SCE_TXT2TAGS_CODE, SCE_TXT2TAGS_CODE2,
-    SCE_TXT2TAGS_CODEBK, SCE_TXT2TAGS_COMMENT, SCE_TXT2TAGS_EM1, SCE_TXT2TAGS_EM2,
-    SCE_TXT2TAGS_HEADER1, SCE_TXT2TAGS_HEADER2, SCE_TXT2TAGS_HEADER3, SCE_TXT2TAGS_HEADER4,
-    SCE_TXT2TAGS_HEADER5, SCE_TXT2TAGS_HEADER6, SCE_TXT2TAGS_HRULE, SCE_TXT2TAGS_LINK,
-    SCE_TXT2TAGS_OLIST_ITEM, SCE_TXT2TAGS_OPTION, SCE_TXT2TAGS_POSTPROC, SCE_TXT2TAGS_PREPROC,
-    SCE_TXT2TAGS_STRIKEOUT, SCE_TXT2TAGS_STRONG1, SCE_TXT2TAGS_ULIST_ITEM, SCE_VHDL_ATTRIBUTE,
-    SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT, SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD,
-    SCE_VHDL_NUMBER, SCE_VHDL_OPERATOR, SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR,
-    SCE_VHDL_STDPACKAGE, SCE_VHDL_STDTYPE, SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD,
-    SCE_VISUALPROLOG_ANONYMOUS, SCE_VISUALPROLOG_COMMENT_BLOCK, SCE_VISUALPROLOG_COMMENT_KEY,
+    SCE_RAKU_ADVERB, SCE_RAKU_ASSOCIATIVE, SCE_RAKU_CALLABLE, SCE_RAKU_CHARACTER, SCE_RAKU_CLASS,
+    SCE_RAKU_COMMENTEMBED, SCE_RAKU_COMMENTLINE, SCE_RAKU_FUNCTION, SCE_RAKU_GRAMMAR,
+    SCE_RAKU_HEREDOC_Q, SCE_RAKU_HEREDOC_QQ, SCE_RAKU_MU, SCE_RAKU_NUMBER, SCE_RAKU_OPERATOR,
+    SCE_RAKU_POD, SCE_RAKU_POSITIONAL, SCE_RAKU_PREPROCESSOR, SCE_RAKU_REGEX, SCE_RAKU_REGEX_VAR,
+    SCE_RAKU_STRING, SCE_RAKU_STRING_Q, SCE_RAKU_STRING_QQ, SCE_RAKU_STRING_Q_LANG,
+    SCE_RAKU_STRING_VAR, SCE_RAKU_TYPEDEF, SCE_RAKU_WORD, SCE_RB_BACKTICKS, SCE_RB_CHARACTER,
+    SCE_RB_CLASSNAME, SCE_RB_CLASS_VAR, SCE_RB_COMMENTLINE, SCE_RB_DATASECTION, SCE_RB_DEFNAME,
+    SCE_RB_GLOBAL, SCE_RB_HERE_DELIM, SCE_RB_HERE_Q, SCE_RB_HERE_QQ, SCE_RB_HERE_QX,
+    SCE_RB_INSTANCE_VAR, SCE_RB_MODULE_NAME, SCE_RB_NUMBER, SCE_RB_OPERATOR, SCE_RB_POD,
+    SCE_RB_REGEX, SCE_RB_STDERR, SCE_RB_STDIN, SCE_RB_STDOUT, SCE_RB_STRING, SCE_RB_STRING_I,
+    SCE_RB_STRING_Q, SCE_RB_STRING_QI, SCE_RB_STRING_QQ, SCE_RB_STRING_QR, SCE_RB_STRING_QS,
+    SCE_RB_STRING_QW, SCE_RB_STRING_QX, SCE_RB_STRING_W, SCE_RB_SYMBOL, SCE_RB_WORD,
+    SCE_RB_WORD_DEMOTED, SCE_REBOL_BINARY, SCE_REBOL_BRACEDSTRING, SCE_REBOL_CHARACTER,
+    SCE_REBOL_COMMENTBLOCK, SCE_REBOL_COMMENTLINE, SCE_REBOL_DATE, SCE_REBOL_EMAIL, SCE_REBOL_FILE,
+    SCE_REBOL_ISSUE, SCE_REBOL_MONEY, SCE_REBOL_NUMBER, SCE_REBOL_OPERATOR, SCE_REBOL_PAIR,
+    SCE_REBOL_PREFACE, SCE_REBOL_QUOTEDSTRING, SCE_REBOL_TAG, SCE_REBOL_TIME, SCE_REBOL_TUPLE,
+    SCE_REBOL_URL, SCE_REBOL_WORD, SCE_REBOL_WORD2, SCE_REBOL_WORD3, SCE_REBOL_WORD4,
+    SCE_REBOL_WORD5, SCE_REBOL_WORD6, SCE_REBOL_WORD7, SCE_REBOL_WORD8, SCE_REG_ADDEDKEY,
+    SCE_REG_COMMENT, SCE_REG_DELETEDKEY, SCE_REG_ESCAPED, SCE_REG_HEXDIGIT, SCE_REG_KEYPATH_GUID,
+    SCE_REG_OPERATOR, SCE_REG_PARAMETER, SCE_REG_STRING, SCE_REG_STRING_GUID, SCE_REG_VALUENAME,
+    SCE_REG_VALUETYPE, SCE_RUST_CHARACTER, SCE_RUST_COMMENTBLOCK, SCE_RUST_COMMENTBLOCKDOC,
+    SCE_RUST_COMMENTLINE, SCE_RUST_COMMENTLINEDOC, SCE_RUST_LIFETIME, SCE_RUST_MACRO,
+    SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2,
+    SCE_R_BACKTICKS, SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_INFIX, SCE_R_INFIXEOL, SCE_R_KWORD,
+    SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD, SCE_R_RAWSTRING, SCE_R_RAWSTRING2,
+    SCE_R_STRING, SCE_R_STRING2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE,
+    SCE_SH_HERE_DELIM, SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR,
+    SCE_SH_STRING, SCE_SH_WORD, SCE_SPICE_COMMENTLINE, SCE_SPICE_DELIMITER, SCE_SPICE_KEYWORD,
+    SCE_SPICE_KEYWORD2, SCE_SPICE_KEYWORD3, SCE_SPICE_NUMBER, SCE_SQL_CHARACTER, SCE_SQL_COMMENT,
+    SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC,
+    SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT,
+    SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCE_ST_ASSIGN,
+    SCE_ST_BINARY, SCE_ST_BOOL, SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL, SCE_ST_KWSEND,
+    SCE_ST_NIL, SCE_ST_NUMBER, SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL, SCE_ST_SPEC_SEL,
+    SCE_ST_STRING, SCE_ST_SUPER, SCE_ST_SYMBOL, SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT,
+    SCE_TCL_COMMENTLINE, SCE_TCL_COMMENT_BOX, SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER,
+    SCE_TCL_NUMBER, SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD,
+    SCE_TCL_WORD2, SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7,
+    SCE_TCL_WORD8, SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP,
+    SCE_TEX_SPECIAL, SCE_TEX_SYMBOL, SCE_TXT2TAGS_BLOCKQUOTE, SCE_TXT2TAGS_CODE,
+    SCE_TXT2TAGS_CODE2, SCE_TXT2TAGS_CODEBK, SCE_TXT2TAGS_COMMENT, SCE_TXT2TAGS_EM1,
+    SCE_TXT2TAGS_EM2, SCE_TXT2TAGS_HEADER1, SCE_TXT2TAGS_HEADER2, SCE_TXT2TAGS_HEADER3,
+    SCE_TXT2TAGS_HEADER4, SCE_TXT2TAGS_HEADER5, SCE_TXT2TAGS_HEADER6, SCE_TXT2TAGS_HRULE,
+    SCE_TXT2TAGS_LINK, SCE_TXT2TAGS_OLIST_ITEM, SCE_TXT2TAGS_OPTION, SCE_TXT2TAGS_POSTPROC,
+    SCE_TXT2TAGS_PREPROC, SCE_TXT2TAGS_STRIKEOUT, SCE_TXT2TAGS_STRONG1, SCE_TXT2TAGS_ULIST_ITEM,
+    SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT, SCE_VHDL_COMMENTLINEBANG,
+    SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER, SCE_VHDL_OPERATOR, SCE_VHDL_STDFUNCTION,
+    SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE, SCE_VHDL_STDTYPE, SCE_VHDL_STRING,
+    SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCE_VISUALPROLOG_ANONYMOUS,
+    SCE_VISUALPROLOG_COMMENT_BLOCK, SCE_VISUALPROLOG_COMMENT_KEY,
     SCE_VISUALPROLOG_COMMENT_KEY_ERROR, SCE_VISUALPROLOG_COMMENT_LINE, SCE_VISUALPROLOG_EMBEDDED,
     SCE_VISUALPROLOG_KEY_DIRECTIVE, SCE_VISUALPROLOG_KEY_MAJOR, SCE_VISUALPROLOG_KEY_MINOR,
     SCE_VISUALPROLOG_NUMBER, SCE_VISUALPROLOG_OPERATOR, SCE_VISUALPROLOG_PLACEHOLDER,
@@ -4024,6 +4032,129 @@ const HOLLYWOOD_THEME: LangTheme = LangTheme {
     styles: HOLLYWOOD_STYLES,
     italic: HOLLYWOOD_ITALIC,
     bold: HOLLYWOOD_BOLD,
+};
+
+// --- LexRaku ---
+// LexRaku serves Raku (the current name of what was previously
+// called "Perl 6"). `L_RAKU` (id 89) is the only language row
+// using this lexer. Dispatches `SCLEX_RAKU` (= 131) via a
+// **seven-class** wordlist descriptor at `LexRaku.cxx:106-115`.
+// Extensions `.raku` / `.rakumod`. See the SCE_RAKU_* banner in
+// `crates/scintilla-sys/src/lib.rs` for the state machine, the
+// first-match-wins classifier order across classes 0-5, and the
+// class-6 `:`-gated adverb classification.
+//
+// **26 style mappings** covering 29 defined SCE_RAKU_* states
+// (0..=28). `SCE_RAKU_DEFAULT` (0) and `SCE_RAKU_IDENTIFIER` (21)
+// are intentionally unmapped per the universal framework
+// convention (bare identifiers paint at STYLE_DEFAULT).
+// `SCE_RAKU_ERROR` (1) is unmapped per the deferred-`StyleSlot::Error`
+// migration convention (same discipline as Visual Prolog's
+// STRING_ESCAPE_ERROR unmapping). Note that two of the 26 mapped
+// slots (`SCE_RAKU_CHARACTER` and `SCE_RAKU_PREPROCESSOR`) are
+// upstream **reserved-but-unemitted** states — see the SCE_RAKU_*
+// banner in `crates/scintilla-sys/src/lib.rs` for why they get
+// defined paints anyway (future-proofing for upstream changes).
+//
+//   - `COMMENTLINE` (2) + `COMMENTEMBED` (3) + `POD` (4) →
+//     Comment. Three comment flavours collapse — `#`-line
+//     comments, `#|`/`#=` declarator-doc embed comments, and
+//     `=begin pod`/`=end pod` block-doc POD. All italic per
+//     `RAKU_ITALIC`.
+//   - `CHARACTER` (5) + `HEREDOC_Q` (6) + `HEREDOC_QQ` (7) +
+//     `STRING` (8) + `STRING_Q` (9) + `STRING_QQ` (10) +
+//     `STRING_Q_LANG` (11) + `STRING_VAR` (12) → String.
+//     **Eight string-family states collapse to one paint** —
+//     the richest string-flavour collapse in Phase 4.5. See
+//     the SCE_RAKU_* banner for what each state represents;
+//     visually they render identically as string-content
+//     paint.
+//   - `REGEX` (13) + `REGEX_VAR` (14) → String. Regex bodies
+//     paint as string (Bash / Perl / VHDL convention for
+//     regex-family styling).
+//   - `ADVERB` (15) → Keyword2. `:sym` / `:qq` / `:to` /
+//     `:heredoc` — modifier tokens with structural role but
+//     no bold weight (bold is reserved for language flow-
+//     control keywords).
+//   - `NUMBER` (16) → Number.
+//   - `PREPROCESSOR` (17) → Preprocessor bold. `use v6.d` /
+//     `use MONKEY-TYPING` / `use nqp` pragma directives.
+//   - `OPERATOR` (18) → Operator.
+//   - `WORD` (19) → Keyword bold — class-0 wordlist hit
+//     (Raku language keywords + phasers).
+//   - `FUNCTION` (20) → Keyword2 — class-1 wordlist hit
+//     (Raku built-in functions).
+//   - `TYPEDEF` (22) → Keyword2 — classes 2/3/4/5 wordlist
+//     hits collapse into ONE style slot (see the SCE_RAKU_*
+//     banner — LexRaku upstream keeps four separate wordlists
+//     as source data but paints them identically).
+//   - `MU` (23) + `POSITIONAL` (24) + `ASSOCIATIVE` (25) +
+//     `CALLABLE` (26) → Lifetime. **Four sigil-tagged variable
+//     states** all route to the framework's sigil-anchor slot —
+//     `$foo` scalar (MU) / `@foo` positional / `%foo`
+//     associative / `&foo` callable. Matches Bash SCALAR /
+//     PARAM / Lisp SYMBOL / Perl SCALAR / GDScript NODEPATH
+//     precedent for `$`/`&`/`%`/`@` sigil-prefixed structural
+//     anchors.
+//   - `GRAMMAR` (27) + `CLASS` (28) → Keyword2. Position-
+//     derived declaration slots — identifier following the
+//     `grammar` or `class` keyword. Matches Python's
+//     `SCE_P_CLASSNAME` / GDScript's `SCE_GD_CLASSNAME`
+//     precedent (declaration-site identifier gets the type-
+//     slot colour).
+//
+// Italic on the three comment states (`COMMENTLINE` +
+// `COMMENTEMBED` + `POD`) matches the universal framework
+// convention. Bold on `WORD` (primary reserved-word class) +
+// `PREPROCESSOR` (`use`-pragma structural anchor) matches
+// Python's `SCE_P_WORD` + `SCE_P_DECORATOR` bold pair — same
+// discipline as GDScript's (KEYWORD + ANNOTATION) and
+// Hollywood's (KEYWORD + PREPROCESSOR).
+const RAKU_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_RAKU_COMMENTLINE, StyleSlot::Comment),
+    (SCE_RAKU_COMMENTEMBED, StyleSlot::Comment),
+    (SCE_RAKU_POD, StyleSlot::Comment),
+    (SCE_RAKU_CHARACTER, StyleSlot::String),
+    (SCE_RAKU_HEREDOC_Q, StyleSlot::String),
+    (SCE_RAKU_HEREDOC_QQ, StyleSlot::String),
+    (SCE_RAKU_STRING, StyleSlot::String),
+    (SCE_RAKU_STRING_Q, StyleSlot::String),
+    (SCE_RAKU_STRING_QQ, StyleSlot::String),
+    (SCE_RAKU_STRING_Q_LANG, StyleSlot::String),
+    (SCE_RAKU_STRING_VAR, StyleSlot::String),
+    (SCE_RAKU_REGEX, StyleSlot::String),
+    (SCE_RAKU_REGEX_VAR, StyleSlot::String),
+    (SCE_RAKU_ADVERB, StyleSlot::Keyword2),
+    (SCE_RAKU_NUMBER, StyleSlot::Number),
+    (SCE_RAKU_PREPROCESSOR, StyleSlot::Preprocessor),
+    (SCE_RAKU_OPERATOR, StyleSlot::Operator),
+    (SCE_RAKU_WORD, StyleSlot::Keyword),
+    (SCE_RAKU_FUNCTION, StyleSlot::Keyword2),
+    (SCE_RAKU_TYPEDEF, StyleSlot::Keyword2),
+    (SCE_RAKU_MU, StyleSlot::Lifetime),
+    (SCE_RAKU_POSITIONAL, StyleSlot::Lifetime),
+    (SCE_RAKU_ASSOCIATIVE, StyleSlot::Lifetime),
+    (SCE_RAKU_CALLABLE, StyleSlot::Lifetime),
+    (SCE_RAKU_GRAMMAR, StyleSlot::Keyword2),
+    (SCE_RAKU_CLASS, StyleSlot::Keyword2),
+];
+
+const RAKU_ITALIC: &[usize] = &[SCE_RAKU_COMMENTLINE, SCE_RAKU_COMMENTEMBED, SCE_RAKU_POD];
+const RAKU_BOLD: &[usize] = &[SCE_RAKU_WORD, SCE_RAKU_PREPROCESSOR];
+
+const RAKU_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, RAKU_KEYWORDS),
+        (1, RAKU_FUNCTIONS),
+        (2, RAKU_TYPES_BASIC),
+        (3, RAKU_TYPES_COMPOSITE),
+        (4, RAKU_TYPES_DOMAIN),
+        (5, RAKU_TYPES_EXCEPTION),
+        (6, RAKU_ADVERBS),
+    ],
+    styles: RAKU_STYLES,
+    italic: RAKU_ITALIC,
+    bold: RAKU_BOLD,
 };
 
 // --- LexCsound ---
@@ -10398,6 +10529,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&GDSCRIPT_THEME)
     } else if lang == L_HOLLYWOOD {
         Some(&HOLLYWOOD_THEME)
+    } else if lang == L_RAKU {
+        Some(&RAKU_THEME)
     } else if lang == L_CSOUND {
         Some(&CSOUND_THEME)
     } else if lang == L_ERLANG {
@@ -25585,11 +25718,12 @@ mod lang_theme_tests {
         GDSCRIPT_BOLD, GDSCRIPT_ITALIC, GDSCRIPT_STYLES, HOLLYWOOD_BOLD, HOLLYWOOD_ITALIC,
         HOLLYWOOD_STYLES, MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC,
         NIM_STYLES, NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD,
-        OSCRIPT_ITALIC, OSCRIPT_STYLES, REBOL_BOLD, REBOL_ITALIC, REBOL_STYLES, REGISTRY_BOLD,
-        REGISTRY_ITALIC, REGISTRY_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
-        SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER,
-        SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
-        SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        OSCRIPT_ITALIC, OSCRIPT_STYLES, RAKU_BOLD, RAKU_ITALIC, RAKU_STYLES, REBOL_BOLD,
+        REBOL_ITALIC, REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC, REGISTRY_STYLES,
+        SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER,
+        SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL,
+        SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
+        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
         SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
         SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
         SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION,
@@ -25669,26 +25803,28 @@ mod lang_theme_tests {
         L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL,
         L_HOLLYWOOD, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX,
         L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC,
-        L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC,
-        L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX,
-        L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML,
-        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+        L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RAKU,
+        L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL,
+        L_TEX, L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML,
+        L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
         MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
         NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
         OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
         OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
         POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
         POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
-        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3,
-        REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
-        R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-        SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3,
-        SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
-        TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS,
-        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
-        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
-        VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS,
-        VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RAKU_ADVERBS, RAKU_FUNCTIONS, RAKU_KEYWORDS,
+        RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION,
+        RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS,
+        RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+        SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2,
+        SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+        TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
+        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
+        VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
+        XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -25756,7 +25892,14 @@ mod lang_theme_tests {
         SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
         SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER, SCE_POWERSHELL_KEYWORD,
         SCE_POWERSHELL_NUMBER, SCE_POWERSHELL_OPERATOR, SCE_POWERSHELL_STRING,
-        SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_REBOL_BINARY, SCE_REBOL_BRACEDSTRING,
+        SCE_POWERSHELL_USER1, SCE_POWERSHELL_VARIABLE, SCE_RAKU_ADVERB, SCE_RAKU_ASSOCIATIVE,
+        SCE_RAKU_CALLABLE, SCE_RAKU_CHARACTER, SCE_RAKU_CLASS, SCE_RAKU_COMMENTEMBED,
+        SCE_RAKU_COMMENTLINE, SCE_RAKU_DEFAULT, SCE_RAKU_ERROR, SCE_RAKU_FUNCTION,
+        SCE_RAKU_GRAMMAR, SCE_RAKU_HEREDOC_Q, SCE_RAKU_HEREDOC_QQ, SCE_RAKU_IDENTIFIER,
+        SCE_RAKU_MU, SCE_RAKU_NUMBER, SCE_RAKU_OPERATOR, SCE_RAKU_POD, SCE_RAKU_POSITIONAL,
+        SCE_RAKU_PREPROCESSOR, SCE_RAKU_REGEX, SCE_RAKU_REGEX_VAR, SCE_RAKU_STRING,
+        SCE_RAKU_STRING_Q, SCE_RAKU_STRING_QQ, SCE_RAKU_STRING_Q_LANG, SCE_RAKU_STRING_VAR,
+        SCE_RAKU_TYPEDEF, SCE_RAKU_WORD, SCE_REBOL_BINARY, SCE_REBOL_BRACEDSTRING,
         SCE_REBOL_CHARACTER, SCE_REBOL_COMMENTBLOCK, SCE_REBOL_COMMENTLINE, SCE_REBOL_DATE,
         SCE_REBOL_DEFAULT, SCE_REBOL_EMAIL, SCE_REBOL_FILE, SCE_REBOL_IDENTIFIER, SCE_REBOL_ISSUE,
         SCE_REBOL_MONEY, SCE_REBOL_NUMBER, SCE_REBOL_OPERATOR, SCE_REBOL_PAIR, SCE_REBOL_PREFACE,
@@ -25818,6 +25961,7 @@ mod lang_theme_tests {
             (L_NIM, "Nim"),
             (L_NNCRONTAB, "NNCrontab"),
             (L_OSCRIPT, "OScript"),
+            (L_RAKU, "Raku"),
             (L_REBOL, "REBOL"),
             (L_TYPESCRIPT, "TypeScript"),
             (L_VISUALPROLOG, "Visual Prolog"),
@@ -37380,6 +37524,362 @@ mod lang_theme_tests {
                 "HOLLYWOOD_STDAPI must NOT include fabricated/misnamed \
                  function `{absent}` — verified absent from Hollywood \
                  11.0 manual"
+            );
+        }
+    }
+
+    /// Raku uses Lexilla's `raku` lexer (`LexRaku.cxx`) — the
+    /// current name of what was previously called "Perl 6". A
+    /// gradually-typed, object-oriented / functional /
+    /// declarative language with rich lexical syntax: sigils
+    /// (`$`/`@`/`%`/`&`), phasers (`BEGIN`/`END`/`ENTER`/`LEAVE`),
+    /// the Q language (`q`/`qq`/`Q`/`qw`/`qww` — with adverbs),
+    /// heredocs, POD documentation blocks, regexes with `:i`/`:g`
+    /// adverbs, grammars (Raku's built-in PEG parser DSL). See
+    /// the `SCE_RAKU_*` banner in `crates/scintilla-sys/src/lib.rs`
+    /// for the state machine, seven-wordlist classifier order,
+    /// first-match-wins semantics across classes 0-5, and
+    /// class-6 `:`-gated adverb classification.
+    ///
+    /// Invariants (14):
+    ///   1. **Deep-value identity pin** — `RAKU_THEME`'s
+    ///      individual fields (`keywords` / `styles` / `italic` /
+    ///      `bold`) must value-equal what the dispatcher returns.
+    ///   2. **26 style mappings** (29 total `SCE_RAKU_*` states
+    ///      0..=28 minus DEFAULT (0) + ERROR (1) + IDENTIFIER
+    ///      (21), all three unmapped per framework convention
+    ///      + deferred `StyleSlot::Error` migration).
+    ///   3. **Seven-class wordlist descriptor** — Code++
+    ///      installs all 7 classes matching `rakuWordLists[]` at
+    ///      `LexRaku.cxx:106-115` ("Keywords and identifiers" /
+    ///      "Functions" / "Types basic" / "Types composite" /
+    ///      "Types domain-specific" / "Types exception" /
+    ///      "Adverbs"). Framework consequence: `keywords.len() == 7`.
+    ///   4. **Canonical class-N wordlist links** for each of the
+    ///      seven classes.
+    ///   5. **Style-routing pins** for all 26 mapped constants —
+    ///      each `(SCE_RAKU_*, StyleSlot::*)` entry present exactly.
+    ///   6. **DEFAULT + ERROR + IDENTIFIER unmapped** — pinned
+    ///      absent via drift-check.
+    ///   7. **Comment-family collapse** — COMMENTLINE +
+    ///      COMMENTEMBED + POD all → `Comment`, with all three
+    ///      italic per `RAKU_ITALIC`.
+    ///   8. **Eight-flavour string-family collapse** — CHARACTER,
+    ///      `HEREDOC_Q`, `HEREDOC_QQ`, STRING, `STRING_Q`,
+    ///      `STRING_QQ`, `STRING_Q_LANG`, `STRING_VAR` all →
+    ///      `String`. Richest string collapse in Phase 4.5;
+    ///      matches TypeScript's five-flavour collapse
+    ///      discipline extended for the Q language.
+    ///   9. **Regex-family collapse** — REGEX, `REGEX_VAR` both
+    ///      → `String` (matches Perl/Bash regex-family convention).
+    ///   10. **Sigil-family four-way collapse** — MU
+    ///       (`$scalar`) + POSITIONAL (`@array`) + ASSOCIATIVE
+    ///       (`%hash`) + CALLABLE (`&code`) all → `Lifetime`
+    ///       (Bash `SCALAR` / Lisp `SYMBOL` / Perl `SCALAR` /
+    ///       `GDScript` `NODEPATH` structural-sigil precedent).
+    ///   11. **Declaration-slot collapse** — GRAMMAR + CLASS
+    ///       both → `Keyword2` (position-derived identifiers
+    ///       after `grammar` / `class` keywords; matches Python
+    ///       `SCE_P_CLASSNAME` precedent).
+    ///   12. **Type-family collapse** — TYPEDEF is the SINGLE
+    ///       style routed to for classes 2-5 wordlist hits
+    ///       (`LexRaku` upstream collapses all four TYPEDEF-slot
+    ///       wordlists to the same paint at
+    ///       `LexRaku.cxx:1373-1380`).
+    ///   13. **Italic set == 3** (COMMENTLINE + COMMENTEMBED +
+    ///       POD) and **bold set == 2** (WORD + PREPROCESSOR).
+    ///   14. **Anchor sanity check** — spot-check that each of
+    ///       the seven wordlists contains a canonical
+    ///       representative (e.g. `if` in KEYWORDS, `abs` in
+    ///       FUNCTIONS, `Int` in `TYPES_BASIC`, `Array` in
+    ///       `TYPES_COMPOSITE`, `IO::Handle` in `TYPES_DOMAIN`,
+    ///       `X::AdHoc` in `TYPES_EXCEPTION`, `sym` in ADVERBS).
+    #[test]
+    fn raku_uses_lexraku_seven_class_theme() {
+        let raku = lang_theme(L_RAKU).expect("Raku wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(raku.styles, RAKU_STYLES);
+        assert_eq!(raku.italic, RAKU_ITALIC);
+        assert_eq!(raku.bold, RAKU_BOLD);
+
+        // Invariant 2: 26 style mappings.
+        assert_eq!(
+            raku.styles.len(),
+            26,
+            "RAKU_STYLES must map 26 indices (29 SCE_RAKU_* states \
+             0..=28 minus DEFAULT (0) + ERROR (1) + IDENTIFIER (21), \
+             all three unmapped per framework convention)"
+        );
+
+        // Invariants 3 + 4: seven-class descriptor with canonical
+        // wordlist links.
+        assert_eq!(
+            raku.keywords.len(),
+            7,
+            "RAKU_THEME must install exactly 7 wordlist classes \
+             (matches rakuWordLists[] at LexRaku.cxx:106-115)"
+        );
+        for (i, (expected_class, expected_list, name)) in [
+            (0u32, RAKU_KEYWORDS, "RAKU_KEYWORDS"),
+            (1, RAKU_FUNCTIONS, "RAKU_FUNCTIONS"),
+            (2, RAKU_TYPES_BASIC, "RAKU_TYPES_BASIC"),
+            (3, RAKU_TYPES_COMPOSITE, "RAKU_TYPES_COMPOSITE"),
+            (4, RAKU_TYPES_DOMAIN, "RAKU_TYPES_DOMAIN"),
+            (5, RAKU_TYPES_EXCEPTION, "RAKU_TYPES_EXCEPTION"),
+            (6, RAKU_ADVERBS, "RAKU_ADVERBS"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                raku.keywords[i].0, *expected_class,
+                "class {i} slot must be {expected_class} for {name}"
+            );
+            assert_eq!(
+                raku.keywords[i].1, *expected_list,
+                "class {i} content must be {name}"
+            );
+        }
+
+        // Invariant 5: every mapped constant present exactly.
+        for (sce, slot, name) in [
+            (
+                SCE_RAKU_COMMENTLINE,
+                StyleSlot::Comment,
+                "SCE_RAKU_COMMENTLINE",
+            ),
+            (
+                SCE_RAKU_COMMENTEMBED,
+                StyleSlot::Comment,
+                "SCE_RAKU_COMMENTEMBED",
+            ),
+            (SCE_RAKU_POD, StyleSlot::Comment, "SCE_RAKU_POD"),
+            (SCE_RAKU_CHARACTER, StyleSlot::String, "SCE_RAKU_CHARACTER"),
+            (SCE_RAKU_HEREDOC_Q, StyleSlot::String, "SCE_RAKU_HEREDOC_Q"),
+            (
+                SCE_RAKU_HEREDOC_QQ,
+                StyleSlot::String,
+                "SCE_RAKU_HEREDOC_QQ",
+            ),
+            (SCE_RAKU_STRING, StyleSlot::String, "SCE_RAKU_STRING"),
+            (SCE_RAKU_STRING_Q, StyleSlot::String, "SCE_RAKU_STRING_Q"),
+            (SCE_RAKU_STRING_QQ, StyleSlot::String, "SCE_RAKU_STRING_QQ"),
+            (
+                SCE_RAKU_STRING_Q_LANG,
+                StyleSlot::String,
+                "SCE_RAKU_STRING_Q_LANG",
+            ),
+            (
+                SCE_RAKU_STRING_VAR,
+                StyleSlot::String,
+                "SCE_RAKU_STRING_VAR",
+            ),
+            (SCE_RAKU_REGEX, StyleSlot::String, "SCE_RAKU_REGEX"),
+            (SCE_RAKU_REGEX_VAR, StyleSlot::String, "SCE_RAKU_REGEX_VAR"),
+            (SCE_RAKU_ADVERB, StyleSlot::Keyword2, "SCE_RAKU_ADVERB"),
+            (SCE_RAKU_NUMBER, StyleSlot::Number, "SCE_RAKU_NUMBER"),
+            (
+                SCE_RAKU_PREPROCESSOR,
+                StyleSlot::Preprocessor,
+                "SCE_RAKU_PREPROCESSOR",
+            ),
+            (SCE_RAKU_OPERATOR, StyleSlot::Operator, "SCE_RAKU_OPERATOR"),
+            (SCE_RAKU_WORD, StyleSlot::Keyword, "SCE_RAKU_WORD"),
+            (SCE_RAKU_FUNCTION, StyleSlot::Keyword2, "SCE_RAKU_FUNCTION"),
+            (SCE_RAKU_TYPEDEF, StyleSlot::Keyword2, "SCE_RAKU_TYPEDEF"),
+            (SCE_RAKU_MU, StyleSlot::Lifetime, "SCE_RAKU_MU"),
+            (
+                SCE_RAKU_POSITIONAL,
+                StyleSlot::Lifetime,
+                "SCE_RAKU_POSITIONAL",
+            ),
+            (
+                SCE_RAKU_ASSOCIATIVE,
+                StyleSlot::Lifetime,
+                "SCE_RAKU_ASSOCIATIVE",
+            ),
+            (SCE_RAKU_CALLABLE, StyleSlot::Lifetime, "SCE_RAKU_CALLABLE"),
+            (SCE_RAKU_GRAMMAR, StyleSlot::Keyword2, "SCE_RAKU_GRAMMAR"),
+            (SCE_RAKU_CLASS, StyleSlot::Keyword2, "SCE_RAKU_CLASS"),
+        ] {
+            assert!(
+                raku.styles.contains(&(sce, slot)),
+                "RAKU_STYLES must route {name} to {slot:?}"
+            );
+        }
+
+        // Invariant 6: DEFAULT + ERROR + IDENTIFIER absent.
+        for (sce, name) in [
+            (SCE_RAKU_DEFAULT, "SCE_RAKU_DEFAULT"),
+            (SCE_RAKU_ERROR, "SCE_RAKU_ERROR"),
+            (SCE_RAKU_IDENTIFIER, "SCE_RAKU_IDENTIFIER"),
+        ] {
+            assert!(
+                !raku.styles.iter().any(|(s, _)| *s == sce),
+                "RAKU_STYLES must NOT map {name} — reserved for \
+                 STYLE_DEFAULT paint / deferred StyleSlot::Error \
+                 migration"
+            );
+        }
+
+        // Invariant 7: comment-family collapse to Comment + italic.
+        for sce in [SCE_RAKU_COMMENTLINE, SCE_RAKU_COMMENTEMBED, SCE_RAKU_POD] {
+            assert!(
+                raku.styles.contains(&(sce, StyleSlot::Comment)),
+                "all three comment states must route to Comment"
+            );
+            assert!(
+                raku.italic.contains(&sce),
+                "all three comment states must be italic"
+            );
+        }
+
+        // Invariant 8: eight-flavour string-family collapse.
+        for sce in [
+            SCE_RAKU_CHARACTER,
+            SCE_RAKU_HEREDOC_Q,
+            SCE_RAKU_HEREDOC_QQ,
+            SCE_RAKU_STRING,
+            SCE_RAKU_STRING_Q,
+            SCE_RAKU_STRING_QQ,
+            SCE_RAKU_STRING_Q_LANG,
+            SCE_RAKU_STRING_VAR,
+        ] {
+            assert!(
+                raku.styles.contains(&(sce, StyleSlot::String)),
+                "all eight string-family states must route to String \
+                 (richest string collapse in Phase 4.5)"
+            );
+        }
+
+        // Invariant 9: regex-family collapse.
+        for sce in [SCE_RAKU_REGEX, SCE_RAKU_REGEX_VAR] {
+            assert!(
+                raku.styles.contains(&(sce, StyleSlot::String)),
+                "regex-family states must route to String \
+                 (Perl / Bash regex convention)"
+            );
+        }
+
+        // Invariant 10: sigil-family four-way collapse to Lifetime.
+        for sce in [
+            SCE_RAKU_MU,
+            SCE_RAKU_POSITIONAL,
+            SCE_RAKU_ASSOCIATIVE,
+            SCE_RAKU_CALLABLE,
+        ] {
+            assert!(
+                raku.styles.contains(&(sce, StyleSlot::Lifetime)),
+                "all four sigil-tagged variable states must route to \
+                 Lifetime — Bash SCALAR / PARAM / Lisp SYMBOL / Perl \
+                 SCALAR / GDScript NODEPATH structural-sigil precedent"
+            );
+        }
+
+        // Invariant 11: GRAMMAR + CLASS declaration-slot collapse.
+        for sce in [SCE_RAKU_GRAMMAR, SCE_RAKU_CLASS] {
+            assert!(
+                raku.styles.contains(&(sce, StyleSlot::Keyword2)),
+                "declaration-position states (GRAMMAR + CLASS) must \
+                 both route to Keyword2 — Python SCE_P_CLASSNAME / \
+                 GDScript SCE_GD_CLASSNAME precedent"
+            );
+        }
+
+        // Invariant 12: TYPEDEF pin (classes 2-5 collapse upstream).
+        assert!(
+            raku.styles
+                .contains(&(SCE_RAKU_TYPEDEF, StyleSlot::Keyword2)),
+            "SCE_RAKU_TYPEDEF is the SINGLE style slot for classes 2-5 \
+             wordlist hits (LexRaku upstream collapses all four TYPEDEF \
+             wordlists at LexRaku.cxx:1373-1380)"
+        );
+
+        // Invariant 13: italic set == 3, bold set == 2.
+        assert_eq!(
+            raku.italic.len(),
+            3,
+            "RAKU_ITALIC must contain 3 states (three comment flavours)"
+        );
+        assert_eq!(
+            raku.bold.len(),
+            2,
+            "RAKU_BOLD must contain 2 states (WORD + PREPROCESSOR)"
+        );
+        assert!(raku.bold.contains(&SCE_RAKU_WORD));
+        assert!(raku.bold.contains(&SCE_RAKU_PREPROCESSOR));
+
+        // Invariant 14: canonical anchors from each of the 7
+        // wordlists. Verified against the upstream Lexilla test
+        // fixture at
+        // crates/scintilla-sys/vendor/lexilla/test/examples/raku/
+        // SciTE.properties.
+        // Note: `sub` (subroutine declarator) is NOT in the class-0
+        // wordlist despite being ubiquitous Raku syntax — the
+        // upstream fixture places it in class 1 (RAKU_FUNCTIONS) so
+        // it renders as `SCE_RAKU_FUNCTION` (Keyword2 accent), NOT
+        // `SCE_RAKU_WORD` (Keyword bold). Anchor list here scopes to
+        // the class-0 tokens; `sub` is covered by the class-1 pin
+        // below.
+        for anchor in [
+            "if", "for", "class", "method", "BEGIN", "END", "when", "given",
+        ] {
+            assert!(
+                RAKU_KEYWORDS.split_whitespace().any(|t| t == anchor),
+                "RAKU_KEYWORDS must include canonical anchor `{anchor}`"
+            );
+        }
+        // Note: `reduce` is NOT in the upstream Lexilla fixture
+        // despite being a common Raku function — the fixture
+        // inherits its function list from Perl 5's stock and
+        // hasn't been kept in perfect sync with Raku 6.d's full API.
+        // `sub` and `say` ARE in the fixture (verified) and pinned
+        // here as anchors alongside the other class-1 canonicals.
+        for anchor in ["abs", "print", "push", "sort", "map", "grep", "say", "sub"] {
+            assert!(
+                RAKU_FUNCTIONS.split_whitespace().any(|t| t == anchor),
+                "RAKU_FUNCTIONS must include canonical anchor `{anchor}`"
+            );
+        }
+        for anchor in [
+            "Str", "Int", "Num", "Bool", "Rat", "Complex", "Mu", "Any", "int32",
+        ] {
+            assert!(
+                RAKU_TYPES_BASIC.split_whitespace().any(|t| t == anchor),
+                "RAKU_TYPES_BASIC must include canonical anchor `{anchor}`"
+            );
+        }
+        for anchor in ["Array", "Hash", "List", "Map", "Set", "Bag"] {
+            assert!(
+                RAKU_TYPES_COMPOSITE.split_whitespace().any(|t| t == anchor),
+                "RAKU_TYPES_COMPOSITE must include canonical anchor `{anchor}`"
+            );
+        }
+        for anchor in [
+            "IO::Handle",
+            "IO::Path",
+            "Promise",
+            "Channel",
+            "Supply",
+            "Grammar",
+        ] {
+            assert!(
+                RAKU_TYPES_DOMAIN.split_whitespace().any(|t| t == anchor),
+                "RAKU_TYPES_DOMAIN must include canonical anchor `{anchor}`"
+            );
+        }
+        for anchor in ["X::AdHoc", "X::TypeCheck", "X::IO", "Exception", "Failure"] {
+            assert!(
+                RAKU_TYPES_EXCEPTION.split_whitespace().any(|t| t == anchor),
+                "RAKU_TYPES_EXCEPTION must include canonical anchor `{anchor}`"
+            );
+        }
+        for anchor in ["sym", "to", "qq", "heredoc", "words"] {
+            assert!(
+                RAKU_ADVERBS.split_whitespace().any(|t| t == anchor),
+                "RAKU_ADVERBS must include canonical anchor `{anchor}` \
+                 (stored WITHOUT the leading `:`)"
             );
         }
     }

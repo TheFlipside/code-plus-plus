@@ -3375,6 +3375,207 @@ pub const SCE_HOLLYWOOD_IDENTIFIER: usize = 12;
 pub const SCE_HOLLYWOOD_CONSTANT: usize = 13;
 pub const SCE_HOLLYWOOD_HEXNUMBER: usize = 14;
 
+// LexRaku style indices. 29 contiguous slots (0..=28) covering Raku
+// — the current name of what was previously called "Perl 6", a
+// gradually-typed, object-oriented / functional / declarative
+// language with rich lexical syntax (sigils, twigils, Q language
+// / heredocs, grammars, POD blocks, regexes with adverbs, ...).
+// Extensions `.raku` / `.rakumod`. Constants mirror
+// `SciLexer.h:2000-2028` verbatim. Dispatches SCLEX_RAKU
+// (= 131, per `SciLexer.h:147`) via
+// `vendor/lexilla/lexers/LexRaku.cxx:1634` — the `LexerModule
+// lmRaku(SCLEX_RAKU, LexerFactoryRaku, "raku", rakuWordLists)`
+// registration.
+//
+// **Seven wordlists.** `rakuWordLists[]` at
+// `LexRaku.cxx:106-115` declares seven named classes:
+//   - class 0 = "Keywords and identifiers" — reserved words
+//     like `if` / `for` / `sub` / `class` / phasers `BEGIN` /
+//     `END` / etc.
+//   - class 1 = "Functions" — Raku built-in-function names
+//     (`abs` / `chr` / `say` / `push` / `sort` / `map` / ...).
+//   - class 2 = "Types basic" — primitive / core types
+//     (`Str` / `Int` / `Num` / `Bool` / `bit` / `int32` /
+//     `num64` / ...).
+//   - class 3 = "Types composite" — collection / container
+//     types (`Array` / `Hash` / `List` / `Map` / `Set` /
+//     `Bag` / ...).
+//   - class 4 = "Types domain-specific" — I/O / concurrency /
+//     grammar / POD types (`IO::Handle` / `Promise` / `Grammar`
+//     / `Pod::Block` / ...).
+//   - class 5 = "Types exception" — the `X::` exception
+//     hierarchy (`X::AdHoc` / `X::TypeCheck` / `X::Syntax::*`
+//     / ...).
+//   - class 6 = "Adverbs" — regex + `Q`-language + `:sym`
+//     adverbs (`sym` / `to` / `qq` / `words` / `heredoc` /
+//     ...). Only recognised after `:` sigil.
+//
+// **Classifier order (identifier).** The identifier-classifier
+// at `LexRaku.cxx:1367-1391` probes wordlists in this fixed
+// order for a bareword identifier:
+//   1. If `keywords.InList(s)` → `SCE_RAKU_WORD` (class 0).
+//   2. Else if `functions.InList(s)` → `SCE_RAKU_FUNCTION`
+//      (class 1).
+//   3. Else if `typesBasic.InList(s)` OR `typesComposite.InList(s)`
+//      OR `typesDomainSpecific.InList(s)` OR
+//      `typesExceptions.InList(s)` → `SCE_RAKU_TYPEDEF` (classes
+//      2 / 3 / 4 / 5 collapse to one style slot). Framework
+//      consequence: the four TYPE classes cannot be
+//      distinguished by style even though they're kept separate
+//      as source data.
+//   4. Else if `wordLast == "class"` → `SCE_RAKU_CLASS`
+//      (position-derived — identifier following the `class`
+//      keyword). Same discipline as Python's `SCE_P_CLASSNAME`
+//      / Ruby's `SCE_RB_CLASSNAME` / GDScript's
+//      `SCE_GD_CLASSNAME`.
+//   5. Else if `wordLast == "grammar"` → `SCE_RAKU_GRAMMAR`
+//      (position-derived — identifier following the `grammar`
+//      keyword, which is Raku's PEG-parser-declaration form).
+//   6. Else → `SCE_RAKU_IDENTIFIER` (bareword).
+//
+// **First-match-wins semantics** across classes 0-5 (the `else
+// if` chain at :1369-1381), so cross-class disjointness is
+// load-bearing for the class-0 → class-1 → class-2..5 → position-
+// derived hierarchy. Cross-class duplicates within classes 2-5
+// are harmless since they all collapse to the same TYPEDEF
+// style; still, the upstream fixture keeps them disjoint (verified
+// against `crates/scintilla-sys/vendor/lexilla/test/examples/raku/
+// SciTE.properties`).
+//
+// **Class 6 (Adverbs) uses a separate `:` gate.** Adverb
+// classification at `LexRaku.cxx:1400-1407` only fires when the
+// current char is `:` and the next is a word-start (`:sym`,
+// `:qq`, `:to`, `:heredoc`, ...). The wordlist entries
+// themselves are STORED WITHOUT the leading `:` — `:sym`
+// tokenises as `SCE_RAKU_ADVERB` iff `sym` is in `adverbs`
+// wordlist. Same prefix-stripping discipline as REBOL's
+// `REBOL_WORD_*` classes.
+//
+// **Case-SENSITIVE identifier lookup.**
+// `LexRaku.cxx:1368` populates the identifier buffer via
+// `LengthToNonWordChar(sc, lengthToEnd, s, sizeof(s))`, which
+// copies raw source bytes verbatim without any tolower step —
+// confirmed by grep (no `tolower` / `MakeLowerCase` /
+// `GetCurrentLowered` anywhere in the file). Wordlist entries
+// must match source spelling exactly. Raku convention: types
+// are `PascalCase` (`Int`, `Str`, `IO::Handle`), keywords +
+// functions are lowercase (`if`, `for`, `abs`, `push`),
+// phasers + closing-CATCH-like keywords are `SCREAMING`
+// (`BEGIN`, `END`, `CATCH`, `LEAVE`).
+//
+// **Sigil-tagged variable states.** At `LexRaku.cxx:1417-1424`,
+// the sigil character maps to a distinct variable state:
+//   - `$` → SCE_RAKU_MU (`$foo` — scalar / any, the universal
+//     "Mu" type in Raku's type hierarchy — hence the state
+//     name).
+//   - `@` → SCE_RAKU_POSITIONAL (`@array` — positional
+//     collection).
+//   - `%` → SCE_RAKU_ASSOCIATIVE (`%hash` — associative
+//     collection).
+//   - `&` → SCE_RAKU_CALLABLE (`&code` — callable reference).
+//
+// Framework routes all four sigil states through
+// `StyleSlot::Lifetime` (matches Bash SCALAR / PARAM / Lisp
+// SYMBOL / Perl SCALAR structural-sigil precedent — the
+// established framework convention for `$`/`&`/`%`/`@`
+// sigil-prefixed structural anchors).
+//
+// **Q-language string states.** Raku's Q language exposes
+// half a dozen string-quoting forms
+// (https://docs.raku.org/language/quoting):
+//   - `SCE_RAKU_STRING` (8) — the generic `"..."` state.
+//   - `SCE_RAKU_STRING_Q` (9) — `q(...)` / `q{...}` — no
+//     interpolation.
+//   - `SCE_RAKU_STRING_QQ` (10) — `qq(...)` / `qq{...}` — with
+//     interpolation.
+//   - `SCE_RAKU_STRING_Q_LANG` (11) — `Q(...)` / `Q{...}` —
+//     literal-quoting form (no escapes).
+//   - `SCE_RAKU_STRING_VAR` (12) — variable interpolation
+//     INSIDE a `qq`/`qq..` state. Ships as a nested state that
+//     paints `$var` / `@var` etc. distinctly inside the outer
+//     string span.
+//   - `SCE_RAKU_HEREDOC_Q` (6) — `q :to/EOF/` heredoc, no
+//     interpolation.
+//   - `SCE_RAKU_HEREDOC_QQ` (7) — `qq :to/EOF/` heredoc, with
+//     interpolation.
+//   - `SCE_RAKU_CHARACTER` (5) — **reserved but unemitted** in
+//     the vendored Lexilla version. Grep of `LexRaku.cxx`
+//     returns zero hits for `SCE_RAKU_CHARACTER` — the
+//     `SciLexer.h` constant table declares the slot but the
+//     lexer body never enters it. Framework still maps it to
+//     `StyleSlot::String` so a future upstream change that
+//     starts emitting it gets a defined paint immediately;
+//     until then, the mapping is dead code.
+//
+// The seven ACTIVE string-family states plus the reserved
+// CHARACTER slot all collapse to `StyleSlot::String` — same
+// collapse discipline as Python's SCE_P_STRING / _CHARACTER
+// / _TRIPLE / _TRIPLEDOUBLE unification and TypeScript's
+// five-flavour string collapse.
+//
+// **Regex + adverb inline states.** `SCE_RAKU_REGEX` (13) is
+// the body of a `/regex/` or `rx/regex/` construct;
+// `SCE_RAKU_REGEX_VAR` (14) is a variable interpolation inside
+// it. Both route through `StyleSlot::String` (Perl / Bash
+// convention for regex-family paint).
+//
+// **POD documentation.** `SCE_RAKU_POD` (4) covers Raku's Perl
+// Old Documentation blocks (`=begin pod ... =end pod`). Routes
+// through `StyleSlot::Comment` — same discipline as Perl's
+// SCE_PL_POD.
+//
+// **Doc-comment `#|` and side-comment `#=` embed comments** —
+// `SCE_RAKU_COMMENTEMBED` (3) covers Raku's declarator-doc
+// syntax. Distinct from `SCE_RAKU_COMMENTLINE` (2) for `#`-line
+// comments. Both route to Comment italic.
+//
+// **`SCE_RAKU_ERROR` (1)** — an authoritative parse-failure
+// state emitted when the classifier can't continue. Left
+// unmapped per the established `StyleSlot::Error`-migration
+// convention (deferred to a future dedicated error slot).
+// Same discipline as Visual Prolog's
+// `SCE_VISUALPROLOG_STRING_ESCAPE_ERROR` unmapping.
+//
+// **`SCE_RAKU_PREPROCESSOR` (17)** — **reserved but
+// unemitted** in the vendored Lexilla version. Grep of
+// `LexRaku.cxx` returns zero hits for `SCE_RAKU_PREPROCESSOR`.
+// `use v6.d` / `use MONKEY-TYPING` / `use nqp` pragma
+// directives actually paint as `SCE_RAKU_FUNCTION` (`use` is
+// in the class-1 wordlist per the upstream fixture). Framework
+// still maps SCE_RAKU_PREPROCESSOR → `StyleSlot::Preprocessor`
+// so a future upstream change gets a defined paint; until
+// then, the mapping is dead code.
+pub const SCLEX_RAKU: usize = 131;
+pub const SCE_RAKU_DEFAULT: usize = 0;
+pub const SCE_RAKU_ERROR: usize = 1;
+pub const SCE_RAKU_COMMENTLINE: usize = 2;
+pub const SCE_RAKU_COMMENTEMBED: usize = 3;
+pub const SCE_RAKU_POD: usize = 4;
+pub const SCE_RAKU_CHARACTER: usize = 5;
+pub const SCE_RAKU_HEREDOC_Q: usize = 6;
+pub const SCE_RAKU_HEREDOC_QQ: usize = 7;
+pub const SCE_RAKU_STRING: usize = 8;
+pub const SCE_RAKU_STRING_Q: usize = 9;
+pub const SCE_RAKU_STRING_QQ: usize = 10;
+pub const SCE_RAKU_STRING_Q_LANG: usize = 11;
+pub const SCE_RAKU_STRING_VAR: usize = 12;
+pub const SCE_RAKU_REGEX: usize = 13;
+pub const SCE_RAKU_REGEX_VAR: usize = 14;
+pub const SCE_RAKU_ADVERB: usize = 15;
+pub const SCE_RAKU_NUMBER: usize = 16;
+pub const SCE_RAKU_PREPROCESSOR: usize = 17;
+pub const SCE_RAKU_OPERATOR: usize = 18;
+pub const SCE_RAKU_WORD: usize = 19;
+pub const SCE_RAKU_FUNCTION: usize = 20;
+pub const SCE_RAKU_IDENTIFIER: usize = 21;
+pub const SCE_RAKU_TYPEDEF: usize = 22;
+pub const SCE_RAKU_MU: usize = 23;
+pub const SCE_RAKU_POSITIONAL: usize = 24;
+pub const SCE_RAKU_ASSOCIATIVE: usize = 25;
+pub const SCE_RAKU_CALLABLE: usize = 26;
+pub const SCE_RAKU_GRAMMAR: usize = 27;
+pub const SCE_RAKU_CLASS: usize = 28;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

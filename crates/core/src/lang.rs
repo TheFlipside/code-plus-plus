@@ -13507,6 +13507,306 @@ pub const HOLLYWOOD_STDAPI: &str = concat!(
     "rnd rndseed waitleftmouse waitkeydown",
 );
 
+/// Space-separated Raku **keywords + phasers + identifiers** list
+/// installed as **class 0** of `LexRaku`'s wordlist descriptor
+/// (`SCE_RAKU_WORD`, bold "Keyword" slot). Raku is the current name
+/// of what was previously called "Perl 6" — a gradually-typed,
+/// object-oriented / functional / declarative language. Extensions
+/// `.raku` / `.rakumod`. See the `SCE_RAKU_*` banner in
+/// `crates/scintilla-sys/src/lib.rs` for the seven-wordlist
+/// classifier order and the first-match-wins semantics across
+/// classes 0-5.
+///
+/// **Case-SENSITIVE lookup.** `LexRaku.cxx:1368` populates the
+/// identifier buffer via `LengthToNonWordChar(sc, lengthToEnd, s,
+/// sizeof(s))` — a raw-byte copy with no tolower step (grep of
+/// `LexRaku.cxx` returns zero hits for `tolower` /
+/// `MakeLowerCase` / `GetCurrentLowered`). So `BEGIN` and
+/// `begin` are distinct tokens — the classifier byte-matches
+/// source spelling exactly. Raku's convention: types are
+/// `PascalCase` (`Str`, `Int`, `IO::Handle`), keywords /
+/// functions / operators are lowercase (`if`, `for`, `abs`,
+/// `push`, `andthen`), phasers + declarative-scope markers are
+/// `SCREAMING` (`BEGIN`, `END`, `INIT`, `CATCH`, `LEAVE`).
+///
+/// **Contents mirror the upstream Lexilla test fixture verbatim**
+/// at `crates/scintilla-sys/vendor/lexilla/test/examples/raku/
+/// SciTE.properties`'s `keywords.*.p6=` line. That fixture is
+/// maintained by the Lexilla project and updated as new Raku
+/// keywords land in Rakudo releases — Code++ mirrors it rather
+/// than curating an independent list because the Raku spec is
+/// evolving (new phasers, control-flow keywords added in 6.d /
+/// 6.e / 6.f language versions) and delegating to the upstream
+/// authority guarantees no drift.
+///
+/// **Categories** (120 entries — verbatim mirror of upstream):
+///
+/// 1. **Phasers** (18) — declarative-scope compile-time / runtime
+///    hooks: `BEGIN` / `CATCH` / `CHECK` / `CONTROL` / `END` /
+///    `ENTER` / `EVAL` / `FIRST` / `INIT` / `KEEP` / `LAST` /
+///    `LEAVE` / `NEXT` / `POST` / `PRE` / `START` / `TEMP` /
+///    `UNDO`. Phasers fire at specific lifecycle points
+///    (compile-time, block-entry, block-exit, iteration, etc.).
+///    All SCREAMING per Raku convention.
+/// 2. **Control flow** (~15) — `if` / `elsif` / `else` / `unless`
+///    / `for` / `while` / `until` / `loop` / `repeat` /
+///    `given` / `when` / `default` / `return-rw` / `xor` /
+///    `orwith`.
+/// 3. **Declaration** (~20) — `sub` / `method` / `submethod` /
+///    `multi` / `proto` / `only` / `macro` / `regex` / `token` /
+///    `rule` / `class` / `role` / `grammar` / `module` /
+///    `package` / `unit` / `enum` / `subset` / `constant` /
+///    `has` / `is` / `does`.
+/// 4. **Boolean operators + comparison** (~20) — `and` / `andthen`
+///    / `or` / `orelse` / `not` / `eq` / `eqv` / `ne` / `lt` /
+///    `le` / `gt` / `ge` / `cmp` / `leg` / `ff` / `fff` /
+///    `after` / `before` / `also` / `x` / `xx` / `o`.
+/// 5. **Misc language** (~15) — `as` / `async` / `augment` /
+///    `handles` / `has` / `require` / `where` / `with` /
+///    `without` / `trusts` / `try` / `take` / `fail` / `fatal`
+///    / `let` / `lift` / `dynamic` / `slang` / `supersede`.
+/// 6. **Number-theoretic / operator words** (~10) — `gcd` /
+///    `lcm` / `mod` / `div` / `size_t` (C-interop) / `complex`
+///    / `bag` / `mix` / `str` / `term`.
+///
+/// The exact set follows upstream. Mirror-not-curate.
+pub const RAKU_KEYWORDS: &str = concat!(
+    // Phasers (SCREAMING per Raku convention).
+    "BEGIN CATCH CHECK CONTROL END ENTER EVAL FIRST ",
+    "INIT KEEP LAST LEAVE NEXT POST PRE START TEMP UNDO ",
+    // Lowercase keywords (mirrors upstream Lexilla fixture verbatim).
+    "after also andthen as async augment bag before but category ",
+    "circumfix class cmp complex constant contend default defer ",
+    "div does dynamic else elsif enum eq eqv extra fail fatal ff ",
+    "fff for gather gcd ge given grammar gt handles has if infix ",
+    "is lcm le leave leg let lift loop lt macro make maybe method ",
+    "mix mod module multi ne not o only oo or orelse orwith postcircumfix ",
+    "postfix prefix proto regex repeat require return-rw returns role ",
+    "rule size_t slang start str submethod subset supersede take temp ",
+    "term token trusts try unit unless until when where while with ",
+    "without x xor xx",
+);
+
+/// Space-separated Raku **built-in functions** list installed as
+/// **class 1** of `LexRaku`'s wordlist descriptor
+/// (`SCE_RAKU_FUNCTION`, accent slot). Covers Raku's core library
+/// function surface: I/O, string manipulation, list operations,
+/// math, introspection, etc.
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`RAKU_KEYWORDS`]. Raku convention: functions are lowercase or
+/// `SCREAMING` (`ACCEPTS`, `AT-KEY`, `EXISTS-KEY` — introspection
+/// hooks) or `CamelCase` (rare — `Filetests`, `Str.IO`).
+///
+/// **Contents mirror the upstream Lexilla test fixture verbatim**
+/// at the same `SciTE.properties` fixture's `keywords2.*.p6=` line
+/// — same mirror-not-curate discipline as [`RAKU_KEYWORDS`].
+///
+/// Categories (~230 entries) cover: I/O (`print` / `say` / `open`
+/// / `close` / `read` / `write`), strings (`chars` / `substr` /
+/// `chr` / `ord` / `join` / `split`), lists (`push` / `pop` /
+/// `shift` / `unshift` / `sort` / `map` / `grep` / `reduce`),
+/// math (`abs` / `sqrt` / `exp` / `log` / `sin` / `cos` /
+/// trig / hyperbolic), files (`chdir` / `stat` / `link` /
+/// `symlink`), processes (`exec` / `fork` / `kill`), network
+/// (`connect` / `bind` / `listen` / `accept`), time (`time` /
+/// `gmtime` / `localtime`), introspection (`.gist` / `.perl`),
+/// and the SCREAMING introspection-hook family (`ACCEPTS`,
+/// `AT-KEY`, `EXISTS-KEY`, `STORE`).
+pub const RAKU_FUNCTIONS: &str = concat!(
+    // SCREAMING introspection hooks + core I/O.
+    "ACCEPTS AT-KEY EVALFILE EXISTS-KEY Filetests IO STORE ",
+    // Math + trig.
+    "abs accept acos acosec acosech acosh acotan acotanh alarm and ",
+    "antipairs asec asech asin asinh atan atan2 atanh base bind binmode bless ",
+    "break caller ceiling chars chdir chmod chomp chop chr chroot chrs cis close ",
+    "closedir codes comb conj connect contains continue cos cosec cosech cosh ",
+    "cotan cotanh crypt dbm defined die do dump each elems eof exec exists exit ",
+    "exp expmod fc fcntl fileno flat flip flock floor fmt fork formats functions ",
+    "get getc getpeername getpgrp getppid getpriority getsock gist glob gmtime ",
+    "goto grep hyper import index int invert ioctl is-prime iterator join keyof ",
+    "keys kill kv last lazy lc lcfirst lines link list listen local localtime ",
+    "lock log log10 lsb lstat map match mkdir msb msg my narrow new next no of ",
+    "open ord ords our pack package pairs path pick pipe polymod pop pos pred ",
+    "print printf prototype push quoting race rand read readdir readline readlink ",
+    "readpipe recv redo ref rename requires reset return reverse rewinddir rindex ",
+    "rmdir roots round samecase say scalar sec sech seek seekdir select semctl ",
+    "semget semop send set setpgrp setpriority setsockopt shift shm shutdown sign ",
+    "sin sinh sleep sockets sort splice split sprintf sqrt srand stat state study ",
+    "sub subst substr substr-rw succ symlink sys syscall system syswrite tan tanh ",
+    "tc tclc tell telldir tie time times trans trim trim-leading trim-trailing ",
+    "truncate uc ucfirst unimatch uniname uninames uniprop uniprops unival unlink ",
+    "unpack unpolar unshift untie use utime values wait waitpid wantarray warn ",
+    "wordcase words write",
+);
+
+/// Space-separated Raku **basic types** list installed as **class 2**
+/// of `LexRaku`'s wordlist descriptor (`SCE_RAKU_TYPEDEF`, "type"
+/// slot). Raku's core value-type surface: primitives, numeric
+/// types, and the `Cool` / `Any` / `Mu` type hierarchy.
+///
+/// **Contents mirror the upstream Lexilla test fixture verbatim**
+/// (`keywords3.*.p6=`). Classes 2/3/4/5 all collapse to
+/// `SCE_RAKU_TYPEDEF` at paint time per the classifier at
+/// `LexRaku.cxx:1373-1380`, but the four wordlists are kept
+/// separate as SOURCE-code data because upstream Lexilla
+/// distinguishes them for potential future style-per-class
+/// hookups. Code++ mirrors that discipline — same wordlist
+/// storage, one style routing.
+///
+/// Categories (116 entries — verbatim mirror): value-type hierarchy (`Any` / `Mu` /
+/// `Cool`), numeric primitives (`Int` / `Num` / `Rat` /
+/// `Complex` / `FatRat`), string (`Str` / `Stringy` /
+/// `NumStr` / `IntStr` / `RatStr` / `ComplexStr`), boolean
+/// (`Bool`), block/routine (`Block` / `Callable` / `Code` /
+/// `Sub` / `Submethod` / `Method` / `Routine`), date/time
+/// (`Date` / `DateTime` / `Dateish` / `Duration` / `Instant`),
+/// junction / whatever / metaclass (`Junction` / `Whatever` /
+/// `WhateverCode` / `Nil`), native sized ints (`int8` / `int16`
+/// / `int32` / `int64` / `uint8` etc.), native sized floats
+/// (`num32` / `num64`), buffer types (`buf` / `buf8` / `buf16`
+/// / `buf32`), and rat sizes (`rat` / `rat8` / `rat16` / etc.).
+pub const RAKU_TYPES_BASIC: &str = concat!(
+    "AST Any Block Bool CallFrame Callable Code ",
+    "Collation Compiler Complex ComplexStr Cool CurrentThreadScheduler Date ",
+    "DateTime Dateish Distribution Distribution::Hash Distribution::Locally ",
+    "Distribution::Path Duration Encoding Encoding::Registry Endian FatRat ",
+    "ForeignCode HyperSeq HyperWhatever Instant Int IntStr Junction Label ",
+    "Lock::Async Macro Method Mu Nil Num NumStr Numeric ObjAt Parameter Perl ",
+    "PredictiveIterator Proxy RaceSeq Rat RatStr Rational Real Routine ",
+    "Routine::WrapHandle Scalar Sequence Signature Str StrDistance Stringy Sub ",
+    "Submethod Telemetry Telemetry::Instrument::Thread ",
+    "Telemetry::Instrument::ThreadPool Telemetry::Instrument::Usage ",
+    "Telemetry::Period Telemetry::Sampler UInt ValueObjAt Variable Version ",
+    "Whatever WhateverCode atomicint bit bool buf buf1 buf16 buf2 buf32 buf4 ",
+    "buf64 buf8 int int1 int16 int2 int32 int4 int64 int8 long longlong num ",
+    "num32 num64 rat rat1 rat16 rat2 rat32 rat4 rat64 rat8 uint uint1 uint16 ",
+    "uint2 uint32 uint4 uint64 uint8 utf16 utf32 utf8",
+);
+
+/// Space-separated Raku **composite types** list installed as
+/// **class 3** of `LexRaku`'s wordlist descriptor (`SCE_RAKU_TYPEDEF`,
+/// same style-slot as basic types). Collection / container types:
+/// `Array` / `Hash` / `List` / `Map` / `Set` / `Bag` / etc.
+///
+/// **Contents mirror the upstream Lexilla test fixture verbatim**
+/// (`keywords4.*.p6=`). Sorted alphabetically as in the fixture.
+pub const RAKU_TYPES_COMPOSITE: &str = concat!(
+    "Array Associative Bag BagHash Baggy Blob Buf ",
+    "Capture Enumeration Hash Iterable Iterator List Map Mix MixHash Mixy NFC NFD ",
+    "NFKC NFKD Pair Positional PositionalBindFailover PseudoStash QuantHash Range ",
+    "Seq Set SetHash Setty Slip Stash Uni utf8",
+);
+
+/// Space-separated Raku **domain-specific types** list installed
+/// as **class 4** of `LexRaku`'s wordlist descriptor
+/// (`SCE_RAKU_TYPEDEF`). Types tied to specific subsystems: I/O
+/// (`IO::Handle` / `IO::Path` / `IO::Socket`), concurrency
+/// (`Promise` / `Channel` / `Semaphore` / `Supply`), grammar +
+/// POD types, compilation-unit metadata (`CompUnit` /
+/// `CompUnit::Repository`).
+///
+/// **Contents mirror the upstream Lexilla test fixture verbatim**
+/// (`keywords5.*.p6=`).
+pub const RAKU_TYPES_DOMAIN: &str = concat!(
+    "Attribute Cancellation Channel CompUnit ",
+    "CompUnit::Repository CompUnit::Repository::FileSystem ",
+    "CompUnit::Repository::Installation Distro Grammar IO IO::ArgFiles ",
+    "IO::CatHandle IO::Handle IO::Notification IO::Path IO::Path::Cygwin ",
+    "IO::Path::QNX IO::Path::Unix IO::Path::Win32 IO::Pipe IO::Socket ",
+    "IO::Socket::Async IO::Socket::INET IO::Spec IO::Spec::Cygwin ",
+    "IO::Spec::QNX IO::Spec::Unix IO::Spec::Win32 IO::Special Kernel Lock ",
+    "Match Order Pod::Block Pod::Block::Code Pod::Block::Comment ",
+    "Pod::Block::Declarator Pod::Block::Named Pod::Block::Para Pod::Block::Table ",
+    "Pod::Defn Pod::FormattingCode Pod::Heading Pod::Item Proc Proc::Async ",
+    "Promise Regex Scheduler Semaphore Supplier Supplier::Preserving Supply ",
+    "Systemic Tap Thread ThreadPoolScheduler VM",
+);
+
+/// Space-separated Raku **exception types** list installed as
+/// **class 5** of `LexRaku`'s wordlist descriptor (`SCE_RAKU_TYPEDEF`).
+/// The `X::` exception hierarchy — Raku's structured error types.
+/// Every exception thrown by the runtime derives from `Exception`
+/// and typically lives in the `X::` namespace (`X::AdHoc`,
+/// `X::TypeCheck::Assignment`, `X::Syntax::Confused`,
+/// `X::IO::DoesNotExist`, etc.).
+///
+/// **Contents mirror the upstream Lexilla test fixture verbatim**
+/// (`keywords6.*.p6=`). Includes the `Backtrace` + `CX::` control-
+/// exception types (`CX::Done` / `CX::Emit` / `CX::Last` /
+/// `CX::Next` / `CX::Return` / `CX::Warn`) that Raku's control
+/// flow uses internally (`try` / `CATCH` / `LEAVE` blocks).
+pub const RAKU_TYPES_EXCEPTION: &str = concat!(
+    "Backtrace Backtrace::Frame CX::Done CX::Emit ",
+    "CX::Last CX::Next CX::Proceed CX::Redo CX::Return CX::Succeed CX::Take ",
+    "CX::Warn Exception Failure X::AdHoc X::Anon::Augment X::Anon::Multi ",
+    "X::Assignment::RO X::Attribute::NoPackage X::Attribute::Package ",
+    "X::Attribute::Required X::Attribute::Undeclared X::Augment::NoSuchType ",
+    "X::Bind X::Bind::NativeType X::Bind::Slice X::Caller::NotDynamic ",
+    "X::Channel::ReceiveOnClosed X::Channel::SendOnClosed X::Comp ",
+    "X::Composition::NotComposable X::Constructor::Positional X::Control ",
+    "X::ControlFlow X::ControlFlow::Return X::DateTime::TimezoneClash ",
+    "X::Declaration::Scope X::Declaration::Scope::Multi X::Does::TypeObject ",
+    "X::Dynamic::NotFound X::Eval::NoSuchLang X::Export::NameClash X::IO ",
+    "X::IO::Chdir X::IO::Chmod X::IO::Copy X::IO::Cwd X::IO::Dir X::IO::DoesNotExist ",
+    "X::IO::Link X::IO::Mkdir X::IO::Move X::IO::Rename X::IO::Rmdir ",
+    "X::IO::Symlink X::IO::Unlink X::Inheritance::NotComposed ",
+    "X::Inheritance::Unsupported X::Method::InvalidQualifier X::Method::NotFound ",
+    "X::Method::Private::Permission X::Method::Private::Unqualified ",
+    "X::Mixin::NotComposable X::NYI X::NoDispatcher X::Numeric::Real ",
+    "X::OS X::Obsolete X::OutOfRange X::Package::Stubbed X::Parameter::Default ",
+    "X::Parameter::MultipleTypeConstraints X::Parameter::Placeholder ",
+    "X::Parameter::Twigil X::Parameter::WrongOrder X::Phaser::Multiple ",
+    "X::Phaser::PrePost X::Placeholder::Block X::Placeholder::Mainline ",
+    "X::Pod X::Proc::Async X::Proc::Async::AlreadyStarted X::Proc::Async::BindOrUse ",
+    "X::Proc::Async::CharsOrBytes X::Proc::Async::MustBeStarted ",
+    "X::Proc::Async::OpenForWriting X::Proc::Async::TapBeforeSpawn ",
+    "X::Proc::Unsuccessful X::Promise::CauseOnlyValidOnBroken X::Promise::Vowed ",
+    "X::Redeclaration X::Role::Initialization X::Scheduler::CueInNaNSeconds ",
+    "X::Seq::Consumed X::Sequence::Deduction X::Signature::NameClash ",
+    "X::Signature::Placeholder X::Str::Numeric X::StubCode X::Syntax ",
+    "X::Syntax::Augment::WithoutMonkeyTyping X::Syntax::Comment::Embedded ",
+    "X::Syntax::Confused X::Syntax::InfixInTermPosition X::Syntax::Malformed ",
+    "X::Syntax::Missing X::Syntax::NegatedPair X::Syntax::NoSelf ",
+    "X::Syntax::Number::RadixOutOfRange X::Syntax::P5 X::Syntax::Perl5Var ",
+    "X::Syntax::Regex::Adverb X::Syntax::Regex::SolitaryQuantifier ",
+    "X::Syntax::Reserved X::Syntax::Self::WithoutObject ",
+    "X::Syntax::Signature::InvocantMarker X::Syntax::Term::MissingInitializer ",
+    "X::Syntax::UnlessElse X::Syntax::Variable::Match X::Syntax::Variable::Numeric ",
+    "X::Syntax::Variable::Twigil X::Temporal X::Temporal::InvalidFormat ",
+    "X::TypeCheck X::TypeCheck::Assignment X::TypeCheck::Binding ",
+    "X::TypeCheck::Return X::TypeCheck::Splice X::Undeclared",
+);
+
+/// Space-separated Raku **adverbs** list installed as **class 6** of
+/// `LexRaku`'s wordlist descriptor (`SCE_RAKU_ADVERB`, accent slot).
+/// Adverbs are `:name`-prefixed modifiers that appear on regexes
+/// (`m/x/:i` — case-insensitive), Q-language strings
+/// (`q:to/EOF/` — heredoc), and named-argument passes (`:sym<foo>`
+/// — grammar rule alias).
+///
+/// **Entries stored WITHOUT the leading `:`.** `LexRaku.cxx:1400-1407`
+/// strips the `:` before wordlist lookup — the classifier only
+/// enters `SCE_RAKU_ADVERB` when it sees a `:` followed by a word-
+/// start, then looks up the word-run against the wordlist.
+///
+/// **Contents mirror the upstream Lexilla test fixture verbatim**
+/// (`keywords7.*.p6=`). ~30 entries covering:
+///   - **Regex flags**: `i` (case-insensitive), `g` (global), `m`
+///     (multi-line), `s` (single-line), `x` (extended), `p` (pos),
+///     `w` (words), `ww` (double-words).
+///   - **Q-language forms**: `q` / `qq` / `sym` / `single` /
+///     `double` / `heredoc` / `to` / `words` / `quotewords` /
+///     `hash` / `array` / `scalar` / `function` / `closure` /
+///     `backslash` / `exec` / `val` / `delete`.
+///   - **Signature adverbs**: `a` / `b` / `c` / `D` / `f` / `h`
+///     / `k` / `kv` / `p` / `v`.
+pub const RAKU_ADVERBS: &str = concat!(
+    "D a array b backslash c closure delete double ",
+    "exec exists f function h hash heredoc k kv p q qq quotewords s scalar single ",
+    "sym to v val w words ww x",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 74 / 🟡 14 / ⚫ 1.
+Total: 89 rows. ✅ 75 / 🟡 13 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1908,7 +1908,7 @@ further shim work needed.
 | Purebasic | 68 | `purebasic` | ⚫ | ⚫ | 🟡 |
 | Python | 22 | `python` | ✅ | ✅ | ✅ |
 | R | 54 | `r` | ✅ | ✅ | ✅ |
-| Raku | 89 | `raku` | ⚫ | ⚫ | 🟡 |
+| Raku | 89 | `raku` | ✅ | ✅ | ✅ |
 | REBOL | 79 | `rebol` | ✅ | ✅ | ✅ |
 | Registry | 80 | `registry` | — | ✅ | ✅ |
 | Resource file | 7 | `cpp` | ✅ | ✅ | ✅ |
@@ -8438,6 +8438,165 @@ language divergence pins
 (GO_KEYWORDS / GO_KEYWORDS_2
 must not equal JS / TS / Java
 class-0 or class-1 lists).
+
+**Raku (2026-07-08):** rides
+Lexilla's `raku` lexer
+(`LexRaku.cxx`) — the current name
+of what was previously called "Perl
+6". A gradually-typed, object-
+oriented / functional /
+declarative language with rich
+lexical syntax: sigils
+(`$`/`@`/`%`/`&` scalars /
+positionals / associatives /
+callables), phasers
+(`BEGIN`/`END`/`ENTER`/`LEAVE`/
+`CATCH`/etc.), the **Q language**
+(`q`/`qq`/`Q`/`qw`/`qww` string-
+quoting families with adverbs like
+`:to` for heredoc / `:i` for case-
+insensitive / `:g` for global),
+POD documentation blocks, regexes
+with `:i`/`:g` adverbs, and
+grammars (Raku's built-in PEG
+parser DSL). Extensions `.raku` /
+`.rakumod`.
+
+**Seven-class wordlist descriptor**
+— the richest wordlist install in
+Phase 4.5. `LexRaku.cxx:106-115`
+declares seven named classes:
+class 0 "Keywords and identifiers"
+(reserved words + phasers), class
+1 "Functions" (built-in-function
+API), class 2 "Types basic"
+(primitives + Cool/Any/Mu
+hierarchy), class 3 "Types
+composite" (Array/Hash/List/Set/
+Bag containers), class 4 "Types
+domain-specific" (I/O /
+concurrency / grammar / POD
+types), class 5 "Types exception"
+(the `X::` hierarchy), class 6
+"Adverbs" (`:sym`/`:qq`/`:to`/
+`:heredoc` regex + Q-language
+modifiers, stored without the `:`
+prefix and gated by
+`LexRaku.cxx:1400-1407`'s `:`
+check).
+
+**Contents mirror the upstream
+Lexilla test fixture** at
+`crates/scintilla-sys/vendor/
+lexilla/test/examples/raku/
+SciTE.properties` verbatim — Code
+++'s wordlists are a
+mirror-not-curate reproduction of
+the Lexilla project's authoritative
+fixture. Rationale: Raku's spec is
+evolving (new phasers, control-
+flow keywords added in 6.d / 6.e /
+6.f language versions) and
+delegating to upstream guarantees
+no drift. One documented fixture
+gap flagged in the invariant test:
+`reduce` is NOT in the class-1
+fixture despite being a common
+Raku function (upstream inherits
+its function list from Perl 5's
+stock and hasn't been kept in
+perfect sync with Raku 6.d's full
+API). `sub` (subroutine
+declarator) IS in class 1 — it
+paints as `SCE_RAKU_FUNCTION`
+accent, NOT bold Keyword.
+`say` also IS in class 1
+(verified against the fixture).
+
+**29 SCE_RAKU_* states** (0..=28)
+with **26-mapping** `RAKU_STYLES`
+— DEFAULT (0), ERROR (1), and
+IDENTIFIER (21) intentionally
+unmapped per framework convention
++ deferred `StyleSlot::Error`
+migration. **Case-SENSITIVE
+lookup** (`GetCurrent` not
+`GetCurrentLowered`) — Raku
+convention: types are `PascalCase`
+(`Str` / `Int` / `IO::Handle`),
+keywords + functions are lowercase
+(`if` / `for` / `abs`), phasers +
+declarative-scope markers are
+`SCREAMING` (`BEGIN` / `END` /
+`CATCH` / `LEAVE`).
+
+**Three-family comment collapse**:
+COMMENTLINE (`#`) + COMMENTEMBED
+(`#|` / `#=` declarator-doc) + POD
+(`=begin pod` / `=end pod`) all →
+Comment italic. **Eight-flavour
+string collapse** — richest string
+collapse in Phase 4.5: CHARACTER +
+HEREDOC_Q + HEREDOC_QQ + STRING +
+STRING_Q + STRING_QQ +
+STRING_Q_LANG + STRING_VAR all →
+String. **Regex-family collapse**:
+REGEX + REGEX_VAR both → String
+(Perl / Bash regex convention).
+**Sigil-family four-way collapse**:
+MU (`$scalar`) + POSITIONAL
+(`@array`) + ASSOCIATIVE (`%hash`)
++ CALLABLE (`&code`) all →
+Lifetime, matching Bash SCALAR /
+Lisp SYMBOL / Perl SCALAR /
+GDScript NODEPATH structural-sigil
+precedent. **Declaration-slot
+collapse**: GRAMMAR + CLASS both →
+Keyword2 (position-derived
+identifiers after `grammar` /
+`class` keywords, matching Python
+`SCE_P_CLASSNAME` /
+`SCE_GD_CLASSNAME` precedent).
+**Type-family collapse**: TYPEDEF
+is the SINGLE style slot for
+classes 2-5 wordlist hits
+(upstream collapses all four
+TYPEDEF wordlists at
+`LexRaku.cxx:1373-1380`). WORD
+(class 0) → Keyword bold;
+FUNCTION (class 1) → Keyword2;
+ADVERB (class 6) → Keyword2;
+PREPROCESSOR (`use v6.d` / `use
+MONKEY-TYPING`) → Preprocessor
+bold.
+
+Structural test coverage: **14
+invariants** — deep-value identity
+pin, 26-mapping style count,
+seven-class descriptor shape,
+canonical class-N wordlist links
+(all 7 classes), exact style-
+routing pin for all 26 mapped
+constants, DEFAULT + ERROR +
+IDENTIFIER drift check, comment-
+family + string-family (8-flavour)
++ regex-family + **sigil-family
+(4-way)** + declaration-slot
+collapse pins, TYPEDEF single-slot
+pin, italic == 3 + bold == 2, and
+canonical anchors per class
+(`if`/`for`/`class`/`BEGIN`/`END`
+in KEYWORDS, `abs`/`print`/`push`/
+`sort`/`map`/`grep` in FUNCTIONS,
+`Str`/`Int`/`Mu` in TYPES_BASIC,
+`Array`/`Hash`/`List`/`Set`/`Bag`
+in TYPES_COMPOSITE, `IO::Handle`/
+`Promise`/`Channel`/`Grammar` in
+TYPES_DOMAIN, `X::AdHoc`/
+`X::TypeCheck`/`Exception` in
+TYPES_EXCEPTION, `sym`/`to`/`qq`/
+`heredoc`/`words` in ADVERBS —
+stored without leading `:`).
 
 ## Notes
 
