@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 78 / 🟡 10 / ⚫ 1.
+Total: 89 rows. ✅ 79 / 🟡 9 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1921,7 +1921,7 @@ further shim work needed.
 | Smalltalk | 37 | `smalltalk` | ✅ | ✅ | ✅ |
 | Spice | 82 | `spice` | ✅ | ✅ | ✅ |
 | SQL | 17 | `sql` | ✅ | ✅ | ✅ |
-| Swift | 64 | `cpp` | ⚫ | ⚫ | 🟡 |
+| Swift | 64 | `cpp` | ✅ | ✅ | ✅ |
 | TCL | 29 | `tcl` | ✅ | ✅ | ✅ |
 | Tektronix extended HEX | 63 | `tehex` | — | ✅ | ✅ |
 | TeX | 24 | `tex` | ✅ | ✅ | ✅ |
@@ -8437,6 +8437,180 @@ exclusion pins, and 6 cross-
 language divergence pins
 (GO_KEYWORDS / GO_KEYWORDS_2
 must not equal JS / TS / Java
+class-0 or class-1 lists).
+
+**Swift (2026-07-08):** rides
+`LexCPP` (per `L_SWIFT`'s
+`LangEntry` `lexer: Some("cpp")`,
+extension `.swift`) — reuses the
+shared `CPP_STYLES` / `CPP_ITALIC`
+/ `CPP_BOLD` table verbatim, same
+as C / C++ / C# / Java / Objective-
+C / JavaScript / TypeScript / Go
+/ Resource file. **Swift 5.9+
+baseline** — includes ownership
+modifiers (`borrowing` /
+`consuming`, added Swift 5.9) and
+structured concurrency (`actor` /
+`async` / `await`, added Swift
+5.5).
+
+`SWIFT_KEYWORDS` (class 0, bold —
+71 tokens) grouped per the Swift
+Programming Language Reference
+§"Keywords and Punctuation":
+**27 declaration keywords**
+(`associatedtype` / `borrowing` /
+`class` / `consuming` / `deinit`
+/ `enum` / `extension` /
+`fileprivate` / `func` /
+`import` / `init` / `inout` /
+`internal` / `let` / `nonisolated`
+/ `open` / `operator` /
+`precedencegroup` / `private` /
+`protocol` / `public` / `rethrows`
+/ `static` / `struct` /
+`subscript` / `typealias` /
+`var`), **19 statement keywords**
+(`break` / `case` / `catch` /
+`continue` / `default` / `defer`
+/ `do` / `else` / `fallthrough`
+/ `for` / `guard` / `if` / `in`
+/ `repeat` / `return` / `throw`
+/ `switch` / `where` / `while`),
+**12 expression/type keywords**
+(`Any` / `as` / `await` /
+`false` / `is` / `nil` / `self`
+/ `Self` / `super` / `throws` /
+`true` / `try` — `Self` capital
+is spec-distinct from lowercase
+`self` per Swift's case-
+sensitive grammar), **2
+concurrency additions** (`actor`
++ `async`, Swift 5.5+ — `await`
+already covered in the
+expression group per spec), and
+**11 member
+modifiers** (`convenience` /
+`dynamic` / `final` / `indirect`
+/ `lazy` / `mutating` /
+`nonmutating` / `override` /
+`required` / `unowned` / `weak`
+— always-reserved modifiers
+universally rendered as keywords
+in Xcode / VS Code / AppCode).
+
+`SWIFT_KEYWORDS_2` (class 1,
+accent — 46 tokens) — Swift
+standard library types: **15
+numeric primitives** (`Int` +
+`Int8..Int64`, `UInt` +
+`UInt8..UInt64`, `Float` +
+`Float16..Float64`, `Double`),
+**8 non-numeric primitives**
+(`Bool` / `Character` / `String`
+/ `Substring` / `Never` / `Void`
+/ `Optional` / `Result`), **8
+collection types** (`Array` /
+`ArraySlice` / `ContiguousArray`
+/ `Dictionary` / `Set` /
+`KeyValuePairs` / `Range` /
+`ClosedRange`), **Error type**,
+**9 common protocols**
+(`Comparable` / `Equatable` /
+`Hashable` / `Codable` /
+`Encodable` / `Decodable` /
+`Sendable` / `AnyObject` /
+`AnyClass`), and **5 concurrency
+types** (`Task` / `TaskGroup` /
+`AsyncSequence` / `AsyncStream`
+/ `MainActor`).
+
+**Deliberate exclusions:**
+- **`#`-prefixed compile-time
+  directives** — partial
+  handling. `LexCPP.cxx:1370-1372`
+  gates `SCE_C_PREPROCESSOR` on
+  `sc.ch == '#' && visibleChars ==
+  0` (source comment reads
+  "Preprocessor commands are alone
+  on their line"). Line-leading
+  directives (`#if` / `#else` /
+  `#elseif` / `#endif` /
+  `#warning` / `#error`) render as
+  PREPROCESSOR. **Inline / mid-
+  expression directives**
+  (`#selector(handleTap)` /
+  `#keyPath(\.foo)` /
+  `#available(iOS 15, *)` /
+  `#colorLiteral(...)`) do NOT —
+  `LexCPP` treats them as
+  operator + identifier past the
+  `#`, rendering unstyled. Known
+  gap in `LexCPP`'s Swift
+  handling; not fixable at the
+  wordlist layer.
+- **Contextual identifier-shaped
+  tokens** (`some` / `optional`
+  lowercase / `get` / `set` /
+  `didSet` / `willSet` /
+  `associativity` / `left` /
+  `right` / `none` / `infix` /
+  `postfix` / `prefix` /
+  `precedence`) stay out of class
+  0 — same identifier-collision
+  rationale as TypeScript's `get`
+  / `set` exclusion. `some View`
+  in SwiftUI is common but so is
+  `let some = ...`.
+- **Foundation / SwiftUI / UIKit
+  / Combine types** (`Date` /
+  `URL` / `Data` / `NSString` /
+  `NSError` / `View` / `Text` /
+  `Button` / `Publisher` /
+  `AnyCancellable`) stay out of
+  class 1 — framework-specific
+  dynamic set (Foundation is
+  ~600 types, SwiftUI/UIKit
+  version-churn per iOS release).
+  Users get Xcode-style framework
+  symbol highlighting from
+  `sourcekit-lsp`, not from a
+  lexer wordlist. Same exclusion
+  rationale as GDScript engine
+  singletons and Go stdlib
+  packages.
+
+Structural test coverage: **the
+LexCPP-family test pattern** —
+style-table reuse pin, two-class
+descriptor shape, canonical
+wordlist links, **27 declaration
++ 19 statement + 12 expression
++ 2 concurrency + 11 modifier
+class-0 anchors** verified by
+name, `Self` (capital) + `self`
+(lowercase) both present as
+distinct tokens per case-
+sensitivity contract, **15
+numeric + 8 non-numeric + 8
+collection + 1 error + 9
+protocol + 5 concurrency class-1
+anchors** verified, strict cross-
+class disjointness (LexCPP
+probes class 0 first), **15
+class-0 contextual exclusion
+pins** (`some` / `any` lowercase
+/ `optional` / accessor
+contextuals / operator-
+declaration contextuals), **9 `#`-directive
+exclusion pins** (both classes),
+**12 framework-type class-1
+exclusion pins** (Foundation +
+SwiftUI + UIKit + Combine), and
+8 cross-language divergence
+pins (Swift wordlists must not
+equal JS / TS / Java / Go
 class-0 or class-1 lists).
 
 **Raku (2026-07-08):** rides

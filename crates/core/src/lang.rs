@@ -2727,6 +2727,205 @@ pub const GO_KEYWORDS_2: &str = concat!(
     "max min new panic print println real recover",
 );
 
+/// Space-separated Swift reserved-word list installed as **class 0**
+/// of `LexCPP`'s wordlist descriptor (`SCE_C_WORD`, bold "Keyword"
+/// slot). Swift rides `LexCPP` (per `L_SWIFT`'s [`LangEntry`] with
+/// `lexer: Some("cpp")`) — same style table as C / C++ / Java /
+/// JavaScript / TypeScript / Go; only the two keyword classes
+/// differ.
+///
+/// **Case sensitive.** Swift is case-sensitive at the spec level.
+/// `LexCPP`'s identifier classifier calls
+/// `sc.GetCurrent(s, sizeof(s))` byte-exact.
+///
+/// **Categories** (71 entries):
+///
+/// 1. **Declaration keywords** (27) — the "used in declarations"
+///    group from Swift 5.9+ spec §"Keywords and Punctuation":
+///    `associatedtype`, `borrowing` (5.9+ ownership),
+///    `class`, `consuming` (5.9+ ownership), `deinit`, `enum`,
+///    `extension`, `fileprivate`, `func`, `import`, `init`,
+///    `inout`, `internal`, `let`, `nonisolated` (5.5+
+///    concurrency), `open`, `operator`, `precedencegroup`,
+///    `private`, `protocol`, `public`, `rethrows`, `static`,
+///    `struct`, `subscript`, `typealias`, `var`.
+/// 2. **Statement keywords** (19) — the "used in statements"
+///    group: `break`, `case`, `catch`, `continue`, `default`,
+///    `defer`, `do`, `else`, `fallthrough`, `for`, `guard`,
+///    `if`, `in`, `repeat`, `return`, `throw`, `switch`,
+///    `where`, `while`.
+/// 3. **Expression and type keywords** (12) — the "used in
+///    expressions and types" group: `Any`, `as`, `await`
+///    (5.5+ concurrency), `false`, `is`, `nil`, `self`, `Self`,
+///    `super`, `throws`, `true`, `try`. `Self` (capital) is
+///    Swift's "current-type" placeholder — distinct from lowercase
+///    `self` (current instance). Both are spec keywords.
+/// 4. **Concurrency additions** (2) — `actor` (Swift 5.5+
+///    reference-typed actor declaration) and `async` (function-
+///    declaration modifier — `func foo() async throws -> T`).
+///    `await` (call-site suspension marker) is in the expression
+///    group above per spec's grouping. `async let` and `for await`
+///    reuse `async` / `await` from this / expression group.
+/// 5. **Member modifiers** (11) — common modifier keywords that
+///    are ALWAYS reserved in Swift and universally rendered as
+///    keywords in every mainstream Swift editor (Xcode, VS Code
+///    Swift extension, AppCode): `convenience`, `dynamic`,
+///    `final`, `indirect`, `lazy`, `mutating`, `nonmutating`,
+///    `override`, `required`, `unowned`, `weak`.
+///
+/// **Deliberate exclusions:**
+///
+/// - **`#`-prefixed compile-time directives** — partial handling:
+///   `LexCPP.cxx:1370-1372` gates `SCE_C_PREPROCESSOR` on
+///   `sc.ch == '#' && visibleChars == 0` (source comment:
+///   "Preprocessor commands are alone on their line"). So
+///   line-leading directives (`#if` / `#else` / `#elseif` /
+///   `#endif` / `#warning` / `#error`) render as PREPROCESSOR.
+///   **Inline / mid-expression directives** (`#selector(handleTap)`
+///   / `#keyPath(\.foo)` / `#available(iOS 15, *)` /
+///   `#colorLiteral(...)` / `#imageLiteral(...)` /
+///   `#fileLiteral(...)`) do NOT — `LexCPP` treats them as
+///   operator + identifier past the `#`, rendering unstyled. This
+///   is a known gap in `LexCPP`'s Swift handling; a Swift-native
+///   lexer would classify them uniformly. Not fixable at the
+///   wordlist layer (adding `#selector` etc. as wordlist entries
+///   wouldn't help — `LexCPP`'s identifier classifier strips
+///   leading punctuation before wordlist lookup).
+/// - **Blank identifier `_`** — reserved as a wildcard-pattern
+///   in Swift but tokenises as an operator/punctuation by
+///   `LexCPP`. Never sees the wordlist path.
+/// - **`get` / `set` / `didSet` / `willSet`** — property-
+///   observer contextual keywords only meaningful inside
+///   accessor blocks. Same identifier-collision rationale as
+///   TypeScript / JavaScript's `get` / `set` exclusion.
+/// - **`some` / `any`** (lowercase) — opaque-type / existential-
+///   type qualifiers only meaningful in type position
+///   (`some View`, `any Collection`). Lowercase `some` is very
+///   often a variable name in real Swift code; highlighting it
+///   as bold keyword would mis-colour every `let some = ...`
+///   binding. `Any` (capital, existential-any type) IS in
+///   category 3 above per spec.
+/// - **`associativity` / `left` / `right` / `none` / `infix` /
+///   `postfix` / `prefix` / `precedence`** — operator-
+///   declaration contextual keywords only meaningful inside
+///   `operator` / `precedencegroup` blocks. Excluded per the
+///   same rationale.
+/// - **`optional`** (lowercase, protocol-member modifier) —
+///   only meaningful in `@objc protocol` members. Very common
+///   as an identifier; excluded. Capital-O `Optional` (the
+///   generic type) IS in [`SWIFT_KEYWORDS_2`] class 1.
+/// - **`Protocol` / `Type`** — meta-type expressions
+///   (`SomeProtocol.Protocol`, `SomeType.Type`) — position-
+///   context-only.
+///
+/// Sourced from the Swift Programming Language Reference at
+/// <https://docs.swift.org/swift-book/documentation/the-swift-programming-language/lexicalstructure/#Keywords-and-Punctuation>
+/// (Swift 5.9+ baseline).
+pub const SWIFT_KEYWORDS: &str = concat!(
+    // Declaration keywords (27 tokens).
+    "associatedtype borrowing class consuming deinit enum extension ",
+    "fileprivate func import init inout internal let nonisolated open ",
+    "operator precedencegroup private protocol public rethrows static ",
+    "struct subscript typealias var ",
+    // Statement keywords (19).
+    "break case catch continue default defer do else fallthrough for ",
+    "guard if in repeat return throw switch where while ",
+    // Expression + type keywords (12; Self is spec-distinct from self).
+    "Any as await false is nil self Self super throws true try ",
+    // Concurrency additions (2 — Swift 5.5+ structured concurrency;
+    // `await` is in the expression group above, `async` is here).
+    "actor async ",
+    // Member modifiers (11 — always-reserved modifier keywords).
+    "convenience dynamic final indirect lazy mutating nonmutating ",
+    "override required unowned weak",
+);
+
+/// Space-separated Swift **standard library types** list installed
+/// as **class 1** of `LexCPP`'s wordlist descriptor
+/// (`SCE_C_WORD2`, accent "Keyword2" slot). Same class-1 slot
+/// occupied by C's primitive types (`int` / `char`), TypeScript's
+/// primitive-type identifiers (`string` / `number`), and Go's
+/// predeclared types (`bool` / `int`).
+///
+/// **Case-sensitive byte-exact match.** Same discipline as
+/// [`SWIFT_KEYWORDS`]. Swift convention: types are `PascalCase`
+/// (`String`, `Int`, `Array`).
+///
+/// **Categories** (46 entries):
+///
+/// 1. **Numeric primitives** (15) — the fixed-width + sized
+///    variants: `Int` / `Int8` / `Int16` / `Int32` / `Int64`,
+///    `UInt` / `UInt8` / `UInt16` / `UInt32` / `UInt64`,
+///    `Float` / `Float16` / `Float32` / `Float64`, `Double`.
+///    Swift's default numeric-literal-inferred types are `Int`
+///    (integer) and `Double` (floating-point).
+/// 2. **Non-numeric primitives** (8) — `Bool`, `Character`,
+///    `String`, `Substring`, `Never`, `Void`, `Optional`,
+///    `Result`. `Never` is Swift's bottom type (used for
+///    functions that never return). `Void` is a type alias
+///    for `()`. `Optional<T>` is the sugar-desugar target of
+///    `T?`. `Result<Success, Failure>` is Swift 5.0+ error-
+///    return type.
+/// 3. **Collection types** (8) — `Array`, `ArraySlice`,
+///    `ContiguousArray`, `Dictionary`, `Set`,
+///    `KeyValuePairs`, `Range`, `ClosedRange`. `Array<T>` is
+///    the sugar-desugar target of `[T]`; `Dictionary<K, V>` of
+///    `[K: V]`.
+/// 4. **Error handling** (1) — `Error` (Swift's error-
+///    protocol type).
+/// 5. **Common protocols** (9) — the universally-used
+///    protocols that appear as constraints in real Swift code:
+///    `Comparable`, `Equatable`, `Hashable`, `Codable`,
+///    `Encodable`, `Decodable`, `Sendable` (5.5+ concurrency),
+///    `AnyObject`, `AnyClass`. `Codable` is a type alias for
+///    `Encodable & Decodable`.
+/// 6. **Concurrency types** (5) — Swift 5.5+ structured
+///    concurrency: `Task`, `TaskGroup`, `AsyncSequence`,
+///    `AsyncStream`, `MainActor`. `MainActor` is the
+///    global-actor for main-thread-affine code.
+///
+/// **Deliberate exclusions:**
+///
+/// - **Foundation types** (`Date`, `URL`, `Data`, `Notification`,
+///   `NSNumber`, `NSString`, `NSError`, etc.) — Foundation is
+///   an imported framework, not part of the Swift standard
+///   library proper. Users get Foundation's ~600 types via
+///   `import Foundation`; highlighting them here would mis-
+///   colour identifiers in Foundation-free Swift code (Linux
+///   headless, embedded WASM). Same "framework-specific dynamic
+///   set" exclusion rationale as `GDScript`'s engine-singleton
+///   omission and Go's stdlib-package omission.
+/// - **`SwiftUI` / `UIKit` / `AppKit` types** (`View`, `ViewBuilder`,
+///   `Text`, `Button`, `Image`, etc.) — UI framework territory,
+///   even more version-churning than Foundation.
+/// - **Combine types** (`Publisher`, `Subscriber`, `AnyCancellable`)
+///   — framework scope.
+/// - **`AsyncIterator`** — protocol Users implement, not usually
+///   used as a bare type.
+/// - **Concrete integer / floating-point protocols** (`FixedWidthInteger`,
+///   `BinaryInteger`, `BinaryFloatingPoint`) — used in generic
+///   constraints only; users see the concrete types in class 1.
+///
+/// Sourced from the Swift Programming Language Reference §"Standard
+/// Library Types" (Swift 5.9+ baseline).
+pub const SWIFT_KEYWORDS_2: &str = concat!(
+    // Numeric primitives (14).
+    "Int Int8 Int16 Int32 Int64 UInt UInt8 UInt16 UInt32 UInt64 ",
+    "Float Float16 Float32 Float64 Double ",
+    // Non-numeric primitives (8).
+    "Bool Character String Substring Never Void Optional Result ",
+    // Collection types (8).
+    "Array ArraySlice ContiguousArray Dictionary Set KeyValuePairs ",
+    "Range ClosedRange ",
+    // Error handling (1).
+    "Error ",
+    // Common protocols (9).
+    "Comparable Equatable Hashable Codable Encodable Decodable ",
+    "Sendable AnyObject AnyClass ",
+    // Concurrency types (5).
+    "Task TaskGroup AsyncSequence AsyncStream MainActor",
+);
+
 /// Space-separated `VBScript` reserved-word list installed via the
 /// hypertext lexer's `SCI_SETKEYWORDS(2, ...)`. Class 2 of
 /// `htmlWordListDesc[]` drives both `SCE_HB_WORD` (client-side

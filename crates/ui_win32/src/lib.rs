@@ -127,26 +127,26 @@ use codepp_core::lang::{
     L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM,
     L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS,
     L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
-    L_SPICE, L_SQL, L_SREC, L_TCL, L_TEHEX, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG,
-    L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
-    MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
-    NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
-    OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
-    OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
-    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
-    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
-    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RAKU_ADVERBS, RAKU_FUNCTIONS,
-    RAKU_KEYWORDS, RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION,
-    RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS,
-    RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
-    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2,
-    SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
-    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-    VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
-    VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
-    XML_KEYWORDS, YAML_KEYWORDS,
+    L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL, L_TEHEX, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB,
+    L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS,
+    MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS,
+    NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES,
+    OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS,
+    OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS,
+    PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS,
+    POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS,
+    PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RAKU_ADVERBS,
+    RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN,
+    RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4,
+    REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
+    SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS,
+    SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, SWIFT_KEYWORDS,
+    SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+    TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+    VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
+    VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -3772,6 +3772,67 @@ const TYPESCRIPT_THEME: LangTheme = LangTheme {
 // applies uniformly.
 const GO_THEME: LangTheme = LangTheme {
     keywords: &[(0, GO_KEYWORDS), (1, GO_KEYWORDS_2)],
+    styles: CPP_STYLES,
+    italic: CPP_ITALIC,
+    bold: CPP_BOLD,
+};
+// Swift rides `LexCPP` (per `L_SWIFT`'s LangEntry
+// `lexer: Some("cpp")`, extension `.swift`) — reuses the shared
+// `CPP_STYLES` / `CPP_ITALIC` / `CPP_BOLD` table verbatim. Same
+// class-0 + class-1 shape as every other LexCPP-family theme
+// (C / C++ / C# / Java / JavaScript / TypeScript / Go /
+// Objective-C / Resource file); only the wordlist content
+// differs:
+//   - class 0 = `SWIFT_KEYWORDS` (71 tokens: 27 declaration
+//     keywords + 19 statement keywords + 12 expression/type
+//     keywords + 2 concurrency additions (`actor` + `async`) +
+//     11 member modifiers).
+//   - class 1 = `SWIFT_KEYWORDS_2` (46 tokens: 15 numeric
+//     primitives + 8 non-numeric primitives + 8 collection
+//     types + `Error` + 9 common protocols + 5 concurrency
+//     types).
+//
+// **Swift 5.9+ baseline** — includes ownership modifiers
+// (`borrowing`/`consuming`, added 5.9) and structured
+// concurrency (`actor`/`async`/`await`, added 5.5). `Self`
+// (capital, current-type placeholder) is spec-distinct from
+// lowercase `self` (current instance); both are class-0
+// keywords.
+//
+// **`#`-prefixed compile-time directives** — **partial handling**.
+// `LexCPP.cxx:1370-1372` gates `SCE_C_PREPROCESSOR` on
+// `sc.ch == '#' && visibleChars == 0` — the source comment
+// literally reads "Preprocessor commands are alone on their
+// line." So line-leading directives (`#if` / `#else` /
+// `#elseif` / `#endif` / `#warning` / `#error`) render
+// correctly as PREPROCESSOR. **Inline / mid-expression
+// directives** (`#selector(handleTap)` / `#keyPath(\.foo)` /
+// `#available(iOS 15, *)` / `#colorLiteral(...)`) do NOT —
+// `LexCPP` tokenises them as operator + identifier past the
+// `#`, rendering unstyled. This is a known gap in `LexCPP`'s
+// Swift handling; a Swift-native lexer would classify all
+// `#name` uniformly. Not fixable at the wordlist layer.
+//
+// **Contextual identifier-shaped tokens excluded from class 0**:
+// `some` (opaque-return-type qualifier, `some View`) / `any`
+// (existential-type qualifier lowercase, `any Collection`) /
+// `optional` (`@objc protocol` member modifier) / `get` /
+// `set` / `didSet` / `willSet` / operator-declaration
+// contextuals (`associativity` / `left` / `right` / `none` /
+// `infix` / `postfix` / `prefix` / `precedence`). Same
+// identifier-collision rationale as TypeScript's `get`/`set`
+// exclusion: `let some = ...` is common Swift code.
+// Capital-A `Any` (existential-any type) IS included in the
+// expression-group per spec.
+//
+// **Foundation / SwiftUI / UIKit types deliberately excluded**
+// from class 1 (framework-specific dynamic set — same
+// exclusion rationale as GDScript's engine singletons and
+// Go's stdlib package names). Users get Xcode-style
+// framework symbol highlighting from `sourcekit-lsp`, not
+// from a lexer wordlist.
+const SWIFT_THEME: LangTheme = LangTheme {
+    keywords: &[(0, SWIFT_KEYWORDS), (1, SWIFT_KEYWORDS_2)],
     styles: CPP_STYLES,
     italic: CPP_ITALIC,
     bold: CPP_BOLD,
@@ -10791,6 +10852,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&FORTRAN_THEME)
     } else if lang == L_GOLANG {
         Some(&GO_THEME)
+    } else if lang == L_SWIFT {
+        Some(&SWIFT_THEME)
     } else if lang == L_GDSCRIPT {
         Some(&GDSCRIPT_THEME)
     } else if lang == L_HOLLYWOOD {
@@ -26078,8 +26141,8 @@ mod lang_theme_tests {
         L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS,
         L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R,
         L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL,
-        L_SREC, L_TCL, L_TEHEX, L_TEX, L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL,
-        L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+        L_SREC, L_SWIFT, L_TCL, L_TEHEX, L_TEX, L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG,
+        L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
         MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
         NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
         OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
@@ -26091,13 +26154,13 @@ mod lang_theme_tests {
         RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4,
         REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
         SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS,
-        SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS,
-        TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
-        VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
-        XML_KEYWORDS, YAML_KEYWORDS,
+        SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, SWIFT_KEYWORDS,
+        SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+        TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+        VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+        VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+        VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
+        VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -26230,6 +26293,7 @@ mod lang_theme_tests {
             (L_FORTRAN_77, "Fortran (fixed form)"),
             (L_GDSCRIPT, "GDScript"),
             (L_GOLANG, "Go"),
+            (L_SWIFT, "Swift"),
             (L_HOLLYWOOD, "Hollywood"),
             (L_CSOUND, "CSound"),
             (L_ERLANG, "Erlang"),
@@ -26997,6 +27061,347 @@ mod lang_theme_tests {
         assert_ne!(go.keywords[1].1, js.keywords[1].1);
         assert_ne!(go.keywords[1].1, ts.keywords[1].1);
         assert_ne!(go.keywords[1].1, java.keywords[1].1);
+    }
+
+    /// Swift uses `LexCPP` (per `L_SWIFT`'s `LangEntry`
+    /// `lexer: Some("cpp")`) — same shared style table as C /
+    /// C++ / C# / Java / Objective-C / JavaScript / TypeScript /
+    /// Go. Only the two keyword classes differ.
+    ///
+    /// **Swift 5.9+ baseline** — includes ownership modifiers
+    /// (`borrowing` / `consuming`, added 5.9) and structured
+    /// concurrency (`actor` / `async` / `await`, added 5.5).
+    ///
+    /// Pins:
+    ///   - Style-table reuse (`CPP_STYLES` / `CPP_ITALIC` /
+    ///     `CPP_BOLD`).
+    ///   - Canonical class-0 link to [`SWIFT_KEYWORDS`] and
+    ///     class-1 link to [`SWIFT_KEYWORDS_2`].
+    ///   - All 27 declaration keywords present by name.
+    ///   - All 19 statement keywords present.
+    ///   - All 12 expression/type keywords present including
+    ///     the `Self` (capital, current-type placeholder) vs
+    ///     `self` (lowercase, current instance) distinction.
+    ///   - Concurrency addition `actor` present.
+    ///   - Member modifiers (11) present.
+    ///   - Predeclared types present in class 1 — 14 numeric
+    ///     primitives + 8 non-numeric + 8 collection types +
+    ///     Error + 9 common protocols + 5 concurrency types.
+    ///   - Class-0 vs class-1 strict disjointness.
+    ///   - Swift-specific exclusion pins: `some` / `optional`
+    ///     (lowercase, contextual) NOT in class 0 — they're
+    ///     identifier-shaped in most positions and highlighting
+    ///     would mis-colour common Swift code.
+    ///   - `#`-prefixed compile-time directives NOT in either
+    ///     class (they render via `LexCPP`'s PREPROCESSOR state,
+    ///     not via wordlist lookup).
+    ///   - Foundation / `SwiftUI` types NOT in class 1
+    ///     (framework scope, not stdlib).
+    ///   - Cross-language non-reuse — Swift's wordlists must
+    ///     differ from every other LexCPP-family row.
+    #[test]
+    fn swift_reuses_lexcpp_style_table_with_spec_reserved_words() {
+        let c = lang_theme(L_C).expect("C wired");
+        let swift = lang_theme(L_SWIFT).expect("Swift wired");
+        assert_eq!(swift.styles, c.styles, "Swift must reuse CPP_STYLES");
+        assert_eq!(swift.italic, c.italic, "Swift must reuse CPP_ITALIC");
+        assert_eq!(swift.bold, c.bold, "Swift must reuse CPP_BOLD");
+        assert_eq!(swift.keywords.len(), 2);
+        assert_eq!(swift.keywords[0].0, 0);
+        assert_eq!(swift.keywords[0].1, SWIFT_KEYWORDS);
+        assert_eq!(swift.keywords[1].0, 1);
+        assert_eq!(swift.keywords[1].1, SWIFT_KEYWORDS_2);
+
+        use std::collections::HashSet;
+        let wl0: HashSet<&str> = SWIFT_KEYWORDS.split_whitespace().collect();
+        let wl1: HashSet<&str> = SWIFT_KEYWORDS_2.split_whitespace().collect();
+
+        // All 27 declaration keywords present.
+        for kw in [
+            "associatedtype",
+            "borrowing",
+            "class",
+            "consuming",
+            "deinit",
+            "enum",
+            "extension",
+            "fileprivate",
+            "func",
+            "import",
+            "init",
+            "inout",
+            "internal",
+            "let",
+            "nonisolated",
+            "open",
+            "operator",
+            "precedencegroup",
+            "private",
+            "protocol",
+            "public",
+            "rethrows",
+            "static",
+            "struct",
+            "subscript",
+            "typealias",
+            "var",
+        ] {
+            assert!(
+                wl0.contains(kw),
+                "SWIFT_KEYWORDS must include declaration keyword `{kw}`"
+            );
+        }
+
+        // All 19 statement keywords present.
+        for kw in [
+            "break",
+            "case",
+            "catch",
+            "continue",
+            "default",
+            "defer",
+            "do",
+            "else",
+            "fallthrough",
+            "for",
+            "guard",
+            "if",
+            "in",
+            "repeat",
+            "return",
+            "throw",
+            "switch",
+            "where",
+            "while",
+        ] {
+            assert!(
+                wl0.contains(kw),
+                "SWIFT_KEYWORDS must include statement keyword `{kw}`"
+            );
+        }
+
+        // Expression + type keywords — the Self/self distinction
+        // is spec-load-bearing.
+        for kw in [
+            "Any", "as", "await", "false", "is", "nil", "self", "Self", "super", "throws", "true",
+            "try",
+        ] {
+            assert!(
+                wl0.contains(kw),
+                "SWIFT_KEYWORDS must include expression/type keyword `{kw}`"
+            );
+        }
+        // Sanity: capital-S Self and lowercase-s self are distinct
+        // tokens (byte-exact match — Swift is case-sensitive).
+        assert!(
+            wl0.contains("self") && wl0.contains("Self"),
+            "SWIFT_KEYWORDS must include BOTH `self` (current instance) \
+             AND `Self` (current-type placeholder) — they're distinct \
+             tokens per Swift spec"
+        );
+
+        // Concurrency + member modifiers. Swift 5.5+ structured
+        // concurrency: `actor` (declaration keyword), `async`
+        // (function modifier), `await` (already covered in
+        // expression group).
+        assert!(wl0.contains("actor"), "SWIFT_KEYWORDS must include `actor`");
+        assert!(
+            wl0.contains("async"),
+            "SWIFT_KEYWORDS must include `async` — Swift 5.5+ function \
+             declaration modifier (`func foo() async throws -> T`)"
+        );
+        for kw in [
+            "convenience",
+            "dynamic",
+            "final",
+            "indirect",
+            "lazy",
+            "mutating",
+            "nonmutating",
+            "override",
+            "required",
+            "unowned",
+            "weak",
+        ] {
+            assert!(
+                wl0.contains(kw),
+                "SWIFT_KEYWORDS must include member modifier `{kw}`"
+            );
+        }
+
+        // Class 1: numeric primitives.
+        for ty in [
+            "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32",
+            "UInt64", "Float", "Float16", "Float32", "Float64", "Double",
+        ] {
+            assert!(
+                wl1.contains(ty),
+                "SWIFT_KEYWORDS_2 must include numeric primitive `{ty}`"
+            );
+        }
+        // Non-numeric primitives.
+        for ty in [
+            "Bool",
+            "Character",
+            "String",
+            "Substring",
+            "Never",
+            "Void",
+            "Optional",
+            "Result",
+        ] {
+            assert!(
+                wl1.contains(ty),
+                "SWIFT_KEYWORDS_2 must include non-numeric primitive `{ty}`"
+            );
+        }
+        // Collection types.
+        for ty in [
+            "Array",
+            "ArraySlice",
+            "ContiguousArray",
+            "Dictionary",
+            "Set",
+            "KeyValuePairs",
+            "Range",
+            "ClosedRange",
+        ] {
+            assert!(
+                wl1.contains(ty),
+                "SWIFT_KEYWORDS_2 must include collection type `{ty}`"
+            );
+        }
+        // Error + common protocols.
+        for ty in [
+            "Error",
+            "Comparable",
+            "Equatable",
+            "Hashable",
+            "Codable",
+            "Encodable",
+            "Decodable",
+            "Sendable",
+            "AnyObject",
+            "AnyClass",
+        ] {
+            assert!(
+                wl1.contains(ty),
+                "SWIFT_KEYWORDS_2 must include protocol / error type `{ty}`"
+            );
+        }
+        // Concurrency types.
+        for ty in [
+            "Task",
+            "TaskGroup",
+            "AsyncSequence",
+            "AsyncStream",
+            "MainActor",
+        ] {
+            assert!(
+                wl1.contains(ty),
+                "SWIFT_KEYWORDS_2 must include concurrency type `{ty}`"
+            );
+        }
+
+        // Class-0 vs class-1 strict disjointness.
+        if let Some(shared) = wl0.intersection(&wl1).next() {
+            panic!(
+                "SWIFT_KEYWORDS and SWIFT_KEYWORDS_2 both contain `{shared}` \
+                 — LexCPP's classifier checks class 0 first, so the class-1 \
+                 entry is dead code"
+            );
+        }
+
+        // Swift-specific exclusion pins: contextual identifier-
+        // shaped tokens must NOT appear in class 0.
+        // Note: lowercase `any` (existential-type qualifier — `any
+        // Collection`) is excluded per the same identifier-collision
+        // rationale as `some`. Capital-A `Any` (existential-any type)
+        // IS in the expression group above.
+        for excluded in [
+            "some",
+            "any",
+            "optional",
+            "get",
+            "set",
+            "didSet",
+            "willSet",
+            "associativity",
+            "left",
+            "right",
+            "none",
+            "infix",
+            "postfix",
+            "prefix",
+            "precedence",
+        ] {
+            assert!(
+                !wl0.contains(excluded),
+                "SWIFT_KEYWORDS must NOT include contextual token `{excluded}` \
+                 — highlighting it would mis-colour common Swift identifiers"
+            );
+        }
+
+        // `#`-prefixed directives must NOT appear in either class
+        // (they render via LexCPP's PREPROCESSOR state, not wordlist).
+        for directive in [
+            "#available",
+            "#if",
+            "#error",
+            "#warning",
+            "#file",
+            "#function",
+            "#line",
+            "#selector",
+            "#keyPath",
+        ] {
+            assert!(
+                !wl0.contains(directive) && !wl1.contains(directive),
+                "Swift wordlists must NOT include `#`-directive `{directive}` \
+                 — LexCPP tokenises them via SCE_C_PREPROCESSOR without \
+                 wordlist lookup"
+            );
+        }
+
+        // Foundation / SwiftUI / UIKit types NOT in class 1
+        // (framework-specific dynamic set — same exclusion rationale
+        // as GDScript engine singletons and Go stdlib packages).
+        for framework_ty in [
+            "Date",
+            "URL",
+            "Data",
+            "NSString",
+            "NSNumber",
+            "NSError",
+            "View",
+            "Text",
+            "Button",
+            "Image",
+            "Publisher",
+            "AnyCancellable",
+        ] {
+            assert!(
+                !wl1.contains(framework_ty),
+                "SWIFT_KEYWORDS_2 must NOT include framework type `{framework_ty}` \
+                 — Foundation / SwiftUI / UIKit / Combine are framework scope, \
+                 not Swift stdlib"
+            );
+        }
+
+        // Cross-language divergence — Swift wordlists must differ
+        // from every other LexCPP-family row.
+        let js = lang_theme(L_JAVASCRIPT).expect("JS wired");
+        let ts = lang_theme(L_TYPESCRIPT).expect("TS wired");
+        let java = lang_theme(L_JAVA).expect("Java wired");
+        let go = lang_theme(L_GOLANG).expect("Go wired");
+        assert_ne!(swift.keywords[0].1, js.keywords[0].1);
+        assert_ne!(swift.keywords[0].1, ts.keywords[0].1);
+        assert_ne!(swift.keywords[0].1, java.keywords[0].1);
+        assert_ne!(swift.keywords[0].1, go.keywords[0].1);
+        assert_ne!(swift.keywords[1].1, js.keywords[1].1);
+        assert_ne!(swift.keywords[1].1, ts.keywords[1].1);
+        assert_ne!(swift.keywords[1].1, java.keywords[1].1);
+        assert_ne!(swift.keywords[1].1, go.keywords[1].1);
     }
 
     /// Win32 resource scripts (`.rc`) — the first SINGLE-class
@@ -43178,11 +43583,11 @@ mod lang_theme_tests {
     ///      no `DATA_EMPTY` (TEHEX doesn't classify padding
     ///      separately).
     ///   4. **Style-routing pins** for all 8 mapped constants.
-    ///   5. **11 states unmapped total** (19 SCE_HEX_* − 8
+    ///   5. **11 states unmapped total** (19 `SCE_HEX_*` − 8
     ///      mapped): DEFAULT + **5 genuine parse-failure states
-    ///      that TEHEX DOES emit** (RECTYPE_UNKNOWN,
-    ///      BYTECOUNT_WRONG, ADDRESSFIELD_UNKNOWN,
-    ///      CHECKSUM_WRONG, GARBAGE — per framework convention
+    ///      that TEHEX DOES emit** (`RECTYPE_UNKNOWN`,
+    ///      `BYTECOUNT_WRONG`, `ADDRESSFIELD_UNKNOWN`,
+    ///      `CHECKSUM_WRONG`, GARBAGE — per framework convention
     ///      / deferred `StyleSlot::Error` migration) + **5
     ///      unused-by-TEHEX states** (NOADDRESS, RECCOUNT,
     ///      EXTENDEDADDRESS, `DATA_EMPTY`, `DATA_UNKNOWN` —
