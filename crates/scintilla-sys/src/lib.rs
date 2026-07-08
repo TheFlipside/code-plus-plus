@@ -9241,6 +9241,168 @@ pub const SCE_SAS_BLOCK_KEYWORD: usize = 13;
 pub const SCE_SAS_MACRO_FUNCTION: usize = 14;
 pub const SCE_SAS_STATEMENT: usize = 15;
 
+// LexErrorList style indices. 43 defined slots split across two
+// numeric ranges (0..=26 + 40..=55), skipping 27..=39 which
+// SciLexer.h and the LexicalClass table at
+// `vendor/lexilla/lexers/LexErrorList.cxx:92-104` mark as "unused"
+// (27..=31) and "predefined" (32..=39, framework-reserved for
+// internal use). Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h:525-568` and the
+// `LexerModule lmErrorList(SCLEX_ERRORLIST, ...)` registration at
+// `vendor/lexilla/lexers/LexErrorList.cxx:572`.
+//
+// Dispatches SCLEX_ERRORLIST (= 10, per `SciLexer.h:28`) — a
+// legacy lexer by Neil Hodgson himself (1998-2001, per
+// `LexErrorList.cxx:5`), historically used for SciTE's Output
+// pane. Notepad++ (and Code++) exposes it as a manually-selectable
+// language for viewing compiler / linter / interpreter diagnostic
+// output. No default file extension per `LANG_TABLE`.
+//
+// **ZERO wordlist classes** — `emptyWordListDesc[]` at
+// `LexErrorList.cxx:44-46` is `{nullptr}`, and the
+// `LexerModule lmErrorList(..., emptyWordListDesc)` registration
+// passes it directly. All classification is line-pattern-based
+// per `RecogniseErrorListLine` at `:232-452` — no keyword lookup
+// whatsoever. Framework consumes zero-wordlist lexers via a
+// dedicated theme (same pattern as `TXT2TAGS_THEME` / PROPS /
+// LATEX / REGISTRY / TeHex) — theme.keywords = &[].
+//
+// **Three numeric ranges** — the state space is discontiguous:
+//
+//   0..=26 (27 states) — the "classic" diagnostic set.
+//     DEFAULT (0) is unclassified; states 1..=26 are one-per-tool
+//     diagnostic patterns (Python / GCC / Microsoft / Borland /
+//     Perl / .NET / Lua / PHP / Fortran family / Java stack /
+//     Bash + supporting VALUE / GCC_INCLUDED_FROM / GCC_EXCERPT
+//     / CTAG / CMD + four DIFF markers + two ESCSEQ states).
+//
+//   27..=31 (5 slots) — "unused" per LexicalClass. Framework
+//     never emits these; deliberately omitted from `SCE_ERR_*`
+//     constants.
+//
+//   32..=39 (8 slots) — "predefined" per LexicalClass. These
+//     are Scintilla framework-reserved indices (STYLE_* range —
+//     SciLexer.h uses 32..=39 for DEFAULT / LINENUMBER /
+//     BRACELIGHT / BRACEBAD / CONTROLCHAR / INDENTGUIDE /
+//     CALLTIP / FOLDDISPLAYTEXT globally). Not emitted by
+//     LexErrorList; deliberately omitted from `SCE_ERR_*`
+//     constants.
+//
+//   40..=55 (16 states) — ANSI escape-sequence color states,
+//     one per ANSI CSI m color code. When the lexer detects
+//     `\033[NNm` sequences and `escape.sequences` property is
+//     enabled (`LexErrorList.cxx:39-42, :460-497`), the color
+//     numeric maps: ANSI 30..=37 (dim black/red/green/brown/blue/
+//     magenta/cyan/gray) → SCE_ERR_ES_BLACK..=GRAY (40..=47);
+//     ANSI 90..=97 (bright) or (30..=37 + bold=1) →
+//     SCE_ERR_ES_DARK_GRAY..=WHITE (48..=55). Framework leaves
+//     these UNMAPPED — the semantic IS "text in specific ANSI
+//     color N", and our `StyleSlot` enum has no ANSI-color slot.
+//     Mapping any of them to a `StyleSlot` variant would collapse
+//     the 16 distinct semantic colors into one visual color,
+//     defeating the purpose. Users viewing colored terminal
+//     output will see the escape sequences painted (via
+//     SCE_ERR_ESCSEQ = Operator) but subsequent text falls back
+//     to STYLE_DEFAULT. This is an architectural limitation of
+//     the current slot set; extending StyleSlot with ANSI-color
+//     slots is deferred future work.
+//
+// **Diagnostic-family collapse.** 15 tool-specific diagnostic
+// states (PYTHON / GCC / MS / BORLAND / PERL / NET / LUA / PHP /
+// ELF / IFC / IFORT / ABSF / TIDY / JAVA_STACK / BASH) all
+// semantically mean "error/warning line from tool X." Framework
+// routes them all to `StyleSlot::Keyword` (primary structural
+// attention) — user's eye needs to pick error lines out of
+// surrounding output, regardless of which tool produced them.
+// The tool-specific distinction (which lexer state fired) is
+// preserved at the lexer level but visually collapsed.
+//
+// **Context / navigation states → `StyleSlot::Keyword2`.** CTAG
+// (9 — CTags navigation records), VALUE (21 — matched text /
+// message part of GCC error), GCC_INCLUDED_FROM (22 — GCC
+// include-path context "In file included from X:5"), and
+// GCC_EXCERPT (25 — GCC "73 |   code here" excerpt lines). All
+// four are "supporting information adjacent to a diagnostic"
+// archetype — Keyword2's secondary-anchor semantics fit.
+//
+// **CMD (4) → `StyleSlot::Preprocessor`.** SciTE's Output pane
+// prefixes command echoes with `>`; the lexer paints this state
+// on any `>`-leading line (`LexErrorList.cxx:237-239`).
+// Semantically "system directive that produced this output" —
+// Preprocessor accent matches the archetype.
+//
+// **Four DIFF states → distinct semantic slots.**
+//   DIFF_ADDITION (11) → `StyleSlot::String` — added-line marker
+//     (`+`-prefixed). String's typical green tint matches diff
+//     UI convention for additions.
+//   DIFF_DELETION (12) → `StyleSlot::Macro` — deleted-line
+//     marker (`-`-prefixed or `<`-prefixed). Macro's typical
+//     red-orange accent matches diff UI convention for
+//     deletions.
+//   DIFF_CHANGED (10) → `StyleSlot::Number` — changed-line
+//     marker (`!`-prefixed). Number's yellow-ish accent matches
+//     diff UI convention for modifications.
+//   DIFF_MESSAGE (13) → `StyleSlot::Comment` — diff header
+//     (`---`/`+++`-prefixed). Metadata annotation archetype —
+//     Comment italic matches the "file-level annotation" role.
+//
+// **Two ESCSEQ states → `StyleSlot::Operator`.** ESCSEQ (23) is
+// a RECOGNISED ANSI escape sequence (e.g. `\033[31m`); ESCSEQ_
+// UNKNOWN (24) is an unrecognised or malformed sequence. Both
+// are terminal control markers — Operator's accent matches the
+// "syntactic delimiter" role. Same slot for both because the
+// distinction is "did the color-parse succeed" — the sequences
+// themselves paint identically; only the following-text color
+// varies (which is where the SCE_ERR_ES_* states then take
+// over).
+pub const SCLEX_ERRORLIST: usize = 10;
+pub const SCE_ERR_DEFAULT: usize = 0;
+pub const SCE_ERR_PYTHON: usize = 1;
+pub const SCE_ERR_GCC: usize = 2;
+pub const SCE_ERR_MS: usize = 3;
+pub const SCE_ERR_CMD: usize = 4;
+pub const SCE_ERR_BORLAND: usize = 5;
+pub const SCE_ERR_PERL: usize = 6;
+pub const SCE_ERR_NET: usize = 7;
+pub const SCE_ERR_LUA: usize = 8;
+pub const SCE_ERR_CTAG: usize = 9;
+pub const SCE_ERR_DIFF_CHANGED: usize = 10;
+pub const SCE_ERR_DIFF_ADDITION: usize = 11;
+pub const SCE_ERR_DIFF_DELETION: usize = 12;
+pub const SCE_ERR_DIFF_MESSAGE: usize = 13;
+pub const SCE_ERR_PHP: usize = 14;
+pub const SCE_ERR_ELF: usize = 15;
+pub const SCE_ERR_IFC: usize = 16;
+pub const SCE_ERR_IFORT: usize = 17;
+pub const SCE_ERR_ABSF: usize = 18;
+pub const SCE_ERR_TIDY: usize = 19;
+pub const SCE_ERR_JAVA_STACK: usize = 20;
+pub const SCE_ERR_VALUE: usize = 21;
+pub const SCE_ERR_GCC_INCLUDED_FROM: usize = 22;
+pub const SCE_ERR_ESCSEQ: usize = 23;
+pub const SCE_ERR_ESCSEQ_UNKNOWN: usize = 24;
+pub const SCE_ERR_GCC_EXCERPT: usize = 25;
+pub const SCE_ERR_BASH: usize = 26;
+// Slots 27..=39 intentionally omitted: 27..=31 are "unused"
+// per `LexErrorList.cxx:92-96`, 32..=39 are "predefined"
+// framework-reserved indices per `LexErrorList.cxx:97-104`.
+pub const SCE_ERR_ES_BLACK: usize = 40;
+pub const SCE_ERR_ES_RED: usize = 41;
+pub const SCE_ERR_ES_GREEN: usize = 42;
+pub const SCE_ERR_ES_BROWN: usize = 43;
+pub const SCE_ERR_ES_BLUE: usize = 44;
+pub const SCE_ERR_ES_MAGENTA: usize = 45;
+pub const SCE_ERR_ES_CYAN: usize = 46;
+pub const SCE_ERR_ES_GRAY: usize = 47;
+pub const SCE_ERR_ES_DARK_GRAY: usize = 48;
+pub const SCE_ERR_ES_BRIGHT_RED: usize = 49;
+pub const SCE_ERR_ES_BRIGHT_GREEN: usize = 50;
+pub const SCE_ERR_ES_YELLOW: usize = 51;
+pub const SCE_ERR_ES_BRIGHT_BLUE: usize = 52;
+pub const SCE_ERR_ES_BRIGHT_MAGENTA: usize = 53;
+pub const SCE_ERR_ES_BRIGHT_CYAN: usize = 54;
+pub const SCE_ERR_ES_WHITE: usize = 55;
+
 // SCN_* notification codes (delivered via WM_NOTIFY's NMHDR.code) are added
 // when Phase 2+ first dispatches them. Each constant must be cross-checked
 // against `vendor/scintilla/include/Scintilla.h` at the time of addition;

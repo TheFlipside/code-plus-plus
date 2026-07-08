@@ -125,10 +125,10 @@ use codepp_core::lang::{
     JSON_KEYWORDS, JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS,
     LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASN1, L_ASP, L_AU3, L_AVS,
     L_BAANC, L_BASH, L_BATCH, L_BLITZBASIC, L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP,
-    L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77,
-    L_FREEBASIC, L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_IHEX, L_INI,
-    L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
-    L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
+    L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_ERRORLIST, L_ESCRIPT, L_FORTH, L_FORTRAN,
+    L_FORTRAN_77, L_FREEBASIC, L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML,
+    L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP,
+    L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
     L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PUREBASIC, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL,
     L_REGISTRY, L_RUBY, L_RUST, L_SAS, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT,
     L_TCL, L_TEHEX, L_TEX, L_TOML, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL,
@@ -220,9 +220,14 @@ use codepp_scintilla_sys::{
     SCE_ERLANG_KEYWORD, SCE_ERLANG_MACRO, SCE_ERLANG_MACRO_QUOTED, SCE_ERLANG_MODULES,
     SCE_ERLANG_MODULES_ATT, SCE_ERLANG_NODE_NAME, SCE_ERLANG_NODE_NAME_QUOTED, SCE_ERLANG_NUMBER,
     SCE_ERLANG_OPERATOR, SCE_ERLANG_PREPROC, SCE_ERLANG_RECORD, SCE_ERLANG_RECORD_QUOTED,
-    SCE_ERLANG_STRING, SCE_ERLANG_VARIABLE, SCE_ESCRIPT_BRACE, SCE_ESCRIPT_COMMENT,
-    SCE_ESCRIPT_COMMENTDOC, SCE_ESCRIPT_COMMENTLINE, SCE_ESCRIPT_NUMBER, SCE_ESCRIPT_OPERATOR,
-    SCE_ESCRIPT_STRING, SCE_ESCRIPT_WORD, SCE_ESCRIPT_WORD2, SCE_ESCRIPT_WORD3, SCE_FORTH_COMMENT,
+    SCE_ERLANG_STRING, SCE_ERLANG_VARIABLE, SCE_ERR_ABSF, SCE_ERR_BASH, SCE_ERR_BORLAND,
+    SCE_ERR_CMD, SCE_ERR_CTAG, SCE_ERR_DIFF_ADDITION, SCE_ERR_DIFF_CHANGED, SCE_ERR_DIFF_DELETION,
+    SCE_ERR_DIFF_MESSAGE, SCE_ERR_ELF, SCE_ERR_ESCSEQ, SCE_ERR_ESCSEQ_UNKNOWN, SCE_ERR_GCC,
+    SCE_ERR_GCC_EXCERPT, SCE_ERR_GCC_INCLUDED_FROM, SCE_ERR_IFC, SCE_ERR_IFORT, SCE_ERR_JAVA_STACK,
+    SCE_ERR_LUA, SCE_ERR_MS, SCE_ERR_NET, SCE_ERR_PERL, SCE_ERR_PHP, SCE_ERR_PYTHON, SCE_ERR_TIDY,
+    SCE_ERR_VALUE, SCE_ESCRIPT_BRACE, SCE_ESCRIPT_COMMENT, SCE_ESCRIPT_COMMENTDOC,
+    SCE_ESCRIPT_COMMENTLINE, SCE_ESCRIPT_NUMBER, SCE_ESCRIPT_OPERATOR, SCE_ESCRIPT_STRING,
+    SCE_ESCRIPT_WORD, SCE_ESCRIPT_WORD2, SCE_ESCRIPT_WORD3, SCE_FORTH_COMMENT,
     SCE_FORTH_COMMENT_ML, SCE_FORTH_CONTROL, SCE_FORTH_DEFWORD, SCE_FORTH_KEYWORD,
     SCE_FORTH_LOCALE, SCE_FORTH_NUMBER, SCE_FORTH_PREWORD1, SCE_FORTH_PREWORD2, SCE_FORTH_STRING,
     SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_LABEL, SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2,
@@ -6946,6 +6951,156 @@ const SAS_THEME: LangTheme = LangTheme {
     bold: SAS_BOLD,
 };
 
+// --- LexErrorList ---
+// ErrorList (no default file extension — manually selectable via
+// Language menu) — the historical output-pane lexer authored by
+// Neil Hodgson himself in 1998-2001 for SciTE. Semantically parses
+// compiler / linter / interpreter diagnostic output line-by-line
+// via pattern matching in `RecogniseErrorListLine`
+// (`LexErrorList.cxx:232-452`). Notepad++ (and Code++) expose it
+// for viewing captured tool output. `L_ERRORLIST` (id 92) is the
+// only language row using this lexer. See the `LexErrorList`
+// banner in `scintilla-sys/src/lib.rs` for the state-space
+// enumeration and slot-routing rationale.
+//
+// **Zero-wordlist lexer** — `emptyWordListDesc[]` at
+// `LexErrorList.cxx:44-46` is `{nullptr}`. Classification is
+// entirely pattern-based (StartsWith / Contains checks against
+// tool-specific message-format signatures). Excluded from
+// `wired_languages_have_complete_themes` because
+// `ERRORLIST_THEME.keywords = &[]` violates that test's
+// `!keywords.is_empty()` floor — matches the PROPS / LATEX /
+// REGISTRY / TXT2TAGS precedents. The dedicated
+// `errorlist_uses_lexerrorlist_zero_class_theme` test below pins
+// the 26-mapping shape, empty-keywords invariant, all
+// style-routing decisions, ANSI-color-slot deliberately-unmapped
+// architectural pin, and cross-language non-reuse.
+//
+// **26 style mappings** covering the 27 emitted states in
+// range 0..=26. One of those 27 stays unmapped:
+//   * `DEFAULT` (0) — framework fall-through convention.
+//
+// Additional 29 unmapped slots outside the mapped range:
+//   * 27..=31 (5 slots) — "unused" per the LexicalClass table at
+//     `LexErrorList.cxx:92-96`.
+//   * 32..=39 (8 slots) — "predefined" per
+//     `LexErrorList.cxx:97-104`; framework-reserved indices in
+//     the Scintilla `STYLE_*` range.
+//   * 40..=55 (16 slots) — ANSI escape-sequence color states
+//     (`SCE_ERR_ES_BLACK` through `SCE_ERR_ES_WHITE`). Framework
+//     leaves these unmapped intentionally — see the extensive
+//     rationale in the `LexErrorList` banner in
+//     `scintilla-sys/src/lib.rs`. TL;DR: the semantic IS
+//     "text in specific ANSI color N", and our `StyleSlot`
+//     enum has no ANSI-color slot. Mapping any of them would
+//     collapse 16 distinct semantic colors into one visual
+//     paint.
+//
+// Mapped slots (26):
+//   * 15 diagnostic states (PYTHON / GCC / MS / BORLAND /
+//     PERL / NET / LUA / PHP / ELF / IFC / IFORT / ABSF /
+//     TIDY / JAVA_STACK / BASH) → Keyword — primary
+//     attention-getting archetype for "error/warning line
+//     from tool X." Also bold.
+//   * 4 context / navigation states (CTAG / VALUE /
+//     GCC_INCLUDED_FROM / GCC_EXCERPT) → Keyword2 —
+//     supporting information adjacent to a diagnostic.
+//   * `CMD` (4) → Preprocessor — SciTE Output pane command
+//     echo (`>`-prefixed lines).
+//   * `DIFF_ADDITION` (11) → String — added-line marker
+//     (green tint by String convention).
+//   * `DIFF_DELETION` (12) → Macro — deleted-line marker
+//     (red-orange tint by Macro convention).
+//   * `DIFF_CHANGED` (10) → Number — changed-line marker
+//     (yellow tint by Number convention).
+//   * `DIFF_MESSAGE` (13) → Comment — diff header
+//     (`---`/`+++`-prefixed). Metadata annotation archetype;
+//     italic.
+//   * `ESCSEQ` (23), `ESCSEQ_UNKNOWN` (24) → Operator —
+//     terminal control markers; syntactic delimiter role.
+//
+// Palette rationale: ErrorList's semantic domain (colored
+// terminal output + tool diagnostics) doesn't map cleanly onto
+// the language-focused `StyleSlot` enum. The framework
+// collapses tool-specific diagnostic distinctions into a
+// single Keyword accent — user's eye needs to pick error
+// lines out of surrounding output, and the tool identity is
+// preserved at the lexer level even if visually unified.
+// Diff-marker states use four DISTINCT semantic slots because
+// diff readers need to visually distinguish addition /
+// deletion / modification / metadata by color.
+const ERRORLIST_STYLES: &[(usize, StyleSlot)] = &[
+    // 15 diagnostic states → Keyword bold.
+    (SCE_ERR_PYTHON, StyleSlot::Keyword),
+    (SCE_ERR_GCC, StyleSlot::Keyword),
+    (SCE_ERR_MS, StyleSlot::Keyword),
+    (SCE_ERR_BORLAND, StyleSlot::Keyword),
+    (SCE_ERR_PERL, StyleSlot::Keyword),
+    (SCE_ERR_NET, StyleSlot::Keyword),
+    (SCE_ERR_LUA, StyleSlot::Keyword),
+    (SCE_ERR_PHP, StyleSlot::Keyword),
+    (SCE_ERR_ELF, StyleSlot::Keyword),
+    (SCE_ERR_IFC, StyleSlot::Keyword),
+    (SCE_ERR_IFORT, StyleSlot::Keyword),
+    (SCE_ERR_ABSF, StyleSlot::Keyword),
+    (SCE_ERR_TIDY, StyleSlot::Keyword),
+    (SCE_ERR_JAVA_STACK, StyleSlot::Keyword),
+    (SCE_ERR_BASH, StyleSlot::Keyword),
+    // 4 context / navigation states → Keyword2.
+    (SCE_ERR_CTAG, StyleSlot::Keyword2),
+    (SCE_ERR_VALUE, StyleSlot::Keyword2),
+    (SCE_ERR_GCC_INCLUDED_FROM, StyleSlot::Keyword2),
+    (SCE_ERR_GCC_EXCERPT, StyleSlot::Keyword2),
+    // CMD → Preprocessor (shell prompt echo).
+    (SCE_ERR_CMD, StyleSlot::Preprocessor),
+    // 4 diff states → distinct semantic slots per diff role.
+    (SCE_ERR_DIFF_ADDITION, StyleSlot::String),
+    (SCE_ERR_DIFF_DELETION, StyleSlot::Macro),
+    (SCE_ERR_DIFF_CHANGED, StyleSlot::Number),
+    (SCE_ERR_DIFF_MESSAGE, StyleSlot::Comment),
+    // 2 escape-sequence states → Operator.
+    (SCE_ERR_ESCSEQ, StyleSlot::Operator),
+    (SCE_ERR_ESCSEQ_UNKNOWN, StyleSlot::Operator),
+];
+
+// Italic on `DIFF_MESSAGE` (diff header — metadata annotation).
+// The DIFF_MESSAGE state routes to Comment which conventionally
+// gets italic across every Code++ theme; adding to this list
+// pins the italic explicitly.
+const ERRORLIST_ITALIC: &[usize] = &[SCE_ERR_DIFF_MESSAGE];
+
+// Bold on the 15 diagnostic states — primary attention-getting
+// role. `>`-prefixed CMD lines are also visually prominent in
+// tool output but are NOT bold because they're commands the user
+// ran (not errors the user needs to fix).
+const ERRORLIST_BOLD: &[usize] = &[
+    SCE_ERR_PYTHON,
+    SCE_ERR_GCC,
+    SCE_ERR_MS,
+    SCE_ERR_BORLAND,
+    SCE_ERR_PERL,
+    SCE_ERR_NET,
+    SCE_ERR_LUA,
+    SCE_ERR_PHP,
+    SCE_ERR_ELF,
+    SCE_ERR_IFC,
+    SCE_ERR_IFORT,
+    SCE_ERR_ABSF,
+    SCE_ERR_TIDY,
+    SCE_ERR_JAVA_STACK,
+    SCE_ERR_BASH,
+];
+
+// Zero-class install matching `emptyWordListDesc[]` at
+// `LexErrorList.cxx:44-46` (single-element null-terminated array
+// — zero real classes).
+const ERRORLIST_THEME: LangTheme = LangTheme {
+    keywords: &[],
+    styles: ERRORLIST_STYLES,
+    italic: ERRORLIST_ITALIC,
+    bold: ERRORLIST_BOLD,
+};
+
 // --- LexVisualProlog ---
 // Visual Prolog (extension `.vip`) — Prolog Development Center's
 // OOP-flavoured Prolog dialect with typed classes and interfaces.
@@ -11889,6 +12044,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&TOML_THEME)
     } else if lang == L_SAS {
         Some(&SAS_THEME)
+    } else if lang == L_ERRORLIST {
+        Some(&ERRORLIST_THEME)
     } else if lang == L_TXT2TAGS {
         Some(&TXT2TAGS_THEME)
     } else if lang == L_TYPESCRIPT {
@@ -27051,18 +27208,19 @@ mod lang_theme_tests {
         ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS,
         ASM_REG_KEYWORDS, ASN1_BOLD, ASN1_ITALIC, ASN1_STYLES, AVS_BOLD, AVS_ITALIC, AVS_STYLES,
         BAAN_BOLD, BAAN_ITALIC, BAAN_STYLES, BLITZBASIC_BOLD, BLITZBASIC_ITALIC, BLITZBASIC_STYLES,
-        ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC, ESCRIPT_STYLES,
-        FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES, FREEBASIC_BOLD,
-        FREEBASIC_ITALIC, FREEBASIC_STYLES, GDSCRIPT_BOLD, GDSCRIPT_ITALIC, GDSCRIPT_STYLES,
-        HOLLYWOOD_BOLD, HOLLYWOOD_ITALIC, HOLLYWOOD_STYLES, IHEX_STYLES, MMIXAL_BOLD,
-        MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC, NIM_STYLES, NNCRONTAB_BOLD,
-        NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD, OSCRIPT_ITALIC, OSCRIPT_STYLES,
-        PUREBASIC_BOLD, PUREBASIC_ITALIC, PUREBASIC_STYLES, RAKU_BOLD, RAKU_ITALIC, RAKU_STYLES,
-        REBOL_BOLD, REBOL_ITALIC, REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC, REGISTRY_STYLES,
-        SAS_BOLD, SAS_ITALIC, SAS_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
-        SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER,
-        SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
-        SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ERRORLIST_BOLD, ERRORLIST_ITALIC,
+        ERRORLIST_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC, ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD,
+        FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES, FREEBASIC_BOLD, FREEBASIC_ITALIC,
+        FREEBASIC_STYLES, GDSCRIPT_BOLD, GDSCRIPT_ITALIC, GDSCRIPT_STYLES, HOLLYWOOD_BOLD,
+        HOLLYWOOD_ITALIC, HOLLYWOOD_STYLES, IHEX_STYLES, MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES,
+        NIM_BOLD, NIM_ITALIC, NIM_STYLES, NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES,
+        OSCRIPT_BOLD, OSCRIPT_ITALIC, OSCRIPT_STYLES, PUREBASIC_BOLD, PUREBASIC_ITALIC,
+        PUREBASIC_STYLES, RAKU_BOLD, RAKU_ITALIC, RAKU_STYLES, REBOL_BOLD, REBOL_ITALIC,
+        REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC, REGISTRY_STYLES, SAS_BOLD, SAS_ITALIC,
+        SAS_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE,
+        SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING,
+        SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
+        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
         SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
         SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
         SCE_ASN1_ATTRIBUTE, SCE_ASN1_COMMENT, SCE_ASN1_DESCRIPTOR, SCE_ASN1_KEYWORD, SCE_ASN1_OID,
@@ -27156,34 +27314,34 @@ mod lang_theme_tests {
         KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2,
         L_ADA, L_ASM, L_ASN1, L_ASP, L_AU3, L_AVS, L_BAANC, L_BASH, L_BATCH, L_BLITZBASIC, L_C,
         L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF,
-        L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_FREEBASIC, L_GDSCRIPT, L_GOLANG,
-        L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT,
-        L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL,
-        L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
-        L_PROPS, L_PS, L_PUREBASIC, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY,
-        L_RUST, L_SAS, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL, L_TEHEX,
-        L_TEX, L_TEXT, L_TOML, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG,
-        L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
-        MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
-        NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-        OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
-        OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
-        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
-        PUREBASIC_KEYWORDS, PUREBASIC_PREPROCESSOR, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
-        RAKU_ADVERBS, RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE,
-        RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3,
-        REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
-        R_OTHER_FUNCTIONS, R_RESERVED, SAS_BLOCK_KEYWORDS, SAS_KEYWORDS, SAS_MACRO_FUNCTIONS,
-        SAS_STATEMENTS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS,
-        SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2,
-        SWIFT_KEYWORDS, SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
-        TCL_TK_KEYWORDS, TOML_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
-        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
-        VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
-        XML_KEYWORDS, YAML_KEYWORDS,
+        L_ERLANG, L_ERRORLIST, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_FREEBASIC,
+        L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_IHEX, L_INI, L_INNO,
+        L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
+        L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP,
+        L_POWERSHELL, L_PROPS, L_PS, L_PUREBASIC, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY,
+        L_RUBY, L_RUST, L_SAS, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL,
+        L_TEHEX, L_TEX, L_TEXT, L_TOML, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL,
+        L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+        MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
+        NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
+        OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+        POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+        POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+        PS_LEVEL3_KEYWORDS, PUREBASIC_KEYWORDS, PUREBASIC_PREPROCESSOR, PYTHON_KEYWORDS,
+        PYTHON_KEYWORDS_2, RAKU_ADVERBS, RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC,
+        RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD,
+        REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS,
+        R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SAS_BLOCK_KEYWORDS, SAS_KEYWORDS,
+        SAS_MACRO_FUNCTIONS, SAS_STATEMENTS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+        SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3,
+        SQL_KEYWORDS, SQL_KEYWORDS_2, SWIFT_KEYWORDS, SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS,
+        TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TOML_KEYWORDS, TYPESCRIPT_KEYWORDS,
+        TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS,
+        VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
+        VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+        VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
+        VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -27208,50 +27366,55 @@ mod lang_theme_tests {
         SCE_ERLANG_MODULES, SCE_ERLANG_MODULES_ATT, SCE_ERLANG_NODE_NAME,
         SCE_ERLANG_NODE_NAME_QUOTED, SCE_ERLANG_NUMBER, SCE_ERLANG_OPERATOR, SCE_ERLANG_PREPROC,
         SCE_ERLANG_RECORD, SCE_ERLANG_RECORD_QUOTED, SCE_ERLANG_STRING, SCE_ERLANG_VARIABLE,
-        SCE_ESCRIPT_BRACE, SCE_ESCRIPT_COMMENT, SCE_ESCRIPT_COMMENTDOC, SCE_ESCRIPT_COMMENTLINE,
-        SCE_ESCRIPT_NUMBER, SCE_ESCRIPT_OPERATOR, SCE_ESCRIPT_STRING, SCE_ESCRIPT_WORD,
-        SCE_ESCRIPT_WORD2, SCE_ESCRIPT_WORD3, SCE_FORTH_COMMENT, SCE_FORTH_COMMENT_ML,
-        SCE_FORTH_CONTROL, SCE_FORTH_DEFWORD, SCE_FORTH_KEYWORD, SCE_FORTH_LOCALE,
-        SCE_FORTH_NUMBER, SCE_FORTH_PREWORD1, SCE_FORTH_PREWORD2, SCE_FORTH_STRING, SCE_F_COMMENT,
-        SCE_F_CONTINUATION, SCE_F_DEFAULT, SCE_F_IDENTIFIER, SCE_F_LABEL, SCE_F_NUMBER,
-        SCE_F_OPERATOR, SCE_F_OPERATOR2, SCE_F_PREPROCESSOR, SCE_F_STRING1, SCE_F_STRING2,
-        SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2, SCE_F_WORD3, SCE_GC_ATTRIBUTE, SCE_GC_COMMAND,
-        SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL, SCE_GC_DEFAULT, SCE_GC_EVENT,
-        SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING, SCE_GD_ANNOTATION, SCE_GD_CHARACTER,
-        SCE_GD_CLASSNAME, SCE_GD_COMMENTBLOCK, SCE_GD_COMMENTLINE, SCE_GD_DEFAULT, SCE_GD_FUNCNAME,
-        SCE_GD_IDENTIFIER, SCE_GD_NODEPATH, SCE_GD_NUMBER, SCE_GD_OPERATOR, SCE_GD_STRING,
-        SCE_GD_STRINGEOL, SCE_GD_TRIPLE, SCE_GD_TRIPLEDOUBLE, SCE_GD_WORD, SCE_GD_WORD2,
-        SCE_HA_IDENTIFIER, SCE_HA_IMPORT, SCE_HEX_ADDRESSFIELD_UNKNOWN, SCE_HEX_BYTECOUNT,
-        SCE_HEX_BYTECOUNT_WRONG, SCE_HEX_CHECKSUM, SCE_HEX_CHECKSUM_WRONG, SCE_HEX_DATAADDRESS,
-        SCE_HEX_DATA_EMPTY, SCE_HEX_DATA_EVEN, SCE_HEX_DATA_ODD, SCE_HEX_DATA_UNKNOWN,
-        SCE_HEX_DEFAULT, SCE_HEX_EXTENDEDADDRESS, SCE_HEX_GARBAGE, SCE_HEX_NOADDRESS,
-        SCE_HEX_RECCOUNT, SCE_HEX_RECSTART, SCE_HEX_RECTYPE, SCE_HEX_RECTYPE_UNKNOWN,
-        SCE_HEX_STARTADDRESS, SCE_HOLLYWOOD_COMMENT, SCE_HOLLYWOOD_COMMENTBLOCK,
-        SCE_HOLLYWOOD_CONSTANT, SCE_HOLLYWOOD_DEFAULT, SCE_HOLLYWOOD_HEXNUMBER,
-        SCE_HOLLYWOOD_IDENTIFIER, SCE_HOLLYWOOD_KEYWORD, SCE_HOLLYWOOD_NUMBER,
-        SCE_HOLLYWOOD_OPERATOR, SCE_HOLLYWOOD_PLUGINAPI, SCE_HOLLYWOOD_PLUGINMETHOD,
-        SCE_HOLLYWOOD_PREPROCESSOR, SCE_HOLLYWOOD_STDAPI, SCE_HOLLYWOOD_STRING,
-        SCE_HOLLYWOOD_STRINGBLOCK, SCE_INNO_IDENTIFIER, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI,
-        SCE_JSON_DEFAULT, SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD,
-        SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR,
-        SCE_JSON_PROPERTYNAME, SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI,
-        SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
-        SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR,
-        SCE_MATLAB_STRING, SCE_MMIXAL_CHAR, SCE_MMIXAL_COMMENT, SCE_MMIXAL_HEX, SCE_MMIXAL_INCLUDE,
-        SCE_MMIXAL_LABEL, SCE_MMIXAL_NUMBER, SCE_MMIXAL_OPCODE_VALID, SCE_MMIXAL_OPERATOR,
-        SCE_MMIXAL_REGISTER, SCE_MMIXAL_STRING, SCE_MMIXAL_SYMBOL, SCE_NIM_BACKTICKS,
-        SCE_NIM_CHARACTER, SCE_NIM_COMMENT, SCE_NIM_COMMENTDOC, SCE_NIM_COMMENTLINE,
-        SCE_NIM_COMMENTLINEDOC, SCE_NIM_FUNCNAME, SCE_NIM_IDENTIFIER, SCE_NIM_NUMBER,
-        SCE_NIM_OPERATOR, SCE_NIM_STRING, SCE_NIM_TRIPLE, SCE_NIM_TRIPLEDOUBLE, SCE_NIM_WORD,
-        SCE_NNCRONTAB_ASTERISK, SCE_NNCRONTAB_COMMENT, SCE_NNCRONTAB_ENVIRONMENT,
-        SCE_NNCRONTAB_IDENTIFIER, SCE_NNCRONTAB_KEYWORD, SCE_NNCRONTAB_MODIFIER,
-        SCE_NNCRONTAB_NUMBER, SCE_NNCRONTAB_SECTION, SCE_NNCRONTAB_STRING, SCE_NNCRONTAB_TASK,
-        SCE_OSCRIPT_BLOCK_COMMENT, SCE_OSCRIPT_CONSTANT, SCE_OSCRIPT_DOC_COMMENT,
-        SCE_OSCRIPT_DOUBLEQUOTE_STRING, SCE_OSCRIPT_FUNCTION, SCE_OSCRIPT_GLOBAL,
-        SCE_OSCRIPT_KEYWORD, SCE_OSCRIPT_LABEL, SCE_OSCRIPT_LINE_COMMENT, SCE_OSCRIPT_METHOD,
-        SCE_OSCRIPT_NUMBER, SCE_OSCRIPT_OBJECT, SCE_OSCRIPT_OPERATOR, SCE_OSCRIPT_PREPROCESSOR,
-        SCE_OSCRIPT_PROPERTY, SCE_OSCRIPT_SINGLEQUOTE_STRING, SCE_OSCRIPT_TYPE,
-        SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET,
+        SCE_ERR_ABSF, SCE_ERR_BASH, SCE_ERR_BORLAND, SCE_ERR_CMD, SCE_ERR_CTAG,
+        SCE_ERR_DIFF_ADDITION, SCE_ERR_DIFF_CHANGED, SCE_ERR_DIFF_DELETION, SCE_ERR_DIFF_MESSAGE,
+        SCE_ERR_ELF, SCE_ERR_ESCSEQ, SCE_ERR_ESCSEQ_UNKNOWN, SCE_ERR_GCC, SCE_ERR_GCC_EXCERPT,
+        SCE_ERR_GCC_INCLUDED_FROM, SCE_ERR_IFC, SCE_ERR_IFORT, SCE_ERR_JAVA_STACK, SCE_ERR_LUA,
+        SCE_ERR_MS, SCE_ERR_NET, SCE_ERR_PERL, SCE_ERR_PHP, SCE_ERR_PYTHON, SCE_ERR_TIDY,
+        SCE_ERR_VALUE, SCE_ESCRIPT_BRACE, SCE_ESCRIPT_COMMENT, SCE_ESCRIPT_COMMENTDOC,
+        SCE_ESCRIPT_COMMENTLINE, SCE_ESCRIPT_NUMBER, SCE_ESCRIPT_OPERATOR, SCE_ESCRIPT_STRING,
+        SCE_ESCRIPT_WORD, SCE_ESCRIPT_WORD2, SCE_ESCRIPT_WORD3, SCE_FORTH_COMMENT,
+        SCE_FORTH_COMMENT_ML, SCE_FORTH_CONTROL, SCE_FORTH_DEFWORD, SCE_FORTH_KEYWORD,
+        SCE_FORTH_LOCALE, SCE_FORTH_NUMBER, SCE_FORTH_PREWORD1, SCE_FORTH_PREWORD2,
+        SCE_FORTH_STRING, SCE_F_COMMENT, SCE_F_CONTINUATION, SCE_F_DEFAULT, SCE_F_IDENTIFIER,
+        SCE_F_LABEL, SCE_F_NUMBER, SCE_F_OPERATOR, SCE_F_OPERATOR2, SCE_F_PREPROCESSOR,
+        SCE_F_STRING1, SCE_F_STRING2, SCE_F_STRINGEOL, SCE_F_WORD, SCE_F_WORD2, SCE_F_WORD3,
+        SCE_GC_ATTRIBUTE, SCE_GC_COMMAND, SCE_GC_COMMENTBLOCK, SCE_GC_COMMENTLINE, SCE_GC_CONTROL,
+        SCE_GC_DEFAULT, SCE_GC_EVENT, SCE_GC_GLOBAL, SCE_GC_OPERATOR, SCE_GC_STRING,
+        SCE_GD_ANNOTATION, SCE_GD_CHARACTER, SCE_GD_CLASSNAME, SCE_GD_COMMENTBLOCK,
+        SCE_GD_COMMENTLINE, SCE_GD_DEFAULT, SCE_GD_FUNCNAME, SCE_GD_IDENTIFIER, SCE_GD_NODEPATH,
+        SCE_GD_NUMBER, SCE_GD_OPERATOR, SCE_GD_STRING, SCE_GD_STRINGEOL, SCE_GD_TRIPLE,
+        SCE_GD_TRIPLEDOUBLE, SCE_GD_WORD, SCE_GD_WORD2, SCE_HA_IDENTIFIER, SCE_HA_IMPORT,
+        SCE_HEX_ADDRESSFIELD_UNKNOWN, SCE_HEX_BYTECOUNT, SCE_HEX_BYTECOUNT_WRONG, SCE_HEX_CHECKSUM,
+        SCE_HEX_CHECKSUM_WRONG, SCE_HEX_DATAADDRESS, SCE_HEX_DATA_EMPTY, SCE_HEX_DATA_EVEN,
+        SCE_HEX_DATA_ODD, SCE_HEX_DATA_UNKNOWN, SCE_HEX_DEFAULT, SCE_HEX_EXTENDEDADDRESS,
+        SCE_HEX_GARBAGE, SCE_HEX_NOADDRESS, SCE_HEX_RECCOUNT, SCE_HEX_RECSTART, SCE_HEX_RECTYPE,
+        SCE_HEX_RECTYPE_UNKNOWN, SCE_HEX_STARTADDRESS, SCE_HOLLYWOOD_COMMENT,
+        SCE_HOLLYWOOD_COMMENTBLOCK, SCE_HOLLYWOOD_CONSTANT, SCE_HOLLYWOOD_DEFAULT,
+        SCE_HOLLYWOOD_HEXNUMBER, SCE_HOLLYWOOD_IDENTIFIER, SCE_HOLLYWOOD_KEYWORD,
+        SCE_HOLLYWOOD_NUMBER, SCE_HOLLYWOOD_OPERATOR, SCE_HOLLYWOOD_PLUGINAPI,
+        SCE_HOLLYWOOD_PLUGINMETHOD, SCE_HOLLYWOOD_PREPROCESSOR, SCE_HOLLYWOOD_STDAPI,
+        SCE_HOLLYWOOD_STRING, SCE_HOLLYWOOD_STRINGBLOCK, SCE_INNO_IDENTIFIER,
+        SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI, SCE_JSON_DEFAULT, SCE_JSON_ERROR,
+        SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT,
+        SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME, SCE_JSON_STRING,
+        SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT,
+        SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER,
+        SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_MMIXAL_CHAR, SCE_MMIXAL_COMMENT,
+        SCE_MMIXAL_HEX, SCE_MMIXAL_INCLUDE, SCE_MMIXAL_LABEL, SCE_MMIXAL_NUMBER,
+        SCE_MMIXAL_OPCODE_VALID, SCE_MMIXAL_OPERATOR, SCE_MMIXAL_REGISTER, SCE_MMIXAL_STRING,
+        SCE_MMIXAL_SYMBOL, SCE_NIM_BACKTICKS, SCE_NIM_CHARACTER, SCE_NIM_COMMENT,
+        SCE_NIM_COMMENTDOC, SCE_NIM_COMMENTLINE, SCE_NIM_COMMENTLINEDOC, SCE_NIM_FUNCNAME,
+        SCE_NIM_IDENTIFIER, SCE_NIM_NUMBER, SCE_NIM_OPERATOR, SCE_NIM_STRING, SCE_NIM_TRIPLE,
+        SCE_NIM_TRIPLEDOUBLE, SCE_NIM_WORD, SCE_NNCRONTAB_ASTERISK, SCE_NNCRONTAB_COMMENT,
+        SCE_NNCRONTAB_ENVIRONMENT, SCE_NNCRONTAB_IDENTIFIER, SCE_NNCRONTAB_KEYWORD,
+        SCE_NNCRONTAB_MODIFIER, SCE_NNCRONTAB_NUMBER, SCE_NNCRONTAB_SECTION, SCE_NNCRONTAB_STRING,
+        SCE_NNCRONTAB_TASK, SCE_OSCRIPT_BLOCK_COMMENT, SCE_OSCRIPT_CONSTANT,
+        SCE_OSCRIPT_DOC_COMMENT, SCE_OSCRIPT_DOUBLEQUOTE_STRING, SCE_OSCRIPT_FUNCTION,
+        SCE_OSCRIPT_GLOBAL, SCE_OSCRIPT_KEYWORD, SCE_OSCRIPT_LABEL, SCE_OSCRIPT_LINE_COMMENT,
+        SCE_OSCRIPT_METHOD, SCE_OSCRIPT_NUMBER, SCE_OSCRIPT_OBJECT, SCE_OSCRIPT_OPERATOR,
+        SCE_OSCRIPT_PREPROCESSOR, SCE_OSCRIPT_PROPERTY, SCE_OSCRIPT_SINGLEQUOTE_STRING,
+        SCE_OSCRIPT_TYPE, SCE_POWERSHELL_ALIAS, SCE_POWERSHELL_CHARACTER, SCE_POWERSHELL_CMDLET,
         SCE_POWERSHELL_COMMENT, SCE_POWERSHELL_COMMENTDOCKEYWORD, SCE_POWERSHELL_COMMENTSTREAM,
         SCE_POWERSHELL_DEFAULT, SCE_POWERSHELL_FUNCTION, SCE_POWERSHELL_HERE_CHARACTER,
         SCE_POWERSHELL_HERE_STRING, SCE_POWERSHELL_IDENTIFIER, SCE_POWERSHELL_KEYWORD,
@@ -48187,6 +48350,368 @@ mod lang_theme_tests {
                  SCE_SAS_STATEMENT ({SCE_SAS_STATEMENT})"
             );
         }
+    }
+
+    /// `ErrorList` uses Lexilla's `errorlist` lexer
+    /// (`LexErrorList.cxx`) — the historical output-pane lexer
+    /// authored by Neil Hodgson himself in 1998-2001 for `SciTE`.
+    /// **Zero-wordlist lexer**: `emptyWordListDesc[]` at
+    /// `LexErrorList.cxx:44-46` is `{nullptr}`; the `LexerModule
+    /// lmErrorList(SCLEX_ERRORLIST, ..., emptyWordListDesc)`
+    /// registration at `:572` passes it directly. Classification
+    /// is entirely line-pattern-based via `RecogniseErrorListLine`
+    /// at `:232-452` (`StartsWith` / `Contains` checks against
+    /// tool-specific message signatures). Excluded from
+    /// `wired_languages_have_complete_themes` because
+    /// `ERRORLIST_THEME.keywords = &[]` violates that test's
+    /// `!keywords.is_empty()` floor — matches the PROPS / LATEX /
+    /// REGISTRY / TXT2TAGS precedents. No default file extension
+    /// per `LANG_TABLE` (menu-only language).
+    ///
+    /// This dedicated test pins:
+    ///
+    ///   1. Deep-value identity (styles / italic / bold /
+    ///      empty keywords).
+    ///   2. 26-mapping style-count.
+    ///   3. Empty keywords list.
+    ///   4. `L_ERRORLIST` `LangEntry` has `lexer:
+    ///      Some("errorlist")` and empty extensions.
+    ///   5. Style-routing pins for all 26 mapped constants.
+    ///   6. `DEFAULT` (0) confirmed unmapped.
+    ///   7. **All 16 ANSI-color states (40..=55) confirmed
+    ///      UNMAPPED** — deliberate architectural pin. The
+    ///      semantic IS "text in ANSI color N" and `StyleSlot`
+    ///      has no ANSI-color slot. Mapping any would collapse
+    ///      16 distinct colors into one visual paint. If a
+    ///      future `StyleSlot::Ansi*` variant lands, these 16
+    ///      routings become the load-bearing extension.
+    ///   8. Italic == 1 (`DIFF_MESSAGE` only — matches Comment
+    ///      italic convention).
+    ///   9. Bold == 15 (the 15 diagnostic states — primary
+    ///      attention-getting).
+    ///   10. Cross-language non-reuse (sampled).
+    ///   11. **Diagnostic-family cohesion pin** — all 15
+    ///       tool-specific diagnostic states (PYTHON / GCC / MS
+    ///       / BORLAND / PERL / NET / LUA / PHP / ELF / IFC /
+    ///       IFORT / ABSF / TIDY / `JAVA_STACK` / BASH) route to
+    ///       `Keyword` AND appear in the bold set. Load-
+    ///       bearing "error line stands out from surrounding
+    ///       output" contract.
+    ///   12. **Context-family cohesion pin** — CTAG, VALUE,
+    ///       `GCC_INCLUDED_FROM`, `GCC_EXCERPT` all route to
+    ///       `Keyword2`. Supporting-info-adjacent-to-diagnostic
+    ///       archetype.
+    ///   13. **Diff-marker semantic-slot distinctness** —
+    ///       `DIFF_ADDITION` → String, `DIFF_DELETION` → Macro,
+    ///       `DIFF_CHANGED` → Number, `DIFF_MESSAGE` → Comment.
+    ///       Four distinct slots so diff readers can visually
+    ///       distinguish addition / deletion / modification /
+    ///       metadata by color.
+    ///   14. **Escape-sequence Operator pin** — both `ESCSEQ`
+    ///       (recognized) and `ESCSEQ_UNKNOWN` (unrecognized)
+    ///       route to `Operator`. Same slot because both are
+    ///       "terminal control marker"; the recognized /
+    ///       unrecognized distinction is a lexer-internal
+    ///       classification, not a visual one.
+    ///   15. **CMD → Preprocessor pin** — `>`-prefixed command
+    ///       echo (`LexErrorList.cxx:237-239`) fires
+    ///       `SCE_ERR_CMD` and routes to Preprocessor accent.
+    ///   16. **`DEFAULT` truly unmapped** — no `(0, _)` tuple.
+    ///   17. **Unused slots 27..=31 & predefined 32..=39
+    ///       confirmed absent from mappings** — 13 slots that
+    ///       `LexErrorList` never emits, deliberately omitted
+    ///       from `SCE_ERR_*` constants and untouched by any
+    ///       style mapping.
+    ///   18. **Highest-defined `SCE_ERR_*` pin** —
+    ///       `SCE_ERR_ES_WHITE` (55) is the top slot per
+    ///       `SciLexer.h:568`. All style-mapping indices ≤ 55.
+    ///   19. **26 unique style-index pin** — no duplicate index
+    ///       across the 26 mappings. Each `SCE_ERR_*` state
+    ///       appears at most once in `ERRORLIST_STYLES`.
+    ///   20. **Empty-keywords invariant** —
+    ///       `ERRORLIST_THEME.keywords = &[]`. `LexErrorList`'s
+    ///       `emptyWordListDesc[]` at `:44-46` and the
+    ///       `LexerModule` at `:572` guarantee zero wordlist
+    ///       classes; installing any would be dead weight.
+    #[test]
+    fn errorlist_uses_lexerrorlist_zero_class_theme() {
+        use codepp_scintilla_sys::{
+            SCE_ERR_DEFAULT, SCE_ERR_ES_BLACK, SCE_ERR_ES_BLUE, SCE_ERR_ES_BRIGHT_BLUE,
+            SCE_ERR_ES_BRIGHT_CYAN, SCE_ERR_ES_BRIGHT_GREEN, SCE_ERR_ES_BRIGHT_MAGENTA,
+            SCE_ERR_ES_BRIGHT_RED, SCE_ERR_ES_BROWN, SCE_ERR_ES_CYAN, SCE_ERR_ES_DARK_GRAY,
+            SCE_ERR_ES_GRAY, SCE_ERR_ES_GREEN, SCE_ERR_ES_MAGENTA, SCE_ERR_ES_RED,
+            SCE_ERR_ES_WHITE, SCE_ERR_ES_YELLOW,
+        };
+        let err = lang_theme(L_ERRORLIST).expect("ErrorList wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(err.styles, ERRORLIST_STYLES);
+        assert_eq!(err.italic, ERRORLIST_ITALIC);
+        assert_eq!(err.bold, ERRORLIST_BOLD);
+        assert!(err.keywords.is_empty());
+
+        // Invariant 2: 26 mappings.
+        assert_eq!(
+            err.styles.len(),
+            26,
+            "ERRORLIST_STYLES must map 26 indices (27 states in \
+             range 0..=26 minus DEFAULT (0); 16 ANSI-color states \
+             40..=55 also intentionally unmapped)"
+        );
+
+        // Invariant 3: empty keywords list.
+        assert!(
+            err.keywords.is_empty(),
+            "ERRORLIST_THEME.keywords must be empty — LexErrorList \
+             is a zero-wordlist lexer (emptyWordListDesc[] at \
+             LexErrorList.cxx:44-46)"
+        );
+
+        // Invariant 4: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_ERRORLIST)
+            .expect("L_ERRORLIST LangEntry present in LANG_TABLE");
+        assert_eq!(
+            entry.lexer,
+            Some("errorlist"),
+            "L_ERRORLIST LangEntry.lexer must be Some(\"errorlist\")"
+        );
+        assert!(
+            entry.extensions.is_empty(),
+            "L_ERRORLIST extensions must be empty (menu-only language)"
+        );
+
+        // Invariant 5: style-routing pins for all 26 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_ERR_PYTHON, StyleSlot::Keyword, "PYTHON"),
+            (SCE_ERR_GCC, StyleSlot::Keyword, "GCC"),
+            (SCE_ERR_MS, StyleSlot::Keyword, "MS"),
+            (SCE_ERR_BORLAND, StyleSlot::Keyword, "BORLAND"),
+            (SCE_ERR_PERL, StyleSlot::Keyword, "PERL"),
+            (SCE_ERR_NET, StyleSlot::Keyword, "NET"),
+            (SCE_ERR_LUA, StyleSlot::Keyword, "LUA"),
+            (SCE_ERR_PHP, StyleSlot::Keyword, "PHP"),
+            (SCE_ERR_ELF, StyleSlot::Keyword, "ELF"),
+            (SCE_ERR_IFC, StyleSlot::Keyword, "IFC"),
+            (SCE_ERR_IFORT, StyleSlot::Keyword, "IFORT"),
+            (SCE_ERR_ABSF, StyleSlot::Keyword, "ABSF"),
+            (SCE_ERR_TIDY, StyleSlot::Keyword, "TIDY"),
+            (SCE_ERR_JAVA_STACK, StyleSlot::Keyword, "JAVA_STACK"),
+            (SCE_ERR_BASH, StyleSlot::Keyword, "BASH"),
+            (SCE_ERR_CTAG, StyleSlot::Keyword2, "CTAG"),
+            (SCE_ERR_VALUE, StyleSlot::Keyword2, "VALUE"),
+            (
+                SCE_ERR_GCC_INCLUDED_FROM,
+                StyleSlot::Keyword2,
+                "GCC_INCLUDED_FROM",
+            ),
+            (SCE_ERR_GCC_EXCERPT, StyleSlot::Keyword2, "GCC_EXCERPT"),
+            (SCE_ERR_CMD, StyleSlot::Preprocessor, "CMD"),
+            (SCE_ERR_DIFF_ADDITION, StyleSlot::String, "DIFF_ADDITION"),
+            (SCE_ERR_DIFF_DELETION, StyleSlot::Macro, "DIFF_DELETION"),
+            (SCE_ERR_DIFF_CHANGED, StyleSlot::Number, "DIFF_CHANGED"),
+            (SCE_ERR_DIFF_MESSAGE, StyleSlot::Comment, "DIFF_MESSAGE"),
+            (SCE_ERR_ESCSEQ, StyleSlot::Operator, "ESCSEQ"),
+            (
+                SCE_ERR_ESCSEQ_UNKNOWN,
+                StyleSlot::Operator,
+                "ESCSEQ_UNKNOWN",
+            ),
+        ] {
+            assert!(
+                err.styles.contains(&(idx, slot)),
+                "SCE_ERR_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 6: DEFAULT (0) confirmed unmapped.
+        assert!(
+            !err.styles.iter().any(|(i, _)| *i == SCE_ERR_DEFAULT),
+            "SCE_ERR_DEFAULT (0) must remain unmapped per framework \
+             fall-through convention"
+        );
+
+        // Invariant 7: all 16 ANSI-color states (40..=55) unmapped.
+        for (idx, name) in [
+            (SCE_ERR_ES_BLACK, "ES_BLACK"),
+            (SCE_ERR_ES_RED, "ES_RED"),
+            (SCE_ERR_ES_GREEN, "ES_GREEN"),
+            (SCE_ERR_ES_BROWN, "ES_BROWN"),
+            (SCE_ERR_ES_BLUE, "ES_BLUE"),
+            (SCE_ERR_ES_MAGENTA, "ES_MAGENTA"),
+            (SCE_ERR_ES_CYAN, "ES_CYAN"),
+            (SCE_ERR_ES_GRAY, "ES_GRAY"),
+            (SCE_ERR_ES_DARK_GRAY, "ES_DARK_GRAY"),
+            (SCE_ERR_ES_BRIGHT_RED, "ES_BRIGHT_RED"),
+            (SCE_ERR_ES_BRIGHT_GREEN, "ES_BRIGHT_GREEN"),
+            (SCE_ERR_ES_YELLOW, "ES_YELLOW"),
+            (SCE_ERR_ES_BRIGHT_BLUE, "ES_BRIGHT_BLUE"),
+            (SCE_ERR_ES_BRIGHT_MAGENTA, "ES_BRIGHT_MAGENTA"),
+            (SCE_ERR_ES_BRIGHT_CYAN, "ES_BRIGHT_CYAN"),
+            (SCE_ERR_ES_WHITE, "ES_WHITE"),
+        ] {
+            assert!(
+                !err.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_ERR_{name} ({idx}) must remain unmapped — \
+                 semantic is 'text in ANSI color N', no matching \
+                 StyleSlot variant. If a StyleSlot::Ansi* variant \
+                 lands in the future, THIS is the load-bearing \
+                 extension pin — update these routings then."
+            );
+        }
+
+        // Invariant 8: italic == 1 (DIFF_MESSAGE only).
+        assert_eq!(err.italic.len(), 1);
+        assert!(err.italic.contains(&SCE_ERR_DIFF_MESSAGE));
+
+        // Invariant 9: bold == 15 (all 15 diagnostic states).
+        assert_eq!(err.bold.len(), 15);
+        for tok in [
+            SCE_ERR_PYTHON,
+            SCE_ERR_GCC,
+            SCE_ERR_MS,
+            SCE_ERR_BORLAND,
+            SCE_ERR_PERL,
+            SCE_ERR_NET,
+            SCE_ERR_LUA,
+            SCE_ERR_PHP,
+            SCE_ERR_ELF,
+            SCE_ERR_IFC,
+            SCE_ERR_IFORT,
+            SCE_ERR_ABSF,
+            SCE_ERR_TIDY,
+            SCE_ERR_JAVA_STACK,
+            SCE_ERR_BASH,
+        ] {
+            assert!(
+                err.bold.contains(&tok),
+                "SCE_ERR diagnostic slot {tok} must be bold"
+            );
+        }
+
+        // Invariant 10: cross-language non-reuse (sampled).
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let sas = lang_theme(L_SAS).expect("SAS wired");
+        let toml = lang_theme(L_TOML).expect("TOML wired");
+        for (other, name) in [(cpp, "C++"), (sas, "SAS"), (toml, "TOML")] {
+            assert_ne!(
+                err.styles, other.styles,
+                "ErrorList must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 11: diagnostic-family cohesion — all 15
+        // diagnostic states route to Keyword AND bold.
+        for tok in [
+            SCE_ERR_PYTHON,
+            SCE_ERR_GCC,
+            SCE_ERR_MS,
+            SCE_ERR_BORLAND,
+            SCE_ERR_PERL,
+            SCE_ERR_NET,
+            SCE_ERR_LUA,
+            SCE_ERR_PHP,
+            SCE_ERR_ELF,
+            SCE_ERR_IFC,
+            SCE_ERR_IFORT,
+            SCE_ERR_ABSF,
+            SCE_ERR_TIDY,
+            SCE_ERR_JAVA_STACK,
+            SCE_ERR_BASH,
+        ] {
+            assert!(
+                err.styles.contains(&(tok, StyleSlot::Keyword)),
+                "Diagnostic state {tok} must route to Keyword"
+            );
+            assert!(
+                err.bold.contains(&tok),
+                "Diagnostic state {tok} must be bold"
+            );
+        }
+
+        // Invariant 12: context-family cohesion.
+        for tok in [
+            SCE_ERR_CTAG,
+            SCE_ERR_VALUE,
+            SCE_ERR_GCC_INCLUDED_FROM,
+            SCE_ERR_GCC_EXCERPT,
+        ] {
+            assert!(
+                err.styles.contains(&(tok, StyleSlot::Keyword2)),
+                "Context state {tok} must route to Keyword2"
+            );
+        }
+
+        // Invariant 13: diff-marker semantic-slot distinctness —
+        // four distinct slots, no collisions among the diff-family.
+        assert!(err
+            .styles
+            .contains(&(SCE_ERR_DIFF_ADDITION, StyleSlot::String)));
+        assert!(err
+            .styles
+            .contains(&(SCE_ERR_DIFF_DELETION, StyleSlot::Macro)));
+        assert!(err
+            .styles
+            .contains(&(SCE_ERR_DIFF_CHANGED, StyleSlot::Number)));
+        assert!(err
+            .styles
+            .contains(&(SCE_ERR_DIFF_MESSAGE, StyleSlot::Comment)));
+
+        // Invariant 14: escape-sequence Operator pin.
+        assert!(err.styles.contains(&(SCE_ERR_ESCSEQ, StyleSlot::Operator)));
+        assert!(err
+            .styles
+            .contains(&(SCE_ERR_ESCSEQ_UNKNOWN, StyleSlot::Operator)));
+
+        // Invariant 15: CMD → Preprocessor pin.
+        assert!(err.styles.contains(&(SCE_ERR_CMD, StyleSlot::Preprocessor)));
+
+        // Invariant 16: DEFAULT truly unmapped (no (0, _) tuple).
+        for (idx, _) in err.styles {
+            assert_ne!(*idx, 0, "ERRORLIST_STYLES must not map slot 0 (DEFAULT)");
+        }
+
+        // Invariant 17: unused (27..=31) + predefined (32..=39) absent.
+        for idx in 27..=39 {
+            assert!(
+                !err.styles.iter().any(|(i, _)| *i == idx),
+                "Slot {idx} must remain unmapped — \
+                 unused/predefined per LexErrorList.cxx:92-104"
+            );
+        }
+
+        // Invariant 18: highest-defined SCE_ERR_* pin.
+        assert_eq!(
+            SCE_ERR_ES_WHITE, 55,
+            "SCE_ERR_ES_WHITE drift from 55 — verify SciLexer.h:568"
+        );
+        for (idx, _) in err.styles {
+            assert!(
+                *idx <= SCE_ERR_ES_WHITE,
+                "ERRORLIST_STYLES references slot {idx}, higher than \
+                 SCE_ERR_ES_WHITE ({SCE_ERR_ES_WHITE})"
+            );
+        }
+
+        // Invariant 19: no duplicate style-index across mappings.
+        use std::collections::HashSet;
+        let unique_indices: HashSet<usize> = err.styles.iter().map(|(i, _)| *i).collect();
+        assert_eq!(
+            unique_indices.len(),
+            err.styles.len(),
+            "ERRORLIST_STYLES contains duplicate SCE_ERR_* indices"
+        );
+
+        // Invariant 20: empty-keywords invariant.
+        assert_eq!(
+            err.keywords.len(),
+            0,
+            "ERRORLIST_THEME.keywords MUST be empty — \
+             emptyWordListDesc[] at LexErrorList.cxx:44-46 \
+             guarantees zero wordlist classes"
+        );
     }
 
     /// txt2tags uses Lexilla's `txt2tags` lexer

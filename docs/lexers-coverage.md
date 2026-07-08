@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 87 / 🟡 1 / ⚫ 1.
+Total: 89 rows. ✅ 88 / 🟡 0 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1867,7 +1867,7 @@ further shim work needed.
 | D | 52 | `d` | ✅ | ✅ | ✅ |
 | Diff | 33 | `diff` | ✅ | ✅ | ✅ |
 | Erlang | 71 | `erlang` | ✅ | ✅ | ✅ |
-| ErrorList | 92 | `errorlist` | ⚫ | ⚫ | 🟡 |
+| ErrorList | 92 | `errorlist` | — | ✅ | ✅ |
 | ESCRIPT | 72 | `escript` | ✅ | ✅ | ✅ |
 | Forth | 73 | `forth` | ✅ | ✅ | ✅ |
 | Fortran (fixed form) | 59 | `f77` | ✅ | ✅ | ✅ |
@@ -10800,6 +10800,229 @@ Coverage advances to ✅ 87 /
 88 wired-eligible rows
 (**98.9%**) — one 🟡 row
 remaining (ErrorList).
+
+**ErrorList (2026-07-08):** rides
+Lexilla's `errorlist` lexer
+(`LexErrorList.cxx`) — the
+historical output-pane lexer
+authored by Neil Hodgson himself
+(Scintilla / Lexilla lead author)
+in 1998-2001 for SciTE. Semantic
+domain: viewing captured
+compiler / linter / interpreter
+diagnostic output line by line.
+Notepad++ (and Code++) exposes
+it as a manually-selectable
+language via the Language menu.
+**No default file extension** —
+menu-only (`LANG_TABLE` row's
+`extensions: &[]`).
+
+**Zero-wordlist lexer.**
+`emptyWordListDesc[]` at
+`LexErrorList.cxx:44-46` is
+`{nullptr}`; the
+`LexerModule lmErrorList(...,
+emptyWordListDesc)` registration
+at `:572` passes it directly.
+Classification is entirely
+line-pattern-based via
+`RecogniseErrorListLine` at
+`:232-452` — StartsWith /
+Contains checks against
+tool-specific message-format
+signatures (e.g. `"cf90-"`
+signals Absoft Pro Fortran,
+`"fortcom:"` signals Intel
+Fortran, `Contains(" at line ",
+"file ")` signals Lua 4, etc.).
+No keyword lookup whatsoever.
+Framework consumes zero-wordlist
+lexers via a dedicated theme
+with `keywords: &[]` — matches
+the PROPS / LATEX / REGISTRY /
+TXT2TAGS precedents. Excluded
+from
+`wired_languages_have_complete_themes`
+because that test's
+`!keywords.is_empty()` floor
+would fail; validated instead by
+the dedicated
+`errorlist_uses_lexerrorlist_zero_class_theme`
+test with 20 invariants.
+
+**Three-range state space** —
+LexErrorList's states are
+discontiguous:
+
+- **0..=26** (classic
+  diagnostic range, 27 states):
+  `DEFAULT` (0) plus 26
+  tool-specific states covering
+  Python / GCC / Microsoft /
+  Borland / Perl / .NET / Lua /
+  PHP / four Fortran flavours /
+  Tidy / Java stack / Bash /
+  CTags / four DIFF markers /
+  CMD echo / VALUE / two
+  supporting GCC context states
+  (INCLUDED_FROM, EXCERPT) /
+  two ESCSEQ states.
+- **27..=31** (5 slots):
+  "unused" per the LexicalClass
+  table at
+  `LexErrorList.cxx:92-96`.
+  Framework never emits these;
+  deliberately omitted from
+  `SCE_ERR_*` constants.
+- **32..=39** (8 slots):
+  "predefined" per
+  `LexErrorList.cxx:97-104` —
+  Scintilla framework-reserved
+  indices in the global
+  `STYLE_*` range (STYLE_DEFAULT
+  through STYLE_FOLDDISPLAYTEXT).
+  Not emitted by LexErrorList;
+  deliberately omitted from
+  `SCE_ERR_*` constants.
+- **40..=55** (16 states):
+  ANSI escape-sequence color
+  states — one per ANSI CSI m
+  color code. When the lexer
+  detects `\033[NNm` sequences
+  and the `escape.sequences`
+  property is enabled
+  (`LexErrorList.cxx:460-497`),
+  the color numeric maps: ANSI
+  30..=37 (dim) → SCE_ERR_ES_
+  BLACK..=GRAY (40..=47); ANSI
+  90..=97 (bright) or (30..=37
+  + bold=1) → SCE_ERR_ES_
+  DARK_GRAY..=WHITE (48..=55).
+
+**26-style-mapping table.** All
+26 mapped SCE_ERR_* indices
+route across seven distinct
+`StyleSlot` variants:
+
+- **15 tool-specific
+  diagnostic states → Keyword
+  bold** (PYTHON, GCC, MS,
+  BORLAND, PERL, NET, LUA, PHP,
+  ELF, IFC, IFORT, ABSF, TIDY,
+  JAVA_STACK, BASH).
+  Semantically "error/warning
+  line from tool X." Framework
+  collapses all 15 into one
+  visual accent — user's eye
+  needs to pick error lines
+  out of surrounding output,
+  regardless of which tool
+  produced them. Bold reinforces
+  the primary-attention role.
+- **4 context / navigation
+  states → Keyword2** (CTAG,
+  VALUE, GCC_INCLUDED_FROM,
+  GCC_EXCERPT). Supporting
+  information adjacent to a
+  diagnostic — secondary
+  anchor accent.
+- **CMD → Preprocessor** —
+  SciTE Output pane command
+  echo (`>`-prefixed lines,
+  `LexErrorList.cxx:237-239`).
+  Semantically "system directive
+  that produced this output."
+- **4 DIFF states → four
+  distinct semantic slots**
+  matching diff-UI colour
+  conventions:
+  DIFF_ADDITION → String
+  (green, `+`-prefixed);
+  DIFF_DELETION → Macro
+  (red-orange,
+  `-`/`<`-prefixed);
+  DIFF_CHANGED → Number
+  (yellow, `!`-prefixed);
+  DIFF_MESSAGE → Comment
+  (metadata italic,
+  `---`/`+++` headers). Four
+  distinct slots so diff
+  readers can visually
+  distinguish addition /
+  deletion / modification /
+  metadata by colour.
+- **2 ESCSEQ states →
+  Operator** — both ESCSEQ
+  (recognized) and
+  ESCSEQ_UNKNOWN
+  (unrecognized) route to
+  Operator. Same slot because
+  both are "terminal control
+  marker"; the recognized /
+  unrecognized distinction is
+  a lexer-internal
+  classification, not a
+  visual one.
+
+**Deliberate UNMAPPED range:
+16 ANSI-color states
+(40..=55)**. The semantic IS
+"text in specific ANSI color N"
+and our `StyleSlot` enum has no
+ANSI-color slot. Mapping any of
+them would collapse 16 distinct
+semantic colors into one visual
+paint, defeating the purpose.
+Users viewing colored terminal
+output will see the escape
+sequences painted (via
+SCE_ERR_ESCSEQ = Operator) but
+subsequent text falls back to
+STYLE_DEFAULT. This is an
+architectural limitation of the
+current slot set; extending
+`StyleSlot` with ANSI-color
+variants is deferred future
+work. **Invariant 7 pins this
+16-slot unmapped-set
+explicitly** — if a future
+`StyleSlot::Ansi*` variant
+lands, that test is the
+load-bearing extension point.
+
+Structural test coverage: **20
+invariants** including all 26
+style-routing pins,
+diagnostic-family cohesion (all
+15 diagnostic states → Keyword
+AND bold), context-family
+cohesion (all 4 context states
+→ Keyword2), diff-marker
+semantic-slot distinctness (4
+distinct slots), escape-
+sequence Operator pin, CMD →
+Preprocessor pin, DEFAULT (0)
+absent from mappings,
+unused/predefined (27..=39)
+absent from mappings, all 16
+ANSI-color states unmapped,
+SCE_ERR_ES_WHITE (=55)
+highest-defined-slot pin, no
+duplicate SCE_ERR_* index
+across mappings, and
+empty-keywords invariant
+(theme.keywords = &[]).
+
+**Coverage advances to ✅ 88 /
+88 wired-eligible rows
+(100.0%)** — Phase 4.5
+COMPLETE. The lone remaining
+⚫ row (`Normal Text`, id 0)
+is design-intent parking with
+`lexer: None` in `LANG_TABLE`
+(excluded from the percentage
+per DESIGN.md §7.2 convention).
 
 ## Notes
 
