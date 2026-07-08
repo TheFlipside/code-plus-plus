@@ -3576,6 +3576,139 @@ pub const SCE_RAKU_CALLABLE: usize = 26;
 pub const SCE_RAKU_GRAMMAR: usize = 27;
 pub const SCE_RAKU_CLASS: usize = 28;
 
+// LexHex-family style indices. 19 contiguous slots (0..=18) SHARED
+// across Motorola S-Record (`.srec` / `.s19` / `.s28` / `.s37`),
+// Intel HEX (`.hex` / `.ihex`), and Tektronix extended HEX
+// (`.tehex`) record formats. `vendor/lexilla/lexers/LexHex.cxx`
+// registers three separate `LexerModule` instances at
+// `LexHex.cxx:1046-1048`:
+//   - `lmSrec(SCLEX_SREC = 117, ColouriseSrecDoc, "srec", 0, NULL)`
+//   - `lmIHex(SCLEX_IHEX, ColouriseIHexDoc, "ihex", FoldIHexDoc, NULL)`
+//   - `lmTEHex(SCLEX_TEHEX, ColouriseTEHexDoc, "tehex", 0, NULL)`
+//
+// All three use the **same `SCE_HEX_*` style constant table** — no
+// separate `SCE_SREC_*` / `SCE_IHEX_*` / `SCE_TEHEX_*` namespaces
+// exist. Constants mirror `SciLexer.h:1863-1881` verbatim.
+//
+// **Zero wordlists.** The `LexerModule` constructors take a 5-arg
+// form ending with `NULL` for the `wordListDesc[]` parameter (vs
+// the standard 4-arg or 5-arg with a real descriptor). All three
+// paint functions have signature `(startPos, length, initStyle,
+// WordList *[], Accessor &styler)` and the `WordList *[]`
+// parameter is **unnamed and never referenced** in the body —
+// installing keywords is a no-op that gets silently ignored by
+// Scintilla. Framework consequence: `SREC_THEME.keywords` MUST
+// be empty; same discipline as [`SCE_PROPS_KEY`] (INI / Properties
+// — ignores wordlists) and [`SCE_REG_DEFAULT`] (Registry —
+// rejects them outright with `-1`).
+//
+// **State-machine driven line classification.** The lexer runs a
+// position-based state machine anchored on the record-line
+// structure. For S-Record:
+//   `S<type><count><address><data...><checksum>`
+// where `<type>` is a single digit (0/1/2/3/5/7/8/9), `<count>`
+// is the byte count as a 2-digit hex, `<address>` is 4/6/8 hex
+// digits (depending on record type), `<data>` is 0..504 hex
+// digits, `<checksum>` is 2 hex digits. Each of those fields
+// gets its own SCE_HEX_* style at paint time.
+//
+// **Which SCE_HEX_* states are emitted per lexer** (from the
+// per-lexer state matrix at `LexHex.cxx:25-27` for S-Record,
+// `:45-49` for Intel HEX, `:82-84` for Tektronix HEX):
+//   - **S-Record** (`ColouriseSrecDoc` at `:649-892`): uses
+//     RECSTART (`S` leader), RECTYPE / RECTYPE_UNKNOWN, BYTECOUNT
+//     / BYTECOUNT_WRONG, NOADDRESS + DATAADDRESS + RECCOUNT +
+//     STARTADDRESS + ADDRESSFIELD_UNKNOWN (five address flavours
+//     per record type), DATA_ODD / DATA_EVEN / DATA_EMPTY /
+//     DATA_UNKNOWN, CHECKSUM / CHECKSUM_WRONG, GARBAGE.
+//     `SCE_HEX_EXTENDEDADDRESS` (11) is **IHEX-only** — never
+//     emitted by Srec's paint loop; Code++'s SREC_STYLES omits
+//     it accordingly.
+//
+// **Style-routing plan** for S-Record:
+//   - `SCE_HEX_RECSTART` (1) → Preprocessor. The `S` leader is
+//     a structural per-line marker analogous to Registry's
+//     KEYNAME or POD's `=begin`. Bold (matches Python's
+//     `SCE_P_DECORATOR` / Hollywood's `PREPROCESSOR` bold
+//     precedent for structural anchors).
+//   - `SCE_HEX_RECTYPE` (2) → Keyword. The record type digit
+//     is the language's flow-control equivalent (S0=header,
+//     S1/S2/S3=data at 16/24/32-bit address, S5=count,
+//     S7/S8/S9=start-address at 32/24/16-bit). Bold.
+//   - `SCE_HEX_BYTECOUNT` (4) → Number.
+//   - `SCE_HEX_NOADDRESS` (6) → Number. Used by S0 (header
+//     record — address field present but semantically zero).
+//   - `SCE_HEX_DATAADDRESS` (7) → Number. Used by S1/S2/S3
+//     data records — the load address of the data payload.
+//   - `SCE_HEX_RECCOUNT` (8) → Number. Used by S5 (record
+//     count — how many S1/S2/S3 records preceded).
+//   - `SCE_HEX_STARTADDRESS` (9) → Number. Used by S7/S8/S9
+//     terminator records — the entry-point address.
+//   - `SCE_HEX_DATA_ODD` (12) + `SCE_HEX_DATA_EVEN` (13) →
+//     String. Both collapse to the same paint (alternating
+//     stripes rendered by the terminal font at rendering
+//     time; not a semantic distinction the framework needs to
+//     preserve). Same collapse discipline as Fortran's STRING1
+//     + STRING2 + STRINGEOL and TypeScript's five-flavour
+//     string collapse.
+//   - `SCE_HEX_DATA_EMPTY` (15) → Comment. Padding / trailing
+//     empty data — visually deemphasised.
+//   - `SCE_HEX_CHECKSUM` (16) → Lifetime. Integrity anchor at
+//     end of every record — structural role matching Bash
+//     SCALAR / Lisp SYMBOL / GDScript NODEPATH / Perl SCALAR
+//     precedent for sigil-like structural markers.
+//
+// **Unmapped states** (deferred to `StyleSlot::Error` migration):
+//   - `SCE_HEX_DEFAULT` (0) — whitespace / unclassified per
+//     framework convention.
+//   - `SCE_HEX_RECTYPE_UNKNOWN` (3) — undefined record type
+//     digit (S4 / S6 don't exist in the S-Record standard).
+//   - `SCE_HEX_BYTECOUNT_WRONG` (5) — byte count doesn't
+//     match line length.
+//   - `SCE_HEX_ADDRESSFIELD_UNKNOWN` (10) — address field
+//     malformed.
+//   - `SCE_HEX_DATA_UNKNOWN` (14) — data byte incomplete /
+//     unexpected non-hex.
+//   - `SCE_HEX_CHECKSUM_WRONG` (17) — computed checksum
+//     doesn't match trailing byte.
+//   - `SCE_HEX_GARBAGE` (18) — arbitrary text outside record
+//     structure.
+//
+// All six authoritative parse-failure states (RECTYPE_UNKNOWN
+// / BYTECOUNT_WRONG / ADDRESSFIELD_UNKNOWN / DATA_UNKNOWN /
+// CHECKSUM_WRONG / GARBAGE) plus DEFAULT (the idle scan state
+// before any `S` leader is seen — NOT a parse failure) are
+// left unmapped per the established framework convention (same
+// discipline as Visual Prolog's STRING_ESCAPE_ERROR +
+// COMMENT_KEY_ERROR unmapping and Registry's malformed-value
+// states for the error group; universal DEFAULT-unmapped
+// convention for the idle state).
+//
+// **`SCE_HEX_EXTENDEDADDRESS` (11)** is unmapped in S-Record's
+// theme — the state is IHEX-only per `LexHex.cxx:49`. Included
+// as a constant here for use by future IHEX / TEHEX theme
+// wirings; a mapping in SREC_STYLES would be dead code.
+pub const SCLEX_SREC: usize = 117;
+pub const SCE_HEX_DEFAULT: usize = 0;
+pub const SCE_HEX_RECSTART: usize = 1;
+pub const SCE_HEX_RECTYPE: usize = 2;
+pub const SCE_HEX_RECTYPE_UNKNOWN: usize = 3;
+pub const SCE_HEX_BYTECOUNT: usize = 4;
+pub const SCE_HEX_BYTECOUNT_WRONG: usize = 5;
+pub const SCE_HEX_NOADDRESS: usize = 6;
+pub const SCE_HEX_DATAADDRESS: usize = 7;
+pub const SCE_HEX_RECCOUNT: usize = 8;
+pub const SCE_HEX_STARTADDRESS: usize = 9;
+pub const SCE_HEX_ADDRESSFIELD_UNKNOWN: usize = 10;
+pub const SCE_HEX_EXTENDEDADDRESS: usize = 11;
+pub const SCE_HEX_DATA_ODD: usize = 12;
+pub const SCE_HEX_DATA_EVEN: usize = 13;
+pub const SCE_HEX_DATA_UNKNOWN: usize = 14;
+pub const SCE_HEX_DATA_EMPTY: usize = 15;
+pub const SCE_HEX_CHECKSUM: usize = 16;
+pub const SCE_HEX_CHECKSUM_WRONG: usize = 17;
+pub const SCE_HEX_GARBAGE: usize = 18;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

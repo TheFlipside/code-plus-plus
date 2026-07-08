@@ -35,7 +35,7 @@ residual rows formally tracked).
 | ✅ | Keywords + theme both wired in `Win32Ui::apply_lang`'s table. Pick this language from the Language menu and a sample file picks up visibly distinct colours for comments, strings, numbers, and keywords. |
 | 🟡 | Lexer attached and tokenising; no host keyword list and no host theme. Buffer renders uniformly black-on-white because every `SCE_*_*` style resolves to `STYLE_DEFAULT` after `SCI_STYLECLEARALL`. (Pre-2026-05-13: this row also covered "lexer compiled but unregistered in `LexillaShim.cxx`'s catalog"; that gap is now closed for every `LANG_TABLE` row with a non-`None` lexer.) |
 | ⚫ | No Lexilla lexer (`LANG_TABLE` row has `lexer: None`). Either by design (`L_TEXT` — plain text never highlights) or because no Lexilla lexer matches the language. Effectively a permanent state for the named row. |
-| — (Keywords column only) | Not applicable. The lexer takes no wordlists at all — host installs none by design. Currently used for `props` (INI / Properties — a pure line-prefix classifier that ignores its `WordList *[]` parameter), `registry` (Windows Registry files — a state-machine lexer whose `WordListSet` unconditionally returns -1, actively REJECTING any keyword install), and `txt2tags` (structural markup — the `LexerModule` registration takes no `wordListDesc` argument at all and the paint function's `WordList **` parameter is unnamed and never referenced). A row with `—` in the Keywords column and ✅ in the Theme column is still ✅ overall: the wiring is complete, there are simply no keywords to wire. |
+| — (Keywords column only) | Not applicable. The lexer takes no wordlists at all — host installs none by design. Currently used for `props` (INI / Properties — a pure line-prefix classifier that ignores its `WordList *[]` parameter), `registry` (Windows Registry files — a state-machine lexer whose `WordListSet` unconditionally returns -1, actively REJECTING any keyword install), `txt2tags` (structural markup — the `LexerModule` registration takes no `wordListDesc` argument at all and the paint function's `WordList **` parameter is unnamed and never referenced), and `srec` (Motorola S-Record ROM files — the `LexerModule` constructor takes 5 args ending in NULL `wordListDesc[]` and the paint function's unnamed `WordList *[]` parameter is never referenced). A row with `—` in the Keywords column and ✅ in the Theme column is still ✅ overall: the wiring is complete, there are simply no keywords to wire. |
 | ⏸ | Reserved for future host-side opt-out (e.g. a lexer the host deliberately leaves off the menu pending review). None today. |
 
 ## How to mark a row ✅
@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 75 / 🟡 13 / ⚫ 1.
+Total: 89 rows. ✅ 76 / 🟡 12 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1914,7 +1914,7 @@ further shim work needed.
 | Resource file | 7 | `cpp` | ✅ | ✅ | ✅ |
 | Ruby | 36 | `ruby` | ✅ | ✅ | ✅ |
 | Rust | 81 | `rust` | ✅ | ✅ | ✅ |
-| S-Record | 61 | `srec` | ⚫ | ⚫ | 🟡 |
+| S-Record | 61 | `srec` | — | ✅ | ✅ |
 | SAS | 91 | `sas` | ⚫ | ⚫ | 🟡 |
 | Scheme | 31 | `lisp` | ✅ | ✅ | ✅ |
 | Shell | 26 | `bash` | ✅ | ✅ | ✅ |
@@ -8597,6 +8597,128 @@ TYPES_DOMAIN, `X::AdHoc`/
 TYPES_EXCEPTION, `sym`/`to`/`qq`/
 `heredoc`/`words` in ADVERBS —
 stored without leading `:`).
+
+**S-Record (2026-07-08):** rides
+Lexilla's `srec` lexer
+(`LexHex.cxx`'s `ColouriseSrecDoc`
+at `:649-892`) — Motorola S-Record
+files (extensions `.srec` /
+`.s19` / `.s28` / `.s37`), a
+text-based ROM-image record format
+where each line is
+`S<type><count><address><data...><checksum>`.
+`LexHex.cxx` also serves Intel HEX
+(`ihex`) and Tektronix extended
+HEX (`tehex`) via separate
+`LexerModule` instances that share
+the same 19-slot `SCE_HEX_*` style
+namespace but use different
+subsets. This commit wires only
+S-Record; the other two remain
+🟡 for follow-up.
+
+**Zero-wordlist lexer.** `LexerModule
+lmSrec(SCLEX_SREC, ColouriseSrecDoc,
+"srec", 0, NULL)` at
+`LexHex.cxx:1046` — the 5-arg
+constructor form with NULL
+`wordListDesc[]`. The paint
+function's `WordList *[]` parameter
+is unnamed and never referenced;
+installing keywords is a silent
+no-op. Framework consequence:
+`SREC_THEME.keywords = &[]`. Fourth
+entry in Phase 4.5's zero-wordlist
+family alongside `props`,
+`registry`, and `txt2tags` — legend
+updated accordingly.
+
+**11 style mappings** covering 19
+SCE_HEX_* states (0..=18) — eight
+states unmapped: DEFAULT (0) per
+framework convention, EXTENDEDADDRESS
+(11) is IHEX-only-so-dead-code for
+Srec, and six authoritative parse-
+failure states (RECTYPE_UNKNOWN /
+BYTECOUNT_WRONG / ADDRESSFIELD_UNKNOWN
+/ DATA_UNKNOWN / CHECKSUM_WRONG /
+GARBAGE) per the deferred
+`StyleSlot::Error` migration
+convention.
+
+**Record-line structural anchors**:
+`RECSTART` (leading `S`) →
+Preprocessor bold (per-line
+structural marker, matching Python
+`SCE_P_DECORATOR` / Hollywood
+`PREPROCESSOR` bold precedent);
+`RECTYPE` (the type digit —
+S0=header, S1/S2/S3=data at
+16/24/32-bit address, S5=count,
+S7/S8/S9=start-address at
+32/24/16-bit) → Keyword bold
+(primary semantic pivot).
+
+**Four-flavour address-field
+collapse**: `NOADDRESS` (S0 header,
+address field present but
+semantically zero) + `DATAADDRESS`
+(S1/S2/S3 data records, load
+address of payload) + `RECCOUNT`
+(S5, how many S1/S2/S3 records
+preceded) + `STARTADDRESS`
+(S7/S8/S9 terminator, entry-point
+address) all → Number. Four
+flavours the lexer distinguishes
+at classification time per
+record-type semantics; framework
+collapses to one paint.
+
+**DATA_ODD + DATA_EVEN → String**
+— alternating-byte pair rendered
+as stripes at the terminal layer
+if the theme supports it. Matches
+D's STRING + STRINGB collapse
+discipline.
+
+**DATA_EMPTY → Comment italic** —
+padding / trailing empty data
+gets visually deemphasised per
+comment-family convention.
+
+**CHECKSUM → Lifetime** —
+integrity anchor at the trailing
+byte of every record. Framework's
+structural-anchor slot matching
+Bash SCALAR / Lisp SYMBOL /
+GDScript NODEPATH / Perl SCALAR
+sigil-marker precedent (in S-
+Record's case a position-derived
+tail rather than a leading sigil,
+but the framework's structural-
+anchor discipline applies
+symmetrically).
+
+Structural test coverage: **12
+invariants** — deep-value identity
+pin, empty-`keywords` LOAD-BEARING
+pin, 11-mapping style count,
+exact style-routing pins for all
+11 mapped constants, 8-state
+drift check (DEFAULT + 6 error
+states + EXTENDEDADDRESS-as-
+IHEX-only), 4-flavour address-
+field collapse pin, DATA_ODD +
+DATA_EVEN → String pin,
+RECSTART + RECTYPE structural
+pair, DATA_EMPTY → Comment
+italic, CHECKSUM → Lifetime
+sigil-anchor, italic == 1 + bold
+== 2, and 5 cross-language
+non-reuse pins (SREC_STYLES must
+differ from REBOL / Registry /
+Spice / txt2tags / Visual
+Prolog).
 
 ## Notes
 
