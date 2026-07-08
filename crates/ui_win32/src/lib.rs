@@ -116,18 +116,18 @@ use codepp_core::lang::{
     FORTH_PREWORD1, FORTH_PREWORD2, FORTH_STRINGS, FORTRAN_EXTENDED, FORTRAN_INTRINSICS,
     FORTRAN_KEYWORDS, GDSCRIPT_KEYWORDS, GDSCRIPT_KEYWORDS_2, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS,
     GUI4CLI_CONTROL, GUI4CLI_EVENTS, GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS,
-    HASKELL_RESERVED_OPERATORS, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS,
-    INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS,
+    HASKELL_RESERVED_OPERATORS, HOLLYWOOD_KEYWORDS, HOLLYWOOD_STDAPI, HTML_KEYWORDS, INNO_KEYWORDS,
+    INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS,
     JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
     KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
     LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
     L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH,
-    L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GUI4CLI, L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA,
-    L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB,
-    L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
-    L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK,
-    L_SPICE, L_SQL, L_TCL, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL,
-    L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+    L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_INI, L_INNO,
+    L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
+    L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP,
+    L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST,
+    L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG,
+    L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
     MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
     NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
     OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
@@ -222,33 +222,36 @@ use codepp_scintilla_sys::{
     SCE_HJA_REGEX, SCE_HJA_SINGLESTRING, SCE_HJA_SYMBOLS, SCE_HJA_TEMPLATELITERAL, SCE_HJA_WORD,
     SCE_HJ_COMMENT, SCE_HJ_COMMENTDOC, SCE_HJ_COMMENTLINE, SCE_HJ_DOUBLESTRING, SCE_HJ_KEYWORD,
     SCE_HJ_NUMBER, SCE_HJ_REGEX, SCE_HJ_SINGLESTRING, SCE_HJ_SYMBOLS, SCE_HJ_TEMPLATELITERAL,
-    SCE_HJ_WORD, SCE_HPHP_COMMENT, SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE,
-    SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE, SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR,
-    SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD, SCE_H_ASP, SCE_H_ASPAT,
-    SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT, SCE_H_DOUBLESTRING,
-    SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION, SCE_H_SGML_1ST_PARAM,
-    SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING, SCE_H_SGML_ENTITY,
-    SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG, SCE_H_TAGEND,
-    SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART, SCE_INNO_COMMENT,
-    SCE_INNO_COMMENT_PASCAL, SCE_INNO_INLINE_EXPANSION, SCE_INNO_KEYWORD, SCE_INNO_KEYWORD_PASCAL,
-    SCE_INNO_KEYWORD_USER, SCE_INNO_PARAMETER, SCE_INNO_PREPROC, SCE_INNO_SECTION,
-    SCE_INNO_STRING_DOUBLE, SCE_INNO_STRING_SINGLE, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI,
-    SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD,
-    SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME,
-    SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_KIX_COMMENT, SCE_KIX_COMMENTSTREAM,
-    SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER, SCE_KIX_OPERATOR,
-    SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT, SCE_LISP_KEYWORD,
-    SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER, SCE_LISP_OPERATOR,
-    SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER, SCE_LUA_COMMENT,
-    SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING, SCE_LUA_NUMBER,
-    SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD, SCE_LUA_WORD2,
-    SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7, SCE_LUA_WORD8,
-    SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH, SCE_L_MATH2,
-    SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM, SCE_MAKE_COMMENT,
-    SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR, SCE_MAKE_TARGET,
-    SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING, SCE_MATLAB_KEYWORD,
-    SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_MMIXAL_CHAR, SCE_MMIXAL_COMMENT,
-    SCE_MMIXAL_HEX, SCE_MMIXAL_INCLUDE, SCE_MMIXAL_LABEL, SCE_MMIXAL_NUMBER,
+    SCE_HJ_WORD, SCE_HOLLYWOOD_COMMENT, SCE_HOLLYWOOD_COMMENTBLOCK, SCE_HOLLYWOOD_CONSTANT,
+    SCE_HOLLYWOOD_HEXNUMBER, SCE_HOLLYWOOD_KEYWORD, SCE_HOLLYWOOD_NUMBER, SCE_HOLLYWOOD_OPERATOR,
+    SCE_HOLLYWOOD_PLUGINAPI, SCE_HOLLYWOOD_PLUGINMETHOD, SCE_HOLLYWOOD_PREPROCESSOR,
+    SCE_HOLLYWOOD_STDAPI, SCE_HOLLYWOOD_STRING, SCE_HOLLYWOOD_STRINGBLOCK, SCE_HPHP_COMMENT,
+    SCE_HPHP_COMMENTLINE, SCE_HPHP_COMPLEX_VARIABLE, SCE_HPHP_HSTRING, SCE_HPHP_HSTRING_VARIABLE,
+    SCE_HPHP_NUMBER, SCE_HPHP_OPERATOR, SCE_HPHP_SIMPLESTRING, SCE_HPHP_VARIABLE, SCE_HPHP_WORD,
+    SCE_H_ASP, SCE_H_ASPAT, SCE_H_ATTRIBUTE, SCE_H_ATTRIBUTEUNKNOWN, SCE_H_CDATA, SCE_H_COMMENT,
+    SCE_H_DOUBLESTRING, SCE_H_ENTITY, SCE_H_NUMBER, SCE_H_OTHER, SCE_H_QUESTION,
+    SCE_H_SGML_1ST_PARAM, SCE_H_SGML_COMMAND, SCE_H_SGML_COMMENT, SCE_H_SGML_DOUBLESTRING,
+    SCE_H_SGML_ENTITY, SCE_H_SGML_SIMPLESTRING, SCE_H_SGML_SPECIAL, SCE_H_SINGLESTRING, SCE_H_TAG,
+    SCE_H_TAGEND, SCE_H_TAGUNKNOWN, SCE_H_VALUE, SCE_H_XCCOMMENT, SCE_H_XMLEND, SCE_H_XMLSTART,
+    SCE_INNO_COMMENT, SCE_INNO_COMMENT_PASCAL, SCE_INNO_INLINE_EXPANSION, SCE_INNO_KEYWORD,
+    SCE_INNO_KEYWORD_PASCAL, SCE_INNO_KEYWORD_USER, SCE_INNO_PARAMETER, SCE_INNO_PREPROC,
+    SCE_INNO_SECTION, SCE_INNO_STRING_DOUBLE, SCE_INNO_STRING_SINGLE, SCE_JSON_BLOCKCOMMENT,
+    SCE_JSON_COMPACTIRI, SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD,
+    SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR,
+    SCE_JSON_PROPERTYNAME, SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI, SCE_KIX_COMMENT,
+    SCE_KIX_COMMENTSTREAM, SCE_KIX_FUNCTIONS, SCE_KIX_KEYWORD, SCE_KIX_MACRO, SCE_KIX_NUMBER,
+    SCE_KIX_OPERATOR, SCE_KIX_STRING1, SCE_KIX_STRING2, SCE_KIX_VAR, SCE_LISP_COMMENT,
+    SCE_LISP_KEYWORD, SCE_LISP_KEYWORD_KW, SCE_LISP_MULTI_COMMENT, SCE_LISP_NUMBER,
+    SCE_LISP_OPERATOR, SCE_LISP_SPECIAL, SCE_LISP_STRING, SCE_LISP_SYMBOL, SCE_LUA_CHARACTER,
+    SCE_LUA_COMMENT, SCE_LUA_COMMENTDOC, SCE_LUA_COMMENTLINE, SCE_LUA_LABEL, SCE_LUA_LITERALSTRING,
+    SCE_LUA_NUMBER, SCE_LUA_OPERATOR, SCE_LUA_PREPROCESSOR, SCE_LUA_STRING, SCE_LUA_WORD,
+    SCE_LUA_WORD2, SCE_LUA_WORD3, SCE_LUA_WORD4, SCE_LUA_WORD5, SCE_LUA_WORD6, SCE_LUA_WORD7,
+    SCE_LUA_WORD8, SCE_L_CMDOPT, SCE_L_COMMAND, SCE_L_COMMENT, SCE_L_COMMENT2, SCE_L_MATH,
+    SCE_L_MATH2, SCE_L_SHORTCMD, SCE_L_SPECIAL, SCE_L_TAG, SCE_L_TAG2, SCE_L_VERBATIM,
+    SCE_MAKE_COMMENT, SCE_MAKE_IDENTIFIER, SCE_MAKE_OPERATOR, SCE_MAKE_PREPROCESSOR,
+    SCE_MAKE_TARGET, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
+    SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR, SCE_MATLAB_STRING, SCE_MMIXAL_CHAR,
+    SCE_MMIXAL_COMMENT, SCE_MMIXAL_HEX, SCE_MMIXAL_INCLUDE, SCE_MMIXAL_LABEL, SCE_MMIXAL_NUMBER,
     SCE_MMIXAL_OPCODE_VALID, SCE_MMIXAL_OPERATOR, SCE_MMIXAL_REGISTER, SCE_MMIXAL_STRING,
     SCE_MMIXAL_SYMBOL, SCE_NIM_BACKTICKS, SCE_NIM_CHARACTER, SCE_NIM_COMMENT, SCE_NIM_COMMENTDOC,
     SCE_NIM_COMMENTLINE, SCE_NIM_COMMENTLINEDOC, SCE_NIM_FUNCNAME, SCE_NIM_NUMBER,
@@ -3882,6 +3885,99 @@ const GDSCRIPT_THEME: LangTheme = LangTheme {
     styles: GDSCRIPT_STYLES,
     italic: GDSCRIPT_ITALIC,
     bold: GDSCRIPT_BOLD,
+};
+
+// --- LexHollywood ---
+// LexHollywood serves Hollywood — a proprietary Lua-inspired
+// multimedia programming language by Andreas Falkenhahn. `L_HOLLYWOOD`
+// (id 87) is the only language row using this lexer. Dispatches
+// `SCLEX_HOLLYWOOD` (= 130) via a four-class wordlist descriptor at
+// `LexHollywood.cxx:235-241` — "Hollywood keywords" / "Hollywood
+// standard API functions" / "Hollywood plugin API functions" /
+// "Hollywood plugin methods". Code++'s default install populates
+// class 0 + class 1 (language reserved words + stdlib API);
+// classes 2 and 3 (plugin-provided vocabulary) are left empty per
+// framework-specific-dynamic-set convention — a user with plugins
+// installed can add their plugin's wordlists via a future
+// configuration override.
+//
+// See the SCE_HOLLYWOOD_* banner in `crates/scintilla-sys/src/lib.rs`
+// for the case-insensitive `GetCurrentLowered` classifier,
+// last-match-wins cross-class discipline, `[[..]]` block-string
+// syntax, `$xxx` / `0xxxx` hex literals, `#`-prefix CONSTANT
+// state (`#RED` / `#WHITE`), and `@`-prefix PREPROCESSOR state
+// (`@REQUIRE` / `@INCLUDE` / `@VERSION` / `@DISPLAY`).
+//
+// **13 style mappings** covering 15 defined SCE_HOLLYWOOD_* states
+// (0..=14). `SCE_HOLLYWOOD_DEFAULT` (0) and
+// `SCE_HOLLYWOOD_IDENTIFIER` (12) are intentionally unmapped per
+// the universal framework convention (bare identifiers paint at
+// STYLE_DEFAULT — same discipline as C's `SCE_C_IDENTIFIER` and
+// Python's `SCE_P_IDENTIFIER`).
+//
+//   - `COMMENT` (1) + `COMMENTBLOCK` (2) → Comment. Both `;`-line
+//     and `/*..*/` block comments collapse — italic on both per
+//     `HOLLYWOOD_ITALIC`. Same collapse discipline as C's
+//     SCE_C_COMMENT / _COMMENTLINE unification.
+//   - `NUMBER` (3) + `HEXNUMBER` (14) → Number. Two numeric
+//     flavours (decimal + hex, either `$abc` or `0xabc`)
+//     collapse to one paint — same collapse discipline as
+//     C's SCE_C_NUMBER (which handles both).
+//   - `KEYWORD` (4) → Keyword (bold — class-0 wordlist hit).
+//   - `STDAPI` (5) + `PLUGINAPI` (6) + `PLUGINMETHOD` (7) →
+//     Keyword2. Three separate wordlist hits, one paint slot —
+//     the framework's "type-like accent" convention. Hollywood
+//     splits its API surface across three wordlist classes for
+//     plugin-set granularity (users can independently populate
+//     class 2 / class 3 without touching Code++'s class-1
+//     stdlib baseline), but visually they collapse to one accent
+//     colour matching the LexCPP-family "SCE_C_WORD2 (class 1)
+//     = types + globals" precedent.
+//   - `STRING` (8) + `STRINGBLOCK` (9) → String. Two string
+//     flavours (`"..."` and Lua-style `[[..]]`) collapse to one
+//     paint — same discipline as Python's SCE_P_STRING /
+//     SCE_P_TRIPLE / SCE_P_TRIPLEDOUBLE unification and
+//     TypeScript's five-flavour string collapse.
+//   - `PREPROCESSOR` (10) → Preprocessor (bold — `@`-prefixed
+//     compile-time directives `@REQUIRE`, `@INCLUDE`, etc.).
+//     Matches Python's `SCE_P_DECORATOR` bold-preprocessor
+//     precedent — same `@name` mechanism, same structural role.
+//   - `OPERATOR` (11) → Operator.
+//   - `CONSTANT` (13) → Lifetime. Structural sigil-tagged
+//     `#`-prefixed named-constant reference (`#RED`, `#WHITE`,
+//     `#TRUE`). Matches the established Lifetime-slot precedent
+//     for sigil-prefixed structural anchors (Bash SCE_SH_SCALAR
+//     / Lisp SCE_LISP_SYMBOL / Perl SCE_PL_SCALAR / GDScript
+//     SCE_GD_NODEPATH).
+//
+// Italic on both comment states matches the universal framework
+// convention; bold on both `KEYWORD` (primary reserved-word
+// class) and `PREPROCESSOR` (`@`-directive structural anchor)
+// matches Python's `SCE_P_WORD` + `SCE_P_DECORATOR` bold pair.
+const HOLLYWOOD_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_HOLLYWOOD_COMMENT, StyleSlot::Comment),
+    (SCE_HOLLYWOOD_COMMENTBLOCK, StyleSlot::Comment),
+    (SCE_HOLLYWOOD_NUMBER, StyleSlot::Number),
+    (SCE_HOLLYWOOD_KEYWORD, StyleSlot::Keyword),
+    (SCE_HOLLYWOOD_STDAPI, StyleSlot::Keyword2),
+    (SCE_HOLLYWOOD_PLUGINAPI, StyleSlot::Keyword2),
+    (SCE_HOLLYWOOD_PLUGINMETHOD, StyleSlot::Keyword2),
+    (SCE_HOLLYWOOD_STRING, StyleSlot::String),
+    (SCE_HOLLYWOOD_STRINGBLOCK, StyleSlot::String),
+    (SCE_HOLLYWOOD_PREPROCESSOR, StyleSlot::Preprocessor),
+    (SCE_HOLLYWOOD_OPERATOR, StyleSlot::Operator),
+    (SCE_HOLLYWOOD_CONSTANT, StyleSlot::Lifetime),
+    (SCE_HOLLYWOOD_HEXNUMBER, StyleSlot::Number),
+];
+
+const HOLLYWOOD_ITALIC: &[usize] = &[SCE_HOLLYWOOD_COMMENT, SCE_HOLLYWOOD_COMMENTBLOCK];
+const HOLLYWOOD_BOLD: &[usize] = &[SCE_HOLLYWOOD_KEYWORD, SCE_HOLLYWOOD_PREPROCESSOR];
+
+const HOLLYWOOD_THEME: LangTheme = LangTheme {
+    keywords: &[(0, HOLLYWOOD_KEYWORDS), (1, HOLLYWOOD_STDAPI)],
+    styles: HOLLYWOOD_STYLES,
+    italic: HOLLYWOOD_ITALIC,
+    bold: HOLLYWOOD_BOLD,
 };
 
 // --- LexCsound ---
@@ -10252,6 +10348,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&FORTRAN_THEME)
     } else if lang == L_GDSCRIPT {
         Some(&GDSCRIPT_THEME)
+    } else if lang == L_HOLLYWOOD {
+        Some(&HOLLYWOOD_THEME)
     } else if lang == L_CSOUND {
         Some(&CSOUND_THEME)
     } else if lang == L_ERLANG {
@@ -25436,10 +25534,11 @@ mod lang_theme_tests {
         ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS,
         ASM_REG_KEYWORDS, ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC,
         ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES,
-        GDSCRIPT_BOLD, GDSCRIPT_ITALIC, GDSCRIPT_STYLES, MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES,
-        NIM_BOLD, NIM_ITALIC, NIM_STYLES, NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES,
-        OSCRIPT_BOLD, OSCRIPT_ITALIC, OSCRIPT_STYLES, REBOL_BOLD, REBOL_ITALIC, REBOL_STYLES,
-        REGISTRY_BOLD, REGISTRY_ITALIC, REGISTRY_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
+        GDSCRIPT_BOLD, GDSCRIPT_ITALIC, GDSCRIPT_STYLES, HOLLYWOOD_BOLD, HOLLYWOOD_ITALIC,
+        HOLLYWOOD_STYLES, MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC,
+        NIM_STYLES, NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD,
+        OSCRIPT_ITALIC, OSCRIPT_STYLES, REBOL_BOLD, REBOL_ITALIC, REBOL_STYLES, REGISTRY_BOLD,
+        REGISTRY_ITALIC, REGISTRY_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
         SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER,
         SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
         SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
@@ -25513,34 +25612,35 @@ mod lang_theme_tests {
         FORTRAN_EXTENDED, FORTRAN_INTRINSICS, FORTRAN_KEYWORDS, GDSCRIPT_KEYWORDS,
         GDSCRIPT_KEYWORDS_2, GUI4CLI_ATTRIBUTES, GUI4CLI_COMMANDS, GUI4CLI_CONTROL, GUI4CLI_EVENTS,
         GUI4CLI_GLOBALS, HASKELL_FFI_KEYWORDS, HASKELL_KEYWORDS, HASKELL_RESERVED_OPERATORS,
-        HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR,
-        INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2,
-        JSON_KEYWORDS, JSON_LD_KEYWORDS, KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS,
-        LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH,
-        L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D,
-        L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GUI4CLI,
-        L_HASKELL, L_HTML, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX,
-        L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC,
-        L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC,
-        L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX,
-        L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML,
-        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
-        MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
-        NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-        OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
-        OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
-        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
-        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3,
-        REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
-        R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-        SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3,
-        SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
-        TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS,
-        VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS,
-        VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES,
-        VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS,
-        VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+        HOLLYWOOD_KEYWORDS, HOLLYWOOD_STDAPI, HTML_KEYWORDS, INNO_KEYWORDS, INNO_PARAMETERS,
+        INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS,
+        JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
+        KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
+        LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
+        L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH,
+        L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_INI,
+        L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
+        L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
+        L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY,
+        L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TEXT, L_TXT2TAGS,
+        L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS,
+        MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS,
+        NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS,
+        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS,
+        OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS,
+        PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS,
+        POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1,
+        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
+        PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4,
+        REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
+        SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS,
+        SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS,
+        TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
+        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
+        VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
+        XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -25578,11 +25678,16 @@ mod lang_theme_tests {
         SCE_GD_CLASSNAME, SCE_GD_COMMENTBLOCK, SCE_GD_COMMENTLINE, SCE_GD_DEFAULT, SCE_GD_FUNCNAME,
         SCE_GD_IDENTIFIER, SCE_GD_NODEPATH, SCE_GD_NUMBER, SCE_GD_OPERATOR, SCE_GD_STRING,
         SCE_GD_STRINGEOL, SCE_GD_TRIPLE, SCE_GD_TRIPLEDOUBLE, SCE_GD_WORD, SCE_GD_WORD2,
-        SCE_HA_IDENTIFIER, SCE_HA_IMPORT, SCE_INNO_IDENTIFIER, SCE_JSON_BLOCKCOMMENT,
-        SCE_JSON_COMPACTIRI, SCE_JSON_DEFAULT, SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE,
-        SCE_JSON_KEYWORD, SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER,
-        SCE_JSON_OPERATOR, SCE_JSON_PROPERTYNAME, SCE_JSON_STRING, SCE_JSON_STRINGEOL,
-        SCE_JSON_URI, SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
+        SCE_HA_IDENTIFIER, SCE_HA_IMPORT, SCE_HOLLYWOOD_COMMENT, SCE_HOLLYWOOD_COMMENTBLOCK,
+        SCE_HOLLYWOOD_CONSTANT, SCE_HOLLYWOOD_DEFAULT, SCE_HOLLYWOOD_HEXNUMBER,
+        SCE_HOLLYWOOD_IDENTIFIER, SCE_HOLLYWOOD_KEYWORD, SCE_HOLLYWOOD_NUMBER,
+        SCE_HOLLYWOOD_OPERATOR, SCE_HOLLYWOOD_PLUGINAPI, SCE_HOLLYWOOD_PLUGINMETHOD,
+        SCE_HOLLYWOOD_PREPROCESSOR, SCE_HOLLYWOOD_STDAPI, SCE_HOLLYWOOD_STRING,
+        SCE_HOLLYWOOD_STRINGBLOCK, SCE_INNO_IDENTIFIER, SCE_JSON_BLOCKCOMMENT, SCE_JSON_COMPACTIRI,
+        SCE_JSON_DEFAULT, SCE_JSON_ERROR, SCE_JSON_ESCAPESEQUENCE, SCE_JSON_KEYWORD,
+        SCE_JSON_LDKEYWORD, SCE_JSON_LINECOMMENT, SCE_JSON_NUMBER, SCE_JSON_OPERATOR,
+        SCE_JSON_PROPERTYNAME, SCE_JSON_STRING, SCE_JSON_STRINGEOL, SCE_JSON_URI,
+        SCE_MATLAB_COMMAND, SCE_MATLAB_COMMENT, SCE_MATLAB_DOUBLEQUOTESTRING,
         SCE_MATLAB_IDENTIFIER, SCE_MATLAB_KEYWORD, SCE_MATLAB_NUMBER, SCE_MATLAB_OPERATOR,
         SCE_MATLAB_STRING, SCE_MMIXAL_CHAR, SCE_MMIXAL_COMMENT, SCE_MMIXAL_HEX, SCE_MMIXAL_INCLUDE,
         SCE_MMIXAL_LABEL, SCE_MMIXAL_NUMBER, SCE_MMIXAL_OPCODE_VALID, SCE_MMIXAL_OPERATOR,
@@ -25655,6 +25760,7 @@ mod lang_theme_tests {
             (L_FORTRAN, "Fortran (free form)"),
             (L_FORTRAN_77, "Fortran (fixed form)"),
             (L_GDSCRIPT, "GDScript"),
+            (L_HOLLYWOOD, "Hollywood"),
             (L_CSOUND, "CSound"),
             (L_ERLANG, "Erlang"),
             (L_ESCRIPT, "ESCRIPT"),
@@ -36591,6 +36697,420 @@ mod lang_theme_tests {
             "GDSCRIPT_STYLES must NOT be identical to PYTHON_STYLES — \
              different SCE_* index sets"
         );
+    }
+
+    /// Hollywood uses Lexilla's `hollywood` lexer
+    /// (`LexHollywood.cxx`) — a proprietary Lua-inspired multimedia
+    /// programming language by Andreas Falkenhahn. See the
+    /// `SCE_HOLLYWOOD_*` banner in `crates/scintilla-sys/src/lib.rs`
+    /// for state-machine details, case-insensitive
+    /// `GetCurrentLowered` classifier discipline, last-match-wins
+    /// cross-class semantics, `@`-preprocessor + `#`-constant
+    /// sigils, and `[[..]]` block-string / `$xxx` hex literal
+    /// handling.
+    ///
+    /// Invariants (14):
+    ///   1. **Deep-value identity pin** — `HOLLYWOOD_THEME`'s
+    ///      individual fields (`keywords` / `styles` / `italic` /
+    ///      `bold`) must value-equal what the dispatcher returns.
+    ///   2. **13 style mappings** (15 total `SCE_HOLLYWOOD_*` states
+    ///      0..=14 minus DEFAULT (0) + IDENTIFIER (12), both
+    ///      unmapped per framework convention).
+    ///   3. **Two-class wordlist install** (out of 4 declared
+    ///      classes at `LexHollywood.cxx:235-241`) — Code++
+    ///      populates class 0 (`HOLLYWOOD_KEYWORDS`) and class 1
+    ///      (`HOLLYWOOD_STDAPI`); classes 2 and 3 (plugin-provided
+    ///      vocabulary) are left empty per framework-specific-
+    ///      dynamic-set convention. Framework consequence:
+    ///      `keywords.len() == 2`, not 4.
+    ///   4. **Canonical class-0 link to `HOLLYWOOD_KEYWORDS`** and
+    ///      class-1 link to `HOLLYWOOD_STDAPI`.
+    ///   5. **Style-routing pins** for all 13 mapped constants —
+    ///      each `(SCE_HOLLYWOOD_*, StyleSlot::*)` entry present
+    ///      exactly.
+    ///   6. **DEFAULT + IDENTIFIER unmapped** — pinned absent via
+    ///      drift-check.
+    ///   7. **Numeric-family collapse** — NUMBER + HEXNUMBER both →
+    ///      `Number`.
+    ///   8. **String-family collapse** — STRING + STRINGBLOCK both →
+    ///      `String` (matches Python's `SCE_P_STRING` /
+    ///      `SCE_P_TRIPLE` unification precedent).
+    ///   9. **API-family collapse** — STDAPI + PLUGINAPI +
+    ///      PLUGINMETHOD all three → `Keyword2` (matches the
+    ///      framework's LexCPP-family `SCE_C_WORD2` accent slot
+    ///      convention).
+    ///   10. **Comment-family collapse** — COMMENT + COMMENTBLOCK
+    ///       both → `Comment`, with both italic per
+    ///       `HOLLYWOOD_ITALIC`.
+    ///   11. **CONSTANT → Lifetime** — `#`-prefix sigil-tagged
+    ///       named constants (`#RED` / `#WHITE`), matches the
+    ///       Bash `SCALAR` / Lisp `SYMBOL` / Perl `SCALAR` /
+    ///       `GDScript` `NODEPATH` structural-sigil precedent.
+    ///   12. **PREPROCESSOR → Preprocessor bold** — `@`-prefix
+    ///       directives, matches Python's `SCE_P_DECORATOR` bold
+    ///       precedent (identical `@name` mechanism).
+    ///   13. **All-lowercase wordlist entries** — `LexHollywood`
+    ///       calls `GetCurrentLowered` before every `InList`
+    ///       probe, so any wordlist entry with an uppercase
+    ///       character silently never matches. Test scans both
+    ///       wordlists for uppercase and fails hard.
+    ///   14. **Cross-class strict disjointness** — last-match-wins
+    ///       classifier at `LexHollywood.cxx:358-362` silently
+    ///       promotes a class-0 token that ALSO appears in class 1
+    ///       to STDAPI. Test uses `HashSet::intersection`.
+    #[test]
+    fn hollywood_uses_lexhollywood_two_class_theme() {
+        let hw = lang_theme(L_HOLLYWOOD).expect("Hollywood wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(hw.styles, HOLLYWOOD_STYLES);
+        assert_eq!(hw.italic, HOLLYWOOD_ITALIC);
+        assert_eq!(hw.bold, HOLLYWOOD_BOLD);
+
+        // Invariant 2: 13 style mappings.
+        assert_eq!(
+            hw.styles.len(),
+            13,
+            "HOLLYWOOD_STYLES must map 13 indices (15 SCE_HOLLYWOOD_* \
+             states 0..=14 minus DEFAULT (0) + IDENTIFIER (12), both \
+             unmapped per framework convention)"
+        );
+
+        // Invariants 3 + 4: two-class descriptor with canonical links.
+        assert_eq!(
+            hw.keywords.len(),
+            2,
+            "HOLLYWOOD_THEME must install exactly 2 wordlist classes \
+             (Code++ populates class 0 KEYWORDS + class 1 STDAPI; \
+             classes 2 PLUGINAPI + 3 PLUGINMETHOD are left empty per \
+             framework-specific-dynamic-set convention)"
+        );
+        assert_eq!(hw.keywords[0].0, 0);
+        assert_eq!(hw.keywords[0].1, HOLLYWOOD_KEYWORDS);
+        assert_eq!(hw.keywords[1].0, 1);
+        assert_eq!(hw.keywords[1].1, HOLLYWOOD_STDAPI);
+
+        // Invariant 5: every mapped constant present exactly.
+        for (sce, slot, name) in [
+            (
+                SCE_HOLLYWOOD_COMMENT,
+                StyleSlot::Comment,
+                "SCE_HOLLYWOOD_COMMENT",
+            ),
+            (
+                SCE_HOLLYWOOD_COMMENTBLOCK,
+                StyleSlot::Comment,
+                "SCE_HOLLYWOOD_COMMENTBLOCK",
+            ),
+            (
+                SCE_HOLLYWOOD_NUMBER,
+                StyleSlot::Number,
+                "SCE_HOLLYWOOD_NUMBER",
+            ),
+            (
+                SCE_HOLLYWOOD_KEYWORD,
+                StyleSlot::Keyword,
+                "SCE_HOLLYWOOD_KEYWORD",
+            ),
+            (
+                SCE_HOLLYWOOD_STDAPI,
+                StyleSlot::Keyword2,
+                "SCE_HOLLYWOOD_STDAPI",
+            ),
+            (
+                SCE_HOLLYWOOD_PLUGINAPI,
+                StyleSlot::Keyword2,
+                "SCE_HOLLYWOOD_PLUGINAPI",
+            ),
+            (
+                SCE_HOLLYWOOD_PLUGINMETHOD,
+                StyleSlot::Keyword2,
+                "SCE_HOLLYWOOD_PLUGINMETHOD",
+            ),
+            (
+                SCE_HOLLYWOOD_STRING,
+                StyleSlot::String,
+                "SCE_HOLLYWOOD_STRING",
+            ),
+            (
+                SCE_HOLLYWOOD_STRINGBLOCK,
+                StyleSlot::String,
+                "SCE_HOLLYWOOD_STRINGBLOCK",
+            ),
+            (
+                SCE_HOLLYWOOD_PREPROCESSOR,
+                StyleSlot::Preprocessor,
+                "SCE_HOLLYWOOD_PREPROCESSOR",
+            ),
+            (
+                SCE_HOLLYWOOD_OPERATOR,
+                StyleSlot::Operator,
+                "SCE_HOLLYWOOD_OPERATOR",
+            ),
+            (
+                SCE_HOLLYWOOD_CONSTANT,
+                StyleSlot::Lifetime,
+                "SCE_HOLLYWOOD_CONSTANT",
+            ),
+            (
+                SCE_HOLLYWOOD_HEXNUMBER,
+                StyleSlot::Number,
+                "SCE_HOLLYWOOD_HEXNUMBER",
+            ),
+        ] {
+            assert!(
+                hw.styles.contains(&(sce, slot)),
+                "HOLLYWOOD_STYLES must route {name} to {slot:?}"
+            );
+        }
+
+        // Invariant 6: DEFAULT + IDENTIFIER absent (drift check).
+        for (sce, name) in [
+            (SCE_HOLLYWOOD_DEFAULT, "SCE_HOLLYWOOD_DEFAULT"),
+            (SCE_HOLLYWOOD_IDENTIFIER, "SCE_HOLLYWOOD_IDENTIFIER"),
+        ] {
+            assert!(
+                !hw.styles.iter().any(|(s, _)| *s == sce),
+                "HOLLYWOOD_STYLES must NOT map {name} — reserved for \
+                 STYLE_DEFAULT paint per framework convention"
+            );
+        }
+
+        // Invariant 7: numeric-family collapse.
+        for sce in [SCE_HOLLYWOOD_NUMBER, SCE_HOLLYWOOD_HEXNUMBER] {
+            assert!(
+                hw.styles.contains(&(sce, StyleSlot::Number)),
+                "both numeric flavours (decimal + hex) must route to Number"
+            );
+        }
+
+        // Invariant 8: string-family collapse.
+        for sce in [SCE_HOLLYWOOD_STRING, SCE_HOLLYWOOD_STRINGBLOCK] {
+            assert!(
+                hw.styles.contains(&(sce, StyleSlot::String)),
+                "both string flavours (\"...\" + [[...]]) must route to String"
+            );
+        }
+
+        // Invariant 9: API-family collapse.
+        for sce in [
+            SCE_HOLLYWOOD_STDAPI,
+            SCE_HOLLYWOOD_PLUGINAPI,
+            SCE_HOLLYWOOD_PLUGINMETHOD,
+        ] {
+            assert!(
+                hw.styles.contains(&(sce, StyleSlot::Keyword2)),
+                "all three API classes (STDAPI + PLUGINAPI + PLUGINMETHOD) \
+                 must collapse to Keyword2 — matches the framework's LexCPP-\
+                 family SCE_C_WORD2 accent-slot convention"
+            );
+        }
+
+        // Invariant 10: comment-family collapse + italic.
+        for sce in [SCE_HOLLYWOOD_COMMENT, SCE_HOLLYWOOD_COMMENTBLOCK] {
+            assert!(
+                hw.styles.contains(&(sce, StyleSlot::Comment)),
+                "both comment states (; and /*..*/) must route to Comment"
+            );
+            assert!(
+                hw.italic.contains(&sce),
+                "both comment states must be italic"
+            );
+        }
+        assert_eq!(
+            hw.italic.len(),
+            2,
+            "HOLLYWOOD_ITALIC must contain exactly 2 states"
+        );
+
+        // Invariants 11 + 12: sigil-tagged states — CONSTANT →
+        // Lifetime, PREPROCESSOR → Preprocessor + bold.
+        assert!(
+            hw.styles
+                .contains(&(SCE_HOLLYWOOD_CONSTANT, StyleSlot::Lifetime)),
+            "CONSTANT (#-sigil named constants) → Lifetime (Bash SCALAR / \
+             Lisp SYMBOL / Perl SCALAR / GDScript NODEPATH structural-sigil \
+             precedent)"
+        );
+        assert!(
+            hw.styles
+                .contains(&(SCE_HOLLYWOOD_PREPROCESSOR, StyleSlot::Preprocessor)),
+            "PREPROCESSOR (@-directives) → Preprocessor (Python \
+             SCE_P_DECORATOR precedent)"
+        );
+        assert_eq!(
+            hw.bold.len(),
+            2,
+            "HOLLYWOOD_BOLD must contain exactly 2 states (KEYWORD + PREPROCESSOR)"
+        );
+        assert!(hw.bold.contains(&SCE_HOLLYWOOD_KEYWORD));
+        assert!(hw.bold.contains(&SCE_HOLLYWOOD_PREPROCESSOR));
+
+        // Invariant 13: all-lowercase wordlist entries. `LexHollywood`
+        // calls `GetCurrentLowered` before every `InList` probe, so
+        // an entry with an uppercase character silently never matches.
+        for wl_name in ["HOLLYWOOD_KEYWORDS", "HOLLYWOOD_STDAPI"] {
+            let wl = if wl_name == "HOLLYWOOD_KEYWORDS" {
+                HOLLYWOOD_KEYWORDS
+            } else {
+                HOLLYWOOD_STDAPI
+            };
+            for tok in wl.split_whitespace() {
+                assert!(
+                    tok.chars().all(|c| !c.is_ascii_uppercase()),
+                    "{wl_name}: token `{tok}` contains an uppercase byte \
+                     — LexHollywood's `GetCurrentLowered` at :357 would \
+                     never match it"
+                );
+            }
+        }
+
+        // Invariant 14: strict cross-class disjointness. Last-match-
+        // wins classifier at LexHollywood.cxx:358-362 silently
+        // promotes a class-0 token also in class 1 to STDAPI.
+        use std::collections::HashSet;
+        let wl0: HashSet<&str> = HOLLYWOOD_KEYWORDS.split_whitespace().collect();
+        let wl1: HashSet<&str> = HOLLYWOOD_STDAPI.split_whitespace().collect();
+        if let Some(shared) = wl0.intersection(&wl1).next() {
+            panic!(
+                "HOLLYWOOD_KEYWORDS and HOLLYWOOD_STDAPI both contain \
+                 `{shared}` — LexHollywood's classifier at :358-362 is \
+                 last-match-wins, so the class-1 entry silently overrides \
+                 the class-0 colour"
+            );
+        }
+
+        // Canonical class-0 anchors — one from each category.
+        // Verified against Hollywood 11.0 manual chapters 11-12.
+        for anchor in [
+            "if",
+            "then",
+            "else",
+            "elseif",
+            "endif",
+            "switch",
+            "case",
+            "endswitch",
+            "for",
+            "next",
+            "in",
+            "do",
+            "while",
+            "wend",
+            "repeat",
+            "until",
+            "forever",
+            "function",
+            "endfunction",
+            "local",
+            "global",
+            "const",
+            "dim",
+            "dimstr",
+            "block",
+            "endblock",
+            "return",
+            "break",
+            "continue",
+            "and",
+            "or",
+            "not",
+            "true",
+            "false",
+            "nil",
+        ] {
+            assert!(
+                wl0.contains(anchor),
+                "HOLLYWOOD_KEYWORDS must include canonical class-0 anchor `{anchor}`"
+            );
+        }
+
+        // Canonical class-1 anchors — one from each category.
+        // Verified against Hollywood 11.0 manual (bare names, NOT
+        // library-prefixed forms).
+        for anchor in [
+            "print",
+            "debugprint",
+            "nprint", // Print-without-newline (NOT `printnln`).
+            "openfile",
+            "closefile",
+            "seek",   // NOT `fileseek`.
+            "exists", // NOT `fileexists`.
+            "filerequest",
+            "opendisplay",
+            "settitle", // NOT `setdisplaytitle`.
+            "loadbrush",
+            "loadsprite",
+            "openanim",
+            "openmusic",
+            "loadsample", // NOT `opensample` — Load/Create/Free lifecycle.
+            "createsample",
+            "freesample",
+            "openfont",
+            "textout",
+            "rgb",
+            "argb",
+            "abs",
+            "sqrt",
+            "cos",
+            "sin",
+            "atan2",
+            "strlen",
+            "upperstr",
+            "replacestr",
+            "tonumber",
+            "getitem", // NOT `gettable` — Table getter.
+            "foreach", // Table iterator (function, NOT keyword).
+            "sort",    // NOT `sorttable`.
+            "gettimer",
+            "wait",
+            "gettime",
+            "rnd",
+            "rndseed", // NOT `srand`.
+        ] {
+            assert!(
+                wl1.contains(anchor),
+                "HOLLYWOOD_STDAPI must include canonical class-1 anchor `{anchor}`"
+            );
+        }
+
+        // Anti-anchors — tokens the reviewer confirmed do NOT
+        // exist in Hollywood 11.0 documentation. Pinned absent to
+        // catch a future regression that re-introduces them.
+        for absent in [
+            "foreach",  // NOT class-0 (it's class-1 as a Table func)
+            "forrange", // fabricated — doesn't exist in Hollywood
+            "enum",     // fabricated — Hollywood uses Local/Global/Const
+        ] {
+            assert!(
+                !wl0.contains(absent),
+                "HOLLYWOOD_KEYWORDS must NOT include non-keyword `{absent}` \
+                 — verified absent from Hollywood 11.0 manual chapters 11-12"
+            );
+        }
+        for absent in [
+            "input",           // no such function
+            "fileseek",        // real name is bare `seek`
+            "fileexists",      // real name is bare `exists`
+            "setdisplaytitle", // real name is bare `settitle`
+            "opensample",      // real lifecycle uses `loadsample`
+            "closesample",
+            "pausesample",
+            "resumesample",
+            "printnln",   // real name is `nprint`
+            "gettable",   // real name is `getitem`
+            "settable",   // fabricated
+            "cleartable", // fabricated
+            "sorttable",  // real name is bare `sort`
+            "srand",      // real name is `rndseed`
+        ] {
+            assert!(
+                !wl1.contains(absent),
+                "HOLLYWOOD_STDAPI must NOT include fabricated/misnamed \
+                 function `{absent}` — verified absent from Hollywood \
+                 11.0 manual"
+            );
+        }
     }
 
     /// Csound uses Lexilla's `csound` lexer (`LexCsound.cxx`) —

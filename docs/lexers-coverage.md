@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 72 / 🟡 16 / ⚫ 1.
+Total: 89 rows. ✅ 73 / 🟡 15 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1877,7 +1877,7 @@ further shim work needed.
 | Go | 88 | `cpp` | ⚫ | ⚫ | 🟡 |
 | Gui4Cli | 51 | `gui4cli` | ✅ | ✅ | ✅ |
 | Haskell | 45 | `haskell` | ✅ | ✅ | ✅ |
-| Hollywood | 87 | `hollywood` | ⚫ | ⚫ | 🟡 |
+| Hollywood | 87 | `hollywood` | ✅ | ✅ | ✅ |
 | HTML | 8 | `hypertext` | ✅ | ✅ | ✅ |
 | INI file | 13 | `props` | — | ✅ | ✅ |
 | Inno Setup | 46 | `inno` | ✅ | ✅ | ✅ |
@@ -8076,6 +8076,238 @@ past the gate with a further
 1.1-point margin. The residual 🟡
 rows continue to be tracked for
 follow-on commits.
+
+**Hollywood (2026-07-08):** rides
+Lexilla's `hollywood` lexer
+(`LexHollywood.cxx`) — Andreas
+Falkenhahn's proprietary Lua-
+inspired multimedia programming
+language (extension `.hws`). Case-
+INSENSITIVE identifier lookup via
+`GetCurrentLowered` at
+`LexHollywood.cxx:357` — Hollywood's
+source convention is PascalCase
+(`Print`, `LoadBrush`) but every
+wordlist entry MUST be stored
+lowercase for the byte-exact InList
+match against the lowercased input.
+
+**15 SCE_HOLLYWOOD_* states**
+(0..=14) with **13-mapping**
+`HOLLYWOOD_STYLES` — DEFAULT (0)
+and IDENTIFIER (12) intentionally
+unmapped per framework convention.
+**Numeric-family collapse**: NUMBER
++ HEXNUMBER (both `$abc` and
+`0xabc` prefixes) → Number.
+**Comment-family collapse**: `;`-
+line-comment (COMMENT) + `/*..*/`
+block-comment (COMMENTBLOCK) both
+→ Comment italic. **String-family
+collapse**: `"..."` (STRING) + Lua-
+style `[[..]]` heredoc
+(STRINGBLOCK) both → String. **API-
+family collapse**: STDAPI (class 1
+stdlib) + PLUGINAPI (class 2
+plugin globals) + PLUGINMETHOD
+(class 3 plugin methods) all three
+→ Keyword2 accent, matching the
+LexCPP-family SCE_C_WORD2 accent-
+slot convention. KEYWORD (class 0)
+→ Keyword bold. PREPROCESSOR
+(`@REQUIRE` / `@INCLUDE` / `@VERSION`
+/ `@DISPLAY`) → Preprocessor bold —
+matches Python's `SCE_P_DECORATOR`
+precedent (identical `@name`
+mechanism). CONSTANT (`#RED` /
+`#WHITE` / `#TRUE` named-constant
+sigils) → Lifetime — structural-
+sigil-tagged reference matching the
+established Bash SCALAR / Lisp
+SYMBOL / Perl SCALAR / GDScript
+NODEPATH precedent.
+
+**Last-match-wins across classes.**
+The `for i in 0..4` loop at
+`LexHollywood.cxx:358-362` does NOT
+break — it keeps probing every
+class and each `ChangeState`
+overwrites the previous match. A
+token appearing in both class 0 and
+class 1 silently promotes to STDAPI
+colour. Same discipline as REBOL
+(REBOL_WORD..REBOL_WORD8 last-match-
+wins). Framework consequence:
+strict cross-class disjointness
+enforced by the invariant test's
+`HashSet::intersection` guard.
+
+`HOLLYWOOD_KEYWORDS` (class 0,
+bold — 39 tokens, all-lowercase) —
+verified against Hollywood 11.0
+manual chapters 11 (variables/
+constants) and 12 (control flow):
+5 conditional (`if` / `then` /
+`else` / `elseif` / `endif`), 4
+switch (`switch` / `case` /
+`default` / `endswitch`), 12 loop
+(`for` / `to` / `step` / `next` /
+`in` / `do` — short-form signal —
+/ `while` / `wend` / `repeat` /
+`until` / `forever` /
+`break`), 2 jump (`return` /
+`continue` — `goto` deliberately
+excluded as Hollywood 1.x legacy
+per the manual's own deprecation
+note), 9 declaration (`function` /
+`endfunction` / `local` / `global`
+/ `const` / `dim` / `dimstr` —
+array declarations — / `block` /
+`endblock` — scoping statement),
+6 boolean/literal (`and` / `or` /
+`not` / `true` / `false` /
+`nil`).
+
+**Deliberately absent from class
+0** (adversarial review found and
+removed): `foreach` is NOT a
+Hollywood keyword — the generic
+loop form is `For var In expr`;
+`ForEach(table, callback)` exists
+but as a Table-library function
+(lives in `HOLLYWOOD_STDAPI` class
+1). `forrange` and `enum` don't
+exist in Hollywood at all.
+
+`HOLLYWOOD_STDAPI` (class 1,
+accent — 96 tokens, all-lowercase)
+— conservatively verified against
+Hollywood 11.0 manual chapter TOCs.
+Favours **verifiable correctness
+over API-surface coverage**:
+Hollywood's full API is ~600
+functions across ~40 libraries;
+this list is a ~96-token subset
+verified against the manual.
+Function-name guesses that could
+plausibly exist (`getdisplaywidth`,
+`pauseanim`, `getanimcount`, etc.)
+are deliberately omitted where the
+manual doesn't confirm them — an
+incorrectly-named entry paints
+harmlessly as
+`SCE_HOLLYWOOD_IDENTIFIER`, but a
+correctly-named-BUT-wrong-name
+entry mis-highlights real user
+code.
+
+Categories (17): 4 console I/O
+(`print` / `debugprint` / `nprint`
+— Print-without-newline, NOT
+`printnln` — / `cls`), 7 file I/O
+(bare `seek` and `exists`, NOT
+`fileseek`/`fileexists`), 2 file
+requester + existence, 4 display
+(bare `settitle`, NOT
+`setdisplaytitle`), 5 brush, 4
+sprite, 4 animation, 6 music
+(Pause/Resume verbs exist HERE,
+not for Sample), 5 sample
+(Load/Create/Free lifecycle — NOT
+Open/Close), 7 font + text (7
+because `nprint` is in category 1),
+2 colour (`rgb` + `argb`), **20
+math (fully verified)**, **10
+string (fully verified)**, 5 type
+conversion + Table (`getitem` NOT
+`gettable`), 2 table iteration
+(`foreach` as function, `sort` NOT
+`sorttable`), 5 time, 4 random +
+events (`rndseed` NOT `srand`).
+
+**Deliberately absent from class 1**
+(adversarial review found and
+removed as fabricated / misnamed):
+`input`, `fileseek`, `fileexists`,
+`flushdisplay`, `getdisplayattributes`,
+`setdisplayattributes`,
+`getdisplaywidth`, `getdisplayheight`,
+`getdisplaycount`, `setdisplaytitle`,
+`savebrush`, `scalebrush`,
+`rotatebrush`, `getbrushwidth`,
+`getbrushheight`, `pauseanim`,
+`getanimwidth`, `getanimheight`,
+`getanimcount`, `opensample`,
+`closesample`, `pausesample`,
+`resumesample`, `printnln`,
+`getrgb`, `setcolor`, `gethexcolor`,
+`gettable`, `settable`,
+`gettablesize`, `cleartable`,
+`sorttable`, `srand`. The invariant
+test asserts each absent so a
+future regression that re-adds any
+of them fails the gate.
+
+**Deliberate exclusions:** Plugin-
+provided globals (`hurl.request`,
+`hcl.compress`, `xmlparser.parse`,
+`sqlite.open` — from user's plugin
+set) stay out — belong in class 2
+(PLUGINAPI), left empty per
+framework-specific-dynamic-set
+convention. Plugin object methods
+(`sprite:move`, `brush:copy`) stay
+out — belong in class 3
+(PLUGINMETHOD), also left empty.
+Named constants (`#RED` / `#WHITE`
+/ `#TRUE`) stay out — they aren't
+wordlist-classified at all; the
+lexer enters `SCE_HOLLYWOOD_CONSTANT`
+state on `#` and paints the whole
+`#name` span without a wordlist
+lookup. `@`-preprocessor directives
+same story — `SCE_HOLLYWOOD_PREPROCESSOR`
+paints them without wordlist lookup.
+
+Structural test coverage: **14
+invariants** — deep-value identity
+pin, 13-mapping style count, **two-
+class descriptor shape** (Code++
+populates class 0 + class 1;
+classes 2 + 3 left empty per
+framework-specific-dynamic-set
+convention — invariant asserts
+`keywords.len() == 2`, not 4),
+canonical class-0 + class-1
+wordlist links, exact style-routing
+pin for all 13 mapped constants,
+DEFAULT + IDENTIFIER unmapped drift
+check, numeric-family collapse pin
+(NUMBER + HEXNUMBER → Number),
+string-family collapse pin (STRING
++ STRINGBLOCK → String), **API-
+family collapse pin** (STDAPI +
+PLUGINAPI + PLUGINMETHOD three-way
+collapse to Keyword2), comment-
+family collapse + italic pin (both
+COMMENT + COMMENTBLOCK italic;
+`italic.len() == 2`), CONSTANT →
+Lifetime + PREPROCESSOR →
+Preprocessor sigil-state pins,
+bold set == 2 (KEYWORD +
+PREPROCESSOR), **all-lowercase
+wordlist enforcement** (both
+wordlists scanned for any uppercase
+byte — LOAD-BEARING for
+`GetCurrentLowered` case-
+insensitive matching), strict
+cross-class disjointness
+(`HashSet::intersection` empty —
+last-match-wins classifier would
+silently promote duplicates to
+STDAPI), 30 canonical class-0
+anchors + 20 canonical class-1
+anchors.
 
 ## Notes
 

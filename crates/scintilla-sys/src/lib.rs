@@ -3269,6 +3269,112 @@ pub const SCE_GD_WORD2: usize = 14;
 pub const SCE_GD_ANNOTATION: usize = 15;
 pub const SCE_GD_NODEPATH: usize = 16;
 
+// LexHollywood style indices. 15 contiguous slots (0..=14) covering
+// Hollywood — a proprietary Lua-inspired multimedia programming
+// language by Andreas Falkenhahn (airsoftsoftwair.de). Extension
+// `.hws`. Constants mirror `SciLexer.h:1985-1999` verbatim.
+// Dispatches SCLEX_HOLLYWOOD (= 130, per `SciLexer.h:146`) via
+// `vendor/lexilla/lexers/LexHollywood.cxx:519`, which registers
+// `LexerModule lmHollywood(SCLEX_HOLLYWOOD, LexerFactoryHollywood,
+// "hollywood", hollywoodWordListDesc)`.
+//
+// **Four wordlists.** `hollywoodWordListDesc[]` at
+// `LexHollywood.cxx:235-241` declares four named classes:
+//   - class 0 = "Hollywood keywords" — language reserved words
+//     (`If` / `Then` / `Function` / `Local` / `Return` / etc.).
+//   - class 1 = "Hollywood standard API functions" — the
+//     stdlib API (`Print` / `LoadBrush` / `OpenAnim` / `Rgb` /
+//     etc.).
+//   - class 2 = "Hollywood plugin API functions" — plugin-
+//     provided global functions (plugin-set-specific; empty in
+//     Code++'s default install).
+//   - class 3 = "Hollywood plugin methods" — plugin-provided
+//     object methods (plugin-set-specific; empty in Code++'s
+//     default install).
+//
+// **Case-INSENSITIVE lookup.** The identifier-exit path at
+// `LexHollywood.cxx:348-364` calls
+// `sc.GetCurrentLowered(s, sizeof(s))` before every
+// `keywordlists[i].InList(s)` probe — all wordlist entries MUST
+// be stored lowercase. Hollywood's own convention is PascalCase
+// (`Print`, `LoadBrush`), but the lexer lowercases the input
+// before matching, so the wordlist strings themselves are stored
+// lowercase.
+//
+// **Last-match-wins across classes.** The `for i in 0..4` loop
+// at `:358-362` does NOT break — it keeps probing every class
+// and each `ChangeState` overwrites the previous one. So a token
+// present in both class 0 and class 3 renders as
+// `SCE_HOLLYWOOD_PLUGINMETHOD` (class 3), not
+// `SCE_HOLLYWOOD_KEYWORD` (class 0). Framework consequence:
+// wordlists must be **cross-class disjoint** — any duplicate
+// silently promotes to the highest matching class. Different
+// discipline from LexCPP (which is first-match-wins) and same as
+// LexREBOL (also last-match-wins).
+//
+// **`;`-line-comment vs `/*..*/` block comment.** At `:410-414`,
+// `;` enters COMMENT and `/*` enters COMMENTBLOCK. The block-
+// comment exit at `:397-401` matches `*/` but is **string-
+// aware**: the `inString` flag toggles on unescaped `"` at
+// `:346` and gates the `*/` recognition. This handles the
+// pathological case where `*/` appears literally inside a
+// string. Both comment states → `StyleSlot::Comment` italic.
+//
+// **`"..."` string vs `[[..]]` block-string (Lua heredoc).** At
+// `:415-419`, `[[` enters STRINGBLOCK and `"` enters STRING.
+// The `[[..]]` form is Hollywood's multi-line string literal
+// (matches Lua's `[[..]]` syntax). Both collapse to
+// `StyleSlot::String` — same discipline as Python's
+// SCE_P_STRING / _TRIPLEDOUBLE unification.
+//
+// **`$xxx` and `0xxxx` hex literals.** At `:420-424`, both
+// `$abc` (BASIC-style hex prefix) and `0xabc` (C-style hex
+// prefix) enter HEXNUMBER. Framework routes HEXNUMBER +
+// NUMBER both to `StyleSlot::Number`.
+//
+// **`.1234` leading-dot decimal literal.** At `:425-427`, a
+// `.` followed by a digit enters NUMBER — Hollywood allows
+// leading-dot decimals like BASIC.
+//
+// **`#`-prefix constants.** At `:430-431`, `#` enters CONSTANT
+// state — Hollywood's named-constant convention (`#RED`,
+// `#WHITE`, `#TRUE`). Framework routes CONSTANT to
+// `StyleSlot::Lifetime` — structural sigil-tagged reference,
+// matching the Bash SCALAR / Lisp SYMBOL / Perl SCALAR
+// precedent for `$` / `&` / `:kw` / `#`-prefixed identifiers.
+//
+// **`@`-prefix preprocessor directives.** At `:432-433`, `@`
+// enters PREPROCESSOR state — Hollywood uses `@REQUIRE`,
+// `@INCLUDE`, `@VERSION`, `@DISPLAY`, `@BGPIC` etc. as
+// preprocessor markers. Framework routes PREPROCESSOR to
+// `StyleSlot::Preprocessor` + bold — matches Python's
+// `SCE_P_DECORATOR` bold-preprocessor precedent.
+//
+// **Comment-inside-operator gotcha.** The paint loop at
+// `:365-372` explicitly resets to DEFAULT after every OPERATOR
+// byte (rather than continuing to consume operator chars) — the
+// author's comment cites the `+/*` sequence: without this
+// reset, `+/*` would tokenise as three-char OPERATOR span and
+// the `/*` block-comment start would be missed. Consequence:
+// OPERATOR spans are always single-character; no framework
+// action needed but noted for future refactoring.
+pub const SCLEX_HOLLYWOOD: usize = 130;
+pub const SCE_HOLLYWOOD_DEFAULT: usize = 0;
+pub const SCE_HOLLYWOOD_COMMENT: usize = 1;
+pub const SCE_HOLLYWOOD_COMMENTBLOCK: usize = 2;
+pub const SCE_HOLLYWOOD_NUMBER: usize = 3;
+pub const SCE_HOLLYWOOD_KEYWORD: usize = 4;
+pub const SCE_HOLLYWOOD_STDAPI: usize = 5;
+pub const SCE_HOLLYWOOD_PLUGINAPI: usize = 6;
+pub const SCE_HOLLYWOOD_PLUGINMETHOD: usize = 7;
+pub const SCE_HOLLYWOOD_STRING: usize = 8;
+pub const SCE_HOLLYWOOD_STRINGBLOCK: usize = 9;
+pub const SCE_HOLLYWOOD_PREPROCESSOR: usize = 10;
+pub const SCE_HOLLYWOOD_OPERATOR: usize = 11;
+pub const SCE_HOLLYWOOD_IDENTIFIER: usize = 12;
+pub const SCE_HOLLYWOOD_CONSTANT: usize = 13;
+pub const SCE_HOLLYWOOD_HEXNUMBER: usize = 14;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

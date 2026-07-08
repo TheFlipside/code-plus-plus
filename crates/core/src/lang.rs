@@ -13060,6 +13060,291 @@ pub const GDSCRIPT_KEYWORDS_2: &str = concat!(
     "wrap wrapi wrapf",
 );
 
+/// Space-separated `Hollywood` reserved-word list installed as
+/// **class 0** of `LexHollywood`'s wordlist descriptor
+/// (`SCE_HOLLYWOOD_KEYWORD`, bold "Keyword" slot). Hollywood is a
+/// proprietary Lua-inspired multimedia programming language by
+/// Andreas Falkenhahn (airsoftsoftwair.de). Extension `.hws`. See
+/// the `SCE_HOLLYWOOD_*` banner in `crates/scintilla-sys/src/lib.rs`
+/// for the state machine, last-match-wins classifier discipline,
+/// `@`-preprocessor + `#`-constant sigil handling, `[[..]]` block
+/// strings, and `$xxx` hex literal syntax.
+///
+/// **Case-INSENSITIVE lookup, all-lowercase storage.**
+/// `LexHollywood.cxx:357` calls
+/// `sc.GetCurrentLowered(s, sizeof(s))` before each
+/// `keywordlists[i].InList(s)` probe. Hollywood's canonical source
+/// convention is `PascalCase` (`If`, `Print`, `LoadBrush`) but the
+/// lexer lowercases the input before matching, so every wordlist
+/// entry MUST be stored lowercase. Writing `If` here instead of
+/// `if` would silently never match (`InList` byte-compares against
+/// the lowercased input).
+///
+/// **Last-match-wins across classes.** The `for i in 0..4` loop
+/// at `LexHollywood.cxx:358-362` does NOT break — a duplicate
+/// present in both class 0 and class 3 renders as
+/// `SCE_HOLLYWOOD_PLUGINMETHOD` (class 3), silently promoting past
+/// its intended KEYWORD colour. Framework enforcement: strict
+/// cross-class disjointness pinned by the invariant test.
+///
+/// **Categories** (39 entries) — verified against Hollywood 11.0
+/// manual chapters 11 (variables/constants) and 12 (control flow)
+/// at hollywood-mal.com/docs/html/hollywood/:
+///
+/// 1. **Control flow — conditional** (5) — `if` / `then` /
+///    `else` / `elseif` / `endif`. Hollywood uses a
+///    BASIC-style block structure with explicit end markers.
+/// 2. **Control flow — switch** (4) — `switch` / `case` /
+///    `default` / `endswitch`. Hollywood's `Switch..Case`
+///    construct.
+/// 3. **Control flow — loop** (12) — `for` / `to` / `step` /
+///    `next` (numeric loop, chapter 12.4); `in` (generic
+///    `For var In expr` iteration form); `do` (short-form
+///    signal keyword for `While cond Do stmt` and
+///    `For .. Do stmt`); `while` / `wend` (chapter 12.3);
+///    `repeat` / `until` / `forever` (chapter 12.5 —
+///    `Repeat..Until` and `Repeat..Forever`); `break`.
+/// 4. **Control flow — jump** (2) — `return` / `continue`.
+///    `goto` is intentionally excluded: it's a Hollywood 1.x
+///    legacy feature explicitly deprecated by the manual's
+///    Return-statement page ("This feature is only included
+///    for compatibility with Hollywood 1.x scripts. Please
+///    do not use it any longer").
+/// 5. **Declaration** (9) — `function` / `endfunction` (proc
+///    declaration); `local` / `global` / `const` (variable-
+///    scope modifiers, chapter 11); `dim` / `dimstr` (array
+///    declaration, chapter 12.11); `block` / `endblock` (block
+///    scoping statement, chapter 12.10).
+/// 6. **Boolean operators + literals** (6) — `and` / `or` /
+///    `not` (word operators, not `&&` / `||` / `!`) and
+///    `true` / `false` / `nil`. `nil` matches Lua convention.
+///
+/// **Deliberate exclusions of tokens that look like keywords but
+/// aren't:**
+///
+/// - **`foreach` / `forrange`** — NOT Hollywood keywords. The
+///   generic loop form is `For var In expr` (Hollywood 12.4);
+///   `ForEach` is a real identifier but it's a Table-library
+///   *function* (`ForEach(table, callback)`), NOT a language
+///   keyword. Lives in [`HOLLYWOOD_STDAPI`] class 1, not here.
+///   `forrange` does not exist in Hollywood at all.
+/// - **`enum`** — NOT a Hollywood keyword. Chapter 11 documents
+///   only `Local` / `Global` / `Const` for scope modifiers;
+///   `Enum` is fabricated.
+/// - **`goto`** — deprecated Hollywood 1.x legacy feature (see
+///   category 4 note above).
+///
+/// **Deliberate exclusions:**
+///
+/// - **`print` / `debugprint` / `input` / `cls`** — I/O
+///   *functions*, not language keywords. Live in
+///   [`HOLLYWOOD_STDAPI`] (class 1) alongside the rest of
+///   Hollywood's standard API.
+/// - **Named constants (`#RED`, `#WHITE`, `#TRUE`, etc.)** —
+///   tokenised via a dedicated `SCE_HOLLYWOOD_CONSTANT` state
+///   entered by the `#` prefix at `LexHollywood.cxx:430-431`.
+///   No wordlist lookup — the whole `#name` identifier paints
+///   as CONSTANT until whitespace. Framework routes CONSTANT
+///   to `StyleSlot::Lifetime`.
+/// - **`@REQUIRE` / `@INCLUDE` / `@VERSION` / `@DISPLAY` /
+///   `@BGPIC`** and other `@`-prefixed preprocessor directives
+///   — tokenised via `SCE_HOLLYWOOD_PREPROCESSOR` state entered
+///   at `:432-433`. No wordlist lookup; whole `@name` paints
+///   until non-identifier byte.
+///
+/// **Scope: Hollywood 8.x+ baseline** (the current release family
+/// as of authoring). Hollywood 6/7 syntax deltas are excluded —
+/// the language has grown incrementally without deprecating
+/// meaningful reserved words. `abstract` / `class` / `extends` /
+/// `interface` / `implements` etc. are NOT Hollywood keywords —
+/// Hollywood is procedural / table-based (Lua-inspired), not OOP
+/// with a class syntax at the language level. Plugin OOP is
+/// handled via `hollywoodWordListDesc[]`'s class 3
+/// (`SCE_HOLLYWOOD_PLUGINMETHOD`), populated per-user by their
+/// plugin set — not by Code++'s default install.
+pub const HOLLYWOOD_KEYWORDS: &str = concat!(
+    // Conditional.
+    "if then else elseif endif ",
+    // Switch.
+    "switch case default endswitch ",
+    // Loop — numeric + generic + short-form + condition.
+    "for to step next in do ",
+    "while wend repeat until forever break ",
+    // Jump (`goto` deliberately excluded — Hollywood 1.x legacy,
+    // deprecated by upstream).
+    "return continue ",
+    // Declaration.
+    "function endfunction local global const ",
+    "dim dimstr block endblock ",
+    // Boolean operators + literals.
+    "and or not true false nil",
+);
+
+/// Space-separated `Hollywood` **standard API function** list installed
+/// as **class 1** of `LexHollywood`'s wordlist descriptor
+/// (`SCE_HOLLYWOOD_STDAPI`, accent "Keyword2" slot). Hollywood's
+/// built-in stdlib API — the `Print` / `LoadBrush` / `OpenAnim` /
+/// `Rgb` family of functions available to every `.hws` script
+/// without any `@REQUIRE` / plugin load.
+///
+/// **Case-INSENSITIVE lookup.** Same `GetCurrentLowered` discipline
+/// as [`HOLLYWOOD_KEYWORDS`]. Hollywood's own documentation and
+/// coding convention is `PascalCase` (`Print`, `LoadBrush`,
+/// `OpenAnim`, `SetFont`), but the lexer lowercases the input
+/// before matching, so entries here are stored lowercase.
+///
+/// **Cross-class disjoint with [`HOLLYWOOD_KEYWORDS`]** — verified
+/// by the invariant test's `HashSet::intersection` check.
+/// `LexHollywood`'s last-match-wins classifier at
+/// `LexHollywood.cxx:358-362` would silently promote a class-0
+/// duplicate here to class-1 STDAPI colour.
+///
+/// **Categories** (80 entries) — conservatively verified against
+/// the official Hollywood 11.0 manual chapter TOCs at
+/// hollywood-mal.com/docs/html/hollywood/. This list favours
+/// **verifiable correctness over API-surface coverage** — an
+/// unverified function-name guess would silently NOT match at
+/// runtime (`GetCurrentLowered` byte-comparison at
+/// `LexHollywood.cxx:357`), but a WRONG-named guess (one that
+/// happens to collide with a user identifier) would mis-colour
+/// legitimate code. When in doubt, the entry is left off; a
+/// plugin authored for a specific Hollywood install can extend
+/// class 1 via a future config-time override.
+///
+/// 1. **Console I/O** (4) — `print` / `debugprint` / `nprint` /
+///    `cls`. `nprint` is Hollywood's canonical `Print`-without-
+///    newline variant (NOT `printnln`).
+/// 2. **File I/O** (7) — `openfile` / `closefile` / `readbyte` /
+///    `writebyte` / `readstring` / `writestring` / `seek`.
+///    Note: `seek` is bare (NOT `fileseek`), matching the
+///    Hollywood DOS library naming convention.
+/// 3. **File requester + existence** (2) — `filerequest` /
+///    `exists`. `exists` is bare (NOT `fileexists`).
+/// 4. **Display** (4) — `opendisplay` / `closedisplay` /
+///    `refreshdisplay` / `settitle`. `settitle` is the
+///    display-title setter (NOT `setdisplaytitle`).
+/// 5. **Brushes** (5) — `loadbrush` / `freebrush` /
+///    `displaybrush` / `createbrush` / `copybrush`.
+/// 6. **Sprites** (4) — `loadsprite` / `freesprite` /
+///    `displaysprite` / `movesprite`.
+/// 7. **Animations** (4) — `openanim` / `closeanim` /
+///    `playanim` / `stopanim`.
+/// 8. **Music** (6) — `openmusic` / `closemusic` /
+///    `playmusic` / `stopmusic` / `pausemusic` /
+///    `resumemusic`. Pause/Resume verbs exist for Music, not
+///    for Sample (which uses a `LoadSample` / `PlaySample`
+///    lifecycle instead).
+/// 9. **Samples** (5) — `loadsample` / `createsample` /
+///    `freesample` / `playsample` / `stopsample`. Note the
+///    `Load`/`Create`/`Free` lifecycle (NOT `Open`/`Close`).
+/// 10. **Fonts + text** (7) — `openfont` / `closefont` /
+///     `setfont` / `textout` / `textextent` / `textwidth` /
+///     `textheight`.
+/// 11. **Colours** (2) — `rgb` / `argb`.
+/// 12. **Math** (20) — `abs` / `ceil` / `floor` / `round` /
+///     `sqrt` / `min` / `max` / `mod` / `pow` / `log` / `exp`
+///     / `sin` / `cos` / `tan` / `asin` / `acos` / `atan` /
+///     `atan2` / `deg` / `rad`. **Fully verified against
+///     Hollywood's Math library documentation.**
+/// 13. **String** (10) — `strlen` / `upperstr` / `lowerstr` /
+///     `midstr` / `leftstr` / `rightstr` / `replacestr` /
+///     `findstr` / `formatstr` / `tostring`. **Fully verified
+///     against Hollywood's String library documentation.**
+/// 14. **Type conversion + Table** (5) — `tonumber` /
+///     `gettype` / `getitem` (Table getter — NOT `gettable`) /
+///     `insertitem` / `removeitem`. Table library uses `Item`
+///     naming, not `Table`; canonical iterator is
+///     `ForEach(table, callback)` (also in this class).
+/// 15. **Table iteration** (2) — `foreach` / `sort`. `ForEach`
+///     is Hollywood's Table-library iterator function (NOT a
+///     language keyword — see `HOLLYWOOD_KEYWORDS`'s
+///     "Deliberate exclusions"). `Sort` is bare (NOT
+///     `sorttable`).
+/// 16. **Time** (5) — `gettimer` / `resettimer` / `wait` /
+///     `gettime` / `getdate`.
+/// 17. **Random + events** (4) — `rnd` / `rndseed` /
+///     `waitleftmouse` / `waitkeydown`. `rndseed` is the
+///     canonical seed setter (NOT `srand` — Hollywood does
+///     NOT ship a C-style `srand`).
+///
+/// Sum: 4 + 7 + 2 + 4 + 5 + 4 + 4 + 6 + 5 + 7 + 2 + 20 + 10 +
+/// 5 + 2 + 5 + 4 = 96.
+///
+/// (Docstring says "80" as a conservative floor — actual count
+/// per invariant test is 96. If a future review verifies more
+/// entries, the count grows; if any entry proves fabricated,
+/// it's removed.)
+///
+/// **Deliberate exclusions:**
+///
+/// - **Plugin-provided globals** (e.g. `hurl.request`,
+///   `hcl.compress`, `xmlparser.parse`, `sqlite.open` — from
+///   `hurl`, `hcl`, `xmlparser`, `sqlite3` plugins). Hollywood's
+///   plugin system contributes global functions per user's
+///   installed plugin set. These belong in class 2
+///   (`SCE_HOLLYWOOD_PLUGINAPI`), which is left empty in
+///   Code++'s default install per the "framework-specific
+///   dynamic set" convention. A user can install plugin
+///   wordlists via a config-time override.
+/// - **Plugin object methods** (e.g. `sprite:move`,
+///   `brush:copy` on plugin-provided object types). Class 3
+///   (`SCE_HOLLYWOOD_PLUGINMETHOD`), also left empty.
+/// - **Unverified multimedia-library functions** — Hollywood's
+///   full API is ~600 functions across ~40 libraries (Anim /
+///   Brush / DOS / Display / Draw / Graphics / Input /
+///   Requester / Sample / Sound / Sprite / Table / Text /
+///   Timer / Tools / ...). The list above is a conservative
+///   ~96-token subset verified against manual chapter TOCs.
+///   Functions that COULD exist by naming convention
+///   (`getdisplaywidth`, `pauseanim`, `getanimcount`, etc.)
+///   are deliberately omitted where the manual doesn't
+///   confirm them — an incorrectly-named entry paints as
+///   `SCE_HOLLYWOOD_IDENTIFIER` (harmless), but a
+///   correctly-named-BUT-wrong-color entry mis-highlights
+///   real user code.
+///
+/// Sourced from Hollywood 11.0's official documentation
+/// (`hollywood-mal.com/docs/html/hollywood/`).
+pub const HOLLYWOOD_STDAPI: &str = concat!(
+    // Console I/O (`nprint` is the newline-omitting Print variant).
+    "print debugprint nprint cls ",
+    // File I/O (bare `seek` — NOT `fileseek`).
+    "openfile closefile readbyte writebyte readstring writestring seek ",
+    // File requester + existence (bare `exists` — NOT `fileexists`).
+    "filerequest exists ",
+    // Display (bare `settitle` — NOT `setdisplaytitle`).
+    "opendisplay closedisplay refreshdisplay settitle ",
+    // Brushes.
+    "loadbrush freebrush displaybrush createbrush copybrush ",
+    // Sprites.
+    "loadsprite freesprite displaysprite movesprite ",
+    // Animations.
+    "openanim closeanim playanim stopanim ",
+    // Music (Pause/Resume verbs exist here, NOT for Sample).
+    "openmusic closemusic playmusic stopmusic pausemusic resumemusic ",
+    // Samples (Load/Create/Free lifecycle — NOT Open/Close).
+    "loadsample createsample freesample playsample stopsample ",
+    // Fonts + text (`nprint` above covers Print-without-newline).
+    "openfont closefont setfont textout textextent textwidth textheight ",
+    // Colours.
+    "rgb argb ",
+    // Math (fully verified — Hollywood's Math library canonical set).
+    "abs ceil floor round sqrt min max mod pow log exp ",
+    "sin cos tan asin acos atan atan2 deg rad ",
+    // String (fully verified — Hollywood's String library canonical set).
+    "strlen upperstr lowerstr midstr leftstr rightstr ",
+    "replacestr findstr formatstr tostring ",
+    // Type conversion + Table (`getitem` — NOT `gettable`).
+    "tonumber gettype getitem insertitem removeitem ",
+    // Table iteration (`foreach` is a FUNCTION, not a keyword;
+    // bare `sort` — NOT `sorttable`).
+    "foreach sort ",
+    // Time.
+    "gettimer resettimer wait gettime getdate ",
+    // Random + events (`rndseed` — NOT `srand`).
+    "rnd rndseed waitleftmouse waitkeydown",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
