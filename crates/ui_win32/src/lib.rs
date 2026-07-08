@@ -130,27 +130,29 @@ use codepp_core::lang::{
     L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
     L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
     L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PUREBASIC, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL,
-    L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL,
-    L_TEHEX, L_TEX, L_TOML, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG,
-    L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
-    MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
-    NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-    OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
-    OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
-    POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
-    PUREBASIC_KEYWORDS, PUREBASIC_PREPROCESSOR, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RAKU_ADVERBS,
-    RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN,
-    RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4,
-    REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
-    SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS,
-    SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, SWIFT_KEYWORDS,
-    SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
-    TOML_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS,
-    VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES,
-    VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES,
-    VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS,
-    VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+    L_REGISTRY, L_RUBY, L_RUST, L_SAS, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT,
+    L_TCL, L_TEHEX, L_TEX, L_TOML, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL,
+    L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+    MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
+    NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+    OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
+    OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+    PS_LEVEL3_KEYWORDS, PUREBASIC_KEYWORDS, PUREBASIC_PREPROCESSOR, PYTHON_KEYWORDS,
+    PYTHON_KEYWORDS_2, RAKU_ADVERBS, RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC,
+    RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD,
+    REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS,
+    R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SAS_BLOCK_KEYWORDS, SAS_KEYWORDS,
+    SAS_MACRO_FUNCTIONS, SAS_STATEMENTS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+    SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS,
+    SQL_KEYWORDS_2, SWIFT_KEYWORDS, SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
+    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TOML_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
+    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+    VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
+    VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
+    XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -336,33 +338,36 @@ use codepp_scintilla_sys::{
     SCE_RUST_NUMBER, SCE_RUST_OPERATOR, SCE_RUST_STRING, SCE_RUST_WORD, SCE_RUST_WORD2,
     SCE_R_BACKTICKS, SCE_R_BASEKWORD, SCE_R_COMMENT, SCE_R_INFIX, SCE_R_INFIXEOL, SCE_R_KWORD,
     SCE_R_NUMBER, SCE_R_OPERATOR, SCE_R_OTHERKWORD, SCE_R_RAWSTRING, SCE_R_RAWSTRING2,
-    SCE_R_STRING, SCE_R_STRING2, SCE_SH_BACKTICKS, SCE_SH_CHARACTER, SCE_SH_COMMENTLINE,
-    SCE_SH_HERE_DELIM, SCE_SH_HERE_Q, SCE_SH_NUMBER, SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR,
-    SCE_SH_STRING, SCE_SH_WORD, SCE_SPICE_COMMENTLINE, SCE_SPICE_DELIMITER, SCE_SPICE_KEYWORD,
-    SCE_SPICE_KEYWORD2, SCE_SPICE_KEYWORD3, SCE_SPICE_NUMBER, SCE_SQL_CHARACTER, SCE_SQL_COMMENT,
-    SCE_SQL_COMMENTDOC, SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC,
-    SCE_SQL_NUMBER, SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT,
-    SCE_SQL_SQLPLUS_PROMPT, SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCE_ST_ASSIGN,
-    SCE_ST_BINARY, SCE_ST_BOOL, SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL, SCE_ST_KWSEND,
-    SCE_ST_NIL, SCE_ST_NUMBER, SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL, SCE_ST_SPEC_SEL,
-    SCE_ST_STRING, SCE_ST_SUPER, SCE_ST_SYMBOL, SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT,
-    SCE_TCL_COMMENTLINE, SCE_TCL_COMMENT_BOX, SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER,
-    SCE_TCL_NUMBER, SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD,
-    SCE_TCL_WORD2, SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7,
-    SCE_TCL_WORD8, SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP,
-    SCE_TEX_SPECIAL, SCE_TEX_SYMBOL, SCE_TOML_COMMENT, SCE_TOML_DATETIME, SCE_TOML_ESCAPECHAR,
-    SCE_TOML_KEY, SCE_TOML_KEYWORD, SCE_TOML_NUMBER, SCE_TOML_OPERATOR, SCE_TOML_STRING_DQ,
-    SCE_TOML_STRING_SQ, SCE_TOML_TABLE, SCE_TOML_TRIPLE_STRING_DQ, SCE_TOML_TRIPLE_STRING_SQ,
-    SCE_TXT2TAGS_BLOCKQUOTE, SCE_TXT2TAGS_CODE, SCE_TXT2TAGS_CODE2, SCE_TXT2TAGS_CODEBK,
-    SCE_TXT2TAGS_COMMENT, SCE_TXT2TAGS_EM1, SCE_TXT2TAGS_EM2, SCE_TXT2TAGS_HEADER1,
-    SCE_TXT2TAGS_HEADER2, SCE_TXT2TAGS_HEADER3, SCE_TXT2TAGS_HEADER4, SCE_TXT2TAGS_HEADER5,
-    SCE_TXT2TAGS_HEADER6, SCE_TXT2TAGS_HRULE, SCE_TXT2TAGS_LINK, SCE_TXT2TAGS_OLIST_ITEM,
-    SCE_TXT2TAGS_OPTION, SCE_TXT2TAGS_POSTPROC, SCE_TXT2TAGS_PREPROC, SCE_TXT2TAGS_STRIKEOUT,
-    SCE_TXT2TAGS_STRONG1, SCE_TXT2TAGS_ULIST_ITEM, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT,
-    SCE_VHDL_COMMENT, SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER,
-    SCE_VHDL_OPERATOR, SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE,
-    SCE_VHDL_STDTYPE, SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD,
-    SCE_VISUALPROLOG_ANONYMOUS, SCE_VISUALPROLOG_COMMENT_BLOCK, SCE_VISUALPROLOG_COMMENT_KEY,
+    SCE_R_STRING, SCE_R_STRING2, SCE_SAS_BLOCK_KEYWORD, SCE_SAS_COMMENT, SCE_SAS_COMMENTBLOCK,
+    SCE_SAS_COMMENTLINE, SCE_SAS_MACRO, SCE_SAS_MACRO_FUNCTION, SCE_SAS_MACRO_KEYWORD,
+    SCE_SAS_NUMBER, SCE_SAS_OPERATOR, SCE_SAS_STATEMENT, SCE_SAS_STRING, SCE_SH_BACKTICKS,
+    SCE_SH_CHARACTER, SCE_SH_COMMENTLINE, SCE_SH_HERE_DELIM, SCE_SH_HERE_Q, SCE_SH_NUMBER,
+    SCE_SH_OPERATOR, SCE_SH_PARAM, SCE_SH_SCALAR, SCE_SH_STRING, SCE_SH_WORD,
+    SCE_SPICE_COMMENTLINE, SCE_SPICE_DELIMITER, SCE_SPICE_KEYWORD, SCE_SPICE_KEYWORD2,
+    SCE_SPICE_KEYWORD3, SCE_SPICE_NUMBER, SCE_SQL_CHARACTER, SCE_SQL_COMMENT, SCE_SQL_COMMENTDOC,
+    SCE_SQL_COMMENTDOCKEYWORD, SCE_SQL_COMMENTLINE, SCE_SQL_COMMENTLINEDOC, SCE_SQL_NUMBER,
+    SCE_SQL_OPERATOR, SCE_SQL_SQLPLUS, SCE_SQL_SQLPLUS_COMMENT, SCE_SQL_SQLPLUS_PROMPT,
+    SCE_SQL_STRING, SCE_SQL_WORD, SCE_SQL_WORD2, SCE_ST_ASSIGN, SCE_ST_BINARY, SCE_ST_BOOL,
+    SCE_ST_CHARACTER, SCE_ST_COMMENT, SCE_ST_GLOBAL, SCE_ST_KWSEND, SCE_ST_NIL, SCE_ST_NUMBER,
+    SCE_ST_RETURN, SCE_ST_SELF, SCE_ST_SPECIAL, SCE_ST_SPEC_SEL, SCE_ST_STRING, SCE_ST_SUPER,
+    SCE_ST_SYMBOL, SCE_TCL_BLOCK_COMMENT, SCE_TCL_COMMENT, SCE_TCL_COMMENTLINE,
+    SCE_TCL_COMMENT_BOX, SCE_TCL_EXPAND, SCE_TCL_IN_QUOTE, SCE_TCL_MODIFIER, SCE_TCL_NUMBER,
+    SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD, SCE_TCL_WORD2,
+    SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7, SCE_TCL_WORD8,
+    SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL,
+    SCE_TEX_SYMBOL, SCE_TOML_COMMENT, SCE_TOML_DATETIME, SCE_TOML_ESCAPECHAR, SCE_TOML_KEY,
+    SCE_TOML_KEYWORD, SCE_TOML_NUMBER, SCE_TOML_OPERATOR, SCE_TOML_STRING_DQ, SCE_TOML_STRING_SQ,
+    SCE_TOML_TABLE, SCE_TOML_TRIPLE_STRING_DQ, SCE_TOML_TRIPLE_STRING_SQ, SCE_TXT2TAGS_BLOCKQUOTE,
+    SCE_TXT2TAGS_CODE, SCE_TXT2TAGS_CODE2, SCE_TXT2TAGS_CODEBK, SCE_TXT2TAGS_COMMENT,
+    SCE_TXT2TAGS_EM1, SCE_TXT2TAGS_EM2, SCE_TXT2TAGS_HEADER1, SCE_TXT2TAGS_HEADER2,
+    SCE_TXT2TAGS_HEADER3, SCE_TXT2TAGS_HEADER4, SCE_TXT2TAGS_HEADER5, SCE_TXT2TAGS_HEADER6,
+    SCE_TXT2TAGS_HRULE, SCE_TXT2TAGS_LINK, SCE_TXT2TAGS_OLIST_ITEM, SCE_TXT2TAGS_OPTION,
+    SCE_TXT2TAGS_POSTPROC, SCE_TXT2TAGS_PREPROC, SCE_TXT2TAGS_STRIKEOUT, SCE_TXT2TAGS_STRONG1,
+    SCE_TXT2TAGS_ULIST_ITEM, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT,
+    SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER, SCE_VHDL_OPERATOR,
+    SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE, SCE_VHDL_STDTYPE,
+    SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCE_VISUALPROLOG_ANONYMOUS,
+    SCE_VISUALPROLOG_COMMENT_BLOCK, SCE_VISUALPROLOG_COMMENT_KEY,
     SCE_VISUALPROLOG_COMMENT_KEY_ERROR, SCE_VISUALPROLOG_COMMENT_LINE, SCE_VISUALPROLOG_EMBEDDED,
     SCE_VISUALPROLOG_KEY_DIRECTIVE, SCE_VISUALPROLOG_KEY_MAJOR, SCE_VISUALPROLOG_KEY_MINOR,
     SCE_VISUALPROLOG_NUMBER, SCE_VISUALPROLOG_OPERATOR, SCE_VISUALPROLOG_PLACEHOLDER,
@@ -6827,6 +6832,120 @@ const TOML_THEME: LangTheme = LangTheme {
     bold: TOML_BOLD,
 };
 
+// --- LexSAS ---
+// SAS (Statistical Analysis System) — proprietary statistical
+// programming language and analytics platform from SAS Institute
+// Inc. (extension `.sas`). `L_SAS` (id 91) is the only language
+// row using this lexer. Four-class wordlist descriptor per
+// `LexSAS.cxx:41-44` (macro keywords / block keywords / macro
+// functions / statements — despite the upstream header at
+// `:216-221` listing only three names before the null
+// terminator). See the `LexSAS` banner in
+// `scintilla-sys/src/lib.rs` for the dispatch semantics and the
+// header/body naming mismatch analysis.
+//
+// **11 style mappings** covering 16 defined SCE_SAS_* states
+// (0..=15). Five unmapped per framework conventions:
+//   * `DEFAULT` (0) — whitespace / unclassified.
+//   * `IDENTIFIER` (6) — transient bareword-collect state
+//     (`:85-97`). Can survive to paint when the collected token
+//     matches neither `statements` nor `blockKeywords` — the
+//     "unknown identifier" fall-through. Framework leaves
+//     unmapped per the transient-collect-fallthrough convention
+//     (same discipline as `SCE_TOML_IDENTIFIER`); default paint
+//     applies. SAS user variables and PROC-specific keywords
+//     that aren't in `statements` fall through here.
+//   * `TYPE` (8), `WORD` (9), `GLOBAL_MACRO` (10) — declared in
+//     SciLexer.h but ZERO references in the `LexSAS.cxx` body
+//     (verified via grep). Included in `SCE_SAS_*` constants for
+//     numeric-contiguity correctness at the FFI boundary;
+//     framework leaves them unmapped per the declared-but-
+//     unemitted convention.
+//
+// Mapped slots (11):
+//   * `COMMENT` (1) → Comment italic — legacy `* text ;`
+//     line-start comment (`LexSAS.cxx:128-130`).
+//   * `COMMENTLINE` (2) → Comment italic — `// text ;` line
+//     comment (`:135-137`).
+//   * `COMMENTBLOCK` (3) → Comment italic — `/* text */` block
+//     comment (`:131-134`).
+//   * `NUMBER` (4) → Number — numeric literals (integer / float
+//     / hex-suffixed, per `:63-68` accepting any word-set char
+//     including `.`).
+//   * `OPERATOR` (5) → Operator — SAS operator set (per
+//     `isoperator` at `:146-149`).
+//   * `STRING` (7) → String — `"..."` double-quoted string.
+//     SAS supports both single- and double-quoted forms but the
+//     lexer only recognises double-quoted at `:138-141`.
+//   * `MACRO` (11) → Macro — `%name` reference that didn't
+//     match any wordlist. Semantically a user macro invocation
+//     (the "unknown %macro" fall-through). Same slot as C's
+//     `SCE_C_PREPROCESSOR` fall-through and Rust's macro
+//     invocation slot.
+//   * `MACRO_KEYWORD` (12) → Preprocessor — SAS macro-language
+//     directives (`%do` / `%mend` / `%if` — from class 0). See
+//     the `LexSAS` banner style-routing rationale.
+//   * `BLOCK_KEYWORD` (13) → Keyword bold — DATA / PROC / RUN
+//     step delimiters (from class 1). Primary structural
+//     accent.
+//   * `MACRO_FUNCTION` (14) → Preprocessor — macro intrinsic
+//     functions (`%eval` / `%str` / `%sysfunc` — from class 2).
+//     Same accent as MACRO_KEYWORD (macro-namespace family).
+//   * `STATEMENT` (15) → Keyword2 — DATA-step / PROC-step
+//     statements (`set` / `if` / `where` — from class 3).
+//     Secondary structural accent.
+//
+// Palette rationale: SAS has three comment forms which all
+// collapse to Comment (universal Code++ discipline). The
+// three macro states (MACRO / MACRO_KEYWORD / MACRO_FUNCTION)
+// intentionally use two distinct accent slots — Macro for the
+// user-macro invocation, Preprocessor for the built-in macro
+// directives and intrinsics. This visually separates
+// "user-defined macro call" from "built-in macro language
+// element," a distinction SAS programmers rely on when reading
+// macro-heavy code.
+const SAS_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_SAS_COMMENT, StyleSlot::Comment),
+    (SCE_SAS_COMMENTLINE, StyleSlot::Comment),
+    (SCE_SAS_COMMENTBLOCK, StyleSlot::Comment),
+    (SCE_SAS_NUMBER, StyleSlot::Number),
+    (SCE_SAS_OPERATOR, StyleSlot::Operator),
+    (SCE_SAS_STRING, StyleSlot::String),
+    (SCE_SAS_MACRO, StyleSlot::Macro),
+    (SCE_SAS_MACRO_KEYWORD, StyleSlot::Preprocessor),
+    (SCE_SAS_BLOCK_KEYWORD, StyleSlot::Keyword),
+    (SCE_SAS_MACRO_FUNCTION, StyleSlot::Preprocessor),
+    (SCE_SAS_STATEMENT, StyleSlot::Keyword2),
+];
+
+// Italic on the three comment states — universal Code++ comment
+// convention. Italic-on-comment is the sole cross-language accent
+// discipline the theme framework mandates.
+const SAS_ITALIC: &[usize] = &[SCE_SAS_COMMENT, SCE_SAS_COMMENTLINE, SCE_SAS_COMMENTBLOCK];
+
+// Bold on `BLOCK_KEYWORD` only — primary structural anchor (DATA
+// / PROC / RUN step delimiters, from class 1). Single-class-bold
+// discipline (Keyword bold, Keyword2 not bold) per every other
+// Code++ theme.
+const SAS_BOLD: &[usize] = &[SCE_SAS_BLOCK_KEYWORD];
+
+// Four-class install matching the actual `LexSAS.cxx:41-44`
+// binding order (`keywords` / `blockKeywords` / `functionKeywords`
+// / `statements`) — NOT the misleading upstream header order at
+// `:216-221`. Both header and body agree on the class-index
+// integers; they disagree only on the human-readable class name.
+const SAS_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, SAS_KEYWORDS),
+        (1, SAS_BLOCK_KEYWORDS),
+        (2, SAS_MACRO_FUNCTIONS),
+        (3, SAS_STATEMENTS),
+    ],
+    styles: SAS_STYLES,
+    italic: SAS_ITALIC,
+    bold: SAS_BOLD,
+};
+
 // --- LexVisualProlog ---
 // Visual Prolog (extension `.vip`) — Prolog Development Center's
 // OOP-flavoured Prolog dialect with typed classes and interfaces.
@@ -11768,6 +11887,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&FREEBASIC_THEME)
     } else if lang == L_TOML {
         Some(&TOML_THEME)
+    } else if lang == L_SAS {
+        Some(&SAS_THEME)
     } else if lang == L_TXT2TAGS {
         Some(&TXT2TAGS_THEME)
     } else if lang == L_TYPESCRIPT {
@@ -26938,10 +27059,10 @@ mod lang_theme_tests {
         NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD, OSCRIPT_ITALIC, OSCRIPT_STYLES,
         PUREBASIC_BOLD, PUREBASIC_ITALIC, PUREBASIC_STYLES, RAKU_BOLD, RAKU_ITALIC, RAKU_STYLES,
         REBOL_BOLD, REBOL_ITALIC, REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC, REGISTRY_STYLES,
-        SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER,
-        SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL,
-        SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
-        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        SAS_BOLD, SAS_ITALIC, SAS_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
+        SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER,
+        SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
+        SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
         SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
         SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
         SCE_ASN1_ATTRIBUTE, SCE_ASN1_COMMENT, SCE_ASN1_DESCRIPTOR, SCE_ASN1_KEYWORD, SCE_ASN1_OID,
@@ -27040,9 +27161,9 @@ mod lang_theme_tests {
         L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL,
         L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
         L_PROPS, L_PS, L_PUREBASIC, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY,
-        L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL, L_TEHEX, L_TEX,
-        L_TEXT, L_TOML, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML,
-        L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+        L_RUST, L_SAS, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL, L_TEHEX,
+        L_TEX, L_TEXT, L_TOML, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG,
+        L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
         MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
         NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
         OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
@@ -27053,15 +27174,16 @@ mod lang_theme_tests {
         RAKU_ADVERBS, RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE,
         RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3,
         REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
-        R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-        SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3,
-        SQL_KEYWORDS, SQL_KEYWORDS_2, SWIFT_KEYWORDS, SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS,
-        TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TOML_KEYWORDS, TYPESCRIPT_KEYWORDS,
-        TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS,
-        VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
-        VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-        VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
-        VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
+        R_OTHER_FUNCTIONS, R_RESERVED, SAS_BLOCK_KEYWORDS, SAS_KEYWORDS, SAS_MACRO_FUNCTIONS,
+        SAS_STATEMENTS, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS,
+        SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2,
+        SWIFT_KEYWORDS, SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
+        TCL_TK_KEYWORDS, TOML_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
+        VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+        VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+        VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
+        VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
+        XML_KEYWORDS, YAML_KEYWORDS,
     };
     use codepp_scintilla_sys::{
         SCE_ADA_IDENTIFIER, SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC,
@@ -27215,6 +27337,7 @@ mod lang_theme_tests {
             (L_PUREBASIC, "Purebasic"),
             (L_FREEBASIC, "Freebasic"),
             (L_TOML, "TOML"),
+            (L_SAS, "SAS"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -47699,6 +47822,371 @@ mod lang_theme_tests {
             "SCE_TOML_ERROR MUST remain unmapped — deferred \
              `StyleSlot::Error` migration"
         );
+    }
+
+    /// SAS uses Lexilla's `sas` lexer (`LexSAS.cxx`) — a 2020
+    /// lexer by Luke Rasmussen at Northwestern University Feinberg
+    /// School of Medicine, developed as part of the `StatTag`
+    /// project. Four-class wordlist descriptor per
+    /// `LexSAS.cxx:41-44` (macro keywords / block keywords / macro
+    /// functions / statements) — despite the upstream header
+    /// array at `:216-221` declaring only three names before the
+    /// null terminator, the body binds four slots. Extension
+    /// `.sas`. Included in `wired_languages_have_complete_themes`.
+    ///
+    /// This dedicated test pins:
+    ///
+    ///   1. Deep-value identity (styles / italic / bold /
+    ///      populated keyword classes).
+    ///   2. 11-mapping style-count (16 defined `SCE_SAS_*` slots
+    ///      0..=15 minus 5 unmapped: DEFAULT / IDENTIFIER
+    ///      (transient) / TYPE / WORD / `GLOBAL_MACRO` — the
+    ///      last three declared in SciLexer.h but ZERO references
+    ///      in the LexSAS.cxx body).
+    ///   3. Four populated classes in canonical binding order
+    ///      matching `LexSAS.cxx:41-44` (keywords → block →
+    ///      functions → statements).
+    ///   4. Each class non-empty and equal to the corresponding
+    ///      wordlist constant.
+    ///   5. Style-routing pins for all 11 mapped constants.
+    ///   6. Framework-unmapped slots confirmed absent (DEFAULT,
+    ///      IDENTIFIER, TYPE, WORD, `GLOBAL_MACRO`).
+    ///   7. Italic == 3 (COMMENT + COMMENTLINE + COMMENTBLOCK).
+    ///   8. Bold == 1 (`BLOCK_KEYWORD` only — primary structural
+    ///      anchor per single-class-bold discipline).
+    ///   9. Cross-language non-reuse (sampled).
+    ///   10. `L_SAS` `LangEntry` has `lexer: Some("sas")` and
+    ///       `.sas` extension.
+    ///   11. **Macro-prefix alphabet enforcement** — every token
+    ///       in classes 0 (keywords) and 2 (functions) MUST
+    ///       start with `%`. `LexSAS.cxx:142-145` enters
+    ///       `SCE_SAS_MACRO` state AT the `%` character and
+    ///       `GetCurrentLowered` returns the full span including
+    ///       the `%` prefix, so bareword entries would never
+    ///       match.
+    ///   12. **Bareword alphabet enforcement** — every token in
+    ///       classes 1 (block) and 3 (statements) MUST start
+    ///       with a lowercase letter (no `%`). Identifier
+    ///       context at `:85-97` collects only setWordStart-
+    ///       started tokens.
+    ///   13. **All-lowercase alphabet enforcement** — every
+    ///       token in every class must be byte-canonical
+    ///       lowercase (post-`%` prefix). `LexSAS.cxx:72, :88`
+    ///       call `sc.GetCurrentLowered(...)` before wordlist
+    ///       probe.
+    ///   14. **Cross-class disjointness** — the four wordlists
+    ///       MUST NOT share any token. `LexSAS`'s per-context
+    ///       probes are first-match-wins `else if` chains
+    ///       (`:73-81` for MACRO, `:89-95` for IDENTIFIER), so
+    ///       cross-class duplicates in the same context are
+    ///       dead entries. The `%` / bareword alphabet split
+    ///       makes cross-context duplicates impossible.
+    ///   15. **Class 0 canonical control-flow markers present**
+    ///       — `%macro` / `%mend` / `%if` / `%then` / `%else`
+    ///       / `%do` / `%end` are the seven canonical macro-
+    ///       language control-flow directives; framework refuses
+    ///       to declare the lexer wired if any is missing.
+    ///   16. **Class 1 step delimiters present** — `data` /
+    ///       `proc` / `run` / `quit` are the four canonical
+    ///       DATA/PROC step markers; framework refuses to
+    ///       declare the lexer wired if any is missing.
+    ///   17. **Class 2 canonical macro intrinsics present** —
+    ///       `%eval` / `%str` / `%sysfunc` are the three
+    ///       highest-frequency macro built-in functions;
+    ///       framework refuses to declare the lexer wired if
+    ///       any is missing.
+    ///   18. **Class 3 canonical DATA-step statements present**
+    ///       — `set` / `if` / `then` / `else` / `do` / `end`
+    ///       are the six canonical DATA-step statements;
+    ///       framework refuses to declare the lexer wired if
+    ///       any is missing.
+    ///   19. **Three comment states collapse to Comment** —
+    ///       COMMENT, COMMENTLINE, COMMENTBLOCK all route to
+    ///       `StyleSlot::Comment`. Universal Code++ comment-
+    ///       unification discipline.
+    ///   20. **Highest-defined `SCE_SAS_*` pin** —
+    ///       `SCE_SAS_STATEMENT` (15) is the top slot per
+    ///       `SciLexer.h:1932`.
+    #[test]
+    fn sas_uses_lexsas_four_class_theme() {
+        use codepp_scintilla_sys::{
+            SCE_SAS_BLOCK_KEYWORD, SCE_SAS_COMMENT, SCE_SAS_COMMENTBLOCK, SCE_SAS_COMMENTLINE,
+            SCE_SAS_DEFAULT, SCE_SAS_GLOBAL_MACRO, SCE_SAS_IDENTIFIER, SCE_SAS_MACRO,
+            SCE_SAS_MACRO_FUNCTION, SCE_SAS_MACRO_KEYWORD, SCE_SAS_NUMBER, SCE_SAS_OPERATOR,
+            SCE_SAS_STATEMENT, SCE_SAS_STRING, SCE_SAS_TYPE, SCE_SAS_WORD,
+        };
+        let sas = lang_theme(L_SAS).expect("SAS wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(sas.styles, SAS_STYLES);
+        assert_eq!(sas.italic, SAS_ITALIC);
+        assert_eq!(sas.bold, SAS_BOLD);
+        assert_eq!(sas.keywords.len(), 4);
+
+        // Invariant 2: 11 mappings (16 defined slots minus 5 unmapped).
+        assert_eq!(
+            sas.styles.len(),
+            11,
+            "SAS_STYLES must map 11 indices (16 defined SCE_SAS_* \
+             slots 0..=15 minus 5 unmapped: DEFAULT, IDENTIFIER \
+             (transient), TYPE, WORD, GLOBAL_MACRO (declared in \
+             SciLexer.h but zero references in LexSAS.cxx body))"
+        );
+
+        // Invariant 3: four populated classes in canonical binding
+        // order (LexSAS.cxx:41-44 → keywords / block / functions /
+        // statements).
+        assert_eq!(sas.keywords[0].0, 0);
+        assert_eq!(sas.keywords[1].0, 1);
+        assert_eq!(sas.keywords[2].0, 2);
+        assert_eq!(sas.keywords[3].0, 3);
+        assert_eq!(sas.keywords[0].1, SAS_KEYWORDS);
+        assert_eq!(sas.keywords[1].1, SAS_BLOCK_KEYWORDS);
+        assert_eq!(sas.keywords[2].1, SAS_MACRO_FUNCTIONS);
+        assert_eq!(sas.keywords[3].1, SAS_STATEMENTS);
+
+        // Invariant 4: each class non-empty.
+        for (name, wl) in [
+            ("SAS_KEYWORDS", SAS_KEYWORDS),
+            ("SAS_BLOCK_KEYWORDS", SAS_BLOCK_KEYWORDS),
+            ("SAS_MACRO_FUNCTIONS", SAS_MACRO_FUNCTIONS),
+            ("SAS_STATEMENTS", SAS_STATEMENTS),
+        ] {
+            assert!(
+                wl.split_whitespace().count() > 0,
+                "{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: style-routing pins for all 11 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_SAS_COMMENT, StyleSlot::Comment, "COMMENT"),
+            (SCE_SAS_COMMENTLINE, StyleSlot::Comment, "COMMENTLINE"),
+            (SCE_SAS_COMMENTBLOCK, StyleSlot::Comment, "COMMENTBLOCK"),
+            (SCE_SAS_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_SAS_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+            (SCE_SAS_STRING, StyleSlot::String, "STRING"),
+            (SCE_SAS_MACRO, StyleSlot::Macro, "MACRO"),
+            (
+                SCE_SAS_MACRO_KEYWORD,
+                StyleSlot::Preprocessor,
+                "MACRO_KEYWORD",
+            ),
+            (SCE_SAS_BLOCK_KEYWORD, StyleSlot::Keyword, "BLOCK_KEYWORD"),
+            (
+                SCE_SAS_MACRO_FUNCTION,
+                StyleSlot::Preprocessor,
+                "MACRO_FUNCTION",
+            ),
+            (SCE_SAS_STATEMENT, StyleSlot::Keyword2, "STATEMENT"),
+        ] {
+            assert!(
+                sas.styles.contains(&(idx, slot)),
+                "SCE_SAS_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 6: framework-unmapped slots confirmed absent.
+        for (idx, name) in [
+            (SCE_SAS_DEFAULT, "DEFAULT"),
+            (SCE_SAS_IDENTIFIER, "IDENTIFIER"),
+            (SCE_SAS_TYPE, "TYPE"),
+            (SCE_SAS_WORD, "WORD"),
+            (SCE_SAS_GLOBAL_MACRO, "GLOBAL_MACRO"),
+        ] {
+            assert!(
+                !sas.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_SAS_{name} ({idx}) must remain unmapped"
+            );
+        }
+
+        // Invariant 7: italic == 3 (three comment states).
+        assert_eq!(sas.italic.len(), 3);
+        assert!(sas.italic.contains(&SCE_SAS_COMMENT));
+        assert!(sas.italic.contains(&SCE_SAS_COMMENTLINE));
+        assert!(sas.italic.contains(&SCE_SAS_COMMENTBLOCK));
+
+        // Invariant 8: bold == 1 (BLOCK_KEYWORD only).
+        assert_eq!(sas.bold.len(), 1);
+        assert!(sas.bold.contains(&SCE_SAS_BLOCK_KEYWORD));
+
+        // Invariant 9: cross-language non-reuse (sampled).
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let toml = lang_theme(L_TOML).expect("TOML wired");
+        let baan = lang_theme(L_BAANC).expect("BaanC wired");
+        for (other, name) in [(cpp, "C++"), (toml, "TOML"), (baan, "BaanC")] {
+            assert_ne!(sas.styles, other.styles, "SAS must NOT reuse {name}_STYLES");
+        }
+
+        // Invariant 10: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_SAS)
+            .expect("L_SAS LangEntry present in LANG_TABLE");
+        assert_eq!(
+            entry.lexer,
+            Some("sas"),
+            "L_SAS LangEntry.lexer must be Some(\"sas\")"
+        );
+        assert!(
+            entry.extensions.contains(&"sas"),
+            "L_SAS extensions must contain `sas`"
+        );
+
+        // Invariant 11: macro-prefix alphabet enforcement (classes 0, 2).
+        for tok in SAS_KEYWORDS.split_whitespace() {
+            assert!(
+                tok.starts_with('%'),
+                "SAS_KEYWORDS token `{tok}` must start with `%` — \
+                 LexSAS.cxx:142-145 enters SCE_SAS_MACRO state AT the \
+                 `%` and GetCurrentLowered returns the full span \
+                 including the `%` prefix"
+            );
+        }
+        for tok in SAS_MACRO_FUNCTIONS.split_whitespace() {
+            assert!(
+                tok.starts_with('%'),
+                "SAS_MACRO_FUNCTIONS token `{tok}` must start with \
+                 `%` — same SCE_SAS_MACRO state-entry semantics as \
+                 SAS_KEYWORDS"
+            );
+        }
+
+        // Invariant 12: bareword alphabet enforcement (classes 1, 3).
+        for tok in SAS_BLOCK_KEYWORDS.split_whitespace() {
+            assert!(
+                !tok.starts_with('%'),
+                "SAS_BLOCK_KEYWORDS token `{tok}` must NOT start with \
+                 `%` — LexSAS.cxx:85-97 identifier context collects \
+                 only setWordStart-started tokens"
+            );
+        }
+        for tok in SAS_STATEMENTS.split_whitespace() {
+            assert!(
+                !tok.starts_with('%'),
+                "SAS_STATEMENTS token `{tok}` must NOT start with `%` \
+                 — same SCE_SAS_IDENTIFIER state-entry semantics as \
+                 SAS_BLOCK_KEYWORDS"
+            );
+        }
+
+        // Invariant 13: all-lowercase alphabet enforcement — every
+        // ASCII letter in every token must be lowercase. Digits and
+        // underscore are allowed word-chars per LexSAS.cxx:49
+        // (setWord = setAlphaNum + "._") and pass through
+        // GetCurrentLowered unchanged.
+        for (name, wl) in [
+            ("SAS_KEYWORDS", SAS_KEYWORDS),
+            ("SAS_BLOCK_KEYWORDS", SAS_BLOCK_KEYWORDS),
+            ("SAS_MACRO_FUNCTIONS", SAS_MACRO_FUNCTIONS),
+            ("SAS_STATEMENTS", SAS_STATEMENTS),
+        ] {
+            for tok in wl.split_whitespace() {
+                let body = tok.strip_prefix('%').unwrap_or(tok);
+                assert!(
+                    !body.is_empty()
+                        && body
+                            .bytes()
+                            .all(|b| { b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' }),
+                    "{name} token `{tok}` violates the lowercase-only \
+                     alphabet (post-`%` prefix; digits and underscore \
+                     permitted per LexSAS.cxx:49 setWord definition) \
+                     — LexSAS.cxx:72, :88 lowercase every byte before \
+                     wordlist probe"
+                );
+            }
+        }
+
+        // Invariant 14: cross-class disjointness.
+        use std::collections::HashSet;
+        let sets: [(&str, HashSet<&str>); 4] = [
+            ("SAS_KEYWORDS", SAS_KEYWORDS.split_whitespace().collect()),
+            (
+                "SAS_BLOCK_KEYWORDS",
+                SAS_BLOCK_KEYWORDS.split_whitespace().collect(),
+            ),
+            (
+                "SAS_MACRO_FUNCTIONS",
+                SAS_MACRO_FUNCTIONS.split_whitespace().collect(),
+            ),
+            (
+                "SAS_STATEMENTS",
+                SAS_STATEMENTS.split_whitespace().collect(),
+            ),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                let intersection: Vec<&&str> = sets[i].1.intersection(&sets[j].1).collect();
+                assert!(
+                    intersection.is_empty(),
+                    "{} and {} must be disjoint — first-match-wins \
+                     dispatch at LexSAS.cxx:73-81, :89-95 makes \
+                     cross-class duplicates dead entries. Overlap: {:?}",
+                    sets[i].0,
+                    sets[j].0,
+                    intersection
+                );
+            }
+        }
+
+        // Invariant 15: canonical class-0 control-flow markers present.
+        for tok in ["%macro", "%mend", "%if", "%then", "%else", "%do", "%end"] {
+            assert!(
+                SAS_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "SAS_KEYWORDS must include canonical macro control-\
+                 flow directive `{tok}`"
+            );
+        }
+
+        // Invariant 16: canonical class-1 step delimiters present.
+        for tok in ["data", "proc", "run", "quit"] {
+            assert!(
+                SAS_BLOCK_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "SAS_BLOCK_KEYWORDS must include canonical DATA/PROC \
+                 step delimiter `{tok}`"
+            );
+        }
+
+        // Invariant 17: canonical class-2 macro intrinsics present.
+        for tok in ["%eval", "%str", "%sysfunc"] {
+            assert!(
+                SAS_MACRO_FUNCTIONS.split_whitespace().any(|t| t == tok),
+                "SAS_MACRO_FUNCTIONS must include canonical macro \
+                 intrinsic `{tok}`"
+            );
+        }
+
+        // Invariant 18: canonical class-3 DATA-step statements present.
+        for tok in ["set", "if", "then", "else", "do", "end"] {
+            assert!(
+                SAS_STATEMENTS.split_whitespace().any(|t| t == tok),
+                "SAS_STATEMENTS must include canonical DATA-step \
+                 statement `{tok}`"
+            );
+        }
+
+        // Invariant 19: three comment states collapse to Comment.
+        for slot in [SCE_SAS_COMMENT, SCE_SAS_COMMENTLINE, SCE_SAS_COMMENTBLOCK] {
+            assert!(
+                sas.styles.contains(&(slot, StyleSlot::Comment)),
+                "SCE_SAS_* comment slot {slot} must route to Comment \
+                 — universal Code++ comment-unification discipline"
+            );
+        }
+
+        // Invariant 20: highest-defined SCE_SAS_* pin.
+        assert_eq!(
+            SCE_SAS_STATEMENT, 15,
+            "SCE_SAS_STATEMENT drift from 15 — verify SciLexer.h:1932"
+        );
+        for (idx, _) in sas.styles {
+            assert!(
+                *idx <= SCE_SAS_STATEMENT,
+                "SAS_STYLES references slot {idx}, higher than \
+                 SCE_SAS_STATEMENT ({SCE_SAS_STATEMENT})"
+            );
+        }
     }
 
     /// txt2tags uses Lexilla's `txt2tags` lexer

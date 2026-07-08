@@ -15240,6 +15240,221 @@ pub const BAAN_KEYWORDS: &str = concat!(
 /// only one wordlist class.
 pub const TOML_KEYWORDS: &str = "false inf nan true";
 
+/// Space-separated **SAS macro-language directive keywords**
+/// installed as **class 0** (`SASWordLists[0]`, named
+/// `"Language Keywords"` at `LexSAS.cxx:217` — but assigned to
+/// `keywords` at `LexSAS.cxx:41` and dispatched to
+/// `SCE_SAS_MACRO_KEYWORD` at `LexSAS.cxx:74`) of `LexSAS`'s
+/// wordlist descriptor.
+///
+/// **Header/body naming mismatch** — the upstream header
+/// `SASWordLists[]` at `LexSAS.cxx:216-221` uses `"Language
+/// Keywords"` as the class-0 name for property-settings purposes,
+/// but the actual dispatch at `:73-75` treats class-0 hits as
+/// macro-language directives (state `SCE_SAS_MACRO`), not
+/// bareword-language keywords. So this wordlist contains the
+/// SAS macro-preprocessor control-flow directives, not the
+/// base-language step statements (those live in
+/// [`SAS_STATEMENTS`]).
+///
+/// **Macro-form entries include the `%` prefix.** The lexer
+/// enters `SCE_SAS_MACRO` state AT the `%` character
+/// (`LexSAS.cxx:142-145` — `SetState` fires before `Forward`), and
+/// `GetCurrentLowered(...)` at `:72` returns the full span from
+/// the `%` to the current non-word position. So wordlist entries
+/// MUST include the leading `%` — bareword entries would never
+/// match. Verified against `StyleContext::SetState` semantics at
+/// `vendor/lexilla/lexlib/StyleContext.h:111-114` (ColourTo(pos-1)
+/// then state = new; segment start becomes current position).
+///
+/// **Case-INSENSITIVE lookup.** `LexSAS.cxx:72` calls
+/// `sc.GetCurrentLowered(s, sizeof(s))` before probing. Wordlist
+/// entries MUST be byte-canonical lowercase — SAS itself is
+/// case-insensitive per language reference, so lookup is
+/// permissive-correct.
+///
+/// **Contents** (22 tokens, sourced from the SAS 9.4 Macro
+/// Language: Reference, Fifth Edition, published by SAS Institute
+/// Inc.; specifically §"Macro Statements" and §"Autocall Macros"):
+///   - **Macro definition** (2): `%macro` / `%mend`.
+///   - **Variable declaration** (3): `%let` / `%global` / `%local`.
+///   - **Variable deletion** (1): `%symdel`.
+///   - **Iterative control flow** (4): `%do` / `%end` / `%while` /
+///     `%until` (`%until` is technically a `%do` clause modifier,
+///     included for lookup completeness).
+///   - **Conditional control flow** (3): `%if` / `%then` / `%else`.
+///   - **Transfer** (2): `%goto` / `%return`.
+///   - **I/O** (3): `%put` / `%input` / `%include`.
+///   - **System** (4): `%abort` / `%sysexec` / `%syscall` /
+///     `%display`.
+///
+/// **Cross-class disjointness** with [`SAS_BLOCK_KEYWORDS`],
+/// [`SAS_MACRO_FUNCTIONS`], and [`SAS_STATEMENTS`] is
+/// invariant-tested. The lexer's per-context probe is a
+/// first-match-wins `else if` chain in each of the two contexts
+/// (`LexSAS.cxx:73-81` for MACRO, `:89-95` for IDENTIFIER), so
+/// cross-class duplicates in the same context path are dead
+/// wordlist entries.
+pub const SAS_KEYWORDS: &str = concat!(
+    "%macro %mend ",
+    "%let %global %local ",
+    "%symdel ",
+    "%do %end %while %until ",
+    "%if %then %else ",
+    "%goto %return ",
+    "%put %input %include ",
+    "%abort %sysexec %syscall %display",
+);
+
+/// Space-separated **SAS DATA-step / PROC-step block delimiter
+/// keywords** installed as **class 1** (`SASWordLists[1]`, named
+/// `"Macro Keywords"` at `LexSAS.cxx:218` — but assigned to
+/// `blockKeywords` at `LexSAS.cxx:42` and dispatched to
+/// `SCE_SAS_BLOCK_KEYWORD` at `LexSAS.cxx:77, :93`) of `LexSAS`'s
+/// wordlist descriptor.
+///
+/// **Header/body naming mismatch** (identical to
+/// [`SAS_KEYWORDS`]) — upstream header says "Macro Keywords" but
+/// the body binds this wordlist as block-delimiter keywords for
+/// both macro and identifier contexts. Naming reflects intent,
+/// not the misleading upstream header label.
+///
+/// **Dual-context class.** Class 1 is uniquely dispatched from
+/// BOTH the `SCE_SAS_MACRO` check (`:76-78`) and the
+/// `SCE_SAS_IDENTIFIER` check (`:92-94`). Bareword forms (no `%`
+/// prefix) fire only in identifier context; `%`-prefixed forms
+/// (e.g. `%data`) would fire only in macro context. SAS grammar
+/// permits `%data` as a step introducer inside macro code but
+/// idiomatic usage is bareword-only, so we seed only bareword
+/// forms — same coverage as SAS Enterprise Guide's default
+/// syntax file.
+///
+/// **Case-INSENSITIVE lookup** per [`SAS_KEYWORDS`].
+///
+/// **Contents** (5 tokens, sourced from SAS 9.4 Base Programming
+/// Reference §"The DATA Step" and §"The PROC Step"):
+///   - **DATA-step introducer** (1): `data`.
+///   - **PROC-step introducer** (1): `proc`.
+///   - **Step terminators** (3): `run` / `quit` / `endsas`.
+///
+/// **Cross-class disjointness** with [`SAS_KEYWORDS`],
+/// [`SAS_MACRO_FUNCTIONS`], and [`SAS_STATEMENTS`] is
+/// invariant-tested. See [`SAS_KEYWORDS`] rationale.
+pub const SAS_BLOCK_KEYWORDS: &str = "data proc run quit endsas";
+
+/// Space-separated **SAS macro-language built-in intrinsic
+/// function keywords** installed as **class 2**
+/// (`SASWordLists[2]`, named `"Types"` at `LexSAS.cxx:219` — but
+/// assigned to `functionKeywords` at `LexSAS.cxx:43` and
+/// dispatched to `SCE_SAS_MACRO_FUNCTION` at `LexSAS.cxx:80`) of
+/// `LexSAS`'s wordlist descriptor.
+///
+/// **Header/body naming mismatch** (identical pattern to
+/// [`SAS_KEYWORDS`] / [`SAS_BLOCK_KEYWORDS`]) — the header claims
+/// class 2 is "Types" but the body dispatches it as macro
+/// intrinsic functions. Naming reflects intent.
+///
+/// **Macro-form entries include the `%` prefix.** Same
+/// `SCE_SAS_MACRO` state-entry mechanics as [`SAS_KEYWORDS`] —
+/// the collected token span is `%name`.
+///
+/// **Case-INSENSITIVE lookup** per [`SAS_KEYWORDS`].
+///
+/// **Contents** (38 tokens, curated commonly used subset from
+/// SAS 9.4 Macro Language: Reference, Fifth Edition, §"Macro
+/// Functions" and the standard SAS AUTOCALL macro library —
+/// includes both true built-in macro functions and the widely-used
+/// AUTOCALL library macros, which are invoked identically with `%`
+/// syntax and are indistinguishable at the lexer level):
+///   - **Arithmetic evaluation** (2): `%eval` / `%sysevalf`.
+///   - **Quoting** (7): `%str` / `%nrstr` / `%quote` /
+///     `%nrquote` / `%bquote` / `%nrbquote` / `%unquote`.
+///   - **Quoting - dynamic** (2): `%superq` / `%qsysfunc`.
+///   - **String scanning** (5): `%index` / `%scan` / `%qscan` /
+///     `%substr` / `%qsubstr`.
+///   - **String case** (4): `%upcase` / `%qupcase` / `%lowcase`
+///     / `%qlowcase`.
+///   - **String length** (1): `%length`.
+///   - **String trim / align (AUTOCALL)** (6): `%trim` / `%qtrim`
+///     / `%left` / `%qleft` / `%cmpres` / `%qcmpres`.
+///   - **System query** (5): `%symexist` / `%symglobl` /
+///     `%symlocal` / `%sysfunc` / `%sysget`.
+///   - **System info** (2): `%sysprod` / `%datatyp`.
+///   - **DBCS-safe scanning** (4): `%kindex` / `%kscan` /
+///     `%ksubstr` / `%kupcase`.
+///
+/// **Cross-class disjointness** with [`SAS_KEYWORDS`],
+/// [`SAS_BLOCK_KEYWORDS`], and [`SAS_STATEMENTS`] is
+/// invariant-tested.
+pub const SAS_MACRO_FUNCTIONS: &str = concat!(
+    "%eval %sysevalf ",
+    "%str %nrstr %quote %nrquote %bquote %nrbquote %unquote ",
+    "%superq %qsysfunc ",
+    "%index %scan %qscan %substr %qsubstr ",
+    "%upcase %qupcase %lowcase %qlowcase ",
+    "%length ",
+    "%trim %qtrim %left %qleft %cmpres %qcmpres ",
+    "%symexist %symglobl %symlocal %sysfunc %sysget ",
+    "%sysprod %datatyp ",
+    "%kindex %kscan %ksubstr %kupcase",
+);
+
+/// Space-separated **SAS DATA-step / PROC-step statement
+/// keywords** installed as **class 3** (`SASWordLists[3]` —
+/// unnamed in the `SASWordLists[]` header array at
+/// `LexSAS.cxx:216-221` which only lists three names before the
+/// null terminator, but assigned to `statements` at
+/// `LexSAS.cxx:44` and dispatched to `SCE_SAS_STATEMENT` at
+/// `LexSAS.cxx:90`) of `LexSAS`'s wordlist descriptor.
+///
+/// **Class 3 fires in IDENTIFIER context ONLY.** Unlike
+/// [`SAS_BLOCK_KEYWORDS`] which fires in both macro and
+/// identifier contexts, statements fire only for bareword tokens
+/// (no `%` prefix) per `LexSAS.cxx:88-91`. So this wordlist
+/// contains only bareword forms.
+///
+/// **Case-INSENSITIVE lookup** per [`SAS_KEYWORDS`].
+///
+/// **Contents** (39 tokens, sourced from SAS 9.4 Statements:
+/// Reference §"DATA Step Statements" and §"Global Statements" —
+/// the most-used subset excluding statements that are only valid
+/// inside specific PROC contexts):
+///   - **DATA-step I/O** (5): `set` / `merge` / `update` /
+///     `modify` / `output`.
+///   - **DATA-step control flow** (5): `if` / `then` / `else` /
+///     `do` / `end`.
+///   - **DATA-step BY-group processing** (1): `by`.
+///   - **DATA-step subsetting / removal** (2): `where` /
+///     `delete`.
+///   - **DATA-step variable manipulation** (7): `format` /
+///     `informat` / `label` / `length` / `drop` / `keep` /
+///     `rename`.
+///   - **DATA-step declarations** (4): `retain` / `array` /
+///     `attrib` / `call`.
+///   - **DATA-step I/O statements** (7): `input` / `put` /
+///     `file` / `infile` / `cards` / `cards4` / `datalines`.
+///   - **DATA-step multi-line data** (1): `datalines4`.
+///   - **DATA-step control** (3): `return` / `stop` / `abort`.
+///   - **Global statements** (2): `libname` / `filename`.
+///   - **Options / titling** (2): `options` / `title`.
+///
+/// **Cross-class disjointness** with [`SAS_KEYWORDS`],
+/// [`SAS_BLOCK_KEYWORDS`], and [`SAS_MACRO_FUNCTIONS`] is
+/// invariant-tested.
+pub const SAS_STATEMENTS: &str = concat!(
+    "set merge update modify output ",
+    "if then else do end ",
+    "by ",
+    "where delete ",
+    "format informat label length drop keep rename ",
+    "retain array attrib call ",
+    "input put file infile cards cards4 datalines ",
+    "datalines4 ",
+    "return stop abort ",
+    "libname filename ",
+    "options title",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

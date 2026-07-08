@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 86 / 🟡 2 / ⚫ 1.
+Total: 89 rows. ✅ 87 / 🟡 1 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1915,7 +1915,7 @@ further shim work needed.
 | Ruby | 36 | `ruby` | ✅ | ✅ | ✅ |
 | Rust | 81 | `rust` | ✅ | ✅ | ✅ |
 | S-Record | 61 | `srec` | — | ✅ | ✅ |
-| SAS | 91 | `sas` | ⚫ | ⚫ | 🟡 |
+| SAS | 91 | `sas` | ✅ | ✅ | ✅ |
 | Scheme | 31 | `lisp` | ✅ | ✅ | ✅ |
 | Shell | 26 | `bash` | ✅ | ✅ | ✅ |
 | Smalltalk | 37 | `smalltalk` | ✅ | ✅ | ✅ |
@@ -10536,6 +10536,270 @@ and BOTH ERROR + STRINGEOL
 deferred-Error pins (two
 separate parse-failure states
 so both must be pinned).
+
+**SAS (2026-07-08):** rides
+Lexilla's `sas` lexer
+(`LexSAS.cxx`) — a 2020 lexer
+by Luke Rasmussen at
+Northwestern University
+Feinberg School of Medicine,
+developed as part of the
+StatTag project (funded by
+NCATS / NIH CTSA grant
+UL1TR001422). Extension
+`.sas`. SAS (Statistical
+Analysis System) is SAS
+Institute Inc.'s proprietary
+statistical programming
+language and analytics
+platform — decades-old,
+domain-dominant in
+pharmaceutical / clinical
+trials / financial analytics.
+
+**Four-class wordlist
+descriptor** per
+`LexSAS.cxx:41-44` despite the
+upstream header at
+`:216-221` listing only three
+class names before the null
+terminator. The body binds
+FOUR slots:
+
+- **Class 0 —
+  `SAS_KEYWORDS`**
+  (Preprocessor, 22 tokens):
+  SAS macro-language
+  directives with `%` prefix
+  — `%macro` / `%mend`,
+  `%let` / `%global` /
+  `%local` / `%symdel`, `%do`
+  / `%end` / `%while` /
+  `%until`, `%if` / `%then`
+  / `%else`, `%goto` /
+  `%return`, `%put` /
+  `%input` / `%include`,
+  `%abort` / `%sysexec` /
+  `%syscall` / `%display`.
+  Sourced from SAS 9.4 Macro
+  Language: Reference, Fifth
+  Edition, §"Macro
+  Statements".
+- **Class 1 —
+  `SAS_BLOCK_KEYWORDS`**
+  (bold Keyword, 5 tokens):
+  DATA / PROC step
+  delimiters — `data` /
+  `proc` / `run` / `quit` /
+  `endsas`. Sourced from SAS
+  9.4 Base Programming
+  Reference §"The DATA Step"
+  and §"The PROC Step".
+- **Class 2 —
+  `SAS_MACRO_FUNCTIONS`**
+  (Preprocessor, 38 tokens):
+  macro-language built-in
+  intrinsic functions + widely-
+  used AUTOCALL library macros
+  with `%` prefix — `%eval` /
+  `%sysevalf`, quoting
+  family (`%str` / `%nrstr`
+  / `%quote` / `%nrquote` /
+  `%bquote` / `%nrbquote` /
+  `%unquote` / `%superq` /
+  `%qsysfunc`), string
+  scanning (`%index` /
+  `%scan` / `%qscan` /
+  `%substr` / `%qsubstr`),
+  case (`%upcase` /
+  `%qupcase` / `%lowcase` /
+  `%qlowcase`), `%length`,
+  trim / align AUTOCALLs
+  (`%trim` / `%qtrim` /
+  `%left` / `%qleft` /
+  `%cmpres` / `%qcmpres`),
+  system query (`%symexist`
+  / `%symglobl` /
+  `%symlocal` / `%sysfunc` /
+  `%sysget`), system info
+  (`%sysprod` / `%datatyp`),
+  and DBCS-safe scanning
+  (`%kindex` / `%kscan` /
+  `%ksubstr` / `%kupcase`).
+  Sourced from SAS 9.4
+  Macro Language:
+  Reference, Fifth Edition,
+  §"Macro Functions" and the
+  SAS AUTOCALL library.
+- **Class 3 —
+  `SAS_STATEMENTS`**
+  (Keyword2, 39 tokens): DATA-
+  step / PROC-step
+  statements — `set` /
+  `merge` / `update` /
+  `modify` / `output`, `if`
+  / `then` / `else` / `do`
+  / `end`, `by`, `where` /
+  `delete`, `format` /
+  `informat` / `label` /
+  `length` / `drop` /
+  `keep` / `rename`,
+  `retain` / `array` /
+  `attrib` / `call`, I/O
+  (`input` / `put` / `file`
+  / `infile` / `cards` /
+  `cards4` / `datalines` /
+  `datalines4`), control
+  (`return` / `stop` /
+  `abort`), global
+  (`libname` / `filename` /
+  `options` / `title`).
+  Sourced from SAS 9.4
+  Statements: Reference
+  §"DATA Step Statements"
+  and §"Global Statements".
+
+**Header/body naming
+mismatch documented** — the
+upstream `SASWordLists[]`
+header at `LexSAS.cxx:216-221`
+uses `"Language Keywords"`,
+`"Macro Keywords"`, `"Types"`
+as the class-0/1/2 names, but
+the body assigns them to
+`keywords` (macro
+directives), `blockKeywords`
+(step delimiters),
+`functionKeywords` (macro
+intrinsics), and adds an
+unnamed fourth `statements`
+class. The naming reflects
+actual dispatch semantics,
+not the misleading upstream
+header labels.
+
+**Macro-prefix alphabet
+enforcement.** The lexer
+enters `SCE_SAS_MACRO` state
+AT the `%` character at
+`LexSAS.cxx:142-145` — the
+call `sc.SetState(...)` fires
+BEFORE `sc.Forward()`, so
+the segment starts at the
+`%`. `GetCurrentLowered(...)`
+at `:72` returns the full
+span from `%` to current
+non-word position. Classes 0
+and 2 MUST use `%`-prefixed
+entries; classes 1 and 3
+MUST use bareword forms.
+Verified against
+`vendor/lexilla/lexlib/
+StyleContext.h:111-114`
+(SetState calls ColourTo(pos
+- 1) then updates state).
+
+**11-style-mapping table**
+covering 16 defined
+`SCE_SAS_*` states. Five
+unmapped:
+- `DEFAULT` (0) — framework
+  fall-through.
+- `IDENTIFIER` (6) —
+  transient bareword-collect
+  state. Can survive to
+  paint when the collected
+  token matches neither
+  `statements` nor
+  `blockKeywords`
+  (`LexSAS.cxx:85-97`); the
+  "unknown identifier"
+  fall-through paints as
+  DEFAULT.
+- `TYPE` (8), `WORD` (9),
+  `GLOBAL_MACRO` (10) —
+  declared in
+  `SciLexer.h:1925-1927`
+  but ZERO references in
+  the LexSAS.cxx body
+  (verified via grep).
+  Included in
+  `SCE_SAS_*` constants for
+  FFI numeric-contiguity
+  correctness; unmapped
+  per the declared-but-
+  unemitted convention.
+
+The 11 mapped states:
+COMMENT + COMMENTLINE +
+COMMENTBLOCK all → Comment
+italic (three-form
+collapse: `* text ;` legacy
+line-start comment, `//
+text ;` line comment, `/*
+text */` block comment);
+NUMBER → Number; OPERATOR →
+Operator; STRING → String
+(double-quoted `"..."`);
+MACRO → Macro (unknown
+`%name` fall-through —
+user macro invocation);
+MACRO_KEYWORD → Preprocessor
+(class-0 hit, macro
+directives); BLOCK_KEYWORD →
+Keyword bold (class-1 hit,
+step delimiters);
+MACRO_FUNCTION →
+Preprocessor (class-2 hit,
+macro intrinsics — grouped
+with MACRO_KEYWORD in the
+macro-preprocessor accent
+family); STATEMENT →
+Keyword2 (class-3 hit, in-
+step statements).
+
+**Case-insensitive lookup**
+per `LexSAS.cxx:72, :88`.
+Wordlist entries must be
+byte-canonical lowercase
+(post-`%` prefix).
+
+Structural test coverage:
+**20 invariants** including
+macro-prefix alphabet
+enforcement pin (classes 0 /
+2 must be `%`-prefixed with
+GetCurrentLowered
+semantics rationale),
+bareword alphabet
+enforcement pin (classes 1 /
+3 must NOT be `%`-prefixed),
+all-lowercase alphabet pin,
+`HashSet`-based cross-class
+disjointness across all four
+classes (dead-entry
+prevention), canonical
+class-0 control-flow marker
+pins (`%macro` / `%mend` /
+`%if` / `%then` / `%else` /
+`%do` / `%end`), canonical
+class-1 step delimiter pins
+(`data` / `proc` / `run` /
+`quit`), canonical class-2
+macro intrinsic pins
+(`%eval` / `%str` /
+`%sysfunc`), canonical
+class-3 DATA-step statement
+pins (`set` / `if` /
+`then` / `else` / `do` /
+`end`), three-comment-state
+collapse pin, and
+`SCE_SAS_STATEMENT` (= 15)
+highest-defined-slot pin.
+Coverage advances to ✅ 87 /
+88 wired-eligible rows
+(**98.9%**) — one 🟡 row
+remaining (ErrorList).
 
 ## Notes
 

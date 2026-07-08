@@ -9118,6 +9118,129 @@ pub const SCE_TOML_ESCAPECHAR: usize = 13;
 pub const SCE_TOML_DATETIME: usize = 14;
 pub const SCE_TOML_STRINGEOL: usize = 15;
 
+// LexSAS style indices. 16 contiguous slots (0..=15) covering the SAS
+// (Statistical Analysis System, from SAS Institute Inc.) lexer's full
+// state set — but only 10 of the 16 slots survive to paint in
+// practice. Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h:1917-1932` and the
+// `LexerModule lmSAS(SCLEX_SAS, ColouriseSASDoc, "sas", FoldSASDoc,
+// SASWordLists)` registration at
+// `vendor/lexilla/lexers/LexSAS.cxx:223`.
+//
+// Dispatches SCLEX_SAS (= 125, per `SciLexer.h:141`) — a lexer by
+// Luke Rasmussen at Northwestern University Feinberg School of
+// Medicine, developed as part of the StatTag project
+// (`LexSAS.cxx:5-13`). Extension `.sas`.
+//
+// **Four wordlist classes** — `SASWordLists[]` at
+// `LexSAS.cxx:216-221` declares three names plus a null terminator
+// (`"Language Keywords"`, `"Macro Keywords"`, `"Types"`), but the
+// body at `:41-44` binds FOUR wordlists (`keywordlists[0..=3]`):
+//
+//   class 0 → `keywords` — dispatched to `SCE_SAS_MACRO_KEYWORD`
+//     ONLY in macro context (`:73-75`). SAS macro-language
+//     directives entered via `%` (e.g. `%macro` / `%mend` / `%let`
+//     / `%do` / `%if` / `%then` / `%else` / `%end` / `%while` /
+//     `%goto` / `%return` / `%put` / `%global` / `%local` /
+//     `%include` / `%abort` / `%input` / `%sysexec` / `%syscall`
+//     / `%symdel`).
+//   class 1 → `blockKeywords` — dispatched to
+//     `SCE_SAS_BLOCK_KEYWORD` in BOTH macro and identifier contexts
+//     (`:76-78, :92-94`). DATA-step and PROC-step introducers /
+//     terminators (`data` / `proc` / `run` / `quit` / `endsas`).
+//   class 2 → `functionKeywords` — dispatched to
+//     `SCE_SAS_MACRO_FUNCTION` ONLY in macro context (`:79-81`).
+//     Macro built-in intrinsic functions (`%eval` / `%str` /
+//     `%sysfunc` / `%index` / `%scan` / `%substr` / `%upcase`
+//     etc.).
+//   class 3 → `statements` — dispatched to `SCE_SAS_STATEMENT`
+//     ONLY in identifier context (`:89-91`). DATA-step and PROC-
+//     step statements (`set` / `merge` / `if` / `then` / `else`
+//     / `where` / `keep` / `drop` / `retain` / `input` / `put`
+//     / `format` / `informat` etc.).
+//
+// **Macro-wordlist entries include the `%` prefix.** The lexer
+// enters `SCE_SAS_MACRO` state AT the `%` character
+// (`:142-145` — `SetState` fires before `Forward`), and
+// `GetCurrentLowered(s, sizeof(s))` at `:72` returns the full
+// span from the `%` to the current non-word position. So wordlist
+// classes 0 and 2 must contain byte-canonical `%name` forms
+// (leading `%`, lowercase), NOT bareword forms. Class 1 fires in
+// both macro and identifier contexts, so containing both `data`
+// and `%data` would activate for both — but per SAS grammar
+// `%data` is not idiomatic so we seed only bareword forms.
+// Class 3 fires only in identifier context — bareword forms.
+//
+// **Case-INSENSITIVE identifier lookup.** `LexSAS.cxx:72, :88` call
+// `sc.GetCurrentLowered(...)` before probing every wordlist.
+// Wordlist entries MUST be byte-canonical lowercase — SAS itself
+// is case-insensitive per language reference (`DATA` / `data` /
+// `Data` all identify the same statement) so the lookup is
+// permissive-correct.
+//
+// **Six unused-in-practice slots.** SciLexer.h declares
+// `SCE_SAS_TYPE` (8), `SCE_SAS_WORD` (9), `SCE_SAS_GLOBAL_MACRO`
+// (10) — no reference in `LexSAS.cxx` body (verified via
+// `grep -n "SCE_SAS_TYPE\|SCE_SAS_WORD\|SCE_SAS_GLOBAL_MACRO"`,
+// zero matches). Included for numeric-contiguity correctness at
+// the FFI boundary; framework leaves them unmapped per the
+// framework's declared-but-unemitted convention.
+// `SCE_SAS_IDENTIFIER` (6) and `SCE_SAS_MACRO` (11) are transient
+// collect states that can survive to paint when the token doesn't
+// match any wordlist — the "unknown bareword" (IDENTIFIER) and
+// "unknown %macro-reference" (MACRO) fall-through paths. Framework
+// leaves IDENTIFIER unmapped (default paint) and routes MACRO to
+// `StyleSlot::Macro` (user macro invocation is semantically a
+// macro-call archetype). `SCE_SAS_DEFAULT` (0) also unmapped per
+// framework default-slot convention.
+//
+// **Three comment flavours share `StyleSlot::Comment`.** SAS
+// supports three comment forms:
+//   `SCE_SAS_COMMENT` (1) — legacy `* text ;` comment at line
+//     start (`:128-130` — fires only when `!lineHasNonCommentChar`).
+//   `SCE_SAS_COMMENTLINE` (2) — `// text ;` line comment
+//     (`:135-137`).
+//   `SCE_SAS_COMMENTBLOCK` (3) — `/* text */` block comment
+//     (`:131-134`).
+// All three collapse to Comment — same discipline as C's line/block
+// unification and Rust's `SCE_RUST_COMMENTBLOCK` /
+// `_COMMENTBLOCKDOC` / `_COMMENTLINE` / `_COMMENTLINEDOC` collapse.
+//
+// **Style-slot routing rationale.**
+//   `MACRO_KEYWORD` (12) → Preprocessor — SAS macro-language
+//     directives (`%do` / `%mend` / `%if`) are semantically
+//     equivalent to C's `#define` / `#if` preprocessor control
+//     flow; same accent family as PHP's `SCE_HPHP_COMMENT` /
+//     `SCE_HPHP_WORD` preprocessor-family collapse.
+//   `BLOCK_KEYWORD` (13) → Keyword — DATA / PROC / RUN are the
+//     primary structural keywords of the language (equivalent to
+//     C's `int` / `if` / `while`); primary-keyword accent.
+//   `MACRO_FUNCTION` (14) → Preprocessor — macro-language
+//     intrinsics (`%eval` / `%str` / `%sysfunc`) share their host
+//     namespace with `MACRO_KEYWORD` and are semantically part of
+//     the same macro-preprocessor accent family.
+//   `STATEMENT` (15) → Keyword2 — in-step statements (`set` /
+//     `if` / `where`) are secondary structural keywords living
+//     inside a DATA / PROC container; secondary-keyword accent
+//     matches `SCE_C_WORD2` / `SCE_PY_WORD2` precedent.
+pub const SCLEX_SAS: usize = 125;
+pub const SCE_SAS_DEFAULT: usize = 0;
+pub const SCE_SAS_COMMENT: usize = 1;
+pub const SCE_SAS_COMMENTLINE: usize = 2;
+pub const SCE_SAS_COMMENTBLOCK: usize = 3;
+pub const SCE_SAS_NUMBER: usize = 4;
+pub const SCE_SAS_OPERATOR: usize = 5;
+pub const SCE_SAS_IDENTIFIER: usize = 6;
+pub const SCE_SAS_STRING: usize = 7;
+pub const SCE_SAS_TYPE: usize = 8;
+pub const SCE_SAS_WORD: usize = 9;
+pub const SCE_SAS_GLOBAL_MACRO: usize = 10;
+pub const SCE_SAS_MACRO: usize = 11;
+pub const SCE_SAS_MACRO_KEYWORD: usize = 12;
+pub const SCE_SAS_BLOCK_KEYWORD: usize = 13;
+pub const SCE_SAS_MACRO_FUNCTION: usize = 14;
+pub const SCE_SAS_STATEMENT: usize = 15;
+
 // SCN_* notification codes (delivered via WM_NOTIFY's NMHDR.code) are added
 // when Phase 2+ first dispatches them. Each constant must be cross-checked
 // against `vendor/scintilla/include/Scintilla.h` at the time of addition;
