@@ -2777,6 +2777,170 @@ pub const SCE_SPICE_DELIMITER: usize = 6;
 pub const SCE_SPICE_VALUE: usize = 7;
 pub const SCE_SPICE_COMMENTLINE: usize = 8;
 
+// LexTxt2tags style indices. 26 contiguous slots (0..=25) for
+// txt2tags — a lightweight markup / plain-text-to-many-formats
+// converter language (extension `.t2t`). Constants mirror
+// `SciLexer.h:1588-1613` verbatim. Dispatches SCLEX_TXT2TAGS
+// (= 99, per `SciLexer.h:115`) via
+// `vendor/lexilla/lexers/LexTxt2tags.cxx:479`.
+//
+// **Zero wordlists.** The `LexerModule` registration at `:479`
+// has the 3-argument constructor `lmTxt2tags(SCLEX_TXT2TAGS,
+// ColorizeTxt2tagsDoc, "txt2tags")` — no `wordListDesc`
+// argument passed at all. The paint function signature at `:108`
+// declares `WordList **, ` with an UNNAMED parameter that is
+// never referenced in the body. txt2tags is a pure
+// structural-markup lexer classifying tokens by line-prefix and
+// delimiter-pair rules, not by identifier lookup. Framework
+// consequence: `TXT2TAGS_THEME.keywords` MUST be empty; there is
+// nothing to install and nowhere for the lexer to consume it.
+//
+// **State-machine driven.** `ColorizeTxt2tagsDoc` at `:107-476`
+// runs a `StyleContext` state machine keyed off the current
+// state plus the byte pattern at `sc.ch` / `sc.chNext` /
+// `sc.Match(...)`. Two categories of state transitions:
+//   - Line-scope entries at `:209-345` (guarded by `sc.state ==
+//     SCE_TXT2TAGS_LINE_BEGIN`): headers (`===` / `+++`), lists,
+//     blockquotes, code blocks, options / preproc / postproc /
+//     comments (all `%!`-prefixed variants).
+//   - Inline entries at `:402-470` (guarded by `sc.state ==
+//     SCE_TXT2TAGS_DEFAULT`): links (`[text url]`), strong
+//     (`**bold**`), emphasis (`//italic//` / `__underline__`),
+//     strikeout (`--strike--`), inline code (`` `` ``), tables
+//     (`|row|`).
+//
+// **`\`-escape.** At `:120-123`, `\` inside any state consumes
+// the next byte via `sc.Forward()` and `continue` — matches
+// Markdown-style escape convention. No dedicated ESCAPED state
+// (unlike LexRegistry's `SCE_REG_ESCAPED`).
+//
+// **Line-prefix transient states.** Bytes on a line's leading
+// whitespace pass through `SCE_TXT2TAGS_PRECHAR` (12) or
+// `SCE_TXT2TAGS_LINE_BEGIN` (1) during scanning. Both settle to
+// a specific role state before end-of-line, or fall through to
+// `SCE_TXT2TAGS_DEFAULT` (0). Framework convention: leave both
+// unmapped so pre-role whitespace / newlines paint at
+// `STYLE_DEFAULT`.
+//
+// **SCE_TXT2TAGS_STRONG2 (3) is a DEAD STATE.** Verified by
+// exhaustive grep: zero call sites emit `SCE_TXT2TAGS_STRONG2`
+// (no `SetState`, `ChangeState`, or `ForwardSetState`). The
+// slot is reserved in `SciLexer.h` presumably as an
+// alternative-strong-syntax escape hatch that upstream never
+// finished wiring. Framework convention: leave unmapped since
+// no bytes ever paint into it.
+//
+// Style semantics (paint-loop citations reference LexTxt2tags.cxx):
+//
+//   - SCE_TXT2TAGS_DEFAULT (0) — plain body text. Entered on
+//     every exit from a role state. Framework convention:
+//     leave unmapped.
+//   - SCE_TXT2TAGS_LINE_BEGIN (1) — transient line-start scan
+//     state. Entered on newline at `:339-340, :469`, on every
+//     end-of-role return at `:59, :96, :128, :147, :156, :163,
+//     :172, :181, :190, :202, :352`, and at initial-state on
+//     entry to a new line. Framework convention: leave
+//     unmapped.
+//   - SCE_TXT2TAGS_STRONG1 (2) — `**bold**` inline strong
+//     text. Entered at `:449`, exits at `:164-167` on closing
+//     `**`.
+//   - SCE_TXT2TAGS_STRONG2 (3) — DEAD STATE. Framework
+//     convention: leave unmapped.
+//   - SCE_TXT2TAGS_EM1 (4) — `//italic//` inline emphasis.
+//     Entered at `:454`, exits at `:173-176` on closing `//`.
+//   - SCE_TXT2TAGS_EM2 (5) — `__underline__` inline emphasis.
+//     Entered at `:458`, exits at `:182-185` on closing `__`.
+//   - SCE_TXT2TAGS_HEADER1 (6) — `= H1 =` or `+ H1 +` single
+//     `=`/`+` header. Entered at `:244-246, :295-297`, exits
+//     on newline via the shared header handler at `:348-353`.
+//   - SCE_TXT2TAGS_HEADER2 (7) — `== H2 ==` or `++ H2 ++`.
+//     Entered at `:231-234, :272-275`.
+//   - SCE_TXT2TAGS_HEADER3 (8) — `=== H3 ===` or `+++ H3 +++`.
+//     Entered at `:225-229, :266-270`.
+//   - SCE_TXT2TAGS_HEADER4 (9) — `==== H4 ====` or `++++ H4 ++++`.
+//     Entered at `:220-224, :261-265`.
+//   - SCE_TXT2TAGS_HEADER5 (10) — `===== H5 =====` or
+//     `+++++ H5 +++++`. Entered at `:215-219, :256-260`.
+//   - SCE_TXT2TAGS_HEADER6 (11) — `====== H6 ======` or
+//     `++++++ H6 ++++++`. Entered at `:210-214, :251-255`.
+//   - SCE_TXT2TAGS_PRECHAR (12) — transient leading-whitespace
+//     scan state. Entered at `:240, :330, :337, :343`. Settles
+//     to `SCE_TXT2TAGS_DEFAULT` at `:395-396`, or to
+//     `SCE_TXT2TAGS_ULIST_ITEM` / `SCE_TXT2TAGS_OLIST_ITEM` at
+//     `:374, :384-386`, or to `SCE_TXT2TAGS_BLOCKQUOTE` at
+//     `:360`. Framework convention: leave unmapped.
+//   - SCE_TXT2TAGS_ULIST_ITEM (13) — `- item` unordered list
+//     marker. Entered at `:374`. Single-marker span; exits
+//     immediately at `:375` via `ForwardSetState(DEFAULT)`.
+//   - SCE_TXT2TAGS_OLIST_ITEM (14) — `1. item` numbered list
+//     or `+ item` alternate ordered list. Entered at `:287,
+//     :335, :384`. Exits at `:289, :337, :386` via
+//     `SetState(DEFAULT)` or `SetState(PRECHAR)`.
+//   - SCE_TXT2TAGS_BLOCKQUOTE (15) — `""" quote` blockquote
+//     marker. Entered at `:360`, exits at `:126-129` via
+//     `Forward(2) + SetState(LINE_BEGIN)`.
+//   - SCE_TXT2TAGS_STRIKEOUT (16) — `--strike--` inline
+//     strikeout. Entered at `:463`, exits at `:203-206` on
+//     closing `--`.
+//   - SCE_TXT2TAGS_HRULE (17) — 20+ hyphens on a line by
+//     themselves (horizontal rule separator). Entered at
+//     `:94-97` via `IsValidHrule` at `:81-105`.
+//     **Hyphen-only** — the sole call site is `:370`,
+//     gated on `sc.ch == '-'`. A line of 20+ `=`
+//     characters is consumed by the header-match cascade
+//     at `:209-248` and paints as HEADER6 (persisting via
+//     the shared exit handler at `:348-353`), NOT HRULE.
+//   - SCE_TXT2TAGS_LINK (18) — `[text]` / `[text url]` /
+//     `![image]` link and image markup. Entered at `:431`,
+//     exits at `:436` via `ForwardSetState(DEFAULT)`.
+//   - SCE_TXT2TAGS_CODE (19) — `|table row|` pipe-delimited
+//     table row. Entered at `:445`, exits at `:157-158` on
+//     closing `|`.
+//   - SCE_TXT2TAGS_CODE2 (20) — `` `` inline code`` `` `
+//     double-backtick inline code span. Entered at `:441`,
+//     exits at `:148-151` on closing `` `` ``.
+//   - SCE_TXT2TAGS_CODEBK (21) — `` ``` `` code block. Entered
+//     at `:302-307` via `HasPrevLineContent` check, exits at
+//     `:191-197` on closing `` ``` `` at line start.
+//   - SCE_TXT2TAGS_COMMENT (22) — `%`-to-EOL line comment.
+//     Entered at `:324-326`, exits via `FollowToLineEnd` at
+//     `:141-143`.
+//   - SCE_TXT2TAGS_OPTION (23) — `%!key : value` document
+//     option. Entered at `:319-321`, exits via `FollowToLineEnd`
+//     at `:131-133`.
+//   - SCE_TXT2TAGS_PREPROC (24) — `%!preproc: pattern
+//     replacement` preprocessor directive. Entered at
+//     `:311-313`, exits via `FollowToLineEnd` at `:137-139`.
+//   - SCE_TXT2TAGS_POSTPROC (25) — `%!postproc: pattern
+//     replacement` postprocessor directive. Entered at
+//     `:315-317`, exits via `FollowToLineEnd` at `:134-136`.
+pub const SCE_TXT2TAGS_DEFAULT: usize = 0;
+pub const SCE_TXT2TAGS_LINE_BEGIN: usize = 1;
+pub const SCE_TXT2TAGS_STRONG1: usize = 2;
+pub const SCE_TXT2TAGS_STRONG2: usize = 3;
+pub const SCE_TXT2TAGS_EM1: usize = 4;
+pub const SCE_TXT2TAGS_EM2: usize = 5;
+pub const SCE_TXT2TAGS_HEADER1: usize = 6;
+pub const SCE_TXT2TAGS_HEADER2: usize = 7;
+pub const SCE_TXT2TAGS_HEADER3: usize = 8;
+pub const SCE_TXT2TAGS_HEADER4: usize = 9;
+pub const SCE_TXT2TAGS_HEADER5: usize = 10;
+pub const SCE_TXT2TAGS_HEADER6: usize = 11;
+pub const SCE_TXT2TAGS_PRECHAR: usize = 12;
+pub const SCE_TXT2TAGS_ULIST_ITEM: usize = 13;
+pub const SCE_TXT2TAGS_OLIST_ITEM: usize = 14;
+pub const SCE_TXT2TAGS_BLOCKQUOTE: usize = 15;
+pub const SCE_TXT2TAGS_STRIKEOUT: usize = 16;
+pub const SCE_TXT2TAGS_HRULE: usize = 17;
+pub const SCE_TXT2TAGS_LINK: usize = 18;
+pub const SCE_TXT2TAGS_CODE: usize = 19;
+pub const SCE_TXT2TAGS_CODE2: usize = 20;
+pub const SCE_TXT2TAGS_CODEBK: usize = 21;
+pub const SCE_TXT2TAGS_COMMENT: usize = 22;
+pub const SCE_TXT2TAGS_OPTION: usize = 23;
+pub const SCE_TXT2TAGS_PREPROC: usize = 24;
+pub const SCE_TXT2TAGS_POSTPROC: usize = 25;
+
 // LexBash (SH) style indices. 14 contiguous slots (0..=13) covering
 // the Bash / POSIX-shell lexer's full emission set: `#`-to-EOL
 // comments (COMMENTLINE), decimal / hex / base-N numeric literals

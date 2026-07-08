@@ -125,22 +125,22 @@ use codepp_core::lang::{
     L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
     L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
     L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY,
-    L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_VB, L_VERILOG, L_VHDL, L_XML,
-    L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
-    MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
-    NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-    OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
-    OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
-    POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-    PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5,
-    RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
-    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2,
-    SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
-    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
-    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
-    XML_KEYWORDS, YAML_KEYWORDS,
+    L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TXT2TAGS, L_VB, L_VERILOG,
+    L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+    MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
+    NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+    OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
+    OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2,
+    REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
+    R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+    SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS,
+    SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
+    VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
+    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -315,39 +315,45 @@ use codepp_scintilla_sys::{
     SCE_TCL_OPERATOR, SCE_TCL_SUBSTITUTION, SCE_TCL_SUB_BRACE, SCE_TCL_WORD, SCE_TCL_WORD2,
     SCE_TCL_WORD3, SCE_TCL_WORD4, SCE_TCL_WORD5, SCE_TCL_WORD6, SCE_TCL_WORD7, SCE_TCL_WORD8,
     SCE_TCL_WORD_IN_QUOTE, SCE_TEX_COMMAND, SCE_TEX_DEFAULT, SCE_TEX_GROUP, SCE_TEX_SPECIAL,
-    SCE_TEX_SYMBOL, SCE_VHDL_ATTRIBUTE, SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT,
-    SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD, SCE_VHDL_NUMBER, SCE_VHDL_OPERATOR,
-    SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR, SCE_VHDL_STDPACKAGE, SCE_VHDL_STDTYPE,
-    SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD, SCE_V_COMMENT, SCE_V_COMMENTLINE,
-    SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT, SCE_V_INPUT, SCE_V_NUMBER,
-    SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR, SCE_V_STRING,
-    SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3, SCE_YAML_COMMENT,
-    SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR,
-    SCE_YAML_REFERENCE, SCE_YAML_TEXT, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY,
-    SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
-    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
-    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
-    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
-    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
-    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
-    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
-    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETFONTQUALITY,
-    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTARGETEND, SCI_SETTARGETSTART,
-    SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
-    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE,
-    SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED,
-    SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
-    SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE,
-    SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
-    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
-    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS,
-    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY,
-    SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS,
-    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION,
-    SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCE_TEX_SYMBOL, SCE_TXT2TAGS_BLOCKQUOTE, SCE_TXT2TAGS_CODE, SCE_TXT2TAGS_CODE2,
+    SCE_TXT2TAGS_CODEBK, SCE_TXT2TAGS_COMMENT, SCE_TXT2TAGS_EM1, SCE_TXT2TAGS_EM2,
+    SCE_TXT2TAGS_HEADER1, SCE_TXT2TAGS_HEADER2, SCE_TXT2TAGS_HEADER3, SCE_TXT2TAGS_HEADER4,
+    SCE_TXT2TAGS_HEADER5, SCE_TXT2TAGS_HEADER6, SCE_TXT2TAGS_HRULE, SCE_TXT2TAGS_LINK,
+    SCE_TXT2TAGS_OLIST_ITEM, SCE_TXT2TAGS_OPTION, SCE_TXT2TAGS_POSTPROC, SCE_TXT2TAGS_PREPROC,
+    SCE_TXT2TAGS_STRIKEOUT, SCE_TXT2TAGS_STRONG1, SCE_TXT2TAGS_ULIST_ITEM, SCE_VHDL_ATTRIBUTE,
+    SCE_VHDL_BLOCK_COMMENT, SCE_VHDL_COMMENT, SCE_VHDL_COMMENTLINEBANG, SCE_VHDL_KEYWORD,
+    SCE_VHDL_NUMBER, SCE_VHDL_OPERATOR, SCE_VHDL_STDFUNCTION, SCE_VHDL_STDOPERATOR,
+    SCE_VHDL_STDPACKAGE, SCE_VHDL_STDTYPE, SCE_VHDL_STRING, SCE_VHDL_STRINGEOL, SCE_VHDL_USERWORD,
+    SCE_V_COMMENT, SCE_V_COMMENTLINE, SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT,
+    SCE_V_INPUT, SCE_V_NUMBER, SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT,
+    SCE_V_PREPROCESSOR, SCE_V_STRING, SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2,
+    SCE_V_WORD3, SCE_YAML_COMMENT, SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD,
+    SCE_YAML_NUMBER, SCE_YAML_OPERATOR, SCE_YAML_REFERENCE, SCE_YAML_TEXT, SCI_BEGINUNDOACTION,
+    SCI_CLEAR, SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER,
+    SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION,
+    SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES,
+    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
+    SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS,
+    SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION,
+    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
+    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT,
+    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION,
+    SCI_SETFONTQUALITY, SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
+    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
+    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO,
+    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
+    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
+    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
+    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_FOLDFLAG_LINEAFTER_CONTRACTED,
+    SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER,
+    SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
+    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
+    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
+    SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
+    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
+    SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT,
+    STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
@@ -5073,6 +5079,158 @@ const SPICE_THEME: LangTheme = LangTheme {
     styles: SPICE_STYLES,
     italic: SPICE_ITALIC,
     bold: SPICE_BOLD,
+};
+
+// --- LexTxt2tags ---
+// txt2tags — lightweight-markup / plain-text-to-many-formats
+// converter (extension `.t2t`). `L_TXT2TAGS` (id 83) is the only
+// language row using this lexer. Zero-wordlist markup lexer per
+// `LexTxt2tags.cxx:479` (3-argument `LexerModule` registration
+// with no `wordListDesc`) — same family as PROPS / LaTeX / TeX /
+// Registry. See the `LexTxt2tags` banner in
+// `scintilla-sys/src/lib.rs` for the paint-loop citations.
+//
+// Style-to-slot decisions (22 mappings across 26 defined slots):
+//
+//   * `STRONG1` (2) → Keyword (bold) — `**bold**` inline strong
+//     text. Same Keyword+bold treatment as HEADER slots below;
+//     STRONG is inline strong emphasis, HEADER is line-scoped
+//     structural emphasis. Both deserve visible weight.
+//   * `EM1` (4) → Keyword (italic) — `//italic//` inline
+//     emphasis. Keyword base colour to visually pair with STRONG,
+//     italic modifier to distinguish semantically.
+//   * `EM2` (5) → Keyword (italic) — `__underline__` inline
+//     emphasis. Same Keyword+italic as EM1; underline is a
+//     secondary emphasis style rendered visually as italic in
+//     Notepad++-style theming.
+//   * `HEADER1..HEADER6` (6..11) → Keyword (bold) — six levels
+//     of `= H1 =` / `+ H1 +` / … / `====== H6 ======` /
+//     `++++++ H6 ++++++`. All six deserve prominent structural
+//     emphasis; the level distinction is documented by count of
+//     `=` / `+` in the source, not by colour (matches Notepad++
+//     defaults for Markdown-family lexers).
+//   * `ULIST_ITEM` (13) → Preprocessor — `- item` unordered
+//     list bullet marker. Same "out-of-band structural marker"
+//     accent as INI's DEFVAL, Batch's leading `@`, Registry's
+//     DELETEDKEY / PARAMETER.
+//   * `OLIST_ITEM` (14) → Preprocessor — `1. item` numbered or
+//     `+ item` alternate ordered list marker. Same accent as
+//     ULIST_ITEM for structural parity.
+//   * `BLOCKQUOTE` (15) → Comment (italic) — `""" quote`
+//     blockquote marker. Same Comment+italic as line comments —
+//     quotes are semantically "out-of-band prose" like comments.
+//   * `STRIKEOUT` (16) → Keyword2 — `--strike--` inline
+//     strikeout. Distinct Keyword2 accent so struck text reads
+//     as visually deprecated relative to STRONG/EM.
+//   * `HRULE` (17) → Operator — 20+-hyphen horizontal-rule
+//     separator. Structural divider role — same Operator slot
+//     as punctuation delimiters.
+//   * `LINK` (18) → String — `[text]` / `[text url]` /
+//     `![image]` link and image markup. URLs paint universally
+//     as String across every lexer.
+//   * `CODE` (19) → String — `|table row|` pipe-delimited
+//     table row. Table cells are literal data — String slot
+//     matches the universal literal-value convention.
+//   * `CODE2` (20) → String — `` `` inline code `` `` — same
+//     literal-code semantics as CODE.
+//   * `CODEBK` (21) → String — `` ``` `` fenced code block.
+//     Same String slot for consistent code visualisation
+//     across inline / block / table forms.
+//   * `COMMENT` (22) → Comment (italic) — `%`-to-EOL line
+//     comment. Universal Comment slot.
+//   * `OPTION` (23) → Preprocessor — `%!key : value` document
+//     option directive.
+//   * `PREPROC` (24) → Preprocessor — `%!preproc: pattern
+//     replacement` directive.
+//   * `POSTPROC` (25) → Preprocessor — `%!postproc: pattern
+//     replacement` directive. OPTION / PREPROC / POSTPROC all
+//     share the Preprocessor slot for consistent
+//     directive-family highlighting.
+//
+// Unmapped slots (framework convention, 4 total):
+//
+//   * `DEFAULT` (0) — plain body text. Standard framework
+//     convention — falls through to `STYLE_DEFAULT`.
+//   * `LINE_BEGIN` (1) — transient line-start scan state
+//     entered at every newline / role-exit. Any byte painted
+//     into LINE_BEGIN is the newline itself; leave unmapped
+//     so it inherits the DEFAULT foreground.
+//   * `STRONG2` (3) — DEAD STATE. Verified: zero call sites
+//     in `LexTxt2tags.cxx` emit the slot (no `SetState`,
+//     `ChangeState`, or `ForwardSetState`). Reserved in
+//     `SciLexer.h` but never entered at runtime. Leave
+//     unmapped since no bytes ever paint into it.
+//   * `PRECHAR` (12) — transient leading-whitespace scan state
+//     between LINE_BEGIN and the settled role state (DEFAULT /
+//     ULIST_ITEM / OLIST_ITEM / BLOCKQUOTE). Same rationale as
+//     LINE_BEGIN.
+const TXT2TAGS_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_TXT2TAGS_STRONG1, StyleSlot::Keyword),
+    (SCE_TXT2TAGS_EM1, StyleSlot::Keyword),
+    (SCE_TXT2TAGS_EM2, StyleSlot::Keyword),
+    (SCE_TXT2TAGS_HEADER1, StyleSlot::Keyword),
+    (SCE_TXT2TAGS_HEADER2, StyleSlot::Keyword),
+    (SCE_TXT2TAGS_HEADER3, StyleSlot::Keyword),
+    (SCE_TXT2TAGS_HEADER4, StyleSlot::Keyword),
+    (SCE_TXT2TAGS_HEADER5, StyleSlot::Keyword),
+    (SCE_TXT2TAGS_HEADER6, StyleSlot::Keyword),
+    (SCE_TXT2TAGS_ULIST_ITEM, StyleSlot::Preprocessor),
+    (SCE_TXT2TAGS_OLIST_ITEM, StyleSlot::Preprocessor),
+    (SCE_TXT2TAGS_BLOCKQUOTE, StyleSlot::Comment),
+    (SCE_TXT2TAGS_STRIKEOUT, StyleSlot::Keyword2),
+    (SCE_TXT2TAGS_HRULE, StyleSlot::Operator),
+    (SCE_TXT2TAGS_LINK, StyleSlot::String),
+    (SCE_TXT2TAGS_CODE, StyleSlot::String),
+    (SCE_TXT2TAGS_CODE2, StyleSlot::String),
+    (SCE_TXT2TAGS_CODEBK, StyleSlot::String),
+    (SCE_TXT2TAGS_COMMENT, StyleSlot::Comment),
+    (SCE_TXT2TAGS_OPTION, StyleSlot::Preprocessor),
+    (SCE_TXT2TAGS_PREPROC, StyleSlot::Preprocessor),
+    (SCE_TXT2TAGS_POSTPROC, StyleSlot::Preprocessor),
+];
+
+// Italic on COMMENT + BLOCKQUOTE (universal prose-out-of-band
+// convention) + EM1 + EM2 (semantic italic / underline emphasis
+// markers — visually rendered as italic).
+const TXT2TAGS_ITALIC: &[usize] = &[
+    SCE_TXT2TAGS_COMMENT,
+    SCE_TXT2TAGS_BLOCKQUOTE,
+    SCE_TXT2TAGS_EM1,
+    SCE_TXT2TAGS_EM2,
+];
+
+// Bold on STRONG1 (semantic bold marker) + all six HEADER
+// levels. Multi-slot bold discipline (7 slots) — same pattern
+// applied to headers as prior lexers apply to structural
+// anchors, but txt2tags has genuinely 6 header levels + 1
+// inline strong that all deserve the treatment.
+const TXT2TAGS_BOLD: &[usize] = &[
+    SCE_TXT2TAGS_STRONG1,
+    SCE_TXT2TAGS_HEADER1,
+    SCE_TXT2TAGS_HEADER2,
+    SCE_TXT2TAGS_HEADER3,
+    SCE_TXT2TAGS_HEADER4,
+    SCE_TXT2TAGS_HEADER5,
+    SCE_TXT2TAGS_HEADER6,
+];
+
+// Zero-wordlist theme — same pattern as PROPS / LaTeX / TeX /
+// Registry. `keywords: &[]` is REQUIRED here: the lexer's
+// `LexerModule` registration at `LexTxt2tags.cxx:479` takes no
+// `wordListDesc` argument and the paint function's WordList**
+// parameter is unnamed and never referenced. Excluded from
+// `wired_languages_have_complete_themes` because
+// `TXT2TAGS_THEME.keywords = &[]` violates that test's
+// `!keywords.is_empty()` floor — matches the PROPS / LATEX /
+// REGISTRY precedents. The dedicated
+// `txt2tags_uses_lextxt2tags_zero_class_theme` test below pins
+// the 22-mapping shape, empty-keywords invariant, style-routing
+// pins, and cross-language non-reuse.
+const TXT2TAGS_THEME: LangTheme = LangTheme {
+    keywords: &[],
+    styles: TXT2TAGS_STYLES,
+    italic: TXT2TAGS_ITALIC,
+    bold: TXT2TAGS_BOLD,
 };
 
 // RC (Win32 resource scripts) is the first SINGLE-class LexCPP-family
@@ -9827,6 +9985,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&REGISTRY_THEME)
     } else if lang == L_SPICE {
         Some(&SPICE_THEME)
+    } else if lang == L_TXT2TAGS {
+        Some(&TXT2TAGS_THEME)
     } else {
         None
     }
@@ -25037,7 +25197,7 @@ mod lang_theme_tests {
         SCE_V_COMMENTLINE, SCE_V_COMMENTLINEBANG, SCE_V_COMMENT_WORD, SCE_V_INOUT, SCE_V_INPUT,
         SCE_V_NUMBER, SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR,
         SCE_V_STRING, SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3,
-        SPICE_BOLD, SPICE_ITALIC, SPICE_STYLES,
+        SPICE_BOLD, SPICE_ITALIC, SPICE_STYLES, TXT2TAGS_BOLD, TXT2TAGS_ITALIC, TXT2TAGS_STYLES,
     };
     // SCE_VHDL_IDENTIFIER is a scan-intermediate state that isn't
     // referenced in the main-scope theme (VHDL_STYLES deliberately
@@ -25068,17 +25228,17 @@ mod lang_theme_tests {
         L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE,
         L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP,
         L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST,
-        L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TEXT, L_VB, L_VERILOG, L_VHDL,
-        L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
-        MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
-        NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-        OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
-        OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
-        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
-        PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3,
-        REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
-        R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+        L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_TCL, L_TEX, L_TEXT, L_TXT2TAGS, L_VB, L_VERILOG,
+        L_VHDL, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+        MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
+        NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+        OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
+        OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+        POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+        POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+        PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RC_KEYWORDS, REBOL_WORD,
+        REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS,
+        R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
         SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3,
         SQL_KEYWORDS, SQL_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS,
         TCL_TK_KEYWORDS, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS,
@@ -40486,6 +40646,328 @@ mod lang_theme_tests {
         }
     }
 
+    /// txt2tags uses Lexilla's `txt2tags` lexer
+    /// (`LexTxt2tags.cxx`) — a state-machine markup lexer for
+    /// txt2tags (`.t2t`) plain-text-to-many-formats converter
+    /// files. Zero-wordlist lexer: the `LexerModule`
+    /// registration at `LexTxt2tags.cxx:479` is 3-argument
+    /// (`lmTxt2tags(SCLEX_TXT2TAGS, ColorizeTxt2tagsDoc,
+    /// "txt2tags")`) with no `wordListDesc` argument at all,
+    /// and the paint function's `WordList **` parameter is
+    /// unnamed and never referenced. NOT included in
+    /// `wired_languages_have_complete_themes` because
+    /// `TXT2TAGS_THEME.keywords = &[]` violates that test's
+    /// `!keywords.is_empty()` floor — matches the PROPS /
+    /// LATEX / REGISTRY precedents. This dedicated test pins:
+    ///
+    ///   1. Deep-value identity (styles / italic / bold /
+    ///      empty keywords).
+    ///   2. 22-mapping style-count (26 defined `SCE_TXT2TAGS_*`
+    ///      slots minus 4 unmapped: DEFAULT, `LINE_BEGIN`
+    ///      (transient), STRONG2 (DEAD STATE), PRECHAR
+    ///      (transient)).
+    ///   3. Empty-keywords invariant — LOAD-BEARING per the
+    ///      lexer's 3-argument `LexerModule` registration
+    ///      (no `wordListDesc`) and unnamed `WordList**`
+    ///      parameter.
+    ///   4. Cross-language non-reuse across 13 sibling themes
+    ///      including explicit zero-wordlist cross-pins
+    ///      (PROPS / LaTeX / TeX / Registry).
+    ///   5. Style-routing pins for all 22 mapped constants.
+    ///   6. Framework-unmapped slots confirmed absent
+    ///      (DEFAULT, `LINE_BEGIN`, STRONG2, PRECHAR) with
+    ///      drift-pin assertions.
+    ///   7. Italic set == 4 (COMMENT, BLOCKQUOTE, EM1, EM2).
+    ///   8. Bold set == 7 (STRONG1 + all six HEADER levels).
+    ///   9. Highest-defined `SCE_TXT2TAGS_*` pin —
+    ///      `SCE_TXT2TAGS_POSTPROC` (25) is the top slot per
+    ///      `SciLexer.h:1613`.
+    ///   10. `L_TXT2TAGS` `LangEntry` has `lexer:
+    ///       Some("txt2tags")` and includes `.t2t` extension.
+    ///   11. **Header-family cohesion pin** — all six HEADER
+    ///       slots route to Keyword AND appear in the bold
+    ///       set. Load-bearing structural anchor uniformity.
+    ///   12. **Directive-family cohesion pin** — OPTION,
+    ///       PREPROC, POSTPROC, `ULIST_ITEM`, `OLIST_ITEM` all
+    ///       route to Preprocessor. Consistent
+    ///       out-of-band-marker highlighting.
+    ///   13. **Code-family cohesion pin** — CODE, CODE2,
+    ///       CODEBK all route to String. Consistent
+    ///       literal-code visualisation across inline / block
+    ///       / table forms.
+    ///   14. **Emphasis-family cohesion pin** — STRONG1 →
+    ///       bold, EM1 → italic, EM2 → italic. Semantic
+    ///       markup styling.
+    #[test]
+    fn txt2tags_uses_lextxt2tags_zero_class_theme() {
+        use super::{
+            SCE_TXT2TAGS_BLOCKQUOTE, SCE_TXT2TAGS_CODE, SCE_TXT2TAGS_CODE2, SCE_TXT2TAGS_CODEBK,
+            SCE_TXT2TAGS_COMMENT, SCE_TXT2TAGS_EM1, SCE_TXT2TAGS_EM2, SCE_TXT2TAGS_HEADER1,
+            SCE_TXT2TAGS_HEADER2, SCE_TXT2TAGS_HEADER3, SCE_TXT2TAGS_HEADER4, SCE_TXT2TAGS_HEADER5,
+            SCE_TXT2TAGS_HEADER6, SCE_TXT2TAGS_HRULE, SCE_TXT2TAGS_LINK, SCE_TXT2TAGS_OLIST_ITEM,
+            SCE_TXT2TAGS_OPTION, SCE_TXT2TAGS_POSTPROC, SCE_TXT2TAGS_PREPROC,
+            SCE_TXT2TAGS_STRIKEOUT, SCE_TXT2TAGS_STRONG1, SCE_TXT2TAGS_ULIST_ITEM,
+        };
+        use codepp_scintilla_sys::{
+            SCE_TXT2TAGS_DEFAULT, SCE_TXT2TAGS_LINE_BEGIN, SCE_TXT2TAGS_PRECHAR,
+            SCE_TXT2TAGS_STRONG2,
+        };
+        let t2t = lang_theme(L_TXT2TAGS).expect("txt2tags wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(t2t.styles, TXT2TAGS_STYLES);
+        assert_eq!(t2t.italic, TXT2TAGS_ITALIC);
+        assert_eq!(t2t.bold, TXT2TAGS_BOLD);
+        assert!(t2t.keywords.is_empty());
+
+        // Invariant 2: 22 mappings (26 defined slots minus 4 unmapped).
+        assert_eq!(
+            t2t.styles.len(),
+            22,
+            "TXT2TAGS_STYLES must map 22 indices (26 defined \
+             SCE_TXT2TAGS_* slots minus 4 unmapped: DEFAULT (0), \
+             LINE_BEGIN (1, transient), STRONG2 (3, DEAD STATE), \
+             PRECHAR (12, transient))"
+        );
+
+        // Invariant 3: empty-keywords LOAD-BEARING.
+        // LexerModule registration at LexTxt2tags.cxx:479 takes no
+        // wordListDesc argument and the paint function's WordList**
+        // is unnamed and never referenced. Installing anything is
+        // a no-op AND violates the zero-wordlist contract.
+        assert!(
+            t2t.keywords.is_empty(),
+            "TXT2TAGS_THEME.keywords must be empty — LexTxt2tags is a \
+             zero-wordlist markup lexer (LexerModule at :479 uses the \
+             3-argument constructor with no wordListDesc)"
+        );
+
+        // Invariant 4: cross-language non-reuse pins.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let mk = lang_theme(L_MAKEFILE).expect("Makefile wired");
+        let pas = lang_theme(L_PASCAL).expect("Pascal wired");
+        let php = lang_theme(L_PHP).expect("PHP wired");
+        let bat = lang_theme(L_BATCH).expect("Batch wired");
+        let sql = lang_theme(L_SQL).expect("SQL wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let css = lang_theme(L_CSS).expect("CSS wired");
+        let rust = lang_theme(L_RUST).expect("Rust wired");
+        let props = lang_theme(L_INI).expect("INI wired");
+        let latex = lang_theme(L_LATEX).expect("LaTeX wired");
+        let tex = lang_theme(L_TEX).expect("TeX wired");
+        let reg = lang_theme(L_REGISTRY).expect("Registry wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (mk, "Makefile"),
+            (pas, "Pascal"),
+            (php, "PHP"),
+            (bat, "Batch"),
+            (sql, "SQL"),
+            (vb, "VB"),
+            (css, "CSS"),
+            (rust, "Rust"),
+            (props, "INI"),
+            (latex, "LaTeX"),
+            (tex, "TeX"),
+            (reg, "Registry"),
+        ] {
+            assert_ne!(
+                t2t.styles, other.styles,
+                "txt2tags must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 5: style-routing pins for all 22 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_TXT2TAGS_STRONG1, StyleSlot::Keyword, "STRONG1"),
+            (SCE_TXT2TAGS_EM1, StyleSlot::Keyword, "EM1"),
+            (SCE_TXT2TAGS_EM2, StyleSlot::Keyword, "EM2"),
+            (SCE_TXT2TAGS_HEADER1, StyleSlot::Keyword, "HEADER1"),
+            (SCE_TXT2TAGS_HEADER2, StyleSlot::Keyword, "HEADER2"),
+            (SCE_TXT2TAGS_HEADER3, StyleSlot::Keyword, "HEADER3"),
+            (SCE_TXT2TAGS_HEADER4, StyleSlot::Keyword, "HEADER4"),
+            (SCE_TXT2TAGS_HEADER5, StyleSlot::Keyword, "HEADER5"),
+            (SCE_TXT2TAGS_HEADER6, StyleSlot::Keyword, "HEADER6"),
+            (
+                SCE_TXT2TAGS_ULIST_ITEM,
+                StyleSlot::Preprocessor,
+                "ULIST_ITEM",
+            ),
+            (
+                SCE_TXT2TAGS_OLIST_ITEM,
+                StyleSlot::Preprocessor,
+                "OLIST_ITEM",
+            ),
+            (SCE_TXT2TAGS_BLOCKQUOTE, StyleSlot::Comment, "BLOCKQUOTE"),
+            (SCE_TXT2TAGS_STRIKEOUT, StyleSlot::Keyword2, "STRIKEOUT"),
+            (SCE_TXT2TAGS_HRULE, StyleSlot::Operator, "HRULE"),
+            (SCE_TXT2TAGS_LINK, StyleSlot::String, "LINK"),
+            (SCE_TXT2TAGS_CODE, StyleSlot::String, "CODE"),
+            (SCE_TXT2TAGS_CODE2, StyleSlot::String, "CODE2"),
+            (SCE_TXT2TAGS_CODEBK, StyleSlot::String, "CODEBK"),
+            (SCE_TXT2TAGS_COMMENT, StyleSlot::Comment, "COMMENT"),
+            (SCE_TXT2TAGS_OPTION, StyleSlot::Preprocessor, "OPTION"),
+            (SCE_TXT2TAGS_PREPROC, StyleSlot::Preprocessor, "PREPROC"),
+            (SCE_TXT2TAGS_POSTPROC, StyleSlot::Preprocessor, "POSTPROC"),
+        ] {
+            assert!(
+                t2t.styles.contains(&(idx, slot)),
+                "SCE_TXT2TAGS_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 6: framework-unmapped slots confirmed absent.
+        assert_eq!(
+            SCE_TXT2TAGS_DEFAULT, 0,
+            "SCE_TXT2TAGS_DEFAULT has drifted from 0 — verify against SciLexer.h:1588"
+        );
+        assert_eq!(
+            SCE_TXT2TAGS_LINE_BEGIN, 1,
+            "SCE_TXT2TAGS_LINE_BEGIN has drifted from 1 — verify against SciLexer.h:1589"
+        );
+        assert_eq!(
+            SCE_TXT2TAGS_STRONG2, 3,
+            "SCE_TXT2TAGS_STRONG2 has drifted from 3 — verify against SciLexer.h:1591"
+        );
+        assert_eq!(
+            SCE_TXT2TAGS_PRECHAR, 12,
+            "SCE_TXT2TAGS_PRECHAR has drifted from 12 — verify against SciLexer.h:1600"
+        );
+        for (idx, name) in [
+            (SCE_TXT2TAGS_DEFAULT, "DEFAULT"),
+            (SCE_TXT2TAGS_LINE_BEGIN, "LINE_BEGIN"),
+            (SCE_TXT2TAGS_STRONG2, "STRONG2"),
+            (SCE_TXT2TAGS_PRECHAR, "PRECHAR"),
+        ] {
+            assert!(
+                !t2t.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_TXT2TAGS_{name} ({idx}) must remain unmapped — \
+                 framework convention (DEFAULT/LINE_BEGIN/PRECHAR are \
+                 transient / plain-text states; STRONG2 is a DEAD STATE \
+                 never emitted by LexTxt2tags' paint loop)"
+            );
+        }
+
+        // Invariant 7: italic == 4.
+        assert_eq!(t2t.italic.len(), 4);
+        for idx in [
+            SCE_TXT2TAGS_COMMENT,
+            SCE_TXT2TAGS_BLOCKQUOTE,
+            SCE_TXT2TAGS_EM1,
+            SCE_TXT2TAGS_EM2,
+        ] {
+            assert!(
+                t2t.italic.contains(&idx),
+                "TXT2TAGS_ITALIC must contain SCE_TXT2TAGS_ idx {idx}"
+            );
+        }
+
+        // Invariant 8: bold == 7 (STRONG1 + all 6 headers).
+        assert_eq!(t2t.bold.len(), 7);
+        for idx in [
+            SCE_TXT2TAGS_STRONG1,
+            SCE_TXT2TAGS_HEADER1,
+            SCE_TXT2TAGS_HEADER2,
+            SCE_TXT2TAGS_HEADER3,
+            SCE_TXT2TAGS_HEADER4,
+            SCE_TXT2TAGS_HEADER5,
+            SCE_TXT2TAGS_HEADER6,
+        ] {
+            assert!(
+                t2t.bold.contains(&idx),
+                "TXT2TAGS_BOLD must contain SCE_TXT2TAGS_ idx {idx}"
+            );
+        }
+
+        // Invariant 9: highest-defined SCE_TXT2TAGS_* pin.
+        assert_eq!(
+            SCE_TXT2TAGS_POSTPROC, 25,
+            "SCE_TXT2TAGS_POSTPROC has drifted from 25 — Lexilla may \
+             have renumbered slots. Verify against SciLexer.h:1613"
+        );
+        for (idx, _) in t2t.styles {
+            assert!(
+                *idx <= SCE_TXT2TAGS_POSTPROC,
+                "TXT2TAGS_STYLES references slot {idx}, which is higher \
+                 than SCE_TXT2TAGS_POSTPROC ({SCE_TXT2TAGS_POSTPROC})"
+            );
+        }
+
+        // Invariant 10: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let t2t_entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_TXT2TAGS)
+            .expect("L_TXT2TAGS LangEntry present in LANG_TABLE");
+        assert_eq!(
+            t2t_entry.lexer,
+            Some("txt2tags"),
+            "L_TXT2TAGS LangEntry.lexer must be Some(\"txt2tags\")"
+        );
+        assert!(
+            t2t_entry.extensions.contains(&"t2t"),
+            "L_TXT2TAGS extensions must contain `t2t`"
+        );
+
+        // Invariant 11: header-family cohesion — all six HEADER
+        // slots route to Keyword AND are in the bold set.
+        // Load-bearing for consistent header rendering across
+        // the six levels.
+        for idx in [
+            SCE_TXT2TAGS_HEADER1,
+            SCE_TXT2TAGS_HEADER2,
+            SCE_TXT2TAGS_HEADER3,
+            SCE_TXT2TAGS_HEADER4,
+            SCE_TXT2TAGS_HEADER5,
+            SCE_TXT2TAGS_HEADER6,
+        ] {
+            assert!(
+                t2t.styles.contains(&(idx, StyleSlot::Keyword)),
+                "Header slot {idx} must route to Keyword"
+            );
+            assert!(
+                t2t.bold.contains(&idx),
+                "Header slot {idx} must be in the bold set"
+            );
+        }
+
+        // Invariant 12: directive-family cohesion — OPTION,
+        // PREPROC, POSTPROC, ULIST_ITEM, OLIST_ITEM all route
+        // to Preprocessor for consistent
+        // out-of-band-marker highlighting.
+        for idx in [
+            SCE_TXT2TAGS_OPTION,
+            SCE_TXT2TAGS_PREPROC,
+            SCE_TXT2TAGS_POSTPROC,
+            SCE_TXT2TAGS_ULIST_ITEM,
+            SCE_TXT2TAGS_OLIST_ITEM,
+        ] {
+            assert!(
+                t2t.styles.contains(&(idx, StyleSlot::Preprocessor)),
+                "Directive-family slot {idx} must route to Preprocessor"
+            );
+        }
+
+        // Invariant 13: code-family cohesion — CODE, CODE2,
+        // CODEBK all route to String for consistent
+        // literal-code visualisation.
+        for idx in [SCE_TXT2TAGS_CODE, SCE_TXT2TAGS_CODE2, SCE_TXT2TAGS_CODEBK] {
+            assert!(
+                t2t.styles.contains(&(idx, StyleSlot::String)),
+                "Code-family slot {idx} must route to String"
+            );
+        }
+
+        // Invariant 14: emphasis-family cohesion — STRONG1 bold,
+        // EM1 italic, EM2 italic. Semantic markup styling.
+        assert!(t2t.bold.contains(&SCE_TXT2TAGS_STRONG1));
+        assert!(!t2t.italic.contains(&SCE_TXT2TAGS_STRONG1));
+        assert!(t2t.italic.contains(&SCE_TXT2TAGS_EM1));
+        assert!(!t2t.bold.contains(&SCE_TXT2TAGS_EM1));
+        assert!(t2t.italic.contains(&SCE_TXT2TAGS_EM2));
+        assert!(!t2t.bold.contains(&SCE_TXT2TAGS_EM2));
+    }
+
     /// Unwired language → `None`. The `apply_lang` caller treats
     /// this as the "best-effort tokenisation, default colours"
     /// path; if a wiring is added later, this assertion needs
@@ -40505,7 +40987,8 @@ mod lang_theme_tests {
     /// `NNCrontab` row landed. `L_OSCRIPT` was removed when the
     /// `OScript` row landed. `L_REBOL` was removed when the REBOL
     /// row landed. `L_REGISTRY` was removed when the Registry row
-    /// landed. `L_SPICE` was removed when the Spice row landed in
+    /// landed. `L_SPICE` was removed when the Spice row landed.
+    /// `L_TXT2TAGS` was removed when the txt2tags row landed in
     /// this commit.
     #[test]
     fn unwired_languages_have_no_theme() {

@@ -35,7 +35,7 @@ residual rows formally tracked).
 | ✅ | Keywords + theme both wired in `Win32Ui::apply_lang`'s table. Pick this language from the Language menu and a sample file picks up visibly distinct colours for comments, strings, numbers, and keywords. |
 | 🟡 | Lexer attached and tokenising; no host keyword list and no host theme. Buffer renders uniformly black-on-white because every `SCE_*_*` style resolves to `STYLE_DEFAULT` after `SCI_STYLECLEARALL`. (Pre-2026-05-13: this row also covered "lexer compiled but unregistered in `LexillaShim.cxx`'s catalog"; that gap is now closed for every `LANG_TABLE` row with a non-`None` lexer.) |
 | ⚫ | No Lexilla lexer (`LANG_TABLE` row has `lexer: None`). Either by design (`L_TEXT` — plain text never highlights) or because no Lexilla lexer matches the language. Effectively a permanent state for the named row. |
-| — (Keywords column only) | Not applicable. The lexer takes no wordlists at all — host installs none by design. Currently used for `props` (INI / Properties — a pure line-prefix classifier that ignores its `WordList *[]` parameter) and `registry` (Windows Registry files — a state-machine lexer whose `WordListSet` unconditionally returns -1, actively REJECTING any keyword install). A row with `—` in the Keywords column and ✅ in the Theme column is still ✅ overall: the wiring is complete, there are simply no keywords to wire. |
+| — (Keywords column only) | Not applicable. The lexer takes no wordlists at all — host installs none by design. Currently used for `props` (INI / Properties — a pure line-prefix classifier that ignores its `WordList *[]` parameter), `registry` (Windows Registry files — a state-machine lexer whose `WordListSet` unconditionally returns -1, actively REJECTING any keyword install), and `txt2tags` (structural markup — the `LexerModule` registration takes no `wordListDesc` argument at all and the paint function's `WordList **` parameter is unnamed and never referenced). A row with `—` in the Keywords column and ✅ in the Theme column is still ✅ overall: the wiring is complete, there are simply no keywords to wire. |
 | ⏸ | Reserved for future host-side opt-out (e.g. a lexer the host deliberately leaves off the menu pending review). None today. |
 
 ## How to mark a row ✅
@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 68 / 🟡 20 / ⚫ 1.
+Total: 89 rows. ✅ 69 / 🟡 19 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1926,7 +1926,7 @@ further shim work needed.
 | Tektronix extended HEX | 63 | `tehex` | ⚫ | ⚫ | 🟡 |
 | TeX | 24 | `tex` | ✅ | ✅ | ✅ |
 | TOML | 90 | `toml` | ⚫ | ⚫ | 🟡 |
-| txt2tags | 83 | `txt2tags` | ⚫ | ⚫ | 🟡 |
+| txt2tags | 83 | `txt2tags` | — | ✅ | ✅ |
 | TypeScript | 85 | `cpp` | ⚫ | ⚫ | 🟡 |
 | Verilog | 43 | `verilog` | ✅ | ✅ | ✅ |
 | VHDL | 38 | `vhdl` | ✅ | ✅ | ✅ |
@@ -7426,6 +7426,113 @@ placement pins** (`if` → class 1,
 class 0 with affirmative absence
 pins from the sibling class), and
 no-duplicate defence-in-depth check.
+
+**txt2tags (2026-07-08):** wires
+`SCLEX_TXT2TAGS` (= 99, per
+`SciLexer.h:115`) for txt2tags
+plain-text-to-many-formats converter
+files (extension `.t2t`). The third
+`—`-glyph lexer (joining `props` and
+`registry`): the `LexerModule`
+registration at `LexTxt2tags.cxx:479`
+uses the 3-argument constructor
+`lmTxt2tags(SCLEX_TXT2TAGS,
+ColorizeTxt2tagsDoc, "txt2tags")` —
+NO `wordListDesc` argument passed at
+all — and the paint function's
+`WordList **` parameter at `:108` is
+UNNAMED, never referenced in the body.
+txt2tags is a pure structural-markup
+lexer classifying tokens by
+line-prefix and delimiter-pair rules,
+not by identifier lookup.
+
+**22-mapping style routing** across
+26 defined slots — 4 unmapped by
+framework convention: DEFAULT (plain
+body text), LINE_BEGIN (1, transient
+line-start scan state entered on
+every newline / role-exit), STRONG2
+(3, **DEAD STATE** — verified zero
+call sites in `LexTxt2tags.cxx` emit
+the slot; reserved in `SciLexer.h`
+but never entered at runtime), and
+PRECHAR (12, transient
+leading-whitespace scan between
+LINE_BEGIN and settled role state).
+Mapped: **STRONG1 → Keyword (bold)**;
+**EM1 / EM2 → Keyword (italic)** for
+inline `//italic//` / `__underline__`
+emphasis; **HEADER1..HEADER6 → Keyword
+(bold)** — all six levels of `=`/`+`
+header syntax get uniform structural
+prominence; **ULIST_ITEM /
+OLIST_ITEM / OPTION / PREPROC /
+POSTPROC → Preprocessor** —
+consistent out-of-band directive
+family accent; **BLOCKQUOTE / COMMENT
+→ Comment (italic)** — universal
+prose-out-of-band convention;
+**STRIKEOUT → Keyword2** — distinct
+accent for visually deprecated text;
+**HRULE → Operator** — structural
+divider role; **LINK / CODE / CODE2
+/ CODEBK → String** — consistent
+literal-value visualisation across
+URLs / tables / inline code / fenced
+code blocks.
+
+**State-machine mechanics.** Line-
+scope entries at `:209-345` (guarded
+by `sc.state == LINE_BEGIN`) handle
+headers, lists, blockquotes, code
+blocks, `%!`-prefixed variants
+(options / preproc / postproc /
+comments). Inline entries at
+`:402-470` (guarded by `sc.state ==
+DEFAULT`) handle links, strong /
+emphasis / strikeout, inline code,
+tables. `\`-escape at `:120-123`
+consumes the next byte across any
+state — Markdown-style escape
+convention. No dedicated ESCAPED
+state.
+
+Structural test coverage: 14
+invariants — deep-value identity pin,
+22-mapping style count (26 defined
+slots minus 4 unmapped), **empty-
+keywords LOAD-BEARING** (LexerModule
+takes no wordListDesc; WordList**
+parameter unnamed and never used),
+cross-language non-reuse across 13
+sibling themes including explicit
+zero-wordlist cross-pins (PROPS /
+LaTeX / TeX / Registry), style-
+routing pins for all 22 mapped
+constants, 4 unmapped slots confirmed
+absent with drift-pin assertions,
+italic set == 4 (COMMENT / BLOCKQUOTE
+/ EM1 / EM2), bold set == 7 (STRONG1
++ all six HEADER levels — multi-slot
+bold discipline for header-family
+uniformity), highest-defined
+`SCE_TXT2TAGS_*` pin
+(`SCE_TXT2TAGS_POSTPROC` (25) as top
+slot), `L_TXT2TAGS` `LangEntry`'s
+`lexer: Some("txt2tags")` + `.t2t`
+extension, **header-family cohesion
+pin** (all six HEADER slots route to
+Keyword AND are in the bold set),
+**directive-family cohesion pin**
+(OPTION / PREPROC / POSTPROC /
+ULIST_ITEM / OLIST_ITEM all route to
+Preprocessor), **code-family cohesion
+pin** (CODE / CODE2 / CODEBK all
+route to String), and
+**emphasis-family cohesion pin**
+(STRONG1 bold, EM1 italic, EM2
+italic — semantic markup styling).
 
 ## Notes
 
