@@ -14246,6 +14246,342 @@ pub const ASN1_TYPES: &str = concat!(
     "VideotexString VisibleString",
 );
 
+/// Space-separated **`AviSynth` structural / control-flow keywords**
+/// installed as **class 0** of `LexAVS`'s wordlist descriptor
+/// (`SCE_AVS_KEYWORD`, primary bold slot).
+///
+/// **Case-INSENSITIVE lookup.** `LexAVS.cxx:99, :189` lower-case the
+/// identifier buffer via `sc.GetCurrentLowered(s, sizeof(s))` before
+/// probing wordlists. Wordlist entries MUST be byte-canonical lower-
+/// case — source `Function`, `FUNCTION`, `function`, `Function` all
+/// match the single lowercase wordlist entry `function`.
+///
+/// **Contents authored clean-room from the `AviSynth+` language
+/// reference** (<https://avs-plus.net/>) — no upstream Lexilla
+/// fixture exists for avs (checked
+/// `crates/scintilla-sys/vendor/lexilla/test/examples/` — no `avs/`
+/// subdirectory).
+///
+/// **Categories** (13 tokens):
+///   - **Function declaration + return** (2): `function` / `return`.
+///   - **Variable scoping** (1): `global`.
+///   - **Control flow** (6): `if` / `else` / `while` / `for` /
+///     `break` / `continue`.
+///   - **Exception handling** (2): `try` / `catch`.
+///   - **Boolean literals** (2): `true` / `false`.
+///
+/// Note: `while` / `for` / `break` / `continue` are `AviSynth+`
+/// control-flow additions per the `AviSynth+` language reference;
+/// they tokenise cleanly under classic `AviSynth` 2.6 too since the
+/// lexer grammar is version-agnostic — a 2.6 script wouldn't use
+/// these keywords so they simply never appear as tokens.
+/// `last` (implicit-clip parameter) is treated as a CLIPPROP-family
+/// bareword and lives in [`AVS_CLIPPROPS`]. `import` is likewise a
+/// runtime function call `Import("file.avs")` (see
+/// [`AVS_FUNCTIONS`]) — NOT a language keyword.
+///
+/// **Cross-class disjointness with `AVS_FILTERS` / `AVS_PLUGINS` /
+/// `AVS_FUNCTIONS` / `AVS_CLIPPROPS`** is invariant-tested.
+pub const AVS_KEYWORDS: &str =
+    "function return global if else while for break continue try catch true false";
+
+/// Space-separated **built-in `AviSynth` filter functions** installed
+/// as **class 1** of `LexAVS`'s wordlist descriptor
+/// (`SCE_AVS_FILTER`, accent slot).
+///
+/// `AviSynth`'s "filters" are the built-in image / audio transformation
+/// verbs — the primary vocabulary users compose scripts from
+/// (`Trim`, `Crop`, `ConvertToYV12`, `Overlay`, etc.). Structurally
+/// distinct from class 3 utility functions (`abs` / `min` / `sin`),
+/// which manipulate scalars rather than clips.
+///
+/// **Case-INSENSITIVE lookup** per [`AVS_KEYWORDS`]. All entries
+/// lowercase.
+///
+/// **Contents authored clean-room from the `AviSynth+` built-in
+/// internal filters index** at <https://avs-plus.net/> — the
+/// canonical filter list for `AviSynth+` 3.x. `AviSynth` 2.6 users
+/// still get the majority since ~90% of the built-in surface
+/// pre-dates the `AviSynth+` fork.
+///
+/// **Categories** (100 tokens):
+///   - **Sources** (13): `avisource` / `audiodub` / `blankclip` /
+///     `colorbars` / `directshowsource` / `imagesource` /
+///     `imagewriter` / `messageclip` / `opendmlsource` /
+///     `segmentedavisource` / `tone` / `version` / `wavsource`.
+///   - **Trim / select** (16): `trim` / `selectevery` /
+///     `selectrangeevery` / `alignedsplice` / `unalignedsplice` /
+///     `loop` / `reverse` / `fadein` / `fadein0` / `fadein2` /
+///     `fadeout` / `fadeout0` / `fadeout2` / `freezeframe` /
+///     `deleteframe` / `duplicateframe`.
+///   - **Resize / resample** (9): `bicubicresize` /
+///     `bilinearresize` / `lanczosresize` / `pointresize` /
+///     `spline16resize` / `spline36resize` / `spline64resize` /
+///     `sincresize` / `gaussresize`.
+///   - **Colorspace conversion** (10): `converttorgb` /
+///     `converttorgb24` / `converttorgb32` / `converttoyuy2` /
+///     `converttoyv12` / `converttoyv16` / `converttoyv24` /
+///     `converttoy8` / `converttoy` / `convertbits`.
+///   - **Color adjustment** (7): `levels` / `rgbadjust` /
+///     `tweak` / `colormatrix` / `coloryuv` / `invert` /
+///     `greyscale`.
+///   - **Filtering** (4): `blur` / `sharpen` / `temporalsoften` /
+///     `spatialsoften`.
+///   - **Overlay / composition** (5): `overlay` / `layer` /
+///     `mask` / `resetmask` / `subtract`.
+///   - **Cropping** (4): `crop` / `cropbottom` / `addborders` /
+///     `letterbox`.
+///   - **Interlacing** (9): `separatefields` / `weave` /
+///     `doubleweave` / `assumefieldbased` / `assumeframebased` /
+///     `assumetff` / `assumebff` / `swapfields` / `bob`.
+///   - **Frame rate** (5): `assumefps` / `assumescaledfps` /
+///     `changefps` / `convertfps` / `timestretch`.
+///   - **Debug / display** (5): `info` / `subtitle` /
+///     `showframenumber` / `showsmpte` / `showtime`.
+///   - **Runtime scripting** (4): `animate` / `conditionalfilter`
+///     / `scriptclip` / `frameevaluate`.
+///   - **Stacking** (2): `stackhorizontal` / `stackvertical`.
+///   - **Planar plane manipulation** (7): `showred` / `showgreen`
+///     / `showblue` / `showalpha` / `mergeluma` / `mergechroma`
+///     / `swapuv`.
+///
+/// **Cross-class disjointness with `AVS_KEYWORDS` / `AVS_PLUGINS`
+/// / `AVS_FUNCTIONS` / `AVS_CLIPPROPS`** is invariant-tested.
+/// `LexAVS`'s forward first-match-wins cascade at `:101-113` means a
+/// class-1 filter with a duplicate in class-3 functions renders as
+/// FILTER (correct) — the disjointness pin just keeps authorship
+/// intent visible.
+pub const AVS_FILTERS: &str = concat!(
+    // Sources.
+    "avisource audiodub blankclip colorbars directshowsource ",
+    "imagesource imagewriter messageclip opendmlsource segmentedavisource ",
+    "tone version wavsource ",
+    // Trim / select.
+    "trim selectevery selectrangeevery alignedsplice unalignedsplice ",
+    "loop reverse fadein fadein0 fadein2 fadeout fadeout0 fadeout2 ",
+    "freezeframe deleteframe duplicateframe ",
+    // Resize.
+    "bicubicresize bilinearresize lanczosresize pointresize ",
+    "spline16resize spline36resize spline64resize sincresize ",
+    "gaussresize ",
+    // Colorspace conversion.
+    "converttorgb converttorgb24 converttorgb32 converttoyuy2 ",
+    "converttoyv12 converttoyv16 converttoyv24 converttoy8 ",
+    "converttoy convertbits ",
+    // Color adjust.
+    "levels rgbadjust tweak colormatrix coloryuv invert greyscale ",
+    // Filtering.
+    "blur sharpen temporalsoften spatialsoften ",
+    // Overlay / composition.
+    "overlay layer mask resetmask subtract ",
+    // Cropping.
+    "crop cropbottom addborders letterbox ",
+    // Interlacing.
+    "separatefields weave doubleweave assumefieldbased assumeframebased ",
+    "assumetff assumebff swapfields bob ",
+    // Frame rate.
+    "assumefps assumescaledfps changefps convertfps timestretch ",
+    // Debug / display.
+    "info subtitle showframenumber showsmpte showtime ",
+    // Runtime scripting.
+    "animate conditionalfilter scriptclip frameevaluate ",
+    // Stacking.
+    "stackhorizontal stackvertical ",
+    // Plane manipulation.
+    "showred showgreen showblue showalpha mergeluma mergechroma swapuv",
+);
+
+/// Space-separated **canonical third-party `AviSynth` plugin function
+/// names** installed as **class 2** of `LexAVS`'s wordlist descriptor
+/// (`SCE_AVS_PLUGIN`, distinct plugin-accent slot).
+///
+/// **Case-INSENSITIVE lookup** per [`AVS_KEYWORDS`]. All entries
+/// lowercase.
+///
+/// The "plugins" bucket covers well-known third-party `AviSynth`
+/// plugin function names that users encounter via `LoadPlugin`.
+/// Notepad++'s stock `AviSynth` wordlist leaves class 2 empty and
+/// expects per-user population; Code++ ships a small canonical
+/// baseline covering the plugin ecosystem's most-used functions.
+///
+/// **Contents authored clean-room from the `AviSynth` Wiki plugins
+/// index** — well-known `ffms2` / `L-SMASH-Works` / `DGMPGDec` /
+/// `MaskTools2` / `MVTools` / `QTGMC` surface. Not a complete plugin
+/// registry (there are hundreds); a canonical "seen everywhere"
+/// starter set. Users get further plugin coverage by extending
+/// the wordlist in their local config.
+///
+/// **Categories** (~20 tokens):
+///   - **ffms2** (3): `ffvideosource` / `ffaudiosource` /
+///     `ffmpegsource2`.
+///   - **L-SMASH-Works** (3): `lsmashvideosource` /
+///     `lsmashaudiosource` / `lwlibavvideosource`.
+///   - **`DGMPGDec`** (2): `mpeg2source` / `dgdecode_mpeg2source`.
+///   - **`MaskTools2`** (5): `mt_lut` / `mt_lutxy` / `mt_lutxyz` /
+///     `mt_merge` / `mt_invert`.
+///   - **`MVTools` / `MVTools2`** (5): `msuper` / `manalyse` /
+///     `mdegrainn` / `mflow` / `mrecalculate`.
+///   - **Community deinterlacers / restorers** (2): `qtgmc` /
+///     `srestore`.
+///
+/// **Cross-class disjointness with `AVS_KEYWORDS` / `AVS_FILTERS`
+/// / `AVS_FUNCTIONS` / `AVS_CLIPPROPS`** is invariant-tested.
+pub const AVS_PLUGINS: &str = concat!(
+    "ffvideosource ffaudiosource ffmpegsource2 ",
+    "lsmashvideosource lsmashaudiosource lwlibavvideosource ",
+    "mpeg2source dgdecode_mpeg2source ",
+    "mt_lut mt_lutxy mt_lutxyz mt_merge mt_invert ",
+    "msuper manalyse mdegrainn mflow mrecalculate ",
+    "qtgmc srestore",
+);
+
+/// Space-separated **built-in `AviSynth` utility / math / string /
+/// runtime functions** installed as **class 3** of `LexAVS`'s
+/// wordlist descriptor (`SCE_AVS_FUNCTION`, distinct function-accent
+/// slot).
+///
+/// Distinct from class 1 filters: class-3 functions operate on
+/// SCALARS (numbers / strings / booleans) or perform introspection
+/// (`isstring` / `defined`), while class-1 filters operate on
+/// CLIPS. Structurally the same call syntax (`func(arg1, arg2)`)
+/// but different semantic role.
+///
+/// **Case-INSENSITIVE lookup** per [`AVS_KEYWORDS`]. All entries
+/// lowercase.
+///
+/// **Contents authored clean-room from the `AviSynth+` internal
+/// functions reference** at <https://avs-plus.net/>.
+///
+/// **Categories** (~80 tokens):
+///   - **Trigonometric + arithmetic** (14): `abs` / `ceil` /
+///     `cos` / `sin` / `tan` / `acos` / `asin` / `atan` /
+///     `atan2` / `cosh` / `sinh` / `tanh` / `pi` / `sqrt`.
+///   - **Exponents + logarithms** (5): `exp` / `log` / `log10`
+///     / `pow` / `frac`.
+///   - **Rounding + limits** (7): `floor` / `int` / `float` /
+///     `max` / `min` / `round` / `sign`.
+///   - **Modulo / interpolation** (4): `mod` / `nmod` / `rand`
+///     / `spline`.
+///   - **Bitwise** (14): `bitand` / `bitor` / `bitxor` /
+///     `bitnot` / `bitlshift` / `bitrshifta` / `bitrshiftl` /
+///     `bitrshifts` / `bitrol` / `bitror` / `bitchange` /
+///     `bitclear` / `bitset` / `bittest`.
+///   - **String manipulation** (15): `chr` / `hexvalue` /
+///     `leftstr` / `lcase` / `midstr` / `ord` / `revstr` /
+///     `rightstr` / `strcmp` / `strcmpi` / `string` /
+///     `tolower` / `toupper` / `ucase` / `value`.
+///   - **Introspection** (13): `default` / `defined` /
+///     `isbool` / `isclip` / `isfloat` / `isfunction` / `isint`
+///     / `islong` / `isstring` / `exist` / `undefined` /
+///     `versionnumber` / `versionstring`.
+///   - **Runtime evaluation** (4): `apply` / `assert` / `eval`
+///     / `import`.
+///   - **Environment control** (3): `setmemorymax` /
+///     `setworkingdir` / `nop`.
+///
+/// **Cross-class disjointness with `AVS_KEYWORDS` / `AVS_FILTERS`
+/// / `AVS_PLUGINS` / `AVS_CLIPPROPS`** is invariant-tested. `trim`
+/// deliberately stays class-1-only (clip-trimming); `AviSynth`'s
+/// string-trim helpers are `LeftStr` / `RightStr` / `MidStr`, so
+/// there's no natural class-3 duplicate to place.
+pub const AVS_FUNCTIONS: &str = concat!(
+    // Trig + arithmetic.
+    "abs ceil cos sin tan acos asin atan atan2 cosh sinh tanh pi sqrt ",
+    // Exponents + logs.
+    "exp log log10 pow frac ",
+    // Rounding + limits.
+    "floor int float max min round sign ",
+    // Modulo / interpolation.
+    "mod nmod rand spline ",
+    // Bitwise.
+    "bitand bitor bitxor bitnot bitlshift bitrshifta bitrshiftl bitrshifts ",
+    "bitrol bitror bitchange bitclear bitset bittest ",
+    // String manipulation.
+    "chr hexvalue leftstr lcase midstr ord revstr rightstr strcmp strcmpi ",
+    "string tolower toupper ucase value ",
+    // Introspection.
+    "default defined isbool isclip isfloat isfunction isint islong isstring ",
+    "exist undefined versionnumber versionstring ",
+    // Runtime evaluation.
+    "apply assert eval import ",
+    // Environment control.
+    "setmemorymax setworkingdir nop",
+);
+
+/// Space-separated **`AviSynth` clip properties** installed as
+/// **class 4** of `LexAVS`'s wordlist descriptor
+/// (`SCE_AVS_CLIPPROP`, distinct property-accent slot).
+///
+/// Clip properties are accessed via dot-syntax (`clip.Width` /
+/// `clip.FrameCount` / `last.IsYV12`) OR as bareword functions
+/// (`Width(clip)` / `Width()` — implicit-clip form). `LexAVS`
+/// treats them as identifier tokens; the wordlist installs them
+/// at class 4 so they get a distinct paint slot from filters /
+/// utility functions.
+///
+/// **Case-INSENSITIVE lookup** per [`AVS_KEYWORDS`]. All entries
+/// lowercase.
+///
+/// **Contents authored clean-room from the `AviSynth+` clip
+/// properties reference** at <https://avs-plus.net/>.
+///
+/// **Categories** (38 tokens):
+///   - **Video geometry** (4): `width` / `height` /
+///     `framecount` / `framerate`.
+///   - **Frame rate detail** (2): `frameratenumerator` /
+///     `frameratedenominator`.
+///   - **Video presence + format** (3): `hasvideo` /
+///     `pixeltype` / `bitspercomponent`.
+///   - **Component layout** (2): `componentsize` /
+///     `numcomponents`.
+///   - **Colorspace predicates** (12): `isrgb` / `isrgb24` /
+///     `isrgb32` / `isrgb48` / `isrgb64` / `isyuv` / `isyuy2` /
+///     `isyv12` / `isyv16` / `isyv24` / `isy` / `isy8`.
+///   - **Format predicates** (3): `isplanar` / `ispackedrgb`
+///     / `isinterleaved`.
+///   - **Field/frame predicates** (2): `isfieldbased` /
+///     `isframebased`.
+///   - **Audio presence + format** (2): `hasaudio` /
+///     `audiochannels`.
+///   - **Audio detail** (4): `audiobits` / `audiorate` /
+///     `audiolength` / `audiolengthf`.
+///   - **Audio type predicates** (2): `isaudiofloat` /
+///     `isaudioint`.
+///   - **Runtime implicits** (2): `current_frame` / `last`.
+///
+/// `current_frame` is the runtime frame index visible inside
+/// `ScriptClip` / `FrameEvaluate` closures per `AviSynth+`
+/// runtime-environment docs. `last` is the implicit-clip
+/// parameter — the result of the previous top-level expression.
+///
+/// **Cross-class disjointness with `AVS_KEYWORDS` / `AVS_FILTERS`
+/// / `AVS_PLUGINS` / `AVS_FUNCTIONS`** is invariant-tested.
+pub const AVS_CLIPPROPS: &str = concat!(
+    // Video geometry.
+    "width height framecount framerate ",
+    // Frame rate detail.
+    "frameratenumerator frameratedenominator ",
+    // Video presence + format.
+    "hasvideo pixeltype bitspercomponent ",
+    // Component layout.
+    "componentsize numcomponents ",
+    // Colorspace predicates.
+    "isrgb isrgb24 isrgb32 isrgb48 isrgb64 isyuv isyuy2 isyv12 isyv16 isyv24 ",
+    "isy isy8 ",
+    // Format predicates.
+    "isplanar ispackedrgb isinterleaved ",
+    // Field/frame predicates.
+    "isfieldbased isframebased ",
+    // Audio presence + format.
+    "hasaudio audiochannels ",
+    // Audio detail.
+    "audiobits audiorate audiolength audiolengthf ",
+    // Audio type predicates.
+    "isaudiofloat isaudioint ",
+    // Runtime implicits.
+    "current_frame last",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

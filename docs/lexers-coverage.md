@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 80 / 🟡 8 / ⚫ 1.
+Total: 89 rows. ✅ 81 / 🟡 7 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1851,7 +1851,7 @@ further shim work needed.
 | ASP | 16 | `hypertext` | ✅ | ✅ | ✅ |
 | Assembly | 32 | `asm` | ✅ | ✅ | ✅ |
 | AutoIt | 40 | `au3` | ✅ | ✅ | ✅ |
-| AviSynth | 66 | `avs` | ⚫ | ⚫ | 🟡 |
+| AviSynth | 66 | `avs` | ✅ | ✅ | ✅ |
 | BaanC | 60 | `baan` | ⚫ | ⚫ | 🟡 |
 | Batch | 12 | `batch` | ✅ | ✅ | ✅ |
 | Blitzbasic | 67 | `blitzbasic` | ⚫ | ⚫ | 🟡 |
@@ -9328,6 +9328,208 @@ pins (`NULL` / `BIT` /
 `SET` / `CHOICE` → class 0
 only; `INTEGER` / `REAL` /
 `BOOLEAN` → class 3 only).
+
+**AviSynth (2026-07-08):** rides
+Lexilla's `avs` lexer
+(`LexAVS.cxx`) — a 2012 lexer
+by Bruno Barbieri "heavily
+based on LexPOV". A six-class
+wordlist descriptor for
+AviSynth video-editing scripts.
+Extensions `.avs` (script) /
+`.avsi` (import). Distinctive
+features: **nested block
+comments** in two flavours
+(`/*...*/` and `[*...*]`) with
+depth tracking, **triple-
+quoted verbatim strings**
+(`"""..."""`), and
+**case-INSENSITIVE identifier
+lookup** per LexAVS.cxx:99's
+`GetCurrentLowered` — wordlist
+entries must be lowercase but
+source can use any casing.
+
+**Six-class wordlist descriptor
+(five installed)** — the
+richest LexCPP-relative
+wordlist install to date.
+`avsWordLists[]` at
+`LexAVS.cxx:284-292` declares
+six named classes with
+**first-match-wins semantics**
+via the classifier chain at
+`:101-113`:
+- **Class 0 — `AVS_KEYWORDS`**
+  (bold Keyword, 13 tokens):
+  structural / control-flow —
+  `function` / `return` /
+  `global` / `if` / `else` /
+  `while` / `for` / `break` /
+  `continue` / `try` / `catch`
+  / `true` / `false`.
+- **Class 1 — `AVS_FILTERS`**
+  (Keyword2 accent, 100
+  tokens): built-in AviSynth
+  filter verbs — the primary
+  vocabulary. Sources
+  (`avisource` /
+  `directshowsource` /
+  `blankclip`), resize
+  (`bicubicresize` /
+  `lanczosresize`),
+  colorspace conversion
+  (`converttorgb24` /
+  `converttoyv12`), color
+  adjust (`levels` / `tweak`
+  / `colormatrix`), overlay
+  (`overlay` / `layer` /
+  `mask`), interlace
+  (`separatefields` / `weave`
+  / `assumetff`), runtime
+  scripting (`conditionalfilter`
+  / `scriptclip`).
+- **Class 2 — `AVS_PLUGINS`**
+  (Preprocessor, ~20 tokens):
+  canonical third-party
+  plugin function names —
+  ffms2 (`ffvideosource` /
+  `ffaudiosource`), L-SMASH-
+  Works (`lsmashvideosource`),
+  DGMPGDec (`mpeg2source`),
+  MaskTools2 (`mt_lut` /
+  `mt_lutxy`), MVTools
+  (`msuper` / `manalyse` /
+  `mdegrainn`), community
+  deinterlacers (`qtgmc` /
+  `srestore`). A canonical
+  "seen everywhere" starter
+  set; users extend per their
+  plugin installation.
+- **Class 3 — `AVS_FUNCTIONS`**
+  (Lifetime, ~80 tokens):
+  built-in utility / math /
+  string / runtime helpers.
+  Distinct from class-1
+  filters — these operate on
+  scalars (`abs` / `min` /
+  `sin` / `chr` / `defined`
+  / `import`), not clips.
+- **Class 4 — `AVS_CLIPPROPS`**
+  (Macro, 38 tokens): clip-
+  info properties accessed via
+  dot-syntax (`clip.Width` /
+  `last.IsYV12`) or as
+  bareword functions
+  (`Width()`). `width` /
+  `height` / `framecount` /
+  `framerate` /
+  `frameratenumerator` /
+  colorspace predicates
+  (`isrgb` / `isyv12` / ...)
+  / audio properties
+  (`hasaudio` /
+  `audiochannels` /
+  `audiorate`) / runtime
+  implicits (`current_frame`
+  / `last`).
+- **Class 5 — User defined
+  functions** (would map to
+  `SCE_AVS_USERDFN`): NOT
+  installed by design. Users
+  who want per-script
+  user-function highlighting
+  extend the wordlist in their
+  local config; the state is
+  dead by config, similar to
+  Spice's `SCE_SPICE_VALUE`
+  dead slot.
+
+**Contents authored clean-room**
+from the AviSynth+ language
+reference at
+<https://avs-plus.net/> plus
+the AviSynth Wiki plugin index
+— no upstream Lexilla fixture
+exists for avs (checked
+`crates/scintilla-sys/vendor/
+lexilla/test/examples/` — no
+`avs/` subdirectory).
+
+**12-style-mapping table**
+covering 15 defined `SCE_AVS_*`
+states — `DEFAULT` (0),
+`IDENTIFIER` (6), and
+`USERDFN` (14) stay unmapped
+per the framework fall-through-
+to-`STYLE_DEFAULT` convention.
+The twelve mapped states:
+COMMENTBLOCK / COMMENTBLOCKN /
+COMMENTLINE → Comment italic,
+NUMBER → Number, OPERATOR →
+Operator, STRING / TRIPLESTRING
+→ String, KEYWORD → Keyword
+bold, FILTER → Keyword2 accent
+(secondary anchor), PLUGIN →
+Preprocessor, FUNCTION →
+Lifetime, CLIPPROP → Macro.
+
+**Palette rationale for the
+5-way keyword-class spread.**
+LexAVS's 6-class descriptor is
+second only to Raku's 7-class
+in Lexilla richness. Mapping 5
+of them to distinct
+`StyleSlot`s (Keyword /
+Keyword2 / Preprocessor /
+Lifetime / Macro) lets the
+AviSynth scripter visually
+distinguish structural /
+filter / plugin / utility /
+property archetypes
+simultaneously — the same
+discipline as ASN.1's 4-way
+spread but adding a Macro slot
+for the property archetype.
+USERDFN (class 5) collapses to
+`STYLE_DEFAULT` since the class
+is unpopulated by design.
+
+**Case-insensitive discipline.**
+`LexAVS.cxx:99, :189` populate
+the identifier buffer via
+`sc.GetCurrentLowered(s,
+sizeof(s))` — every collected
+byte is lowered *before* the
+wordlist probe. Wordlist
+entries must be byte-canonical
+lowercase; source `Trim` /
+`TRIM` / `trim` all match the
+single lowercase entry `trim`.
+Same case-insensitive contract
+as VBScript / Ada / Fortran /
+SQL — reader gets consistent
+highlighting regardless of the
+original author's casing
+convention.
+
+Structural test coverage: **20
+invariants** including
+disjointness across all 10
+pairs of populated classes,
+canonical anchor pins for each
+class (structural keywords /
+built-in filters / utility
+functions / clip properties),
+lowercase-plus-underscore
+alphabet enforcement,
+underscore-in-identifier pins
+(`current_frame` / `mt_lut`),
+and ambiguous-token dominance
+pins (`trim` → class 1;
+`import` → class 3, not
+class 0; `last` → class 4,
+not class 0).
 
 ## Notes
 

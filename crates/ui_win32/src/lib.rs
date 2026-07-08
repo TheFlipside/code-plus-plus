@@ -104,9 +104,10 @@ use codepp_core::lang::{
     ADA_KEYWORDS, ASM_CPU_KEYWORDS, ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS,
     ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS, ASM_REG_KEYWORDS, ASN1_ATTRIBUTES, ASN1_DESCRIPTORS,
     ASN1_KEYWORDS, ASN1_TYPES, AU3_EXPAND, AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS,
-    AU3_PREPROCESSORS, AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS,
-    BATCH_KEYWORDS_2, CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CMAKE_COMMANDS,
-    CMAKE_PARAMETERS, CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B, COBOL_KEYWORDS_C,
+    AU3_PREPROCESSORS, AU3_SENDKEYS, AU3_SPECIAL, AU3_UDF, AVS_CLIPPROPS, AVS_FILTERS,
+    AVS_FUNCTIONS, AVS_KEYWORDS, AVS_PLUGINS, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2,
+    CAML_KEYWORDS, CAML_KEYWORDS2, CAML_KEYWORDS3, CMAKE_COMMANDS, CMAKE_PARAMETERS,
+    CMAKE_USERDEFINED, COBOL_KEYWORDS_A, COBOL_KEYWORDS_B, COBOL_KEYWORDS_C,
     COFFEESCRIPT_GLOBAL_CLASSES, COFFEESCRIPT_KEYWORDS, COFFEESCRIPT_KEYWORDS_2, CPP_KEYWORDS,
     CPP_KEYWORDS_2, CSOUND_HEADERSTMT, CSOUND_OPCODES, CSOUND_USERKW, CSS_PROPERTIES_CSS1,
     CSS_PROPERTIES_CSS2, CSS_PROPERTIES_CSS3, CSS_PSEUDO_CLASSES, CSS_PSEUDO_ELEMENTS, CS_KEYWORDS,
@@ -121,33 +122,33 @@ use codepp_core::lang::{
     INNO_PARAMETERS, INNO_PASCAL_KEYWORDS, INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS,
     JAVASCRIPT_KEYWORDS_2, JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS,
     KIX_FUNCTIONS, KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS,
-    LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASN1, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE,
-    L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_ESCRIPT,
-    L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL, L_HOLLYWOOD,
-    L_HTML, L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX,
-    L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT,
-    L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL,
-    L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL,
-    L_TEHEX, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML,
-    L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
-    MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
-    NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
-    OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
-    OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
-    POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-    PYTHON_KEYWORDS_2, RAKU_ADVERBS, RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC,
-    RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD,
-    REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS,
-    R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-    SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS,
-    SQL_KEYWORDS_2, SWIFT_KEYWORDS, SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
-    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-    VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
-    VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
-    XML_KEYWORDS, YAML_KEYWORDS,
+    LUA_KEYWORDS_2, L_ADA, L_ASM, L_ASN1, L_ASP, L_AU3, L_AVS, L_BASH, L_BATCH, L_C, L_CAML,
+    L_CMAKE, L_COBOL, L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG,
+    L_ESCRIPT, L_FORTH, L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL,
+    L_HOLLYWOOD, L_HTML, L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP,
+    L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS,
+    L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RAKU,
+    L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC,
+    L_SWIFT, L_TCL, L_TEHEX, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL,
+    L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES,
+    MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS,
+    NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS,
+    OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS,
+    OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS,
+    POWERSHELL_ALIASES, POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS,
+    POWERSHELL_KEYWORDS, POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS,
+    PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RAKU_ADVERBS, RAKU_FUNCTIONS,
+    RAKU_KEYWORDS, RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION,
+    RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS,
+    RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS,
+    SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2,
+    SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, SWIFT_KEYWORDS, SWIFT_KEYWORDS_2,
+    TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS,
+    TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS,
+    VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS,
+    VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+    VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
+    VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -167,19 +168,22 @@ use codepp_scintilla_sys::{
     SCE_ASN1_OPERATOR, SCE_ASN1_SCALAR, SCE_ASN1_STRING, SCE_ASN1_TYPE, SCE_AU3_COMMENT,
     SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
     SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT,
-    SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_BAT_AFTER_LABEL,
-    SCE_BAT_COMMAND, SCE_BAT_COMMENT, SCE_BAT_HIDE, SCE_BAT_LABEL, SCE_BAT_OPERATOR, SCE_BAT_WORD,
-    SCE_B_COMMENT, SCE_B_DATE, SCE_B_KEYWORD, SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4,
-    SCE_B_NUMBER, SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CAML_CHAR,
-    SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD,
-    SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR,
-    SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS, SCE_CMAKE_COMMENT,
-    SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF, SCE_CMAKE_NUMBER,
-    SCE_CMAKE_PARAMETERS, SCE_CMAKE_STRINGDQ, SCE_CMAKE_STRINGLQ, SCE_CMAKE_STRINGRQ,
-    SCE_CMAKE_STRINGVAR, SCE_CMAKE_USERDEFINED, SCE_CMAKE_VARIABLE, SCE_CMAKE_WHILEDEF,
-    SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC, SCE_COBOL_COMMENTLINE,
-    SCE_COBOL_NUMBER, SCE_COBOL_OPERATOR, SCE_COBOL_PREPROCESSOR, SCE_COBOL_STRING, SCE_COBOL_WORD,
-    SCE_COBOL_WORD2, SCE_COBOL_WORD3, SCE_COFFEESCRIPT_CHARACTER, SCE_COFFEESCRIPT_COMMENTBLOCK,
+    SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_AVS_CLIPPROP,
+    SCE_AVS_COMMENTBLOCK, SCE_AVS_COMMENTBLOCKN, SCE_AVS_COMMENTLINE, SCE_AVS_FILTER,
+    SCE_AVS_FUNCTION, SCE_AVS_KEYWORD, SCE_AVS_NUMBER, SCE_AVS_OPERATOR, SCE_AVS_PLUGIN,
+    SCE_AVS_STRING, SCE_AVS_TRIPLESTRING, SCE_BAT_AFTER_LABEL, SCE_BAT_COMMAND, SCE_BAT_COMMENT,
+    SCE_BAT_HIDE, SCE_BAT_LABEL, SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_B_COMMENT, SCE_B_DATE,
+    SCE_B_KEYWORD, SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4, SCE_B_NUMBER, SCE_B_OPERATOR,
+    SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CAML_CHAR, SCE_CAML_COMMENT, SCE_CAML_COMMENT1,
+    SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3,
+    SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR, SCE_CAML_STRING, SCE_CAML_TAGNAME,
+    SCE_CAML_WHITE, SCE_CMAKE_COMMANDS, SCE_CMAKE_COMMENT, SCE_CMAKE_FOREACHDEF,
+    SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF, SCE_CMAKE_NUMBER, SCE_CMAKE_PARAMETERS,
+    SCE_CMAKE_STRINGDQ, SCE_CMAKE_STRINGLQ, SCE_CMAKE_STRINGRQ, SCE_CMAKE_STRINGVAR,
+    SCE_CMAKE_USERDEFINED, SCE_CMAKE_VARIABLE, SCE_CMAKE_WHILEDEF, SCE_COBOL_CHARACTER,
+    SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC, SCE_COBOL_COMMENTLINE, SCE_COBOL_NUMBER,
+    SCE_COBOL_OPERATOR, SCE_COBOL_PREPROCESSOR, SCE_COBOL_STRING, SCE_COBOL_WORD, SCE_COBOL_WORD2,
+    SCE_COBOL_WORD3, SCE_COFFEESCRIPT_CHARACTER, SCE_COFFEESCRIPT_COMMENTBLOCK,
     SCE_COFFEESCRIPT_COMMENTLINE, SCE_COFFEESCRIPT_GLOBALCLASS, SCE_COFFEESCRIPT_INSTANCEPROPERTY,
     SCE_COFFEESCRIPT_NUMBER, SCE_COFFEESCRIPT_OPERATOR, SCE_COFFEESCRIPT_REGEX,
     SCE_COFFEESCRIPT_STRING, SCE_COFFEESCRIPT_VERBOSE_REGEX,
@@ -5911,6 +5915,142 @@ const ASN1_THEME: LangTheme = LangTheme {
     bold: ASN1_BOLD,
 };
 
+// --- LexAVS ---
+// AviSynth — video-editing scripting language (extensions `.avs` /
+// `.avsi`). `L_AVS` (id 66) is the only language row using this
+// lexer. Six-wordlist descriptor (Keywords / Filters / Plugins /
+// Functions / ClipProperties / UserDefined) with first-match-wins
+// classification per `LexAVS.cxx:101-113`. Case-INSENSITIVE per
+// `LexAVS.cxx:99, :189` — wordlist entries MUST be lowercase.
+// See the `LexAVS` banner in `scintilla-sys/src/lib.rs` for the
+// paint-loop citations and per-state emission analysis.
+//
+// **12 style mappings** covering 15 defined SCE_AVS_* states
+// (0..=14). `SCE_AVS_DEFAULT` (0), `SCE_AVS_IDENTIFIER` (6), and
+// `SCE_AVS_USERDFN` (14) stay unmapped per the framework's
+// fall-through-to-STYLE_DEFAULT convention:
+//   * DEFAULT — whitespace / unclassified. Standard framework
+//     convention.
+//   * IDENTIFIER — the transient collect state at `:180`. Bytes
+//     that don't match any of the six wordlists stay in this
+//     state and paint at STYLE_DEFAULT. Same convention as
+//     `SCE_C_IDENTIFIER` / `SCE_ASN1_IDENTIFIER` /
+//     `SCE_SPICE_IDENTIFIER`.
+//   * USERDFN — class 5 "User defined functions" wordlist is NOT
+//     installed by the theme (`AVS_THEME.keywords` has only 5
+//     entries, classes 0..=4). Class 5 stays empty at Scintilla,
+//     `userDefined.InList(s)` always returns false, and the
+//     USERDFN state is never emitted. Same "config-driven dead
+//     state" pattern as Spice's SCE_SPICE_VALUE — the slot exists
+//     in Lexilla but the emission path is unreachable given our
+//     wordlist configuration. Leaving unmapped keeps the framework
+//     honest: if a future config change installs a class-5
+//     wordlist, USERDFN bytes will paint at STYLE_DEFAULT until
+//     the theme adds an explicit mapping.
+//
+// Mapped slots (first-match-wins colour discipline matching the
+// classifier's Keywords → Filters → Plugins → Functions →
+// ClipProperties probe order):
+//   * `COMMENTBLOCK` (1) → Comment italic — `/*...*/` C-family
+//     nested block comments.
+//   * `COMMENTBLOCKN` (2) → Comment italic — `[*...*]` AviSynth's
+//     own nested block form. Distinct SCE_ slot so the two
+//     nesting families track independent depths, but same visual
+//     paint per framework convention.
+//   * `COMMENTLINE` (3) → Comment italic — `#`-to-EOL line
+//     comments.
+//   * `NUMBER` (4) → Number — decimal / dot-fractional / signed-
+//     fractional literals per `LexAVS.cxx:40-45`'s permissive
+//     `IsANumberChar`.
+//   * `OPERATOR` (5) → Operator — anything `isoperator(ch)`
+//     accepts (arithmetic / comparison / assignment / grouping).
+//   * `STRING` (7) → String — `"..."` double-quoted strings.
+//   * `TRIPLESTRING` (8) → String — `"""..."""` verbatim strings.
+//     Same collapse discipline as Python's SCE_P_STRING /
+//     _CHARACTER / _TRIPLE / _TRIPLEDOUBLE unification and
+//     Raku's Q-language collapse.
+//   * `KEYWORD` (9) → Keyword bold — class 0 structural control
+//     words (`function` / `return` / `if` / `else` / ...). Primary
+//     anchor slot.
+//   * `FILTER` (10) → Keyword2 accent — class 1 built-in AviSynth
+//     filter verbs (`avisource` / `crop` / `trim` / `overlay` /
+//     ...). Secondary anchor — the main vocabulary users compose
+//     scripts from.
+//   * `PLUGIN` (11) → Preprocessor — class 2 third-party plugin
+//     function names (`ffvideosource` / `qtgmc` / ...). Distinct
+//     colour so external plugin surface reads differently from
+//     stock builtins.
+//   * `FUNCTION` (12) → Lifetime — class 3 built-in utility /
+//     math / string functions (`abs` / `min` / `sin` / `chr` /
+//     ...). Distinct fourth colour separating scalar helpers from
+//     clip transforms.
+//   * `CLIPPROP` (13) → Macro — class 4 clip properties
+//     (`width` / `height` / `framecount` / `isyv12` / ...).
+//     Distinct fifth colour for the property-accessor archetype.
+//
+// Palette rationale for the 5-way keyword-class spread: LexAVS's
+// 6-class descriptor is second only to Raku's 7-class in Lexilla
+// richness. Mapping 5 of them to distinct StyleSlots (Keyword /
+// Keyword2 / Preprocessor / Lifetime / Macro) lets the AviSynth
+// scripter visually distinguish structural / filter / plugin /
+// utility / property archetypes simultaneously — the same
+// discipline as ASN.1's 4-way spread but with an added Macro slot
+// for the property archetype. USERDFN (class 5) collapses to
+// STYLE_DEFAULT since the class is unpopulated by design.
+const AVS_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_AVS_COMMENTBLOCK, StyleSlot::Comment),
+    (SCE_AVS_COMMENTBLOCKN, StyleSlot::Comment),
+    (SCE_AVS_COMMENTLINE, StyleSlot::Comment),
+    (SCE_AVS_NUMBER, StyleSlot::Number),
+    (SCE_AVS_OPERATOR, StyleSlot::Operator),
+    (SCE_AVS_STRING, StyleSlot::String),
+    (SCE_AVS_TRIPLESTRING, StyleSlot::String),
+    (SCE_AVS_KEYWORD, StyleSlot::Keyword),
+    (SCE_AVS_FILTER, StyleSlot::Keyword2),
+    (SCE_AVS_PLUGIN, StyleSlot::Preprocessor),
+    (SCE_AVS_FUNCTION, StyleSlot::Lifetime),
+    (SCE_AVS_CLIPPROP, StyleSlot::Macro),
+];
+
+// Italic on all three comment forms — universal Code++ comment
+// convention. Both `/*...*/` and `[*...*]` block comments plus
+// `#`-line comments.
+const AVS_ITALIC: &[usize] = &[
+    SCE_AVS_COMMENTBLOCK,
+    SCE_AVS_COMMENTBLOCKN,
+    SCE_AVS_COMMENTLINE,
+];
+
+// Bold on KEYWORD (class 0 — structural control words) — primary
+// anchor slot. Same single-class-bold discipline as ASN.1
+// (KEYWORD), SPICE (KEYWORD), PROPS (SECTION), Makefile (TARGET),
+// REBOL (WORD), OScript (KEYWORD), and every LexCPP-family theme
+// (WORD).
+const AVS_BOLD: &[usize] = &[SCE_AVS_KEYWORD];
+
+// Five-class install matching descriptor order at
+// `LexAVS.cxx:284-292` (Keywords, Filters, Plugins, Functions,
+// Clip properties). Class 5 "User defined functions" left
+// unpopulated by design — users who want per-script user-function
+// highlighting can extend the wordlist in their local config; the
+// framework's default keeps the state as dead code so no
+// accidental cross-class collision surprises the reader.
+// First-match-wins cascade at `:101-113` probes class 0 → 1 → 2
+// → 3 → 4 in forward order; cross-class disjointness is strictly
+// enforced by the invariant test.
+const AVS_THEME: LangTheme = LangTheme {
+    keywords: &[
+        (0, AVS_KEYWORDS),
+        (1, AVS_FILTERS),
+        (2, AVS_PLUGINS),
+        (3, AVS_FUNCTIONS),
+        (4, AVS_CLIPPROPS),
+    ],
+    styles: AVS_STYLES,
+    italic: AVS_ITALIC,
+    bold: AVS_BOLD,
+};
+
 // --- LexTxt2tags ---
 // txt2tags — lightweight-markup / plain-text-to-many-formats
 // converter (extension `.t2t`). `L_TXT2TAGS` (id 83) is the only
@@ -10992,6 +11132,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&SPICE_THEME)
     } else if lang == L_ASN1 {
         Some(&ASN1_THEME)
+    } else if lang == L_AVS {
+        Some(&AVS_THEME)
     } else if lang == L_TXT2TAGS {
         Some(&TXT2TAGS_THEME)
     } else if lang == L_TYPESCRIPT {
@@ -26152,11 +26294,11 @@ mod lang_theme_tests {
     use super::{
         extra_fold_properties, lang_theme, slot_color, StyleSlot, ASM_CPU_KEYWORDS,
         ASM_DIRECTIVE_KEYWORDS, ASM_DIRECTIVE_OP_KEYWORDS, ASM_EXT_KEYWORDS, ASM_FPU_KEYWORDS,
-        ASM_REG_KEYWORDS, ASN1_BOLD, ASN1_ITALIC, ASN1_STYLES, ERLANG_BOLD, ERLANG_ITALIC,
-        ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC, ESCRIPT_STYLES, FG_COMMENT, FG_KEYWORD,
-        FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES, GDSCRIPT_BOLD, GDSCRIPT_ITALIC,
-        GDSCRIPT_STYLES, HOLLYWOOD_BOLD, HOLLYWOOD_ITALIC, HOLLYWOOD_STYLES, IHEX_STYLES,
-        MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC, NIM_STYLES,
+        ASM_REG_KEYWORDS, ASN1_BOLD, ASN1_ITALIC, ASN1_STYLES, AVS_BOLD, AVS_ITALIC, AVS_STYLES,
+        ERLANG_BOLD, ERLANG_ITALIC, ERLANG_STYLES, ESCRIPT_BOLD, ESCRIPT_ITALIC, ESCRIPT_STYLES,
+        FG_COMMENT, FG_KEYWORD, FG_MACRO, FORTH_BOLD, FORTH_ITALIC, FORTH_STYLES, GDSCRIPT_BOLD,
+        GDSCRIPT_ITALIC, GDSCRIPT_STYLES, HOLLYWOOD_BOLD, HOLLYWOOD_ITALIC, HOLLYWOOD_STYLES,
+        IHEX_STYLES, MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC, NIM_STYLES,
         NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD, OSCRIPT_ITALIC,
         OSCRIPT_STYLES, RAKU_BOLD, RAKU_ITALIC, RAKU_STYLES, REBOL_BOLD, REBOL_ITALIC,
         REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC, REGISTRY_STYLES, SCE_ADA_CHARACTER,
@@ -26170,10 +26312,13 @@ mod lang_theme_tests {
         SCE_ASN1_SCALAR, SCE_ASN1_STRING, SCE_ASN1_TYPE, SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK,
         SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD, SCE_AU3_MACRO,
         SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT, SCE_AU3_SPECIAL,
-        SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_CAML_CHAR, SCE_CAML_COMMENT,
-        SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD,
-        SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR,
-        SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS, SCE_CMAKE_COMMENT,
+        SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_AVS_CLIPPROP, SCE_AVS_COMMENTBLOCK,
+        SCE_AVS_COMMENTBLOCKN, SCE_AVS_COMMENTLINE, SCE_AVS_FILTER, SCE_AVS_FUNCTION,
+        SCE_AVS_KEYWORD, SCE_AVS_NUMBER, SCE_AVS_OPERATOR, SCE_AVS_PLUGIN, SCE_AVS_STRING,
+        SCE_AVS_TRIPLESTRING, SCE_CAML_CHAR, SCE_CAML_COMMENT, SCE_CAML_COMMENT1,
+        SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2,
+        SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR, SCE_CAML_STRING,
+        SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS, SCE_CMAKE_COMMENT,
         SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF, SCE_CMAKE_NUMBER,
         SCE_CMAKE_PARAMETERS, SCE_CMAKE_STRINGDQ, SCE_CMAKE_STRINGLQ, SCE_CMAKE_STRINGRQ,
         SCE_CMAKE_STRINGVAR, SCE_CMAKE_USERDEFINED, SCE_CMAKE_VARIABLE, SCE_CMAKE_WHILEDEF,
@@ -26225,7 +26370,8 @@ mod lang_theme_tests {
     use codepp_core::lang::{
         ADA_KEYWORDS, ASN1_ATTRIBUTES, ASN1_DESCRIPTORS, ASN1_KEYWORDS, ASN1_TYPES, AU3_EXPAND,
         AU3_FUNCTIONS, AU3_KEYWORDS, AU3_MACROS, AU3_PREPROCESSORS, AU3_SENDKEYS, AU3_SPECIAL,
-        AU3_UDF, BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CAML_KEYWORDS, CAML_KEYWORDS2,
+        AU3_UDF, AVS_CLIPPROPS, AVS_FILTERS, AVS_FUNCTIONS, AVS_KEYWORDS, AVS_PLUGINS,
+        BASH_KEYWORDS, BATCH_KEYWORDS, BATCH_KEYWORDS_2, CAML_KEYWORDS, CAML_KEYWORDS2,
         CAML_KEYWORDS3, CMAKE_COMMANDS, CMAKE_PARAMETERS, CMAKE_USERDEFINED, COBOL_KEYWORDS_A,
         COBOL_KEYWORDS_B, COBOL_KEYWORDS_C, COFFEESCRIPT_GLOBAL_CLASSES, COFFEESCRIPT_KEYWORDS,
         COFFEESCRIPT_KEYWORDS_2, CPP_KEYWORDS_2, CSOUND_HEADERSTMT, CSOUND_OPCODES, CSOUND_USERKW,
@@ -26242,7 +26388,7 @@ mod lang_theme_tests {
         INNO_PREPROCESSOR, INNO_SECTIONS, JAVASCRIPT_KEYWORDS, JAVASCRIPT_KEYWORDS_2,
         JAVA_KEYWORDS, JAVA_KEYWORDS_2, JSON_KEYWORDS, JSON_LD_KEYWORDS, KIX_FUNCTIONS,
         KIX_KEYWORDS, KIX_MACROS, LISP_KEYWORDS, LISP_KEYWORDS_KW, LUA_KEYWORDS, LUA_KEYWORDS_2,
-        L_ADA, L_ASM, L_ASN1, L_ASP, L_AU3, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
+        L_ADA, L_ASM, L_ASN1, L_ASP, L_AU3, L_AVS, L_BASH, L_BATCH, L_C, L_CAML, L_CMAKE, L_COBOL,
         L_COFFEESCRIPT, L_CPP, L_CS, L_CSOUND, L_CSS, L_D, L_DIFF, L_ERLANG, L_ESCRIPT, L_FORTH,
         L_FORTRAN, L_FORTRAN_77, L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML,
         L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX,
@@ -26416,6 +26562,7 @@ mod lang_theme_tests {
             (L_TYPESCRIPT, "TypeScript"),
             (L_VISUALPROLOG, "Visual Prolog"),
             (L_ASN1, "ASN.1"),
+            (L_AVS, "AviSynth"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -44699,6 +44846,449 @@ mod lang_theme_tests {
                  paint to the structural keyword slot"
             );
         }
+    }
+
+    /// `AviSynth` uses Lexilla's `avs` lexer (`LexAVS.cxx`) — a 2012
+    /// lexer by Bruno Barbieri "heavily based on `LexPOV`". A
+    /// six-class-wordlist state machine for `AviSynth` video-editing
+    /// scripts. Extensions `.avs` (script) / `.avsi` (import).
+    /// Included in `wired_languages_have_complete_themes` — 12
+    /// style mappings (15 defined `SCE_AVS_*` slots minus 3
+    /// unmapped: DEFAULT / IDENTIFIER / USERDFN) meets the ≥8
+    /// floor with room to spare. This dedicated test pins the
+    /// AviSynth-specific structural invariants that the shared
+    /// shape test can't see:
+    ///
+    ///   1. Deep-value identity (styles / italic / bold / five
+    ///      populated keyword classes).
+    ///   2. 12-mapping style-count (15 defined `SCE_AVS_*` slots
+    ///      minus 3 unmapped: DEFAULT, IDENTIFIER, USERDFN).
+    ///   3. Five populated classes in canonical descriptor order
+    ///      matching `avsWordLists[]` at `LexAVS.cxx:284-292`
+    ///      (Keywords, Filters, Plugins, Functions, Clip
+    ///      properties). Class 5 "User defined functions"
+    ///      deliberately NOT installed.
+    ///   4. All five populated classes non-empty.
+    ///   5. **Cross-class disjointness** across all 10 pairs of
+    ///      populated classes — LOAD-BEARING for the forward
+    ///      first-match-wins cascade at `LexAVS.cxx:101-113`.
+    ///   6. Style-routing pins for all 12 mapped constants.
+    ///   7. Framework-unmapped slots confirmed absent (DEFAULT,
+    ///      IDENTIFIER, USERDFN) with drift-pin assertions.
+    ///   8. Italic == 3 (all three comment forms — COMMENTBLOCK,
+    ///      COMMENTBLOCKN, COMMENTLINE).
+    ///   9. Bold == 1 (KEYWORD only — class 0, primary structural
+    ///      anchor).
+    ///   10. Cross-language non-reuse (sampled).
+    ///   11. `L_AVS` `LangEntry` has `lexer: Some("avs")` and both
+    ///       `avs` + `avsi` extensions.
+    ///   12. **All-lowercase alphabet enforcement across every
+    ///       class** — LexAVS.cxx:99, :189 lowercases every
+    ///       collected byte via `GetCurrentLowered` before probing;
+    ///       uppercase / mixed-case wordlist entries would never
+    ///       match. Includes `_` allowed (per `IsAWordChar` at
+    ///       :32-34).
+    ///   13. **Canonical class-0 KEYWORD anchors** — `function`,
+    ///       `return`, `if`, `else`, `try`, `catch`, `global`,
+    ///       `true`, `false`.
+    ///   14. **Canonical class-1 FILTER anchors** — `avisource`,
+    ///       `trim`, `crop`, `overlay`, `converttorgb24`,
+    ///       `bicubicresize`.
+    ///   15. **Canonical class-3 FUNCTION anchors** — `abs`,
+    ///       `min`, `max`, `sin`, `chr`, `string`, `defined`.
+    ///   16. **Canonical class-4 CLIPPROP anchors** — `width`,
+    ///       `height`, `framecount`, `framerate`, `isyv12`,
+    ///       `hasaudio`, `current_frame`, `last`.
+    ///   17. **`_` allowed in identifiers** — `current_frame` and
+    ///       `mt_lut` tokenise as single tokens per `IsAWordChar`
+    ///       at `:32-34` (`_` is a word char).
+    ///   18. Highest-defined `SCE_AVS_*` pin — `SCE_AVS_USERDFN`
+    ///       (14) is the top slot per `SciLexer.h:1691`.
+    ///   19. No duplicate tokens within any wordlist.
+    ///   20. **Ambiguous-token placement pins** — `trim` (class-1
+    ///       clip trim wins over class-3 string trim by
+    ///       first-match); `import` (class-3 function, not class-0
+    ///       keyword — `AviSynth` `import` is a runtime call at
+    ///       script scope); `last` (class-4 CLIPPROP implicit-clip
+    ///       parameter, not class-0 keyword).
+    #[test]
+    fn avs_uses_lexavs_five_class_theme() {
+        use codepp_scintilla_sys::{SCE_AVS_DEFAULT, SCE_AVS_IDENTIFIER, SCE_AVS_USERDFN};
+        let avs = lang_theme(L_AVS).expect("AviSynth wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(avs.styles, AVS_STYLES);
+        assert_eq!(avs.italic, AVS_ITALIC);
+        assert_eq!(avs.bold, AVS_BOLD);
+        assert_eq!(avs.keywords.len(), 5);
+
+        // Invariant 2: 12 mappings (15 defined slots minus 3 unmapped).
+        assert_eq!(
+            avs.styles.len(),
+            12,
+            "AVS_STYLES must map 12 indices (15 defined SCE_AVS_* \
+             slots minus 3 unmapped: DEFAULT (whitespace), \
+             IDENTIFIER (bareword fall-through), USERDFN (class-5 \
+             wordlist deliberately unpopulated so state is dead by \
+             config))"
+        );
+
+        // Invariant 3: five populated classes in canonical order.
+        for (i, (expected_class, expected_list)) in [
+            (0u32, AVS_KEYWORDS),
+            (1u32, AVS_FILTERS),
+            (2u32, AVS_PLUGINS),
+            (3u32, AVS_FUNCTIONS),
+            (4u32, AVS_CLIPPROPS),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                avs.keywords[i].0, *expected_class,
+                "AVS_THEME.keywords[{i}].class must match \
+                 descriptor order at LexAVS.cxx:284-292"
+            );
+            assert_eq!(
+                avs.keywords[i].1, *expected_list,
+                "AVS_THEME.keywords[{i}].list must match \
+                 canonical wordlist"
+            );
+        }
+
+        // Invariant 4: all five populated classes non-empty.
+        for (list, name) in [
+            (AVS_KEYWORDS, "KEYWORDS"),
+            (AVS_FILTERS, "FILTERS"),
+            (AVS_PLUGINS, "PLUGINS"),
+            (AVS_FUNCTIONS, "FUNCTIONS"),
+            (AVS_CLIPPROPS, "CLIPPROPS"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "AVS_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: cross-class disjointness. LOAD-BEARING for the
+        // forward first-match-wins cascade at LexAVS.cxx:101-113 —
+        // a higher-priority class always wins, so a cross-class
+        // duplicate silently leaves the lower-priority entry as
+        // dead code.
+        use std::collections::HashSet;
+        let sets = [
+            (
+                "KEYWORDS",
+                AVS_KEYWORDS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "FILTERS",
+                AVS_FILTERS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "PLUGINS",
+                AVS_PLUGINS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "FUNCTIONS",
+                AVS_FUNCTIONS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+            (
+                "CLIPPROPS",
+                AVS_CLIPPROPS.split_whitespace().collect::<HashSet<_>>(),
+            ),
+        ];
+        for i in 0..sets.len() {
+            for j in (i + 1)..sets.len() {
+                if let Some(shared) = sets[i].1.intersection(&sets[j].1).next() {
+                    panic!(
+                        "AVS_{} and AVS_{} both contain `{shared}` \
+                         — LexAVS.cxx:101-113 probes classes 0 → 1 → \
+                         2 → 3 → 4 forward-first-match-wins. Cross- \
+                         class duplicate leaves the HIGHER-numbered \
+                         entry dead code.",
+                        sets[i].0, sets[j].0
+                    );
+                }
+            }
+        }
+
+        // Invariant 6: style-routing pins for all 12 mapped constants.
+        for (idx, slot, name) in [
+            (SCE_AVS_COMMENTBLOCK, StyleSlot::Comment, "COMMENTBLOCK"),
+            (SCE_AVS_COMMENTBLOCKN, StyleSlot::Comment, "COMMENTBLOCKN"),
+            (SCE_AVS_COMMENTLINE, StyleSlot::Comment, "COMMENTLINE"),
+            (SCE_AVS_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_AVS_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+            (SCE_AVS_STRING, StyleSlot::String, "STRING"),
+            (SCE_AVS_TRIPLESTRING, StyleSlot::String, "TRIPLESTRING"),
+            (SCE_AVS_KEYWORD, StyleSlot::Keyword, "KEYWORD"),
+            (SCE_AVS_FILTER, StyleSlot::Keyword2, "FILTER"),
+            (SCE_AVS_PLUGIN, StyleSlot::Preprocessor, "PLUGIN"),
+            (SCE_AVS_FUNCTION, StyleSlot::Lifetime, "FUNCTION"),
+            (SCE_AVS_CLIPPROP, StyleSlot::Macro, "CLIPPROP"),
+        ] {
+            assert!(
+                avs.styles.contains(&(idx, slot)),
+                "SCE_AVS_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 7: framework-unmapped slots confirmed absent.
+        assert_eq!(
+            SCE_AVS_DEFAULT, 0,
+            "SCE_AVS_DEFAULT has drifted from 0 — verify against SciLexer.h:1677"
+        );
+        assert_eq!(
+            SCE_AVS_IDENTIFIER, 6,
+            "SCE_AVS_IDENTIFIER has drifted from 6 — verify against SciLexer.h:1683"
+        );
+        assert_eq!(
+            SCE_AVS_USERDFN, 14,
+            "SCE_AVS_USERDFN has drifted from 14 — verify against SciLexer.h:1691"
+        );
+        for (idx, name) in [
+            (SCE_AVS_DEFAULT, "DEFAULT"),
+            (SCE_AVS_IDENTIFIER, "IDENTIFIER"),
+            (SCE_AVS_USERDFN, "USERDFN"),
+        ] {
+            assert!(
+                !avs.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_AVS_{name} ({idx}) must remain unmapped — \
+                 framework convention (DEFAULT + IDENTIFIER fall \
+                 through to STYLE_DEFAULT; USERDFN is dead by config \
+                 — class-5 wordlist deliberately unpopulated)"
+            );
+        }
+
+        // Invariant 8: italic == 3 (all three comment forms).
+        assert_eq!(avs.italic.len(), 3);
+        for (idx, name) in [
+            (SCE_AVS_COMMENTBLOCK, "COMMENTBLOCK"),
+            (SCE_AVS_COMMENTBLOCKN, "COMMENTBLOCKN"),
+            (SCE_AVS_COMMENTLINE, "COMMENTLINE"),
+        ] {
+            assert!(
+                avs.italic.contains(&idx),
+                "AVS_ITALIC must contain SCE_AVS_{name}"
+            );
+        }
+
+        // Invariant 9: bold == 1 (KEYWORD only — class 0, primary
+        // structural anchor).
+        assert_eq!(avs.bold.len(), 1);
+        assert!(
+            avs.bold.contains(&SCE_AVS_KEYWORD),
+            "AVS_BOLD must contain SCE_AVS_KEYWORD (class 0 — \
+             AviSynth structural control words, the primary anchor \
+             of every AviSynth script)"
+        );
+
+        // Invariant 10: cross-language non-reuse (sampled).
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let asn1 = lang_theme(L_ASN1).expect("ASN.1 wired");
+        let sp = lang_theme(L_SPICE).expect("Spice wired");
+        let raku = lang_theme(L_RAKU).expect("Raku wired");
+        for (other, name) in [(cpp, "C++"), (asn1, "ASN.1"), (sp, "Spice"), (raku, "Raku")] {
+            assert_ne!(
+                avs.styles, other.styles,
+                "AviSynth must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 11: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_AVS)
+            .expect("L_AVS LangEntry present in LANG_TABLE");
+        assert_eq!(
+            entry.lexer,
+            Some("avs"),
+            "L_AVS LangEntry.lexer must be Some(\"avs\")"
+        );
+        assert!(
+            entry.extensions.contains(&"avs"),
+            "L_AVS extensions must contain `avs`"
+        );
+        assert!(
+            entry.extensions.contains(&"avsi"),
+            "L_AVS extensions must contain `avsi`"
+        );
+
+        // Invariant 12: all-lowercase-plus-underscore alphabet
+        // enforcement. LexAVS.cxx:99, :189 lowercases every
+        // collected byte before probing; uppercase / mixed-case
+        // entries would never match. `_` is allowed per :32-34.
+        for (list, name) in [
+            (AVS_KEYWORDS, "KEYWORDS"),
+            (AVS_FILTERS, "FILTERS"),
+            (AVS_PLUGINS, "PLUGINS"),
+            (AVS_FUNCTIONS, "FUNCTIONS"),
+            (AVS_CLIPPROPS, "CLIPPROPS"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    !tok.is_empty()
+                        && tok
+                            .bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+                    "AVS_{name} token `{tok}` violates the \
+                     lowercase-alnum-underscore alphabet — \
+                     LexAVS.cxx:99 lowercases every byte before \
+                     wordlist probe, so uppercase entries never \
+                     match; `_` is allowed per IsAWordChar at :32-34"
+                );
+            }
+        }
+
+        // Invariant 13: canonical class-0 KEYWORD anchors.
+        for tok in [
+            "function", "return", "if", "else", "try", "catch", "global", "true", "false",
+        ] {
+            assert!(
+                AVS_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "AVS_KEYWORDS must include canonical structural keyword `{tok}`"
+            );
+        }
+
+        // Invariant 14: canonical class-1 FILTER anchors — the
+        // AviSynth vocabulary most users encounter first.
+        for tok in [
+            "avisource",
+            "trim",
+            "crop",
+            "overlay",
+            "converttorgb24",
+            "bicubicresize",
+        ] {
+            assert!(
+                AVS_FILTERS.split_whitespace().any(|t| t == tok),
+                "AVS_FILTERS must include canonical filter `{tok}`"
+            );
+        }
+
+        // Invariant 15: canonical class-3 FUNCTION anchors — scalar
+        // / string / introspection utility functions.
+        for tok in ["abs", "min", "max", "sin", "chr", "string", "defined"] {
+            assert!(
+                AVS_FUNCTIONS.split_whitespace().any(|t| t == tok),
+                "AVS_FUNCTIONS must include canonical function `{tok}`"
+            );
+        }
+
+        // Invariant 16: canonical class-4 CLIPPROP anchors — the
+        // most common clip-info accessors.
+        for tok in [
+            "width",
+            "height",
+            "framecount",
+            "framerate",
+            "isyv12",
+            "hasaudio",
+            "current_frame",
+            "last",
+        ] {
+            assert!(
+                AVS_CLIPPROPS.split_whitespace().any(|t| t == tok),
+                "AVS_CLIPPROPS must include canonical clip property `{tok}`"
+            );
+        }
+
+        // Invariant 17: underscore allowed in identifiers per
+        // IsAWordChar at :32-34. `current_frame` (CLIPPROP) and
+        // `mt_lut` (PLUGIN) exemplify the two archetypes.
+        assert!(
+            AVS_CLIPPROPS
+                .split_whitespace()
+                .any(|t| t == "current_frame"),
+            "AVS_CLIPPROPS must include `current_frame` — \
+             tokenises as single word per IsAWordChar (underscore \
+             is a word char)"
+        );
+        assert!(
+            AVS_PLUGINS.split_whitespace().any(|t| t == "mt_lut"),
+            "AVS_PLUGINS must include `mt_lut` — MaskTools2 \
+             function name uses underscore per IsAWordChar"
+        );
+
+        // Invariant 18: highest-defined SCE_AVS_* pin.
+        assert_eq!(
+            SCE_AVS_USERDFN, 14,
+            "SCE_AVS_USERDFN has drifted from 14 — Lexilla may \
+             have renumbered slots. Verify against SciLexer.h:1691"
+        );
+        for (idx, _) in avs.styles {
+            assert!(
+                *idx <= SCE_AVS_USERDFN,
+                "AVS_STYLES references slot {idx}, which is higher \
+                 than SCE_AVS_USERDFN ({SCE_AVS_USERDFN})"
+            );
+        }
+
+        // Invariant 19: no duplicate tokens within any wordlist.
+        for (list, name) in [
+            (AVS_KEYWORDS, "KEYWORDS"),
+            (AVS_FILTERS, "FILTERS"),
+            (AVS_PLUGINS, "PLUGINS"),
+            (AVS_FUNCTIONS, "FUNCTIONS"),
+            (AVS_CLIPPROPS, "CLIPPROPS"),
+        ] {
+            let total = list.split_whitespace().count();
+            let unique = list.split_whitespace().collect::<HashSet<_>>().len();
+            assert_eq!(
+                total,
+                unique,
+                "AVS_{name} contains {} duplicate token(s)",
+                total - unique
+            );
+        }
+
+        // Invariant 20: ambiguous-token placement pins. First-match-
+        // wins at LexAVS.cxx:101-113 means the class holding the
+        // token decides its paint. These pins document the intent
+        // and prevent silent drift.
+        //
+        //   * `trim` → class 1 (clip trimming — the AviSynth
+        //     Trim(clip, first, last) is the far more visible
+        //     surface than any string-trim helper).
+        //   * `import` → class 3 (runtime function call — script-
+        //     level Import("file.avs"), not a keyword).
+        //   * `last` → class 4 (implicit-clip parameter — dot-
+        //     syntax accessor, not a keyword).
+        assert!(
+            AVS_FILTERS.split_whitespace().any(|t| t == "trim"),
+            "`trim` must be in AVS_FILTERS (clip-trim role \
+             dominates)"
+        );
+        assert!(
+            !AVS_FUNCTIONS.split_whitespace().any(|t| t == "trim"),
+            "`trim` must NOT be in AVS_FUNCTIONS — class-1 wins \
+             by first-match-wins; class-3 duplicate would be dead \
+             code"
+        );
+        assert!(
+            AVS_FUNCTIONS.split_whitespace().any(|t| t == "import"),
+            "`import` must be in AVS_FUNCTIONS (AviSynth Import() \
+             is a runtime function call at script scope, not a \
+             keyword)"
+        );
+        assert!(
+            !AVS_KEYWORDS.split_whitespace().any(|t| t == "import"),
+            "`import` must NOT be in AVS_KEYWORDS — first-match- \
+             wins would move paint to the structural keyword slot \
+             instead of the intended function slot"
+        );
+        assert!(
+            AVS_CLIPPROPS.split_whitespace().any(|t| t == "last"),
+            "`last` must be in AVS_CLIPPROPS (implicit-clip \
+             parameter is a property-accessor archetype)"
+        );
+        assert!(
+            !AVS_KEYWORDS.split_whitespace().any(|t| t == "last"),
+            "`last` must NOT be in AVS_KEYWORDS — first-match-wins \
+             would move paint to the structural keyword slot"
+        );
     }
 
     /// txt2tags uses Lexilla's `txt2tags` lexer

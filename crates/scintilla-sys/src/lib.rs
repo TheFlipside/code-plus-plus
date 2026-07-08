@@ -8677,6 +8677,147 @@ pub const SCE_ASN1_DESCRIPTOR: usize = 8;
 pub const SCE_ASN1_TYPE: usize = 9;
 pub const SCE_ASN1_OPERATOR: usize = 10;
 
+// LexAVS style indices. 15 contiguous slots (0..=14) covering the
+// AviSynth lexer's full emission set: nested `/*...*/` and `[*...*]`
+// block comments (COMMENTBLOCK / COMMENTBLOCKN — depth-tracked via
+// per-line state), `#`-to-EOL line comments (COMMENTLINE), decimal /
+// dot-fractional / signed-fractional numeric literals (NUMBER), the
+// AviSynth operator set (OPERATOR — anything `isoperator(ch)` accepts),
+// identifier-shaped tokens (IDENTIFIER) resolving via wordlist probe
+// into KEYWORD / FILTER / PLUGIN / FUNCTION / CLIPPROP / USERDFN
+// (LexAVS's six-class descriptor), `"..."` double-quoted strings
+// (STRING), and `"""..."""` triple-quoted verbatim strings
+// (TRIPLESTRING). Cross-referenced against
+// `vendor/lexilla/include/SciLexer.h` lines 1677-1691, the
+// `SCE_AVS_*` block in `vendor/lexilla/include/LexicalStyles.iface`,
+// and the `LexerModule lmAVS(SCLEX_AVS, ColouriseAvsDoc, "avs",
+// FoldAvsDoc, avsWordLists)` registration at
+// `vendor/lexilla/lexers/LexAVS.cxx:294`.
+//
+// Dispatches SCLEX_AVS (= 104, per `SciLexer.h:120`) — a 2012 lexer
+// by Bruno Barbieri "heavily based on LexPOV" (`LexAVS.cxx:6`).
+// Extensions `.avs` (script) and `.avsi` (import). `L_AVS`
+// (LANG_TABLE id 66) is the only language row using this lexer.
+//
+// **Six wordlists.** `avsWordLists[]` at `LexAVS.cxx:284-292`
+// declares six named classes with **first-match-wins semantics**
+// via the `if` / `else if` chain at `:101-113` inside the
+// `SCE_AVS_IDENTIFIER` collect-state closer:
+//   - class 0 = "Keywords" — structural control-flow words
+//     (`function` / `return` / `global` / `if` / `else` /
+//     `while` / `for` / `break` / `continue` / `try` / `catch`
+//     / `true` / `false`). Highest priority. `import` is a
+//     RUNTIME function call (`Import("file.avs")`) in AviSynth,
+//     not a language keyword — it lives in class 3 with the
+//     other utility functions.
+//   - class 1 = "Filters" — built-in AviSynth filter functions
+//     (`avisource` / `crop` / `trim` / `overlay` / `convertorgb`
+//     / etc.). Second priority.
+//   - class 2 = "Plugins" — third-party plugin function names
+//     (`ffvideosource` / `qtgmc` / `mvtools2` / etc.). Third
+//     priority. Empty in stock AviSynth; populated per user's
+//     plugin installation.
+//   - class 3 = "Functions" — built-in scalar / math / string /
+//     runtime helper functions (`abs` / `min` / `max` / `sin` /
+//     `chr` / `string` / `defined` / etc.). Fourth priority.
+//   - class 4 = "Clip properties" — clip-info properties accessed
+//     via dot-syntax (`width` / `height` / `framecount` /
+//     `framerate` / `isyv12` / etc.). Fifth priority.
+//   - class 5 = "User defined functions" — script-declared
+//     functions the user (or an editor auto-populator) explicitly
+//     lists. Lowest priority. Left empty in Code++'s theme by
+//     default — the state is dead code by config choice, matching
+//     the framework precedent for optional emit-only-if-populated
+//     classes.
+//
+// **Classifier order.** `LexAVS.cxx:101-113` probes wordlists in
+// this fixed order after the identifier-collect state closes:
+//   1. `keywords.InList(s)` → `SCE_AVS_KEYWORD`.
+//   2. `filters.InList(s)` → `SCE_AVS_FILTER`.
+//   3. `plugins.InList(s)` → `SCE_AVS_PLUGIN`.
+//   4. `functions.InList(s)` → `SCE_AVS_FUNCTION`.
+//   5. `clipProperties.InList(s)` → `SCE_AVS_CLIPPROP`.
+//   6. `userDefined.InList(s)` → `SCE_AVS_USERDFN`.
+//   7. Fall through → identifier bytes retain `SCE_AVS_IDENTIFIER`.
+//
+// **Case-INSENSITIVE identifier lookup.** `LexAVS.cxx:99, :189`
+// populate the identifier buffer via
+// `sc.GetCurrentLowered(s, sizeof(s))` — every collected byte is
+// lowered *before* the wordlist probe. Wordlist entries **must be
+// byte-canonical lowercase** to match at all. AviSynth source
+// uses PascalCase / camelCase / lowercase interchangeably (`Trim`
+// / `trim` / `TRIM` all match the same wordlist entry `trim`);
+// the wordlist author cannot preserve source casing. Same
+// case-insensitive contract as [`SCE_HB_WORD`] (VBScript), [`SCE_ADA_WORD`]
+// (Ada), [`SCE_F_WORD`] (Fortran), [`SCE_SQL_WORD`] (SQL).
+//
+// **Word grammar.** `LexAVS.cxx:32-38` defines identifier chars
+// as ASCII alphanumeric OR `_` (`IsAWordChar`), and word starts
+// as `isalpha(ch)` OR any non-space/newline/`(`/`.`/`,` char
+// (`IsAWordStart` — deliberately permissive; the closer at
+// `:97-115` will bail on non-`IsAWordChar` if no match). No
+// Unicode support.
+//
+// **Nested block comments** — two distinct nesting families with
+// per-line depth tracking:
+//   - `SCE_AVS_COMMENTBLOCK` (1) — `/*...*/` style (C-family
+//     convention).
+//   - `SCE_AVS_COMMENTBLOCKN` (2) — `[*...*]` style (AviSynth's
+//     own convention, distinct namespace so `[*` inside `/*`
+//     doesn't affect the outer depth). Same "N" suffix
+//     convention as OScript's nested comment state.
+// Both track depth via `blockCommentLevel` at `:63, :80, :117-136`;
+// depth is preserved across lines via `styler.SetLineState`
+// (`:81, :84`). Framework routes both to `StyleSlot::Comment` —
+// same collapse discipline as C's `SCE_C_COMMENT` /
+// `SCE_C_COMMENTDOC` / `SCE_C_COMMENTLINE` unification.
+//
+// **Triple-quoted strings.** `SCE_AVS_TRIPLESTRING` (8) at
+// `:146-152` covers `"""..."""` verbatim strings — AviSynth's
+// answer to raw string literals (no escape processing, embedded
+// `"` OK). Framework collapses with `SCE_AVS_STRING` (7) to
+// `StyleSlot::String` — same discipline as Python's SCE_P_STRING
+// / _CHARACTER / _TRIPLE / _TRIPLEDOUBLE quad-collapse.
+//
+// **`SCE_AVS_IDENTIFIER` (6)** — the transient collect state at
+// `:180` covering identifier-shaped bytes as they accumulate.
+// Exit paths mirror the LexAsn1 / LexSpice pattern:
+//   1. Match found via one of the six wordlists →
+//      `sc.ChangeState(...)` at `:102, :104, :106, :108, :110,
+//      :112` retroactively re-styles the collected bytes.
+//   2. No match → state stays `IDENTIFIER` when
+//      `SetState(SCE_AVS_DEFAULT)` fires at `:114`; the bytes
+//      keep the `IDENTIFIER` style at paint. Framework leaves
+//      `IDENTIFIER` unmapped so bareword tokens (variable
+//      references, `LoadPlugin` return-value bindings, iterator
+//      names inside `for`) fall through to `STYLE_DEFAULT` —
+//      same convention as `SCE_C_IDENTIFIER` /
+//      `SCE_ASN1_IDENTIFIER` / `SCE_SPICE_IDENTIFIER`.
+//
+// **No STRINGEOL / no error state.** LexAVS does not emit a
+// `SCE_AVS_STRINGEOL` or `SCE_AVS_STRING_ERROR` state for
+// unterminated strings — the string state simply keeps consuming
+// bytes until it hits the closing `"` or `"""`. If EOF arrives
+// mid-string, the state persists into the file's tail. This is
+// a deliberate simplification in the lexer's design; no
+// framework mapping needed.
+pub const SCLEX_AVS: usize = 104;
+pub const SCE_AVS_DEFAULT: usize = 0;
+pub const SCE_AVS_COMMENTBLOCK: usize = 1;
+pub const SCE_AVS_COMMENTBLOCKN: usize = 2;
+pub const SCE_AVS_COMMENTLINE: usize = 3;
+pub const SCE_AVS_NUMBER: usize = 4;
+pub const SCE_AVS_OPERATOR: usize = 5;
+pub const SCE_AVS_IDENTIFIER: usize = 6;
+pub const SCE_AVS_STRING: usize = 7;
+pub const SCE_AVS_TRIPLESTRING: usize = 8;
+pub const SCE_AVS_KEYWORD: usize = 9;
+pub const SCE_AVS_FILTER: usize = 10;
+pub const SCE_AVS_PLUGIN: usize = 11;
+pub const SCE_AVS_FUNCTION: usize = 12;
+pub const SCE_AVS_CLIPPROP: usize = 13;
+pub const SCE_AVS_USERDFN: usize = 14;
+
 // SCN_* notification codes (delivered via WM_NOTIFY's NMHDR.code) are added
 // when Phase 2+ first dispatches them. Each constant must be cross-checked
 // against `vendor/scintilla/include/Scintilla.h` at the time of addition;
