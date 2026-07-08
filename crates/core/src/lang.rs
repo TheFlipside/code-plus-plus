@@ -14746,6 +14746,172 @@ pub const BLITZBASIC_BUILTINS: &str = concat!(
     "loadsound playsound stopsound freesound runtimeerror",
 );
 
+/// Space-separated **`PureBasic` language keywords** installed as
+/// **class 0** of `LexBasic`'s wordlist descriptor
+/// (`SCE_B_KEYWORD`, primary bold slot) for `SCLEX_PUREBASIC`.
+///
+/// **Case-INSENSITIVE lookup** per `LexBasic.cxx:347` (shared with
+/// [`BLITZBASIC_KEYWORDS`]). Wordlist entries MUST be byte-canonical
+/// lowercase — source `Procedure`, `PROCEDURE`, `procedure` all
+/// match the single lowercase entry `procedure`.
+///
+/// **Contents authored clean-room from the `PureBasic` language
+/// reference** at <https://www.purebasic.com/documentation/> — no
+/// upstream Lexilla fixture exists for purebasic (checked
+/// `crates/scintilla-sys/vendor/lexilla/test/examples/` — no
+/// `purebasic/` subdirectory).
+///
+/// **Categories** (97 tokens):
+///   - **Procedure declaration** (10): `procedure` /
+///     `procedurereturn` / `proceduredll` / `procedurec` /
+///     `procedurecdll` / `endprocedure` / `declare` /
+///     `declaredll` / `declarec` / `declarecdll`.
+///   - **Prototype** (2): `prototype` / `prototypec`.
+///   - **Interface** (3): `interface` / `endinterface` /
+///     `extends`.
+///   - **Structure** (4): `structure` / `endstructure` /
+///     `structureunion` / `endstructureunion`.
+///   - **Enumeration** (3): `enumeration` / `endenumeration` /
+///     `enumerationbinary`.
+///   - **Macro** (3): `macro` / `endmacro` / `macroexpandedcount`.
+///   - **Module** (6): `module` / `endmodule` / `declaremodule`
+///     / `enddeclaremodule` / `usemodule` / `unusemodule`.
+///   - **Import** (4): `import` / `endimport` / `importc` /
+///     `endimportc`.
+///   - **Runtime / with block** (3): `runtime` / `with` /
+///     `endwith`.
+///   - **Control flow — decisions** (8): `if` / `elseif` /
+///     `else` / `endif` / `select` / `case` / `default` /
+///     `endselect`.
+///   - **Control flow — loops** (11): `for` / `to` / `step` /
+///     `next` / `foreach` / `while` / `wend` / `repeat` /
+///     `until` / `break` / `continue`.
+///   - **Jump + terminator** (4): `return` / `goto` / `gosub` /
+///     `end`.
+///   - **Variable declaration** (10): `global` / `protected` /
+///     `static` / `shared` / `threaded` / `newlist` / `newmap`
+///     / `dim` / `redim` / `define`.
+///   - **Data statement family** (5): `data` / `datasection` /
+///     `enddatasection` / `read` / `restore`.
+///   - **Word operators** (4): `and` / `or` / `not` / `xor`.
+///   - **Primitive type keywords** (11): `byte` / `ascii` /
+///     `word` / `unicode` / `character` / `long` / `integer` /
+///     `float` / `double` / `quad` / `string`.
+///   - **Compile-time operators** (2): `sizeof` / `offsetof`.
+///   - **Debug statements** (4): `debug` / `debuglevel` /
+///     `calldebugger` / `raiseerror`.
+///
+/// Note: `PureBasic` uses **sigils** (`.b` / `.a` / `.w` / `.u`
+/// / `.c` / `.l` / `.i` / `.f` / `.d` / `.q` / `.s`) for type
+/// declarations alongside bareword type names (`Define x.Integer`
+/// or `Define x.i`). Bareword type names are included in class 0
+/// because they appear as full-identifier tokens in idiomatic
+/// `PureBasic`. Unlike `Blitz3D` (which uses `$` / `%` / `#`
+/// exclusively and bareword types are BlitzMax-only), `PureBasic`
+/// idioms make both forms valid.
+///
+/// `#`-prefixed constants (`#True` / `#False` / `#Null` /
+/// `#PB_Any` / etc.) get `SCE_B_CONSTANT` paint via the sigil-
+/// entry path at `LexBasic.cxx:459-460` — no wordlist involvement.
+/// Bareword `True` / `False` / `Null` are NOT valid `PureBasic`
+/// tokens (they must be written with `#` prefix) and deliberately
+/// excluded.
+///
+/// **Cross-class disjointness with [`PUREBASIC_PREPROCESSOR`]** is
+/// invariant-tested. `LexBasic`'s classifier at `:348-352` uses
+/// **last-match-wins** (loop iterates classes 0..=3, `ChangeState`
+/// overwrites on every match) — a token in both class 0 and class
+/// 1 renders as `SCE_B_KEYWORD2` (class 1 wins), NOT
+/// `SCE_B_KEYWORD`. Disjointness eliminates that ambiguity.
+pub const PUREBASIC_KEYWORDS: &str = concat!(
+    // Procedure declaration.
+    "procedure procedurereturn proceduredll procedurec procedurecdll ",
+    "endprocedure declare declaredll declarec declarecdll ",
+    // Prototype.
+    "prototype prototypec ",
+    // Interface / structure / enumeration / macro.
+    "interface endinterface extends ",
+    "structure endstructure structureunion endstructureunion ",
+    "enumeration endenumeration enumerationbinary ",
+    "macro endmacro macroexpandedcount ",
+    // Module / import / runtime / with.
+    "module endmodule declaremodule enddeclaremodule usemodule unusemodule ",
+    "import endimport importc endimportc ",
+    "runtime with endwith ",
+    // Control flow — decisions.
+    "if elseif else endif select case default endselect ",
+    // Control flow — loops + break/continue.
+    "for to step next foreach while wend repeat until break continue ",
+    // Jump + terminator.
+    "return goto gosub end ",
+    // Variable declaration.
+    "global protected static shared threaded newlist newmap dim redim define ",
+    // Data statement family.
+    "data datasection enddatasection read restore ",
+    // Word operators.
+    "and or not xor ",
+    // Primitive type keywords.
+    "byte ascii word unicode character long integer float double quad string ",
+    // Compile-time operators.
+    "sizeof offsetof ",
+    // Debug statements.
+    "debug debuglevel calldebugger raiseerror",
+);
+
+/// Space-separated **`PureBasic` compiler / preprocessor
+/// directives** installed as **class 1** of `LexBasic`'s wordlist
+/// descriptor (`SCE_B_KEYWORD2`, secondary slot) for
+/// `SCLEX_PUREBASIC`.
+///
+/// `LexBasic.cxx:188-194` explicitly names class 1 as `"PureBasic
+/// PreProcessor Keywords"` — the only member of the `LexBasic`
+/// family whose class 1 has a specific semantic assignment.
+/// (`BlitzBasic` and `FreeBasic` label class 1 as generic
+/// `user1` / user-defined slots.)
+///
+/// **Case-INSENSITIVE lookup** per [`PUREBASIC_KEYWORDS`]. All
+/// entries lowercase.
+///
+/// **Contents authored clean-room from the `PureBasic` compiler
+/// directives reference** at
+/// <https://www.purebasic.com/documentation/reference/>.
+///
+/// **Categories** (18 tokens):
+///   - **Compile-time conditionals** (4): `compilerif` /
+///     `compilerelseif` / `compilerelse` / `compilerendif`.
+///   - **Compile-time select** (4): `compilerselect` /
+///     `compilercase` / `compilerdefault` / `compilerendselect`.
+///   - **Compile-time diagnostic** (2): `compilererror` /
+///     `compilerwarning`.
+///   - **Compiler modes** (2): `enableexplicit` /
+///     `disableexplicit`.
+///   - **File inclusion** (4): `includefile` / `xincludefile` /
+///     `includepath` / `includebinary`.
+///   - **Other compile-time** (2): `enableasm` / `disableasm`.
+///
+/// **Cross-class disjointness with [`PUREBASIC_KEYWORDS`]** is
+/// invariant-tested. See the class-0 docstring for the
+/// last-match-wins rationale — a class-0 token duplicated in
+/// class 1 would render as `SCE_B_KEYWORD2` (correct), but a
+/// class-1 preprocessor directive duplicated in class 0 would
+/// still render as `SCE_B_KEYWORD2` (last match wins), silently
+/// masking the intended Keyword paint. Both directions are
+/// pinned by the invariant test.
+pub const PUREBASIC_PREPROCESSOR: &str = concat!(
+    // Compile-time conditionals.
+    "compilerif compilerelseif compilerelse compilerendif ",
+    // Compile-time select.
+    "compilerselect compilercase compilerdefault compilerendselect ",
+    // Compile-time diagnostic.
+    "compilererror compilerwarning ",
+    // Compiler modes.
+    "enableexplicit disableexplicit ",
+    // File inclusion.
+    "includefile xincludefile includepath includebinary ",
+    // Other compile-time.
+    "enableasm disableasm",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;

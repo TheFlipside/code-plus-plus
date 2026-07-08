@@ -124,7 +124,7 @@ list. This mirrors the `CPP_STYLES` pattern across LexCPP family.
 Subsequent commits add rows row-by-row. The matrix's
 percentage updates per ✅ promotion.
 
-Total: 89 rows. ✅ 82 / 🟡 6 / ⚫ 1.
+Total: 89 rows. ✅ 83 / 🟡 5 / ⚫ 1.
 
 **C# (2026-05-13):** rides the shared `CPP_STYLES` / `CPP_ITALIC` /
 `CPP_BOLD` table from the LexCPP family — only the keyword list
@@ -1905,7 +1905,7 @@ further shim work needed.
 | PostScript | 35 | `ps` | ✅ | ✅ | ✅ |
 | PowerShell | 53 | `powershell` | ✅ | ✅ | ✅ |
 | Properties | 34 | `props` | — | ✅ | ✅ |
-| Purebasic | 68 | `purebasic` | ⚫ | ⚫ | 🟡 |
+| Purebasic | 68 | `purebasic` | ✅ | ✅ | ✅ |
 | Python | 22 | `python` | ✅ | ✅ | ✅ |
 | R | 54 | `r` | ✅ | ✅ | ✅ |
 | Raku | 89 | `raku` | ✅ | ✅ | ✅ |
@@ -9737,6 +9737,188 @@ and ambiguous-token dominance
 statement keyword, NOT class 1
 built-in — Blitz3D has no
 bareword `read` function).
+
+**Purebasic (2026-07-08):** rides
+Lexilla's `purebasic` lexer
+(`LexBasic.cxx`) — the second
+of the three-family `LexBasic`
+shared lexer. Extension `.pb`.
+General-purpose language with
+strong compile-time
+metaprogramming (procedures,
+structures, modules, macros,
+compiler directives).
+
+**Semantically-typed class 1
+(unlike BlitzBasic).**
+`purebasicWordListDesc[]:190`
+labels class 1 as **"PureBasic
+PreProcessor Keywords"** — the
+ONLY `LexBasic` family member
+whose class 1 has a specific
+semantic assignment (BlitzBasic
+and FreeBasic label class 1 as
+generic `user1` slots). Code++
+therefore routes `SCE_B_KEYWORD2`
+→ `StyleSlot::Preprocessor` for
+the PureBasic theme, giving
+compile-time directives
+(`CompilerIf` / `EnableExplicit`
+/ `IncludeFile`) a distinct
+magenta paint versus the
+Keyword blue of language
+keywords — matching the
+C-family `SCE_C_PREPROCESSOR`
+convention that renders
+`#if` / `#define` distinctly
+from `if` / `while`. This is a
+**divergence from BlitzBasic**
+where the same `SCE_B_KEYWORD2`
+routes to Keyword2 (steel blue)
+for the Blitz3D stdlib
+repurposing. The load-bearing
+semantic difference between
+the two themes.
+
+**Two-class wordlist install.**
+Classes 2 (user defined 1) and
+3 (user defined 2) remain
+uninstalled by design — same
+discipline as BlitzBasic's
+user1/user2 slots.
+
+- **Class 0 — `PUREBASIC_KEYWORDS`**
+  (bold Keyword, 97 tokens):
+  language grammar —
+  procedure declaration
+  (`procedure` /
+  `endprocedure` / `declare` /
+  `procedurereturn`), interfaces
+  and structures (`interface` /
+  `structure` / `enumeration` /
+  `macro` / `module`), control
+  flow (`if` / `for` / `while`
+  / `foreach` / `select` /
+  `break` / `continue`), data
+  section (`data` /
+  `datasection` /
+  `enddatasection`), word
+  operators (`and` / `or` /
+  `not` / `xor`), primitive
+  types as barewords (`byte`
+  / `word` / `long` /
+  `integer` / `float` /
+  `double` / `quad` /
+  `string` / `ascii` /
+  `unicode` / `character`),
+  compile-time operators
+  (`sizeof` / `offsetof`),
+  debug (`debug` /
+  `debuglevel` /
+  `calldebugger` /
+  `raiseerror`).
+- **Class 1 —
+  `PUREBASIC_PREPROCESSOR`**
+  (Preprocessor, 18 tokens):
+  compile-time conditionals
+  (`compilerif` /
+  `compilerelseif` /
+  `compilerelse` /
+  `compilerendif`),
+  compile-time select
+  (`compilerselect` /
+  `compilercase` /
+  `compilerdefault` /
+  `compilerendselect`),
+  compile-time diagnostic
+  (`compilererror` /
+  `compilerwarning`),
+  compiler modes
+  (`enableexplicit` /
+  `disableexplicit` /
+  `enableasm` / `disableasm`),
+  file inclusion
+  (`includefile` /
+  `xincludefile` /
+  `includepath` /
+  `includebinary`).
+
+**Bareword type keywords ARE
+included** for PureBasic —
+unlike BlitzBasic which uses
+sigils exclusively. PureBasic
+supports both sigil form
+(`Define x.i`) and bareword
+form (`Define x.Integer`); both
+render `Integer` (lowered to
+`integer`) as a class-0 token.
+`BlitzMax`-style bareword type
+keywords in the class 0 list.
+
+`#`-prefixed constants
+(`#True` / `#False` / `#Null`
+/ `#PB_Any` / user's own
+`#MY_CONST`) get
+`SCE_B_CONSTANT` paint via the
+sigil-entry path at
+`LexBasic.cxx:459-460` — no
+wordlist involvement. Bareword
+`True` / `False` / `Null` are
+NOT valid PureBasic tokens
+(must be written with `#`
+prefix) and deliberately
+excluded from class 0.
+
+**Contents authored clean-room**
+from the PureBasic language
+reference at
+<https://www.purebasic.com/documentation/>
+— no upstream Lexilla fixture
+exists for purebasic (checked
+`crates/scintilla-sys/vendor/
+lexilla/test/examples/` — no
+`purebasic/` subdirectory).
+
+**17-style-mapping table.**
+Same 23-slot SCE_B_* namespace
+as BlitzBasic — 6 unmapped
+(DEFAULT / IDENTIFIER dead-
+state pair, DATE / STRINGEOL /
+ASM lexer-dead, ERROR deferred
+`StyleSlot::Error`). 16
+mappings are identical to
+BlitzBasic; the 17th
+(`SCE_B_KEYWORD2`) diverges to
+Preprocessor as documented
+above.
+
+**Case-insensitive discipline**
+identical to BlitzBasic per
+`LexBasic.cxx:347` shared paint
+loop. Wordlist entries must be
+byte-canonical lowercase.
+
+Structural test coverage: **20
+invariants** including cross-
+class disjointness pin,
+canonical anchor pins for each
+class (language keywords /
+preprocessor directives),
+bareword type keyword pin (11
+PureBasic-specific type names
+in class 0), compile-time
+operator pin (`sizeof` /
+`offsetof`), debug statement
+pin, and the load-bearing
+**KEYWORD2 divergence pin**
+that explicitly asserts
+PureBasic routes
+`SCE_B_KEYWORD2` to Preprocessor
+AND BlitzBasic routes the same
+constant to Keyword2 — proving
+the two themes really do
+differ where the wordlist
+descriptors say they should.
 
 ## Notes
 

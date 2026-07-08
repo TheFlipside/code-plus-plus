@@ -128,28 +128,28 @@ use codepp_core::lang::{
     L_FORTRAN_77, L_GDSCRIPT, L_GOLANG, L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_IHEX, L_INI,
     L_INNO, L_JAVA, L_JAVASCRIPT, L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA,
     L_MAKEFILE, L_MATLAB, L_MMIXAL, L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL,
-    L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY,
-    L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL, L_TEHEX, L_TEX,
-    L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML,
-    MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+    L_PERL, L_PHP, L_POWERSHELL, L_PROPS, L_PS, L_PUREBASIC, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL,
+    L_REGISTRY, L_RUBY, L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL,
+    L_TEHEX, L_TEX, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML,
+    L_YAML, MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
     MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
     NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
     OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
     OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
     POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
-    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-    PYTHON_KEYWORDS_2, RAKU_ADVERBS, RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC,
-    RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD,
-    REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS,
-    R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
-    SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS,
-    SQL_KEYWORDS_2, SWIFT_KEYWORDS, SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS,
-    TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
-    VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2, VERILOG_KEYWORDS, VERILOG_KEYWORDS_2,
-    VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS, VHDL_OPERATORS, VHDL_STDFUNCTIONS,
-    VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS, VISUALPROLOG_DIRECTIVE_KEYWORDS,
-    VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS, VISUALPROLOG_MINOR_KEYWORDS,
-    XML_KEYWORDS, YAML_KEYWORDS,
+    POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
+    PUREBASIC_KEYWORDS, PUREBASIC_PREPROCESSOR, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2, RAKU_ADVERBS,
+    RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN,
+    RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3, REBOL_WORD4,
+    REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED,
+    SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW, SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS,
+    SPICE_KEYWORDS2, SPICE_KEYWORDS3, SQL_KEYWORDS, SQL_KEYWORDS_2, SWIFT_KEYWORDS,
+    SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS, TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS,
+    TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2, VBSCRIPT_KEYWORDS, VB_KEYWORDS, VB_KEYWORDS_2,
+    VERILOG_KEYWORDS, VERILOG_KEYWORDS_2, VERILOG_SYSTEM_TASKS, VHDL_ATTRIBUTES, VHDL_KEYWORDS,
+    VHDL_OPERATORS, VHDL_STDFUNCTIONS, VHDL_STDPACKAGES, VHDL_STDTYPES, VHDL_USERWORDS,
+    VISUALPROLOG_DIRECTIVE_KEYWORDS, VISUALPROLOG_DOC_KEYWORDS, VISUALPROLOG_MAJOR_KEYWORDS,
+    VISUALPROLOG_MINOR_KEYWORDS, XML_KEYWORDS, YAML_KEYWORDS,
 };
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
@@ -6091,7 +6091,7 @@ const AVS_THEME: LangTheme = LangTheme {
 //
 // Mapped slots (17):
 //   * `COMMENT` (1) → Comment italic — `;`-to-EOL line comments
-//     (BlitzBasic's comment character per `LexerFactoryBlitzBasic`
+//     (`BlitzBasic`'s comment character per `LexerFactoryBlitzBasic`
 //     at `LexBasic.cxx:277`).
 //   * `NUMBER` (2) → Number — decimal digit runs.
 //   * `KEYWORD` (3) → Keyword bold — class 0 language keywords
@@ -6101,7 +6101,7 @@ const AVS_THEME: LangTheme = LangTheme {
 //     **unreachable in BlitzBasic**. The trigger at
 //     `LexBasic.cxx:437` is gated on `comment_char == '\''`
 //     (FreeBasic-only, the "deprecated QBASIC `'$Include`" hack).
-//     BlitzBasic's comment char is `;`, so PREPROCESSOR never
+//     `BlitzBasic`'s comment char is `;`, so PREPROCESSOR never
 //     fires. Mapping preserves the paint for future FreeBasic
 //     wiring; harmless for BlitzBasic.
 //   * `OPERATOR` (6) → Operator — arithmetic / comparison /
@@ -6153,7 +6153,7 @@ const AVS_THEME: LangTheme = LangTheme {
 //     DOCBLOCK. Distinct paint so the reader sees the tag
 //     separately from the surrounding doc-comment prose.
 //
-// Palette rationale: BlitzBasic's classic use-case is game +
+// Palette rationale: `BlitzBasic`'s classic use-case is game +
 // script code with strong control-flow anchors and a large
 // standard library. The Keyword / Keyword2 split cleanly
 // separates language grammar from stdlib API surface. CONSTANT
@@ -6217,6 +6217,104 @@ const BLITZBASIC_THEME: LangTheme = LangTheme {
     styles: BLITZBASIC_STYLES,
     italic: BLITZBASIC_ITALIC,
     bold: BLITZBASIC_BOLD,
+};
+
+// --- LexBasic (PureBasic dialect) ---
+// PureBasic — general-purpose programming language (extension
+// `.pb`) with strong compile-time metaprogramming features
+// (procedures, structures, modules, macros, compiler directives).
+// `L_PUREBASIC` (id 68) rides the same shared `LexBasic` lexer as
+// BlitzBasic; per-family differences are only the comment
+// character (`;` — shared with BlitzBasic per
+// `LexBasic.cxx:280`), the fold-check function
+// (`CheckPureFoldPoint` at `:116-131` recognises
+// `procedure` / `enumeration` / `interface` / `structure` as
+// fold points), and the wordlist descriptor
+// (`purebasicWordListDesc[]` at `:188-194`).
+//
+// **Class 1 has semantic meaning here — unlike BlitzBasic.**
+// `purebasicWordListDesc[]:190` labels class 1 as `"PureBasic
+// PreProcessor Keywords"` — the ONLY member of the `LexBasic`
+// family whose class 1 has a specific assigned purpose. Code++
+// therefore routes `SCE_B_KEYWORD2` → `StyleSlot::Preprocessor`
+// for the PureBasic theme (magenta / distinct color), rather
+// than the generic Keyword2 accent used by BlitzBasic. This
+// visually separates compile-time directives (`CompilerIf` /
+// `EnableExplicit` / `IncludeFile`) from language keywords
+// (`Procedure` / `If` / `For`) — matching the C-family
+// `SCE_C_PREPROCESSOR` convention that renders `#if` / `#define`
+// distinctly from `if` / `while`.
+//
+// Same paint-loop as BlitzBasic — see the BLITZBASIC_STYLES
+// banner above for the full per-state analysis. This banner
+// documents only the PureBasic-specific deviations:
+//
+//   * `KEYWORD2` (10) → **Preprocessor** (magenta) — class 1
+//     compile-time directives. BlitzBasic routes this to
+//     Keyword2; PureBasic routes to Preprocessor since the
+//     class semantically IS preprocessor per the descriptor.
+//   * `KEYWORD3` (11) → Preprocessor — class 2 user-defined 1.
+//     Kept at Preprocessor same as BlitzBasic for consistency;
+//     empty by config.
+//   * `KEYWORD4` (12) → Lifetime — class 3 user-defined 2.
+//     Kept at Lifetime same as BlitzBasic; empty by config.
+//   * All other slots (COMMENT / NUMBER / KEYWORD / STRING /
+//     PREPROCESSOR / OPERATOR / CONSTANT / LABEL / HEXNUMBER /
+//     BINNUMBER / COMMENTBLOCK / DOCLINE / DOCBLOCK /
+//     DOCKEYWORD) route identically to BlitzBasic.
+//
+// **DOCLINE / DOCBLOCK / PREPROCESSOR (SCE_B_PREPROCESSOR — the
+// FreeBasic `'$Include` hack)** all remain dead in PureBasic
+// same as BlitzBasic — their triggers hard-code `'`, not the
+// per-family comment_char. Mapping preserves the paint for
+// future FreeBasic wiring; harmless for PureBasic.
+const PUREBASIC_STYLES: &[(usize, StyleSlot)] = &[
+    (SCE_B_COMMENT, StyleSlot::Comment),
+    (SCE_B_NUMBER, StyleSlot::Number),
+    (SCE_B_KEYWORD, StyleSlot::Keyword),
+    (SCE_B_STRING, StyleSlot::String),
+    (SCE_B_PREPROCESSOR, StyleSlot::Preprocessor),
+    (SCE_B_OPERATOR, StyleSlot::Operator),
+    (SCE_B_KEYWORD2, StyleSlot::Preprocessor),
+    (SCE_B_KEYWORD3, StyleSlot::Preprocessor),
+    (SCE_B_KEYWORD4, StyleSlot::Lifetime),
+    (SCE_B_CONSTANT, StyleSlot::Macro),
+    (SCE_B_LABEL, StyleSlot::Macro),
+    (SCE_B_HEXNUMBER, StyleSlot::Number),
+    (SCE_B_BINNUMBER, StyleSlot::Number),
+    (SCE_B_COMMENTBLOCK, StyleSlot::Comment),
+    (SCE_B_DOCLINE, StyleSlot::Comment),
+    (SCE_B_DOCBLOCK, StyleSlot::Comment),
+    (SCE_B_DOCKEYWORD, StyleSlot::Preprocessor),
+];
+
+// Italic on all four comment forms — matches BlitzBasic
+// discipline verbatim. DOCLINE / DOCBLOCK dead in PureBasic
+// per the banner but preserved for future FreeBasic reuse.
+const PUREBASIC_ITALIC: &[usize] = &[
+    SCE_B_COMMENT,
+    SCE_B_COMMENTBLOCK,
+    SCE_B_DOCLINE,
+    SCE_B_DOCBLOCK,
+];
+
+// Bold on KEYWORD (class 0) — same discipline as BlitzBasic /
+// every other Code++ theme with a primary structural anchor.
+const PUREBASIC_BOLD: &[usize] = &[SCE_B_KEYWORD];
+
+// Two-class install matching `purebasicWordListDesc[]` at
+// `LexBasic.cxx:188-194`. Class 0 is "PureBasic Keywords"
+// (language grammar), class 1 is "PureBasic PreProcessor
+// Keywords" (compile-time directives). Classes 2 and 3
+// ("user defined 1" / "user defined 2") remain uninstalled
+// by config — same discipline as `BlitzBasic`'s user1/user2
+// slots. Last-match-wins across the four classes; class-0-vs-
+// class-1 disjointness is invariant-tested.
+const PUREBASIC_THEME: LangTheme = LangTheme {
+    keywords: &[(0, PUREBASIC_KEYWORDS), (1, PUREBASIC_PREPROCESSOR)],
+    styles: PUREBASIC_STYLES,
+    italic: PUREBASIC_ITALIC,
+    bold: PUREBASIC_BOLD,
 };
 
 // --- LexTxt2tags ---
@@ -11304,6 +11402,8 @@ fn lang_theme(lang: LangType) -> Option<&'static LangTheme> {
         Some(&AVS_THEME)
     } else if lang == L_BLITZBASIC {
         Some(&BLITZBASIC_THEME)
+    } else if lang == L_PUREBASIC {
+        Some(&PUREBASIC_THEME)
     } else if lang == L_TXT2TAGS {
         Some(&TXT2TAGS_THEME)
     } else if lang == L_TYPESCRIPT {
@@ -26471,28 +26571,28 @@ mod lang_theme_tests {
         GDSCRIPT_STYLES, HOLLYWOOD_BOLD, HOLLYWOOD_ITALIC, HOLLYWOOD_STYLES, IHEX_STYLES,
         MMIXAL_BOLD, MMIXAL_ITALIC, MMIXAL_STYLES, NIM_BOLD, NIM_ITALIC, NIM_STYLES,
         NNCRONTAB_BOLD, NNCRONTAB_ITALIC, NNCRONTAB_STYLES, OSCRIPT_BOLD, OSCRIPT_ITALIC,
-        OSCRIPT_STYLES, RAKU_BOLD, RAKU_ITALIC, RAKU_STYLES, REBOL_BOLD, REBOL_ITALIC,
-        REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC, REGISTRY_STYLES, SCE_ADA_CHARACTER,
-        SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL,
-        SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD,
-        SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE,
-        SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND,
-        SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER, SCE_ASM_OPERATOR,
-        SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_ASN1_ATTRIBUTE,
-        SCE_ASN1_COMMENT, SCE_ASN1_DESCRIPTOR, SCE_ASN1_KEYWORD, SCE_ASN1_OID, SCE_ASN1_OPERATOR,
-        SCE_ASN1_SCALAR, SCE_ASN1_STRING, SCE_ASN1_TYPE, SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK,
-        SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD, SCE_AU3_MACRO,
-        SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT, SCE_AU3_SPECIAL,
-        SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_AVS_CLIPPROP, SCE_AVS_COMMENTBLOCK,
-        SCE_AVS_COMMENTBLOCKN, SCE_AVS_COMMENTLINE, SCE_AVS_FILTER, SCE_AVS_FUNCTION,
-        SCE_AVS_KEYWORD, SCE_AVS_NUMBER, SCE_AVS_OPERATOR, SCE_AVS_PLUGIN, SCE_AVS_STRING,
-        SCE_AVS_TRIPLESTRING, SCE_B_BINNUMBER, SCE_B_COMMENT, SCE_B_COMMENTBLOCK, SCE_B_CONSTANT,
-        SCE_B_DOCBLOCK, SCE_B_DOCKEYWORD, SCE_B_DOCLINE, SCE_B_HEXNUMBER, SCE_B_KEYWORD,
-        SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4, SCE_B_LABEL, SCE_B_NUMBER, SCE_B_OPERATOR,
-        SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CAML_CHAR, SCE_CAML_COMMENT, SCE_CAML_COMMENT1,
-        SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2,
-        SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR, SCE_CAML_STRING,
-        SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS, SCE_CMAKE_COMMENT,
+        OSCRIPT_STYLES, PUREBASIC_BOLD, PUREBASIC_ITALIC, PUREBASIC_STYLES, RAKU_BOLD, RAKU_ITALIC,
+        RAKU_STYLES, REBOL_BOLD, REBOL_ITALIC, REBOL_STYLES, REGISTRY_BOLD, REGISTRY_ITALIC,
+        REGISTRY_STYLES, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE,
+        SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING,
+        SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
+        SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
+        SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
+        SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
+        SCE_ASN1_ATTRIBUTE, SCE_ASN1_COMMENT, SCE_ASN1_DESCRIPTOR, SCE_ASN1_KEYWORD, SCE_ASN1_OID,
+        SCE_ASN1_OPERATOR, SCE_ASN1_SCALAR, SCE_ASN1_STRING, SCE_ASN1_TYPE, SCE_AU3_COMMENT,
+        SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
+        SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT,
+        SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_AVS_CLIPPROP,
+        SCE_AVS_COMMENTBLOCK, SCE_AVS_COMMENTBLOCKN, SCE_AVS_COMMENTLINE, SCE_AVS_FILTER,
+        SCE_AVS_FUNCTION, SCE_AVS_KEYWORD, SCE_AVS_NUMBER, SCE_AVS_OPERATOR, SCE_AVS_PLUGIN,
+        SCE_AVS_STRING, SCE_AVS_TRIPLESTRING, SCE_B_BINNUMBER, SCE_B_COMMENT, SCE_B_COMMENTBLOCK,
+        SCE_B_CONSTANT, SCE_B_DOCBLOCK, SCE_B_DOCKEYWORD, SCE_B_DOCLINE, SCE_B_HEXNUMBER,
+        SCE_B_KEYWORD, SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4, SCE_B_LABEL, SCE_B_NUMBER,
+        SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CAML_CHAR, SCE_CAML_COMMENT,
+        SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD,
+        SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR,
+        SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS, SCE_CMAKE_COMMENT,
         SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF, SCE_CMAKE_NUMBER,
         SCE_CMAKE_PARAMETERS, SCE_CMAKE_STRINGDQ, SCE_CMAKE_STRINGLQ, SCE_CMAKE_STRINGRQ,
         SCE_CMAKE_STRINGVAR, SCE_CMAKE_USERDEFINED, SCE_CMAKE_VARIABLE, SCE_CMAKE_WHILEDEF,
@@ -26568,20 +26668,21 @@ mod lang_theme_tests {
         L_GUI4CLI, L_HASKELL, L_HOLLYWOOD, L_HTML, L_IHEX, L_INI, L_INNO, L_JAVA, L_JAVASCRIPT,
         L_JSON, L_JSON5, L_JSP, L_KIX, L_LATEX, L_LISP, L_LUA, L_MAKEFILE, L_MATLAB, L_MMIXAL,
         L_NIM, L_NNCRONTAB, L_NSIS, L_OBJC, L_OSCRIPT, L_PASCAL, L_PERL, L_PHP, L_POWERSHELL,
-        L_PROPS, L_PS, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY, L_RUST, L_SCHEME,
-        L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL, L_TEHEX, L_TEX, L_TEXT, L_TXT2TAGS,
-        L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML, MAKEFILE_KEYWORDS,
-        MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS, MMIXAL_SPECIAL_REGISTERS,
-        NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS, NNCRONTAB_SECTIONS, NSIS_FUNCTIONS,
-        NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2, OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS,
-        OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS, OSCRIPT_TYPES, PASCAL_KEYWORDS,
-        PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES, POWERSHELL_CMDLETS,
-        POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS, POWERSHELL_USER1,
-        PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS, PYTHON_KEYWORDS,
-        PYTHON_KEYWORDS_2, RAKU_ADVERBS, RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC,
-        RAKU_TYPES_COMPOSITE, RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD,
-        REBOL_WORD2, REBOL_WORD3, REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS,
-        R_BASE_FUNCTIONS, R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
+        L_PROPS, L_PS, L_PUREBASIC, L_PYTHON, L_R, L_RAKU, L_RC, L_REBOL, L_REGISTRY, L_RUBY,
+        L_RUST, L_SCHEME, L_SMALLTALK, L_SPICE, L_SQL, L_SREC, L_SWIFT, L_TCL, L_TEHEX, L_TEX,
+        L_TEXT, L_TXT2TAGS, L_TYPESCRIPT, L_VB, L_VERILOG, L_VHDL, L_VISUALPROLOG, L_XML, L_YAML,
+        MAKEFILE_KEYWORDS, MATLAB_KEYWORDS, MMIXAL_OPCODES, MMIXAL_PREDEF_SYMBOLS,
+        MMIXAL_SPECIAL_REGISTERS, NIM_KEYWORDS, NNCRONTAB_KEYWORDS, NNCRONTAB_MODIFIERS,
+        NNCRONTAB_SECTIONS, NSIS_FUNCTIONS, NSIS_VARIABLES, OBJC_KEYWORDS, OBJC_KEYWORDS_2,
+        OSCRIPT_CONSTANTS, OSCRIPT_FUNCTIONS, OSCRIPT_KEYWORDS, OSCRIPT_OBJECTS, OSCRIPT_OPERATORS,
+        OSCRIPT_TYPES, PASCAL_KEYWORDS, PERL_KEYWORDS, PHP_KEYWORDS, POWERSHELL_ALIASES,
+        POWERSHELL_CMDLETS, POWERSHELL_DOC_KEYWORDS, POWERSHELL_FUNCTIONS, POWERSHELL_KEYWORDS,
+        POWERSHELL_USER1, PS_LEVEL1_KEYWORDS, PS_LEVEL2_KEYWORDS, PS_LEVEL3_KEYWORDS,
+        PUREBASIC_KEYWORDS, PUREBASIC_PREPROCESSOR, PYTHON_KEYWORDS, PYTHON_KEYWORDS_2,
+        RAKU_ADVERBS, RAKU_FUNCTIONS, RAKU_KEYWORDS, RAKU_TYPES_BASIC, RAKU_TYPES_COMPOSITE,
+        RAKU_TYPES_DOMAIN, RAKU_TYPES_EXCEPTION, RC_KEYWORDS, REBOL_WORD, REBOL_WORD2, REBOL_WORD3,
+        REBOL_WORD4, REBOL_WORD5, RUBY_KEYWORDS, RUST_KEYWORDS, R_BASE_FUNCTIONS,
+        R_OTHER_FUNCTIONS, R_RESERVED, SCHEME_KEYWORDS, SCHEME_KEYWORDS_KW,
         SMALLTALK_SPECIAL_SELECTORS, SPICE_KEYWORDS, SPICE_KEYWORDS2, SPICE_KEYWORDS3,
         SQL_KEYWORDS, SQL_KEYWORDS_2, SWIFT_KEYWORDS, SWIFT_KEYWORDS_2, TCL_ITCL_KEYWORDS,
         TCL_KEYWORDS, TCL_TK_COMMANDS, TCL_TK_KEYWORDS, TYPESCRIPT_KEYWORDS, TYPESCRIPT_KEYWORDS_2,
@@ -26739,6 +26840,7 @@ mod lang_theme_tests {
             (L_ASN1, "ASN.1"),
             (L_AVS, "AviSynth"),
             (L_BLITZBASIC, "Blitzbasic"),
+            (L_PUREBASIC, "Purebasic"),
         ] {
             let theme = lang_theme(lang).unwrap_or_else(|| panic!("no theme for {name}"));
             assert!(
@@ -45839,6 +45941,373 @@ mod lang_theme_tests {
             "`read` must NOT be in BLITZBASIC_BUILTINS — last-match- \
              wins would mask the class-0 Keyword paint. File-read \
              functions are `readbyte`, `readstring`, etc."
+        );
+    }
+
+    /// `PureBasic` uses Lexilla's `purebasic` lexer
+    /// (`LexBasic.cxx`) — the shared `LexBasic` family (see
+    /// `blitzbasic_uses_lexbasic_two_class_theme` for the shared
+    /// state analysis). PureBasic-specific: class 1 is
+    /// **semantically preprocessor** per
+    /// `purebasicWordListDesc[]:190`, so `SCE_B_KEYWORD2` routes
+    /// to `StyleSlot::Preprocessor` (distinct from `BlitzBasic`'s
+    /// Keyword2 mapping). Extension `.pb`. Included in
+    /// `wired_languages_have_complete_themes` — 17 style mappings.
+    ///
+    /// This dedicated test pins:
+    ///
+    ///   1. Deep-value identity (styles / italic / bold / two
+    ///      populated keyword classes).
+    ///   2. 17-mapping style-count matching `BlitzBasic`.
+    ///   3. Two populated classes in canonical order (class 0
+    ///      "`PureBasic` Keywords", class 1 "`PureBasic`
+    ///      `PreProcessor` Keywords").
+    ///   4. Both populated classes non-empty.
+    ///   5. **Cross-class disjointness** — LOAD-BEARING for the
+    ///      last-match-wins classifier.
+    ///   6. Style-routing pins for all 17 mapped constants,
+    ///      including the **PureBasic-specific divergence** —
+    ///      `SCE_B_KEYWORD2` → Preprocessor (NOT Keyword2 as
+    ///      in `BlitzBasic`).
+    ///   7. Framework-unmapped slots confirmed absent.
+    ///   8. Italic == 4 (all four comment forms).
+    ///   9. Bold == 1 (KEYWORD only).
+    ///   10. Cross-language non-reuse (sampled) — including
+    ///       explicit non-reuse against `BlitzBasic` (same
+    ///       lexer family but different KEYWORD2 mapping).
+    ///   11. `L_PUREBASIC` `LangEntry` has `lexer:
+    ///       Some("purebasic")` and `.pb` extension.
+    ///   12. All-lowercase alphabet enforcement across both
+    ///       classes.
+    ///   13. **Canonical class-0 KEYWORD anchors** — `procedure`,
+    ///       `endprocedure`, `structure`, `interface`,
+    ///       `enumeration`, `module`, `macro`, `if`, `for`,
+    ///       `while`, `select`, `foreach`, `break`, `continue`.
+    ///   14. **Canonical class-1 PREPROCESSOR anchors** —
+    ///       `compilerif`, `compilerelse`, `compilerendif`,
+    ///       `compilerselect`, `compilercase`, `enableexplicit`,
+    ///       `includefile`, `xincludefile`.
+    ///   15. **PureBasic-specific type keywords** — `integer`,
+    ///       `float`, `string`, `byte`, `word`, `long`, `quad`,
+    ///       `double`, `ascii`, `unicode`, `character` in
+    ///       class 0. Unlike `BlitzBasic` (which relies on sigils
+    ///       exclusively), `PureBasic` supports bareword type
+    ///       names in declarations.
+    ///   16. **Compile-time operators** — `sizeof` / `offsetof`
+    ///       in class 0.
+    ///   17. **Debug statements** — `debug` / `debuglevel` /
+    ///       `calldebugger` / `raiseerror` in class 0.
+    ///   18. Highest-defined `SCE_B_*` pin (shared with BB).
+    ///   19. No duplicate tokens within any wordlist.
+    ///   20. **KEYWORD2 divergence pin** — asserts
+    ///       `SCE_B_KEYWORD2` → Preprocessor for `PureBasic` AND
+    ///       Keyword2 for `BlitzBasic`. This is the load-bearing
+    ///       semantic difference between the two themes.
+    #[test]
+    fn purebasic_uses_lexbasic_two_class_theme() {
+        use codepp_scintilla_sys::{
+            SCE_B_ASM, SCE_B_DATE, SCE_B_DEFAULT, SCE_B_ERROR, SCE_B_IDENTIFIER, SCE_B_STRINGEOL,
+        };
+        let pb = lang_theme(L_PUREBASIC).expect("PureBasic wired");
+
+        // Invariant 1: deep-value identity pin.
+        assert_eq!(pb.styles, PUREBASIC_STYLES);
+        assert_eq!(pb.italic, PUREBASIC_ITALIC);
+        assert_eq!(pb.bold, PUREBASIC_BOLD);
+        assert_eq!(pb.keywords.len(), 2);
+
+        // Invariant 2: 17 mappings (matches BlitzBasic).
+        assert_eq!(
+            pb.styles.len(),
+            17,
+            "PUREBASIC_STYLES must map 17 indices (matching \
+             BLITZBASIC_STYLES structurally — same shared LexBasic \
+             namespace)"
+        );
+
+        // Invariant 3: two populated classes in canonical order.
+        for (i, (expected_class, expected_list)) in
+            [(0u32, PUREBASIC_KEYWORDS), (1u32, PUREBASIC_PREPROCESSOR)]
+                .iter()
+                .enumerate()
+        {
+            assert_eq!(
+                pb.keywords[i].0, *expected_class,
+                "PUREBASIC_THEME.keywords[{i}].class must match \
+                 purebasicWordListDesc descriptor order at \
+                 LexBasic.cxx:188-194"
+            );
+            assert_eq!(
+                pb.keywords[i].1, *expected_list,
+                "PUREBASIC_THEME.keywords[{i}].list must match \
+                 canonical wordlist"
+            );
+        }
+
+        // Invariant 4: both populated classes non-empty.
+        for (list, name) in [
+            (PUREBASIC_KEYWORDS, "KEYWORDS"),
+            (PUREBASIC_PREPROCESSOR, "PREPROCESSOR"),
+        ] {
+            assert!(
+                list.split_whitespace().count() > 0,
+                "PUREBASIC_{name} must be non-empty"
+            );
+        }
+
+        // Invariant 5: cross-class disjointness. LOAD-BEARING for
+        // the last-match-wins classifier at LexBasic.cxx:348-352.
+        // A class-1 duplicate of a class-0 keyword would silently
+        // move the paint to Preprocessor; a class-0 duplicate of a
+        // class-1 directive would move paint to Keyword — both
+        // reverse the intended semantic assignment.
+        use std::collections::HashSet;
+        let kws: HashSet<&str> = PUREBASIC_KEYWORDS.split_whitespace().collect();
+        let preproc: HashSet<&str> = PUREBASIC_PREPROCESSOR.split_whitespace().collect();
+        if let Some(shared) = kws.intersection(&preproc).next() {
+            panic!(
+                "PUREBASIC_KEYWORDS and PUREBASIC_PREPROCESSOR both \
+                 contain `{shared}` — LexBasic.cxx:348-352 uses \
+                 last-match-wins, so class 1 would mask class 0."
+            );
+        }
+
+        // Invariant 6: style-routing pins for all 17 mapped constants.
+        // PureBasic-specific: KEYWORD2 → Preprocessor (NOT Keyword2).
+        for (idx, slot, name) in [
+            (SCE_B_COMMENT, StyleSlot::Comment, "COMMENT"),
+            (SCE_B_NUMBER, StyleSlot::Number, "NUMBER"),
+            (SCE_B_KEYWORD, StyleSlot::Keyword, "KEYWORD"),
+            (SCE_B_STRING, StyleSlot::String, "STRING"),
+            (SCE_B_PREPROCESSOR, StyleSlot::Preprocessor, "PREPROCESSOR"),
+            (SCE_B_OPERATOR, StyleSlot::Operator, "OPERATOR"),
+            (SCE_B_KEYWORD2, StyleSlot::Preprocessor, "KEYWORD2"),
+            (SCE_B_KEYWORD3, StyleSlot::Preprocessor, "KEYWORD3"),
+            (SCE_B_KEYWORD4, StyleSlot::Lifetime, "KEYWORD4"),
+            (SCE_B_CONSTANT, StyleSlot::Macro, "CONSTANT"),
+            (SCE_B_LABEL, StyleSlot::Macro, "LABEL"),
+            (SCE_B_HEXNUMBER, StyleSlot::Number, "HEXNUMBER"),
+            (SCE_B_BINNUMBER, StyleSlot::Number, "BINNUMBER"),
+            (SCE_B_COMMENTBLOCK, StyleSlot::Comment, "COMMENTBLOCK"),
+            (SCE_B_DOCLINE, StyleSlot::Comment, "DOCLINE"),
+            (SCE_B_DOCBLOCK, StyleSlot::Comment, "DOCBLOCK"),
+            (SCE_B_DOCKEYWORD, StyleSlot::Preprocessor, "DOCKEYWORD"),
+        ] {
+            assert!(
+                pb.styles.contains(&(idx, slot)),
+                "SCE_B_{name} must route to {slot:?}"
+            );
+        }
+
+        // Invariant 7: framework-unmapped slots confirmed absent.
+        for (idx, name) in [
+            (SCE_B_DEFAULT, "DEFAULT"),
+            (SCE_B_IDENTIFIER, "IDENTIFIER"),
+            (SCE_B_DATE, "DATE"),
+            (SCE_B_STRINGEOL, "STRINGEOL"),
+            (SCE_B_ASM, "ASM"),
+            (SCE_B_ERROR, "ERROR"),
+        ] {
+            assert!(
+                !pb.styles.iter().any(|(i, _)| *i == idx),
+                "SCE_B_{name} ({idx}) must remain unmapped"
+            );
+        }
+
+        // Invariant 8: italic == 4 (all four comment forms).
+        assert_eq!(pb.italic.len(), 4);
+        for idx in [
+            SCE_B_COMMENT,
+            SCE_B_COMMENTBLOCK,
+            SCE_B_DOCLINE,
+            SCE_B_DOCBLOCK,
+        ] {
+            assert!(pb.italic.contains(&idx));
+        }
+
+        // Invariant 9: bold == 1 (KEYWORD only).
+        assert_eq!(pb.bold.len(), 1);
+        assert!(pb.bold.contains(&SCE_B_KEYWORD));
+
+        // Invariant 10: cross-language non-reuse. Includes explicit
+        // non-reuse against BlitzBasic — same LexBasic lexer family
+        // but different KEYWORD2 mapping (Keyword2 vs Preprocessor)
+        // means the styles tables MUST differ.
+        let cpp = lang_theme(L_CPP).expect("C++ wired");
+        let bb = lang_theme(L_BLITZBASIC).expect("BlitzBasic wired");
+        let vb = lang_theme(L_VB).expect("VB wired");
+        let asn1 = lang_theme(L_ASN1).expect("ASN.1 wired");
+        for (other, name) in [
+            (cpp, "C++"),
+            (bb, "BlitzBasic"),
+            (vb, "VB"),
+            (asn1, "ASN.1"),
+        ] {
+            assert_ne!(
+                pb.styles, other.styles,
+                "PureBasic must NOT reuse {name}_STYLES"
+            );
+        }
+
+        // Invariant 11: LangEntry sanity.
+        use codepp_core::lang::LANG_TABLE;
+        let entry = LANG_TABLE
+            .iter()
+            .find(|e| e.lang == L_PUREBASIC)
+            .expect("L_PUREBASIC LangEntry present in LANG_TABLE");
+        assert_eq!(
+            entry.lexer,
+            Some("purebasic"),
+            "L_PUREBASIC LangEntry.lexer must be Some(\"purebasic\")"
+        );
+        assert!(
+            entry.extensions.contains(&"pb"),
+            "L_PUREBASIC extensions must contain `pb`"
+        );
+
+        // Invariant 12: all-lowercase alphabet enforcement.
+        for (list, name) in [
+            (PUREBASIC_KEYWORDS, "KEYWORDS"),
+            (PUREBASIC_PREPROCESSOR, "PREPROCESSOR"),
+        ] {
+            for tok in list.split_whitespace() {
+                assert!(
+                    !tok.is_empty()
+                        && tok
+                            .bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'),
+                    "PUREBASIC_{name} token `{tok}` violates the \
+                     lowercase-alnum-underscore alphabet"
+                );
+            }
+        }
+
+        // Invariant 13: canonical class-0 KEYWORD anchors.
+        for tok in [
+            "procedure",
+            "endprocedure",
+            "structure",
+            "interface",
+            "enumeration",
+            "module",
+            "macro",
+            "if",
+            "for",
+            "while",
+            "select",
+            "foreach",
+            "break",
+            "continue",
+        ] {
+            assert!(
+                PUREBASIC_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "PUREBASIC_KEYWORDS must include canonical language keyword `{tok}`"
+            );
+        }
+
+        // Invariant 14: canonical class-1 PREPROCESSOR anchors.
+        for tok in [
+            "compilerif",
+            "compilerelse",
+            "compilerendif",
+            "compilerselect",
+            "compilercase",
+            "enableexplicit",
+            "includefile",
+            "xincludefile",
+        ] {
+            assert!(
+                PUREBASIC_PREPROCESSOR.split_whitespace().any(|t| t == tok),
+                "PUREBASIC_PREPROCESSOR must include canonical directive `{tok}`"
+            );
+        }
+
+        // Invariant 15: PureBasic-specific bareword type keywords.
+        // PureBasic supports `Define x.Integer` alongside sigil form
+        // `Define x.i` — bareword type names are valid identifier
+        // tokens and belong in class 0. This differs from BlitzBasic
+        // which uses sigils exclusively and excludes bareword types.
+        for tok in [
+            "integer",
+            "float",
+            "string",
+            "byte",
+            "word",
+            "long",
+            "quad",
+            "double",
+            "ascii",
+            "unicode",
+            "character",
+        ] {
+            assert!(
+                PUREBASIC_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "PUREBASIC_KEYWORDS must include bareword type `{tok}`"
+            );
+        }
+
+        // Invariant 16: compile-time operators.
+        for tok in ["sizeof", "offsetof"] {
+            assert!(
+                PUREBASIC_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "PUREBASIC_KEYWORDS must include compile-time operator `{tok}`"
+            );
+        }
+
+        // Invariant 17: debug statements.
+        for tok in ["debug", "debuglevel", "calldebugger", "raiseerror"] {
+            assert!(
+                PUREBASIC_KEYWORDS.split_whitespace().any(|t| t == tok),
+                "PUREBASIC_KEYWORDS must include debug statement `{tok}`"
+            );
+        }
+
+        // Invariant 18: highest-defined SCE_B_* pin (shared with BB).
+        for (idx, _) in pb.styles {
+            assert!(
+                *idx <= SCE_B_DOCKEYWORD,
+                "PUREBASIC_STYLES references slot {idx}, which is \
+                 higher than SCE_B_DOCKEYWORD ({SCE_B_DOCKEYWORD})"
+            );
+        }
+
+        // Invariant 19: no duplicate tokens within any wordlist.
+        for (list, name) in [
+            (PUREBASIC_KEYWORDS, "KEYWORDS"),
+            (PUREBASIC_PREPROCESSOR, "PREPROCESSOR"),
+        ] {
+            let total = list.split_whitespace().count();
+            let unique = list.split_whitespace().collect::<HashSet<_>>().len();
+            assert_eq!(
+                total,
+                unique,
+                "PUREBASIC_{name} contains {} duplicate token(s)",
+                total - unique
+            );
+        }
+
+        // Invariant 20: KEYWORD2 divergence pin. This is the
+        // load-bearing semantic difference between PureBasic and
+        // BlitzBasic themes — same shared lexer family but
+        // different class-1 semantic assignments per the
+        // wordlist descriptors. PureBasic's class 1 is EXPLICITLY
+        // named "PureBasic PreProcessor Keywords" per
+        // LexBasic.cxx:190, so it routes to Preprocessor.
+        // `BlitzBasic`'s class 1 is a generic user1 slot repurposed
+        // for stdlib builtins, so it routes to Keyword2.
+        assert!(
+            pb.styles
+                .contains(&(SCE_B_KEYWORD2, StyleSlot::Preprocessor)),
+            "PureBasic: SCE_B_KEYWORD2 MUST route to Preprocessor \
+             (class 1 is semantically preprocessor per \
+             LexBasic.cxx:190)"
+        );
+        let bb2 = lang_theme(L_BLITZBASIC).expect("BlitzBasic wired");
+        assert!(
+            bb2.styles.contains(&(SCE_B_KEYWORD2, StyleSlot::Keyword2)),
+            "BlitzBasic: SCE_B_KEYWORD2 MUST route to Keyword2 \
+             (class 1 is a generic user1 slot repurposed for \
+             Blitz3D stdlib)"
         );
     }
 
