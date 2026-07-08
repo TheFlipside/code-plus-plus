@@ -50,6 +50,8 @@ The thesis: **performance is an architectural property, not a tuning result.** Y
 | 2 | Core: session, files, encoding | Open/save/restore real files, no UI freeze |
 | 3 | Multi-tab + plugin host | Real N++ plugin DLL loads and runs |
 | 4 | Lexers, search, find-in-files | Highlighting + search at scale |
+| 4.5 | Per-language keyword + theme wiring | Colour-correct highlighting across ~88 languages |
+| 4.6 | User Defined Languages (UDL) | Load N++ UDL XML, preinstalled Markdown UDL, in-app editor modal |
 | 5 | Linux (GTK) and macOS (Cocoa) | Same binary builds and runs natively |
 
 ---
