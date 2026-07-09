@@ -44,6 +44,7 @@ codepp-plugin-host = { version = "0.1.0", path = "crates/plugin-host" }
 codepp-plugin-sdk = { version = "0.1.0", path = "crates/plugin-sdk" }
 codepp-scintilla-sys = { version = "0.1.0", path = "crates/scintilla-sys" }
 codepp-shell = { version = "0.1.0", path = "crates/shell" }
+codepp-udl = { version = "0.1.0", path = "crates/udl" }
 codepp-ui-win32 = { version = "0.1.0", path = "crates/ui_win32" }
 
 # External dependencies — pin every version here so cargo-deny's wildcard

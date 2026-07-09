@@ -179,6 +179,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codepp-udl"
+version = "0.1.0"
+dependencies = [
+ "quick-xml",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "codepp-ui-win32"
 version = "0.1.0"
 dependencies = [

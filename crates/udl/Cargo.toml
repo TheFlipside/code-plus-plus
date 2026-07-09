@@ -1,0 +1,24 @@
+[package]
+name = "codepp-udl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "User Defined Language (UDL) XML parser and in-memory model, matching Notepad++'s UDL v2.1 format."
+
+[lints]
+workspace = true
+
+[lib]
+name = "codepp_udl"
+
+[dependencies]
+quick-xml = { workspace = true }
+serde     = { workspace = true }
+tracing   = { workspace = true }
+
+[dev-dependencies]
+# No dev-only deps yet; the fixture-based unit tests read from
+# assets/preinstalled-udls/ via CARGO_MANIFEST_DIR relative paths.
