@@ -121,10 +121,16 @@ impl Sequence {
 /// (`03`/`04`), or both.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CommentRules {
-    /// Line-comment opener (index `00`) — the byte sequence
-    /// that starts a line comment. `#` for markdown, `//` for
-    /// C-family, `--` for SQL / Ada / Haskell.
-    pub line_open: Sequence,
+    /// Line-comment opener alternatives (index `00`) — the byte
+    /// sequences that start a line comment. Multiple entries at
+    /// index `00` accumulate rather than overwrite: real UDL
+    /// v2.0 files (e.g. Luis Pisco's Cisco IOS UDL declares
+    /// `"00! 00remark"` for two line-comment markers) expect
+    /// both markers to fire, and last-wins would silently lose
+    /// all but the trailing one. Empty vec = no line comment
+    /// declared. Bounded by [`MAX_ALTERNATIVES_PER_SLOT`], same
+    /// `DoS`-defence rationale as delimiter opener alternatives.
+    pub line_open: Vec<Sequence>,
     /// Line-comment continuation character (index `01`) — for
     /// languages where a backslash at line end continues the
     /// comment onto the next line. Empty for most languages;
@@ -187,9 +193,12 @@ impl CommentRules {
     /// rest of the crate follows.
     ///
     /// Tokens past index `04` are treated as extraneous and
-    /// warn-skipped. Multiple tokens at the same index → the
-    /// last one wins (consistent with N++'s own overwrite
-    /// semantics).
+    /// warn-skipped. Multiple tokens at index `00` accumulate
+    /// (see [`Self::line_open`] — Cisco IOS's `"00! 00remark"`
+    /// is a real example that would silently lose one marker
+    /// under last-wins semantics). Multiple tokens at the other
+    /// indices still last-wins — no real-world UDL declares
+    /// multiple line-continuations or multiple block-openers.
     ///
     /// [`Sequence::Literal`] values exceeding
     /// [`MAX_LITERAL_BYTES`] are collapsed to [`Sequence::Empty`]
@@ -201,7 +210,7 @@ impl CommentRules {
         for token in tokenise_udl_encoding(encoded) {
             let content = cap_literal(token.content);
             match token.index {
-                0 => rules.line_open = content,
+                0 => push_bounded(&mut rules.line_open, content, "line_open", 0),
                 1 => rules.line_continue = content,
                 2 => rules.line_close = content,
                 3 => rules.block_open = content,
@@ -429,7 +438,7 @@ mod tests {
     fn markdown_comments_parse_to_structured_rules() {
         // Fixture: `00# 01 02((EOL)) 03<!-- 04-->`
         let rules = CommentRules::parse("00# 01 02((EOL)) 03<!-- 04-->");
-        assert_eq!(rules.line_open, Sequence::Literal("#".to_owned()));
+        assert_eq!(rules.line_open, vec![Sequence::Literal("#".to_owned())]);
         assert_eq!(rules.line_continue, Sequence::Empty);
         assert_eq!(rules.line_close, Sequence::EndOfLine);
         assert_eq!(rules.block_open, Sequence::Literal("<!--".to_owned()));
@@ -441,7 +450,7 @@ mod tests {
         // Hypothetical C-family UDL: `//` line comment, `/* */`
         // block comment.
         let rules = CommentRules::parse("00// 01 02((EOL)) 03/* 04*/");
-        assert_eq!(rules.line_open, Sequence::Literal("//".to_owned()));
+        assert_eq!(rules.line_open, vec![Sequence::Literal("//".to_owned())]);
         assert_eq!(rules.line_close, Sequence::EndOfLine);
         assert_eq!(rules.block_open, Sequence::Literal("/*".to_owned()));
         assert_eq!(rules.block_close, Sequence::Literal("*/".to_owned()));
@@ -452,7 +461,7 @@ mod tests {
         // Only 00..=04 are valid; 05 must be dropped, other
         // entries must still populate.
         let rules = CommentRules::parse("00# 05IGNORED");
-        assert_eq!(rules.line_open, Sequence::Literal("#".to_owned()));
+        assert_eq!(rules.line_open, vec![Sequence::Literal("#".to_owned())]);
         assert_eq!(rules.block_close, Sequence::Empty);
     }
 
@@ -462,6 +471,25 @@ mod tests {
         assert_eq!(rules, CommentRules::default());
     }
 
+    #[test]
+    fn multiple_line_open_markers_accumulate_not_overwrite() {
+        // Regression pin for the Cisco IOS UDL shape — real v2.0
+        // files declare two line-comment markers via
+        // `00! 00remark`. Pre-fix, `CommentRules::parse` used
+        // `rules.line_open = content` (last-wins), silently
+        // dropping the first marker and leaving `!`-started
+        // lines unstyled. Confirm both survive in
+        // input order.
+        let rules = CommentRules::parse("00! 00remark 01 02((EOL))");
+        assert_eq!(
+            rules.line_open,
+            vec![
+                Sequence::Literal("!".to_owned()),
+                Sequence::Literal("remark".to_owned()),
+            ]
+        );
+    }
+
     // --- DoS caps ---------------------------------------------
 
     #[test]
@@ -469,10 +497,12 @@ mod tests {
         // A `Literal` value exceeding MAX_LITERAL_BYTES is a
         // DoS-shaped input; the parser must collapse it to
         // `Empty` (not crash, not pass through unchanged).
+        // `push_bounded` skips empty entries silently — no
+        // marker is stored, `line_open` stays empty.
         let long = "a".repeat(MAX_LITERAL_BYTES + 1);
         let encoded = format!("00{long}");
         let rules = CommentRules::parse(&encoded);
-        assert_eq!(rules.line_open, Sequence::Empty);
+        assert!(rules.line_open.is_empty());
     }
 
     #[test]
@@ -663,12 +693,14 @@ mod tests {
     }
 
     #[test]
-    fn same_index_last_one_wins_in_comment_rules() {
-        // Documented "last one wins" semantics — pinned so a
-        // future refactor doesn't silently swap to first-wins.
-        // Matches N++'s own overwrite semantics for `Comments`.
-        let rules = CommentRules::parse("00# 00//");
-        assert_eq!(rules.line_open, Sequence::Literal("//".to_owned()));
+    fn same_index_last_one_wins_in_non_accumulating_comment_slots() {
+        // Non-`00` comment indices (line-continue, line-close,
+        // block-open, block-close) still last-wins — no real UDL
+        // declares multiples for those slots. Only `00`
+        // (line_open) accumulates; that's covered by
+        // `multiple_line_open_markers_accumulate_not_overwrite`.
+        let rules = CommentRules::parse("03/* 03<!--");
+        assert_eq!(rules.block_open, Sequence::Literal("<!--".to_owned()));
     }
 
     #[test]
@@ -708,7 +740,7 @@ mod tests {
             .join("markdown._preinstalled.udl.xml");
         let udl = crate::UdlDefinition::from_file(&path).expect("markdown UDL parses");
         let rules = CommentRules::parse(&udl.keyword_lists.comments);
-        assert_eq!(rules.line_open, Sequence::Literal("#".to_owned()));
+        assert_eq!(rules.line_open, vec![Sequence::Literal("#".to_owned())]);
         assert_eq!(rules.line_close, Sequence::EndOfLine);
         assert_eq!(rules.block_open, Sequence::Literal("<!--".to_owned()));
         assert_eq!(rules.block_close, Sequence::Literal("-->".to_owned()));

@@ -229,9 +229,15 @@ impl<'a> Tokeniser<'a> {
             sort_by_descending_literal_len(&mut rule.open);
             sort_by_descending_literal_len(&mut rule.close);
         }
+        let mut comment = CommentRules::parse(&def.keyword_lists.comments);
+        // `line_open` may hold multiple alternatives (Cisco IOS's
+        // `"00! 00remark"`). Longest-match discipline matters when
+        // a shorter marker is a prefix of a longer one — no known
+        // real UDL has that pattern but the sort is cheap.
+        sort_by_descending_literal_len(&mut comment.line_open);
         Self {
             def,
-            comment: CommentRules::parse(&def.keyword_lists.comments),
+            comment,
             delims,
         }
     }
@@ -277,32 +283,42 @@ impl<'a> Tokeniser<'a> {
         events
     }
 
-    /// If a line-comment opener matches at `pos`, return the
+    /// If any line-comment opener matches at `pos`, return the
     /// total span length (from opener start to line end). Else
-    /// `None`. Line-comment span always terminates at the next
-    /// `\n` (or end-of-buffer), regardless of the
-    /// [`CommentRules::line_close`] variant — [`Sequence::EndOfLine`]
-    /// is the only value markdown / C / SQL / every other
-    /// mainstream UDL actually uses, and honouring a literal
-    /// `line_close` sequence would need a lookahead scan the
-    /// existing fixtures never exercise.
+    /// `None`. Multiple opener alternatives (Cisco IOS's
+    /// `"00! 00remark"`) are tried in descending-length order
+    /// (set up by [`Self::new`]), so a UDL with overlapping
+    /// prefixes matches the longest first.
+    ///
+    /// Line-comment span always terminates at the next `\n`
+    /// (or end-of-buffer), regardless of the
+    /// [`CommentRules::line_close`] variant —
+    /// [`Sequence::EndOfLine`] is the only value markdown / C /
+    /// SQL / every other mainstream UDL actually uses, and
+    /// honouring a literal `line_close` sequence would need a
+    /// lookahead scan the existing fixtures never exercise.
     fn match_line_comment(&self, text: &[u8], pos: usize) -> Option<usize> {
-        let open = literal_str(&self.comment.line_open)?;
-        if !text[pos..].starts_with(open.as_bytes()) {
-            return None;
+        for open_seq in &self.comment.line_open {
+            let Some(open) = literal_str(open_seq) else {
+                continue;
+            };
+            if !text[pos..].starts_with(open.as_bytes()) {
+                continue;
+            }
+            // Walk to the next `\n` or end of buffer. The event
+            // includes the newline byte if present so adjacent
+            // events stay tight (the next line's event starts
+            // at the byte after the newline).
+            let mut i = pos + open.len();
+            while i < text.len() && text[i] != b'\n' {
+                i += 1;
+            }
+            if i < text.len() {
+                i += 1; // include the newline byte
+            }
+            return Some(i - pos);
         }
-        // Walk to the next `\n` or end of buffer. The event
-        // includes the newline byte if present so adjacent events
-        // stay tight (the next line's event starts at the byte
-        // after the newline).
-        let mut i = pos + open.len();
-        while i < text.len() && text[i] != b'\n' {
-            i += 1;
-        }
-        if i < text.len() {
-            i += 1; // include the newline byte
-        }
-        Some(i - pos)
+        None
     }
 
     /// If a block-comment opener matches at `pos`, return the
@@ -778,6 +794,36 @@ mod tests {
             .find(|e| e.slot == UdlStyleSlot::Delimiter1)
             .expect("Delimiter1 span");
         assert_eq!(&text[d.start..d.end], b"```\n");
+    }
+
+    #[test]
+    fn multiple_line_comment_markers_both_fire() {
+        // Regression pin for the Cisco IOS UDL — real v2.0 files
+        // declare two line-comment markers via `00! 00remark`.
+        // Both `!` and `remark` at line start must open a
+        // CommentLine span. Adjacent same-slot events coalesce
+        // in `push_event`, so we test per-position slot
+        // membership rather than per-event boundaries.
+        let def = synth_udl("00! 00remark 02((EOL))", "");
+        let t = Tokeniser::new(&def);
+        let text = b"! bang line\nremark also comment\nplain line\n";
+        let events = t.tokenise(text);
+        assert_covers_buffer(text, &events);
+        let slot_at = |pos: usize| -> UdlStyleSlot {
+            events
+                .iter()
+                .find(|e| pos >= e.start && pos < e.end)
+                .expect("every position is covered")
+                .slot
+        };
+        // Byte 0 = `!` — line 1 is CommentLine via `!` marker.
+        assert_eq!(slot_at(0), UdlStyleSlot::CommentLine);
+        // Byte 12 = `r` of "remark" — line 2 is CommentLine via
+        // `remark` marker (would be Default under pre-fix
+        // last-wins behaviour).
+        assert_eq!(slot_at(12), UdlStyleSlot::CommentLine);
+        // Byte 32 = `p` of "plain" — no marker matches → Default.
+        assert_eq!(slot_at(32), UdlStyleSlot::Default);
     }
 
     #[test]
