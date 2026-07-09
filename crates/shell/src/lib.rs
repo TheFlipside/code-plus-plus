@@ -1068,6 +1068,7 @@ impl Shell {
                      missing path"
                 );
             }
+            copy_preinstalled_udls(&dir);
             codepp_udl::UdlRegistry::scan_dir(&dir)
         } else {
             tracing::info!("no config_dir resolved; skipping UDL registry scan");
@@ -5098,6 +5099,108 @@ fn save_find_history(history: &FindHistory) {
     };
     if let Err(e) = history.save(&path) {
         tracing::warn!(path = %path.display(), error = %e, "find_history.xml save failed");
+    }
+}
+
+/// Preinstalled Markdown UDL bundled at build time via
+/// `include_bytes!`. Copied into
+/// `<config_dir>/userDefineLangs/` on first run by
+/// [`copy_preinstalled_udls`] so a fresh install shows
+/// "Markdown (preinstalled)" in the Language menu without the
+/// user having to hand-install anything.
+///
+/// The file lives at `assets/preinstalled-udls/markdown._pre
+/// installed.udl.xml` at the workspace root — an MIT-licensed
+/// verbatim copy from Edditoria's `markdown-plus-plus` (see
+/// `assets/preinstalled-udls/PROVENANCE.md`). Embedding at
+/// build time (rather than shipping alongside the exe) means
+/// the binary is self-contained: a user copying `code++.exe`
+/// to a USB stick still has Markdown UDL after Code++ runs
+/// once and populates its config dir.
+const PREINSTALLED_MARKDOWN_UDL: &[u8] =
+    include_bytes!("../../../assets/preinstalled-udls/markdown._preinstalled.udl.xml");
+
+/// Filename the preinstalled Markdown UDL is written under.
+/// Matches N++'s naming convention so a user migrating from
+/// N++ can drop the file into `<config_dir>/userDefineLangs/`
+/// and get identical behaviour.
+const PREINSTALLED_MARKDOWN_FILENAME: &str = "markdown._preinstalled.udl.xml";
+
+/// Copy the preinstalled UDL(s) into `dir` on first run. Called
+/// from `Shell::new` after `create_dir_all(<userDefineLangs>)`
+/// and before `UdlRegistry::scan_dir`.
+///
+/// **Skip-if-exists discipline.** If a file with the same
+/// filename already exists in `dir`, DO NOT overwrite — the
+/// user may have hand-edited (customised colours, added
+/// keywords) or explicitly deleted the file to remove it from
+/// their menu. Same discipline N++ uses; matches the
+/// `assets/preinstalled-udls/PROVENANCE.md` note that "Users
+/// who want the upstream GPLv3 plugins can still install them
+/// by hand — runtime loading by the plugin host is the same
+/// as for any other third-party plugin."
+///
+/// **Atomic write (TOCTOU-safe).** Uses `OpenOptions::create_new`
+/// so the "file doesn't exist yet → create it" decision is a
+/// single kernel operation, not a `.exists()` check followed by
+/// a separate `fs::write`. Without this, another local process
+/// running as the same user (a malicious plugin already loaded
+/// this session, per DESIGN.md §6.5's in-process trust model,
+/// or a pre-existing attacker with local code execution) could
+/// plant a symlink/junction at
+/// `<dir>/markdown._preinstalled.udl.xml` between the
+/// `.exists()` check and the write, and Code++'s `fs::write` —
+/// which follows reparse points — would overwrite whatever the
+/// symlink pointed at with our embedded UDL bytes. `create_new`
+/// treats "path exists as a regular file OR a symlink"
+/// identically as `AlreadyExists`, collapsing the check-then-
+/// act window to zero. `AlreadyExists` maps to the same skip
+/// semantics as the previous `.exists()` early return.
+///
+/// **First-run persistence** — the copied file lives on disk
+/// alongside user-installed UDLs. On second launch it's
+/// already present, so the scanner just picks it up (no
+/// re-copy). If the user deletes it, it stays deleted; if
+/// they modify it, their modifications survive. All standard
+/// preinstalled-asset conventions.
+///
+/// Errors are logged at warn and swallowed — a fresh install
+/// that can't write its preinstalled UDLs still works, the
+/// user just doesn't see "Markdown (preinstalled)" in the
+/// menu.
+fn copy_preinstalled_udls(dir: &Path) {
+    use std::io::Write;
+    let target = dir.join(PREINSTALLED_MARKDOWN_FILENAME);
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+    {
+        Ok(f) => f,
+        // AlreadyExists is the skip-if-present success case —
+        // the user already has this file (or a hand-edit,
+        // deletion-and-recreation, or a previous copy of it).
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => return,
+        Err(err) => {
+            tracing::warn!(
+                path = ?target,
+                error = %err,
+                "failed to create preinstalled Markdown UDL; \
+                 skipping (Language menu will not show Markdown \
+                 (preinstalled) until this file is present)"
+            );
+            return;
+        }
+    };
+    if let Err(err) = file.write_all(PREINSTALLED_MARKDOWN_UDL) {
+        tracing::warn!(
+            path = ?target,
+            error = %err,
+            "failed to write preinstalled Markdown UDL contents; \
+             partial file left on disk (Language menu may show \
+             Markdown (preinstalled) with a parse error until \
+             the file is deleted or replaced)"
+        );
     }
 }
 
