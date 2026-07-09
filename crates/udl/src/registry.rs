@@ -38,6 +38,24 @@ pub const UDL_LANG_TYPE_BASE: i32 = 1024;
 /// 15-20× over.
 pub const UDL_LANG_TYPE_END: i32 = 2047;
 
+/// Predicate: is `id` inside the UDL dynamic-id space?
+///
+/// The `ui_win32` container-lexer path (Phase 4.6 m1c-3b)
+/// dispatches on this — a `Tab.lang` id inside the range means
+/// "route through Scintilla's container-lexer mode
+/// (`SCI_SETILEXER(0, 0)`) and drive styling via
+/// `SCN_STYLENEEDED`," while an id outside the range takes the
+/// normal Lexilla-lexer path.
+///
+/// Extracted as a separate function rather than open-coded at
+/// every call site so the boundary check stays consistent —
+/// there's only one definition of "is this a UDL id" in the
+/// codebase.
+#[must_use]
+pub const fn is_udl_lang_id(id: i32) -> bool {
+    id >= UDL_LANG_TYPE_BASE && id <= UDL_LANG_TYPE_END
+}
+
 /// Enumeration cap on the number of directory entries the
 /// scanner will inspect. Distinct from the id-space size —
 /// enumeration + canonicalization happens BEFORE id assignment,
@@ -480,6 +498,24 @@ mod tests {
 
         let reg = UdlRegistry::scan_dir(tmp.path());
         assert_eq!(reg.entries().len(), 1);
+    }
+
+    #[test]
+    fn is_udl_lang_id_boundary_checks() {
+        // Below the range.
+        assert!(!is_udl_lang_id(0));
+        assert!(!is_udl_lang_id(93)); // L_EXTERNAL — last built-in
+        assert!(!is_udl_lang_id(1023));
+        // Inside the range.
+        assert!(is_udl_lang_id(UDL_LANG_TYPE_BASE));
+        assert!(is_udl_lang_id(1500));
+        assert!(is_udl_lang_id(UDL_LANG_TYPE_END));
+        // Above the range.
+        assert!(!is_udl_lang_id(UDL_LANG_TYPE_END + 1));
+        assert!(!is_udl_lang_id(i32::MAX));
+        // Negative values (plugins are allowed to send anything).
+        assert!(!is_udl_lang_id(-1));
+        assert!(!is_udl_lang_id(i32::MIN));
     }
 
     #[test]

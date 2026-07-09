@@ -89,6 +89,64 @@ pub const SCI_CLEAR: u32 = 2180;
 pub const SCI_GOTOLINE: u32 = 2024;
 pub const SCI_GETLINECOUNT: u32 = 2154;
 pub const SCI_LINEFROMPOSITION: u32 = 2166;
+
+// --- Container-lexer styling (Phase 4.6 m1c-3) --------------------------
+//
+// When Scintilla is put into container-lexer mode via
+// `SCI_SETILEXER(0, 0)` (see `Editor::clear_lexer`), it stops
+// running Lexilla's styling passes and instead fires
+// `SCN_STYLENEEDED` whenever it needs styling for a byte range.
+// The host is expected to compute the styles for that range and
+// apply them via `SCI_STARTSTYLING(start)` +
+// `SCI_SETSTYLING(length, style)` calls — one per contiguous
+// same-style byte run. Numeric values verified against
+// `vendor/scintilla/include/Scintilla.h`.
+
+/// `SCI_STARTSTYLING(int start, int unused)` — position the
+/// styler at byte offset `start` so subsequent
+/// [`SCI_SETSTYLING`] calls paint bytes from there onward. The
+/// `unused` argument (historically a style mask) is ignored
+/// under the modern styling API; pass 0. Cross-referenced
+/// against `Scintilla.h:96`.
+pub const SCI_STARTSTYLING: u32 = 2032;
+
+/// `SCI_SETSTYLING(int length, int style)` — paint the next
+/// `length` bytes with `style`. Advances the internal styler
+/// cursor by `length` bytes; the next call resumes from there.
+/// Cross-referenced against `Scintilla.h:97`.
+pub const SCI_SETSTYLING: u32 = 2033;
+
+/// `SCI_GETENDSTYLED()` — return the byte offset up to which
+/// Scintilla considers styling already applied. Container-mode
+/// hosts start their next tokenisation run at (or before, per
+/// line-alignment discipline) this position. Cross-referenced
+/// against `Scintilla.h:89`.
+pub const SCI_GETENDSTYLED: u32 = 2028;
+
+/// `SCI_POSITIONFROMLINE(int line)` — return the byte offset of
+/// the first character on `line`. Used by the `SCN_STYLENEEDED`
+/// handler to align the tokenisation start to a line boundary
+/// (safer restart point than a mid-line byte). Cross-
+/// referenced against `Scintilla.h:553`.
+pub const SCI_POSITIONFROMLINE: u32 = 2167;
+
+/// `SCI_GETRANGEPOINTER(int start, int length)` — return a
+/// pointer into Scintilla's internal buffer covering the
+/// requested range. Zero-copy view of the document bytes,
+/// valid only until the next buffer modification. The
+/// container-mode host reads text through this rather than
+/// copying via `SCI_GETTEXTRANGEFULL` to avoid the per-
+/// `SCN_STYLENEEDED` allocation cost. Cross-referenced against
+/// `Scintilla.h:1000`.
+pub const SCI_GETRANGEPOINTER: u32 = 2643;
+
+/// `SCN_STYLENEEDED` — the notification Scintilla sends when a
+/// range needs container-side styling. `SCNotification.position`
+/// carries the end position; `SCI_GETENDSTYLED` gives the start.
+/// Delivered via `WM_NOTIFY` on the parent window (same
+/// dispatch surface as `SCN_MODIFIED` / `SCN_UPDATEUI`).
+/// Cross-referenced against `Scintilla.h:1288`.
+pub const SCN_STYLENEEDED: u32 = 2000;
 /// Column (visual / virtual-space-aware) of a byte offset on its
 /// line. Used by the status bar to render `Col: N` after the
 /// caret moves.

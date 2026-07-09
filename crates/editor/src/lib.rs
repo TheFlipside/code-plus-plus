@@ -31,15 +31,17 @@ use core::ffi::c_void;
 
 use codepp_scintilla_sys::{
     sptr_t, uptr_t, CreateLexer, ScintillaDirectFunction, SCI_BRACEBADLIGHT, SCI_BRACEHIGHLIGHT,
-    SCI_BRACEMATCH, SCI_GETCHARAT, SCI_GETCURRENTPOS, SCI_GETTARGETEND, SCI_GETTARGETSTART,
-    SCI_MARKERDEFINE, SCI_MARKERENABLEHIGHLIGHT, SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED,
-    SCI_MARKERSETFORE, SCI_REPLACETARGET, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT,
+    SCI_BRACEMATCH, SCI_GETCHARAT, SCI_GETCURRENTPOS, SCI_GETENDSTYLED, SCI_GETRANGEPOINTER,
+    SCI_GETTARGETEND, SCI_GETTARGETSTART, SCI_LINEFROMPOSITION, SCI_MARKERDEFINE,
+    SCI_MARKERENABLEHIGHLIGHT, SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE,
+    SCI_POSITIONFROMLINE, SCI_REPLACETARGET, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT,
     SCI_SEARCHPREV, SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE,
     SCI_SETCHANGEHISTORY, SCI_SETFOLDFLAGS, SCI_SETFOLDMARGINCOLOUR, SCI_SETFOLDMARGINHICOLOUR,
     SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN, SCI_SETMARGINSENSITIVEN,
-    SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETPROPERTY, SCI_SETSEARCHFLAGS,
-    SCI_SETTARGETRANGE, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT,
-    SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE, SCI_STYLESETUNDERLINE,
+    SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETPROPERTY, SCI_SETSEARCHFLAGS, SCI_SETSTYLING,
+    SCI_SETTARGETRANGE, SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD,
+    SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE,
+    SCI_STYLESETUNDERLINE,
 };
 
 /// Opaque handle to a Scintilla editor control.
@@ -168,8 +170,128 @@ impl EditorHandle {
 
     /// Detach any current lexer, leaving the view in plain-text
     /// rendering. Equivalent to `SCI_SETILEXER(0, 0)`.
+    ///
+    /// `SCI_SETILEXER(0, 0)` also enables Scintilla's container-
+    /// lexer mode — with no lexer attached, styling is delegated
+    /// to the host via `SCN_STYLENEEDED` notifications. Phase
+    /// 4.6 m1c-3 uses this path for UDL buffers.
     pub fn clear_lexer(&self) {
         self.send(SCI_SETILEXER, 0, 0);
+    }
+
+    /// Position the styler at byte offset `start`. Subsequent
+    /// [`Self::set_styling`] calls paint bytes from there
+    /// onward, advancing the internal cursor as they go. Called
+    /// from Phase 4.6 m1c-3b's `SCN_STYLENEEDED` handler to
+    /// begin a container-lexer styling pass.
+    pub fn start_styling(&self, start: usize) {
+        self.send(SCI_STARTSTYLING, start, 0);
+    }
+
+    /// Paint the next `length` bytes with `style`. `style` must
+    /// fit in a `u8` (Scintilla style indices are byte-sized);
+    /// the host's UDL tokeniser passes `UdlStyleSlot as u8`
+    /// values that map 1:1 to N++'s `SCE_USER_STYLE_*`
+    /// constants.
+    pub fn set_styling(&self, length: usize, style: u8) {
+        self.send(SCI_SETSTYLING, length, sptr_t::from(style));
+    }
+
+    /// Byte offset up to which Scintilla considers styling
+    /// applied. The container-lexer host walks BACKWARDS from
+    /// this position to a line boundary before starting a
+    /// restart-safe tokenisation pass in the `SCN_STYLENEEDED`
+    /// handler.
+    #[must_use]
+    pub fn get_end_styled(&self) -> usize {
+        let ret = self.send(SCI_GETENDSTYLED, 0, 0);
+        ret.max(0) as usize
+    }
+
+    /// Line number (0-indexed) that contains byte offset
+    /// `position`. Used to align the `SCN_STYLENEEDED`
+    /// tokenisation range to line boundaries — restarting mid-
+    /// line risks splitting a delimiter span the tokeniser
+    /// wouldn't otherwise know it was inside.
+    #[must_use]
+    pub fn line_from_position(&self, position: usize) -> usize {
+        let ret = self.send(SCI_LINEFROMPOSITION, position, 0);
+        ret.max(0) as usize
+    }
+
+    /// First-character byte offset of `line`. Returns `None` when
+    /// Scintilla signals "line out of range" — per
+    /// `ScintillaDoc.html:796-801`, `SCI_POSITIONFROMLINE`
+    /// returns `-1` for a line number strictly greater than the
+    /// document's line count (NOT a clamp — an explicit
+    /// out-of-range sentinel). Preserving `None` lets the
+    /// caller distinguish that from a legitimate "position 0 =
+    /// start of document" answer; m1c-3b's line-boundary
+    /// alignment for `SCN_STYLENEEDED` uses this discipline so
+    /// an off-by-one in the range math fails loudly rather than
+    /// producing a plausible-looking "restyle from column 0"
+    /// range.
+    #[must_use]
+    pub fn position_from_line(&self, line: usize) -> Option<usize> {
+        let ret = self.send(SCI_POSITIONFROMLINE, line, 0);
+        if ret < 0 {
+            None
+        } else {
+            Some(ret as usize)
+        }
+    }
+
+    /// Read a range of Scintilla's document as an owned
+    /// `Vec<u8>`. Returns `None` on zero-length or invalid
+    /// ranges.
+    ///
+    /// **Deliberate copy, not a zero-copy borrow.** Scintilla's
+    /// `SCI_GETRANGEPOINTER` returns a raw pointer into the
+    /// live document buffer that is invalidated by ANY
+    /// subsequent Scintilla call (per
+    /// `ScintillaDoc.html:7437-7440`), including read-only ones
+    /// like `SCI_GETLENGTH`. A safe scoped-borrow API around
+    /// that would require the closure to never call any
+    /// `EditorHandle` method — but `EditorHandle` is `Copy`,
+    /// so a closure can capture one from its environment and
+    /// the type system can't prevent the reentrancy. Copying
+    /// eliminates the hazard entirely at the cost of one
+    /// bounded allocation per call.
+    ///
+    /// The typical caller is m1c-3b's `SCN_STYLENEEDED` handler
+    /// reading a viewport-sized range (single-digit KB) — the
+    /// copy cost is negligible against the tokenise + paint
+    /// work that follows.
+    ///
+    /// Reads bytes via `SCI_GETRANGEPOINTER` under the hood,
+    /// then immediately copies before returning. The unsafe
+    /// slice construction is bounded to the copy line and
+    /// cannot escape.
+    #[must_use]
+    pub fn get_range_bytes(&self, start: usize, length: usize) -> Option<Vec<u8>> {
+        if length == 0 {
+            return None;
+        }
+        let ptr = self.send(SCI_GETRANGEPOINTER, start, length as sptr_t);
+        // Scintilla returns 0 (null) for zero-length or invalid
+        // ranges. On 64-bit Windows, user-mode addresses never
+        // set the sign bit, so `<= 0` also catches any negative
+        // return that would indicate an internal error we don't
+        // want to interpret as a pointer.
+        if ptr <= 0 {
+            return None;
+        }
+        // SAFETY: SCI_GETRANGEPOINTER returned a non-null
+        // pointer into Scintilla's own buffer covering exactly
+        // `length` bytes starting at `start`. The pointer is
+        // valid at this instant (before any subsequent call);
+        // we read it immediately into an owned Vec on the very
+        // next line, then drop the raw view. No other
+        // `EditorHandle::send` call runs between construction
+        // of the slice and the copy, and the raw slice does
+        // not escape this function.
+        let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, length) };
+        Some(slice.to_vec())
     }
 
     /// Install a space-separated keyword list under `set_index`.
