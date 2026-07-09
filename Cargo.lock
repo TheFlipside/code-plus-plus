@@ -199,6 +199,7 @@ dependencies = [
  "codepp-plugin-host",
  "codepp-scintilla-sys",
  "codepp-shell",
+ "codepp-udl",
  "png",
  "tracing",
  "windows",

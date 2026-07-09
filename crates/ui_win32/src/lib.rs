@@ -93,6 +93,7 @@
 )]
 
 mod toolbar;
+mod udl_paint;
 
 use core::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
@@ -396,8 +397,8 @@ use codepp_scintilla_sys::{
     SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTARGETEND,
     SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE,
     SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN,
-    SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_UPDATEUI,
-    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
+    SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED,
+    SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
     SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
     SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_EOL_CR, SC_EOL_CRLF,
     SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL,
@@ -1247,6 +1248,7 @@ impl WindowState {
             accel_handle: &raw mut self.accel_handle,
             plugin_modeless_dialogs: &raw mut self.plugin_modeless_dialogs,
             dock_dialogs: &raw mut self.dock_dialogs,
+            udl_registry: &raw const self.shell.udl_registry,
             editor: self.editor,
         };
         (&mut self.shell, ui)
@@ -1327,6 +1329,26 @@ struct Win32Ui {
     /// `register_dock_dialog` (push) and read by every other
     /// DMM method.
     dock_dialogs: *mut Vec<DockEntry>,
+    /// Pointer to `WindowState.shell.udl_registry` so
+    /// `apply_udl_lang` can read the loaded UDLs without
+    /// reaching back through `state_from_hwnd(GetParent(...))`
+    /// — the reach-back would produce a **second** overlapping
+    /// `&mut WindowState` in the callers that already hold one
+    /// (`handle_close_active_tab_inner`, `handle_tab_selchange`,
+    /// `handle_style_config_menu`), aliasing UB under Rust's
+    /// `noalias` optimizer even before behavioural bugs
+    /// manifest. Same "raw pointer, UI-thread-only,
+    /// non-aliased-by-construction" invariant as
+    /// [`Self::accel_handle`] and friends.
+    ///
+    /// **Aliasing discipline.** The registry is populated once
+    /// at `Shell::new` and never mutated after — every read
+    /// through this pointer is shared, no `&mut` ever crosses
+    /// the FFI boundary via this field. When m3's editor modal
+    /// mutates the registry, the mutation must go through
+    /// `state_from_hwnd(state)` (no `Win32Ui` involvement) so
+    /// this pointer never observes a `&mut UdlRegistry`.
+    udl_registry: *const codepp_udl::UdlRegistry,
     editor: EditorHandle,
 }
 
@@ -1534,6 +1556,31 @@ impl UiPlatform for Win32Ui {
     }
 
     fn apply_lang(&mut self, lang: LangType) {
+        // Phase 4.6 m1c-3b-1: UDL container-lexer routing. When
+        // the target LangType is a UDL id (dynamically-assigned
+        // at startup in `Shell.udl_registry`), take the
+        // container-lexer path instead of `set_lexer_by_name`:
+        //   1. `clear_lexer` = `SCI_SETILEXER(0, 0)` — puts
+        //      Scintilla in container-lexer mode; styling now
+        //      fires as `SCN_STYLENEEDED` notifications the
+        //      WM_NOTIFY handler dispatches to
+        //      `udl_paint::paint_udl_range`.
+        //   2. `apply_default_styles` resets every style index
+        //      so the previous lexer's per-style colours don't
+        //      bleed onto our 24 UDL slots.
+        //   3. `apply_udl_styles` writes the UDL's own palette
+        //      into indices 0..=23 (matching `UdlStyleSlot`
+        //      discriminants).
+        //   4. Force a full-buffer initial paint immediately —
+        //      resetting `endStyled` to 0 via `SCI_STARTSTYLING`
+        //      and painting the whole document in one pass —
+        //      so the visible content shows the new highlighting
+        //      without waiting for a scroll to trigger
+        //      `SCN_STYLENEEDED`.
+        if codepp_udl::is_udl_lang_id(lang.as_npp_id()) {
+            self.apply_udl_lang(lang);
+            return;
+        }
         // Look up the Lexilla lexer name in core::lang. None means
         // either L_TEXT (no lexer wanted) or a language whose lexer
         // isn't yet in build.rs's static-link set — both fall through
@@ -2899,6 +2946,102 @@ struct ScintillaViewState {
 }
 
 impl Win32Ui {
+    /// UDL branch of `<Self as UiPlatform>::apply_lang` — set
+    /// container-lexer mode, apply the UDL's own style palette,
+    /// and immediately paint the whole buffer via the m1c-2
+    /// tokeniser. Inherent (not-a-trait-method) so the trait
+    /// impl stays focused on Lexilla-lexer routing; UDL is a
+    /// different enough dispatch shape (no lexer name, host-side
+    /// styling) that co-mingling the two branches would obscure
+    /// both.
+    ///
+    /// Registry lookup runs through `state_from_hwnd(main_hwnd)`
+    /// because `Win32Ui` doesn't hold a Shell reference — the
+    /// main HWND is derived via `GetParent(self.tab_hwnd)`, the
+    /// same pattern `apply_default_style` uses for its
+    /// `WindowState` access. If the registry doesn't contain the
+    /// requested id (shouldn't happen — Shell only hands out ids
+    /// it registered — but defensive), or `GetParent` returns
+    /// null (impossible by construction), fall through to plain
+    /// text.
+    fn apply_udl_lang(&mut self, lang: LangType) {
+        // Read the UDL from the pre-populated raw pointer rather
+        // than reaching back through `state_from_hwnd` — that
+        // would produce a second `&WindowState` overlapping with
+        // the outer callers' `&mut WindowState` borrow (aliasing
+        // UB in `handle_close_active_tab_inner`,
+        // `handle_tab_selchange`, `handle_style_config_menu`).
+        // The registry is populated once at `Shell::new` and
+        // read-only from here.
+        //
+        // SAFETY: `self.udl_registry` was captured from
+        // `WindowState.shell.udl_registry` at Win32Ui
+        // construction. `WindowState` outlives `Win32Ui` (which
+        // is Copy but only ever exists as a short-lived value
+        // during dispatch), the registry is never mutated after
+        // `Shell::new`, and we only take a shared reference
+        // for the duration of the clone.
+        let def = unsafe { &*self.udl_registry }
+            .find_by_lang_type_id(lang.as_npp_id())
+            .map(|entry| entry.definition.clone());
+        let Some(def) = def else {
+            tracing::warn!(
+                lang = lang.as_npp_id(),
+                "UDL LangType not in registry; falling back to plain text"
+            );
+            self.editor.clear_lexer();
+            apply_default_styles(&self.editor);
+            self.editor.send(SCI_COLOURISE, 0, -1);
+            return;
+        };
+        // Container-lexer mode: no Lexilla lexer attached. Every
+        // subsequent `SCN_STYLENEEDED` on this document fires
+        // through the WM_NOTIFY dispatch in `main_wnd_proc` and
+        // routes to `udl_paint::paint_udl_range`.
+        //
+        // **Why the paint below is bounded rather than full-
+        // document.** `clear_lexer()` doesn't reset Scintilla's
+        // `endStyled` cursor (verified against
+        // `vendor/scintilla/src/Document.cxx:65-67` —
+        // `SCI_SETILEXER(0, 0)` swaps only the lexer pointer
+        // and leaves `endStyled` alone). Without an explicit
+        // paint the previously-Lexilla-styled bytes keep their
+        // old style indices — which now point at the freshly-
+        // cleared per-style palette we just installed above —
+        // producing visually-empty styling for the whole
+        // document until the user scrolls. So an initial
+        // paint IS required.
+        //
+        // But full-document paint here would violate DESIGN.md
+        // §8's UI-never-blocks constraint on the tens-of-MB
+        // range. Instead we cap the synchronous initial paint
+        // at [`INITIAL_PAINT_CAP`] bytes; the rest fills in
+        // via `SCN_STYLENEEDED` as the user scrolls. 64 KiB
+        // comfortably covers viewport-sized files AND the
+        // visible window on multi-MB files, and the m1c-2
+        // tokeniser is linear-time so this bounds the initial-
+        // paint wall clock deterministically.
+        self.editor.clear_lexer();
+        apply_default_styles(&self.editor);
+        udl_paint::apply_udl_styles(&self.editor, &def);
+        const INITIAL_PAINT_CAP: usize = 64 * 1024;
+        let doc_len = self.editor.send(SCI_GETLENGTH, 0, 0).max(0) as usize;
+        let cap = doc_len.min(INITIAL_PAINT_CAP);
+        // Align to end-of-line so the tokeniser doesn't see a
+        // mid-line partial delimiter span at the cap.
+        let end_line = self.editor.line_from_position(cap);
+        let paint_end = self
+            .editor
+            .position_from_line(end_line + 1)
+            .unwrap_or(doc_len)
+            .min(doc_len);
+        if paint_end > 0 {
+            if let Some(bytes) = self.editor.get_range_bytes(0, paint_end) {
+                udl_paint::paint_udl_range(&self.editor, &def, 0, &bytes);
+            }
+        }
+    }
+
     /// Capture every piece of view state that `SCI_SETDOCPOINTER`
     /// would wipe on the swap-back. See `ScintillaViewState`.
     fn snapshot_active_view(&self) -> ScintillaViewState {
@@ -12638,6 +12781,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                 accel_handle: &raw mut state.accel_handle,
                 plugin_modeless_dialogs: &raw mut state.plugin_modeless_dialogs,
                 dock_dialogs: &raw mut state.dock_dialogs,
+                udl_registry: &raw const state.shell.udl_registry,
                 editor: state.editor,
             };
             <Win32Ui as UiPlatform>::update_status(
@@ -12721,6 +12865,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                     accel_handle: &raw mut state.accel_handle,
                     plugin_modeless_dialogs: &raw mut state.plugin_modeless_dialogs,
                     dock_dialogs: &raw mut state.dock_dialogs,
+                    udl_registry: &raw const state.shell.udl_registry,
                     editor: state.editor,
                 };
                 <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
@@ -12768,6 +12913,108 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
 /// lazily here: create one, push the tab's stored text, store the
 /// pointer back on the tab. Subsequent switches short-circuit.
 ///
+/// Handle `SCN_STYLENEEDED` for a UDL buffer. Called from the
+/// `WM_NOTIFY` arm when the active tab's language is inside the
+/// UDL dynamic-id range. `target` is the notification's
+/// `position` field — the byte offset up to which Scintilla
+/// wants styling applied.
+///
+/// If the active tab isn't a UDL (or the registry lookup
+/// fails), the function returns without painting — Scintilla
+/// simply leaves the range at whatever style it currently
+/// carries. This is the graceful-degradation shape: a UDL
+/// buffer whose registry entry got dropped between
+/// `apply_udl_lang` and the notification (impossible today
+/// but defensive) renders as plain text instead of crashing.
+///
+/// **Known m1c-3b-1 limitation** — this handler tokenises from
+/// a line boundary near `endStyled` without any per-line
+/// initial-state carry-over. A multi-line block comment /
+/// delimiter span whose opening line falls before the current
+/// paint range will mis-style on the first edit inside the
+/// span. The fix (tracked follow-up under Phase 4.6 m1c
+/// polish): persist per-line initial state via
+/// `SCI_SETLINESTATE`, walk back to a line with
+/// known-default state before starting the tokenise.
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+///
+/// **Load-bearing borrow discipline**: `state_from_hwnd` is
+/// dropped BEFORE any `editor.send(...)` call. Every
+/// `SCI_SETSTYLING` in the paint loop synchronously fires
+/// `SCN_MODIFIED(ChangeStyle)` via `Document::SetStyleFor`
+/// (`vendor/scintilla/src/Document.cxx:2418-2432` — no
+/// `modEventMask` override to suppress it), which re-enters
+/// `main_wnd_proc`'s `WM_NOTIFY` dispatcher synchronously. If
+/// we still held `&WindowState` at that point, the reentrant
+/// `SCN_MODIFIED` handler's attempt to re-borrow would violate
+/// Rust's aliasing rules. Clone the definition out of the
+/// borrow, drop the borrow, then paint.
+unsafe fn handle_udl_style_needed(hwnd: HWND, target: usize) {
+    let Some(state) = (unsafe { state_from_hwnd(hwnd) }) else {
+        return;
+    };
+    let Some(active_idx) = state.shell.active_tab else {
+        return;
+    };
+    let Some(tab) = state.shell.tabs.get(active_idx) else {
+        return;
+    };
+    let lang_id = tab.lang.as_npp_id();
+    if !codepp_udl::is_udl_lang_id(lang_id) {
+        return;
+    }
+    let Some(entry) = state.shell.udl_registry.find_by_lang_type_id(lang_id) else {
+        // Registry entry vanished — no paint, no crash. Log
+        // once so a future contributor can spot this in `-v`
+        // output if it ever happens.
+        tracing::warn!(
+            lang = lang_id,
+            "SCN_STYLENEEDED for UDL LangType not in registry; skipping paint"
+        );
+        return;
+    };
+    let def = entry.definition.clone();
+    let editor = state.editor;
+    // Compute line-aligned tokenise range. See
+    // `udl_paint::line_aligned_range` for the discipline.
+    let (range_start, range_end) = udl_paint::line_aligned_range(&editor, target);
+    if range_end <= range_start {
+        // Nothing to style (empty range or one that inverted
+        // under document-length clamping). Skip cleanly.
+        return;
+    }
+    // **Per-notification paint cap** — reviewer-required DoS
+    // defence. A plugin or a stray `SCI_COLOURISE(0, -1)` can
+    // fire `SCN_STYLENEEDED` with `position` = whole-document,
+    // and Scintilla synchronously blocks the UI thread until
+    // the handler returns. Cap the per-call paint at 64 KiB
+    // (line-aligned). Each `SCI_SETSTYLING` advances Scintilla's
+    // `endStyled`, so any bytes past the cap trigger a fresh
+    // `SCN_STYLENEEDED` on Scintilla's next paint iteration.
+    // The tokeniser is linear-time; 64 KiB is well inside
+    // DESIGN.md §8's keystroke budget.
+    const MAX_TOKENISE_RANGE: usize = 64 * 1024;
+    let capped_end = range_start
+        .saturating_add(MAX_TOKENISE_RANGE)
+        .min(range_end);
+    // Re-align to end-of-line so a mid-line cap doesn't produce
+    // a partial-delimiter tail.
+    let capped_line = editor.line_from_position(capped_end);
+    let doc_len = editor.send(SCI_GETLENGTH, 0, 0).max(0) as usize;
+    let capped_range_end = editor
+        .position_from_line(capped_line + 1)
+        .unwrap_or(doc_len)
+        .min(range_end);
+    let range_len = capped_range_end - range_start;
+    let Some(bytes) = editor.get_range_bytes(range_start, range_len) else {
+        return;
+    };
+    udl_paint::paint_udl_range(&editor, &def, range_start, &bytes);
+}
+
 /// # Safety
 ///
 /// Caller must invoke from the UI thread that owns `hwnd`.
@@ -12849,6 +13096,7 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
         accel_handle: &raw mut state.accel_handle,
         plugin_modeless_dialogs: &raw mut state.plugin_modeless_dialogs,
         dock_dialogs: &raw mut state.dock_dialogs,
+        udl_registry: &raw const state.shell.udl_registry,
         editor: state.editor,
     };
     // Re-apply the new tab's lexer/theme. Each tab carries its own
@@ -25846,6 +26094,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                         plugin_modeless_dialogs: &raw mut state
                                             .plugin_modeless_dialogs,
                                         dock_dialogs: &raw mut state.dock_dialogs,
+                                        udl_registry: &raw const state.shell.udl_registry,
                                         editor: state.editor,
                                     };
                                     <Win32Ui as UiPlatform>::update_status(
@@ -26724,6 +26973,39 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         };
                         if owns_source {
                             handle_tab_selchange(hwnd);
+                        }
+                    } else if nmhdr.code == SCN_STYLENEEDED {
+                        // Container-lexer styling request (Phase
+                        // 4.6 m1c-3b-1). Fires when Scintilla
+                        // needs styling for a range and no
+                        // Lexilla lexer is attached (we put the
+                        // view in container mode via
+                        // `clear_lexer` inside `apply_udl_lang`).
+                        // Read the target end position from the
+                        // SCNotification, look up the active
+                        // UDL, and paint the line-aligned range.
+                        //
+                        // Only handle notifications from OUR
+                        // Scintilla view — plugin-created
+                        // Scintilla controls (via
+                        // NPPM_CREATESCINTILLAHANDLE) would
+                        // also route through this WM_NOTIFY
+                        // handler, but their styling is the
+                        // plugin's own concern.
+                        //
+                        // SAFETY (outer `unsafe`): Win32 hands
+                        // us a valid `SCNotification` pointer;
+                        // we read `position` by value into a
+                        // local.
+                        let owns_source = if let Some(state) = state_from_hwnd(hwnd) {
+                            nmhdr.hwndFrom == state.scintilla_hwnd
+                        } else {
+                            false
+                        };
+                        if owns_source {
+                            let sci = &*(lparam.0 as *const SCNotification);
+                            let target = sci.position.max(0) as usize;
+                            handle_udl_style_needed(hwnd, target);
                         }
                     } else if nmhdr.code == SCN_MODIFIED {
                         // Scintilla's tracking-mode horizontal
