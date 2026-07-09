@@ -66,7 +66,9 @@ use std::str::FromStr;
 use serde::Deserialize;
 
 pub mod registry;
+pub mod rules;
 pub use registry::{UdlEntry, UdlRegistry, UDL_LANG_TYPE_BASE, UDL_LANG_TYPE_END};
+pub use rules::{CommentRules, DelimiterRule, DelimiterRules, Sequence};
 
 /// Hard cap on the byte-size of a UDL file. **256 KiB.**
 ///
