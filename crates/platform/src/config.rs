@@ -163,10 +163,14 @@ pub fn styles_xml_path() -> Option<PathBuf> {
 
 /// User Defined Language directory: `config_dir/userDefineLangs/`.
 /// Phase 4.6's UDL runtime scans this directory at startup and
-/// loads every `*.udl.xml` file into `LANG_TABLE`'s dynamic-id
-/// space. Directory name matches Notepad++'s
-/// `%APPDATA%\Notepad++\userDefineLangs` so a user migrating from
-/// N++ can copy their existing UDL collection over verbatim.
+/// loads every `*.xml` file into `LANG_TABLE`'s dynamic-id
+/// space (matching N++'s scan behaviour — community UDLs from
+/// `notepad-plus-plus/userDefinedLanguages` use plain `.xml`
+/// filenames, not the `.udl.xml` double-suffix the preinstalled
+/// Markdown fixture uses). Directory name matches Notepad++'s
+/// `%APPDATA%\Notepad++\userDefineLangs` so a user migrating
+/// from N++ can copy their existing UDL collection over
+/// verbatim.
 ///
 /// **Guaranteed to exist after `Shell::new` returns.** Phase 4.6
 /// m1b's startup path calls `create_dir_all` on this before

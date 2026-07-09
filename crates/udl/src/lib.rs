@@ -414,16 +414,53 @@ impl UdlKeywordLists {
     /// adding new lists shouldn't break existing UDL loading.
     /// Known lists absent from the file are left at their default
     /// empty-string value.
+    ///
+    /// **v2.0-style aliases.** Real-world UDLs shipping with
+    /// `udlVersion="2.0"` (observed on Luis Pisco's
+    /// `Cisco_IOS_byLuisPisco.xml`, among others in the
+    /// `notepad-plus-plus/userDefinedLanguages` collection)
+    /// use these four number-list names verbatim, distinct
+    /// from the `"Numbers, prefix1"` / `"Numbers, extras1"` /
+    /// `"Numbers, suffix1"` / `"Numbers, extras2"` set our
+    /// preinstalled Markdown v2.1 fixture uses. Whether N++
+    /// formally renamed these between UDL v2.0 and v2.1 or
+    /// accepts both forms in parallel isn't established from
+    /// N++'s public docs — the pragmatic observation is that
+    /// they appear in real files a user drops into
+    /// `userDefineLangs/`, and without recognising them the
+    /// scanner's `tracing::warn!("unknown …; skipped")` branch
+    /// fires and number-literal highlighting silently drops.
+    /// Accepting them as aliases for the closest-semantics
+    /// v2.1 slot is a compat best-effort — the mapping isn't
+    /// authoritative (`"Numbers, additional"` → `extras2` in
+    /// particular is a judgment call), but the failure mode is
+    /// bounded: a mis-assigned number slot yields slightly
+    /// different colouring than N++ would show for the same
+    /// file, not a crash or a load failure.
     fn from_raw(entries: Vec<RawKeywords>) -> Self {
         let mut lists = Self::default();
         for entry in entries {
             match entry.name.as_str() {
                 "Comments" => lists.comments = entry.value,
-                "Numbers, prefix1" => lists.numbers_prefix1 = entry.value,
+                // Canonical (v2.1-fixture) name paired with the
+                // v2.0-style alias observed in real N++
+                // community UDLs. Aliased arms map to the
+                // closest-semantics v2.1 slot; see the
+                // docstring above for the compat-best-effort
+                // rationale.
+                "Numbers, prefix1" | "Numbers, prefixes" => {
+                    lists.numbers_prefix1 = entry.value;
+                }
                 "Numbers, prefix2" => lists.numbers_prefix2 = entry.value,
-                "Numbers, extras1" => lists.numbers_extras1 = entry.value,
-                "Numbers, extras2" => lists.numbers_extras2 = entry.value,
-                "Numbers, suffix1" => lists.numbers_suffix1 = entry.value,
+                "Numbers, extras1" | "Numbers, extras with prefixes" => {
+                    lists.numbers_extras1 = entry.value;
+                }
+                "Numbers, extras2" | "Numbers, additional" => {
+                    lists.numbers_extras2 = entry.value;
+                }
+                "Numbers, suffix1" | "Numbers, suffixes" => {
+                    lists.numbers_suffix1 = entry.value;
+                }
                 "Numbers, suffix2" => lists.numbers_suffix2 = entry.value,
                 "Numbers, range" => lists.numbers_range = entry.value,
                 "Operators1" => lists.operators1 = entry.value,
@@ -649,37 +686,48 @@ struct RawSettings {
     prefix: RawPrefix,
 }
 
+/// `<Global>` attributes. All fields are `#[serde(default)]` so
+/// pre-v2.1 UDL files (which omit `@decimalSeparator`, added in
+/// v2.1) load without error. N++'s implicit defaults are the
+/// `Default` of each field's type — matches the tolerance N++'s
+/// own loader shows for hand-edited or older UDLs.
 #[derive(Debug, Deserialize)]
 struct RawGlobal {
-    #[serde(rename = "@caseIgnored")]
+    #[serde(rename = "@caseIgnored", default)]
     case_ignored: YesNo,
-    #[serde(rename = "@allowFoldOfComments")]
+    #[serde(rename = "@allowFoldOfComments", default)]
     allow_fold_of_comments: YesNo,
-    #[serde(rename = "@foldCompact")]
+    #[serde(rename = "@foldCompact", default)]
     fold_compact: YesNo,
-    #[serde(rename = "@forcePureLC")]
+    #[serde(rename = "@forcePureLC", default)]
     force_pure_lc: u8,
-    #[serde(rename = "@decimalSeparator")]
+    /// v2.1 addition; absent on v2.0 files → default `0` (dot).
+    #[serde(rename = "@decimalSeparator", default)]
     decimal_separator: u8,
 }
 
+/// `<Prefix>` attributes. All fields are `#[serde(default)]`
+/// so a hand-edited UDL missing one of the eight `KeywordsN`
+/// attributes defaults it to `no` (prefix-mode off) rather than
+/// erroring out — same tolerance N++ shows for older or partial
+/// UDLs.
 #[derive(Debug, Deserialize)]
 struct RawPrefix {
-    #[serde(rename = "@Keywords1")]
+    #[serde(rename = "@Keywords1", default)]
     keywords1: YesNo,
-    #[serde(rename = "@Keywords2")]
+    #[serde(rename = "@Keywords2", default)]
     keywords2: YesNo,
-    #[serde(rename = "@Keywords3")]
+    #[serde(rename = "@Keywords3", default)]
     keywords3: YesNo,
-    #[serde(rename = "@Keywords4")]
+    #[serde(rename = "@Keywords4", default)]
     keywords4: YesNo,
-    #[serde(rename = "@Keywords5")]
+    #[serde(rename = "@Keywords5", default)]
     keywords5: YesNo,
-    #[serde(rename = "@Keywords6")]
+    #[serde(rename = "@Keywords6", default)]
     keywords6: YesNo,
-    #[serde(rename = "@Keywords7")]
+    #[serde(rename = "@Keywords7", default)]
     keywords7: YesNo,
-    #[serde(rename = "@Keywords8")]
+    #[serde(rename = "@Keywords8", default)]
     keywords8: YesNo,
 }
 
@@ -724,7 +772,13 @@ struct RawWordsStyle {
 /// tolerant variants (case-insensitive `"yes"`/`"no"`/`"true"`/
 /// `"false"`/`"1"`/`"0"`) — the tolerance protects against
 /// hand-edits by users who don't know the strict format.
-#[derive(Debug, Clone, Copy)]
+///
+/// `Default` is `YesNo(false)` — used by `#[serde(default)]` on
+/// `<Global>`/`<Prefix>` attributes that were added post-v2.0
+/// so pre-v2.1 UDL files (like the community collection's
+/// `Cisco_IOS_byLuisPisco.xml`) load with N++'s implicit
+/// defaults rather than erroring out.
+#[derive(Debug, Clone, Copy, Default)]
 struct YesNo(bool);
 
 impl From<YesNo> for bool {
@@ -1040,6 +1094,136 @@ mod tests {
         assert_eq!(parse_hex_color("XYZ"), 0);
         assert_eq!(parse_hex_color("FF00FF"), 0x00FF_00FF);
         assert_eq!(parse_hex_color("#00FF00"), 0x0000_FF00);
+    }
+
+    #[test]
+    fn v2_0_global_without_decimal_separator_parses() {
+        // Regression pin: community UDLs like Luis Pisco's
+        // `Cisco_IOS_byLuisPisco.xml` are UDL v2.0 and omit the
+        // `@decimalSeparator` attribute that v2.1 added. Before
+        // this fix, `RawGlobal` hard-required the attribute and
+        // the whole file failed to parse — the user would see
+        // no Language-menu entry with no obvious reason why.
+        // Confirm that `<Global>` without `decimalSeparator`
+        // parses cleanly, defaulting the field to `0`.
+        let xml = r#"<NotepadPlus>
+            <UserLang name="v2.0 Sample" ext="v20" udlVersion="2.0">
+              <Settings>
+                <Global caseIgnored="yes" allowFoldOfComments="no"
+                        forcePureLC="0" foldCompact="no" />
+                <Prefix Keywords1="no" Keywords2="no" Keywords3="no"
+                        Keywords4="no" Keywords5="no" Keywords6="no"
+                        Keywords7="no" Keywords8="no" />
+              </Settings>
+              <KeywordLists />
+              <Styles />
+            </UserLang>
+          </NotepadPlus>"#;
+        let udl = UdlDefinition::parse(xml).expect("v2.0 <Global> must parse");
+        assert_eq!(udl.udl_version, "2.0");
+        assert!(udl.settings.case_ignored);
+        assert!(!udl.settings.fold_compact);
+        assert_eq!(
+            udl.settings.decimal_separator, 0,
+            "missing @decimalSeparator must default to 0 (dot)"
+        );
+    }
+
+    #[test]
+    fn v2_0_keyword_names_alias_to_v2_1_slots() {
+        // Regression pin: real-world UDLs shipping with
+        // `udlVersion="2.0"` use these older number-list names
+        // verbatim; without aliasing they'd be dropped as
+        // "unknown" and number-literal highlighting would be
+        // lost. Whether N++ formally renamed the lists between
+        // v2.0 and v2.1 or accepts both forms in parallel
+        // isn't established from N++'s public docs — see the
+        // hedged docstring on `UdlKeywordLists::from_raw`
+        // above for the compat-best-effort rationale.
+        let xml = r#"<NotepadPlus>
+            <UserLang name="v2.0 Numbers" ext="v20n" udlVersion="2.0">
+              <Settings>
+                <Global caseIgnored="no" allowFoldOfComments="no"
+                        foldCompact="no" forcePureLC="0" />
+                <Prefix Keywords1="no" Keywords2="no" Keywords3="no"
+                        Keywords4="no" Keywords5="no" Keywords6="no"
+                        Keywords7="no" Keywords8="no" />
+              </Settings>
+              <KeywordLists>
+                <Keywords name="Numbers, prefixes">$ 0x</Keywords>
+                <Keywords name="Numbers, extras with prefixes">_</Keywords>
+                <Keywords name="Numbers, suffixes">L UL</Keywords>
+                <Keywords name="Numbers, additional">.</Keywords>
+              </KeywordLists>
+              <Styles />
+            </UserLang>
+          </NotepadPlus>"#;
+        let udl = UdlDefinition::parse(xml).expect("v2.0 keyword aliases must parse");
+        // v2.0 name → v2.1 field mapping (see UdlKeywordLists::from_raw
+        // docstring for the semantic-closest justification).
+        assert_eq!(udl.keyword_lists.numbers_prefix1, "$ 0x");
+        assert_eq!(udl.keyword_lists.numbers_extras1, "_");
+        assert_eq!(udl.keyword_lists.numbers_suffix1, "L UL");
+        assert_eq!(udl.keyword_lists.numbers_extras2, ".");
+    }
+
+    #[test]
+    fn cisco_ios_shaped_v2_0_udl_loads_end_to_end() {
+        // Regression pin against Luis Pisco's Cisco IOS UDL
+        // shape (v2.0, empty `ext`, non-empty Keywords1..6, no
+        // `<Prefix>` numeric attrs missing, v2.0 keyword-list
+        // names for the numbers, populated `<Styles>` set). Not
+        // the actual bundled file (third-party asset we don't
+        // redistribute), but a minimal reduction that exercises
+        // every attribute the v2.0 → v2.1 tolerance work
+        // touches: `<Global>` without `@decimalSeparator`,
+        // `<Keywords name="Numbers, additional">`, empty `ext`
+        // attribute, and all 24 `<WordsStyle>` slots.
+        let xml = r#"<NotepadPlus>
+            <UserLang name="Cisco IOS" ext="" udlVersion="2.0">
+              <Settings>
+                <Global caseIgnored="yes" allowFoldOfComments="no"
+                        forcePureLC="0" foldCompact="no" />
+                <Prefix Keywords1="no" Keywords2="no" Keywords3="no"
+                        Keywords4="no" Keywords5="yes" Keywords6="no"
+                        Keywords7="no" Keywords8="no" />
+              </Settings>
+              <KeywordLists>
+                <Keywords name="Comments">00! 00remark 01 02((EOF)) 03 04</Keywords>
+                <Keywords name="Numbers, additional">:</Keywords>
+                <Keywords name="Operators1">. /</Keywords>
+                <Keywords name="Keywords1">interface hostname</Keywords>
+                <Keywords name="Keywords5">FastEthernet Vlan</Keywords>
+                <Keywords name="Delimiters">00 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18 19 20 21 22 23</Keywords>
+              </KeywordLists>
+              <Styles>
+                <WordsStyle name="DEFAULT" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="0" nesting="0" />
+                <WordsStyle name="KEYWORDS1" fgColor="AC8202" bgColor="FFFFFF" fontName="" fontStyle="1" nesting="0" />
+                <WordsStyle name="KEYWORDS5" fgColor="0080FF" bgColor="FFFFFF" fontName="" fontStyle="0" nesting="0" />
+              </Styles>
+            </UserLang>
+          </NotepadPlus>"#;
+        let udl = UdlDefinition::parse(xml).expect("Cisco-IOS-shaped v2.0 UDL must parse");
+        assert_eq!(udl.name, "Cisco IOS");
+        assert!(
+            udl.extensions.is_empty(),
+            "empty @ext must yield an empty extension list, not a spurious [\"\"]"
+        );
+        // Prefix flag on Keywords5 preserved.
+        assert!(udl.prefix[4], "Keywords5 prefix mode should be true");
+        // v2.0 "Numbers, additional" aliased into extras2.
+        assert_eq!(udl.keyword_lists.numbers_extras2, ":");
+        // Ordinary keyword lists untouched.
+        assert_eq!(udl.keyword_lists.keywords[0], "interface hostname");
+        assert_eq!(udl.keyword_lists.keywords[4], "FastEthernet Vlan");
+        // Style slots preserved with their v2.0 fontStyle bits.
+        let kw1 = udl
+            .styles
+            .iter()
+            .find(|s| s.name == "KEYWORDS1")
+            .expect("KEYWORDS1 must load");
+        assert_eq!(kw1.fg_color, 0x00AC_8202);
+        assert_eq!(kw1.font_style, 1, "bold bit preserved");
     }
 
     #[test]

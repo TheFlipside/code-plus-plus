@@ -1,6 +1,6 @@
 //! Runtime UDL registry — the in-memory collection of every
 //! `UdlDefinition` loaded at startup from
-//! `<config_dir>/userDefineLangs/*.udl.xml`, each carrying its own
+//! `<config_dir>/userDefineLangs/*.xml`, each carrying its own
 //! dynamically-assigned `LangType` id.
 //!
 //! This module is Phase 4.6 m1b: the scanner + registry
@@ -59,7 +59,7 @@ pub const fn is_udl_lang_id(id: i32) -> bool {
 /// Enumeration cap on the number of directory entries the
 /// scanner will inspect. Distinct from the id-space size —
 /// enumeration + canonicalization happens BEFORE id assignment,
-/// so a directory containing millions of `.udl.xml`-named files
+/// so a directory containing millions of `.xml`-named files
 /// (planted by a hostile install script or by accident) would
 /// otherwise force millions of synchronous `canonicalize`
 /// syscalls on the `Shell::new` startup path, blowing past the
@@ -106,7 +106,12 @@ pub struct UdlEntry {
 /// scanner's per-iteration work stays short and so a future
 /// unit test can drive the classifier in isolation. Preserves
 /// the security discipline:
-/// 1. Only `.udl.xml`-suffixed filenames enter canonicalisation.
+/// 1. Only `.xml`-suffixed filenames enter canonicalisation
+///    (matching N++'s directory-scan behaviour — see the
+///    inline rationale in this function's body). Non-UDL
+///    `.xml` files that survive canonicalisation are rejected
+///    downstream by the parser's `MissingUserLang` / `Parse`
+///    error path in `UdlDefinition::from_file`.
 /// 2. Both `canonicalize(entry)` failure and out-of-directory
 ///    resolution log-and-skip (fail closed).
 /// 3. The canonical path — not the raw entry path — is pushed,
@@ -129,11 +134,24 @@ fn classify_entry(
         }
     };
     let raw_path = entry.path();
-    let is_udl = raw_path
+    // Match N++'s behaviour: `userDefineLangs/` scans every
+    // `*.xml`, not just the `.udl.xml` double-suffix convention
+    // the preinstalled Markdown fixture uses. Community UDLs
+    // distributed via `notepad-plus-plus/userDefinedLanguages`
+    // (e.g. `Cisco_IOS_byLuisPisco.xml`, `Kotlin.xml`) use the
+    // plain `.xml` suffix and would otherwise be invisible to
+    // Code++. A user renaming an unrelated `.xml` into this
+    // directory that isn't shaped like a UDL is caught by the
+    // parser instead — `UdlDefinition::from_file` returns
+    // `UdlError::Parse` / `MissingUserLang` on non-UDL XML and
+    // the scanner log-and-skips, so opening the filter to
+    // `.xml` doesn't cause phantom menu entries. The parser is
+    // the second line of defence.
+    let is_xml = raw_path
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".udl.xml"));
-    if !is_udl {
+        .is_some_and(|name| name.to_ascii_lowercase().ends_with(".xml"));
+    if !is_xml {
         return;
     }
     // TOCTOU-safe path resolution — see the caller's inline
@@ -184,7 +202,7 @@ impl UdlRegistry {
         Self::default()
     }
 
-    /// Scan `dir` for `*.udl.xml` files and load each one via
+    /// Scan `dir` for `*.xml` files and load each one via
     /// [`UdlDefinition::from_file`].
     ///
     /// **Missing / unreadable directory returns an empty
@@ -207,12 +225,15 @@ impl UdlRegistry {
     /// renumbering when the file set changes (see [`UdlEntry`]'s
     /// stability caveat).
     ///
-    /// **`.udl.xml` extension matching.** `Path::extension()`
-    /// only returns the last dot-suffix — for `markdown._pre.udl.xml`
-    /// it returns `xml`, not `udl.xml`. We test the full filename
-    /// against the compound suffix so a user renaming an
-    /// unrelated `.xml` file into the directory doesn't get
-    /// silently loaded as a UDL.
+    /// **`.xml` extension matching.** N++ scans every `*.xml`
+    /// in `userDefineLangs/`, not just files with the
+    /// preinstalled fixture's `.udl.xml` double-suffix, so the
+    /// scanner matches on plain `.xml` too. Any XML file that
+    /// isn't shaped like a UDL is rejected downstream by the
+    /// parser (`MissingUserLang` / `Parse`) and log-and-skipped
+    /// per file — the parser is the second line of defence
+    /// against a user renaming an unrelated `.xml` into the
+    /// directory.
     ///
     /// **Dynamic-id-space exhaustion.** If more than
     /// [`UDL_LANG_TYPE_END`]` - `[`UDL_LANG_TYPE_BASE`]` + 1`
@@ -265,7 +286,7 @@ impl UdlRegistry {
         // trace when a user reports "my UDL isn't showing up."
         let mut paths: Vec<PathBuf> = Vec::new();
         // Enumeration is capped so a directory containing
-        // hundreds of thousands of `.udl.xml`-named entries
+        // hundreds of thousands of `.xml`-named entries
         // (planted by a hostile install script) can't force
         // hundreds of thousands of `canonicalize` syscalls on
         // the startup path — that would blow past DESIGN.md §8's
@@ -395,10 +416,14 @@ mod tests {
     }
 
     #[test]
-    fn scans_udl_xml_files_only() {
+    fn scans_all_xml_and_skips_non_udl_via_parser() {
         // Populate a tempdir with one real UDL and a decoy `.xml`
-        // file — the scanner must load the UDL and skip the
-        // decoy.
+        // file. The filename filter now accepts every `.xml`
+        // (matching N++'s behaviour), so the decoy enters
+        // canonicalisation and gets attempted by the parser;
+        // parsing fails (`MissingUserLang`) and the scanner
+        // log-and-skips. The parser is the second line of
+        // defence — no phantom entry created.
         let tmp = tempfile::tempdir().expect("tempdir must succeed");
         let markdown = std::fs::read_to_string(markdown_fixture_path())
             .expect("markdown fixture must be readable");
@@ -409,6 +434,28 @@ mod tests {
             "<not-a-udl></not-a-udl>",
         )
         .expect("write decoy");
+
+        let reg = UdlRegistry::scan_dir(tmp.path());
+        assert_eq!(reg.entries().len(), 1);
+        assert_eq!(reg.entries()[0].definition.name, "Markdown (preinstalled)");
+    }
+
+    #[test]
+    fn scans_plain_xml_suffix_without_udl_double_suffix() {
+        // Regression pin: community UDLs from
+        // `notepad-plus-plus/userDefinedLanguages` (e.g.
+        // `Cisco_IOS_byLuisPisco.xml`, `Kotlin.xml`) use the
+        // plain `.xml` suffix, not the `.udl.xml` double the
+        // preinstalled Markdown fixture uses. Before this fix,
+        // those files would never enter canonicalisation and
+        // the user would silently see nothing in the Language
+        // menu. Confirm they now scan and load.
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        let markdown = std::fs::read_to_string(markdown_fixture_path())
+            .expect("markdown fixture must be readable");
+        // Write the fixture under a bare `.xml` filename.
+        std::fs::write(tmp.path().join("SomeCommunityUdl.xml"), &markdown)
+            .expect("write plain-.xml UDL");
 
         let reg = UdlRegistry::scan_dir(tmp.path());
         assert_eq!(reg.entries().len(), 1);
