@@ -201,6 +201,7 @@ dependencies = [
  "codepp-shell",
  "codepp-udl",
  "png",
+ "tempfile",
  "tracing",
  "windows",
 ]

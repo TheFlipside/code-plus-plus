@@ -1511,7 +1511,12 @@ impl UiPlatform for Win32Ui {
         // construction — Scintilla has the authoritative number
         // since the buffer is fully populated by the time
         // `update_status` runs).
-        let lang_label = lang.language_name().unwrap_or("Normal Text");
+        //
+        // SAFETY on `&*self.udl_registry`: same as
+        // `apply_udl_lang` — the registry is populated once at
+        // `Shell::new`, read-only from here, and outlives every
+        // `Win32Ui` value that captures a pointer to it.
+        let lang_label = resolve_lang_label(lang, unsafe { &*self.udl_registry });
         write_status_part(
             self.status_hwnd,
             STATUS_PART_LANG,
@@ -14904,6 +14909,47 @@ unsafe fn relayout_main_window_via_post(child_hwnd: HWND) {
         // `SIZE_MINIMIZED`), revisit each caller so a chrome
         // toggle doesn't produce a spurious "restored" event.
         let _ = PostMessageW(Some(parent), WM_SIZE, WPARAM(0), LPARAM(h16 | w16));
+    }
+}
+
+/// Resolve the display label for the Language slot of the
+/// status bar. Built-in languages route through
+/// `LangType::language_name()` (which walks `core::lang::
+/// LANG_TABLE`); dynamically-registered UDLs use the
+/// `<UserLang name="...">` string from the parsed
+/// [`codepp_udl::UdlDefinition`] in `udl_registry`. Falls back
+/// to `"Normal Text"` when the id doesn't resolve in either
+/// direction — same fallback the pre-Phase-4.6 code used, so a
+/// hostile / stale `LangType` produces the same visible label as
+/// an actual `L_TEXT` buffer.
+///
+/// **UDL-name sanitisation.** The UDL branch runs the name
+/// through [`sanitize_filename_for_display`] before returning
+/// — the string comes from third-party XML the user may have
+/// downloaded, so control characters (`\0`/`\r`/`\n`/`\t`) that
+/// would garble the status bar are stripped and the length is
+/// capped so an oversized name can't visually push the adjacent
+/// EOL / encoding / caret slots. Consistent with the same
+/// discipline the menu-label path already applies via
+/// `sanitize_udl_name_for_menu`; the `&`-doubling done there is
+/// menu-specific (mnemonic marker) and doesn't apply here since
+/// the status bar renders `&` literally.
+///
+/// Extracted into a free function so the branching can be unit-
+/// tested without a live `Win32Ui` or `HWND`. The single caller
+/// (`Win32Ui::update_status`) wraps the raw-pointer dereference
+/// for the registry itself, matching the safety discipline the
+/// rest of the file uses for `udl_registry` access.
+fn resolve_lang_label(lang: LangType, udl_registry: &codepp_udl::UdlRegistry) -> String {
+    if codepp_udl::is_udl_lang_id(lang.as_npp_id()) {
+        udl_registry
+            .find_by_lang_type_id(lang.as_npp_id())
+            .map_or_else(
+                || "Normal Text".to_string(),
+                |entry| sanitize_filename_for_display(&entry.definition.name),
+            )
+    } else {
+        lang.language_name().unwrap_or("Normal Text").to_string()
     }
 }
 
@@ -50595,5 +50641,138 @@ mod udl_menu_sanitizer_tests {
     #[test]
     fn empty_input_yields_empty_output() {
         assert_eq!(sanitize_udl_name_for_menu(""), "");
+    }
+}
+
+#[cfg(test)]
+mod status_lang_label_tests {
+    //! Tests for Phase 4.6 follow-up: status-bar language slot
+    //! shows the UDL's `<UserLang name="...">` string for
+    //! dynamically-registered UDL buffers instead of the
+    //! pre-fix "Normal Text" fallback (which happened because
+    //! `LangType::language_name()` walks the built-in
+    //! `LANG_TABLE` and returns `None` for UDL ids).
+    use super::resolve_lang_label;
+    use codepp_core::lang::{LangType, L_CPP, L_TEXT};
+
+    /// Construct a `UdlRegistry` from a synthetic definition
+    /// with a given name. The registry's public constructors
+    /// take a directory path; this helper drives the same
+    /// state via `UdlDefinition::parse` + `Vec<UdlEntry>` under
+    /// the hood.
+    fn registry_with_udl_named(name: &str) -> codepp_udl::UdlRegistry {
+        // Minimal valid UDL v2.1 with the requested name — same
+        // shape as the fixture but reduced to the smallest
+        // parseable document. The `parse` path stamps
+        // `lang_type_id` at `UDL_LANG_TYPE_BASE` via the scanner
+        // in real use; here we go through a tempdir + `scan_dir`
+        // so the entry lands with the assigned id the resolver
+        // will look up.
+        let xml = format!(
+            r#"<NotepadPlus>
+                <UserLang name="{name}" ext="foo" udlVersion="2.1">
+                  <Settings>
+                    <Global caseIgnored="no" allowFoldOfComments="no"
+                            foldCompact="no" forcePureLC="0" decimalSeparator="0" />
+                    <Prefix Keywords1="no" Keywords2="no" Keywords3="no"
+                            Keywords4="no" Keywords5="no" Keywords6="no"
+                            Keywords7="no" Keywords8="no" />
+                  </Settings>
+                  <KeywordLists />
+                  <Styles />
+                </UserLang>
+              </NotepadPlus>"#
+        );
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        std::fs::write(tmp.path().join("test.xml"), xml).expect("write UDL");
+        codepp_udl::UdlRegistry::scan_dir(tmp.path())
+    }
+
+    #[test]
+    fn built_in_lang_name_used_when_id_is_not_a_udl() {
+        // C++ has an entry in `core::lang::LANG_TABLE` — the
+        // resolver must return its display name regardless of
+        // what's in the UDL registry.
+        let registry = codepp_udl::UdlRegistry::new();
+        assert_eq!(resolve_lang_label(L_CPP, &registry), "C++");
+    }
+
+    #[test]
+    fn udl_name_used_when_id_is_a_udl() {
+        // The Cisco IOS demo: pick a UDL from the Language menu,
+        // status bar should show the UDL's name, not "Normal
+        // Text". Regression pin for the exact bug the user hit.
+        let registry = registry_with_udl_named("Cisco IOS");
+        let entry = registry.entries().first().expect("one entry");
+        assert_eq!(
+            resolve_lang_label(LangType(entry.lang_type_id), &registry),
+            "Cisco IOS"
+        );
+    }
+
+    #[test]
+    fn normal_text_fallback_when_udl_id_is_unknown() {
+        // Buffer's `lang` is a UDL id but the registry doesn't
+        // have that id (e.g. the UDL was deleted between
+        // session-save and session-restore). Fall back to
+        // "Normal Text" — matches the pre-Phase-4.6 behaviour
+        // when `LangType::language_name()` returns None.
+        let registry = codepp_udl::UdlRegistry::new();
+        // Any id inside the UDL range; the registry is empty so
+        // the lookup misses.
+        let id = codepp_udl::UDL_LANG_TYPE_BASE;
+        assert_eq!(resolve_lang_label(LangType(id), &registry), "Normal Text");
+    }
+
+    #[test]
+    fn normal_text_for_l_text_regardless_of_registry_contents() {
+        // `L_TEXT` is the "Normal Text" entry in `LANG_TABLE` —
+        // the pre-existing fallback rendering should not
+        // change just because a UDL happens to be registered.
+        let registry = registry_with_udl_named("Some UDL");
+        assert_eq!(resolve_lang_label(L_TEXT, &registry), "Normal Text");
+    }
+
+    #[test]
+    fn udl_name_is_sanitised_before_reaching_the_status_bar() {
+        // Third-party UDL XML is attacker-influenced (the
+        // Language menu even links users to a public GitHub
+        // collection to download them). Control characters in
+        // the `<UserLang name="...">` string would garble the
+        // status bar's segmented layout — a `\t` in particular
+        // would render as glyph noise, an embedded `\r`/`\n`
+        // could break the label into multiple visual lines.
+        // Confirm `sanitize_filename_for_display` runs on the
+        // UDL branch, stripping those characters before the
+        // label reaches `write_status_part`.
+        //
+        // XML attribute-value normalization (spec §3.3.3)
+        // silently converts literal `\t`/`\r`/`\n` bytes in
+        // attribute text to spaces, so hostile control chars
+        // in a UDL name only actually survive parsing when
+        // encoded as character references (`&#x9;`, `&#xD;`,
+        // `&#xA;`) — attribute-value normalization doesn't
+        // apply to character references. Use the ref form so
+        // the test genuinely exercises the sanitizer, not the
+        // XML parser's own whitespace-collapse.
+        let xml = r#"<NotepadPlus>
+            <UserLang name="Bad&#x9;UDL&#xD;Name&#xA;" ext="foo" udlVersion="2.1">
+              <Settings>
+                <Global caseIgnored="no" allowFoldOfComments="no"
+                        foldCompact="no" forcePureLC="0" decimalSeparator="0" />
+                <Prefix Keywords1="no" Keywords2="no" Keywords3="no"
+                        Keywords4="no" Keywords5="no" Keywords6="no"
+                        Keywords7="no" Keywords8="no" />
+              </Settings>
+              <KeywordLists />
+              <Styles />
+            </UserLang>
+          </NotepadPlus>"#;
+        let tmp = tempfile::tempdir().expect("tempdir must succeed");
+        std::fs::write(tmp.path().join("nasty.xml"), xml).expect("write UDL");
+        let registry = codepp_udl::UdlRegistry::scan_dir(tmp.path());
+        let entry = registry.entries().first().expect("one entry");
+        let label = resolve_lang_label(LangType(entry.lang_type_id), &registry);
+        assert_eq!(label, "BadUDLName");
     }
 }
