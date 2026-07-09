@@ -610,17 +610,16 @@ const ID_TOOLS_MONITORING: u16 = 1901;
 const ID_UDL_DEFINE_LANGUAGE: u16 = 2100;
 const ID_UDL_OPEN_FOLDER: u16 = 2101;
 const ID_UDL_OPEN_COLLECTION: u16 = 2102;
-// Reserved for m1d: dynamic loaded-UDL menu items. `ID_UDL_ITEM_BASE
-// + loaded_udl_dynamic_id` becomes the item's command id, matching
-// the `ID_LANGUAGE_BASE + lang.as_npp_id()` scheme used for the
-// built-in Lexilla-backed rows. The range accommodates ~900 UDLs,
-// which is comfortably past any realistic user's collection size.
-// `#[allow(dead_code)]` because m1d hasn't wired the dispatch yet;
-// the constants land now so a future contributor writing m1d has
-// stable range boundaries to reference.
-#[allow(dead_code)]
+// Dynamic loaded-UDL menu items. `ID_UDL_ITEM_BASE +
+// (lang_type_id - UDL_LANG_TYPE_BASE)` becomes the item's command
+// id — same encoding scheme as the built-in `ID_LANGUAGE_BASE +
+// lang.as_npp_id()` rows. The range accommodates ~900 UDLs, which
+// is comfortably past any realistic user's collection size. Wired
+// by `append_udls_to_menu` (menu build), `set_udl_radio_mark` +
+// `clear_all_language_menu_marks` (state refresh), and the
+// `WM_COMMAND` dispatch arm that inverts the encoding back to a
+// `LangType` id.
 const ID_UDL_ITEM_BASE: u16 = 2200;
-#[allow(dead_code)]
 const ID_UDL_ITEM_END: u16 = 3099;
 
 /// Notepad++ User Defined Languages Collection URL — the community
@@ -1084,14 +1083,6 @@ struct WindowState {
     view_menu: HMENU,
     encoding_menu: HMENU,
     language_menu: HMENU,
-    /// HMENU for the "User-Defined language" submenu nested under
-    /// `language_menu`. Populated at build time with the three
-    /// fixed action entries; extended at `Win32Ui::run`-time by
-    /// `append_udls_to_menu` with one `MF_STRING` item per loaded
-    /// UDL. Kept on `WindowState` so a future in-app UDL editor
-    /// (m3) can re-append after a definition is added or renamed
-    /// without rebuilding the whole Language menu.
-    udl_menu: HMENU,
     window_menu: HMENU,
     /// Right-edge open-tabs `▼` popup. Same content as `window_menu`
     /// — rebuilt on `WM_INITMENUPOPUP` by `refresh_window_menu`.
@@ -13547,15 +13538,6 @@ struct BuiltMenuBar {
     view_menu: HMENU,
     encoding_menu: HMENU,
     language_menu: HMENU,
-    /// Popup HMENU for the "User-Defined language" submenu nested
-    /// under `language_menu`. Kept as a separate handle so
-    /// `append_udls_to_menu` can extend it after `Shell::new`
-    /// populates the UDL registry — build-time it has only the
-    /// three fixed action entries (Define your language / Open
-    /// folder / N++ collection); the dynamic per-UDL list is
-    /// appended later. Also the target of any future in-app UDL
-    /// editor "reload" that rebuilds the entry list.
-    udl_menu: HMENU,
     window_menu: HMENU,
     /// Popup HMENU for the right-shortcuts `▼` dropdown — the open-
     /// tabs switcher pinned to the right edge of the menu bar.
@@ -13834,7 +13816,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         //   4. Separator.
         //   5. "User-Defined language" submenu — greyed pending the
         //      Phase 5 user-defined-language work.
-        let (language_menu, udl_menu) = build_language_menu()?;
+        let language_menu = build_language_menu()?;
         AppendMenuW(bar, MF_POPUP, language_menu.0 as usize, w!("&Language"))?;
 
         // ----- Settings -----
@@ -13980,7 +13962,6 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             view_menu,
             encoding_menu,
             language_menu,
-            udl_menu,
             window_menu,
             right_shortcuts_menu,
         })
@@ -14208,21 +14189,30 @@ unsafe fn clear_all_language_menu_marks(language_menu: HMENU) {
             let sub = GetSubMenu(language_menu, i);
             if sub.is_invalid() {
                 // Direct top-level command item (no child popup):
-                // "Normal Text" at position 0, plus any letter
-                // that has exactly one `LANG_TABLE` entry — the
-                // Language menu inlines those at the top level
-                // rather than wrapping a single-item letter
-                // submenu around them. `refresh_language_menu`'s
-                // built-in sweep marks these via
-                // `CheckMenuRadioItem(language_menu, ...)`, so
-                // this clear path must be able to unmark them
-                // too when switching *away* to a UDL. Read the
-                // item's cmd id via `GetMenuItemID(language_menu,
-                // i)` and clear its bullet if it's a language id
-                // (UDL ids never appear at the top level — they
-                // only ever live inside the UDL submenu).
+                //   * "Normal Text" at position 0.
+                //   * Any letter with exactly one `LANG_TABLE`
+                //     entry (single-run letters aren't wrapped
+                //     in a letter submenu).
+                //   * Every loaded UDL — appended flat at the
+                //     bottom of the Language menu by
+                //     `append_udls_to_menu` so a UDL click is
+                //     one hover-and-click, matching N++'s
+                //     layout.
+                //
+                // Read the cmd id and clear the bullet if it's
+                // in either the built-in language range or the
+                // UDL item range. Both `refresh_language_menu`'s
+                // built-in sweep and `set_udl_radio_mark` set
+                // bullets on `language_menu` directly for these
+                // ids, so this clear path must handle both
+                // ranges to keep cross-boundary switches from
+                // leaving a stale bullet behind.
                 let id = GetMenuItemID(language_menu, i);
-                if id >= u32::from(ID_LANGUAGE_BASE) && id <= u32::from(ID_LANGUAGE_END) {
+                let in_lang_range =
+                    id >= u32::from(ID_LANGUAGE_BASE) && id <= u32::from(ID_LANGUAGE_END);
+                let in_udl_range =
+                    id >= u32::from(ID_UDL_ITEM_BASE) && id <= u32::from(ID_UDL_ITEM_END);
+                if in_lang_range || in_udl_range {
                     let _ = CheckMenuItem(language_menu, id, MF_BYCOMMAND.0 | MF_UNCHECKED.0);
                 }
                 continue;
@@ -14261,17 +14251,19 @@ unsafe fn clear_all_language_menu_marks(language_menu: HMENU) {
 }
 
 /// Apply the radio-mark bullet for a UDL language. UDL menu
-/// items live under the "User-Defined language" submenu with cmd
-/// ids in `ID_UDL_ITEM_BASE..=ID_UDL_ITEM_END`, disjoint from
-/// the letter-submenus' `ID_LANGUAGE_BASE..=ID_LANGUAGE_END`
-/// band. Assumes the caller has already invoked
+/// items live as flat top-level entries directly on
+/// `language_menu`, with cmd ids in
+/// `ID_UDL_ITEM_BASE..=ID_UDL_ITEM_END`, disjoint from the
+/// letter-submenus' `ID_LANGUAGE_BASE..=ID_LANGUAGE_END` band.
+/// Because the target is a direct child of `language_menu`, one
+/// `CheckMenuRadioItem` call on `language_menu` with the UDL id
+/// range is sufficient — no submenu walk, no companion parent-
+/// popup bullet to mirror (there is no popup wrapping UDL
+/// entries any more).
+///
+/// Assumes the caller has already invoked
 /// [`clear_all_language_menu_marks`] so no stale bullets remain
 /// on either side of the built-in / UDL boundary.
-///
-/// Also marks the parent "User-Defined language" top-level entry
-/// with `MFT_RADIOCHECK | MFS_CHECKED` so the bullet is visible
-/// at the top level too, matching the letter-submenu rendering
-/// discipline in `refresh_language_menu`.
 ///
 /// # Safety
 ///
@@ -14279,34 +14271,6 @@ unsafe fn clear_all_language_menu_marks(language_menu: HMENU) {
 /// from `build_language_menu`). Caller on the UI thread.
 unsafe fn set_udl_radio_mark(language_menu: HMENU, lang_id: i32) {
     unsafe {
-        // Locate the "User-Defined language" submenu — it's the
-        // last popup child under `language_menu`, appended after
-        // the separator that follows the alphabetical block.
-        // Rather than hard-coding a position, walk children and
-        // pick the one whose first item's cmd id equals
-        // `ID_UDL_DEFINE_LANGUAGE` (the fixed leading entry,
-        // unchanging across app versions).
-        let count = GetMenuItemCount(Some(language_menu));
-        if count <= 0 {
-            return;
-        }
-        let mut udl_sub = HMENU::default();
-        let mut udl_sub_pos = -1_i32;
-        for i in 0..count {
-            let sub = GetSubMenu(language_menu, i);
-            if sub.is_invalid() {
-                continue;
-            }
-            let first_id = GetMenuItemID(sub, 0);
-            if first_id == u32::from(ID_UDL_DEFINE_LANGUAGE) {
-                udl_sub = sub;
-                udl_sub_pos = i;
-                break;
-            }
-        }
-        if udl_sub.is_invalid() || udl_sub_pos < 0 {
-            return;
-        }
         // Compute the target cmd id from the lang id — inverse
         // of `append_udls_to_menu`'s encoding.
         let offset = lang_id - codepp_udl::UDL_LANG_TYPE_BASE;
@@ -14319,37 +14283,17 @@ unsafe fn set_udl_radio_mark(language_menu: HMENU, lang_id: i32) {
         #[allow(clippy::cast_sign_loss, reason = "offset guarded to be non-negative")]
         let target = u32::from(ID_UDL_ITEM_BASE) + offset as u32;
         let _ = CheckMenuRadioItem(
-            udl_sub,
+            language_menu,
             u32::from(ID_UDL_ITEM_BASE),
             u32::from(ID_UDL_ITEM_END),
             target,
             MF_BYCOMMAND.0,
         );
-        // Mark the parent "User-Defined language" top-level
-        // submenu item so the bullet is visible before the user
-        // hovers into the submenu — same discipline as the
-        // letter-submenu marks in `refresh_language_menu`.
-        let mut mii = MENUITEMINFOW {
-            cbSize: u32::try_from(core::mem::size_of::<MENUITEMINFOW>()).unwrap_or(0),
-            fMask: MIIM_FTYPE | MIIM_STATE,
-            fType: MFT_RADIOCHECK,
-            fState: MFS_CHECKED,
-            ..Default::default()
-        };
-        #[allow(
-            clippy::cast_sign_loss,
-            reason = "udl_sub_pos derived from GetMenuItemCount iteration, non-negative"
-        )]
-        let pos = udl_sub_pos as u32;
-        let _ = SetMenuItemInfoW(language_menu, pos, true, &raw mut mii);
     }
 }
 
 /// Build the Language menu from `core::lang::LANG_TABLE`. Returns
-/// `(top_level_menu, udl_submenu)` — the top-level HMENU ready to
-/// be appended to the menu bar, plus the "User-Defined language"
-/// submenu handle so `append_udls_to_menu` can extend it after
-/// `Shell::new` populates the UDL registry.
+/// the top-level HMENU, ready to be appended to the menu bar.
 ///
 /// Layout matches Notepad++:
 ///
@@ -14369,14 +14313,18 @@ unsafe fn set_udl_radio_mark(language_menu: HMENU, lang_id: i32) {
 ///       creating the directory first if it doesn't yet exist.
 ///     - "Notepad++ User Defined Languages Collection" — opens
 ///       [`UDL_COLLECTION_URL`] in the user's default browser.
-///     - Followed by the dynamic list of loaded UDLs, appended
-///       later by `append_udls_to_menu` once `Shell` is
-///       constructed (the registry isn't populated until then).
+///  6. The dynamic list of loaded UDLs, appended at the *top
+///     level* (below the "User-Defined language" submenu entry,
+///     matching N++'s layout — one hover-and-click per UDL, not
+///     two). That extension happens later in `Win32Ui::run` via
+///     `append_udls_to_menu` because the registry isn't
+///     populated until `Shell::new` scans
+///     `<config_dir>/userDefineLangs/`.
 ///
 /// `LANG_TABLE` is asserted to be alphabetical in `core::lang`'s
 /// tests, so the iteration walks adjacent same-letter rows
 /// directly without sorting here.
-fn build_language_menu() -> Result<(HMENU, HMENU)> {
+fn build_language_menu() -> Result<HMENU> {
     use codepp_core::lang::LANG_TABLE;
 
     // Top-level menu, RAII-wrapped: any `?`-propagated failure
@@ -14532,15 +14480,24 @@ fn build_language_menu() -> Result<(HMENU, HMENU)> {
     }
     let _ = udl_sub.take();
 
-    Ok((menu.take(), udl_handle))
+    Ok(menu.take())
 }
 
-/// Append the loaded UDL entries to the Language menu's
-/// "User-Defined language" submenu. Called from `Win32Ui::run`
-/// AFTER `Shell::new` has populated `Shell.udl_registry` (the
-/// submenu is built with only the fixed action entries during
-/// window creation because Shell doesn't exist yet at that
-/// point).
+/// Append the loaded UDL entries as flat top-level items on the
+/// Language menu, directly below the "User-Defined language"
+/// submenu entry. Called from `Win32Ui::run` AFTER `Shell::new`
+/// has populated `Shell.udl_registry` (the top-level menu is
+/// built with only the built-in languages + the fixed UDL-
+/// action submenu during window creation because Shell doesn't
+/// exist yet at that point).
+///
+/// Layout matches Notepad++'s Language menu: the fixed UDL
+/// actions ("Define your language…" etc.) live inside the
+/// "User-Defined language" submenu; the loaded UDLs themselves
+/// appear as flat, top-level `MF_STRING` items at the very
+/// bottom of the Language menu, so a click on Language →
+/// "Markdown (preinstalled)" is one hover-and-click rather than
+/// two.
 ///
 /// Each loaded UDL gets one menu item with command id
 /// `ID_UDL_ITEM_BASE + (lang_type_id - UDL_LANG_TYPE_BASE)`.
@@ -14550,27 +14507,30 @@ fn build_language_menu() -> Result<(HMENU, HMENU)> {
 /// same path built-in-lexer menu items already take.
 ///
 /// A separator is inserted before the first UDL entry (only if
-/// there's at least one loaded UDL) so the fixed action
-/// entries are visually distinct from the dynamic list.
+/// there's at least one loaded UDL) so the "User-Defined
+/// language" submenu entry is visually distinct from the
+/// dynamic flat list.
 ///
 /// # Safety
 ///
-/// `udl_submenu` must be a live HMENU created by
-/// `build_language_menu` and still owned by the top-level menu
-/// bar (not detached). Caller runs on the UI thread.
-unsafe fn append_udls_to_menu(udl_submenu: HMENU, registry: &codepp_udl::UdlRegistry) {
+/// `language_menu` must be the live top-level HMENU returned by
+/// `build_language_menu`, still owned by the top-level menu bar
+/// (not detached). Caller runs on the UI thread.
+unsafe fn append_udls_to_menu(language_menu: HMENU, registry: &codepp_udl::UdlRegistry) {
     unsafe {
         let entries = registry.entries();
         if entries.is_empty() {
             return;
         }
-        // Separator between the fixed actions and the loaded
-        // UDLs. Errors from AppendMenuW here are non-critical —
-        // the menu still functions with the entries appended
-        // sans separator, and the failure mode is a Win32
+        // Separator between the "User-Defined language" submenu
+        // entry (the last thing `build_language_menu` appended)
+        // and the flat loaded-UDL list that follows. Errors
+        // from AppendMenuW here are non-critical — the menu
+        // still functions with the entries appended sans
+        // separator, and the failure mode is a Win32
         // out-of-resources which would break far more than this
         // one call.
-        let _ = AppendMenuW(udl_submenu, MF_SEPARATOR, 0, PCWSTR::null());
+        let _ = AppendMenuW(language_menu, MF_SEPARATOR, 0, PCWSTR::null());
         for entry in entries {
             let offset = entry.lang_type_id - codepp_udl::UDL_LANG_TYPE_BASE;
             // Bound-check: skip any entry outside the reserved
@@ -14594,7 +14554,7 @@ unsafe fn append_udls_to_menu(udl_submenu: HMENU, registry: &codepp_udl::UdlRegi
             let menu_id = usize::from(ID_UDL_ITEM_BASE) + offset as usize;
             let sanitized = sanitize_udl_name_for_menu(&entry.definition.name);
             let label = wide_terminated(&sanitized);
-            let _ = AppendMenuW(udl_submenu, MF_STRING, menu_id, PCWSTR(label.as_ptr()));
+            let _ = AppendMenuW(language_menu, MF_STRING, menu_id, PCWSTR(label.as_ptr()));
         }
     }
 }
@@ -22876,7 +22836,6 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             view_menu: menus.view_menu,
             encoding_menu: menus.encoding_menu,
             language_menu: menus.language_menu,
-            udl_menu: menus.udl_menu,
             window_menu: menus.window_menu,
             right_shortcuts_menu: menus.right_shortcuts_menu,
             find_replace_dlg: None,
@@ -23078,24 +23037,28 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             ui.apply_lang(active_lang);
         }
 
-        // Populate the "User-Defined language" submenu with the
-        // loaded UDL entries. `build_language_menu` created the
-        // fixed action entries during window construction (Define
-        // your language / Open folder / N++ collection); the
-        // dynamic per-UDL list must wait until `Shell::new` has
-        // scanned `<config_dir>/userDefineLangs/` — which happened
-        // as part of the `Shell` constructed above. Append now, on
-        // the UI thread, before the window is shown, so the very
-        // first user drop-down of the Language menu already shows
-        // every loaded UDL. Cheap: one `AppendMenuW` per entry,
+        // Append the loaded UDL entries as flat top-level items
+        // at the bottom of the Language menu (right below the
+        // "User-Defined language" submenu entry, matching N++'s
+        // layout so a click on a loaded UDL is one hover-and-
+        // click rather than two). `build_language_menu` built
+        // the top-level menu structure and the fixed-action
+        // submenu during window construction (Shell didn't
+        // exist yet — the UDL registry is populated by
+        // `Shell::new`'s scan of `<config_dir>/userDefineLangs/`
+        // which just ran above). Append now on the UI thread,
+        // before the window is shown, so the very first user
+        // drop-down of the Language menu already shows every
+        // loaded UDL. Cheap: one `AppendMenuW` per entry,
         // registry capped at [`MAX_UDL_SCAN_ENTRIES`].
         //
-        // SAFETY: `state.udl_menu` is the live UDL submenu HMENU
-        // returned by `build_language_menu` and still owned by
-        // the top-level menu bar (installed via `SetMenu` on the
-        // main HWND above); the call runs on the UI thread that
-        // just created it. Enclosing block is already unsafe.
-        append_udls_to_menu(state.udl_menu, &state.shell.udl_registry);
+        // SAFETY: `state.language_menu` is the live top-level
+        // Language HMENU returned by `build_language_menu` and
+        // still owned by the top-level menu bar (installed via
+        // `SetMenu` on the main HWND above); the call runs on
+        // the UI thread that just created it. Enclosing block
+        // is already unsafe.
+        append_udls_to_menu(state.language_menu, &state.shell.udl_registry);
 
         // Box now finalized. Install the raw pointer in GWLP_USERDATA;
         // the Box is reclaimed in WM_DESTROY.
