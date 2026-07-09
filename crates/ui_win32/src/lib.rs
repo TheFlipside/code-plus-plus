@@ -595,6 +595,41 @@ const ID_HELP_ABOUT: u16 = 1800;
 // command space so the toolbar's button table is complete.
 const ID_TOOLS_DEFINE_LANG: u16 = 1900;
 const ID_TOOLS_MONITORING: u16 = 1901;
+
+// UDL (User Defined Language) menu — Phase 4.6 m2.
+//
+// Three static command IDs for the fixed "User-Defined language"
+// submenu entries. `DEFINE_LANGUAGE` stays greyed until m3 lands
+// the editor modal; the two `OPEN_*` handlers wire `ShellExecuteW`
+// to launch the OS file-explorer and the default browser
+// respectively. The dynamic list of loaded UDLs lands with m1b
+// (startup scan) and m1d (menu wiring); it will occupy a separate
+// reserved range immediately below `ID_UDL_ITEM_END` so a click on
+// a UDL entry can be dispatched with a single range check.
+const ID_UDL_DEFINE_LANGUAGE: u16 = 2100;
+const ID_UDL_OPEN_FOLDER: u16 = 2101;
+const ID_UDL_OPEN_COLLECTION: u16 = 2102;
+// Reserved for m1d: dynamic loaded-UDL menu items. `ID_UDL_ITEM_BASE
+// + loaded_udl_dynamic_id` becomes the item's command id, matching
+// the `ID_LANGUAGE_BASE + lang.as_npp_id()` scheme used for the
+// built-in Lexilla-backed rows. The range accommodates ~900 UDLs,
+// which is comfortably past any realistic user's collection size.
+// `#[allow(dead_code)]` because m1d hasn't wired the dispatch yet;
+// the constants land now so a future contributor writing m1d has
+// stable range boundaries to reference.
+#[allow(dead_code)]
+const ID_UDL_ITEM_BASE: u16 = 2200;
+#[allow(dead_code)]
+const ID_UDL_ITEM_END: u16 = 3099;
+
+/// Notepad++ User Defined Languages Collection URL — the community
+/// showcase of UDL XML files linked from N++'s own Language menu.
+/// Opened by [`ID_UDL_OPEN_COLLECTION`] via `ShellExecuteW("open",
+/// url, ...)` which routes to the user's default browser. Constant
+/// so the URL is (a) an unmodifiable compile-time value that
+/// cannot be reached by an attacker-controlled path and (b) easy
+/// to grep for when N++ eventually renames or moves the repo.
+const UDL_COLLECTION_URL: &str = "https://github.com/notepad-plus-plus/userDefinedLanguages";
 /// Plugins → Plugin Manager... menu item. Opens the modal admin
 /// dialog that lists installed plugins and lets the user toggle
 /// the per-plugin enabled flag (persisted to
@@ -13790,16 +13825,21 @@ unsafe fn refresh_language_menu(language_menu: HMENU, lang: LangType) {
             //   * `contains_target` — does this submenu contain the
             //     active language? (drives the bullet mark)
             //   * `in_lang_band` — does this submenu hold items with
-            //     ids inside the language range at all? Letter
-            //     submenus (A / B / C / ...) yield `true`; the
-            //     greyed "User-Defined language" submenu yields
-            //     `false` (its items all have cmd id 0).
+            //     ids inside the `ID_LANGUAGE_BASE..=ID_LANGUAGE_END`
+            //     (1500..=1599) range at all? Letter submenus
+            //     (A / B / C / ...) yield `true`; the "User-Defined
+            //     language" submenu yields `false` because its
+            //     entries live in the disjoint 2100..=2102 UDL-
+            //     action range and the reserved 2200..=3099 UDL-
+            //     item range (Phase 4.6 m2 / m1d) — both outside
+            //     the language band.
             // The `in_lang_band` discriminator is load-bearing: we
             // ONLY apply `SetMenuItemInfoW` to letter submenus.
-            // Touching the UDL submenu would replace its
-            // `MFS_GRAYED` state with `MFS_UNCHECKED` (`MIIM_STATE`
-            // overwrites fState wholesale), silently re-enabling the
-            // deliberately disabled item.
+            // Touching the UDL submenu would replace the greyed
+            // "Define your language…" entry's `MFS_GRAYED` state
+            // with `MFS_UNCHECKED` (`MIIM_STATE` overwrites fState
+            // wholesale), silently re-enabling the deliberately
+            // disabled item.
             let inner_count = GetMenuItemCount(Some(sub));
             let mut contains_target = false;
             let mut in_lang_band = false;
@@ -13856,12 +13896,16 @@ unsafe fn refresh_language_menu(language_menu: HMENU, lang: LangType) {
 ///     titled by the letter; single-entry letters stay at the top
 ///     level.
 ///  4. Separator.
-///  5. "User-Defined language" submenu — greyed pending the
-///     Phase 5 user-defined-language work, plus three placeholder
-///     items the user listed (Define your language..., Open UDL
-///     folder..., Notepad++ UDL Collection) and the two Markdown
-///     entries (preinstalled / dark mode).
-///  6. "User-defined" greyed-out tail item.
+///  5. "User-Defined language" submenu (Phase 4.6 m2):
+///     - "Define your language…" — greyed until the m3 editor
+///       modal lands.
+///     - "Open User Defined Language folder…" — opens the OS
+///       file explorer at `<config_dir>/userDefineLangs/`,
+///       creating the directory first if it doesn't yet exist.
+///     - "Notepad++ User Defined Languages Collection" — opens
+///       [`UDL_COLLECTION_URL`] in the user's default browser.
+///     - Followed by the dynamic list of loaded UDLs once
+///       m1b's startup scan and m1d's menu-append wiring land.
 ///
 /// `LANG_TABLE` is asserted to be alphabetical in `core::lang`'s
 /// tests, so the iteration walks adjacent same-letter rows
@@ -13963,68 +14007,64 @@ fn build_language_menu() -> Result<HMENU> {
         i = j;
     }
 
-    // 4 + 5. User-Defined section, greyed pending Phase 5.
+    // 4 + 5. User-Defined section (Phase 4.6 m2).
+    //
+    // Layout follows Notepad++:
+    //   ├─ Define your language…            (greyed — m3 wires the modal)
+    //   ├─ Open User Defined Language folder…
+    //   ├─ Notepad++ User Defined Languages Collection
+    //   ├─ ──────── (separator, only present once loaded UDLs exist)
+    //   └─ <loaded UDL list>                (m1d populates)
+    //
+    // The two `OPEN_*` entries are enabled today and route to
+    // `ShellExecuteW("open", ...)` in the `WM_COMMAND` handler.
+    // The loaded-UDL list is empty until m1b's startup scan lands;
+    // the separator that would visually divide the actions from
+    // the list is deliberately omitted here (would render as a
+    // trailing separator otherwise, which reads as broken layout).
     unsafe {
         AppendMenuW(menu.handle(), MF_SEPARATOR, 0, PCWSTR::null())?;
     }
 
     let udl_sub = MenuGuard::wrap(unsafe { CreatePopupMenu()? });
-    for label in [
-        "Define your language...",
-        "Open User Defined Language folder...",
-        "Notepad++ User Defined Languages Collection",
-    ] {
-        let l = wide_terminated(label);
-        // cmd id 0 with MF_GRAYED — the placeholder won't
-        // route through WM_COMMAND, just sits as a visual
-        // entry until Phase 5 wires the real command ids.
-        unsafe {
-            AppendMenuW(
-                udl_sub.handle(),
-                MF_STRING | MF_GRAYED,
-                0,
-                PCWSTR(l.as_ptr()),
-            )?;
-        }
-    }
+    let define_label = wide_terminated("Define your language...");
     unsafe {
-        AppendMenuW(udl_sub.handle(), MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(
+            udl_sub.handle(),
+            MF_STRING | MF_GRAYED,
+            usize::from(ID_UDL_DEFINE_LANGUAGE),
+            PCWSTR(define_label.as_ptr()),
+        )?;
     }
-    for label in [
-        "Markdown (preinstalled)",
-        "Markdown (preinstalled dark mode)",
-    ] {
-        let l = wide_terminated(label);
-        unsafe {
-            AppendMenuW(
-                udl_sub.handle(),
-                MF_STRING | MF_GRAYED,
-                0,
-                PCWSTR(l.as_ptr()),
-            )?;
-        }
+    let open_folder_label = wide_terminated("Open User Defined Language folder...");
+    unsafe {
+        AppendMenuW(
+            udl_sub.handle(),
+            MF_STRING,
+            usize::from(ID_UDL_OPEN_FOLDER),
+            PCWSTR(open_folder_label.as_ptr()),
+        )?;
+    }
+    let collection_label = wide_terminated("Notepad++ User Defined Languages Collection");
+    unsafe {
+        AppendMenuW(
+            udl_sub.handle(),
+            MF_STRING,
+            usize::from(ID_UDL_OPEN_COLLECTION),
+            PCWSTR(collection_label.as_ptr()),
+        )?;
     }
     let udl_label = wide_terminated("User-Defined language");
     let udl_handle = udl_sub.handle();
     unsafe {
         AppendMenuW(
             menu.handle(),
-            MF_POPUP | MF_GRAYED,
+            MF_POPUP,
             udl_handle.0 as usize,
             PCWSTR(udl_label.as_ptr()),
         )?;
     }
     let _ = udl_sub.take();
-
-    let user_def = wide_terminated("User-defined");
-    unsafe {
-        AppendMenuW(
-            menu.handle(),
-            MF_STRING | MF_GRAYED,
-            0,
-            PCWSTR(user_def.as_ptr()),
-        )?;
-    }
 
     Ok(menu.take())
 }
@@ -16573,6 +16613,116 @@ unsafe extern "system" fn style_config_wnd_proc_inner(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         },
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// Handle Language → User-Defined language → "Open User Defined
+/// Language folder…" — creates `<config_dir>/userDefineLangs/`
+/// if it doesn't yet exist, then shells out to `ShellExecuteW`
+/// which launches the OS default file-explorer (Windows Explorer
+/// on Windows) at that path.
+///
+/// The `create_dir_all` step means this action always succeeds on
+/// a fresh install (before m1b's startup scanner has minted the
+/// directory itself) — a user clicking the menu item expects an
+/// open folder, not an error dialog telling them the directory
+/// doesn't exist.
+///
+/// `hwnd` is the owner for `ShellExecuteW`'s error-dialog surface
+/// — passing the main window keeps any UAC / association-picker
+/// prompt visually anchored to Code++.
+///
+/// **Security note.** The path fed to `ShellExecuteW` is derived
+/// from `platform::user_define_langs_dir()`, which joins a fixed
+/// `"userDefineLangs"` component to the `APPDATA`-derived
+/// `config_dir()`. No user-controlled string participates. The
+/// `"open"` verb + directory-path shape is what Windows Explorer
+/// uses internally — this is not "execute an arbitrary user-named
+/// program" surface.
+fn open_udl_folder(hwnd: HWND) {
+    let Some(dir) = codepp_platform::user_define_langs_dir() else {
+        tracing::warn!(
+            "no config_dir resolved; skipping open_udl_folder \
+             (APPDATA / HOME unset?)"
+        );
+        return;
+    };
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(
+            path = ?dir,
+            error = %e,
+            "failed to create userDefineLangs directory; \
+             ShellExecuteW may still succeed if it exists"
+        );
+    }
+    // Encode the path directly via `OsStr::encode_wide` for
+    // lossless UTF-16 round-trip. Going through `to_string_lossy`
+    // instead would substitute U+FFFD on any ill-formed surrogate
+    // sequence in the OS path — safe in practice for our fixed
+    // `%APPDATA%\Code++\userDefineLangs` shape but not necessary,
+    // and inconsistent with `read_pe_file_version`'s established
+    // pattern. Matches the codebase's existing convention for
+    // shipping a `Path` into a wide-string API.
+    use std::os::windows::ffi::OsStrExt;
+    let path_wide: Vec<u16> = dir
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let ret = unsafe {
+        ShellExecuteW(
+            Some(hwnd),
+            w!("open"),
+            PCWSTR(path_wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // `ShellExecuteW` returns a `HINSTANCE`; a value <= 32 is a
+    // documented error code (missing association, no `explorer.exe`,
+    // etc.). Log the failure so a broken environment is
+    // distinguishable from user inattention in `--verbose` diags.
+    if (ret.0 as isize) <= 32 {
+        tracing::warn!(
+            path = ?dir,
+            code = ret.0 as isize,
+            "ShellExecuteW(open, <udl folder>) failed"
+        );
+    }
+}
+
+/// Handle Language → User-Defined language → "Notepad++ User
+/// Defined Languages Collection" — opens [`UDL_COLLECTION_URL`]
+/// in the user's default browser via `ShellExecuteW`.
+///
+/// The URL is a compile-time constant, not user-controlled —
+/// `ShellExecuteW`'s "open" verb on an `https://` URL routes to
+/// the registered browser association, not to arbitrary program
+/// execution.
+fn open_udl_collection_url(hwnd: HWND) {
+    let url_wide = wide_terminated(UDL_COLLECTION_URL);
+    let ret = unsafe {
+        ShellExecuteW(
+            Some(hwnd),
+            w!("open"),
+            PCWSTR(url_wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // Same observability discipline as `open_udl_folder` — a
+    // `HINSTANCE` <= 32 indicates a documented error (no
+    // registered http/https association, etc.). Log so a broken
+    // browser configuration is diagnosable rather than looking
+    // like an unresponsive menu.
+    if (ret.0 as isize) <= 32 {
+        tracing::warn!(
+            url = UDL_COLLECTION_URL,
+            code = ret.0 as isize,
+            "ShellExecuteW(open, UDL_COLLECTION_URL) failed"
+        );
     }
 }
 
@@ -25713,6 +25863,22 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // info. Modal pump runs after the borrow drops.
                     ID_HELP_ABOUT => {
                         show_about_dialog(hwnd);
+                    }
+                    // Language → User-Defined language → Open UDL
+                    // folder (Phase 4.6 m2). Creates
+                    // `<config_dir>/userDefineLangs/` if missing,
+                    // then launches the OS file explorer at that
+                    // path via `ShellExecuteW("open", ...)`.
+                    ID_UDL_OPEN_FOLDER => {
+                        open_udl_folder(hwnd);
+                    }
+                    // Language → User-Defined language → Notepad++
+                    // UDL Collection (Phase 4.6 m2). Opens
+                    // `UDL_COLLECTION_URL` in the user's default
+                    // browser. Compile-time-fixed URL, no user
+                    // string ever reaches `ShellExecuteW`.
+                    ID_UDL_OPEN_COLLECTION => {
+                        open_udl_collection_url(hwnd);
                     }
                     // Settings → Style Configurator. Opens the
                     // modal style editor. On Save & Close the

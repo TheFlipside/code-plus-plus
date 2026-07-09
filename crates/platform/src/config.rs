@@ -161,6 +161,23 @@ pub fn styles_xml_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("styles.xml"))
 }
 
+/// User Defined Language directory: `config_dir/userDefineLangs/`.
+/// Phase 4.6's UDL runtime scans this directory at startup and
+/// loads every `*.udl.xml` file into `LANG_TABLE`'s dynamic-id
+/// space. Directory name matches Notepad++'s
+/// `%APPDATA%\Notepad++\userDefineLangs` so a user migrating from
+/// N++ can copy their existing UDL collection over verbatim.
+///
+/// May not yet exist. The Language menu's "Open User Defined
+/// Language folder…" action (Phase 4.6 m2) and the startup
+/// scanner (m1b) both `create_dir_all` here first so the folder
+/// is guaranteed to exist for the OS file-explorer action even on
+/// a fresh install with no UDLs installed.
+#[must_use]
+pub fn user_define_langs_dir() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("userDefineLangs"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,6 +220,24 @@ mod tests {
         assert_eq!(
             plugins.file_name().and_then(|s| s.to_str()),
             Some("plugins")
+        );
+    }
+
+    #[test]
+    fn user_define_langs_dir_lives_under_config_dir() {
+        let Some(udl_dir) = user_define_langs_dir() else {
+            return;
+        };
+        let Some(config) = config_dir() else {
+            return;
+        };
+        assert!(udl_dir.starts_with(&config));
+        // Directory name matches Notepad++ exactly so a user
+        // migrating from N++ can copy their UDL collection
+        // verbatim — the pin catches a silent rename.
+        assert_eq!(
+            udl_dir.file_name().and_then(|s| s.to_str()),
+            Some("userDefineLangs")
         );
     }
 
