@@ -168,11 +168,14 @@ pub fn styles_xml_path() -> Option<PathBuf> {
 /// `%APPDATA%\Notepad++\userDefineLangs` so a user migrating from
 /// N++ can copy their existing UDL collection over verbatim.
 ///
-/// May not yet exist. The Language menu's "Open User Defined
-/// Language folder…" action (Phase 4.6 m2) and the startup
-/// scanner (m1b) both `create_dir_all` here first so the folder
-/// is guaranteed to exist for the OS file-explorer action even on
-/// a fresh install with no UDLs installed.
+/// **Guaranteed to exist after `Shell::new` returns.** Phase 4.6
+/// m1b's startup path calls `create_dir_all` on this before
+/// scanning, so the folder is always present after the first
+/// successful editor construction. The Language menu's "Open
+/// User Defined Language folder…" action (Phase 4.6 m2) also
+/// `create_dir_all`s here defensively, so a click that races
+/// with a between-boots directory deletion still opens Explorer
+/// at a valid path.
 #[must_use]
 pub fn user_define_langs_dir() -> Option<PathBuf> {
     config_dir().map(|d| d.join("userDefineLangs"))

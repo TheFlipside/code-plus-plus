@@ -20,5 +20,7 @@ serde     = { workspace = true }
 tracing   = { workspace = true }
 
 [dev-dependencies]
-# No dev-only deps yet; the fixture-based unit tests read from
-# assets/preinstalled-udls/ via CARGO_MANIFEST_DIR relative paths.
+# tempfile: registry-scan tests need a fresh directory populated
+# with fixture UDL files. Workspace-shared to inherit the common
+# version pin.
+tempfile = { workspace = true }

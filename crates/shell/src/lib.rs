@@ -964,6 +964,18 @@ pub struct Shell {
     /// `UiPlatform::apply_default_style` on this value after the
     /// editor is up to seed the visible appearance.
     pub styles: codepp_core::styles::Styles,
+    /// Runtime registry of User Defined Languages loaded from
+    /// `<config_dir>/userDefineLangs/` at startup (Phase 4.6 m1b).
+    /// The UI (m1d) reads [`codepp_udl::UdlRegistry::entries`] to
+    /// append the loaded UDLs to the Language menu; the container-
+    /// lexer runtime (m1c) resolves a buffer's UDL via
+    /// [`codepp_udl::UdlRegistry::find_by_lang_type_id`] when the
+    /// user activates a UDL-language buffer. Empty on a fresh
+    /// install before the m1d first-run copy of the preinstalled
+    /// UDLs has run; empty is a valid state (no runtime error, no
+    /// startup failure — same graceful-degradation discipline as
+    /// missing `session.xml`).
+    pub udl_registry: codepp_udl::UdlRegistry,
 }
 
 /// Search-option bitset matching Scintilla's `SCFIND_*` flags. Held
@@ -1032,6 +1044,36 @@ impl Shell {
         spawn_forwarder(fif_rx_inner, fif_tx_outer, wake, "fif-forwarder");
         let fif_orchestrator = fif::FifOrchestrator::new(fif_tx_inner);
 
+        // `<config_dir>/userDefineLangs/` — create if missing,
+        // then scan for UDL XML files. Creating up-front matches
+        // the promise `platform::user_define_langs_dir`'s doc
+        // makes ("m1b's scanner `create_dir_all`s here first")
+        // and gives m1d's first-run preinstalled-UDL copy a
+        // place to write. `create_dir_all` is idempotent, so
+        // hitting this on every startup after the first is
+        // near-free. Failure is logged at warn and swallowed —
+        // `scan_dir` still runs and returns an empty registry,
+        // preserving the fresh-install-friendly discipline.
+        // Per-file parse failures inside `scan_dir` are
+        // similarly logged and skipped: a single malformed UDL
+        // doesn't block startup or hide the rest of the
+        // collection.
+        let udl_registry = if let Some(dir) = codepp_platform::user_define_langs_dir() {
+            if let Err(err) = std::fs::create_dir_all(&dir) {
+                tracing::warn!(
+                    path = ?dir,
+                    error = %err,
+                    "failed to create userDefineLangs directory; \
+                     scan_dir will still run against the possibly-\
+                     missing path"
+                );
+            }
+            codepp_udl::UdlRegistry::scan_dir(&dir)
+        } else {
+            tracing::info!("no config_dir resolved; skipping UDL registry scan");
+            codepp_udl::UdlRegistry::new()
+        };
+
         Ok(Self {
             session: Session::new(),
             tabs: Vec::new(),
@@ -1056,6 +1098,7 @@ impl Shell {
             pending_fif_launch: None,
             deferred_dialogs: Vec::new(),
             styles: load_styles(),
+            udl_registry,
         })
     }
 

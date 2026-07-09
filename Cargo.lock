@@ -173,6 +173,7 @@ dependencies = [
  "codepp-editor",
  "codepp-platform",
  "codepp-plugin-host",
+ "codepp-udl",
  "crossbeam-channel",
  "tempfile",
  "tracing",
@@ -184,6 +185,7 @@ version = "0.1.0"
 dependencies = [
  "quick-xml",
  "serde",
+ "tempfile",
  "tracing",
 ]
 

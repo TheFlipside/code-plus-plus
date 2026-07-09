@@ -19,6 +19,7 @@ codepp-core        = { workspace = true }
 codepp-editor      = { workspace = true }
 codepp-plugin-host = { workspace = true }
 codepp-platform    = { workspace = true }
+codepp-udl         = { workspace = true }
 crossbeam-channel  = { workspace = true }
 # tempfile is a runtime dep (used by save_current_to_disk's atomic
 # write), not just a test fixture.
