@@ -73,7 +73,7 @@ pub use rules::{
     CommentRules, DelimiterRule, DelimiterRules, Sequence, MAX_ALTERNATIVES_PER_SLOT,
     MAX_LITERAL_BYTES,
 };
-pub use tokenise::{StyleEvent, Tokeniser, UdlStyleSlot};
+pub use tokenise::{StyleEvent, Tokeniser, UdlCompiledRules, UdlStyleSlot};
 
 /// Hard cap on the byte-size of a UDL file. **256 KiB.**
 ///

@@ -13,7 +13,7 @@
 
 use codepp_editor::EditorHandle;
 use codepp_scintilla_sys::SCI_GETLENGTH;
-use codepp_udl::{Tokeniser, UdlDefinition, UdlStyleSlot};
+use codepp_udl::{Tokeniser, UdlCompiledRules, UdlStyleSlot};
 
 /// Font-style bitfield used by UDL `<WordsStyle fontStyle="...">`
 /// attributes. Bit 0 = bold, bit 1 = italic, bit 2 = underline.
@@ -91,8 +91,8 @@ fn udl_style_name_to_index(name: &str) -> Option<u8> {
 /// prior lexer's per-style colours don't bleed through onto
 /// indices the UDL doesn't populate. Same discipline as the
 /// existing Lexilla-theme path in `apply_lang`.
-pub fn apply_udl_styles(editor: &EditorHandle, def: &UdlDefinition) {
-    for style in &def.styles {
+pub fn apply_udl_styles(editor: &EditorHandle, styles: &[codepp_udl::UdlStyle]) {
+    for style in styles {
         let Some(index) = udl_style_name_to_index(&style.name) else {
             // Unknown WordsStyle name — either a UDL authored
             // against a future N++ version we don't know about,
@@ -112,11 +112,19 @@ pub fn apply_udl_styles(editor: &EditorHandle, def: &UdlDefinition) {
     }
 }
 
-/// Tokenise `text_range` of the editor's document via the UDL
-/// rules and paint the resulting style events via
-/// `SCI_STARTSTYLING` + `SCI_SETSTYLING`. `range_start` is the
-/// byte offset (line-aligned by the caller) where painting
+/// Tokenise `text_range` of the editor's document via the
+/// pre-compiled UDL rules and paint the resulting style events
+/// via `SCI_STARTSTYLING` + `SCI_SETSTYLING`. `range_start` is
+/// the byte offset (line-aligned by the caller) where painting
 /// begins; `text_range` is the caller-fetched byte content.
+///
+/// Takes a `&UdlCompiledRules` reference rather than a raw
+/// `&UdlDefinition` so this hot path (fired on every
+/// `SCN_STYLENEEDED`) doesn't rebuild the keyword-class tables
+/// per keystroke — see the type's docstring for the DESIGN.md
+/// §8 argument. The Arc lives on the [`codepp_udl::UdlEntry`]
+/// and is populated once at [`codepp_udl::UdlRegistry::scan_dir`]
+/// time.
 ///
 /// **Caller responsibilities:**
 /// - Align `range_start` to a line boundary so restart is safe
@@ -128,11 +136,11 @@ pub fn apply_udl_styles(editor: &EditorHandle, def: &UdlDefinition) {
 ///   through here on the UI thread.
 pub fn paint_udl_range(
     editor: &EditorHandle,
-    def: &UdlDefinition,
+    rules: &UdlCompiledRules,
     range_start: usize,
     text_range: &[u8],
 ) {
-    let tokeniser = Tokeniser::new(def);
+    let tokeniser = Tokeniser::new(rules);
     let events = tokeniser.tokenise(text_range);
     editor.start_styling(range_start);
     for event in &events {

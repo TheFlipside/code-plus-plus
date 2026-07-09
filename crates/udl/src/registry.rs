@@ -96,6 +96,21 @@ pub struct UdlEntry {
     /// The parsed UDL. `definition.source_path` carries the file
     /// path the scanner loaded from.
     pub definition: UdlDefinition,
+    /// Pre-compiled tokeniser rules — comment / delimiter
+    /// parses and the eight [`crate::tokenise::KeywordClass`]
+    /// tables. Built exactly once here at
+    /// [`UdlRegistry::scan_dir`] time and shared via
+    /// [`std::sync::Arc`] with every subsequent
+    /// [`crate::Tokeniser`] created for this language.
+    ///
+    /// **Why on the entry, not built per-tokenise.** See
+    /// [`crate::UdlCompiledRules`]'s type-level docstring for
+    /// the DESIGN.md §8 keystroke-latency argument. Short
+    /// version: rebuilding the keyword class tables per
+    /// `SCN_STYLENEEDED` notification (which fires on every
+    /// keystroke in a UDL buffer) blows the 5 ms p99 budget on
+    /// any UDL that pushes close to the `DoS` caps.
+    pub compiled: std::sync::Arc<crate::UdlCompiledRules>,
 }
 
 /// Filter one directory entry to a canonicalised, contained
@@ -329,9 +344,17 @@ impl UdlRegistry {
             }
             match UdlDefinition::from_file(path) {
                 Ok(definition) => {
+                    // Compile the tokeniser rules once per UDL
+                    // at scan time (see `UdlEntry::compiled`'s
+                    // docstring for the DESIGN.md §8
+                    // rationale). Shared via Arc so
+                    // `Tokeniser::new`, which fires on every
+                    // `SCN_STYLENEEDED`, is a pointer-copy.
+                    let compiled = std::sync::Arc::new(crate::UdlCompiledRules::new(&definition));
                     entries.push(UdlEntry {
                         lang_type_id: next_id,
                         definition,
+                        compiled,
                     });
                     next_id += 1;
                 }

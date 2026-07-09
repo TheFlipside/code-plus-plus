@@ -2985,10 +2985,22 @@ impl Win32Ui {
         // during dispatch), the registry is never mutated after
         // `Shell::new`, and we only take a shared reference
         // for the duration of the clone.
-        let def = unsafe { &*self.udl_registry }
+        // Clone only what we need: the style palette (Vec of 24
+        // small structs) and the Arc of compiled rules (pointer
+        // bump). Was `entry.definition.clone()` — that copied
+        // hundreds of keyword strings on every language switch.
+        // Both fields survive the registry borrow ending here so
+        // the block below can proceed without holding a live
+        // `&UdlEntry`.
+        let styles_and_rules = unsafe { &*self.udl_registry }
             .find_by_lang_type_id(lang.as_npp_id())
-            .map(|entry| entry.definition.clone());
-        let Some(def) = def else {
+            .map(|entry| {
+                (
+                    entry.definition.styles.clone(),
+                    std::sync::Arc::clone(&entry.compiled),
+                )
+            });
+        let Some((styles, compiled_rules)) = styles_and_rules else {
             tracing::warn!(
                 lang = lang.as_npp_id(),
                 "UDL LangType not in registry; falling back to plain text"
@@ -3027,7 +3039,7 @@ impl Win32Ui {
         // paint wall clock deterministically.
         self.editor.clear_lexer();
         apply_default_styles(&self.editor);
-        udl_paint::apply_udl_styles(&self.editor, &def);
+        udl_paint::apply_udl_styles(&self.editor, &styles);
         const INITIAL_PAINT_CAP: usize = 64 * 1024;
         let doc_len = self.editor.send(SCI_GETLENGTH, 0, 0).max(0) as usize;
         let cap = doc_len.min(INITIAL_PAINT_CAP);
@@ -3041,7 +3053,7 @@ impl Win32Ui {
             .min(doc_len);
         if paint_end > 0 {
             if let Some(bytes) = self.editor.get_range_bytes(0, paint_end) {
-                udl_paint::paint_udl_range(&self.editor, &def, 0, &bytes);
+                udl_paint::paint_udl_range(&self.editor, &compiled_rules, 0, &bytes);
             }
         }
     }
@@ -12980,7 +12992,14 @@ unsafe fn handle_udl_style_needed(hwnd: HWND, target: usize) {
         );
         return;
     };
-    let def = entry.definition.clone();
+    // Cheap `Arc` clone rather than deep-copying the whole
+    // definition — the whole point of `UdlEntry::compiled` is
+    // that this hot path (fires on every keystroke) doesn't
+    // rebuild the keyword-class tables. Was
+    // `entry.definition.clone()` before the caching layer
+    // landed. See `UdlCompiledRules`'s docstring for the
+    // DESIGN.md §8 keystroke-budget rationale.
+    let compiled = std::sync::Arc::clone(&entry.compiled);
     let editor = state.editor;
     // Compute line-aligned tokenise range. See
     // `udl_paint::line_aligned_range` for the discipline.
@@ -13016,7 +13035,7 @@ unsafe fn handle_udl_style_needed(hwnd: HWND, target: usize) {
     let Some(bytes) = editor.get_range_bytes(range_start, range_len) else {
         return;
     };
-    udl_paint::paint_udl_range(&editor, &def, range_start, &bytes);
+    udl_paint::paint_udl_range(&editor, &compiled, range_start, &bytes);
 }
 
 /// # Safety
