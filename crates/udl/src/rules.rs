@@ -43,6 +43,45 @@
 //!   markdown's `00![ 00[` means the delimiter-0 opener can be
 //!   either `![` or `[`).
 
+/// Maximum number of alternative `open`/`close` sequences the
+/// parser accepts per delimiter slot. Excess alternatives are
+/// dropped with a `tracing::warn!`.
+///
+/// **`DoS` defence.** Without a cap, a hostile UDL could pack
+/// tens of thousands of alternatives at a single delimiter
+/// index within m1a's 256 KiB file-size cap (e.g.
+/// `"00a 00a 00a ..."` at ~5 bytes/token → ~50K alternatives).
+/// The m1c-2 tokeniser probes each alternative at every byte
+/// position when nothing matches, so unbounded alternatives
+/// become an `O(N × M)` per-buffer cost with `M` attacker-
+/// controlled — freezing the UI thread when m1c-3 wires this
+/// into `SCN_STYLENEEDED` (which fires synchronously on every
+/// redraw / scroll).
+///
+/// **32** is generous relative to any real-world UDL —
+/// Edditoria's markdown-plus-plus tops out at 3 alternatives
+/// per slot; the whole notepad-plus-plus/userDefinedLanguages
+/// community collection stays under 8. A malformed / hostile
+/// UDL hitting this cap is a diagnostic-worthy event, not a
+/// mistake we should silently accept.
+pub const MAX_ALTERNATIVES_PER_SLOT: usize = 32;
+
+/// Maximum byte length of a single [`Sequence::Literal`] value
+/// (comment marker / block open-close / delimiter open-escape-
+/// close). Excess-length literals are dropped with a
+/// `tracing::warn!`.
+///
+/// **`DoS` defence.** The m1c-2 tokeniser scans for close
+/// sequences by re-running `starts_with(literal.as_bytes())` at
+/// every byte position of a delimiter body. A 100 KiB literal
+/// close that never matches would drive the scan toward
+/// `O(N² × L)` on documents containing many opener occurrences.
+///
+/// **64** is generous relative to the longest sequences the
+/// markdown fixture uses (4 bytes for `<!--` / `-->` / ```` ``` ````
+/// / `~~~`); N++'s own community UDLs stay under 16.
+pub const MAX_LITERAL_BYTES: usize = 64;
+
 /// A single content atom parsed from an `NN<content>` token.
 /// The parser's own building block — not part of the public API
 /// (both [`CommentRules`] and [`DelimiterRules`] surface a more
@@ -151,16 +190,22 @@ impl CommentRules {
     /// warn-skipped. Multiple tokens at the same index → the
     /// last one wins (consistent with N++'s own overwrite
     /// semantics).
+    ///
+    /// [`Sequence::Literal`] values exceeding
+    /// [`MAX_LITERAL_BYTES`] are collapsed to [`Sequence::Empty`]
+    /// with a `tracing::warn!` — see the cap's docstring for
+    /// the `DoS` rationale.
     #[must_use]
     pub fn parse(encoded: &str) -> Self {
         let mut rules = Self::default();
         for token in tokenise_udl_encoding(encoded) {
+            let content = cap_literal(token.content);
             match token.index {
-                0 => rules.line_open = token.content,
-                1 => rules.line_continue = token.content,
-                2 => rules.line_close = token.content,
-                3 => rules.block_open = token.content,
-                4 => rules.block_close = token.content,
+                0 => rules.line_open = content,
+                1 => rules.line_continue = content,
+                2 => rules.line_close = content,
+                3 => rules.block_open = content,
+                4 => rules.block_close = content,
                 other => {
                     tracing::warn!(
                         index = other,
@@ -198,23 +243,57 @@ impl DelimiterRules {
                 );
                 continue;
             }
+            let content = cap_literal(token.content);
             match slot {
-                0 => {
-                    if !token.content.is_empty() {
-                        rules.rules[delim].open.push(token.content);
-                    }
-                }
-                1 => rules.rules[delim].escape = token.content,
-                2 => {
-                    if !token.content.is_empty() {
-                        rules.rules[delim].close.push(token.content);
-                    }
-                }
+                0 => push_bounded(&mut rules.rules[delim].open, content, "open", delim),
+                1 => rules.rules[delim].escape = content,
+                2 => push_bounded(&mut rules.rules[delim].close, content, "close", delim),
                 _ => unreachable!("slot bounded by mod-3"),
             }
         }
         rules
     }
+}
+
+/// Downgrade a [`Sequence::Literal`] value whose content exceeds
+/// [`MAX_LITERAL_BYTES`] to [`Sequence::Empty`], logging a warn.
+/// See the cap's docstring for the `DoS` rationale.
+fn cap_literal(seq: Sequence) -> Sequence {
+    match seq {
+        Sequence::Literal(l) if l.len() > MAX_LITERAL_BYTES => {
+            tracing::warn!(
+                len = l.len(),
+                cap = MAX_LITERAL_BYTES,
+                "UDL literal exceeds byte cap; collapsed to Empty \
+                 (probable DoS-shaped input)"
+            );
+            Sequence::Empty
+        }
+        other => other,
+    }
+}
+
+/// Push a non-empty sequence onto an alternatives vec, warning
+/// and dropping the entry if the vec is already at
+/// [`MAX_ALTERNATIVES_PER_SLOT`]. Empty entries are skipped
+/// silently — they were preserved on `Sequence::Empty` variants
+/// by earlier m1c-1 design (round-trip fidelity) but have no
+/// runtime effect and shouldn't count toward the cap.
+fn push_bounded(vec: &mut Vec<Sequence>, seq: Sequence, side: &'static str, delim: usize) {
+    if seq.is_empty() {
+        return;
+    }
+    if vec.len() >= MAX_ALTERNATIVES_PER_SLOT {
+        tracing::warn!(
+            side,
+            delim,
+            cap = MAX_ALTERNATIVES_PER_SLOT,
+            "UDL delimiter alternative count exceeds cap; dropped \
+             (probable DoS-shaped input)"
+        );
+        return;
+    }
+    vec.push(seq);
 }
 
 /// One parsed `NN<content>` token from the compact encoding.
@@ -382,6 +461,44 @@ mod tests {
         let rules = CommentRules::parse("");
         assert_eq!(rules, CommentRules::default());
     }
+
+    // --- DoS caps ---------------------------------------------
+
+    #[test]
+    fn overlong_literal_collapses_to_empty() {
+        // A `Literal` value exceeding MAX_LITERAL_BYTES is a
+        // DoS-shaped input; the parser must collapse it to
+        // `Empty` (not crash, not pass through unchanged).
+        let long = "a".repeat(MAX_LITERAL_BYTES + 1);
+        let encoded = format!("00{long}");
+        let rules = CommentRules::parse(&encoded);
+        assert_eq!(rules.line_open, Sequence::Empty);
+    }
+
+    #[test]
+    fn max_alternatives_per_slot_enforced() {
+        // Pack the parser with MAX_ALTERNATIVES_PER_SLOT + 5 open
+        // sequences at delimiter slot 0. Only the first MAX
+        // survive; the excess is dropped.
+        let mut encoded = String::new();
+        let count = MAX_ALTERNATIVES_PER_SLOT + 5;
+        for i in 0..count {
+            // Use unique-enough content per index so we can
+            // distinguish which ones landed. Numeric suffix on
+            // the letter `a`.
+            let _ = std::fmt::Write::write_fmt(&mut encoded, format_args!("00a{i} "));
+        }
+        let rules = DelimiterRules::parse(&encoded);
+        assert_eq!(rules.rules[0].open.len(), MAX_ALTERNATIVES_PER_SLOT);
+    }
+
+    // Sanity pin — the caps must not be so tight that a
+    // realistic UDL trips them. Markdown fixture's largest slot
+    // has 3 alternatives (delimiter 1 `open`), longest literal
+    // is 4 bytes. Compile-time asserts because both operands are
+    // consts, per clippy's assertions_on_constants lint.
+    const _: () = assert!(MAX_ALTERNATIVES_PER_SLOT >= 8);
+    const _: () = assert!(MAX_LITERAL_BYTES >= 16);
 
     // --- Delimiter-rules parsing -------------------------------
 

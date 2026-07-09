@@ -67,8 +67,13 @@ use serde::Deserialize;
 
 pub mod registry;
 pub mod rules;
+pub mod tokenise;
 pub use registry::{UdlEntry, UdlRegistry, UDL_LANG_TYPE_BASE, UDL_LANG_TYPE_END};
-pub use rules::{CommentRules, DelimiterRule, DelimiterRules, Sequence};
+pub use rules::{
+    CommentRules, DelimiterRule, DelimiterRules, Sequence, MAX_ALTERNATIVES_PER_SLOT,
+    MAX_LITERAL_BYTES,
+};
+pub use tokenise::{StyleEvent, Tokeniser, UdlStyleSlot};
 
 /// Hard cap on the byte-size of a UDL file. **256 KiB.**
 ///
