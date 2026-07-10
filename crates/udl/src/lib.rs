@@ -55,9 +55,22 @@
 //! - **Style-slot → Scintilla mapping** — the m1c runtime maps
 //!   each of the 24 named `<WordsStyle>` slots to a Scintilla
 //!   style index; this crate just carries the raw name.
-//! - **UDL editor round-trip** — the m3 editor modal will need a
-//!   serialiser back to the XML format. This crate exposes only
-//!   `parse` today; `serialise` lands with m3.
+//!
+//! # XML round-trip (m3)
+//!
+//! [`UdlDefinition::to_xml_string`] and [`UdlDefinition::save_to_file`]
+//! produce the canonical N++-shaped `<NotepadPlus><UserLang>...`
+//! output that our own [`UdlDefinition::parse`] re-reads. The
+//! serialiser always writes **v2.1 canonical names** — a definition
+//! loaded from a v2.0 file (with `"Numbers, prefixes"` etc.) is
+//! written back with the v2.1 spellings (`"Numbers, prefix1"`).
+//! Round-trip fidelity is at the **normalised in-memory shape**, not
+//! byte-for-byte against the source file.
+
+// Note: the m1 non-goal list above (delimiter-string parsing, style
+// slot → Scintilla mapping) was superseded by the m1c runtime; the
+// round-trip non-goal was superseded by m3. The individual
+// docstrings below remain accurate.
 
 use std::io::Read;
 use std::path::Path;
@@ -67,6 +80,7 @@ use serde::Deserialize;
 
 pub mod registry;
 pub mod rules;
+pub mod serialise;
 pub mod tokenise;
 pub use registry::{is_udl_lang_id, UdlEntry, UdlRegistry, UDL_LANG_TYPE_BASE, UDL_LANG_TYPE_END};
 pub use rules::{
@@ -141,6 +155,46 @@ pub struct UdlDefinition {
     /// the editor's "Save" action (m3) don't each have to carry
     /// `(PathBuf, UdlDefinition)` tuples through their own state.
     pub source_path: Option<std::path::PathBuf>,
+    /// Verbatim XML content before the `<NotepadPlus>` root
+    /// element — leading comment blocks and inter-block whitespace,
+    /// preserved so a save-in-place round-trip through the m3
+    /// editor doesn't strip content the source file carries.
+    ///
+    /// **Why this exists.** The preinstalled Markdown UDL
+    /// (`assets/preinstalled-udls/markdown._preinstalled.udl.xml`,
+    /// bundled under Edditoria's MIT licence) prefixes the root
+    /// element with a copyright / licence notice inside an XML
+    /// comment. Without this field, `parse → to_xml_string →
+    /// save` would silently drop that notice — a
+    /// licence-compliance regression. Capturing the raw preamble
+    /// (comments only, extraction stops at anything that isn't
+    /// whitespace or a `<!--...-->` block) lets the serialiser
+    /// re-emit it verbatim.
+    ///
+    /// **What is NOT captured.** XML declarations (`<?xml ... ?>`),
+    /// processing instructions, and DOCTYPE declarations are left
+    /// in the body for `quick-xml` to handle (and reject where
+    /// appropriate — see the `dtd_entity_expansion_is_not_supported`
+    /// test). Only leading `<!--...-->` blocks and their
+    /// surrounding whitespace populate this field. Real-world UDL
+    /// fixtures never use anything else in the prolog, so the
+    /// comment-only capture is sufficient without pulling in
+    /// DOCTYPE-preservation risk.
+    ///
+    /// `None` on programmatic construction ("New UDL" flow in
+    /// the m3 modal) and on any UDL whose source had no leading
+    /// comments.
+    ///
+    /// **Direct mutation is discouraged.** The field is `pub` for
+    /// symmetry with the rest of the struct, but the serialiser
+    /// emits it verbatim (modulo XML-1.0-illegal-character
+    /// stripping — see `crate::UdlDefinition::to_xml_string`).
+    /// A malformed comment fragment (`Some("<!-- unclosed")`)
+    /// would produce a document whose `<NotepadPlus>` root ends
+    /// up inside a dangling comment token. Callers should either
+    /// keep the value as parsed or replace it with a well-formed
+    /// `<!-- ... -->` block.
+    pub preamble: Option<String>,
 }
 
 impl UdlDefinition {
@@ -221,7 +275,15 @@ impl UdlDefinition {
     /// or [`UdlError::MissingUserLang`] if it contains no
     /// `<UserLang>` element.
     pub fn parse(xml: &str) -> Result<Self, UdlError> {
-        let root: RawNotepadPlus = quick_xml::de::from_str(xml).map_err(UdlError::Parse)?;
+        // Peel off any leading comment prolog (whitespace-separated
+        // `<!--...-->` blocks) before handing the body to
+        // `quick_xml::de`. quick-xml itself would skip the comments
+        // silently — we capture them so `to_xml_string` can round-
+        // trip them and the m3 editor's save flow doesn't strip
+        // (for example) the Edditoria MIT-licence header from the
+        // preinstalled Markdown UDL.
+        let (preamble, body) = extract_preamble_comments(xml);
+        let root: RawNotepadPlus = quick_xml::de::from_str(body).map_err(UdlError::Parse)?;
         let count = root.user_langs.len();
         let user_lang = root
             .user_langs
@@ -249,7 +311,9 @@ impl UdlDefinition {
                  keeping the first, dropping the rest"
             );
         }
-        Ok(Self::from_raw(user_lang))
+        let mut udl = Self::from_raw(user_lang);
+        udl.preamble = preamble;
+        Ok(udl)
     }
 
     /// Normalise a raw-XML `<UserLang>` element into the public
@@ -302,7 +366,83 @@ impl UdlDefinition {
             keyword_lists,
             styles,
             source_path: None,
+            preamble: None,
         }
+    }
+}
+
+/// Extract the leading comment prolog from a UDL XML string.
+///
+/// Returns `(preamble, body)` where `preamble` is `Some(&xml[..n])`
+/// if the input starts with one or more whitespace-separated
+/// `<!--...-->` blocks (and captures everything up to but not
+/// including the first non-comment token), or `None` if the input
+/// starts directly with content that isn't a leading comment.
+/// `body` is `&xml[n..]` — the remainder that `quick_xml::de`
+/// consumes.
+///
+/// # Why comments only
+///
+/// XML declarations (`<?xml ... ?>`), processing instructions,
+/// and DOCTYPE declarations are deliberately NOT captured. Real
+/// UDL fixtures never use them; keeping the extractor
+/// comment-only avoids the risk of preserving a DOCTYPE with
+/// internal entity declarations (which would re-emit them on
+/// save and interact with the existing XXE-regression pin in
+/// `dtd_entity_expansion_is_not_supported`).
+///
+/// # Robustness
+///
+/// A malformed leading comment (missing closing `-->`) stops the
+/// extraction and leaves the malformed content in the body, where
+/// `quick_xml::de` will produce a `UdlError::Parse`. The caller
+/// gets a diagnostic pointing at the problem rather than a
+/// silently truncated preamble.
+fn extract_preamble_comments(xml: &str) -> (Option<String>, &str) {
+    let bytes = xml.as_bytes();
+    let mut end = 0;
+    loop {
+        // Consume whitespace between (or before) comment blocks.
+        // Whitespace on its own is not preserved as preamble — it's
+        // only captured when it sits between comment blocks that
+        // are.
+        let mut ws_end = end;
+        while ws_end < bytes.len() && bytes[ws_end].is_ascii_whitespace() {
+            ws_end += 1;
+        }
+        // Look for a comment start at `ws_end`.
+        if xml[ws_end..].starts_with("<!--") {
+            // Find the matching `-->`. Comments cannot nest in
+            // XML, so the first occurrence closes this comment.
+            let after_open = ws_end + 4;
+            if let Some(rel) = xml[after_open..].find("-->") {
+                end = after_open + rel + 3;
+                continue;
+            }
+            // Malformed (no closing `-->`) — stop here and let
+            // quick-xml surface the error against the body it
+            // gets, which now still contains the unclosed
+            // `<!--`.
+            break;
+        }
+        // First non-comment, non-whitespace token — stop.
+        break;
+    }
+    if end > 0 {
+        // Include the trailing whitespace after the last comment
+        // in the preamble. Without this, a fixture with the
+        // canonical `<!--...-->\n<NotepadPlus>` shape would round-
+        // trip as `<!--...--><NotepadPlus>` on the serialise side
+        // (the serialiser has no visibility into what whitespace
+        // to add between preamble and the root element it's about
+        // to emit). Capturing it here keeps the round-trip
+        // byte-clean.
+        while end < bytes.len() && bytes[end].is_ascii_whitespace() {
+            end += 1;
+        }
+        (Some(xml[..end].to_owned()), &xml[end..])
+    } else {
+        (None, xml)
     }
 }
 

@@ -849,6 +849,7 @@ mod tests {
             keyword_lists: kw,
             styles: Vec::new(),
             source_path: None,
+            preamble: None,
         }
     }
 
@@ -883,6 +884,7 @@ mod tests {
             keyword_lists: kw,
             styles: Vec::new(),
             source_path: None,
+            preamble: None,
         }
     }
 
