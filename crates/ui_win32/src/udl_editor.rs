@@ -185,6 +185,11 @@ const IDC_DECIMAL_RADIO_2: u16 = 222;
 const IDC_SAVE_BUTTON: u16 = 300;
 const IDC_SAVE_AS_BUTTON: u16 = 301;
 const IDC_CLOSE_BUTTON: u16 = 302;
+/// Numeric value of `IDCANCEL` (2) as a `u16` for match arms.
+/// windows-rs exposes `IDCANCEL` as a struct-wrapped constant,
+/// which is not a valid match pattern; we hardcode the numeric
+/// value (which is fixed by the Win32 ABI) here.
+const IDCANCEL_U16: u16 = 2;
 
 // Keywords Lists tab (Phase 4.6 m3c)
 const IDC_KW_CLASS_COMBO: u16 = 400;
@@ -261,11 +266,14 @@ fn with_modal_pump<R>(f: impl FnOnce() -> R) -> R {
 
 // --- Layout constants (raw pixels; see DESIGN.md §7.4 re: DPI) -----
 
-const DIALOG_W: i32 = 560;
-const DIALOG_H: i32 = 480;
+const DIALOG_W: i32 = 720;
+const DIALOG_H: i32 = 560;
 const TAB_X: i32 = 8;
 const TAB_Y: i32 = 8;
-const TAB_H: i32 = 400;
+const TAB_H: i32 = 460;
+/// Vertical padding between the tab control's bottom edge and
+/// the top of the Save / Save As / Close button row.
+const BUTTON_ROW_TOP_GAP: i32 = 20;
 const LABEL_H: i32 = 16;
 const CTRL_H: i32 = 22;
 const ROW_GAP: i32 = 8;
@@ -1179,7 +1187,9 @@ fn build_folder_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
         label_x,
         y,
         field_w,
-        3 * CTRL_H + 20,
+        // Group-box height: label (~20) + 3 radios (66) + 12 bottom
+        // padding so the last radio's text doesn't cross the border.
+        3 * CTRL_H + 32,
         "Line-comment position:",
     );
     let g_y = y + 20;
@@ -1202,7 +1212,9 @@ fn build_folder_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
             i == 0,
         );
     }
-    y += 3 * CTRL_H + 30;
+    // Advance past group-box (height = 3*CTRL_H+32, see above)
+    // plus 10px gap before the next section.
+    y += 3 * CTRL_H + 42;
 
     // Decimal separator radio group
     let _ = group_box(
@@ -1212,7 +1224,9 @@ fn build_folder_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
         label_x,
         y,
         field_w,
-        3 * CTRL_H + 20,
+        // Group-box height: label (~20) + 3 radios (66) + 12 bottom
+        // padding so the last radio's text doesn't cross the border.
+        3 * CTRL_H + 32,
         "Decimal separator:",
     );
     let g_y = y + 20;
@@ -1634,7 +1648,11 @@ fn build_styles_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
 }
 
 fn build_bottom_buttons(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
-    let y = DIALOG_H - BUTTON_H - 16 - 26; // 26 = title-bar overhead
+    // Position the button row directly below the tab control
+    // (rather than deriving from DIALOG_H, which required a
+    // fudge factor for the title bar and left the buttons
+    // visually squashed against the dialog's bottom edge).
+    let y = TAB_Y + TAB_H + BUTTON_ROW_TOP_GAP;
     let total_w = 3 * BUTTON_W + 2 * BUTTON_GAP;
     let mut x = (DIALOG_W - total_w) / 2;
     state.folder.save_btn = push_button(
@@ -2742,7 +2760,11 @@ fn handle_command(state: &mut UdlEditorState, wparam: WPARAM, _lparam: LPARAM) {
         }
         IDC_SAVE_BUTTON => save_action(state, false),
         IDC_SAVE_AS_BUTTON => save_action(state, true),
-        IDC_CLOSE_BUTTON => unsafe {
+        // Close button OR ESC key (IDCANCEL = 2). `IsDialogMessageW`
+        // in the main pump translates ESC into a `WM_COMMAND`
+        // with wparam = IDCANCEL, which routes here — so the
+        // ESC-closes-modal expectation is satisfied.
+        IDC_CLOSE_BUTTON | IDCANCEL_U16 => unsafe {
             let _ = PostMessageW(Some(state.dialog), WM_CLOSE, WPARAM(0), LPARAM(0));
         },
         _ => {}
