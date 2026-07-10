@@ -54,11 +54,18 @@
 //!   `((EOL <chars>))` escape hatch). Building a friendly 8×3
 //!   UI on top requires the udl crate to expose its tokeniser
 //!   — tracked as a follow-up polish.
-//! - **m3f** — Styler dialog (font / colours / nesting) launched
-//!   from any tab.
+//! - **m3f (this commit)** — Styles tab. Slot combobox picks one
+//!   of the 24 named style slots; a font-name edit, three
+//!   font-style checkboxes (bold / italic / underline),
+//!   Foreground / Background buttons that open `ChooseColorW`,
+//!   and a raw decimal `nesting` mask edit. Swap-dance on
+//!   combobox change mirrors the Keywords tab's discipline via
+//!   `swap_style_slot`. Colour picker is a nested modal pump —
+//!   guarded by [`MODAL_PUMP_ACTIVE`].
 //! - **m3g (deferred polish)** — live restyle on every property
 //!   change (currently save-triggered rather than keystroke-
-//!   triggered).
+//!   triggered); friendly nesting-checkbox grid; font-family
+//!   picker via `ChooseFontW`.
 //!
 //! # Layout convention
 //!
@@ -116,6 +123,7 @@ use windows::Win32::Graphics::Gdi::{
     FillRect, GetStockObject, SetBkColor, DEFAULT_GUI_FONT, HDC, HFONT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Controls::Dialogs::{ChooseColorW, CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW};
 use windows::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, NMHDR, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL,
     TCM_INSERTITEMW, TCN_SELCHANGE, TCS_TABS, WC_COMBOBOX, WC_TABCONTROL,
@@ -201,6 +209,23 @@ const IDC_NUM_RANGE: u16 = 516;
 const IDC_OP1_EDIT: u16 = 600;
 const IDC_OP2_EDIT: u16 = 601;
 const IDC_DELIMS_EDIT: u16 = 602;
+
+// Styles tab (Phase 4.6 m3f)
+const IDC_STYLE_SLOT_COMBO: u16 = 700;
+const IDC_STYLE_FONT_NAME: u16 = 701;
+const IDC_STYLE_BOLD: u16 = 702;
+const IDC_STYLE_ITALIC: u16 = 703;
+const IDC_STYLE_UNDERLINE: u16 = 704;
+const IDC_STYLE_FG_BUTTON: u16 = 705;
+const IDC_STYLE_BG_BUTTON: u16 = 706;
+const IDC_STYLE_NESTING: u16 = 707;
+
+/// Font-style bitfield bits used by [`UdlStyle::font_style`].
+/// Matches N++'s convention (also documented in
+/// [`codepp_udl::UdlStyle`]).
+const FONT_STYLE_BOLD: u8 = 1;
+const FONT_STYLE_ITALIC: u8 = 2;
+const FONT_STYLE_UNDERLINE: u8 = 4;
 
 thread_local! {
     /// Set true while a nested modal pump (`GetSaveFileNameW` /
@@ -289,8 +314,9 @@ struct UdlEditorState {
     tab_ctrl: HWND,
     /// One HWND per tab page (child of `dialog`). The active page
     /// is `SW_SHOW`-visible; others are `SW_HIDE`-hidden. Indexed
-    /// 0..=3 matching tab order.
-    tab_pages: [HWND; 4],
+    /// 0..=4 matching tab order (Folder & Default, Keywords,
+    /// Comment & Number, Operators & Delimiters, Styles).
+    tab_pages: [HWND; 5],
     /// Currently selected tab.
     current_tab: usize,
     /// The Folder & Default tab's control HWNDs.
@@ -302,6 +328,8 @@ struct UdlEditorState {
     comment_number: CommentNumberTabControls,
     /// The Operators & Delimiters tab's control HWNDs (Phase 4.6 m3e).
     operators_delimiters: OperatorsDelimitersTabControls,
+    /// The Styles tab's control HWNDs (Phase 4.6 m3f).
+    styles: StylesTabControls,
     /// The in-memory UDL definition being edited. Every field
     /// change flows into here; Save serialises this and writes.
     definition: UdlDefinition,
@@ -394,6 +422,52 @@ struct OperatorsDelimitersTabControls {
     op1_edit: HWND,
     op2_edit: HWND,
     delims_edit: HWND,
+}
+
+/// Controls for the Styles tab (Phase 4.6 m3f).
+///
+/// Presents ONE style slot at a time — a combobox picks which of
+/// the 24 named slots (`DEFAULT`, `COMMENTS`, `LINE COMMENTS`,
+/// `NUMBERS`, `KEYWORDS1`..`8`, `OPERATORS`, `FOLDER IN CODE1/2`,
+/// `FOLDER IN COMMENT`, `DELIMITERS1`..`8`) to edit. Switching
+/// slots via the combobox flushes the current fields back into
+/// the model at the previous slot index, then re-populates the
+/// fields from the newly-selected slot's stored values (same
+/// swap-dance shape as the Keywords Lists tab).
+///
+/// # Simplifications vs Notepad++'s Styler
+///
+/// - **Font size:** [`codepp_udl::UdlStyle`] has no `font_size`
+///   field today (fixtures like the preinstalled Markdown UDL
+///   don't declare it), so we don't expose it either. Adding it
+///   would require a udl-crate schema bump — tracked as a
+///   follow-up.
+/// - **Transparency:** likewise not modelled by
+///   [`codepp_udl::UdlStyle`]; skipped.
+/// - **Nesting checkboxes:** N++'s dialog shows 32 checkboxes
+///   (one per slot the current slot can nest inside). We expose
+///   the raw decimal integer for now — advanced UX. Real UDLs
+///   rarely set nesting; when they do (e.g. Markdown's
+///   `DELIMITERS4`/`DELIMITERS5`), it's a small hand-authored
+///   value the user can type. Friendly checkbox grid is a
+///   tracked follow-up.
+struct StylesTabControls {
+    slot_combo: HWND,
+    font_name: HWND,
+    bold: HWND,
+    italic: HWND,
+    underline: HWND,
+    /// "Foreground..." button. Click opens `ChooseColorW`. The
+    /// button's label carries the current colour as a `#RRGGBB`
+    /// suffix so the user sees the value without a separate
+    /// swatch — one fewer control on the tab.
+    fg_button: HWND,
+    /// "Background..." button — same discipline as `fg_button`.
+    bg_button: HWND,
+    nesting: HWND,
+    /// Which of the 24 slots the fields currently reflect. Same
+    /// swap-dance discipline as [`KeywordsTabControls::current_class`].
+    current_slot: usize,
 }
 
 /// Controls for the Keywords Lists tab (Phase 4.6 m3c).
@@ -496,7 +570,7 @@ pub(crate) fn show_udl_editor(
         main_hwnd,
         dialog: HWND::default(),
         tab_ctrl: HWND::default(),
-        tab_pages: [HWND::default(); 4],
+        tab_pages: [HWND::default(); 5],
         current_tab: 0,
         folder: FolderTabControls {
             name_edit: HWND::default(),
@@ -533,6 +607,17 @@ pub(crate) fn show_udl_editor(
             op1_edit: HWND::default(),
             op2_edit: HWND::default(),
             delims_edit: HWND::default(),
+        },
+        styles: StylesTabControls {
+            slot_combo: HWND::default(),
+            font_name: HWND::default(),
+            bold: HWND::default(),
+            italic: HWND::default(),
+            underline: HWND::default(),
+            fg_button: HWND::default(),
+            bg_button: HWND::default(),
+            nesting: HWND::default(),
+            current_slot: 0,
         },
         definition,
         source_path,
@@ -752,6 +837,7 @@ extern "system" fn udl_editor_wnd_proc(
                     populate_keywords_tab(state);
                     populate_comment_number_tab(state);
                     populate_operators_delimiters_tab(state);
+                    populate_styles_tab(state);
                     state.controls_ready = true;
                 }
                 LRESULT(0)
@@ -911,12 +997,13 @@ fn build_controls(state: &mut UdlEditorState) {
         apply_dialog_font(state.tab_ctrl, font);
     }
 
-    // Insert 4 tabs. Tabs 2-4 are placeholder shells for m3c-e.
+    // Insert 5 tabs — all wired from m3f onward.
     let tab_labels = [
         "Folder && Default",
         "Keywords Lists",
         "Comment && Number",
         "Operators && Delimiters",
+        "Styles",
     ];
     for (i, label) in tab_labels.iter().enumerate() {
         let wide = wide_terminated(label);
@@ -970,7 +1057,7 @@ fn build_controls(state: &mut UdlEditorState) {
     // selection, silently vanishes. The forwarder fixes that by
     // routing the two notification-carrying messages to the
     // dialog, which is where our handlers live.
-    for i in 0..4 {
+    for i in 0..5 {
         let page = unsafe {
             CreateWindowExW(
                 WINDOW_EX_STYLE(0),
@@ -1023,6 +1110,8 @@ fn build_controls(state: &mut UdlEditorState) {
     build_comment_number_tab(state, hinst, font);
     // Build Operators & Delimiters tab controls (page 3) — Phase 4.6 m3e.
     build_operators_delimiters_tab(state, hinst, font);
+    // Build Styles tab controls (page 4) — Phase 4.6 m3f.
+    build_styles_tab(state, hinst, font);
     // Dialog-wide bottom-row buttons (Save / Save As / Close).
     build_bottom_buttons(state, hinst, font);
 }
@@ -1387,6 +1476,136 @@ fn build_operators_delimiters_tab(state: &mut UdlEditorState, hinst: HINSTANCE, 
         y,
         field_w,
         "Format: 8 slots × (open / escape / close) indexed 00-23. E.g. 00\" 01\\ 02\" for double-quoted strings.",
+    );
+}
+
+fn build_styles_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
+    let parent = state.tab_pages[4];
+    let mut y = 16;
+    let label_w = 120;
+    let ctrl_x = 140;
+    let ctrl_w = 380;
+
+    // Slot picker
+    let _ = static_label(parent, hinst, font, 16, y, label_w, "Style slot:");
+    state.styles.slot_combo = combo_box(
+        parent,
+        hinst,
+        font,
+        IDC_STYLE_SLOT_COMBO,
+        ctrl_x,
+        y - 2,
+        ctrl_w,
+        // Dropdown drop area — 24 slots × ~20px = ~480, cap
+        // at 300 so the scrolled list fits inside typical
+        // dialog height without overflowing off-screen.
+        300,
+    );
+    // Populate the slot combobox with the definition's own slot
+    // names (order preserved from the source XML). The
+    // `default_new_udl` flow gives us the canonical 24-name
+    // list; a loaded UDL may have a subset — populate whatever
+    // is present.
+    with_modal_pump(|| {
+        for style in &state.definition.styles {
+            let wide = wide_terminated(&style.name);
+            unsafe {
+                SendMessageW(
+                    state.styles.slot_combo,
+                    CB_ADDSTRING,
+                    None,
+                    Some(LPARAM(wide.as_ptr() as isize)),
+                );
+            }
+        }
+    });
+    y += CTRL_H + ROW_GAP;
+
+    // Font name
+    let _ = static_label(parent, hinst, font, 16, y, label_w, "Font name:");
+    state.styles.font_name = edit_box(
+        parent,
+        hinst,
+        font,
+        IDC_STYLE_FONT_NAME,
+        ctrl_x,
+        y - 2,
+        ctrl_w,
+    );
+    y += CTRL_H + ROW_GAP;
+
+    // Style (bold / italic / underline) checkboxes on one row
+    let _ = static_label(parent, hinst, font, 16, y, label_w, "Style:");
+    state.styles.bold = check_box(parent, hinst, font, IDC_STYLE_BOLD, ctrl_x, y, 80, "Bold");
+    state.styles.italic = check_box(
+        parent,
+        hinst,
+        font,
+        IDC_STYLE_ITALIC,
+        ctrl_x + 90,
+        y,
+        80,
+        "Italic",
+    );
+    state.styles.underline = check_box(
+        parent,
+        hinst,
+        font,
+        IDC_STYLE_UNDERLINE,
+        ctrl_x + 180,
+        y,
+        100,
+        "Underline",
+    );
+    y += CTRL_H + ROW_GAP;
+
+    // Foreground / Background buttons — each carries its current
+    // hex value in the label so the user sees the value without
+    // a separate colour swatch. `ChooseColorW` opens on click.
+    let _ = static_label(parent, hinst, font, 16, y, label_w, "Foreground:");
+    state.styles.fg_button = push_button(
+        parent,
+        hinst,
+        font,
+        IDC_STYLE_FG_BUTTON,
+        ctrl_x,
+        y - 2,
+        220,
+        BUTTON_H,
+        "Foreground...",
+        false,
+    );
+    y += CTRL_H + ROW_GAP;
+
+    let _ = static_label(parent, hinst, font, 16, y, label_w, "Background:");
+    state.styles.bg_button = push_button(
+        parent,
+        hinst,
+        font,
+        IDC_STYLE_BG_BUTTON,
+        ctrl_x,
+        y - 2,
+        220,
+        BUTTON_H,
+        "Background...",
+        false,
+    );
+    y += CTRL_H + ROW_GAP;
+
+    // Nesting (decimal integer edit)
+    let _ = static_label(parent, hinst, font, 16, y, label_w, "Nesting mask:");
+    state.styles.nesting = edit_box(parent, hinst, font, IDC_STYLE_NESTING, ctrl_x, y - 2, 120);
+    y += CTRL_H + ROW_GAP + 4;
+
+    let _ = static_label(
+        parent,
+        hinst,
+        font,
+        16,
+        y,
+        ctrl_x + ctrl_w - 16,
+        "Nesting mask is a decimal bitfield; each bit permits an inner style slot. \
+         Rarely used — see N++ UDL docs.",
     );
 }
 
@@ -1859,6 +2078,59 @@ fn populate_comment_number_tab(state: &UdlEditorState) {
     });
 }
 
+/// Populate the Styles tab (m3f) from the current definition's
+/// slot at index `styles.current_slot`. Sets the combobox
+/// selection, the font name, the three font-style checkboxes,
+/// the fg/bg button labels (with hex values), and the nesting
+/// integer. Wrapped in `with_modal_pump` to suppress spurious
+/// EN_CHANGE / BN_CLICKED during programmatic setup.
+fn populate_styles_tab(state: &UdlEditorState) {
+    with_modal_pump(|| {
+        let idx = state
+            .styles
+            .current_slot
+            .min(state.definition.styles.len().saturating_sub(1));
+        if state.definition.styles.is_empty() {
+            return;
+        }
+        let style = &state.definition.styles[idx];
+        unsafe {
+            SendMessageW(
+                state.styles.slot_combo,
+                CB_SETCURSEL,
+                Some(WPARAM(idx)),
+                None,
+            );
+        }
+        set_edit_text(state.styles.font_name, &style.font_name);
+        set_check(state.styles.bold, style.font_style & FONT_STYLE_BOLD != 0);
+        set_check(
+            state.styles.italic,
+            style.font_style & FONT_STYLE_ITALIC != 0,
+        );
+        set_check(
+            state.styles.underline,
+            style.font_style & FONT_STYLE_UNDERLINE != 0,
+        );
+        set_edit_text(
+            state.styles.fg_button,
+            &format_color_button("Foreground", style.fg_color),
+        );
+        set_edit_text(
+            state.styles.bg_button,
+            &format_color_button("Background", style.bg_color),
+        );
+        set_edit_text(state.styles.nesting, &style.nesting.to_string());
+    });
+}
+
+/// Format a colour-picker button's label. Includes the current
+/// `RRGGBB` hex value so the user sees the value without a
+/// separate swatch.
+pub(crate) fn format_color_button(prefix: &str, rrggbb: u32) -> String {
+    format!("{prefix}... (#{:06X})", rrggbb & 0x00FF_FFFF)
+}
+
 /// Populate the Operators & Delimiters tab (m3e) from the current
 /// definition. All three fields are verbatim string copies from
 /// the model — the delimiter encoding round-trips as-is.
@@ -2105,6 +2377,65 @@ pub(crate) fn encode_comments(d: &DecodedComments) -> String {
     parts.join(" ")
 }
 
+/// Convert a Win32 `COLORREF` (`0x00BBGGRR`, blue high) to the
+/// `RRGGBB` (red high) 24-bit integer format
+/// [`codepp_udl::UdlStyle`] uses. Symmetric with
+/// [`rrggbb_to_colorref`].
+///
+/// Win32's colour APIs (`CreateSolidBrush`, `SetTextColor`,
+/// `ChooseColorW`) all take `COLORREF`; N++'s UDL XML stores the
+/// red-high form (e.g. the Markdown fixture's
+/// `fgColor="8000FF"`). The style-slot round-trip goes RRGGBB
+/// (model) → colorref (Win32 call) → RRGGBB (after user picked a
+/// new colour), so both directions need conversion.
+#[must_use]
+pub(crate) const fn colorref_to_rrggbb(c: u32) -> u32 {
+    let r = c & 0xFF;
+    let g = (c >> 8) & 0xFF;
+    let b = (c >> 16) & 0xFF;
+    (r << 16) | (g << 8) | b
+}
+
+/// Convert `RRGGBB` to Win32 `COLORREF`. See [`colorref_to_rrggbb`].
+#[must_use]
+pub(crate) const fn rrggbb_to_colorref(c: u32) -> u32 {
+    let r = (c >> 16) & 0xFF;
+    let g = (c >> 8) & 0xFF;
+    let b = c & 0xFF;
+    (b << 16) | (g << 8) | r
+}
+
+/// Pure swap-dance for the Styles tab's slot-combobox selection
+/// change. Flushes the caller-provided current field values into
+/// `def.styles[prev]`, then returns the `UdlStyle` for `new` for
+/// the caller to load into the UI. Bounds-checks handled at the
+/// call site; `prev` and `new` must both be `< def.styles.len()`.
+///
+/// Kept as a free function so tests exercise the actual dispatch
+/// path rather than reimplementing it. Same shape as
+/// [`swap_keyword_class`].
+// Note: `clippy::too_many_arguments` is already allowed at the
+// module level (see the `#![allow]` block at file top); no need
+// to duplicate the annotation per function.
+pub(crate) fn swap_style_slot(
+    def: &mut UdlDefinition,
+    prev: usize,
+    flushed_font_name: String,
+    flushed_font_style: u8,
+    flushed_fg: u32,
+    flushed_bg: u32,
+    flushed_nesting: u32,
+    new: usize,
+) -> UdlStyle {
+    debug_assert!(prev < def.styles.len() && new < def.styles.len());
+    def.styles[prev].font_name = flushed_font_name;
+    def.styles[prev].font_style = flushed_font_style;
+    def.styles[prev].fg_color = flushed_fg;
+    def.styles[prev].bg_color = flushed_bg;
+    def.styles[prev].nesting = flushed_nesting;
+    def.styles[new].clone()
+}
+
 /// Pure swap-dance for the Keywords Lists tab's class-combobox
 /// selection change. Flushes the caller-provided `flushed_text`
 /// (what's currently in the edit box) into `def.keyword_lists.
@@ -2266,6 +2597,124 @@ fn handle_command(state: &mut UdlEditorState, wparam: WPARAM, _lparam: LPARAM) {
             state.definition.keyword_lists.delimiters =
                 get_edit_text(state.operators_delimiters.delims_edit);
             state.dirty = true;
+        }
+        // --- Styles tab (Phase 4.6 m3f) ---
+        IDC_STYLE_SLOT_COMBO if notify_code == CBN_SELCHANGE as u16 => {
+            let prev = state.styles.current_slot;
+            let (flushed_font_name, flushed_font_style, flushed_fg, flushed_bg, flushed_nesting) =
+                current_styles_field_values(state);
+            let new_slot_raw = unsafe {
+                SendMessageW(state.styles.slot_combo, CB_GETCURSEL, None, None).0 as isize
+            };
+            if new_slot_raw < 0 || new_slot_raw as usize >= state.definition.styles.len() {
+                return;
+            }
+            let new_slot = new_slot_raw as usize;
+            let new_style = swap_style_slot(
+                &mut state.definition,
+                prev,
+                flushed_font_name,
+                flushed_font_style,
+                flushed_fg,
+                flushed_bg,
+                flushed_nesting,
+                new_slot,
+            );
+            state.styles.current_slot = new_slot;
+            with_modal_pump(|| {
+                set_edit_text(state.styles.font_name, &new_style.font_name);
+                set_check(
+                    state.styles.bold,
+                    new_style.font_style & FONT_STYLE_BOLD != 0,
+                );
+                set_check(
+                    state.styles.italic,
+                    new_style.font_style & FONT_STYLE_ITALIC != 0,
+                );
+                set_check(
+                    state.styles.underline,
+                    new_style.font_style & FONT_STYLE_UNDERLINE != 0,
+                );
+                set_edit_text(
+                    state.styles.fg_button,
+                    &format_color_button("Foreground", new_style.fg_color),
+                );
+                set_edit_text(
+                    state.styles.bg_button,
+                    &format_color_button("Background", new_style.bg_color),
+                );
+                set_edit_text(state.styles.nesting, &new_style.nesting.to_string());
+            });
+        }
+        IDC_STYLE_FONT_NAME if notify_code == EN_CHANGE as u16 => {
+            let idx = state.styles.current_slot;
+            if idx < state.definition.styles.len() {
+                state.definition.styles[idx].font_name = get_edit_text(state.styles.font_name);
+                state.dirty = true;
+            }
+        }
+        IDC_STYLE_BOLD | IDC_STYLE_ITALIC | IDC_STYLE_UNDERLINE => {
+            let idx = state.styles.current_slot;
+            if idx < state.definition.styles.len() {
+                let mut bits: u8 = 0;
+                if is_checked(state.styles.bold) {
+                    bits |= FONT_STYLE_BOLD;
+                }
+                if is_checked(state.styles.italic) {
+                    bits |= FONT_STYLE_ITALIC;
+                }
+                if is_checked(state.styles.underline) {
+                    bits |= FONT_STYLE_UNDERLINE;
+                }
+                state.definition.styles[idx].font_style = bits;
+                state.dirty = true;
+            }
+        }
+        IDC_STYLE_FG_BUTTON => {
+            let idx = state.styles.current_slot;
+            if idx < state.definition.styles.len() {
+                let initial = state.definition.styles[idx].fg_color;
+                if let Some(picked) = prompt_color(state.dialog, initial) {
+                    state.definition.styles[idx].fg_color = picked;
+                    with_modal_pump(|| {
+                        set_edit_text(
+                            state.styles.fg_button,
+                            &format_color_button("Foreground", picked),
+                        );
+                    });
+                    state.dirty = true;
+                }
+            }
+        }
+        IDC_STYLE_BG_BUTTON => {
+            let idx = state.styles.current_slot;
+            if idx < state.definition.styles.len() {
+                let initial = state.definition.styles[idx].bg_color;
+                if let Some(picked) = prompt_color(state.dialog, initial) {
+                    state.definition.styles[idx].bg_color = picked;
+                    with_modal_pump(|| {
+                        set_edit_text(
+                            state.styles.bg_button,
+                            &format_color_button("Background", picked),
+                        );
+                    });
+                    state.dirty = true;
+                }
+            }
+        }
+        IDC_STYLE_NESTING if notify_code == EN_CHANGE as u16 => {
+            let idx = state.styles.current_slot;
+            if idx < state.definition.styles.len() {
+                let text = get_edit_text(state.styles.nesting);
+                // Parse as decimal integer; on parse failure keep
+                // the previous value rather than overwriting to 0
+                // (an invariant a fat-fingered "12x" edit
+                // shouldn't wipe out).
+                if let Ok(v) = text.trim().parse::<u32>() {
+                    state.definition.styles[idx].nesting = v;
+                    state.dirty = true;
+                }
+            }
         }
         IDC_SAVE_BUTTON => save_action(state, false),
         IDC_SAVE_AS_BUTTON => save_action(state, true),
@@ -2436,6 +2885,86 @@ fn show_warning(owner: HWND, title: &str, msg: &str) {
             MB_ICONWARNING | MB_OK,
         );
     }
+}
+
+/// Read the Styles tab's field HWNDs and return what's currently
+/// there so `swap_style_slot` can flush it into the previous
+/// slot before the combobox moves. Parses `nesting` leniently
+/// (defaults to 0 on malformed input, matching the same
+/// discipline the `IDC_STYLE_NESTING` handler uses).
+fn current_styles_field_values(state: &UdlEditorState) -> (String, u8, u32, u32, u32) {
+    let font_name = get_edit_text(state.styles.font_name);
+    let mut font_style = 0_u8;
+    if is_checked(state.styles.bold) {
+        font_style |= FONT_STYLE_BOLD;
+    }
+    if is_checked(state.styles.italic) {
+        font_style |= FONT_STYLE_ITALIC;
+    }
+    if is_checked(state.styles.underline) {
+        font_style |= FONT_STYLE_UNDERLINE;
+    }
+    // Fg / bg live on the model, not the button labels — the
+    // buttons only display the current value. Read from the
+    // model at the OLD slot index; the swap function then writes
+    // them back to the same slot (no-op) before moving on.
+    // Reading from the model rather than parsing the label
+    // avoids a round-trip through the "#RRGGBB" text encoding.
+    let idx = state
+        .styles
+        .current_slot
+        .min(state.definition.styles.len().saturating_sub(1));
+    let (fg, bg) = if state.definition.styles.is_empty() {
+        (0, 0x00FF_FFFF)
+    } else {
+        (
+            state.definition.styles[idx].fg_color,
+            state.definition.styles[idx].bg_color,
+        )
+    };
+    // Nesting parse-failure discipline: fall back to the CURRENT
+    // model value (not 0), matching the `IDC_STYLE_NESTING`
+    // EN_CHANGE handler which also keeps the old value on
+    // unparsable/empty input. Otherwise clearing the Nesting
+    // edit and then switching slots before retyping a digit
+    // would silently zero out a previously-nonzero mask — a
+    // real data-loss path caught in the m3f code review.
+    let current_nesting = if state.definition.styles.is_empty() {
+        0
+    } else {
+        state.definition.styles[idx].nesting
+    };
+    let nesting = get_edit_text(state.styles.nesting)
+        .trim()
+        .parse::<u32>()
+        .unwrap_or(current_nesting);
+    (font_name, font_style, fg, bg, nesting)
+}
+
+/// Open Win32's `ChooseColorW` dialog with `initial_rrggbb` as
+/// the pre-selected colour. Returns the newly-picked colour in
+/// `RRGGBB` (24-bit red-high) form, or `None` if the user
+/// cancelled.
+///
+/// Runs a nested message pump; guard the outer wnd_proc's
+/// `&mut UdlEditorState` borrow by wrapping the call in
+/// `with_modal_pump`. (This function does that for you — the
+/// wrapper is inside.)
+fn prompt_color(owner: HWND, initial_rrggbb: u32) -> Option<u32> {
+    let mut custom_colors: [COLORREF; 16] = [COLORREF(0); 16];
+    let mut cc = CHOOSECOLORW {
+        lStructSize: std::mem::size_of::<CHOOSECOLORW>() as u32,
+        hwndOwner: owner,
+        lpCustColors: &raw mut custom_colors[0],
+        rgbResult: COLORREF(rrggbb_to_colorref(initial_rrggbb)),
+        Flags: CC_FULLOPEN | CC_RGBINIT,
+        ..Default::default()
+    };
+    let ok = with_modal_pump(|| unsafe { ChooseColorW(&raw mut cc).as_bool() });
+    if !ok {
+        return None;
+    }
+    Some(colorref_to_rrggbb(cc.rgbResult.0))
 }
 
 fn confirm_discard_if_dirty(state: &UdlEditorState) -> bool {
@@ -2897,6 +3426,118 @@ mod tests {
         let decoded = decode_comments("03first 03second 04close_first 04close_last");
         assert_eq!(decoded.block_open, "second");
         assert_eq!(decoded.block_close, "close_last");
+    }
+
+    #[test]
+    fn colorref_to_rrggbb_is_involutive() {
+        // Round-trip pin: the two conversions must be exact
+        // inverses. Otherwise the Save-As dialog would corrupt
+        // colours by walking them through Win32 and back.
+        for c in [
+            0x00_00_00_u32,
+            0xFF_FF_FF,
+            0xAB_CD_EF,
+            0x12_34_56,
+            0x0080_00FF, // markdown fixture's KEYWORDS1
+            0x33_33_33,  // markdown fixture's DEFAULT fg
+        ] {
+            let round_tripped = colorref_to_rrggbb(rrggbb_to_colorref(c));
+            assert_eq!(c, round_tripped, "round-trip failed for {c:#08X}");
+        }
+    }
+
+    #[test]
+    fn rrggbb_to_colorref_swaps_channels_correctly() {
+        // COLORREF is 0x00BBGGRR. RRGGBB is 0x00RRGGBB.
+        // Verify individual channels:
+        // pure red RRGGBB=0xFF0000 → COLORREF=0x0000FF
+        assert_eq!(rrggbb_to_colorref(0x00_FF_00_00), 0x00_00_00_FF);
+        // pure green RRGGBB=0x00FF00 → COLORREF=0x00FF00
+        assert_eq!(rrggbb_to_colorref(0x00_00_FF_00), 0x00_00_FF_00);
+        // pure blue RRGGBB=0x0000FF → COLORREF=0xFF0000
+        assert_eq!(rrggbb_to_colorref(0x00_00_00_FF), 0x00_FF_00_00);
+    }
+
+    #[test]
+    fn format_color_button_zero_pads_to_six_digits() {
+        // The colour button label must show a 6-digit uppercase
+        // hex value; leading-zero regressions here would produce
+        // a confusing UI where black shows as "#0" instead of
+        // "#000000".
+        assert_eq!(
+            format_color_button("Foreground", 0x0000_0000_u32),
+            "Foreground... (#000000)"
+        );
+        assert_eq!(
+            format_color_button("Background", 0x00FF_FFFF),
+            "Background... (#FFFFFF)"
+        );
+        assert_eq!(
+            format_color_button("Foreground", 0x00_ab_cd),
+            "Foreground... (#00ABCD)"
+        );
+    }
+
+    #[test]
+    fn swap_style_slot_flushes_prev_and_returns_new() {
+        // Regression pin for the Styles tab swap dance — same
+        // shape as `swap_keyword_class_flushes_prev_and_returns_new_state`.
+        let mut udl = default_new_udl();
+        let prev = 0; // DEFAULT
+        let new = 4; // KEYWORDS1
+        let flushed_name = "Consolas".to_owned();
+        let flushed_style = FONT_STYLE_BOLD | FONT_STYLE_ITALIC;
+        let flushed_fg = 0x12_34_56;
+        let flushed_bg = 0xAB_CD_EF;
+        let flushed_nesting = 42;
+        // Pre-seed the target slot so we can verify it comes back
+        // unmodified.
+        udl.styles[new].fg_color = 0x0080_00FF;
+        udl.styles[new].bg_color = 0x00FF_FFFF;
+
+        let returned = swap_style_slot(
+            &mut udl,
+            prev,
+            flushed_name.clone(),
+            flushed_style,
+            flushed_fg,
+            flushed_bg,
+            flushed_nesting,
+            new,
+        );
+        // Previous slot took the flushed values.
+        assert_eq!(udl.styles[prev].font_name, "Consolas");
+        assert_eq!(udl.styles[prev].font_style, flushed_style);
+        assert_eq!(udl.styles[prev].fg_color, flushed_fg);
+        assert_eq!(udl.styles[prev].bg_color, flushed_bg);
+        assert_eq!(udl.styles[prev].nesting, flushed_nesting);
+        // Returned = the new slot's pre-seeded values, untouched.
+        assert_eq!(returned.fg_color, 0x0080_00FF);
+        assert_eq!(returned.bg_color, 0x00FF_FFFF);
+        // Other slots undisturbed.
+        assert_eq!(udl.styles[1].font_name, "");
+    }
+
+    #[test]
+    fn swap_style_slot_self_swap_writes_and_returns_same_slot() {
+        // Degenerate self-swap: the flush and the return are on
+        // the same index; the return reflects the just-flushed
+        // values.
+        let mut udl = default_new_udl();
+        let returned = swap_style_slot(
+            &mut udl,
+            2,
+            "MyFont".to_owned(),
+            FONT_STYLE_UNDERLINE,
+            0x11_22_33,
+            0x44_55_66,
+            7,
+            2,
+        );
+        assert_eq!(returned.font_name, "MyFont");
+        assert_eq!(returned.font_style, FONT_STYLE_UNDERLINE);
+        assert_eq!(returned.fg_color, 0x11_22_33);
+        assert_eq!(returned.nesting, 7);
     }
 
     #[test]
