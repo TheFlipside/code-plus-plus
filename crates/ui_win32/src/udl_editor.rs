@@ -129,7 +129,7 @@ use windows::Win32::UI::Controls::{
     TCM_INSERTITEMW, TCN_SELCHANGE, TCS_TABS, WC_COMBOBOX, WC_TABCONTROL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetSystemMetrics,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetSystemMetrics,
     GetWindowLongPtrW, IsWindow, LoadCursorW, MessageBoxW, PostMessageW, RegisterClassExW,
     SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, BM_GETCHECK,
     BM_SETCHECK, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
@@ -311,11 +311,26 @@ struct UdlEditorState {
     dialog: HWND,
     /// SysTabControl32 that spans the top of the dialog.
     tab_ctrl: HWND,
-    /// One HWND per tab page (child of `dialog`). The active page
-    /// is `SW_SHOW`-visible; others are `SW_HIDE`-hidden. Indexed
-    /// 0..=4 matching tab order (Folder & Default, Keywords,
-    /// Comment & Number, Operators & Delimiters, Styles).
-    tab_pages: [HWND; 5],
+    /// Dialog-relative bounds of the tab strip's content area
+    /// (from `TCM_ADJUSTRECT` + `TAB_X`/`TAB_Y` translation).
+    /// Field controls are positioned at
+    /// `(content_rc.left + local_x, content_rc.top + local_y)`
+    /// and parented directly to [`Self::dialog`].
+    content_rc: RECT,
+    /// One `Vec<HWND>` per tab, holding every field control on
+    /// that tab (labels, edits, checkboxes, group boxes, etc).
+    /// On tab switch, `switch_tab` calls `ShowWindow(SW_HIDE)`
+    /// on the outgoing tab's HWNDs and `SW_SHOW` on the
+    /// incoming tab's HWNDs. Indexed 0..=4 matching tab order.
+    ///
+    /// Field controls are parented directly to `dialog` — not
+    /// to an intermediate tab-page container. Both the STATIC-
+    /// container-with-subclass-forwarder approach (m3c fix) and
+    /// the custom-class-with-hbrBackground approach silently
+    /// left the tab content blank at runtime. Direct-parent-
+    /// to-dialog is the working pattern the rest of the crate
+    /// uses.
+    tab_hwnds: [Vec<HWND>; 5],
     /// Currently selected tab.
     current_tab: usize,
     /// The Folder & Default tab's control HWNDs.
@@ -569,7 +584,8 @@ pub(crate) fn show_udl_editor(
         main_hwnd,
         dialog: HWND::default(),
         tab_ctrl: HWND::default(),
-        tab_pages: [HWND::default(); 5],
+        content_rc: RECT::default(),
+        tab_hwnds: [const { Vec::new() }; 5],
         current_tab: 0,
         folder: FolderTabControls {
             name_edit: HWND::default(),
@@ -759,90 +775,6 @@ fn default_style_slots() -> Vec<UdlStyle> {
 // Window proc
 // -------------------------------------------------------------
 
-/// Window-class name for the tab-page containers.
-const UDL_TAB_PAGE_CLASS: PCWSTR = w!("CodePlusPlusUdlEditorTabPage");
-
-/// Register the tab-page window class. Called lazily on first
-/// open, same discipline as [`register_class`] for the main
-/// editor dialog.
-///
-/// # Why a custom class (not `"STATIC"`)
-///
-/// Original m3b/m3c used the system `STATIC` class for tab pages
-/// with a subclass forwarder for `WM_COMMAND`. That approach had
-/// two problems that only surfaced once fields were interactive:
-///
-/// 1. **Invisible content.** The `STATIC` class has
-///    `hbrBackground = NULL` — it does not paint its own
-///    background but relies on the parent to paint through.
-///    Combined with the dialog's `WS_CLIPCHILDREN` (which
-///    excludes child rects from the dialog's `WM_ERASEBKGND`),
-///    the tab-page rect was never painted at all — leaving
-///    child controls with nothing to draw against and the whole
-///    content area appearing blank. The custom class here
-///    declares `hbrBackground = dialog_bg_brush()` so the tab
-///    page paints itself grey, matching the dialog chrome.
-///
-/// 2. **Extra indirection.** The subclass forwarder ran through
-///    `DefSubclassProc` on every non-command message; a custom
-///    class with its own WndProc is one lookup shorter and
-///    doesn't depend on comctl32's subclass chain plumbing.
-///
-/// The WndProc forwards `WM_COMMAND` / `WM_NOTIFY` to the
-/// parent (the dialog) so control notifications reach the
-/// dialog's dispatcher; everything else goes to `DefWindowProc`.
-fn register_tab_page_class(hinst: HINSTANCE) {
-    static REGISTERED: OnceLock<()> = OnceLock::new();
-    REGISTERED.get_or_init(|| unsafe {
-        let wc = WNDCLASSEXW {
-            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(tab_page_wnd_proc),
-            hInstance: hinst,
-            hbrBackground: dialog_bg_brush(),
-            hIcon: HICON::default(),
-            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or(HCURSOR::default()),
-            lpszClassName: UDL_TAB_PAGE_CLASS,
-            ..Default::default()
-        };
-        let atom = RegisterClassExW(&raw const wc);
-        if atom == 0 {
-            tracing::error!("failed to register UDL editor tab-page window class");
-        }
-    });
-}
-
-/// `WndProc` for tab-page container windows. Forwards
-/// `WM_COMMAND` and `WM_NOTIFY` up to the parent (the editor
-/// dialog); everything else falls through to `DefWindowProc`.
-///
-/// Panic-guarded via `catch_unwind` — same discipline as
-/// [`udl_editor_wnd_proc`].
-extern "system" fn tab_page_wnd_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        match msg {
-            WM_COMMAND | WM_NOTIFY => {
-                if let Ok(parent) = GetParent(hwnd) {
-                    return SendMessageW(parent, msg, Some(wparam), Some(lparam));
-                }
-                LRESULT(0)
-            }
-            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
-        }
-    }));
-    if let Ok(lr) = result {
-        lr
-    } else {
-        tracing::error!("panic caught in tab_page_wnd_proc");
-        LRESULT(0)
-    }
-}
-
 extern "system" fn udl_editor_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -909,7 +841,7 @@ extern "system" fn udl_editor_wnd_proc(
                             let state = &mut *state_ptr;
                             let sel =
                                 SendMessageW(state.tab_ctrl, TCM_GETCURSEL, None, None).0 as isize;
-                            if sel >= 0 && (sel as usize) < state.tab_pages.len() {
+                            if sel >= 0 && (sel as usize) < state.tab_hwnds.len() {
                                 switch_tab(state, sel as usize);
                             }
                         }
@@ -1090,78 +1022,94 @@ fn build_controls(state: &mut UdlEditorState) {
     content_rc.top += TAB_Y;
     content_rc.bottom += TAB_Y;
 
-    // Create the 5 tab-page containers via the custom
-    // `UDL_TAB_PAGE_CLASS` — a class whose WndProc forwards
-    // `WM_COMMAND`/`WM_NOTIFY` to the parent (the dialog) AND
-    // whose `hbrBackground = dialog_bg_brush()`.
-    //
-    // Both properties are load-bearing:
-    //
-    // - The WM_COMMAND forwarding routes control notifications
-    //   from field controls (parented to the tab page) up to
-    //   the dialog's `handle_command` dispatcher. Without this,
-    //   every keystroke and combobox change would silently
-    //   vanish (Win32 sends notifications to the direct parent,
-    //   not up the chain).
-    // - The background brush makes the tab page paint itself
-    //   grey. If we used the system `STATIC` class instead
-    //   (which has `hbrBackground = NULL`), combined with the
-    //   dialog's `WS_CLIPCHILDREN` excluding child rects from
-    //   the dialog's own `WM_ERASEBKGND`, the tab-page rect
-    //   would never get painted at all — leaving the whole
-    //   content area visually empty even though controls exist.
-    //
-    // Only page 0 starts visible; `switch_tab` flips visibility
-    // as the user clicks tabs.
-    register_tab_page_class(hinst);
-    for i in 0..5 {
-        let page = unsafe {
-            CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                UDL_TAB_PAGE_CLASS,
-                None,
-                WS_CHILD
-                    | WS_CLIPCHILDREN
-                    | WS_CLIPSIBLINGS
-                    | if i == 0 { WS_VISIBLE } else { WINDOW_STYLE(0) },
-                content_rc.left,
-                content_rc.top,
-                content_rc.right - content_rc.left,
-                content_rc.bottom - content_rc.top,
-                Some(state.dialog),
-                None,
-                Some(hinst),
-                None,
-            )
-        }
-        .unwrap_or(HWND::default());
-        state.tab_pages[i] = page;
-    }
+    state.content_rc = content_rc;
 
-    // All 4 tabs now have real controls — no placeholder pass
-    // required after m3e.
-
-    // Build Folder & Default tab controls (page 0).
+    // Field controls are parented directly to `state.dialog` (not
+    // to an intermediate tab-page container). Each `build_*_tab`
+    // creates its controls and — via `capture_new_children` —
+    // records their HWNDs on `state.tab_hwnds[i]` so `switch_tab`
+    // can show/hide them on tab-strip clicks.
+    //
+    // At the end of this function we also hide every HWND on
+    // tabs 1..=4 so only the initial tab's controls are visible.
+    let before_folder = enumerate_dialog_children(state.dialog);
     build_folder_tab(state, hinst, font);
-    // Build Keywords Lists tab controls (page 1) — Phase 4.6 m3c.
+    state.tab_hwnds[0] = capture_new_children(state.dialog, &before_folder);
+
+    let before_kw = enumerate_dialog_children(state.dialog);
     build_keywords_tab(state, hinst, font);
-    // Build Comment & Number tab controls (page 2) — Phase 4.6 m3d.
+    state.tab_hwnds[1] = capture_new_children(state.dialog, &before_kw);
+
+    let before_cn = enumerate_dialog_children(state.dialog);
     build_comment_number_tab(state, hinst, font);
-    // Build Operators & Delimiters tab controls (page 3) — Phase 4.6 m3e.
+    state.tab_hwnds[2] = capture_new_children(state.dialog, &before_cn);
+
+    let before_od = enumerate_dialog_children(state.dialog);
     build_operators_delimiters_tab(state, hinst, font);
-    // Build Styles tab controls (page 4) — Phase 4.6 m3f.
+    state.tab_hwnds[3] = capture_new_children(state.dialog, &before_od);
+
+    let before_styles = enumerate_dialog_children(state.dialog);
     build_styles_tab(state, hinst, font);
+    state.tab_hwnds[4] = capture_new_children(state.dialog, &before_styles);
+
     // Dialog-wide bottom-row buttons (Save / Save As / Close).
     build_bottom_buttons(state, hinst, font);
+
+    // Hide non-active tabs' controls. Tab 0 stays visible by
+    // virtue of every control being created with `WS_VISIBLE`.
+    unsafe {
+        for tab_idx in 1..state.tab_hwnds.len() {
+            for h in &state.tab_hwnds[tab_idx] {
+                let _ = ShowWindow(*h, SW_HIDE);
+            }
+        }
+    }
+}
+
+/// Enumerate every child window HWND of `parent`. Used by
+/// `capture_new_children` to snapshot the child set before and
+/// after each `build_*_tab` call.
+fn enumerate_dialog_children(parent: HWND) -> Vec<HWND> {
+    use windows::core::BOOL;
+    use windows::Win32::UI::WindowsAndMessaging::EnumChildWindows;
+    let mut children: Vec<HWND> = Vec::new();
+    unsafe extern "system" fn cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let vec = lparam.0 as *mut Vec<HWND>;
+        if !vec.is_null() {
+            unsafe {
+                (*vec).push(hwnd);
+            }
+        }
+        BOOL(1)
+    }
+    unsafe {
+        let _ = EnumChildWindows(Some(parent), Some(cb), LPARAM(&raw mut children as isize));
+    }
+    children
+}
+
+/// Return every HWND that is currently a child of `parent` but
+/// was NOT in `before`. Used to isolate the HWNDs created by a
+/// single `build_*_tab` call so they can be tracked per tab.
+fn capture_new_children(parent: HWND, before: &[HWND]) -> Vec<HWND> {
+    let after = enumerate_dialog_children(parent);
+    after.into_iter().filter(|h| !before.contains(h)).collect()
 }
 
 fn build_folder_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
-    let parent = state.tab_pages[0];
+    let parent = state.dialog;
+    // Offsets that translate tab-local (0, 0) → dialog client
+    // coords. Applied to `label_x`, `field_x`, and initial `y`
+    // below; every subsequent `y += ...` or `x + GROUP_PAD`
+    // calculation stays valid because it's additive from the
+    // offset base.
+    let dx = state.content_rc.left;
+    let dy = state.content_rc.top;
 
-    let mut y = 16;
+    let mut y = dy + 16;
     let content_w = 380;
-    let label_x = 16;
-    let field_x = 16;
+    let label_x = dx + 16;
+    let field_x = dx + 16;
     let field_w = content_w - 32;
 
     // Name label + edit
@@ -1290,17 +1238,19 @@ fn build_folder_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
 }
 
 fn build_keywords_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
-    let parent = state.tab_pages[1];
+    let parent = state.dialog;
+    let dx = state.content_rc.left;
+    let dy = state.content_rc.top;
 
     // Row 1: class selector + prefix checkbox.
-    let _ = static_label(parent, hinst, font, 16, 20, 100, "Keyword class:");
+    let _ = static_label(parent, hinst, font, dx + 16, dy + 20, 100, "Keyword class:");
     state.keywords.class_combo = combo_box(
         parent,
         hinst,
         font,
         IDC_KW_CLASS_COMBO,
-        120,
-        18,
+        dx + 120,
+        dy + 18,
         180,
         // Dropdown-list height needs the closed size PLUS the
         // extended drop area — 200px is enough to show all 8
@@ -1331,8 +1281,8 @@ fn build_keywords_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT)
         hinst,
         font,
         IDC_KW_PREFIX_CHECK,
-        320,
-        20,
+        dx + 320,
+        dy + 20,
         200,
         "Prefix mode (this class)",
     );
@@ -1342,42 +1292,53 @@ fn build_keywords_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT)
         parent,
         hinst,
         font,
-        16,
-        52,
+        dx + 16,
+        dy + 52,
         400,
         "Keywords (space-separated):",
     );
 
     // Row 3: multi-line edit filling the rest of the tab page.
-    state.keywords.edit = multi_line_edit(parent, hinst, font, IDC_KW_EDIT, 16, 72, 500, 280);
+    state.keywords.edit =
+        multi_line_edit(parent, hinst, font, IDC_KW_EDIT, dx + 16, dy + 72, 500, 280);
 }
 
 fn build_comment_number_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
-    let parent = state.tab_pages[2];
-    let mut y = 16;
+    let parent = state.dialog;
+    let dx = state.content_rc.left;
+    let dy = state.content_rc.top;
+    let mut y = dy + 16;
 
     // --- Comment section ---
     let _ = static_label(
         parent,
         hinst,
         font,
-        16,
+        dx + 16,
         y,
         400,
         "Line-comment marker(s) (space-separated):",
     );
     y += LABEL_H + 2;
     state.comment_number.line_marker =
-        edit_box(parent, hinst, font, IDC_CM_LINE_MARKER, 16, y, 500);
+        edit_box(parent, hinst, font, IDC_CM_LINE_MARKER, dx + 16, y, 500);
     y += CTRL_H + ROW_GAP;
 
-    let _ = static_label(parent, hinst, font, 16, y, 200, "Line-comment closes at:");
+    let _ = static_label(
+        parent,
+        hinst,
+        font,
+        dx + 16,
+        y,
+        200,
+        "Line-comment closes at:",
+    );
     state.comment_number.line_close_combo = combo_box(
         parent,
         hinst,
         font,
         IDC_CM_LINE_CLOSE_COMBO,
-        220,
+        dx + 220,
         y - 2,
         180,
         160,
@@ -1406,54 +1367,72 @@ fn build_comment_number_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: 
     });
     y += CTRL_H + ROW_GAP;
 
-    let _ = static_label(parent, hinst, font, 16, y, 200, "Block-comment open:");
+    let _ = static_label(parent, hinst, font, dx + 16, y, 200, "Block-comment open:");
     state.comment_number.block_open =
-        edit_box(parent, hinst, font, IDC_CM_BLOCK_OPEN, 220, y - 2, 180);
+        edit_box(parent, hinst, font, IDC_CM_BLOCK_OPEN, dx + 220, y - 2, 180);
     y += CTRL_H + ROW_GAP;
 
-    let _ = static_label(parent, hinst, font, 16, y, 200, "Block-comment close:");
-    state.comment_number.block_close =
-        edit_box(parent, hinst, font, IDC_CM_BLOCK_CLOSE, 220, y - 2, 180);
+    let _ = static_label(parent, hinst, font, dx + 16, y, 200, "Block-comment close:");
+    state.comment_number.block_close = edit_box(
+        parent,
+        hinst,
+        font,
+        IDC_CM_BLOCK_CLOSE,
+        dx + 220,
+        y - 2,
+        180,
+    );
     y += CTRL_H + ROW_GAP + 12;
 
     // --- Number section ---
-    let _ = static_label(parent, hinst, font, 16, y, 200, "Number prefix set 1:");
+    let _ = static_label(parent, hinst, font, dx + 16, y, 200, "Number prefix set 1:");
     state.comment_number.num_prefix1 =
-        edit_box(parent, hinst, font, IDC_NUM_PREFIX1, 220, y - 2, 180);
+        edit_box(parent, hinst, font, IDC_NUM_PREFIX1, dx + 220, y - 2, 180);
     y += CTRL_H + ROW_GAP;
 
-    let _ = static_label(parent, hinst, font, 16, y, 200, "Number prefix set 2:");
+    let _ = static_label(parent, hinst, font, dx + 16, y, 200, "Number prefix set 2:");
     state.comment_number.num_prefix2 =
-        edit_box(parent, hinst, font, IDC_NUM_PREFIX2, 220, y - 2, 180);
+        edit_box(parent, hinst, font, IDC_NUM_PREFIX2, dx + 220, y - 2, 180);
     y += CTRL_H + ROW_GAP;
 
-    let _ = static_label(parent, hinst, font, 16, y, 200, "Number extras set 1:");
+    let _ = static_label(parent, hinst, font, dx + 16, y, 200, "Number extras set 1:");
     state.comment_number.num_extras1 =
-        edit_box(parent, hinst, font, IDC_NUM_EXTRAS1, 220, y - 2, 180);
+        edit_box(parent, hinst, font, IDC_NUM_EXTRAS1, dx + 220, y - 2, 180);
     y += CTRL_H + ROW_GAP;
 
-    let _ = static_label(parent, hinst, font, 16, y, 200, "Number extras set 2:");
+    let _ = static_label(parent, hinst, font, dx + 16, y, 200, "Number extras set 2:");
     state.comment_number.num_extras2 =
-        edit_box(parent, hinst, font, IDC_NUM_EXTRAS2, 220, y - 2, 180);
+        edit_box(parent, hinst, font, IDC_NUM_EXTRAS2, dx + 220, y - 2, 180);
     y += CTRL_H + ROW_GAP;
 
-    let _ = static_label(parent, hinst, font, 16, y, 200, "Number suffix set 1:");
+    let _ = static_label(parent, hinst, font, dx + 16, y, 200, "Number suffix set 1:");
     state.comment_number.num_suffix1 =
-        edit_box(parent, hinst, font, IDC_NUM_SUFFIX1, 220, y - 2, 180);
+        edit_box(parent, hinst, font, IDC_NUM_SUFFIX1, dx + 220, y - 2, 180);
     y += CTRL_H + ROW_GAP;
 
-    let _ = static_label(parent, hinst, font, 16, y, 200, "Number suffix set 2:");
+    let _ = static_label(parent, hinst, font, dx + 16, y, 200, "Number suffix set 2:");
     state.comment_number.num_suffix2 =
-        edit_box(parent, hinst, font, IDC_NUM_SUFFIX2, 220, y - 2, 180);
+        edit_box(parent, hinst, font, IDC_NUM_SUFFIX2, dx + 220, y - 2, 180);
     y += CTRL_H + ROW_GAP;
 
-    let _ = static_label(parent, hinst, font, 16, y, 200, "Number range operator:");
-    state.comment_number.num_range = edit_box(parent, hinst, font, IDC_NUM_RANGE, 220, y - 2, 180);
+    let _ = static_label(
+        parent,
+        hinst,
+        font,
+        dx + 16,
+        y,
+        200,
+        "Number range operator:",
+    );
+    state.comment_number.num_range =
+        edit_box(parent, hinst, font, IDC_NUM_RANGE, dx + 220, y - 2, 180);
 }
 
 fn build_operators_delimiters_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
-    let parent = state.tab_pages[3];
-    let mut y = 16;
+    let parent = state.dialog;
+    let dx = state.content_rc.left;
+    let dy = state.content_rc.top;
+    let mut y = dy + 16;
     let field_w = 500;
 
     // Operators 1 (no whitespace required)
@@ -1461,14 +1440,14 @@ fn build_operators_delimiters_tab(state: &mut UdlEditorState, hinst: HINSTANCE, 
         parent,
         hinst,
         font,
-        16,
+        dx + 16,
         y,
         field_w,
         "Operators 1 — no whitespace required (space-separated):",
     );
     y += LABEL_H + 2;
     state.operators_delimiters.op1_edit =
-        edit_box(parent, hinst, font, IDC_OP1_EDIT, 16, y, field_w);
+        edit_box(parent, hinst, font, IDC_OP1_EDIT, dx + 16, y, field_w);
     y += CTRL_H + ROW_GAP;
 
     // Operators 2 (whitespace-required)
@@ -1476,14 +1455,14 @@ fn build_operators_delimiters_tab(state: &mut UdlEditorState, hinst: HINSTANCE, 
         parent,
         hinst,
         font,
-        16,
+        dx + 16,
         y,
         field_w,
         "Operators 2 — whitespace-delimited (space-separated):",
     );
     y += LABEL_H + 2;
     state.operators_delimiters.op2_edit =
-        edit_box(parent, hinst, font, IDC_OP2_EDIT, 16, y, field_w);
+        edit_box(parent, hinst, font, IDC_OP2_EDIT, dx + 16, y, field_w);
     y += CTRL_H + ROW_GAP + 8;
 
     // Delimiters (raw N++ encoding)
@@ -1491,19 +1470,22 @@ fn build_operators_delimiters_tab(state: &mut UdlEditorState, hinst: HINSTANCE, 
         parent,
         hinst,
         font,
-        16,
+        dx + 16,
         y,
         field_w,
         "Delimiters (raw N++ encoding — space-separated NN<sequence> tokens):",
     );
     y += LABEL_H + 2;
-    // Delimiter edit height: 210px. Trimmed from an initial 220 so
-    // the trailing hint label below fits inside the tab content
-    // rect — the tab-strip row plus TCM_ADJUSTRECT insets consume
-    // enough of the 400px TAB_H that 220 + hint could truncate
-    // the last few pixels of the hint on default DPI.
-    state.operators_delimiters.delims_edit =
-        multi_line_edit(parent, hinst, font, IDC_DELIMS_EDIT, 16, y, field_w, 210);
+    state.operators_delimiters.delims_edit = multi_line_edit(
+        parent,
+        hinst,
+        font,
+        IDC_DELIMS_EDIT,
+        dx + 16,
+        y,
+        field_w,
+        210,
+    );
     y += 210 + 4;
 
     // Help hint below the delimiters edit.
@@ -1511,7 +1493,7 @@ fn build_operators_delimiters_tab(state: &mut UdlEditorState, hinst: HINSTANCE, 
         parent,
         hinst,
         font,
-        16,
+        dx + 16,
         y,
         field_w,
         "Format: 8 slots × (open / escape / close) indexed 00-23. E.g. 00\" 01\\ 02\" for double-quoted strings.",
@@ -1519,14 +1501,17 @@ fn build_operators_delimiters_tab(state: &mut UdlEditorState, hinst: HINSTANCE, 
 }
 
 fn build_styles_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
-    let parent = state.tab_pages[4];
-    let mut y = 16;
+    let parent = state.dialog;
+    let dx = state.content_rc.left;
+    let dy = state.content_rc.top;
+    let mut y = dy + 16;
     let label_w = 120;
-    let ctrl_x = 140;
+    let ctrl_x = dx + 140;
     let ctrl_w = 380;
+    let label_x = dx + 16;
 
     // Slot picker
-    let _ = static_label(parent, hinst, font, 16, y, label_w, "Style slot:");
+    let _ = static_label(parent, hinst, font, label_x, y, label_w, "Style slot:");
     state.styles.slot_combo = combo_box(
         parent,
         hinst,
@@ -1561,7 +1546,7 @@ fn build_styles_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
     y += CTRL_H + ROW_GAP;
 
     // Font name
-    let _ = static_label(parent, hinst, font, 16, y, label_w, "Font name:");
+    let _ = static_label(parent, hinst, font, label_x, y, label_w, "Font name:");
     state.styles.font_name = edit_box(
         parent,
         hinst,
@@ -1574,7 +1559,7 @@ fn build_styles_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
     y += CTRL_H + ROW_GAP;
 
     // Style (bold / italic / underline) checkboxes on one row
-    let _ = static_label(parent, hinst, font, 16, y, label_w, "Style:");
+    let _ = static_label(parent, hinst, font, label_x, y, label_w, "Style:");
     state.styles.bold = check_box(parent, hinst, font, IDC_STYLE_BOLD, ctrl_x, y, 80, "Bold");
     state.styles.italic = check_box(
         parent,
@@ -1601,7 +1586,7 @@ fn build_styles_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
     // Foreground / Background buttons — each carries its current
     // hex value in the label so the user sees the value without
     // a separate colour swatch. `ChooseColorW` opens on click.
-    let _ = static_label(parent, hinst, font, 16, y, label_w, "Foreground:");
+    let _ = static_label(parent, hinst, font, label_x, y, label_w, "Foreground:");
     state.styles.fg_button = push_button(
         parent,
         hinst,
@@ -1616,7 +1601,7 @@ fn build_styles_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
     );
     y += CTRL_H + ROW_GAP;
 
-    let _ = static_label(parent, hinst, font, 16, y, label_w, "Background:");
+    let _ = static_label(parent, hinst, font, label_x, y, label_w, "Background:");
     state.styles.bg_button = push_button(
         parent,
         hinst,
@@ -1632,7 +1617,7 @@ fn build_styles_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
     y += CTRL_H + ROW_GAP;
 
     // Nesting (decimal integer edit)
-    let _ = static_label(parent, hinst, font, 16, y, label_w, "Nesting mask:");
+    let _ = static_label(parent, hinst, font, label_x, y, label_w, "Nesting mask:");
     state.styles.nesting = edit_box(parent, hinst, font, IDC_STYLE_NESTING, ctrl_x, y - 2, 120);
     y += CTRL_H + ROW_GAP + 4;
 
@@ -1640,9 +1625,9 @@ fn build_styles_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
         parent,
         hinst,
         font,
-        16,
+        label_x,
         y,
-        ctrl_x + ctrl_w - 16,
+        ctrl_x + ctrl_w - label_x,
         "Nesting mask is a decimal bitfield; each bit permits an inner style slot. \
          Rarely used — see N++ UDL docs.",
     );
@@ -2765,12 +2750,16 @@ fn handle_command(state: &mut UdlEditorState, wparam: WPARAM, _lparam: LPARAM) {
 }
 
 fn switch_tab(state: &mut UdlEditorState, new_tab: usize) {
-    if new_tab == state.current_tab {
+    if new_tab == state.current_tab || new_tab >= state.tab_hwnds.len() {
         return;
     }
-    for (i, page) in state.tab_pages.iter().enumerate() {
-        unsafe {
-            let _ = ShowWindow(*page, if i == new_tab { SW_SHOW } else { SW_HIDE });
+    let current = state.current_tab;
+    unsafe {
+        for h in &state.tab_hwnds[current] {
+            let _ = ShowWindow(*h, SW_HIDE);
+        }
+        for h in &state.tab_hwnds[new_tab] {
+            let _ = ShowWindow(*h, SW_SHOW);
         }
     }
     state.current_tab = new_tab;
