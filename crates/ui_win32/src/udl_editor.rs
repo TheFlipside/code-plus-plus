@@ -37,7 +37,13 @@
 //!   selected class's saved value — protects against clobbering
 //!   unsaved-in-buffer edits on a rapid Keywords 1 → Keywords 2
 //!   swap.
-//! - **m3d** — Comment & Number tab.
+//! - **m3d (this commit)** — Comment & Number tab. Four friendly
+//!   comment fields (line marker(s), line-close style combobox,
+//!   block open, block close) route through `decode_comments`
+//!   / `encode_comments` — pure helpers that translate to and
+//!   from the raw `NN<seq>` encoding N++'s tokeniser consumes.
+//!   Seven number-config edits mirror the `numbers_*` slots
+//!   verbatim.
 //! - **m3e** — Operators & Delimiters tab.
 //! - **m3f** — Styler dialog (font / colours / nesting) launched
 //!   from any tab.
@@ -169,6 +175,19 @@ const IDC_KW_CLASS_COMBO: u16 = 400;
 const IDC_KW_PREFIX_CHECK: u16 = 401;
 const IDC_KW_EDIT: u16 = 402;
 
+// Comment & Number tab (Phase 4.6 m3d)
+const IDC_CM_LINE_MARKER: u16 = 500;
+const IDC_CM_LINE_CLOSE_COMBO: u16 = 501;
+const IDC_CM_BLOCK_OPEN: u16 = 502;
+const IDC_CM_BLOCK_CLOSE: u16 = 503;
+const IDC_NUM_PREFIX1: u16 = 510;
+const IDC_NUM_PREFIX2: u16 = 511;
+const IDC_NUM_EXTRAS1: u16 = 512;
+const IDC_NUM_EXTRAS2: u16 = 513;
+const IDC_NUM_SUFFIX1: u16 = 514;
+const IDC_NUM_SUFFIX2: u16 = 515;
+const IDC_NUM_RANGE: u16 = 516;
+
 thread_local! {
     /// Set true while a nested modal pump (`GetSaveFileNameW` /
     /// `MessageBoxW`) is running inside `save_action` /
@@ -265,6 +284,8 @@ struct UdlEditorState {
     /// The Keywords Lists tab's control HWNDs. See
     /// [`KeywordsTabControls`] for the UI shape.
     keywords: KeywordsTabControls,
+    /// The Comment & Number tab's control HWNDs (Phase 4.6 m3d).
+    comment_number: CommentNumberTabControls,
     /// The in-memory UDL definition being edited. Every field
     /// change flows into here; Save serialises this and writes.
     definition: UdlDefinition,
@@ -293,6 +314,33 @@ struct FolderTabControls {
     save_btn: HWND,
     save_as_btn: HWND,
     close_btn: HWND,
+}
+
+/// Controls for the Comment & Number tab (Phase 4.6 m3d).
+///
+/// The comment section presents four *friendly* fields (line
+/// markers, line-close style combobox, block open, block close)
+/// rather than the raw `NN<seq>` encoding — see
+/// [`decode_comments`] / [`encode_comments`] for the pure
+/// (String ↔ DecodedComments) helpers that the wnd_proc arms
+/// route through.
+///
+/// The number section is 7 plain edit boxes, each mirroring one
+/// slot of [`codepp_udl::UdlKeywordLists`]. Numbers use no
+/// encoding — the raw string content is what N++ writes and what
+/// the tokeniser consumes.
+struct CommentNumberTabControls {
+    line_marker: HWND,
+    line_close_combo: HWND,
+    block_open: HWND,
+    block_close: HWND,
+    num_prefix1: HWND,
+    num_prefix2: HWND,
+    num_extras1: HWND,
+    num_extras2: HWND,
+    num_suffix1: HWND,
+    num_suffix2: HWND,
+    num_range: HWND,
 }
 
 /// Controls for the Keywords Lists tab (Phase 4.6 m3c).
@@ -414,6 +462,19 @@ pub(crate) fn show_udl_editor(
             prefix_check: HWND::default(),
             edit: HWND::default(),
             current_class: 0,
+        },
+        comment_number: CommentNumberTabControls {
+            line_marker: HWND::default(),
+            line_close_combo: HWND::default(),
+            block_open: HWND::default(),
+            block_close: HWND::default(),
+            num_prefix1: HWND::default(),
+            num_prefix2: HWND::default(),
+            num_extras1: HWND::default(),
+            num_extras2: HWND::default(),
+            num_suffix1: HWND::default(),
+            num_suffix2: HWND::default(),
+            num_range: HWND::default(),
         },
         definition,
         source_path,
@@ -631,6 +692,7 @@ extern "system" fn udl_editor_wnd_proc(
                     build_controls(state);
                     populate_folder_tab(state);
                     populate_keywords_tab(state);
+                    populate_comment_number_tab(state);
                     state.controls_ready = true;
                 }
                 LRESULT(0)
@@ -891,17 +953,10 @@ fn build_controls(state: &mut UdlEditorState) {
         }
     }
 
-    // Populate tabs 3-4 with a placeholder label so users see
-    // "coming soon" rather than an empty page. Tab 2 (Keywords
-    // Lists) gained real controls in m3c; tabs 3 (Comment &
-    // Number) and 4 (Operators & Delimiters) still stand as
-    // placeholders until m3d/m3e land.
-    let placeholder_labels = [
-        "Comment & Number — coming in Phase 4.6 m3d",
-        "Operators & Delimiters — coming in Phase 4.6 m3e",
-    ];
-    for (i, label) in placeholder_labels.iter().enumerate() {
-        let wide = wide_terminated(label);
+    // Populate tab 4 (Operators & Delimiters) with a placeholder
+    // until m3e lands. Tabs 1-3 all have real controls now.
+    {
+        let wide = wide_terminated("Operators & Delimiters — coming in Phase 4.6 m3e");
         unsafe {
             let hwnd = CreateWindowExW(
                 WINDOW_EX_STYLE(0),
@@ -912,7 +967,7 @@ fn build_controls(state: &mut UdlEditorState) {
                 20,
                 380,
                 LABEL_H,
-                Some(state.tab_pages[i + 2]),
+                Some(state.tab_pages[3]),
                 None,
                 Some(hinst),
                 None,
@@ -926,6 +981,8 @@ fn build_controls(state: &mut UdlEditorState) {
     build_folder_tab(state, hinst, font);
     // Build Keywords Lists tab controls (page 1) — Phase 4.6 m3c.
     build_keywords_tab(state, hinst, font);
+    // Build Comment & Number tab controls (page 2) — Phase 4.6 m3d.
+    build_comment_number_tab(state, hinst, font);
     // Dialog-wide bottom-row buttons (Save / Save As / Close).
     build_bottom_buttons(state, hinst, font);
 }
@@ -1125,6 +1182,105 @@ fn build_keywords_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT)
 
     // Row 3: multi-line edit filling the rest of the tab page.
     state.keywords.edit = multi_line_edit(parent, hinst, font, IDC_KW_EDIT, 16, 72, 500, 280);
+}
+
+fn build_comment_number_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
+    let parent = state.tab_pages[2];
+    let mut y = 16;
+
+    // --- Comment section ---
+    let _ = static_label(
+        parent,
+        hinst,
+        font,
+        16,
+        y,
+        400,
+        "Line-comment marker(s) (space-separated):",
+    );
+    y += LABEL_H + 2;
+    state.comment_number.line_marker =
+        edit_box(parent, hinst, font, IDC_CM_LINE_MARKER, 16, y, 500);
+    y += CTRL_H + ROW_GAP;
+
+    let _ = static_label(parent, hinst, font, 16, y, 200, "Line-comment closes at:");
+    state.comment_number.line_close_combo = combo_box(
+        parent,
+        hinst,
+        font,
+        IDC_CM_LINE_CLOSE_COMBO,
+        220,
+        y - 2,
+        180,
+        160,
+    );
+    // Populate the 4 line-close options in the same order as
+    // `LineCloseStyle` variants (None, Eol, Eof, Both) — the
+    // `IDC_CM_LINE_CLOSE_COMBO` arm assumes the sel index matches
+    // the discriminant order.
+    with_modal_pump(|| {
+        for label in [
+            "(no close marker)",
+            "End of line",
+            "End of file",
+            "Both EOL and EOF",
+        ] {
+            let wide = wide_terminated(label);
+            unsafe {
+                SendMessageW(
+                    state.comment_number.line_close_combo,
+                    CB_ADDSTRING,
+                    None,
+                    Some(LPARAM(wide.as_ptr() as isize)),
+                );
+            }
+        }
+    });
+    y += CTRL_H + ROW_GAP;
+
+    let _ = static_label(parent, hinst, font, 16, y, 200, "Block-comment open:");
+    state.comment_number.block_open =
+        edit_box(parent, hinst, font, IDC_CM_BLOCK_OPEN, 220, y - 2, 180);
+    y += CTRL_H + ROW_GAP;
+
+    let _ = static_label(parent, hinst, font, 16, y, 200, "Block-comment close:");
+    state.comment_number.block_close =
+        edit_box(parent, hinst, font, IDC_CM_BLOCK_CLOSE, 220, y - 2, 180);
+    y += CTRL_H + ROW_GAP + 12;
+
+    // --- Number section ---
+    let _ = static_label(parent, hinst, font, 16, y, 200, "Number prefix set 1:");
+    state.comment_number.num_prefix1 =
+        edit_box(parent, hinst, font, IDC_NUM_PREFIX1, 220, y - 2, 180);
+    y += CTRL_H + ROW_GAP;
+
+    let _ = static_label(parent, hinst, font, 16, y, 200, "Number prefix set 2:");
+    state.comment_number.num_prefix2 =
+        edit_box(parent, hinst, font, IDC_NUM_PREFIX2, 220, y - 2, 180);
+    y += CTRL_H + ROW_GAP;
+
+    let _ = static_label(parent, hinst, font, 16, y, 200, "Number extras set 1:");
+    state.comment_number.num_extras1 =
+        edit_box(parent, hinst, font, IDC_NUM_EXTRAS1, 220, y - 2, 180);
+    y += CTRL_H + ROW_GAP;
+
+    let _ = static_label(parent, hinst, font, 16, y, 200, "Number extras set 2:");
+    state.comment_number.num_extras2 =
+        edit_box(parent, hinst, font, IDC_NUM_EXTRAS2, 220, y - 2, 180);
+    y += CTRL_H + ROW_GAP;
+
+    let _ = static_label(parent, hinst, font, 16, y, 200, "Number suffix set 1:");
+    state.comment_number.num_suffix1 =
+        edit_box(parent, hinst, font, IDC_NUM_SUFFIX1, 220, y - 2, 180);
+    y += CTRL_H + ROW_GAP;
+
+    let _ = static_label(parent, hinst, font, 16, y, 200, "Number suffix set 2:");
+    state.comment_number.num_suffix2 =
+        edit_box(parent, hinst, font, IDC_NUM_SUFFIX2, 220, y - 2, 180);
+    y += CTRL_H + ROW_GAP;
+
+    let _ = static_label(parent, hinst, font, 16, y, 200, "Number range operator:");
+    state.comment_number.num_range = edit_box(parent, hinst, font, IDC_NUM_RANGE, 220, y - 2, 180);
 }
 
 fn build_bottom_buttons(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
@@ -1533,6 +1689,102 @@ fn populate_keywords_tab(state: &UdlEditorState) {
     });
 }
 
+/// Populate the Comment & Number tab (m3d) from the current
+/// definition. Decodes the raw `comments` encoding into the
+/// friendly fields and sets the 7 number sub-fields verbatim.
+/// Wrapped in `with_modal_pump` so the synchronous `EN_CHANGE`
+/// each `set_edit_text` fires doesn't flip the dirty bit on a
+/// freshly-loaded UDL.
+fn populate_comment_number_tab(state: &UdlEditorState) {
+    with_modal_pump(|| {
+        let decoded = decode_comments(&state.definition.keyword_lists.comments);
+        set_edit_text(
+            state.comment_number.line_marker,
+            &decoded.line_markers.join(" "),
+        );
+        // The combobox sel index maps 1:1 to `LineCloseStyle`
+        // discriminant order (see `build_comment_number_tab`).
+        let sel = match decoded.line_close {
+            LineCloseStyle::None => 0,
+            LineCloseStyle::Eol => 1,
+            LineCloseStyle::Eof => 2,
+            LineCloseStyle::Both => 3,
+        };
+        unsafe {
+            SendMessageW(
+                state.comment_number.line_close_combo,
+                CB_SETCURSEL,
+                Some(WPARAM(sel)),
+                None,
+            );
+        }
+        set_edit_text(state.comment_number.block_open, &decoded.block_open);
+        set_edit_text(state.comment_number.block_close, &decoded.block_close);
+
+        set_edit_text(
+            state.comment_number.num_prefix1,
+            &state.definition.keyword_lists.numbers_prefix1,
+        );
+        set_edit_text(
+            state.comment_number.num_prefix2,
+            &state.definition.keyword_lists.numbers_prefix2,
+        );
+        set_edit_text(
+            state.comment_number.num_extras1,
+            &state.definition.keyword_lists.numbers_extras1,
+        );
+        set_edit_text(
+            state.comment_number.num_extras2,
+            &state.definition.keyword_lists.numbers_extras2,
+        );
+        set_edit_text(
+            state.comment_number.num_suffix1,
+            &state.definition.keyword_lists.numbers_suffix1,
+        );
+        set_edit_text(
+            state.comment_number.num_suffix2,
+            &state.definition.keyword_lists.numbers_suffix2,
+        );
+        set_edit_text(
+            state.comment_number.num_range,
+            &state.definition.keyword_lists.numbers_range,
+        );
+    });
+}
+
+/// Read the four comment-section edits + the line-close combo
+/// and re-encode into `keyword_lists.comments`. Called on every
+/// EN_CHANGE / CBN_SELCHANGE for a comment control so the model
+/// stays in sync with the UI.
+fn flush_comment_section_to_model(state: &mut UdlEditorState) {
+    let markers_text = get_edit_text(state.comment_number.line_marker);
+    let line_markers: Vec<String> = markers_text.split_whitespace().map(str::to_owned).collect();
+    let sel = unsafe {
+        SendMessageW(
+            state.comment_number.line_close_combo,
+            CB_GETCURSEL,
+            None,
+            None,
+        )
+        .0 as isize
+    };
+    let line_close = match sel {
+        1 => LineCloseStyle::Eol,
+        2 => LineCloseStyle::Eof,
+        3 => LineCloseStyle::Both,
+        _ => LineCloseStyle::None,
+    };
+    let block_open = get_edit_text(state.comment_number.block_open);
+    let block_close = get_edit_text(state.comment_number.block_close);
+    let decoded = DecodedComments {
+        line_markers,
+        line_close,
+        block_open,
+        block_close,
+    };
+    state.definition.keyword_lists.comments = encode_comments(&decoded);
+}
+
 fn set_edit_text(hwnd: HWND, text: &str) {
     let wide = wide_terminated(text);
     unsafe {
@@ -1581,6 +1833,150 @@ fn is_checked(hwnd: HWND) -> bool {
 // -------------------------------------------------------------
 // Command dispatch
 // -------------------------------------------------------------
+
+/// Comment index-02 line-close style. UDLs express this as literal
+/// `((EOL))` / `((EOF))` tokens which the parser recognises
+/// specially — see [`codepp_udl::CommentRules::parse`].
+///
+/// **`Both`** is preserved (rather than collapsed to one of the
+/// two) so a UDL that carries both variants round-trips losslessly;
+/// the UI exposes the presence of both as a single "Both" combobox
+/// selection.
+///
+/// **Runtime effect (Phase 4.6 m3d state).** The container-lexer
+/// tokeniser in `crates/udl/src/tokenise.rs::match_line_comment`
+/// currently ALWAYS terminates a line comment at `\n`, regardless
+/// of which variant is selected here. `Eof` and `Both` are stored
+/// and round-tripped correctly (Save writes them back verbatim to
+/// the on-disk XML) but they do NOT yet change how live buffers
+/// are highlighted. Wiring the tokeniser to consult
+/// [`codepp_udl::CommentRules`]`::line_close` for EOF handling is
+/// tracked as a follow-up in the udl crate; for now this enum is
+/// faithful storage, not effective behaviour.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum LineCloseStyle {
+    /// No index-02 token present. Line comment terminates at
+    /// end-of-line (the tokeniser's default).
+    #[default]
+    None,
+    /// `02((EOL))` — explicitly asks the parser to mark EOL as
+    /// the close; matches the tokeniser's default behaviour.
+    /// C, Python, Bash, Markdown all use this.
+    Eol,
+    /// `02((EOF))` — declared but not yet consulted by the
+    /// tokeniser (see the type-level "Runtime effect" note).
+    /// Cisco IOS declares this for `!` markers.
+    Eof,
+    /// Both `02((EOL))` and `02((EOF))` present in the source.
+    Both,
+}
+
+/// A comment-encoding string (the `Comments` keyword-list value)
+/// decomposed into the four friendly fields the m3d UI exposes.
+/// Index-01 (line-continue) is deliberately omitted — no
+/// real-world UDL uses it and N++'s own editor hides it too.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub(crate) struct DecodedComments {
+    /// Index-00 markers. Cisco IOS carries two (`!` and `remark`);
+    /// C carries one (`//`); markdown carries `#`.
+    pub line_markers: Vec<String>,
+    /// Index-02 style.
+    pub line_close: LineCloseStyle,
+    /// Index-03 block-comment opener.
+    pub block_open: String,
+    /// Index-04 block-comment closer.
+    pub block_close: String,
+}
+
+/// Decode a `Comments` keyword-list value into structured fields.
+/// Unknown / index-01 / index-≥5 tokens are silently dropped —
+/// same tolerant-parsing discipline `codepp_udl::CommentRules::parse`
+/// uses. Never panics — malformed tokens (< 2 bytes, non-digit
+/// prefix, or a multi-byte codepoint straddling byte offset 2)
+/// are silently skipped.
+pub(crate) fn decode_comments(encoded: &str) -> DecodedComments {
+    let mut out = DecodedComments::default();
+    for tok in encoded.split_whitespace() {
+        // A well-formed token is 2 ASCII digits + arbitrary
+        // content. Guard both length AND char-boundary before
+        // `split_at`, otherwise a hostile UDL with a multi-byte
+        // codepoint in the FIRST byte of a token (e.g.
+        // "日remark", "0é...") would panic here — real DoS
+        // vector because `decode_comments` runs on every UDL
+        // load in the "Define your language…" flow, and the
+        // in-process `panic = "abort"` release profile takes
+        // down the whole editor.
+        let Some(prefix) = tok.get(..2) else { continue };
+        let Some(content) = tok.get(2..) else {
+            continue;
+        };
+        let Ok(idx) = prefix.parse::<u8>() else {
+            continue;
+        };
+        match idx {
+            0 if !content.is_empty() => out.line_markers.push(content.to_owned()),
+            2 => match content {
+                "((EOL))" => {
+                    out.line_close = match out.line_close {
+                        LineCloseStyle::None => LineCloseStyle::Eol,
+                        LineCloseStyle::Eof | LineCloseStyle::Both => LineCloseStyle::Both,
+                        LineCloseStyle::Eol => LineCloseStyle::Eol,
+                    };
+                }
+                "((EOF))" => {
+                    out.line_close = match out.line_close {
+                        LineCloseStyle::None => LineCloseStyle::Eof,
+                        LineCloseStyle::Eol | LineCloseStyle::Both => LineCloseStyle::Both,
+                        LineCloseStyle::Eof => LineCloseStyle::Eof,
+                    };
+                }
+                _ => {}
+            },
+            // Last-wins on indices 3/4, matching
+            // `codepp_udl::CommentRules::parse`'s discipline
+            // (unconditional overwrite). Real UDLs never declare
+            // duplicate block markers, but a hand-edited or
+            // hostile file that does must decode to the same
+            // shape here as it does through the runtime parser,
+            // otherwise an edit-and-resave loses whichever the
+            // runtime was actually using.
+            3 => content.clone_into(&mut out.block_open),
+            4 => content.clone_into(&mut out.block_close),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Encode a [`DecodedComments`] back to the space-separated
+/// `NN<content>` string the tokeniser consumes. Symmetric with
+/// [`decode_comments`] — `encode(decode(x))` normalises `x`
+/// (drops index-01 and any garbage; collapses duplicates on
+/// indices 3/4) but round-trips clean data losslessly.
+pub(crate) fn encode_comments(d: &DecodedComments) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for marker in &d.line_markers {
+        if !marker.is_empty() {
+            parts.push(format!("00{marker}"));
+        }
+    }
+    match d.line_close {
+        LineCloseStyle::None => {}
+        LineCloseStyle::Eol => parts.push("02((EOL))".to_owned()),
+        LineCloseStyle::Eof => parts.push("02((EOF))".to_owned()),
+        LineCloseStyle::Both => {
+            parts.push("02((EOL))".to_owned());
+            parts.push("02((EOF))".to_owned());
+        }
+    }
+    if !d.block_open.is_empty() {
+        parts.push(format!("03{}", d.block_open));
+    }
+    if !d.block_close.is_empty() {
+        parts.push(format!("04{}", d.block_close));
+    }
+    parts.join(" ")
+}
 
 /// Pure swap-dance for the Keywords Lists tab's class-combobox
 /// selection change. Flushes the caller-provided `flushed_text`
@@ -1674,6 +2070,56 @@ fn handle_command(state: &mut UdlEditorState, wparam: WPARAM, _lparam: LPARAM) {
         IDC_KW_PREFIX_CHECK => {
             let idx = state.keywords.current_class;
             state.definition.prefix[idx] = is_checked(state.keywords.prefix_check);
+            state.dirty = true;
+        }
+        // --- Comment & Number tab (Phase 4.6 m3d) ---
+        // Comment section: any change to a comment field
+        // re-encodes ALL four fields into `comments`.
+        IDC_CM_LINE_MARKER | IDC_CM_BLOCK_OPEN | IDC_CM_BLOCK_CLOSE
+            if notify_code == EN_CHANGE as u16 =>
+        {
+            flush_comment_section_to_model(state);
+            state.dirty = true;
+        }
+        IDC_CM_LINE_CLOSE_COMBO if notify_code == CBN_SELCHANGE as u16 => {
+            flush_comment_section_to_model(state);
+            state.dirty = true;
+        }
+        // Number section: each field mirrors one keyword-list
+        // slot verbatim; no encoding.
+        IDC_NUM_PREFIX1 if notify_code == EN_CHANGE as u16 => {
+            state.definition.keyword_lists.numbers_prefix1 =
+                get_edit_text(state.comment_number.num_prefix1);
+            state.dirty = true;
+        }
+        IDC_NUM_PREFIX2 if notify_code == EN_CHANGE as u16 => {
+            state.definition.keyword_lists.numbers_prefix2 =
+                get_edit_text(state.comment_number.num_prefix2);
+            state.dirty = true;
+        }
+        IDC_NUM_EXTRAS1 if notify_code == EN_CHANGE as u16 => {
+            state.definition.keyword_lists.numbers_extras1 =
+                get_edit_text(state.comment_number.num_extras1);
+            state.dirty = true;
+        }
+        IDC_NUM_EXTRAS2 if notify_code == EN_CHANGE as u16 => {
+            state.definition.keyword_lists.numbers_extras2 =
+                get_edit_text(state.comment_number.num_extras2);
+            state.dirty = true;
+        }
+        IDC_NUM_SUFFIX1 if notify_code == EN_CHANGE as u16 => {
+            state.definition.keyword_lists.numbers_suffix1 =
+                get_edit_text(state.comment_number.num_suffix1);
+            state.dirty = true;
+        }
+        IDC_NUM_SUFFIX2 if notify_code == EN_CHANGE as u16 => {
+            state.definition.keyword_lists.numbers_suffix2 =
+                get_edit_text(state.comment_number.num_suffix2);
+            state.dirty = true;
+        }
+        IDC_NUM_RANGE if notify_code == EN_CHANGE as u16 => {
+            state.definition.keyword_lists.numbers_range =
+                get_edit_text(state.comment_number.num_range);
             state.dirty = true;
         }
         IDC_SAVE_BUTTON => save_action(state, false),
@@ -2116,6 +2562,196 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn decode_comments_recognises_c_style() {
+        // `00// 01\ 02((EOL)) 03/* 04*/` = C-style comments.
+        let decoded = decode_comments("00// 01\\ 02((EOL)) 03/* 04*/");
+        assert_eq!(decoded.line_markers, vec!["//".to_owned()]);
+        assert_eq!(decoded.line_close, LineCloseStyle::Eol);
+        assert_eq!(decoded.block_open, "/*");
+        assert_eq!(decoded.block_close, "*/");
+    }
+
+    #[test]
+    fn decode_comments_recognises_cisco_ios_multi_marker() {
+        // Cisco IOS UDL uses both `!` and `remark` as line
+        // markers, and closes at EOF (line comment continues
+        // until end of file when unclosed).
+        let decoded = decode_comments("00! 00remark 01 02((EOF)) 03 04");
+        assert_eq!(
+            decoded.line_markers,
+            vec!["!".to_owned(), "remark".to_owned()]
+        );
+        assert_eq!(decoded.line_close, LineCloseStyle::Eof);
+        assert_eq!(decoded.block_open, "");
+        assert_eq!(decoded.block_close, "");
+    }
+
+    #[test]
+    fn decode_comments_recognises_markdown_fixture() {
+        // Markdown preinstalled fixture uses `#` line marker + EOL
+        // close + `<!--` / `-->` block markers.
+        let decoded = decode_comments("00# 01 02((EOL)) 03<!-- 04-->");
+        assert_eq!(decoded.line_markers, vec!["#".to_owned()]);
+        assert_eq!(decoded.line_close, LineCloseStyle::Eol);
+        assert_eq!(decoded.block_open, "<!--");
+        assert_eq!(decoded.block_close, "-->");
+    }
+
+    #[test]
+    fn decode_comments_recognises_both_line_close() {
+        let decoded = decode_comments("00# 02((EOL)) 02((EOF))");
+        assert_eq!(decoded.line_close, LineCloseStyle::Both);
+    }
+
+    #[test]
+    fn decode_comments_empty_input_yields_default() {
+        let decoded = decode_comments("");
+        assert_eq!(decoded, DecodedComments::default());
+    }
+
+    #[test]
+    fn decode_comments_never_panics_on_non_char_boundary_input() {
+        // Regression pin for the m3d critical audit finding:
+        // `tok.split_at(2)` used to panic when byte offset 2 fell
+        // inside a multi-byte codepoint. A UDL whose comments
+        // value contained non-ASCII text was a one-file DoS on
+        // the whole editor because `decode_comments` runs on
+        // every "Define your language…" open and the release
+        // profile is `panic = "abort"`. Fix uses `tok.get(..2)`
+        // / `tok.get(2..)` (returns `None` on non-char-boundary
+        // rather than panicking).
+        //
+        // Exercise every codepoint shape at every position:
+        //  - 3-byte codepoint at offset 0 (`"日x"`)
+        //  - 2-byte codepoint straddling offset 1-2 (`"0éx"`)
+        //  - 4-byte codepoint at offset 0 (astral, `"🎉x"`)
+        //  - Isolated single-byte tokens ("a", "01", "1")
+        // None of these panic; malformed tokens are dropped.
+        let _ = decode_comments("日x");
+        let _ = decode_comments("0éx");
+        let _ = decode_comments("🎉x");
+        let _ = decode_comments("a");
+        let _ = decode_comments("01");
+        let _ = decode_comments("1");
+        // A well-formed marker adjacent to a hostile token: the
+        // hostile one drops, the well-formed one survives.
+        let decoded = decode_comments("日hostile 00# 0éalso 02((EOL))");
+        assert_eq!(decoded.line_markers, vec!["#".to_owned()]);
+        assert_eq!(decoded.line_close, LineCloseStyle::Eol);
+    }
+
+    #[test]
+    fn decode_comments_ignores_index_01_and_garbage() {
+        // Index-01 (line-continue) and unknown indices ≥5 are
+        // silently dropped — matches the parser's tolerance.
+        let decoded = decode_comments("00# 01\\ 05junk 99garbage");
+        assert_eq!(decoded.line_markers, vec!["#".to_owned()]);
+        assert_eq!(decoded.block_open, "");
+        assert_eq!(decoded.block_close, "");
+    }
+
+    #[test]
+    fn encode_comments_round_trips_c_style() {
+        let decoded = DecodedComments {
+            line_markers: vec!["//".to_owned()],
+            line_close: LineCloseStyle::Eol,
+            block_open: "/*".to_owned(),
+            block_close: "*/".to_owned(),
+        };
+        let encoded = encode_comments(&decoded);
+        assert_eq!(encoded, "00// 02((EOL)) 03/* 04*/");
+        // Symmetry: re-decode reproduces the input.
+        assert_eq!(decode_comments(&encoded), decoded);
+    }
+
+    #[test]
+    fn encode_comments_round_trips_cisco_multi_marker() {
+        let decoded = DecodedComments {
+            line_markers: vec!["!".to_owned(), "remark".to_owned()],
+            line_close: LineCloseStyle::Eof,
+            block_open: String::new(),
+            block_close: String::new(),
+        };
+        let encoded = encode_comments(&decoded);
+        assert_eq!(encoded, "00! 00remark 02((EOF))");
+        assert_eq!(decode_comments(&encoded), decoded);
+    }
+
+    #[test]
+    fn encode_comments_omits_empty_markers() {
+        // Empty markers must not be written back (a `00` prefix
+        // with no content would round-trip as a "marker of
+        // zero length" which the tokeniser silently discards).
+        let decoded = DecodedComments {
+            line_markers: vec![String::new(), "#".to_owned(), String::new()],
+            line_close: LineCloseStyle::None,
+            block_open: String::new(),
+            block_close: String::new(),
+        };
+        let encoded = encode_comments(&decoded);
+        assert_eq!(encoded, "00#");
+    }
+
+    #[test]
+    fn encode_comments_empty_decoded_yields_empty_string() {
+        let encoded = encode_comments(&DecodedComments::default());
+        assert!(encoded.is_empty());
+    }
+
+    #[test]
+    fn round_trip_matches_codepp_udl_parser() {
+        // End-to-end pin: the encoded output must be readable by
+        // the actual `codepp_udl::CommentRules::parse` used at
+        // load time. Guards against a divergence between our
+        // encoder and the tokeniser it feeds — the whole point
+        // of the m3d flow is that Save → reload works.
+        use codepp_udl::Sequence;
+        let decoded = DecodedComments {
+            line_markers: vec!["//".to_owned()],
+            line_close: LineCloseStyle::Eol,
+            block_open: "/*".to_owned(),
+            block_close: "*/".to_owned(),
+        };
+        let encoded = encode_comments(&decoded);
+        let parsed = codepp_udl::CommentRules::parse(&encoded);
+        assert_eq!(parsed.line_open, vec![Sequence::Literal("//".to_owned())]);
+        assert_eq!(parsed.block_open, Sequence::Literal("/*".to_owned()));
+        assert_eq!(parsed.block_close, Sequence::Literal("*/".to_owned()));
+    }
+
+    #[test]
+    fn encode_then_decode_round_trips_both_line_close() {
+        // Symmetry pin for the `Both` promotion matrix — the
+        // most intricate logic path in `decode_comments`. The
+        // other 3 variants get symmetric coverage from the C-
+        // style / Cisco tests; `Both` was previously only
+        // covered on the decode direction.
+        let decoded = DecodedComments {
+            line_markers: vec!["#".to_owned()],
+            line_close: LineCloseStyle::Both,
+            block_open: String::new(),
+            block_close: String::new(),
+        };
+        let encoded = encode_comments(&decoded);
+        assert_eq!(encoded, "00# 02((EOL)) 02((EOF))");
+        assert_eq!(decode_comments(&encoded), decoded);
+    }
+
+    #[test]
+    fn decode_comments_index_3_and_4_are_last_wins() {
+        // Regression pin for the m3d re-review warning:
+        // `codepp_udl::CommentRules::parse` treats duplicate
+        // index-3/4 tokens as last-wins (unconditional
+        // overwrite). Our decoder must match — otherwise a
+        // hand-edited UDL with duplicates would round-trip to
+        // a different value through the m3d editor than what
+        // the runtime tokeniser actually uses.
+        let decoded = decode_comments("03first 03second 04close_first 04close_last");
+        assert_eq!(decoded.block_open, "second");
+        assert_eq!(decoded.block_close, "close_last");
     }
 
     #[test]
