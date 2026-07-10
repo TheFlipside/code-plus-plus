@@ -267,13 +267,18 @@ fn with_modal_pump<R>(f: impl FnOnce() -> R) -> R {
 // --- Layout constants (raw pixels; see DESIGN.md §7.4 re: DPI) -----
 
 const DIALOG_W: i32 = 720;
-const DIALOG_H: i32 = 560;
+const DIALOG_H: i32 = 600;
 const TAB_X: i32 = 8;
 const TAB_Y: i32 = 8;
 const TAB_H: i32 = 460;
-/// Vertical padding between the tab control's bottom edge and
-/// the top of the Save / Save As / Close button row.
-const BUTTON_ROW_TOP_GAP: i32 = 20;
+/// Padding between the button row's bottom edge and the dialog
+/// client-area bottom. `build_bottom_buttons` positions the row
+/// at `client_h - BUTTON_H - BUTTON_ROW_BOTTOM_GAP`, using the
+/// actual client height from `GetClientRect` — deriving from
+/// `DIALOG_H` (the WINDOW height) fails because title-bar
+/// height varies by DPI and theme, so a fixed offset from
+/// `DIALOG_H` leaves the buttons visually squashed at high DPI.
+const BUTTON_ROW_BOTTOM_GAP: i32 = 28;
 const LABEL_H: i32 = 16;
 const CTRL_H: i32 = 22;
 const ROW_GAP: i32 = 8;
@@ -1648,11 +1653,16 @@ fn build_styles_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
 }
 
 fn build_bottom_buttons(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
-    // Position the button row directly below the tab control
-    // (rather than deriving from DIALOG_H, which required a
-    // fudge factor for the title bar and left the buttons
-    // visually squashed against the dialog's bottom edge).
-    let y = TAB_Y + TAB_H + BUTTON_ROW_TOP_GAP;
+    // Position the button row relative to the actual client
+    // bottom (from `GetClientRect`), NOT relative to `DIALOG_H`
+    // (the WINDOW height). The window's non-client area (title
+    // bar + borders) varies by DPI and theme, so any y derived
+    // from `DIALOG_H` risks the buttons being visually squashed
+    // against the client-area bottom edge on some setups.
+    let mut client_rc = RECT::default();
+    let _ = unsafe { GetClientRect(state.dialog, &raw mut client_rc) };
+    let client_h = client_rc.bottom - client_rc.top;
+    let y = client_h - BUTTON_H - BUTTON_ROW_BOTTOM_GAP;
     let total_w = 3 * BUTTON_W + 2 * BUTTON_GAP;
     let mut x = (DIALOG_W - total_w) / 2;
     state.folder.save_btn = push_button(
