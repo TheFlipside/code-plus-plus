@@ -864,6 +864,17 @@ const IDC_ABOUT_HOME_LABEL: u16 = 402;
 const IDC_ABOUT_HOME_LINK: u16 = 403;
 const IDC_ABOUT_LICENSE_GROUP: u16 = 404;
 const IDC_ABOUT_LICENSE_TEXT: u16 = 405;
+/// STATIC control that carries the "MIT License" caption sat on
+/// top of the etched frame's top edge. Split out from the frame
+/// (`IDC_ABOUT_LICENSE_GROUP`, now an unlabelled `SS_ETCHEDFRAME`)
+/// so `about_wnd_proc`'s `WM_CTLCOLORSTATIC` can return
+/// `dialog_bg_brush` **only** for this label, giving it an opaque
+/// background that visually breaks the frame line around it.
+/// Every other STATIC still returns `NULL_BRUSH` for transparent
+/// text on the dialog background — the caption is the sole
+/// exception because it's the only STATIC that has to opaquely
+/// overwrite chrome behind it.
+const IDC_ABOUT_LICENSE_TITLE: u16 = 406;
 
 /// `STN_CLICKED` — the static-control click notification fired by
 /// `SS_NOTIFY` controls. windows-rs doesn't re-export this constant
@@ -884,6 +895,32 @@ const SS_LEFT: u32 = 0x0000;
 /// surfaces the icon's transparent pixels as black on Win11.
 const SS_OWNERDRAW: u32 = 0x000D;
 const SS_NOTIFY: u32 = 0x0100;
+/// `SS_ETCHEDFRAME` — a STATIC style that paints just an etched
+/// rectangle around the control's client rect, with no text and
+/// no title. Used by the About dialog to draw the "MIT License"
+/// frame without the `BS_GROUPBOX` title-paint machinery whose
+/// classic + themed variants both let the top border line run
+/// through the title glyphs on Win11 (a `SetWindowTheme` +
+/// `WM_CTLCOLORBTN` workaround didn't hold). Pairing this style
+/// with a separately-positioned "MIT License" STATIC that paints
+/// on an opaque `dialog_bg_brush` background over the frame's
+/// top edge produces the same "titled group" visual with zero
+/// dependency on group-box paint behaviour.
+const SS_ETCHEDFRAME: u32 = 0x0012;
+/// `SS_CENTER` — horizontally-centred STATIC text. Used by the
+/// About dialog's "MIT License" caption so the label reads
+/// balanced inside its opaque backing rect regardless of tiny
+/// hand-tuned differences in the caption's rect width.
+const SS_CENTER: u32 = 0x0001;
+/// `SS_CENTERIMAGE` — vertically-centre STATIC content within
+/// the control's client rect. Named "image" for historical
+/// reasons but Windows applies it to text as well (verified
+/// against Win11 24H2). Paired with [`SS_CENTER`] on the About
+/// dialog's "MIT License" caption so the text's vertical
+/// midpoint lands on the etched-frame's top edge — without it
+/// text sits at the top of the rect and the border line reads
+/// as running through the descenders.
+const SS_CENTERIMAGE: u32 = 0x0200;
 
 /// MAKEINTRESOURCEW(1). Windows treats a `PCWSTR` whose high word is
 /// zero as a numeric resource id rather than a pointer to a string;
@@ -15655,6 +15692,14 @@ struct AboutDialogState {
     /// handle inside the state ties its lifetime exactly to the
     /// `Box`'s and makes a future reorder safe by construction.
     app_icon: HICON,
+    /// HWND of the "MIT License" caption STATIC that sits over
+    /// the etched frame's top edge. `WM_CTLCOLORSTATIC` compares
+    /// `lparam` against this handle to return `dialog_bg_brush`
+    /// (opaque background) for this label only, so the label
+    /// paints a solid rectangle over the frame line and visually
+    /// breaks it. Every other STATIC still returns `NULL_BRUSH`
+    /// (transparent).
+    lic_title_hwnd: HWND,
 }
 
 impl Drop for AboutDialogState {
@@ -15831,35 +15876,45 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 LRESULT(1)
             }
             WM_CTLCOLORSTATIC => {
-                // STATIC labels (title line, home-URL row, license
-                // body) paint on a transparent background so the
-                // dialog fill shows through. Colour the URL STATIC
-                // hyperlink-blue (RGB 0,0,238 → COLORREF 0x00EE0000);
-                // others keep the system text colour.
+                // Most STATICs (title line, home-URL row, license
+                // body, etched frame) paint on a transparent
+                // background so the dialog fill shows through.
+                // Exception: the "MIT License" caption sitting on
+                // top of the etched frame's top edge — that one
+                // needs an opaque `dialog_bg_brush` return so its
+                // rect covers the frame line at the caption's
+                // position and visually breaks it. Same rect
+                // (from the STATIC's own client area) is used as
+                // both the text background and the returned
+                // brush, keeping the caption's paint fully in
+                // its own bounds. Colour the URL STATIC
+                // hyperlink-blue (RGB 0,0,238 → COLORREF
+                // 0x00EE0000); others keep the system text
+                // colour.
                 let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkMode(hdc, TRANSPARENT);
                 let target = HWND(lparam.0 as *mut c_void);
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
+                if !state_ptr.is_null() && target == (*state_ptr).lic_title_hwnd {
+                    let _ = SetBkColor(hdc, COLORREF(DIALOG_BG));
+                    return LRESULT(dialog_bg_brush().0 as isize);
+                }
+                let _ = SetBkMode(hdc, TRANSPARENT);
                 if !state_ptr.is_null() && target == (*state_ptr).link_hwnd {
                     let _ = SetTextColor(hdc, COLORREF(0x00EE_0000));
                 }
                 LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
             }
             WM_CTLCOLORBTN => {
-                // Only the theme-disabled `BS_GROUPBOX` ("MIT
-                // License" frame) routes through here — themed
-                // push buttons paint themselves and ignore the
-                // brush return. Return the dialog-background
-                // brush (and set matching `SetBkColor`) so
-                // classic group-box paint clears the title rect
-                // to that colour, breaking the top border line
-                // around the "MIT License" text. Returning
-                // `NULL_BRUSH` here (an earlier iteration) left
-                // the classic paint running the border line
-                // straight through the title glyphs.
+                // No `BS_GROUPBOX` in this dialog anymore (frame
+                // is `SS_ETCHEDFRAME` on a STATIC), so the only
+                // buttons routing through here are the themed OK
+                // push button — which paints itself and ignores
+                // the brush return. Match the transparent-BkMode
+                // + `NULL_BRUSH` pattern the other dialogs use
+                // for pushbuttons.
                 let hdc = HDC(wparam.0 as *mut c_void);
-                let _ = SetBkColor(hdc, COLORREF(DIALOG_BG));
-                LRESULT(dialog_bg_brush().0 as isize)
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
@@ -17556,10 +17611,15 @@ fn show_about_dialog(main_hwnd: HWND) {
         const HOME_LINK_W: i32 = CLIENT_W - HOME_LINK_X - PAD;
         const HOME_ROW_H: i32 = 22;
 
-        // License box: BS_GROUPBOX titled "MIT License" with the
-        // license body as a multi-line STATIC inside it. The body
-        // STATIC is inset enough that the group box's line never
-        // touches the text.
+        // License frame + caption + body. Etched-frame STATIC
+        // draws the border rectangle; a separate opaque-fill
+        // caption STATIC sits over the top edge so the border
+        // line breaks around the "MIT License" text; the
+        // multi-line license body STATIC is inset inside the
+        // frame. See the block just before the frame `CreateWindowExW`
+        // for the design rationale (`BS_GROUPBOX` was replaced
+        // after two rounds of unsuccessful title-clear workarounds
+        // on Win11).
         const LIC_BOX_Y: i32 = HOME_ROW_Y + HOME_ROW_H + 14;
         const LIC_BOX_X: i32 = PAD;
         const LIC_BOX_W: i32 = CLIENT_W - 2 * PAD;
@@ -17667,6 +17727,7 @@ fn show_about_dialog(main_hwnd: HWND) {
             owner_hwnd: main_hwnd,
             home_url: home_url.clone(),
             app_icon,
+            lic_title_hwnd: HWND::default(),
         });
         let state_ptr: *mut AboutDialogState = &raw mut *state;
 
@@ -17778,17 +17839,37 @@ fn show_about_dialog(main_hwnd: HWND) {
             Err(_) => return,
         };
 
-        // License box and body. `BS_GROUPBOX` carries the "MIT
-        // License" title at the top edge of the rectangle; the
-        // line of the box breaks naturally around the title text
-        // so the line never crosses the title. The body STATIC
-        // inside is inset enough that the box's line never
-        // touches the body either.
+        // License box: an etched frame with a separate caption
+        // STATIC positioned over the frame's top edge. Split
+        // rather than using `BS_GROUPBOX` because the group-box
+        // paint routine on Win11 lets the top border line run
+        // through the title text regardless of theme state or
+        // `WM_CTLCOLORBTN` return — verified across the merged
+        // (`NULL_BRUSH`), classic (`dialog_bg_brush` +
+        // `SetBkColor`), and font-order-swapped variants. The
+        // split gives us a frame that draws no title area to
+        // interfere with, plus a plain STATIC whose
+        // `WM_CTLCOLORSTATIC` returns `dialog_bg_brush` so its
+        // painted rect opaquely covers the frame's top edge at
+        // the caption's position — same visual as a themed
+        // group-box title on other platforms, without any of
+        // the group-box paint quirks.
+        //
+        // Caption geometry: the label's vertical centre lands
+        // on the frame's top edge (`LIC_BOX_Y`) so the opaque
+        // rect breaks the line cleanly. Width is generous
+        // enough (`LIC_CAPTION_W`) to seat the label with
+        // horizontal padding either side; `SS_CENTER` keeps the
+        // text balanced inside that rect.
+        const LIC_CAPTION_TEXT_H: i32 = 18;
+        const LIC_CAPTION_W: i32 = 96;
+        const LIC_CAPTION_X: i32 = LIC_BOX_X + 12;
+        const LIC_CAPTION_Y: i32 = LIC_BOX_Y - LIC_CAPTION_TEXT_H / 2;
         let lic_box = match CreateWindowExW(
             WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            w!("MIT License"),
-            WS_CHILD | WS_VISIBLE | style_bits(BS_GROUPBOX),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_ETCHEDFRAME as i32),
             LIC_BOX_X,
             LIC_BOX_Y,
             LIC_BOX_W,
@@ -17801,12 +17882,23 @@ fn show_about_dialog(main_hwnd: HWND) {
             Ok(h) => h,
             Err(_) => return,
         };
-        // Drop the visual-style on the group box so its themed
-        // "rounded corners + gradient title cell" paint doesn't
-        // override our flat dialog background — same trick the
-        // Find/Replace dialog uses on its mode group.
-        disable_visual_style(lic_box);
-
+        let lic_title = match CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(" MIT License "),
+            WS_CHILD | WS_VISIBLE | style_bits((SS_CENTER | SS_CENTERIMAGE) as i32),
+            LIC_CAPTION_X,
+            LIC_CAPTION_Y,
+            LIC_CAPTION_W,
+            LIC_CAPTION_TEXT_H,
+            Some(dlg),
+            Some(HMENU(IDC_ABOUT_LICENSE_TITLE as usize as *mut c_void)),
+            Some(instance.into()),
+            None,
+        ) {
+            Ok(h) => h,
+            Err(_) => return,
+        };
         let lic_text = match CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
@@ -17843,17 +17935,27 @@ fn show_about_dialog(main_hwnd: HWND) {
             Err(_) => return,
         };
 
-        // Publish the link HWND to the wnd_proc before the modal
+        // Publish both HWNDs to the wnd_proc before the modal
         // pump kicks off so the very first `WM_SETCURSOR` /
-        // `WM_CTLCOLORSTATIC` message can resolve it.
+        // `WM_CTLCOLORSTATIC` message can resolve them.
         state.link_hwnd = link;
+        state.lic_title_hwnd = lic_title;
 
         // Apply fonts: bold title font for the title only, default
         // GUI font for everything else. The owner-draw icon
         // STATIC carries no text so it needs no font; the system
-        // STATIC class default is used for it implicitly.
+        // STATIC class default is used for it implicitly. No
+        // `disable_visual_style` call is needed on the etched
+        // frame — `SetWindowTheme(hwnd, "", "")` targets the
+        // "Button" UxTheme class, and `STATIC` is a separate
+        // class ("Static") that renders the etched frame
+        // correctly under both themed and classic paints. The
+        // group-box version of this dialog previously called
+        // `disable_visual_style` to work around a BS_GROUPBOX
+        // title-clear quirk, but the redesign no longer depends
+        // on that path at all.
         apply_dialog_font(title_static, title_font);
-        for child in [home_label, link, lic_box, lic_text, ok_btn] {
+        for child in [home_label, link, lic_box, lic_title, lic_text, ok_btn] {
             apply_dialog_font(child, default_font);
         }
 
