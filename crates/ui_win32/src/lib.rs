@@ -93,6 +93,7 @@
 )]
 
 mod toolbar;
+mod udl_editor;
 mod udl_paint;
 
 use core::ffi::c_void;
@@ -464,31 +465,32 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateAcceleratorTableW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DeleteMenu, DestroyAcceleratorTable, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
     DrawIconEx, DrawMenuBar, GetClientRect, GetCursorPos, GetDlgItem, GetMenu, GetMenuItemCount,
-    GetMenuItemID, GetMessageW, GetParent, GetSubMenu, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer,
-    LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SendMessageW, SetCursor, SetLayeredWindowAttributes, SetMenu,
-    SetMenuItemInfoW, SetParent, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
-    ShowWindow, TrackPopupMenu, TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS,
-    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON,
-    BS_GROUPBOX, BS_OWNERDRAW, BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING,
-    CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
-    DC_HASDEFID, DI_NORMAL, DM_GETDEFID, ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL,
-    FSHIFT, FVIRTKEY, GWLP_USERDATA, GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW,
-    IDC_HAND, IDC_SIZENS, IDNO, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA,
-    MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MFS_CHECKED,
-    MFS_UNCHECKED, MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
-    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MIIM_STATE, MSG,
-    SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
-    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE,
-    WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL, WM_INITMENUPOPUP, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE,
-    WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
-    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP,
-    WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    GetMenuItemID, GetMenuItemInfoW, GetMessageW, GetParent, GetSubMenu, GetWindowLongPtrW,
+    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW, IsWindow,
+    IsWindowVisible, KillTimer, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, MoveWindow,
+    PostMessageW, PostQuitMessage, RegisterClassExW, RemoveMenu, SendMessageW, SetCursor,
+    SetLayeredWindowAttributes, SetMenu, SetMenuItemInfoW, SetParent, SetTimer, SetWindowLongPtrW,
+    SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu, TranslateAcceleratorW,
+    TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
+    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_OWNERDRAW,
+    BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL,
+    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID,
+    ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
+    GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO, IDOK,
+    IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
+    MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MFS_CHECKED, MFS_UNCHECKED, MFT_RADIOCHECK,
+    MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP,
+    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MIIM_STATE, MSG, SHOW_WINDOW_CMD,
+    SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED,
+    SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
+    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND,
+    WM_HSCROLL, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
+    WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
+    WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
+    WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -1094,6 +1096,14 @@ struct WindowState {
     /// loop reads this in `IsDialogMessageW(dlg, &msg)` so Tab /
     /// Enter / Esc work inside the dialog while it's open.
     find_replace_dlg: Option<HWND>,
+    /// HWND of the modeless UDL editor dialog (Phase 4.6 m3),
+    /// lazily created on the first "Define your language…"
+    /// menu click. Same discipline as `find_replace_dlg`: the
+    /// main message pump routes `IsDialogMessageW` to it, and a
+    /// second menu click reuses the existing HWND rather than
+    /// opening a duplicate. Cleared on the editor's `WM_DESTROY`
+    /// via the [`udl_editor::WM_APP_UDL_CLOSED`] notification.
+    udl_editor_dlg: Option<HWND>,
     /// Plugin-registered modeless-dialog HWNDs. Plugins call
     /// `NPPM_MODELESSDIALOG(MODELESSDIALOGADD, hwnd)` to add a
     /// dialog so the message pump consults it via
@@ -14469,7 +14479,7 @@ fn build_language_menu() -> Result<HMENU> {
     unsafe {
         AppendMenuW(
             udl_sub.handle(),
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             usize::from(ID_UDL_DEFINE_LANGUAGE),
             PCWSTR(define_label.as_ptr()),
         )?;
@@ -14583,6 +14593,69 @@ unsafe fn append_udls_to_menu(language_menu: HMENU, registry: &codepp_udl::UdlRe
     }
 }
 
+/// Refresh the loaded UDL registry from disk after the user
+/// saves a UDL via the m3 editor. Rebuilds the Language menu's
+/// dynamic UDL section so the newly-saved UDL becomes
+/// selectable without a restart.
+///
+/// Contract: called on the UI thread from the main `WndProc`'s
+/// `WM_APP_UDL_REFRESH` arm ONLY. Not re-entrant with plugin
+/// dispatch — the registry mutation must happen inside the
+/// `&mut WindowState` borrow so a plugin-thread read never
+/// races.
+unsafe fn refresh_udl_registry(main_hwnd: HWND) {
+    let Some(state) = (unsafe { state_from_hwnd(main_hwnd) }) else {
+        return;
+    };
+    let Some(dir) = codepp_platform::user_define_langs_dir() else {
+        tracing::warn!("cannot refresh UDL registry: user_define_langs_dir unavailable");
+        return;
+    };
+    // Re-scan from disk. Same call `Shell::new` uses at startup.
+    state.shell.udl_registry = codepp_udl::UdlRegistry::scan_dir(&dir);
+
+    // Clear the previously-appended dynamic UDL entries from the
+    // Language menu. Walk from the end and delete every trailing
+    // item whose command id sits in the UDL range, plus a
+    // trailing separator if present. This mirrors what
+    // `append_udls_to_menu` inserts:
+    //   1. one MFT_SEPARATOR
+    //   2. one MF_STRING per loaded UDL, cmd id in
+    //      ID_UDL_ITEM_BASE..=ID_UDL_ITEM_END.
+    // Removing by-cmd on the strings and by-position on the
+    // trailing separator handles both.
+    let language_menu = state.language_menu;
+    unsafe {
+        // First pass: remove every UDL-range command entry.
+        // `RemoveMenu(..., MF_BYCOMMAND)` doesn't care about
+        // position; iterating until it fails clears them all.
+        for id in u32::from(ID_UDL_ITEM_BASE)..=u32::from(ID_UDL_ITEM_END) {
+            let _ = RemoveMenu(language_menu, id, MF_BYCOMMAND);
+        }
+        // Second pass: peel off a trailing separator if present.
+        // `GetMenuItemCount` returns -1 on error; treat that as
+        // "no menu" and stop.
+        let count = GetMenuItemCount(Some(language_menu));
+        if count > 0 {
+            let last_idx = (count - 1) as u32;
+            let mut info = MENUITEMINFOW {
+                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                fMask: MIIM_FTYPE,
+                ..Default::default()
+            };
+            if GetMenuItemInfoW(language_menu, last_idx, true, &raw mut info).is_ok()
+                && (info.fType.0 & MFT_SEPARATOR.0) != 0
+            {
+                let _ = RemoveMenu(language_menu, last_idx, MF_BYPOSITION);
+            }
+        }
+        // Re-append the dynamic UDL entries + their separator.
+        append_udls_to_menu(language_menu, &state.shell.udl_registry);
+        // Repaint the menu bar so the change is visible.
+        let _ = DrawMenuBar(main_hwnd);
+    }
+}
+
 /// Sanitize a UDL `<UserLang name="...">` attribute for use as
 /// a Win32 menu label. Attacker-controlled (UDL XML is authored
 /// by third parties — the "User-Defined language" submenu even
@@ -14665,7 +14738,7 @@ impl Drop for MenuGuard {
 /// the raw pointer via `.as_ptr()`; the buffer must out-live the
 /// `PCWSTR` use. `AppendMenuW` copies the string immediately, so
 /// per-call locals are sufficient.
-fn wide_terminated(s: &str) -> Vec<u16> {
+pub(crate) fn wide_terminated(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
@@ -18607,7 +18680,7 @@ unsafe fn read_target_value(edit: HWND, max: u32) -> Option<u32> {
 /// the dialog's actual background show through, giving a clean
 /// flush look. Visual style on push buttons (Find Next, Close,
 /// etc.) is left intact so they keep their rounded Win11 look.
-unsafe fn disable_visual_style(hwnd: HWND) {
+pub(crate) unsafe fn disable_visual_style(hwnd: HWND) {
     unsafe {
         let _ = SetWindowTheme(hwnd, w!(""), w!(""));
     }
@@ -18616,7 +18689,7 @@ unsafe fn disable_visual_style(hwnd: HWND) {
 /// Apply the system default GUI font to a freshly-created child
 /// control. Without this Win32 falls back to the bitmap "System"
 /// font from the Win95 era, which looks broken on every modern DPI.
-unsafe fn apply_dialog_font(child: HWND, font: HFONT) {
+pub(crate) unsafe fn apply_dialog_font(child: HWND, font: HFONT) {
     unsafe {
         SendMessageW(
             child,
@@ -19425,7 +19498,7 @@ const fn makelong(lo: i32, hi: i32) -> u32 {
 /// constant to the same shade Win11 paints (`#F9F9F9`)
 /// makes the rectangles we DO control blend with the
 /// system-painted dialog instead of standing out.
-const DIALOG_BG: u32 = 0x00F9_F9F9;
+pub(crate) const DIALOG_BG: u32 = 0x00F9_F9F9;
 /// COLORREF for the bottom status strip — a step darker than
 /// the dialog background so it still reads as a distinct band.
 const STATUS_BG: u32 = 0x00E8_E8E8;
@@ -19444,7 +19517,7 @@ const EDITOR_BORDER: u32 = 0x00A0_A0A0;
 /// app's lifetime, which is fine — the alternative is owning
 /// the brush in `WindowState` and threading it through every
 /// dialog `wnd_proc`.
-fn dialog_bg_brush() -> HBRUSH {
+pub(crate) fn dialog_bg_brush() -> HBRUSH {
     use std::sync::OnceLock;
     static BRUSH: OnceLock<isize> = OnceLock::new();
     let raw = *BRUSH.get_or_init(|| unsafe { CreateSolidBrush(COLORREF(DIALOG_BG)).0 as isize });
@@ -22904,6 +22977,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             window_menu: menus.window_menu,
             right_shortcuts_menu: menus.right_shortcuts_menu,
             find_replace_dlg: None,
+            udl_editor_dlg: None,
             plugin_modeless_dialogs: Vec::new(),
             dock_dialogs: Vec::new(),
             fif_dock_hwnd,
@@ -23292,23 +23366,41 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                     // wnd_proc and triggers a NPPM dispatch is
                     // free to mutate `plugin_modeless_dialogs`
                     // without aliasing the local snapshot.
-                    let (dlg_handle, haccel, plugin_dlgs): (Option<HWND>, HACCEL, Vec<HWND>) =
-                        state_from_hwnd(main_hwnd).map_or(
-                            (None, HACCEL::default(), Vec::new()),
-                            |s| {
-                                (
-                                    s.find_replace_dlg,
-                                    s.accel_handle,
-                                    s.plugin_modeless_dialogs.clone(),
-                                )
-                            },
-                        );
+                    let (dlg_handle, udl_editor_handle, haccel, plugin_dlgs): (
+                        Option<HWND>,
+                        Option<HWND>,
+                        HACCEL,
+                        Vec<HWND>,
+                    ) = state_from_hwnd(main_hwnd).map_or(
+                        (None, None, HACCEL::default(), Vec::new()),
+                        |s| {
+                            (
+                                s.find_replace_dlg,
+                                s.udl_editor_dlg,
+                                s.accel_handle,
+                                s.plugin_modeless_dialogs.clone(),
+                            )
+                        },
+                    );
                     let mut handled = false;
                     if let Some(dlg) = dlg_handle {
                         if IsWindow(Some(dlg)).as_bool()
                             && IsDialogMessageW(dlg, &raw const msg).as_bool()
                         {
                             handled = true;
+                        }
+                    }
+                    // UDL editor modeless dialog (Phase 4.6 m3b).
+                    // Route Tab / Enter / mnemonic keystrokes so
+                    // the modal keyboard-nav behaves like every
+                    // other modeless dialog we own.
+                    if !handled {
+                        if let Some(dlg) = udl_editor_handle {
+                            if IsWindow(Some(dlg)).as_bool()
+                                && IsDialogMessageW(dlg, &raw const msg).as_bool()
+                            {
+                                handled = true;
+                            }
                         }
                     }
                     // Plugin-registered modeless dialogs after
@@ -25896,6 +25988,27 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 apply_pending_fif_jumps(hwnd);
                 LRESULT(0)
             }
+            // UDL editor saved a UDL — re-scan the registry from
+            // disk so the newly-saved (or updated) UDL becomes
+            // selectable from the Language menu without a
+            // restart. Same-thread PostMessage from the editor's
+            // Save handler, so no aliasing concern.
+            udl_editor::WM_APP_UDL_REFRESH => {
+                refresh_udl_registry(hwnd);
+                LRESULT(0)
+            }
+            // UDL editor dialog was destroyed. Clear the tracking
+            // slot so the reuse fast-path doesn't try to
+            // re-activate a dead HWND.
+            udl_editor::WM_APP_UDL_CLOSED => {
+                if let Some(state) = state_from_hwnd(hwnd) {
+                    let closed = HWND(lparam.0 as *mut c_void);
+                    if state.udl_editor_dlg == Some(closed) {
+                        state.udl_editor_dlg = None;
+                    }
+                }
+                LRESULT(0)
+            }
             WM_DROPFILES => {
                 let mut deduped = false;
                 if let Some(state) = state_from_hwnd(hwnd) {
@@ -26486,6 +26599,26 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // path via `ShellExecuteW("open", ...)`.
                     ID_UDL_OPEN_FOLDER => {
                         open_udl_folder(hwnd);
+                    }
+                    // Language → User-Defined language → Define
+                    // your language… (Phase 4.6 m3b). Opens the
+                    // modeless UDL editor. Reuses an already-open
+                    // instance if present; otherwise creates a
+                    // fresh one starting from the "New UDL"
+                    // defaults. The returned HWND is stashed on
+                    // `WindowState.udl_editor_dlg` so the main
+                    // pump can route `IsDialogMessageW` to it.
+                    ID_UDL_DEFINE_LANGUAGE => {
+                        let existing = state_from_hwnd(hwnd).and_then(|s| s.udl_editor_dlg);
+                        if let Some(dlg) = udl_editor::show_udl_editor(
+                            hwnd,
+                            existing,
+                            udl_editor::UdlEditorMode::New,
+                        ) {
+                            if let Some(s) = state_from_hwnd(hwnd) {
+                                s.udl_editor_dlg = Some(dlg);
+                            }
+                        }
                     }
                     // Language → User-Defined language → Notepad++
                     // UDL Collection (Phase 4.6 m2). Opens
