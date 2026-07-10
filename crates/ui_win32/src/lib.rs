@@ -592,6 +592,36 @@ const ID_WINDOW_CAP: usize = (ID_WINDOW_END - ID_WINDOW_BASE + 1) as usize;
 
 // Help (1800-1899).
 const ID_HELP_ABOUT: u16 = 1800;
+/// Help → Code++ Home. Opens [`HELP_HOME_URL`] in the user's
+/// default browser via the shared [`open_url_in_browser`] helper.
+const ID_HELP_HOME: u16 = 1801;
+/// Help → Code++ Project Page. Opens [`HELP_PROJECT_URL`].
+const ID_HELP_PROJECT: u16 = 1802;
+/// Help → Code++ Online User Manual. Greyed until the manual site
+/// exists — the command id is reserved so the menu is consistent
+/// across builds even while the target isn't wired.
+const ID_HELP_MANUAL: u16 = 1803;
+/// Help → Code++ Community (Forum). Opens [`HELP_COMMUNITY_URL`].
+const ID_HELP_COMMUNITY: u16 = 1804;
+/// Help → Update Code++. Greyed until an update mechanism is
+/// implemented; id reserved so the menu placement is stable.
+const ID_HELP_UPDATE: u16 = 1805;
+
+/// Home page for Code++. Compile-time constant so no
+/// user-controlled string ever reaches `ShellExecuteW`. Same
+/// safety rationale as [`UDL_COLLECTION_URL`].
+const HELP_HOME_URL: &str = "https://code-plus-plus.org/";
+/// Public "project page" for Code++ — the GitHub mirror.
+/// DESIGN.md §9.3 documents git.fiedler.live/tux/code-plus-plus
+/// as the canonical Forgejo instance and describes the GitHub
+/// mirror as read-only; this URL is the specific mirror the
+/// project's owner chose to publish under. The user-facing
+/// "project page" menu entry lands here rather than the Forgejo
+/// URL because the GitHub view is what most drive-by contributors
+/// expect from a "project page" link.
+const HELP_PROJECT_URL: &str = "https://github.com/TheFlipside/code-plus-plus";
+/// Discourse-style community forum for Code++ users.
+const HELP_COMMUNITY_URL: &str = "https://community.code-plus-plus.org/";
 
 // Tools (1900-1999) — toolbar-only entries for features that aren't
 // implemented yet. Clicking falls through; the IDs reserve the
@@ -13935,7 +13965,46 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         AppendMenuW(bar, MF_POPUP, window_menu.0 as usize, w!("&Window"))?;
 
         // ----- ? (Help) -----
+        // Order: external links first, then Update (greyed),
+        // then About. Two separators split the three logical
+        // groups (info-and-community, self-update, app-info).
+        // The two greyed entries (`ID_HELP_MANUAL`,
+        // `ID_HELP_UPDATE`) are placeholders — their command ids
+        // are reserved so the menu layout is stable across builds
+        // even while the targets aren't wired.
         let help_menu = CreateMenu()?;
+        AppendMenuW(
+            help_menu,
+            MF_STRING,
+            ID_HELP_HOME as usize,
+            w!("Code++ &Home"),
+        )?;
+        AppendMenuW(
+            help_menu,
+            MF_STRING,
+            ID_HELP_PROJECT as usize,
+            w!("Code++ &Project Page"),
+        )?;
+        AppendMenuW(
+            help_menu,
+            MF_STRING | MF_GRAYED,
+            ID_HELP_MANUAL as usize,
+            w!("Code++ Online User &Manual"),
+        )?;
+        AppendMenuW(
+            help_menu,
+            MF_STRING,
+            ID_HELP_COMMUNITY as usize,
+            w!("Code++ &Community (Forum)"),
+        )?;
+        AppendMenuW(help_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(
+            help_menu,
+            MF_STRING | MF_GRAYED,
+            ID_HELP_UPDATE as usize,
+            w!("&Update Code++"),
+        )?;
+        AppendMenuW(help_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
         AppendMenuW(
             help_menu,
             MF_STRING,
@@ -17372,16 +17441,31 @@ fn open_udl_folder(hwnd: HWND) {
     }
 }
 
-/// Handle Language → User-Defined language → "Notepad++ User
-/// Defined Languages Collection" — opens [`UDL_COLLECTION_URL`]
-/// in the user's default browser via `ShellExecuteW`.
+/// Open `url` in the user's default browser via
+/// `ShellExecuteW("open", ...)`. Shared by every menu handler
+/// whose job is "point the OS at this URL" — the UDL collection
+/// entry and every Help menu external link.
 ///
-/// The URL is a compile-time constant, not user-controlled —
-/// `ShellExecuteW`'s "open" verb on an `https://` URL routes to
-/// the registered browser association, not to arbitrary program
-/// execution.
-fn open_udl_collection_url(hwnd: HWND) {
-    let url_wide = wide_terminated(UDL_COLLECTION_URL);
+/// **Security:** callers pass a compile-time-constant `&'static
+/// str`, so the URL is never derived from user input. The
+/// documented "open" verb resolves against the registered
+/// http/https association and does NOT reach arbitrary command
+/// execution, but the constness discipline is what makes that
+/// argument bulletproof — a mistake at a call site (say, passing
+/// a path derived from a text buffer) would be visible in the
+/// diff.
+///
+/// Failure is logged at warn level rather than surfaced to the
+/// user — a broken browser association is rare, and the
+/// alternative (a modal error dialog on every failed click) reads
+/// as worse than "the menu did nothing." `HINSTANCE` <= 32 is
+/// `ShellExecuteW`'s documented failure signal.
+fn open_url_in_browser(hwnd: HWND, url: &'static str) {
+    let url_wide = wide_terminated(url);
+    // SAFETY: `url_wide` is a stack-owned Vec<u16> that lives
+    // across the synchronous `ShellExecuteW` call; `hwnd` is a
+    // live top-level window we own on this thread. No pointer
+    // is retained past this call.
     let ret = unsafe {
         ShellExecuteW(
             Some(hwnd),
@@ -17392,16 +17476,11 @@ fn open_udl_collection_url(hwnd: HWND) {
             SW_SHOWNORMAL,
         )
     };
-    // Same observability discipline as `open_udl_folder` — a
-    // `HINSTANCE` <= 32 indicates a documented error (no
-    // registered http/https association, etc.). Log so a broken
-    // browser configuration is diagnosable rather than looking
-    // like an unresponsive menu.
     if (ret.0 as isize) <= 32 {
         tracing::warn!(
-            url = UDL_COLLECTION_URL,
+            url,
             code = ret.0 as isize,
-            "ShellExecuteW(open, UDL_COLLECTION_URL) failed"
+            "ShellExecuteW(open, url) failed"
         );
     }
 }
@@ -27041,7 +27120,21 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // browser. Compile-time-fixed URL, no user
                     // string ever reaches `ShellExecuteW`.
                     ID_UDL_OPEN_COLLECTION => {
-                        open_udl_collection_url(hwnd);
+                        open_url_in_browser(hwnd, UDL_COLLECTION_URL);
+                    }
+                    // Help → Code++ Home / Project Page /
+                    // Community. Same shared browser helper as the
+                    // UDL Collection entry above; each URL is a
+                    // compile-time constant so no user-controlled
+                    // string ever reaches `ShellExecuteW`.
+                    ID_HELP_HOME => {
+                        open_url_in_browser(hwnd, HELP_HOME_URL);
+                    }
+                    ID_HELP_PROJECT => {
+                        open_url_in_browser(hwnd, HELP_PROJECT_URL);
+                    }
+                    ID_HELP_COMMUNITY => {
+                        open_url_in_browser(hwnd, HELP_COMMUNITY_URL);
                     }
                     // Settings → Style Configurator. Opens the
                     // modal style editor. On Save & Close the
