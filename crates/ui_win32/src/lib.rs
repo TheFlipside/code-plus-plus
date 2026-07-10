@@ -423,11 +423,11 @@ use windows::Win32::Graphics::Gdi::{
     AlphaBlend, ClientToScreen, CreateCompatibleDC, CreateFontIndirectW, CreatePen,
     CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EnumFontFamiliesExW, FillRect, GetDC,
     GetMonitorInfoW, GetStockObject, GetSysColorBrush, InvalidateRect, LineTo, MonitorFromWindow,
-    MoveToEx, Polygon, ReleaseDC, SelectObject, SetBkColor, SetBkMode, SetTextColor, AC_SRC_ALPHA,
-    AC_SRC_OVER, BLENDFUNCTION, COLOR_WINDOW, DEFAULT_CHARSET, DEFAULT_GUI_FONT, DT_END_ELLIPSIS,
-    DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ,
-    LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH, PS_SOLID, TEXTMETRICW,
-    TRANSPARENT,
+    MoveToEx, Polygon, ReleaseDC, ScreenToClient, SelectObject, SetBkColor, SetBkMode,
+    SetTextColor, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, COLOR_WINDOW, DEFAULT_CHARSET,
+    DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_BOLD, HBITMAP,
+    HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH,
+    PS_SOLID, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
@@ -1232,6 +1232,22 @@ struct WindowState {
     /// so a click-and-drag-away pattern cancels the close instead of
     /// firing it on a release outside the X.
     tab_close_armed: Option<usize>,
+    /// True iff the cursor sits over the pin-toggle clickable rect
+    /// of the tab in [`Self::tab_hover_idx`]. Symmetric to
+    /// [`Self::tab_hover_close_x`] — drives the pin's hover paint
+    /// tint (a small colour shift signalling clickability) and
+    /// gates the click-through disable so `WM_LBUTTONDOWN` on the
+    /// pin doesn't also fall through to tab activation / drag
+    /// detection. Always `false` when [`Self::tab_hover_idx`] is
+    /// `None`.
+    tab_hover_pin: bool,
+    /// `Some(idx)` while the user is mid-click on a pin glyph
+    /// (pressed but not yet released). The pin toggle fires on
+    /// the matching `WM_LBUTTONUP` only if the cursor is still
+    /// over the same pin — Win32 button convention, mirroring
+    /// [`Self::tab_close_armed`]. A click-and-drag-away cancels
+    /// the toggle instead of firing on release outside the pin.
+    tab_pin_armed: Option<usize>,
     editor: EditorHandle,
     shell: Shell,
 }
@@ -23002,6 +23018,8 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             tab_hover_close_x: false,
             tab_mouse_tracking: false,
             tab_close_armed: None,
+            tab_hover_pin: false,
+            tab_pin_armed: None,
             editor,
             shell,
             accel_handle: initial_accel_handle,
@@ -24886,15 +24904,46 @@ extern "system" fn tab_subclass_proc(
                     let _ = SetCapture(hwnd);
                     return DefSubclassProc(hwnd, msg, wparam, lparam);
                 }
+                // Pin-toggle click. Same click-fires-on-matching-
+                // release convention as close-X: arm now on
+                // `WM_LBUTTONDOWN`, commit on `WM_LBUTTONUP` iff
+                // the release lands on the same pin, cancel on
+                // `WM_CAPTURECHANGED`. Intercepts before drag-
+                // detect so clicking the pin doesn't also start a
+                // tab reorder. Forwarded to `DefSubclassProc` so
+                // the underlying click still activates the tab —
+                // matches the close-X path.
+                let pin_hit = tab_pin_hit_test(hwnd, x, y);
+                if let Some(idx) = pin_hit {
+                    if let Some(state) = state_from_hwnd(parent) {
+                        state.tab_pin_armed = Some(idx);
+                        state.tab_drag = None;
+                    }
+                    let _ = SetCapture(hwnd);
+                    return DefSubclassProc(hwnd, msg, wparam, lparam);
+                }
                 let hit = tab_hit_test(hwnd, x, y);
                 if let Some(state) = state_from_hwnd(parent) {
                     if let Some(idx) = hit {
-                        state.tab_drag = Some(TabDrag {
-                            source_idx: idx,
-                            start_x: x,
-                            threshold_passed: false,
-                        });
-                        let _ = SetCapture(hwnd);
+                        // Skip drag arming on pinned tabs — the
+                        // shell would reject every `move_tab` call
+                        // via the invariant guard anyway (pinned
+                        // tabs are fixed in place, that's the
+                        // point), but arming and then no-op-ing
+                        // through the WM_MOUSEMOVE loop is
+                        // wasted work per mouse frame. The click
+                        // still falls through to
+                        // `DefSubclassProc` so the tab activates
+                        // normally.
+                        let is_pinned = state.shell.tabs.get(idx).is_some_and(|t| t.pinned);
+                        if !is_pinned {
+                            state.tab_drag = Some(TabDrag {
+                                source_idx: idx,
+                                start_x: x,
+                                threshold_passed: false,
+                            });
+                            let _ = SetCapture(hwnd);
+                        }
                     }
                 }
                 // Forward to the system tab control so the click
@@ -24916,14 +24965,18 @@ extern "system" fn tab_subclass_proc(
                 let parent = GetParent(hwnd).unwrap_or_default();
                 let hit = tab_hit_test(hwnd, x, y);
                 let close_hit = tab_close_x_hit_test(hwnd, x, y).is_some();
+                let pin_hit = tab_pin_hit_test(hwnd, x, y).is_some();
                 // Hover-state update + TrackMouseEvent arming. Done
                 // outside the drag branch so plain hover (no button
-                // held) updates the visible X glyphs immediately.
+                // held) updates the visible X / pin glyphs
+                // immediately.
                 if let Some(state) = state_from_hwnd(parent) {
                     let prev_idx = state.tab_hover_idx;
                     let prev_on_x = state.tab_hover_close_x;
+                    let prev_on_pin = state.tab_hover_pin;
                     state.tab_hover_idx = hit;
                     state.tab_hover_close_x = close_hit;
+                    state.tab_hover_pin = pin_hit;
                     if !state.tab_mouse_tracking {
                         let mut tme = TRACKMOUSEEVENT {
                             cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as u32,
@@ -24940,10 +24993,10 @@ extern "system" fn tab_subclass_proc(
                     }
                     // Repaint affected cells on transitions. We
                     // invalidate two indices (old + new) to cover
-                    // moves between adjacent tabs; for an X-state
-                    // change on the same tab, the old==new path
-                    // collapses to one InvalidateRect.
-                    if prev_idx != hit || prev_on_x != close_hit {
+                    // moves between adjacent tabs; for a same-tab
+                    // sub-region change (X or pin), the old==new
+                    // path collapses to one InvalidateRect.
+                    if prev_idx != hit || prev_on_x != close_hit || prev_on_pin != pin_hit {
                         if let Some(prev) = prev_idx {
                             invalidate_tab(hwnd, prev);
                         }
@@ -25023,15 +25076,17 @@ extern "system" fn tab_subclass_proc(
                 // unconditionally so a release outside the X (or on
                 // a different tab's X) just dismisses without firing.
                 let release_close_hit = tab_close_x_hit_test(hwnd, x, y);
-                let armed = if let Some(state) = state_from_hwnd(parent) {
-                    let armed = state.tab_close_armed.take();
+                let release_pin_hit = tab_pin_hit_test(hwnd, x, y);
+                let (close_armed, pin_armed) = if let Some(state) = state_from_hwnd(parent) {
+                    let c = state.tab_close_armed.take();
+                    let p = state.tab_pin_armed.take();
                     state.tab_drag = None;
-                    armed
+                    (c, p)
                 } else {
-                    None
+                    (None, None)
                 };
                 let _ = ReleaseCapture();
-                if let Some(armed_idx) = armed {
+                if let Some(armed_idx) = close_armed {
                     if release_close_hit == Some(armed_idx) {
                         // Activate the clicked tab if it wasn't
                         // already, then post the close. The
@@ -25065,19 +25120,59 @@ extern "system" fn tab_subclass_proc(
                         );
                     }
                 }
+                // Pin arm commits on same-pin release, mirroring
+                // the close-X convention. `Shell::set_pinned` does
+                // the flag flip + boundary move + active-index
+                // adjustment + `NPPN_DOCORDERCHANGED` in one call.
+                // Force a full tab-strip resync after so the
+                // system tab control's TCITEM order reflects the
+                // reordered `Shell.tabs` — otherwise the moved
+                // pinned tab keeps its old visual position until
+                // the next TCM_INSERTITEM / DELETEITEM.
+                //
+                // `TCM_SETCURSEL`/`TCM_DELETEALLITEMS`/`TCM_INSERTITEMW`
+                // do not fire `TCN_SELCHANGE` (documented Win32
+                // behaviour), so the synchronous resync from
+                // inside a mouse handler cannot re-enter our
+                // `wnd_proc` and double-borrow `&mut WindowState`
+                // — same rationale the drag-reorder path relies
+                // on.
+                if let Some(armed_idx) = pin_armed {
+                    if release_pin_hit == Some(armed_idx) {
+                        if let Some(state) = state_from_hwnd(parent) {
+                            let want = !state.shell.tabs.get(armed_idx).is_some_and(|t| t.pinned);
+                            if state.shell.set_pinned(armed_idx, want) {
+                                force_tab_strip_resync(state);
+                                // Refresh hover state against the
+                                // NEW tab order — the cursor
+                                // hasn't moved but a different
+                                // logical tab now sits under it,
+                                // so `tab_hover_idx` /
+                                // `tab_hover_pin` etc. are stale.
+                                // Without this, the next paint
+                                // renders hover-darkened glyphs
+                                // on whichever tab happens to
+                                // land at the stale index until
+                                // the user's next physical mouse
+                                // move corrects it.
+                                refresh_tab_hover_from_cursor(state, hwnd);
+                            }
+                        }
+                    }
+                }
                 DefSubclassProc(hwnd, msg, wparam, lparam)
             }
             WM_MOUSELEAVE => {
                 // Cursor left the tab strip: clear hover state,
                 // disarm the leave tracker (Win32 fires once per
                 // arm), and repaint the previously-hovered cell so
-                // its close-X disappears (for inactive tabs) or
-                // returns to non-hover colour (for the active tab).
+                // its close-X / pin returns to non-hover colour.
                 let parent = GetParent(hwnd).unwrap_or_default();
                 if let Some(state) = state_from_hwnd(parent) {
                     let prev = state.tab_hover_idx;
                     state.tab_hover_idx = None;
                     state.tab_hover_close_x = false;
+                    state.tab_hover_pin = false;
                     state.tab_mouse_tracking = false;
                     if let Some(idx) = prev {
                         invalidate_tab(hwnd, idx);
@@ -25090,22 +25185,23 @@ extern "system" fn tab_subclass_proc(
                 // is taken away mid-drag (alt-tab, parent destroy,
                 // …), drop the drag state so the next mouse-move
                 // doesn't reorder tabs without a held button. Same
-                // logic for the close-X arm: capture loss = cancel.
+                // logic for the close-X / pin arms: capture loss =
+                // cancel.
                 //
                 // Hover state piggy-backs on the same teardown:
                 // without this, an Alt-Tab while the cursor sits over
                 // a tab leaves the previously-hovered cell painted
                 // with its hover-shaded background and visible close-X
-                // until the cursor next moves over the strip. Reset
-                // the trackers and invalidate the affected cell so
-                // the next paint reflects "no tab is hovered".
+                // / pin until the cursor next moves over the strip.
                 let parent = GetParent(hwnd).unwrap_or_default();
                 let prev_hover = if let Some(state) = state_from_hwnd(parent) {
                     state.tab_drag = None;
                     state.tab_close_armed = None;
+                    state.tab_pin_armed = None;
                     let prev = state.tab_hover_idx;
                     state.tab_hover_idx = None;
                     state.tab_hover_close_x = false;
+                    state.tab_hover_pin = false;
                     state.tab_mouse_tracking = false;
                     prev
                 } else {
@@ -25628,6 +25724,33 @@ const TAB_PIN_POLYGON_UNPINNED: &[(i32, i32)] = &[
     (2, 7),
 ];
 
+/// Darken a `COLORREF` (BGR-encoded 32-bit value) by `delta` per
+/// channel, saturating at 0. Used by the pin-glyph paint path to
+/// tint the hover state without a second colour constant per state
+/// — a `40`-per-channel drop reads as "same colour, slightly
+/// darker" across every base hue we use, matching the visual
+/// convention the close-X's `BOX_DARK` → `BOX_LIGHT` hover swap
+/// establishes.
+///
+/// Pure function, unit-testable, and cheap enough (three
+/// saturating subtracts) that it's called every paint frame
+/// without measurable cost.
+///
+/// `COLORREF` on Windows is documented `0x00BBGGRR` — the low
+/// byte is **Red**, not Blue, despite the name. Channel names
+/// here match actual bit position (not the "BGR" spelling) so
+/// a future generalization that adjusts channels non-uniformly
+/// can trust the labels.
+fn darken_colorref(bgr: u32, delta: u8) -> u32 {
+    let r = (bgr & 0xFF) as u8;
+    let g = ((bgr >> 8) & 0xFF) as u8;
+    let b = ((bgr >> 16) & 0xFF) as u8;
+    let r2 = r.saturating_sub(delta);
+    let g2 = g.saturating_sub(delta);
+    let b2 = b.saturating_sub(delta);
+    (u32::from(b2) << 16) | (u32::from(g2) << 8) | u32::from(r2)
+}
+
 /// Compute the rect inside a tab cell where the save icon is painted.
 /// The icon sits flush-left, vertically centred on the cell midpoint
 /// — the same midpoint `DrawTextW`'s `DT_VCENTER` uses for the tab
@@ -25689,6 +25812,52 @@ unsafe fn tab_close_x_hit_test(tab_hwnd: HWND, x: i32, y: i32) -> Option<usize> 
         }
         let close_rc = tab_close_x_rect(rc);
         if x >= close_rc.left && x < close_rc.right && y >= close_rc.top && y < close_rc.bottom {
+            return Some(i as usize);
+        }
+    }
+    None
+}
+
+/// Hit-test the pin-toggle glyphs of every visible tab. Returns
+/// the index of the tab whose pin rect contains `(x, y)`, or
+/// `None` otherwise. Called from `tab_subclass_proc::WM_LBUTTONDOWN`
+/// so a click on the pin intercepts before drag-detect / tab
+/// activation, and from `WM_MOUSEMOVE` so the hover state
+/// [`WindowState::tab_hover_pin`] tracks accurately.
+///
+/// Structurally identical to [`tab_close_x_hit_test`] — same
+/// linear scan (tab counts are small), same `TCM_GETITEMRECT`
+/// per item, only the rect helper differs. Kept as a separate
+/// function rather than parameterising over "which rect" so
+/// each hit-test path reads flat at every call site.
+unsafe fn tab_pin_hit_test(tab_hwnd: HWND, x: i32, y: i32) -> Option<usize> {
+    let n = unsafe {
+        SendMessageW(
+            tab_hwnd,
+            windows::Win32::UI::Controls::TCM_GETITEMCOUNT,
+            None,
+            None,
+        )
+        .0 as i32
+    };
+    if n <= 0 {
+        return None;
+    }
+    for i in 0..n {
+        let mut rc = RECT::default();
+        let ok = unsafe {
+            SendMessageW(
+                tab_hwnd,
+                TCM_GETITEMRECT,
+                Some(WPARAM(i as usize)),
+                Some(LPARAM(&raw mut rc as isize)),
+            )
+        };
+        if ok.0 == 0 {
+            continue;
+        }
+        let pin_rc = tab_pin_rect(rc);
+        if x >= pin_rc.left && x < pin_rc.right && y >= pin_rc.top && y < pin_rc.bottom {
             return Some(i as usize);
         }
     }
@@ -25970,12 +26139,17 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
     // Two shapes, picked from the compile-time polygon tables:
     //   - Pinned:   [`TAB_PIN_POLYGON_PINNED`]  — filled blue
     //     thumbtack sitting upright.
-    //   - Unpinned: [`TAB_PIN_POLYGON_UNPINNED`] — red outline of
+    //   - Unpinned: [`TAB_PIN_POLYGON_UNPINNED`] — grey outline of
     //     the same thumbtack rotated 45° CCW.
+    // Hover state (cursor over the pin's own rect) darkens the
+    // colour by ~40 to signal clickability without changing the
+    // shape — same convention the close-X uses via its BOX_DARK
+    // → BOX_LIGHT transition.
     // The 12×12 canvas the tables were designed in is translated
     // into the pin rect at paint time via `pin_rc.left/top`.
     if idx < state.shell.tabs.len() {
         let is_pinned = state.shell.tabs[idx].pinned;
+        let on_pin = hovered && state.tab_hover_pin;
         let pin_rc = tab_pin_rect(dis.rcItem);
         let template = if is_pinned {
             TAB_PIN_POLYGON_PINNED
@@ -26007,17 +26181,27 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
         // `NULL_BRUSH` draws only the outline (no fill) — which
         // is exactly the unpinned appearance we want.
         unsafe {
-            let pen_color = if is_pinned {
+            let base_color = if is_pinned {
                 TAB_PIN_FILL_PINNED
             } else {
                 TAB_PIN_OUTLINE_UNPINNED
+            };
+            let pen_color = if on_pin {
+                darken_colorref(base_color, 40)
+            } else {
+                base_color
             };
             let pen = CreatePen(PS_SOLID, 1, COLORREF(pen_color));
             if !pen.is_invalid() {
                 let prev_pen = SelectObject(dis.hDC, HGDIOBJ(pen.0));
                 // Fill vs outline selection via the brush.
                 let brush = if is_pinned {
-                    CreateSolidBrush(COLORREF(TAB_PIN_FILL_PINNED))
+                    // Fill colour follows the pen so hover state
+                    // uses the darkened variant (`pen_color`) —
+                    // otherwise the outline would darken while
+                    // the fill stayed light and the two would
+                    // read as mismatched.
+                    CreateSolidBrush(COLORREF(pen_color))
                 } else {
                     // Stock NULL_BRUSH — `HBRUSH` wrapper over
                     // the stock handle. Not deletable.
@@ -26036,6 +26220,54 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
                 let _ = SelectObject(dis.hDC, prev_pen);
                 let _ = DeleteObject(HGDIOBJ(pen.0));
             }
+        }
+    }
+}
+
+/// Re-run the tab-strip hit-tests against the current cursor
+/// position and update `WindowState::tab_hover_*` fields
+/// accordingly, then invalidate the affected cells.
+///
+/// Called from the pin-commit path after `force_tab_strip_resync`
+/// reorders the tab strip: the cursor hasn't moved, but a
+/// different logical tab now sits under it. Without this refresh
+/// the stale `tab_hover_idx` would drive the next `WM_DRAWITEM`
+/// to render hover-darkened glyphs on whichever tab landed at
+/// the old index, until the user's next `WM_MOUSEMOVE` corrected
+/// the tracker naturally.
+///
+/// `GetCursorPos` returns screen coords; `ScreenToClient(tab_hwnd)`
+/// converts to the same coordinate space the hit-tests expect.
+/// A failure in either call leaves the state unchanged — a
+/// stale-glyph frame is a better failure mode than an
+/// inconsistent update.
+unsafe fn refresh_tab_hover_from_cursor(state: &mut WindowState, tab_hwnd: HWND) {
+    let mut pt = POINT::default();
+    // SAFETY: `pt` is a stack binding alive across both
+    // synchronous calls; neither retains the pointer.
+    let ok = unsafe { GetCursorPos(&raw mut pt).is_ok() };
+    if !ok {
+        return;
+    }
+    let converted = unsafe { ScreenToClient(tab_hwnd, &raw mut pt).as_bool() };
+    if !converted {
+        return;
+    }
+    let hit = unsafe { tab_hit_test(tab_hwnd, pt.x, pt.y) };
+    let close_hit = unsafe { tab_close_x_hit_test(tab_hwnd, pt.x, pt.y).is_some() };
+    let pin_hit = unsafe { tab_pin_hit_test(tab_hwnd, pt.x, pt.y).is_some() };
+    let prev_idx = state.tab_hover_idx;
+    let prev_on_x = state.tab_hover_close_x;
+    let prev_on_pin = state.tab_hover_pin;
+    state.tab_hover_idx = hit;
+    state.tab_hover_close_x = close_hit;
+    state.tab_hover_pin = pin_hit;
+    if prev_idx != hit || prev_on_x != close_hit || prev_on_pin != pin_hit {
+        if let Some(prev) = prev_idx {
+            unsafe { invalidate_tab(tab_hwnd, prev) };
+        }
+        if let Some(now) = hit {
+            unsafe { invalidate_tab(tab_hwnd, now) };
         }
     }
 }
@@ -28108,6 +28340,37 @@ unsafe fn handle_dropped_files(state: &mut WindowState, hdrop: HDROP) -> bool {
         any_deduped |= matches!(outcome, OpenFileOutcome::SwitchedToExisting(_));
     }
     any_deduped
+}
+
+#[cfg(test)]
+mod colour_helpers_tests {
+    use super::darken_colorref;
+
+    /// A typical case: mid-range BGR channels each drop by the
+    /// requested delta, no saturation.
+    #[test]
+    fn darken_middle_range() {
+        // BGR 0x80_A0_C0 → each channel down by 0x20 →
+        // 0x60_80_A0. Confirms channel independence.
+        assert_eq!(darken_colorref(0x00_80_A0_C0, 0x20), 0x00_60_80_A0);
+    }
+
+    /// A channel already below `delta` saturates to zero rather
+    /// than wrapping around — hover state should darken to black,
+    /// never explode into a bright colour.
+    #[test]
+    fn darken_saturates_at_zero() {
+        // Blue channel 0x10, delta 0x30 → 0 (saturating). Others
+        // (0x40, 0x80) also drop by 0x30 → 0x10, 0x50.
+        assert_eq!(darken_colorref(0x00_80_40_10, 0x30), 0x00_50_10_00);
+    }
+
+    /// A zero delta is a no-op — safety net for a future call
+    /// site that forwards a possibly-zero user setting.
+    #[test]
+    fn darken_zero_delta_is_no_op() {
+        assert_eq!(darken_colorref(0x00_11_22_33, 0), 0x00_11_22_33);
+    }
 }
 
 #[cfg(test)]
