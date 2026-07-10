@@ -44,7 +44,16 @@
 //!   from the raw `NN<seq>` encoding N++'s tokeniser consumes.
 //!   Seven number-config edits mirror the `numbers_*` slots
 //!   verbatim.
-//! - **m3e** — Operators & Delimiters tab.
+//! - **m3e (this commit)** — Operators & Delimiters tab. Three
+//!   fields: `operators1` (no-whitespace-required operators),
+//!   `operators2` (whitespace-delimited operators), and
+//!   `delimiters` (the 8-slot × 3-sub-part `NN<sequence>`
+//!   encoding). Operators are plain space-separated tokens;
+//!   delimiters are exposed as a raw multi-line edit that
+//!   round-trips the encoding verbatim (including the
+//!   `((EOL <chars>))` escape hatch). Building a friendly 8×3
+//!   UI on top requires the udl crate to expose its tokeniser
+//!   — tracked as a follow-up polish.
 //! - **m3f** — Styler dialog (font / colours / nesting) launched
 //!   from any tab.
 //! - **m3g (deferred polish)** — live restyle on every property
@@ -188,6 +197,11 @@ const IDC_NUM_SUFFIX1: u16 = 514;
 const IDC_NUM_SUFFIX2: u16 = 515;
 const IDC_NUM_RANGE: u16 = 516;
 
+// Operators & Delimiters tab (Phase 4.6 m3e)
+const IDC_OP1_EDIT: u16 = 600;
+const IDC_OP2_EDIT: u16 = 601;
+const IDC_DELIMS_EDIT: u16 = 602;
+
 thread_local! {
     /// Set true while a nested modal pump (`GetSaveFileNameW` /
     /// `MessageBoxW`) is running inside `save_action` /
@@ -286,6 +300,8 @@ struct UdlEditorState {
     keywords: KeywordsTabControls,
     /// The Comment & Number tab's control HWNDs (Phase 4.6 m3d).
     comment_number: CommentNumberTabControls,
+    /// The Operators & Delimiters tab's control HWNDs (Phase 4.6 m3e).
+    operators_delimiters: OperatorsDelimitersTabControls,
     /// The in-memory UDL definition being edited. Every field
     /// change flows into here; Save serialises this and writes.
     definition: UdlDefinition,
@@ -341,6 +357,43 @@ struct CommentNumberTabControls {
     num_suffix1: HWND,
     num_suffix2: HWND,
     num_range: HWND,
+}
+
+/// Controls for the Operators & Delimiters tab (Phase 4.6 m3e).
+///
+/// # Design note
+///
+/// This tab exposes the raw N++-encoded strings directly rather
+/// than parsing them into structured fields, which is a
+/// deliberate trade-off:
+///
+/// - **Operators1** and **Operators2** are plain space-separated
+///   token lists — no encoding — so a single edit box holds them
+///   verbatim.
+/// - **Delimiters** use the compact `NN<sequence>` encoding with
+///   8 slots × 3 sub-parts (open / escape / close, indices 00-23)
+///   and support the special `((EOL <chars>))` escape hatch that
+///   embeds a space inside a token (see
+///   [`codepp_udl::rules`]'s `tokenise_udl_encoding`). Building a
+///   friendly 8×3 UI on top of that encoding requires a
+///   crate-private tokeniser we don't yet expose, and getting the
+///   `((EOL <chars>))` round-trip byte-clean is fiddly. Exposing
+///   the raw encoding in a multi-line edit ships correctly and
+///   gives the user full expressive power without risking a
+///   round-trip that silently loses information for real-world
+///   fixtures (Markdown / Bash / SQL all use `((EOL <chars>))`).
+///
+/// A friendly-UI m3e polish pass is a natural follow-up once the
+/// tokeniser exposes its parser to callers.
+#[allow(
+    clippy::struct_field_names,
+    reason = "the `_edit` suffix communicates HWND-of-edit-box; \
+              stripping it leaves ambiguous names like `op1` / `delims`"
+)]
+struct OperatorsDelimitersTabControls {
+    op1_edit: HWND,
+    op2_edit: HWND,
+    delims_edit: HWND,
 }
 
 /// Controls for the Keywords Lists tab (Phase 4.6 m3c).
@@ -475,6 +528,11 @@ pub(crate) fn show_udl_editor(
             num_suffix1: HWND::default(),
             num_suffix2: HWND::default(),
             num_range: HWND::default(),
+        },
+        operators_delimiters: OperatorsDelimitersTabControls {
+            op1_edit: HWND::default(),
+            op2_edit: HWND::default(),
+            delims_edit: HWND::default(),
         },
         definition,
         source_path,
@@ -693,6 +751,7 @@ extern "system" fn udl_editor_wnd_proc(
                     populate_folder_tab(state);
                     populate_keywords_tab(state);
                     populate_comment_number_tab(state);
+                    populate_operators_delimiters_tab(state);
                     state.controls_ready = true;
                 }
                 LRESULT(0)
@@ -953,29 +1012,8 @@ fn build_controls(state: &mut UdlEditorState) {
         }
     }
 
-    // Populate tab 4 (Operators & Delimiters) with a placeholder
-    // until m3e lands. Tabs 1-3 all have real controls now.
-    {
-        let wide = wide_terminated("Operators & Delimiters — coming in Phase 4.6 m3e");
-        unsafe {
-            let hwnd = CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                w!("STATIC"),
-                PCWSTR(wide.as_ptr()),
-                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_LEFT),
-                16,
-                20,
-                380,
-                LABEL_H,
-                Some(state.tab_pages[3]),
-                None,
-                Some(hinst),
-                None,
-            )
-            .unwrap_or(HWND::default());
-            apply_dialog_font(hwnd, font);
-        }
-    }
+    // All 4 tabs now have real controls — no placeholder pass
+    // required after m3e.
 
     // Build Folder & Default tab controls (page 0).
     build_folder_tab(state, hinst, font);
@@ -983,6 +1021,8 @@ fn build_controls(state: &mut UdlEditorState) {
     build_keywords_tab(state, hinst, font);
     // Build Comment & Number tab controls (page 2) — Phase 4.6 m3d.
     build_comment_number_tab(state, hinst, font);
+    // Build Operators & Delimiters tab controls (page 3) — Phase 4.6 m3e.
+    build_operators_delimiters_tab(state, hinst, font);
     // Dialog-wide bottom-row buttons (Save / Save As / Close).
     build_bottom_buttons(state, hinst, font);
 }
@@ -1281,6 +1321,73 @@ fn build_comment_number_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: 
 
     let _ = static_label(parent, hinst, font, 16, y, 200, "Number range operator:");
     state.comment_number.num_range = edit_box(parent, hinst, font, IDC_NUM_RANGE, 220, y - 2, 180);
+}
+
+fn build_operators_delimiters_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
+    let parent = state.tab_pages[3];
+    let mut y = 16;
+    let field_w = 500;
+
+    // Operators 1 (no whitespace required)
+    let _ = static_label(
+        parent,
+        hinst,
+        font,
+        16,
+        y,
+        field_w,
+        "Operators 1 — no whitespace required (space-separated):",
+    );
+    y += LABEL_H + 2;
+    state.operators_delimiters.op1_edit =
+        edit_box(parent, hinst, font, IDC_OP1_EDIT, 16, y, field_w);
+    y += CTRL_H + ROW_GAP;
+
+    // Operators 2 (whitespace-required)
+    let _ = static_label(
+        parent,
+        hinst,
+        font,
+        16,
+        y,
+        field_w,
+        "Operators 2 — whitespace-delimited (space-separated):",
+    );
+    y += LABEL_H + 2;
+    state.operators_delimiters.op2_edit =
+        edit_box(parent, hinst, font, IDC_OP2_EDIT, 16, y, field_w);
+    y += CTRL_H + ROW_GAP + 8;
+
+    // Delimiters (raw N++ encoding)
+    let _ = static_label(
+        parent,
+        hinst,
+        font,
+        16,
+        y,
+        field_w,
+        "Delimiters (raw N++ encoding — space-separated NN<sequence> tokens):",
+    );
+    y += LABEL_H + 2;
+    // Delimiter edit height: 210px. Trimmed from an initial 220 so
+    // the trailing hint label below fits inside the tab content
+    // rect — the tab-strip row plus TCM_ADJUSTRECT insets consume
+    // enough of the 400px TAB_H that 220 + hint could truncate
+    // the last few pixels of the hint on default DPI.
+    state.operators_delimiters.delims_edit =
+        multi_line_edit(parent, hinst, font, IDC_DELIMS_EDIT, 16, y, field_w, 210);
+    y += 210 + 4;
+
+    // Help hint below the delimiters edit.
+    let _ = static_label(
+        parent,
+        hinst,
+        font,
+        16,
+        y,
+        field_w,
+        "Format: 8 slots × (open / escape / close) indexed 00-23. E.g. 00\" 01\\ 02\" for double-quoted strings.",
+    );
 }
 
 fn build_bottom_buttons(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
@@ -1752,6 +1859,26 @@ fn populate_comment_number_tab(state: &UdlEditorState) {
     });
 }
 
+/// Populate the Operators & Delimiters tab (m3e) from the current
+/// definition. All three fields are verbatim string copies from
+/// the model — the delimiter encoding round-trips as-is.
+fn populate_operators_delimiters_tab(state: &UdlEditorState) {
+    with_modal_pump(|| {
+        set_edit_text(
+            state.operators_delimiters.op1_edit,
+            &state.definition.keyword_lists.operators1,
+        );
+        set_edit_text(
+            state.operators_delimiters.op2_edit,
+            &state.definition.keyword_lists.operators2,
+        );
+        set_edit_text(
+            state.operators_delimiters.delims_edit,
+            &state.definition.keyword_lists.delimiters,
+        );
+    });
+}
+
 /// Read the four comment-section edits + the line-close combo
 /// and re-encode into `keyword_lists.comments`. Called on every
 /// EN_CHANGE / CBN_SELCHANGE for a comment control so the model
@@ -2120,6 +2247,24 @@ fn handle_command(state: &mut UdlEditorState, wparam: WPARAM, _lparam: LPARAM) {
         IDC_NUM_RANGE if notify_code == EN_CHANGE as u16 => {
             state.definition.keyword_lists.numbers_range =
                 get_edit_text(state.comment_number.num_range);
+            state.dirty = true;
+        }
+        // --- Operators & Delimiters tab (Phase 4.6 m3e) ---
+        // All three edits are verbatim mirrors — no encoding
+        // interpretation on write, just a plain string copy.
+        IDC_OP1_EDIT if notify_code == EN_CHANGE as u16 => {
+            state.definition.keyword_lists.operators1 =
+                get_edit_text(state.operators_delimiters.op1_edit);
+            state.dirty = true;
+        }
+        IDC_OP2_EDIT if notify_code == EN_CHANGE as u16 => {
+            state.definition.keyword_lists.operators2 =
+                get_edit_text(state.operators_delimiters.op2_edit);
+            state.dirty = true;
+        }
+        IDC_DELIMS_EDIT if notify_code == EN_CHANGE as u16 => {
+            state.definition.keyword_lists.delimiters =
+                get_edit_text(state.operators_delimiters.delims_edit);
             state.dirty = true;
         }
         IDC_SAVE_BUTTON => save_action(state, false),
