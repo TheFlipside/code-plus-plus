@@ -28,8 +28,15 @@
 //!   guarded by the [`MODAL_PUMP_ACTIVE`] thread-local so a
 //!   spurious message during the nested pump can't materialise a
 //!   second `&mut UdlEditorState` overlapping the outer borrow.
-//! - **m3c** — Keywords Lists tab (8 keyword classes + 8 prefix
-//!   flags).
+//! - **m3c (this commit)** — Keywords Lists tab. Combobox selects
+//!   one of the 8 keyword classes; a multi-line edit shows that
+//!   class's keyword list (space-separated); a checkbox toggles
+//!   the class's prefix-mode flag. Switching classes via the
+//!   combobox flushes the current edit's text back into the model
+//!   at the previous class index before loading the newly-
+//!   selected class's saved value — protects against clobbering
+//!   unsaved-in-buffer edits on a rapid Keywords 1 → Keywords 2
+//!   swap.
 //! - **m3d** — Comment & Number tab.
 //! - **m3e** — Operators & Delimiters tab.
 //! - **m3f** — Styler dialog (font / colours / nesting) launched
@@ -96,20 +103,22 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, NMHDR, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL,
-    TCM_INSERTITEMW, TCN_SELCHANGE, TCS_TABS, WC_TABCONTROL,
+    TCM_INSERTITEMW, TCN_SELCHANGE, TCS_TABS, WC_COMBOBOX, WC_TABCONTROL,
 };
+use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetSystemMetrics,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetSystemMetrics,
     GetWindowLongPtrW, IsWindow, LoadCursorW, MessageBoxW, PostMessageW, RegisterClassExW,
     SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, BM_GETCHECK, BM_SETCHECK,
     BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
-    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, EN_CHANGE, ES_AUTOHSCROLL, GWLP_USERDATA, HCURSOR,
-    HICON, HMENU, IDC_ARROW, IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNOCANCEL,
-    SM_CXSCREEN, SM_CYSCREEN, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC,
-    WM_DESTROY, WM_ERASEBKGND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY,
-    WM_SETTEXT, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-    WS_EX_CLIENTEDGE, WS_GROUP, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    CBN_SELCHANGE, CBS_DROPDOWNLIST, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CREATESTRUCTW,
+    CS_HREDRAW, CS_VREDRAW, EN_CHANGE, ES_AUTOHSCROLL, GWLP_USERDATA, HCURSOR, HICON, HMENU,
+    IDC_ARROW, IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNOCANCEL, SM_CXSCREEN,
+    SM_CYSCREEN, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+    WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_DESTROY, WM_ERASEBKGND,
+    WM_GETTEXT, WM_GETTEXTLENGTH, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETTEXT, WNDCLASSEXW,
+    WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_CLIENTEDGE, WS_GROUP,
+    WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{apply_dialog_font, dialog_bg_brush, disable_visual_style, wide_terminated};
@@ -154,6 +163,11 @@ const IDC_DECIMAL_RADIO_2: u16 = 222;
 const IDC_SAVE_BUTTON: u16 = 300;
 const IDC_SAVE_AS_BUTTON: u16 = 301;
 const IDC_CLOSE_BUTTON: u16 = 302;
+
+// Keywords Lists tab (Phase 4.6 m3c)
+const IDC_KW_CLASS_COMBO: u16 = 400;
+const IDC_KW_PREFIX_CHECK: u16 = 401;
+const IDC_KW_EDIT: u16 = 402;
 
 thread_local! {
     /// Set true while a nested modal pump (`GetSaveFileNameW` /
@@ -248,6 +262,9 @@ struct UdlEditorState {
     current_tab: usize,
     /// The Folder & Default tab's control HWNDs.
     folder: FolderTabControls,
+    /// The Keywords Lists tab's control HWNDs. See
+    /// [`KeywordsTabControls`] for the UI shape.
+    keywords: KeywordsTabControls,
     /// The in-memory UDL definition being edited. Every field
     /// change flows into here; Save serialises this and writes.
     definition: UdlDefinition,
@@ -276,6 +293,35 @@ struct FolderTabControls {
     save_btn: HWND,
     save_as_btn: HWND,
     close_btn: HWND,
+}
+
+/// Controls for the Keywords Lists tab (Phase 4.6 m3c).
+///
+/// Layout matches Notepad++'s UDL editor: a combobox picks one of
+/// the 8 keyword classes; the multi-line edit box below shows the
+/// selected class's keyword list; a checkbox next to the combobox
+/// toggles prefix mode for the selected class. Switching classes
+/// via the combobox flushes the edit's current text back into the
+/// model at the previous class index, then re-populates the edit
+/// from the model at the newly-selected index.
+struct KeywordsTabControls {
+    /// Drop-down list ("Keywords 1" .. "Keywords 8"). Only the
+    /// selection index matters; labels are cosmetic.
+    class_combo: HWND,
+    /// "Prefix mode (this class)" checkbox — mirrors
+    /// [`UdlDefinition::prefix`]`[current_class]`.
+    prefix_check: HWND,
+    /// Multi-line edit box holding the selected class's keyword
+    /// list (space-separated tokens). Committed back to the
+    /// model on `EN_CHANGE` at the current-class index; refreshed
+    /// on combobox `CBN_SELCHANGE`.
+    edit: HWND,
+    /// Which of the 8 keyword classes (0-indexed) the edit box
+    /// is currently displaying. On combobox selection change,
+    /// the edit's text is written to `keyword_lists.keywords[
+    /// current_class]` before this index is updated to the new
+    /// selection.
+    current_class: usize,
 }
 
 /// Register the UDL editor's private window class. Called from
@@ -362,6 +408,12 @@ pub(crate) fn show_udl_editor(
             save_btn: HWND::default(),
             save_as_btn: HWND::default(),
             close_btn: HWND::default(),
+        },
+        keywords: KeywordsTabControls {
+            class_combo: HWND::default(),
+            prefix_check: HWND::default(),
+            edit: HWND::default(),
+            current_class: 0,
         },
         definition,
         source_path,
@@ -504,6 +556,57 @@ fn default_style_slots() -> Vec<UdlStyle> {
 // Window proc
 // -------------------------------------------------------------
 
+/// Subclass ID for the tab-page forwarder. Any unique-per-HWND
+/// integer value works; using a distinct constant so a future
+/// second subclass on the same HWND doesn't collide.
+const TAB_PAGE_SUBCLASS_ID: usize = 0x7564_6C31; // "udl1" — mnemonic
+
+/// `SUBCLASSPROC` installed on each tab-page STATIC window.
+///
+/// Forwards `WM_COMMAND` and `WM_NOTIFY` up to the tab page's
+/// parent (the editor dialog). Everything else falls through to
+/// `DefSubclassProc`, which chains to the original STATIC WndProc
+/// so paint / theming / accessibility keep working.
+///
+/// # Why this exists
+///
+/// Win32 delivers control notifications to the DIRECT parent —
+/// which for our tab-page-child controls is the tab-page STATIC
+/// window, not the dialog. STATIC's own WndProc drops `WM_COMMAND`
+/// silently; without this forwarder, every keystroke on the Name
+/// edit, every combobox selection, every checkbox click on
+/// Folder & Default / Keywords Lists would never reach
+/// `udl_editor_wnd_proc`'s `WM_COMMAND` arm — the field controls
+/// would be dead-on-arrival.
+extern "system" fn tab_page_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id_subclass: usize,
+    _ref_data: usize,
+) -> LRESULT {
+    // Same panic-catch discipline as `udl_editor_wnd_proc` —
+    // unwinding across an `extern "system"` frame is UB.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        match msg {
+            WM_COMMAND | WM_NOTIFY => {
+                if let Ok(parent) = GetParent(hwnd) {
+                    return SendMessageW(parent, msg, Some(wparam), Some(lparam));
+                }
+                LRESULT(0)
+            }
+            _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+        }
+    }));
+    if let Ok(lr) = result {
+        lr
+    } else {
+        tracing::error!("panic caught in tab_page_subclass_proc");
+        LRESULT(0)
+    }
+}
+
 extern "system" fn udl_editor_wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -527,6 +630,7 @@ extern "system" fn udl_editor_wnd_proc(
                     state.dialog = hwnd;
                     build_controls(state);
                     populate_folder_tab(state);
+                    populate_keywords_tab(state);
                     state.controls_ready = true;
                 }
                 LRESULT(0)
@@ -733,6 +837,18 @@ fn build_controls(state: &mut UdlEditorState) {
     // Create the 4 tab-page containers (each a plain STATIC
     // window sized to `content_rc`). Only page 0 starts visible;
     // switching tabs flips visibility.
+    //
+    // Immediately after creation we subclass each page's WndProc
+    // to `tab_page_wnd_proc` — this forwards `WM_COMMAND` and
+    // `WM_NOTIFY` up to the dialog. Without the forwarder, Win32
+    // sends control notifications to the direct parent, which is
+    // the tab page (STATIC-class), whose `DefWindowProc` drops
+    // `WM_COMMAND` on the floor. The dialog's WndProc never sees
+    // the notification and the field controls are dead-on-arrival
+    // — every keystroke on the Name edit, every combobox
+    // selection, silently vanishes. The forwarder fixes that by
+    // routing the two notification-carrying messages to the
+    // dialog, which is where our handlers live.
     for i in 0..4 {
         let page = unsafe {
             CreateWindowExW(
@@ -756,12 +872,31 @@ fn build_controls(state: &mut UdlEditorState) {
         }
         .unwrap_or(HWND::default());
         state.tab_pages[i] = page;
+        // Install the WM_COMMAND / WM_NOTIFY forwarder subclass.
+        // `SetWindowSubclass` returns BOOL — failure is
+        // extremely rare (only on out-of-comctl32-resources) but
+        // if it does fail this tab's field controls become
+        // silently inert (WM_COMMAND won't reach the dialog).
+        // Log it so a user hitting the rare failure sees a
+        // diagnostic instead of dead keystrokes.
+        let ok = unsafe {
+            SetWindowSubclass(page, Some(tab_page_subclass_proc), TAB_PAGE_SUBCLASS_ID, 0)
+        };
+        if !ok.as_bool() {
+            tracing::warn!(
+                tab_index = i,
+                "SetWindowSubclass failed for UDL editor tab page; \
+                 field controls on this tab will be inert"
+            );
+        }
     }
 
-    // Populate tabs 2-4 with a placeholder label so users see
-    // "coming soon" rather than an empty page.
+    // Populate tabs 3-4 with a placeholder label so users see
+    // "coming soon" rather than an empty page. Tab 2 (Keywords
+    // Lists) gained real controls in m3c; tabs 3 (Comment &
+    // Number) and 4 (Operators & Delimiters) still stand as
+    // placeholders until m3d/m3e land.
     let placeholder_labels = [
-        "Keywords Lists — coming in Phase 4.6 m3c",
         "Comment & Number — coming in Phase 4.6 m3d",
         "Operators & Delimiters — coming in Phase 4.6 m3e",
     ];
@@ -777,7 +912,7 @@ fn build_controls(state: &mut UdlEditorState) {
                 20,
                 380,
                 LABEL_H,
-                Some(state.tab_pages[i + 1]),
+                Some(state.tab_pages[i + 2]),
                 None,
                 Some(hinst),
                 None,
@@ -789,6 +924,8 @@ fn build_controls(state: &mut UdlEditorState) {
 
     // Build Folder & Default tab controls (page 0).
     build_folder_tab(state, hinst, font);
+    // Build Keywords Lists tab controls (page 1) — Phase 4.6 m3c.
+    build_keywords_tab(state, hinst, font);
     // Dialog-wide bottom-row buttons (Save / Save As / Close).
     build_bottom_buttons(state, hinst, font);
 }
@@ -927,6 +1064,69 @@ fn build_folder_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
     }
 }
 
+fn build_keywords_tab(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
+    let parent = state.tab_pages[1];
+
+    // Row 1: class selector + prefix checkbox.
+    let _ = static_label(parent, hinst, font, 16, 20, 100, "Keyword class:");
+    state.keywords.class_combo = combo_box(
+        parent,
+        hinst,
+        font,
+        IDC_KW_CLASS_COMBO,
+        120,
+        18,
+        180,
+        // Dropdown-list height needs the closed size PLUS the
+        // extended drop area — 200px is enough to show all 8
+        // items without scrolling.
+        200,
+    );
+    // Populate the combobox with the 8 class labels. We NEVER
+    // want to fire a `CBN_SELCHANGE` for these programmatic
+    // inserts, so use the modal-pump guard to short-circuit any
+    // wnd_proc re-entry the edit control might trigger.
+    with_modal_pump(|| {
+        for i in 1..=8_u32 {
+            let label = format!("Keywords {i}");
+            let wide = wide_terminated(&label);
+            unsafe {
+                SendMessageW(
+                    state.keywords.class_combo,
+                    CB_ADDSTRING,
+                    None,
+                    Some(LPARAM(wide.as_ptr() as isize)),
+                );
+            }
+        }
+    });
+
+    state.keywords.prefix_check = check_box(
+        parent,
+        hinst,
+        font,
+        IDC_KW_PREFIX_CHECK,
+        320,
+        20,
+        200,
+        "Prefix mode (this class)",
+    );
+
+    // Row 2: label above the multi-line edit.
+    let _ = static_label(
+        parent,
+        hinst,
+        font,
+        16,
+        52,
+        400,
+        "Keywords (space-separated):",
+    );
+
+    // Row 3: multi-line edit filling the rest of the tab page.
+    state.keywords.edit = multi_line_edit(parent, hinst, font, IDC_KW_EDIT, 16, 72, 500, 280);
+}
+
 fn build_bottom_buttons(state: &mut UdlEditorState, hinst: HINSTANCE, font: HFONT) {
     let y = DIALOG_H - BUTTON_H - 16 - 26; // 26 = title-bar overhead
     let total_w = 3 * BUTTON_W + 2 * BUTTON_GAP;
@@ -1017,6 +1217,95 @@ fn edit_box(parent: HWND, hinst: HINSTANCE, font: HFONT, id: u16, x: i32, y: i32
             y,
             w,
             CTRL_H,
+            Some(parent),
+            Some(HMENU(id as usize as *mut c_void)),
+            Some(hinst),
+            None,
+        )
+    }
+    .unwrap_or(HWND::default());
+    unsafe {
+        apply_dialog_font(hwnd, font);
+    }
+    hwnd
+}
+
+/// Multi-line edit box with vertical scrollbar, word-wrap, and
+/// return-key handling. Used for the keyword-list edit on the
+/// Keywords Lists tab (m3c) — long lists (Cisco IOS has hundreds
+/// of entries) need to wrap and scroll, and Enter/Return must
+/// insert a newline into the text rather than dismiss the dialog.
+fn multi_line_edit(
+    parent: HWND,
+    hinst: HINSTANCE,
+    font: HFONT,
+    id: u16,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> HWND {
+    // ES_MULTILINE: allow multiple lines
+    // ES_AUTOVSCROLL: scroll vertically as content grows
+    // ES_WANTRETURN: Return key inserts newline rather than
+    //                triggering the dialog's default button
+    // WS_VSCROLL: visible scrollbar
+    const ES_MULTILINE: u32 = 0x0004;
+    const ES_AUTOVSCROLL: u32 = 0x0040;
+    const ES_WANTRETURN: u32 = 0x1000;
+
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WS_EX_CLIENTEDGE,
+            w!("EDIT"),
+            None,
+            WS_CHILD
+                | WS_VISIBLE
+                | WS_BORDER
+                | WS_TABSTOP
+                | WS_VSCROLL
+                | WINDOW_STYLE(ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN),
+            x,
+            y,
+            w,
+            h,
+            Some(parent),
+            Some(HMENU(id as usize as *mut c_void)),
+            Some(hinst),
+            None,
+        )
+    }
+    .unwrap_or(HWND::default());
+    unsafe {
+        apply_dialog_font(hwnd, font);
+    }
+    hwnd
+}
+
+/// Drop-down-list combobox (CBS_DROPDOWNLIST) — no free-text
+/// entry, user picks from a fixed list. `h` is the combobox's
+/// full height, which for a drop-down includes the extended
+/// drop area (the height of the "expanded" list).
+fn combo_box(
+    parent: HWND,
+    hinst: HINSTANCE,
+    font: HFONT,
+    id: u16,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> HWND {
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            WC_COMBOBOX,
+            None,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WINDOW_STYLE(CBS_DROPDOWNLIST as u32),
+            x,
+            y,
+            w,
+            h,
             Some(parent),
             Some(HMENU(id as usize as *mut c_void)),
             Some(hinst),
@@ -1214,6 +1503,36 @@ fn populate_folder_tab(state: &UdlEditorState) {
     }
 }
 
+/// Populate the Keywords Lists tab (m3c) from the current
+/// definition. Sets the combobox selection to
+/// `keywords.current_class` (0 on first open) and loads the
+/// corresponding keyword list into the edit box + the prefix
+/// checkbox from the class's prefix flag.
+///
+/// Wrapped in `with_modal_pump` so the wnd_proc reentry guard
+/// suppresses any synchronous `EN_CHANGE` / `BN_CLICKED`
+/// notifications the edit / combobox fire back at the parent
+/// — otherwise the initial population would flip the "dirty"
+/// bit on a freshly-loaded UDL.
+fn populate_keywords_tab(state: &UdlEditorState) {
+    with_modal_pump(|| {
+        let idx = state.keywords.current_class.min(7);
+        unsafe {
+            SendMessageW(
+                state.keywords.class_combo,
+                CB_SETCURSEL,
+                Some(WPARAM(idx)),
+                None,
+            );
+        }
+        set_edit_text(
+            state.keywords.edit,
+            &state.definition.keyword_lists.keywords[idx],
+        );
+        set_check(state.keywords.prefix_check, state.definition.prefix[idx]);
+    });
+}
+
 fn set_edit_text(hwnd: HWND, text: &str) {
     let wide = wide_terminated(text);
     unsafe {
@@ -1228,8 +1547,11 @@ fn get_edit_text(hwnd: HWND) -> String {
             return String::new();
         }
         // Cap the read at a defensive upper bound so a hostile /
-        // corrupt state can't OOM us. 64 KiB is orders of
-        // magnitude above any realistic UDL name/extension entry.
+        // corrupt state can't OOM us. 65 536 UTF-16 code units
+        // ≈ up to ~128 KiB of UTF-16 in memory — orders of
+        // magnitude above any realistic UDL name / keyword-list /
+        // extension entry the user is meant to type here, but
+        // small enough that a runaway allocation is bounded.
         let cap = len.min(64 * 1024);
         let mut buf = vec![0u16; cap + 1];
         let got = SendMessageW(
@@ -1259,6 +1581,28 @@ fn is_checked(hwnd: HWND) -> bool {
 // -------------------------------------------------------------
 // Command dispatch
 // -------------------------------------------------------------
+
+/// Pure swap-dance for the Keywords Lists tab's class-combobox
+/// selection change. Flushes the caller-provided `flushed_text`
+/// (what's currently in the edit box) into `def.keyword_lists.
+/// keywords[prev]`, then returns `(new_text, new_prefix)` for the
+/// caller to load into the edit + checkbox at `new`. Assumes `new
+/// < 8` — callers bounds-check the combobox selection first (see
+/// the `IDC_KW_CLASS_COMBO` arm in `handle_command`).
+///
+/// Kept as a free function so the unit tests exercise the actual
+/// wnd_proc logic rather than reimplementing it inline. Doesn't
+/// touch any HWND state; the wnd_proc arm handles that side.
+fn swap_keyword_class(
+    def: &mut UdlDefinition,
+    prev: usize,
+    flushed_text: String,
+    new: usize,
+) -> (String, bool) {
+    debug_assert!(prev < 8 && new < 8, "class indices must be 0..=7");
+    def.keyword_lists.keywords[prev] = flushed_text;
+    (def.keyword_lists.keywords[new].clone(), def.prefix[new])
+}
 
 fn handle_command(state: &mut UdlEditorState, wparam: WPARAM, _lparam: LPARAM) {
     let id = (wparam.0 & 0xFFFF) as u16;
@@ -1295,6 +1639,41 @@ fn handle_command(state: &mut UdlEditorState, wparam: WPARAM, _lparam: LPARAM) {
         IDC_DECIMAL_RADIO_0 | IDC_DECIMAL_RADIO_1 | IDC_DECIMAL_RADIO_2 => {
             let idx = (id - IDC_DECIMAL_RADIO_0) as u8;
             state.definition.settings.decimal_separator = idx;
+            state.dirty = true;
+        }
+        // --- Keywords Lists tab (Phase 4.6 m3c) ---
+        IDC_KW_CLASS_COMBO if notify_code == CBN_SELCHANGE as u16 => {
+            let prev = state.keywords.current_class;
+            let flushed = get_edit_text(state.keywords.edit);
+            let new_class_raw = unsafe {
+                SendMessageW(state.keywords.class_combo, CB_GETCURSEL, None, None).0 as isize
+            };
+            if new_class_raw < 0
+                || new_class_raw as usize >= state.definition.keyword_lists.keywords.len()
+            {
+                return;
+            }
+            let new_class = new_class_raw as usize;
+            // All the pure logic lives in `swap_keyword_class`,
+            // which the tests exercise directly. The HWND-coupled
+            // part (writing the new text back to the edit + the
+            // prefix flag to the checkbox) stays here.
+            let (new_text, new_prefix) =
+                swap_keyword_class(&mut state.definition, prev, flushed, new_class);
+            state.keywords.current_class = new_class;
+            with_modal_pump(|| {
+                set_edit_text(state.keywords.edit, &new_text);
+                set_check(state.keywords.prefix_check, new_prefix);
+            });
+        }
+        IDC_KW_EDIT if notify_code == EN_CHANGE as u16 => {
+            let idx = state.keywords.current_class;
+            state.definition.keyword_lists.keywords[idx] = get_edit_text(state.keywords.edit);
+            state.dirty = true;
+        }
+        IDC_KW_PREFIX_CHECK => {
+            let idx = state.keywords.current_class;
+            state.definition.prefix[idx] = is_checked(state.keywords.prefix_check);
             state.dirty = true;
         }
         IDC_SAVE_BUTTON => save_action(state, false),
@@ -1658,6 +2037,85 @@ mod tests {
             !path_is_under(outside, dir),
             "outside path must NOT be recognised as contained"
         );
+    }
+
+    #[test]
+    fn swap_keyword_class_flushes_prev_and_returns_new_state() {
+        // Actual regression pin for the `IDC_KW_CLASS_COMBO` swap
+        // dance — exercises the same `swap_keyword_class` the
+        // wnd_proc arm calls. Would have caught (and would still
+        // catch) a re-ordering that either drops the caller's
+        // flushed text or reads the new class's data BEFORE
+        // writing the previous class's.
+        let mut udl = default_new_udl();
+        udl.keyword_lists.keywords[0] = "orig_kw1".to_owned();
+        udl.keyword_lists.keywords[1] = "orig_kw2".to_owned();
+        udl.prefix[1] = true;
+
+        // User was in Keywords 1, typed "typed_new" into the
+        // edit box, then picked Keywords 2 from the combobox.
+        let (new_text, new_prefix) = swap_keyword_class(&mut udl, 0, "typed_new".to_owned(), 1);
+
+        assert_eq!(new_text, "orig_kw2", "load new class's saved keywords");
+        assert!(new_prefix, "load new class's saved prefix flag");
+        assert_eq!(
+            udl.keyword_lists.keywords[0], "typed_new",
+            "prev class's edit content must be flushed to the model"
+        );
+        assert_eq!(
+            udl.keyword_lists.keywords[1], "orig_kw2",
+            "new class's slot must NOT be overwritten by the flush"
+        );
+    }
+
+    #[test]
+    fn swap_keyword_class_self_swap_is_idempotent() {
+        // Pin the degenerate case: swapping to the same class the
+        // user is already on (e.g. the CBN_SELCHANGE fires with
+        // an unchanged selection — Win32 combobox quirk). The
+        // flushed text becomes both the write AND the read, and
+        // `new_text` matches what we just flushed.
+        let mut udl = default_new_udl();
+        udl.keyword_lists.keywords[3] = "before".to_owned();
+        let (new_text, _prefix) = swap_keyword_class(&mut udl, 3, "typed_new".to_owned(), 3);
+        assert_eq!(new_text, "typed_new");
+        assert_eq!(udl.keyword_lists.keywords[3], "typed_new");
+    }
+
+    #[test]
+    fn swap_keyword_class_all_indices_isolated() {
+        // Off-by-one pin: swap at index N must ONLY touch
+        // keywords[prev] and read keywords[new]/prefix[new];
+        // every other slot must be untouched. Iterates every
+        // (prev, new) pair over 0..=7 × 0..=7 to catch any
+        // stray `.iter_mut()` bug.
+        for prev in 0..8 {
+            for new in 0..8 {
+                let mut udl = default_new_udl();
+                for i in 0..8 {
+                    udl.keyword_lists.keywords[i] = format!("orig_{i}");
+                    udl.prefix[i] = i % 2 == 0;
+                }
+                let _ = swap_keyword_class(&mut udl, prev, "FLUSHED".to_owned(), new);
+                for i in 0..8 {
+                    let expected = if i == prev {
+                        "FLUSHED".to_owned()
+                    } else {
+                        format!("orig_{i}")
+                    };
+                    assert_eq!(
+                        udl.keyword_lists.keywords[i], expected,
+                        "prev={prev} new={new}: keywords[{i}] must be untouched \
+                         except at prev"
+                    );
+                    assert_eq!(
+                        udl.prefix[i],
+                        i % 2 == 0,
+                        "prev={prev} new={new}: prefix[{i}] must be untouched"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
