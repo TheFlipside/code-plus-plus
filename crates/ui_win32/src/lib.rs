@@ -15830,21 +15830,36 @@ extern "system" fn about_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 FillRect(hdc, &raw const rect, dialog_bg_brush());
                 LRESULT(1)
             }
-            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
+            WM_CTLCOLORSTATIC => {
+                // STATIC labels (title line, home-URL row, license
+                // body) paint on a transparent background so the
+                // dialog fill shows through. Colour the URL STATIC
+                // hyperlink-blue (RGB 0,0,238 → COLORREF 0x00EE0000);
+                // others keep the system text colour.
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
-                // Paint the URL link in standard hyperlink blue
-                // (RGB 0, 0, 238 → COLORREF 0x00EE0000). Other
-                // statics keep the system text colour.
                 let target = HWND(lparam.0 as *mut c_void);
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const AboutDialogState;
-                if !state_ptr.is_null()
-                    && msg == WM_CTLCOLORSTATIC
-                    && target == (*state_ptr).link_hwnd
-                {
+                if !state_ptr.is_null() && target == (*state_ptr).link_hwnd {
                     let _ = SetTextColor(hdc, COLORREF(0x00EE_0000));
                 }
                 LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
+            }
+            WM_CTLCOLORBTN => {
+                // Only the theme-disabled `BS_GROUPBOX` ("MIT
+                // License" frame) routes through here — themed
+                // push buttons paint themselves and ignore the
+                // brush return. Return the dialog-background
+                // brush (and set matching `SetBkColor`) so
+                // classic group-box paint clears the title rect
+                // to that colour, breaking the top border line
+                // around the "MIT License" text. Returning
+                // `NULL_BRUSH` here (an earlier iteration) left
+                // the classic paint running the border line
+                // straight through the title glyphs.
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let _ = SetBkColor(hdc, COLORREF(DIALOG_BG));
+                LRESULT(dialog_bg_brush().0 as isize)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
