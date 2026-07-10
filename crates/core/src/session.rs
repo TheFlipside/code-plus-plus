@@ -122,6 +122,16 @@ pub struct Tab {
     /// `default`.
     #[serde(rename = "@lang", skip_serializing_if = "Option::is_none", default)]
     pub lang: Option<i32>,
+    /// `true` iff the user pinned this tab. Pinned tabs stay
+    /// clustered at the left edge of the tab strip in insertion
+    /// order and cannot be moved by drag; unpinned tabs occupy the
+    /// slots to their right and remain freely draggable. The Shell
+    /// enforces the "pinned-before-unpinned" invariant at every
+    /// mutation. Older session.xml files (written before this
+    /// field shipped) round-trip cleanly thanks to `default` —
+    /// tabs come back unpinned, matching pre-pin behaviour.
+    #[serde(rename = "@pinned", default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
 }
 
 /// Persisted main-window geometry. Pixel dimensions are positive in
@@ -351,6 +361,7 @@ mod tests {
                     backup: None,
                     custom_name: None,
                     lang: None,
+                    pinned: false,
                 },
                 Tab {
                     path: Some(PathBuf::from(r"C:\users\alice\config.toml")),
@@ -361,6 +372,7 @@ mod tests {
                     backup: None,
                     custom_name: None,
                     lang: None,
+                    pinned: false,
                 },
             ],
         };
@@ -384,6 +396,7 @@ mod tests {
                 backup: None,
                 custom_name: None,
                 lang: None,
+                pinned: false,
             }],
         };
         session.save_to_xml(&path).unwrap();
@@ -409,6 +422,7 @@ mod tests {
                 backup: Some("new 1@2026-05-04_215750".into()),
                 custom_name: None,
                 lang: None,
+                pinned: false,
             }],
         };
         session.save_to_xml(&path).unwrap();
@@ -436,6 +450,7 @@ mod tests {
                     backup: None,
                     custom_name: None,
                     lang: None,
+                    pinned: false,
                 },
                 Tab {
                     path: None,
@@ -446,6 +461,7 @@ mod tests {
                     backup: Some("new 1@2026-05-04_215800".into()),
                     custom_name: None,
                     lang: None,
+                    pinned: false,
                 },
                 Tab {
                     path: None,
@@ -456,6 +472,7 @@ mod tests {
                     backup: Some("new 2@2026-05-04_215800".into()),
                     custom_name: None,
                     lang: None,
+                    pinned: false,
                 },
             ],
         };
@@ -484,6 +501,7 @@ mod tests {
                 backup: Some("new 3@2026-05-09_141500".into()),
                 custom_name: Some("release notes".into()),
                 lang: None,
+                pinned: false,
             }],
         };
         session.save_to_xml(&path).unwrap();
@@ -516,6 +534,7 @@ mod tests {
                 // extension-based detection would yield Text, so
                 // the persisted override must dominate on restore.
                 lang: Some(81),
+                pinned: false,
             }],
         };
         session.save_to_xml(&path).unwrap();

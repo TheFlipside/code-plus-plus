@@ -23041,6 +23041,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                         backup_modified_externally,
                         custom_name,
                         lang,
+                        pinned,
                     } => {
                         // `restore_untitled_with_text` needs a
                         // `&mut UiPlatform` to allocate the Scintilla
@@ -23060,6 +23061,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                             backup_modified_externally,
                             custom_name,
                             lang,
+                            pinned,
                         );
                     }
                     SessionRestoreEntry::DirtyFromBackup {
@@ -23071,6 +23073,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                         disk_changed_externally,
                         backup_modified_externally,
                         lang,
+                        pinned,
                     } => {
                         // Same shape as the Untitled branch: split
                         // off a UiPlatform handle, seed the new
@@ -23096,6 +23099,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                             disk_changed_externally,
                             backup_modified_externally,
                             lang,
+                            pinned,
                         );
                     }
                 }

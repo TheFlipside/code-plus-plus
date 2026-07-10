@@ -565,7 +565,8 @@ pub enum SessionRestoreEntry {
     /// `Shell.session` inside `apply_load_result` by path, so no
     /// dedicated field is needed on this variant — same pattern
     /// `apply_load_result` already uses for the restored cursor
-    /// position.
+    /// position. The persisted `pinned` flag is looked up the same
+    /// way.
     OpenFile(PathBuf),
     /// Re-create an untitled buffer at the next slot with the
     /// pre-loaded text from its backup file. The UI calls
@@ -604,6 +605,11 @@ pub enum SessionRestoreEntry {
         /// untitled buffer keeps its highlighting across
         /// relaunches.
         lang: Option<i32>,
+        /// Persisted pin state — `true` restores the tab as pinned.
+        /// `Shell::load_session_entries` sorts entries so pinned
+        /// tabs come back first, matching the on-disk order that
+        /// `Shell::save_session` writes.
+        pinned: bool,
     },
     /// Re-create a tab that was bound to `path` but had unsaved
     /// edits at session-save time. The tab opens with `path`
@@ -649,6 +655,10 @@ pub enum SessionRestoreEntry {
         /// so a Language-menu choice the user made during the
         /// previous session reapplies on restore.
         lang: Option<i32>,
+        /// Persisted pin state — `true` restores the tab as pinned.
+        /// Same round-trip semantics as
+        /// [`SessionRestoreEntry::UntitledFromBackup::pinned`].
+        pinned: bool,
     },
 }
 
@@ -771,6 +781,15 @@ pub struct Tab {
     /// Cleared (`None`) when an untitled buffer is saved with a
     /// real path — the on-disk filename takes over.
     pub custom_name: Option<String>,
+    /// `true` iff the user pinned this tab. Pinned tabs cluster at
+    /// the left edge of the tab strip in insertion order and cannot
+    /// be moved by drag; unpinned tabs occupy the slots to their
+    /// right. `Shell` enforces the "pinned-before-unpinned"
+    /// invariant across `move_tab` / `set_pinned` /
+    /// `close_active_tab` so no code path can leave the vector in
+    /// a state that violates it. Round-trips through `session.xml`
+    /// via [`codepp_core::Tab::pinned`].
+    pub pinned: bool,
 }
 
 impl Default for Tab {
@@ -788,6 +807,7 @@ impl Default for Tab {
             untitled_seq: None,
             dirty: false,
             custom_name: None,
+            pinned: false,
         }
     }
 }
@@ -1225,8 +1245,29 @@ impl Shell {
     /// to`) or when either index is out of range. Returning a bool
     /// lets the caller skip the cost of a tab-strip resync when
     /// nothing changed.
+    ///
+    /// **Pinning invariant.** Pinned tabs occupy the left prefix of
+    /// `tabs` in insertion order; unpinned tabs fill the remainder.
+    /// `move_tab` rejects (returns `false`) any move that would
+    /// violate that layout — either dragging a pinned tab (which
+    /// the user pinned specifically to fix in place) or dragging
+    /// an unpinned tab into the pinned prefix. Pin/unpin
+    /// operations go through [`Self::set_pinned`] instead, which
+    /// is the only path that changes a tab's `pinned` flag.
     pub fn move_tab(&mut self, from: usize, to: usize) -> bool {
         if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+            return false;
+        }
+        // Pinning invariant: pinned tabs form a fixed prefix. Reject
+        // any drag that would either (a) move a pinned tab at all,
+        // or (b) push an unpinned tab up into the pinned prefix.
+        // The boundary index is `first_unpinned_idx`; any
+        // unpinned-tab `to` below that would violate the layout.
+        if self.tabs[from].pinned {
+            return false;
+        }
+        let first_unpinned = self.first_unpinned_idx();
+        if to < first_unpinned {
             return false;
         }
         let tab = self.tabs.remove(from);
@@ -1259,6 +1300,97 @@ impl Shell {
         // the early `from == to` short-circuit above filters
         // out no-op drags that "land back where they started"
         // so plugins don't see a spurious "list changed" event.
+        #[cfg(target_os = "windows")]
+        self.pending_notifications
+            .push(Notification::DocOrderChanged);
+        true
+    }
+
+    /// Index of the first unpinned tab, i.e. the boundary between the
+    /// pinned prefix and the unpinned suffix. Equal to the number of
+    /// pinned tabs. Returns `tabs.len()` when every tab is pinned
+    /// (rare but supported — no invariant violation).
+    ///
+    /// Cheap linear scan; typical sessions have well under 100 tabs,
+    /// caching would add invalidation surface without measurable
+    /// benefit. Kept `pub` so the UI's drag hit-test can clamp a
+    /// drop target to the unpinned zone before calling `move_tab`
+    /// (which also validates, but the UI wants to render the drop
+    /// as bounded rather than reject a mid-drag frame).
+    #[must_use]
+    pub fn first_unpinned_idx(&self) -> usize {
+        self.tabs
+            .iter()
+            .position(|t| !t.pinned)
+            .unwrap_or(self.tabs.len())
+    }
+
+    /// Toggle the pin state of `idx` to `want`. Idempotent — no-op
+    /// (returns `false`) if the tab is already in the requested
+    /// state or if `idx` is out of range. Otherwise:
+    ///
+    /// * **Pin** (`want = true`): flip the flag, then move the tab
+    ///   to the right edge of the pinned prefix (index
+    ///   `first_unpinned_idx() - 1` after the flag flip). Preserves
+    ///   the relative order among tabs that were already pinned.
+    /// * **Unpin** (`want = false`): flip the flag, then move the
+    ///   tab to the left edge of the unpinned zone (index
+    ///   `first_unpinned_idx()` after the flag flip). Preserves
+    ///   the relative order among tabs that stay pinned.
+    ///
+    /// The active-tab index follows the moved tab (same rule as
+    /// `move_tab` for the "active == from" case). A real state
+    /// change queues `NPPN_DOCORDERCHANGED` so plugins tracking
+    /// buffer order re-sync from `NPPM_GETOPENFILENAMES`; the
+    /// idempotent no-op path does not.
+    pub fn set_pinned(&mut self, idx: usize, want: bool) -> bool {
+        if idx >= self.tabs.len() || self.tabs[idx].pinned == want {
+            return false;
+        }
+        self.tabs[idx].pinned = want;
+        // Compute the target slot for the moved tab, expressed in
+        // terms of the vector state AFTER `tabs.remove(idx)` runs.
+        // The remove-then-insert model means the target must land
+        // at the first unpinned position in the shrunken vec:
+        //
+        //   target = (# of tabs at positions != idx that are pinned)
+        //
+        // Pinning (`want = true`): pinned tabs excluding `idx` are
+        // the *already-pinned* prefix — the newly pinned tab lands
+        // right after them, at the end of the pinned block.
+        // Unpinning (`want = false`): pinned tabs excluding `idx`
+        // are the *still-pinned* prefix (the unpinning tab is
+        // already flag-flipped so it doesn't count) — the newly
+        // unpinned tab lands right after them, at the boundary.
+        //
+        // The formula is symmetric across the two cases; the flag
+        // flip above shifts membership in the "pinned" set for the
+        // count, which is what makes the target land in the
+        // correct block.
+        let target = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, t)| *i != idx && t.pinned)
+            .count();
+        // Move without going through `move_tab` — that path enforces
+        // the invariant we're currently repairing. Manual splice
+        // keeps the tab-move logic in one canonical shape while
+        // reusing the active-index adjustment formula below.
+        if idx != target {
+            let tab = self.tabs.remove(idx);
+            self.tabs.insert(target, tab);
+            if let Some(active) = self.active_tab.as_mut() {
+                if *active == idx {
+                    *active = target;
+                } else if idx < *active && *active <= target {
+                    *active -= 1;
+                } else if target <= *active && *active < idx {
+                    *active += 1;
+                }
+            }
+            self.session.active = self.active_tab;
+        }
         #[cfg(target_os = "windows")]
         self.pending_notifications
             .push(Notification::DocOrderChanged);
@@ -2221,12 +2353,21 @@ impl Shell {
                     tracing::warn!(error = %e, path = ?loaded.path, "failed to watch file");
                 }
 
-                let cursor = self
+                // Single by-path lookup covering every attribute the
+                // load path pulls from the persisted session:
+                // caret position, the user's Language-menu override,
+                // and the pin state. Rebuilding the find call per
+                // attribute (an earlier shape of this code) had the
+                // same shape three times and pushed the function
+                // over clippy's `too_many_lines` gate.
+                let stored = self
                     .session
                     .tabs
                     .iter()
-                    .find(|t| t.path.as_deref() == Some(loaded.path.as_path()))
-                    .map_or(0, |t| t.cursor);
+                    .find(|t| t.path.as_deref() == Some(loaded.path.as_path()));
+                let cursor = stored.map_or(0, |t| t.cursor);
+                let stored_lang_override = stored.and_then(|t| t.lang).map(LangType);
+                let stored_pinned = stored.is_some_and(|t| t.pinned);
 
                 // Write the tab fields first so any UI calls below
                 // observe a tab in its post-load state. The borrow
@@ -2240,26 +2381,19 @@ impl Shell {
                 tab.eol = loaded.eol;
                 tab.byte_len = loaded.byte_len;
                 tab.text.clone_from(&loaded.text);
-                // Lang resolution order:
-                //   1. Persisted session override (the user's
-                //      Language-menu choice from a previous run)
-                //      — looked up by path in `self.session.tabs`,
-                //      same pattern this method already uses for
-                //      `cursor`.
-                //   2. Extension-based auto-detection.
-                // Plugins may still override later via
-                // NPPM_SETBUFFERLANGTYPE; the precedence above is
-                // about the load-time default before any plugin
-                // gets to react.
-                let stored_lang_override = self
-                    .session
-                    .tabs
-                    .iter()
-                    .find(|t| t.path.as_deref() == Some(loaded.path.as_path()))
-                    .and_then(|t| t.lang)
-                    .map(LangType);
+                // Lang resolution: persisted Language-menu override
+                // wins; extension-based auto-detection is the
+                // fallback. Plugins may still override later via
+                // `NPPM_SETBUFFERLANGTYPE`.
                 tab.lang =
                     stored_lang_override.unwrap_or_else(|| LangType::from_path(&loaded.path));
+                // Restore the persisted pin state — the
+                // pinned-before-unpinned invariant is preserved
+                // because `save_session` writes tabs in that order
+                // and `load_session_entries` iterates in the same
+                // order, so the tab vector is reassembled with the
+                // pinned prefix intact.
+                tab.pinned = stored_pinned;
                 let stored_doc = tab.scintilla_doc;
                 let lang = tab.lang;
                 #[cfg(target_os = "windows")]
@@ -3030,6 +3164,12 @@ impl Shell {
                         Some(tab.lang.as_npp_id())
                     }
                 },
+                // Persist the user's pin choice so pinned tabs come
+                // back pinned (and at the left edge) on next launch.
+                // Older session.xml files without the attribute
+                // deserialize with `pinned = false` (unpinned), so
+                // no migration is required.
+                pinned: tab.pinned,
             });
         }
         session.active = self.active_tab.and_then(|active_idx| {
@@ -3095,13 +3235,14 @@ impl Shell {
         let Some(path) = codepp_platform::session_xml_path() else {
             return Vec::new();
         };
-        let session = match Session::load_from_xml(&path) {
+        let mut session = match Session::load_from_xml(&path) {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = ?e, "session.xml load failed; starting clean");
                 return Vec::new();
             }
         };
+        normalize_session_pinning(&mut session);
         // Cap restored tabs at `MAX_SESSION_TABS` to prevent a
         // tampered or runaway session.xml from queuing thousands
         // of loads / backup reads at startup (local DoS).
@@ -3190,6 +3331,7 @@ impl Shell {
                             disk_changed_externally,
                             backup_modified_externally,
                             lang: t.lang,
+                            pinned: t.pinned,
                         })
                     } else {
                         Some(SessionRestoreEntry::OpenFile(path.clone()))
@@ -3214,6 +3356,7 @@ impl Shell {
                             backup_modified_externally,
                             custom_name: t.custom_name.clone(),
                             lang: t.lang,
+                            pinned: t.pinned,
                         }
                     })
                 }
@@ -3269,6 +3412,7 @@ impl Shell {
         backup_modified_externally: bool,
         custom_name: Option<String>,
         lang: Option<i32>,
+        pinned: bool,
     ) -> usize {
         let id = self.allocate_buffer_id();
         let new_idx = self.tabs.len();
@@ -3296,6 +3440,7 @@ impl Shell {
             // races the load completion (rarely observable).
             dirty: false,
             custom_name,
+            pinned,
         });
         self.active_tab = Some(new_idx);
         // Bind a fresh Scintilla document; matches `new_untitled`'s
@@ -3387,6 +3532,7 @@ impl Shell {
         disk_changed_externally: bool,
         backup_modified_externally: bool,
         stored_lang: Option<i32>,
+        pinned: bool,
     ) -> usize {
         let id = self.allocate_buffer_id();
         let new_idx = self.tabs.len();
@@ -3415,6 +3561,7 @@ impl Shell {
             // whether the underlying doc has yet been touched.
             dirty: true,
             custom_name: None,
+            pinned,
         });
         self.active_tab = Some(new_idx);
         let new_doc = ui.activate_tab(new_idx, 0);
@@ -3835,6 +3982,52 @@ fn is_disk_newer_than_backup(disk_path: &Path, backup_path: &Path) -> bool {
 }
 
 /// Reject backup filenames that contain a path separator, parent-
+/// Enforce the "pinned-before-unpinned" invariant on a freshly-
+/// parsed [`Session`] by stable-sorting `session.tabs` so pinned
+/// entries occupy the left prefix, then remapping `session.active`
+/// so it still points at the same tab it did pre-sort.
+///
+/// `Shell::save_session` writes tabs in the invariant-preserving
+/// order, so a `session.xml` Code++ produced itself is already
+/// sorted — this pass is a no-op there. The point is to defend
+/// against a hand-edited or corrupted `session.xml` that
+/// interleaves pinned and unpinned `<tab>` entries: without this
+/// pass, the tab vector would be reassembled in the on-disk order
+/// (which, for `SessionRestoreEntry::OpenFile`, is the order
+/// `apply_load_result` pushes tabs), and `first_unpinned_idx`
+/// would no longer describe the actual pinned prefix.
+///
+/// `apply_load_result`'s by-path lookup on `self.session.tabs`
+/// must observe the same reordered view so a late-arriving async
+/// load picks up the correct persisted `pinned`/`lang`/`cursor`
+/// fields — that's why the sort mutates the stored `Session`
+/// rather than a copy.
+///
+/// `sort_by_key` with `Reverse(pinned)` is stable in Rust's stdlib
+/// (guaranteed since 1.6), preserving relative order within each
+/// group — matches the "insertion order is preserved among pinned
+/// tabs" contract in [`SessionRestoreEntry::UntitledFromBackup::pinned`]
+/// and its `DirtyFromBackup` sibling.
+fn normalize_session_pinning(session: &mut Session) {
+    // Capture an identity for the currently-active tab so we can
+    // find it again after the sort. `(path, untitled_seq)` is a
+    // unique identity across every tab shape Code++ writes:
+    // path-bound tabs have `path = Some(_)` and `untitled_seq =
+    // None`; untitled tabs have `path = None` and `untitled_seq
+    // = Some(_)`; the pair distinguishes both.
+    let active_path = session
+        .active
+        .and_then(|i| session.tabs.get(i))
+        .map(|t| (t.path.clone(), t.untitled_seq));
+    session.tabs.sort_by_key(|t| std::cmp::Reverse(t.pinned));
+    if let Some((prev_path, prev_seq)) = active_path {
+        session.active = session
+            .tabs
+            .iter()
+            .position(|t| t.path == prev_path && t.untitled_seq == prev_seq);
+    }
+}
+
 /// directory traversal, drive-letter prefixes, Windows reserved
 /// device names, or other shapes that would let a tampered
 /// session.xml escape the backups directory or open a special
@@ -7361,6 +7554,7 @@ mod tests {
                     backup: None,
                     custom_name: None,
                     lang: None,
+                    pinned: false,
                 },
                 CoreTab {
                     path: Some(PathBuf::from("/tmp/second.txt")),
@@ -7371,6 +7565,7 @@ mod tests {
                     backup: None,
                     custom_name: None,
                     lang: None,
+                    pinned: false,
                 },
             ],
         };
@@ -8242,6 +8437,197 @@ mod tests {
         );
     }
 
+    /// Pinning a tab that's currently in the middle of the strip
+    /// walks it to the left edge and flips the flag. Active tab
+    /// index follows the moved tab.
+    #[test]
+    fn set_pinned_moves_tab_to_pinned_prefix() {
+        let mut shell = shell_with_synthetic_tabs(5, Some(2));
+        let id_at_2 = shell.tabs[2].id;
+        assert!(shell.set_pinned(2, true));
+        // Tab 2 slid to index 0 (left edge of pinned prefix).
+        assert_eq!(shell.tabs[0].id, id_at_2);
+        assert!(shell.tabs[0].pinned);
+        // Active follows.
+        assert_eq!(shell.active_tab, Some(0));
+        // Only one pinned tab so far.
+        assert_eq!(shell.first_unpinned_idx(), 1);
+    }
+
+    /// A second pinned tab lands to the right of the first pinned
+    /// tab (insertion order), not clobbering it.
+    #[test]
+    fn set_pinned_second_tab_lands_after_first_pinned() {
+        let mut shell = shell_with_synthetic_tabs(5, None);
+        let id_first_pinned = shell.tabs[3].id;
+        let id_second_pinned = shell.tabs[4].id;
+        assert!(shell.set_pinned(3, true));
+        // Pin idx 4 — after the first pin, this is now at idx 4
+        // (the pin moved 3→0 shifted 4 left by one).
+        assert!(shell.set_pinned(4, true));
+        assert_eq!(shell.tabs[0].id, id_first_pinned);
+        assert_eq!(shell.tabs[1].id, id_second_pinned);
+        assert!(shell.tabs[0].pinned);
+        assert!(shell.tabs[1].pinned);
+        assert_eq!(shell.first_unpinned_idx(), 2);
+    }
+
+    /// Unpinning walks the tab to the leftmost slot of the unpinned
+    /// zone (right after the last still-pinned tab).
+    #[test]
+    fn set_pinned_false_moves_tab_to_unpinned_edge() {
+        let mut shell = shell_with_synthetic_tabs(5, None);
+        assert!(shell.set_pinned(1, true));
+        assert!(shell.set_pinned(2, true));
+        // State: [P1, P2, A, C, D] where A/C/D are original unpinned.
+        let unpinned_pin_id = shell.tabs[0].id;
+        assert!(shell.set_pinned(0, false));
+        // Unpinned tab now sits at the boundary (idx 1 — right after
+        // the one still-pinned tab).
+        assert_eq!(shell.first_unpinned_idx(), 1);
+        assert_eq!(shell.tabs[1].id, unpinned_pin_id);
+        assert!(!shell.tabs[1].pinned);
+    }
+
+    /// `set_pinned` is idempotent — flipping to the current state
+    /// returns false and does not queue a notification.
+    #[test]
+    fn set_pinned_idempotent_no_op_returns_false() {
+        let mut shell = shell_with_synthetic_tabs(3, Some(0));
+        assert!(!shell.set_pinned(0, false), "already unpinned");
+        assert!(shell.set_pinned(0, true));
+        assert!(!shell.set_pinned(0, true), "already pinned");
+        // Out of range.
+        assert!(!shell.set_pinned(99, true));
+    }
+
+    /// `move_tab` refuses to move a pinned tab. Users pin
+    /// specifically to fix the tab in place.
+    #[test]
+    fn move_tab_refuses_to_move_pinned_tab() {
+        let mut shell = shell_with_synthetic_tabs(4, None);
+        assert!(shell.set_pinned(1, true));
+        // Pinned tab now at idx 0; every move attempt is rejected.
+        assert!(!shell.move_tab(0, 2));
+        assert!(!shell.move_tab(0, 1));
+        // Layout unchanged.
+        assert!(shell.tabs[0].pinned);
+        assert_eq!(shell.first_unpinned_idx(), 1);
+    }
+
+    /// `move_tab` refuses to drag an unpinned tab into the pinned
+    /// prefix — the boundary is respected.
+    #[test]
+    fn move_tab_refuses_unpinned_into_pinned_zone() {
+        let mut shell = shell_with_synthetic_tabs(4, None);
+        assert!(shell.set_pinned(0, true));
+        assert!(shell.set_pinned(1, true));
+        // State: two pinned tabs at [0, 1], unpinned at [2, 3].
+        assert_eq!(shell.first_unpinned_idx(), 2);
+        // Dragging unpinned tab (idx 2) to idx 0 or 1 would put it
+        // inside the pinned zone — rejected.
+        assert!(!shell.move_tab(2, 0));
+        assert!(!shell.move_tab(2, 1));
+        // Dragging unpinned within its zone still works.
+        assert!(shell.move_tab(2, 3));
+    }
+
+    /// A `session.xml` whose `<tab>` entries interleave pinned and
+    /// unpinned rows (either hand-edited or produced by some future
+    /// buggy writer) must load with the invariant repaired —
+    /// pinned tabs first, insertion order preserved within each
+    /// group. Without this, `move_tab`'s pinned-prefix check would
+    /// silently accept invalid drops.
+    #[test]
+    fn normalize_session_pinning_sorts_interleaved_tabs() {
+        use codepp_core::session::{Session as CoreSession, Tab as CoreTab};
+        let mk = |name: &str, pinned: bool| CoreTab {
+            path: Some(PathBuf::from(format!("/tmp/{name}"))),
+            pinned,
+            ..CoreTab::default()
+        };
+        let mut session = CoreSession {
+            active: Some(2), // "b" — a pinned tab
+            window: None,
+            tabs: vec![
+                mk("a", false),
+                mk("x", false),
+                mk("b", true),
+                mk("y", false),
+                mk("c", true),
+            ],
+        };
+        normalize_session_pinning(&mut session);
+        // Pinned block first — insertion order (b before c) preserved.
+        assert_eq!(
+            session
+                .tabs
+                .iter()
+                .map(|t| (
+                    t.path
+                        .as_ref()
+                        .unwrap()
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string(),
+                    t.pinned
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("b".to_string(), true),
+                ("c".to_string(), true),
+                ("a".to_string(), false),
+                ("x".to_string(), false),
+                ("y".to_string(), false),
+            ]
+        );
+        // Active tab pointer follows "b" to its new position (0).
+        assert_eq!(session.active, Some(0));
+    }
+
+    /// The all-unpinned case is a stable no-op — order preserved,
+    /// active untouched. Confirms the sort doesn't churn a
+    /// session.xml that Code++ wrote itself in the current
+    /// (pre-pinning) shape.
+    #[test]
+    fn normalize_session_pinning_no_op_when_no_pins() {
+        use codepp_core::session::{Session as CoreSession, Tab as CoreTab};
+        let mut session = CoreSession {
+            active: Some(1),
+            window: None,
+            tabs: vec![
+                CoreTab {
+                    path: Some(PathBuf::from("/tmp/a")),
+                    ..CoreTab::default()
+                },
+                CoreTab {
+                    path: Some(PathBuf::from("/tmp/b")),
+                    ..CoreTab::default()
+                },
+            ],
+        };
+        let before = session.clone();
+        normalize_session_pinning(&mut session);
+        assert_eq!(session, before);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn set_pinned_queues_doc_order_changed() {
+        // The plugin ABI's view of buffer order changes on
+        // pin/unpin — the pinned tab visibly moves in the strip —
+        // so `NPPN_DOCORDERCHANGED` fires alongside the flag flip.
+        let mut shell = shell_with_synthetic_tabs(3, Some(0));
+        let _ = shell.take_notifications();
+        assert!(shell.set_pinned(2, true));
+        let n = shell.take_notifications();
+        assert!(
+            n.iter().any(|x| matches!(x, Notification::DocOrderChanged)),
+            "expected NPPN_DOCORDERCHANGED in {n:?}"
+        );
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn external_remove_of_open_file_queues_file_deleted() {
@@ -8405,6 +8791,7 @@ mod tests {
             true,  // disk file changed externally
             false, // backup file untouched
             None,  // no persisted lang override — extension-detect
+            false, // not pinned
         );
 
         let pending = shell.drain(&mut ui);
@@ -8536,9 +8923,10 @@ mod tests {
             0,
             Encoding::Utf8,
             Eol::Lf,
-            true, // backup was modified externally
-            None, // no custom rename label
-            None, // no persisted lang override — defaults to L_TEXT
+            true,  // backup was modified externally
+            None,  // no custom rename label
+            None,  // no persisted lang override — defaults to L_TEXT
+            false, // not pinned
         );
         let pending = shell.drain(&mut ui);
         let n = pending
@@ -8570,6 +8958,7 @@ mod tests {
             false, // disk untouched
             false, // backup untouched
             None,  // no persisted lang override
+            false, // not pinned
         );
 
         let pending = shell.drain(&mut ui);
@@ -8610,6 +8999,7 @@ mod tests {
             false,
             false,
             Some(81),
+            false,
         );
 
         let idx = shell.active_tab.expect("a tab was just restored");
@@ -8650,6 +9040,7 @@ mod tests {
             false,
             None,
             Some(81),
+            false,
         );
 
         let idx = shell.active_tab.expect("a tab was just restored");
