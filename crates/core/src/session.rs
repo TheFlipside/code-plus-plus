@@ -543,6 +543,82 @@ mod tests {
         assert_eq!(loaded.tabs[0].lang, Some(81));
     }
 
+    /// `pinned` round-trips on a saved-file tab. Confirms the
+    /// user's pin choice persists across the session save/load
+    /// cycle so a pinned tab comes back pinned on next launch.
+    #[test]
+    fn round_trip_tab_with_pinned_true() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            active: Some(0),
+            window: None,
+            tabs: vec![Tab {
+                path: Some(PathBuf::from("pinned.txt")),
+                cursor: 42,
+                encoding: Encoding::Utf8,
+                eol: Eol::Lf,
+                untitled_seq: None,
+                backup: None,
+                custom_name: None,
+                lang: None,
+                pinned: true,
+            }],
+        };
+        session.save_to_xml(&path).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(session, loaded);
+        assert!(loaded.tabs[0].pinned, "pinned=true must round-trip");
+    }
+
+    /// The `@pinned="false"` default is elided from the wire —
+    /// `skip_serializing_if = "is_false"` should keep the XML
+    /// clean the same way `@maximized` does. Loading the same
+    /// bytes must still yield `pinned: false`.
+    #[test]
+    fn round_trip_pinned_false_is_omitted_from_xml() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            active: Some(0),
+            window: None,
+            tabs: vec![Tab {
+                path: Some(PathBuf::from("plain.txt")),
+                cursor: 0,
+                encoding: Encoding::Utf8,
+                eol: Eol::Lf,
+                untitled_seq: None,
+                backup: None,
+                custom_name: None,
+                lang: None,
+                pinned: false,
+            }],
+        };
+        session.save_to_xml(&path).unwrap();
+        let xml = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !xml.contains("pinned"),
+            "pinned=false must be elided from the wire; got:\n{xml}"
+        );
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert!(!loaded.tabs[0].pinned);
+    }
+
+    /// A session.xml written before the `@pinned` attribute
+    /// shipped must still parse — old files come back with
+    /// `pinned: false` and untouched by every other feature.
+    #[test]
+    fn pre_pinned_session_xml_loads_with_none_pinned() {
+        let (_dir, path) = temp_session_path();
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
+        std::fs::write(&path, xml).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(loaded.tabs.len(), 1);
+        assert!(
+            !loaded.tabs[0].pinned,
+            "missing @pinned must default to false"
+        );
+    }
+
     /// A session.xml written before the `@lang` attribute shipped
     /// must still parse — the load path falls back to extension
     /// detection (or `L_TEXT` for untitled) when `lang` is `None`.
