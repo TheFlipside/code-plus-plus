@@ -128,12 +128,11 @@ use windows::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, NMHDR, TCIF_TEXT, TCITEMW, TCM_ADJUSTRECT, TCM_GETCURSEL,
     TCM_INSERTITEMW, TCN_SELCHANGE, TCS_TABS, WC_COMBOBOX, WC_TABCONTROL,
 };
-use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetParent, GetSystemMetrics,
     GetWindowLongPtrW, IsWindow, LoadCursorW, MessageBoxW, PostMessageW, RegisterClassExW,
-    SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, BM_GETCHECK, BM_SETCHECK,
-    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
+    SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, BM_GETCHECK,
+    BM_SETCHECK, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_PUSHBUTTON,
     CBN_SELCHANGE, CBS_DROPDOWNLIST, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CREATESTRUCTW,
     CS_HREDRAW, CS_VREDRAW, EN_CHANGE, ES_AUTOHSCROLL, GWLP_USERDATA, HCURSOR, HICON, HMENU,
     IDC_ARROW, IDYES, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_YESNOCANCEL, SM_CXSCREEN,
@@ -760,38 +759,71 @@ fn default_style_slots() -> Vec<UdlStyle> {
 // Window proc
 // -------------------------------------------------------------
 
-/// Subclass ID for the tab-page forwarder. Any unique-per-HWND
-/// integer value works; using a distinct constant so a future
-/// second subclass on the same HWND doesn't collide.
-const TAB_PAGE_SUBCLASS_ID: usize = 0x7564_6C31; // "udl1" — mnemonic
+/// Window-class name for the tab-page containers.
+const UDL_TAB_PAGE_CLASS: PCWSTR = w!("CodePlusPlusUdlEditorTabPage");
 
-/// `SUBCLASSPROC` installed on each tab-page STATIC window.
+/// Register the tab-page window class. Called lazily on first
+/// open, same discipline as [`register_class`] for the main
+/// editor dialog.
 ///
-/// Forwards `WM_COMMAND` and `WM_NOTIFY` up to the tab page's
-/// parent (the editor dialog). Everything else falls through to
-/// `DefSubclassProc`, which chains to the original STATIC WndProc
-/// so paint / theming / accessibility keep working.
+/// # Why a custom class (not `"STATIC"`)
 ///
-/// # Why this exists
+/// Original m3b/m3c used the system `STATIC` class for tab pages
+/// with a subclass forwarder for `WM_COMMAND`. That approach had
+/// two problems that only surfaced once fields were interactive:
 ///
-/// Win32 delivers control notifications to the DIRECT parent —
-/// which for our tab-page-child controls is the tab-page STATIC
-/// window, not the dialog. STATIC's own WndProc drops `WM_COMMAND`
-/// silently; without this forwarder, every keystroke on the Name
-/// edit, every combobox selection, every checkbox click on
-/// Folder & Default / Keywords Lists would never reach
-/// `udl_editor_wnd_proc`'s `WM_COMMAND` arm — the field controls
-/// would be dead-on-arrival.
-extern "system" fn tab_page_subclass_proc(
+/// 1. **Invisible content.** The `STATIC` class has
+///    `hbrBackground = NULL` — it does not paint its own
+///    background but relies on the parent to paint through.
+///    Combined with the dialog's `WS_CLIPCHILDREN` (which
+///    excludes child rects from the dialog's `WM_ERASEBKGND`),
+///    the tab-page rect was never painted at all — leaving
+///    child controls with nothing to draw against and the whole
+///    content area appearing blank. The custom class here
+///    declares `hbrBackground = dialog_bg_brush()` so the tab
+///    page paints itself grey, matching the dialog chrome.
+///
+/// 2. **Extra indirection.** The subclass forwarder ran through
+///    `DefSubclassProc` on every non-command message; a custom
+///    class with its own WndProc is one lookup shorter and
+///    doesn't depend on comctl32's subclass chain plumbing.
+///
+/// The WndProc forwards `WM_COMMAND` / `WM_NOTIFY` to the
+/// parent (the dialog) so control notifications reach the
+/// dialog's dispatcher; everything else goes to `DefWindowProc`.
+fn register_tab_page_class(hinst: HINSTANCE) {
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+    REGISTERED.get_or_init(|| unsafe {
+        let wc = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(tab_page_wnd_proc),
+            hInstance: hinst,
+            hbrBackground: dialog_bg_brush(),
+            hIcon: HICON::default(),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or(HCURSOR::default()),
+            lpszClassName: UDL_TAB_PAGE_CLASS,
+            ..Default::default()
+        };
+        let atom = RegisterClassExW(&raw const wc);
+        if atom == 0 {
+            tracing::error!("failed to register UDL editor tab-page window class");
+        }
+    });
+}
+
+/// `WndProc` for tab-page container windows. Forwards
+/// `WM_COMMAND` and `WM_NOTIFY` up to the parent (the editor
+/// dialog); everything else falls through to `DefWindowProc`.
+///
+/// Panic-guarded via `catch_unwind` — same discipline as
+/// [`udl_editor_wnd_proc`].
+extern "system" fn tab_page_wnd_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
-    _id_subclass: usize,
-    _ref_data: usize,
 ) -> LRESULT {
-    // Same panic-catch discipline as `udl_editor_wnd_proc` —
-    // unwinding across an `extern "system"` frame is UB.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         match msg {
             WM_COMMAND | WM_NOTIFY => {
@@ -800,13 +832,13 @@ extern "system" fn tab_page_subclass_proc(
                 }
                 LRESULT(0)
             }
-            _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
     }));
     if let Ok(lr) = result {
         lr
     } else {
-        tracing::error!("panic caught in tab_page_subclass_proc");
+        tracing::error!("panic caught in tab_page_wnd_proc");
         LRESULT(0)
     }
 }
@@ -906,11 +938,27 @@ extern "system" fn udl_editor_wnd_proc(
                     return DefWindowProcW(hwnd, msg, wparam, lparam);
                 }
                 let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut UdlEditorState;
-                if !state_ptr.is_null() {
+                let main_hwnd_for_focus = if state_ptr.is_null() {
+                    HWND::default()
+                } else {
                     let state = &mut *state_ptr;
                     if !confirm_discard_if_dirty(state) {
                         return LRESULT(0);
                     }
+                    state.main_hwnd
+                };
+                // Return focus to the main window BEFORE destroying
+                // our HWND. Without this, destroying an owned popup
+                // that currently has the foreground can leave Win32
+                // in a state where the main app is behind another
+                // window (or worse, minimized in the taskbar), and
+                // the user has to click the icon to raise it.
+                // Same well-known Win32 modeless-dialog quirk that
+                // hit the tab-close path earlier in this project.
+                if main_hwnd_for_focus.0 as usize != 0
+                    && IsWindow(Some(main_hwnd_for_focus)).as_bool()
+                {
+                    let _ = SetForegroundWindow(main_hwnd_for_focus);
                 }
                 let _ = DestroyWindow(hwnd);
                 LRESULT(0)
@@ -1042,32 +1090,40 @@ fn build_controls(state: &mut UdlEditorState) {
     content_rc.top += TAB_Y;
     content_rc.bottom += TAB_Y;
 
-    // Create the 4 tab-page containers (each a plain STATIC
-    // window sized to `content_rc`). Only page 0 starts visible;
-    // switching tabs flips visibility.
+    // Create the 5 tab-page containers via the custom
+    // `UDL_TAB_PAGE_CLASS` — a class whose WndProc forwards
+    // `WM_COMMAND`/`WM_NOTIFY` to the parent (the dialog) AND
+    // whose `hbrBackground = dialog_bg_brush()`.
     //
-    // Immediately after creation we subclass each page's WndProc
-    // to `tab_page_wnd_proc` — this forwards `WM_COMMAND` and
-    // `WM_NOTIFY` up to the dialog. Without the forwarder, Win32
-    // sends control notifications to the direct parent, which is
-    // the tab page (STATIC-class), whose `DefWindowProc` drops
-    // `WM_COMMAND` on the floor. The dialog's WndProc never sees
-    // the notification and the field controls are dead-on-arrival
-    // — every keystroke on the Name edit, every combobox
-    // selection, silently vanishes. The forwarder fixes that by
-    // routing the two notification-carrying messages to the
-    // dialog, which is where our handlers live.
+    // Both properties are load-bearing:
+    //
+    // - The WM_COMMAND forwarding routes control notifications
+    //   from field controls (parented to the tab page) up to
+    //   the dialog's `handle_command` dispatcher. Without this,
+    //   every keystroke and combobox change would silently
+    //   vanish (Win32 sends notifications to the direct parent,
+    //   not up the chain).
+    // - The background brush makes the tab page paint itself
+    //   grey. If we used the system `STATIC` class instead
+    //   (which has `hbrBackground = NULL`), combined with the
+    //   dialog's `WS_CLIPCHILDREN` excluding child rects from
+    //   the dialog's own `WM_ERASEBKGND`, the tab-page rect
+    //   would never get painted at all — leaving the whole
+    //   content area visually empty even though controls exist.
+    //
+    // Only page 0 starts visible; `switch_tab` flips visibility
+    // as the user clicks tabs.
+    register_tab_page_class(hinst);
     for i in 0..5 {
         let page = unsafe {
             CreateWindowExW(
                 WINDOW_EX_STYLE(0),
-                w!("STATIC"),
+                UDL_TAB_PAGE_CLASS,
                 None,
                 WS_CHILD
                     | WS_CLIPCHILDREN
                     | WS_CLIPSIBLINGS
-                    | if i == 0 { WS_VISIBLE } else { WINDOW_STYLE(0) }
-                    | WINDOW_STYLE(SS_LEFT),
+                    | if i == 0 { WS_VISIBLE } else { WINDOW_STYLE(0) },
                 content_rc.left,
                 content_rc.top,
                 content_rc.right - content_rc.left,
@@ -1080,23 +1136,6 @@ fn build_controls(state: &mut UdlEditorState) {
         }
         .unwrap_or(HWND::default());
         state.tab_pages[i] = page;
-        // Install the WM_COMMAND / WM_NOTIFY forwarder subclass.
-        // `SetWindowSubclass` returns BOOL — failure is
-        // extremely rare (only on out-of-comctl32-resources) but
-        // if it does fail this tab's field controls become
-        // silently inert (WM_COMMAND won't reach the dialog).
-        // Log it so a user hitting the rare failure sees a
-        // diagnostic instead of dead keystrokes.
-        let ok = unsafe {
-            SetWindowSubclass(page, Some(tab_page_subclass_proc), TAB_PAGE_SUBCLASS_ID, 0)
-        };
-        if !ok.as_bool() {
-            tracing::warn!(
-                tab_index = i,
-                "SetWindowSubclass failed for UDL editor tab page; \
-                 field controls on this tab will be inert"
-            );
-        }
     }
 
     // All 4 tabs now have real controls — no placeholder pass
