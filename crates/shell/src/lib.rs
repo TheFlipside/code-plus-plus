@@ -5560,11 +5560,17 @@ mod tests {
         /// Recorded N++-ABI menu command ids dispatched through
         /// `dispatch_npp_menu_command` — one entry per call, in
         /// order. Lets `NPPM_MENUCOMMAND` tests assert the
-        /// dispatcher forwarded the exact id.
+        /// dispatcher forwarded the exact id. `cfg(windows)`-gated
+        /// because both the impl method and the tests that read
+        /// the vec are Windows-only (`NPPM_*` dispatch lives in
+        /// `plugin-host`, which is Windows-only until Phase 5).
+        #[cfg(target_os = "windows")]
         npp_menu_commands: Vec<i32>,
         /// Recorded `(cmd_id, checked)` pairs from
         /// `set_npp_menu_item_check` — lets `NPPM_SETMENUITEMCHECK`
-        /// tests assert both the id and the requested state.
+        /// tests assert both the id and the requested state. Same
+        /// `cfg(windows)` gate rationale as `npp_menu_commands`.
+        #[cfg(target_os = "windows")]
         npp_menu_checks: Vec<(i32, bool)>,
         /// Counter incremented each time `mark_active_buffer_dirty`
         /// is called — `NPPM_MAKECURRENTBUFFERDIRTY` tests assert
