@@ -457,40 +457,40 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_OEM_PLUS, VK_S, VK_W,
 };
 use windows::Win32::UI::Shell::{
-    DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW, SetWindowSubclass, ShellExecuteW,
-    HDROP,
+    AssocQueryStringW, DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW,
+    SetWindowSubclass, ShellExecuteW, ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR_EXECUTABLE, HDROP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CopyAcceleratorTableW,
     CreateAcceleratorTableW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
     DeleteMenu, DestroyAcceleratorTable, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
-    DrawIconEx, DrawMenuBar, GetClientRect, GetCursorPos, GetDlgItem, GetMenu, GetMenuItemCount,
-    GetMenuItemID, GetMenuItemInfoW, GetMessageW, GetParent, GetSubMenu, GetWindowLongPtrW,
-    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW, IsWindow,
-    IsWindowVisible, KillTimer, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW, MoveWindow,
-    PostMessageW, PostQuitMessage, RegisterClassExW, RemoveMenu, SendMessageW, SetCursor,
-    SetLayeredWindowAttributes, SetMenu, SetMenuItemInfoW, SetParent, SetTimer, SetWindowLongPtrW,
-    SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu, TranslateAcceleratorW,
-    TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
-    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_OWNERDRAW,
+    DrawIconEx, DrawMenuBar, EnableMenuItem, GetClientRect, GetCursorPos, GetDlgItem, GetMenu,
+    GetMenuItemCount, GetMenuItemID, GetMenuItemInfoW, GetMessageW, GetParent, GetSubMenu,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW,
+    IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW,
+    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, RemoveMenu, SendMessageW,
+    SetCursor, SetLayeredWindowAttributes, SetMenu, SetMenuItemInfoW, SetParent, SetTimer,
+    SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu,
+    TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK,
+    BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_OWNERDRAW,
     BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL,
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID,
     ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
     GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO, IDOK,
     IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
-    MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MFS_CHECKED, MFS_UNCHECKED, MFT_RADIOCHECK,
-    MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MIIM_STATE, MSG, SHOW_WINDOW_CMD,
-    SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED,
-    SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
-    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND,
-    WM_HSCROLL, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE,
-    WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
-    WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
-    WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL,
-    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS, MFS_CHECKED, MFS_UNCHECKED,
+    MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
+    MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MIIM_STATE,
+    MSG, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
+    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE,
+    WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL, WM_INITMENUPOPUP, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE,
+    WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
+    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP,
+    WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -518,6 +518,14 @@ const ID_FILE_CLOSE_ALL: u16 = 1007;
 const ID_FILE_RELOAD: u16 = 1008;
 const ID_FILE_PRINT: u16 = 1009;
 const ID_FILE_RENAME: u16 = 1010;
+/// File → Open in Default Viewer. Passes the active tab's on-disk
+/// path to the OS's registered handler for that file's extension
+/// via `ShellExecuteW("open", ...)`. Greyed when the active tab
+/// has no on-disk path (untitled) or its extension has no
+/// registered handler on the current machine. Refreshed on every
+/// `WM_INITMENUPOPUP` for the File menu — see
+/// [`refresh_file_menu`].
+const ID_FILE_OPEN_IN_DEFAULT_VIEWER: u16 = 1011;
 
 // Edit (1100-1199) — most route directly to Scintilla via SCI_*.
 const ID_EDIT_UNDO: u16 = 1100;
@@ -1144,11 +1152,13 @@ struct WindowState {
     /// menu skip the work; we never reload plugins after the first
     /// touch, even if the user re-opens the menu.
     plugins_menu_initialized: bool,
-    /// HMENUs of the four menus whose contents reflect live state
-    /// (encoding radio, language radio, View toggle/check marks,
-    /// Window's per-tab list). The popup HMENU on
-    /// `WM_INITMENUPOPUP` is matched against these to dispatch the
-    /// right refresh routine.
+    /// HMENUs of the five menus whose contents reflect live state
+    /// (File → Open in Default Viewer greyed state, encoding
+    /// radio, language radio, View toggle/check marks, Window's
+    /// per-tab list). The popup HMENU on `WM_INITMENUPOPUP` is
+    /// matched against these to dispatch the right refresh
+    /// routine.
+    file_menu: HMENU,
     view_menu: HMENU,
     encoding_menu: HMENU,
     language_menu: HMENU,
@@ -13913,6 +13923,12 @@ fn tab_label_for(tab: &Tab) -> Vec<u16> {
 struct BuiltMenuBar {
     bar: HMENU,
     plugin_menu: HMENU,
+    /// File submenu. Held addressable so `WM_INITMENUPOPUP` can
+    /// match against it and refresh the state-driven entries
+    /// (currently just `ID_FILE_OPEN_IN_DEFAULT_VIEWER`'s enabled
+    /// state, driven by the active tab's on-disk path + extension
+    /// association).
+    file_menu: HMENU,
     view_menu: HMENU,
     encoding_menu: HMENU,
     language_menu: HMENU,
@@ -13956,6 +13972,16 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             MF_STRING,
             ID_FILE_OPEN as usize,
             w!("&Open...\tCtrl+O"),
+        )?;
+        // Enable state is state-driven — see [`refresh_file_menu`]
+        // fired from `WM_INITMENUPOPUP` for the File menu. Starts
+        // greyed because no tab exists at startup; a fresh Ctrl+N
+        // or Ctrl+O flips it appropriately on the next popup.
+        AppendMenuW(
+            file_menu,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_OPEN_IN_DEFAULT_VIEWER as usize,
+            w!("Open in &Default Viewer"),
         )?;
         AppendMenuW(
             file_menu,
@@ -14376,6 +14402,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         Ok(BuiltMenuBar {
             bar,
             plugin_menu,
+            file_menu,
             view_menu,
             encoding_menu,
             language_menu,
@@ -17812,6 +17839,157 @@ fn open_url_in_browser(hwnd: HWND, url: &'static str) {
             url,
             code = ret.0 as isize,
             "ShellExecuteW(open, url) failed"
+        );
+    }
+}
+
+/// Extract the file extension from `path` with the leading dot
+/// prefix required by [`AssocQueryStringW`]. Returns `None` for
+/// paths with no extension (`README`, `Makefile`) or for
+/// extensions that aren't valid UTF-8 (rare in practice on
+/// Windows filesystems, but possible via arbitrary byte
+/// sequences a plugin could construct).
+///
+/// Pure — no OS interaction. Broken out so the tests can pin
+/// the extraction rules without needing a live registry to
+/// query.
+fn extract_extension_with_dot(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?;
+    if ext.is_empty() {
+        return None;
+    }
+    Some(format!(".{ext}"))
+}
+
+/// Returns `true` if the current Windows shell has any registered
+/// handler for the file extension `ext_with_dot` (e.g. `".txt"`).
+///
+/// The check is a null-buffer size-probe of [`AssocQueryStringW`]
+/// with [`ASSOCSTR_EXECUTABLE`]. Two subtleties worth pinning:
+///
+/// 1. **`ASSOCF_INIT_IGNOREUNKNOWN` is load-bearing.** Without it,
+///    Windows silently falls back to the "Unknown" application
+///    for unregistered extensions and returns success anyway. That
+///    would light the menu entry for every extension, defeating
+///    the greying contract. The `IGNOREUNKNOWN` flag makes
+///    unregistered extensions fail with `ERROR_NO_ASSOCIATION`
+///    (`0x8007_0483` when wrapped as HRESULT).
+///
+/// 2. **`S_FALSE` (not `E_POINTER`) is the "size query succeeded"
+///    signal.** The Microsoft docs describe the null-buffer
+///    contract as "returns the required size" without pinning a
+///    specific HRESULT; empirically the `windows` crate surfaces
+///    `S_FALSE` (`0x0000_0001`) on Win10/Win11. `hr.is_ok()`
+///    covers both `S_OK` and `S_FALSE`, matching either the
+///    real-buffer or null-buffer success path.
+///
+/// Used exclusively by [`refresh_file_menu`] to decide whether
+/// `ID_FILE_OPEN_IN_DEFAULT_VIEWER` should be enabled: no
+/// association ⇒ greyed, matching what a user would see if they
+/// clicked and Explorer popped the "How do you want to open this
+/// file?" picker instead of opening the file.
+fn extension_has_registered_handler(ext_with_dot: &str) -> bool {
+    let ext_wide = wide_terminated(ext_with_dot);
+    let mut required_size: u32 = 0;
+    // SAFETY: `AssocQueryStringW` reads through `ext_wide` (a
+    // stack-owned Vec<u16> live across the call), writes to
+    // `required_size`, and does nothing with the two null buffer
+    // pointers. No wnd_proc re-entry, no cross-thread state.
+    let hr = unsafe {
+        AssocQueryStringW(
+            ASSOCF_INIT_IGNOREUNKNOWN,
+            ASSOCSTR_EXECUTABLE,
+            PCWSTR(ext_wide.as_ptr()),
+            w!("open"),
+            None,
+            &raw mut required_size,
+        )
+    };
+    hr.is_ok()
+}
+
+/// Pass `path` to the OS's registered handler for its extension
+/// via `ShellExecuteW("open", ...)`. The verb resolves against
+/// the same association tree [`extension_has_registered_handler`]
+/// probes, so callers that gate on that helper first can trust
+/// the launch to succeed on any healthy machine. Failures still
+/// log at `warn` — a broken association between the greying
+/// refresh and the click (e.g. the user uninstalled the handler
+/// mid-session) is rare but not impossible.
+///
+/// **Security.** Unlike [`open_url_in_browser`], the path here is
+/// derived from `Tab.path` (user-controlled) rather than a
+/// compile-time constant. The mitigation is that
+/// (a) `ShellExecuteW`'s `"open"` verb only invokes the
+/// per-extension registered handler, never runs the path as a
+/// command, and (b) the path is quoted-then-passed as a single
+/// wide-string argument, so a filename containing shell
+/// metacharacters cannot inject additional command tokens. Same
+/// safety envelope Notepad++ operates under for the equivalent
+/// menu entry.
+fn open_path_in_default_viewer(hwnd: HWND, path: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    let path_wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `path_wide` lives across the synchronous call; `hwnd`
+    // is the main window we own on this thread. No handle is
+    // retained past this call.
+    let ret = unsafe {
+        ShellExecuteW(
+            Some(hwnd),
+            w!("open"),
+            PCWSTR(path_wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if (ret.0 as isize) <= 32 {
+        tracing::warn!(
+            path = ?path,
+            code = ret.0 as isize,
+            "ShellExecuteW(open, <file>) failed"
+        );
+    }
+}
+
+/// Refresh state-driven File menu entries. Currently drives just
+/// [`ID_FILE_OPEN_IN_DEFAULT_VIEWER`]'s enabled/greyed state; the
+/// rest of the File menu is either statically enabled or gated
+/// elsewhere (e.g. Save's WM_INITMENUPOPUP-independent shortcut
+/// flow).
+///
+/// Enable rule (mirrors Notepad++): the entry is enabled iff the
+/// active tab has an on-disk path (untitled buffers grey it) AND
+/// the extension has a registered OS handler (unregistered
+/// extensions grey it). Both checks are cheap — a probe-only
+/// `AssocQueryStringW` on a menu-open cadence sits well inside
+/// the per-frame budget.
+///
+/// # Safety
+///
+/// `file_menu` must be a live HMENU (built by
+/// [`build_main_menu`], stored on `WindowState`). Caller runs on
+/// the UI thread.
+unsafe fn refresh_file_menu(file_menu: HMENU, shell: &codepp_shell::Shell) {
+    let enabled = shell
+        .active()
+        .and_then(|tab| tab.path.as_deref())
+        .and_then(extract_extension_with_dot)
+        .is_some_and(|ext| extension_has_registered_handler(&ext));
+    // `EnableMenuItem` returns the previous state on success or
+    // `-1u32` on failure; both are fire-and-forget for us — a
+    // failure just means the enable state is wrong on this open,
+    // never a stability issue.
+    let flags = MF_BYCOMMAND.0 | if enabled { MF_ENABLED.0 } else { MF_GRAYED.0 };
+    unsafe {
+        let _ = EnableMenuItem(
+            file_menu,
+            u32::from(ID_FILE_OPEN_IN_DEFAULT_VIEWER),
+            MENU_ITEM_FLAGS(flags),
         );
     }
 }
@@ -23444,6 +23622,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             main_menu: menubar,
             plugin_menu,
             plugins_menu_initialized: false,
+            file_menu: menus.file_menu,
             view_menu: menus.view_menu,
             encoding_menu: menus.encoding_menu,
             language_menu: menus.language_menu,
@@ -27019,6 +27198,37 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         }
                         fire_queued_notifications(hwnd);
                     }
+                    ID_FILE_OPEN_IN_DEFAULT_VIEWER => {
+                        // Snapshot the active tab's path under a brief
+                        // borrow, then drop it before `ShellExecuteW`:
+                        // the shelled-out process is asynchronous but
+                        // the call itself can enter modal dialogs
+                        // (UAC prompt, association picker) whose
+                        // pump would re-enter our wnd_proc.
+                        //
+                        // The menu item is greyed by
+                        // `refresh_file_menu` for untitled buffers /
+                        // unregistered extensions, so a click always
+                        // reaches this arm with a path that is
+                        // eligible on the machine — the `path.is_some()`
+                        // guard is UX-only (not a security boundary):
+                        // it protects against a plugin-driven
+                        // `NPPM_MENUCOMMAND` firing the id
+                        // independently of menu greying and hitting
+                        // `open_path_in_default_viewer` with a
+                        // no-path tab, which would silently no-op
+                        // and pop nothing at all. Plugins already
+                        // run in-process with full authority
+                        // (DESIGN.md §6.5), so they could call
+                        // `ShellExecuteW` directly on any path
+                        // regardless — the gate isn't a
+                        // capability restriction.
+                        let path: Option<PathBuf> = state_from_hwnd(hwnd)
+                            .and_then(|state| state.shell.active().and_then(|t| t.path.clone()));
+                        if let Some(p) = path {
+                            open_path_in_default_viewer(hwnd, &p);
+                        }
+                    }
                     ID_FILE_SAVE_AS => {
                         run_save_as_flow(hwnd);
                         // save_buffer_as clears the dirty glyph via
@@ -27794,7 +28004,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // a re-entrant call could observe through `state`.
                 // None of these helpers re-enter our wnd_proc.
                 if let Some(state) = state_from_hwnd(hwnd) {
-                    if popup_hmenu_value == state.view_menu.0 as usize {
+                    if popup_hmenu_value == state.file_menu.0 as usize {
+                        refresh_file_menu(state.file_menu, &state.shell);
+                    } else if popup_hmenu_value == state.view_menu.0 as usize {
                         refresh_view_menu(state.view_menu, &state.editor);
                     } else if popup_hmenu_value == state.encoding_menu.0 as usize {
                         if let Some(active) = state.shell.active() {
@@ -29038,6 +29250,121 @@ mod idm_mapping_tests {
     /// of the alloc pool below the range floor is caught early.
     const _: () = assert!(PLUGIN_CMD_ID_BASE > 49_999);
     const _: () = assert!(PLUGIN_ALLOC_CMD_LIMIT >= PLUGIN_CMD_ID_BASE);
+}
+
+#[cfg(test)]
+mod file_menu_extension_tests {
+    use super::extract_extension_with_dot;
+    use std::path::PathBuf;
+
+    /// A typical case: the extractor prepends the required dot,
+    /// yielding the exact form `AssocQueryStringW` expects.
+    #[test]
+    fn common_extension_is_returned_with_leading_dot() {
+        assert_eq!(
+            extract_extension_with_dot(&PathBuf::from(r"C:\src\lib.rs")),
+            Some(".rs".to_string())
+        );
+        assert_eq!(
+            extract_extension_with_dot(&PathBuf::from("notes.txt")),
+            Some(".txt".to_string())
+        );
+    }
+
+    /// Files with no extension (README, Makefile) have no
+    /// association to probe — the menu item must grey. Returning
+    /// `None` from the extractor is the mechanism.
+    #[test]
+    fn no_extension_returns_none() {
+        assert_eq!(
+            extract_extension_with_dot(&PathBuf::from(r"C:\project\README")),
+            None
+        );
+        assert_eq!(extract_extension_with_dot(&PathBuf::from("Makefile")), None);
+    }
+
+    /// Dot-files (`.gitignore`, `.env`) — `Path::extension`
+    /// returns `None` for these on both Unix and Windows, so the
+    /// extractor mirrors that. Consistent with N++ behaviour:
+    /// dot-files grey the entry until the user gives them a real
+    /// extension.
+    #[test]
+    fn dot_files_have_no_extension() {
+        assert_eq!(
+            extract_extension_with_dot(&PathBuf::from(".gitignore")),
+            None
+        );
+        assert_eq!(
+            extract_extension_with_dot(&PathBuf::from(r"C:\src\.env")),
+            None
+        );
+    }
+
+    /// Multi-dot files (`archive.tar.gz`) — `Path::extension`
+    /// returns only the trailing segment. That matches what a
+    /// user pastes into the shell association picker, so
+    /// probing on `.gz` is the correct behaviour (there's no
+    /// per-`.tar.gz` handler in the registry).
+    #[test]
+    fn multi_dot_returns_final_segment_only() {
+        assert_eq!(
+            extract_extension_with_dot(&PathBuf::from(r"C:\dl\archive.tar.gz")),
+            Some(".gz".to_string())
+        );
+    }
+
+    /// Trailing-dot filenames (`weird.`) — `Path::extension`
+    /// returns `Some("")` on some platforms. The extractor
+    /// filters empty extensions to avoid probing `"."`, which
+    /// would return spurious hits from mis-configured
+    /// associations.
+    #[test]
+    fn trailing_dot_returns_none() {
+        assert_eq!(extract_extension_with_dot(&PathBuf::from("weird.")), None);
+    }
+
+    /// Case is preserved verbatim — Windows filesystems are
+    /// case-insensitive, and `AssocQueryStringW` normalises
+    /// internally, so `.TXT` and `.txt` reach the same handler.
+    /// Round-tripping the on-disk casing here is cheaper than a
+    /// `to_lowercase()` allocation on every menu open.
+    #[test]
+    fn case_is_preserved() {
+        assert_eq!(
+            extract_extension_with_dot(&PathBuf::from("README.MD")),
+            Some(".MD".to_string())
+        );
+    }
+
+    /// Live probe against the Windows shell registry. `.exe` is
+    /// guaranteed to have a registered handler on every Windows
+    /// installation (Windows Explorer double-clicks it); a
+    /// deliberately nonsense extension must fail to distinguish
+    /// itself from the generic "Unknown" fallback (that's what
+    /// [`ASSOCF_INIT_IGNOREUNKNOWN`] guarantees). Pins the correct
+    /// combination of flag + HRESULT check — a regression on
+    /// either (dropping the flag, matching the wrong success
+    /// code) would fail exactly this test.
+    ///
+    /// Runs only on Windows because the underlying
+    /// `AssocQueryStringW` symbol is Windows-only. On Linux/macOS
+    /// the whole `ui_win32` crate isn't built into the app anyway,
+    /// but its cfg-gates keep the test suite green on those CI
+    /// runners.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn extension_check_distinguishes_registered_from_missing() {
+        use super::extension_has_registered_handler;
+        assert!(
+            extension_has_registered_handler(".exe"),
+            ".exe must resolve to the OS's registered handler on every Windows install"
+        );
+        assert!(
+            !extension_has_registered_handler(".zzzznotreal-codepp-testonly"),
+            "unregistered extension must fail — otherwise the greying logic \
+             never fires and the menu entry is permanently enabled"
+        );
+    }
 }
 
 #[cfg(test)]
