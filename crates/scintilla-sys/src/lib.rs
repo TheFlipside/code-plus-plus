@@ -345,6 +345,21 @@ pub const SCI_REDO: u32 = 2011;
 pub const SCI_CANUNDO: u32 = 2174;
 pub const SCI_CANREDO: u32 = 2016;
 pub const SCI_EMPTYUNDOBUFFER: u32 = 2175;
+/// Add a plugin-owned container action to the undo stack. `wparam`
+/// is the opaque token the plugin receives back through
+/// `SCN_MODIFIED` with `SC_MOD_CONTAINER` when the action is
+/// undone/redone; `lparam` carries the [`UNDO_MAY_COALESCE`] flag
+/// (or 0 to force a standalone action). Adding a container action
+/// moves the current undo position past the last save-point, so
+/// `SCI_GETMODIFY` starts reporting the document as dirty — that's
+/// how `NPPM_MAKECURRENTBUFFERDIRTY` toggles the modified state
+/// without touching text.
+pub const SCI_ADDUNDOACTION: u32 = 2560;
+/// `SCI_ADDUNDOACTION` flag: this container action may coalesce
+/// with an adjacent one on the undo stack (e.g. two consecutive
+/// same-token actions collapse to one undo step). `0` forces
+/// a standalone action.
+pub const UNDO_MAY_COALESCE: i32 = 1;
 
 // Caret / cursor position
 pub const SCI_GETCURRENTPOS: u32 = 2008;

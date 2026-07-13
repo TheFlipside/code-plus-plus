@@ -548,6 +548,48 @@ pub trait UiPlatform {
     /// the backup write entirely, dirty tabs get one so the
     /// user's unsaved edits survive a restart.
     fn is_doc_dirty(&mut self, scintilla_doc: isize) -> bool;
+
+    /// Dispatch a Notepad++-ABI `IDM_*` command id. Drives
+    /// `NPPM_MENUCOMMAND`. The implementation maps the N++
+    /// command id to whichever internal command routes to the
+    /// same action (File → Open, View → Word Wrap, …) and fires
+    /// it — typically by posting an equivalent `WM_COMMAND` on
+    /// Win32 so the built-in menu handler runs the same code
+    /// path a user click would take. Plugin-allocated cmd ids
+    /// (from `NPPM_ALLOCATECMDID` or the plugin's own `FuncItem`
+    /// entries) fall through untouched. Returns `true` if a
+    /// dispatch was attempted, `false` for command ids the
+    /// backend has no target for (unmapped built-in ids). Same
+    /// `cfg(windows)` gate rationale as the other plugin-host-
+    /// dispatched methods — `NPPM_MENUCOMMAND` lives in
+    /// `plugin-host`, which is Windows-only until Phase 5.
+    #[cfg(target_os = "windows")]
+    fn dispatch_npp_menu_command(&mut self, idm: i32) -> bool;
+
+    /// Set the checked state of the menu item bound to N++-ABI
+    /// command id `idm`. Drives `NPPM_SETMENUITEMCHECK`. The
+    /// implementation maps built-in `IDM_*` ids through the same
+    /// table as [`Self::dispatch_npp_menu_command`], falls through
+    /// for plugin-allocated cmd ids, and issues the native
+    /// "check menu item by command" call. Returns `true` if the
+    /// state was applied, `false` if the id has no menu item
+    /// (unmapped built-in id, or a plugin cmd id whose owning
+    /// plugin didn't publish a menu entry).
+    #[cfg(target_os = "windows")]
+    fn set_npp_menu_item_check(&mut self, idm: i32, checked: bool) -> bool;
+
+    /// Mark the active buffer as modified, so save prompts, the
+    /// title-bar asterisk, and `SCI_GETMODIFY` all report dirty
+    /// until the next successful save. Drives
+    /// `NPPM_MAKECURRENTBUFFERDIRTY`. Scintilla has no direct
+    /// "set dirty" primitive — the Win32 impl adds an opaque
+    /// container action (`SCI_ADDUNDOACTION`) to shift the undo
+    /// position past the save point. No-op if the buffer is
+    /// already dirty (avoids stacking one phantom undo entry per
+    /// call for plugins that redundantly re-mark). Not gated on
+    /// Windows only — the primitive is Scintilla-level and every
+    /// backend has the same shape.
+    fn mark_active_buffer_dirty(&mut self);
 }
 
 /// One restored tab from `Shell::load_session_entries`. Tells the UI
@@ -4414,18 +4456,30 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn menu_command(&mut self, cmd_id: i32) {
-        // Built-in menu cmdIDs (IDM_FILE_OPEN, IDM_EDIT_COPY, …) get
-        // wired in milestone 6 alongside the full menu set. Phase 3
-        // milestone 4 logs and ignores so plugins don't crash.
-        tracing::trace!(cmd = cmd_id, "NPPM_MENUCOMMAND (no handler wired yet)");
+        // Routes the plugin's N++-ABI `IDM_*` id through the
+        // UI-side mapping onto the equivalent Code++ `ID_*`, then
+        // fires it via `PostMessage(WM_COMMAND)` — same code path
+        // a user's menu click takes. Plugin-allocated cmd ids
+        // (from `NPPM_ALLOCATECMDID` / FuncItem entries) pass
+        // through untouched.
+        //
+        // `dispatch_npp_menu_command` returns `false` for
+        // unmapped built-in ids (Notepad++ features Code++
+        // doesn't implement yet). We don't propagate that up —
+        // the `NPPM_MENUCOMMAND` ABI has no rejection channel;
+        // the trace-log in the UI method is enough for
+        // diagnostics.
+        let _ = self.ui.dispatch_npp_menu_command(cmd_id);
     }
 
     fn make_current_buffer_dirty(&mut self) {
-        // Dirty-state tracking lives entirely in Scintilla
-        // (`SCI_GETMODIFY`); plugins calling this expect the title
-        // bar to update and the save-on-exit prompt to appear.
-        // Title-bar dirty glyph is a milestone 6 task; for now log.
-        tracing::trace!("NPPM_MAKECURRENTBUFFERDIRTY (no-op, tracked by Scintilla)");
+        // The UI-side impl toggles Scintilla's dirty state via
+        // `SCI_ADDUNDOACTION` — Scintilla has no direct "set
+        // dirty" primitive, so the container-action shift-past-
+        // savepoint is the closest reachable analogue. Idempotent
+        // when the buffer is already dirty (avoids stacking phantom
+        // undo entries).
+        self.ui.mark_active_buffer_dirty();
     }
 
     fn set_buffer_lang_type(&mut self, id: isize, lang: i32) -> bool {
@@ -4488,9 +4542,16 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         LangType(lang).language_desc()
     }
 
-    fn set_menu_item_check(&mut self, _cmd_id: i32, _checked: bool) {
-        // Forwarded to native menu API in milestone 6.
-        tracing::trace!("NPPM_SETMENUITEMCHECK (no-op until full menu set lands)");
+    fn set_menu_item_check(&mut self, cmd_id: i32, checked: bool) {
+        // Routes the plugin's `IDM_*` id through the same UI-side
+        // mapping as `menu_command`, then calls the native
+        // check-menu-item primitive (`CheckMenuItem(MF_BYCOMMAND)`
+        // on Win32). Plugin-allocated cmd ids (>= `PLUGIN_CMD_ID_MIN`)
+        // pass through so plugins can toggle the check state on
+        // their own submenu entries. Same "no rejection channel"
+        // note as `menu_command`: `NPPM_SETMENUITEMCHECK` returns
+        // void, so a mapping miss just no-ops with a trace log.
+        let _ = self.ui.set_npp_menu_item_check(cmd_id, checked);
     }
 
     fn activate_doc(&mut self, view: i32, pos: i32) -> bool {
@@ -5496,6 +5557,19 @@ mod tests {
         /// `is_doc_dirty` returns this verbatim — tests that exercise
         /// the dirty-aware save path flip the flag manually.
         dirty: bool,
+        /// Recorded N++-ABI menu command ids dispatched through
+        /// `dispatch_npp_menu_command` — one entry per call, in
+        /// order. Lets `NPPM_MENUCOMMAND` tests assert the
+        /// dispatcher forwarded the exact id.
+        npp_menu_commands: Vec<i32>,
+        /// Recorded `(cmd_id, checked)` pairs from
+        /// `set_npp_menu_item_check` — lets `NPPM_SETMENUITEMCHECK`
+        /// tests assert both the id and the requested state.
+        npp_menu_checks: Vec<(i32, bool)>,
+        /// Counter incremented each time `mark_active_buffer_dirty`
+        /// is called — `NPPM_MAKECURRENTBUFFERDIRTY` tests assert
+        /// the shell reached the UI method once per plugin call.
+        mark_dirty_calls: usize,
     }
 
     impl UiPlatform for FakeUi {
@@ -5813,6 +5887,30 @@ mod tests {
             // the current single-buffer test fixtures. Per-doc
             // tracking can be added when a test needs it.
             self.dirty
+        }
+        #[cfg(target_os = "windows")]
+        fn dispatch_npp_menu_command(&mut self, idm: i32) -> bool {
+            // Record the id so tests can assert the shell routed
+            // the plugin's `NPPM_MENUCOMMAND` through the UI
+            // dispatcher. Returns `true` unconditionally — the
+            // real Win32 impl filters unmapped built-in ids, but
+            // the shell-side contract only exercises the routing
+            // path.
+            self.npp_menu_commands.push(idm);
+            true
+        }
+        #[cfg(target_os = "windows")]
+        fn set_npp_menu_item_check(&mut self, idm: i32, checked: bool) -> bool {
+            self.npp_menu_checks.push((idm, checked));
+            true
+        }
+        fn mark_active_buffer_dirty(&mut self) {
+            self.mark_dirty_calls += 1;
+            // Mirror the real Win32 impl's behavioural contract:
+            // after a call the buffer must be observably dirty.
+            // Tests exercising the `NPPM_MAKECURRENTBUFFERDIRTY`
+            // → subsequent `is_doc_dirty` chain rely on this.
+            self.dirty = true;
         }
     }
 
@@ -6428,6 +6526,134 @@ mod tests {
         };
         assert_eq!(r, Some(1));
         assert_eq!(ui.plugin_status_calls, vec![(2usize, "Hello!".to_string())]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn plugin_dispatch_menu_command_routes_id_through_ui() {
+        // Plugin sends NPPM_MENUCOMMAND(IDM_FILE_OPEN); the shell
+        // must forward the id verbatim through `HostBridge` into
+        // the UI's `dispatch_npp_menu_command`. FakeUi records
+        // the id — real Win32 would `PostMessage(WM_COMMAND)`.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        const NPPM_MENUCOMMAND: u32 = (0x0400 + 1000) + 48;
+        // IDM_FILE_OPEN = IDM_BASE(40000) + 1000 + 2 = 41002.
+        const IDM_FILE_OPEN: isize = 41002;
+
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_MENUCOMMAND,
+                0,
+                IDM_FILE_OPEN,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(ui.npp_menu_commands, vec![IDM_FILE_OPEN as i32]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn plugin_dispatch_set_menu_item_check_routes_id_and_state() {
+        // Plugin sends NPPM_SETMENUITEMCHECK(IDM_VIEW_WRAP, TRUE);
+        // the shell must forward both the id and the checked flag
+        // verbatim into the UI's `set_npp_menu_item_check`. FakeUi
+        // records the `(id, checked)` pair; real Win32 would call
+        // `CheckMenuItem(main_menu, id, MF_BYCOMMAND | MF_CHECKED)`.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        const NPPM_SETMENUITEMCHECK: u32 = (0x0400 + 1000) + 40;
+        // IDM_VIEW_WRAP = IDM_BASE + 4000 + 7 = 44007.
+        const IDM_VIEW_WRAP: usize = 44007;
+
+        let checked_r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SETMENUITEMCHECK,
+                IDM_VIEW_WRAP,
+                1, // TRUE
+            )
+        };
+        assert_eq!(checked_r, Some(1));
+
+        // Second call with FALSE — the shell must forward the
+        // clear-check semantic too.
+        let unchecked_r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SETMENUITEMCHECK,
+                IDM_VIEW_WRAP,
+                0, // FALSE
+            )
+        };
+        assert_eq!(unchecked_r, Some(1));
+
+        assert_eq!(
+            ui.npp_menu_checks,
+            vec![(IDM_VIEW_WRAP as i32, true), (IDM_VIEW_WRAP as i32, false),]
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn plugin_dispatch_make_current_buffer_dirty_reaches_ui() {
+        // Plugin sends NPPM_MAKECURRENTBUFFERDIRTY; the shell must
+        // forward through `HostBridge` into the UI's
+        // `mark_active_buffer_dirty`. FakeUi's impl also flips its
+        // internal `dirty` flag so a follow-up `is_doc_dirty`
+        // reflects the change — pinning the behavioural contract
+        // that the real Win32 impl upholds via `SCI_ADDUNDOACTION`.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        // Baseline: no calls, no dirty state.
+        assert_eq!(ui.mark_dirty_calls, 0);
+        assert!(!ui.is_doc_dirty(1));
+
+        const NPPM_MAKECURRENTBUFFERDIRTY: u32 = (0x0400 + 1000) + 44;
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_MAKECURRENTBUFFERDIRTY,
+                0,
+                0,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(ui.mark_dirty_calls, 1);
+        // Behavioural check: the UI-side impl must leave the
+        // buffer observably dirty. The real Win32 impl issues
+        // `SCI_ADDUNDOACTION` to shift past the savepoint; FakeUi
+        // sets its flag directly.
+        assert!(ui.is_doc_dirty(1));
+
+        // Second call — the counter increments, dirty stays true.
+        // The real Win32 impl no-ops on already-dirty (avoids
+        // stacking phantom undo entries); FakeUi doesn't model
+        // that idempotence check because the shell doesn't rely
+        // on it — the semantic ("after the call, buffer is dirty")
+        // holds either way.
+        let r2 = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_MAKECURRENTBUFFERDIRTY,
+                0,
+                0,
+            )
+        };
+        assert_eq!(r2, Some(1));
+        assert_eq!(ui.mark_dirty_calls, 2);
     }
 
     #[cfg(target_os = "windows")]

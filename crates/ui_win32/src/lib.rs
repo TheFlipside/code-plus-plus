@@ -160,8 +160,8 @@ use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
 use codepp_plugin_host::ffi::SCNotification;
 use codepp_plugin_host::{
-    Notification, NppData, PluginAdminEntry, NPPMSG, NPPMSG_RANGE, PLUGIN_CMD_ID_BASE,
-    RUNCOMMAND_RANGE, RUNCOMMAND_USER,
+    Notification, NppData, PluginAdminEntry, NPPMSG, NPPMSG_RANGE, PLUGIN_ALLOC_CMD_LIMIT,
+    PLUGIN_CMD_ID_BASE, RUNCOMMAND_RANGE, RUNCOMMAND_USER,
 };
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
@@ -384,9 +384,9 @@ use codepp_scintilla_sys::{
     SCE_V_OPERATOR, SCE_V_OUTPUT, SCE_V_PORT_CONNECT, SCE_V_PREPROCESSOR, SCE_V_STRING,
     SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3, SCE_YAML_COMMENT,
     SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR,
-    SCE_YAML_REFERENCE, SCE_YAML_TEXT, SCI_BEGINUNDOACTION, SCI_CLEAR, SCI_COLOURISE, SCI_COPY,
-    SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR,
-    SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+    SCE_YAML_REFERENCE, SCE_YAML_TEXT, SCI_ADDUNDOACTION, SCI_BEGINUNDOACTION, SCI_CLEAR,
+    SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION,
+    SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
     SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
     SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
     SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
@@ -1442,6 +1442,131 @@ struct Win32Ui {
     /// this pointer never observes a `&mut UdlRegistry`.
     udl_registry: *const codepp_udl::UdlRegistry,
     editor: EditorHandle,
+}
+
+// -----------------------------------------------------------------
+// Notepad++ ABI menu-command ids (IDM_*).
+//
+// These are the numeric values plugins pass to `NPPM_MENUCOMMAND` and
+// `NPPM_SETMENUITEMCHECK` (declared in
+// `plugins/nppcompat-headers/menuCmdID.h`). Kept as Rust constants
+// alongside Code++'s own [`ID_*`] block so the mapping function below
+// can be a single `match` without a magic-number soup. Only the ids
+// Code++ actually implements a target for are declared here; new
+// mappings add a matching constant when they land.
+//
+// The values MUST match `menuCmdID.h` exactly — a plugin compiled
+// against those constants sends those numeric ids over the ABI, and
+// a mismatch here would silently drop the dispatch.
+const IDM_BASE: i32 = 40000;
+const IDM_FILE: i32 = IDM_BASE + 1000;
+const IDM_EDIT: i32 = IDM_BASE + 2000;
+const IDM_SEARCH: i32 = IDM_BASE + 3000;
+const IDM_VIEW: i32 = IDM_BASE + 4000;
+const IDM_FORMAT: i32 = IDM_BASE + 5000;
+
+const IDM_FILE_NEW: i32 = IDM_FILE + 1;
+const IDM_FILE_OPEN: i32 = IDM_FILE + 2;
+const IDM_FILE_CLOSE: i32 = IDM_FILE + 3;
+const IDM_FILE_CLOSEALL: i32 = IDM_FILE + 4;
+const IDM_FILE_SAVE: i32 = IDM_FILE + 6;
+const IDM_FILE_SAVEALL: i32 = IDM_FILE + 7;
+const IDM_FILE_SAVEAS: i32 = IDM_FILE + 8;
+const IDM_FILE_PRINT: i32 = IDM_FILE + 9;
+const IDM_FILE_EXIT: i32 = IDM_FILE + 11;
+const IDM_FILE_RELOAD: i32 = IDM_FILE + 14;
+const IDM_FILE_RENAME: i32 = IDM_FILE + 17;
+
+const IDM_EDIT_CUT: i32 = IDM_EDIT + 1;
+const IDM_EDIT_COPY: i32 = IDM_EDIT + 2;
+const IDM_EDIT_UNDO: i32 = IDM_EDIT + 3;
+const IDM_EDIT_REDO: i32 = IDM_EDIT + 4;
+const IDM_EDIT_PASTE: i32 = IDM_EDIT + 5;
+const IDM_EDIT_DELETE: i32 = IDM_EDIT + 6;
+const IDM_EDIT_SELECTALL: i32 = IDM_EDIT + 7;
+
+const IDM_SEARCH_FIND: i32 = IDM_SEARCH + 1;
+const IDM_SEARCH_FINDNEXT: i32 = IDM_SEARCH + 2;
+const IDM_SEARCH_REPLACE: i32 = IDM_SEARCH + 3;
+const IDM_SEARCH_GOTOLINE: i32 = IDM_SEARCH + 4;
+const IDM_SEARCH_FINDINFILES: i32 = IDM_SEARCH + 9;
+
+const IDM_VIEW_ZOOMIN: i32 = IDM_VIEW + 3;
+const IDM_VIEW_ZOOMOUT: i32 = IDM_VIEW + 4;
+const IDM_VIEW_ZOOMRESTORE: i32 = IDM_VIEW + 5;
+const IDM_VIEW_WRAP: i32 = IDM_VIEW + 7;
+
+const IDM_FORMAT_ANSI: i32 = IDM_FORMAT + 1;
+const IDM_FORMAT_UTF_8: i32 = IDM_FORMAT + 2;
+const IDM_FORMAT_UTF_16BE: i32 = IDM_FORMAT + 3;
+const IDM_FORMAT_UTF_16LE: i32 = IDM_FORMAT + 4;
+const IDM_FORMAT_AS_UTF_8: i32 = IDM_FORMAT + 5;
+
+/// Returns `true` if `idm` falls inside the plugin-owned cmd-id
+/// range — either the `FuncItem` band (from `getFuncsArray`,
+/// starting at [`PLUGIN_CMD_ID_BASE`]) or the `NPPM_ALLOCATECMDID`
+/// pool (which caps at [`PLUGIN_ALLOC_CMD_LIMIT`]). Ids outside this
+/// range are either built-in `IDM_*` values (below the base) or
+/// garbage (above the limit).
+///
+/// **Upper bound matters.** `main_wnd_proc`'s `WM_COMMAND` handler
+/// keys off only the low 16 bits of `wparam`, so an `idm` above
+/// `u16::MAX` posted through `dispatch_npp_menu_command` would
+/// truncate down and alias onto whatever built-in `ID_*` sits at
+/// that low id (e.g. `ID_FILE_SAVE = 1000`). Refusing values past
+/// the alloc-pool ceiling makes buggy plugins fail closed
+/// (`dispatch_npp_menu_command` returns `false` on the unknown id)
+/// instead of silently triggering an unrelated host command.
+#[cfg(target_os = "windows")]
+fn is_plugin_cmd_id(idm: i32) -> bool {
+    (PLUGIN_CMD_ID_BASE..=PLUGIN_ALLOC_CMD_LIMIT).contains(&idm)
+}
+
+/// Translate a Notepad++-ABI `IDM_*` command id into the Code++
+/// internal [`ID_*`] `WM_COMMAND` id that runs the equivalent action.
+/// Returns `None` for `IDM_*` values Code++ has no target for
+/// (e.g. Notepad++ features Code++ doesn't implement yet).
+///
+/// Plugin-allocated cmd ids (from `getFuncsArray` `FuncItem` entries
+/// or `NPPM_ALLOCATECMDID`) are **not** mapped — the caller detects
+/// those via [`is_plugin_cmd_id`] and passes them through untouched
+/// so a plugin's own menu items dispatch through the same route.
+fn map_npp_idm_to_local(idm: i32) -> Option<u16> {
+    match idm {
+        IDM_FILE_NEW => Some(ID_FILE_NEW),
+        IDM_FILE_OPEN => Some(ID_FILE_OPEN),
+        IDM_FILE_CLOSE => Some(ID_FILE_CLOSE),
+        IDM_FILE_CLOSEALL => Some(ID_FILE_CLOSE_ALL),
+        IDM_FILE_SAVE => Some(ID_FILE_SAVE),
+        IDM_FILE_SAVEALL => Some(ID_FILE_SAVE_ALL),
+        IDM_FILE_SAVEAS => Some(ID_FILE_SAVE_AS),
+        IDM_FILE_PRINT => Some(ID_FILE_PRINT),
+        IDM_FILE_EXIT => Some(ID_FILE_EXIT),
+        IDM_FILE_RELOAD => Some(ID_FILE_RELOAD),
+        IDM_FILE_RENAME => Some(ID_FILE_RENAME),
+        IDM_EDIT_CUT => Some(ID_EDIT_CUT),
+        IDM_EDIT_COPY => Some(ID_EDIT_COPY),
+        IDM_EDIT_UNDO => Some(ID_EDIT_UNDO),
+        IDM_EDIT_REDO => Some(ID_EDIT_REDO),
+        IDM_EDIT_PASTE => Some(ID_EDIT_PASTE),
+        IDM_EDIT_DELETE => Some(ID_EDIT_DELETE),
+        IDM_EDIT_SELECTALL => Some(ID_EDIT_SELECTALL),
+        IDM_SEARCH_FIND => Some(ID_SEARCH_FIND),
+        IDM_SEARCH_FINDNEXT => Some(ID_SEARCH_FINDNEXT),
+        IDM_SEARCH_REPLACE => Some(ID_SEARCH_REPLACE),
+        IDM_SEARCH_GOTOLINE => Some(ID_SEARCH_GOTOLINE),
+        IDM_SEARCH_FINDINFILES => Some(ID_SEARCH_FINDINFILES),
+        IDM_VIEW_ZOOMIN => Some(ID_VIEW_ZOOMIN),
+        IDM_VIEW_ZOOMOUT => Some(ID_VIEW_ZOOMOUT),
+        IDM_VIEW_ZOOMRESTORE => Some(ID_VIEW_ZOOMRESET),
+        IDM_VIEW_WRAP => Some(ID_VIEW_WORDWRAP),
+        IDM_FORMAT_ANSI => Some(ID_ENCODING_ANSI),
+        IDM_FORMAT_UTF_8 => Some(ID_ENCODING_UTF8),
+        IDM_FORMAT_AS_UTF_8 => Some(ID_ENCODING_UTF8_BOM),
+        IDM_FORMAT_UTF_16LE => Some(ID_ENCODING_UTF16_LE),
+        IDM_FORMAT_UTF_16BE => Some(ID_ENCODING_UTF16_BE),
+        _ => None,
+    }
 }
 
 impl UiPlatform for Win32Ui {
@@ -3019,6 +3144,142 @@ impl UiPlatform for Win32Ui {
             self.restore_active_view(view);
         }
         dirty
+    }
+
+    #[cfg(target_os = "windows")]
+    fn dispatch_npp_menu_command(&mut self, idm: i32) -> bool {
+        // Resolve the built-in mapping first. Plugin-allocated cmd
+        // ids (FuncItem entries or `NPPM_ALLOCATECMDID` allocations)
+        // land inside the range checked by [`is_plugin_cmd_id`];
+        // those are already installed as menu items owned by the
+        // plugin's own submenu and can be dispatched as-is. Unmapped
+        // built-in ids AND ids past the plugin-alloc ceiling get
+        // logged and dropped — the alternative (posting an
+        // unrecognised WM_COMMAND) would either hit the fall-through
+        // arm or, worse, collide with an unrelated Code++ ID_* value
+        // via `main_wnd_proc`'s low-16-bit `WM_COMMAND` keying.
+        let target: u32 = if let Some(local) = map_npp_idm_to_local(idm) {
+            u32::from(local)
+        } else if is_plugin_cmd_id(idm) {
+            // Plugin-allocated cmd id — safe to pass through: it
+            // was minted by our own allocator (or came out of the
+            // plugin's own FuncItem table) and points at an item
+            // in the plugin's submenu. `idm as u32` widens
+            // losslessly because `is_plugin_cmd_id` guaranteed
+            // `idm >= PLUGIN_CMD_ID_BASE`, which is positive.
+            #[allow(clippy::cast_sign_loss)]
+            {
+                idm as u32
+            }
+        } else {
+            tracing::trace!(idm, "NPPM_MENUCOMMAND: no target for idm");
+            return false;
+        };
+        // Post rather than send: this method runs inside
+        // `dispatch_plugin_message`, which holds `&mut Shell` +
+        // `&mut Win32Ui` borrows. A synchronous `SendMessageW`
+        // would re-enter `main_wnd_proc` on this thread and hit
+        // `PluginCallGuard`'s re-borrow refusal (or worse, land
+        // in a WM_COMMAND handler that expects those borrows to
+        // be free). PostMessage defers the dispatch to the next
+        // pump iteration.
+        //
+        // SAFETY: `self.tab_hwnd`'s parent is the main window,
+        // owned by `WindowState` which outlives every `Win32Ui`
+        // instance. `PostMessageW` only enqueues; no wnd_proc
+        // reentry happens synchronously.
+        unsafe {
+            let Ok(main_hwnd) = GetParent(self.tab_hwnd) else {
+                tracing::warn!("NPPM_MENUCOMMAND: no parent HWND on tab strip");
+                return false;
+            };
+            let _ = PostMessageW(
+                Some(main_hwnd),
+                WM_COMMAND,
+                WPARAM(target as usize),
+                LPARAM(0),
+            );
+        }
+        true
+    }
+
+    #[cfg(target_os = "windows")]
+    fn set_npp_menu_item_check(&mut self, idm: i32, checked: bool) -> bool {
+        // Same id-shape decoding as `dispatch_npp_menu_command`:
+        // built-in ids go through the mapping table, plugin cmd
+        // ids pass through (bounded by `is_plugin_cmd_id`), and
+        // everything else is rejected with a trace log. Rejection
+        // is symmetric with `dispatch_npp_menu_command` even though
+        // `CheckMenuItem` itself doesn't truncate — a plugin
+        // sending garbage-past-the-alloc-ceiling is a bug either
+        // way, and failing closed on both paths keeps the two
+        // dispatch shapes consistent.
+        let target: u32 = if let Some(local) = map_npp_idm_to_local(idm) {
+            u32::from(local)
+        } else if is_plugin_cmd_id(idm) {
+            #[allow(clippy::cast_sign_loss)]
+            {
+                idm as u32
+            }
+        } else {
+            tracing::trace!(idm, "NPPM_SETMENUITEMCHECK: no target for idm");
+            return false;
+        };
+        // `MF_BYCOMMAND` makes `CheckMenuItem` search recursively
+        // through every submenu of `self.main_menu` for an item
+        // matching `target`. Covers both built-in items (which
+        // live in the File / Edit / Search / View submenus) and
+        // plugin cmd ids (which live in the Plugins submenu).
+        // Returns `-1u32` on failure (item not found) which we
+        // surface as `false`; a plugin calling this on an id that
+        // has no menu item gets a clean rejection instead of a
+        // silent no-op.
+        //
+        // SAFETY: `self.main_menu` is populated at window
+        // construction and never destroyed until window teardown;
+        // `Win32Ui` instances are UI-thread-only. `CheckMenuItem`
+        // does not re-enter our wnd_proc.
+        let flags = MF_BYCOMMAND.0
+            | if checked {
+                MF_CHECKED.0
+            } else {
+                MF_UNCHECKED.0
+            };
+        let prev = unsafe { CheckMenuItem(self.main_menu, target, flags) };
+        // `CheckMenuItem` returns `-1u32` (`0xFFFF_FFFF`) when the
+        // item can't be found. Every other value is a legitimate
+        // previous state (`MF_CHECKED`/`MF_UNCHECKED`).
+        prev != u32::MAX
+    }
+
+    fn mark_active_buffer_dirty(&mut self) {
+        // Scintilla has no direct "flip the modified flag" API —
+        // the modified state is derived from whether the current
+        // undo position matches the last save-point. To force
+        // "dirty" without touching text, we add an opaque
+        // container action to the undo stack: that shifts the
+        // undo position past the save-point, so `SCI_GETMODIFY`
+        // starts returning true.
+        //
+        // No-op when the buffer is already dirty — a plugin that
+        // redundantly re-marks (say, once per keystroke) would
+        // otherwise pile up phantom `SC_MOD_CONTAINER` entries the
+        // user has to Ctrl+Z past. Once-per-transition matches
+        // Notepad++'s own semantic (its `Buffer::setDirty(true)`
+        // is idempotent).
+        //
+        // The container action itself sits on the undo stack as
+        // an opaque token (0) with no side effects: if the user
+        // does Ctrl+Z all the way back, they'll pass through one
+        // phantom step that fires `SCN_MODIFIED` with
+        // `SC_MOD_CONTAINER` — Code++ has no `SC_MOD_CONTAINER`
+        // handler, so the notification is dropped and the buffer
+        // reaches the save-point again (clean). That's the cost
+        // of buffer-level "make dirty" without touching text.
+        if self.editor.send(SCI_GETMODIFY, 0, 0) != 0 {
+            return;
+        }
+        self.editor.send(SCI_ADDUNDOACTION, 0, 0);
     }
 }
 
@@ -28581,6 +28842,205 @@ mod colour_helpers_tests {
     fn darken_zero_delta_is_no_op() {
         assert_eq!(darken_colorref(0x00_11_22_33, 0), 0x00_11_22_33);
     }
+}
+
+#[cfg(test)]
+mod idm_mapping_tests {
+    use super::{
+        is_plugin_cmd_id, map_npp_idm_to_local, IDM_EDIT_COPY, IDM_EDIT_CUT, IDM_EDIT_DELETE,
+        IDM_EDIT_PASTE, IDM_EDIT_REDO, IDM_EDIT_SELECTALL, IDM_EDIT_UNDO, IDM_FILE_CLOSE,
+        IDM_FILE_CLOSEALL, IDM_FILE_EXIT, IDM_FILE_NEW, IDM_FILE_OPEN, IDM_FILE_PRINT,
+        IDM_FILE_RELOAD, IDM_FILE_RENAME, IDM_FILE_SAVE, IDM_FILE_SAVEALL, IDM_FILE_SAVEAS,
+        IDM_FORMAT_ANSI, IDM_FORMAT_AS_UTF_8, IDM_FORMAT_UTF_16BE, IDM_FORMAT_UTF_16LE,
+        IDM_FORMAT_UTF_8, IDM_SEARCH_FIND, IDM_SEARCH_FINDINFILES, IDM_SEARCH_FINDNEXT,
+        IDM_SEARCH_GOTOLINE, IDM_SEARCH_REPLACE, IDM_VIEW_WRAP, IDM_VIEW_ZOOMIN, IDM_VIEW_ZOOMOUT,
+        IDM_VIEW_ZOOMRESTORE, ID_EDIT_COPY, ID_EDIT_CUT, ID_EDIT_DELETE, ID_EDIT_PASTE,
+        ID_EDIT_REDO, ID_EDIT_SELECTALL, ID_EDIT_UNDO, ID_ENCODING_ANSI, ID_ENCODING_UTF16_BE,
+        ID_ENCODING_UTF16_LE, ID_ENCODING_UTF8, ID_ENCODING_UTF8_BOM, ID_FILE_CLOSE,
+        ID_FILE_CLOSE_ALL, ID_FILE_EXIT, ID_FILE_NEW, ID_FILE_OPEN, ID_FILE_PRINT, ID_FILE_RELOAD,
+        ID_FILE_RENAME, ID_FILE_SAVE, ID_FILE_SAVE_ALL, ID_FILE_SAVE_AS, ID_SEARCH_FIND,
+        ID_SEARCH_FINDINFILES, ID_SEARCH_FINDNEXT, ID_SEARCH_GOTOLINE, ID_SEARCH_REPLACE,
+        ID_VIEW_WORDWRAP, ID_VIEW_ZOOMIN, ID_VIEW_ZOOMOUT, ID_VIEW_ZOOMRESET,
+        PLUGIN_ALLOC_CMD_LIMIT, PLUGIN_CMD_ID_BASE,
+    };
+
+    /// The N++ ABI numeric constants must match `menuCmdID.h` exactly —
+    /// a divergence would silently drop the dispatch (plugins ship a
+    /// specific number on the wire; the mapping table has to match it).
+    #[test]
+    fn idm_base_values_match_npp_abi() {
+        // File section: IDM_BASE(40000) + 1000 + slot.
+        assert_eq!(IDM_FILE_NEW, 41001);
+        assert_eq!(IDM_FILE_OPEN, 41002);
+        assert_eq!(IDM_FILE_SAVE, 41006);
+        assert_eq!(IDM_FILE_EXIT, 41011);
+        // Edit section: IDM_BASE + 2000 + slot.
+        assert_eq!(IDM_EDIT_CUT, 42001);
+        assert_eq!(IDM_EDIT_UNDO, 42003);
+        // Search section: IDM_BASE + 3000 + slot.
+        assert_eq!(IDM_SEARCH_FIND, 43001);
+        assert_eq!(IDM_SEARCH_FINDINFILES, 43009);
+        // View section: IDM_BASE + 4000 + slot.
+        assert_eq!(IDM_VIEW_WRAP, 44007);
+        // Format (encoding) section: IDM_BASE + 5000 + slot.
+        assert_eq!(IDM_FORMAT_ANSI, 45001);
+        assert_eq!(IDM_FORMAT_UTF_8, 45002);
+    }
+
+    /// Every entry in the File / Edit / Search / View / Format
+    /// sections we care about maps to the equivalent Code++ `ID_*`
+    /// that runs the same action. If a mapping regresses, this
+    /// test surfaces it before the plugin ABI does.
+    #[test]
+    fn every_wired_idm_maps_to_expected_local_id() {
+        // File.
+        assert_eq!(map_npp_idm_to_local(IDM_FILE_NEW), Some(ID_FILE_NEW));
+        assert_eq!(map_npp_idm_to_local(IDM_FILE_OPEN), Some(ID_FILE_OPEN));
+        assert_eq!(map_npp_idm_to_local(IDM_FILE_CLOSE), Some(ID_FILE_CLOSE));
+        assert_eq!(
+            map_npp_idm_to_local(IDM_FILE_CLOSEALL),
+            Some(ID_FILE_CLOSE_ALL)
+        );
+        assert_eq!(map_npp_idm_to_local(IDM_FILE_SAVE), Some(ID_FILE_SAVE));
+        assert_eq!(
+            map_npp_idm_to_local(IDM_FILE_SAVEALL),
+            Some(ID_FILE_SAVE_ALL)
+        );
+        assert_eq!(map_npp_idm_to_local(IDM_FILE_SAVEAS), Some(ID_FILE_SAVE_AS));
+        assert_eq!(map_npp_idm_to_local(IDM_FILE_PRINT), Some(ID_FILE_PRINT));
+        assert_eq!(map_npp_idm_to_local(IDM_FILE_EXIT), Some(ID_FILE_EXIT));
+        assert_eq!(map_npp_idm_to_local(IDM_FILE_RELOAD), Some(ID_FILE_RELOAD));
+        assert_eq!(map_npp_idm_to_local(IDM_FILE_RENAME), Some(ID_FILE_RENAME));
+        // Edit.
+        assert_eq!(map_npp_idm_to_local(IDM_EDIT_CUT), Some(ID_EDIT_CUT));
+        assert_eq!(map_npp_idm_to_local(IDM_EDIT_COPY), Some(ID_EDIT_COPY));
+        assert_eq!(map_npp_idm_to_local(IDM_EDIT_UNDO), Some(ID_EDIT_UNDO));
+        assert_eq!(map_npp_idm_to_local(IDM_EDIT_REDO), Some(ID_EDIT_REDO));
+        assert_eq!(map_npp_idm_to_local(IDM_EDIT_PASTE), Some(ID_EDIT_PASTE));
+        assert_eq!(map_npp_idm_to_local(IDM_EDIT_DELETE), Some(ID_EDIT_DELETE));
+        assert_eq!(
+            map_npp_idm_to_local(IDM_EDIT_SELECTALL),
+            Some(ID_EDIT_SELECTALL)
+        );
+        // Search.
+        assert_eq!(map_npp_idm_to_local(IDM_SEARCH_FIND), Some(ID_SEARCH_FIND));
+        assert_eq!(
+            map_npp_idm_to_local(IDM_SEARCH_FINDNEXT),
+            Some(ID_SEARCH_FINDNEXT)
+        );
+        assert_eq!(
+            map_npp_idm_to_local(IDM_SEARCH_REPLACE),
+            Some(ID_SEARCH_REPLACE)
+        );
+        assert_eq!(
+            map_npp_idm_to_local(IDM_SEARCH_GOTOLINE),
+            Some(ID_SEARCH_GOTOLINE)
+        );
+        assert_eq!(
+            map_npp_idm_to_local(IDM_SEARCH_FINDINFILES),
+            Some(ID_SEARCH_FINDINFILES)
+        );
+        // View.
+        assert_eq!(map_npp_idm_to_local(IDM_VIEW_ZOOMIN), Some(ID_VIEW_ZOOMIN));
+        assert_eq!(
+            map_npp_idm_to_local(IDM_VIEW_ZOOMOUT),
+            Some(ID_VIEW_ZOOMOUT)
+        );
+        // IDM_VIEW_ZOOMRESTORE has an intentional name difference
+        // from ID_VIEW_ZOOMRESET — verify the cross-name mapping.
+        assert_eq!(
+            map_npp_idm_to_local(IDM_VIEW_ZOOMRESTORE),
+            Some(ID_VIEW_ZOOMRESET)
+        );
+        assert_eq!(map_npp_idm_to_local(IDM_VIEW_WRAP), Some(ID_VIEW_WORDWRAP));
+        // Format / encoding — the AS_UTF_8 → UTF8_BOM mapping is
+        // the load-bearing cross-name pairing here.
+        assert_eq!(
+            map_npp_idm_to_local(IDM_FORMAT_ANSI),
+            Some(ID_ENCODING_ANSI)
+        );
+        assert_eq!(
+            map_npp_idm_to_local(IDM_FORMAT_UTF_8),
+            Some(ID_ENCODING_UTF8)
+        );
+        assert_eq!(
+            map_npp_idm_to_local(IDM_FORMAT_AS_UTF_8),
+            Some(ID_ENCODING_UTF8_BOM)
+        );
+        assert_eq!(
+            map_npp_idm_to_local(IDM_FORMAT_UTF_16LE),
+            Some(ID_ENCODING_UTF16_LE)
+        );
+        assert_eq!(
+            map_npp_idm_to_local(IDM_FORMAT_UTF_16BE),
+            Some(ID_ENCODING_UTF16_BE)
+        );
+    }
+
+    /// Unmapped IDM_* values (Notepad++ features Code++ doesn't
+    /// implement yet — session save/load, macro record, etc.) must
+    /// return `None` so the caller can log-and-drop instead of
+    /// falling through into an unrelated Code++ command.
+    #[test]
+    fn unmapped_idm_returns_none() {
+        // Random unmapped IDM_* — the SETTING / TOOLS / MACRO / RUN
+        // section bases from menuCmdID.h have no mapped children.
+        assert_eq!(map_npp_idm_to_local(46000), None); // IDM_SETTING
+        assert_eq!(map_npp_idm_to_local(47000), None); // IDM_TOOLS
+        assert_eq!(map_npp_idm_to_local(48000), None); // IDM_MACRO
+        assert_eq!(map_npp_idm_to_local(49000), None); // IDM_RUN
+                                                       // Middle of the IDM_FILE range that's not a wired command
+                                                       // (IDM_FILE_LOADSESSION == 41012).
+        assert_eq!(map_npp_idm_to_local(41012), None);
+        // Plugin-cmd space is intentionally NOT in the mapping —
+        // the dispatcher passes those through untouched.
+        assert_eq!(map_npp_idm_to_local(PLUGIN_CMD_ID_BASE), None);
+        assert_eq!(map_npp_idm_to_local(PLUGIN_CMD_ID_BASE + 100), None);
+        // Negative / zero — plugin bug or garbage; must be dropped.
+        assert_eq!(map_npp_idm_to_local(0), None);
+        assert_eq!(map_npp_idm_to_local(-1), None);
+    }
+
+    /// `is_plugin_cmd_id` accepts every id in the plugin-owned
+    /// range [`PLUGIN_CMD_ID_BASE`, `PLUGIN_ALLOC_CMD_LIMIT`] and
+    /// rejects everything else. The upper bound matters: without it,
+    /// a plugin sending an id past the alloc-pool ceiling would
+    /// truncate through `WM_COMMAND`'s low-16-bit key in
+    /// `main_wnd_proc` and alias onto a small built-in `ID_*` value
+    /// (e.g. `ID_FILE_SAVE = 1000`), silently triggering the wrong
+    /// action. Failing closed here keeps buggy plugins from firing
+    /// unrelated host commands.
+    #[test]
+    fn plugin_cmd_id_range_bounds_are_closed() {
+        // Below the range — built-in IDM_* section, garbage, negative.
+        assert!(!is_plugin_cmd_id(0));
+        assert!(!is_plugin_cmd_id(-1));
+        assert!(!is_plugin_cmd_id(PLUGIN_CMD_ID_BASE - 1));
+        // Inside the range — FuncItem base and alloc pool both count.
+        assert!(is_plugin_cmd_id(PLUGIN_CMD_ID_BASE));
+        assert!(is_plugin_cmd_id(PLUGIN_CMD_ID_BASE + 100));
+        assert!(is_plugin_cmd_id(PLUGIN_ALLOC_CMD_LIMIT));
+        // Above the range — the WM_COMMAND truncation collision zone.
+        // A hypothetical `PLUGIN_ALLOC_CMD_LIMIT + 1` (65_501) with
+        // its low 16 bits (65_501 & 0xFFFF = 65_501) is above u16::MAX
+        // and would truncate; larger values are the real collision
+        // (e.g. 66536 & 0xFFFF = 1000, aliasing ID_FILE_SAVE).
+        assert!(!is_plugin_cmd_id(PLUGIN_ALLOC_CMD_LIMIT + 1));
+        assert!(!is_plugin_cmd_id(65_536 + i32::from(super::ID_FILE_SAVE)));
+        assert!(!is_plugin_cmd_id(i32::MAX));
+    }
+
+    /// The plugin-cmd threshold must sit above every `IDM_*` section
+    /// base so plugin-allocated ids can't accidentally collide with
+    /// a mapping-table entry. Highest `IDM_*` section base in
+    /// `menuCmdID.h` is `IDM_RUN` (49000); `PLUGIN_CMD_ID_BASE` is
+    /// `50_000` so the two ranges stay disjoint with a comfortable
+    /// buffer. Enforced at compile time — a bump of
+    /// `PLUGIN_CMD_ID_BASE` that violated this would fail to
+    /// compile. The upper bound is also asserted here so a shrink
+    /// of the alloc pool below the range floor is caught early.
+    const _: () = assert!(PLUGIN_CMD_ID_BASE > 49_999);
+    const _: () = assert!(PLUGIN_ALLOC_CMD_LIMIT >= PLUGIN_CMD_ID_BASE);
 }
 
 #[cfg(test)]
