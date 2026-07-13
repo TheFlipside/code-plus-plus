@@ -7831,6 +7831,14 @@ mod tests {
         assert_eq!(tab.lang, codepp_core::lang::L_TEXT);
         assert!(tab.id > 0, "tab must have an allocated buffer id");
         assert_ne!(tab.scintilla_doc, 0, "Scintilla doc must be bound");
+        // A freshly-created untitled buffer starts clean — the tab
+        // strip renders it with the blue save glyph (not red). Only
+        // the user's first edit flips this via `SCN_SAVEPOINTLEFT`.
+        // Matches N++'s tab-strip semantic. Pins the invariant
+        // `paint_tab_item` relies on; a future regression that
+        // reintroduced the old "untitled → always dirty" behavior
+        // would fail here.
+        assert!(!tab.dirty, "fresh untitled buffer must not report dirty");
 
         // UI received the activation, an empty-buffer set, lang
         // attach, and a status refresh — same shape as a fresh load.

@@ -26340,16 +26340,13 @@ unsafe fn paint_tab_item(state: &mut WindowState, dis: &DRAWITEMSTRUCT) {
     // and by `handle_tab_selchange` snapshotting the outgoing
     // tab's modify state before the doc-pointer swap.
     //
-    // Untitled buffers (`untitled_seq.is_some()`) are *always*
-    // treated as dirty regardless of the cache: they have no
-    // on-disk representation, so the user's mental model is
-    // "this needs saving" from the moment the tab appears, even
-    // before any text has been typed. SCI_SETSAVEPOINT (which
-    // would normally clear dirty) is only meaningful against an
-    // on-disk file; a clean modify bit on an untitled buffer is
-    // misleading.
-    let dirty = idx < state.shell.tabs.len()
-        && (state.shell.tabs[idx].untitled_seq.is_some() || state.shell.tabs[idx].dirty);
+    // Untitled buffers follow the same rule as titled ones:
+    // clean on creation (blue glyph), red the moment the user
+    // types. Matches Notepad++'s semantic — a fresh `new 1` tab
+    // is not "dirty" just because it lacks a path; only user
+    // edits count. Aligns Code++ with N++'s tab strip so muscle
+    // memory carries across.
+    let dirty = idx < state.shell.tabs.len() && state.shell.tabs[idx].dirty;
 
     // Background fill: pick the right shade for active / inactive
     // (with a subtle bump for inactive-hovered).
