@@ -3718,6 +3718,31 @@ impl Shell {
     pub fn set_window_geometry(&mut self, geometry: WindowGeometry) {
         self.session.window = Some(geometry);
     }
+
+    /// Persisted "Folder as Workspace" panel state read from
+    /// session.xml, or `None` if the session predates the
+    /// feature (no `<workspace>` element) or the panel was
+    /// never opened. The UI reads this after `load_session_paths`
+    /// and — if `visible` is set on the returned entry — pops
+    /// the panel open at the stored `root` during cold-start
+    /// restore.
+    #[must_use]
+    pub fn saved_workspace_session(&self) -> Option<codepp_core::session::WorkspaceSession> {
+        self.session.workspace.clone()
+    }
+
+    /// Update the cached workspace panel state from the UI.
+    /// Called from the periodic autosave and shutdown paths so
+    /// the next launch cold-starts into the same panel state.
+    /// Setting `None` clears any previously-recorded workspace
+    /// (e.g. the user opened a folder this session but closed
+    /// the panel and expects it not to reopen next launch).
+    pub fn set_workspace_session(
+        &mut self,
+        workspace: Option<codepp_core::session::WorkspaceSession>,
+    ) {
+        self.session.workspace = workspace;
+    }
 }
 
 /// Local-time timestamp string used as the suffix on backup
@@ -5302,6 +5327,7 @@ fn write_session_files(path: &Path, files: &[PathBuf]) -> bool {
     let session = codepp_core::session::Session {
         active: None,
         window: None,
+        workspace: None,
         tabs: files
             .iter()
             .map(|p| codepp_core::session::Tab {
@@ -7776,6 +7802,7 @@ mod tests {
         let original = CoreSession {
             active: Some(1),
             window: None,
+            workspace: None,
             tabs: vec![
                 CoreTab {
                     path: Some(PathBuf::from("/tmp/first.txt")),
@@ -8789,6 +8816,7 @@ mod tests {
         let mut session = CoreSession {
             active: Some(2), // "b" — a pinned tab
             window: None,
+            workspace: None,
             tabs: vec![
                 mk("a", false),
                 mk("x", false),
@@ -8836,6 +8864,7 @@ mod tests {
         let mut session = CoreSession {
             active: Some(1),
             window: None,
+            workspace: None,
             tabs: vec![
                 CoreTab {
                     path: Some(PathBuf::from("/tmp/a")),

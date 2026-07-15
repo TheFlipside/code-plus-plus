@@ -185,6 +185,40 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// Persisted "Folder as Workspace" panel state — the left-column
+/// tree view reachable via `File → Open Folder as Workspace...`.
+/// Only present on sessions that had the panel opened at least
+/// once; a session.xml written before the feature shipped or by
+/// a build that drops it deserialises to `None`, which the UI
+/// reads as "no workspace to restore, start fresh."
+///
+/// The `root` field uses serde's blanket `Option<PathBuf>`
+/// support — same mechanism `Tab.path` uses. Kept as `Option`
+/// so the "panel was opened but never rooted at a real folder"
+/// state (impossible today, but not ruled out by the ABI)
+/// serialises as no `root` attribute rather than `root=""`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceSession {
+    /// Absolute path of the folder the panel was rooted at when
+    /// this session was saved. `None` if the user closed the
+    /// panel without opening a folder this session; in practice
+    /// the UI only writes this field when a root has been
+    /// picked, so `None` after a load means "no restore."
+    #[serde(rename = "@root", skip_serializing_if = "Option::is_none", default)]
+    pub root: Option<PathBuf>,
+    /// True iff the panel was visible when the session was
+    /// saved. Cold-start restore only pops the panel open when
+    /// this is true — a user who closed the panel expects it to
+    /// stay closed next launch even if `root` is remembered.
+    #[serde(rename = "@visible", default, skip_serializing_if = "is_false")]
+    pub visible: bool,
+    /// Panel width in pixels when the session was saved. `None`
+    /// means "use the built-in default" — same fallback shape
+    /// as [`WindowGeometry::width`].
+    #[serde(rename = "@width", skip_serializing_if = "Option::is_none", default)]
+    pub width: Option<i32>,
+}
+
 /// The whole session. The active-tab index is `Option<usize>` rather
 /// than `usize` so an empty session round-trips cleanly (no spurious
 /// `active="0"` when there are no tabs).
@@ -200,6 +234,12 @@ pub struct Session {
     /// drops it) — UI falls back to its built-in default size.
     #[serde(rename = "window", skip_serializing_if = "Option::is_none", default)]
     pub window: Option<WindowGeometry>,
+    /// Persisted "Folder as Workspace" panel state. `None` on
+    /// sessions written before the feature shipped or by a build
+    /// that drops it — cold-start restore treats that as "no
+    /// panel this session."
+    #[serde(rename = "workspace", skip_serializing_if = "Option::is_none", default)]
+    pub workspace: Option<WorkspaceSession>,
     /// All open tabs, in the order they appear in the tab strip.
     #[serde(rename = "tab", default)]
     pub tabs: Vec<Tab>,
@@ -351,6 +391,7 @@ mod tests {
         let session = Session {
             active: Some(1),
             window: None,
+            workspace: None,
             tabs: vec![
                 Tab {
                     path: Some(PathBuf::from(r"C:\users\alice\hello.txt")),
@@ -387,6 +428,7 @@ mod tests {
         let session = Session {
             active: Some(0),
             window: None,
+            workspace: None,
             tabs: vec![Tab {
                 path: Some(PathBuf::from("legacy.txt")),
                 cursor: 0,
@@ -413,6 +455,7 @@ mod tests {
         let session = Session {
             active: Some(0),
             window: None,
+            workspace: None,
             tabs: vec![Tab {
                 path: None,
                 cursor: 17,
@@ -440,6 +483,7 @@ mod tests {
         let session = Session {
             active: Some(1),
             window: None,
+            workspace: None,
             tabs: vec![
                 Tab {
                     path: Some(PathBuf::from("/tmp/a.txt")),
@@ -492,6 +536,7 @@ mod tests {
         let session = Session {
             active: Some(0),
             window: None,
+            workspace: None,
             tabs: vec![Tab {
                 path: None,
                 cursor: 0,
@@ -521,6 +566,7 @@ mod tests {
         let session = Session {
             active: Some(0),
             window: None,
+            workspace: None,
             tabs: vec![Tab {
                 path: Some(PathBuf::from("notes.txt")),
                 cursor: 0,
@@ -552,6 +598,7 @@ mod tests {
         let session = Session {
             active: Some(0),
             window: None,
+            workspace: None,
             tabs: vec![Tab {
                 path: Some(PathBuf::from("pinned.txt")),
                 cursor: 42,
@@ -580,6 +627,7 @@ mod tests {
         let session = Session {
             active: Some(0),
             window: None,
+            workspace: None,
             tabs: vec![Tab {
                 path: Some(PathBuf::from("plain.txt")),
                 cursor: 0,
@@ -663,6 +711,7 @@ mod tests {
                 height: Some(900),
                 maximized: false,
             }),
+            workspace: None,
             tabs: vec![],
         };
         session.save_to_xml(&path).unwrap();
@@ -680,6 +729,7 @@ mod tests {
                 height: Some(720),
                 maximized: true,
             }),
+            workspace: None,
             tabs: vec![],
         };
         session.save_to_xml(&path).unwrap();
@@ -714,6 +764,7 @@ mod tests {
         let session = Session {
             active: None,
             window: None,
+            workspace: None,
             tabs: vec![],
         };
         session.save_to_xml(&path).unwrap();
@@ -721,6 +772,125 @@ mod tests {
         assert!(
             !text.contains("<window"),
             "<window> element should be elided when None: {text}"
+        );
+    }
+
+    /// Round-trip a session with a populated `WorkspaceSession` —
+    /// root, visible, and width all preserved.
+    #[test]
+    fn round_trip_workspace_session() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            active: None,
+            window: None,
+            workspace: Some(WorkspaceSession {
+                root: Some(PathBuf::from(r"C:\Users\Max\Projects\code-plus-plus")),
+                visible: true,
+                width: Some(280),
+            }),
+            tabs: vec![],
+        };
+        session.save_to_xml(&path).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(session, loaded);
+        let ws = loaded.workspace.expect("workspace should round-trip");
+        assert_eq!(
+            ws.root.as_deref(),
+            Some(std::path::Path::new(
+                r"C:\Users\Max\Projects\code-plus-plus"
+            ))
+        );
+        assert!(ws.visible);
+        assert_eq!(ws.width, Some(280));
+    }
+
+    /// Workspace `visible=false` is the default state — it must
+    /// elide from the XML the same way `@maximized="false"` does
+    /// on `WindowGeometry`. Load must still recover it as `false`.
+    #[test]
+    fn workspace_visible_false_is_elided() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            active: None,
+            window: None,
+            workspace: Some(WorkspaceSession {
+                root: Some(PathBuf::from(r"C:\code")),
+                visible: false,
+                width: None,
+            }),
+            tabs: vec![],
+        };
+        session.save_to_xml(&path).unwrap();
+        let xml = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !xml.contains("visible"),
+            "visible=false must be elided from the wire; got:\n{xml}"
+        );
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert!(!loaded.workspace.unwrap().visible);
+    }
+
+    /// A `WorkspaceSession` with no root — pathological but not
+    /// impossible — must serialise as `<workspace/>` (or
+    /// `<workspace></workspace>`) with no `root` attribute, and
+    /// load back as `WorkspaceSession { root: None, .. }`.
+    #[test]
+    fn workspace_root_none_elides_attribute() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            active: None,
+            window: None,
+            workspace: Some(WorkspaceSession {
+                root: None,
+                visible: false,
+                width: None,
+            }),
+            tabs: vec![],
+        };
+        session.save_to_xml(&path).unwrap();
+        let xml = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !xml.contains(" root="),
+            "root=None must be elided from the wire; got:\n{xml}"
+        );
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(loaded.workspace.unwrap().root, None);
+    }
+
+    /// A session.xml written before the `<workspace>` feature
+    /// shipped must still parse. Cold-start restore treats a
+    /// `None` workspace as "no panel this session" — no runtime
+    /// error, no behavioural change relative to pre-feature.
+    #[test]
+    fn pre_workspace_session_xml_loads_with_none_workspace() {
+        let (_dir, path) = temp_session_path();
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
+        std::fs::write(&path, xml).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(loaded.workspace, None);
+        // Tabs still parse cleanly — the added field doesn't
+        // disturb any pre-existing round-trip.
+        assert_eq!(loaded.tabs.len(), 1);
+    }
+
+    /// A session with no workspace (`None` field) must elide the
+    /// `<workspace>` element entirely, same discipline as the
+    /// `<window>` element.
+    #[test]
+    fn empty_workspace_not_serialized() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            active: None,
+            window: None,
+            workspace: None,
+            tabs: vec![],
+        };
+        session.save_to_xml(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("workspace"),
+            "<workspace> element should be elided when None: {text}"
         );
     }
 

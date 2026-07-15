@@ -24424,6 +24424,16 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             rect.right,
             rect.bottom,
         );
+        // Cold-start restore: if the previous session had the
+        // workspace panel open, pop it back up at the same root
+        // and width. Runs AFTER the initial layout so
+        // `show_workspace_panel`'s own layout call correctly
+        // undoes the hardcoded `visible: false` above; both
+        // layouts happen before the message pump starts, so
+        // the user sees the final (with-panel) state on the
+        // first paint, not a flash of editor-full-width then
+        // panel-slides-in.
+        apply_saved_workspace(main_hwnd);
         let _ = SetFocus(Some(scintilla_hwnd));
 
         // Initial toolbar-state sync. Without this the first paint
@@ -27837,6 +27847,93 @@ unsafe fn toggle_workspace_panel(main_hwnd: HWND) {
     }
 }
 
+/// Snapshot the current workspace panel state into
+/// `Shell.session.workspace` so the next `save_session` writes
+/// it through to disk. Called immediately before every
+/// `save_session` invocation (the periodic autosave tick + the
+/// `WM_DESTROY` shutdown save) so a clean shutdown or a
+/// mid-session autosave both capture the latest state.
+///
+/// If the user has never opened a workspace this session
+/// (`workspace_root` is `None`), we deliberately preserve any
+/// pre-existing `WorkspaceSession` on the Shell rather than
+/// overwriting with `None`. That way a user who launched into a
+/// restored workspace, then closed the app without touching
+/// the panel, still gets the same restore next launch. The
+/// panel-close X and `View → Folder as Workspace` toggle both
+/// leave `workspace_root` populated for exactly this reason
+/// (matches N++'s behaviour).
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window HWND. UI thread only.
+unsafe fn sync_workspace_state_to_shell(main_hwnd: HWND) {
+    let Some(state) = (unsafe { state_from_hwnd(main_hwnd) }) else {
+        return;
+    };
+    let Some(root) = state.workspace_root.clone() else {
+        // No root has ever been set this session — leave any
+        // previously-loaded `WorkspaceSession` alone (see doc).
+        return;
+    };
+    state
+        .shell
+        .set_workspace_session(Some(codepp_core::session::WorkspaceSession {
+            root: Some(root),
+            visible: state.workspace_visible,
+            width: Some(state.workspace_width),
+        }));
+}
+
+/// Cold-start restore: read `Shell.saved_workspace_session()`
+/// and apply it. If the session had a workspace with `visible ==
+/// true`, this pops the panel open at the saved root and
+/// applies the saved width. If `visible == false` but a root is
+/// present, we seed `state.workspace_root` + `state.workspace_width`
+/// so a later `View → Folder as Workspace` opens at the
+/// remembered root without needing to prompt again.
+///
+/// Called once from `run()` after `SetWindowLongPtrW(GWLP_USERDATA)`
+/// installs the state pointer + the initial `layout_children`
+/// call. Placing it after the initial layout means the first
+/// paint already reflects the restored panel state — no visible
+/// "editor first, then panel slides in" flash.
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window HWND. UI thread only.
+unsafe fn apply_saved_workspace(main_hwnd: HWND) {
+    let saved = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        state.shell.saved_workspace_session()
+    } else {
+        return;
+    };
+    let Some(ws) = saved else {
+        return;
+    };
+    let Some(root) = ws.root else {
+        return;
+    };
+    // Seed the width first so the panel opens at the persisted
+    // size rather than snapping to the default and then resizing.
+    if let Some(width) = ws.width {
+        if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+            state.workspace_width = width;
+        }
+    }
+    if ws.visible {
+        // `show_workspace_panel` handles the state seeding
+        // (`workspace_root`, `workspace_visible`), tree populate,
+        // `ShowWindow`, and layout re-run. One call restores
+        // everything.
+        unsafe { show_workspace_panel(main_hwnd, root) };
+    } else if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        // Not visible — remember the root so the next `View →
+        // Folder as Workspace` opens at it without prompting.
+        state.workspace_root = Some(root);
+    }
+}
+
 /// `Wnd_proc` for the FIF dock container. Owns the layout of its
 /// own children (status STATIC, close-X button, listview) on
 /// `WM_SIZE`, forwards `WM_NOTIFY` from the listview up to
@@ -30822,6 +30919,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             Some(WPARAM(0)),
                             Some(LPARAM(0)),
                         );
+                        // Capture the workspace panel state
+                        // (root / visible / width) into the shell's
+                        // session cache BEFORE `save_session` runs
+                        // so cold-start restore next launch sees the
+                        // latest state.
+                        sync_workspace_state_to_shell(hwnd);
                         let (shell, mut ui) = state.split();
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             shell.save_session(&mut ui)
@@ -30913,6 +31016,11 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             .notify_plugins(Notification::BeforeShutdown, hwnd.0);
                     }));
                 }
+                // Capture workspace panel state (root / visible /
+                // width) into the shell's session cache BEFORE the
+                // shutdown save runs — same rationale as the
+                // autosave path above.
+                sync_workspace_state_to_shell(hwnd);
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let (shell, mut ui) = state.split();
                     // catch_unwind for the same reason as
