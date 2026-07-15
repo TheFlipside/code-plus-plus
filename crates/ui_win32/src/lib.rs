@@ -476,8 +476,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL,
     CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID,
     ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
-    GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDNO, IDOK,
-    IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
+    GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDC_SIZEWE, IDNO,
+    IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
     MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS, MFS_CHECKED, MFS_UNCHECKED,
     MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
     MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MIIM_STATE,
@@ -526,6 +526,17 @@ const ID_FILE_RENAME: u16 = 1010;
 /// `WM_INITMENUPOPUP` for the File menu — see
 /// [`refresh_file_menu`].
 const ID_FILE_OPEN_IN_DEFAULT_VIEWER: u16 = 1011;
+/// File → Open Folder as Workspace... Opens the OS folder picker;
+/// the chosen folder becomes the root of the Workspace panel
+/// (left of the tab strip / editor). Reveals the panel if hidden.
+/// Wired progressively across four milestones — see the plan on
+/// the Phase 4.6 "Workspace" feature:
+///   * m1: menu entry defined, logs on click (this commit).
+///   * m2: folder picker + panel frame + header X close.
+///   * m3: `SysTreeView32` body with lazy `read_dir` on expand,
+///     three action buttons.
+///   * m4: `Session` round-trip + View menu toggle.
+const ID_FILE_OPEN_FOLDER_AS_WORKSPACE: u16 = 1012;
 
 // Edit (1100-1199) — most route directly to Scintilla via SCI_*.
 const ID_EDIT_UNDO: u16 = 1100;
@@ -722,6 +733,16 @@ const FIF_SPLITTER_CLASS: PCWSTR = w!("CodePlusPlusFifSplitter");
 /// Modeless top-level window class for the FIF progress dialog
 /// shown while a search is running (m4 step 4b).
 const FIF_PROGRESS_CLASS: PCWSTR = w!("CodePlusPlusFifProgress");
+/// Window class for the "Folder as Workspace" left-side panel.
+/// A plain `WS_CHILD` container; its own `wnd_proc` paints the
+/// header + action bar and forwards commands. Registered lazily
+/// in [`register_workspace_classes`] on first `run()` invocation.
+const WORKSPACE_PANEL_CLASS: PCWSTR = w!("CodePlusPlusWorkspacePanel");
+/// Vertical splitter that sits between the workspace panel and
+/// the tab-strip / editor stack. Owns the horizontal resize
+/// cursor and forwards drag events to the parent so
+/// `layout_children` can re-apply with the new workspace width.
+const WORKSPACE_SPLITTER_CLASS: PCWSTR = w!("CodePlusPlusWorkspaceSplitter");
 
 /// Control ids for the FIF progress window's three children.
 const IDC_FIF_PROGRESS_PATH: u16 = 300;
@@ -784,6 +805,23 @@ const MIN_DOCK_HEIGHT_PX: i32 = 60;
 /// is shown. The user can shrink the dock but never the editor;
 /// this matches N++'s "the editor is the priority surface" feel.
 const MIN_SCINTILLA_HEIGHT_PX: i32 = 60;
+
+/// Width of the vertical splitter between the workspace panel and
+/// the tab-strip / editor column. Matches [`SPLITTER_HEIGHT_PX`]'s
+/// 4 px rationale — draggable without pixel-hunting.
+const WORKSPACE_SPLITTER_WIDTH_PX: i32 = 4;
+/// Initial workspace-panel width the first time the user opens a
+/// folder. Enough for a ~30-char folder name at a typical
+/// system font; persistence across sessions lands in m4.
+const DEFAULT_WORKSPACE_WIDTH_PX: i32 = 240;
+/// Minimum workspace-panel width. Below this the tree view
+/// horizontal-scrollbar dominates and the header buttons
+/// overflow; the splitter clamps at this value.
+const MIN_WORKSPACE_WIDTH_PX: i32 = 120;
+/// Minimum Scintilla width the workspace splitter preserves while
+/// the panel is shown. Same "editor is priority surface" rule as
+/// [`MIN_SCINTILLA_HEIGHT_PX`].
+const MIN_SCINTILLA_WIDTH_PX: i32 = 200;
 
 /// Window class for the "Go to..." modal popup. Registered once on
 /// first `show_goto_dialog`. The dialog is a plain top-level
@@ -1229,6 +1267,53 @@ struct WindowState {
     fif_dock_height: i32,
     /// `Some` iff the user is currently mid-drag on the splitter.
     fif_splitter_drag: Option<SplitterDrag>,
+
+    // --- Workspace panel (Phase 4.6 m1+) ---
+    //
+    // The "Folder as Workspace" panel — the left-column tree view
+    // reachable via File → Open Folder as Workspace... Both HWNDs
+    // are created eagerly at startup (mirroring the FIF-dock
+    // pattern) and toggled visible only when the user opens a
+    // folder or restores a persisted session.
+    //
+    // m1 ships all fields present + zero-effect wiring: the panel
+    // is created hidden, `workspace_visible` starts false, and
+    // `layout_children` short-circuits the workspace column when
+    // hidden. Subsequent milestones fill in the picker (m2), the
+    // tree body (m3), and cross-session persistence (m4).
+    /// Container HWND for the workspace panel. Header bar + action
+    /// bar + tree body land inside as children in m2/m3.
+    workspace_hwnd: HWND,
+    /// Vertical splitter between the workspace panel and the tab
+    /// strip / editor column. Hidden alongside `workspace_hwnd`.
+    workspace_splitter_hwnd: HWND,
+    /// Whether the workspace panel + splitter are currently shown.
+    /// Toggled by the File → Open Folder as Workspace... flow
+    /// (m2), the View → Folder as Workspace check (m4), the
+    /// header's X button (m2), and session restore (m4).
+    workspace_visible: bool,
+    /// Persisted workspace-column width across show/hide cycles
+    /// within one session. Cross-session persistence lands with
+    /// [`codepp_core::session::Session`] in m4.
+    workspace_width: i32,
+    /// `Some` iff the user is currently mid-drag on the workspace
+    /// splitter. Mirror of `fif_splitter_drag` for the horizontal
+    /// axis. Written by the splitter's `WM_LBUTTONDOWN`/`UP`
+    /// arms in m2.
+    #[allow(
+        dead_code,
+        reason = "populated in m2 (workspace splitter drag protocol)"
+    )]
+    workspace_splitter_drag: Option<SplitterDrag>,
+    /// Root path of the currently-shown workspace. `None` when
+    /// the panel has never been opened this session (or was
+    /// closed without re-opening). Set by the picker in m2;
+    /// consumed by the tree populate in m3.
+    #[allow(
+        dead_code,
+        reason = "populated in m2 (folder picker), read in m3 (tree populate)"
+    )]
+    workspace_root: Option<PathBuf>,
     /// Modeless top-level progress window shown while a FIF job
     /// is running. `None` until the user clicks Find All; the
     /// terminal `FifEvent` (Done or Cancelled) destroys it and
@@ -13983,6 +14068,15 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             ID_FILE_OPEN_IN_DEFAULT_VIEWER as usize,
             w!("Open in &Default Viewer"),
         )?;
+        // Workspace open-folder — greyed in m1 because the picker +
+        // panel wiring lands in m2. Cmd id and menu placement are
+        // stable so plugins can bind against them from Phase 3+.
+        AppendMenuW(
+            file_menu,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_OPEN_FOLDER_AS_WORKSPACE as usize,
+            w!("Open Folder as &Workspace..."),
+        )?;
         AppendMenuW(
             file_menu,
             MF_STRING,
@@ -14168,6 +14262,16 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             MF_STRING,
             ID_VIEW_ZOOMRESET as usize,
             w!("&Restore Zoom\tCtrl+0"),
+        )?;
+        AppendMenuW(view_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+        // Toggle — check state syncs to `WindowState.workspace_visible`
+        // via `refresh_view_menu`. Starts greyed in m1 because the
+        // panel scaffolding isn't wired yet; m2 flips it enabled.
+        AppendMenuW(
+            view_menu,
+            MF_STRING | MF_GRAYED,
+            ID_VIEW_FOLDER_AS_WORKSPACE as usize,
+            w!("&Folder as Workspace"),
         )?;
         AppendMenuW(bar, MF_POPUP, view_menu.0 as usize, w!("&View"))?;
 
@@ -23335,6 +23439,42 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             None,
         )?;
 
+        // Workspace panel + splitter — both hidden at startup, both
+        // eagerly created so `layout_children` always has valid
+        // HWNDs to reason about (mirrors the FIF pattern above).
+        // The panel body (header + action bar + tree) is populated
+        // in m2/m3; m1 just registers the classes and holds the
+        // container.
+        register_workspace_classes();
+        let workspace_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            WORKSPACE_PANEL_CLASS,
+            PCWSTR::null(),
+            WS_CHILD | WS_CLIPCHILDREN,
+            0,
+            0,
+            0,
+            0,
+            Some(main_hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        )?;
+        let workspace_splitter_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            WORKSPACE_SPLITTER_CLASS,
+            PCWSTR::null(),
+            WS_CHILD,
+            0,
+            0,
+            0,
+            0,
+            Some(main_hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        )?;
+
         // Header chrome inside the dock — a status STATIC on the
         // left for "X matches in Y files" and a close-X button on
         // the right. Both are visible from creation; the dock's
@@ -23640,6 +23780,12 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             fif_dock_visible: false,
             fif_dock_height: DEFAULT_DOCK_HEIGHT_PX,
             fif_splitter_drag: None,
+            workspace_hwnd,
+            workspace_splitter_hwnd,
+            workspace_visible: false,
+            workspace_width: DEFAULT_WORKSPACE_WIDTH_PX,
+            workspace_splitter_drag: None,
+            workspace_root: None,
             fif_progress_hwnd: None,
             fif_active_job: None,
             fif_pending_results: Vec::new(),
@@ -23915,6 +24061,12 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             // hides it is `NPPM_HIDETABBAR`, which can't fire
             // before `WM_APP_WAKE`.
             false,
+            WorkspaceLayout {
+                panel: workspace_hwnd,
+                splitter: workspace_splitter_hwnd,
+                visible: false,
+                width: DEFAULT_WORKSPACE_WIDTH_PX,
+            },
             rect.right,
             rect.bottom,
         );
@@ -24155,6 +24307,24 @@ fn clamp_dock_height(client_height: i32, toolbar_height: i32, requested: i32) ->
     requested.clamp(MIN_DOCK_HEIGHT_PX, upper)
 }
 
+/// Workspace-panel layout inputs bundled into a small owned
+/// struct so [`layout_children`] doesn't push past clippy's
+/// too-many-arguments cap. All four fields together describe
+/// "how much of the client area does the left-column workspace
+/// take, and which HWNDs do we position for it."
+///
+/// Fully populated at every call site — the `visible: false`
+/// path leaves the panel + splitter alone (they stay wherever a
+/// previous `MoveWindow` left them; `ShowWindow(SW_HIDE)` toggles
+/// visibility orthogonally).
+#[derive(Copy, Clone)]
+struct WorkspaceLayout {
+    panel: HWND,
+    splitter: HWND,
+    visible: bool,
+    width: i32,
+}
+
 #[allow(clippy::too_many_arguments)]
 unsafe fn layout_children(
     toolbar: HWND,
@@ -24167,6 +24337,7 @@ unsafe fn layout_children(
     dock_visible: bool,
     dock_height: i32,
     tab_hidden: bool,
+    workspace: WorkspaceLayout,
     width: i32,
     height: i32,
 ) {
@@ -24186,12 +24357,38 @@ unsafe fn layout_children(
     // orthogonal to the layout.
     let tab_height = if tab_hidden { 0 } else { TAB_HEIGHT_PX };
     let status_height = STATUS_HEIGHT_PX;
+    // Workspace column takes the left band of the mid-region
+    // (between toolbar-bottom and status-bar-top). Clamped to
+    // `MIN_WORKSPACE_WIDTH_PX..=(width - MIN_SCINTILLA_WIDTH_PX
+    //  - WORKSPACE_SPLITTER_WIDTH_PX)` so a window-resize-down
+    // that pushes past the splitter's minimums is corrected
+    // here — same idempotence rule as [`clamp_dock_height`] does
+    // for the vertical splitter. When the panel is hidden the
+    // column collapses to zero width and the layout math is
+    // identical to the pre-workspace behaviour.
+    let (workspace_col_width, editor_x_shift) = if workspace.visible {
+        let clamped = clamp_workspace_width(width, workspace.width);
+        (clamped, clamped + WORKSPACE_SPLITTER_WIDTH_PX)
+    } else {
+        (0, 0)
+    };
     unsafe {
-        // Toolbar at the very top (y=0). The tab strip is pushed
-        // down by `toolbar_height`; everything below cascades from
-        // there.
+        // Toolbar at the very top (y=0), full width — the workspace
+        // panel starts *below* the toolbar so users can still see
+        // the whole toolbar regardless of workspace state.
         let _ = MoveWindow(toolbar, 0, 0, width, toolbar_height, true);
-        let _ = MoveWindow(tabs, 0, toolbar_height, width, tab_height, true);
+        // Tab strip: sits above the editor, shifted right by the
+        // workspace column so the workspace panel spans from just
+        // below the toolbar to just above the status bar.
+        let tabs_w = (width - editor_x_shift).max(0);
+        let _ = MoveWindow(
+            tabs,
+            editor_x_shift,
+            toolbar_height,
+            tabs_w,
+            tab_height,
+            true,
+        );
         let _ = MoveWindow(
             status,
             0,
@@ -24200,6 +24397,32 @@ unsafe fn layout_children(
             status_height,
             true,
         );
+        // Workspace panel: fills the left column from toolbar-bottom
+        // to status-bar-top. Splitter sits flush to its right edge.
+        // Both hidden → `ShowWindow(SW_HIDE)` was called at panel
+        // close; we still MoveWindow them so their off-screen
+        // position doesn't matter if a future SW_SHOW fires.
+        let ws_top = toolbar_height;
+        let ws_height = (height - status_height - toolbar_height).max(0);
+        if workspace.visible {
+            let _ = MoveWindow(
+                workspace.panel,
+                0,
+                ws_top,
+                workspace_col_width,
+                ws_height,
+                true,
+            );
+            let _ = MoveWindow(
+                workspace.splitter,
+                workspace_col_width,
+                ws_top,
+                WORKSPACE_SPLITTER_WIDTH_PX,
+                ws_height,
+                true,
+            );
+        }
+
         let scintilla_top = toolbar_height + tab_height;
         let mid_height = (height - status_height - tab_height - toolbar_height).max(0);
 
@@ -24217,9 +24440,16 @@ unsafe fn layout_children(
         // splitter (when the dock is open) or at the status bar
         // (when the dock is closed), which is the natural
         // "around the actual edit area" reading of the request.
-        let editor_x = EDITOR_BORDER_PX;
-        let editor_w = (width - 2 * EDITOR_BORDER_PX).max(0);
+        //
+        // The editor's x-origin shifts right by `editor_x_shift`
+        // (workspace column + splitter width) when the workspace
+        // is shown; this keeps the editor column snug against the
+        // workspace splitter without a second inset.
+        let editor_x = editor_x_shift + EDITOR_BORDER_PX;
+        let editor_w = (width - editor_x_shift - 2 * EDITOR_BORDER_PX).max(0);
         let editor_y = scintilla_top + EDITOR_BORDER_PX;
+        let fif_dock_x = editor_x_shift;
+        let fif_dock_w = (width - editor_x_shift).max(0);
 
         if dock_visible {
             // Authoritative clamp — re-applies the same rule the
@@ -24242,11 +24472,25 @@ unsafe fn layout_children(
             // top by `EDITOR_BORDER_PX` pixels.
             let editor_h = (scintilla_height - EDITOR_BORDER_PX).max(0);
             let _ = MoveWindow(scintilla, editor_x, editor_y, editor_w, editor_h, true);
-            let _ = MoveWindow(splitter, 0, splitter_top, width, SPLITTER_HEIGHT_PX, true);
+            let _ = MoveWindow(
+                splitter,
+                fif_dock_x,
+                splitter_top,
+                fif_dock_w,
+                SPLITTER_HEIGHT_PX,
+                true,
+            );
             // The dock's own WM_SIZE handler positions its
             // children (status STATIC, close-X button, listview)
             // — see `fif_dock_wnd_proc`.
-            let _ = MoveWindow(dock, 0, dock_top, width, actual_dock_height, true);
+            let _ = MoveWindow(
+                dock,
+                fif_dock_x,
+                dock_top,
+                fif_dock_w,
+                actual_dock_height,
+                true,
+            );
         } else {
             // Splitter and dock are hidden — leave them where they
             // are; ShowWindow toggles their visibility separately.
@@ -24255,6 +24499,25 @@ unsafe fn layout_children(
             let _ = MoveWindow(scintilla, editor_x, editor_y, editor_w, editor_h, true);
         }
     }
+}
+
+/// Clamp a requested workspace-panel width to
+/// `[MIN_WORKSPACE_WIDTH_PX, upper]` where `upper` leaves room
+/// for the editor's minimum plus the splitter. Analogous to
+/// [`clamp_dock_height`] on the vertical axis — a
+/// window-resize-down that pushes past the horizontal splitter's
+/// minimums lands here and the layout stays idempotent. Also
+/// the single source of truth for the eventual splitter drag
+/// (lands in m2), so a change to the minimums flows through
+/// both call sites.
+fn clamp_workspace_width(client_width: i32, requested: i32) -> i32 {
+    let usable = client_width.saturating_sub(WORKSPACE_SPLITTER_WIDTH_PX);
+    // Same `.max(MIN_WORKSPACE_WIDTH_PX)` pattern as
+    // `clamp_dock_height` — `clamp(MIN, MIN)` collapses to
+    // exactly `MIN_WORKSPACE_WIDTH_PX` on a window crushed below
+    // the splitter's minimums, rather than panicking on low > high.
+    let upper = (usable - MIN_SCINTILLA_WIDTH_PX).max(MIN_WORKSPACE_WIDTH_PX);
+    requested.clamp(MIN_WORKSPACE_WIDTH_PX, upper)
 }
 
 /// Register the FIF dock and splitter window classes. Idempotent —
@@ -24323,6 +24586,93 @@ unsafe fn register_fif_classes() {
         };
         let _ = RegisterClassExW(&raw const progress_class);
     });
+}
+
+/// Register the workspace panel and its splitter window classes.
+/// Idempotent via `OnceLock` (same pattern as
+/// [`register_fif_classes`]).
+///
+/// # Safety
+///
+/// `RegisterClassExW` is pure Win32 registration; the only invariant
+/// is that the `wnd_proc` pointers we hand it (`workspace_panel_wnd_proc`,
+/// `workspace_splitter_wnd_proc`) live for the app's lifetime — which
+/// is trivially true for `extern "system" fn` items.
+unsafe fn register_workspace_classes() {
+    use std::sync::OnceLock;
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+    REGISTERED.get_or_init(|| unsafe {
+        let instance = GetModuleHandleW(None).unwrap_or_default();
+        // Panel container. Empty background painted with the shared
+        // dialog-chrome brush (`dialog_bg_brush`) so the panel
+        // visually reads as one continuous surface with the tab
+        // strip; the header + action bar paint their own chrome on
+        // top in m2. Default arrow cursor everywhere except the
+        // splitter.
+        let panel_class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(workspace_panel_wnd_proc),
+            hInstance: instance.into(),
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            hbrBackground: dialog_bg_brush(),
+            lpszClassName: WORKSPACE_PANEL_CLASS,
+            ..Default::default()
+        };
+        let _ = RegisterClassExW(&raw const panel_class);
+
+        // Splitter: vertical band with the horizontal-drag cursor
+        // (`IDC_SIZEWE`). Background matches the panel so the seam
+        // is invisible until hover reveals the cursor change —
+        // parity with the FIF splitter's affordance model.
+        let splitter_class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(workspace_splitter_wnd_proc),
+            hInstance: instance.into(),
+            hCursor: LoadCursorW(None, IDC_SIZEWE).unwrap_or_default(),
+            hbrBackground: dialog_bg_brush(),
+            lpszClassName: WORKSPACE_SPLITTER_CLASS,
+            ..Default::default()
+        };
+        let _ = RegisterClassExW(&raw const splitter_class);
+    });
+}
+
+/// Minimal `wnd_proc` for the workspace panel container — forwards
+/// everything to `DefWindowProcW` in m1. Header / action-bar
+/// paint + child-control layout land in m2; tree-view mouse
+/// routing lands in m3.
+///
+/// # Safety
+///
+/// Standard `extern "system"` `wnd_proc` invariants — must not
+/// unwind across the FFI boundary. `DefWindowProcW` never
+/// panics; no other code runs here in m1.
+extern "system" fn workspace_panel_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+/// Minimal `wnd_proc` for the workspace splitter — forwards
+/// everything to `DefWindowProcW` in m1. The horizontal drag
+/// protocol (`WM_LBUTTONDOWN` → `SetCapture` → `WM_MOUSEMOVE`
+/// → `WM_LBUTTONUP` → clamp + relayout) lands in m2.
+///
+/// # Safety
+///
+/// Same invariants as [`workspace_panel_wnd_proc`].
+extern "system" fn workspace_splitter_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 /// Hard cap on registered dock-dialog count. A misbehaving plugin
@@ -25154,6 +25504,12 @@ unsafe fn show_fif_dock(main_hwnd: HWND) {
             state.fif_splitter_hwnd,
             state.fif_dock_hwnd,
             state.fif_dock_height,
+            WorkspaceLayout {
+                panel: state.workspace_hwnd,
+                splitter: state.workspace_splitter_hwnd,
+                visible: state.workspace_visible,
+                width: state.workspace_width,
+            },
         ))
     } else {
         None
@@ -25167,6 +25523,7 @@ unsafe fn show_fif_dock(main_hwnd: HWND) {
         splitter,
         dock,
         dock_height,
+        workspace,
     )) = snapshot
     else {
         return;
@@ -25190,6 +25547,7 @@ unsafe fn show_fif_dock(main_hwnd: HWND) {
                 true,
                 dock_height,
                 tab_hidden,
+                workspace,
                 rect.right,
                 rect.bottom,
             );
@@ -25215,6 +25573,12 @@ unsafe fn hide_fif_dock(main_hwnd: HWND) {
             state.fif_splitter_hwnd,
             state.fif_dock_hwnd,
             state.fif_dock_height,
+            WorkspaceLayout {
+                panel: state.workspace_hwnd,
+                splitter: state.workspace_splitter_hwnd,
+                visible: state.workspace_visible,
+                width: state.workspace_width,
+            },
         ))
     } else {
         None
@@ -25228,6 +25592,7 @@ unsafe fn hide_fif_dock(main_hwnd: HWND) {
         splitter,
         dock,
         dock_height,
+        workspace,
     )) = snapshot
     else {
         return;
@@ -25249,6 +25614,7 @@ unsafe fn hide_fif_dock(main_hwnd: HWND) {
                 false,
                 dock_height,
                 tab_hidden,
+                workspace,
                 rect.right,
                 rect.bottom,
             );
@@ -25388,6 +25754,12 @@ extern "system" fn splitter_wnd_proc(
                             state.fif_splitter_hwnd,
                             state.fif_dock_hwnd,
                             state.fif_dock_visible,
+                            WorkspaceLayout {
+                                panel: state.workspace_hwnd,
+                                splitter: state.workspace_splitter_hwnd,
+                                visible: state.workspace_visible,
+                                width: state.workspace_width,
+                            },
                         )
                     })
                 } else {
@@ -25404,6 +25776,7 @@ extern "system" fn splitter_wnd_proc(
                     splitter,
                     dock,
                     dock_visible,
+                    workspace,
                 )) = snap
                 else {
                     return LRESULT(0);
@@ -25444,6 +25817,7 @@ extern "system" fn splitter_wnd_proc(
                     dock_visible,
                     new_height,
                     tab_hidden,
+                    workspace,
                     rect.right,
                     rect.bottom,
                 );
@@ -27229,6 +27603,27 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             open_path_in_default_viewer(hwnd, &p);
                         }
                     }
+                    ID_FILE_OPEN_FOLDER_AS_WORKSPACE => {
+                        // m1: menu entry declared but greyed. Trace-log
+                        // is here so if some other path (plugin
+                        // NPPM_MENUCOMMAND, accelerator) synthesises the
+                        // command before the picker lands in m2, we see
+                        // the reach in `--verbose` diags. m2 replaces
+                        // this with the actual folder-picker flow.
+                        tracing::trace!(
+                            "ID_FILE_OPEN_FOLDER_AS_WORKSPACE: no handler wired yet (m1 stub)"
+                        );
+                    }
+                    ID_VIEW_FOLDER_AS_WORKSPACE => {
+                        // Same m1 stub as the File-menu entry above —
+                        // toolbar button already dispatches this id, so
+                        // the arm has to exist for the click to land
+                        // somewhere. The real toggle (show/hide the
+                        // panel + persist the state) lands in m2/m4.
+                        tracing::trace!(
+                            "ID_VIEW_FOLDER_AS_WORKSPACE: no handler wired yet (m1 stub)"
+                        );
+                    }
                     ID_FILE_SAVE_AS => {
                         run_save_as_flow(hwnd);
                         // save_buffer_as clears the dirty glyph via
@@ -28034,6 +28429,12 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let tab_hidden = !IsWindowVisible(state.tab_hwnd).as_bool();
                     let toolbar_height = toolbar::toolbar_height_px(state.toolbar_bitmap_px);
+                    let workspace = WorkspaceLayout {
+                        panel: state.workspace_hwnd,
+                        splitter: state.workspace_splitter_hwnd,
+                        visible: state.workspace_visible,
+                        width: state.workspace_width,
+                    };
                     layout_children(
                         state.toolbar_hwnd,
                         toolbar_height,
@@ -28045,6 +28446,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         state.fif_dock_visible,
                         state.fif_dock_height,
                         tab_hidden,
+                        workspace,
                         width,
                         height,
                     );
