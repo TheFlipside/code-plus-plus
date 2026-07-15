@@ -164,38 +164,38 @@ use codepp_plugin_host::{
     PLUGIN_CMD_ID_BASE, RUNCOMMAND_RANGE, RUNCOMMAND_USER,
 };
 use codepp_scintilla_sys::{
-    ScintillaDirectFunction, Scintilla_RegisterClasses, CARETSTYLE_INVISIBLE, SCE_ADA_CHARACTER,
-    SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL,
-    SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER,
-    SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION,
-    SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION,
-    SCE_ASM_NUMBER, SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
-    SCE_ASN1_ATTRIBUTE, SCE_ASN1_COMMENT, SCE_ASN1_DESCRIPTOR, SCE_ASN1_KEYWORD, SCE_ASN1_OID,
-    SCE_ASN1_OPERATOR, SCE_ASN1_SCALAR, SCE_ASN1_STRING, SCE_ASN1_TYPE, SCE_AU3_COMMENT,
-    SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
-    SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT,
-    SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_AVS_CLIPPROP,
-    SCE_AVS_COMMENTBLOCK, SCE_AVS_COMMENTBLOCKN, SCE_AVS_COMMENTLINE, SCE_AVS_FILTER,
-    SCE_AVS_FUNCTION, SCE_AVS_KEYWORD, SCE_AVS_NUMBER, SCE_AVS_OPERATOR, SCE_AVS_PLUGIN,
-    SCE_AVS_STRING, SCE_AVS_TRIPLESTRING, SCE_BAAN_COMMENT, SCE_BAAN_COMMENTDOC,
-    SCE_BAAN_DEFINEDEF, SCE_BAAN_DOMDEF, SCE_BAAN_FUNCDEF, SCE_BAAN_FUNCTION, SCE_BAAN_NUMBER,
-    SCE_BAAN_OBJECTDEF, SCE_BAAN_OPERATOR, SCE_BAAN_PREPROCESSOR, SCE_BAAN_STRING,
-    SCE_BAAN_TABLEDEF, SCE_BAAN_TABLESQL, SCE_BAAN_WORD, SCE_BAAN_WORD2, SCE_BAAN_WORD3,
-    SCE_BAAN_WORD4, SCE_BAAN_WORD5, SCE_BAAN_WORD6, SCE_BAAN_WORD7, SCE_BAAN_WORD8, SCE_BAAN_WORD9,
-    SCE_BAT_AFTER_LABEL, SCE_BAT_COMMAND, SCE_BAT_COMMENT, SCE_BAT_HIDE, SCE_BAT_LABEL,
-    SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_B_BINNUMBER, SCE_B_COMMENT, SCE_B_COMMENTBLOCK,
-    SCE_B_CONSTANT, SCE_B_DATE, SCE_B_DOCBLOCK, SCE_B_DOCKEYWORD, SCE_B_DOCLINE, SCE_B_HEXNUMBER,
-    SCE_B_KEYWORD, SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4, SCE_B_LABEL, SCE_B_NUMBER,
-    SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CAML_CHAR, SCE_CAML_COMMENT,
-    SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2,
-    SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR, SCE_CAML_STRING,
-    SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS, SCE_CMAKE_COMMENT, SCE_CMAKE_FOREACHDEF,
-    SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF, SCE_CMAKE_NUMBER, SCE_CMAKE_PARAMETERS,
-    SCE_CMAKE_STRINGDQ, SCE_CMAKE_STRINGLQ, SCE_CMAKE_STRINGRQ, SCE_CMAKE_STRINGVAR,
-    SCE_CMAKE_USERDEFINED, SCE_CMAKE_VARIABLE, SCE_CMAKE_WHILEDEF, SCE_COBOL_CHARACTER,
-    SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC, SCE_COBOL_COMMENTLINE, SCE_COBOL_NUMBER,
-    SCE_COBOL_OPERATOR, SCE_COBOL_PREPROCESSOR, SCE_COBOL_STRING, SCE_COBOL_WORD, SCE_COBOL_WORD2,
-    SCE_COBOL_WORD3, SCE_COFFEESCRIPT_CHARACTER, SCE_COFFEESCRIPT_COMMENTBLOCK,
+    ScintillaDirectFunction, Scintilla_RegisterClasses, CARETSTYLE_INVISIBLE, INDIC_HIDDEN,
+    INDIC_STRAIGHTBOX, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE,
+    SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING,
+    SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
+    SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND,
+    SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER, SCE_ASM_OPERATOR,
+    SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_ASN1_ATTRIBUTE,
+    SCE_ASN1_COMMENT, SCE_ASN1_DESCRIPTOR, SCE_ASN1_KEYWORD, SCE_ASN1_OID, SCE_ASN1_OPERATOR,
+    SCE_ASN1_SCALAR, SCE_ASN1_STRING, SCE_ASN1_TYPE, SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK,
+    SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD, SCE_AU3_MACRO,
+    SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT, SCE_AU3_SPECIAL,
+    SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_AVS_CLIPPROP, SCE_AVS_COMMENTBLOCK,
+    SCE_AVS_COMMENTBLOCKN, SCE_AVS_COMMENTLINE, SCE_AVS_FILTER, SCE_AVS_FUNCTION, SCE_AVS_KEYWORD,
+    SCE_AVS_NUMBER, SCE_AVS_OPERATOR, SCE_AVS_PLUGIN, SCE_AVS_STRING, SCE_AVS_TRIPLESTRING,
+    SCE_BAAN_COMMENT, SCE_BAAN_COMMENTDOC, SCE_BAAN_DEFINEDEF, SCE_BAAN_DOMDEF, SCE_BAAN_FUNCDEF,
+    SCE_BAAN_FUNCTION, SCE_BAAN_NUMBER, SCE_BAAN_OBJECTDEF, SCE_BAAN_OPERATOR,
+    SCE_BAAN_PREPROCESSOR, SCE_BAAN_STRING, SCE_BAAN_TABLEDEF, SCE_BAAN_TABLESQL, SCE_BAAN_WORD,
+    SCE_BAAN_WORD2, SCE_BAAN_WORD3, SCE_BAAN_WORD4, SCE_BAAN_WORD5, SCE_BAAN_WORD6, SCE_BAAN_WORD7,
+    SCE_BAAN_WORD8, SCE_BAAN_WORD9, SCE_BAT_AFTER_LABEL, SCE_BAT_COMMAND, SCE_BAT_COMMENT,
+    SCE_BAT_HIDE, SCE_BAT_LABEL, SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_B_BINNUMBER, SCE_B_COMMENT,
+    SCE_B_COMMENTBLOCK, SCE_B_CONSTANT, SCE_B_DATE, SCE_B_DOCBLOCK, SCE_B_DOCKEYWORD,
+    SCE_B_DOCLINE, SCE_B_HEXNUMBER, SCE_B_KEYWORD, SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4,
+    SCE_B_LABEL, SCE_B_NUMBER, SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CAML_CHAR,
+    SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD,
+    SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR,
+    SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS, SCE_CMAKE_COMMENT,
+    SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF, SCE_CMAKE_NUMBER,
+    SCE_CMAKE_PARAMETERS, SCE_CMAKE_STRINGDQ, SCE_CMAKE_STRINGLQ, SCE_CMAKE_STRINGRQ,
+    SCE_CMAKE_STRINGVAR, SCE_CMAKE_USERDEFINED, SCE_CMAKE_VARIABLE, SCE_CMAKE_WHILEDEF,
+    SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC, SCE_COBOL_COMMENTLINE,
+    SCE_COBOL_NUMBER, SCE_COBOL_OPERATOR, SCE_COBOL_PREPROCESSOR, SCE_COBOL_STRING, SCE_COBOL_WORD,
+    SCE_COBOL_WORD2, SCE_COBOL_WORD3, SCE_COFFEESCRIPT_CHARACTER, SCE_COFFEESCRIPT_COMMENTBLOCK,
     SCE_COFFEESCRIPT_COMMENTLINE, SCE_COFFEESCRIPT_GLOBALCLASS, SCE_COFFEESCRIPT_INSTANCEPROPERTY,
     SCE_COFFEESCRIPT_NUMBER, SCE_COFFEESCRIPT_OPERATOR, SCE_COFFEESCRIPT_REGEX,
     SCE_COFFEESCRIPT_STRING, SCE_COFFEESCRIPT_VERBOSE_REGEX,
@@ -385,16 +385,19 @@ use codepp_scintilla_sys::{
     SCE_V_STRINGEOL, SCE_V_USER, SCE_V_WORD, SCE_V_WORD2, SCE_V_WORD3, SCE_YAML_COMMENT,
     SCE_YAML_DOCUMENT, SCE_YAML_IDENTIFIER, SCE_YAML_KEYWORD, SCE_YAML_NUMBER, SCE_YAML_OPERATOR,
     SCE_YAML_REFERENCE, SCE_YAML_TEXT, SCI_ADDUNDOACTION, SCI_BEGINUNDOACTION, SCI_CLEAR,
-    SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION,
-    SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
-    SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE, SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH,
-    SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
-    SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET,
-    SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
-    SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
-    SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
-    SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN,
+    SCI_COLOURISE, SCI_COPY, SCI_CREATEDOCUMENT, SCI_CUT, SCI_DOCLINEFROMVISIBLE,
+    SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION, SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS,
+    SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
+    SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
+    SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
+    SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS,
+    SCI_INDICATORCLEARRANGE, SCI_INDICATORFILLRANGE, SCI_INDICSETALPHA, SCI_INDICSETFORE,
+    SCI_INDICSETOUTLINEALPHA, SCI_INDICSETSTYLE, SCI_INDICSETUNDER, SCI_LINEFROMPOSITION,
+    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
+    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_POSITIONFROMLINE, SCI_REDO,
+    SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCARETSTYLE, SCI_SETCODEPAGE,
+    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETFONTQUALITY,
+    SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETINDICATORCURRENT, SCI_SETMARGINWIDTHN,
     SCI_SETREADONLY, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
     SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTARGETEND,
     SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETVSCROLLBAR,
@@ -947,6 +950,19 @@ const MIN_SCINTILLA_WIDTH_PX: i32 = 200;
 /// estate; persistence across sessions rides
 /// [`codepp_core::session::DocMapSession::width`].
 const DEFAULT_DOCMAP_WIDTH_PX: i32 = 160;
+/// Scintilla indicator slot for the docmap's viewport highlight
+/// (the "orange rectangle" over the range currently visible in
+/// the main editor). Lives in the 8..=31 user-defined range —
+/// slots 0-7 are reserved for built-in / lexer-managed
+/// indicators. Slot 8 chosen as the first available.
+const DOCMAP_VIEWPORT_INDICATOR: usize = 8;
+/// Fill + outline colour of the docmap viewport highlight, in
+/// Scintilla's `COLORREF` byte order (`0x00BBGGRR` — same
+/// encoding Win32's `RGB` macro produces). HTML `#FFA500`
+/// ("orange") = `R=FF G=A5 B=00` → BGR = `0x0000A5FF`.
+/// Matches the tone in Notepad++'s Document Map so users
+/// migrating from N++ see the same "you are here" colour.
+const DOCMAP_VIEWPORT_COLOR: u32 = 0x0000_a5ff;
 /// Minimum docmap-panel width. Below this the miniature view
 /// collapses into unreadable blocks; every layout pass clamps to
 /// this floor via [`clamp_docmap_width`], same discipline the
@@ -2043,7 +2059,26 @@ impl UiPlatform for Win32Ui {
         // to whatever doc it was last bound to, both showing
         // stale content AND leaking a Scintilla `Document` ref
         // on any tab the user closed.
+        //
+        // The viewport-highlight indicator paints against the
+        // now-bound document via
+        // `update_docmap_viewport_indicator` — same rationale
+        // as [`sync_docmap_to_active_tab`]'s own trailing call:
+        // without the update the highlight would show the
+        // previous tab's visible range against this tab's text
+        // until the next scroll event fires an update.
         self.docmap_editor.send(SCI_SETDOCPOINTER, 0, doc);
+        // Kick the viewport-highlight update with the two
+        // handles directly — no `state_from_hwnd` reach-back,
+        // which matters because this method is called from
+        // inside `shell.method(&mut ui)` chains where a `&mut
+        // WindowState` is already alive via `state.split()`'s
+        // reborrow. A second live `&mut WindowState` here would
+        // be aliasing UB. Both handles are already `Copy` on
+        // `self`, so this is a straight pass-through.
+        unsafe {
+            update_docmap_viewport_indicator(self.editor, self.docmap_editor);
+        }
         doc
     }
 
@@ -25092,6 +25127,32 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         docmap_editor.send(SCI_SETMARGINWIDTHN, 1, 0);
         docmap_editor.send(SCI_SETMARGINWIDTHN, 2, 0);
         docmap_editor.send(SCI_SETZOOM, -10_isize as usize, 0);
+        // Viewport highlight indicator — the "orange rectangle"
+        // that marks the range currently visible in the main
+        // editor. Configured once at creation; every subsequent
+        // scroll / tab-switch / resize just calls
+        // `update_docmap_viewport_indicator` which re-fills the
+        // range on this same indicator slot (see
+        // [`DOCMAP_VIEWPORT_INDICATOR`]). `INDIC_STRAIGHTBOX` gives
+        // us a filled rectangle with a solid outline —
+        // translucent fill (alpha 80) so the miniature text stays
+        // legible under the highlight, solid outline (alpha 255)
+        // so the region reads as a definite band. `UNDER=1`
+        // paints the indicator BEHIND the text glyphs on the
+        // same rationale.
+        docmap_editor.send(
+            SCI_INDICSETSTYLE,
+            DOCMAP_VIEWPORT_INDICATOR,
+            INDIC_STRAIGHTBOX as isize,
+        );
+        docmap_editor.send(
+            SCI_INDICSETFORE,
+            DOCMAP_VIEWPORT_INDICATOR,
+            DOCMAP_VIEWPORT_COLOR as isize,
+        );
+        docmap_editor.send(SCI_INDICSETALPHA, DOCMAP_VIEWPORT_INDICATOR, 80);
+        docmap_editor.send(SCI_INDICSETOUTLINEALPHA, DOCMAP_VIEWPORT_INDICATOR, 255);
+        docmap_editor.send(SCI_INDICSETUNDER, DOCMAP_VIEWPORT_INDICATOR, 1);
 
         // Header chrome inside the dock — a status STATIC on the
         // left for "X matches in Y files" and a close-X button on
@@ -25252,6 +25313,27 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // fire from the tail of `apply_default_styles` — same
         // re-application pattern as line-number and brace styles.
         apply_indent_guide_style(&editor);
+
+        // Hide indicator slot [`DOCMAP_VIEWPORT_INDICATOR`] on
+        // the main editor. Indicator STYLE lives on `ViewStyle`
+        // (per-view); indicator RANGE lives on `Document`
+        // (per-doc, shared). The Document Map view fills a range
+        // on that slot to paint its orange highlight, but the
+        // range data lands on the shared document — without
+        // this the main editor renders the same range using its
+        // own (uninitialised) style for slot 8, which falls back
+        // to Scintilla's built-in `INDIC_PLAIN` and paints a
+        // black underline under every visible line of the main
+        // editor. Setting `INDIC_HIDDEN` on the main view splits
+        // the two views' visual treatments cleanly: shared
+        // range, view-specific rendering. Only style is set
+        // here (view-level, one-time); the map view configures
+        // the visible `INDIC_STRAIGHTBOX` on its own side.
+        editor.send(
+            SCI_INDICSETSTYLE,
+            DOCMAP_VIEWPORT_INDICATOR,
+            INDIC_HIDDEN as isize,
+        );
 
         // Tab-width + implicit indent-level width for the indent-
         // guide algorithm on the initial implicit document. Per-
@@ -29965,7 +30047,10 @@ unsafe fn show_docmap_panel(main_hwnd: HWND) {
         // Defensive re-sync of the map view's bound doc — cold
         // start already seeded it, but a panel toggle after a
         // tab activation that happened while the panel was
-        // hidden needs this to catch up.
+        // hidden needs this to catch up. `sync_docmap_to_active_tab`
+        // trails an `update_docmap_viewport_indicator` call
+        // internally, so the reveal paints the highlight at the
+        // main editor's current viewport in the same frame.
         sync_docmap_to_active_tab(main_hwnd);
     }
 }
@@ -30095,16 +30180,153 @@ unsafe fn toggle_docmap_panel(main_hwnd: HWND) {
 ///
 /// `main_hwnd` must be the main window HWND. UI thread only.
 unsafe fn sync_docmap_to_active_tab(main_hwnd: HWND) {
-    let (docmap_editor, doc) = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-        let doc = state.shell.active().map_or(0, |t| t.scintilla_doc);
-        (state.docmap_editor, doc)
-    } else {
-        return;
-    };
+    let (main_editor, docmap_editor, doc) =
+        if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+            let doc = state.shell.active().map_or(0, |t| t.scintilla_doc);
+            (state.editor, state.docmap_editor, doc)
+        } else {
+            return;
+        };
     if doc == 0 {
         return;
     }
     docmap_editor.send(SCI_SETDOCPOINTER, 0, doc);
+    // Rebinding the doc doesn't re-derive the viewport
+    // highlight — the indicator lives on the document, so the
+    // range from the *previous* tab's binding would still be
+    // painted (against the new tab's text) until the next
+    // scroll event fired an update. Kick a fresh update here
+    // so the newly-bound doc paints the correct range from the
+    // main editor's current viewport. Handles pulled from the
+    // borrow above so no second `state_from_hwnd` is needed.
+    unsafe {
+        update_docmap_viewport_indicator(main_editor, docmap_editor);
+    }
+}
+
+/// Recompute + repaint the docmap viewport-highlight indicator so
+/// it covers exactly the line range currently visible in the main
+/// editor. Called on every event that shifts either endpoint:
+///
+///   * Scroll (`SCN_UPDATEUI` with `SC_UPDATE_V_SCROLL`).
+///   * Tab activation ([`Win32Ui::activate_tab`] +
+///     [`sync_docmap_to_active_tab`]).
+///   * Panel show ([`show_docmap_panel`], to seed the initial
+///     paint).
+///   * Main-editor resize (changes `SCI_LINESONSCREEN` so the
+///     bottom edge of the range moves) — hooked via the parent
+///     window's `WM_SIZE` handler.
+///
+/// Also scrolls the map view so the highlighted range is
+/// centered vertically in the miniature — a very long buffer
+/// won't fit into the panel at any zoom, and without this the
+/// user would scroll the main editor down and see the map's
+/// highlight disappear off the bottom of the panel.
+///
+/// Cheap: three direct-call reads on the main editor
+/// (`SCI_GETFIRSTVISIBLELINE`, `SCI_LINESONSCREEN`,
+/// `SCI_GETLINECOUNT`), one `SCI_POSITIONFROMLINE` per endpoint,
+/// two indicator writes on the map, one scroll adjustment. Well
+/// under the keystroke budget in DESIGN.md §8.
+///
+/// # Aliasing safety
+///
+/// Takes the two `EditorHandle`s by value (they are `Copy`)
+/// rather than re-deriving them from an `HWND` via
+/// `state_from_hwnd`. This matters: several call sites already
+/// hold a live `&mut WindowState` (or a `&mut Shell` reborrowed
+/// from one via `WindowState::split`) at the moment this helper
+/// runs. A second `state_from_hwnd` reach-back from inside would
+/// materialise an overlapping `&mut WindowState` — aliasing UB
+/// under Rust's `noalias` optimizer even before behavioural bugs
+/// appear. Same discipline as the pre-existing `Win32Ui` fields
+/// (`accel_handle`, `dock_dialogs`, `udl_registry`).
+///
+/// # Safety
+///
+/// Both handles must be live — created in [`run`], destroyed only
+/// at window teardown. UI thread only.
+unsafe fn update_docmap_viewport_indicator(main_editor: EditorHandle, docmap_editor: EditorHandle) {
+    // Main-editor viewport bounds. `SCI_GETFIRSTVISIBLELINE`
+    // returns a VISIBLE-line index (post-folding / post-
+    // wrapping), which is what the user sees but NOT what
+    // `SCI_POSITIONFROMLINE` accepts — it takes a DOCUMENT-line
+    // index. Convert via `SCI_DOCLINEFROMVISIBLE` (identity when
+    // no folding is active) so a folded buffer with, say,
+    // visible lines 0..20 mapping to document lines 0..200
+    // still gets the highlight painted at the right byte range.
+    // Same conversion applied to the exclusive upper endpoint.
+    // `SCI_LINESONSCREEN` returns the count of fully-visible
+    // (post-folding) lines; add it to the first-visible to get
+    // the exclusive upper bound in visible-line space.
+    let first_visible = main_editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
+    let lines_on_screen = main_editor.send(SCI_LINESONSCREEN, 0, 0);
+    let line_count = main_editor.send(SCI_GETLINECOUNT, 0, 0).max(0);
+    if first_visible < 0 || lines_on_screen <= 0 || line_count == 0 {
+        // Buffer is empty or the viewport hasn't been laid out
+        // yet (pre-first-`WM_SIZE`). Clear the old highlight so
+        // a switch to an empty buffer doesn't leave stale paint
+        // from the previous tab.
+        docmap_editor.send(SCI_SETINDICATORCURRENT, DOCMAP_VIEWPORT_INDICATOR, 0);
+        let doc_len = docmap_editor.send(SCI_GETLENGTH, 0, 0);
+        if doc_len > 0 {
+            docmap_editor.send(SCI_INDICATORCLEARRANGE, 0, doc_len);
+        }
+        return;
+    }
+    // Clamp `last_visible_exclusive` against the actual visible
+    // line count — Scintilla reports `SCI_LINESONSCREEN` based on
+    // viewport dimensions, not doc length, so a short buffer in a
+    // tall editor overshoots. Then convert both endpoints from
+    // visible-line space to document-line space (identity when no
+    // folding is active).
+    let last_visible_exclusive = first_visible + lines_on_screen;
+    let first_doc_line = main_editor.send(SCI_DOCLINEFROMVISIBLE, first_visible as usize, 0);
+    let last_doc_line_raw =
+        main_editor.send(SCI_DOCLINEFROMVISIBLE, last_visible_exclusive as usize, 0);
+    let last_doc_line_exclusive = last_doc_line_raw.min(line_count);
+    if first_doc_line < 0 || last_doc_line_exclusive < first_doc_line {
+        return;
+    }
+    let first_pos = main_editor.send(SCI_POSITIONFROMLINE, first_doc_line as usize, 0);
+    let last_pos = main_editor.send(SCI_POSITIONFROMLINE, last_doc_line_exclusive as usize, 0);
+    if first_pos < 0 || last_pos < first_pos {
+        return;
+    }
+    // Repaint: select our slot, clear the whole doc's previous
+    // range on it, then fill just the new range. Clear-then-fill
+    // rather than tracking the previous range means we don't
+    // need extra state and stay correct even after a doc-pointer
+    // swap or an out-of-band edit that shifted line offsets.
+    docmap_editor.send(SCI_SETINDICATORCURRENT, DOCMAP_VIEWPORT_INDICATOR, 0);
+    let doc_len = docmap_editor.send(SCI_GETLENGTH, 0, 0);
+    if doc_len > 0 {
+        docmap_editor.send(SCI_INDICATORCLEARRANGE, 0, doc_len);
+    }
+    // `first_pos` is guarded `>= 0` above so the cast to `usize`
+    // (Scintilla's wparam shape) is lossless — cast_sign_loss is
+    // documented as intentional at the crate level, no extra
+    // annotation needed here.
+    docmap_editor.send(
+        SCI_INDICATORFILLRANGE,
+        first_pos as usize,
+        last_pos - first_pos,
+    );
+    // Center the highlighted range in the map's viewport so it
+    // stays visible when the user scrolls the main editor
+    // beyond the map's own lines-on-screen. Compute the target
+    // first-visible-line for the map: put the highlight's
+    // vertical center at the map's vertical center. Uses
+    // document-line indices on both sides so folding doesn't
+    // cause a jump.
+    let map_lines_on_screen = docmap_editor.send(SCI_LINESONSCREEN, 0, 0);
+    let highlight_span = last_doc_line_exclusive - first_doc_line;
+    let target_map_first = (first_doc_line + highlight_span / 2 - map_lines_on_screen / 2).max(0);
+    let map_current_first = docmap_editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
+    let delta = target_map_first - map_current_first;
+    if delta != 0 {
+        docmap_editor.send(SCI_LINESCROLL, 0, delta);
+    }
 }
 
 /// Push the current docmap panel state into the shell so the next
@@ -33445,7 +33667,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
             WM_SIZE => {
                 let width = (lparam.0 & 0xFFFF) as i32;
                 let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
-                if let Some(state) = state_from_hwnd(hwnd) {
+                let editors = if let Some(state) = state_from_hwnd(hwnd) {
                     let tab_hidden = !IsWindowVisible(state.tab_hwnd).as_bool();
                     let toolbar_height = toolbar::toolbar_height_px(state.toolbar_bitmap_px);
                     let workspace = WorkspaceLayout {
@@ -33486,6 +33708,21 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // session cache so the next clean shutdown
                     // writes the size the user actually wants.
                     track_window_geometry(hwnd, &mut state.shell, wparam.0 as u32);
+                    Some((state.editor, state.docmap_editor))
+                } else {
+                    None
+                };
+                // A main-window resize changes the main editor's
+                // `SCI_LINESONSCREEN`, which shifts the bottom
+                // edge of the visible range. Scintilla doesn't
+                // fire `SCN_UPDATEUI(SC_UPDATE_V_SCROLL)` for a
+                // resize that doesn't move first-visible-line
+                // (only for scroll gestures), so we push the
+                // update ourselves. Both editor handles snapshot
+                // out of the `state_from_hwnd` scope above so no
+                // second borrow materialises here.
+                if let Some((main_editor, docmap_editor)) = editors {
+                    update_docmap_viewport_indicator(main_editor, docmap_editor);
                 }
                 LRESULT(0)
             }
@@ -34243,6 +34480,24 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 // re-do this work on every keystroke.
                                 if (updated & SC_UPDATE_V_SCROLL) != 0 {
                                     populate_visible_line_numbers(&state.editor);
+                                    // Move the Document Map's
+                                    // viewport highlight to match
+                                    // the new visible-line range in
+                                    // the main editor. Handles
+                                    // pulled from the outer `state`
+                                    // borrow so the update helper
+                                    // doesn't re-derive them via
+                                    // `state_from_hwnd` — that
+                                    // would materialise an
+                                    // overlapping `&mut WindowState`
+                                    // (aliasing UB) since `state` is
+                                    // still live for the
+                                    // `update_brace_highlight` call
+                                    // below.
+                                    update_docmap_viewport_indicator(
+                                        state.editor,
+                                        state.docmap_editor,
+                                    );
                                 }
                                 // Brace-match highlight — repaint
                                 // whenever the selection moved OR the

@@ -252,6 +252,84 @@ pub const SCI_SETHSCROLLBAR: u32 = 2130;
 /// [`SCI_SETHSCROLLBAR`] for the vertical scrollbar.
 pub const SCI_SETVSCROLLBAR: u32 = 2280;
 
+// -----------------------------------------------------------------
+// Indicators. Scintilla supports 32 independent indicator styles per
+// document — the Document Map's viewport highlight uses one of them
+// (`INDIC_STRAIGHTBOX` at slot [`DOCMAP_VIEWPORT_INDICATOR`]) to
+// paint the orange rectangle over the range visible in the main
+// editor.
+//
+// Indicator numbers 0-7 are reserved by Scintilla and Lexilla for
+// built-in features (searchresult, diagnostic markers, container-
+// managed indicators from lexers, …); user-defined indicators live
+// in 8..=31.
+// -----------------------------------------------------------------
+
+/// `SCI_INDICSETSTYLE(indicator, style)` — set the visual style of
+/// an indicator. The style codes are the `INDIC_*` constants;
+/// currently only [`INDIC_STRAIGHTBOX`] is exported here.
+pub const SCI_INDICSETSTYLE: u32 = 2080;
+/// `SCI_INDICSETFORE(indicator, colour)` — set the foreground
+/// colour of an indicator. `colour` is a Scintilla `sptr_t`
+/// encoding a `COLORREF` (0x00BBGGRR — same byte order as
+/// Win32's `RGB` macro).
+pub const SCI_INDICSETFORE: u32 = 2082;
+/// `SCI_INDICSETUNDER(indicator, under)` — non-zero draws the
+/// indicator UNDER the text (so text stays legible on top of a
+/// filled box). Zero paints on top, which for `INDIC_STRAIGHTBOX`
+/// would obscure the miniature text under the highlight rectangle.
+pub const SCI_INDICSETUNDER: u32 = 2510;
+/// `SCI_INDICSETALPHA(indicator, alpha)` — 0..=255 alpha of the
+/// fill for filled-box indicators (`INDIC_ROUNDBOX`,
+/// `INDIC_STRAIGHTBOX`, `INDIC_FULLBOX`). 0 = fully transparent,
+/// 255 = fully opaque.
+pub const SCI_INDICSETALPHA: u32 = 2523;
+/// `SCI_INDICSETOUTLINEALPHA(indicator, alpha)` — same shape as
+/// [`SCI_INDICSETALPHA`] but for the box outline. Paired with
+/// [`SCI_INDICSETALPHA`] so a filled box can have a translucent
+/// interior and a solid outline (the "cursor rectangle" look on
+/// N++'s Document Map).
+pub const SCI_INDICSETOUTLINEALPHA: u32 = 2558;
+/// `SCI_SETINDICATORCURRENT(indicator)` — select which of the 32
+/// indicator slots subsequent
+/// [`SCI_INDICATORFILLRANGE`]/[`SCI_INDICATORCLEARRANGE`] calls
+/// operate on. Modal — stays selected until changed. Applies per
+/// Scintilla view.
+pub const SCI_SETINDICATORCURRENT: u32 = 2500;
+/// `SCI_INDICATORFILLRANGE(position, fillLength)` — set the
+/// currently-selected indicator on `fillLength` bytes starting at
+/// `position`. Additive: a second call over the same range doesn't
+/// duplicate paint, it just re-asserts the bit.
+pub const SCI_INDICATORFILLRANGE: u32 = 2504;
+/// `SCI_INDICATORCLEARRANGE(position, clearLength)` — clear the
+/// currently-selected indicator over the range. Used to erase the
+/// previous viewport highlight before painting the new one.
+pub const SCI_INDICATORCLEARRANGE: u32 = 2505;
+
+/// `INDIC_STRAIGHTBOX = 8` — filled rectangle with a solid
+/// outline. The Document Map's viewport highlight uses this style
+/// so the "you are here" region reads as a coloured band across
+/// every line of the currently-visible main-editor range.
+pub const INDIC_STRAIGHTBOX: usize = 8;
+/// `INDIC_HIDDEN = 5` — indicator is not painted at all. The
+/// Document Map assigns this style to slot
+/// [`INDIC_STRAIGHTBOX`]'s number on the **main** editor so the
+/// shared-document indicator range (written by the map view for
+/// its own highlight) doesn't bleed through as a rendering
+/// artefact on the main editor. Indicator STYLE lives on
+/// `ViewStyle` (per-view); indicator RANGE lives on `Document`
+/// (per-doc, shared). Split the two views' styles accordingly.
+pub const INDIC_HIDDEN: usize = 5;
+
+/// `SCI_DOCLINEFROMVISIBLE(visibleLine)` — convert a
+/// visible-line index (post-folding / post-wrapping, as returned
+/// by [`SCI_GETFIRSTVISIBLELINE`]) into a document-line index
+/// (as consumed by [`SCI_POSITIONFROMLINE`]). Identity when no
+/// folding is active; catches the case where a scrolled-to
+/// visible line sits at a different document line because
+/// intervening lines are folded.
+pub const SCI_DOCLINEFROMVISIBLE: u32 = 2221;
+
 // Horizontal-scroll width control. Scintilla defaults `scrollWidth`
 // to 2000 px and never auto-shrinks, which produces the visible
 // "scroll past the end of any line into empty space" behaviour.
