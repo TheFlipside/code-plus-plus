@@ -580,6 +580,21 @@ const ID_FILE_OPEN_CONTAINING_CMD: u16 = 1023;
 const ID_FILE_OPEN_CONTAINING_POWERSHELL: u16 = 1024;
 const ID_FILE_OPEN_CONTAINING_WORKSPACE: u16 = 1025;
 
+// File → Close Multiple Documents submenu (1026-1030). Each entry
+// closes a specific subset of open tabs. All five share the same
+// underlying loop as ID_FILE_CLOSE_ALL: repeatedly pick the next
+// target tab per a variant-specific predicate, activate it (so
+// its Scintilla document is bound and the dirty-check + save
+// prompt work correctly), then reuse `handle_close_active_tab_with_outcome`
+// so per-tab dirty prompts + `CloseOutcome::Aborted` short-circuit
+// exactly like Close All. Greyed by `refresh_file_menu` per
+// per-entry preconditions (only-one-tab, no-tabs-to-left, etc.).
+const ID_FILE_CLOSE_ALL_BUT_ACTIVE: u16 = 1026;
+const ID_FILE_CLOSE_ALL_BUT_PINNED: u16 = 1027;
+const ID_FILE_CLOSE_ALL_TO_LEFT: u16 = 1028;
+const ID_FILE_CLOSE_ALL_TO_RIGHT: u16 = 1029;
+const ID_FILE_CLOSE_ALL_UNCHANGED: u16 = 1030;
+
 // Edit (1100-1199) — most route directly to Scintilla via SCI_*.
 const ID_EDIT_UNDO: u16 = 1100;
 const ID_EDIT_REDO: u16 = 1101;
@@ -13151,6 +13166,180 @@ enum CloseOutcome {
     Aborted,
 }
 
+/// Which subset of tabs the [`close_multiple_documents`] loop
+/// should close. Every variant reuses the single-tab close path
+/// (dirty-check prompt + Cancel short-circuit), so the user's
+/// choices on individual dirty buffers are honoured exactly as
+/// they are for `File → Close All`.
+// The shared `All` prefix on every variant mirrors the user-facing
+// menu labels ("Close All but Active", "Close All to the Left",
+// …). Renaming to drop the prefix would only replace one context
+// (this enum) with another (a `use CloseMultiKind::*` glob at
+// every call site), so silence the pedantic lint.
+#[allow(clippy::enum_variant_names)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum CloseMultiKind {
+    /// Every tab except the one that was active when the loop
+    /// started. If the active tab is unpinned it stays open;
+    /// pinned/unpinned status is irrelevant for this variant.
+    AllButActive,
+    /// Every tab that is NOT pinned. Pinned tabs stay. The
+    /// active tab may or may not survive depending on whether
+    /// it's pinned.
+    AllButPinned,
+    /// Every tab whose current index is < the active tab's
+    /// index (i.e. to the left of it in the tab strip).
+    AllToLeft,
+    /// Every tab whose current index is > the active tab's
+    /// index. Everything to the right of the active tab.
+    AllToRight,
+    /// Every tab that is not dirty (no unsaved changes). Uses
+    /// the cached `Tab.dirty` flag which mirrors Scintilla's
+    /// `SCI_GETMODIFY` and is maintained by `SCN_SAVEPOINTREACHED`
+    /// / `SCN_SAVEPOINTLEFT` — so this is O(n) with no
+    /// doc-pointer-swap dance. The active tab is closed too if
+    /// it happens to be clean.
+    AllUnchanged,
+}
+
+/// Close every tab that matches the `kind` predicate. Reuses the
+/// single-tab close path per iteration so dirty prompts +
+/// Cancel-shortcircuits behave identically to Ctrl+W. Bounds
+/// the iteration count by the initial tabs length so a
+/// misbehaving close path can't hang the app.
+///
+/// Loop invariant:
+///   * Snapshot the active tab id (the "keeper" for the
+///     "All but Active" / "All to the Left" / "All to the
+///     Right" variants) BEFORE entering the loop, because
+///     activating a target tab mid-loop shifts
+///     `shell.active_tab` and picking a fresh keeper on every
+///     tick would collapse the loop to a no-op (each iteration
+///     would try to skip whichever tab we just activated).
+///   * Each iteration: pick the next target tab by
+///     `pick_next_target(shell, kind, keeper_id)`; if `None`,
+///     we're done. Else activate + close.
+///   * `handle_close_active_tab_with_outcome` returns
+///     `Aborted` on Cancel or `NothingToClose` when
+///     `state_from_hwnd` returns `None` (re-entrant plugin
+///     call). Either breaks the loop.
+///
+/// `ensure_one_tab` is called at the end only if the workspace
+/// is empty. All five variants can potentially drain the strip
+/// (Close All Unchanged if every tab is clean; Close All but
+/// Pinned if none are pinned; etc.), and we don't want to leave
+/// the user staring at an empty editor.
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+unsafe fn close_multiple_documents(hwnd: HWND, kind: CloseMultiKind) {
+    // Snapshot the keeper id + initial tab count under one
+    // brief borrow, then drop it before the loop — each
+    // iteration re-acquires the borrow inside its own scope.
+    //
+    // No active tab → return early instead of falling back to a
+    // synthetic id: three of the five variants (AllButActive,
+    // AllToLeft, AllToRight) are meaningless without a keeper,
+    // and a fallback of `0` would silently protect any tab that
+    // happens to have that id from being closed. `refresh_file_menu`
+    // greys every entry when `active_tab.is_none()`, but a
+    // plugin-forged `WM_COMMAND` bypasses that greying and would
+    // reach this helper — the early return is the security /
+    // correctness gate.
+    let (keeper_id, initial_count) = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        let Some(active) = state.shell.active() else {
+            return;
+        };
+        (active.id, state.shell.tabs.len())
+    } else {
+        return;
+    };
+    if initial_count == 0 {
+        return;
+    }
+    for _ in 0..initial_count {
+        // Pick the next target index under a fresh borrow.
+        let next_idx = unsafe { state_from_hwnd(hwnd) }
+            .and_then(|state| pick_next_close_target(&state.shell, kind, keeper_id));
+        let Some(idx) = next_idx else {
+            break; // No more targets — done.
+        };
+        // Activate the target tab if it isn't already the
+        // active one — `handle_close_active_tab_inner` reads
+        // `SCI_GETMODIFY` off the currently-bound Scintilla
+        // document and pops the save prompt for THAT document,
+        // so the target must be the bound one before we close.
+        let active_now = unsafe { state_from_hwnd(hwnd) }.and_then(|s| s.shell.active_tab);
+        if active_now != Some(idx) {
+            unsafe { handle_window_menu_click(hwnd, idx) };
+        }
+        match unsafe { handle_close_active_tab_with_outcome(hwnd) } {
+            CloseOutcome::Closed => {}
+            // Aborted (Cancel or Save failure) OR NothingToClose
+            // (re-entrant plugin call blocking state access):
+            // stop the loop. Tabs that have already been closed
+            // stay closed; the user committed to those decisions.
+            CloseOutcome::Aborted | CloseOutcome::NothingToClose => break,
+        }
+    }
+    // If the loop drained the strip (Close All Unchanged with
+    // all-clean tabs; Close All but Pinned with none pinned;
+    // …), restore the "always at least one tab" invariant.
+    let empty = unsafe { state_from_hwnd(hwnd) }.is_some_and(|s| s.shell.tabs.is_empty());
+    if empty {
+        unsafe { ensure_one_tab(hwnd) };
+    }
+    unsafe {
+        fire_queued_notifications(hwnd);
+    }
+}
+
+/// Pick the vector index of the next tab to close for `kind`,
+/// or `None` if no candidate remains. `keeper_id` is the tab id
+/// that must survive for the "All but Active" / "All to the
+/// Left / Right" variants — captured once at the loop's start
+/// so mid-loop activations don't shift the reference point.
+///
+/// This is a pure inspector on `Shell`; no mutation, no I/O,
+/// no borrow smell. Called once per iteration of the outer
+/// close loop.
+fn pick_next_close_target(
+    shell: &codepp_shell::Shell,
+    kind: CloseMultiKind,
+    keeper_id: i32,
+) -> Option<usize> {
+    match kind {
+        CloseMultiKind::AllButActive => shell.tabs.iter().position(|t| t.id != keeper_id),
+        CloseMultiKind::AllButPinned => shell.tabs.iter().position(|t| !t.pinned),
+        CloseMultiKind::AllToLeft => {
+            // Find the keeper's current position; everything at
+            // a lower index is a target. Close index 0 first;
+            // the keeper drifts left as tabs to its left vanish,
+            // so we stop once index 0 IS the keeper.
+            let keeper_pos = shell.tabs.iter().position(|t| t.id == keeper_id)?;
+            if keeper_pos == 0 {
+                None
+            } else {
+                Some(0)
+            }
+        }
+        CloseMultiKind::AllToRight => {
+            // Everything at an index greater than the keeper's
+            // is a target. Close the slot immediately after the
+            // keeper first; each close shifts subsequent
+            // targets left into the same slot.
+            let keeper_pos = shell.tabs.iter().position(|t| t.id == keeper_id)?;
+            if keeper_pos + 1 < shell.tabs.len() {
+                Some(keeper_pos + 1)
+            } else {
+                None
+            }
+        }
+        CloseMultiKind::AllUnchanged => shell.tabs.iter().position(|t| !t.dirty),
+    }
+}
+
 /// # Safety
 ///
 /// Caller must invoke from the UI thread that owns `hwnd`.
@@ -14353,6 +14542,50 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             MF_STRING,
             ID_FILE_CLOSE_ALL as usize,
             w!("Close A&ll\tCtrl+Shift+W"),
+        )?;
+        // "Close Multiple Documents ▸" submenu. Five variants,
+        // each closing a specific subset of the open tabs. All
+        // reuse the single-tab close path (dirty prompt + Cancel
+        // shortcircuit) so a dirty buffer produces the same
+        // Save/Don't Save/Cancel dialog as Ctrl+W. Per-entry
+        // greying is driven by `refresh_file_menu` on
+        // WM_INITMENUPOPUP.
+        let close_multi = CreateMenu()?;
+        AppendMenuW(
+            close_multi,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_CLOSE_ALL_BUT_ACTIVE as usize,
+            w!("Close All but &Active Document"),
+        )?;
+        AppendMenuW(
+            close_multi,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_CLOSE_ALL_BUT_PINNED as usize,
+            w!("Close All but &Pinned Documents"),
+        )?;
+        AppendMenuW(
+            close_multi,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_CLOSE_ALL_TO_LEFT as usize,
+            w!("Close All To the &Left"),
+        )?;
+        AppendMenuW(
+            close_multi,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_CLOSE_ALL_TO_RIGHT as usize,
+            w!("Close All To the &Right"),
+        )?;
+        AppendMenuW(
+            close_multi,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_CLOSE_ALL_UNCHANGED as usize,
+            w!("Close All &Unchanged"),
+        )?;
+        AppendMenuW(
+            file_menu,
+            MF_POPUP,
+            close_multi.0 as usize,
+            w!("Close &Multiple Documents"),
         )?;
         AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
         AppendMenuW(
@@ -18617,13 +18850,32 @@ unsafe fn refresh_file_menu(file_menu: HMENU, shell: &codepp_shell::Shell) {
     // condition — all four operate on the parent directory.
     let open_containing_enabled = active_path.and_then(Path::parent).is_some();
 
+    // Close Multiple Documents: each entry has its own
+    // precondition. Baseline is `tabs.len() >= 2` — none of the
+    // variants make sense with zero or one tab.
+    let n = shell.tabs.len();
+    let baseline_multi = n >= 2;
+    let active_idx = shell.active_tab;
+    // "Close All but Active": needs at least one non-active tab
+    // to close (i.e. any n >= 2 when an active tab exists).
+    let close_but_active_enabled = baseline_multi && active_idx.is_some();
+    // "Close All but Pinned": needs at least one non-pinned tab.
+    let close_but_pinned_enabled = baseline_multi && shell.tabs.iter().any(|t| !t.pinned);
+    // "Close All To the Left": needs active idx > 0 (at least
+    // one tab to the left of the active one).
+    let close_to_left_enabled = baseline_multi && active_idx.is_some_and(|i| i > 0);
+    // "Close All To the Right": needs active idx < n-1.
+    let close_to_right_enabled = baseline_multi && active_idx.is_some_and(|i| i + 1 < n);
+    // "Close All Unchanged": needs at least one clean tab.
+    let close_unchanged_enabled = baseline_multi && shell.tabs.iter().any(|t| !t.dirty);
+
     // `EnableMenuItem` returns the previous state on success or
     // `-1u32` on failure; both are fire-and-forget for us — a
     // failure just means the enable state is wrong on this open,
     // never a stability issue. `MF_BYCOMMAND` searches the entire
     // menu tree rooted at `file_menu`, including nested submenus,
-    // so the four Open Containing Folder ids resolve correctly
-    // even though they live one level deep.
+    // so ids that live one level deep (Open Containing Folder,
+    // Close Multiple Documents) resolve correctly.
     let apply = |id: u16, enabled: bool| unsafe {
         let flags = MF_BYCOMMAND.0 | if enabled { MF_ENABLED.0 } else { MF_GRAYED.0 };
         let _ = EnableMenuItem(file_menu, u32::from(id), MENU_ITEM_FLAGS(flags));
@@ -18633,6 +18885,11 @@ unsafe fn refresh_file_menu(file_menu: HMENU, shell: &codepp_shell::Shell) {
     apply(ID_FILE_OPEN_CONTAINING_CMD, open_containing_enabled);
     apply(ID_FILE_OPEN_CONTAINING_POWERSHELL, open_containing_enabled);
     apply(ID_FILE_OPEN_CONTAINING_WORKSPACE, open_containing_enabled);
+    apply(ID_FILE_CLOSE_ALL_BUT_ACTIVE, close_but_active_enabled);
+    apply(ID_FILE_CLOSE_ALL_BUT_PINNED, close_but_pinned_enabled);
+    apply(ID_FILE_CLOSE_ALL_TO_LEFT, close_to_left_enabled);
+    apply(ID_FILE_CLOSE_ALL_TO_RIGHT, close_to_right_enabled);
+    apply(ID_FILE_CLOSE_ALL_UNCHANGED, close_unchanged_enabled);
 }
 
 /// Show the "About Code++" dialog modally. `main_hwnd` is the
@@ -31155,6 +31412,35 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             ensure_one_tab(hwnd);
                         }
                         fire_queued_notifications(hwnd);
+                    }
+                    // File → Close Multiple Documents submenu. All
+                    // five arms funnel through `close_multiple_documents`
+                    // which handles the loop, the mid-loop
+                    // activation-then-close dance, the abort
+                    // short-circuits, and the `ensure_one_tab` +
+                    // notification drain at the end. Per-entry
+                    // greying by `refresh_file_menu` means a
+                    // normal click never reaches an arm with no
+                    // targets (baseline_multi = `tabs.len() >= 2`
+                    // plus the variant's own precondition); a
+                    // plugin-forged WM_COMMAND that skips the
+                    // greying reaches a helper that's already
+                    // a no-op when `pick_next_close_target`
+                    // returns None on the first iteration.
+                    ID_FILE_CLOSE_ALL_BUT_ACTIVE => {
+                        close_multiple_documents(hwnd, CloseMultiKind::AllButActive);
+                    }
+                    ID_FILE_CLOSE_ALL_BUT_PINNED => {
+                        close_multiple_documents(hwnd, CloseMultiKind::AllButPinned);
+                    }
+                    ID_FILE_CLOSE_ALL_TO_LEFT => {
+                        close_multiple_documents(hwnd, CloseMultiKind::AllToLeft);
+                    }
+                    ID_FILE_CLOSE_ALL_TO_RIGHT => {
+                        close_multiple_documents(hwnd, CloseMultiKind::AllToRight);
+                    }
+                    ID_FILE_CLOSE_ALL_UNCHANGED => {
+                        close_multiple_documents(hwnd, CloseMultiKind::AllUnchanged);
                     }
                     ID_FILE_RELOAD => {
                         // Reload from disk. Two checks before we
