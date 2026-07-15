@@ -4149,12 +4149,12 @@ impl Shell {
     }
 
     /// Persisted global editor-view toggles read from session.xml
-    /// (currently just the indent-guide flag; the struct is the
-    /// growth spot for future view-level toggles like word-wrap or
-    /// show-line-numbers). The UI reads this at cold start —
-    /// after `Shell::new` and before window-show — so the first
-    /// paint already reflects the user's chosen state instead of
-    /// Scintilla's built-in default.
+    /// (indent guide, word wrap, show-whitespace, show-EOL; the
+    /// struct is the growth spot for future view-level toggles like
+    /// show-line-numbers). The UI reads this at cold start — after
+    /// `Shell::new` and before window-show — so the first paint
+    /// already reflects the user's chosen state instead of
+    /// Scintilla's built-in defaults.
     #[must_use]
     pub fn saved_view_settings(&self) -> codepp_core::session::ViewSettings {
         self.session.view

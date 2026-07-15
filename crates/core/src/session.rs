@@ -219,18 +219,27 @@ pub struct WorkspaceSession {
     pub width: Option<i32>,
 }
 
-/// Persisted global (view-level) editor toggles. Room to grow — the
-/// initial cut carries just the indent-guide flag, but the intent is
-/// that other cross-buffer view state (word-wrap default, show-line-
-/// numbers default, show-whitespace default, …) lands on the same
-/// element so a session.xml written by an older build round-trips
-/// cleanly against a newer one and vice versa.
+/// Persisted global (view-level) editor toggles. Room to grow —
+/// every one of these fields corresponds to a Scintilla view-style
+/// property (`viewIndentationGuides`, `wrap`, `viewWhitespace`,
+/// `viewEOL`) that lives per-`Scintilla` control, not per-document,
+/// so applying the persisted values once at cold start covers the
+/// whole session — doc-pointer swaps do not reset them.
 ///
 /// `Default` produces the "everything off" baseline, which matches
 /// Scintilla's built-in defaults so a session with no `<view>`
 /// element (first launch, or a `session.xml` written before this
 /// feature shipped) behaves identically to a session with an empty
 /// `<view/>` element.
+// Each field is an independent Scintilla view-style toggle with
+// distinct semantics (indent-guide mode / wrap mode / whitespace
+// visibility / EOL visibility) — collapsing to an enum or bitflags
+// would obscure the wire-format shape (`<view @indent_guide @word_wrap
+// @show_whitespace @show_eol/>`) and force the serde attribute plumbing
+// to route through custom (de)serialisers. Multiple bools is the
+// correct model here; the pedantic lint's assumption ("N booleans is
+// often a smell") doesn't apply.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewSettings {
     /// True iff the indent-guide mode is on (Scintilla's
@@ -240,6 +249,27 @@ pub struct ViewSettings {
     /// user's chosen state instead of Scintilla's default (off).
     #[serde(rename = "@indent_guide", default, skip_serializing_if = "is_false")]
     pub indent_guide: bool,
+    /// True iff word wrap is on (Scintilla's `SC_WRAP_WORD`).
+    /// False maps to `SC_WRAP_NONE`. Toggled by `ID_VIEW_WORDWRAP`
+    /// (menu + toolbar). No `SC_WRAP_CHAR` / `SC_WRAP_WHITESPACE`
+    /// distinction persisted — the toolbar toggle only walks
+    /// between `SC_WRAP_NONE` and `SC_WRAP_WORD`, so a bool is
+    /// the full expressive range of the user-facing surface.
+    #[serde(rename = "@word_wrap", default, skip_serializing_if = "is_false")]
+    pub word_wrap: bool,
+    /// True iff whitespace glyphs are visible (Scintilla's
+    /// `SCWS_VISIBLEALWAYS`). False maps to `SCWS_INVISIBLE`.
+    /// Toggled by the `View → Show Whitespace` menu, the
+    /// individual `ID_VIEW_SHOWWS` toggle, AND the composite
+    /// toolbar `Show All Chars` button (which flips this in
+    /// lockstep with `show_eol` — see the handler comments).
+    #[serde(rename = "@show_whitespace", default, skip_serializing_if = "is_false")]
+    pub show_whitespace: bool,
+    /// True iff end-of-line glyphs are visible (Scintilla's
+    /// `SCI_SETVIEWEOL`). Same two-way + composite toggle wiring
+    /// as `show_whitespace`.
+    #[serde(rename = "@show_eol", default, skip_serializing_if = "is_false")]
+    pub show_eol: bool,
 }
 
 /// The whole session. The active-tab index is `Option<usize>` rather
@@ -1005,19 +1035,57 @@ mod tests {
         assert!(text.starts_with("<?xml"));
     }
 
-    /// Round-trip a session with `view.indent_guide` set — the flag
-    /// survives XML serialisation and reparses to the same value.
+    /// Round-trip a session with every `ViewSettings` field flipped
+    /// on — the flags survive XML serialisation and reparse to the
+    /// same values. One combined test rather than one per field
+    /// because the fields are structurally identical and a bug that
+    /// broke one (serde derive, elision predicate, or attribute
+    /// naming) would almost certainly break the others; one covering
+    /// test is enough signal. The single-field
+    /// `round_trip_view_settings_word_wrap_only` pin below catches
+    /// the "one field's `#[serde(default)]` leaks into a sibling"
+    /// class of bug.
     #[test]
-    fn round_trip_view_indent_guide_on() {
+    fn round_trip_view_settings_all_on() {
         let (_dir, path) = temp_session_path();
         let session = Session {
-            view: ViewSettings { indent_guide: true },
+            view: ViewSettings {
+                indent_guide: true,
+                word_wrap: true,
+                show_whitespace: true,
+                show_eol: true,
+            },
             ..Session::default()
         };
         session.save_to_xml(&path).unwrap();
         let loaded = Session::load_from_xml(&path).unwrap();
         assert_eq!(session, loaded);
         assert!(loaded.view.indent_guide);
+        assert!(loaded.view.word_wrap);
+        assert!(loaded.view.show_whitespace);
+        assert!(loaded.view.show_eol);
+    }
+
+    /// Round-trip a session with only one field flipped — each
+    /// field is independent, so flipping one must not spuriously
+    /// flip the others on load (would happen if the serde-derived
+    /// deserialisation mis-shared defaults across attributes).
+    #[test]
+    fn round_trip_view_settings_word_wrap_only() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            view: ViewSettings {
+                word_wrap: true,
+                ..ViewSettings::default()
+            },
+            ..Session::default()
+        };
+        session.save_to_xml(&path).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert!(loaded.view.word_wrap);
+        assert!(!loaded.view.indent_guide);
+        assert!(!loaded.view.show_whitespace);
+        assert!(!loaded.view.show_eol);
     }
 
     /// `ViewSettings::default()` (indent guide off) must NOT emit a

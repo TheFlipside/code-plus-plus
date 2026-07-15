@@ -25281,16 +25281,26 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             state.shell.set_window_geometry(g);
         }
 
-        // Apply persisted view toggles (indent guide, future
-        // siblings). These live on Scintilla's `ViewStyle` (per-
-        // view, not per-document) so one application at cold start
-        // covers the whole session — new tabs / doc-pointer swaps
-        // don't reset it, matching Scintilla's own semantics
-        // (`vs.viewIndentationGuides` in Editor.cxx). Runs after
-        // `Shell::new` (so `saved_view_settings` is populated from
-        // the loaded session.xml) and before window show, so the
-        // very first paint already reflects the user's choice
-        // instead of Scintilla's built-in off default.
+        // Apply persisted view toggles (indent guide, word wrap,
+        // show-whitespace, show-EOL). Every one of these settings
+        // lives on Scintilla's `ViewStyle` (per-view, not per-
+        // document; verified in Editor.cxx — `vs.viewIndentationGuides`
+        // / `vs.SetWrapState` / `vs.viewWhitespace` / `vs.viewEOL`),
+        // so one application at cold start covers the whole session —
+        // new tabs / doc-pointer swaps don't reset any of them. Runs
+        // after `Shell::new` (so `saved_view_settings` is populated
+        // from the loaded session.xml) and before window show, so the
+        // very first paint already reflects the user's choices instead
+        // of Scintilla's built-in off defaults.
+        //
+        // Wrap and whitespace both accept multi-value enums
+        // (`SC_WRAP_NONE` / `SC_WRAP_WORD` / `SC_WRAP_CHAR` /
+        // `SC_WRAP_WHITESPACE` on the wrap side; `SCWS_INVISIBLE` /
+        // `SCWS_VISIBLEALWAYS` / `SCWS_VISIBLEAFTERINDENT` /
+        // `SCWS_VISIBLEONLYININDENT` on the whitespace side), but
+        // Code++'s user surface only exposes on/off, so the persisted
+        // bool round-trips as {0, 1} — matches the semantics of every
+        // ID_VIEW_* toggle handler below.
         let saved_view = state.shell.saved_view_settings();
         state.editor.send(
             SCI_SETINDENTATIONGUIDES,
@@ -25301,6 +25311,15 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             },
             0,
         );
+        state
+            .editor
+            .send(SCI_SETWRAPMODE, usize::from(saved_view.word_wrap), 0);
+        state
+            .editor
+            .send(SCI_SETVIEWWS, usize::from(saved_view.show_whitespace), 0);
+        state
+            .editor
+            .send(SCI_SETVIEWEOL, usize::from(saved_view.show_eol), 0);
 
         // Seed STYLE_DEFAULT from styles.xml (font face, size,
         // bold / italic / underline, fg, bg) and apply transparency
@@ -31959,6 +31978,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             let toolbar_hwnd = state.toolbar_hwnd;
                             let on = editor.send(SCI_GETWRAPMODE, 0, 0) != 0;
                             editor.send(SCI_SETWRAPMODE, usize::from(!on), 0);
+                            // Persist the new state — same read-modify-
+                            // write shape as the indent-guide toggle so
+                            // a future sibling toggle can't clobber the
+                            // other flags on the struct.
+                            let mut view = state.shell.saved_view_settings();
+                            view.word_wrap = !on;
+                            state.shell.set_view_settings(view);
                             // SCI_SETWRAPMODE doesn't fire SCN_UPDATEUI,
                             // so push the new check state onto the
                             // toolbar explicitly.
@@ -31972,6 +31998,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             let on = editor.send(SCI_GETVIEWWS, 0, 0) != 0;
                             // SCWS_INVISIBLE = 0, SCWS_VISIBLEALWAYS = 1.
                             editor.send(SCI_SETVIEWWS, usize::from(!on), 0);
+                            let mut view = state.shell.saved_view_settings();
+                            view.show_whitespace = !on;
+                            state.shell.set_view_settings(view);
                             toolbar::refresh_state(toolbar_hwnd, &editor);
                         }
                     }
@@ -31981,6 +32010,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             let toolbar_hwnd = state.toolbar_hwnd;
                             let on = editor.send(SCI_GETVIEWEOL, 0, 0) != 0;
                             editor.send(SCI_SETVIEWEOL, usize::from(!on), 0);
+                            let mut view = state.shell.saved_view_settings();
+                            view.show_eol = !on;
+                            state.shell.set_view_settings(view);
                             toolbar::refresh_state(toolbar_hwnd, &editor);
                         }
                     }
@@ -32001,9 +32033,20 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             // both on → both off; otherwise → both on.
                             // That makes the click semantics agree
                             // with the button's check indicator.
-                            let target = usize::from(!(ws_on && eol_on));
+                            let new_on = !(ws_on && eol_on);
+                            let target = usize::from(new_on);
                             editor.send(SCI_SETVIEWWS, target, 0);
                             editor.send(SCI_SETVIEWEOL, target, 0);
+                            // Persist both underlying flags. The
+                            // composite button reads them back on
+                            // next launch via `refresh_state`'s
+                            // `ws_on && eol_on` gate — same
+                            // in-session semantic, restored across
+                            // launches.
+                            let mut view = state.shell.saved_view_settings();
+                            view.show_whitespace = new_on;
+                            view.show_eol = new_on;
+                            state.shell.set_view_settings(view);
                             toolbar::refresh_state(toolbar_hwnd, &editor);
                         }
                     }
