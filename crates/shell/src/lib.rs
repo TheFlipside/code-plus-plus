@@ -3075,6 +3075,16 @@ impl Shell {
         // `set_window_geometry` on `WM_SIZE` / maximize-restore; we
         // just snapshot the latest value here.
         session.window = self.session.window;
+        // Same discipline for the workspace panel state. The UI
+        // keeps `self.session.workspace` in sync via
+        // `set_workspace_session` right before every save (see
+        // `sync_workspace_state_to_shell` in `ui_win32`); we
+        // snapshot the latest value here. Without this, the
+        // workspace state I set via `set_workspace_session`
+        // would be thrown away — `save_session` starts from a
+        // fresh `Session::new()` and only carries over fields
+        // it explicitly copies.
+        session.workspace.clone_from(&self.session.workspace);
 
         // Filenames of all backups we wrote on this save pass.
         // After session.xml is durably written we use this list to
