@@ -441,16 +441,17 @@ use windows::Win32::UI::Controls::Dialogs::{
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, CDDS_PREPAINT,
     CDRF_DODEFAULT, CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, HTREEITEM, ICC_BAR_CLASSES,
-    ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT,
-    LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_STATE, LVIF_TEXT, LVIS_STATEIMAGEMASK,
-    LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
-    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVM_SETITEMTEXTW, LVN_ITEMCHANGED,
-    LVS_EX_CHECKBOXES, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS,
-    LVS_SINGLESEL, NMCUSTOMDRAW, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NMTREEVIEWW, NM_CUSTOMDRAW,
-    NM_DBLCLK, ODT_TAB, TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL,
-    TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCM_SETPADDING,
-    TCN_SELCHANGE, TCS_OWNERDRAWFIXED, TVE_COLLAPSE, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT,
-    TVGN_PARENT, TVGN_ROOT, TVIF_CHILDREN, TVIF_IMAGE, TVIF_PARAM, TVIF_SELECTEDIMAGE, TVIF_TEXT,
+    ICC_LISTVIEW_CLASSES, ICC_PROGRESS_CLASS, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES,
+    INITCOMMONCONTROLSEX, LVCFMT_LEFT, LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_STATE,
+    LVIF_TEXT, LVIS_STATEIMAGEMASK, LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT,
+    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE,
+    LVM_SETITEMTEXTW, LVN_ITEMCHANGED, LVS_EX_CHECKBOXES, LVS_EX_DOUBLEBUFFER,
+    LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, NMCUSTOMDRAW, NMHDR,
+    NMITEMACTIVATE, NMLISTVIEW, NMTREEVIEWW, NM_CUSTOMDRAW, NM_DBLCLK, ODT_TAB, TCHITTESTINFO,
+    TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST,
+    TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCM_SETPADDING, TCN_SELCHANGE,
+    TCS_OWNERDRAWFIXED, TVE_COLLAPSE, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT,
+    TVGN_ROOT, TVIF_CHILDREN, TVIF_IMAGE, TVIF_PARAM, TVIF_SELECTEDIMAGE, TVIF_TEXT,
     TVINSERTSTRUCTW, TVITEMW, TVI_LAST, TVI_ROOT, TVM_DELETEITEM, TVM_ENSUREVISIBLE, TVM_EXPAND,
     TVM_GETITEMW, TVM_GETNEXTITEM, TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETIMAGELIST, TVM_SETITEMW,
     TVN_ITEMEXPANDINGW, TVSIL_NORMAL, TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT,
@@ -712,6 +713,31 @@ const WM_APP_WAKE: u32 = WM_APP + 1;
 /// works. We have only one timer on the main window, so `1` is
 /// fine.
 const AUTOSAVE_TIMER_ID: usize = 1;
+/// Height of the marquee progress bar overlay shown during the
+/// async "Unfold All" walk. Standard Win32 progress bar height.
+const WORKSPACE_UNFOLD_PROGRESS_HEIGHT_PX: i32 = 16;
+/// Gap between the progress bar and its "Expanding folders: N"
+/// label directly below it.
+const WORKSPACE_UNFOLD_PROGRESS_GAP_PX: i32 = 6;
+/// Height reserved for the status label under the progress bar.
+const WORKSPACE_UNFOLD_LABEL_HEIGHT_PX: i32 = 18;
+/// Batch size for the async "Unfold All" walk — folders processed
+/// per `WM_TIMER` tick. Because the tree is hidden during the
+/// walk (see `Self::workspace_unfold_progress`), mid-tick paint
+/// isn't visible, so we can be a bit aggressive here without
+/// re-introducing the flicker. 20 folders × ~15 ms tick =
+/// ~1300 folders/sec — a 5000-folder workspace unfolds in ~4 s.
+const WORKSPACE_UNFOLD_BATCH_SIZE: usize = 20;
+/// `PBM_SETMARQUEE` (`WM_USER + 10`) — turns marquee animation
+/// on/off. `WPARAM = 1` to start with an interval of `LPARAM`
+/// milliseconds; `WPARAM = 0` to stop. Not exposed by windows-rs
+/// 0.62 under a stable name, so declared here as a literal.
+const PBM_SETMARQUEE: u32 = 0x040A;
+/// `PBS_MARQUEE` (0x08) — window style that makes the progress
+/// bar accept `PBM_SETMARQUEE` and animate. Not exposed under a
+/// stable name in windows-rs 0.62.
+const PBS_MARQUEE: u32 = 0x08;
+
 /// Timer id for the async "Unfold All" walk on the workspace
 /// tree. Each tick processes one folder — expanding it (which
 /// fires `TVN_ITEMEXPANDING` → lazy `read_dir`) and enqueueing
@@ -1417,6 +1443,22 @@ struct WindowState {
     /// — the alternative (one synchronous walk of the whole
     /// tree) froze the app end-to-end.
     workspace_unfold_pending: Vec<HTREEITEM>,
+    /// Count of folders processed so far in the current
+    /// "Unfold All" walk. Used to update
+    /// [`Self::workspace_unfold_label`]'s text on each tick.
+    /// Resets to 0 in [`start_workspace_unfold_all`].
+    workspace_unfold_count: usize,
+    /// Marquee progress bar shown while an "Unfold All" walk is
+    /// in progress. Sibling of `workspace_tree_hwnd` inside
+    /// `workspace_hwnd`; the tree is hidden and this + the
+    /// counter label take its place. Hides again when the walk
+    /// completes. Prevents the per-tick tree repaint from being
+    /// visible to the user — the tree only paints once, at the
+    /// end, showing the final expanded state.
+    workspace_unfold_progress: HWND,
+    /// STATIC child that shows "Expanding folders: N" during the
+    /// walk. Paired with [`Self::workspace_unfold_progress`].
+    workspace_unfold_label: HWND,
     /// Modeless top-level progress window shown while a FIF job
     /// is running. `None` until the user clicks Find All; the
     /// terminal `FifEvent` (Done or Cancelled) destroys it and
@@ -23306,7 +23348,11 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // treeview (TREEVIEW) for the workspace panel body.
         let icc = INITCOMMONCONTROLSEX {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_BAR_CLASSES | ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES | ICC_TREEVIEW_CLASSES,
+            dwICC: ICC_BAR_CLASSES
+                | ICC_TAB_CLASSES
+                | ICC_LISTVIEW_CLASSES
+                | ICC_TREEVIEW_CLASSES
+                | ICC_PROGRESS_CLASS,
         };
         InitCommonControlsEx(&raw const icc).ok()?;
 
@@ -23738,6 +23784,39 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                 Some(LPARAM(sys_himl)),
             );
         }
+        // "Unfold All" overlay controls — a marquee progress bar
+        // and a "Expanding folders: N" STATIC. Both start hidden;
+        // they take the tree's place during the async walk so the
+        // per-tick tree repaint isn't visible (tree paints only
+        // once, at the end, showing the final expanded state).
+        let workspace_unfold_progress = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("msctls_progress32"),
+            PCWSTR::null(),
+            WS_CHILD | style_bits(PBS_MARQUEE as i32),
+            0,
+            0,
+            0,
+            0,
+            Some(workspace_hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        )?;
+        let workspace_unfold_label = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | style_bits((SS_CENTER | SS_CENTERIMAGE) as i32),
+            0,
+            0,
+            0,
+            0,
+            Some(workspace_hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        )?;
 
         // Header chrome inside the dock — a status STATIC on the
         // left for "X matches in Y files" and a close-X button on
@@ -24058,6 +24137,9 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             workspace_action_locate,
             workspace_tree_hwnd,
             workspace_unfold_pending: Vec::new(),
+            workspace_unfold_count: 0,
+            workspace_unfold_progress,
+            workspace_unfold_label,
             fif_progress_hwnd: None,
             fif_active_job: None,
             fif_pending_results: Vec::new(),
@@ -24959,9 +25041,21 @@ extern "system" fn workspace_panel_wnd_proc(
                         state.workspace_action_fold,
                         state.workspace_action_locate,
                         state.workspace_tree_hwnd,
+                        state.workspace_unfold_progress,
+                        state.workspace_unfold_label,
                     )
                 });
-                if let Some((header_frame, header_label, close, unfold, fold, locate, tree)) = hwnds
+                if let Some((
+                    header_frame,
+                    header_label,
+                    close,
+                    unfold,
+                    fold,
+                    locate,
+                    tree,
+                    unfold_progress,
+                    unfold_label,
+                )) = hwnds
                 {
                     layout_workspace_panel_children(
                         WorkspacePanelChildren {
@@ -24972,6 +25066,8 @@ extern "system" fn workspace_panel_wnd_proc(
                             fold,
                             locate,
                             tree,
+                            unfold_progress,
+                            unfold_label,
                         },
                         width,
                         height,
@@ -25085,6 +25181,12 @@ struct WorkspacePanelChildren {
     locate: HWND,
     /// `SysTreeView32` filling the panel body below the action row.
     tree: HWND,
+    /// Marquee progress bar overlay shown during "Unfold All".
+    /// Positioned inside the tree body area, centred vertically.
+    unfold_progress: HWND,
+    /// Status STATIC directly below the progress bar. Shows
+    /// "Expanding folders: N" during the walk.
+    unfold_label: HWND,
 }
 
 /// Lay out the workspace panel's five children within its client
@@ -25192,8 +25294,14 @@ unsafe fn layout_workspace_panel_children(
             true,
         );
     }
-    // Body region — the `SysTreeView32` filling the rest of the
-    // panel below the action row.
+    // Body region — the `SysTreeView32` fills it during normal
+    // use; a marquee progress bar + counter STATIC take its
+    // place while "Unfold All" is running. All three are
+    // positioned unconditionally; visibility is toggled by
+    // `ShowWindow(SW_SHOW/HIDE)` in `start_workspace_unfold_all`
+    // / on completion. Placing them at their target positions
+    // even when hidden means the reveal on completion is
+    // instant — no first-paint layout jitter.
     let body_top = action_y + WORKSPACE_ACTION_HEIGHT_PX;
     let body_bottom = (height - inset).max(body_top);
     let body_h = (body_bottom - body_top).max(0);
@@ -25204,6 +25312,31 @@ unsafe fn layout_workspace_panel_children(
             body_top,
             inner_width,
             body_h,
+            true,
+        );
+        // Progress bar + label centered vertically within the
+        // body region. Progress bar spans the full inner width;
+        // label sits directly below with a small gap. If body
+        // is too short to fit both, they just clip — the reveal
+        // on completion swaps back to the tree anyway.
+        let overlay_h = WORKSPACE_UNFOLD_PROGRESS_HEIGHT_PX
+            + WORKSPACE_UNFOLD_PROGRESS_GAP_PX
+            + WORKSPACE_UNFOLD_LABEL_HEIGHT_PX;
+        let overlay_top = body_top + ((body_h - overlay_h) / 2).max(0);
+        let _ = MoveWindow(
+            children.unfold_progress,
+            inner_left,
+            overlay_top,
+            inner_width,
+            WORKSPACE_UNFOLD_PROGRESS_HEIGHT_PX,
+            true,
+        );
+        let _ = MoveWindow(
+            children.unfold_label,
+            inner_left,
+            overlay_top + WORKSPACE_UNFOLD_PROGRESS_HEIGHT_PX + WORKSPACE_UNFOLD_PROGRESS_GAP_PX,
+            inner_width,
+            WORKSPACE_UNFOLD_LABEL_HEIGHT_PX,
             true,
         );
     }
@@ -27043,31 +27176,57 @@ unsafe fn tree_walk_descendants<F: FnMut(HWND, HTREEITEM)>(
     }
 }
 
-/// Kick off the async "Unfold All" walk. Seeds the pending
-/// queue with the root and starts the `WM_TIMER` that ticks the
-/// state machine. Idempotent: a second click while a walk is
-/// already in progress is a no-op (the queue stays as-is and
-/// the existing timer keeps firing).
+/// Write a fresh "Expanding folders: N" caption into the
+/// counter label. Called on every tick so the user sees
+/// progress climb.
 ///
-/// The walk itself lives in [`tick_workspace_unfold`], which
-/// runs one folder per `WM_TIMER(WORKSPACE_UNFOLD_TIMER_ID)`
-/// tick. Keeping work tiny per tick is what keeps the UI
-/// responsive — the synchronous "walk the whole tree at once"
-/// approach we started with froze the app on any workspace big
-/// enough to notice.
+/// # Safety
+///
+/// `label` must be a live STATIC HWND on the UI thread.
+unsafe fn update_workspace_unfold_label(label: HWND, count: usize) {
+    let text = format!("Expanding folders: {count}");
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let _ = SetWindowTextW(label, PCWSTR(wide.as_ptr()));
+    }
+}
+
+/// Kick off the async "Unfold All" walk. Hides the tree, shows
+/// the marquee progress + counter overlay, seeds the pending
+/// queue with the root, starts the `WM_TIMER` that ticks the
+/// state machine. Idempotent: a second click while a walk is
+/// already in progress is a no-op.
+///
+/// **Why the overlay?** Each per-tick tree expand fires
+/// notifications that dirty the tree; without hiding it, the
+/// user sees rows blip in for every one of the hundreds/thousands
+/// of folders being walked — flicker that undermines the whole
+/// point of "responsive UI." Hiding + overlay eliminates the
+/// mid-walk paints; the tree only paints once, at the end,
+/// showing the final expanded state.
+///
+/// **Why marquee, not %?** Total folder count isn't known
+/// upfront (that's what the walk is for). The queue-based
+/// discovery means "% done" would fluctuate misleadingly as new
+/// UNPOP folders are discovered and enqueued. A marquee
+/// animation + growing count is honest ("something's happening,
+/// N so far").
 ///
 /// # Safety
 ///
 /// `main_hwnd` must be the main window HWND. UI thread only.
 unsafe fn start_workspace_unfold_all(main_hwnd: HWND) {
-    let (tree, already_running) = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+    let snapshot = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
         (
             state.workspace_tree_hwnd,
+            state.workspace_unfold_progress,
+            state.workspace_unfold_label,
             !state.workspace_unfold_pending.is_empty(),
         )
     } else {
         return;
     };
+    let (tree, progress, label, already_running) = snapshot;
     if already_running {
         // A walk is already in progress; ignore the extra click
         // rather than spawning a second timer that would race the
@@ -27088,67 +27247,123 @@ unsafe fn start_workspace_unfold_all(main_hwnd: HWND) {
     }
     if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
         state.workspace_unfold_pending.push(root_item);
+        state.workspace_unfold_count = 0;
     }
-    // 5 ms interval — fast enough to feel snappy on small trees
-    // (~200 folders/sec), slow enough that the message pump gets
-    // real breathing room between ticks. `SetTimer` clamps to the
-    // system timer resolution (~10–15 ms on most Windows setups),
-    // so in practice this is a "yield after each folder" throttle.
     unsafe {
-        SetTimer(Some(main_hwnd), WORKSPACE_UNFOLD_TIMER_ID, 5, None);
+        // Swap the tree for the overlay: hide tree, show
+        // progress + label, kick off the marquee animation.
+        let _ = ShowWindow(tree, SW_HIDE);
+        update_workspace_unfold_label(label, 0);
+        let _ = ShowWindow(progress, SW_SHOW);
+        let _ = ShowWindow(label, SW_SHOW);
+        // 30 ms marquee-step interval — smooth animation without
+        // burning CPU.
+        SendMessageW(progress, PBM_SETMARQUEE, Some(WPARAM(1)), Some(LPARAM(30)));
+        // 15 ms timer — matches Windows' clock granularity so we
+        // process a batch as often as the system will wake us.
+        // With `WORKSPACE_UNFOLD_BATCH_SIZE = 20`, that's ~1300
+        // folders/sec — a 5000-folder workspace unfolds in ~4 s.
+        SetTimer(Some(main_hwnd), WORKSPACE_UNFOLD_TIMER_ID, 15, None);
     }
 }
 
-/// Process one folder from the "Unfold All" pending queue.
-/// Called from the `WM_TIMER(WORKSPACE_UNFOLD_TIMER_ID)` arm of
-/// `main_wnd_proc`. Returns `true` if more work remains, `false`
-/// if the queue is empty (caller kills the timer).
+/// Process a batch of folders from the "Unfold All" pending
+/// queue. Called from the `WM_TIMER(WORKSPACE_UNFOLD_TIMER_ID)`
+/// arm of `main_wnd_proc`. Returns `true` if more work remains,
+/// `false` if the queue is empty (caller kills the timer +
+/// triggers the completion path).
 ///
-/// One folder per tick — the whole point of this design. Doing
-/// more per tick would defeat the "UI stays responsive"
-/// guarantee that motivates the async path.
+/// Batch size is [`WORKSPACE_UNFOLD_BATCH_SIZE`] — we can be
+/// aggressive here because the tree is hidden during the walk,
+/// so per-batch tree paints aren't visible. The message pump
+/// still runs between ticks, so paint / mouse / keys flow
+/// normally.
 ///
 /// # Safety
 ///
 /// `main_hwnd` must be the main window HWND. UI thread only.
 unsafe fn tick_workspace_unfold(main_hwnd: HWND) -> bool {
-    let (tree, node) = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+    let tree = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        state.workspace_tree_hwnd
+    } else {
+        return false;
+    };
+    let mut processed_this_tick = 0usize;
+    for _ in 0..WORKSPACE_UNFOLD_BATCH_SIZE {
+        let node = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+            state.workspace_unfold_pending.pop()
+        } else {
+            break;
+        };
+        let Some(node) = node else { break };
+        // Expand this folder — fires `TVN_ITEMEXPANDING`
+        // synchronously, which populates its children on the
+        // first expand (state machine `UNPOP → POP`). Idempotent
+        // on already-populated folders.
+        unsafe { tree_expand(tree, node, TVE_EXPAND.0) };
+        // Discover this folder's subfolder children and enqueue
+        // them for later ticks. Stack semantics (`Vec::push`) →
+        // DFS: we dive into one branch before moving to siblings.
+        let mut child = unsafe { tree_first_child(tree, node) };
+        while child.0 != 0 {
+            let child_state = unsafe { tree_item_lparam(tree, child) };
+            if child_state == WORKSPACE_ITEM_UNPOP || child_state == WORKSPACE_ITEM_POP {
+                if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+                    state.workspace_unfold_pending.push(child);
+                }
+            }
+            child = unsafe { tree_next_sibling(tree, child) };
+        }
+        processed_this_tick += 1;
+    }
+    // Update the counter label at the end of the batch (one
+    // paint per tick, not per folder).
+    let (count, label, has_more) = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        state.workspace_unfold_count += processed_this_tick;
         (
-            state.workspace_tree_hwnd,
-            state.workspace_unfold_pending.pop(),
+            state.workspace_unfold_count,
+            state.workspace_unfold_label,
+            !state.workspace_unfold_pending.is_empty(),
         )
     } else {
         return false;
     };
-    let Some(node) = node else {
-        return false;
+    unsafe { update_workspace_unfold_label(label, count) };
+    has_more
+}
+
+/// Completion path for the async "Unfold All" walk: stop the
+/// marquee, hide the overlay, show the tree, and force a single
+/// clean repaint so the user sees the final expanded state.
+/// Called from the `WM_TIMER` arm when
+/// [`tick_workspace_unfold`] returns `false`.
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window HWND. UI thread only.
+unsafe fn finish_workspace_unfold(main_hwnd: HWND) {
+    let (tree, progress, label) = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        (
+            state.workspace_tree_hwnd,
+            state.workspace_unfold_progress,
+            state.workspace_unfold_label,
+        )
+    } else {
+        return;
     };
-    // Expand this folder — fires `TVN_ITEMEXPANDING` synchronously,
-    // which populates its children on the first expand (state
-    // machine `UNPOP → POP`). Idempotent on already-populated
-    // folders.
-    unsafe { tree_expand(tree, node, TVE_EXPAND.0) };
-    // Discover this folder's subfolder children and enqueue them
-    // for later ticks. Stack semantics (`Vec::push`) → DFS: we
-    // dive into one branch before moving to siblings, which
-    // matches user expectation for "unfold this whole subtree
-    // then move on".
-    let mut child = unsafe { tree_first_child(tree, node) };
-    while child.0 != 0 {
-        let child_state = unsafe { tree_item_lparam(tree, child) };
-        // Enqueue every folder — UNPOP (needs a read_dir when
-        // expanded) OR POP (already read, but may have deeper
-        // subfolders we still need to walk).
-        if child_state == WORKSPACE_ITEM_UNPOP || child_state == WORKSPACE_ITEM_POP {
-            if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-                state.workspace_unfold_pending.push(child);
-            }
-        }
-        child = unsafe { tree_next_sibling(tree, child) };
+    unsafe {
+        // Stop the animation before hiding — a marquee that's
+        // still animating while its window is hidden wastes a
+        // tiny amount of CPU on the marquee thread until the
+        // next `PBM_SETMARQUEE(0)`.
+        SendMessageW(progress, PBM_SETMARQUEE, Some(WPARAM(0)), Some(LPARAM(0)));
+        let _ = ShowWindow(progress, SW_HIDE);
+        let _ = ShowWindow(label, SW_HIDE);
+        let _ = ShowWindow(tree, SW_SHOW);
+        // Force one fresh paint of the fully-expanded tree.
+        let _ = InvalidateRect(Some(tree), None, true);
+        let _ = UpdateWindow(tree);
     }
-    // More work iff queue is non-empty. Caller uses this to decide
-    // whether to keep the timer alive.
-    unsafe { state_from_hwnd(main_hwnd) }.is_some_and(|s| !s.workspace_unfold_pending.is_empty())
 }
 
 /// Cancel an in-flight "Unfold All" walk. Called by `Fold All`
@@ -27156,15 +27371,27 @@ unsafe fn tick_workspace_unfold(main_hwnd: HWND) -> bool {
 /// `hide_workspace_panel` / `WM_DESTROY` (so a timer tick can't
 /// fire on stale tree state after the panel is gone).
 ///
+/// Symmetric with [`start_workspace_unfold_all`] — restores
+/// the tree/overlay visibility to its pre-unfold state.
+///
 /// # Safety
 ///
 /// `main_hwnd` must be the main window HWND. UI thread only.
 unsafe fn cancel_workspace_unfold(main_hwnd: HWND) {
-    if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+    let running = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        let running = !state.workspace_unfold_pending.is_empty();
         state.workspace_unfold_pending.clear();
-    }
+        state.workspace_unfold_count = 0;
+        running
+    } else {
+        return;
+    };
     unsafe {
         let _ = KillTimer(Some(main_hwnd), WORKSPACE_UNFOLD_TIMER_ID);
+    }
+    if running {
+        // Restore the panel to its pre-unfold visual state.
+        unsafe { finish_workspace_unfold(main_hwnd) };
     }
 }
 
@@ -30560,11 +30787,15 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // so a panic in shell bookkeeping can't unwind
                 // across the `extern "system"` frame.
                 if wparam.0 == WORKSPACE_UNFOLD_TIMER_ID {
-                    // Async "Unfold All" tick — process one folder,
-                    // then decide whether to keep the timer alive.
+                    // Async "Unfold All" tick — process a batch of
+                    // folders, then decide whether to keep the timer
+                    // alive. On completion, `finish_workspace_unfold`
+                    // stops the marquee, hides the overlay, shows
+                    // the tree, and forces one clean repaint.
                     let more = tick_workspace_unfold(hwnd);
                     if !more {
                         let _ = KillTimer(Some(hwnd), WORKSPACE_UNFOLD_TIMER_ID);
+                        finish_workspace_unfold(hwnd);
                     }
                     return LRESULT(0);
                 }
