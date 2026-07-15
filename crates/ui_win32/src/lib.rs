@@ -440,16 +440,21 @@ use windows::Win32::UI::Controls::Dialogs::{
 };
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, CDDS_PREPAINT,
-    CDRF_DODEFAULT, CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES,
-    ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT, LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW,
-    LVIF_STATE, LVIF_TEXT, LVIS_STATEIMAGEMASK, LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT,
-    LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE,
-    LVM_SETITEMTEXTW, LVN_ITEMCHANGED, LVS_EX_CHECKBOXES, LVS_EX_DOUBLEBUFFER,
-    LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, NMCUSTOMDRAW, NMHDR,
-    NMITEMACTIVATE, NMLISTVIEW, NM_CUSTOMDRAW, NM_DBLCLK, ODT_TAB, TCHITTESTINFO, TCIF_TEXT,
-    TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW,
-    TCM_SETCURSEL, TCM_SETITEMW, TCM_SETPADDING, TCN_SELCHANGE, TCS_OWNERDRAWFIXED, WC_COMBOBOX,
-    WC_LISTVIEWW, WC_TABCONTROL, WM_MOUSELEAVE,
+    CDRF_DODEFAULT, CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, HTREEITEM, ICC_BAR_CLASSES,
+    ICC_LISTVIEW_CLASSES, ICC_TAB_CLASSES, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, LVCFMT_LEFT,
+    LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCOLUMNW, LVIF_STATE, LVIF_TEXT, LVIS_STATEIMAGEMASK,
+    LVITEMW, LVM_DELETEALLITEMS, LVM_GETITEMCOUNT, LVM_INSERTCOLUMNW, LVM_INSERTITEMW,
+    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE, LVM_SETITEMTEXTW, LVN_ITEMCHANGED,
+    LVS_EX_CHECKBOXES, LVS_EX_DOUBLEBUFFER, LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS,
+    LVS_SINGLESEL, NMCUSTOMDRAW, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NMTREEVIEWW, NM_CUSTOMDRAW,
+    NM_DBLCLK, ODT_TAB, TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL,
+    TCM_GETITEMRECT, TCM_HITTEST, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCM_SETPADDING,
+    TCN_SELCHANGE, TCS_OWNERDRAWFIXED, TVE_COLLAPSE, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT,
+    TVGN_PARENT, TVGN_ROOT, TVIF_CHILDREN, TVIF_IMAGE, TVIF_PARAM, TVIF_SELECTEDIMAGE, TVIF_TEXT,
+    TVINSERTSTRUCTW, TVITEMW, TVI_LAST, TVI_ROOT, TVM_DELETEITEM, TVM_ENSUREVISIBLE, TVM_EXPAND,
+    TVM_GETITEMW, TVM_GETNEXTITEM, TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETIMAGELIST, TVM_SETITEMW,
+    TVN_ITEMEXPANDINGW, TVSIL_NORMAL, TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT,
+    TVS_SHOWSELALWAYS, WC_COMBOBOX, WC_LISTVIEWW, WC_TABCONTROL, WC_TREEVIEWW, WM_MOUSELEAVE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
@@ -458,7 +463,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW,
-    SetWindowSubclass, ShellExecuteW, ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR_EXECUTABLE, HDROP,
+    SHGetFileInfoW, SetWindowSubclass, ShellExecuteW, ASSOCF_INIT_IGNOREUNKNOWN,
+    ASSOCSTR_EXECUTABLE, HDROP, SHFILEINFOW, SHGFI_SMALLICON, SHGFI_SYSICONINDEX,
+    SHGFI_USEFILEATTRIBUTES,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, CheckMenuItem, CheckMenuRadioItem, CopyAcceleratorTableW,
@@ -1376,12 +1383,19 @@ struct WindowState {
     /// click handlers (walk-and-expand, walk-and-collapse,
     /// walk-ancestors-and-reveal) land in m3 alongside the tree
     /// body itself.
-    #[allow(dead_code, reason = "click handlers wired in m3 alongside the tree")]
     workspace_action_unfold: HWND,
-    #[allow(dead_code, reason = "click handlers wired in m3 alongside the tree")]
     workspace_action_fold: HWND,
-    #[allow(dead_code, reason = "click handlers wired in m3 alongside the tree")]
     workspace_action_locate: HWND,
+    /// `SysTreeView32` filling the panel body. Populated lazily
+    /// — the initial [`show_workspace_panel`] call reads only
+    /// the root's direct children (fast, one `read_dir`); each
+    /// subfolder gets a hidden placeholder child so the `[+]`
+    /// chevron appears; expanding a subfolder fires
+    /// `TVN_ITEMEXPANDINGW`, which replaces the placeholder
+    /// with a real `read_dir` for that folder only. Contrast
+    /// with N++, which walks the whole tree eagerly on open
+    /// and freezes on large workspaces.
+    workspace_tree_hwnd: HWND,
     /// Modeless top-level progress window shown while a FIF job
     /// is running. `None` until the user clicks Find All; the
     /// terminal `FifEvent` (Done or Cancelled) destroys it and
@@ -23267,10 +23281,11 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         let instance = GetModuleHandleW(None)?;
 
         // Common controls — status bar (BAR), tab strip (TAB),
-        // and listview (LISTVIEW) for the FIF results dock.
+        // listview (LISTVIEW) for the FIF results dock, and
+        // treeview (TREEVIEW) for the workspace panel body.
         let icc = INITCOMMONCONTROLSEX {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_BAR_CLASSES | ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES,
+            dwICC: ICC_BAR_CLASSES | ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES | ICC_TREEVIEW_CLASSES,
         };
         InitCommonControlsEx(&raw const icc).ok()?;
 
@@ -23649,6 +23664,59 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             Some(instance.into()),
             None,
         )?;
+        // TreeView filling the workspace panel body. Populated
+        // lazily via `TVN_ITEMEXPANDINGW` — see [`populate_workspace_root`]
+        // and [`insert_tree_folder_children`]. Styles:
+        //   * TVS_HASBUTTONS — [+]/[-] chevrons.
+        //   * TVS_HASLINES + TVS_LINESATROOT — hierarchy lines
+        //     from root down (matches Explorer's tree pane).
+        //   * TVS_SHOWSELALWAYS — selection stays visible when
+        //     the tree loses focus (so a double-click in the
+        //     editor doesn't visually clear the tree selection).
+        let workspace_tree_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            WC_TREEVIEWW,
+            PCWSTR::null(),
+            WS_CHILD
+                | WS_VISIBLE
+                | WS_TABSTOP
+                | style_bits(
+                    (TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS) as i32,
+                ),
+            0,
+            0,
+            0,
+            0,
+            Some(workspace_hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        )?;
+        // Wire the system image list once at creation so every
+        // subsequent `TVITEMW::iImage` refers to a system-icon
+        // index (matches Explorer's icons). The `SHGFI_SYSICONINDEX`
+        // return value IS the `HIMAGELIST`; the dummy call with an
+        // empty path gives us the handle. Empty string (not NULL)
+        // — behaviour with a null `pszPath` here is undocumented,
+        // and the guard `if sys_himl != 0` below covers the failure
+        // path either way, but the empty-string form is what the
+        // MSDN example uses.
+        let mut sfi = SHFILEINFOW::default();
+        let sys_himl = SHGetFileInfoW(
+            w!(""),
+            windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL,
+            Some(&raw mut sfi),
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES,
+        ) as isize;
+        if sys_himl != 0 {
+            SendMessageW(
+                workspace_tree_hwnd,
+                TVM_SETIMAGELIST,
+                Some(WPARAM(TVSIL_NORMAL as usize)),
+                Some(LPARAM(sys_himl)),
+            );
+        }
 
         // Header chrome inside the dock — a status STATIC on the
         // left for "X matches in Y files" and a close-X button on
@@ -23967,6 +24035,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             workspace_action_unfold,
             workspace_action_fold,
             workspace_action_locate,
+            workspace_tree_hwnd,
             fif_progress_hwnd: None,
             fif_active_job: None,
             fif_pending_results: Vec::new(),
@@ -24867,9 +24936,11 @@ extern "system" fn workspace_panel_wnd_proc(
                         state.workspace_action_unfold,
                         state.workspace_action_fold,
                         state.workspace_action_locate,
+                        state.workspace_tree_hwnd,
                     )
                 });
-                if let Some((header_frame, header_label, close, unfold, fold, locate)) = hwnds {
+                if let Some((header_frame, header_label, close, unfold, fold, locate, tree)) = hwnds
+                {
                     layout_workspace_panel_children(
                         WorkspacePanelChildren {
                             header_frame,
@@ -24878,6 +24949,7 @@ extern "system" fn workspace_panel_wnd_proc(
                             unfold,
                             fold,
                             locate,
+                            tree,
                         },
                         width,
                         height,
@@ -24906,6 +24978,66 @@ extern "system" fn workspace_panel_wnd_proc(
                 }
                 LRESULT(0)
             }
+            WM_NOTIFY => {
+                // TreeView notifications: lazy expand + double-click.
+                // `lparam` is `NMHDR*` — the header is enough to
+                // dispatch on notification code. Only two codes
+                // matter for m3:
+                //   * `TVN_ITEMEXPANDINGW`: lazy `read_dir` when
+                //     a folder is being expanded for the first time.
+                //   * `NM_DBLCLK`: open file in the editor.
+                //
+                // Everything else falls through to `DefWindowProcW`
+                // so TreeView's default expand/collapse animation
+                // and keyboard handling still run.
+                //
+                // SAFETY: `lparam` points to a `NMHDR` (or a wider
+                // notification struct that starts with `NMHDR` —
+                // guaranteed by the Windows notification ABI).
+                let nmhdr = &*(lparam.0 as *const NMHDR);
+                let workspace_hwnd_here = hwnd;
+                let parent = GetParent(hwnd).unwrap_or_default();
+                if nmhdr.code == TVN_ITEMEXPANDINGW {
+                    // `TVN_ITEMEXPANDINGW` uses `NMTREEVIEWW`. The
+                    // `action` field tells us expand vs collapse.
+                    let ntv = &*(lparam.0 as *const NMTREEVIEWW);
+                    // Only populate on expand; collapse leaves the
+                    // real children in place so re-expand is instant.
+                    if ntv.action == TVE_EXPAND {
+                        let root = state_from_hwnd(parent).and_then(|s| s.workspace_root.clone());
+                        if let (Some(state), Some(root)) = (state_from_hwnd(parent), root) {
+                            let tree = state.workspace_tree_hwnd;
+                            // Snapshot the tree HWND then drop the
+                            // borrow before calling the populate
+                            // helper — it issues `TVM_*` sends that
+                            // could re-enter through a plugin
+                            // subclass one day. Same discipline as
+                            // the other snapshot-then-drop sites.
+                            let _ = state;
+                            handle_tree_item_expanding(tree, ntv.itemNew.hItem, &root);
+                        }
+                    }
+                    // Return 0 = allow the expand/collapse to proceed.
+                    // Non-zero would suppress it (which we never want).
+                    return LRESULT(0);
+                }
+                if nmhdr.code == NM_DBLCLK {
+                    // Which control was double-clicked? Only the tree
+                    // matters — action buttons don't fire NM_DBLCLK
+                    // (they use `BN_CLICKED` inside `WM_COMMAND`).
+                    let tree_hwnd = state_from_hwnd(parent).map(|s| s.workspace_tree_hwnd);
+                    if let Some(tree) = tree_hwnd {
+                        if nmhdr.hwndFrom == tree {
+                            handle_tree_double_click(parent, tree);
+                            return LRESULT(0);
+                        }
+                    }
+                }
+                // Fall through — let default handling run for every
+                // other notification.
+                let _ = workspace_hwnd_here;
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
             WM_CTLCOLORSTATIC => LRESULT(dialog_bg_brush().0 as isize),
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
@@ -24929,6 +25061,8 @@ struct WorkspacePanelChildren {
     unfold: HWND,
     fold: HWND,
     locate: HWND,
+    /// `SysTreeView32` filling the panel body below the action row.
+    tree: HWND,
 }
 
 /// Lay out the workspace panel's five children within its client
@@ -25036,10 +25170,21 @@ unsafe fn layout_workspace_panel_children(
             true,
         );
     }
-    // Body region (tree in m3) is `(inner_left, action_y +
-    // WORKSPACE_ACTION_HEIGHT_PX)` to `(inner_right, height - inset)` —
-    // no HWND to move yet.
-    let _ = (inner_width, height);
+    // Body region — the `SysTreeView32` filling the rest of the
+    // panel below the action row.
+    let body_top = action_y + WORKSPACE_ACTION_HEIGHT_PX;
+    let body_bottom = (height - inset).max(body_top);
+    let body_h = (body_bottom - body_top).max(0);
+    unsafe {
+        let _ = MoveWindow(
+            children.tree,
+            inner_left,
+            body_top,
+            inner_width,
+            body_h,
+            true,
+        );
+    }
 }
 
 /// `Wnd_proc` for the workspace splitter — horizontal-axis
@@ -26254,6 +26399,870 @@ unsafe fn prompt_pick_workspace_folder(owner: HWND, initial: Option<&Path>) -> O
     Some(PathBuf::from(os))
 }
 
+// ─────────────────────────────────────────────────────────────
+// Workspace tree — lazy directory population.
+//
+// The tree is populated one folder at a time via
+// `TVN_ITEMEXPANDINGW`. Each folder node uses `lParam` as a
+// state machine:
+//   * `WORKSPACE_ITEM_FILE  = 0` — file (leaf).
+//   * `WORKSPACE_ITEM_UNPOP = 1` — folder, not yet populated
+//     (has a placeholder child so the [+] chevron appears).
+//   * `WORKSPACE_ITEM_POP   = 2` — folder, populated (real
+//     children — either subfolders + files, or nothing if the
+//     folder was empty).
+// The `TVN_ITEMEXPANDINGW` handler reads the state, populates
+// on `UNPOP`, transitions to `POP`. Subsequent expands are
+// no-ops on the state flip.
+
+/// Item lParam sentinel: leaf file. No children.
+const WORKSPACE_ITEM_FILE: isize = 0;
+/// Item lParam sentinel: folder with a placeholder child, not
+/// yet read from disk. Populated on first `TVN_ITEMEXPANDING`.
+const WORKSPACE_ITEM_UNPOP: isize = 1;
+/// Item lParam sentinel: folder whose real children are loaded.
+const WORKSPACE_ITEM_POP: isize = 2;
+
+/// Ask the OS for the system-icon-list index of a filesystem
+/// entry. `SHGFI_USEFILEATTRIBUTES` makes `SHGetFileInfoW` skip
+/// any actual disk access — it derives the icon from the passed
+/// attribute bits alone. Fast, so cheap to call per-item during
+/// populate.
+///
+/// # Safety
+///
+/// `name_wide` must be a null-terminated wide string. UI-thread
+/// only (the system image list is one per process; concurrent
+/// access is fine but keeps the pattern consistent with the
+/// rest of the file).
+unsafe fn sys_icon_index_for(name_wide: &[u16], is_dir: bool) -> i32 {
+    use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL};
+    let attribs = if is_dir {
+        FILE_ATTRIBUTE_DIRECTORY
+    } else {
+        FILE_ATTRIBUTE_NORMAL
+    };
+    let mut sfi = SHFILEINFOW::default();
+    unsafe {
+        SHGetFileInfoW(
+            PCWSTR(name_wide.as_ptr()),
+            attribs,
+            Some(&raw mut sfi),
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_SYSICONINDEX | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES,
+        );
+    }
+    sfi.iIcon
+}
+
+/// Insert one item under `parent` in `tree`. Returns the new
+/// item's handle, or a null handle on failure (caller should
+/// treat as "insert dropped").
+///
+/// `has_placeholder`: if true AND `is_dir`, the caller is
+/// responsible for inserting a placeholder child so the [+]
+/// chevron appears; the item's `lParam` is set to
+/// `WORKSPACE_ITEM_UNPOP`. If false, `lParam` becomes
+/// `WORKSPACE_ITEM_FILE` (for files) or `WORKSPACE_ITEM_POP`
+/// (for folders whose children are being inserted right now).
+///
+/// # Safety
+///
+/// `tree` must be a live `SysTreeView32` HWND. UI-thread only.
+unsafe fn tree_insert_item(
+    tree: HWND,
+    parent: HTREEITEM,
+    name: &str,
+    is_dir: bool,
+    has_placeholder: bool,
+) -> HTREEITEM {
+    let name_wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    let icon = unsafe { sys_icon_index_for(&name_wide, is_dir) };
+    let lparam_val = if !is_dir {
+        WORKSPACE_ITEM_FILE
+    } else if has_placeholder {
+        WORKSPACE_ITEM_UNPOP
+    } else {
+        WORKSPACE_ITEM_POP
+    };
+    let item = TVITEMW {
+        mask: TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM | TVIF_CHILDREN,
+        pszText: windows::core::PWSTR(name_wide.as_ptr().cast_mut()),
+        cchTextMax: name_wide.len() as i32,
+        iImage: icon,
+        iSelectedImage: icon,
+        cChildren: windows::Win32::UI::Controls::TVITEMEXW_CHILDREN(i32::from(
+            is_dir && has_placeholder,
+        )),
+        lParam: LPARAM(lparam_val),
+        ..Default::default()
+    };
+    let insert = TVINSERTSTRUCTW {
+        hParent: parent,
+        hInsertAfter: TVI_LAST,
+        Anonymous: windows::Win32::UI::Controls::TVINSERTSTRUCTW_0 { item },
+    };
+    let result = unsafe {
+        SendMessageW(
+            tree,
+            TVM_INSERTITEMW,
+            Some(WPARAM(0)),
+            Some(LPARAM(&raw const insert as isize)),
+        )
+    };
+    HTREEITEM(result.0)
+}
+
+/// Insert a hidden "placeholder" child under `parent` so its
+/// `[+]` chevron shows without us having to `read_dir` yet.
+/// The placeholder itself is invisible in practice — the
+/// user only sees it in the flash between clicking `[+]` and
+/// the real children arriving via `TVN_ITEMEXPANDINGW`.
+///
+/// # Safety
+///
+/// Same as [`tree_insert_item`].
+unsafe fn tree_insert_placeholder(tree: HWND, parent: HTREEITEM) {
+    // Empty-string placeholder. `TVIF_PARAM` marker so we can
+    // recognise & delete it on the first real populate.
+    let name_wide: [u16; 1] = [0];
+    let item = TVITEMW {
+        mask: TVIF_TEXT | TVIF_PARAM,
+        pszText: windows::core::PWSTR(name_wide.as_ptr().cast_mut()),
+        cchTextMax: 0,
+        // Sentinel `-1` so we can distinguish the placeholder
+        // from every real item (file=0, unpop=1, pop=2).
+        lParam: LPARAM(-1),
+        ..Default::default()
+    };
+    let insert = TVINSERTSTRUCTW {
+        hParent: parent,
+        hInsertAfter: TVI_LAST,
+        Anonymous: windows::Win32::UI::Controls::TVINSERTSTRUCTW_0 { item },
+    };
+    unsafe {
+        SendMessageW(
+            tree,
+            TVM_INSERTITEMW,
+            Some(WPARAM(0)),
+            Some(LPARAM(&raw const insert as isize)),
+        );
+    }
+}
+
+/// `read_dir(dir)` and insert its entries as children of
+/// `parent`. Folders come first alphabetically, then files
+/// alphabetically — matches Explorer's ordering. Each subfolder
+/// gets a placeholder so the `[+]` chevron shows without us
+/// recursing here (that's the "lazy" part — recursion happens
+/// per-folder on user expand).
+///
+/// Errors from `read_dir` are logged and treated as "empty
+/// directory" — the folder shows as expanded with no children.
+///
+/// # Safety
+///
+/// Same as [`tree_insert_item`].
+unsafe fn insert_tree_folder_children(tree: HWND, parent: HTREEITEM, dir: &Path) {
+    let mut folders: Vec<String> = Vec::new();
+    let mut files: Vec<String> = Vec::new();
+    match std::fs::read_dir(dir) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                // `file_type()` is fast (uses cached dir-entry metadata
+                // on Windows); no extra `stat` call.
+                let is_dir = entry.file_type().is_ok_and(|ft| ft.is_dir());
+                if is_dir {
+                    folders.push(name);
+                } else {
+                    files.push(name);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(dir = ?dir, error = %e, "workspace read_dir failed; showing empty folder");
+            return;
+        }
+    }
+    // Case-insensitive sort — Explorer's behaviour on Windows.
+    // Rust's default `sort()` is case-sensitive; the closure
+    // below folds case for comparison without allocating extra.
+    folders.sort_by_key(|s| s.to_lowercase());
+    files.sort_by_key(|s| s.to_lowercase());
+    for name in &folders {
+        let node = unsafe { tree_insert_item(tree, parent, name, true, true) };
+        if node.0 != 0 {
+            unsafe { tree_insert_placeholder(tree, node) };
+        }
+    }
+    for name in &files {
+        unsafe { tree_insert_item(tree, parent, name, false, false) };
+    }
+}
+
+/// Wipe every item in the tree via `TVM_DELETEITEM(TVI_ROOT)`.
+/// Called before re-populating (e.g. on `File → Open Folder
+/// as Workspace...` re-root).
+///
+/// # Safety
+///
+/// `tree` must be a live `SysTreeView32` HWND.
+unsafe fn tree_clear_all(tree: HWND) {
+    unsafe {
+        SendMessageW(
+            tree,
+            TVM_DELETEITEM,
+            Some(WPARAM(0)),
+            Some(LPARAM(TVI_ROOT.0)),
+        );
+    }
+}
+
+/// Populate the tree with the workspace root as the top node
+/// and its direct children as the second level. Subfolders get
+/// placeholders so `[+]` chevrons show without any deeper
+/// `read_dir` calls — subsequent expands populate one folder
+/// at a time via [`insert_tree_folder_children`].
+///
+/// The root node is inserted expanded (`TVM_EXPAND(TVE_EXPAND)`)
+/// so the user sees the top level immediately without an extra
+/// click.
+///
+/// # Safety
+///
+/// `tree` must be a live `SysTreeView32` HWND. UI-thread only.
+unsafe fn populate_workspace_root(tree: HWND, root: &Path) {
+    unsafe { tree_clear_all(tree) };
+    let root_name = root.file_name().map_or_else(
+        || root.to_string_lossy().into_owned(),
+        |s| s.to_string_lossy().into_owned(),
+    );
+    let root_node =
+        unsafe { tree_insert_item(tree, HTREEITEM::default(), &root_name, true, false) };
+    if root_node.0 == 0 {
+        return;
+    }
+    unsafe { insert_tree_folder_children(tree, root_node, root) };
+    // Auto-expand the root so the user sees the first level
+    // without clicking. Second- and deeper-level expands remain
+    // lazy per [`TVN_ITEMEXPANDINGW`].
+    unsafe {
+        SendMessageW(
+            tree,
+            TVM_EXPAND,
+            Some(WPARAM(TVE_EXPAND.0 as usize)),
+            Some(LPARAM(root_node.0)),
+        );
+    }
+}
+
+/// Read the text of a tree item into an owned `String`. Used
+/// by [`tree_item_full_path`] to reconstruct a filesystem path
+/// by walking from an item up to the root.
+///
+/// # Safety
+///
+/// `tree` must be a live `SysTreeView32` HWND, `item` a live
+/// item in it.
+unsafe fn tree_item_text(tree: HWND, item: HTREEITEM) -> String {
+    // MAX_PATH is enough for one path component; components
+    // longer than that are exceptionally rare (Windows'
+    // NAME_MAX per-component is 255 typically).
+    let mut buf = [0u16; 260];
+    let mut item_out = TVITEMW {
+        mask: TVIF_TEXT,
+        hItem: item,
+        pszText: windows::core::PWSTR(buf.as_mut_ptr()),
+        cchTextMax: buf.len() as i32,
+        ..Default::default()
+    };
+    unsafe {
+        SendMessageW(
+            tree,
+            TVM_GETITEMW,
+            Some(WPARAM(0)),
+            Some(LPARAM(&raw mut item_out as isize)),
+        );
+    }
+    let null_idx = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    use std::os::windows::ffi::OsStringExt;
+    std::ffi::OsString::from_wide(&buf[..null_idx])
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Reconstruct the full filesystem path of `item` by walking
+/// from it up to the root, collecting each item's text as a
+/// path component, and joining onto `workspace_root`. The
+/// topmost item (the root node) is skipped — its text is
+/// `workspace_root`'s basename, which is already implicit in
+/// `workspace_root` itself.
+///
+/// # Safety
+///
+/// Same as [`tree_item_text`].
+unsafe fn tree_item_full_path(tree: HWND, item: HTREEITEM, workspace_root: &Path) -> PathBuf {
+    let mut components: Vec<String> = Vec::new();
+    let mut cur = item;
+    // Walk up: for each item, if it has a parent, keep its text;
+    // when we hit the root (parent == null), stop.
+    loop {
+        let parent = unsafe {
+            SendMessageW(
+                tree,
+                TVM_GETNEXTITEM,
+                Some(WPARAM(TVGN_PARENT as usize)),
+                Some(LPARAM(cur.0)),
+            )
+        };
+        if parent.0 == 0 {
+            // `cur` is the root node — its text (workspace_root
+            // basename) is NOT a path component to append; the
+            // components collected so far are already relative
+            // to workspace_root.
+            break;
+        }
+        components.push(unsafe { tree_item_text(tree, cur) });
+        cur = HTREEITEM(parent.0);
+    }
+    components.reverse();
+    let mut path = workspace_root.to_path_buf();
+    for c in components {
+        path.push(c);
+    }
+    path
+}
+
+/// Read a tree item's `lParam` (our state sentinel: file /
+/// folder-unpopulated / folder-populated / placeholder).
+///
+/// # Safety
+///
+/// Same as [`tree_item_text`].
+unsafe fn tree_item_lparam(tree: HWND, item: HTREEITEM) -> isize {
+    let mut item_out = TVITEMW {
+        mask: TVIF_PARAM,
+        hItem: item,
+        ..Default::default()
+    };
+    unsafe {
+        SendMessageW(
+            tree,
+            TVM_GETITEMW,
+            Some(WPARAM(0)),
+            Some(LPARAM(&raw mut item_out as isize)),
+        );
+    }
+    item_out.lParam.0
+}
+
+/// Write a tree item's `lParam`. Paired with
+/// [`tree_item_lparam`] to transition folders from
+/// `WORKSPACE_ITEM_UNPOP` → `WORKSPACE_ITEM_POP` after the
+/// first lazy populate.
+///
+/// # Safety
+///
+/// Same as [`tree_item_text`].
+unsafe fn tree_set_item_lparam(tree: HWND, item: HTREEITEM, lparam: isize) {
+    let item_set = TVITEMW {
+        mask: TVIF_PARAM,
+        hItem: item,
+        lParam: LPARAM(lparam),
+        ..Default::default()
+    };
+    unsafe {
+        SendMessageW(
+            tree,
+            TVM_SETITEMW,
+            Some(WPARAM(0)),
+            Some(LPARAM(&raw const item_set as isize)),
+        );
+    }
+}
+
+/// Remove every child of `parent`. Used to strip the placeholder
+/// off an `UNPOP` folder before inserting real children.
+///
+/// # Safety
+///
+/// Same as [`tree_item_text`].
+unsafe fn tree_delete_all_children(tree: HWND, parent: HTREEITEM) {
+    loop {
+        let child = unsafe {
+            SendMessageW(
+                tree,
+                TVM_GETNEXTITEM,
+                Some(WPARAM(TVGN_CHILD as usize)),
+                Some(LPARAM(parent.0)),
+            )
+        };
+        if child.0 == 0 {
+            break;
+        }
+        unsafe {
+            SendMessageW(tree, TVM_DELETEITEM, Some(WPARAM(0)), Some(LPARAM(child.0)));
+        }
+    }
+}
+
+/// Handle `TVN_ITEMEXPANDINGW`: if the item is an unpopulated
+/// folder (`WORKSPACE_ITEM_UNPOP`), delete its placeholder,
+/// `read_dir` its path, insert real children, and flip its
+/// state to `WORKSPACE_ITEM_POP`. Any other state is a no-op —
+/// already-populated folders don't re-read on subsequent
+/// expands.
+///
+/// # Safety
+///
+/// `tree` must be a live `SysTreeView32` HWND on the UI thread.
+/// `workspace_root` must match the tree's current population
+/// (it's what path reconstruction joins against).
+unsafe fn handle_tree_item_expanding(tree: HWND, item: HTREEITEM, workspace_root: &Path) {
+    let state = unsafe { tree_item_lparam(tree, item) };
+    if state != WORKSPACE_ITEM_UNPOP {
+        return;
+    }
+    let path = unsafe { tree_item_full_path(tree, item, workspace_root) };
+    unsafe { tree_delete_all_children(tree, item) };
+    unsafe { insert_tree_folder_children(tree, item, &path) };
+    unsafe { tree_set_item_lparam(tree, item, WORKSPACE_ITEM_POP) };
+}
+
+/// Handle `NM_DBLCLK` on the tree: if a file item is selected,
+/// route it to `Shell::open_file`. Folder items are ignored —
+/// `TreeView`'s default `NM_DBLCLK` handling toggles their expand
+/// state, which is the desired behaviour.
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window. `tree` a live tree HWND.
+unsafe fn handle_tree_double_click(main_hwnd: HWND, tree: HWND) {
+    // Which item is under the cursor / selected? On a double-click,
+    // TreeView has already updated the selection to the clicked
+    // item, so `TVGN_CARET` gives the right answer.
+    let selected = unsafe {
+        SendMessageW(
+            tree,
+            TVM_GETNEXTITEM,
+            Some(WPARAM(TVGN_CARET as usize)),
+            Some(LPARAM(0)),
+        )
+    };
+    let item = HTREEITEM(selected.0);
+    if item.0 == 0 {
+        return;
+    }
+    let state = unsafe { tree_item_lparam(tree, item) };
+    if state != WORKSPACE_ITEM_FILE {
+        // Folder — let TreeView's own double-click-to-expand
+        // handling run. We return WITHOUT consuming, so the
+        // default proc will toggle expand.
+        return;
+    }
+    // Reconstruct the file path against the current workspace
+    // root and open it.
+    let root = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        state.workspace_root.clone()
+    } else {
+        None
+    };
+    let Some(root) = root else {
+        return;
+    };
+    let path = unsafe { tree_item_full_path(tree, item, &root) };
+    // Defense in depth: `tree_item_full_path` joins each tree
+    // item's displayed text (which came from `read_dir`) onto
+    // `workspace_root` via `PathBuf::push`. On a well-behaved
+    // Windows filesystem, `read_dir` never returns entries with
+    // path separators or absolute-path syntax — so the joined
+    // path stays under `workspace_root`. But `PathBuf::push`
+    // with an absolute component REPLACES the accumulated
+    // path, so a hostile network filesystem / third-party
+    // driver that returned e.g. a name starting with `\` could
+    // in principle escape. Verify before handing to
+    // `Shell::open_file`; a mismatch is a bug in the FS or the
+    // tree state, not something to silently paper over.
+    if !path.starts_with(&root) {
+        tracing::warn!(
+            path = ?path,
+            root = ?root,
+            "workspace tree: reconstructed path escaped root; refusing to open"
+        );
+        return;
+    }
+    // Drop the state borrow completely, then call open_file on
+    // a fresh borrow — `Shell::open_file` mutates and we do NOT
+    // want a re-entrant borrow via any load-progress wakeup.
+    if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        let _ = state.shell.open_file(path);
+    }
+    // `open_file` queues a load; the tab strip / editor update
+    // when the load completes (WM_APP_WAKE drain). No further
+    // action needed here.
+    unsafe {
+        crate::fire_queued_notifications(main_hwnd);
+        refresh_tab_chrome(main_hwnd);
+    }
+}
+
+/// Get the first child of `item` in the tree, or a null handle
+/// if there are none. Wrapper around `TVM_GETNEXTITEM(TVGN_CHILD)`.
+///
+/// # Safety
+///
+/// `tree` must be a live `SysTreeView32` HWND.
+unsafe fn tree_first_child(tree: HWND, item: HTREEITEM) -> HTREEITEM {
+    let r = unsafe {
+        SendMessageW(
+            tree,
+            TVM_GETNEXTITEM,
+            Some(WPARAM(TVGN_CHILD as usize)),
+            Some(LPARAM(item.0)),
+        )
+    };
+    HTREEITEM(r.0)
+}
+
+/// Get the next sibling of `item` — the item that follows it at
+/// the same level. Null handle if `item` is the last sibling.
+///
+/// # Safety
+///
+/// Same as [`tree_first_child`].
+unsafe fn tree_next_sibling(tree: HWND, item: HTREEITEM) -> HTREEITEM {
+    let r = unsafe {
+        SendMessageW(
+            tree,
+            TVM_GETNEXTITEM,
+            Some(WPARAM(TVGN_NEXT as usize)),
+            Some(LPARAM(item.0)),
+        )
+    };
+    HTREEITEM(r.0)
+}
+
+/// `TVM_EXPAND(action, item)` shorthand. `action` is one of
+/// `TVE_EXPAND` / `TVE_COLLAPSE`.
+///
+/// # Safety
+///
+/// Same as [`tree_first_child`].
+unsafe fn tree_expand(tree: HWND, item: HTREEITEM, action: u32) {
+    unsafe {
+        SendMessageW(
+            tree,
+            TVM_EXPAND,
+            Some(WPARAM(action as usize)),
+            Some(LPARAM(item.0)),
+        );
+    }
+}
+
+/// Depth-first walk of the tree from `item`, invoking `visit` on
+/// every descendant (in visit-parent-first order). Callers use
+/// this to implement Unfold All / Fold All / Locate — each of
+/// which mutates state via `visit` (expanding, collapsing, or
+/// searching). Iterative to avoid stack blowup on deep trees.
+///
+/// # Safety
+///
+/// `tree` must be a live `SysTreeView32` HWND. `visit` is called
+/// on the UI thread; nothing forbids it from re-entering
+/// `TreeView` APIs but the caller should ensure it doesn't delete
+/// `item` mid-walk.
+unsafe fn tree_walk_descendants<F: FnMut(HWND, HTREEITEM)>(
+    tree: HWND,
+    item: HTREEITEM,
+    visit: &mut F,
+) {
+    // Stack of items to process. We push a subtree root, then
+    // pop-visit-push-children.
+    let mut stack: Vec<HTREEITEM> = vec![item];
+    while let Some(node) = stack.pop() {
+        visit(tree, node);
+        // Push children in reverse so the leftmost child is
+        // processed next (visually first).
+        let mut children: Vec<HTREEITEM> = Vec::new();
+        let mut child = unsafe { tree_first_child(tree, node) };
+        while child.0 != 0 {
+            children.push(child);
+            child = unsafe { tree_next_sibling(tree, child) };
+        }
+        for c in children.into_iter().rev() {
+            stack.push(c);
+        }
+    }
+}
+
+/// Recursively expand every folder in the tree starting from
+/// the root. Because folders are lazy-loaded via
+/// `TVN_ITEMEXPANDINGW`, calling `TVM_EXPAND` on an `UNPOP`
+/// folder triggers the expand notification which populates its
+/// children; the walk then descends into those newly-populated
+/// children on the next iteration.
+///
+/// **Cost:** proportional to total files+folders in the
+/// workspace, one `read_dir` per folder. On large trees this
+/// can take a noticeable moment — the user is opting in
+/// explicitly by clicking the button. `SendMessage` on
+/// `WM_SETREDRAW` around the whole walk suppresses flicker.
+///
+/// # Safety
+///
+/// `tree` must be a live `SysTreeView32` HWND.
+unsafe fn tree_unfold_all(tree: HWND) {
+    let root = unsafe {
+        SendMessageW(
+            tree,
+            TVM_GETNEXTITEM,
+            Some(WPARAM(TVGN_ROOT as usize)),
+            Some(LPARAM(0)),
+        )
+    };
+    let root_item = HTREEITEM(root.0);
+    if root_item.0 == 0 {
+        return;
+    }
+    // Suppress paint flicker during the burst. The tree isn't a
+    // Scintilla control, so we don't need `ScintillaRedrawGuard`;
+    // a plain `WM_SETREDRAW` bracket is enough — TreeView has no
+    // reason to hold the "no redraw" state after we restore.
+    unsafe {
+        SendMessageW(tree, WM_SETREDRAW, Some(WPARAM(0)), Some(LPARAM(0)));
+    }
+    // Fixed-point walk: expanding a folder can add new children
+    // (via the TVN_ITEMEXPANDING lazy-load hook), which we then
+    // want to visit. Simplest: after the pass, if any UNPOP
+    // folder remains anywhere, run another pass. Bounded by tree
+    // depth × total nodes; in practice one or two passes.
+    for _round in 0..8 {
+        let mut work_done = false;
+        unsafe {
+            tree_walk_descendants(tree, root_item, &mut |t, node| {
+                let state = tree_item_lparam(t, node);
+                if state == WORKSPACE_ITEM_UNPOP || state == WORKSPACE_ITEM_POP {
+                    // Only expand if not already expanded — TVM_EXPAND
+                    // is a toggle for the `TVE_EXPAND` action, actually
+                    // no: `TVE_EXPAND` sets expanded state (idempotent).
+                    tree_expand(t, node, TVE_EXPAND.0);
+                    if state == WORKSPACE_ITEM_UNPOP {
+                        work_done = true;
+                    }
+                }
+            });
+        }
+        if !work_done {
+            break;
+        }
+    }
+    unsafe {
+        SendMessageW(tree, WM_SETREDRAW, Some(WPARAM(1)), Some(LPARAM(0)));
+        let _ = InvalidateRect(Some(tree), None, true);
+        let _ = UpdateWindow(tree);
+    }
+}
+
+/// Recursively collapse every folder in the tree. No I/O
+/// happens — just `TVM_EXPAND(TVE_COLLAPSE)` on each folder.
+///
+/// # Safety
+///
+/// Same as [`tree_unfold_all`].
+unsafe fn tree_fold_all(tree: HWND) {
+    let root = unsafe {
+        SendMessageW(
+            tree,
+            TVM_GETNEXTITEM,
+            Some(WPARAM(TVGN_ROOT as usize)),
+            Some(LPARAM(0)),
+        )
+    };
+    let root_item = HTREEITEM(root.0);
+    if root_item.0 == 0 {
+        return;
+    }
+    unsafe {
+        SendMessageW(tree, WM_SETREDRAW, Some(WPARAM(0)), Some(LPARAM(0)));
+        tree_walk_descendants(tree, root_item, &mut |t, node| {
+            // Only need to touch folders; files have no expand state.
+            let state = tree_item_lparam(t, node);
+            if state == WORKSPACE_ITEM_UNPOP || state == WORKSPACE_ITEM_POP {
+                tree_expand(t, node, TVE_COLLAPSE.0);
+            }
+        });
+        SendMessageW(tree, WM_SETREDRAW, Some(WPARAM(1)), Some(LPARAM(0)));
+        let _ = InvalidateRect(Some(tree), None, true);
+        let _ = UpdateWindow(tree);
+    }
+}
+
+/// Case-insensitive analogue of `Path::strip_prefix`. Returns
+/// `Some(rest)` where `rest` is `target`'s components after
+/// `prefix`, or `None` if `target` doesn't start with `prefix`
+/// under case-insensitive comparison.
+///
+/// Windows filesystems (NTFS/FAT/exFAT) are case-insensitive at
+/// the file-lookup layer, and Explorer displays whichever case
+/// the on-disk metadata uses. Two paths that resolve to the same
+/// file can therefore differ in case at any component — most
+/// commonly the drive letter — so a case-sensitive `strip_prefix`
+/// gives false negatives on identical files.
+///
+/// Comparison is `to_lowercase()`-based; imperfect Unicode case
+/// folding is acceptable here because the fall-through only
+/// affects the "Locate Current File" no-op case (worse than
+/// perfect: locate silently does nothing on some non-ASCII
+/// paths; better than the alternative: false-positive resolve to
+/// the wrong file, which would corrupt user state).
+fn strip_prefix_case_insensitive(target: &Path, prefix: &Path) -> Option<PathBuf> {
+    let mut t_iter = target.components();
+    let mut p_iter = prefix.components();
+    loop {
+        match (t_iter.next(), p_iter.next()) {
+            (_, None) => {
+                // Prefix exhausted — the rest of the target
+                // components form the relative path.
+                return Some(t_iter.collect());
+            }
+            (None, Some(_)) => return None,
+            (Some(tc), Some(pc)) => {
+                let ts = tc.as_os_str().to_string_lossy().to_lowercase();
+                let ps = pc.as_os_str().to_string_lossy().to_lowercase();
+                if ts != ps {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+/// Reveal `target` in the tree by walking down from the root
+/// one path component at a time, expanding each ancestor
+/// folder along the way (triggering lazy population via
+/// `TVN_ITEMEXPANDINGW`), and finally selecting + scrolling to
+/// the leaf.
+///
+/// If `target` is not under `workspace_root`, returns silently
+/// (matches N++'s no-feedback behaviour for the same case). If
+/// any intermediate component is missing from disk (renamed
+/// between panel open and now), the walk stops at the last
+/// existing ancestor and selects that.
+///
+/// # Safety
+///
+/// `tree` must be a live `SysTreeView32` HWND.
+unsafe fn tree_locate_path(tree: HWND, target: &Path, workspace_root: &Path) {
+    // Only meaningful if `target` is under the workspace root.
+    // Case-insensitive strip — Windows filesystems are
+    // case-insensitive, and `Path::strip_prefix` is case-sensitive
+    // by default. Without this, drive-letter case differences
+    // (`c:\foo` vs `C:\foo`) or a user opening a file via
+    // drag-and-drop where the path's case differs from the
+    // folder-picker's canonicalisation would make Locate a silent
+    // no-op even though the file is genuinely inside the
+    // workspace.
+    let Some(rel) = strip_prefix_case_insensitive(target, workspace_root) else {
+        return;
+    };
+    let root = unsafe {
+        SendMessageW(
+            tree,
+            TVM_GETNEXTITEM,
+            Some(WPARAM(TVGN_ROOT as usize)),
+            Some(LPARAM(0)),
+        )
+    };
+    let mut cur = HTREEITEM(root.0);
+    if cur.0 == 0 {
+        return;
+    }
+    // Walk `rel`'s components one at a time. For each component,
+    // ensure `cur` is expanded (this fires TVN_ITEMEXPANDING →
+    // lazy `read_dir` if needed), then scan `cur`'s children for
+    // a matching name.
+    for comp in rel.components() {
+        // `Component::as_os_str()` for `Normal(name)` is the name
+        // itself. Prefix / root / current-dir components should
+        // never appear in a relative path, but skip defensively.
+        let comp_name = comp.as_os_str();
+        if comp_name.is_empty() {
+            continue;
+        }
+        let comp_name_str = comp_name.to_string_lossy();
+        // Expand cur (idempotent) — triggers lazy populate if
+        // it's still UNPOP.
+        unsafe { tree_expand(tree, cur, TVE_EXPAND.0) };
+        // Scan children for the component.
+        let mut found = HTREEITEM(0);
+        let mut child = unsafe { tree_first_child(tree, cur) };
+        while child.0 != 0 {
+            let name = unsafe { tree_item_text(tree, child) };
+            // Case-insensitive compare — Windows paths are case-
+            // insensitive on NTFS/FAT, and Explorer displays the
+            // filesystem's canonical case. Using `eq_ignore_ascii_case`
+            // is faithful to the FS behaviour for ASCII; for non-
+            // ASCII, fall back to `to_lowercase` (imperfect but
+            // "good enough" — Unicode case folding is complex and
+            // Explorer itself has quirks).
+            if name.eq_ignore_ascii_case(&comp_name_str)
+                || name.to_lowercase() == comp_name_str.to_lowercase()
+            {
+                found = child;
+                break;
+            }
+            child = unsafe { tree_next_sibling(tree, child) };
+        }
+        if found.0 == 0 {
+            // Component missing from tree — stop at last existing
+            // ancestor. Select `cur` so the user at least sees
+            // the closest match.
+            break;
+        }
+        cur = found;
+    }
+    // Select the final match and scroll it into view.
+    unsafe {
+        SendMessageW(
+            tree,
+            TVM_SELECTITEM,
+            Some(WPARAM(TVGN_CARET as usize)),
+            Some(LPARAM(cur.0)),
+        );
+        SendMessageW(
+            tree,
+            TVM_ENSUREVISIBLE,
+            Some(WPARAM(0)),
+            Some(LPARAM(cur.0)),
+        );
+    }
+}
+
+/// `View → Locate Current File` — reveal the active tab's path in
+/// the workspace tree. Snapshots the active path + workspace root
+/// under a brief borrow so the tree walk runs without holding
+/// `&mut WindowState`.
+///
+/// # Safety
+///
+/// `main_hwnd` must be a live main window HWND. UI thread only.
+unsafe fn locate_current_file_in_workspace(main_hwnd: HWND) {
+    let (tree, root, active_path) = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        (
+            state.workspace_tree_hwnd,
+            state.workspace_root.clone(),
+            state.shell.active().and_then(|t| t.path.clone()),
+        )
+    } else {
+        return;
+    };
+    let (Some(root), Some(active)) = (root, active_path) else {
+        return;
+    };
+    unsafe { tree_locate_path(tree, &active, &root) };
+}
+
 /// Show the workspace panel rooted at `root`. Idempotent on the
 /// visibility flag; overwrites `workspace_root` on every call so
 /// `File → Open Folder as Workspace...` can re-root an already-
@@ -26268,8 +27277,18 @@ unsafe fn prompt_pick_workspace_folder(owner: HWND, initial: Option<&Path>) -> O
 ///
 /// `main_hwnd` must be a live main window HWND. UI thread only.
 unsafe fn show_workspace_panel(main_hwnd: HWND, root: PathBuf) {
+    // Compute the header title now (basename of root, or the
+    // full path if there's no basename — e.g. `C:\`). Encoded
+    // to wide once so we can write it without another allocation
+    // inside the snapshot borrow.
+    let title = root.file_name().map_or_else(
+        || root.to_string_lossy().into_owned(),
+        |s| s.to_string_lossy().into_owned(),
+    );
+    let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+
     let snapshot = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
-        state.workspace_root = Some(root);
+        state.workspace_root = Some(root.clone());
         state.workspace_visible = true;
         Some((
             state.toolbar_hwnd,
@@ -26281,6 +27300,8 @@ unsafe fn show_workspace_panel(main_hwnd: HWND, root: PathBuf) {
             state.fif_dock_hwnd,
             state.fif_dock_visible,
             state.fif_dock_height,
+            state.workspace_header_label,
+            state.workspace_tree_hwnd,
             WorkspaceLayout {
                 panel: state.workspace_hwnd,
                 splitter: state.workspace_splitter_hwnd,
@@ -26301,12 +27322,22 @@ unsafe fn show_workspace_panel(main_hwnd: HWND, root: PathBuf) {
         fif_dock,
         fif_dock_visible,
         fif_dock_height,
+        header_label,
+        tree,
         workspace,
     )) = snapshot
     else {
         return;
     };
     unsafe {
+        // Update the header title to the root's basename — gives
+        // the user a visible anchor for which folder they're
+        // looking at without eating tree row height.
+        let _ = SetWindowTextW(header_label, PCWSTR(title_wide.as_ptr()));
+        // Clear + repopulate the tree. Only the root + its
+        // direct children hit disk here (one `read_dir`);
+        // subfolders defer to `TVN_ITEMEXPANDING`.
+        populate_workspace_root(tree, &root);
         let _ = ShowWindow(workspace.panel, SW_SHOW);
         let _ = ShowWindow(workspace.splitter, SW_SHOW);
         let mut rect = RECT::default();
@@ -28466,6 +29497,35 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // decision matrix. Matches N++'s View-menu
                         // toggle for the same feature.
                         toggle_workspace_panel(hwnd);
+                    }
+                    IDC_WORKSPACE_UNFOLD => {
+                        // Workspace panel: expand every folder in the
+                        // tree, lazy-loading intermediate `read_dir`s
+                        // as we go. See [`tree_unfold_all`] for the
+                        // fixed-point walk that handles the "expanding
+                        // one folder reveals new UNPOP folders" case.
+                        let tree = state_from_hwnd(hwnd).map(|s| s.workspace_tree_hwnd);
+                        if let Some(t) = tree {
+                            tree_unfold_all(t);
+                        }
+                    }
+                    IDC_WORKSPACE_FOLD => {
+                        // Workspace panel: collapse every folder in
+                        // the tree. Purely a UI operation — no I/O.
+                        let tree = state_from_hwnd(hwnd).map(|s| s.workspace_tree_hwnd);
+                        if let Some(t) = tree {
+                            tree_fold_all(t);
+                        }
+                    }
+                    IDC_WORKSPACE_LOCATE => {
+                        // Workspace panel: reveal the active tab's
+                        // file in the tree by walking down from the
+                        // root one path component at a time,
+                        // expanding each ancestor (triggers lazy
+                        // populate), then selecting the leaf. No-op
+                        // if there's no active tab, no workspace
+                        // root, or the file isn't under the root.
+                        locate_current_file_in_workspace(hwnd);
                     }
                     ID_FILE_SAVE_AS => {
                         run_save_as_flow(hwnd);
