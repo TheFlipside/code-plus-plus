@@ -27630,16 +27630,12 @@ unsafe fn locate_current_file_in_workspace(main_hwnd: HWND) {
 ///
 /// `main_hwnd` must be a live main window HWND. UI thread only.
 unsafe fn show_workspace_panel(main_hwnd: HWND, root: PathBuf) {
-    // Compute the header title now (basename of root, or the
-    // full path if there's no basename — e.g. `C:\`). Encoded
-    // to wide once so we can write it without another allocation
-    // inside the snapshot borrow.
-    let title = root.file_name().map_or_else(
-        || root.to_string_lossy().into_owned(),
-        |s| s.to_string_lossy().into_owned(),
-    );
-    let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
-
+    // The header title stays fixed at "Folder as Workspace" (the
+    // text seeded on control creation). Earlier iterations
+    // overwrote it with the root basename here, but that was
+    // never the intended design — the header is a label for the
+    // panel itself, not for the currently-loaded folder. The
+    // root folder's name is already visible as the top tree node.
     let snapshot = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
         state.workspace_root = Some(root.clone());
         state.workspace_visible = true;
@@ -27653,7 +27649,6 @@ unsafe fn show_workspace_panel(main_hwnd: HWND, root: PathBuf) {
             state.fif_dock_hwnd,
             state.fif_dock_visible,
             state.fif_dock_height,
-            state.workspace_header_label,
             state.workspace_tree_hwnd,
             WorkspaceLayout {
                 panel: state.workspace_hwnd,
@@ -27675,7 +27670,6 @@ unsafe fn show_workspace_panel(main_hwnd: HWND, root: PathBuf) {
         fif_dock,
         fif_dock_visible,
         fif_dock_height,
-        header_label,
         tree,
         workspace,
     )) = snapshot
@@ -27683,10 +27677,6 @@ unsafe fn show_workspace_panel(main_hwnd: HWND, root: PathBuf) {
         return;
     };
     unsafe {
-        // Update the header title to the root's basename — gives
-        // the user a visible anchor for which folder they're
-        // looking at without eating tree row height.
-        let _ = SetWindowTextW(header_label, PCWSTR(title_wide.as_ptr()));
         // Clear + repopulate the tree. Only the root + its
         // direct children hit disk here (one `read_dir`);
         // subfolders defer to `TVN_ITEMEXPANDING`.
