@@ -14559,7 +14559,6 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             ID_FILE_RENAME as usize,
             w!("Re&name...\tF2"),
         )?;
-        AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
         AppendMenuW(
             file_menu,
             MF_STRING,
