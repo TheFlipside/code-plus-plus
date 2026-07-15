@@ -31845,13 +31845,30 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         //      the user doesn't see a Yes/No dialog
                         //      that silently no-ops on Yes.
                         //   2. The buffer is dirty. If Scintilla's
-                        //      modified flag is clear, reload is
-                        //      idempotent and the prompt is just
-                        //      noise — skip it.
+                        //      modified flag AND the cached
+                        //      `Tab.dirty` are both clear, reload
+                        //      is idempotent and the prompt is
+                        //      just noise — skip it. The OR mirrors
+                        //      the close-tab gate: `Tab.dirty` can
+                        //      be true while `SCI_GETMODIFY` is
+                        //      false when the file was deleted
+                        //      externally (Shell flips `Tab.dirty`
+                        //      from `apply_file_change::Removed`
+                        //      without touching the Scintilla doc),
+                        //      and in that case the reload would
+                        //      still discard state the user might
+                        //      want to preserve — either the
+                        //      pre-delete buffer text itself, or,
+                        //      if the file was recreated with new
+                        //      content and the user said No to the
+                        //      Confirm Reload dialog, the stale
+                        //      version they were keeping.
                         let (has_path, dirty) = if let Some(state) = state_from_hwnd(hwnd) {
-                            let has_path =
-                                state.shell.active().and_then(|t| t.path.as_ref()).is_some();
-                            let dirty = state.editor.send(SCI_GETMODIFY, 0, 0) != 0;
+                            let (has_path, cached_dirty) = state
+                                .shell
+                                .active()
+                                .map_or((false, false), |t| (t.path.is_some(), t.dirty));
+                            let dirty = state.editor.send(SCI_GETMODIFY, 0, 0) != 0 || cached_dirty;
                             (has_path, dirty)
                         } else {
                             (false, false)
