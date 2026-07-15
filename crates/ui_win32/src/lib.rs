@@ -434,9 +434,10 @@ use windows::Win32::Storage::FileSystem::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::{
-    ChooseColorW, GetOpenFileNameW, GetSaveFileNameW, CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW,
-    OFN_EXPLORER, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT,
-    OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    ChooseColorW, CommDlgExtendedError, GetOpenFileNameW, GetSaveFileNameW, CC_FULLOPEN,
+    CC_RGBINIT, CHOOSECOLORW, FNERR_BUFFERTOOSMALL, OFN_ALLOWMULTISELECT, OFN_EXPLORER,
+    OFN_FILEMUSTEXIST, OFN_HIDEREADONLY, OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST,
+    OPENFILENAMEW,
 };
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, SetWindowTheme, BST_CHECKED, BST_UNCHECKED, CDDS_PREPAINT,
@@ -16390,61 +16391,151 @@ fn build_dialog_filter() -> Vec<u16> {
         .collect()
 }
 
-/// Show the standard "Open" dialog and return the chosen path, or
-/// `None` if the user cancelled. Owner is the main Code++ HWND so
-/// the dialog is modal-relative and the user can't hit the file
-/// menu twice.
+/// Show the standard "Open" dialog and return every path the user
+/// selected. Returns an empty `Vec` if the user cancelled. Owner
+/// is the main Code++ HWND so the dialog is modal-relative and
+/// the user can't hit the file menu twice.
 ///
-/// The path buffer is sized to `MAX_PATH + 1` wide chars (Windows
-/// rejects longer paths in the standard dialog without an explicit
-/// long-path opt-in; matching Notepad++'s behaviour for now). The
-/// returned `PathBuf` decodes via `from_utf16_lossy` — paths
+/// **Multi-select.** `OFN_ALLOWMULTISELECT` is set so the user
+/// can Ctrl+click / Shift+click to open several files in one
+/// dialog. With `OFN_EXPLORER`, Windows fills `lpstrFile` with a
+/// double-NUL-terminated sequence: for a single selection it's
+/// just the full path followed by two NULs; for multiple
+/// selections it's the directory, then each filename (basename
+/// only), then two NULs. `parse_ofn_multi_select_buffer` handles
+/// both shapes and returns absolute `PathBuf`s.
+///
+/// Buffer size: 32 KiB wide-chars (~ 64 KB). Windows recommends
+/// a large buffer for multi-select because the entire selection
+/// (directory + every filename + separators) has to fit or the
+/// dialog fails with `ERROR_INSUFFICIENT_BUFFER`. `MAX_PATH`
+/// (260) would silently truncate on a user picking a dozen files
+/// from a deep directory; 32 KiB accommodates hundreds of typical
+/// filenames without any practical constraint on the user's
+/// selection count.
+///
+/// The returned `PathBuf`s decode via `from_utf16_lossy` — paths
 /// containing surrogate halves (extremely rare on real filesystems)
 /// degrade to a U+FFFD-substituted path that `std::fs::open` will
 /// then refuse, surfacing as an Open error rather than silent
 /// corruption.
-fn prompt_open_path(owner: HWND) -> Option<PathBuf> {
+fn prompt_open_paths(owner: HWND) -> Vec<PathBuf> {
     let filter = build_dialog_filter();
-    // One past `MAX_PATH` so the trailing NUL fits even at the cap.
-    let mut path = vec![0u16; MAX_PATH as usize + 1];
+    // 32 KiB wide-chars — see the doc comment for why the
+    // `MAX_PATH + 1` used by the save-side dialog doesn't work
+    // for multi-select.
+    const MULTISELECT_BUFFER_CHARS: usize = 32 * 1024;
+    let mut buf = vec![0u16; MULTISELECT_BUFFER_CHARS];
 
     let mut ofn = OPENFILENAMEW {
         lStructSize: core::mem::size_of::<OPENFILENAMEW>() as u32,
         hwndOwner: owner,
         lpstrFilter: PCWSTR(filter.as_ptr()),
-        lpstrFile: PWSTR(path.as_mut_ptr()),
-        nMaxFile: path.len() as u32,
+        lpstrFile: PWSTR(buf.as_mut_ptr()),
+        nMaxFile: buf.len() as u32,
         nFilterIndex: 1,
         // OFN_NOCHANGEDIR: without it, the dialog silently mutates the
         // process working directory as a side effect of the user
         // navigating around. That would corrupt every later relative
         // path the app resolves (including save_buffer_as's `Path::new(".")`
         // fallback when the chosen file has no parent component).
+        //
+        // OFN_ALLOWMULTISELECT: Ctrl/Shift-click accumulates a
+        // multi-file selection. Requires OFN_EXPLORER for the
+        // NUL-separated result format used here; the old
+        // space-separated short-name format (without EXPLORER)
+        // is unusable — filenames with spaces would be silently
+        // corrupted.
         Flags: OFN_FILEMUSTEXIST
             | OFN_PATHMUSTEXIST
             | OFN_HIDEREADONLY
             | OFN_EXPLORER
+            | OFN_ALLOWMULTISELECT
             | OFN_NOCHANGEDIR,
         ..Default::default()
     };
 
     // SAFETY: `&mut ofn` is a valid pointer to a fully-initialised
-    // `OPENFILENAMEW` struct. `filter` and `path` outlive the call
+    // `OPENFILENAMEW` struct. `filter` and `buf` outlive the call
     // (both are local Vecs held until function return). The
     // dialog blocks until the user clicks OK or Cancel; on
-    // success Windows writes the chosen path into `path` and we
-    // truncate at the first NUL.
+    // success Windows writes the double-NUL-terminated selection
+    // list into `buf`.
     let ok = unsafe { GetOpenFileNameW(&raw mut ofn) }.as_bool();
     if !ok {
-        return None;
+        // Disambiguate Cancel (returns 0 from CommDlgExtendedError)
+        // from a real failure. FNERR_BUFFERTOOSMALL fires when the
+        // user's selection wouldn't fit in the 32 KiB buffer above
+        // — surface it to the user rather than looking like a
+        // mis-click cancel. Any other error code is unusual (the
+        // OFN struct itself is fully-init) but still warrants a
+        // log so the ambient failure is diagnosable.
+        let err = unsafe { CommDlgExtendedError() };
+        if err == FNERR_BUFFERTOOSMALL {
+            show_error_dialog(
+                owner,
+                "Open — too many files",
+                "The dialog can't return this many files in one selection. \
+                 Please open fewer files at once (or open the folder as a workspace).",
+            );
+        } else if err.0 != 0 {
+            tracing::warn!(
+                code = err.0,
+                "GetOpenFileNameW failed with a non-cancel error code"
+            );
+        }
+        return Vec::new();
     }
+    parse_ofn_multi_select_buffer(&buf)
+}
 
-    let nul = path.iter().position(|&u| u == 0).unwrap_or(path.len());
-    let s = String::from_utf16_lossy(&path[..nul]);
-    if s.is_empty() {
-        return None;
+/// Parse the double-NUL-terminated wide-char buffer that
+/// `GetOpenFileNameW(OFN_ALLOWMULTISELECT | OFN_EXPLORER)` fills
+/// in on success. Two shapes to handle:
+///
+///   * **Single file selected:** the buffer contains one
+///     full path followed by two NULs. Return a one-element
+///     `Vec` with that path.
+///   * **Multiple files selected:** the buffer contains the
+///     directory, then each filename (basename only, no
+///     separator prefix), each entry NUL-terminated, and the
+///     whole list ends with an additional NUL (so the buffer
+///     is double-NUL-terminated). Return one `PathBuf` per
+///     filename, each joined onto the directory.
+///
+/// Disambiguation: if the first NUL-terminated entry is followed
+/// by more non-NUL bytes, we're in the multi-file shape. If not,
+/// we're in the single-file shape.
+///
+/// Broken out as a pure function so it can be unit-tested
+/// without invoking the actual Win32 dialog.
+fn parse_ofn_multi_select_buffer(buf: &[u16]) -> Vec<PathBuf> {
+    // Split the wide buffer into NUL-terminated fields. Windows
+    // pads the buffer with zeros beyond the double-NUL terminator,
+    // so `split(|&c| c == 0)` yields empty strings at the tail;
+    // we filter those out.
+    let mut fields = buf
+        .split(|&c| c == 0)
+        .take_while(|slice| !slice.is_empty())
+        .map(String::from_utf16_lossy);
+    let Some(first) = fields.next() else {
+        return Vec::new();
+    };
+    let rest: Vec<String> = fields.collect();
+    if rest.is_empty() {
+        // Single-file shape — first entry IS the full path.
+        return vec![PathBuf::from(first)];
     }
-    Some(PathBuf::from(s))
+    // Multi-file shape — first entry is the directory, remaining
+    // are basenames.
+    let dir = PathBuf::from(first);
+    rest.into_iter()
+        .map(|name| {
+            let mut p = dir.clone();
+            p.push(name);
+            p
+        })
+        .collect()
 }
 
 /// Show the standard "Save As" dialog and return the chosen path,
@@ -30914,9 +31005,21 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // borrow — it spins its own message loop that
                         // can re-enter our wnd_proc, and any active
                         // borrow at that point would alias-UB.
-                        let path = prompt_open_path(hwnd);
+                        //
+                        // Multi-select: `prompt_open_paths` returns
+                        // every file the user picked. Empty Vec on
+                        // Cancel. Each path funnels through
+                        // `Shell::open_file` in the same shape the
+                        // single-path handler used — the shell
+                        // dedupes already-open paths and pushes fresh
+                        // tabs for the rest. `deduped` tracks whether
+                        // ANY of the opens landed on an existing tab
+                        // so the final `handle_tab_selchange` fires
+                        // once at the end and rebinds the view to
+                        // whichever tab ended up active.
+                        let paths = prompt_open_paths(hwnd);
                         let mut deduped = false;
-                        if let Some(p) = path {
+                        for p in paths {
                             let outcome = if let Some(state) = state_from_hwnd(hwnd) {
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                     state.shell.open_file(p)
@@ -30925,7 +31028,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             } else {
                                 OpenFileOutcome::Rejected
                             };
-                            deduped = matches!(outcome, OpenFileOutcome::SwitchedToExisting(_));
+                            if matches!(outcome, OpenFileOutcome::SwitchedToExisting(_)) {
+                                deduped = true;
+                            }
                         }
                         // If `open_file` switched to an existing tab
                         // (the de-dupe branch) there's no async load
@@ -33799,6 +33904,110 @@ mod tab_display_name_tests {
         // Untitled tabs feed their "new N" name straight into
         // the dialog — no special-casing in the prompt.
         assert_eq!(save_confirm_prompt_for("new 3"), "Save file 'new 3' ?");
+    }
+}
+
+#[cfg(test)]
+mod ofn_multi_select_parser_tests {
+    //! Unit tests for `parse_ofn_multi_select_buffer` — the
+    //! parser that decodes the double-NUL-terminated wide-char
+    //! buffer `GetOpenFileNameW(OFN_ALLOWMULTISELECT | OFN_EXPLORER)`
+    //! writes on success. Confirms both single-file and
+    //! multi-file result shapes are recognised and joined
+    //! correctly, and that the trailing NUL padding Windows
+    //! leaves in the buffer doesn't leak into the output.
+
+    use super::parse_ofn_multi_select_buffer;
+    use std::path::PathBuf;
+
+    /// Build a double-NUL-terminated wide-char buffer from a list
+    /// of fields, then pad with more NULs to simulate the
+    /// zero-initialised tail of a 32 KiB Vec that Windows only
+    /// wrote a prefix of.
+    fn wide_buf(fields: &[&str], pad_zeros: usize) -> Vec<u16> {
+        let mut out: Vec<u16> = Vec::new();
+        for f in fields {
+            out.extend(f.encode_utf16());
+            out.push(0);
+        }
+        // Final terminating NUL (making it double-NUL).
+        out.push(0);
+        out.extend(std::iter::repeat_n(0u16, pad_zeros));
+        out
+    }
+
+    #[test]
+    fn single_file_returns_one_full_path() {
+        // Single-file shape: full path, NUL, NUL, [padding].
+        let buf = wide_buf(&[r"C:\Users\foo\notes.txt"], 100);
+        let out = parse_ofn_multi_select_buffer(&buf);
+        assert_eq!(out, vec![PathBuf::from(r"C:\Users\foo\notes.txt")]);
+    }
+
+    #[test]
+    fn multi_file_joins_each_name_onto_the_directory() {
+        // Multi-file shape: directory, NUL, name1, NUL, name2,
+        // NUL, name3, NUL, NUL.
+        let buf = wide_buf(&[r"C:\Users\foo", "a.txt", "b.txt", "c.txt"], 50);
+        let out = parse_ofn_multi_select_buffer(&buf);
+        assert_eq!(
+            out,
+            vec![
+                PathBuf::from(r"C:\Users\foo\a.txt"),
+                PathBuf::from(r"C:\Users\foo\b.txt"),
+                PathBuf::from(r"C:\Users\foo\c.txt"),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_buffer_yields_no_paths() {
+        // Simulates the buffer state after Cancel (nothing
+        // written) — every byte NUL.
+        let buf = vec![0u16; 64];
+        let out = parse_ofn_multi_select_buffer(&buf);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn trailing_padding_does_not_produce_ghost_entries() {
+        // Even 10 KiB of trailing zeros must not manifest as
+        // empty-string PathBufs in the result. The `take_while
+        // !slice.is_empty()` stop condition guards this.
+        let buf = wide_buf(&[r"C:\dir", "one.txt"], 10 * 1024);
+        let out = parse_ofn_multi_select_buffer(&buf);
+        assert_eq!(out, vec![PathBuf::from(r"C:\dir\one.txt")]);
+    }
+
+    #[test]
+    fn unicode_paths_round_trip_through_utf16() {
+        // Non-ASCII in both directory and filename — verifies
+        // `String::from_utf16_lossy` doesn't corrupt the
+        // characters and that `PathBuf::push` joins correctly.
+        let buf = wide_buf(&[r"C:\Пользователи", "заметки.txt", "日本語.md"], 30);
+        let out = parse_ofn_multi_select_buffer(&buf);
+        assert_eq!(
+            out,
+            vec![
+                PathBuf::from(r"C:\Пользователи\заметки.txt"),
+                PathBuf::from(r"C:\Пользователи\日本語.md"),
+            ]
+        );
+    }
+
+    #[test]
+    fn single_file_with_spaces_returns_full_path() {
+        // Spaces are legal filesystem characters; verify they
+        // don't accidentally trigger the multi-file
+        // disambiguation (the OFN_EXPLORER protocol is
+        // NUL-separated, not space-separated — this test pins
+        // that guarantee).
+        let buf = wide_buf(&[r"C:\Program Files\My App\notes v2.txt"], 20);
+        let out = parse_ofn_multi_select_buffer(&buf);
+        assert_eq!(
+            out,
+            vec![PathBuf::from(r"C:\Program Files\My App\notes v2.txt")]
+        );
     }
 }
 
