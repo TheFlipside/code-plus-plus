@@ -1019,6 +1019,40 @@ pub struct Shell {
     /// UI's existing dialog-presentation path picks them up
     /// without a new code path.
     deferred_dialogs: Vec<PendingDialog>,
+    /// Per-path debounce deadlines for file-change dialogs. An
+    /// entry with a future timestamp means new file-change
+    /// events for that path are silently discarded until now
+    /// crosses it.
+    ///
+    /// Two producers:
+    ///   * `save_current_to_disk` (and its `save_active_as_copy`
+    ///     / `save_buffer_as` siblings) — sets a deadline just
+    ///     past the atomic-rename event burst so `ReadDirectoryChangesW`
+    ///     events from our OWN save don't reach the user as a
+    ///     phantom "reload from disk?" prompt. The
+    ///     `unwatch`/`rewatch` dance already tried to gate this,
+    ///     but the notify Windows backend watches whole
+    ///     directories and events queued between the unwatch
+    ///     and rewatch still land on the receiver — this
+    ///     timestamp fence is what actually suppresses them.
+    ///   * `drain` — after surfacing a "reload?" dialog for a
+    ///     path, extends the deadline. A single external save
+    ///     produces raw events that arrive across two-plus
+    ///     drain cycles (each notify wake is a separate
+    ///     `WM_APP_WAKE`); without cross-drain suppression the
+    ///     user sees the same "reload?" prompt twice for one
+    ///     external save.
+    ///
+    /// Not bounded by open tab count: `save_active_as_copy`
+    /// (`NPPM_SAVEFILEAS`) writes to arbitrary caller-supplied
+    /// paths, which grows the map beyond the set of open tab
+    /// paths over a long session. Opportunistically pruned
+    /// inside `drain` — expired entries older than
+    /// `FILE_CHANGE_DEBOUNCE_PRUNE_AGE` are swept when the map
+    /// grows past a soft-cap threshold. Entries stay valid past
+    /// their deadline until pruned; a `contains_key` check
+    /// alone means nothing, only the deadline value does.
+    file_change_debounce: std::collections::HashMap<PathBuf, DebounceEntry>,
     /// Editor visual configuration persisted in `styles.xml` and
     /// edited via the Style Configurator dialog. Read at startup
     /// (`Shell::new`); written by [`Self::set_styles`] when the
@@ -1073,6 +1107,80 @@ impl SearchFlags {
     pub const fn bits(self) -> u32 {
         self.0
     }
+}
+
+/// Debounce window for file-change dialogs. See
+/// [`Shell::file_change_debounce`] for the invariants; 1s is long
+/// enough to swallow an atomic-rename event burst (~200ms on
+/// Windows in the worst case) plus a comfortable safety margin,
+/// short enough that a user's genuine second modification within
+/// the same second doesn't get silently discarded across
+/// human-perceivable time. Same order of magnitude as most GUI
+/// text editors' external-change coalescing.
+const FILE_CHANGE_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Hard ceiling on how long a single sliding debounce window
+/// can suppress dialogs for one path. Extending the deadline
+/// on every event handles slow-filesystem bursts, but naive
+/// sliding indefinitely means an adversarial (or runaway)
+/// process writing at sub-`FILE_CHANGE_DEBOUNCE` cadence would
+/// silently swallow every "reload from disk?" warning
+/// forever, defeating the user-visible tamper-detection signal.
+/// After this window elapses from the FIRST fence, the very
+/// next event surfaces the dialog regardless of the sliding
+/// deadline — the user then dismisses it and a new sliding
+/// window opens.
+const FILE_CHANGE_DEBOUNCE_MAX: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Size threshold that triggers opportunistic pruning of
+/// expired entries from `Shell::file_change_debounce`. Below
+/// this, keeping the entries around is trivially cheap
+/// (a handful of `DebounceEntry` values); above this, the map
+/// may be accumulating stale entries from
+/// `save_active_as_copy`'s arbitrary destination paths and a
+/// sweep is warranted. Set well above realistic same-second
+/// activity for a normal session (a burst of 64 simultaneous
+/// saves is far above what one user can drive).
+const FILE_CHANGE_DEBOUNCE_PRUNE_THRESHOLD: usize = 64;
+
+/// Per-path debounce state. Sliding window with a hard
+/// ceiling: `deadline` extends on every event, but suppression
+/// only holds while both `now < deadline` AND
+/// `now - first_set < FILE_CHANGE_DEBOUNCE_MAX`. See
+/// [`FILE_CHANGE_DEBOUNCE_MAX`] for why the ceiling matters.
+#[derive(Copy, Clone, Debug)]
+struct DebounceEntry {
+    /// When the FIRST fence was set for this path. Never moves
+    /// forward within one debounce cycle — used as the anchor
+    /// for the MAX-window ceiling.
+    first_set: std::time::Instant,
+    /// Sliding deadline extended by every incoming event
+    /// (suppressed or surfaced). Only meaningful when the
+    /// MAX-window ceiling from `first_set` hasn't elapsed.
+    deadline: std::time::Instant,
+}
+
+/// Return `true` iff new file-change events for `path` should
+/// currently be suppressed by the debounce window. Two
+/// conditions must both hold:
+///
+///   * The sliding `deadline` has not elapsed (last event was
+///     within [`FILE_CHANGE_DEBOUNCE`]).
+///   * The absolute window from `first_set` has not elapsed
+///     ([`FILE_CHANGE_DEBOUNCE_MAX`] — the ceiling that
+///     prevents an adversarial or runaway process writing at
+///     sub-debounce cadence from silently suppressing the
+///     "reload from disk?" dialog forever).
+///
+/// Pure helper so tests can inject deterministic timestamps.
+fn is_path_debounced(
+    map: &std::collections::HashMap<PathBuf, DebounceEntry>,
+    path: &Path,
+    now: std::time::Instant,
+) -> bool {
+    map.get(path).is_some_and(|entry| {
+        now < entry.deadline && now.duration_since(entry.first_set) < FILE_CHANGE_DEBOUNCE_MAX
+    })
 }
 
 /// Fold a burst of raw file-watcher events into at most one
@@ -1174,6 +1282,54 @@ where
     }
 }
 
+/// Start a fresh debounce window for `path` — sets both
+/// `first_set` and `deadline` to now-anchored values. Overwrites
+/// any existing entry so the MAX-window ceiling is re-anchored.
+/// Used at every point where a new "quiet please" cycle begins:
+///
+///   * Save paths (`save_current_to_disk`, `save_buffer_as`,
+///     `save_active_as_copy`) — the atomic-rename event burst
+///     that follows should be suppressed for a fresh 1s + MAX.
+///   * `drain`'s SURFACE branch — after a "reload from disk?"
+///     dialog fires (either because there was no prior fence
+///     or because the MAX-window ceiling elapsed on an
+///     adversarial write burst), the next window starts from
+///     now. Without this, a sustained sub-debounce write
+///     cadence would spam a dialog per event once the ceiling
+///     first tripped, because `first_set` would stay stuck at
+///     the anchor from many seconds ago.
+fn start_fresh_debounce(
+    map: &mut std::collections::HashMap<PathBuf, DebounceEntry>,
+    path: PathBuf,
+    now: std::time::Instant,
+) {
+    map.insert(
+        path,
+        DebounceEntry {
+            first_set: now,
+            deadline: now + FILE_CHANGE_DEBOUNCE,
+        },
+    );
+}
+
+/// Extend the sliding `deadline` on an existing debounce entry
+/// without touching `first_set`. Used by `drain`'s SUPPRESS
+/// branch — a suppressed event resets the sliding clock so the
+/// tail of a slow burst stays suppressed, but preserves the
+/// MAX-window anchor so an adversarial cadence still surfaces
+/// a dialog after `FILE_CHANGE_DEBOUNCE_MAX`. No-op if the
+/// path has no existing entry (which shouldn't normally happen
+/// on the suppress branch, but is defensively safe if it does).
+fn extend_debounce_deadline(
+    map: &mut std::collections::HashMap<PathBuf, DebounceEntry>,
+    path: &Path,
+    now: std::time::Instant,
+) {
+    if let Some(entry) = map.get_mut(path) {
+        entry.deadline = now + FILE_CHANGE_DEBOUNCE;
+    }
+}
+
 impl Shell {
     /// Create a `Shell` and wire up the cross-thread plumbing.
     ///
@@ -1259,6 +1415,7 @@ impl Shell {
             #[cfg(target_os = "windows")]
             pending_fif_launch: None,
             deferred_dialogs: Vec::new(),
+            file_change_debounce: std::collections::HashMap::new(),
             styles: load_styles(),
             udl_registry,
         })
@@ -2104,6 +2261,16 @@ impl Shell {
                 if let Err(e) = self.file_watcher.watch(&new_path) {
                     tracing::warn!(error = %e, path = ?new_path, "failed to watch new path after Save As");
                 }
+                // Debounce fence — same rationale as
+                // save_current_to_disk. The atomic-rename event
+                // burst from THIS Save As write must not
+                // surface as an immediate "reload from disk?"
+                // prompt for the file we just created.
+                start_fresh_debounce(
+                    &mut self.file_change_debounce,
+                    new_path.clone(),
+                    std::time::Instant::now(),
+                );
                 // Notification push first, then dirty-glyph clear —
                 // see save_current_to_disk for the ordering rationale.
                 #[cfg(target_os = "windows")]
@@ -2185,6 +2352,18 @@ impl Shell {
             .map_err(|e| ShellError::Io(e.to_string()))?;
         tmp.persist(path)
             .map_err(|e| ShellError::Io(e.error.to_string()))?;
+        // Debounce fence — see save_current_to_disk. If `path`
+        // happens to be a file we already have open in another
+        // tab (NPPM_SAVEFILEAS can point anywhere), the atomic
+        // rename above would surface as a "reload from disk?"
+        // prompt on that other tab. Registering the fence for
+        // any path is cheap and harmless when the path isn't
+        // watched.
+        start_fresh_debounce(
+            &mut self.file_change_debounce,
+            path.to_path_buf(),
+            std::time::Instant::now(),
+        );
         Ok(())
     }
 
@@ -2372,8 +2551,59 @@ impl Shell {
         // for the filesystem-verification wrapper.
         let events: Vec<FileChange> =
             std::iter::from_fn(|| self.change_rx.try_recv().ok()).collect();
+        let now = std::time::Instant::now();
+        // Opportunistic prune: sweep entries whose deadline is
+        // in the past, but only when the map has grown past the
+        // soft cap. Keeps the amortised cost near zero for the
+        // steady-state case (few paths, all live) while
+        // bounding the worst case for a session that touched a
+        // lot of distinct paths via `save_active_as_copy` /
+        // `NPPM_SAVEFILEAS`.
+        if self.file_change_debounce.len() > FILE_CHANGE_DEBOUNCE_PRUNE_THRESHOLD {
+            self.file_change_debounce
+                .retain(|_, entry| now < entry.deadline);
+        }
         for change in coalesce_file_changes(events) {
             let effective = classify_change_by_existence(change, Path::try_exists);
+            let path_ref: &Path = match &effective {
+                FileChange::Modified(p) | FileChange::Removed(p) => p,
+            };
+            // Debounce: suppress the dialog if this path's
+            // deadline hasn't elapsed. Two suppression sources
+            // land here (see `file_change_debounce` field doc):
+            // own-save echoes and cross-drain duplicates of one
+            // external save. Every event that hits this path —
+            // whether suppressed or surfaced — extends the
+            // deadline. Extending on suppress too matters
+            // because atomic-rename event bursts on a slow
+            // filesystem (antivirus scanning the temp file, a
+            // laggy network drive, ...) can span longer than
+            // the initial `FILE_CHANGE_DEBOUNCE` window; without
+            // this extension, the tail of such a burst would
+            // leak a spurious dialog past the original
+            // deadline. Any single new event resets the clock.
+            let debounced = is_path_debounced(&self.file_change_debounce, path_ref, now);
+            if debounced {
+                // Suppress branch: extend the sliding deadline
+                // so the tail of a slow burst stays quiet, but
+                // do NOT re-anchor `first_set` — the MAX-window
+                // ceiling must still fire on an adversarial
+                // cadence.
+                extend_debounce_deadline(&mut self.file_change_debounce, path_ref, now);
+                tracing::debug!(
+                    path = ?path_ref,
+                    "file-watcher: event suppressed by debounce"
+                );
+                continue;
+            }
+            // Surface branch: start a fresh window (re-anchor
+            // both `first_set` and `deadline`). Covers both the
+            // "first ever event" case and the "MAX ceiling just
+            // tripped after a suppress spree" case — either
+            // way, from here we owe the user 1s of quiet before
+            // a follow-up dialog, and MAX-window from now
+            // before we can force one past the sliding gate.
+            start_fresh_debounce(&mut self.file_change_debounce, path_ref.to_path_buf(), now);
             self.apply_file_change(effective, &mut pending);
         }
         // Stage FIF events for the UI to consume after the borrow
@@ -2810,6 +3040,25 @@ impl Shell {
                 tracing::warn!(error = %e, path = ?path, "failed to re-watch after save");
             }
         }
+        // Register a debounce fence covering the atomic-rename
+        // event burst that just fired (or is about to — the events
+        // arrive on a background thread and are typically observed
+        // shortly after `tempfile::persist` returns). Without this,
+        // Windows' `ReadDirectoryChangesW`-based notify backend
+        // delivers our own save's Modify/Rename events past the
+        // `unwatch`/`rewatch` gate above (which only refilters,
+        // doesn't pause the underlying directory watch), and the
+        // next `drain` surfaces a spurious "reload from disk?"
+        // prompt for the exact file we just wrote. See
+        // `file_change_debounce` field doc for the full contract.
+        // Registered even on `write_result.is_err()` because a
+        // failed save still generated a tempfile create+delete
+        // burst that would surface as ambiguous events.
+        start_fresh_debounce(
+            &mut self.file_change_debounce,
+            path.clone(),
+            std::time::Instant::now(),
+        );
         write_result?;
 
         // Use the byte count of what we just encoded — re-reading from
@@ -9205,6 +9454,154 @@ mod tests {
         // for an unmatched path.
         let out = coalesce_file_changes(Vec::<FileChange>::new());
         assert!(out.is_empty());
+    }
+
+    fn mk_debounce(first_set: std::time::Instant, deadline: std::time::Instant) -> DebounceEntry {
+        DebounceEntry {
+            first_set,
+            deadline,
+        }
+    }
+
+    #[test]
+    fn debounced_path_returns_true_before_deadline() {
+        // Own-save fence + cross-drain dupe suppression share
+        // this predicate; a path with a future deadline (and
+        // recent first_set) must be reported as debounced.
+        use std::time::{Duration, Instant};
+        let mut map = std::collections::HashMap::new();
+        let path = PathBuf::from("/tmp/quiet.txt");
+        let now = Instant::now();
+        map.insert(
+            path.clone(),
+            mk_debounce(now, now + Duration::from_millis(500)),
+        );
+        assert!(is_path_debounced(&map, &path, now));
+    }
+
+    #[test]
+    fn debounced_path_returns_false_after_deadline() {
+        // Sliding `deadline` elapsed → predicate must return
+        // false so a fresh external modification surfaces the
+        // dialog again. Guards against a "debounce forever"
+        // bug for the normal case (single burst, quiet after).
+        use std::time::{Duration, Instant};
+        let mut map = std::collections::HashMap::new();
+        let path = PathBuf::from("/tmp/thawed.txt");
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(10))
+            .expect("Instant::now() - 10s is representable on any realistic clock");
+        map.insert(path.clone(), mk_debounce(past, past));
+        assert!(!is_path_debounced(&map, &path, Instant::now()));
+    }
+
+    #[test]
+    fn debounced_path_returns_false_when_max_window_elapsed_even_if_deadline_future() {
+        // The critical adversary-defence case: a runaway or
+        // malicious writer touches the file at sub-debounce
+        // cadence, keeping `deadline` perpetually in the
+        // future. The MAX-window ceiling from `first_set` must
+        // fire to surface the dialog after
+        // FILE_CHANGE_DEBOUNCE_MAX regardless — otherwise the
+        // "reload from disk?" tamper-detection signal would be
+        // suppressed forever under adversary-controlled write
+        // cadence. Reviewer flagged this on the first pass.
+        use std::time::Instant;
+        let mut map = std::collections::HashMap::new();
+        let path = PathBuf::from("/tmp/adversarial.txt");
+        let long_ago = Instant::now()
+            .checked_sub(FILE_CHANGE_DEBOUNCE_MAX + std::time::Duration::from_secs(1))
+            .expect("clock supports subtracting the max window plus one second");
+        let far_future = Instant::now() + std::time::Duration::from_mins(1);
+        // first_set is BEFORE the MAX window ago; deadline is
+        // in the far future. The MAX-window ceiling must win.
+        map.insert(path.clone(), mk_debounce(long_ago, far_future));
+        assert!(
+            !is_path_debounced(&map, &path, Instant::now()),
+            "MAX-window ceiling must override an artificially-extended sliding deadline"
+        );
+    }
+
+    #[test]
+    fn debounced_path_returns_false_for_unknown_path() {
+        // A path never touched by save/drain has no entry, so
+        // the very first event for it surfaces the dialog.
+        let map = std::collections::HashMap::new();
+        assert!(!is_path_debounced(
+            &map,
+            Path::new("/tmp/first-event.txt"),
+            std::time::Instant::now()
+        ));
+    }
+
+    #[test]
+    fn debounced_path_isolates_paths() {
+        // Debouncing path A must not suppress events for path B.
+        // Regression pin for a naive `contains_key(&any)` shape.
+        use std::time::{Duration, Instant};
+        let mut map = std::collections::HashMap::new();
+        let a = PathBuf::from("/tmp/A.txt");
+        let b = PathBuf::from("/tmp/B.txt");
+        let now = Instant::now();
+        map.insert(
+            a.clone(),
+            mk_debounce(now, now + Duration::from_millis(500)),
+        );
+        assert!(is_path_debounced(&map, &a, now));
+        assert!(!is_path_debounced(&map, &b, now));
+    }
+
+    #[test]
+    fn extend_deadline_preserves_first_set() {
+        // The sliding-window extension must NOT reset
+        // `first_set` — otherwise the MAX-window ceiling gets
+        // pushed forward indefinitely and an adversarial write
+        // cadence would suppress the dialog forever. This is
+        // the invariant behind `is_path_debounced`'s
+        // MAX-window ceiling check being useful.
+        use std::time::{Duration, Instant};
+        let mut map = std::collections::HashMap::new();
+        let path = PathBuf::from("/tmp/keep-anchor.txt");
+        let t0 = Instant::now();
+        start_fresh_debounce(&mut map, path.clone(), t0);
+        let anchored_first_set = map.get(&path).unwrap().first_set;
+        // Extend later — deadline slides forward, first_set
+        // stays anchored.
+        let t1 = t0 + Duration::from_millis(400);
+        extend_debounce_deadline(&mut map, &path, t1);
+        let entry = map.get(&path).unwrap();
+        assert_eq!(
+            entry.first_set, anchored_first_set,
+            "first_set must not be moved forward by extend_debounce_deadline"
+        );
+        assert_eq!(
+            entry.deadline,
+            t1 + FILE_CHANGE_DEBOUNCE,
+            "deadline must slide forward with each extend"
+        );
+    }
+
+    #[test]
+    fn start_fresh_debounce_reanchors_first_set() {
+        // After the MAX ceiling trips and drain surfaces the
+        // dialog, `start_fresh_debounce` re-anchors `first_set`
+        // to now so a NEW window begins. Without this, a
+        // sustained adversarial write cadence would surface a
+        // dialog on every subsequent event (spam) instead of
+        // once per MAX window (the intended UX).
+        use std::time::{Duration, Instant};
+        let mut map = std::collections::HashMap::new();
+        let path = PathBuf::from("/tmp/reanchor.txt");
+        let t0 = Instant::now();
+        start_fresh_debounce(&mut map, path.clone(), t0);
+        let t1 = t0 + Duration::from_secs(5);
+        start_fresh_debounce(&mut map, path.clone(), t1);
+        let entry = map.get(&path).unwrap();
+        assert_eq!(
+            entry.first_set, t1,
+            "start_fresh_debounce must re-anchor first_set on every call"
+        );
+        assert_eq!(entry.deadline, t1 + FILE_CHANGE_DEBOUNCE);
     }
 
     #[test]
