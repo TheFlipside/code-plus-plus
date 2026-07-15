@@ -9332,7 +9332,6 @@ mod tests {
         // treat the buffer as unsaved. Without this, closing the
         // tab silently discards the last copy of the text.
         let mut shell = shell_with_synthetic_tabs(3, Some(0));
-        let _ = shell.take_notifications();
         // Sanity: freshly-loaded tabs start clean.
         assert!(
             !shell.tabs[1].dirty,
@@ -9356,7 +9355,6 @@ mod tests {
         // longer matches any tab) must not accidentally flip any
         // sibling tab's dirty flag.
         let mut shell = shell_with_synthetic_tabs(3, Some(0));
-        let _ = shell.take_notifications();
         let mut pending = Vec::new();
         shell.apply_file_change(
             FileChange::Removed(PathBuf::from("/tmp/nowhere.txt")),
