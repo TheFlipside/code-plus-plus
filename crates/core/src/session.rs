@@ -219,6 +219,28 @@ pub struct WorkspaceSession {
     pub width: Option<i32>,
 }
 
+/// Persisted right-side "Document Map" panel state. `None` on a
+/// session written before the feature shipped or by a build that
+/// drops it — cold-start restore treats that as "no map panel this
+/// session." Structurally symmetric with [`WorkspaceSession`]'s
+/// visible / width fields; a `root`-equivalent field is deliberately
+/// absent because the docmap always mirrors the active buffer rather
+/// than binding to a caller-supplied resource.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocMapSession {
+    /// True iff the map panel was visible when the session was
+    /// saved. Cold-start restore only pops the panel open when
+    /// this is true — a user who closed the panel expects it to
+    /// stay closed next launch.
+    #[serde(rename = "@visible", default, skip_serializing_if = "is_false")]
+    pub visible: bool,
+    /// Panel width in pixels when the session was saved. `None`
+    /// means "use the built-in default" — same fallback shape as
+    /// [`WorkspaceSession::width`] and [`WindowGeometry::width`].
+    #[serde(rename = "@width", skip_serializing_if = "Option::is_none", default)]
+    pub width: Option<i32>,
+}
+
 /// Persisted global (view-level) editor toggles. Room to grow —
 /// every one of these fields corresponds to a Scintilla view-style
 /// property (`viewIndentationGuides`, `wrap`, `viewWhitespace`,
@@ -293,6 +315,12 @@ pub struct Session {
     /// panel this session."
     #[serde(rename = "workspace", skip_serializing_if = "Option::is_none", default)]
     pub workspace: Option<WorkspaceSession>,
+    /// Persisted right-side Document Map panel state. Same
+    /// discipline as `workspace`: `None` deserialises as "no map
+    /// panel this session" so pre-feature session.xml files
+    /// round-trip cleanly.
+    #[serde(rename = "docmap", skip_serializing_if = "Option::is_none", default)]
+    pub docmap: Option<DocMapSession>,
     /// Persisted global editor view toggles (indent guide, and
     /// future siblings). Round-trips as a `<view/>` element via
     /// [`ViewSettings`]; absence deserialises to the all-off
@@ -465,6 +493,7 @@ mod tests {
             active: Some(1),
             window: None,
             workspace: None,
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![
                 Tab {
@@ -503,6 +532,7 @@ mod tests {
             active: Some(0),
             window: None,
             workspace: None,
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: Some(PathBuf::from("legacy.txt")),
@@ -531,6 +561,7 @@ mod tests {
             active: Some(0),
             window: None,
             workspace: None,
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: None,
@@ -560,6 +591,7 @@ mod tests {
             active: Some(1),
             window: None,
             workspace: None,
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![
                 Tab {
@@ -614,6 +646,7 @@ mod tests {
             active: Some(0),
             window: None,
             workspace: None,
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: None,
@@ -645,6 +678,7 @@ mod tests {
             active: Some(0),
             window: None,
             workspace: None,
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: Some(PathBuf::from("notes.txt")),
@@ -678,6 +712,7 @@ mod tests {
             active: Some(0),
             window: None,
             workspace: None,
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: Some(PathBuf::from("pinned.txt")),
@@ -708,6 +743,7 @@ mod tests {
             active: Some(0),
             window: None,
             workspace: None,
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: Some(PathBuf::from("plain.txt")),
@@ -793,6 +829,7 @@ mod tests {
                 maximized: false,
             }),
             workspace: None,
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -812,6 +849,7 @@ mod tests {
                 maximized: true,
             }),
             workspace: None,
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -848,6 +886,7 @@ mod tests {
             active: None,
             window: None,
             workspace: None,
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -872,6 +911,7 @@ mod tests {
                 visible: true,
                 width: Some(280),
             }),
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -903,6 +943,7 @@ mod tests {
                 visible: false,
                 width: None,
             }),
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -931,6 +972,7 @@ mod tests {
                 visible: false,
                 width: None,
             }),
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -971,6 +1013,7 @@ mod tests {
             active: None,
             window: None,
             workspace: None,
+            docmap: None,
             view: ViewSettings::default(),
             tabs: vec![],
         };
@@ -1109,6 +1152,78 @@ mod tests {
         );
         let loaded = Session::load_from_xml(&path).unwrap();
         assert_eq!(loaded.view, ViewSettings::default());
+    }
+
+    /// Round-trip a session with a populated `DocMapSession` —
+    /// visible + width preserved end-to-end.
+    #[test]
+    fn round_trip_docmap_session() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            docmap: Some(DocMapSession {
+                visible: true,
+                width: Some(220),
+            }),
+            ..Session::default()
+        };
+        session.save_to_xml(&path).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(session, loaded);
+        let dm = loaded.docmap.expect("docmap should round-trip");
+        assert!(dm.visible);
+        assert_eq!(dm.width, Some(220));
+    }
+
+    /// `visible=false` on `DocMapSession` must elide from the wire
+    /// (same convention every other bool-default field on `Session`
+    /// observes). Reload still recovers it as `false`.
+    #[test]
+    fn docmap_visible_false_is_elided() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            docmap: Some(DocMapSession {
+                visible: false,
+                width: Some(180),
+            }),
+            ..Session::default()
+        };
+        session.save_to_xml(&path).unwrap();
+        let xml = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !xml.contains("visible"),
+            "docmap visible=false must be elided; got:\n{xml}"
+        );
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert!(!loaded.docmap.unwrap().visible);
+    }
+
+    /// A session with no docmap (`None` field) must elide the
+    /// `<docmap>` element entirely — same discipline as `<window>`
+    /// and `<workspace>`.
+    #[test]
+    fn empty_docmap_not_serialized() {
+        let (_dir, path) = temp_session_path();
+        let session = Session::default();
+        session.save_to_xml(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("docmap"),
+            "<docmap> element should be elided when None: {text}"
+        );
+    }
+
+    /// A session.xml written before the `<docmap>` feature shipped
+    /// must still parse. Cold-start restore treats a `None` docmap
+    /// as "no map panel this session" — no runtime error.
+    #[test]
+    fn pre_docmap_session_xml_loads_with_none_docmap() {
+        let (_dir, path) = temp_session_path();
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
+        std::fs::write(&path, xml).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(loaded.docmap, None);
+        assert_eq!(loaded.tabs.len(), 1);
     }
 
     /// A session.xml written before the `<view>` feature shipped

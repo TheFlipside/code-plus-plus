@@ -3473,6 +3473,12 @@ impl Shell {
         // fresh `Session::new()` and only carries over fields
         // it explicitly copies.
         session.workspace.clone_from(&self.session.workspace);
+        // Same discipline for the right-side Document Map panel
+        // state (visible + width). Kept in sync by
+        // `set_docmap_session` from the UI's autosave / shutdown
+        // path; snapshot here so the fresh session carries it
+        // forward.
+        session.docmap = self.session.docmap;
         // Same discipline for view-level toggles (indent guide,
         // future siblings). Kept in sync by `set_view_settings`
         // whenever the user flips a toggle; snapshot here so the
@@ -4146,6 +4152,25 @@ impl Shell {
         workspace: Option<codepp_core::session::WorkspaceSession>,
     ) {
         self.session.workspace = workspace;
+    }
+
+    /// Persisted right-side Document Map panel state read from
+    /// session.xml, or `None` if the session predates the feature
+    /// (no `<docmap>` element) or the panel was never opened. The
+    /// UI reads this after `load_session_paths` and — if `visible`
+    /// is set — pops the panel open at the stored `width` during
+    /// cold-start restore.
+    #[must_use]
+    pub fn saved_docmap_session(&self) -> Option<codepp_core::session::DocMapSession> {
+        self.session.docmap
+    }
+
+    /// Update the cached Document Map panel state from the UI.
+    /// Called from the periodic autosave and shutdown paths so
+    /// the next launch cold-starts into the same panel state.
+    /// Symmetric with [`Self::set_workspace_session`].
+    pub fn set_docmap_session(&mut self, docmap: Option<codepp_core::session::DocMapSession>) {
+        self.session.docmap = docmap;
     }
 
     /// Persisted global editor-view toggles read from session.xml
@@ -5752,6 +5777,7 @@ fn write_session_files(path: &Path, files: &[PathBuf]) -> bool {
         active: None,
         window: None,
         workspace: None,
+        docmap: None,
         view: codepp_core::session::ViewSettings::default(),
         tabs: files
             .iter()
@@ -8228,6 +8254,7 @@ mod tests {
             active: Some(1),
             window: None,
             workspace: None,
+            docmap: None,
             view: codepp_core::session::ViewSettings::default(),
             tabs: vec![
                 CoreTab {
@@ -9243,6 +9270,7 @@ mod tests {
             active: Some(2), // "b" — a pinned tab
             window: None,
             workspace: None,
+            docmap: None,
             view: codepp_core::session::ViewSettings::default(),
             tabs: vec![
                 mk("a", false),
@@ -9292,6 +9320,7 @@ mod tests {
             active: Some(1),
             window: None,
             workspace: None,
+            docmap: None,
             view: codepp_core::session::ViewSettings::default(),
             tabs: vec![
                 CoreTab {

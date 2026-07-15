@@ -902,10 +902,14 @@ pub unsafe fn set_button_checked(toolbar: HWND, cmd_id: u16, checked: bool) {
 /// - Show Indent Guide: `TBSTATE_CHECKED` from
 ///   `SCI_GETINDENTATIONGUIDES != SC_IV_NONE`.
 ///
-/// The four "panel visibility" toggles (Document Map / List,
-/// Function List, Folder as Workspace) are toggle-style buttons but
-/// stay un-checked — their underlying features aren't implemented
-/// yet, so there's nothing to query.
+/// The three still-stub "panel visibility" toggles (Doc List,
+/// Function List, Folder as Workspace) stay un-checked here —
+/// their underlying features aren't fully wired to `refresh_state`
+/// yet. Document Map has its own bit (`state.docmap_visible` in
+/// `ui_win32`) that isn't a Scintilla-derived state, so its
+/// button-check is pushed explicitly by `show_docmap_panel` /
+/// `hide_docmap_panel` rather than being re-derived here on every
+/// `SCN_UPDATEUI`.
 ///
 /// # Safety
 ///
