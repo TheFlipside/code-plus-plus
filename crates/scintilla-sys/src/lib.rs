@@ -255,9 +255,8 @@ pub const SCI_SETVSCROLLBAR: u32 = 2280;
 // -----------------------------------------------------------------
 // Indicators. Scintilla supports 32 independent indicator styles per
 // document — the Document Map's viewport highlight uses one of them
-// (`INDIC_STRAIGHTBOX` at slot [`DOCMAP_VIEWPORT_INDICATOR`]) to
-// paint the orange rectangle over the range visible in the main
-// editor.
+// (`INDIC_FULLBOX` at slot [`DOCMAP_VIEWPORT_INDICATOR`]) to paint
+// the orange rectangle over the range visible in the main editor.
 //
 // Indicator numbers 0-7 are reserved by Scintilla and Lexilla for
 // built-in features (searchresult, diagnostic markers, container-
@@ -267,7 +266,8 @@ pub const SCI_SETVSCROLLBAR: u32 = 2280;
 
 /// `SCI_INDICSETSTYLE(indicator, style)` — set the visual style of
 /// an indicator. The style codes are the `INDIC_*` constants;
-/// currently only [`INDIC_STRAIGHTBOX`] is exported here.
+/// [`INDIC_STRAIGHTBOX`], [`INDIC_FULLBOX`], and [`INDIC_HIDDEN`]
+/// are exported here.
 pub const SCI_INDICSETSTYLE: u32 = 2080;
 /// `SCI_INDICSETFORE(indicator, colour)` — set the foreground
 /// colour of an indicator. `colour` is a Scintilla `sptr_t`
@@ -276,8 +276,10 @@ pub const SCI_INDICSETSTYLE: u32 = 2080;
 pub const SCI_INDICSETFORE: u32 = 2082;
 /// `SCI_INDICSETUNDER(indicator, under)` — non-zero draws the
 /// indicator UNDER the text (so text stays legible on top of a
-/// filled box). Zero paints on top, which for `INDIC_STRAIGHTBOX`
-/// would obscure the miniature text under the highlight rectangle.
+/// filled box). Zero paints on top; for the filled-box styles
+/// (`INDIC_STRAIGHTBOX` / `INDIC_FULLBOX` / `INDIC_ROUNDBOX`)
+/// that means the fill alpha-blends against the text glyphs,
+/// tinting them toward the fill colour.
 pub const SCI_INDICSETUNDER: u32 = 2510;
 /// `SCI_INDICSETALPHA(indicator, alpha)` — 0..=255 alpha of the
 /// fill for filled-box indicators (`INDIC_ROUNDBOX`,
@@ -307,10 +309,26 @@ pub const SCI_INDICATORFILLRANGE: u32 = 2504;
 pub const SCI_INDICATORCLEARRANGE: u32 = 2505;
 
 /// `INDIC_STRAIGHTBOX = 8` — filled rectangle with a solid
-/// outline. The Document Map's viewport highlight uses this style
-/// so the "you are here" region reads as a coloured band across
-/// every line of the currently-visible main-editor range.
+/// outline. Verified against `vendor/scintilla/src/Indicator.cxx`
+/// and `EditView.cxx`: the box's horizontal extent is derived
+/// from the range's actual glyph x-positions (via
+/// `ll->XInLine`), so a range that ends mid-line paints only up
+/// to where the text ends; blank lines inside the range paint
+/// no fill at all. Stacked lines carry a 1-px vertical seam
+/// between them because `Indicator.cxx` applies `rcBox.top +=
+/// 1` for this style.
 pub const INDIC_STRAIGHTBOX: usize = 8;
+/// `INDIC_FULLBOX = 16` — same glyph-derived horizontal-extent
+/// model as [`INDIC_STRAIGHTBOX`] (both use `XInLine`, so blank
+/// lines still don't paint and end-of-text still marks the
+/// right edge). The only difference is the 1-px vertical
+/// `rcBox.top += 1` inset is dropped, so consecutive filled
+/// lines stack without a horizontal seam between them — reads
+/// as one continuous vertical band across a multi-line range.
+/// That's the property the Document Map's viewport highlight
+/// wants (Notepad++'s map paints the "you are here" region as
+/// a single band, not a stack of 1-line-tall rectangles).
+pub const INDIC_FULLBOX: usize = 16;
 /// `INDIC_HIDDEN = 5` — indicator is not painted at all. The
 /// Document Map assigns this style to slot
 /// [`INDIC_STRAIGHTBOX`]'s number on the **main** editor so the

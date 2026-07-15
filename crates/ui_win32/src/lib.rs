@@ -164,10 +164,10 @@ use codepp_plugin_host::{
     PLUGIN_CMD_ID_BASE, RUNCOMMAND_RANGE, RUNCOMMAND_USER,
 };
 use codepp_scintilla_sys::{
-    ScintillaDirectFunction, Scintilla_RegisterClasses, CARETSTYLE_INVISIBLE, INDIC_HIDDEN,
-    INDIC_STRAIGHTBOX, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE,
-    SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING,
-    SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
+    ScintillaDirectFunction, Scintilla_RegisterClasses, CARETSTYLE_INVISIBLE, INDIC_FULLBOX,
+    INDIC_HIDDEN, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER,
+    SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL,
+    SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
     SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND,
     SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER, SCE_ASM_OPERATOR,
     SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_ASN1_ATTRIBUTE,
@@ -2165,6 +2165,20 @@ impl UiPlatform for Win32Ui {
         // Incremental edits still go through the cheaper
         // `populate_visible_line_numbers` path on `SCN_MODIFIED`.
         populate_all_line_numbers(&self.editor);
+        // Refresh the Document Map's viewport highlight so it
+        // covers the newly-loaded content. `Win32Ui::activate_tab`
+        // ran BEFORE this call — at that point the doc was empty
+        // (Scintilla's built-in single-line placeholder) so
+        // `update_docmap_viewport_indicator`'s empty-buffer guard
+        // returned without painting. Now that `SCI_SETTEXT` has
+        // populated real content, re-fire the update so the
+        // highlight paints from the first `WM_PAINT` — without
+        // this the map stays visibly empty until the user's
+        // first scroll gesture triggers an `SCN_UPDATEUI` with
+        // `SC_UPDATE_V_SCROLL`.
+        unsafe {
+            update_docmap_viewport_indicator(self.editor, self.docmap_editor);
+        }
     }
 
     fn get_buffer_text(&mut self) -> String {
@@ -25196,24 +25210,38 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // scroll / tab-switch / resize just calls
         // `update_docmap_viewport_indicator` which re-fills the
         // range on this same indicator slot (see
-        // [`DOCMAP_VIEWPORT_INDICATOR`]). `INDIC_STRAIGHTBOX` gives
-        // us a filled rectangle with a solid outline —
-        // translucent fill (alpha 80) so the miniature text stays
-        // legible under the highlight, solid outline (alpha 255)
-        // so the region reads as a definite band. `UNDER=1`
-        // paints the indicator BEHIND the text glyphs on the
-        // same rationale.
+        // [`DOCMAP_VIEWPORT_INDICATOR`]).
+        //
+        // `INDIC_FULLBOX` stacks consecutive filled lines without
+        // the 1-px vertical seam `INDIC_STRAIGHTBOX` leaves
+        // between them, so a multi-line viewport range reads as
+        // one continuous vertical band across the map — matches
+        // Notepad++'s "you are here" look. (Both styles derive
+        // horizontal extent from the range's glyph positions;
+        // neither extends to full panel width, and a blank line
+        // inside the range still paints no fill on either
+        // style. See [`INDIC_FULLBOX`]'s doc comment.)
+        //
+        // Fill alpha 30/255 (~12% opacity) keeps the highlight a
+        // subtle tint over the miniature text rather than a
+        // dominant colour cast. Outline alpha 255 (solid) makes
+        // the rectangle's edges read as a definite frame — the
+        // frame is the primary "you are here" cue; the fill just
+        // adds a soft background wash. `UNDER=1` paints the box
+        // behind the text glyphs so text stays its own colour
+        // (black on white) rather than being alpha-blended
+        // toward orange.
         docmap_editor.send(
             SCI_INDICSETSTYLE,
             DOCMAP_VIEWPORT_INDICATOR,
-            INDIC_STRAIGHTBOX as isize,
+            INDIC_FULLBOX as isize,
         );
         docmap_editor.send(
             SCI_INDICSETFORE,
             DOCMAP_VIEWPORT_INDICATOR,
             DOCMAP_VIEWPORT_COLOR as isize,
         );
-        docmap_editor.send(SCI_INDICSETALPHA, DOCMAP_VIEWPORT_INDICATOR, 80);
+        docmap_editor.send(SCI_INDICSETALPHA, DOCMAP_VIEWPORT_INDICATOR, 30);
         docmap_editor.send(SCI_INDICSETOUTLINEALPHA, DOCMAP_VIEWPORT_INDICATOR, 255);
         docmap_editor.send(SCI_INDICSETUNDER, DOCMAP_VIEWPORT_INDICATOR, 1);
         // Subclass the map's Scintilla so mouse events reach us
@@ -25407,7 +25435,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // the two views' visual treatments cleanly: shared
         // range, view-specific rendering. Only style is set
         // here (view-level, one-time); the map view configures
-        // the visible `INDIC_STRAIGHTBOX` on its own side.
+        // the visible `INDIC_FULLBOX` on its own side.
         editor.send(
             SCI_INDICSETSTYLE,
             DOCMAP_VIEWPORT_INDICATOR,
