@@ -13427,12 +13427,23 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
     // (the borrow can't outlive the modal — the Win32 message
     // pump re-enters our wnd_proc, which would alias-UB the
     // `WindowState`), then act on the user's choice.
+    //
+    // `dirty` OR's the live `SCI_GETMODIFY` bit against the cached
+    // `Tab.dirty` from Shell. The two agree for the active tab in
+    // normal operation (kept in sync by SCN_SAVEPOINT* notifications),
+    // but diverge in the "file removed externally, tab still open"
+    // case: Shell flips `Tab.dirty = true` in `apply_file_change`
+    // whether the underlying Scintilla doc has been touched or not,
+    // so the close-prompt gate here still fires and closing the
+    // tab doesn't silently discard the only surviving copy of the
+    // buffer text.
     let prelude = if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
         state.shell.active().map(|tab| {
             let name = tab_display_name(tab);
             let has_path = tab.path.is_some();
             let has_pending_load = tab.pending_load.is_some();
-            let dirty = state.editor.send(SCI_GETMODIFY, 0, 0) != 0;
+            let cached_dirty = tab.dirty;
+            let dirty = state.editor.send(SCI_GETMODIFY, 0, 0) != 0 || cached_dirty;
             let length = state.editor.send(SCI_GETLENGTH, 0, 0);
             (name, has_path, has_pending_load, dirty, length)
         })
@@ -30991,6 +31002,17 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 if let Some(state) = state_from_hwnd(hwnd) {
                     sync_tab_strip(state);
                     update_window_title(hwnd, &state.shell);
+                    // Repaint every cell so any `Tab.dirty` flips
+                    // that happened during drain (e.g. Shell
+                    // marking a tab dirty from `FileChange::Removed`)
+                    // recolour the save icon on the visible strip.
+                    // `sync_tab_strip` only triggers cell paints via
+                    // `TCM_INSERTITEMW` / `TCM_SETITEMW` when the
+                    // label changes; a dirty-only change touches no
+                    // label and would otherwise stay hidden until an
+                    // unrelated repaint. Whole-strip invalidation is
+                    // cheap (~one paint per tab per drain).
+                    let _ = InvalidateRect(Some(state.tab_hwnd), None, false);
                 }
                 // Defense in depth for the "always at least one tab"
                 // invariant: a load failure on a fresh tab removes

@@ -2920,26 +2920,46 @@ impl Shell {
                 // buffer id for the NPPN_FILEDELETED payload. The
                 // tab stays open — the buffer text is still in
                 // memory and the user can save-as to recover the
-                // file. We just queue the notification + the
-                // user-facing dialog; the host does not auto-close.
-                if let Some(tab) = self
+                // file. We queue the notification + the user-facing
+                // dialog, and mark the tab dirty so the tab strip's
+                // save icon flips to red AND the close-tab flow
+                // surfaces the save prompt: closing an open buffer
+                // whose backing file has just vanished would
+                // otherwise discard the only surviving copy. The
+                // underlying Scintilla doc may still report
+                // `SCI_GETMODIFY == 0` (no user edit since the last
+                // save-point), but the paint cache and the close-
+                // prompt gate both consult `Tab.dirty` — flipping
+                // it here is enough to close the data-loss hazard.
+                // Single mut-borrow walk: flip `Tab.dirty` inside
+                // the `find` closure and hand the id back out for
+                // the notification push below. Path uniqueness
+                // across tabs is enforced elsewhere (open-file
+                // dedup activates the existing tab rather than
+                // creating a duplicate), so at most one tab can
+                // match.
+                let matched_id = self
                     .tabs
-                    .iter()
+                    .iter_mut()
                     .find(|t| t.path.as_deref() == Some(path.as_path()))
-                {
+                    .map(|tab| {
+                        tab.dirty = true;
+                        tab.id
+                    });
+                if let Some(id) = matched_id {
                     #[cfg(target_os = "windows")]
                     {
-                        let buffer_id = tab.id as isize;
+                        let buffer_id = id as isize;
                         self.pending_notifications
                             .push(Notification::FileDeleted { buffer_id });
                     }
-                    // Suppress the unused-variable warning on
+                    // Suppress unused-variable warnings on
                     // non-Windows builds. Once the GTK / Cocoa
                     // plugin host bridges land in Phase 5, the
                     // notification push above moves out of the
-                    // cfg gate and `tab` becomes used here too.
+                    // cfg gate and `id` becomes used unconditionally.
                     #[cfg(not(target_os = "windows"))]
-                    let _ = tab;
+                    let _ = id;
                     pending.push(PendingDialog::Error {
                         title: "File removed".to_string(),
                         message: format!(
@@ -9301,6 +9321,50 @@ mod tests {
             ),
             "expected the 'File removed' error dialog in {pending:?}",
         );
+    }
+
+    #[test]
+    fn external_remove_marks_open_tab_dirty() {
+        // Data-loss safeguard: when the backing file is deleted
+        // externally, the tab stays open (the buffer text is the
+        // only surviving copy), and `Tab.dirty` must flip so both
+        // the save-icon paint AND the close-tab save prompt gate
+        // treat the buffer as unsaved. Without this, closing the
+        // tab silently discards the last copy of the text.
+        let mut shell = shell_with_synthetic_tabs(3, Some(0));
+        let _ = shell.take_notifications();
+        // Sanity: freshly-loaded tabs start clean.
+        assert!(
+            !shell.tabs[1].dirty,
+            "tab must start clean before the Removed event"
+        );
+        let path = shell.tabs[1].path.clone().unwrap();
+        let mut pending = Vec::new();
+        shell.apply_file_change(FileChange::Removed(path), &mut pending);
+        assert!(
+            shell.tabs[1].dirty,
+            "tab must be marked dirty after its file was deleted externally"
+        );
+        // Untouched siblings must not spuriously go dirty.
+        assert!(!shell.tabs[0].dirty, "sibling tab 0 must stay clean");
+        assert!(!shell.tabs[2].dirty, "sibling tab 2 must stay clean");
+    }
+
+    #[test]
+    fn external_remove_of_unopened_file_does_not_touch_other_tabs() {
+        // The straggler path (Removed event for a path that no
+        // longer matches any tab) must not accidentally flip any
+        // sibling tab's dirty flag.
+        let mut shell = shell_with_synthetic_tabs(3, Some(0));
+        let _ = shell.take_notifications();
+        let mut pending = Vec::new();
+        shell.apply_file_change(
+            FileChange::Removed(PathBuf::from("/tmp/nowhere.txt")),
+            &mut pending,
+        );
+        for (i, tab) in shell.tabs.iter().enumerate() {
+            assert!(!tab.dirty, "tab {i} must stay clean on a stray Removed");
+        }
     }
 
     #[cfg(target_os = "windows")]
