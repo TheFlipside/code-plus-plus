@@ -18427,6 +18427,73 @@ fn open_explorer_at(hwnd: HWND, folder: &Path) {
     }
 }
 
+/// Open Explorer at `file`'s parent folder with `file` itself
+/// highlighted and scrolled into view. Uses Explorer's
+/// `/select,"<abs path>"` command-line switch — the standard
+/// Windows technique that Notepad++'s and Explorer's own "Show in
+/// Folder" / Shift-right-click "Open file location" use.
+///
+/// **Security.** Unlike [`open_explorer_at`], this variant does
+/// pass the path via `lpParameters` (a command line to
+/// `explorer.exe`) rather than as `lpFile`. That makes argument
+/// splicing a real concern — mitigated here by wrapping the path
+/// in double quotes. Windows filenames are documented as
+/// forbidding the double-quote character (along with `<`, `>`,
+/// `|`, `?`, `*`, `:`, `/`, `\`, and NUL — the path separators
+/// `/` and `\` are consumed by the path-component parser, not
+/// the filename itself), so no user-controlled path can escape
+/// the enclosing quotes to inject extra command tokens. This is
+/// the same envelope Explorer itself operates under when it
+/// synthesises `/select` from its own right-click menus.
+///
+/// **`file` must be a file path, never a folder.** The classic
+/// `CommandLineToArgvW` trailing-backslash-quote hazard (`"foo\"`
+/// parses as an escaped quote, not a terminator) is unreachable
+/// here only because a real file path never ends in `\` — a
+/// trailing separator marks a directory. If this helper is ever
+/// generalised to accept folder paths, the closing quote MUST be
+/// preceded by an explicit trim of any trailing `\` (or by
+/// switching to `SHOpenFolderAndSelectItems`, the COM-based
+/// PIDL-driven "proper" API for this operation). The `File`
+/// kind guard in both call sites (`ID_FILE_OPEN_CONTAINING_EXPLORER`
+/// only fires when `tab.path` is set from a legitimate file open,
+/// `ID_WORKSPACE_CTX_EXPLORER` gates on `WorkspaceCtxKind::File`)
+/// is what enforces the contract in practice.
+///
+/// Failures log at `warn`; there is no user-facing error
+/// dialog — a missing/renamed file is the most common cause and
+/// warrants the same silent-failure treatment as
+/// [`open_path_in_default_viewer`].
+fn open_explorer_selecting(hwnd: HWND, file: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    // Build `/select,"<abs path>"` as a wide-string parameter
+    // buffer. The literal chunks (`/select,"` + the trailing `"`)
+    // are pure ASCII so `encode_utf16` and manual push are
+    // equivalent; using `encode_utf16` keeps the concatenation
+    // uniform. Terminating NUL required by `PCWSTR`.
+    let mut params: Vec<u16> = "/select,\"".encode_utf16().collect();
+    params.extend(file.as_os_str().encode_wide());
+    params.extend("\"".encode_utf16());
+    params.push(0);
+    let ret = unsafe {
+        ShellExecuteW(
+            Some(hwnd),
+            w!("open"),
+            w!("explorer.exe"),
+            PCWSTR(params.as_ptr()),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if (ret.0 as isize) <= 32 {
+        tracing::warn!(
+            file = ?file,
+            code = ret.0 as isize,
+            "ShellExecuteW(open, explorer.exe /select) failed"
+        );
+    }
+}
+
 /// Launch `program` (e.g. `"cmd.exe"` or `"powershell.exe"`) with
 /// `working_dir` as its current directory. Uses
 /// `ShellExecuteW`'s `lpDirectory` parameter — the launched
@@ -30598,8 +30665,29 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // plugin-forged `WM_COMMAND` bypass a silent
                     // no-op rather than a panic.
                     ID_FILE_OPEN_CONTAINING_EXPLORER => {
-                        if let Some(d) = active_parent_dir(hwnd) {
-                            open_explorer_at(hwnd, &d);
+                        // Prefer `/select,` so Explorer highlights
+                        // the active file and scrolls it into view
+                        // rather than just opening at the parent
+                        // folder — matches "Show in Folder" UX
+                        // across the ecosystem (Notepad++, VS
+                        // Code, browsers). Gated on the same
+                        // parent-exists predicate as
+                        // `active_parent_dir` (Explorer's `/select`
+                        // needs a real parent to open at, which
+                        // rules out drive-root paths); we resolve
+                        // the file path itself here rather than
+                        // reusing `active_parent_dir` so `/select`
+                        // has the addressable child to highlight.
+                        let file = state_from_hwnd(hwnd).and_then(|state| {
+                            state
+                                .shell
+                                .active()
+                                .and_then(|t| t.path.as_deref())
+                                .filter(|p| p.parent().is_some())
+                                .map(Path::to_path_buf)
+                        });
+                        if let Some(f) = file {
+                            open_explorer_selecting(hwnd, &f);
                         }
                     }
                     ID_FILE_OPEN_CONTAINING_CMD => {
@@ -30755,17 +30843,22 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         let taken =
                             state_from_hwnd(hwnd).and_then(|s| s.workspace_ctx_target.take());
                         if let Some(target) = taken {
-                            // Folder → open at that folder; file → open
-                            // at parent (Explorer's Shift-right-click
-                            // "Open folder location" pattern).
-                            let target_dir = match target.kind {
+                            // File → open at parent WITH the file
+                            //   highlighted (Explorer's
+                            //   `/select,"..."` — same UX as
+                            //   Windows Explorer's own
+                            //   Shift-right-click → "Open file
+                            //   location", VS Code's "Reveal in
+                            //   File Explorer", etc.).
+                            // Folder / root → open at that folder
+                            //   itself (no file to select).
+                            match target.kind {
                                 WorkspaceCtxKind::File => {
-                                    target.path.parent().map(Path::to_path_buf)
+                                    open_explorer_selecting(hwnd, &target.path);
                                 }
-                                _ => Some(target.path.clone()),
-                            };
-                            if let Some(d) = target_dir {
-                                open_explorer_at(hwnd, &d);
+                                _ => {
+                                    open_explorer_at(hwnd, &target.path);
+                                }
                             }
                         }
                     }
