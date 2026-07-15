@@ -230,6 +230,28 @@ pub const SCI_ZOOMOUT: u32 = 2334;
 pub const SCI_SETZOOM: u32 = 2373;
 pub const SCI_GETZOOM: u32 = 2374;
 
+/// `SCI_SETREADONLY(readOnly)` — set the read-only flag on the
+/// currently-bound Scintilla document. Non-zero blocks all
+/// user-initiated edits (typing, delete, paste); scripted edits
+/// via `SCI_REPLACETARGET` / `SCI_INSERTTEXT` still work. Used by
+/// the Document Map's miniature view — the user browses the map
+/// but can't accidentally edit through it.
+pub const SCI_SETREADONLY: u32 = 2171;
+/// `SCI_SETCARETSTYLE(style)` — style codes are the `CARETSTYLE_*`
+/// constants below. The Document Map view uses `CARETSTYLE_INVISIBLE`
+/// so no blinking caret appears in the read-only overview.
+pub const SCI_SETCARETSTYLE: u32 = 2512;
+/// Hide the caret entirely. Pairs with [`SCI_SETREADONLY`] on
+/// non-editable views like the Document Map.
+pub const CARETSTYLE_INVISIBLE: usize = 0;
+/// `SCI_SETHSCROLLBAR(visible)` — non-zero shows the horizontal
+/// scrollbar. The Document Map view hides it (0) so the miniature
+/// view is chrome-free.
+pub const SCI_SETHSCROLLBAR: u32 = 2130;
+/// `SCI_SETVSCROLLBAR(visible)` — same shape as
+/// [`SCI_SETHSCROLLBAR`] for the vertical scrollbar.
+pub const SCI_SETVSCROLLBAR: u32 = 2280;
+
 // Horizontal-scroll width control. Scintilla defaults `scrollWidth`
 // to 2000 px and never auto-shrinks, which produces the visible
 // "scroll past the end of any line into empty space" behaviour.

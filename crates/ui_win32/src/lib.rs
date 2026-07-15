@@ -164,12 +164,12 @@ use codepp_plugin_host::{
     PLUGIN_CMD_ID_BASE, RUNCOMMAND_RANGE, RUNCOMMAND_USER,
 };
 use codepp_scintilla_sys::{
-    ScintillaDirectFunction, Scintilla_RegisterClasses, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL,
-    SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER,
-    SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT,
-    SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE,
-    SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER,
-    SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
+    ScintillaDirectFunction, Scintilla_RegisterClasses, CARETSTYLE_INVISIBLE, SCE_ADA_CHARACTER,
+    SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL,
+    SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER,
+    SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION,
+    SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION,
+    SCE_ASM_NUMBER, SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
     SCE_ASN1_ATTRIBUTE, SCE_ASN1_COMMENT, SCE_ASN1_DESCRIPTOR, SCE_ASN1_KEYWORD, SCE_ASN1_OID,
     SCE_ASN1_OPERATOR, SCE_ASN1_SCALAR, SCE_ASN1_STRING, SCE_ASN1_TYPE, SCE_AU3_COMMENT,
     SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
@@ -393,23 +393,25 @@ use codepp_scintilla_sys::{
     SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS, SCI_LINEFROMPOSITION, SCI_LINESCROLL,
     SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT, SCI_MARGINTEXTCLEARALL, SCI_PASTE,
     SCI_POSITIONAFTER, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETFONTQUALITY,
-    SCI_SETINDENTATIONGUIDES, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING,
-    SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTARGETEND,
-    SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETWRAPMODE,
-    SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_ZOOMIN,
-    SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED,
-    SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
-    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
-    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_EOL_CR, SC_EOL_CRLF,
-    SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL,
-    SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL,
-    SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
-    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
-    SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
-    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
-    SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT,
-    STYLE_INDENTGUIDE, STYLE_LINENUMBER,
+    SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
+    SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN,
+    SCI_SETREADONLY, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
+    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTARGETEND,
+    SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETVSCROLLBAR,
+    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO,
+    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED,
+    SCN_STYLENEEDED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK,
+    SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8,
+    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
+    SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH,
+    SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
+    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
+    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS,
+    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY,
+    SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION,
+    SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT, STYLE_INDENTGUIDE,
+    STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
@@ -1603,6 +1605,23 @@ struct WindowState {
     /// Header row close-× button. Consumed by the panel's own
     /// `wnd_proc` via [`IDC_DOCMAP_CLOSE`].
     docmap_close_hwnd: HWND,
+    /// Second Scintilla control — the miniature view. Bound to
+    /// the active tab's document via `SCI_SETDOCPOINTER` so it
+    /// mirrors the main editor's text without duplicating any
+    /// bytes; the two views share the same `Document` at
+    /// Scintilla's level. Configured once at creation
+    /// (read-only, invisible caret, no scrollbars, no margins,
+    /// heavy zoom-out) and re-bound on every tab switch. The
+    /// viewport indicator + drag-to-scroll wiring lands in
+    /// later commits of the Document Map feature.
+    docmap_scintilla_hwnd: HWND,
+    /// Direct-call handle for the map's Scintilla control —
+    /// speed-path counterpart to [`Self::editor`] but for the
+    /// miniature view. Even though the map isn't a hot path
+    /// (config-only messages), using an `EditorHandle` matches
+    /// the codebase convention and keeps every `send` call
+    /// shape-identical to the main editor's.
+    docmap_editor: EditorHandle,
     /// Modeless top-level progress window shown while a FIF job
     /// is running. `None` until the user clicks Find All; the
     /// terminal `FifEvent` (Done or Cancelled) destroys it and
@@ -1726,6 +1745,7 @@ impl WindowState {
             dock_dialogs: &raw mut self.dock_dialogs,
             udl_registry: &raw const self.shell.udl_registry,
             editor: self.editor,
+            docmap_editor: self.docmap_editor,
         };
         (&mut self.shell, ui)
     }
@@ -1826,6 +1846,18 @@ struct Win32Ui {
     /// this pointer never observes a `&mut UdlRegistry`.
     udl_registry: *const codepp_udl::UdlRegistry,
     editor: EditorHandle,
+    /// Direct-call handle for the Document Map's miniature
+    /// Scintilla view. Carried alongside [`Self::editor`] so
+    /// every Shell-driven `activate_tab` — File→Open, File→New,
+    /// session restore, plugin `NPPM_SWITCHTOFILE`, and the
+    /// `ensure_one_tab` fallback — can rebind the map view in
+    /// lockstep with the main view. Skipping the map here (the
+    /// Win32-side handlers alone are not enough) leaves the map
+    /// pinned to a stale document that's already been closed or
+    /// bypassed, which is both a UX bug (shows the wrong buffer)
+    /// and a resource leak (the map's implicit ref keeps the
+    /// closed doc resident until the next real tab switch).
+    docmap_editor: EditorHandle,
 }
 
 // -----------------------------------------------------------------
@@ -1999,6 +2031,19 @@ impl UiPlatform for Win32Ui {
         // yet. Cost is bounded by viewport height (~50 lines), not
         // file size — cheap to run unconditionally.
         populate_visible_line_numbers(&self.editor);
+        // Rebind the Document Map's miniature view to the same
+        // document in lockstep with the main view. This is the
+        // shared chokepoint for every Shell-driven activation
+        // (File→Open, File→New, session restore, plugin
+        // `NPPM_SWITCHTOFILE`, `ensure_one_tab`); Win32-side
+        // tab-switch / tab-close paths also call
+        // `sync_docmap_to_active_tab` on top for defence in
+        // depth (redundant same-doc rebinds are Scintilla
+        // no-ops). Without this call the map view stays pinned
+        // to whatever doc it was last bound to, both showing
+        // stale content AND leaking a Scintilla `Document` ref
+        // on any tab the user closed.
+        self.docmap_editor.send(SCI_SETDOCPOINTER, 0, doc);
         doc
     }
 
@@ -13750,6 +13795,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                 dock_dialogs: &raw mut state.dock_dialogs,
                 udl_registry: &raw const state.shell.udl_registry,
                 editor: state.editor,
+                docmap_editor: state.docmap_editor,
             };
             <Win32Ui as UiPlatform>::update_status(
                 &mut win32_ui,
@@ -13834,6 +13880,7 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                     dock_dialogs: &raw mut state.dock_dialogs,
                     udl_registry: &raw const state.shell.udl_registry,
                     editor: state.editor,
+                    docmap_editor: state.docmap_editor,
                 };
                 <Win32Ui as UiPlatform>::apply_lang(&mut win32_ui, lang);
                 <Win32Ui as UiPlatform>::update_status(
@@ -13863,6 +13910,19 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
             update_window_title(hwnd, &state.shell);
         }
         fire_queued_notifications(hwnd);
+    }
+    // Sync the Document Map's miniature view to the surviving
+    // active tab. The "no tabs left" path invokes
+    // `ensure_one_tab`, which calls `shell.new_untitled(&mut ui)`
+    // — that trip through `Win32Ui::activate_tab` handles the
+    // map sync via the primary path. This explicit call covers
+    // the surviving-active-tab close case where the Win32-side
+    // rebind above (`SCI_SETDOCPOINTER` on the main view for the
+    // new active doc) doesn't go through the trait method.
+    // Runs after the notifications block so a re-entrant plugin
+    // can't race the sync.
+    unsafe {
+        sync_docmap_to_active_tab(hwnd);
     }
     CloseOutcome::Closed
 }
@@ -14072,6 +14132,7 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
         dock_dialogs: &raw mut state.dock_dialogs,
         udl_registry: &raw const state.shell.udl_registry,
         editor: state.editor,
+        docmap_editor: state.docmap_editor,
     };
     // Re-apply the new tab's lexer/theme. Each tab carries its own
     // LangType; without this call the previous tab's lexer stays
@@ -14125,6 +14186,17 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
     // SAFETY: caller's UI-thread contract carries.
     unsafe {
         fire_queued_notifications(hwnd);
+    }
+    // Point the Document Map's miniature view at the newly-
+    // active tab's document. Runs regardless of panel
+    // visibility — a tab switch while the panel is hidden still
+    // rebinds so the doc's Scintilla refcount stays coherent
+    // (map view's `SCI_SETDOCPOINTER(new)` releases its
+    // previous binding, letting the old tab's doc drop to
+    // refcount 1 or 0 as appropriate). Also cheap: one
+    // direct-call.
+    unsafe {
+        sync_docmap_to_active_tab(hwnd);
     }
 }
 
@@ -24953,6 +25025,73 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             Some(instance.into()),
             None,
         )?;
+        // Miniature Scintilla view inside the docmap panel body.
+        // Bound to the active tab's document via
+        // `SCI_SETDOCPOINTER` — the two views share the same
+        // `Document`, so text stays in sync without any
+        // duplication. Read-only + no caret + no scrollbars + no
+        // margins + heavy zoom-out give the "aerial view" look
+        // Notepad++'s Document Map ships with.
+        let docmap_scintilla_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            SCINTILLA_CLASS,
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE,
+            0,
+            0,
+            0,
+            0,
+            Some(docmap_hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        )?;
+        // Direct-call pointers for the map view. Same shape as
+        // the main-editor path above — a null return from either
+        // `SCI_GETDIRECTFUNCTION` or `SCI_GETDIRECTPOINTER` is
+        // fatal: the map view can't operate without them and the
+        // codebase's editor abstraction requires the pair.
+        let docmap_direct_fn_lr =
+            SendMessageW(docmap_scintilla_hwnd, SCI_GETDIRECTFUNCTION, None, None);
+        let docmap_direct_ptr_lr =
+            SendMessageW(docmap_scintilla_hwnd, SCI_GETDIRECTPOINTER, None, None);
+        if docmap_direct_fn_lr.0 == 0 || docmap_direct_ptr_lr.0 == 0 {
+            return Err(windows::core::Error::new(
+                E_FAIL,
+                "docmap Scintilla returned null SCI_GETDIRECTFUNCTION/SCI_GETDIRECTPOINTER",
+            ));
+        }
+        let docmap_direct_fn: ScintillaDirectFunction = std::mem::transmute(docmap_direct_fn_lr.0);
+        let docmap_direct_ptr = docmap_direct_ptr_lr.0 as *mut c_void;
+        let docmap_editor =
+            EditorHandle::new(docmap_scintilla_hwnd.0, docmap_direct_fn, docmap_direct_ptr);
+        // One-time map-view configuration. All of these are
+        // Scintilla view-level settings (per-`ViewStyle`) that
+        // survive doc-pointer swaps, so we set them once at
+        // creation and every subsequent `SCI_SETDOCPOINTER`
+        // rebind (see [`sync_docmap_to_active_tab`]) inherits
+        // them unchanged.
+        //
+        // Read-only blocks user-initiated edits through the
+        // shared document — a keystroke while the map has focus
+        // would otherwise mutate the buffer the main editor is
+        // also bound to. Invisible caret hides the blinking
+        // insertion point since there's nothing to insert at.
+        // Both scrollbars stay hidden — the map is a
+        // fixed-height overview, not a scrollable pane. Every
+        // margin (line-number, symbol, fold) collapses to zero
+        // so the miniature view uses its full width for content.
+        // Zoom `-10` shrinks the font to the smallest legible
+        // block-shape that still hints at text density — matches
+        // N++'s default map font size.
+        docmap_editor.send(SCI_SETREADONLY, 1, 0);
+        docmap_editor.send(SCI_SETCARETSTYLE, CARETSTYLE_INVISIBLE, 0);
+        docmap_editor.send(SCI_SETHSCROLLBAR, 0, 0);
+        docmap_editor.send(SCI_SETVSCROLLBAR, 0, 0);
+        docmap_editor.send(SCI_SETMARGINWIDTHN, 0, 0);
+        docmap_editor.send(SCI_SETMARGINWIDTHN, 1, 0);
+        docmap_editor.send(SCI_SETMARGINWIDTHN, 2, 0);
+        docmap_editor.send(SCI_SETZOOM, -10_isize as usize, 0);
 
         // Header chrome inside the dock — a status STATIC on the
         // left for "X matches in Y files" and a close-X button on
@@ -25283,6 +25422,8 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             docmap_header_frame,
             docmap_header_label,
             docmap_close_hwnd,
+            docmap_scintilla_hwnd,
+            docmap_editor,
             fif_progress_hwnd: None,
             fif_active_job: None,
             fif_pending_results: Vec::new(),
@@ -25623,6 +25764,13 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // panel-slides-in.
         apply_saved_workspace(main_hwnd);
         apply_saved_docmap(main_hwnd);
+        // Seed the map view with the active tab's document so
+        // the miniature view isn't blank on first paint. Runs
+        // regardless of `docmap_visible` — the panel might be
+        // hidden but toggling it on later shouldn't require a
+        // fresh sync (though `show_docmap_panel` re-syncs
+        // defensively either way; the redundant call is cheap).
+        sync_docmap_to_active_tab(main_hwnd);
         let _ = SetFocus(Some(scintilla_hwnd));
 
         // Initial toolbar-state sync. Without this the first paint
@@ -26655,26 +26803,30 @@ unsafe fn layout_workspace_panel_children(
     }
 }
 
-/// Snapshot of the Document Map panel's three chrome children —
-/// header frame, title label, close-× button. Same
-/// snapshot-then-drop discipline as [`WorkspacePanelChildren`].
+/// Snapshot of the Document Map panel's chrome + body children:
+/// header frame, title label, close-× button, and the miniature
+/// Scintilla view that fills the body. Same snapshot-then-drop
+/// discipline as [`WorkspacePanelChildren`].
 #[derive(Copy, Clone)]
 struct DocMapPanelChildren {
     header_frame: HWND,
     header_label: HWND,
     close: HWND,
+    /// Second Scintilla control filling the panel body — bound
+    /// via `SCI_SETDOCPOINTER` to the active tab's document.
+    scintilla: HWND,
 }
 
-/// Lay out the docmap panel's chrome children within its client
-/// rect. Currently just the header row (etched frame + title +
-/// close-×); the panel body below is empty until the next
-/// milestone plants a shared-doc Scintilla view there.
+/// Lay out the docmap panel's chrome + body children within its
+/// client rect. Header row at the top (etched frame + title +
+/// close-×); the Scintilla miniature view fills the rest of the
+/// panel below the header, using the panel's full inner width.
 ///
 /// # Safety
 ///
 /// Every HWND in `children` must be live (created in [`run`],
 /// destroyed only at window teardown). UI-thread only.
-unsafe fn layout_docmap_panel_children(children: DocMapPanelChildren, width: i32) {
+unsafe fn layout_docmap_panel_children(children: DocMapPanelChildren, width: i32, height: i32) {
     let inset = DOCMAP_INSET_PX;
     let inner_left = inset;
     let inner_right = (width - inset).max(inner_left);
@@ -26713,13 +26865,31 @@ unsafe fn layout_docmap_panel_children(children: DocMapPanelChildren, width: i32
             true,
         );
     }
+    // Body — miniature Scintilla view fills the panel below the
+    // header, using the full inner width. A negative body_h
+    // (panel narrower than the header) clamps to zero via `.max`
+    // — the `MoveWindow` no-ops on a zero-dim window rather
+    // than panicking.
+    let body_top = header_y + DOCMAP_HEADER_HEIGHT_PX;
+    let body_bottom = (height - inset).max(body_top);
+    let body_h = (body_bottom - body_top).max(0);
+    unsafe {
+        let _ = MoveWindow(
+            children.scintilla,
+            inner_left,
+            body_top,
+            inner_width,
+            body_h,
+            true,
+        );
+    }
 }
 
 /// `Wnd_proc` for the Document Map panel container. Handles:
 ///
 ///   * `WM_SIZE`: lay out the header chrome (frame + title +
-///     close-×). Body space is reserved for the shared-doc
-///     Scintilla in the next milestone.
+///     close-×) plus the miniature Scintilla view that fills
+///     the body.
 ///   * `WM_COMMAND`: consume the close-× button and route to
 ///     [`hide_docmap_panel`].
 ///
@@ -26739,7 +26909,8 @@ extern "system" fn docmap_panel_wnd_proc(
         match msg {
             WM_SIZE => {
                 let width = (lparam.0 & 0xFFFF) as i32;
-                // Snapshot the three chrome HWNDs under a brief
+                let height = ((lparam.0 >> 16) & 0xFFFF) as i32;
+                // Snapshot the four child HWNDs under a brief
                 // borrow, drop it, then call the layout helper.
                 // Same aliasing-safety rationale as
                 // `workspace_panel_wnd_proc`'s WM_SIZE.
@@ -26748,16 +26919,19 @@ extern "system" fn docmap_panel_wnd_proc(
                         state.docmap_header_frame,
                         state.docmap_header_label,
                         state.docmap_close_hwnd,
+                        state.docmap_scintilla_hwnd,
                     )
                 });
-                if let Some((header_frame, header_label, close)) = hwnds {
+                if let Some((header_frame, header_label, close, scintilla)) = hwnds {
                     layout_docmap_panel_children(
                         DocMapPanelChildren {
                             header_frame,
                             header_label,
                             close,
+                            scintilla,
                         },
                         width,
+                        height,
                     );
                 }
                 LRESULT(0)
@@ -29788,6 +29962,11 @@ unsafe fn show_docmap_panel(main_hwnd: HWND) {
         // bit (docmap visibility isn't a Scintilla-derived state),
         // so we push it explicitly here.
         toolbar::set_button_checked(toolbar_hwnd, ID_VIEW_DOCMAP, true);
+        // Defensive re-sync of the map view's bound doc — cold
+        // start already seeded it, but a panel toggle after a
+        // tab activation that happened while the panel was
+        // hidden needs this to catch up.
+        sync_docmap_to_active_tab(main_hwnd);
     }
 }
 
@@ -29885,6 +30064,47 @@ unsafe fn toggle_docmap_panel(main_hwnd: HWND) {
     } else {
         unsafe { show_docmap_panel(main_hwnd) };
     }
+}
+
+/// Defensive re-sync of the map view's Scintilla binding to the
+/// active tab's document. The **primary** sync path is
+/// [`Win32Ui::activate_tab`], which rebinds the map view in
+/// lockstep with the main view — that covers every Shell-driven
+/// activation (File→Open, File→New, session restore, plugin
+/// `NPPM_SWITCHTOFILE`, `ensure_one_tab`). This helper is called
+/// from the Win32-side tab-switch / tab-close paths that mutate
+/// the main view's binding without going through the trait
+/// method: `handle_tab_selchange`, `handle_close_active_tab_inner`,
+/// `show_docmap_panel` (belt-and-braces after a hidden-panel
+/// tab switch), and the cold-start seed. Same-doc redundant
+/// rebinds are Scintilla no-ops so the double coverage is safe.
+///
+/// Cheap: one `SCI_SETDOCPOINTER` direct-call. Scintilla's
+/// ref-counting makes the shared binding safe — the doc's
+/// refcount stays non-zero as long as either view (main editor
+/// or map) references it, so tab-close's `SCI_RELEASEDOCUMENT`
+/// doesn't free out from under the map.
+///
+/// A zero doc pointer (nothing to bind, e.g. a pending-load tab
+/// whose lazy doc hasn't been minted yet) short-circuits — the
+/// map view keeps its previous binding, which is harmless (the
+/// user just sees stale content until the load finishes and the
+/// next selchange fires).
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window HWND. UI thread only.
+unsafe fn sync_docmap_to_active_tab(main_hwnd: HWND) {
+    let (docmap_editor, doc) = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        let doc = state.shell.active().map_or(0, |t| t.scintilla_doc);
+        (state.docmap_editor, doc)
+    } else {
+        return;
+    };
+    if doc == 0 {
+        return;
+    }
+    docmap_editor.send(SCI_SETDOCPOINTER, 0, doc);
 }
 
 /// Push the current docmap panel state into the shell so the next
@@ -32842,6 +33062,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                         dock_dialogs: &raw mut state.dock_dialogs,
                                         udl_registry: &raw const state.shell.udl_registry,
                                         editor: state.editor,
+                                        docmap_editor: state.docmap_editor,
                                     };
                                     <Win32Ui as UiPlatform>::update_status(
                                         &mut win32_ui,
