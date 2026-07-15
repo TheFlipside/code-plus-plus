@@ -447,13 +447,14 @@ use windows::Win32::UI::Controls::{
     LVM_INSERTCOLUMNW, LVM_INSERTITEMW, LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMSTATE,
     LVM_SETITEMTEXTW, LVN_ITEMCHANGED, LVS_EX_CHECKBOXES, LVS_EX_DOUBLEBUFFER,
     LVS_EX_FULLROWSELECT, LVS_REPORT, LVS_SHOWSELALWAYS, LVS_SINGLESEL, NMCUSTOMDRAW, NMHDR,
-    NMITEMACTIVATE, NMLISTVIEW, NMTREEVIEWW, NM_CUSTOMDRAW, NM_DBLCLK, ODT_TAB, TCHITTESTINFO,
-    TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT, TCM_HITTEST,
-    TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCM_SETPADDING, TCN_SELCHANGE,
+    NMITEMACTIVATE, NMLISTVIEW, NMTREEVIEWW, NM_CUSTOMDRAW, NM_DBLCLK, NM_RCLICK, ODT_TAB,
+    TCHITTESTINFO, TCIF_TEXT, TCITEMW, TCM_DELETEALLITEMS, TCM_GETCURSEL, TCM_GETITEMRECT,
+    TCM_HITTEST, TCM_INSERTITEMW, TCM_SETCURSEL, TCM_SETITEMW, TCM_SETPADDING, TCN_SELCHANGE,
     TCS_OWNERDRAWFIXED, TVE_COLLAPSE, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT,
-    TVGN_ROOT, TVIF_CHILDREN, TVIF_IMAGE, TVIF_PARAM, TVIF_SELECTEDIMAGE, TVIF_TEXT,
-    TVINSERTSTRUCTW, TVITEMW, TVI_LAST, TVI_ROOT, TVM_DELETEITEM, TVM_ENSUREVISIBLE, TVM_EXPAND,
-    TVM_GETITEMW, TVM_GETNEXTITEM, TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETIMAGELIST, TVM_SETITEMW,
+    TVGN_ROOT, TVHITTESTINFO, TVHITTESTINFO_FLAGS, TVHT_ONITEM, TVHT_ONITEMRIGHT, TVIF_CHILDREN,
+    TVIF_IMAGE, TVIF_PARAM, TVIF_SELECTEDIMAGE, TVIF_TEXT, TVINSERTSTRUCTW, TVITEMW, TVI_LAST,
+    TVI_ROOT, TVM_DELETEITEM, TVM_ENSUREVISIBLE, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
+    TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETIMAGELIST, TVM_SETITEMW,
     TVN_ITEMEXPANDINGW, TVSIL_NORMAL, TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT,
     TVS_SHOWSELALWAYS, WC_COMBOBOX, WC_LISTVIEWW, WC_TABCONTROL, WC_TREEVIEWW, WM_MOUSELEAVE,
 };
@@ -545,6 +546,26 @@ const ID_FILE_OPEN_IN_DEFAULT_VIEWER: u16 = 1011;
 ///     three action buttons.
 ///   * m4: `Session` round-trip + View menu toggle.
 const ID_FILE_OPEN_FOLDER_AS_WORKSPACE: u16 = 1012;
+
+// Workspace tree right-click context menu (1013-1029) — surfaced by
+// `show_workspace_tree_context_menu` when the user right-clicks a
+// node in the Folder-as-Workspace `SysTreeView32`. The clicked
+// item's path + kind are stashed on
+// `WindowState.workspace_ctx_target` just before `TrackPopupMenu`;
+// the WM_COMMAND handler for each id reads them back and drops the
+// stash. Ids are dispatched by `main_wnd_proc` (not the panel's
+// wnd_proc) because the popup is posted with `TPM_RETURNCMD` +
+// `PostMessageW` to the main window — same routing shape as the
+// status-bar language menu.
+const ID_WORKSPACE_CTX_REMOVE: u16 = 1013;
+const ID_WORKSPACE_CTX_COPY_PATH: u16 = 1014;
+const ID_WORKSPACE_CTX_COPY_FILE_NAME: u16 = 1015;
+const ID_WORKSPACE_CTX_FIND_IN_FILES: u16 = 1016;
+const ID_WORKSPACE_CTX_OPEN_FILE: u16 = 1017;
+const ID_WORKSPACE_CTX_RUN_BY_SYSTEM: u16 = 1018;
+const ID_WORKSPACE_CTX_EXPLORER: u16 = 1019;
+const ID_WORKSPACE_CTX_CMD: u16 = 1020;
+const ID_WORKSPACE_CTX_POWERSHELL: u16 = 1021;
 
 // Edit (1100-1199) — most route directly to Scintilla via SCI_*.
 const ID_EDIT_UNDO: u16 = 1100;
@@ -1459,6 +1480,22 @@ struct WindowState {
     /// STATIC child that shows "Expanding folders: N" during the
     /// walk. Paired with [`Self::workspace_unfold_progress`].
     workspace_unfold_label: HWND,
+    /// Path + kind of the workspace tree item that was
+    /// right-clicked. Populated by
+    /// [`show_workspace_tree_context_menu`] immediately before
+    /// `TrackPopupMenu` and consumed (`.take()`) by the `WM_COMMAND`
+    /// handler for `ID_WORKSPACE_CTX_*`. Between click and command
+    /// dispatch it lives here rather than being encoded into the
+    /// command id so cmd ids stay static (menu-check enable/grey
+    /// paths depend on that) and so the target can carry a full
+    /// `PathBuf` without pointer marshalling.
+    ///
+    /// `.take()` on the command side is deliberate — a stale
+    /// target from a previous click that never fired (e.g. user
+    /// dismissed the popup by clicking elsewhere) MUST NOT be
+    /// picked up by the next click. Each context menu populates
+    /// this field afresh.
+    workspace_ctx_target: Option<WorkspaceCtxTarget>,
     /// Modeless top-level progress window shown while a FIF job
     /// is running. `None` until the user clicks Find All; the
     /// terminal `FifEvent` (Done or Cancelled) destroys it and
@@ -18209,6 +18246,177 @@ fn open_path_in_default_viewer(hwnd: HWND, path: &Path) {
     }
 }
 
+/// Copy `text` to the Windows clipboard as `CF_UNICODETEXT`.
+/// Follows the classic Win32 sequence: `OpenClipboard(owner)` →
+/// `EmptyClipboard` → `GlobalAlloc(GMEM_MOVEABLE)` → memcpy
+/// through `GlobalLock`/`GlobalUnlock` → `SetClipboardData` →
+/// `CloseClipboard`.
+///
+/// Ownership hand-off: on success the clipboard subsystem takes
+/// ownership of the `HGLOBAL` and is responsible for freeing it.
+/// If `SetClipboardData` fails, we still own the allocation and
+/// must free it via `GlobalFree` — otherwise the buffer leaks
+/// once per failed copy. `EmptyClipboard` frees whatever the
+/// previous owner (possibly us on a prior copy) put there, so
+/// leaks are bounded to the current attempt's window.
+///
+/// Errors log at `warn` and drop the copy silently — clipboard
+/// contention with another app's paste operation is a routine
+/// failure mode not worth surfacing to the user.
+///
+/// # Safety
+///
+/// `owner` must be a live HWND owned by this thread — the
+/// clipboard subsystem binds the owning window to the caller's
+/// thread for the duration of the open, and passing a foreign
+/// HWND races with the owning thread's clipboard state.
+unsafe fn copy_text_to_clipboard(owner: HWND, text: &str) {
+    use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+
+    // Encode as UTF-16 with a trailing NUL. `SetClipboardData`
+    // for CF_UNICODETEXT expects a null-terminated wide string;
+    // omitting the NUL would let paste consumers read past the
+    // buffer end.
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let bytes = wide.len() * 2;
+
+    // SAFETY: no cross-thread state; OpenClipboard binds the
+    // clipboard to this thread. Every early-return path either
+    // hasn't taken clipboard ownership yet or explicitly calls
+    // `CloseClipboard`.
+    unsafe {
+        if OpenClipboard(Some(owner)).is_err() {
+            tracing::warn!("copy_text_to_clipboard: OpenClipboard failed");
+            return;
+        }
+        // EmptyClipboard is best-effort — failure just means the
+        // previous owner leaks; the copy attempt still proceeds.
+        let _ = EmptyClipboard();
+
+        let Ok(hglobal) = GlobalAlloc(GMEM_MOVEABLE, bytes) else {
+            let _ = CloseClipboard();
+            tracing::warn!(bytes, "copy_text_to_clipboard: GlobalAlloc failed");
+            return;
+        };
+        let hglobal: HGLOBAL = hglobal;
+        let dst = GlobalLock(hglobal).cast::<u16>();
+        if dst.is_null() {
+            let _ = GlobalFree(Some(hglobal));
+            let _ = CloseClipboard();
+            tracing::warn!("copy_text_to_clipboard: GlobalLock returned null");
+            return;
+        }
+        std::ptr::copy_nonoverlapping(wide.as_ptr(), dst, wide.len());
+        // GlobalUnlock's Result is documented as returning an
+        // error on the LAST unlock — that's the expected path
+        // here (lock count goes 1 → 0). Discard it.
+        let _ = GlobalUnlock(hglobal);
+        let handle = HANDLE(hglobal.0);
+        if SetClipboardData(u32::from(CF_UNICODETEXT_U16), Some(handle)).is_err() {
+            // SetClipboardData failed → we still own the buffer;
+            // free it to avoid a leak. On success ownership
+            // transfers to the clipboard subsystem and we MUST
+            // NOT free.
+            let _ = GlobalFree(Some(hglobal));
+            let _ = CloseClipboard();
+            tracing::warn!("copy_text_to_clipboard: SetClipboardData failed");
+            return;
+        }
+        let _ = CloseClipboard();
+    }
+}
+
+/// `CF_UNICODETEXT` clipboard format id. Broken out as a `u16`
+/// constant so callers don't need to pull in
+/// `windows::Win32::System::Ole::CF_UNICODETEXT` (which is
+/// wrapped in a `CLIPBOARD_FORMAT` newtype and only used for
+/// this one call). The value is fixed at 13 by the Win32 API
+/// and has been since Windows 3.1.
+const CF_UNICODETEXT_U16: u16 = 13;
+
+/// Open a Windows Explorer window rooted at `folder`. Uses
+/// `ShellExecuteW("open", <folder>, ...)` — Windows resolves
+/// `open` on a directory to the Explorer shell verb. Failures
+/// log at `warn` (same class of soft-fail as
+/// [`open_path_in_default_viewer`]).
+///
+/// **Security.** `folder` is derived from workspace tree text
+/// which came from `read_dir` — passed as a single wide-string
+/// argument to `ShellExecuteW`, never spliced into a command
+/// line, so filenames containing shell metacharacters cannot
+/// inject additional command tokens.
+fn open_explorer_at(hwnd: HWND, folder: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    let path_wide: Vec<u16> = folder
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let ret = unsafe {
+        ShellExecuteW(
+            Some(hwnd),
+            w!("open"),
+            PCWSTR(path_wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if (ret.0 as isize) <= 32 {
+        tracing::warn!(
+            path = ?folder,
+            code = ret.0 as isize,
+            "ShellExecuteW(open, <folder>) failed"
+        );
+    }
+}
+
+/// Launch `program` (e.g. `"cmd.exe"` or `"powershell.exe"`) with
+/// `working_dir` as its current directory. Uses
+/// `ShellExecuteW`'s `lpDirectory` parameter — the launched
+/// process inherits it as CWD, which is exactly the "CMD here"
+/// / "PowerShell here" behaviour Explorer implements for its own
+/// Shift-right-click menu.
+///
+/// **Security.** `program` is a compile-time `&'static str`
+/// (either "cmd.exe" or "powershell.exe"), never derived from
+/// user input. Windows resolves both via `%PATH%` — that is the
+/// same path Explorer's built-in Shift-right-click uses. If a
+/// user has planted a malicious `cmd.exe` earlier in `PATH` than
+/// `%SystemRoot%\System32`, they have already lost far more
+/// than this menu entry. The `working_dir` is passed via
+/// `lpDirectory` (setting CWD, not spliced into a command line),
+/// so a hostile pathname cannot inject additional command tokens.
+fn shell_launch_in_dir(hwnd: HWND, program: PCWSTR, working_dir: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    let dir_wide: Vec<u16> = working_dir
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let ret = unsafe {
+        ShellExecuteW(
+            Some(hwnd),
+            w!("open"),
+            program,
+            PCWSTR::null(),
+            PCWSTR(dir_wide.as_ptr()),
+            SW_SHOWNORMAL,
+        )
+    };
+    if (ret.0 as isize) <= 32 {
+        tracing::warn!(
+            dir = ?working_dir,
+            code = ret.0 as isize,
+            "ShellExecuteW(open, <program>) failed"
+        );
+    }
+}
+
 /// Refresh state-driven File menu entries. Currently drives just
 /// [`ID_FILE_OPEN_IN_DEFAULT_VIEWER`]'s enabled/greyed state; the
 /// rest of the File menu is either statically enabled or gated
@@ -21327,6 +21535,36 @@ unsafe fn handle_replace_all(state: &mut FindReplaceState) {
 /// is shown via `NPPM_LAUNCHFINDINFILESDLG`. Empty fields on the
 /// prefill are skipped so a partial pre-fill doesn't clobber user
 /// state for the absent field.
+/// Open (or refocus) the Find/Replace dialog on its
+/// Find-in-Files tab and seed the Directory field with `dir`.
+/// Shares the same show + prefill machinery the plugin
+/// `NPPM_LAUNCHFINDINFILESDLG` path uses — [`apply_fif_prefill`]
+/// takes a [`codepp_shell::FifLaunchPrefill`], which is
+/// constructed inline here for the "directory only" case.
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window on the UI thread. The
+/// dialog pump entered by `show_find_replace_dialog` may re-enter
+/// `main_wnd_proc`, so callers MUST NOT hold a `&mut WindowState`
+/// borrow across the call — same discipline every dialog-opening
+/// helper uses.
+unsafe fn open_fif_at_directory(main_hwnd: HWND, dir: &Path) {
+    let existing = unsafe { state_from_hwnd(main_hwnd).and_then(|s| s.find_replace_dlg) };
+    let Some(dlg) = show_find_replace_dialog(main_hwnd, existing, FindReplaceTab::FindInFiles)
+    else {
+        return;
+    };
+    if let Some(s) = unsafe { state_from_hwnd(main_hwnd) } {
+        s.find_replace_dlg = Some(dlg);
+    }
+    let prefill = codepp_shell::FifLaunchPrefill {
+        directory: Some(dir.to_path_buf()),
+        filters: None,
+    };
+    unsafe { apply_fif_prefill(dlg, &prefill) };
+}
+
 unsafe fn apply_fif_prefill(dlg: HWND, prefill: &codepp_shell::FifLaunchPrefill) {
     unsafe {
         let state_ptr = GetWindowLongPtrW(dlg, GWLP_USERDATA) as *mut FindReplaceState;
@@ -24140,6 +24378,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             workspace_unfold_count: 0,
             workspace_unfold_progress,
             workspace_unfold_label,
+            workspace_ctx_target: None,
             fif_progress_hwnd: None,
             fif_active_job: None,
             fif_pending_results: Vec::new(),
@@ -25157,6 +25396,22 @@ extern "system" fn workspace_panel_wnd_proc(
                     if let Some(tree) = tree_hwnd {
                         if nmhdr.hwndFrom == tree {
                             handle_tree_double_click(parent, tree);
+                            return LRESULT(0);
+                        }
+                    }
+                }
+                if nmhdr.code == NM_RCLICK {
+                    // Right-click on the tree → show the per-node
+                    // context menu (Remove / Copy path / Find in
+                    // Files / Explorer here / etc.). Only fires for
+                    // the tree control — action buttons don't
+                    // produce NM_RCLICK. Buffered lookup +
+                    // `state_from_hwnd` re-entry pattern matches
+                    // the NM_DBLCLK branch above.
+                    let tree_hwnd = state_from_hwnd(parent).map(|s| s.workspace_tree_hwnd);
+                    if let Some(tree) = tree_hwnd {
+                        if nmhdr.hwndFrom == tree {
+                            show_workspace_tree_context_menu(parent, tree);
                             return LRESULT(0);
                         }
                     }
@@ -26588,6 +26843,28 @@ const WORKSPACE_ITEM_UNPOP: isize = 1;
 /// Item lParam sentinel: folder whose real children are loaded.
 const WORKSPACE_ITEM_POP: isize = 2;
 
+/// Classification of the workspace tree node that was
+/// right-clicked. Determines which items appear in the popup
+/// (Remove is root-only; Copy file name / Open / Run by system
+/// are file-only) and how "Explorer/CMD/PowerShell here" resolves
+/// the working directory (folder → the folder itself; file → the
+/// parent directory).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum WorkspaceCtxKind {
+    Root,
+    Folder,
+    File,
+}
+
+/// Payload captured on right-click and consumed by the `WM_COMMAND`
+/// arm of the chosen menu item. Stored on
+/// [`WindowState::workspace_ctx_target`].
+#[derive(Clone, Debug)]
+struct WorkspaceCtxTarget {
+    path: PathBuf,
+    kind: WorkspaceCtxKind,
+}
+
 /// Ask the OS for the system-icon-list index of a filesystem
 /// entry. `SHGFI_USEFILEATTRIBUTES` makes `SHGetFileInfoW` skip
 /// any actual disk access — it derives the icon from the passed
@@ -27614,6 +27891,294 @@ unsafe fn locate_current_file_in_workspace(main_hwnd: HWND) {
         return;
     };
     unsafe { tree_locate_path(tree, &active, &root) };
+}
+
+/// Right-click context menu for the workspace tree. Called from
+/// the panel's `WM_NOTIFY` on `NM_RCLICK`.
+///
+/// Flow:
+///   1. `GetCursorPos` → hit-test the tree via `TVM_HITTEST` to
+///      identify the clicked item.
+///   2. Read its `lParam` sentinel and parent pointer to classify
+///      the target as root / non-root folder / file.
+///   3. Select the item (`TreeView` doesn't do this on right-click
+///      by default) so the popup targets a visually-highlighted
+///      row.
+///   4. Reconstruct the item's full filesystem path via
+///      [`tree_item_full_path`], stash it + kind on
+///      [`WindowState::workspace_ctx_target`].
+///   5. Build the appropriate popup menu (see [`WorkspaceCtxKind`]
+///      for the per-kind shape).
+///   6. `TrackPopupMenu(TPM_RETURNCMD)` → the chosen id is
+///      `PostMessageW`'d to the main window as a `WM_COMMAND`
+///      so the existing `main_wnd_proc` dispatch picks it up on
+///      a clean tick with no `TrackPopupMenu` modal pump still
+///      on the stack.
+///
+/// Reconstructed paths defence-in-depth check against
+/// [`Path::starts_with(workspace_root)`] before being stashed,
+/// mirroring [`handle_tree_double_click`]'s defence against a
+/// hostile filesystem returning components with path separators.
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window. `tree` must be the
+/// workspace tree's live `SysTreeView32` HWND. UI thread only.
+unsafe fn show_workspace_tree_context_menu(main_hwnd: HWND, tree: HWND) {
+    // 1. Cursor → tree client coords → hit-test.
+    let mut cursor = POINT::default();
+    if unsafe { GetCursorPos(&raw mut cursor) }.is_err() {
+        return;
+    }
+    let mut client_pt = cursor;
+    if !unsafe { ScreenToClient(tree, &raw mut client_pt) }.as_bool() {
+        return;
+    }
+    let mut ht = TVHITTESTINFO {
+        pt: client_pt,
+        flags: TVHITTESTINFO_FLAGS::default(),
+        hItem: HTREEITEM(0),
+    };
+    unsafe {
+        SendMessageW(
+            tree,
+            TVM_HITTEST,
+            Some(WPARAM(0)),
+            Some(LPARAM(&raw mut ht as isize)),
+        );
+    }
+    // Only accept clicks that landed on an item's icon / label /
+    // state-icon / to-the-right-of-label area. `TVHT_ONITEM` is
+    // already the aggregate icon+label+state-icon mask (70), so
+    // ORing it with `TVHT_ONITEMRIGHT` covers everything a real
+    // item click can produce. A click on the [+] chevron
+    // (`TVHT_ONITEMBUTTON`), the indent guides
+    // (`TVHT_ONITEMINDENT`), the whitespace above/below any item
+    // (`TVHT_ABOVE` / `TVHT_BELOW` / `TVHT_NOWHERE`), or the
+    // resize gutter (`TVHT_TOLEFT`) all fall through with no
+    // menu — matching what File Explorer does when you
+    // right-click empty space in the folder tree.
+    let on_item = ht.flags & (TVHT_ONITEM | TVHT_ONITEMRIGHT);
+    if on_item.0 == 0 || ht.hItem.0 == 0 {
+        return;
+    }
+    let item = ht.hItem;
+
+    // 2. Classify: root vs folder vs file.
+    let state_sentinel = unsafe { tree_item_lparam(tree, item) };
+    let parent = unsafe {
+        SendMessageW(
+            tree,
+            TVM_GETNEXTITEM,
+            Some(WPARAM(TVGN_PARENT as usize)),
+            Some(LPARAM(item.0)),
+        )
+    };
+    let is_root = parent.0 == 0;
+    let kind = if state_sentinel == WORKSPACE_ITEM_FILE {
+        WorkspaceCtxKind::File
+    } else if is_root {
+        WorkspaceCtxKind::Root
+    } else {
+        WorkspaceCtxKind::Folder
+    };
+
+    // 3. Select the clicked item so the highlight matches the
+    //    popup. Match File Explorer + N++'s behaviour — silent
+    //    right-click that doesn't change selection is jarring.
+    unsafe {
+        SendMessageW(
+            tree,
+            TVM_SELECTITEM,
+            Some(WPARAM(TVGN_CARET as usize)),
+            Some(LPARAM(item.0)),
+        );
+    }
+
+    // 4. Reconstruct + validate path, stash on WindowState.
+    let root = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        state.workspace_root.clone()
+    } else {
+        return;
+    };
+    let Some(root) = root else {
+        return;
+    };
+    let path = unsafe { tree_item_full_path(tree, item, &root) };
+    // Same defence as `handle_tree_double_click`: a hostile
+    // filesystem returning a component with an absolute-path
+    // prefix could escape workspace_root via `PathBuf::push`. All
+    // context menu actions dispatch on this path (opening files,
+    // spawning shells, showing FIF), so escape here would be far
+    // worse than escape in the double-click path.
+    if !path.starts_with(&root) {
+        tracing::warn!(
+            path = ?path,
+            root = ?root,
+            "workspace tree ctx menu: reconstructed path escaped root; refusing to show menu"
+        );
+        return;
+    }
+    if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        state.workspace_ctx_target = Some(WorkspaceCtxTarget {
+            path: path.clone(),
+            kind,
+        });
+    }
+
+    // 5. Build the popup. Menu shape depends on `kind`:
+    //   * Root:   Remove | -- | Copy path | Find in Files... | -- |
+    //             Explorer here | CMD here | PowerShell here
+    //   * Folder: Copy path | Find in Files... | -- |
+    //             Explorer here | CMD here | PowerShell here
+    //   * File:   Open | -- | Copy path | Copy file name |
+    //             Run by system | -- |
+    //             Explorer here | CMD here | PowerShell here
+    let Ok(menu) = (unsafe { CreatePopupMenu() }) else {
+        return;
+    };
+    let append = |flags: MENU_ITEM_FLAGS, id: u16, text: PCWSTR| unsafe {
+        let _ = AppendMenuW(menu, flags, id as usize, text);
+    };
+    let sep = || MF_SEPARATOR;
+    match kind {
+        WorkspaceCtxKind::Root => {
+            append(MF_STRING, ID_WORKSPACE_CTX_REMOVE, w!("Remove"));
+            append(sep(), 0, PCWSTR::null());
+            append(MF_STRING, ID_WORKSPACE_CTX_COPY_PATH, w!("Copy path"));
+            append(
+                MF_STRING,
+                ID_WORKSPACE_CTX_FIND_IN_FILES,
+                w!("Find in Files..."),
+            );
+            append(sep(), 0, PCWSTR::null());
+            append(MF_STRING, ID_WORKSPACE_CTX_EXPLORER, w!("Explorer here"));
+            append(MF_STRING, ID_WORKSPACE_CTX_CMD, w!("CMD here"));
+            append(
+                MF_STRING,
+                ID_WORKSPACE_CTX_POWERSHELL,
+                w!("PowerShell here"),
+            );
+        }
+        WorkspaceCtxKind::Folder => {
+            append(MF_STRING, ID_WORKSPACE_CTX_COPY_PATH, w!("Copy path"));
+            append(
+                MF_STRING,
+                ID_WORKSPACE_CTX_FIND_IN_FILES,
+                w!("Find in Files..."),
+            );
+            append(sep(), 0, PCWSTR::null());
+            append(MF_STRING, ID_WORKSPACE_CTX_EXPLORER, w!("Explorer here"));
+            append(MF_STRING, ID_WORKSPACE_CTX_CMD, w!("CMD here"));
+            append(
+                MF_STRING,
+                ID_WORKSPACE_CTX_POWERSHELL,
+                w!("PowerShell here"),
+            );
+        }
+        WorkspaceCtxKind::File => {
+            append(MF_STRING, ID_WORKSPACE_CTX_OPEN_FILE, w!("Open"));
+            append(sep(), 0, PCWSTR::null());
+            append(MF_STRING, ID_WORKSPACE_CTX_COPY_PATH, w!("Copy path"));
+            append(
+                MF_STRING,
+                ID_WORKSPACE_CTX_COPY_FILE_NAME,
+                w!("Copy file name"),
+            );
+            // "Run by system" mirrors File → Open in Default Viewer:
+            // only enabled when the extension has a registered
+            // handler. Grey it (rather than omit) so the layout
+            // stays predictable across files.
+            let run_flags = MF_STRING
+                | if extract_extension_with_dot(&path)
+                    .is_some_and(|ext| extension_has_registered_handler(&ext))
+                {
+                    MF_ENABLED
+                } else {
+                    MF_GRAYED
+                };
+            append(
+                run_flags,
+                ID_WORKSPACE_CTX_RUN_BY_SYSTEM,
+                w!("Run by system"),
+            );
+            append(sep(), 0, PCWSTR::null());
+            append(MF_STRING, ID_WORKSPACE_CTX_EXPLORER, w!("Explorer here"));
+            append(MF_STRING, ID_WORKSPACE_CTX_CMD, w!("CMD here"));
+            append(
+                MF_STRING,
+                ID_WORKSPACE_CTX_POWERSHELL,
+                w!("PowerShell here"),
+            );
+        }
+    }
+
+    // 6. Show the popup at the cursor's *screen* coords. TrackPopupMenu
+    //    with TPM_RETURNCMD enters a modal pump — no WindowState
+    //    borrow may be alive across it, so the stash above was our
+    //    last touch of state before this call. TPM_RIGHTBUTTON lets
+    //    the right button dismiss/select (default is left only).
+    let cmd = unsafe {
+        TrackPopupMenu(
+            menu,
+            TPM_LEFTALIGN | TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            cursor.x,
+            cursor.y,
+            Some(0),
+            main_hwnd,
+            None,
+        )
+    };
+    // `CreatePopupMenu` returned an HMENU we now own; free it
+    // before we return regardless of whether the user picked
+    // something. TrackPopupMenu does NOT take ownership.
+    unsafe {
+        let _ = DestroyMenu(menu);
+    }
+    if cmd.0 == 0 {
+        // User dismissed the popup without picking. Drop the
+        // stash so the next click starts fresh.
+        if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+            state.workspace_ctx_target = None;
+        }
+        return;
+    }
+    // Post as WM_COMMAND to the main window — mirrors what the
+    // language status menu does. Dispatch happens on a clean tick
+    // with no popup pump on the stack.
+    let _ = unsafe {
+        PostMessageW(
+            Some(main_hwnd),
+            WM_COMMAND,
+            WPARAM(cmd.0 as usize),
+            LPARAM(0),
+        )
+    };
+}
+
+/// "Remove" from the root-folder context menu. Clears the tree
+/// and drops the stashed workspace root so the next session save
+/// won't restore it. The panel itself stays visible with an
+/// empty tree — matches the user-facing spec ("the workspace is
+/// empty"). Cancels any in-flight Unfold All so its ticks don't
+/// try to walk the just-deleted tree.
+///
+/// # Safety
+///
+/// `main_hwnd` must be a live main window on the UI thread.
+unsafe fn remove_workspace_root(main_hwnd: HWND) {
+    unsafe { cancel_workspace_unfold(main_hwnd) };
+    let tree = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        state.workspace_root = None;
+        state.workspace_tree_hwnd
+    } else {
+        return;
+    };
+    unsafe { tree_clear_all(tree) };
+    // Persist the cleared state so quitting Code++ now doesn't
+    // resurrect the removed root on the next launch — matches
+    // the "session persistence" fix landed with m4.
+    unsafe { sync_workspace_state_to_shell(main_hwnd) };
 }
 
 /// Show the workspace panel rooted at `root`. Idempotent on the
@@ -29964,6 +30529,137 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // if there's no active tab, no workspace
                         // root, or the file isn't under the root.
                         locate_current_file_in_workspace(hwnd);
+                    }
+                    // Workspace tree right-click context menu arms.
+                    // The stashed target on `WindowState.workspace_ctx_target`
+                    // was populated by `show_workspace_tree_context_menu`
+                    // just before `TrackPopupMenu`; every arm takes it out
+                    // (drops the stash) and then acts. If the take
+                    // returns `None` — e.g. a keyboard-triggered
+                    // WM_COMMAND on one of these ids that skipped the
+                    // right-click flow — the arm is a silent no-op
+                    // (these ids have no menu bar entry, so the only
+                    // reachable path is the context menu).
+                    ID_WORKSPACE_CTX_REMOVE => {
+                        let taken =
+                            state_from_hwnd(hwnd).and_then(|s| s.workspace_ctx_target.take());
+                        if let Some(target) = taken {
+                            if target.kind == WorkspaceCtxKind::Root {
+                                remove_workspace_root(hwnd);
+                            }
+                        }
+                    }
+                    ID_WORKSPACE_CTX_COPY_PATH => {
+                        let taken =
+                            state_from_hwnd(hwnd).and_then(|s| s.workspace_ctx_target.take());
+                        if let Some(target) = taken {
+                            let text = target.path.to_string_lossy().into_owned();
+                            copy_text_to_clipboard(hwnd, &text);
+                        }
+                    }
+                    ID_WORKSPACE_CTX_COPY_FILE_NAME => {
+                        let taken =
+                            state_from_hwnd(hwnd).and_then(|s| s.workspace_ctx_target.take());
+                        if let Some(target) = taken {
+                            let name = target
+                                .path
+                                .file_name()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            if !name.is_empty() {
+                                copy_text_to_clipboard(hwnd, &name);
+                            }
+                        }
+                    }
+                    ID_WORKSPACE_CTX_FIND_IN_FILES => {
+                        let taken =
+                            state_from_hwnd(hwnd).and_then(|s| s.workspace_ctx_target.take());
+                        if let Some(target) = taken {
+                            // For folders/root, use the target path as
+                            // the FIF directory. For a file — not
+                            // reachable today (the file-kind menu has
+                            // no "Find in Files" entry), but if a
+                            // future menu adds it, use the parent.
+                            let dir = match target.kind {
+                                WorkspaceCtxKind::File => {
+                                    target.path.parent().map(Path::to_path_buf)
+                                }
+                                _ => Some(target.path.clone()),
+                            };
+                            if let Some(d) = dir {
+                                open_fif_at_directory(hwnd, &d);
+                            }
+                        }
+                    }
+                    ID_WORKSPACE_CTX_OPEN_FILE => {
+                        let taken =
+                            state_from_hwnd(hwnd).and_then(|s| s.workspace_ctx_target.take());
+                        if let Some(target) = taken {
+                            if target.kind == WorkspaceCtxKind::File {
+                                if let Some(state) = state_from_hwnd(hwnd) {
+                                    let _ = state.shell.open_file(target.path);
+                                }
+                                fire_queued_notifications(hwnd);
+                                refresh_tab_chrome(hwnd);
+                            }
+                        }
+                    }
+                    ID_WORKSPACE_CTX_RUN_BY_SYSTEM => {
+                        let taken =
+                            state_from_hwnd(hwnd).and_then(|s| s.workspace_ctx_target.take());
+                        if let Some(target) = taken {
+                            if target.kind == WorkspaceCtxKind::File {
+                                open_path_in_default_viewer(hwnd, &target.path);
+                            }
+                        }
+                    }
+                    ID_WORKSPACE_CTX_EXPLORER => {
+                        let taken =
+                            state_from_hwnd(hwnd).and_then(|s| s.workspace_ctx_target.take());
+                        if let Some(target) = taken {
+                            // Folder → open at that folder; file → open
+                            // at parent (Explorer's Shift-right-click
+                            // "Open folder location" pattern).
+                            let target_dir = match target.kind {
+                                WorkspaceCtxKind::File => {
+                                    target.path.parent().map(Path::to_path_buf)
+                                }
+                                _ => Some(target.path.clone()),
+                            };
+                            if let Some(d) = target_dir {
+                                open_explorer_at(hwnd, &d);
+                            }
+                        }
+                    }
+                    ID_WORKSPACE_CTX_CMD => {
+                        let taken =
+                            state_from_hwnd(hwnd).and_then(|s| s.workspace_ctx_target.take());
+                        if let Some(target) = taken {
+                            let workdir = match target.kind {
+                                WorkspaceCtxKind::File => {
+                                    target.path.parent().map(Path::to_path_buf)
+                                }
+                                _ => Some(target.path.clone()),
+                            };
+                            if let Some(d) = workdir {
+                                shell_launch_in_dir(hwnd, w!("cmd.exe"), &d);
+                            }
+                        }
+                    }
+                    ID_WORKSPACE_CTX_POWERSHELL => {
+                        let taken =
+                            state_from_hwnd(hwnd).and_then(|s| s.workspace_ctx_target.take());
+                        if let Some(target) = taken {
+                            let workdir = match target.kind {
+                                WorkspaceCtxKind::File => {
+                                    target.path.parent().map(Path::to_path_buf)
+                                }
+                                _ => Some(target.path.clone()),
+                            };
+                            if let Some(d) = workdir {
+                                shell_launch_in_dir(hwnd, w!("powershell.exe"), &d);
+                            }
+                        }
                     }
                     ID_FILE_SAVE_AS => {
                         run_save_as_flow(hwnd);
