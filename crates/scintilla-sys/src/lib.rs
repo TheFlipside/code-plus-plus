@@ -330,6 +330,22 @@ pub const INDIC_HIDDEN: usize = 5;
 /// intervening lines are folded.
 pub const SCI_DOCLINEFROMVISIBLE: u32 = 2221;
 
+/// `SCI_VISIBLEFROMDOCLINE(docLine)` — inverse of
+/// [`SCI_DOCLINEFROMVISIBLE`]. Converts a document-line index
+/// into the visible-line index for the same content. Identity
+/// when no folding is active; used by the Document Map's
+/// drag-to-scroll to translate a clicked doc line into the
+/// visible-line coordinate that [`SCI_LINESCROLL`] operates on.
+pub const SCI_VISIBLEFROMDOCLINE: u32 = 2220;
+
+/// `SCI_POSITIONFROMPOINTCLOSE(x, y)` — return the closest byte
+/// position to the given client-coord point, or `-1` if the
+/// point is not inside a text region (e.g. on the margin, or
+/// past the last line). Used by the Document Map's
+/// drag-to-scroll: hit-test the click, convert the position to
+/// a line, scroll the main editor to that line.
+pub const SCI_POSITIONFROMPOINTCLOSE: u32 = 2023;
+
 // Horizontal-scroll width control. Scintilla defaults `scrollWidth`
 // to 2000 px and never auto-shrinks, which produces the visible
 // "scroll past the end of any line into empty space" behaviour.

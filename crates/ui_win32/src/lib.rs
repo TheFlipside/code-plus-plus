@@ -394,27 +394,27 @@ use codepp_scintilla_sys::{
     SCI_INDICATORCLEARRANGE, SCI_INDICATORFILLRANGE, SCI_INDICSETALPHA, SCI_INDICSETFORE,
     SCI_INDICSETOUTLINEALPHA, SCI_INDICSETSTYLE, SCI_INDICSETUNDER, SCI_LINEFROMPOSITION,
     SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
-    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_POSITIONFROMLINE, SCI_REDO,
-    SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCARETSTYLE, SCI_SETCODEPAGE,
-    SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETFONTQUALITY,
-    SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETINDICATORCURRENT, SCI_SETMARGINWIDTHN,
-    SCI_SETREADONLY, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
-    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTARGETEND,
-    SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETVSCROLLBAR,
-    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO,
-    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED,
-    SCN_STYLENEEDED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK,
-    SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8,
-    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
-    SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH,
-    SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
-    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
-    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS,
-    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY,
-    SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS,
-    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION,
-    SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT, STYLE_INDENTGUIDE,
-    STYLE_LINENUMBER,
+    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_POSITIONFROMLINE,
+    SCI_POSITIONFROMPOINTCLOSE, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
+    SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
+    SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETINDICATORCURRENT,
+    SCI_SETMARGINWIDTHN, SCI_SETREADONLY, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
+    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
+    SCI_SETTABWIDTH, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL,
+    SCI_SETVIEWWS, SCI_SETVSCROLLBAR, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
+    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT,
+    SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI,
+    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
+    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
+    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_EOL_CR, SC_EOL_CRLF,
+    SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL,
+    SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL,
+    SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
+    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
+    SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
+    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
+    SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT,
+    STYLE_INDENTGUIDE, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
@@ -858,13 +858,15 @@ const WORKSPACE_SPLITTER_CLASS: PCWSTR = w!("CodePlusPlusWorkspaceSplitter");
 /// container shape as the workspace panel; different position
 /// (right edge of the editor column). Registered lazily on
 /// first [`run`] invocation via [`register_docmap_classes`].
-///
-/// The splitter (drag-to-resize) lands in the next milestone
-/// alongside the shared-doc Scintilla view; commit 1 pins the
-/// panel at [`DEFAULT_DOCMAP_WIDTH_PX`] so the layout math and
-/// toggle plumbing can settle before the interactive resize
-/// path enters the picture.
 const DOCMAP_PANEL_CLASS: PCWSTR = w!("CodePlusPlusDocMapPanel");
+/// Window class for the docmap panel's LEFT-edge splitter —
+/// mirror of [`WORKSPACE_SPLITTER_CLASS`] on the opposite column.
+/// Owns the horizontal-resize cursor; drag events forward to the
+/// parent so [`layout_children`] re-applies with the new panel
+/// width. The sign convention flips: dragging LEFT grows the
+/// docmap (the panel sits at the right edge, the splitter to
+/// its left).
+const DOCMAP_SPLITTER_CLASS: PCWSTR = w!("CodePlusPlusDocMapSplitter");
 
 /// Control ids for the FIF progress window's three children.
 const IDC_FIF_PROGRESS_PATH: u16 = 300;
@@ -950,6 +952,10 @@ const MIN_SCINTILLA_WIDTH_PX: i32 = 200;
 /// estate; persistence across sessions rides
 /// [`codepp_core::session::DocMapSession::width`].
 const DEFAULT_DOCMAP_WIDTH_PX: i32 = 160;
+/// Width of the vertical splitter between the editor column and
+/// the docmap panel. Same 4-px rationale as
+/// [`WORKSPACE_SPLITTER_WIDTH_PX`].
+const DOCMAP_SPLITTER_WIDTH_PX: i32 = 4;
 /// Scintilla indicator slot for the docmap's viewport highlight
 /// (the "orange rectangle" over the range currently visible in
 /// the main editor). Lives in the 8..=31 user-defined range —
@@ -1259,6 +1265,42 @@ struct WorkspaceSplitterDrag {
     start_screen_x: i32,
     /// Workspace column width at drag start.
     width_at_start: i32,
+}
+
+/// Drag-tracking state for the Document Map splitter — mirror of
+/// [`WorkspaceSplitterDrag`] on the right column. The sign
+/// convention flips: dragging LEFT grows the panel because the
+/// panel sits at the right edge, splitter to its left.
+#[derive(Debug, Clone, Copy)]
+struct DocMapSplitterDrag {
+    /// Cursor X in screen coords at drag start. New docmap width
+    /// = `width_at_start - (current_x - start_screen_x)` —
+    /// dragging left grows the panel.
+    start_screen_x: i32,
+    /// Docmap column width at drag start.
+    width_at_start: i32,
+}
+
+/// Drag-tracking state for scroll-by-drag on the Document Map's
+/// miniature view. On mouse-down inside the map view, the map's
+/// `wnd_proc` subclass takes capture and stores this marker;
+/// every subsequent `WM_MOUSEMOVE` while the marker is present
+/// scrolls the main editor to the line under the cursor.
+/// Released on `WM_LBUTTONUP` or `WM_CAPTURECHANGED`. Stored on
+/// the parent state rather than on the subclass so the map's
+/// subclass `wnd_proc` stays a thin forwarder — same pattern the
+/// workspace
+/// splitter uses.
+#[derive(Debug, Clone, Copy)]
+struct DocMapScrollDrag {
+    /// Non-empty marker. No fields today — the current-cursor
+    /// position is read fresh on every `WM_MOUSEMOVE` via
+    /// `SCI_POSITIONFROMPOINTCLOSE`. A struct rather than a
+    /// bare bool leaves room for future scroll-drag state
+    /// (initial-line snapshot for "cancel to original scroll,"
+    /// scroll offset accumulator, …) without a wire-format
+    /// change to `WindowState`.
+    _priv: (),
 }
 
 /// Drag-tracking state for tab reordering. Captured on
@@ -1596,22 +1638,32 @@ struct WindowState {
     /// picked up by the next click. Each context menu populates
     /// this field afresh.
     workspace_ctx_target: Option<WorkspaceCtxTarget>,
-    /// Container HWND for the right-side Document Map panel. The
-    /// heavily-zoomed-out shared-doc Scintilla lands as a child
-    /// here in the next milestone; today the panel body is empty
-    /// chrome. Mirror of [`Self::workspace_hwnd`].
+    /// Container HWND for the right-side Document Map panel.
+    /// Mirror of [`Self::workspace_hwnd`].
     docmap_hwnd: HWND,
-    /// Whether the docmap panel is currently shown. Toggled by
-    /// the View → Document Map menu, the docmap toolbar button,
-    /// the header's close-× button, and session restore.
+    /// Vertical splitter on the LEFT edge of the docmap panel
+    /// — mirror of [`Self::workspace_splitter_hwnd`] on the
+    /// opposite column. Drag events forward to
+    /// [`layout_children`] with a new docmap width.
+    docmap_splitter_hwnd: HWND,
+    /// Whether the docmap panel + splitter are currently shown.
+    /// Toggled by the View → Document Map menu, the docmap
+    /// toolbar button, the header's close-× button, and session
+    /// restore.
     docmap_visible: bool,
-    /// Persisted docmap-column width across show/hide cycles.
-    /// Fixed at [`DEFAULT_DOCMAP_WIDTH_PX`] in this milestone —
-    /// interactive resize via a splitter lands in the next commit
-    /// alongside the shared-doc Scintilla view. Cross-session
+    /// Persisted docmap-column width across show/hide cycles
+    /// AND across interactive splitter drags. Cross-session
     /// persistence rides
     /// [`codepp_core::session::DocMapSession::width`].
     docmap_width: i32,
+    /// `Some` iff the user is currently mid-drag on the docmap
+    /// splitter. Mirror of [`Self::workspace_splitter_drag`].
+    docmap_splitter_drag: Option<DocMapSplitterDrag>,
+    /// `Some` iff the user is currently mid-drag on the docmap
+    /// Scintilla view (drag-to-scroll — see [`DocMapScrollDrag`]).
+    /// Every `WM_MOUSEMOVE` while this is `Some` scrolls the main
+    /// editor to the line under the cursor.
+    docmap_scroll_drag: Option<DocMapScrollDrag>,
     /// Header row `SS_ETCHEDFRAME` STATIC — same construction as
     /// [`Self::workspace_header_frame`].
     docmap_header_frame: HWND,
@@ -24991,20 +25043,31 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             None,
         )?;
 
-        // Document Map panel. Symmetric with the workspace panel
-        // above but positioned at the right edge by
-        // `layout_children`. Panel body is currently empty chrome
-        // — the shared-doc Scintilla view lands as a child here
-        // in the next milestone (which will also introduce the
-        // left-edge splitter for interactive resize). Starts
-        // hidden; toggled by the View → Document Map menu, the
-        // docmap toolbar button, or session restore.
+        // Document Map panel + splitter. Symmetric with the
+        // workspace panel above but positioned at the right edge
+        // by `layout_children`. Both start hidden; toggled by
+        // the View → Document Map menu, the docmap toolbar
+        // button, or session restore.
         register_docmap_classes();
         let docmap_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             DOCMAP_PANEL_CLASS,
             PCWSTR::null(),
             WS_CHILD | WS_CLIPCHILDREN,
+            0,
+            0,
+            0,
+            0,
+            Some(main_hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        )?;
+        let docmap_splitter_hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            DOCMAP_SPLITTER_CLASS,
+            PCWSTR::null(),
+            WS_CHILD,
             0,
             0,
             0,
@@ -25153,6 +25216,22 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         docmap_editor.send(SCI_INDICSETALPHA, DOCMAP_VIEWPORT_INDICATOR, 80);
         docmap_editor.send(SCI_INDICSETOUTLINEALPHA, DOCMAP_VIEWPORT_INDICATOR, 255);
         docmap_editor.send(SCI_INDICSETUNDER, DOCMAP_VIEWPORT_INDICATOR, 1);
+        // Subclass the map's Scintilla so mouse events reach us
+        // BEFORE Scintilla's own handler (which would start a
+        // text-selection drag on the read-only view — pointless
+        // and would interfere with the map's own scroll-drag
+        // gesture). Same failure mode as
+        // `SetWindowSubclass(tab_hwnd, ...)` above: BOOL return,
+        // near-impossible failure at OOM, degrades to
+        // no-drag-to-scroll if it fails but no crash. Removed
+        // implicitly at Scintilla control destruction — no
+        // teardown hook needed.
+        let _ = SetWindowSubclass(
+            docmap_scintilla_hwnd,
+            Some(docmap_scintilla_subclass_proc),
+            DOCMAP_SCINTILLA_SUBCLASS_ID,
+            0,
+        );
 
         // Header chrome inside the dock — a status STATIC on the
         // left for "X matches in Y files" and a close-X button on
@@ -25499,8 +25578,11 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             workspace_unfold_label,
             workspace_ctx_target: None,
             docmap_hwnd,
+            docmap_splitter_hwnd,
             docmap_visible: false,
             docmap_width: DEFAULT_DOCMAP_WIDTH_PX,
+            docmap_splitter_drag: None,
+            docmap_scroll_drag: None,
             docmap_header_frame,
             docmap_header_label,
             docmap_close_hwnd,
@@ -25829,6 +25911,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             },
             DocMapLayout {
                 panel: docmap_hwnd,
+                splitter: docmap_splitter_hwnd,
                 visible: false,
                 width: DEFAULT_DOCMAP_WIDTH_PX,
             },
@@ -26109,12 +26192,12 @@ struct WorkspaceLayout {
 }
 
 /// "How much of the client area does the right-column Document
-/// Map take, and which HWND do we position for it." Mirror of
-/// [`WorkspaceLayout`] on the opposite edge. No splitter field
-/// yet — interactive resize lands in the next milestone.
+/// Map take, and which HWNDs do we position for it." Mirror of
+/// [`WorkspaceLayout`] on the opposite edge.
 #[derive(Copy, Clone)]
 struct DocMapLayout {
     panel: HWND,
+    splitter: HWND,
     visible: bool,
     width: i32,
 }
@@ -26171,16 +26254,17 @@ unsafe fn layout_children(
     // panel. `docmap_col_width` is the pixel column the panel
     // eats off the right edge; `editor_x_shrink_right` is what
     // every horizontal-width calc below subtracts to keep the
-    // editor / tabs / FIF dock from underlapping the map.
+    // editor / tabs / FIF dock from underlapping the map, and
+    // includes the splitter band alongside the panel body so a
+    // hover over the seam gets the resize cursor.
     // `clamp_docmap_width` is the same authority
-    // [`apply_saved_docmap`] uses, so a window-resize-down that
-    // pushes past the docmap's ceiling is corrected here and the
-    // layout stays idempotent (mirror of `clamp_workspace_width`
-    // on the left column). No splitter yet — see
-    // [`DocMapLayout`]'s doc comment.
+    // [`apply_saved_docmap`] and the splitter drag consult, so a
+    // window-resize-down that pushes past the docmap's ceiling
+    // is corrected here and the layout stays idempotent (mirror
+    // of `clamp_workspace_width` on the left column).
     let (docmap_col_width, editor_x_shrink_right) = if docmap.visible {
         let clamped = clamp_docmap_width(width, docmap.width);
-        (clamped, clamped)
+        (clamped, clamped + DOCMAP_SPLITTER_WIDTH_PX)
     } else {
         (0, 0)
     };
@@ -26237,12 +26321,22 @@ unsafe fn layout_children(
                 true,
             );
         }
-        // Docmap panel: right-column mirror of the workspace panel.
-        // Fills the same vertical band, flush against the right
-        // edge. Hidden → skip the MoveWindow; ShowWindow(SW_HIDE)
-        // was called at panel close.
+        // Docmap panel + splitter: right-column mirror of the
+        // workspace pair. Splitter sits flush to the panel's
+        // LEFT edge (opposite of the workspace splitter's right
+        // edge). Hidden → skip both `MoveWindow` calls;
+        // `ShowWindow(SW_HIDE)` was called at panel close.
         if docmap.visible {
             let docmap_x = (width - docmap_col_width).max(0);
+            let splitter_x = (docmap_x - DOCMAP_SPLITTER_WIDTH_PX).max(0);
+            let _ = MoveWindow(
+                docmap.splitter,
+                splitter_x,
+                ws_top,
+                DOCMAP_SPLITTER_WIDTH_PX,
+                ws_height,
+                true,
+            );
             let _ = MoveWindow(
                 docmap.panel,
                 docmap_x,
@@ -26353,22 +26447,26 @@ fn clamp_workspace_width(client_width: i32, requested: i32) -> i32 {
 
 /// Clamp a requested docmap-panel width to
 /// `[MIN_DOCMAP_WIDTH_PX, upper]` where `upper` leaves room for
-/// the editor's minimum. Same shape as [`clamp_workspace_width`],
-/// applied on every layout pass so a persisted
+/// the editor's minimum AND the docmap splitter's own 4-px band.
+/// Same shape as [`clamp_workspace_width`], applied on every
+/// layout pass so a persisted
 /// [`codepp_core::session::DocMapSession::width`] value that was
 /// saved on a wider display — or hand-edited / crash-corrupted to
 /// something wild — can never drive `MoveWindow` with a
 /// nonsensical dimension. Also enforces the invariant on cold
-/// start via [`apply_saved_docmap`].
+/// start via [`apply_saved_docmap`] and on splitter drag.
 ///
-/// Does NOT subtract the workspace column's width; when both
+/// Does NOT subtract the workspace column's width. When both
 /// panels are visible on a very narrow window the editor's
 /// `.max(0)` guard still catches a would-be negative width
-/// safely. A reciprocal clamp lands in the milestone that
-/// introduces the interactive-resize splitter — the drag path
-/// will need it anyway.
+/// safely — worst case is the editor visually squeezes to zero
+/// with the two panels butting up against each other, not a
+/// crash or an overlap. Coordinating the two panels'
+/// simultaneous clamps against a shared editor floor is tracked
+/// as a Phase 5 polish item.
 fn clamp_docmap_width(client_width: i32, requested: i32) -> i32 {
-    let upper = (client_width - MIN_SCINTILLA_WIDTH_PX).max(MIN_DOCMAP_WIDTH_PX);
+    let usable = client_width.saturating_sub(DOCMAP_SPLITTER_WIDTH_PX);
+    let upper = (usable - MIN_SCINTILLA_WIDTH_PX).max(MIN_DOCMAP_WIDTH_PX);
     requested.clamp(MIN_DOCMAP_WIDTH_PX, upper)
 }
 
@@ -26491,16 +26589,15 @@ unsafe fn register_workspace_classes() {
     });
 }
 
-/// Register the Document Map panel window class. Idempotent via
-/// `OnceLock`, same shape as [`register_workspace_classes`].
-/// The left-edge splitter (interactive resize) gets registered
-/// in the next milestone alongside the shared-doc Scintilla view.
+/// Register the Document Map panel + splitter window classes.
+/// Idempotent via `OnceLock`, same shape as
+/// [`register_workspace_classes`].
 ///
 /// # Safety
 ///
-/// `RegisterClassExW` invariants: the `wnd_proc` pointer we hand
-/// it (`docmap_panel_wnd_proc`) is an `extern "system" fn` item
-/// that lives for the app's lifetime.
+/// `RegisterClassExW` invariants: the `wnd_proc` pointers we hand
+/// it (`docmap_panel_wnd_proc`, `docmap_splitter_wnd_proc`) are
+/// `extern "system" fn` items that live for the app's lifetime.
 unsafe fn register_docmap_classes() {
     use std::sync::OnceLock;
     static REGISTERED: OnceLock<()> = OnceLock::new();
@@ -26517,6 +26614,18 @@ unsafe fn register_docmap_classes() {
             ..Default::default()
         };
         let _ = RegisterClassExW(&raw const panel_class);
+
+        let splitter_class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(docmap_splitter_wnd_proc),
+            hInstance: instance.into(),
+            hCursor: LoadCursorW(None, IDC_SIZEWE).unwrap_or_default(),
+            hbrBackground: dialog_bg_brush(),
+            lpszClassName: DOCMAP_SPLITTER_CLASS,
+            ..Default::default()
+        };
+        let _ = RegisterClassExW(&raw const splitter_class);
     });
 }
 
@@ -27114,6 +27223,7 @@ extern "system" fn workspace_splitter_wnd_proc(
                             },
                             DocMapLayout {
                                 panel: state.docmap_hwnd,
+                                splitter: state.docmap_splitter_hwnd,
                                 visible: state.docmap_visible,
                                 width: state.docmap_width,
                             },
@@ -27224,6 +27334,291 @@ extern "system" fn workspace_splitter_wnd_proc(
                 LRESULT(0)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+}
+
+/// `Wnd_proc` for the Document Map splitter — right-column mirror
+/// of [`workspace_splitter_wnd_proc`]. Sign convention flips:
+/// dragging LEFT grows the panel because the panel sits at the
+/// right edge and the splitter to its left.
+///
+/// # Safety
+///
+/// Standard `extern "system"` `wnd_proc` invariants — must not
+/// unwind across the FFI boundary. All bodies wrap Win32 API
+/// calls in `unsafe {}`; parent-state access goes through
+/// `state_from_hwnd` under `PluginCallGuard`.
+extern "system" fn docmap_splitter_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_SETCURSOR => {
+                if let Ok(cursor) = LoadCursorW(None, IDC_SIZEWE) {
+                    let _ = SetCursor(Some(cursor));
+                }
+                LRESULT(1)
+            }
+            WM_LBUTTONDOWN => {
+                let parent = GetParent(hwnd).unwrap_or_default();
+                if let Some(state) = state_from_hwnd(parent) {
+                    let mut pt = POINT::default();
+                    if GetCursorPos(&raw mut pt).is_ok() {
+                        state.docmap_splitter_drag = Some(DocMapSplitterDrag {
+                            start_screen_x: pt.x,
+                            width_at_start: state.docmap_width,
+                        });
+                        let _ = SetCapture(hwnd);
+                    }
+                }
+                LRESULT(0)
+            }
+            WM_MOUSEMOVE => {
+                let parent = GetParent(hwnd).unwrap_or_default();
+                let snap = if let Some(state) = state_from_hwnd(parent) {
+                    state.docmap_splitter_drag.map(|drag| {
+                        (
+                            drag,
+                            state.docmap_width,
+                            state.toolbar_hwnd,
+                            state.toolbar_bitmap_px,
+                            state.tab_hwnd,
+                            state.scintilla_hwnd,
+                            state.status_hwnd,
+                            state.fif_splitter_hwnd,
+                            state.fif_dock_hwnd,
+                            state.fif_dock_visible,
+                            state.fif_dock_height,
+                            WorkspaceLayout {
+                                panel: state.workspace_hwnd,
+                                splitter: state.workspace_splitter_hwnd,
+                                visible: state.workspace_visible,
+                                width: state.workspace_width,
+                            },
+                            DocMapLayout {
+                                panel: state.docmap_hwnd,
+                                splitter: state.docmap_splitter_hwnd,
+                                visible: state.docmap_visible,
+                                width: state.docmap_width,
+                            },
+                            state.editor,
+                            state.docmap_editor,
+                        )
+                    })
+                } else {
+                    None
+                };
+                let Some((
+                    drag,
+                    current_width,
+                    toolbar_hwnd,
+                    toolbar_bitmap_px,
+                    tabs,
+                    scintilla,
+                    status,
+                    fif_splitter,
+                    fif_dock,
+                    fif_dock_visible,
+                    fif_dock_height,
+                    workspace,
+                    mut docmap,
+                    main_editor,
+                    docmap_editor,
+                )) = snap
+                else {
+                    return LRESULT(0);
+                };
+                let mut pt = POINT::default();
+                if GetCursorPos(&raw mut pt).is_err() {
+                    return LRESULT(0);
+                }
+                let mut rect = RECT::default();
+                if GetClientRect(parent, &raw mut rect).is_err() {
+                    return LRESULT(0);
+                }
+                // Sign flip vs the workspace splitter: dragging
+                // LEFT grows the docmap (subtract the delta).
+                let proposed = drag.width_at_start - (pt.x - drag.start_screen_x);
+                let new_width = clamp_docmap_width(rect.right, proposed);
+                if new_width == current_width {
+                    return LRESULT(0);
+                }
+                if let Some(state) = state_from_hwnd(parent) {
+                    state.docmap_width = new_width;
+                }
+                docmap.width = new_width;
+                let tab_hidden = !IsWindowVisible(tabs).as_bool();
+                // Same anti-flicker discipline as the workspace
+                // splitter — Scintilla's WM_PAINT burst during
+                // rapid MoveWindow is bracketed by
+                // `ScintillaRedrawGuard`.
+                {
+                    let _redraw = ScintillaRedrawGuard::enter(scintilla);
+                    layout_children(
+                        toolbar_hwnd,
+                        toolbar::toolbar_height_px(toolbar_bitmap_px),
+                        tabs,
+                        scintilla,
+                        status,
+                        fif_splitter,
+                        fif_dock,
+                        fif_dock_visible,
+                        fif_dock_height,
+                        tab_hidden,
+                        workspace,
+                        docmap,
+                        rect.right,
+                        rect.bottom,
+                    );
+                }
+                let _ = UpdateWindow(scintilla);
+                // Panel width change alters the miniature
+                // view's lines-on-screen — the highlight-center
+                // math would drift otherwise. Update pulls both
+                // handles by value, no reentrant `state_from_hwnd`.
+                update_docmap_viewport_indicator(main_editor, docmap_editor);
+                LRESULT(0)
+            }
+            WM_LBUTTONUP => {
+                let parent = GetParent(hwnd).unwrap_or_default();
+                if let Some(state) = state_from_hwnd(parent) {
+                    state.docmap_splitter_drag = None;
+                }
+                let _ = ReleaseCapture();
+                LRESULT(0)
+            }
+            WM_CAPTURECHANGED => {
+                let parent = GetParent(hwnd).unwrap_or_default();
+                if let Some(state) = state_from_hwnd(parent) {
+                    state.docmap_splitter_drag = None;
+                }
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+}
+
+/// Scroll the main editor so the given document-line index is
+/// centered vertically in the main viewport. Called on every
+/// mouse-down / mouse-move inside the map view's scroll-drag
+/// gesture. Uses [`SCI_VISIBLEFROMDOCLINE`] to convert the
+/// doc-line into visible-line space (identity when folding is
+/// off) so [`SCI_LINESCROLL`] moves the right amount.
+///
+/// # Safety
+///
+/// Both handles must be live; caller runs on the UI thread.
+unsafe fn scroll_main_to_doc_line(main_editor: EditorHandle, target_doc_line: isize) {
+    let target_visible = main_editor.send(SCI_VISIBLEFROMDOCLINE, target_doc_line as usize, 0);
+    let main_lines_on_screen = main_editor.send(SCI_LINESONSCREEN, 0, 0);
+    let current_first_visible = main_editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
+    let desired_first_visible = (target_visible - main_lines_on_screen / 2).max(0);
+    let delta = desired_first_visible - current_first_visible;
+    if delta != 0 {
+        main_editor.send(SCI_LINESCROLL, 0, delta);
+    }
+}
+
+/// Subclass proc for the Document Map's Scintilla control.
+/// Hijacks mouse events so a click / drag on the miniature view
+/// scrolls the MAIN editor to the corresponding line (rather
+/// than letting Scintilla start a text-selection drag on the
+/// read-only view). Every other message forwards to
+/// `DefSubclassProc` so Scintilla's own paint / keyboard /
+/// notification handling continues unchanged.
+///
+/// Drag-state is stored on `WindowState.docmap_scroll_drag`
+/// (via `state_from_hwnd(GetParent(map_hwnd))`) rather than on
+/// the subclass itself, matching the pattern used by the
+/// workspace and docmap splitters.
+///
+/// # Safety
+///
+/// Standard subclass-proc invariants — must not unwind across
+/// FFI. All bodies wrap Win32/state access in `unsafe`.
+unsafe extern "system" fn docmap_scintilla_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _uidsubclass: usize,
+    _dwrefdata: usize,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_LBUTTONDOWN => {
+                let parent = GetParent(hwnd).unwrap_or_default();
+                if let Some(state) = state_from_hwnd(parent) {
+                    state.docmap_scroll_drag = Some(DocMapScrollDrag { _priv: () });
+                }
+                let _ = SetCapture(hwnd);
+                // Do the initial scroll immediately so a plain
+                // click (no drag) still moves the view.
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let (main_editor, docmap_editor) = if let Some(state) = state_from_hwnd(parent) {
+                    (state.editor, state.docmap_editor)
+                } else {
+                    return LRESULT(0);
+                };
+                let pos = docmap_editor.send(SCI_POSITIONFROMPOINTCLOSE, x as usize, y as isize);
+                if pos >= 0 {
+                    let doc_line = docmap_editor.send(SCI_LINEFROMPOSITION, pos as usize, 0);
+                    scroll_main_to_doc_line(main_editor, doc_line);
+                }
+                // Consume the event so Scintilla doesn't start a
+                // text-selection drag on the read-only view.
+                LRESULT(0)
+            }
+            WM_MOUSEMOVE => {
+                let parent = GetParent(hwnd).unwrap_or_default();
+                let dragging = if let Some(state) = state_from_hwnd(parent) {
+                    state.docmap_scroll_drag.is_some()
+                } else {
+                    false
+                };
+                if !dragging {
+                    return DefSubclassProc(hwnd, msg, wparam, lparam);
+                }
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let (main_editor, docmap_editor) = if let Some(state) = state_from_hwnd(parent) {
+                    (state.editor, state.docmap_editor)
+                } else {
+                    return LRESULT(0);
+                };
+                let pos = docmap_editor.send(SCI_POSITIONFROMPOINTCLOSE, x as usize, y as isize);
+                if pos >= 0 {
+                    let doc_line = docmap_editor.send(SCI_LINEFROMPOSITION, pos as usize, 0);
+                    scroll_main_to_doc_line(main_editor, doc_line);
+                }
+                LRESULT(0)
+            }
+            WM_LBUTTONUP => {
+                let parent = GetParent(hwnd).unwrap_or_default();
+                if let Some(state) = state_from_hwnd(parent) {
+                    state.docmap_scroll_drag = None;
+                }
+                let _ = ReleaseCapture();
+                LRESULT(0)
+            }
+            WM_CAPTURECHANGED => {
+                // Defensive: some UI operation stole capture
+                // mid-drag (e.g. Alt+Tab). Clear drag state so a
+                // stray WM_MOUSEMOVE without a fresh
+                // WM_LBUTTONDOWN doesn't scroll the main editor.
+                let parent = GetParent(hwnd).unwrap_or_default();
+                if let Some(state) = state_from_hwnd(parent) {
+                    state.docmap_scroll_drag = None;
+                }
+                DefSubclassProc(hwnd, msg, wparam, lparam)
+            }
+            _ => DefSubclassProc(hwnd, msg, wparam, lparam),
         }
     }
 }
@@ -28065,6 +28460,7 @@ unsafe fn show_fif_dock(main_hwnd: HWND) {
             },
             DocMapLayout {
                 panel: state.docmap_hwnd,
+                splitter: state.docmap_splitter_hwnd,
                 visible: state.docmap_visible,
                 width: state.docmap_width,
             },
@@ -28141,6 +28537,7 @@ unsafe fn hide_fif_dock(main_hwnd: HWND) {
             },
             DocMapLayout {
                 panel: state.docmap_hwnd,
+                splitter: state.docmap_splitter_hwnd,
                 visible: state.docmap_visible,
                 width: state.docmap_width,
             },
@@ -29682,6 +30079,7 @@ unsafe fn show_workspace_panel(main_hwnd: HWND, root: PathBuf) {
             },
             DocMapLayout {
                 panel: state.docmap_hwnd,
+                splitter: state.docmap_splitter_hwnd,
                 visible: state.docmap_visible,
                 width: state.docmap_width,
             },
@@ -29774,6 +30172,7 @@ unsafe fn hide_workspace_panel(main_hwnd: HWND) {
             },
             DocMapLayout {
                 panel: state.docmap_hwnd,
+                splitter: state.docmap_splitter_hwnd,
                 visible: state.docmap_visible,
                 width: state.docmap_width,
             },
@@ -29994,6 +30393,7 @@ unsafe fn show_docmap_panel(main_hwnd: HWND) {
             },
             DocMapLayout {
                 panel: state.docmap_hwnd,
+                splitter: state.docmap_splitter_hwnd,
                 visible: true,
                 width: state.docmap_width,
             },
@@ -30019,6 +30419,7 @@ unsafe fn show_docmap_panel(main_hwnd: HWND) {
     };
     unsafe {
         let _ = ShowWindow(docmap.panel, SW_SHOW);
+        let _ = ShowWindow(docmap.splitter, SW_SHOW);
         let mut rect = RECT::default();
         if GetClientRect(main_hwnd, &raw mut rect).is_ok() {
             let tab_hidden = !IsWindowVisible(tabs).as_bool();
@@ -30085,6 +30486,7 @@ unsafe fn hide_docmap_panel(main_hwnd: HWND) {
             },
             DocMapLayout {
                 panel: state.docmap_hwnd,
+                splitter: state.docmap_splitter_hwnd,
                 visible: false,
                 width: state.docmap_width,
             },
@@ -30110,6 +30512,7 @@ unsafe fn hide_docmap_panel(main_hwnd: HWND) {
     };
     unsafe {
         let _ = ShowWindow(docmap.panel, SW_HIDE);
+        let _ = ShowWindow(docmap.splitter, SW_HIDE);
         let mut rect = RECT::default();
         if GetClientRect(main_hwnd, &raw mut rect).is_ok() {
             let tab_hidden = !IsWindowVisible(tabs).as_bool();
@@ -30535,6 +30938,7 @@ extern "system" fn splitter_wnd_proc(
                             },
                             DocMapLayout {
                                 panel: state.docmap_hwnd,
+                                splitter: state.docmap_splitter_hwnd,
                                 visible: state.docmap_visible,
                                 width: state.docmap_width,
                             },
@@ -31040,6 +31444,18 @@ extern "system" fn tab_subclass_proc(
 /// Only one subclass is installed on the tab control today, so the
 /// value is arbitrary — the constant just gives it a name.
 const TAB_SUBCLASS_ID: usize = 1;
+
+/// Subclass id for the Document Map's Scintilla control — used to
+/// hijack mouse events (`WM_LBUTTONDOWN`/`MOUSEMOVE`/`LBUTTONUP`)
+/// so a click / drag on the miniature view scrolls the MAIN
+/// editor to the corresponding line. Same subclass mechanism the
+/// tab strip uses ([`TAB_SUBCLASS_ID`]). Numerically distinct
+/// from other `*_SUBCLASS_ID` constants in this file — the
+/// `uIdSubclass` `SetWindowSubclass` parameter is scoped
+/// per-HWND, so a collision would be inert, but keeping the
+/// values unique across the file avoids confusing future readers
+/// who assume a global namespace.
+const DOCMAP_SCINTILLA_SUBCLASS_ID: usize = 3;
 
 /// Subclass id for the status-bar control. Each subclassed control
 /// needs its own id in the parent's subclass-chain bookkeeping — the
@@ -33678,6 +34094,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     };
                     let docmap = DocMapLayout {
                         panel: state.docmap_hwnd,
+                        splitter: state.docmap_splitter_hwnd,
                         visible: state.docmap_visible,
                         width: state.docmap_width,
                     };
