@@ -26485,8 +26485,30 @@ unsafe fn tree_insert_item(
     } else {
         WORKSPACE_ITEM_POP
     };
+    // `TVIF_CHILDREN` + `cChildren = 0` on an item is a
+    // load-bearing HINT to TreeView: "this item has no
+    // children, don't render a chevron." That hint sticks even
+    // if we later insert real children under it — the chevron
+    // stays hidden and the user can't expand.
+    //
+    // So we only include TVIF_CHILDREN when we want to hint the
+    // *presence* of children ahead of actually inserting them —
+    // the placeholder-folder case (`is_dir && has_placeholder`),
+    // where the chevron must appear before the real `read_dir`
+    // runs on expand. For everything else (root, populated
+    // folder, file), omit the mask bit and let TreeView infer
+    // the chevron from actual child count.
+    let mask_bits = TVIF_TEXT
+        | TVIF_IMAGE
+        | TVIF_SELECTEDIMAGE
+        | TVIF_PARAM
+        | if is_dir && has_placeholder {
+            TVIF_CHILDREN
+        } else {
+            windows::Win32::UI::Controls::TVITEM_MASK(0)
+        };
     let item = TVITEMW {
-        mask: TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM | TVIF_CHILDREN,
+        mask: mask_bits,
         pszText: windows::core::PWSTR(name_wide.as_ptr().cast_mut()),
         cchTextMax: name_wide.len() as i32,
         iImage: icon,
@@ -26638,8 +26660,11 @@ unsafe fn populate_workspace_root(tree: HWND, root: &Path) {
         || root.to_string_lossy().into_owned(),
         |s| s.to_string_lossy().into_owned(),
     );
-    let root_node =
-        unsafe { tree_insert_item(tree, HTREEITEM::default(), &root_name, true, false) };
+    // `TVI_ROOT` is the documented sentinel for "insert as a
+    // top-level item." `HTREEITEM::default()` (i.e. NULL) happens
+    // to work as a synonym on current Windows but isn't part of
+    // the documented contract — use the explicit sentinel.
+    let root_node = unsafe { tree_insert_item(tree, TVI_ROOT, &root_name, true, false) };
     if root_node.0 == 0 {
         return;
     }
