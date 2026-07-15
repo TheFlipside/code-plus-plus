@@ -547,7 +547,7 @@ const ID_FILE_OPEN_IN_DEFAULT_VIEWER: u16 = 1011;
 ///   * m4: `Session` round-trip + View menu toggle.
 const ID_FILE_OPEN_FOLDER_AS_WORKSPACE: u16 = 1012;
 
-// Workspace tree right-click context menu (1013-1029) — surfaced by
+// Workspace tree right-click context menu (1013-1021) — surfaced by
 // `show_workspace_tree_context_menu` when the user right-clicks a
 // node in the Folder-as-Workspace `SysTreeView32`. The clicked
 // item's path + kind are stashed on
@@ -566,6 +566,19 @@ const ID_WORKSPACE_CTX_RUN_BY_SYSTEM: u16 = 1018;
 const ID_WORKSPACE_CTX_EXPLORER: u16 = 1019;
 const ID_WORKSPACE_CTX_CMD: u16 = 1020;
 const ID_WORKSPACE_CTX_POWERSHELL: u16 = 1021;
+
+// File → Open Containing Folder submenu (1022-1025). Each entry
+// acts on the parent directory of the active tab's on-disk path;
+// all four are greyed by `refresh_file_menu` when the active tab
+// is untitled (no path). Explorer / cmd / PowerShell share the
+// shell-launcher helpers the workspace-tree context menu uses;
+// "Folder as Workspace" routes to `show_workspace_panel` at the
+// parent directory (opens the panel if hidden, re-roots in place
+// if already open — same idempotent path the picker uses).
+const ID_FILE_OPEN_CONTAINING_EXPLORER: u16 = 1022;
+const ID_FILE_OPEN_CONTAINING_CMD: u16 = 1023;
+const ID_FILE_OPEN_CONTAINING_POWERSHELL: u16 = 1024;
+const ID_FILE_OPEN_CONTAINING_WORKSPACE: u16 = 1025;
 
 // Edit (1100-1199) — most route directly to Scintilla via SCI_*.
 const ID_EDIT_UNDO: u16 = 1100;
@@ -14240,6 +14253,45 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             ID_FILE_OPEN as usize,
             w!("&Open...\tCtrl+O"),
         )?;
+        // "Open Containing Folder ▸" submenu. Four entries, all
+        // greyed on menu open when the active tab is untitled
+        // (state-driven via `refresh_file_menu` on
+        // WM_INITMENUPOPUP; MF_BYCOMMAND greying reaches items
+        // inside nested submenus, so we don't need to track the
+        // submenu HMENU separately). Each entry acts on the
+        // parent directory of the active tab's on-disk path.
+        let open_containing = CreateMenu()?;
+        AppendMenuW(
+            open_containing,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_OPEN_CONTAINING_EXPLORER as usize,
+            w!("&Explorer"),
+        )?;
+        AppendMenuW(
+            open_containing,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_OPEN_CONTAINING_CMD as usize,
+            w!("&cmd"),
+        )?;
+        AppendMenuW(
+            open_containing,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_OPEN_CONTAINING_POWERSHELL as usize,
+            w!("&PowerShell"),
+        )?;
+        AppendMenuW(open_containing, MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(
+            open_containing,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_OPEN_CONTAINING_WORKSPACE as usize,
+            w!("Folder as &Workspace"),
+        )?;
+        AppendMenuW(
+            file_menu,
+            MF_POPUP,
+            open_containing.0 as usize,
+            w!("Open &Containing Folder"),
+        )?;
         // Enable state is state-driven — see [`refresh_file_menu`]
         // fired from `WM_INITMENUPOPUP` for the File menu. Starts
         // greyed because no tab exists at startup; a fresh Ctrl+N
@@ -18417,6 +18469,35 @@ fn shell_launch_in_dir(hwnd: HWND, program: PCWSTR, working_dir: &Path) {
     }
 }
 
+/// Resolve the parent directory of the active tab's on-disk path,
+/// under a brief `state_from_hwnd` borrow that drops before the
+/// caller does anything else. Used by every "Open Containing
+/// Folder" submenu arm and any future consumer that wants "the
+/// folder containing the file the user is looking at right now."
+///
+/// Returns `None` iff the tab is untitled (no `path`) OR its
+/// path has no parent (drive root / filesystem root). Both cases
+/// are also greyed by [`refresh_file_menu`] so a normal menu
+/// click never reaches this returning `None`; the `Option` shape
+/// only matters when a plugin-forged `WM_COMMAND` bypasses the
+/// greying, which stays a silent no-op — the greying is a UX
+/// gate, not a capability restriction (plugins already run
+/// in-process with full authority, DESIGN.md §6.5).
+///
+/// # Safety
+///
+/// `hwnd` must be the main window on the UI thread.
+unsafe fn active_parent_dir(hwnd: HWND) -> Option<PathBuf> {
+    unsafe { state_from_hwnd(hwnd) }.and_then(|state| {
+        state
+            .shell
+            .active()
+            .and_then(|t| t.path.as_deref())
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+    })
+}
+
 /// Refresh state-driven File menu entries. Currently drives just
 /// [`ID_FILE_OPEN_IN_DEFAULT_VIEWER`]'s enabled/greyed state; the
 /// rest of the File menu is either statically enabled or gated
@@ -18436,23 +18517,36 @@ fn shell_launch_in_dir(hwnd: HWND, program: PCWSTR, working_dir: &Path) {
 /// [`build_main_menu`], stored on `WindowState`). Caller runs on
 /// the UI thread.
 unsafe fn refresh_file_menu(file_menu: HMENU, shell: &codepp_shell::Shell) {
-    let enabled = shell
-        .active()
-        .and_then(|tab| tab.path.as_deref())
+    let active_path = shell.active().and_then(|tab| tab.path.as_deref());
+    // Open in Default Viewer: enabled iff path exists AND the
+    // extension has a registered OS handler.
+    let default_viewer_enabled = active_path
         .and_then(extract_extension_with_dot)
         .is_some_and(|ext| extension_has_registered_handler(&ext));
+    // Open Containing Folder submenu: enabled iff path exists AND
+    // has a parent directory (a path like `C:\`, though not
+    // reachable via Save-As on a normal machine, would have no
+    // parent). Every entry in the submenu (Explorer / cmd /
+    // PowerShell / Folder as Workspace) shares the same enable
+    // condition — all four operate on the parent directory.
+    let open_containing_enabled = active_path.and_then(Path::parent).is_some();
+
     // `EnableMenuItem` returns the previous state on success or
     // `-1u32` on failure; both are fire-and-forget for us — a
     // failure just means the enable state is wrong on this open,
-    // never a stability issue.
-    let flags = MF_BYCOMMAND.0 | if enabled { MF_ENABLED.0 } else { MF_GRAYED.0 };
-    unsafe {
-        let _ = EnableMenuItem(
-            file_menu,
-            u32::from(ID_FILE_OPEN_IN_DEFAULT_VIEWER),
-            MENU_ITEM_FLAGS(flags),
-        );
-    }
+    // never a stability issue. `MF_BYCOMMAND` searches the entire
+    // menu tree rooted at `file_menu`, including nested submenus,
+    // so the four Open Containing Folder ids resolve correctly
+    // even though they live one level deep.
+    let apply = |id: u16, enabled: bool| unsafe {
+        let flags = MF_BYCOMMAND.0 | if enabled { MF_ENABLED.0 } else { MF_GRAYED.0 };
+        let _ = EnableMenuItem(file_menu, u32::from(id), MENU_ITEM_FLAGS(flags));
+    };
+    apply(ID_FILE_OPEN_IN_DEFAULT_VIEWER, default_viewer_enabled);
+    apply(ID_FILE_OPEN_CONTAINING_EXPLORER, open_containing_enabled);
+    apply(ID_FILE_OPEN_CONTAINING_CMD, open_containing_enabled);
+    apply(ID_FILE_OPEN_CONTAINING_POWERSHELL, open_containing_enabled);
+    apply(ID_FILE_OPEN_CONTAINING_WORKSPACE, open_containing_enabled);
 }
 
 /// Show the "About Code++" dialog modally. `main_hwnd` is the
@@ -30487,6 +30581,50 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // then hand the chosen path to the panel
                         // show flow. Cancel is a silent no-op.
                         open_workspace_folder_flow(hwnd);
+                    }
+                    // File → Open Containing Folder submenu. Each
+                    // arm resolves the active tab's parent
+                    // directory via [`active_parent_dir`] — a
+                    // shared helper that centralises the borrow
+                    // + dropdown pattern (`state_from_hwnd` →
+                    // `active().path.parent()` → `PathBuf`) and
+                    // documents the "greying is UX-only, not a
+                    // capability gate" contract so a future
+                    // reader doesn't strip the `Option` guard as
+                    // redundant. Entries are greyed by
+                    // `refresh_file_menu` when the tab is
+                    // untitled or its path has no parent; the
+                    // `Option` guard here is what makes a
+                    // plugin-forged `WM_COMMAND` bypass a silent
+                    // no-op rather than a panic.
+                    ID_FILE_OPEN_CONTAINING_EXPLORER => {
+                        if let Some(d) = active_parent_dir(hwnd) {
+                            open_explorer_at(hwnd, &d);
+                        }
+                    }
+                    ID_FILE_OPEN_CONTAINING_CMD => {
+                        if let Some(d) = active_parent_dir(hwnd) {
+                            shell_launch_in_dir(hwnd, w!("cmd.exe"), &d);
+                        }
+                    }
+                    ID_FILE_OPEN_CONTAINING_POWERSHELL => {
+                        if let Some(d) = active_parent_dir(hwnd) {
+                            shell_launch_in_dir(hwnd, w!("powershell.exe"), &d);
+                        }
+                    }
+                    ID_FILE_OPEN_CONTAINING_WORKSPACE => {
+                        // "Folder as Workspace" on the parent dir.
+                        // Reuses the same `show_workspace_panel`
+                        // entry point the folder picker uses —
+                        // idempotent on the visibility flag, and
+                        // re-roots in place if the panel is
+                        // already open at a different folder.
+                        // Matches the "open folder as workspace"
+                        // menu entry's UX (no picker step needed
+                        // because we already know the folder).
+                        if let Some(d) = active_parent_dir(hwnd) {
+                            show_workspace_panel(hwnd, d);
+                        }
                     }
                     ID_VIEW_FOLDER_AS_WORKSPACE => {
                         // Three-branch toggle:
