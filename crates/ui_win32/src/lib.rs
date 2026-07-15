@@ -424,10 +424,10 @@ use windows::Win32::Graphics::Gdi::{
     CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EnumFontFamiliesExW, FillRect, GetDC,
     GetMonitorInfoW, GetStockObject, GetSysColorBrush, InvalidateRect, LineTo, MonitorFromWindow,
     MoveToEx, Polygon, ReleaseDC, ScreenToClient, SelectObject, SetBkColor, SetBkMode,
-    SetTextColor, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, COLOR_WINDOW, DEFAULT_CHARSET,
-    DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_BOLD, HBITMAP,
-    HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH,
-    PS_SOLID, TEXTMETRICW, TRANSPARENT,
+    SetTextColor, UpdateWindow, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, COLOR_WINDOW,
+    DEFAULT_CHARSET, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
+    FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    NULL_BRUSH, PS_SOLID, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
@@ -839,6 +839,11 @@ const WORKSPACE_CLOSE_BUTTON_WIDTH_PX: i32 = 22;
 /// Inset applied around the panel's inner content — a thin
 /// margin between the panel edge and header/action/tree rows.
 const WORKSPACE_INSET_PX: i32 = 2;
+/// Inset applied between the header row's etched frame and the
+/// label + close-× button inside. Two pixels lets the frame
+/// stay visible on all four sides without cropping the button's
+/// glyph.
+const WORKSPACE_HEADER_FRAME_INSET_PX: i32 = 2;
 
 /// Control ids for the workspace panel's child controls. Local
 /// to `workspace_hwnd`'s `WM_COMMAND` dispatch — they never reach
@@ -1354,8 +1359,15 @@ struct WindowState {
     // Positioned by the panel's own `WM_SIZE` handler; visible
     // whenever the panel is visible (their parent's visibility
     // gates them).
+    /// Header row: `SS_ETCHEDFRAME` STATIC enclosing the title
+    /// label + close-× button as one visually-grouped box. Same
+    /// technique as the About dialog's "MIT License" frame —
+    /// paints under the label + close via z-order (created
+    /// before them so they sit above at paint time).
+    workspace_header_frame: HWND,
     /// Header row: fixed title STATIC ("Folder as Workspace") on
-    /// the left; the close-× button on the right.
+    /// the left; the close-× button on the right. Both painted
+    /// on top of [`Self::workspace_header_frame`].
     workspace_header_label: HWND,
     workspace_close_hwnd: HWND,
     /// Action row: three narrow buttons on the right — unfold
@@ -23541,6 +23553,25 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // gated by the panel's own visibility (the panel starts
         // hidden). Positioned by `workspace_panel_wnd_proc`'s
         // `WM_SIZE` handler on every panel-size change.
+        //
+        // Frame created FIRST so z-order (later-created siblings
+        // paint above earlier) puts it behind the label + close.
+        // Same z-order technique the About dialog uses for its
+        // "MIT License" etched frame.
+        let workspace_header_frame = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_ETCHEDFRAME as i32),
+            0,
+            0,
+            0,
+            0,
+            Some(workspace_hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        )?;
         let workspace_header_label = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("STATIC"),
@@ -23930,6 +23961,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             workspace_width: DEFAULT_WORKSPACE_WIDTH_PX,
             workspace_splitter_drag: None,
             workspace_root: None,
+            workspace_header_frame,
             workspace_header_label,
             workspace_close_hwnd,
             workspace_action_unfold,
@@ -24829,6 +24861,7 @@ extern "system" fn workspace_panel_wnd_proc(
                 // `fif_dock_wnd_proc`'s `WM_SIZE`.
                 let hwnds = state_from_hwnd(GetParent(hwnd).unwrap_or_default()).map(|state| {
                     (
+                        state.workspace_header_frame,
                         state.workspace_header_label,
                         state.workspace_close_hwnd,
                         state.workspace_action_unfold,
@@ -24836,9 +24869,10 @@ extern "system" fn workspace_panel_wnd_proc(
                         state.workspace_action_locate,
                     )
                 });
-                if let Some((header_label, close, unfold, fold, locate)) = hwnds {
+                if let Some((header_frame, header_label, close, unfold, fold, locate)) = hwnds {
                     layout_workspace_panel_children(
                         WorkspacePanelChildren {
+                            header_frame,
                             header_label,
                             close,
                             unfold,
@@ -24878,7 +24912,7 @@ extern "system" fn workspace_panel_wnd_proc(
     }
 }
 
-/// Snapshot of the workspace panel's five child HWNDs. Owned by
+/// Snapshot of the workspace panel's six child HWNDs. Owned by
 /// value so [`layout_workspace_panel_children`] doesn't need to
 /// hold a `&mut WindowState` borrow while it issues `MoveWindow`
 /// calls that could re-enter our `wnd_proc` via child repaint
@@ -24886,6 +24920,10 @@ extern "system" fn workspace_panel_wnd_proc(
 /// FIF dock uses.
 #[derive(Copy, Clone)]
 struct WorkspacePanelChildren {
+    /// Etched-frame STATIC that visually groups the header row.
+    /// Painted first (via z-order) so `header_label` + `close`
+    /// sit on top.
+    header_frame: HWND,
     header_label: HWND,
     close: HWND,
     unfold: HWND,
@@ -24927,26 +24965,41 @@ unsafe fn layout_workspace_panel_children(
     let inner_right = (width - inset).max(inner_left);
     let inner_width = (inner_right - inner_left).max(0);
 
-    // Header row — title fills the left region, close-× pinned right.
+    // Header row — etched frame encloses title + close-× as a
+    // visually-grouped box. Frame spans the full header row;
+    // label and close inset inside so they don't overpaint the
+    // frame's border.
     let header_y = inset;
+    let frame_pad = WORKSPACE_HEADER_FRAME_INSET_PX;
+    let content_left = inner_left + frame_pad;
+    let content_right = (inner_right - frame_pad).max(content_left);
     let close_w = WORKSPACE_CLOSE_BUTTON_WIDTH_PX;
-    let close_x = (inner_right - close_w).max(inner_left);
-    let label_w = (close_x - inner_left).max(0);
+    let close_x = (content_right - close_w).max(content_left);
+    let label_w = (close_x - content_left).max(0);
+    let inner_h = (WORKSPACE_HEADER_HEIGHT_PX - 2 * frame_pad).max(0);
     unsafe {
         let _ = MoveWindow(
-            children.header_label,
+            children.header_frame,
             inner_left,
             header_y,
-            label_w,
+            inner_width,
             WORKSPACE_HEADER_HEIGHT_PX,
+            true,
+        );
+        let _ = MoveWindow(
+            children.header_label,
+            content_left,
+            header_y + frame_pad,
+            label_w,
+            inner_h,
             true,
         );
         let _ = MoveWindow(
             children.close,
             close_x,
-            header_y,
+            header_y + frame_pad,
             close_w,
-            WORKSPACE_HEADER_HEIGHT_PX,
+            inner_h,
             true,
         );
     }
@@ -25100,21 +25153,44 @@ extern "system" fn workspace_splitter_wnd_proc(
                 }
                 workspace.width = new_width;
                 let tab_hidden = !IsWindowVisible(tabs).as_bool();
-                layout_children(
-                    toolbar_hwnd,
-                    toolbar::toolbar_height_px(toolbar_bitmap_px),
-                    tabs,
-                    scintilla,
-                    status,
-                    fif_splitter,
-                    fif_dock,
-                    fif_dock_visible,
-                    fif_dock_height,
-                    tab_hidden,
-                    workspace,
-                    rect.right,
-                    rect.bottom,
-                );
+                // Suppress Scintilla's WM_PAINT storm during the
+                // drag's `MoveWindow` burst. Without this, every
+                // pixel of drag fires WM_SIZE on Scintilla, which
+                // invalidates and repaints the entire editor —
+                // visible as heavy flicker on wider windows.
+                //
+                // [`ScintillaRedrawGuard`] handles the SETREDRAW
+                // pair as RAII: enter() suppresses paints,
+                // Drop restores + `InvalidateRect`s in one shot.
+                // Using the guard rather than a manual bracket
+                // guarantees redraw is restored even if a future
+                // edit to `layout_children` introduces a panic
+                // path — a stuck-frozen Scintilla view would be
+                // unrecoverable for the user.
+                //
+                // Scoped block so the guard's Drop runs BEFORE the
+                // explicit `UpdateWindow` below — we want the
+                // guard's InvalidateRect to have marked the region
+                // dirty by the time UpdateWindow forces a paint.
+                {
+                    let _redraw = ScintillaRedrawGuard::enter(scintilla);
+                    layout_children(
+                        toolbar_hwnd,
+                        toolbar::toolbar_height_px(toolbar_bitmap_px),
+                        tabs,
+                        scintilla,
+                        status,
+                        fif_splitter,
+                        fif_dock,
+                        fif_dock_visible,
+                        fif_dock_height,
+                        tab_hidden,
+                        workspace,
+                        rect.right,
+                        rect.bottom,
+                    );
+                }
+                let _ = UpdateWindow(scintilla);
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
@@ -26566,21 +26642,32 @@ extern "system" fn splitter_wnd_proc(
                     state.fif_dock_height = new_height;
                 }
                 let tab_hidden = !IsWindowVisible(tabs).as_bool();
-                layout_children(
-                    toolbar_hwnd,
-                    toolbar_height,
-                    tabs,
-                    scintilla,
-                    status,
-                    splitter,
-                    dock,
-                    dock_visible,
-                    new_height,
-                    tab_hidden,
-                    workspace,
-                    rect.right,
-                    rect.bottom,
-                );
+                // Same anti-flicker discipline as the workspace
+                // splitter's drag — bracket the layout burst with
+                // `ScintillaRedrawGuard` so Scintilla batches all
+                // WM_SIZE-driven repaints into one after the guard
+                // drops. Without this the vertical drag flickers
+                // the editor content, most visibly on wide/tall
+                // windows.
+                {
+                    let _redraw = ScintillaRedrawGuard::enter(scintilla);
+                    layout_children(
+                        toolbar_hwnd,
+                        toolbar_height,
+                        tabs,
+                        scintilla,
+                        status,
+                        splitter,
+                        dock,
+                        dock_visible,
+                        new_height,
+                        tab_hidden,
+                        workspace,
+                        rect.right,
+                        rect.bottom,
+                    );
+                }
+                let _ = UpdateWindow(scintilla);
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
