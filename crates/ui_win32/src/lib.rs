@@ -18428,70 +18428,89 @@ fn open_explorer_at(hwnd: HWND, folder: &Path) {
 }
 
 /// Open Explorer at `file`'s parent folder with `file` itself
-/// highlighted and scrolled into view. Uses Explorer's
-/// `/select,"<abs path>"` command-line switch — the standard
-/// Windows technique that Notepad++'s and Explorer's own "Show in
-/// Folder" / Shift-right-click "Open file location" use.
+/// highlighted **and scrolled into view**. Uses the shell's
+/// `SHOpenFolderAndSelectItems` COM API — the "proper" way to do
+/// this on Windows. Notably more reliable than the
+/// `explorer.exe /select,"<path>"` command-line variant, which
+/// selects the item but does NOT scroll the view when Explorer
+/// reuses an existing window showing that folder — the item ends
+/// up highlighted somewhere off-screen. `SHOpenFolderAndSelectItems`
+/// hits the same code path Explorer uses internally when it
+/// synthesises "Show in Folder" from its own right-click menus,
+/// so the scroll-to-item behaviour is native.
 ///
-/// **Security.** Unlike [`open_explorer_at`], this variant does
-/// pass the path via `lpParameters` (a command line to
-/// `explorer.exe`) rather than as `lpFile`. That makes argument
-/// splicing a real concern — mitigated here by wrapping the path
-/// in double quotes. Windows filenames are documented as
-/// forbidding the double-quote character (along with `<`, `>`,
-/// `|`, `?`, `*`, `:`, `/`, `\`, and NUL — the path separators
-/// `/` and `\` are consumed by the path-component parser, not
-/// the filename itself), so no user-controlled path can escape
-/// the enclosing quotes to inject extra command tokens. This is
-/// the same envelope Explorer itself operates under when it
-/// synthesises `/select` from its own right-click menus.
+/// Implementation:
+///   1. Build a NUL-terminated wide-string path.
+///   2. `ILCreateFromPathW` → PIDL for the file item.
+///   3. `SHOpenFolderAndSelectItems(pidl, None, 0)` — per MSDN,
+///      when the selection array is empty the `pidlfolder`
+///      argument is treated as a fully-qualified item ID list
+///      pointing at a single item within a folder, and Explorer
+///      opens the item's PARENT folder with that item selected +
+///      revealed.
+///   4. `ILFree` the PIDL.
 ///
-/// **`file` must be a file path, never a folder.** The classic
-/// `CommandLineToArgvW` trailing-backslash-quote hazard (`"foo\"`
-/// parses as an escaped quote, not a terminator) is unreachable
-/// here only because a real file path never ends in `\` — a
-/// trailing separator marks a directory. If this helper is ever
-/// generalised to accept folder paths, the closing quote MUST be
-/// preceded by an explicit trim of any trailing `\` (or by
-/// switching to `SHOpenFolderAndSelectItems`, the COM-based
-/// PIDL-driven "proper" API for this operation). The `File`
-/// kind guard in both call sites (`ID_FILE_OPEN_CONTAINING_EXPLORER`
-/// only fires when `tab.path` is set from a legitimate file open,
-/// `ID_WORKSPACE_CTX_EXPLORER` gates on `WorkspaceCtxKind::File`)
-/// is what enforces the contract in practice.
+/// **COM requirement.** `SHOpenFolderAndSelectItems` requires COM
+/// to be initialised on the calling thread. The UI thread already
+/// has COM in STA mode by the time any menu command can fire,
+/// because Scintilla calls `OleInitialize` in its `ScintillaWin`
+/// constructor when the editor control is created (see
+/// `crates/scintilla-sys/vendor/scintilla/win32/ScintillaWin.cxx`
+/// ~line 628), and every menu that reaches this helper lives on
+/// the same message-pump thread. No explicit `CoInitializeEx`
+/// call is needed — attempting a second init would only return
+/// `S_FALSE` at best or `RPC_E_CHANGED_MODE` at worst.
 ///
-/// Failures log at `warn`; there is no user-facing error
-/// dialog — a missing/renamed file is the most common cause and
-/// warrants the same silent-failure treatment as
+/// **Security.** Unlike the `/select,"…"` command-line variant,
+/// this API takes a PIDL (a binary shell item id list), not a
+/// command line — so there is no argument-injection surface at
+/// all. `ILCreateFromPathW` parses the path itself and produces
+/// an opaque structure Explorer consumes directly. Callers may
+/// pass any legitimate filesystem path.
+///
+/// Failures log at `warn` and drop silently — the two possible
+/// error paths (file no longer exists → `ILCreateFromPathW`
+/// returns null; Explorer couldn't be reached →
+/// `SHOpenFolderAndSelectItems` returns an HRESULT) both warrant
+/// the same soft-fail treatment as
 /// [`open_path_in_default_viewer`].
-fn open_explorer_selecting(hwnd: HWND, file: &Path) {
+fn open_explorer_selecting(_hwnd: HWND, file: &Path) {
     use std::os::windows::ffi::OsStrExt;
-    // Build `/select,"<abs path>"` as a wide-string parameter
-    // buffer. The literal chunks (`/select,"` + the trailing `"`)
-    // are pure ASCII so `encode_utf16` and manual push are
-    // equivalent; using `encode_utf16` keeps the concatenation
-    // uniform. Terminating NUL required by `PCWSTR`.
-    let mut params: Vec<u16> = "/select,\"".encode_utf16().collect();
-    params.extend(file.as_os_str().encode_wide());
-    params.extend("\"".encode_utf16());
-    params.push(0);
-    let ret = unsafe {
-        ShellExecuteW(
-            Some(hwnd),
-            w!("open"),
-            w!("explorer.exe"),
-            PCWSTR(params.as_ptr()),
-            PCWSTR::null(),
-            SW_SHOWNORMAL,
-        )
-    };
-    if (ret.0 as isize) <= 32 {
+    use windows::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
+
+    let wide: Vec<u16> = file
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // SAFETY: `wide` is a stack-owned buffer live across the
+    // `ILCreateFromPathW` call. UI-thread only.
+    // `ILCreateFromPathW` returns null when the path can't be
+    // parsed (e.g. missing file); a null PIDL is a soft-fail
+    // rather than a crash.
+    let pidl = unsafe { ILCreateFromPathW(PCWSTR(wide.as_ptr())) };
+    if pidl.is_null() {
         tracing::warn!(
             file = ?file,
-            code = ret.0 as isize,
-            "ShellExecuteW(open, explorer.exe /select) failed"
+            "open_explorer_selecting: ILCreateFromPathW returned null"
+        );
+        return;
+    }
+    // SAFETY: `pidl` is a valid ITEMIDLIST from ILCreateFromPathW.
+    // `apidl = None` → cidl = 0 → SHOpenFolderAndSelectItems
+    // treats `pidl` as the full-item PIDL and selects it in its
+    // parent. COM is live on this thread (see doc comment).
+    if let Err(e) = unsafe { SHOpenFolderAndSelectItems(pidl, None, 0) } {
+        tracing::warn!(
+            file = ?file,
+            error = ?e,
+            "SHOpenFolderAndSelectItems failed"
         );
     }
+    // Always free the PIDL we allocated with ILCreateFromPathW —
+    // SHOpenFolderAndSelectItems does not take ownership.
+    unsafe { ILFree(Some(pidl)) };
 }
 
 /// Launch `program` (e.g. `"cmd.exe"` or `"powershell.exe"`) with
