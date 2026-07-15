@@ -488,19 +488,20 @@ use windows::Win32::UI::WindowsAndMessaging::{
     ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
     GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDC_SIZEWE, IDNO,
     IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
-    MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS, MFS_CHECKED, MFS_UNCHECKED,
-    MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
-    MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MIIM_STATE,
-    MSG, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW,
-    SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED, WM_CLOSE,
-    WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL, WM_INITMENUPOPUP, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE,
-    WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
-    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP,
-    WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    MB_OKCANCEL, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS, MFS_CHECKED,
+    MFS_UNCHECKED, MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION,
+    MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE,
+    MIIM_STATE, MSG, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED,
+    WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
+    WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL, WM_INITMENUPOPUP,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW,
+    WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_LAYERED,
+    WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -595,6 +596,17 @@ const ID_FILE_CLOSE_ALL_BUT_PINNED: u16 = 1027;
 const ID_FILE_CLOSE_ALL_TO_LEFT: u16 = 1028;
 const ID_FILE_CLOSE_ALL_TO_RIGHT: u16 = 1029;
 const ID_FILE_CLOSE_ALL_UNCHANGED: u16 = 1030;
+
+/// File → Move to Recycle Bin. Shows a confirmation dialog with
+/// the active file's absolute path; on OK, closes the active
+/// tab (discarding any unsaved edits — deleting a file is an
+/// "I'm done with it" action; prompting to save first before
+/// moving to trash is nonsensical) and hands the path to
+/// `SHFileOperationW(FO_DELETE | FOF_ALLOWUNDO)` so the OS
+/// performs its standard recycle-bin move (identical to a
+/// user-initiated Delete in Explorer). Greyed for untitled
+/// buffers via `refresh_file_menu`.
+const ID_FILE_MOVE_TO_RECYCLE_BIN: u16 = 1031;
 
 // Edit (1100-1199) — most route directly to Scintilla via SCI_*.
 const ID_EDIT_UNDO: u16 = 1100;
@@ -14615,6 +14627,16 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             close_multi.0 as usize,
             w!("Close &Multiple Documents"),
         )?;
+        // Greyed for untitled buffers via `refresh_file_menu` —
+        // MF_GRAYED here is the startup default (no tab yet
+        // exists, so nothing is deletable). Matches Notepad++'s
+        // File menu label + behaviour.
+        AppendMenuW(
+            file_menu,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_MOVE_TO_RECYCLE_BIN as usize,
+            w!("Move to Recycle &Bin"),
+        )?;
         AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
         AppendMenuW(
             file_menu,
@@ -16289,6 +16311,44 @@ fn show_yes_no_dialog(main_hwnd: HWND, title: &str, message: &str) -> bool {
         )
     };
     response == IDYES
+}
+
+/// Simple modal OK / Cancel prompt. Returns `true` for OK,
+/// `false` for Cancel (or any other dismissal — X in the title
+/// bar, Esc). Warning icon (matches the "you're about to lose
+/// something" tone the OK / Cancel pattern usually indicates —
+/// used by "Move to Recycle Bin" today, applicable to any
+/// destructive-but-recoverable confirmation).
+///
+/// Modal, so the caller MUST drop any `&mut WindowState` borrow
+/// before calling — same UB rule as [`show_yes_no_dialog`].
+fn show_ok_cancel_dialog(main_hwnd: HWND, title: &str, message: &str) -> bool {
+    let title_w = HSTRING::from(title);
+    let msg_w = HSTRING::from(message);
+    let response = unsafe {
+        MessageBoxW(
+            Some(main_hwnd),
+            &msg_w,
+            &title_w,
+            MB_OKCANCEL | MB_ICONWARNING,
+        )
+    };
+    response == IDOK
+}
+
+/// Format the "Move to Recycle Bin" confirmation dialog's body
+/// text. Pure function so the exact wording is unit-testable.
+/// Matches the wording the user requested verbatim:
+///
+/// > The file "C:\path\to\file.rb"
+/// > will be moved to your Recycle Bin and this document will
+/// > be closed.
+/// > Continue?
+fn move_to_recycle_bin_prompt_for(path: &Path) -> String {
+    format!(
+        "The file \"{}\"\nwill be moved to your Recycle Bin and this document will be closed.\nContinue?",
+        path.display()
+    )
 }
 
 /// Outcome of a [`show_save_confirm_dialog`] modal — Notepad++'s
@@ -18864,6 +18924,80 @@ fn open_explorer_selecting(_hwnd: HWND, file: &Path) {
     unsafe { ILFree(Some(pidl)) };
 }
 
+/// Move `path` to the Windows Recycle Bin via
+/// `SHFileOperationW(FO_DELETE | FOF_ALLOWUNDO)`. Returns
+/// `Ok(())` on a successful move, `Err(String)` with a
+/// diagnostic message on failure. This is the exact API path
+/// Explorer's own Delete key uses, so the OS Recycle Bin
+/// prompts, quota rules, and eventual restore-item metadata
+/// behave identically to a user-initiated delete.
+///
+/// **Confirmation.** We pass `FOF_NOCONFIRMATION` because the
+/// caller has already shown its own OK/Cancel prompt with the
+/// full file path; layering the shell's generic "Are you sure?"
+/// on top would be a friction double-tap.
+///
+/// **Buffer contract.** `SHFileOperationW`'s `pFrom` is a
+/// double-NUL-terminated wide-string list (`"path\0\0"`). We
+/// build the buffer as a `Vec<u16>` ending in two NULs and
+/// hand a `PCWSTR` pointing at its head.
+///
+/// **Security.** `path` is derived from `Tab.path` — an
+/// on-disk file the user opened themselves via File→Open,
+/// drag-drop, or session restore. Every entry into
+/// `SHFileOperationW` is gated by the caller's OK/Cancel
+/// prompt showing the exact absolute path, so the user always
+/// sees what they're about to delete.
+///
+/// **COM precondition.** `SHFileOperationW`'s Recycle Bin
+/// path goes through shell/COM machinery. The UI thread
+/// already has COM in STA mode by the time any menu command
+/// can fire — Scintilla's `OleInitialize` (called in
+/// `ScintillaWin`'s constructor when the editor control is
+/// created) established it, and every menu that reaches this
+/// helper lives on the same message-pump thread. Same
+/// invariant `open_explorer_selecting` relies on for
+/// `SHOpenFolderAndSelectItems`; no explicit `CoInitializeEx`
+/// call is needed.
+fn move_path_to_recycle_bin(path: &Path) -> std::result::Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::UI::Shell::{
+        SHFileOperationW, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FO_DELETE, SHFILEOPSTRUCTW,
+    };
+
+    // Double-NUL terminated wide string. SHFileOperationW's
+    // documented contract on `pFrom` — a single-file list must
+    // still end in two NULs (one terminates the last path, the
+    // second terminates the list itself).
+    let mut buf: Vec<u16> = path.as_os_str().encode_wide().collect();
+    buf.push(0);
+    buf.push(0);
+    let mut op = SHFILEOPSTRUCTW {
+        wFunc: FO_DELETE,
+        pFrom: PCWSTR(buf.as_ptr()),
+        // `FOF_ALLOWUNDO` is the "Recycle Bin" flag — without
+        // it, `FO_DELETE` performs an unrecoverable permanent
+        // delete. `FOF_NOCONFIRMATION` suppresses the shell's
+        // own "Are you sure?" so the caller's prompt is
+        // authoritative.
+        fFlags: u16::try_from((FOF_ALLOWUNDO | FOF_NOCONFIRMATION).0)
+            .expect("FOF flag bits fit in u16"),
+        ..Default::default()
+    };
+    // SAFETY: `buf` outlives the synchronous SHFileOperationW
+    // call. `pFrom` points into `buf`; no field of `op` is
+    // retained past this call.
+    let rc = unsafe { SHFileOperationW(&raw mut op) };
+    if rc == 0 && !op.fAnyOperationsAborted.as_bool() {
+        Ok(())
+    } else {
+        Err(format!(
+            "SHFileOperationW returned {rc} (aborted={})",
+            op.fAnyOperationsAborted.as_bool()
+        ))
+    }
+}
+
 /// Launch `program` (e.g. `"cmd.exe"` or `"powershell.exe"`) with
 /// `working_dir` as its current directory. Uses
 /// `ShellExecuteW`'s `lpDirectory` parameter — the launched
@@ -19008,6 +19142,9 @@ unsafe fn refresh_file_menu(file_menu: HMENU, shell: &codepp_shell::Shell) {
     apply(ID_FILE_CLOSE_ALL_TO_LEFT, close_to_left_enabled);
     apply(ID_FILE_CLOSE_ALL_TO_RIGHT, close_to_right_enabled);
     apply(ID_FILE_CLOSE_ALL_UNCHANGED, close_unchanged_enabled);
+    // Move to Recycle Bin: enabled iff the active tab has an
+    // on-disk path (untitled buffers have nothing to move).
+    apply(ID_FILE_MOVE_TO_RECYCLE_BIN, active_path.is_some());
 }
 
 /// Show the "About Code++" dialog modally. `main_hwnd` is the
@@ -31574,6 +31711,109 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     ID_FILE_CLOSE_ALL_UNCHANGED => {
                         close_multiple_documents(hwnd, CloseMultiKind::AllUnchanged);
                     }
+                    ID_FILE_MOVE_TO_RECYCLE_BIN => {
+                        // Flow:
+                        //   1. Snapshot the active tab's path (drop
+                        //      the borrow immediately — the confirm
+                        //      dialog spins its own message pump).
+                        //   2. Show OK / Cancel with the exact
+                        //      path in the body. Cancel → done.
+                        //   3. Force the buffer's savepoint so the
+                        //      close path skips the "Save changes?"
+                        //      modal. Deleting a file is an "I'm
+                        //      done" action; prompting to save
+                        //      first is nonsensical here.
+                        //   4. Close the active tab via the normal
+                        //      path (Scintilla doc release +
+                        //      rebind + tab strip resync). If
+                        //      close is aborted for any other
+                        //      reason (re-entrant plugin call,
+                        //      panic caught by the outcome
+                        //      wrapper), skip the deletion.
+                        //   5. Move the file to the Recycle Bin.
+                        //      Log an error dialog on
+                        //      SHFileOperationW failure — the
+                        //      buffer is already gone at this
+                        //      point so we can't undo the close,
+                        //      but the file is still on disk.
+                        //
+                        // The menu entry is greyed for untitled
+                        // buffers by `refresh_file_menu`, so a
+                        // click always reaches this arm with a
+                        // path — the `path.is_some()` guard is
+                        // UX-only, not a security boundary. Same
+                        // rationale documented on
+                        // `ID_FILE_OPEN_IN_DEFAULT_VIEWER`.
+                        let path: Option<PathBuf> = state_from_hwnd(hwnd)
+                            .and_then(|state| state.shell.active().and_then(|t| t.path.clone()));
+                        let Some(path) = path else {
+                            return LRESULT(0);
+                        };
+                        let prompt = move_to_recycle_bin_prompt_for(&path);
+                        let confirmed = show_ok_cancel_dialog(hwnd, "Delete file", &prompt);
+                        if !confirmed {
+                            return LRESULT(0);
+                        }
+                        // Force the buffer to clean state so the
+                        // save-prompt in
+                        // `handle_close_active_tab_inner` doesn't
+                        // fire — the whole point of this action
+                        // is that the file (and its edits) are
+                        // being discarded. The inner close path
+                        // reads dirty via `SCI_GETMODIFY` (a
+                        // direct-call query on the bound doc, not
+                        // the cached `Tab.dirty` field or a
+                        // notification-driven flag), so
+                        // `SCI_SETSAVEPOINT` here suppresses the
+                        // prompt synchronously and deterministically.
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            state.editor.send(SCI_SETSAVEPOINT, 0, 0);
+                        }
+                        // Close BEFORE delete for two reasons:
+                        //   1. `shell.close_active_tab` (called
+                        //      inside `handle_close_active_tab_inner`)
+                        //      unwatches the path, so the
+                        //      subsequent SHFileOperationW doesn't
+                        //      race the file-watcher and pop its
+                        //      own "reload? file deleted?" prompt
+                        //      on top of this flow.
+                        //   2. If the delete fails, the file is
+                        //      left on disk intact — the user can
+                        //      still recover their data by
+                        //      reopening it. The buffer is gone
+                        //      but that's the intended
+                        //      dischargeable state anyway.
+                        let outcome = handle_close_active_tab_with_outcome(hwnd);
+                        if !matches!(outcome, CloseOutcome::Closed) {
+                            // Close didn't happen (e.g. re-entrant
+                            // plugin call blocked state access).
+                            // Bail without touching the file so
+                            // the user's buffer/file stay in sync.
+                            return LRESULT(0);
+                        }
+                        // Preserve the "always at least one tab"
+                        // invariant if this was the last tab.
+                        // Matches every other close call site
+                        // that can drain the strip.
+                        ensure_one_tab(hwnd);
+                        if let Err(e) = move_path_to_recycle_bin(&path) {
+                            tracing::warn!(
+                                path = ?path,
+                                error = %e,
+                                "SHFileOperationW(FO_DELETE|FOF_ALLOWUNDO) failed"
+                            );
+                            show_error_dialog(
+                                hwnd,
+                                "Delete failed",
+                                &format!(
+                                    "The file could not be moved to the Recycle Bin.\n\n{}\n\n{}",
+                                    path.display(),
+                                    e
+                                ),
+                            );
+                        }
+                        fire_queued_notifications(hwnd);
+                    }
                     ID_FILE_RELOAD => {
                         // Reload from disk. Two checks before we
                         // touch anything:
@@ -33803,7 +34043,7 @@ mod wide_string_equals_tests {
 
 #[cfg(test)]
 mod tab_display_name_tests {
-    use super::{save_confirm_prompt_for, tab_display_name};
+    use super::{move_to_recycle_bin_prompt_for, save_confirm_prompt_for, tab_display_name};
     use codepp_shell::Tab;
     use std::path::PathBuf;
 
@@ -33884,6 +34124,34 @@ mod tab_display_name_tests {
         };
         let name = tab_display_name(&tab);
         assert!(!name.contains('\n'), "got {name:?}");
+    }
+
+    #[test]
+    fn move_to_recycle_bin_prompt_matches_spec() {
+        // The user-facing wording must match the spec verbatim.
+        // Pin the exact string so a stray edit to either the
+        // format literal or this assertion trips the test.
+        let out =
+            move_to_recycle_bin_prompt_for(std::path::Path::new(r"C:\Users\Max\Downloads\test.rb"));
+        assert_eq!(
+            out,
+            "The file \"C:\\Users\\Max\\Downloads\\test.rb\"\n\
+             will be moved to your Recycle Bin and this document will be closed.\n\
+             Continue?"
+        );
+    }
+
+    #[test]
+    fn move_to_recycle_bin_prompt_handles_spaces_in_path() {
+        // A common Windows case: spaces in the path shouldn't
+        // require quoting or escaping in the display — they're
+        // just rendered inside the outer quotes. Guards against
+        // a future format-string edit that adds its own
+        // shell-style quoting.
+        let out = move_to_recycle_bin_prompt_for(std::path::Path::new(
+            r"C:\Users\Max\Downloads\example - Copy.rb",
+        ));
+        assert!(out.contains(r#""C:\Users\Max\Downloads\example - Copy.rb""#));
     }
 
     #[test]
