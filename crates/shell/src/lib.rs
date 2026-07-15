@@ -1075,6 +1075,105 @@ impl SearchFlags {
     }
 }
 
+/// Fold a burst of raw file-watcher events into at most one
+/// [`FileChange`] per path. Windows' `ReadDirectoryChangesW`
+/// backend fires dozens of raw events for a single external
+/// save; without this coalescing the drain would fire one dialog
+/// per event, producing the user-reported "confirm 26 times to
+/// work through them all" flood.
+///
+/// **Order-independent classification.** For the same path,
+/// `Modified` dominates `Removed` regardless of which event
+/// arrived first in the batch. The reason to keep `Modified`
+/// rather than the "last event wins" alternative is that
+/// atomic-rename saves burst `Modify(Name)`/Remove-shaped events
+/// interleaved with `Modify(Any)`; picking "last wins" would
+/// pick Removed roughly half the time (the transient rename
+/// artefact), then the drain-level `try_exists` check would have
+/// to upgrade almost every event. Keeping the Modified early
+/// keeps the coalesce output stable and legible.
+///
+/// **Do not treat this classification as authoritative.**
+/// `Shell::drain` runs a `try_exists` filesystem check on the
+/// coalesced path AFTER this returns, and uses the on-disk state
+/// as the final truth — so an edit-then-delete sequence within
+/// one batch (where this returns `Modified` but the file is
+/// really gone) still surfaces as `Removed` correctly. This
+/// helper is a burst-compactor, not a state-of-the-world
+/// oracle.
+///
+/// Extracted as a pure function (out of drain) so the invariant
+/// is unit-testable without a live `FileWatcher` / channel pair.
+fn coalesce_file_changes(events: impl IntoIterator<Item = FileChange>) -> Vec<FileChange> {
+    let mut coalesced: std::collections::HashMap<PathBuf, FileChange> =
+        std::collections::HashMap::new();
+    for change in events {
+        let (path, is_modified) = match &change {
+            FileChange::Modified(p) => (p.clone(), true),
+            FileChange::Removed(p) => (p.clone(), false),
+        };
+        match coalesced.get(&path) {
+            // Existing Modified wins over new Removed —
+            // atomic-rename transient removal AFTER the real
+            // modification event.
+            Some(FileChange::Modified(_)) if !is_modified => {}
+            _ => {
+                coalesced.insert(path, change);
+            }
+        }
+    }
+    coalesced.into_values().collect()
+}
+
+/// Verify a coalesced file-change against the real filesystem
+/// state at `path`. Filesystem truth wins over the event kind
+/// [`coalesce_file_changes`] returned — this catches two
+/// scenarios where the event classification alone would produce
+/// a wrong dialog:
+///
+///   * **Atomic-rename save reporting Removed:** the notify
+///     backend fired only Modify(Name)/Remove-shaped events for
+///     what was really a modification. `exists` returns `true`
+///     (the rename landed a fresh file at the same path before
+///     drain runs) — reclassify as `Modified` so the user gets
+///     the correct reload prompt instead of a spurious "was
+///     deleted" alert.
+///   * **Edit-then-delete within one batch reporting Modified:**
+///     `coalesce_file_changes` picks Modified for a same-path
+///     burst that includes any Modified event, but if the file
+///     is actually gone we need `Removed`. `exists` returns
+///     `false` — reclassify.
+///
+/// `exists` is a closure so tests can pin the reclassification
+/// without touching the real filesystem. Production wires it to
+/// `Path::try_exists`. On `Err` (permission denied, ADS access
+/// fault, symlink loop, ...) the return is treated as
+/// `Removed` — the ambiguous case is safe to report because the
+/// user's next Save-As recovers the buffer either way, and a
+/// permissions-fault log line is not more useful to the user
+/// than the removal dialog. The `Err` is logged at `warn` for
+/// diagnostic visibility.
+fn classify_change_by_existence<F>(change: FileChange, exists: F) -> FileChange
+where
+    F: FnOnce(&Path) -> std::io::Result<bool>,
+{
+    let path = match change {
+        FileChange::Modified(p) | FileChange::Removed(p) => p,
+    };
+    match exists(&path) {
+        Ok(true) => FileChange::Modified(path),
+        Ok(false) => FileChange::Removed(path),
+        Err(e) => {
+            tracing::warn!(
+                path = ?path,
+                error = %e,
+                "file-watcher: try_exists failed; classifying as Removed"
+            );
+            FileChange::Removed(path)
+        }
+    }
+}
+
 impl Shell {
     /// Create a `Shell` and wire up the cross-thread plumbing.
     ///
@@ -2254,8 +2353,28 @@ impl Shell {
         while let Ok(result) = self.load_rx.try_recv() {
             self.apply_load_result(ui, result, &mut pending);
         }
-        while let Ok(change) = self.change_rx.try_recv() {
-            self.apply_file_change(change, &mut pending);
+        // File-change events: coalesce first, then apply.
+        //
+        // A single external save fires many events on Windows'
+        // `ReadDirectoryChangesW` — an atomic-rename save (which
+        // both Notepad++ and Code++'s own `save_current_to_disk`
+        // use) produces `Modify(Name)` events for the rename plus
+        // `Modify(Any)` for the actual write, often several of
+        // each because the API doesn't compact bursts. Firing one
+        // dialog per raw event surfaced as the user-reported
+        // "confirm 26 times to work through them all" bug when
+        // the same file is open in Notepad++ and Code++
+        // simultaneously and either app saves.
+        //
+        // Coalesce by path (step 1) then verify existence
+        // (step 2). See [`coalesce_file_changes`] for the pure
+        // coalescing logic and [`classify_change_by_existence`]
+        // for the filesystem-verification wrapper.
+        let events: Vec<FileChange> =
+            std::iter::from_fn(|| self.change_rx.try_recv().ok()).collect();
+        for change in coalesce_file_changes(events) {
+            let effective = classify_change_by_existence(change, Path::try_exists);
+            self.apply_file_change(effective, &mut pending);
         }
         // Stage FIF events for the UI to consume after the borrow
         // ends — same pattern as plugin notifications. Per active
@@ -8960,6 +9079,209 @@ mod tests {
             pending.is_empty(),
             "watcher straggler must not queue any user dialog; got {pending:?}"
         );
+    }
+
+    #[test]
+    fn coalesce_dedupes_repeated_modified_events_for_one_path() {
+        // notify::RecommendedWatcher on Windows fires several
+        // Modify(Any) events for a single external save — the
+        // API doesn't compact bursts. Drain must fold them into
+        // one FileChange for the path.
+        let path = PathBuf::from("/tmp/burst.txt");
+        let events = vec![
+            FileChange::Modified(path.clone()),
+            FileChange::Modified(path.clone()),
+            FileChange::Modified(path.clone()),
+        ];
+        let out = coalesce_file_changes(events);
+        assert_eq!(out.len(), 1);
+        assert!(matches!(&out[0], FileChange::Modified(p) if *p == path));
+    }
+
+    #[test]
+    fn coalesce_modified_wins_over_removed_regardless_of_order() {
+        // Order-independence pin: Modified beats Removed
+        // whether Modified came first, last, or in the middle.
+        // Same-path bursts must collapse to Modified in every
+        // ordering, so the drain-level filesystem check has a
+        // stable classification to work from (no matter what
+        // arrival order the notify backend happened to use).
+        let path = PathBuf::from("/tmp/order.txt");
+        let orderings: [&[FileChange]; 3] = [
+            &[
+                FileChange::Modified(path.clone()),
+                FileChange::Removed(path.clone()),
+            ],
+            &[
+                FileChange::Removed(path.clone()),
+                FileChange::Modified(path.clone()),
+            ],
+            &[
+                FileChange::Removed(path.clone()),
+                FileChange::Modified(path.clone()),
+                FileChange::Removed(path.clone()),
+            ],
+        ];
+        for events in orderings {
+            let out = coalesce_file_changes(events.iter().cloned());
+            assert_eq!(out.len(), 1, "events={events:?}");
+            assert!(
+                matches!(&out[0], FileChange::Modified(p) if *p == path),
+                "expected Modified for events={events:?}, got {:?}",
+                out[0]
+            );
+        }
+    }
+
+    #[test]
+    fn coalesce_modified_wins_over_removed_for_same_path() {
+        // Atomic-rename save: the notify backend may sequence
+        // Modify(Name)→Remove-shaped events followed by a real
+        // Modify(Any). The Modified reflects the final state;
+        // Removed here is a transient rename artifact and must
+        // NOT surface as a "was deleted" dialog.
+        let path = PathBuf::from("/tmp/atomic.txt");
+        let events = vec![
+            FileChange::Removed(path.clone()),
+            FileChange::Modified(path.clone()),
+            FileChange::Removed(path.clone()),
+        ];
+        let out = coalesce_file_changes(events);
+        assert_eq!(out.len(), 1);
+        assert!(
+            matches!(&out[0], FileChange::Modified(p) if *p == path),
+            "Modified must win over Removed for the same path"
+        );
+    }
+
+    #[test]
+    fn coalesce_preserves_removed_when_no_modified_arrived() {
+        // A genuine deletion with no follow-on Modified — the
+        // file really is gone from that path. Must preserve the
+        // Removed classification so the "was deleted" dialog
+        // surfaces. The follow-on `try_exists` gate lives in
+        // `Shell::drain`, not this helper, so we return
+        // Removed here regardless of any filesystem state.
+        let path = PathBuf::from("/tmp/deleted.txt");
+        let events = vec![
+            FileChange::Removed(path.clone()),
+            FileChange::Removed(path.clone()),
+        ];
+        let out = coalesce_file_changes(events);
+        assert_eq!(out.len(), 1);
+        assert!(matches!(&out[0], FileChange::Removed(p) if *p == path));
+    }
+
+    #[test]
+    fn coalesce_keeps_events_for_different_paths_separate() {
+        // Two files saved simultaneously — one dialog per file
+        // is correct. The coalescing is per-path only.
+        let a = PathBuf::from("/tmp/a.txt");
+        let b = PathBuf::from("/tmp/b.txt");
+        let events = vec![
+            FileChange::Modified(a.clone()),
+            FileChange::Modified(b.clone()),
+            FileChange::Modified(a.clone()),
+        ];
+        let mut out = coalesce_file_changes(events);
+        out.sort_by(|x, y| {
+            let px = match x {
+                FileChange::Modified(p) | FileChange::Removed(p) => p,
+            };
+            let py = match y {
+                FileChange::Modified(p) | FileChange::Removed(p) => p,
+            };
+            px.cmp(py)
+        });
+        assert_eq!(out.len(), 2);
+        assert!(matches!(&out[0], FileChange::Modified(p) if *p == a));
+        assert!(matches!(&out[1], FileChange::Modified(p) if *p == b));
+    }
+
+    #[test]
+    fn coalesce_empty_input_yields_empty_output() {
+        // Trivially: no events → no dialogs. Guards a future
+        // refactor that could accidentally emit a phantom entry
+        // for an unmatched path.
+        let out = coalesce_file_changes(Vec::<FileChange>::new());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn classify_upgrades_removed_to_modified_when_file_exists() {
+        // The atomic-rename case: notify said Removed but the
+        // rename landed a fresh file at the same path before we
+        // look. Verifier must upgrade to Modified so the user
+        // gets the correct reload prompt instead of a spurious
+        // "was deleted" alert.
+        let path = PathBuf::from("/tmp/exists.txt");
+        let out = classify_change_by_existence(FileChange::Removed(path.clone()), |_| Ok(true));
+        assert!(matches!(out, FileChange::Modified(p) if p == path));
+    }
+
+    #[test]
+    fn classify_downgrades_modified_to_removed_when_file_absent() {
+        // The bug the reviewer caught on the first pass:
+        // `coalesce_file_changes` returns Modified for an
+        // edit-then-delete batch (a build script that writes
+        // then unlinks a file within one drain window). Without
+        // filesystem verification the user gets a "reload from
+        // disk?" prompt for a file that no longer exists, and
+        // confirming reload fails the read. Filesystem truth
+        // wins over the coalesced event kind.
+        let path = PathBuf::from("/tmp/absent.txt");
+        let out = classify_change_by_existence(FileChange::Modified(path.clone()), |_| Ok(false));
+        assert!(matches!(out, FileChange::Removed(p) if p == path));
+    }
+
+    #[test]
+    fn classify_removed_stays_removed_when_file_absent() {
+        // No-op case: notify said Removed, file really is gone,
+        // classification stays Removed. Guards against a
+        // future refactor accidentally treating "false" as
+        // "upgrade to Modified" via double-negation.
+        let path = PathBuf::from("/tmp/really_gone.txt");
+        let out = classify_change_by_existence(FileChange::Removed(path.clone()), |_| Ok(false));
+        assert!(matches!(out, FileChange::Removed(p) if p == path));
+    }
+
+    #[test]
+    fn classify_modified_stays_modified_when_file_present() {
+        // Common case: notify said Modified, file exists,
+        // classification stays Modified.
+        let path = PathBuf::from("/tmp/normal.txt");
+        let out = classify_change_by_existence(FileChange::Modified(path.clone()), |_| Ok(true));
+        assert!(matches!(out, FileChange::Modified(p) if p == path));
+    }
+
+    #[test]
+    fn classify_err_falls_through_as_removed() {
+        // Permission denied / ADS access fault / symlink loop —
+        // any Err from try_exists is safer to report as
+        // Removed. The user's Save-As recovers the buffer
+        // regardless, and a permissions-fault log line is not
+        // more useful than the removal dialog.
+        let path = PathBuf::from("/tmp/perm_denied.txt");
+        let out = classify_change_by_existence(FileChange::Modified(path.clone()), |_| {
+            Err(std::io::Error::other("permission denied"))
+        });
+        assert!(matches!(out, FileChange::Removed(p) if p == path));
+    }
+
+    #[test]
+    fn coalesce_handles_the_user_reported_26_event_flood() {
+        // Regression pin for the specific user-reported symptom:
+        // 26 raw events for one path collapse to exactly one
+        // FileChange. Matches the count in the bug report.
+        let path = PathBuf::from("/tmp/example - Copy.rb");
+        let events: Vec<FileChange> = std::iter::repeat_with(|| FileChange::Modified(path.clone()))
+            .take(20)
+            .chain(std::iter::repeat_with(|| FileChange::Removed(path.clone())).take(6))
+            .collect();
+        assert_eq!(events.len(), 26);
+        let out = coalesce_file_changes(events);
+        assert_eq!(out.len(), 1);
+        assert!(matches!(&out[0], FileChange::Modified(p) if *p == path));
     }
 
     #[cfg(target_os = "windows")]
