@@ -712,6 +712,17 @@ const WM_APP_WAKE: u32 = WM_APP + 1;
 /// works. We have only one timer on the main window, so `1` is
 /// fine.
 const AUTOSAVE_TIMER_ID: usize = 1;
+/// Timer id for the async "Unfold All" walk on the workspace
+/// tree. Each tick processes one folder — expanding it (which
+/// fires `TVN_ITEMEXPANDING` → lazy `read_dir`) and enqueueing
+/// its subfolders for later ticks. Fires every 5 ms while
+/// `workspace_unfold_pending` is non-empty; the timer is killed
+/// when the queue drains. Bounded work per tick keeps the UI
+/// responsive on very large workspaces — the alternative (one
+/// synchronous walk of the entire tree) froze the app on any
+/// workspace big enough to notice, which is exactly the N++
+/// behaviour we set out to avoid.
+const WORKSPACE_UNFOLD_TIMER_ID: usize = 2;
 
 /// Auto-save period in milliseconds. 7 s matches Notepad++'s
 /// default for its "auto-save unsaved buffers" backup loop —
@@ -1396,6 +1407,16 @@ struct WindowState {
     /// with N++, which walks the whole tree eagerly on open
     /// and freezes on large workspaces.
     workspace_tree_hwnd: HWND,
+    /// DFS queue for the async "Unfold All" walk. Non-empty ⇔
+    /// walk in progress. On each `WM_TIMER(WORKSPACE_UNFOLD_TIMER_ID)`
+    /// tick we pop one folder, expand it (which fires
+    /// `TVN_ITEMEXPANDING` → lazy `read_dir`), and push any of
+    /// its unexpanded subfolders back onto the queue. When
+    /// empty the timer is killed. This keeps the UI thread
+    /// free between ticks so paints / mouse / keys still flow
+    /// — the alternative (one synchronous walk of the whole
+    /// tree) froze the app end-to-end.
+    workspace_unfold_pending: Vec<HTREEITEM>,
     /// Modeless top-level progress window shown while a FIF job
     /// is running. `None` until the user clicks Find All; the
     /// terminal `FifEvent` (Done or Cancelled) destroys it and
@@ -24036,6 +24057,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             workspace_action_fold,
             workspace_action_locate,
             workspace_tree_hwnd,
+            workspace_unfold_pending: Vec::new(),
             fif_progress_hwnd: None,
             fif_active_job: None,
             fif_pending_results: Vec::new(),
@@ -27021,23 +27043,37 @@ unsafe fn tree_walk_descendants<F: FnMut(HWND, HTREEITEM)>(
     }
 }
 
-/// Recursively expand every folder in the tree starting from
-/// the root. Because folders are lazy-loaded via
-/// `TVN_ITEMEXPANDINGW`, calling `TVM_EXPAND` on an `UNPOP`
-/// folder triggers the expand notification which populates its
-/// children; the walk then descends into those newly-populated
-/// children on the next iteration.
+/// Kick off the async "Unfold All" walk. Seeds the pending
+/// queue with the root and starts the `WM_TIMER` that ticks the
+/// state machine. Idempotent: a second click while a walk is
+/// already in progress is a no-op (the queue stays as-is and
+/// the existing timer keeps firing).
 ///
-/// **Cost:** proportional to total files+folders in the
-/// workspace, one `read_dir` per folder. On large trees this
-/// can take a noticeable moment — the user is opting in
-/// explicitly by clicking the button. `SendMessage` on
-/// `WM_SETREDRAW` around the whole walk suppresses flicker.
+/// The walk itself lives in [`tick_workspace_unfold`], which
+/// runs one folder per `WM_TIMER(WORKSPACE_UNFOLD_TIMER_ID)`
+/// tick. Keeping work tiny per tick is what keeps the UI
+/// responsive — the synchronous "walk the whole tree at once"
+/// approach we started with froze the app on any workspace big
+/// enough to notice.
 ///
 /// # Safety
 ///
-/// `tree` must be a live `SysTreeView32` HWND.
-unsafe fn tree_unfold_all(tree: HWND) {
+/// `main_hwnd` must be the main window HWND. UI thread only.
+unsafe fn start_workspace_unfold_all(main_hwnd: HWND) {
+    let (tree, already_running) = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        (
+            state.workspace_tree_hwnd,
+            !state.workspace_unfold_pending.is_empty(),
+        )
+    } else {
+        return;
+    };
+    if already_running {
+        // A walk is already in progress; ignore the extra click
+        // rather than spawning a second timer that would race the
+        // first one's queue mutations.
+        return;
+    }
     let root = unsafe {
         SendMessageW(
             tree,
@@ -27050,42 +27086,85 @@ unsafe fn tree_unfold_all(tree: HWND) {
     if root_item.0 == 0 {
         return;
     }
-    // Suppress paint flicker during the burst. The tree isn't a
-    // Scintilla control, so we don't need `ScintillaRedrawGuard`;
-    // a plain `WM_SETREDRAW` bracket is enough — TreeView has no
-    // reason to hold the "no redraw" state after we restore.
-    unsafe {
-        SendMessageW(tree, WM_SETREDRAW, Some(WPARAM(0)), Some(LPARAM(0)));
+    if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        state.workspace_unfold_pending.push(root_item);
     }
-    // Fixed-point walk: expanding a folder can add new children
-    // (via the TVN_ITEMEXPANDING lazy-load hook), which we then
-    // want to visit. Simplest: after the pass, if any UNPOP
-    // folder remains anywhere, run another pass. Bounded by tree
-    // depth × total nodes; in practice one or two passes.
-    for _round in 0..8 {
-        let mut work_done = false;
-        unsafe {
-            tree_walk_descendants(tree, root_item, &mut |t, node| {
-                let state = tree_item_lparam(t, node);
-                if state == WORKSPACE_ITEM_UNPOP || state == WORKSPACE_ITEM_POP {
-                    // Only expand if not already expanded — TVM_EXPAND
-                    // is a toggle for the `TVE_EXPAND` action, actually
-                    // no: `TVE_EXPAND` sets expanded state (idempotent).
-                    tree_expand(t, node, TVE_EXPAND.0);
-                    if state == WORKSPACE_ITEM_UNPOP {
-                        work_done = true;
-                    }
-                }
-            });
+    // 5 ms interval — fast enough to feel snappy on small trees
+    // (~200 folders/sec), slow enough that the message pump gets
+    // real breathing room between ticks. `SetTimer` clamps to the
+    // system timer resolution (~10–15 ms on most Windows setups),
+    // so in practice this is a "yield after each folder" throttle.
+    unsafe {
+        SetTimer(Some(main_hwnd), WORKSPACE_UNFOLD_TIMER_ID, 5, None);
+    }
+}
+
+/// Process one folder from the "Unfold All" pending queue.
+/// Called from the `WM_TIMER(WORKSPACE_UNFOLD_TIMER_ID)` arm of
+/// `main_wnd_proc`. Returns `true` if more work remains, `false`
+/// if the queue is empty (caller kills the timer).
+///
+/// One folder per tick — the whole point of this design. Doing
+/// more per tick would defeat the "UI stays responsive"
+/// guarantee that motivates the async path.
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window HWND. UI thread only.
+unsafe fn tick_workspace_unfold(main_hwnd: HWND) -> bool {
+    let (tree, node) = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        (
+            state.workspace_tree_hwnd,
+            state.workspace_unfold_pending.pop(),
+        )
+    } else {
+        return false;
+    };
+    let Some(node) = node else {
+        return false;
+    };
+    // Expand this folder — fires `TVN_ITEMEXPANDING` synchronously,
+    // which populates its children on the first expand (state
+    // machine `UNPOP → POP`). Idempotent on already-populated
+    // folders.
+    unsafe { tree_expand(tree, node, TVE_EXPAND.0) };
+    // Discover this folder's subfolder children and enqueue them
+    // for later ticks. Stack semantics (`Vec::push`) → DFS: we
+    // dive into one branch before moving to siblings, which
+    // matches user expectation for "unfold this whole subtree
+    // then move on".
+    let mut child = unsafe { tree_first_child(tree, node) };
+    while child.0 != 0 {
+        let child_state = unsafe { tree_item_lparam(tree, child) };
+        // Enqueue every folder — UNPOP (needs a read_dir when
+        // expanded) OR POP (already read, but may have deeper
+        // subfolders we still need to walk).
+        if child_state == WORKSPACE_ITEM_UNPOP || child_state == WORKSPACE_ITEM_POP {
+            if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+                state.workspace_unfold_pending.push(child);
+            }
         }
-        if !work_done {
-            break;
-        }
+        child = unsafe { tree_next_sibling(tree, child) };
+    }
+    // More work iff queue is non-empty. Caller uses this to decide
+    // whether to keep the timer alive.
+    unsafe { state_from_hwnd(main_hwnd) }.is_some_and(|s| !s.workspace_unfold_pending.is_empty())
+}
+
+/// Cancel an in-flight "Unfold All" walk. Called by `Fold All`
+/// (so its `TVE_COLLAPSE` walk isn't racing the unfold) and by
+/// `hide_workspace_panel` / `WM_DESTROY` (so a timer tick can't
+/// fire on stale tree state after the panel is gone).
+///
+/// # Safety
+///
+/// `main_hwnd` must be the main window HWND. UI thread only.
+unsafe fn cancel_workspace_unfold(main_hwnd: HWND) {
+    if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        state.workspace_unfold_pending.clear();
     }
     unsafe {
-        SendMessageW(tree, WM_SETREDRAW, Some(WPARAM(1)), Some(LPARAM(0)));
-        let _ = InvalidateRect(Some(tree), None, true);
-        let _ = UpdateWindow(tree);
+        let _ = KillTimer(Some(main_hwnd), WORKSPACE_UNFOLD_TIMER_ID);
     }
 }
 
@@ -27146,10 +27225,22 @@ fn strip_prefix_case_insensitive(target: &Path, prefix: &Path) -> Option<PathBuf
     let mut p_iter = prefix.components();
     loop {
         match (t_iter.next(), p_iter.next()) {
-            (_, None) => {
-                // Prefix exhausted — the rest of the target
-                // components form the relative path.
-                return Some(t_iter.collect());
+            (None, None) => {
+                // Both exhausted — target == prefix. The relative
+                // remainder is empty.
+                return Some(PathBuf::new());
+            }
+            (Some(first_extra), None) => {
+                // Prefix exhausted while target has more — the
+                // remaining components form the relative path.
+                // `first_extra` was consumed by the pattern match
+                // and must be re-included; naive `t_iter.collect()`
+                // silently drops it.
+                let mut rel = PathBuf::from(first_extra.as_os_str());
+                for c in t_iter {
+                    rel.push(c);
+                }
+                return Some(rel);
             }
             (None, Some(_)) => return None,
             (Some(tc), Some(pc)) => {
@@ -27397,6 +27488,11 @@ unsafe fn show_workspace_panel(main_hwnd: HWND, root: PathBuf) {
 ///
 /// Same invariants as [`show_workspace_panel`].
 unsafe fn hide_workspace_panel(main_hwnd: HWND) {
+    // Kill any in-flight "Unfold All" walk BEFORE we tear the
+    // panel state down — the timer would otherwise keep firing
+    // and reach into a tree HWND whose parent's visibility just
+    // flipped underneath it.
+    unsafe { cancel_workspace_unfold(main_hwnd) };
     let snapshot = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
         if !state.workspace_visible {
             return;
@@ -29524,19 +29620,22 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         toggle_workspace_panel(hwnd);
                     }
                     IDC_WORKSPACE_UNFOLD => {
-                        // Workspace panel: expand every folder in the
-                        // tree, lazy-loading intermediate `read_dir`s
-                        // as we go. See [`tree_unfold_all`] for the
-                        // fixed-point walk that handles the "expanding
-                        // one folder reveals new UNPOP folders" case.
-                        let tree = state_from_hwnd(hwnd).map(|s| s.workspace_tree_hwnd);
-                        if let Some(t) = tree {
-                            tree_unfold_all(t);
-                        }
+                        // Workspace panel: start the async
+                        // "Unfold All" walk. See
+                        // [`start_workspace_unfold_all`] and
+                        // [`tick_workspace_unfold`] — the walk runs
+                        // one folder per `WM_TIMER` tick so the UI
+                        // stays responsive on large workspaces. A
+                        // second click while a walk is already in
+                        // progress is a no-op.
+                        start_workspace_unfold_all(hwnd);
                     }
                     IDC_WORKSPACE_FOLD => {
                         // Workspace panel: collapse every folder in
                         // the tree. Purely a UI operation — no I/O.
+                        // Cancel any in-flight unfold walk first so
+                        // its ticks don't fight our collapse.
+                        cancel_workspace_unfold(hwnd);
                         let tree = state_from_hwnd(hwnd).map(|s| s.workspace_tree_hwnd);
                         if let Some(t) = tree {
                             tree_fold_all(t);
@@ -30460,6 +30559,15 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // view" pattern; `catch_unwind` matches `WM_DESTROY`
                 // so a panic in shell bookkeeping can't unwind
                 // across the `extern "system"` frame.
+                if wparam.0 == WORKSPACE_UNFOLD_TIMER_ID {
+                    // Async "Unfold All" tick — process one folder,
+                    // then decide whether to keep the timer alive.
+                    let more = tick_workspace_unfold(hwnd);
+                    if !more {
+                        let _ = KillTimer(Some(hwnd), WORKSPACE_UNFOLD_TIMER_ID);
+                    }
+                    return LRESULT(0);
+                }
                 if wparam.0 == AUTOSAVE_TIMER_ID {
                     if let Some(state) = state_from_hwnd(hwnd) {
                         // Freeze the editor's WM_PAINT delivery
@@ -30543,8 +30651,11 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 //
                 // Kill the auto-save timer first so a tick can't
                 // race the shutdown save (or arrive after the box
-                // is reclaimed below).
+                // is reclaimed below). Same reasoning for the
+                // workspace-unfold timer — a mid-shutdown tick
+                // reaching into a torn-down tree HWND is UB.
                 let _ = KillTimer(Some(hwnd), AUTOSAVE_TIMER_ID);
+                let _ = KillTimer(Some(hwnd), WORKSPACE_UNFOLD_TIMER_ID);
                 // Fire NPPN_BEFORESHUTDOWN before any host-side
                 // teardown. Plugins use this hook to save their
                 // own state alongside the host's session save.
@@ -31694,6 +31805,84 @@ mod file_menu_extension_tests {
             "unregistered extension must fail — otherwise the greying logic \
              never fires and the menu entry is permanently enabled"
         );
+    }
+}
+
+#[cfg(test)]
+mod strip_prefix_case_insensitive_tests {
+    use super::strip_prefix_case_insensitive;
+    use std::path::{Path, PathBuf};
+
+    /// Common case: target and prefix share components, target has
+    /// more. The relative remainder must include EVERY component of
+    /// target that isn't in prefix — regression against the bug
+    /// where the `(_, None)` match arm consumed the first extra
+    /// component in the pattern but dropped it in the `t_iter.collect()`
+    /// that followed, yielding a `PathBuf` missing its topmost segment.
+    #[test]
+    fn returns_all_target_components_past_prefix() {
+        let target = Path::new(r"C:\Users\Max\Projects\code-plus-plus\crates\ui_win32\src\lib.rs");
+        let prefix = Path::new(r"C:\Users\Max\Projects\code-plus-plus");
+        let rel = strip_prefix_case_insensitive(target, prefix).expect("should match");
+        assert_eq!(rel, PathBuf::from(r"crates\ui_win32\src\lib.rs"));
+    }
+
+    /// Drive-letter case difference. Windows filesystems are
+    /// case-insensitive; a `c:` vs `C:` mismatch must not defeat
+    /// the strip. Std's `Path::strip_prefix` is case-SENSITIVE and
+    /// would return `None` here — this is the reason
+    /// `strip_prefix_case_insensitive` exists.
+    #[test]
+    fn drive_letter_case_mismatch_is_tolerated() {
+        let target = Path::new(r"c:\users\max\projects\code-plus-plus\readme.md");
+        let prefix = Path::new(r"C:\Users\Max\Projects\code-plus-plus");
+        let rel = strip_prefix_case_insensitive(target, prefix).expect("should match");
+        assert_eq!(rel, PathBuf::from("readme.md"));
+    }
+
+    /// Component case difference deeper in the path — also
+    /// tolerated.
+    #[test]
+    fn interior_component_case_mismatch_is_tolerated() {
+        let target = Path::new(r"C:\Users\MAX\projects\Code-Plus-Plus\src");
+        let prefix = Path::new(r"C:\users\Max\PROJECTS\code-plus-plus");
+        let rel = strip_prefix_case_insensitive(target, prefix).expect("should match");
+        assert_eq!(rel, PathBuf::from("src"));
+    }
+
+    /// Target and prefix identical: relative remainder is empty.
+    #[test]
+    fn identical_paths_yield_empty_rel() {
+        let target = Path::new(r"C:\Users\Max\code");
+        let prefix = Path::new(r"C:\Users\Max\code");
+        let rel = strip_prefix_case_insensitive(target, prefix).expect("should match");
+        assert_eq!(rel, PathBuf::new());
+    }
+
+    /// Target diverges from prefix mid-path: no match.
+    #[test]
+    fn diverging_paths_return_none() {
+        let target = Path::new(r"C:\Users\Max\OtherProject\file.rs");
+        let prefix = Path::new(r"C:\Users\Max\code-plus-plus");
+        assert_eq!(strip_prefix_case_insensitive(target, prefix), None);
+    }
+
+    /// Target shorter than prefix: no match.
+    #[test]
+    fn target_shorter_than_prefix_returns_none() {
+        let target = Path::new(r"C:\Users\Max");
+        let prefix = Path::new(r"C:\Users\Max\code-plus-plus");
+        assert_eq!(strip_prefix_case_insensitive(target, prefix), None);
+    }
+
+    /// Single-component past prefix — the most stripped-down form
+    /// of the regressed bug. Must return that one component.
+    #[test]
+    fn single_extra_component_survives() {
+        let target = Path::new(r"C:\workspace\just-one-more");
+        let prefix = Path::new(r"C:\workspace");
+        let rel = strip_prefix_case_insensitive(target, prefix).expect("should match");
+        assert_eq!(rel, PathBuf::from("just-one-more"));
     }
 }
 
