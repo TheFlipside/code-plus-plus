@@ -25281,6 +25281,27 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             state.shell.set_window_geometry(g);
         }
 
+        // Apply persisted view toggles (indent guide, future
+        // siblings). These live on Scintilla's `ViewStyle` (per-
+        // view, not per-document) so one application at cold start
+        // covers the whole session — new tabs / doc-pointer swaps
+        // don't reset it, matching Scintilla's own semantics
+        // (`vs.viewIndentationGuides` in Editor.cxx). Runs after
+        // `Shell::new` (so `saved_view_settings` is populated from
+        // the loaded session.xml) and before window show, so the
+        // very first paint already reflects the user's choice
+        // instead of Scintilla's built-in off default.
+        let saved_view = state.shell.saved_view_settings();
+        state.editor.send(
+            SCI_SETINDENTATIONGUIDES,
+            if saved_view.indent_guide {
+                SC_IV_LOOKBOTH
+            } else {
+                SC_IV_NONE
+            },
+            0,
+        );
+
         // Seed STYLE_DEFAULT from styles.xml (font face, size,
         // bold / italic / underline, fg, bg) and apply transparency
         // *after* session restore has populated tabs but *before*
@@ -32002,6 +32023,16 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 SC_IV_NONE
                             };
                             editor.send(SCI_SETINDENTATIONGUIDES, target, 0);
+                            // Persist the new state on Shell so the
+                            // next `save_session` (autosave / shutdown)
+                            // writes it through to `session.xml` and
+                            // the next launch cold-starts with the
+                            // same choice. Read-modify-write so a
+                            // future sibling toggle on `ViewSettings`
+                            // doesn't get clobbered here.
+                            let mut view = state.shell.saved_view_settings();
+                            view.indent_guide = target == SC_IV_LOOKBOTH;
+                            state.shell.set_view_settings(view);
                             toolbar::refresh_state(toolbar_hwnd, &editor);
                         }
                     }

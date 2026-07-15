@@ -219,6 +219,29 @@ pub struct WorkspaceSession {
     pub width: Option<i32>,
 }
 
+/// Persisted global (view-level) editor toggles. Room to grow — the
+/// initial cut carries just the indent-guide flag, but the intent is
+/// that other cross-buffer view state (word-wrap default, show-line-
+/// numbers default, show-whitespace default, …) lands on the same
+/// element so a session.xml written by an older build round-trips
+/// cleanly against a newer one and vice versa.
+///
+/// `Default` produces the "everything off" baseline, which matches
+/// Scintilla's built-in defaults so a session with no `<view>`
+/// element (first launch, or a `session.xml` written before this
+/// feature shipped) behaves identically to a session with an empty
+/// `<view/>` element.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewSettings {
+    /// True iff the indent-guide mode is on (Scintilla's
+    /// `SC_IV_LOOKBOTH`). False maps to `SC_IV_NONE`. Toggled by
+    /// the toolbar's `ID_VIEW_SHOW_INDENT_GUIDE` and persisted on
+    /// the next session save so the next launch reopens with the
+    /// user's chosen state instead of Scintilla's default (off).
+    #[serde(rename = "@indent_guide", default, skip_serializing_if = "is_false")]
+    pub indent_guide: bool,
+}
+
 /// The whole session. The active-tab index is `Option<usize>` rather
 /// than `usize` so an empty session round-trips cleanly (no spurious
 /// `active="0"` when there are no tabs).
@@ -240,9 +263,29 @@ pub struct Session {
     /// panel this session."
     #[serde(rename = "workspace", skip_serializing_if = "Option::is_none", default)]
     pub workspace: Option<WorkspaceSession>,
+    /// Persisted global editor view toggles (indent guide, and
+    /// future siblings). Round-trips as a `<view/>` element via
+    /// [`ViewSettings`]; absence deserialises to the all-off
+    /// default.
+    #[serde(rename = "view", default, skip_serializing_if = "is_default_view")]
+    pub view: ViewSettings,
     /// All open tabs, in the order they appear in the tab strip.
     #[serde(rename = "tab", default)]
     pub tabs: Vec<Tab>,
+}
+
+/// `skip_serializing_if` predicate for [`Session::view`] — elides the
+/// `<view/>` element from serialised session.xml when every toggle
+/// carries its default value (there's nothing to write). Same
+/// discipline the `Option`-typed sibling fields use for their
+/// "absent" case.
+///
+/// serde calls predicates via `&T`, so the signature must be
+/// `&ViewSettings` even though the type is `Copy` — same reason the
+/// sibling `is_false` predicate above pins the `&bool` shape.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_default_view(v: &ViewSettings) -> bool {
+    *v == ViewSettings::default()
 }
 
 /// Errors from reading or writing `session.xml`.
@@ -392,6 +435,7 @@ mod tests {
             active: Some(1),
             window: None,
             workspace: None,
+            view: ViewSettings::default(),
             tabs: vec![
                 Tab {
                     path: Some(PathBuf::from(r"C:\users\alice\hello.txt")),
@@ -429,6 +473,7 @@ mod tests {
             active: Some(0),
             window: None,
             workspace: None,
+            view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: Some(PathBuf::from("legacy.txt")),
                 cursor: 0,
@@ -456,6 +501,7 @@ mod tests {
             active: Some(0),
             window: None,
             workspace: None,
+            view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: None,
                 cursor: 17,
@@ -484,6 +530,7 @@ mod tests {
             active: Some(1),
             window: None,
             workspace: None,
+            view: ViewSettings::default(),
             tabs: vec![
                 Tab {
                     path: Some(PathBuf::from("/tmp/a.txt")),
@@ -537,6 +584,7 @@ mod tests {
             active: Some(0),
             window: None,
             workspace: None,
+            view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: None,
                 cursor: 0,
@@ -567,6 +615,7 @@ mod tests {
             active: Some(0),
             window: None,
             workspace: None,
+            view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: Some(PathBuf::from("notes.txt")),
                 cursor: 0,
@@ -599,6 +648,7 @@ mod tests {
             active: Some(0),
             window: None,
             workspace: None,
+            view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: Some(PathBuf::from("pinned.txt")),
                 cursor: 42,
@@ -628,6 +678,7 @@ mod tests {
             active: Some(0),
             window: None,
             workspace: None,
+            view: ViewSettings::default(),
             tabs: vec![Tab {
                 path: Some(PathBuf::from("plain.txt")),
                 cursor: 0,
@@ -712,6 +763,7 @@ mod tests {
                 maximized: false,
             }),
             workspace: None,
+            view: ViewSettings::default(),
             tabs: vec![],
         };
         session.save_to_xml(&path).unwrap();
@@ -730,6 +782,7 @@ mod tests {
                 maximized: true,
             }),
             workspace: None,
+            view: ViewSettings::default(),
             tabs: vec![],
         };
         session.save_to_xml(&path).unwrap();
@@ -765,6 +818,7 @@ mod tests {
             active: None,
             window: None,
             workspace: None,
+            view: ViewSettings::default(),
             tabs: vec![],
         };
         session.save_to_xml(&path).unwrap();
@@ -788,6 +842,7 @@ mod tests {
                 visible: true,
                 width: Some(280),
             }),
+            view: ViewSettings::default(),
             tabs: vec![],
         };
         session.save_to_xml(&path).unwrap();
@@ -818,6 +873,7 @@ mod tests {
                 visible: false,
                 width: None,
             }),
+            view: ViewSettings::default(),
             tabs: vec![],
         };
         session.save_to_xml(&path).unwrap();
@@ -845,6 +901,7 @@ mod tests {
                 visible: false,
                 width: None,
             }),
+            view: ViewSettings::default(),
             tabs: vec![],
         };
         session.save_to_xml(&path).unwrap();
@@ -884,6 +941,7 @@ mod tests {
             active: None,
             window: None,
             workspace: None,
+            view: ViewSettings::default(),
             tabs: vec![],
         };
         session.save_to_xml(&path).unwrap();
@@ -945,5 +1003,58 @@ mod tests {
         Session::default().save_to_xml(&path).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.starts_with("<?xml"));
+    }
+
+    /// Round-trip a session with `view.indent_guide` set — the flag
+    /// survives XML serialisation and reparses to the same value.
+    #[test]
+    fn round_trip_view_indent_guide_on() {
+        let (_dir, path) = temp_session_path();
+        let session = Session {
+            view: ViewSettings { indent_guide: true },
+            ..Session::default()
+        };
+        session.save_to_xml(&path).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(session, loaded);
+        assert!(loaded.view.indent_guide);
+    }
+
+    /// `ViewSettings::default()` (indent guide off) must NOT emit a
+    /// `<view/>` element or an `indent_guide` attribute — same
+    /// discipline the other `Option`-typed and `bool`-default fields
+    /// on `Session` observe. Reloading with no `<view>` element
+    /// yields the default `ViewSettings` back.
+    #[test]
+    fn empty_view_not_serialized() {
+        let (_dir, path) = temp_session_path();
+        let session = Session::default();
+        session.save_to_xml(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.contains("<view"),
+            "<view> element must be elided when default: {text}"
+        );
+        assert!(
+            !text.contains("indent_guide"),
+            "indent_guide attribute must be elided when default: {text}"
+        );
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(loaded.view, ViewSettings::default());
+    }
+
+    /// A session.xml written before the `<view>` feature shipped
+    /// must still parse. The loaded `view` field falls back to
+    /// `ViewSettings::default()` — no runtime error, no behavioural
+    /// change relative to pre-feature.
+    #[test]
+    fn pre_view_session_xml_loads_with_default_view() {
+        let (_dir, path) = temp_session_path();
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<session active="0"><tab path="hello.txt" cursor="0" encoding="UTF-8" eol="LF"/></session>"#;
+        std::fs::write(&path, xml).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        assert_eq!(loaded.view, ViewSettings::default());
+        assert_eq!(loaded.tabs.len(), 1);
     }
 }

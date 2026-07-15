@@ -3473,6 +3473,12 @@ impl Shell {
         // fresh `Session::new()` and only carries over fields
         // it explicitly copies.
         session.workspace.clone_from(&self.session.workspace);
+        // Same discipline for view-level toggles (indent guide,
+        // future siblings). Kept in sync by `set_view_settings`
+        // whenever the user flips a toggle; snapshot here so the
+        // fresh session carries it forward instead of resetting
+        // to `ViewSettings::default()`.
+        session.view = self.session.view;
 
         // Filenames of all backups we wrote on this save pass.
         // After session.xml is durably written we use this list to
@@ -4140,6 +4146,26 @@ impl Shell {
         workspace: Option<codepp_core::session::WorkspaceSession>,
     ) {
         self.session.workspace = workspace;
+    }
+
+    /// Persisted global editor-view toggles read from session.xml
+    /// (currently just the indent-guide flag; the struct is the
+    /// growth spot for future view-level toggles like word-wrap or
+    /// show-line-numbers). The UI reads this at cold start —
+    /// after `Shell::new` and before window-show — so the first
+    /// paint already reflects the user's chosen state instead of
+    /// Scintilla's built-in default.
+    #[must_use]
+    pub fn saved_view_settings(&self) -> codepp_core::session::ViewSettings {
+        self.session.view
+    }
+
+    /// Update the cached view-toggle state from the UI. Called
+    /// from the toolbar / menu handler for each toggle so the
+    /// next `save_session` (autosave or shutdown) writes the
+    /// new value through to disk and the next launch restores it.
+    pub fn set_view_settings(&mut self, view: codepp_core::session::ViewSettings) {
+        self.session.view = view;
     }
 }
 
@@ -5726,6 +5752,7 @@ fn write_session_files(path: &Path, files: &[PathBuf]) -> bool {
         active: None,
         window: None,
         workspace: None,
+        view: codepp_core::session::ViewSettings::default(),
         tabs: files
             .iter()
             .map(|p| codepp_core::session::Tab {
@@ -8201,6 +8228,7 @@ mod tests {
             active: Some(1),
             window: None,
             workspace: None,
+            view: codepp_core::session::ViewSettings::default(),
             tabs: vec![
                 CoreTab {
                     path: Some(PathBuf::from("/tmp/first.txt")),
@@ -9215,6 +9243,7 @@ mod tests {
             active: Some(2), // "b" — a pinned tab
             window: None,
             workspace: None,
+            view: codepp_core::session::ViewSettings::default(),
             tabs: vec![
                 mk("a", false),
                 mk("x", false),
@@ -9263,6 +9292,7 @@ mod tests {
             active: Some(1),
             window: None,
             workspace: None,
+            view: codepp_core::session::ViewSettings::default(),
             tabs: vec![
                 CoreTab {
                     path: Some(PathBuf::from("/tmp/a")),
