@@ -18462,7 +18462,16 @@ unsafe extern "system" fn style_config_wnd_proc_inner(
                     let _ = EnableWindow(state.owner_hwnd, true);
                     let _ = DestroyWindow(hwnd);
                 }
-                IDC_STYLE_CANCEL => {
+                // OR-in `IDCANCEL_U16` so the Esc key closes the
+                // dialog too — `IsDialogMessageW` in the modal
+                // pump above translates Esc into a
+                // `WM_COMMAND(IDCANCEL)`, and without this arm the
+                // synthesised id (2) doesn't match our custom
+                // Cancel-button id (811) and the keystroke gets
+                // dropped by the `_ => {}` fall-through. Same
+                // pattern the Find/Replace dialog uses
+                // (`IDC_FR_CLOSE | IDCANCEL_U16`).
+                IDC_STYLE_CANCEL | IDCANCEL_U16 => {
                     state.result = None;
                     let _ = EnableWindow(state.owner_hwnd, true);
                     let _ = DestroyWindow(hwnd);
