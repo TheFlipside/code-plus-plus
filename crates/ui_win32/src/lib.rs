@@ -461,7 +461,7 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
     TRACKMOUSEEVENT, VK_0, VK_F, VK_F1, VK_F2, VK_F3, VK_G, VK_H, VK_N, VK_O, VK_OEM_MINUS,
-    VK_OEM_PLUS, VK_S, VK_W,
+    VK_OEM_PLUS, VK_R, VK_S, VK_W,
 };
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW,
@@ -14315,7 +14315,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             file_menu,
             MF_STRING,
             ID_FILE_RELOAD as usize,
-            w!("&Reload from Disk"),
+            w!("&Reload from Disk\tCtrl+R"),
         )?;
         AppendMenuW(
             file_menu,
@@ -14327,13 +14327,13 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             file_menu,
             MF_STRING,
             ID_FILE_SAVE_AS as usize,
-            w!("Save &As...\tCtrl+Shift+S"),
+            w!("Save &As...\tCtrl+Alt+S"),
         )?;
         AppendMenuW(
             file_menu,
             MF_STRING,
             ID_FILE_SAVE_ALL as usize,
-            w!("Sav&e All"),
+            w!("Sav&e All\tCtrl+Shift+S"),
         )?;
         AppendMenuW(
             file_menu,
@@ -14352,7 +14352,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             file_menu,
             MF_STRING,
             ID_FILE_CLOSE_ALL as usize,
-            w!("Close A&ll"),
+            w!("Close A&ll\tCtrl+Shift+W"),
         )?;
         AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
         AppendMenuW(
@@ -23655,8 +23655,27 @@ fn decode_accel_to_shortcut_key(a: &ACCEL) -> codepp_plugin_host::ShortcutKey {
 fn build_default_accel_table() -> Vec<ACCEL> {
     let ctrl = ACCEL_VIRT_FLAGS(FCONTROL.0 | FVIRTKEY.0);
     let ctrl_shift = ACCEL_VIRT_FLAGS(FCONTROL.0 | FSHIFT.0 | FVIRTKEY.0);
+    let ctrl_alt = ACCEL_VIRT_FLAGS(FCONTROL.0 | FALT.0 | FVIRTKEY.0);
     vec![
-        // File
+        // File — the Save family follows Notepad++'s conventions:
+        //   Ctrl+S       → Save (active buffer)
+        //   Ctrl+Alt+S   → Save As (opens dialog for active buffer)
+        //   Ctrl+Shift+S → Save All (every dirty buffer at once)
+        // Ctrl+R → Reload (from disk). Ctrl+W / Ctrl+Shift+W →
+        // Close / Close All. None of these keys are bound in
+        // Scintilla's native keyboard table (which owns Ctrl+X/C/
+        // V/Z/Y/A — see the comment above about the "Ctrl+V
+        // sometimes doesn't paste" bug), so there's no
+        // contention with the editor.
+        //
+        // **AltGr caveat.** On non-US keyboard layouts (German,
+        // French, etc.) AltGr is delivered as Ctrl+Alt combined,
+        // so AltGr+S — normally a printable character on those
+        // layouts — will fire the Save As accelerator instead.
+        // This is an accepted trade-off Notepad++ shares (its
+        // default Save As binding is also Ctrl+Alt+S) and is
+        // consistent with how a user of the two apps side by
+        // side would expect the shortcut to behave.
         ACCEL {
             fVirt: ctrl,
             key: VK_N.0,
@@ -23669,18 +23688,33 @@ fn build_default_accel_table() -> Vec<ACCEL> {
         },
         ACCEL {
             fVirt: ctrl,
+            key: VK_R.0,
+            cmd: ID_FILE_RELOAD,
+        },
+        ACCEL {
+            fVirt: ctrl,
             key: VK_S.0,
             cmd: ID_FILE_SAVE,
         },
         ACCEL {
-            fVirt: ctrl_shift,
+            fVirt: ctrl_alt,
             key: VK_S.0,
             cmd: ID_FILE_SAVE_AS,
+        },
+        ACCEL {
+            fVirt: ctrl_shift,
+            key: VK_S.0,
+            cmd: ID_FILE_SAVE_ALL,
         },
         ACCEL {
             fVirt: ctrl,
             key: VK_W.0,
             cmd: ID_FILE_CLOSE,
+        },
+        ACCEL {
+            fVirt: ctrl_shift,
+            key: VK_W.0,
+            cmd: ID_FILE_CLOSE_ALL,
         },
         // Search
         ACCEL {
