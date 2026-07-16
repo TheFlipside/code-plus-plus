@@ -10,6 +10,7 @@ pub mod fif;
 pub mod file;
 pub mod find_history;
 pub mod lang;
+pub mod npp_session;
 pub mod session;
 pub mod styles;
 
