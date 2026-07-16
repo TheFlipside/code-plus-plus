@@ -424,14 +424,14 @@ use windows::Win32::Foundation::{
     COLORREF, E_FAIL, HWND, LPARAM, LRESULT, MAX_PATH, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    AlphaBlend, ClientToScreen, CreateCompatibleDC, CreateFontIndirectW, CreatePen,
-    CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EnumFontFamiliesExW, FillRect, GetDC,
-    GetMonitorInfoW, GetStockObject, GetSysColorBrush, InvalidateRect, LineTo, MonitorFromWindow,
-    MoveToEx, Polygon, Rectangle, ReleaseDC, ScreenToClient, SelectObject, SetBkColor, SetBkMode,
-    SetTextColor, UpdateWindow, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, COLOR_WINDOW,
-    DEFAULT_CHARSET, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
-    FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    NULL_BRUSH, PS_SOLID, TEXTMETRICW, TRANSPARENT,
+    AlphaBlend, ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontIndirectW,
+    CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EnumFontFamiliesExW, FillRect,
+    GetDC, GetMonitorInfoW, GetStockObject, GetSysColorBrush, InvalidateRect, LineTo,
+    MonitorFromWindow, MoveToEx, Polygon, Rectangle, ReleaseDC, ScreenToClient, SelectObject,
+    SetBkColor, SetBkMode, SetTextColor, UpdateWindow, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION,
+    COLOR_WINDOW, DEFAULT_CHARSET, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE,
+    DT_VCENTER, FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST, NULL_BRUSH, PS_SOLID, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
@@ -955,6 +955,13 @@ const DEFAULT_DOCMAP_WIDTH_PX: i32 = 160;
 /// the docmap panel. Same 4-px rationale as
 /// [`WORKSPACE_SPLITTER_WIDTH_PX`].
 const DOCMAP_SPLITTER_WIDTH_PX: i32 = 4;
+/// Uniform alpha of the docmap viewport highlight's fill (the
+/// translucent orange wash inside the box), 0..=255. 60/255
+/// (~24% opacity) reads as a soft tint that leaves the miniature
+/// text underneath clearly legible. The outline is drawn solid on
+/// top; the fill only carries the "here's the highlighted band"
+/// affordance, not the primary visual weight.
+const DOCMAP_VIEWPORT_FILL_ALPHA: u8 = 60;
 /// Fill + outline colour of the docmap viewport highlight, in
 /// Scintilla's `COLORREF` byte order (`0x00BBGGRR` — same
 /// encoding Win32's `RGB` macro produces). HTML `#FFA500`
@@ -27704,6 +27711,60 @@ unsafe fn paint_docmap_viewport_overlay(map_hwnd: HWND, main_hwnd: HWND) {
         if hdc.is_invalid() {
             return;
         }
+        let rect_w = (client.right - client.left).max(0);
+        let rect_h = (bottom_y_i32 - top_y_i32).max(0);
+        // Fill (translucent orange) via `AlphaBlend` from a 1x1
+        // solid-orange memory bitmap. `AlphaBlend` stretches the
+        // 1x1 source to the target rect and uniformly blends
+        // through `SourceConstantAlpha` — perfect for a flat
+        // translucent wash. 60/255 (~24% opacity) reads as a
+        // soft orange tint that still lets the miniature text
+        // show through cleanly.
+        if rect_w > 0 && rect_h > 0 {
+            let hdc_mem = CreateCompatibleDC(Some(hdc));
+            if !hdc_mem.is_invalid() {
+                let hbm = CreateCompatibleBitmap(hdc, 1, 1);
+                if !hbm.is_invalid() {
+                    let prev_bm = SelectObject(hdc_mem, HGDIOBJ(hbm.0));
+                    let fill_brush = CreateSolidBrush(COLORREF(DOCMAP_VIEWPORT_COLOR));
+                    if !fill_brush.is_invalid() {
+                        let fill_rect = RECT {
+                            left: 0,
+                            top: 0,
+                            right: 1,
+                            bottom: 1,
+                        };
+                        FillRect(hdc_mem, &raw const fill_rect, fill_brush);
+                        let _ = DeleteObject(HGDIOBJ(fill_brush.0));
+                    }
+                    let blend = BLENDFUNCTION {
+                        BlendOp: AC_SRC_OVER as u8,
+                        BlendFlags: 0,
+                        SourceConstantAlpha: DOCMAP_VIEWPORT_FILL_ALPHA,
+                        AlphaFormat: 0,
+                    };
+                    let _ = AlphaBlend(
+                        hdc,
+                        client.left,
+                        top_y_i32,
+                        rect_w,
+                        rect_h,
+                        hdc_mem,
+                        0,
+                        0,
+                        1,
+                        1,
+                        blend,
+                    );
+                    SelectObject(hdc_mem, prev_bm);
+                    let _ = DeleteObject(HGDIOBJ(hbm.0));
+                }
+                let _ = DeleteDC(hdc_mem);
+            }
+        }
+        // Outline: solid orange 2-px pen with a hollow interior
+        // — drawn AFTER the alpha fill so the border sits on top
+        // of the translucent wash.
         let pen = CreatePen(PS_SOLID, 2, COLORREF(DOCMAP_VIEWPORT_COLOR));
         if !pen.is_invalid() {
             let prev_pen = SelectObject(hdc, HGDIOBJ(pen.0));
