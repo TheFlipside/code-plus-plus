@@ -38,9 +38,9 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
     CreateFontIndirectW, DeleteDC, DeleteObject, DrawTextW, GetDeviceCaps, LineTo, MoveToEx,
-    SelectObject, SetBkMode, SetTextColor, DEFAULT_CHARSET, DT_LEFT, DT_NOPREFIX, DT_RIGHT,
-    DT_SINGLELINE, DT_TOP, FW_NORMAL, HDC, HFONT, HGDIOBJ, HORZRES, LOGFONTW, LOGPIXELSX,
-    LOGPIXELSY, TRANSPARENT, VERTRES,
+    RestoreDC, SaveDC, SelectObject, SetBkMode, SetTextAlign, SetTextColor, DEFAULT_CHARSET,
+    DT_LEFT, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE, DT_TOP, FW_NORMAL, HDC, HFONT, HGDIOBJ, HORZRES,
+    LOGFONTW, LOGPIXELSX, LOGPIXELSY, TA_LEFT, TA_TOP, TEXT_ALIGN_OPTIONS, TRANSPARENT, VERTRES,
 };
 use windows::Win32::Storage::Xps::{EndDoc, EndPage, StartDocW, StartPage, DOCINFOW};
 use windows::Win32::UI::Controls::Dialogs::{
@@ -645,6 +645,44 @@ fn draw_page_header(
     page: usize,
     total: usize,
 ) {
+    // Snapshot the DC's full state before touching anything.
+    //
+    // Scintilla's `SurfaceGDI::Init` calls
+    // `SetTextAlign(hdc, TA_BASELINE)` — inherited from the
+    // per-page render pass AND from the measure pass that runs
+    // *before* the first `StartPage`. `SurfaceGDI`'s destructor
+    // restores pen/brush/font/bitmap but does NOT restore text
+    // alignment or (on some drivers) other minor DC attributes.
+    // `DrawTextW` internally dispatches through `ExtTextOut`,
+    // which honours `SetTextAlign`; with `TA_BASELINE` the text
+    // baseline gets pinned to the rect's top edge instead of the
+    // top of the glyphs, so header text ends up drawn *above* my
+    // header rectangle and gets clipped by the page margin. The
+    // observed symptom of the second Print-fix attempt (`48ad2f4`,
+    // "only a few pixels of the bottom are printed") matches
+    // exactly.
+    //
+    // `SaveDC` + `RestoreDC(-1)` is the belt-and-braces fix:
+    // snapshots every DC attribute Scintilla may have touched
+    // (text align, colours, background mode, pen, font, clip,
+    // transform, mapping mode, …) and restores them at the end
+    // regardless of which specific attribute is causing trouble
+    // on a given driver. The explicit `SetTextAlign(TA_TOP |
+    // TA_LEFT)` below is also-defensive — pinning the alignment
+    // we actually need so a future refactor that drops the
+    // SaveDC discipline doesn't silently regress the symptom.
+    //
+    // SAFETY: `hdc` is the caller-owned printer DC (still valid
+    // for the duration of this function). `SaveDC` returns 0 on
+    // failure — we tolerate that by drawing without a rollback,
+    // matching the "rare failure, degrade gracefully" pattern
+    // used for `CreateFontIndirectW` below.
+    let saved_dc_state = unsafe { SaveDC(hdc) };
+    // SAFETY: pure attribute writes on the valid HDC.
+    unsafe {
+        let _ = SetTextAlign(hdc, TEXT_ALIGN_OPTIONS(TA_TOP.0 | TA_LEFT.0));
+    }
+
     // Font: 10pt Arial, weight normal. Height in device pixels is
     // negative to select the em-height convention `DrawTextW` uses.
     let mut lf = LOGFONTW {
@@ -749,12 +787,16 @@ fn draw_page_header(
         let _ = LineTo(hdc, header.right, header.bottom - 1);
     }
 
-    // Restore the previous font and free the header font. Only
-    // re-select `old_font` if we actually captured one (i.e. the
-    // earlier `SelectObject` succeeded); a null default would
-    // otherwise clobber the DC's current font selection. Deletion
-    // is independent of the restore: we always free the created
-    // font, which is safe even if it was never selected.
+    // Restore the previous font selection and free the header
+    // font. The `RestoreDC` below would also restore the font
+    // selection (that's what `SaveDC` snapshots), but it does NOT
+    // free the `hfont` we `CreateFontIndirectW`-created — GDI
+    // objects have their own owner-tracked lifetime independent
+    // of DC state. So we still `DeleteObject(hfont)` explicitly.
+    // The `SelectObject(hdc, old_font)` restore is technically
+    // redundant with the pending `RestoreDC`, but we keep it so
+    // the ownership handoff is legible independent of the DC-
+    // level rollback below.
     if !hfont.is_invalid() {
         // SAFETY: paired with the SelectObject / CreateFontIndirectW
         // pair above; both handles were created inside this
@@ -764,6 +806,19 @@ fn draw_page_header(
                 let _ = SelectObject(hdc, old_font);
             }
             let _ = DeleteObject(HGDIOBJ(hfont.0));
+        }
+    }
+
+    // Roll back every attribute the SaveDC snapshotted at the top.
+    // Only if the snapshot succeeded (`saved_dc_state != 0`) —
+    // passing 0 to `RestoreDC` is a no-op per Win32 docs, but
+    // guarding it makes the intent explicit.
+    if saved_dc_state != 0 {
+        // SAFETY: `saved_dc_state` came from the matching `SaveDC`
+        // on the same HDC; no other code has pushed / popped DC
+        // state in between (the header render is straight-line).
+        unsafe {
+            let _ = RestoreDC(hdc, saved_dc_state);
         }
     }
 }
