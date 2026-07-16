@@ -424,14 +424,15 @@ use windows::Win32::Foundation::{
     COLORREF, E_FAIL, HWND, LPARAM, LRESULT, MAX_PATH, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    AlphaBlend, ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontIndirectW,
-    CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EnumFontFamiliesExW, FillRect,
-    GetDC, GetMonitorInfoW, GetStockObject, GetSysColorBrush, InvalidateRect, LineTo,
-    MonitorFromWindow, MoveToEx, Polygon, Rectangle, ReleaseDC, ScreenToClient, SelectObject,
-    SetBkColor, SetBkMode, SetTextColor, UpdateWindow, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION,
-    COLOR_WINDOW, DEFAULT_CHARSET, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE,
-    DT_VCENTER, FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, MONITORINFO,
-    MONITOR_DEFAULTTONEAREST, NULL_BRUSH, PS_SOLID, TEXTMETRICW, TRANSPARENT,
+    AlphaBlend, BeginPaint, BitBlt, ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC,
+    CreateFontIndirectW, CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint,
+    EnumFontFamiliesExW, FillRect, GetDC, GetMonitorInfoW, GetStockObject, GetSysColorBrush,
+    InvalidateRect, LineTo, MonitorFromWindow, MoveToEx, Polygon, ReleaseDC, ScreenToClient,
+    SelectObject, SetBkColor, SetBkMode, SetTextColor, UpdateWindow, AC_SRC_ALPHA, AC_SRC_OVER,
+    BLENDFUNCTION, COLOR_WINDOW, DEFAULT_CHARSET, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_NOPREFIX,
+    DT_SINGLELINE, DT_VCENTER, FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST, NULL_BRUSH, PAINTSTRUCT, PS_SOLID, SRCCOPY, TEXTMETRICW,
+    TRANSPARENT,
 };
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO,
@@ -495,17 +496,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MB_OKCANCEL, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS, MFS_CHECKED,
     MFS_UNCHECKED, MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION,
     MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE,
-    MIIM_STATE, MSG, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED,
-    WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
-    WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL, WM_INITMENUPOPUP,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY,
-    WM_NOTIFY, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
-    WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
-    WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL,
-    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    MIIM_STATE, MSG, PRF_CLIENT, PRF_ERASEBKGND, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN,
+    TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+    WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
+    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL,
+    WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE,
+    WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER,
+    WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
+    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP,
+    WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -27625,46 +27626,115 @@ unsafe extern "system" fn docmap_scintilla_subclass_proc(
                 LRESULT(0)
             }
             WM_PAINT => {
-                // Let Scintilla paint its miniature-text content
-                // first, then overlay a custom orange rectangle
-                // across the visible-line range. Scintilla's
-                // range-based indicators paint per-subline, which
-                // at zoom -10 (line height ~2-3 px) makes any
-                // outline cover the entire line — the reason
-                // earlier iterations produced "everything's
-                // orange" instead of a bounding box. Custom GDI
-                // drawing lets us paint ONE rectangle spanning
-                // top-of-first-visible to bottom-of-last-visible.
-                let result = DefSubclassProc(hwnd, msg, wparam, lparam);
-                paint_docmap_viewport_overlay(hwnd, main);
-                result
+                // Double-buffered paint: render Scintilla's
+                // miniature text AND our translucent-orange
+                // overlay into an off-screen bitmap, then blit
+                // both to the screen in one shot. Without this,
+                // scrolling produces visible flicker because the
+                // sequence "Scintilla's buffer → screen → our
+                // overlay → screen" leaves a one-frame window
+                // during which the screen shows Scintilla's
+                // fresh text WITHOUT the overlay on top of it.
+                //
+                // Scintilla is asked to paint into our memory DC
+                // via `WM_PRINTCLIENT` (the documented
+                // control-paints-into-caller-DC message; every
+                // major Win32 control including Scintilla
+                // supports it). The overlay is then drawn on
+                // the same memory DC, and the whole thing is
+                // BitBlt'd to the paint DC returned by
+                // `BeginPaint` — one screen write per frame,
+                // no intermediate flash.
+                let mut ps = PAINTSTRUCT::default();
+                let dst_dc = BeginPaint(hwnd, &raw mut ps);
+                if !dst_dc.is_invalid() {
+                    let mut client = RECT::default();
+                    if GetClientRect(hwnd, &raw mut client).is_ok() {
+                        let width = client.right - client.left;
+                        let height = client.bottom - client.top;
+                        if width > 0 && height > 0 {
+                            let mem_dc = CreateCompatibleDC(Some(dst_dc));
+                            let mem_bmp = CreateCompatibleBitmap(dst_dc, width, height);
+                            if !mem_dc.is_invalid() && !mem_bmp.is_invalid() {
+                                let prev_bmp = SelectObject(mem_dc, HGDIOBJ(mem_bmp.0));
+                                // Ask Scintilla to render its
+                                // content into `mem_dc`. Sending
+                                // via SendMessageW re-enters our
+                                // own subclass proc; the `_ =>`
+                                // arm forwards to DefSubclassProc
+                                // which reaches Scintilla's own
+                                // wnd_proc.
+                                let _ = SendMessageW(
+                                    hwnd,
+                                    WM_PRINTCLIENT,
+                                    Some(WPARAM(mem_dc.0 as usize)),
+                                    Some(LPARAM((PRF_CLIENT | PRF_ERASEBKGND) as isize)),
+                                );
+                                paint_docmap_viewport_overlay(mem_dc, client, main);
+                                let _ = BitBlt(
+                                    dst_dc,
+                                    0,
+                                    0,
+                                    width,
+                                    height,
+                                    Some(mem_dc),
+                                    0,
+                                    0,
+                                    SRCCOPY,
+                                );
+                                SelectObject(mem_dc, prev_bmp);
+                            }
+                            if !mem_bmp.is_invalid() {
+                                let _ = DeleteObject(HGDIOBJ(mem_bmp.0));
+                            }
+                            if !mem_dc.is_invalid() {
+                                let _ = DeleteDC(mem_dc);
+                            }
+                        }
+                    }
+                    let _ = EndPaint(hwnd, &raw const ps);
+                }
+                LRESULT(0)
+            }
+            WM_ERASEBKGND => {
+                // Skip background erase entirely — the buffered
+                // WM_PAINT above fills every pixel of the client
+                // area with Scintilla's rendered content, so any
+                // background erase is redundant work AND a source
+                // of tearing (background fill → paint → visible
+                // flash of background between the two).
+                LRESULT(1)
             }
             _ => DefSubclassProc(hwnd, msg, wparam, lparam),
         }
     }
 }
 
-/// Paint the orange viewport-highlight rectangle over the map
-/// view via GDI. Called from the map Scintilla's `WM_PAINT`
-/// subclass AFTER Scintilla's own paint completes, so the
-/// overlay sits on top of the miniature text.
+/// Paint the translucent orange viewport-highlight rectangle onto
+/// the caller's device context. Called from the map Scintilla's
+/// `WM_PAINT` subclass — the DC is a memory DC into which
+/// Scintilla has already painted its miniature text (via
+/// `WM_PRINTCLIENT`), so this overlay lands on top of the text
+/// inside the same off-screen buffer. That buffer is then blit'd
+/// to the screen in one shot, eliminating the paint-flicker that
+/// separate on-screen overlay drawing would produce.
 ///
-/// `map_hwnd` — the map's Scintilla control.
-/// `main_hwnd` — the main window, needed for
-/// `state_from_hwnd` to reach both editor handles.
+/// `dst_hdc` — target device context (memory DC in the buffered
+/// paint path).
+/// `client_rect` — client rect of the map view; the overlay
+/// spans full width, its vertical extent is computed from the
+/// main editor's visible range.
+/// `main_hwnd` — the main window, needed for `state_from_hwnd`
+/// to reach both editor handles.
 ///
-/// No-op when the state pointer isn't installed yet
-/// (`main_hwnd` invalid) or when the buffer/viewport is empty
-/// (nothing to highlight).
+/// No-op when the state pointer isn't installed, the viewport
+/// is empty, or Scintilla returns degenerate coordinates.
 ///
 /// # Safety
 ///
-/// Runs on the UI thread inside `WM_PAINT` dispatch. Uses
-/// `GetDC`/`ReleaseDC` (rather than `BeginPaint`/`EndPaint`)
-/// because Scintilla already handled the paint validation via
-/// its own `DefSubclassProc` call; we just need a device
-/// context to draw over the client area.
-unsafe fn paint_docmap_viewport_overlay(map_hwnd: HWND, main_hwnd: HWND) {
+/// Runs on the UI thread inside `WM_PAINT` dispatch. Uses only
+/// GDI calls; the caller owns the DC lifecycle.
+unsafe fn paint_docmap_viewport_overlay(dst_hdc: HDC, client_rect: RECT, main_hwnd: HWND) {
     unsafe {
         let (main_editor, docmap_editor) = if let Some(state) = state_from_hwnd(main_hwnd) {
             (state.editor, state.docmap_editor)
@@ -27703,79 +27773,57 @@ unsafe fn paint_docmap_viewport_overlay(map_hwnd: HWND, main_hwnd: HWND) {
             let line_h = docmap_editor.send(SCI_TEXTHEIGHT, first_doc_line as usize, 0);
             bottom_y_i32 = top_y_i32 + i32::try_from(line_h).unwrap_or(0);
         }
-        let mut client = RECT::default();
-        if GetClientRect(map_hwnd, &raw mut client).is_err() {
-            return;
-        }
-        let hdc = GetDC(Some(map_hwnd));
-        if hdc.is_invalid() {
-            return;
-        }
-        let rect_w = (client.right - client.left).max(0);
+        let rect_w = (client_rect.right - client_rect.left).max(0);
         let rect_h = (bottom_y_i32 - top_y_i32).max(0);
+        if rect_w <= 0 || rect_h <= 0 {
+            return;
+        }
         // Fill (translucent orange) via `AlphaBlend` from a 1x1
         // solid-orange memory bitmap. `AlphaBlend` stretches the
         // 1x1 source to the target rect and uniformly blends
         // through `SourceConstantAlpha` — perfect for a flat
-        // translucent wash. 60/255 (~24% opacity) reads as a
-        // soft orange tint that still lets the miniature text
-        // show through cleanly.
-        if rect_w > 0 && rect_h > 0 {
-            let hdc_mem = CreateCompatibleDC(Some(hdc));
-            if !hdc_mem.is_invalid() {
-                let hbm = CreateCompatibleBitmap(hdc, 1, 1);
-                if !hbm.is_invalid() {
-                    let prev_bm = SelectObject(hdc_mem, HGDIOBJ(hbm.0));
-                    let fill_brush = CreateSolidBrush(COLORREF(DOCMAP_VIEWPORT_COLOR));
-                    if !fill_brush.is_invalid() {
-                        let fill_rect = RECT {
-                            left: 0,
-                            top: 0,
-                            right: 1,
-                            bottom: 1,
-                        };
-                        FillRect(hdc_mem, &raw const fill_rect, fill_brush);
-                        let _ = DeleteObject(HGDIOBJ(fill_brush.0));
-                    }
-                    let blend = BLENDFUNCTION {
-                        BlendOp: AC_SRC_OVER as u8,
-                        BlendFlags: 0,
-                        SourceConstantAlpha: DOCMAP_VIEWPORT_FILL_ALPHA,
-                        AlphaFormat: 0,
-                    };
-                    let _ = AlphaBlend(
-                        hdc,
-                        client.left,
-                        top_y_i32,
-                        rect_w,
-                        rect_h,
-                        hdc_mem,
-                        0,
-                        0,
-                        1,
-                        1,
-                        blend,
-                    );
-                    SelectObject(hdc_mem, prev_bm);
-                    let _ = DeleteObject(HGDIOBJ(hbm.0));
-                }
-                let _ = DeleteDC(hdc_mem);
+        // translucent wash over the miniature text underneath.
+        let hdc_mem = CreateCompatibleDC(Some(dst_hdc));
+        if hdc_mem.is_invalid() {
+            return;
+        }
+        let hbm = CreateCompatibleBitmap(dst_hdc, 1, 1);
+        if !hbm.is_invalid() {
+            let prev_bm = SelectObject(hdc_mem, HGDIOBJ(hbm.0));
+            let fill_brush = CreateSolidBrush(COLORREF(DOCMAP_VIEWPORT_COLOR));
+            if !fill_brush.is_invalid() {
+                let fill_rect = RECT {
+                    left: 0,
+                    top: 0,
+                    right: 1,
+                    bottom: 1,
+                };
+                FillRect(hdc_mem, &raw const fill_rect, fill_brush);
+                let _ = DeleteObject(HGDIOBJ(fill_brush.0));
             }
+            let blend = BLENDFUNCTION {
+                BlendOp: AC_SRC_OVER as u8,
+                BlendFlags: 0,
+                SourceConstantAlpha: DOCMAP_VIEWPORT_FILL_ALPHA,
+                AlphaFormat: 0,
+            };
+            let _ = AlphaBlend(
+                dst_hdc,
+                client_rect.left,
+                top_y_i32,
+                rect_w,
+                rect_h,
+                hdc_mem,
+                0,
+                0,
+                1,
+                1,
+                blend,
+            );
+            SelectObject(hdc_mem, prev_bm);
+            let _ = DeleteObject(HGDIOBJ(hbm.0));
         }
-        // Outline: solid orange 2-px pen with a hollow interior
-        // — drawn AFTER the alpha fill so the border sits on top
-        // of the translucent wash.
-        let pen = CreatePen(PS_SOLID, 2, COLORREF(DOCMAP_VIEWPORT_COLOR));
-        if !pen.is_invalid() {
-            let prev_pen = SelectObject(hdc, HGDIOBJ(pen.0));
-            let hollow_brush = GetStockObject(NULL_BRUSH);
-            let prev_brush = SelectObject(hdc, hollow_brush);
-            let _ = Rectangle(hdc, client.left, top_y_i32, client.right, bottom_y_i32);
-            SelectObject(hdc, prev_brush);
-            SelectObject(hdc, prev_pen);
-            let _ = DeleteObject(HGDIOBJ(pen.0));
-        }
-        ReleaseDC(Some(map_hwnd), hdc);
+        let _ = DeleteDC(hdc_mem);
     }
 }
 
