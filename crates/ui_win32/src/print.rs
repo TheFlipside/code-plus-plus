@@ -39,8 +39,8 @@ use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
     CreateFontIndirectW, DeleteDC, DeleteObject, DrawTextW, GetDeviceCaps, LineTo, MoveToEx,
     SelectObject, SetBkMode, SetTextColor, DEFAULT_CHARSET, DT_LEFT, DT_NOPREFIX, DT_RIGHT,
-    DT_SINGLELINE, DT_TOP, DT_VCENTER, FW_NORMAL, HDC, HFONT, HGDIOBJ, LOGFONTW, LOGPIXELSX,
-    LOGPIXELSY, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY, PHYSICALWIDTH, TRANSPARENT,
+    DT_SINGLELINE, DT_TOP, FW_NORMAL, HDC, HFONT, HGDIOBJ, HORZRES, LOGFONTW, LOGPIXELSX,
+    LOGPIXELSY, TRANSPARENT, VERTRES,
 };
 use windows::Win32::Storage::Xps::{EndDoc, EndPage, StartDocW, StartPage, DOCINFOW};
 use windows::Win32::UI::Controls::Dialogs::{
@@ -343,16 +343,50 @@ fn show_print_dialog(owner: HWND) -> Option<PrintJob> {
 // Paper metrics
 // -------------------------------------------------------------------
 
-/// Cached device-pixel measurements for a single print job. Everything
-/// is in printer-DC pixels; Scintilla's `SCI_FORMATRANGEFULL`
-/// consumes the same coordinate system on both `rc` and `rc_page`.
+/// Cached device-pixel measurements for a single print job.
+///
+/// **Coordinate system.** All rectangles are in printer-DC pixels
+/// with the origin at the top-left of the **printable area**
+/// (`HORZRES × VERTRES`), NOT the top-left of the physical page.
+/// That's the invariant a Win32 printer HDC in the default
+/// `MM_TEXT` mapping mode guarantees — the driver's DDI layer
+/// enforces it, so it's consistent across vendors: `(0, 0)` on
+/// the HDC lands at the mechanically-printable top-left, and
+/// drawing above `y = 0` (or left of `x = 0`) is clipped by the
+/// driver. `PHYSICALOFFSETX/Y` exist so an app can *locate* the
+/// printable area on the physical sheet (for edge-to-edge / crop-
+/// mark workflows), not to be added a second time on top of an
+/// already-origin-adjusted HDC.
+///
+/// An earlier version of this code did exactly that — positioned
+/// the header at `y = PHYSICALOFFSETY + margin_y`, effectively
+/// double-counting the mechanical top margin. The header ended
+/// up ~5mm (the typical `PHYSICALOFFSETY` value) farther from
+/// the paper edge than the intended 15mm. That's the classic
+/// GDI "double margin" bug. The user-reported "header cut in
+/// half from top down" symptom after the first Print landing is
+/// the visible artifact — dropping the redundant `PHYSICALOFFSET*`
+/// addition is the correct fix regardless of whether the exact
+/// mechanism matches the original diagnosis.
+///
+/// Notably, `Sci_RangeToFormatFull::rc_page` is **not** read by
+/// Scintilla's `Editor::FormatRange` / `EditView::FormatRange`
+/// implementation (`vendor/scintilla/src/Editor.cxx:1926-1934`
+/// and `vendor/scintilla/src/EditView.cxx:2679-2863` — verified
+/// during the fix review). We still populate `rc_page` with the
+/// printable-area extents both for wire-shape consistency and
+/// as a defensible value for any future consumer that starts
+/// reading it.
 struct PaperMetrics {
-    /// Full physical page rectangle — 0,0 to physical width/height.
-    /// This is what Scintilla uses as `rc_page`.
+    /// Full printable page rectangle — `(0, 0, HORZRES, VERTRES)`.
+    /// Populated for `Sci_RangeToFormatFull::rc_page`; not read
+    /// by the current Scintilla `FormatRange` code path (see the
+    /// `PaperMetrics` doc comment for the vendored-source
+    /// citation).
     page_rect: Sci_Rectangle,
-    /// The text-area rectangle — page minus header strip minus
-    /// user-margin insets on all four sides. This is what Scintilla
-    /// uses as `rc`.
+    /// The text-area rectangle — printable area minus header strip
+    /// minus user-margin insets on all four sides. This is what
+    /// Scintilla uses as `rc`.
     text_rect: Sci_Rectangle,
     /// Header strip rectangle — sits above `text_rect`, contains the
     /// filename / date / page-N-of-M line and the divider rule.
@@ -369,13 +403,13 @@ impl PaperMetrics {
     fn from_hdc(hdc: HDC) -> Self {
         // SAFETY: `GetDeviceCaps` on a valid HDC is a pure query, no
         // side effects, no ownership issues. Every index below is a
-        // documented value from `wingdi.h`.
-        let (phys_w, phys_h, off_x, off_y, dpi_x, dpi_y) = unsafe {
+        // documented value from `wingdi.h`. `HORZRES`/`VERTRES` are
+        // the printable area dimensions; the HDC origin already
+        // lands at the top-left of that area.
+        let (horz_res, vert_res, dpi_x, dpi_y) = unsafe {
             (
-                GetDeviceCaps(Some(hdc), PHYSICALWIDTH),
-                GetDeviceCaps(Some(hdc), PHYSICALHEIGHT),
-                GetDeviceCaps(Some(hdc), PHYSICALOFFSETX),
-                GetDeviceCaps(Some(hdc), PHYSICALOFFSETY),
+                GetDeviceCaps(Some(hdc), HORZRES),
+                GetDeviceCaps(Some(hdc), VERTRES),
                 GetDeviceCaps(Some(hdc), LOGPIXELSX),
                 GetDeviceCaps(Some(hdc), LOGPIXELSY),
             )
@@ -386,40 +420,41 @@ impl PaperMetrics {
         // 15mm ≈ 0.591 inch; convert via `dpi_y * 15 / 254` (10x mm
         // ÷ inch-per-mm = 254/10, kept integer to dodge the float
         // conversion round-trip).
+        //
+        // Note: this margin is measured from the **printable area**
+        // edge, not the physical paper edge. On a typical printer
+        // with a ~5mm mechanical margin, the effective margin from
+        // paper edge is ~20mm. Users don't perceive the difference
+        // — what matters is that content is legibly inset — and
+        // trying to account for `PHYSICALOFFSET*` would only
+        // subtract from the drawable region.
         let margin_x = mm_to_device_pixels(15, dpi_x);
         let margin_y = mm_to_device_pixels(15, dpi_y);
-        // Header strip below the top margin: three lines of body-
-        // font-sized space plus a 2-pixel divider gap. Body font
-        // hasn't been chosen at this point (it's the editor's own
-        // font, applied later inside SCI_FORMATRANGEFULL), so use
-        // a conservative 10pt: 10/72 inch = 10 * dpi / 72.
+        // Header strip below the top margin: two lines of body-
+        // font-sized space. Body font hasn't been chosen at this
+        // point (it's the editor's own font, applied later inside
+        // `SCI_FORMATRANGEFULL`), so use a conservative 10pt:
+        // `10/72 inch = 10 * dpi / 72`.
         let header_h = pt_to_device_pixels(10, dpi_y) * 2;
-
-        let text_left = off_x + margin_x;
-        let text_top = off_y + margin_y + header_h;
-        let text_right = phys_w - off_x - margin_x;
-        let text_bottom = phys_h - off_y - margin_y;
-        let header_top = off_y + margin_y;
-        let header_bottom = text_top;
 
         Self {
             page_rect: Sci_Rectangle {
                 left: 0,
                 top: 0,
-                right: phys_w,
-                bottom: phys_h,
+                right: horz_res,
+                bottom: vert_res,
             },
             text_rect: Sci_Rectangle {
-                left: text_left,
-                top: text_top,
-                right: text_right,
-                bottom: text_bottom,
+                left: margin_x,
+                top: margin_y + header_h,
+                right: horz_res - margin_x,
+                bottom: vert_res - margin_y,
             },
             header_rect: Sci_Rectangle {
-                left: text_left,
-                top: header_top,
-                right: text_right,
-                bottom: header_bottom,
+                left: margin_x,
+                top: margin_y,
+                right: horz_res - margin_x,
+                bottom: margin_y + header_h,
             },
             dpi_y,
         }
@@ -677,14 +712,20 @@ fn draw_page_header(
             DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX,
         );
     }
-    // Date (centre-aligned).
+    // Date (horizontally centre-aligned, top-anchored to match
+    // the filename and page-of-M items so all three text baselines
+    // line up. An earlier version used `DT_VCENTER` here, which
+    // centred the date halfway down the header strip while the
+    // other two hugged the top — visually the date read as a
+    // separate lower line, contributing to the "header looks split
+    // in half" report.).
     let mut date_w: Vec<u16> = date_text.encode_utf16().collect();
     unsafe {
         DrawTextW(
             hdc,
             &mut date_w,
             &raw mut rc_centre,
-            DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | windows::Win32::Graphics::Gdi::DT_CENTER,
+            DT_TOP | DT_SINGLELINE | DT_NOPREFIX | windows::Win32::Graphics::Gdi::DT_CENTER,
         );
     }
     // "Page N of M" (right-aligned).
