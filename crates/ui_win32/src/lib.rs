@@ -392,16 +392,16 @@ use codepp_scintilla_sys::{
     SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
     SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS,
     SCI_INDICATORCLEARRANGE, SCI_INDICATORFILLRANGE, SCI_INDICSETALPHA, SCI_INDICSETFORE,
-    SCI_INDICSETOUTLINEALPHA, SCI_INDICSETSTYLE, SCI_INDICSETUNDER, SCI_LINEFROMPOSITION,
-    SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
+    SCI_INDICSETOUTLINEALPHA, SCI_INDICSETSTROKEWIDTH, SCI_INDICSETSTYLE, SCI_INDICSETUNDER,
+    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
     SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_POSITIONFROMLINE,
     SCI_POSITIONFROMPOINTCLOSE, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
     SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
     SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETINDICATORCURRENT,
     SCI_SETMARGINWIDTHN, SCI_SETREADONLY, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
     SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
-    SCI_SETTABWIDTH, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL,
-    SCI_SETVIEWWS, SCI_SETVSCROLLBAR, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
+    SCI_SETTABWIDTH, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTECHNOLOGY, SCI_SETTEXT,
+    SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETVSCROLLBAR, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
     SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT,
     SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI,
     SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
@@ -412,9 +412,9 @@ use codepp_scintilla_sys::{
     SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
     SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
     SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
-    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
-    SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT,
-    STYLE_INDENTGUIDE, STYLE_LINENUMBER,
+    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
+    SC_TECHNOLOGY_DIRECTWRITE, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL,
+    STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT, STYLE_INDENTGUIDE, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
@@ -25204,6 +25204,18 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         docmap_editor.send(SCI_SETMARGINWIDTHN, 1, 0);
         docmap_editor.send(SCI_SETMARGINWIDTHN, 2, 0);
         docmap_editor.send(SCI_SETZOOM, -10_isize as usize, 0);
+        // Switch the docmap's Scintilla surface from GDI
+        // (Scintilla's default) to Direct2D + DirectWrite.
+        // Motivation: `SCI_INDICSETSTROKEWIDTH` (which we use
+        // below for the viewport-highlight outline) is a no-op
+        // under GDI — `SurfaceGDI::AlphaRectangle` in
+        // `PlatWin.cxx` hardcodes a 1-px border regardless of
+        // the width parameter. Only the D2D surface honours
+        // stroke width. Scoped to the docmap view only so the
+        // main editor's rendering stays on GDI (no font-metric
+        // shifts or other visual side effects on the primary
+        // typing surface).
+        docmap_editor.send(SCI_SETTECHNOLOGY, SC_TECHNOLOGY_DIRECTWRITE, 0);
         // Viewport highlight indicator — the "orange rectangle"
         // that marks the range currently visible in the main
         // editor. Configured once at creation; every subsequent
@@ -25215,22 +25227,20 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // `INDIC_FULLBOX` stacks consecutive filled lines without
         // the 1-px vertical seam `INDIC_STRAIGHTBOX` leaves
         // between them, so a multi-line viewport range reads as
-        // one continuous vertical band across the map — matches
-        // Notepad++'s "you are here" look. (Both styles derive
-        // horizontal extent from the range's glyph positions;
-        // neither extends to full panel width, and a blank line
-        // inside the range still paints no fill on either
-        // style. See [`INDIC_FULLBOX`]'s doc comment.)
+        // one continuous vertical band across the map.
         //
-        // Fill alpha 30/255 (~12% opacity) keeps the highlight a
-        // subtle tint over the miniature text rather than a
-        // dominant colour cast. Outline alpha 255 (solid) makes
-        // the rectangle's edges read as a definite frame — the
-        // frame is the primary "you are here" cue; the fill just
-        // adds a soft background wash. `UNDER=1` paints the box
-        // behind the text glyphs so text stays its own colour
-        // (black on white) rather than being alpha-blended
-        // toward orange.
+        // **Fill alpha 0 — no fill.** The earlier iteration used
+        // a translucent fill with `UNDER=1` intending the box to
+        // sit behind the miniature text, but the alpha-blended
+        // orange still visibly tinted the glyphs above it (the
+        // "under" flag decides paint ORDER, not whether the
+        // subsequent glyph pass alpha-blends against the fill —
+        // it does either way in this Scintilla version). Setting
+        // fill to fully transparent removes the tint entirely.
+        // Outline alpha 255 + stroke width 2 px (`200/100`)
+        // carries the visual on its own: a clean orange
+        // rectangle framing the visible range, text underneath
+        // untouched.
         docmap_editor.send(
             SCI_INDICSETSTYLE,
             DOCMAP_VIEWPORT_INDICATOR,
@@ -25241,8 +25251,9 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             DOCMAP_VIEWPORT_INDICATOR,
             DOCMAP_VIEWPORT_COLOR as isize,
         );
-        docmap_editor.send(SCI_INDICSETALPHA, DOCMAP_VIEWPORT_INDICATOR, 30);
+        docmap_editor.send(SCI_INDICSETALPHA, DOCMAP_VIEWPORT_INDICATOR, 0);
         docmap_editor.send(SCI_INDICSETOUTLINEALPHA, DOCMAP_VIEWPORT_INDICATOR, 255);
+        docmap_editor.send(SCI_INDICSETSTROKEWIDTH, DOCMAP_VIEWPORT_INDICATOR, 200);
         docmap_editor.send(SCI_INDICSETUNDER, DOCMAP_VIEWPORT_INDICATOR, 1);
         // Subclass the map's Scintilla so mouse events reach us
         // BEFORE Scintilla's own handler (which would start a
@@ -27560,10 +27571,14 @@ unsafe fn scroll_main_to_doc_line(main_editor: EditorHandle, target_doc_line: is
 /// `DefSubclassProc` so Scintilla's own paint / keyboard /
 /// notification handling continues unchanged.
 ///
-/// Drag-state is stored on `WindowState.docmap_scroll_drag`
-/// (via `state_from_hwnd(GetParent(map_hwnd))`) rather than on
-/// the subclass itself, matching the pattern used by the
-/// workspace and docmap splitters.
+/// Drag-state is stored on `WindowState.docmap_scroll_drag`,
+/// reached by walking TWO levels of parenthood from the map's
+/// Scintilla HWND: its direct parent is the docmap panel HWND
+/// (which owns no state), whose parent is the main window
+/// (where `state` is installed via `GWLP_USERDATA`). Same
+/// discipline the workspace/docmap splitters use, except those
+/// splitters are direct children of the main window so their
+/// walk is only one hop.
 ///
 /// # Safety
 ///
@@ -27578,10 +27593,14 @@ unsafe extern "system" fn docmap_scintilla_subclass_proc(
     _dwrefdata: usize,
 ) -> LRESULT {
     unsafe {
+        // Walk `map_scintilla → docmap_panel → main_hwnd`. The
+        // panel HWND doesn't have `WindowState` installed on
+        // `GWLP_USERDATA`; state lives on the main window.
+        let panel = GetParent(hwnd).unwrap_or_default();
+        let main = GetParent(panel).unwrap_or_default();
         match msg {
             WM_LBUTTONDOWN => {
-                let parent = GetParent(hwnd).unwrap_or_default();
-                if let Some(state) = state_from_hwnd(parent) {
+                if let Some(state) = state_from_hwnd(main) {
                     state.docmap_scroll_drag = Some(DocMapScrollDrag { _priv: () });
                 }
                 let _ = SetCapture(hwnd);
@@ -27589,7 +27608,7 @@ unsafe extern "system" fn docmap_scintilla_subclass_proc(
                 // click (no drag) still moves the view.
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                let (main_editor, docmap_editor) = if let Some(state) = state_from_hwnd(parent) {
+                let (main_editor, docmap_editor) = if let Some(state) = state_from_hwnd(main) {
                     (state.editor, state.docmap_editor)
                 } else {
                     return LRESULT(0);
@@ -27604,8 +27623,7 @@ unsafe extern "system" fn docmap_scintilla_subclass_proc(
                 LRESULT(0)
             }
             WM_MOUSEMOVE => {
-                let parent = GetParent(hwnd).unwrap_or_default();
-                let dragging = if let Some(state) = state_from_hwnd(parent) {
+                let dragging = if let Some(state) = state_from_hwnd(main) {
                     state.docmap_scroll_drag.is_some()
                 } else {
                     false
@@ -27615,7 +27633,7 @@ unsafe extern "system" fn docmap_scintilla_subclass_proc(
                 }
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
-                let (main_editor, docmap_editor) = if let Some(state) = state_from_hwnd(parent) {
+                let (main_editor, docmap_editor) = if let Some(state) = state_from_hwnd(main) {
                     (state.editor, state.docmap_editor)
                 } else {
                     return LRESULT(0);
@@ -27628,8 +27646,7 @@ unsafe extern "system" fn docmap_scintilla_subclass_proc(
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
-                let parent = GetParent(hwnd).unwrap_or_default();
-                if let Some(state) = state_from_hwnd(parent) {
+                if let Some(state) = state_from_hwnd(main) {
                     state.docmap_scroll_drag = None;
                 }
                 let _ = ReleaseCapture();
@@ -27640,8 +27657,7 @@ unsafe extern "system" fn docmap_scintilla_subclass_proc(
                 // mid-drag (e.g. Alt+Tab). Clear drag state so a
                 // stray WM_MOUSEMOVE without a fresh
                 // WM_LBUTTONDOWN doesn't scroll the main editor.
-                let parent = GetParent(hwnd).unwrap_or_default();
-                if let Some(state) = state_from_hwnd(parent) {
+                if let Some(state) = state_from_hwnd(main) {
                     state.docmap_scroll_drag = None;
                 }
                 DefSubclassProc(hwnd, msg, wparam, lparam)

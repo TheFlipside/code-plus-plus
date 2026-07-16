@@ -364,6 +364,36 @@ pub const SCI_VISIBLEFROMDOCLINE: u32 = 2220;
 /// a line, scroll the main editor to that line.
 pub const SCI_POSITIONFROMPOINTCLOSE: u32 = 2023;
 
+/// `SCI_INDICSETSTROKEWIDTH(indicator, hundredths)` — width of
+/// the indicator's outline stroke, in HUNDREDTHS of a pixel
+/// (so `100` = 1 px, `200` = 2 px). The Document Map's viewport
+/// highlight uses a thick outline as the primary "you are here"
+/// cue, with the fill alpha at 0 so the miniature text under
+/// the highlight isn't tinted by an alpha-blended overlay.
+///
+/// **Renderer caveat.** Only Scintilla's DirectWrite (D2D)
+/// surface honours this value — the GDI `Surface` implementation
+/// hardcodes a 1 px border regardless (see `SurfaceGDI::AlphaRectangle`
+/// in `vendor/scintilla/win32/PlatWin.cxx`). The map view opts
+/// into D2D via [`SCI_SETTECHNOLOGY`] +
+/// [`SC_TECHNOLOGY_DIRECTWRITE`] to get the thicker outline.
+pub const SCI_INDICSETSTROKEWIDTH: u32 = 2751;
+
+/// `SCI_SETTECHNOLOGY(tech)` — pick the low-level rendering
+/// surface. Default is GDI (`SC_TECHNOLOGY_DEFAULT`); Direct2D /
+/// DirectWrite variants unlock the `AlphaRectangle` stroke-width
+/// path plus generally smoother glyph rendering. Set per-view;
+/// the Document Map opts into D2D so its viewport-highlight
+/// outline honours [`SCI_INDICSETSTROKEWIDTH`].
+pub const SCI_SETTECHNOLOGY: u32 = 2630;
+/// GDI-based rendering (default). `AlphaRectangle` outlines are
+/// hardcoded at 1 px here.
+pub const SC_TECHNOLOGY_DEFAULT: usize = 0;
+/// Direct2D + DirectWrite rendering. Honours
+/// [`SCI_INDICSETSTROKEWIDTH`] and generally provides smoother
+/// glyph rendering. Used by the Document Map view.
+pub const SC_TECHNOLOGY_DIRECTWRITE: usize = 1;
+
 // Horizontal-scroll width control. Scintilla defaults `scrollWidth`
 // to 2000 px and never auto-shrinks, which produces the visible
 // "scroll past the end of any line into empty space" behaviour.
