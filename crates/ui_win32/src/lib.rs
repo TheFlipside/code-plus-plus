@@ -164,38 +164,38 @@ use codepp_plugin_host::{
     PLUGIN_CMD_ID_BASE, RUNCOMMAND_RANGE, RUNCOMMAND_USER,
 };
 use codepp_scintilla_sys::{
-    ScintillaDirectFunction, Scintilla_RegisterClasses, CARETSTYLE_INVISIBLE, INDIC_FULLBOX,
-    INDIC_HIDDEN, SCE_ADA_CHARACTER, SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER,
-    SCE_ADA_ILLEGAL, SCE_ADA_LABEL, SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL,
-    SCE_ADA_WORD, SCE_ASM_CHARACTER, SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK,
-    SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION, SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND,
-    SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION, SCE_ASM_NUMBER, SCE_ASM_OPERATOR,
-    SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE, SCE_ASN1_ATTRIBUTE,
-    SCE_ASN1_COMMENT, SCE_ASN1_DESCRIPTOR, SCE_ASN1_KEYWORD, SCE_ASN1_OID, SCE_ASN1_OPERATOR,
-    SCE_ASN1_SCALAR, SCE_ASN1_STRING, SCE_ASN1_TYPE, SCE_AU3_COMMENT, SCE_AU3_COMMENTBLOCK,
-    SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD, SCE_AU3_MACRO,
-    SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT, SCE_AU3_SPECIAL,
-    SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_AVS_CLIPPROP, SCE_AVS_COMMENTBLOCK,
-    SCE_AVS_COMMENTBLOCKN, SCE_AVS_COMMENTLINE, SCE_AVS_FILTER, SCE_AVS_FUNCTION, SCE_AVS_KEYWORD,
-    SCE_AVS_NUMBER, SCE_AVS_OPERATOR, SCE_AVS_PLUGIN, SCE_AVS_STRING, SCE_AVS_TRIPLESTRING,
-    SCE_BAAN_COMMENT, SCE_BAAN_COMMENTDOC, SCE_BAAN_DEFINEDEF, SCE_BAAN_DOMDEF, SCE_BAAN_FUNCDEF,
-    SCE_BAAN_FUNCTION, SCE_BAAN_NUMBER, SCE_BAAN_OBJECTDEF, SCE_BAAN_OPERATOR,
-    SCE_BAAN_PREPROCESSOR, SCE_BAAN_STRING, SCE_BAAN_TABLEDEF, SCE_BAAN_TABLESQL, SCE_BAAN_WORD,
-    SCE_BAAN_WORD2, SCE_BAAN_WORD3, SCE_BAAN_WORD4, SCE_BAAN_WORD5, SCE_BAAN_WORD6, SCE_BAAN_WORD7,
-    SCE_BAAN_WORD8, SCE_BAAN_WORD9, SCE_BAT_AFTER_LABEL, SCE_BAT_COMMAND, SCE_BAT_COMMENT,
-    SCE_BAT_HIDE, SCE_BAT_LABEL, SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_B_BINNUMBER, SCE_B_COMMENT,
-    SCE_B_COMMENTBLOCK, SCE_B_CONSTANT, SCE_B_DATE, SCE_B_DOCBLOCK, SCE_B_DOCKEYWORD,
-    SCE_B_DOCLINE, SCE_B_HEXNUMBER, SCE_B_KEYWORD, SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4,
-    SCE_B_LABEL, SCE_B_NUMBER, SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CAML_CHAR,
-    SCE_CAML_COMMENT, SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD,
-    SCE_CAML_KEYWORD2, SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR,
-    SCE_CAML_STRING, SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS, SCE_CMAKE_COMMENT,
-    SCE_CMAKE_FOREACHDEF, SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF, SCE_CMAKE_NUMBER,
-    SCE_CMAKE_PARAMETERS, SCE_CMAKE_STRINGDQ, SCE_CMAKE_STRINGLQ, SCE_CMAKE_STRINGRQ,
-    SCE_CMAKE_STRINGVAR, SCE_CMAKE_USERDEFINED, SCE_CMAKE_VARIABLE, SCE_CMAKE_WHILEDEF,
-    SCE_COBOL_CHARACTER, SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC, SCE_COBOL_COMMENTLINE,
-    SCE_COBOL_NUMBER, SCE_COBOL_OPERATOR, SCE_COBOL_PREPROCESSOR, SCE_COBOL_STRING, SCE_COBOL_WORD,
-    SCE_COBOL_WORD2, SCE_COBOL_WORD3, SCE_COFFEESCRIPT_CHARACTER, SCE_COFFEESCRIPT_COMMENTBLOCK,
+    ScintillaDirectFunction, Scintilla_RegisterClasses, CARETSTYLE_INVISIBLE, SCE_ADA_CHARACTER,
+    SCE_ADA_CHARACTEREOL, SCE_ADA_COMMENTLINE, SCE_ADA_DELIMITER, SCE_ADA_ILLEGAL, SCE_ADA_LABEL,
+    SCE_ADA_NUMBER, SCE_ADA_STRING, SCE_ADA_STRINGEOL, SCE_ADA_WORD, SCE_ASM_CHARACTER,
+    SCE_ASM_COMMENT, SCE_ASM_COMMENTBLOCK, SCE_ASM_COMMENTDIRECTIVE, SCE_ASM_CPUINSTRUCTION,
+    SCE_ASM_DIRECTIVE, SCE_ASM_DIRECTIVEOPERAND, SCE_ASM_EXTINSTRUCTION, SCE_ASM_MATHINSTRUCTION,
+    SCE_ASM_NUMBER, SCE_ASM_OPERATOR, SCE_ASM_REGISTER, SCE_ASM_STRING, SCE_ASM_STRINGBACKQUOTE,
+    SCE_ASN1_ATTRIBUTE, SCE_ASN1_COMMENT, SCE_ASN1_DESCRIPTOR, SCE_ASN1_KEYWORD, SCE_ASN1_OID,
+    SCE_ASN1_OPERATOR, SCE_ASN1_SCALAR, SCE_ASN1_STRING, SCE_ASN1_TYPE, SCE_AU3_COMMENT,
+    SCE_AU3_COMMENTBLOCK, SCE_AU3_COMOBJ, SCE_AU3_EXPAND, SCE_AU3_FUNCTION, SCE_AU3_KEYWORD,
+    SCE_AU3_MACRO, SCE_AU3_NUMBER, SCE_AU3_OPERATOR, SCE_AU3_PREPROCESSOR, SCE_AU3_SENT,
+    SCE_AU3_SPECIAL, SCE_AU3_STRING, SCE_AU3_UDF, SCE_AU3_VARIABLE, SCE_AVS_CLIPPROP,
+    SCE_AVS_COMMENTBLOCK, SCE_AVS_COMMENTBLOCKN, SCE_AVS_COMMENTLINE, SCE_AVS_FILTER,
+    SCE_AVS_FUNCTION, SCE_AVS_KEYWORD, SCE_AVS_NUMBER, SCE_AVS_OPERATOR, SCE_AVS_PLUGIN,
+    SCE_AVS_STRING, SCE_AVS_TRIPLESTRING, SCE_BAAN_COMMENT, SCE_BAAN_COMMENTDOC,
+    SCE_BAAN_DEFINEDEF, SCE_BAAN_DOMDEF, SCE_BAAN_FUNCDEF, SCE_BAAN_FUNCTION, SCE_BAAN_NUMBER,
+    SCE_BAAN_OBJECTDEF, SCE_BAAN_OPERATOR, SCE_BAAN_PREPROCESSOR, SCE_BAAN_STRING,
+    SCE_BAAN_TABLEDEF, SCE_BAAN_TABLESQL, SCE_BAAN_WORD, SCE_BAAN_WORD2, SCE_BAAN_WORD3,
+    SCE_BAAN_WORD4, SCE_BAAN_WORD5, SCE_BAAN_WORD6, SCE_BAAN_WORD7, SCE_BAAN_WORD8, SCE_BAAN_WORD9,
+    SCE_BAT_AFTER_LABEL, SCE_BAT_COMMAND, SCE_BAT_COMMENT, SCE_BAT_HIDE, SCE_BAT_LABEL,
+    SCE_BAT_OPERATOR, SCE_BAT_WORD, SCE_B_BINNUMBER, SCE_B_COMMENT, SCE_B_COMMENTBLOCK,
+    SCE_B_CONSTANT, SCE_B_DATE, SCE_B_DOCBLOCK, SCE_B_DOCKEYWORD, SCE_B_DOCLINE, SCE_B_HEXNUMBER,
+    SCE_B_KEYWORD, SCE_B_KEYWORD2, SCE_B_KEYWORD3, SCE_B_KEYWORD4, SCE_B_LABEL, SCE_B_NUMBER,
+    SCE_B_OPERATOR, SCE_B_PREPROCESSOR, SCE_B_STRING, SCE_CAML_CHAR, SCE_CAML_COMMENT,
+    SCE_CAML_COMMENT1, SCE_CAML_COMMENT2, SCE_CAML_COMMENT3, SCE_CAML_KEYWORD, SCE_CAML_KEYWORD2,
+    SCE_CAML_KEYWORD3, SCE_CAML_LINENUM, SCE_CAML_NUMBER, SCE_CAML_OPERATOR, SCE_CAML_STRING,
+    SCE_CAML_TAGNAME, SCE_CAML_WHITE, SCE_CMAKE_COMMANDS, SCE_CMAKE_COMMENT, SCE_CMAKE_FOREACHDEF,
+    SCE_CMAKE_IFDEFINEDEF, SCE_CMAKE_MACRODEF, SCE_CMAKE_NUMBER, SCE_CMAKE_PARAMETERS,
+    SCE_CMAKE_STRINGDQ, SCE_CMAKE_STRINGLQ, SCE_CMAKE_STRINGRQ, SCE_CMAKE_STRINGVAR,
+    SCE_CMAKE_USERDEFINED, SCE_CMAKE_VARIABLE, SCE_CMAKE_WHILEDEF, SCE_COBOL_CHARACTER,
+    SCE_COBOL_COMMENT, SCE_COBOL_COMMENTDOC, SCE_COBOL_COMMENTLINE, SCE_COBOL_NUMBER,
+    SCE_COBOL_OPERATOR, SCE_COBOL_PREPROCESSOR, SCE_COBOL_STRING, SCE_COBOL_WORD, SCE_COBOL_WORD2,
+    SCE_COBOL_WORD3, SCE_COFFEESCRIPT_CHARACTER, SCE_COFFEESCRIPT_COMMENTBLOCK,
     SCE_COFFEESCRIPT_COMMENTLINE, SCE_COFFEESCRIPT_GLOBALCLASS, SCE_COFFEESCRIPT_INSTANCEPROPERTY,
     SCE_COFFEESCRIPT_NUMBER, SCE_COFFEESCRIPT_OPERATOR, SCE_COFFEESCRIPT_REGEX,
     SCE_COFFEESCRIPT_STRING, SCE_COFFEESCRIPT_VERBOSE_REGEX,
@@ -391,30 +391,29 @@ use codepp_scintilla_sys::{
     SCI_GETINDENTATIONGUIDES, SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE,
     SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART, SCI_GETSELTEXT, SCI_GETTEXT, SCI_GETVIEWEOL,
     SCI_GETVIEWWS, SCI_GETWRAPMODE, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOLINE, SCI_GOTOPOS,
-    SCI_INDICATORCLEARRANGE, SCI_INDICATORFILLRANGE, SCI_INDICSETALPHA, SCI_INDICSETFORE,
-    SCI_INDICSETOUTLINEALPHA, SCI_INDICSETSTROKEWIDTH, SCI_INDICSETSTYLE, SCI_INDICSETUNDER,
     SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_MARGINSETSTYLE, SCI_MARGINSETTEXT,
-    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POSITIONAFTER, SCI_POSITIONFROMLINE,
-    SCI_POSITIONFROMPOINTCLOSE, SCI_REDO, SCI_RELEASEDOCUMENT, SCI_REPLACETARGET, SCI_SELECTALL,
-    SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE,
-    SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETINDICATORCURRENT,
-    SCI_SETMARGINWIDTHN, SCI_SETREADONLY, SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH,
-    SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART,
-    SCI_SETTABWIDTH, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTECHNOLOGY, SCI_SETTEXT,
+    SCI_MARGINTEXTCLEARALL, SCI_PASTE, SCI_POINTYFROMPOSITION, SCI_POSITIONAFTER,
+    SCI_POSITIONFROMLINE, SCI_POSITIONFROMPOINTCLOSE, SCI_REDO, SCI_RELEASEDOCUMENT,
+    SCI_REPLACETARGET, SCI_SELECTALL, SCI_SETCARETSTYLE, SCI_SETCODEPAGE, SCI_SETDOCPOINTER,
+    SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETFONTQUALITY, SCI_SETHSCROLLBAR,
+    SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN, SCI_SETREADONLY, SCI_SETSAVEPOINT,
+    SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL, SCI_SETSELECTIONEND,
+    SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT,
     SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETVSCROLLBAR, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM,
-    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_UNDO, SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT,
-    SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI,
-    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
-    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
-    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_EOL_CR, SC_EOL_CRLF,
-    SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL,
-    SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL,
-    SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
-    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
-    SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
-    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
-    SC_TECHNOLOGY_DIRECTWRITE, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL,
-    STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT, STYLE_INDENTGUIDE, STYLE_LINENUMBER,
+    SCI_STYLEGETBACK, SCI_STYLEGETFORE, SCI_TEXTHEIGHT, SCI_UNDO, SCI_VISIBLEFROMDOCLINE,
+    SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED,
+    SCN_STYLENEEDED, SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK,
+    SC_AUTOMATICFOLD_SHOW, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8,
+    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
+    SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH,
+    SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARGIN_TEXT, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
+    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
+    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS,
+    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY,
+    SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS,
+    SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION,
+    SC_UPDATE_V_SCROLL, STYLE_BRACEBAD, STYLE_BRACELIGHT, STYLE_DEFAULT, STYLE_INDENTGUIDE,
+    STYLE_LINENUMBER,
 };
 use codepp_shell::{
     HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
@@ -428,7 +427,7 @@ use windows::Win32::Graphics::Gdi::{
     AlphaBlend, ClientToScreen, CreateCompatibleDC, CreateFontIndirectW, CreatePen,
     CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EnumFontFamiliesExW, FillRect, GetDC,
     GetMonitorInfoW, GetStockObject, GetSysColorBrush, InvalidateRect, LineTo, MonitorFromWindow,
-    MoveToEx, Polygon, ReleaseDC, ScreenToClient, SelectObject, SetBkColor, SetBkMode,
+    MoveToEx, Polygon, Rectangle, ReleaseDC, ScreenToClient, SelectObject, SetBkColor, SetBkMode,
     SetTextColor, UpdateWindow, AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, COLOR_WINDOW,
     DEFAULT_CHARSET, DEFAULT_GUI_FONT, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
     FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, LOGFONTW, MONITORINFO, MONITOR_DEFAULTTONEAREST,
@@ -501,12 +500,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CAPTURECHANGED,
     WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
     WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL, WM_INITMENUPOPUP,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_QUIT,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW,
-    WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_LAYERED,
-    WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
-    WS_VISIBLE, WS_VSCROLL,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_NCDESTROY,
+    WM_NOTIFY, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
+    WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSEXW, WS_BORDER,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_EX_CONTROLPARENT,
+    WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP, WS_HSCROLL,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 // --- Built-in menu command ids ----------------------------------------
@@ -956,12 +955,6 @@ const DEFAULT_DOCMAP_WIDTH_PX: i32 = 160;
 /// the docmap panel. Same 4-px rationale as
 /// [`WORKSPACE_SPLITTER_WIDTH_PX`].
 const DOCMAP_SPLITTER_WIDTH_PX: i32 = 4;
-/// Scintilla indicator slot for the docmap's viewport highlight
-/// (the "orange rectangle" over the range currently visible in
-/// the main editor). Lives in the 8..=31 user-defined range —
-/// slots 0-7 are reserved for built-in / lexer-managed
-/// indicators. Slot 8 chosen as the first available.
-const DOCMAP_VIEWPORT_INDICATOR: usize = 8;
 /// Fill + outline colour of the docmap viewport highlight, in
 /// Scintilla's `COLORREF` byte order (`0x00BBGGRR` — same
 /// encoding Win32's `RGB` macro produces). HTML `#FFA500`
@@ -25204,57 +25197,19 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         docmap_editor.send(SCI_SETMARGINWIDTHN, 1, 0);
         docmap_editor.send(SCI_SETMARGINWIDTHN, 2, 0);
         docmap_editor.send(SCI_SETZOOM, -10_isize as usize, 0);
-        // Switch the docmap's Scintilla surface from GDI
-        // (Scintilla's default) to Direct2D + DirectWrite.
-        // Motivation: `SCI_INDICSETSTROKEWIDTH` (which we use
-        // below for the viewport-highlight outline) is a no-op
-        // under GDI — `SurfaceGDI::AlphaRectangle` in
-        // `PlatWin.cxx` hardcodes a 1-px border regardless of
-        // the width parameter. Only the D2D surface honours
-        // stroke width. Scoped to the docmap view only so the
-        // main editor's rendering stays on GDI (no font-metric
-        // shifts or other visual side effects on the primary
-        // typing surface).
-        docmap_editor.send(SCI_SETTECHNOLOGY, SC_TECHNOLOGY_DIRECTWRITE, 0);
-        // Viewport highlight indicator — the "orange rectangle"
-        // that marks the range currently visible in the main
-        // editor. Configured once at creation; every subsequent
-        // scroll / tab-switch / resize just calls
-        // `update_docmap_viewport_indicator` which re-fills the
-        // range on this same indicator slot (see
-        // [`DOCMAP_VIEWPORT_INDICATOR`]).
-        //
-        // `INDIC_FULLBOX` stacks consecutive filled lines without
-        // the 1-px vertical seam `INDIC_STRAIGHTBOX` leaves
-        // between them, so a multi-line viewport range reads as
-        // one continuous vertical band across the map.
-        //
-        // **Fill alpha 0 — no fill.** The earlier iteration used
-        // a translucent fill with `UNDER=1` intending the box to
-        // sit behind the miniature text, but the alpha-blended
-        // orange still visibly tinted the glyphs above it (the
-        // "under" flag decides paint ORDER, not whether the
-        // subsequent glyph pass alpha-blends against the fill —
-        // it does either way in this Scintilla version). Setting
-        // fill to fully transparent removes the tint entirely.
-        // Outline alpha 255 + stroke width 2 px (`200/100`)
-        // carries the visual on its own: a clean orange
-        // rectangle framing the visible range, text underneath
-        // untouched.
-        docmap_editor.send(
-            SCI_INDICSETSTYLE,
-            DOCMAP_VIEWPORT_INDICATOR,
-            INDIC_FULLBOX as isize,
-        );
-        docmap_editor.send(
-            SCI_INDICSETFORE,
-            DOCMAP_VIEWPORT_INDICATOR,
-            DOCMAP_VIEWPORT_COLOR as isize,
-        );
-        docmap_editor.send(SCI_INDICSETALPHA, DOCMAP_VIEWPORT_INDICATOR, 0);
-        docmap_editor.send(SCI_INDICSETOUTLINEALPHA, DOCMAP_VIEWPORT_INDICATOR, 255);
-        docmap_editor.send(SCI_INDICSETSTROKEWIDTH, DOCMAP_VIEWPORT_INDICATOR, 200);
-        docmap_editor.send(SCI_INDICSETUNDER, DOCMAP_VIEWPORT_INDICATOR, 1);
+        // Viewport highlight paint is done by our own WM_PAINT
+        // subclass proc — see [`docmap_scintilla_subclass_proc`].
+        // Scintilla's built-in indicators are range-based
+        // (per-subline paint at glyph resolution), which at the
+        // map view's zoom of -10 makes every line ~2-3 px tall.
+        // A per-line box outline covers the entire line at that
+        // scale, producing the "everything's orange" result the
+        // earlier iterations landed on. Custom GDI drawing of a
+        // SINGLE rectangle across the full highlight range —
+        // top of the first visible line to bottom of the last —
+        // is the only way to get the clean bounding-box look
+        // Notepad++'s Document Map paints (which uses the same
+        // custom-overlay technique).
         // Subclass the map's Scintilla so mouse events reach us
         // BEFORE Scintilla's own handler (which would start a
         // text-selection drag on the read-only view — pointless
@@ -25431,27 +25386,6 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // fire from the tail of `apply_default_styles` — same
         // re-application pattern as line-number and brace styles.
         apply_indent_guide_style(&editor);
-
-        // Hide indicator slot [`DOCMAP_VIEWPORT_INDICATOR`] on
-        // the main editor. Indicator STYLE lives on `ViewStyle`
-        // (per-view); indicator RANGE lives on `Document`
-        // (per-doc, shared). The Document Map view fills a range
-        // on that slot to paint its orange highlight, but the
-        // range data lands on the shared document — without
-        // this the main editor renders the same range using its
-        // own (uninitialised) style for slot 8, which falls back
-        // to Scintilla's built-in `INDIC_PLAIN` and paints a
-        // black underline under every visible line of the main
-        // editor. Setting `INDIC_HIDDEN` on the main view splits
-        // the two views' visual treatments cleanly: shared
-        // range, view-specific rendering. Only style is set
-        // here (view-level, one-time); the map view configures
-        // the visible `INDIC_FULLBOX` on its own side.
-        editor.send(
-            SCI_INDICSETSTYLE,
-            DOCMAP_VIEWPORT_INDICATOR,
-            INDIC_HIDDEN as isize,
-        );
 
         // Tab-width + implicit indent-level width for the indent-
         // guide algorithm on the initial implicit document. Per-
@@ -27662,8 +27596,125 @@ unsafe extern "system" fn docmap_scintilla_subclass_proc(
                 }
                 DefSubclassProc(hwnd, msg, wparam, lparam)
             }
+            WM_MOUSEWHEEL => {
+                // Wheel-scroll on the map view scrolls the MAIN
+                // editor rather than the map (the map is a
+                // fixed-viewport overview; the main editor is
+                // the surface the user actually navigates).
+                // Forward the message directly to the main
+                // editor's Scintilla control — it handles wheel
+                // scrolling natively.
+                let main_scintilla = if let Some(state) = state_from_hwnd(main) {
+                    state.scintilla_hwnd
+                } else {
+                    return LRESULT(0);
+                };
+                let _ = SendMessageW(main_scintilla, WM_MOUSEWHEEL, Some(wparam), Some(lparam));
+                // Consume so Scintilla's own wnd_proc doesn't
+                // scroll the map view — the map should stay
+                // pinned by `update_docmap_viewport_indicator`'s
+                // centering logic, not respond to wheel input
+                // directly.
+                LRESULT(0)
+            }
+            WM_PAINT => {
+                // Let Scintilla paint its miniature-text content
+                // first, then overlay a custom orange rectangle
+                // across the visible-line range. Scintilla's
+                // range-based indicators paint per-subline, which
+                // at zoom -10 (line height ~2-3 px) makes any
+                // outline cover the entire line — the reason
+                // earlier iterations produced "everything's
+                // orange" instead of a bounding box. Custom GDI
+                // drawing lets us paint ONE rectangle spanning
+                // top-of-first-visible to bottom-of-last-visible.
+                let result = DefSubclassProc(hwnd, msg, wparam, lparam);
+                paint_docmap_viewport_overlay(hwnd, main);
+                result
+            }
             _ => DefSubclassProc(hwnd, msg, wparam, lparam),
         }
+    }
+}
+
+/// Paint the orange viewport-highlight rectangle over the map
+/// view via GDI. Called from the map Scintilla's `WM_PAINT`
+/// subclass AFTER Scintilla's own paint completes, so the
+/// overlay sits on top of the miniature text.
+///
+/// `map_hwnd` — the map's Scintilla control.
+/// `main_hwnd` — the main window, needed for
+/// `state_from_hwnd` to reach both editor handles.
+///
+/// No-op when the state pointer isn't installed yet
+/// (`main_hwnd` invalid) or when the buffer/viewport is empty
+/// (nothing to highlight).
+///
+/// # Safety
+///
+/// Runs on the UI thread inside `WM_PAINT` dispatch. Uses
+/// `GetDC`/`ReleaseDC` (rather than `BeginPaint`/`EndPaint`)
+/// because Scintilla already handled the paint validation via
+/// its own `DefSubclassProc` call; we just need a device
+/// context to draw over the client area.
+unsafe fn paint_docmap_viewport_overlay(map_hwnd: HWND, main_hwnd: HWND) {
+    unsafe {
+        let (main_editor, docmap_editor) = if let Some(state) = state_from_hwnd(main_hwnd) {
+            (state.editor, state.docmap_editor)
+        } else {
+            return;
+        };
+        // Recompute the visible-line range on the main editor.
+        // Same discipline as `update_docmap_viewport_indicator`
+        // — read fresh values so a mid-frame scroll on the main
+        // editor still positions the overlay correctly.
+        let first_visible = main_editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
+        let lines_on_screen = main_editor.send(SCI_LINESONSCREEN, 0, 0);
+        let line_count = main_editor.send(SCI_GETLINECOUNT, 0, 0).max(0);
+        if first_visible < 0 || lines_on_screen <= 0 || line_count == 0 {
+            return;
+        }
+        let last_visible_exclusive = first_visible + lines_on_screen;
+        let first_doc_line = main_editor.send(SCI_DOCLINEFROMVISIBLE, first_visible as usize, 0);
+        let last_doc_line_raw =
+            main_editor.send(SCI_DOCLINEFROMVISIBLE, last_visible_exclusive as usize, 0);
+        let last_doc_line_exclusive = last_doc_line_raw.min(line_count);
+        if first_doc_line < 0 || last_doc_line_exclusive <= first_doc_line {
+            return;
+        }
+        let first_pos = docmap_editor.send(SCI_POSITIONFROMLINE, first_doc_line as usize, 0);
+        let last_pos =
+            docmap_editor.send(SCI_POSITIONFROMLINE, last_doc_line_exclusive as usize, 0);
+        if first_pos < 0 || last_pos < 0 {
+            return;
+        }
+        let top_y = docmap_editor.send(SCI_POINTYFROMPOSITION, 0, first_pos);
+        let bottom_y = docmap_editor.send(SCI_POINTYFROMPOSITION, 0, last_pos);
+        let top_y_i32 = i32::try_from(top_y).unwrap_or(0);
+        let mut bottom_y_i32 = i32::try_from(bottom_y).unwrap_or(0);
+        if bottom_y_i32 <= top_y_i32 {
+            let line_h = docmap_editor.send(SCI_TEXTHEIGHT, first_doc_line as usize, 0);
+            bottom_y_i32 = top_y_i32 + i32::try_from(line_h).unwrap_or(0);
+        }
+        let mut client = RECT::default();
+        if GetClientRect(map_hwnd, &raw mut client).is_err() {
+            return;
+        }
+        let hdc = GetDC(Some(map_hwnd));
+        if hdc.is_invalid() {
+            return;
+        }
+        let pen = CreatePen(PS_SOLID, 2, COLORREF(DOCMAP_VIEWPORT_COLOR));
+        if !pen.is_invalid() {
+            let prev_pen = SelectObject(hdc, HGDIOBJ(pen.0));
+            let hollow_brush = GetStockObject(NULL_BRUSH);
+            let prev_brush = SelectObject(hdc, hollow_brush);
+            let _ = Rectangle(hdc, client.left, top_y_i32, client.right, bottom_y_i32);
+            SelectObject(hdc, prev_brush);
+            SelectObject(hdc, prev_pen);
+            let _ = DeleteObject(HGDIOBJ(pen.0));
+        }
+        ReleaseDC(Some(map_hwnd), hdc);
     }
 }
 
@@ -30638,13 +30689,13 @@ unsafe fn sync_docmap_to_active_tab(main_hwnd: HWND) {
         return;
     }
     docmap_editor.send(SCI_SETDOCPOINTER, 0, doc);
-    // Rebinding the doc doesn't re-derive the viewport
-    // highlight — the indicator lives on the document, so the
-    // range from the *previous* tab's binding would still be
-    // painted (against the new tab's text) until the next
-    // scroll event fired an update. Kick a fresh update here
-    // so the newly-bound doc paints the correct range from the
-    // main editor's current viewport. Handles pulled from the
+    // Rebinding the doc changes the map's line-count and
+    // per-line pixel positions, so the auto-center scroll
+    // computed at the previous tab's dimensions is stale.
+    // Kick a fresh update so the map view scrolls to keep the
+    // main editor's viewport centered, and invalidate the map
+    // so the WM_PAINT subclass redraws the overlay rectangle
+    // against the newly-bound content. Handles pulled from the
     // borrow above so no second `state_from_hwnd` is needed.
     unsafe {
         update_docmap_viewport_indicator(main_editor, docmap_editor);
@@ -30696,37 +30747,24 @@ unsafe fn sync_docmap_to_active_tab(main_hwnd: HWND) {
 unsafe fn update_docmap_viewport_indicator(main_editor: EditorHandle, docmap_editor: EditorHandle) {
     // Main-editor viewport bounds. `SCI_GETFIRSTVISIBLELINE`
     // returns a VISIBLE-line index (post-folding / post-
-    // wrapping), which is what the user sees but NOT what
+    // wrapping) which is what the user sees but NOT what
     // `SCI_POSITIONFROMLINE` accepts — it takes a DOCUMENT-line
     // index. Convert via `SCI_DOCLINEFROMVISIBLE` (identity when
-    // no folding is active) so a folded buffer with, say,
-    // visible lines 0..20 mapping to document lines 0..200
-    // still gets the highlight painted at the right byte range.
-    // Same conversion applied to the exclusive upper endpoint.
-    // `SCI_LINESONSCREEN` returns the count of fully-visible
-    // (post-folding) lines; add it to the first-visible to get
-    // the exclusive upper bound in visible-line space.
+    // no folding is active). Same conversion for the exclusive
+    // upper endpoint.
     let first_visible = main_editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
     let lines_on_screen = main_editor.send(SCI_LINESONSCREEN, 0, 0);
     let line_count = main_editor.send(SCI_GETLINECOUNT, 0, 0).max(0);
     if first_visible < 0 || lines_on_screen <= 0 || line_count == 0 {
-        // Buffer is empty or the viewport hasn't been laid out
-        // yet (pre-first-`WM_SIZE`). Clear the old highlight so
-        // a switch to an empty buffer doesn't leave stale paint
-        // from the previous tab.
-        docmap_editor.send(SCI_SETINDICATORCURRENT, DOCMAP_VIEWPORT_INDICATOR, 0);
-        let doc_len = docmap_editor.send(SCI_GETLENGTH, 0, 0);
-        if doc_len > 0 {
-            docmap_editor.send(SCI_INDICATORCLEARRANGE, 0, doc_len);
+        // Empty buffer or pre-first-`WM_SIZE`. Invalidate the
+        // map view so its `WM_PAINT` subclass runs and clears
+        // any leftover overlay from a previous tab.
+        let map_hwnd = HWND(docmap_editor.hwnd());
+        unsafe {
+            let _ = InvalidateRect(Some(map_hwnd), None, false);
         }
         return;
     }
-    // Clamp `last_visible_exclusive` against the actual visible
-    // line count — Scintilla reports `SCI_LINESONSCREEN` based on
-    // viewport dimensions, not doc length, so a short buffer in a
-    // tall editor overshoots. Then convert both endpoints from
-    // visible-line space to document-line space (identity when no
-    // folding is active).
     let last_visible_exclusive = first_visible + lines_on_screen;
     let first_doc_line = main_editor.send(SCI_DOCLINEFROMVISIBLE, first_visible as usize, 0);
     let last_doc_line_raw =
@@ -30735,30 +30773,6 @@ unsafe fn update_docmap_viewport_indicator(main_editor: EditorHandle, docmap_edi
     if first_doc_line < 0 || last_doc_line_exclusive < first_doc_line {
         return;
     }
-    let first_pos = main_editor.send(SCI_POSITIONFROMLINE, first_doc_line as usize, 0);
-    let last_pos = main_editor.send(SCI_POSITIONFROMLINE, last_doc_line_exclusive as usize, 0);
-    if first_pos < 0 || last_pos < first_pos {
-        return;
-    }
-    // Repaint: select our slot, clear the whole doc's previous
-    // range on it, then fill just the new range. Clear-then-fill
-    // rather than tracking the previous range means we don't
-    // need extra state and stay correct even after a doc-pointer
-    // swap or an out-of-band edit that shifted line offsets.
-    docmap_editor.send(SCI_SETINDICATORCURRENT, DOCMAP_VIEWPORT_INDICATOR, 0);
-    let doc_len = docmap_editor.send(SCI_GETLENGTH, 0, 0);
-    if doc_len > 0 {
-        docmap_editor.send(SCI_INDICATORCLEARRANGE, 0, doc_len);
-    }
-    // `first_pos` is guarded `>= 0` above so the cast to `usize`
-    // (Scintilla's wparam shape) is lossless — cast_sign_loss is
-    // documented as intentional at the crate level, no extra
-    // annotation needed here.
-    docmap_editor.send(
-        SCI_INDICATORFILLRANGE,
-        first_pos as usize,
-        last_pos - first_pos,
-    );
     // Center the highlighted range in the map's viewport so it
     // stays visible when the user scrolls the main editor
     // beyond the map's own lines-on-screen. Compute the target
@@ -30773,6 +30787,14 @@ unsafe fn update_docmap_viewport_indicator(main_editor: EditorHandle, docmap_edi
     let delta = target_map_first - map_current_first;
     if delta != 0 {
         docmap_editor.send(SCI_LINESCROLL, 0, delta);
+    }
+    // Kick a repaint so the WM_PAINT subclass draws the fresh
+    // overlay rectangle. Scintilla's own paint may or may not
+    // re-fire depending on whether the doc-pointer / scroll
+    // moved; a manual invalidation guarantees the overlay tracks.
+    let map_hwnd = HWND(docmap_editor.hwnd());
+    unsafe {
+        let _ = InvalidateRect(Some(map_hwnd), None, false);
     }
 }
 

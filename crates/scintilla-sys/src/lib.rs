@@ -382,17 +382,28 @@ pub const SCI_INDICSETSTROKEWIDTH: u32 = 2751;
 /// `SCI_SETTECHNOLOGY(tech)` — pick the low-level rendering
 /// surface. Default is GDI (`SC_TECHNOLOGY_DEFAULT`); Direct2D /
 /// DirectWrite variants unlock the `AlphaRectangle` stroke-width
-/// path plus generally smoother glyph rendering. Set per-view;
-/// the Document Map opts into D2D so its viewport-highlight
-/// outline honours [`SCI_INDICSETSTROKEWIDTH`].
+/// path plus generally smoother glyph rendering.
 pub const SCI_SETTECHNOLOGY: u32 = 2630;
 /// GDI-based rendering (default). `AlphaRectangle` outlines are
 /// hardcoded at 1 px here.
 pub const SC_TECHNOLOGY_DEFAULT: usize = 0;
 /// Direct2D + DirectWrite rendering. Honours
 /// [`SCI_INDICSETSTROKEWIDTH`] and generally provides smoother
-/// glyph rendering. Used by the Document Map view.
+/// glyph rendering.
 pub const SC_TECHNOLOGY_DIRECTWRITE: usize = 1;
+
+/// `SCI_POINTYFROMPOSITION(0, pos)` — return the Y coordinate
+/// (in the view's client area) of the given byte position.
+/// Used by the Document Map's custom-drawn viewport highlight
+/// to translate the main editor's visible-line endpoints into
+/// map-view pixels for the overlay rectangle.
+pub const SCI_POINTYFROMPOSITION: u32 = 2165;
+/// `SCI_TEXTHEIGHT(line)` — pixel height of the given line
+/// (post-zoom). The Document Map's overlay needs this to extend
+/// the highlight rectangle down through the last visible line,
+/// since [`SCI_POINTYFROMPOSITION`] gives the TOP of the line
+/// only.
+pub const SCI_TEXTHEIGHT: u32 = 2279;
 
 // Horizontal-scroll width control. Scintilla defaults `scrollWidth`
 // to 2000 px and never auto-shrinks, which produces the visible
