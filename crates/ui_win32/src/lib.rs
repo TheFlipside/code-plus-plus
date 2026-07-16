@@ -92,6 +92,7 @@
     clippy::trivially_copy_pass_by_ref
 )]
 
+mod print;
 mod toolbar;
 mod udl_editor;
 mod udl_paint;
@@ -471,7 +472,7 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
     TRACKMOUSEEVENT, VK_0, VK_F, VK_F1, VK_F2, VK_F3, VK_G, VK_H, VK_N, VK_O, VK_OEM_MINUS,
-    VK_OEM_PLUS, VK_R, VK_S, VK_W,
+    VK_OEM_PLUS, VK_P, VK_R, VK_S, VK_W,
 };
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW,
@@ -14925,6 +14926,10 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             w!("Save Sess&ion..."),
         )?;
         AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
+        // Print is greyed by `refresh_file_menu` when there's no
+        // active tab or the active tab's document is empty; enabled
+        // otherwise. The initial `MF_GRAYED` is a startup safe
+        // default (no tab exists at menu-build time).
         AppendMenuW(
             file_menu,
             MF_STRING | MF_GRAYED,
@@ -16729,7 +16734,7 @@ fn show_save_confirm_dialog(main_hwnd: HWND, display_name: &str) -> SaveConfirmR
 
 /// Show a non-fatal error dialog. Standalone for the same reason as
 /// `show_reload_dialog`.
-fn show_error_dialog(main_hwnd: HWND, title: &str, message: &str) {
+pub(crate) fn show_error_dialog(main_hwnd: HWND, title: &str, message: &str) {
     let title_w = HSTRING::from(title);
     let msg_w = HSTRING::from(message);
     unsafe {
@@ -17443,6 +17448,41 @@ fn handle_load_session(hwnd: HWND) {
         }
         fire_queued_notifications(hwnd);
     }
+}
+
+/// File → Print — snapshots the active tab's display name plus a copy
+/// of the [`EditorHandle`] under a brief `&mut WindowState` borrow,
+/// then dispatches to the [`print`] module for the OS print dialog and
+/// the two-pass render loop. All GDI + spooler work happens outside
+/// the borrow because `PrintDlgW` spins its own message pump that
+/// would re-enter `wnd_proc`.
+///
+/// Idempotent no-op when no tab is open (`refresh_file_menu` greys
+/// the menu item in that case, but a plugin-driven `NPPM_MENUCOMMAND`
+/// could still fire the id independently — the guard here makes the
+/// mismatch a silent no-op instead of a panic).
+fn handle_print(hwnd: HWND) {
+    // Snapshot: display name (basename / new N / custom label) plus a
+    // copy of the editor handle. Editor is `Copy` — captures the
+    // direct-call function pointer once at creation, then every copy
+    // dispatches identically. Dropping the state borrow BEFORE the
+    // dialog opens is the mandatory pattern (see the load-session
+    // handler for the same rationale).
+    let (display_name, editor) = unsafe {
+        let Some(state) = state_from_hwnd(hwnd) else {
+            return;
+        };
+        let Some(tab) = state.shell.active() else {
+            return;
+        };
+        let name = print::display_name_for(
+            tab.path.as_deref(),
+            tab.untitled_seq,
+            tab.custom_name.as_deref(),
+        );
+        (name, state.editor)
+    };
+    print::print_active_document(hwnd, &display_name, editor);
 }
 
 // --- About dialog ----------------------------------------------------
@@ -19938,6 +19978,12 @@ unsafe fn refresh_file_menu(file_menu: HMENU, shell: &codepp_shell::Shell) {
     // Move to Recycle Bin: enabled iff the active tab has an
     // on-disk path (untitled buffers have nothing to move).
     apply(ID_FILE_MOVE_TO_RECYCLE_BIN, active_path.is_some());
+    // Print: enabled iff there IS an active tab. We can't cheaply
+    // check "document non-empty" from the shell alone (that requires
+    // touching Scintilla, which we don't want to do on every menu
+    // refresh), so the empty-doc case falls through to the print
+    // handler's own fast-path skip.
+    apply(ID_FILE_PRINT, shell.active().is_some());
 }
 
 /// Show the "About Code++" dialog modally. `main_hwnd` is the
@@ -25015,6 +25061,14 @@ fn build_default_accel_table() -> Vec<ACCEL> {
             fVirt: ctrl,
             key: VK_W.0,
             cmd: ID_FILE_CLOSE,
+        },
+        // Print — standard Ctrl+P across every OS-native app that
+        // ever printed anything. Scintilla doesn't bind Ctrl+P, so
+        // there's no editor-side contention.
+        ACCEL {
+            fVirt: ctrl,
+            key: VK_P.0,
+            cmd: ID_FILE_PRINT,
         },
         ACCEL {
             fVirt: ctrl_shift,
@@ -33501,6 +33555,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     }
                     ID_FILE_LOAD_SESSION => {
                         handle_load_session(hwnd);
+                    }
+                    ID_FILE_PRINT => {
+                        handle_print(hwnd);
                     }
                     ID_FILE_OPEN_IN_DEFAULT_VIEWER => {
                         // Snapshot the active tab's path under a brief

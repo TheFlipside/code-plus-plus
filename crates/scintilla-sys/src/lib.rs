@@ -90,6 +90,110 @@ pub const SCI_GOTOLINE: u32 = 2024;
 pub const SCI_GETLINECOUNT: u32 = 2154;
 pub const SCI_LINEFROMPOSITION: u32 = 2166;
 
+// --- Printing (`SCI_FORMATRANGEFULL` and friends) --------------------
+//
+// Scintilla renders a range of the document into a target HDC (screen,
+// printer, or memory DC) via `SCI_FORMATRANGEFULL`. The host owns the
+// DC lifecycle (StartDoc / StartPage / EndPage / EndDoc for a printer,
+// or CreateCompatibleDC for a preview bitmap) and drives the message
+// once per page. Return value: the next character position to format
+// (== `chrg.cp_max` when the page hasn't consumed the whole remaining
+// range, or all-consumed at end of document).
+//
+// **wparam semantics** — `1` = actually draw into `hdc`; `0` = measure
+// only (Scintilla returns the next-page cpMin without touching the DC's
+// pixels). Two-pass rendering (measure all pages first to know "page N
+// of M", then draw the wanted subset) is the standard use.
+//
+// **hdc vs hdcTarget** — `hdc` is where pixels go; `hdcTarget` is what
+// Scintilla asks for font metrics. For plain printing both point at the
+// printer DC. For a screen-based Print Preview against printer metrics,
+// `hdcTarget` stays the printer DC while `hdc` swaps to an offscreen
+// bitmap DC — that's how the preview shows what the paper will really
+// look like without dispatching to the printer.
+//
+// **Releasing the format cache** — after the last real render call, send
+// one final `SCI_FORMATRANGEFULL(0, NULL)` to let Scintilla free the
+// per-print caches it built. Without it the caches leak for the
+// remaining Scintilla-instance lifetime (small, but observable in
+// long-running sessions that print often).
+//
+// Message codes verified against `vendor/scintilla/include/Scintilla.h`
+// (see the `SCI_FORMATRANGE` / `SCI_FORMATRANGEFULL` and
+// `SCI_SETPRINTCOLOURMODE` / `SC_PRINT_*` blocks there).
+pub const SCI_FORMATRANGE: u32 = 2151;
+pub const SCI_FORMATRANGEFULL: u32 = 2777;
+pub const SCI_SETPRINTMAGNIFICATION: u32 = 2146;
+pub const SCI_GETPRINTMAGNIFICATION: u32 = 2147;
+pub const SCI_SETPRINTCOLOURMODE: u32 = 2148;
+pub const SCI_GETPRINTCOLOURMODE: u32 = 2149;
+pub const SCI_SETPRINTWRAPMODE: u32 = 2406;
+pub const SCI_GETPRINTWRAPMODE: u32 = 2407;
+
+/// Print colour modes for `SCI_SETPRINTCOLOURMODE`.
+///
+/// * `SC_PRINT_NORMAL` — use the same on-screen colours (including any
+///   dark background). Ink-hungry on dark themes.
+/// * `SC_PRINT_INVERTLIGHT` — swap the lightness component of every
+///   colour; keeps hue but flips light↔dark.
+/// * `SC_PRINT_BLACKONWHITE` — every glyph prints as pure black.
+/// * `SC_PRINT_COLOURONWHITE` — glyphs keep their editor colour, but
+///   every background is forced white.
+/// * `SC_PRINT_COLOURONWHITEDEFAULTBG` — as above, but styles that use
+///   the default background inherit white too (i.e. "syntax colours on
+///   plain white paper", matching Notepad++'s default and what nearly
+///   every editor does when printing).
+/// * `SC_PRINT_SCREENCOLOURS` — same as `SC_PRINT_NORMAL`, kept as a
+///   distinct name for API-parity with Scintilla.
+pub const SC_PRINT_NORMAL: i32 = 0;
+pub const SC_PRINT_INVERTLIGHT: i32 = 1;
+pub const SC_PRINT_BLACKONWHITE: i32 = 2;
+pub const SC_PRINT_COLOURONWHITE: i32 = 3;
+pub const SC_PRINT_COLOURONWHITEDEFAULTBG: i32 = 4;
+pub const SC_PRINT_SCREENCOLOURS: i32 = 5;
+
+/// `struct Sci_Rectangle` from `Scintilla.h` — a plain
+/// `left`/`top`/`right`/`bottom` rectangle in device pixels of whatever
+/// HDC the surrounding [`Sci_RangeToFormatFull`] targets. Field order
+/// matches the C ABI exactly; a mismatch would corrupt the render.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sci_Rectangle {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+/// `struct Sci_CharacterRangeFull` from `Scintilla.h`. The `Full`
+/// variant uses `Sci_Position` (== `ptrdiff_t` == `isize`) instead of
+/// `long`, so documents larger than 2 GiB address correctly. Same as
+/// `sptr_t` in this crate.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sci_CharacterRangeFull {
+    pub cp_min: sptr_t,
+    pub cp_max: sptr_t,
+}
+
+/// `struct Sci_RangeToFormatFull` from `Scintilla.h` — the `lparam`
+/// payload for [`SCI_FORMATRANGEFULL`]. Layout is ABI-critical: the
+/// vendored `SCI_FORMATRANGEFULL` dispatch reads this struct pointer
+/// with fixed field offsets.
+///
+/// `hdc` and `hdc_target` are `Scintilla::SurfaceID` (== `void *`) in
+/// the C header. On Win32 they hold Win32 `HDC` values via that same
+/// `void *` typedef.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Sci_RangeToFormatFull {
+    pub hdc: *mut c_void,
+    pub hdc_target: *mut c_void,
+    pub rc: Sci_Rectangle,
+    pub rc_page: Sci_Rectangle,
+    pub chrg: Sci_CharacterRangeFull,
+}
+
 // --- Container-lexer styling (Phase 4.6 m1c-3) --------------------------
 //
 // When Scintilla is put into container-lexer mode via
@@ -9707,3 +9811,55 @@ pub const SCE_ERR_ES_WHITE: usize = 55;
 // when Phase 2+ first dispatches them. Each constant must be cross-checked
 // against `vendor/scintilla/include/Scintilla.h` at the time of addition;
 // numeric values must not be guessed.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `Sci_RangeToFormatFull` layout is ABI-critical — Scintilla's
+    /// `SCI_FORMATRANGEFULL` dispatch reads fields by fixed byte offset,
+    /// so a Rust padding change would silently mis-render or crash. Pin
+    /// the field offsets and total size against what the C header
+    /// (`vendor/scintilla/include/Scintilla.h:1387-1393`) produces on
+    /// this target.
+    ///
+    /// Values verified for `x86_64-pc-windows-msvc` / `aarch64-pc-windows-msvc`
+    /// (64-bit `void*`, 64-bit `Sci_Position`, natural alignment):
+    ///   `hdc`         at 0   ( 8 bytes)
+    ///   `hdc_target`  at 8   ( 8 bytes)
+    ///   `rc`          at 16  (16 bytes)
+    ///   `rc_page`     at 32  (16 bytes)
+    ///   `chrg`        at 48  (16 bytes)
+    ///   size          = 64
+    #[test]
+    fn range_to_format_full_layout_matches_c_abi() {
+        use core::mem::{align_of, offset_of, size_of};
+        assert_eq!(size_of::<Sci_RangeToFormatFull>(), 64);
+        assert_eq!(align_of::<Sci_RangeToFormatFull>(), 8);
+        assert_eq!(offset_of!(Sci_RangeToFormatFull, hdc), 0);
+        assert_eq!(offset_of!(Sci_RangeToFormatFull, hdc_target), 8);
+        assert_eq!(offset_of!(Sci_RangeToFormatFull, rc), 16);
+        assert_eq!(offset_of!(Sci_RangeToFormatFull, rc_page), 32);
+        assert_eq!(offset_of!(Sci_RangeToFormatFull, chrg), 48);
+    }
+
+    #[test]
+    fn sci_rectangle_layout_matches_c_abi() {
+        use core::mem::{align_of, offset_of, size_of};
+        assert_eq!(size_of::<Sci_Rectangle>(), 16);
+        assert_eq!(align_of::<Sci_Rectangle>(), 4);
+        assert_eq!(offset_of!(Sci_Rectangle, left), 0);
+        assert_eq!(offset_of!(Sci_Rectangle, top), 4);
+        assert_eq!(offset_of!(Sci_Rectangle, right), 8);
+        assert_eq!(offset_of!(Sci_Rectangle, bottom), 12);
+    }
+
+    #[test]
+    fn sci_character_range_full_layout_matches_c_abi() {
+        use core::mem::{align_of, offset_of, size_of};
+        assert_eq!(size_of::<Sci_CharacterRangeFull>(), 16);
+        assert_eq!(align_of::<Sci_CharacterRangeFull>(), 8);
+        assert_eq!(offset_of!(Sci_CharacterRangeFull, cp_min), 0);
+        assert_eq!(offset_of!(Sci_CharacterRangeFull, cp_max), 8);
+    }
+}
