@@ -29,20 +29,23 @@ use std::ffi::c_void;
 
 use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{GetStockObject, DEFAULT_GUI_FONT, HFONT};
+use windows::Win32::Graphics::Gdi::{
+    FillRect, GetStockObject, SetBkMode, DEFAULT_GUI_FONT, HDC, HFONT, NULL_BRUSH, TRANSPARENT,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetMessageW, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, IsDialogMessageW,
-    IsWindow, LoadCursorW, PostMessageW, RegisterClassExW, SendMessageW, SetForegroundWindow,
-    SetWindowLongPtrW, ShowWindow, TranslateMessage, BM_GETCHECK, BM_SETCHECK, BN_CLICKED,
-    BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, CREATESTRUCTW, CS_HREDRAW,
-    CS_VREDRAW, GWLP_USERDATA, GW_OWNER, HCURSOR, HMENU, IDC_ARROW, LBN_SELCHANGE, LBS_HASSTRINGS,
-    LBS_NOTIFY, LB_ADDSTRING, LB_SETCURSEL, MSG, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE,
-    WM_COMMAND, WM_DESTROY, WM_ERASEBKGND, WM_NCCREATE, WM_NCDESTROY, WM_QUIT, WM_SETFONT,
-    WM_SETTEXT, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT,
-    WS_EX_DLGMODALFRAME, WS_GROUP, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    GetClientRect, GetMessageW, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
+    IsDialogMessageW, IsWindow, LoadCursorW, PostMessageW, RegisterClassExW, SendMessageW,
+    SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage, BM_GETCHECK, BM_SETCHECK,
+    BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, CREATESTRUCTW,
+    CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, GW_OWNER, HCURSOR, HMENU, IDC_ARROW, LBN_SELCHANGE,
+    LBS_HASSTRINGS, LBS_NOTIFY, LB_ADDSTRING, LB_SETCURSEL, MSG, SW_SHOW, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_ERASEBKGND, WM_NCCREATE, WM_NCDESTROY, WM_QUIT, WM_SETFONT, WM_SETTEXT, WNDCLASSEXW,
+    WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_POPUP,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use codepp_core::preferences::{
@@ -306,9 +309,35 @@ unsafe extern "system" fn prefs_wnd_proc(
                 LRESULT(0)
             }
             WM_ERASEBKGND => {
-                // Themed background comes from the class's
-                // hbrBackground — no per-message paint work needed.
+                // Paint the whole client area with the app's
+                // chrome brush (`DIALOG_BG`) so the dialog blends
+                // with every other modal in Code++. Returning
+                // LRESULT(1) alone is not enough — DefWindowProc
+                // is what normally uses the class `hbrBackground`,
+                // and short-circuiting past it means no paint
+                // happens unless we do it here.
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let mut rect = RECT::default();
+                let _ = GetClientRect(hwnd, &raw mut rect);
+                FillRect(hdc, &raw const rect, dialog_bg_brush());
                 LRESULT(1)
+            }
+            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
+                // Static labels, group boxes, checkboxes, and
+                // radio buttons ask their parent what colour to
+                // paint their text background in. Without this
+                // handler Win32 hands back `COLOR_WINDOW` (system
+                // white / dark-mode grey), which shows up as
+                // small colour patches around each control text
+                // that don't match `DIALOG_BG`. Same fix the
+                // About / Style Configurator / UDL-editor dialogs
+                // apply — `SetBkMode(TRANSPARENT)` + returning
+                // `NULL_BRUSH` tells the control to skip its own
+                // background fill and let the parent's already-
+                // painted chrome show through.
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
             }
             WM_COMMAND => {
                 // wparam packs (notify_code, cmd_id); lparam is
