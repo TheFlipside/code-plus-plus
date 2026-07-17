@@ -14951,17 +14951,6 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             ID_FILE_PRINT as usize,
             w!("&Print...\tCtrl+P"),
         )?;
-        // Print Now: same enable discipline as Print (greyed at
-        // build time; enabled by `refresh_file_menu` when a tab is
-        // active). No ellipsis in the label since it never
-        // prompts — the "..." convention signals a follow-up
-        // dialog, and this action deliberately skips one.
-        AppendMenuW(
-            file_menu,
-            MF_STRING | MF_GRAYED,
-            ID_FILE_PRINT_NOW as usize,
-            w!("Print &Now"),
-        )?;
         // Print Preview: same enable / disable discipline as
         // Print (both greyed at menu-build time; enabled by
         // `refresh_file_menu` when a tab is active).
@@ -14970,6 +14959,19 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             MF_STRING | MF_GRAYED,
             ID_FILE_PRINT_PREVIEW as usize,
             w!("Print Pre&view...\tCtrl+Shift+P"),
+        )?;
+        // Print Now: same enable discipline as Print. Placed last
+        // in the print cluster because it's the "destructive" one
+        // (fires straight to the printer with no confirmation) —
+        // users looking for the safer "show me a dialog first"
+        // options land on those first. No ellipsis in the label
+        // since it never prompts — the "..." convention signals a
+        // follow-up dialog, and this action deliberately skips one.
+        AppendMenuW(
+            file_menu,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_PRINT_NOW as usize,
+            w!("Print &Now"),
         )?;
         AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
         AppendMenuW(file_menu, MF_STRING, ID_FILE_EXIT as usize, w!("E&xit"))?;

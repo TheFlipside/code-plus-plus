@@ -56,14 +56,15 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
-    GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, IsDialogMessageW, IsWindow, LoadCursorW,
-    PostMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-    TranslateMessage, BN_CLICKED, BS_PUSHBUTTON, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW,
-    GWLP_USERDATA, HMENU, IDC_ARROW, MSG, SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE,
-    SWP_NOOWNERZORDER, SWP_NOZORDER, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND,
-    WM_CREATE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_NCCREATE, WM_PAINT, WM_QUIT, WM_SIZE,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME,
-    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
+    GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowRect, IsDialogMessageW, IsWindow,
+    LoadCursorW, PostMessageW, RegisterClassExW, SetForegroundWindow, SetWindowLongPtrW,
+    SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, BN_CLICKED, BS_PUSHBUTTON,
+    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, GW_OWNER, HMENU, IDC_ARROW, MSG,
+    SM_CXSCREEN, SM_CYSCREEN, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER, SW_SHOW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_ERASEBKGND,
+    WM_KEYDOWN, WM_NCCREATE, WM_PAINT, WM_QUIT, WM_SIZE, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_MINIMIZEBOX, WS_POPUP,
+    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE,
 };
 
 use crate::print::{
@@ -500,14 +501,32 @@ unsafe extern "system" fn preview_wnd_proc(
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let cmd_id = (wparam.0 & 0xffff) as u16;
                     let notify = ((wparam.0 >> 16) & 0xffff) as u16;
-                    if notify == BN_CLICKED as u16 {
-                        handle_command(hwnd, state, cmd_id);
+                    // `IsDialogMessageW` in `run_modal`'s pump
+                    // translates Esc into `WM_COMMAND(IDCANCEL,
+                    // BN_CLICKED)` on the parent when a child
+                    // button has focus — that's the standard Win32
+                    // dialog-navigation contract. Route IDCANCEL
+                    // to the Close button so Esc always closes the
+                    // preview regardless of which child currently
+                    // owns focus (the direct `WM_KEYDOWN` handler
+                    // only fires when the popup itself has focus).
+                    // IDCANCEL is the Win32 magic constant 2 (from
+                    // `winuser.h` — kept as a numeric literal here
+                    // since it's the message-layer ID, not one of
+                    // our own child-control IDs).
+                    let effective_id = if cmd_id == 2 {
+                        IDC_PREVIEW_CLOSE
+                    } else {
+                        cmd_id
+                    };
+                    if notify == BN_CLICKED as u16 || cmd_id == 2 {
+                        handle_command(hwnd, state, effective_id);
                     }
                 }
                 LRESULT(0)
             }
             WM_CLOSE => {
-                let _ = DestroyWindow(hwnd);
+                close_preview(hwnd);
                 LRESULT(0)
             }
             WM_DESTROY => {
@@ -640,13 +659,13 @@ unsafe fn handle_command(hwnd: HWND, state: &mut PreviewState, id: u16) {
         IDC_PREVIEW_PRINT => {
             state.print_after_close = true;
             unsafe {
-                let _ = DestroyWindow(hwnd);
+                close_preview(hwnd);
             }
             return;
         }
         IDC_PREVIEW_CLOSE => {
             unsafe {
-                let _ = DestroyWindow(hwnd);
+                close_preview(hwnd);
             }
             return;
         }
@@ -675,6 +694,31 @@ unsafe fn handle_key(hwnd: HWND, state: &mut PreviewState, vk: u32) {
     };
     unsafe {
         handle_command(hwnd, state, id);
+    }
+}
+
+/// Close the preview modal cleanly. Restores foreground to the
+/// owner window BEFORE destroying our HWND — without this,
+/// destroying an owned popup that currently holds the foreground
+/// can leave Win32 with the main app behind another window (or
+/// minimized), forcing the user to click the icon to raise it.
+/// Same well-known modeless-dialog quirk `crate::udl_editor` (and
+/// earlier the tab-close path) already documented and worked
+/// around.
+///
+/// # Safety
+///
+/// `hwnd` must be a live preview-modal HWND owned by the current
+/// thread. `GetWindow(hwnd, GW_OWNER)` returns the owner captured
+/// at `CreateWindowExW` time; if it's still a live window, we
+/// re-foreground it before tearing our modal down.
+unsafe fn close_preview(hwnd: HWND) {
+    unsafe {
+        let owner = GetWindow(hwnd, GW_OWNER).unwrap_or_default();
+        if !owner.is_invalid() && IsWindow(Some(owner)).as_bool() {
+            let _ = SetForegroundWindow(owner);
+        }
+        let _ = DestroyWindow(hwnd);
     }
 }
 
