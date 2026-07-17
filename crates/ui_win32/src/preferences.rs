@@ -52,7 +52,7 @@ use codepp_core::preferences::{
     Preferences, RecentFileDisplayMode, CUSTOM_MAX_LENGTH_LIMIT, MAX_ENTRIES_LIMIT,
 };
 
-use crate::{dialog_bg_brush, DlgDestroyGuard, OwnerEnableGuard};
+use crate::{dialog_bg_brush, disable_visual_style, DlgDestroyGuard, OwnerEnableGuard};
 
 const PREFS_CLASS: PCWSTR = windows::core::w!("CodePlusPlusPreferencesDialog");
 
@@ -532,6 +532,22 @@ unsafe fn populate_controls(hwnd: HWND) {
         SendMessageW(category, LB_SETCURSEL, Some(WPARAM(0)), None);
 
         // 2. Right panel: "Recent Files History" group.
+        //
+        // BS_GROUPBOX + BS_AUTOCHECKBOX + BS_AUTORADIOBUTTON on
+        // Win11 all render through the UxTheme layer, which
+        // paints its own COLOR_BTNFACE (~#F0F0F0) rectangle
+        // behind the control text before consulting
+        // WM_CTLCOLORBTN / WM_CTLCOLORSTATIC. That produces a
+        // visible darker patch around every label that doesn't
+        // match the dialog's #F9F9F9 chrome. `disable_visual_style`
+        // opts the control out of theming for its background paint
+        // (via `SetWindowTheme(hwnd, "", "")`), pushing it onto
+        // the classic-paint path that honours our NULL_BRUSH
+        // return — text still uses the system UI font, but its
+        // background is transparent so the dialog chrome shows
+        // through. Same fix the other Code++ modals apply.
+        // Push buttons (BS_DEFPUSHBUTTON, Close below) deliberately
+        // keep their visual style so they look right on Win11.
         const GROUP_TOP_H: i32 = 96;
         let group_top = create_child(
             hwnd,
@@ -545,6 +561,7 @@ unsafe fn populate_controls(hwnd: HWND) {
             0,
         );
         set_font(group_top, font);
+        disable_visual_style(group_top);
 
         // Enabled checkbox.
         let enabled = create_child(
@@ -560,6 +577,7 @@ unsafe fn populate_controls(hwnd: HWND) {
         );
         state.hwnd_enabled = enabled;
         set_font(enabled, font);
+        disable_visual_style(enabled);
         // Render inverts because the label is negative-sense:
         // the checkbox reads "Don't check at launch time" (N++
         // wording), so BST_CHECKED means the feature is OFF.
@@ -627,6 +645,7 @@ unsafe fn populate_controls(hwnd: HWND) {
             0,
         );
         set_font(group_disp, font);
+        disable_visual_style(group_disp);
 
         let in_submenu = create_child(
             hwnd,
@@ -641,6 +660,7 @@ unsafe fn populate_controls(hwnd: HWND) {
         );
         state.hwnd_in_submenu = in_submenu;
         set_font(in_submenu, font);
+        disable_visual_style(in_submenu);
         set_checked(in_submenu, state.prefs.recent_files_history.in_submenu);
 
         // Radio group: mark the first radio with WS_GROUP so
@@ -658,6 +678,7 @@ unsafe fn populate_controls(hwnd: HWND) {
         );
         state.hwnd_only_name = only_name;
         set_font(only_name, font);
+        disable_visual_style(only_name);
 
         let full_path = create_child(
             hwnd,
@@ -672,6 +693,7 @@ unsafe fn populate_controls(hwnd: HWND) {
         );
         state.hwnd_full_path = full_path;
         set_font(full_path, font);
+        disable_visual_style(full_path);
 
         let custom_len_radio = create_child(
             hwnd,
@@ -686,6 +708,7 @@ unsafe fn populate_controls(hwnd: HWND) {
         );
         state.hwnd_custom_len_radio = custom_len_radio;
         set_font(custom_len_radio, font);
+        disable_visual_style(custom_len_radio);
         let custom_len_edit = create_child(
             hwnd,
             windows::core::w!("EDIT"),
