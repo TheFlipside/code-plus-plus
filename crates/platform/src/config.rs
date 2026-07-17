@@ -150,6 +150,18 @@ pub fn find_history_xml_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("find_history.xml"))
 }
 
+/// Path to `recent_files.xml` under [`config_dir`] — the
+/// most-recent-first list of full paths for files the user has
+/// closed. Powers the File → Recent Files region. Persisted next
+/// to `session.xml` so it survives across launches. Config for
+/// the feature (enabled flag, cap, display style) lives in
+/// [`config_xml_path`], not here — a hand-edit of the tuning
+/// preferences shouldn't lose the path list, and vice versa.
+#[must_use]
+pub fn recent_files_xml_path() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("recent_files.xml"))
+}
+
 /// Path to `styles.xml` under [`config_dir`] — the editor's
 /// default-style configuration (font face / size / bold / italic /
 /// underline / fg / bg / transparency) the Style Configurator

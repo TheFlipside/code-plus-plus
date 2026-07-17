@@ -92,6 +92,7 @@
     clippy::trivially_copy_pass_by_ref
 )]
 
+mod preferences;
 mod print;
 mod print_preview;
 mod toolbar;
@@ -473,7 +474,7 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
     TRACKMOUSEEVENT, VK_0, VK_F, VK_F1, VK_F2, VK_F3, VK_G, VK_H, VK_N, VK_O, VK_OEM_MINUS,
-    VK_OEM_PLUS, VK_P, VK_R, VK_S, VK_W,
+    VK_OEM_PLUS, VK_P, VK_R, VK_S, VK_T, VK_W,
 };
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW,
@@ -487,11 +488,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DeleteMenu, DestroyAcceleratorTable, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW,
     DrawIconEx, DrawMenuBar, EnableMenuItem, GetClientRect, GetCursorPos, GetDlgItem, GetMenu,
     GetMenuItemCount, GetMenuItemID, GetMenuItemInfoW, GetMessageW, GetParent, GetSubMenu,
-    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsDialogMessageW,
-    IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW, LoadImageW, MessageBoxW,
-    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, RemoveMenu, SendMessageW,
-    SetCursor, SetLayeredWindowAttributes, SetMenu, SetMenuItemInfoW, SetParent, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, InsertMenuW,
+    IsDialogMessageW, IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadIconW, LoadImageW,
+    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, RemoveMenu,
+    SendMessageW, SetCursor, SetLayeredWindowAttributes, SetMenu, SetMenuItemInfoW, SetParent,
+    SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu,
     TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK,
     BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_OWNERDRAW,
     BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL,
@@ -632,6 +633,27 @@ const ID_FILE_PRINT_PREVIEW: u16 = 1034;
 /// right now, without any prompts" contract users expect from a
 /// menu item literally named "Print Now".
 const ID_FILE_PRINT_NOW: u16 = 1035;
+
+/// Base of the dynamic Recent Files menu-item range. The Nth
+/// visible entry gets id `ID_FILE_RECENT_BASE + N`. The [BASE,
+/// END] window is 30 wide — matches Preferences → Recent Files
+/// History → *Max. number of entries*'s ceiling and
+/// [`codepp_core::recent_files::MAX_ENTRIES`].
+const ID_FILE_RECENT_BASE: u16 = 1036;
+/// Inclusive upper bound of the Recent Files id range.
+const ID_FILE_RECENT_END: u16 = 1065;
+/// File → Restore Recent Closed File — reopens the most-recently
+/// closed file. Bound to Ctrl+Shift+T (mirrors N++ and the browser
+/// convention for "reopen last tab"). Repeated presses walk down
+/// the history: each press pops the current top entry and opens
+/// it; the next press takes the next entry that has bubbled up.
+const ID_FILE_RESTORE_RECENT: u16 = 1066;
+/// File → Open All Recent Files — reopens every tracked recent
+/// file in most-recent-first order, then empties the history
+/// (since every entry is now open, nothing "closed" remains).
+const ID_FILE_OPEN_ALL_RECENT: u16 = 1067;
+/// File → Empty Recent Files List — drops every tracked path.
+const ID_FILE_EMPTY_RECENT: u16 = 1068;
 
 /// File → Load Session... — pick a Notepad++-shaped session XML from
 /// disk, parse its `<File>` list, and open every path referenced. The
@@ -1489,6 +1511,13 @@ struct WindowState {
     /// matched against these to dispatch the right refresh
     /// routine.
     file_menu: HMENU,
+    /// Number of items the recent-files rebuild logic inserted
+    /// into `file_menu` on the previous popup. Used by
+    /// [`rebuild_file_menu_recent_region`] to know how many
+    /// items to remove from the region between the print cluster
+    /// and File → Exit before inserting the fresh ones. Zero on
+    /// first paint (nothing to remove).
+    file_menu_recent_count: usize,
     view_menu: HMENU,
     encoding_menu: HMENU,
     language_menu: HMENU,
@@ -15185,7 +15214,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
         let settings_menu = CreateMenu()?;
         AppendMenuW(
             settings_menu,
-            MF_STRING | MF_GRAYED,
+            MF_STRING,
             ID_SETTINGS_PREFERENCES as usize,
             w!("&Preferences..."),
         )?;
@@ -17566,6 +17595,117 @@ fn handle_print_preview(hwnd: HWND) {
         (name, state.editor)
     };
     print_preview::show_print_preview(hwnd, &display_name, editor);
+}
+
+/// File → Restore Recent Closed File (Ctrl+Shift+T). Pops the
+/// most-recently-closed path off the history and opens it via
+/// `Shell::open_file` — same code path a menu click on a
+/// specific recent-files entry would take. When the history is
+/// empty this is a no-op (the menu item is greyed by
+/// `refresh_file_menu` for the same case, so we only reach this
+/// handler when either a plugin fires the id or the accelerator
+/// beats the menu-greying check by a keystroke).
+fn handle_restore_recent(hwnd: HWND) {
+    let path = unsafe { state_from_hwnd(hwnd).and_then(|s| s.shell.pop_last_recent_file()) };
+    let Some(path) = path else { return };
+    open_recent_path_via_shell(hwnd, path);
+}
+
+/// File → Open All Recent Files. Drains the entire history and
+/// opens each path in most-recent-first order. The list is
+/// empty after this returns (matching N++: everything the user
+/// just reopened is now open, so it doesn't belong in a "recently
+/// closed" list). No confirmation prompt even for a full 30-file
+/// history — that matches N++, and the menu label makes the
+/// action's scope obvious.
+fn handle_open_all_recent(hwnd: HWND) {
+    let paths = unsafe {
+        state_from_hwnd(hwnd)
+            .map(|s| s.shell.take_all_recent_files())
+            .unwrap_or_default()
+    };
+    if paths.is_empty() {
+        return;
+    }
+    for p in paths {
+        open_recent_path_via_shell(hwnd, p);
+    }
+}
+
+/// File → Empty Recent Files List. Drops every retained path
+/// and rewrites the (now-empty) `recent_files.xml`. No
+/// confirmation — the action is one entry back in the menu
+/// history via Ctrl+Z-equivalent (there isn't one, but the
+/// list can always be repopulated by closing files again).
+/// Matches N++'s no-prompt behaviour.
+fn handle_empty_recent(hwnd: HWND) {
+    unsafe {
+        if let Some(state) = state_from_hwnd(hwnd) {
+            state.shell.clear_recent_files();
+        }
+    }
+}
+
+/// File → \[Nth recent file\]. Fires when the user clicks a
+/// specific numbered entry in the recent-files region. `index`
+/// is 0-based (0 = "the most recently closed file", matching
+/// the menu order). Symmetric with Restore Recent Closed File
+/// (Ctrl+Shift+T) and Open All Recent Files: the entry is
+/// removed from the history the moment it's reopened, since
+/// the file is now open again and no longer counts as
+/// "recently closed." Closing it again will re-add it to the
+/// top of the list via the usual `close_active_tab` push path.
+fn handle_open_recent_at(hwnd: HWND, index: usize) {
+    let path = unsafe { state_from_hwnd(hwnd).and_then(|s| s.shell.take_recent_file_at(index)) };
+    let Some(path) = path else { return };
+    open_recent_path_via_shell(hwnd, path);
+}
+
+/// Settings → Preferences. Snapshot the current Preferences
+/// under a brief borrow, drop the borrow (the modal dialog's
+/// pump re-enters this `wnd_proc`, same borrow discipline as
+/// every other modal handler), show the dialog, and on Close
+/// hand the updated Preferences back to Shell so
+/// `set_preferences` can persist them + take side-effect
+/// actions (e.g. clearing the recent-files list when the user
+/// disables the feature).
+fn handle_preferences_menu(hwnd: HWND) {
+    let current = unsafe { state_from_hwnd(hwnd).map(|s| s.shell.preferences.clone()) };
+    let Some(current) = current else { return };
+    let updated = preferences::show_preferences_dialog(hwnd, current);
+    if let Some(new) = updated {
+        unsafe {
+            if let Some(state) = state_from_hwnd(hwnd) {
+                state.shell.set_preferences(new);
+            }
+        }
+    }
+}
+
+/// Shared open path used by the three recent-files handlers.
+/// Wraps [`Shell::open_file`] with the same `catch_unwind` guard
+/// and post-open UI refresh dance the multi-file File → Open
+/// handler uses, so behaviour is identical whether the user
+/// opened the file through the OS picker or through a
+/// recent-files menu item.
+fn open_recent_path_via_shell(hwnd: HWND, path: PathBuf) {
+    let outcome = unsafe {
+        if let Some(state) = state_from_hwnd(hwnd) {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| state.shell.open_file(path)))
+                .unwrap_or(OpenFileOutcome::Rejected)
+        } else {
+            OpenFileOutcome::Rejected
+        }
+    };
+    unsafe { refresh_tab_chrome(hwnd) };
+    if matches!(outcome, OpenFileOutcome::SwitchedToExisting(_)) {
+        // Dedupe branch: shell flipped `active_tab` but no async
+        // load will wake to fire `handle_tab_selchange`. Fire it
+        // manually so the Scintilla view rebinds to the newly
+        // active buffer. Same pattern the multi-file Open path
+        // uses on its own dedupe branch.
+        unsafe { handle_tab_selchange(hwnd) };
+    }
 }
 
 // --- About dialog ----------------------------------------------------
@@ -20073,6 +20213,392 @@ unsafe fn refresh_file_menu(file_menu: HMENU, shell: &codepp_shell::Shell) {
     // Print Preview: same enable condition as Print — a modal
     // preview of "no active document" is useless.
     apply(ID_FILE_PRINT_PREVIEW, shell.active().is_some());
+    // Recent-files action items track the list itself. Restore /
+    // Open All grey when the list is empty; Empty greys when the
+    // list is already empty. When the feature is disabled these
+    // three items are absent from the menu entirely (see
+    // `rebuild_file_menu_recent_region`), so the enable set is a
+    // no-op — `EnableMenuItem(MF_BYCOMMAND)` on a missing id
+    // silently returns -1.
+    let recent_len = shell.visible_recent_files().len();
+    apply(ID_FILE_RESTORE_RECENT, recent_len > 0);
+    apply(ID_FILE_OPEN_ALL_RECENT, recent_len > 0);
+    apply(ID_FILE_EMPTY_RECENT, recent_len > 0);
+}
+
+/// Rebuild the Recent Files region between the print cluster and
+/// File → Exit. Called from the File menu's `WM_INITMENUPOPUP`
+/// arm so the list is always fresh at open time.
+///
+/// The region's byPos anchor is stable: `file_menu_recent_count`
+/// tracks how many items we inserted on the previous popup, so
+/// we can delete exactly that many at the top of the region, then
+/// insert the fresh set immediately before File → Exit. Whether
+/// the count was 0 (first popup) or 15 (twelve recent files plus
+/// three action items plus a separator), the delete-then-insert
+/// pair keeps the position of Exit unchanged for the outer menu
+/// bar's layout.
+///
+/// **Feature disabled** (Preferences → Recent Files History →
+/// "Don't check at launch time" cleared, or Max Number of
+/// Entries at 0) removes the region entirely, leaving the File
+/// menu at "Print Now / --- / Exit". Turning the feature back
+/// on repopulates it on the next popup.
+///
+/// # Safety
+///
+/// `file_menu` must be a live HMENU owned by
+/// [`WindowState::file_menu`]; caller runs on the UI thread.
+/// `recent_count` is the state's tracking counter; the function
+/// updates it in place to reflect the newly-inserted region's
+/// item count.
+unsafe fn rebuild_file_menu_recent_region(
+    file_menu: HMENU,
+    shell: &codepp_shell::Shell,
+    recent_count: &mut usize,
+) {
+    unsafe {
+        // 1. Locate File → Exit. Whatever items I inserted last
+        //    time sit in `[exit_pos - *recent_count, exit_pos)`.
+        //    Iterate by position (a plain integer loop) rather
+        //    than trusting `GetMenuItemID(pos)` on every step;
+        //    the id-based search survives future menu reorders
+        //    that would otherwise silently shift the anchor.
+        let count = GetMenuItemCount(Some(file_menu));
+        if count <= 0 {
+            return;
+        }
+        let mut exit_pos: Option<u32> = None;
+        for i in 0..count {
+            let id = GetMenuItemID(file_menu, i);
+            if id == u32::from(ID_FILE_EXIT) {
+                exit_pos = Some(i as u32);
+                break;
+            }
+        }
+        let Some(exit_pos) = exit_pos else {
+            // File menu doesn't contain Exit — should be
+            // unreachable given `build_main_menu` always appends
+            // it. Bail rather than corrupting the layout.
+            tracing::warn!("File menu missing Exit; skipping recent-files rebuild");
+            return;
+        };
+
+        // 2. Delete the previous region from bottom up so
+        //    positions above the delete point stay valid.
+        //    `checked_sub` guards against a plugin having
+        //    already mutated the File menu out-of-band
+        //    (plugins reach us via `NPPM_GETMENUHANDLE(NPPMAINMENU)`
+        //    and can `DeleteMenu`/`RemoveMenu` items directly,
+        //    per DESIGN.md §6.3). If our stored `recent_count`
+        //    no longer fits inside `[0, exit_pos)`, our bookkeeping
+        //    is stale — reset to zero, log, and skip the delete
+        //    pass; the fresh insert below rebuilds the region
+        //    from scratch off the re-scanned `insert_pos`.
+        let recent_count_u32 = u32::try_from(*recent_count).unwrap_or(u32::MAX);
+        if let Some(region_start) = exit_pos.checked_sub(recent_count_u32) {
+            for offset in (0..*recent_count).rev() {
+                let pos = region_start + offset as u32;
+                let _ = DeleteMenu(file_menu, pos, MF_BYPOSITION);
+            }
+        } else {
+            tracing::warn!(
+                exit_pos,
+                stored_recent_count = *recent_count,
+                "File menu shrunk out from under recent-files bookkeeping; \
+                 resetting counter and rebuilding fresh"
+            );
+        }
+        *recent_count = 0;
+
+        // Re-scan for Exit's new position after the deletes above.
+        // Cheaper than tracking the shift redundantly and robust
+        // against any concurrent menu mutation by other refresh
+        // helpers that also run on this popup. `GetMenuItemCount`
+        // can return -1 on failure; if it does, bail rather than
+        // casting a signed -1 into a huge `u32` insert index.
+        let count = GetMenuItemCount(Some(file_menu));
+        if count <= 0 {
+            return;
+        }
+        let mut insert_pos: u32 = count as u32;
+        for i in 0..count {
+            let id = GetMenuItemID(file_menu, i);
+            if id == u32::from(ID_FILE_EXIT) {
+                insert_pos = i as u32;
+                break;
+            }
+        }
+
+        // 3. Bail out early when the feature is disabled or the
+        //    list-visible cap is zero — no items to render.
+        //    Shared with the shell's `is_active()` gate so a
+        //    Preferences toggle change lands atomically across
+        //    render + tracking.
+        let cfg = &shell.preferences.recent_files_history;
+        if !cfg.is_active() {
+            return;
+        }
+
+        let entries = shell.visible_recent_files();
+
+        // 4. Two layouts controlled by *In Submenu*:
+        //
+        //    inline (default) — the file list, an inner separator,
+        //    and the three action entries all sit flat on the File
+        //    menu itself.
+        //
+        //    submenu — everything (files + inner separator + action
+        //    entries) nests inside a single "Recent Files" popup
+        //    on the File menu. `WM_COMMAND` bubbles up from
+        //    submenu items to the same command-id dispatch we
+        //    already use for the inline layout, so the handlers
+        //    don't need to care where the item lived.
+        if cfg.in_submenu {
+            let popup = match CreatePopupMenu() {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::warn!(error = %e, "CreatePopupMenu for Recent Files submenu failed; skipping submenu render");
+                    return;
+                }
+            };
+            append_recent_file_entries(popup, entries, cfg);
+            if !entries.is_empty() {
+                if let Err(e) = AppendMenuW(popup, MF_SEPARATOR, 0, PCWSTR::null()) {
+                    tracing::warn!(error = %e, "AppendMenuW separator inside Recent Files submenu failed");
+                }
+            }
+            append_recent_action_entries(popup);
+            let submenu_label: Vec<u16> = "Recent &Files\0".encode_utf16().collect();
+            if let Err(e) = InsertMenuW(
+                file_menu,
+                insert_pos,
+                MF_BYPOSITION | MF_POPUP,
+                popup.0 as usize,
+                PCWSTR(submenu_label.as_ptr()),
+            ) {
+                tracing::warn!(error = %e, "InsertMenuW for Recent Files submenu failed");
+                let _ = DestroyMenu(popup);
+                return;
+            }
+            insert_pos += 1;
+            *recent_count += 1;
+        } else {
+            for (i, path) in entries.iter().enumerate() {
+                let label = format_recent_menu_label(i, path, cfg);
+                let wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
+                let id = u32::from(ID_FILE_RECENT_BASE) + i as u32;
+                if let Err(e) = InsertMenuW(
+                    file_menu,
+                    insert_pos,
+                    MF_BYPOSITION | MF_STRING,
+                    id as usize,
+                    PCWSTR(wide.as_ptr()),
+                ) {
+                    tracing::warn!(error = %e, "InsertMenuW for recent-files entry failed");
+                    continue;
+                }
+                insert_pos += 1;
+                *recent_count += 1;
+            }
+
+            // Inner separator between the inline file list and
+            // the three inline action entries. Skipped when
+            // there are no files above — a leading separator
+            // with nothing above it reads as a broken menu.
+            if !entries.is_empty() {
+                if let Err(e) = InsertMenuW(
+                    file_menu,
+                    insert_pos,
+                    MF_BYPOSITION | MF_SEPARATOR,
+                    0,
+                    PCWSTR::null(),
+                ) {
+                    tracing::warn!(error = %e, "InsertMenuW separator (above inline actions) failed");
+                } else {
+                    insert_pos += 1;
+                    *recent_count += 1;
+                }
+            }
+
+            // Inline action entries. Enable/greyed state is set
+            // by `refresh_file_menu` on the same popup (both run
+            // from `WM_INITMENUPOPUP`); `MF_BYCOMMAND` finds the
+            // ids whether they live on `file_menu` (inline) or
+            // inside the "Recent Files" submenu.
+            for (label_utf16, id) in inline_action_labels() {
+                if let Err(e) = InsertMenuW(
+                    file_menu,
+                    insert_pos,
+                    MF_BYPOSITION | MF_STRING,
+                    id as usize,
+                    PCWSTR(label_utf16.as_ptr()),
+                ) {
+                    tracing::warn!(error = %e, cmd = id, "InsertMenuW for inline action entry failed");
+                    continue;
+                }
+                insert_pos += 1;
+                *recent_count += 1;
+            }
+        }
+
+        // 5. Trailing separator so the recent region is visually
+        //    bracketed from File → Exit below it.
+        if let Err(e) = InsertMenuW(
+            file_menu,
+            insert_pos,
+            MF_BYPOSITION | MF_SEPARATOR,
+            0,
+            PCWSTR::null(),
+        ) {
+            tracing::warn!(error = %e, "InsertMenuW trailing separator failed");
+        } else {
+            *recent_count += 1;
+        }
+    }
+}
+
+/// `AppendMenuW` every visible recent-files entry to the given
+/// popup HMENU. Used by the submenu path — inline layout builds
+/// its entries by position (`InsertMenuW`) into the File menu
+/// itself.
+unsafe fn append_recent_file_entries(
+    popup: HMENU,
+    entries: &[std::path::PathBuf],
+    cfg: &codepp_core::RecentFilesHistoryConfig,
+) {
+    unsafe {
+        for (i, path) in entries.iter().enumerate() {
+            let label = format_recent_menu_label(i, path, cfg);
+            let wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
+            let id = u32::from(ID_FILE_RECENT_BASE) + i as u32;
+            if let Err(e) = AppendMenuW(popup, MF_STRING, id as usize, PCWSTR(wide.as_ptr())) {
+                tracing::warn!(error = %e, "AppendMenuW for recent-files submenu item failed");
+            }
+        }
+    }
+}
+
+/// `AppendMenuW` the three action entries (Restore / Open All
+/// / Empty) to the given popup HMENU. Used by the submenu
+/// path so the actions live *inside* the "Recent Files" popup
+/// below the file list — the user asked for the submenu to
+/// carry the actions too, not just the file list.
+unsafe fn append_recent_action_entries(popup: HMENU) {
+    unsafe {
+        for (label_utf16, id) in inline_action_labels() {
+            if let Err(e) = AppendMenuW(popup, MF_STRING, id as usize, PCWSTR(label_utf16.as_ptr()))
+            {
+                tracing::warn!(error = %e, cmd = id, "AppendMenuW for submenu action entry failed");
+            }
+        }
+    }
+}
+
+/// The three action entries as `(UTF-16 label, command id)`.
+/// Shared between the inline and submenu layouts so a text
+/// tweak on either lands in both places. Labels carry the
+/// `Ctrl+Shift+T` accelerator hint on Restore because the
+/// accelerator itself is registered in the main accelerator
+/// table — a menu `\t<binding>` is display-only and not
+/// registered by the menu.
+fn inline_action_labels() -> [(Vec<u16>, u16); 3] {
+    let restore: Vec<u16> = "&Restore Recent Closed File\tCtrl+Shift+T\0"
+        .encode_utf16()
+        .collect();
+    let open_all: Vec<u16> = "Open All Recent Files\0".encode_utf16().collect();
+    let empty: Vec<u16> = "Empty Recent Files List\0".encode_utf16().collect();
+    [
+        (restore, ID_FILE_RESTORE_RECENT),
+        (open_all, ID_FILE_OPEN_ALL_RECENT),
+        (empty, ID_FILE_EMPTY_RECENT),
+    ]
+}
+
+/// Build the display label for one recent-files menu entry.
+/// `index` is 0-based; the first nine entries take an `&<N>`
+/// mnemonic so Alt+1..Alt+9 fire the item.
+fn format_recent_menu_label(
+    index: usize,
+    path: &std::path::Path,
+    cfg: &codepp_core::RecentFilesHistoryConfig,
+) -> String {
+    let visible = match cfg.display_mode {
+        codepp_core::RecentFileDisplayMode::OnlyFileName => path.file_name().map_or_else(
+            || path.to_string_lossy().into_owned(),
+            |s| s.to_string_lossy().into_owned(),
+        ),
+        codepp_core::RecentFileDisplayMode::FullPath => path.to_string_lossy().into_owned(),
+        codepp_core::RecentFileDisplayMode::CustomMaxLength => {
+            let full = path.to_string_lossy();
+            let cap = cfg.custom_max_length as usize;
+            if full.chars().count() <= cap {
+                full.into_owned()
+            } else {
+                // Truncate to the last `cap - 3` characters and
+                // prepend "..." so the meaningful tail (usually
+                // the filename) remains visible. Char-aware to
+                // avoid slicing multibyte sequences.
+                let keep = cap.saturating_sub(3);
+                let start = full.chars().count().saturating_sub(keep);
+                let tail: String = full.chars().skip(start).collect();
+                format!("...{tail}")
+            }
+        }
+    };
+    // Menu accelerator prefix `&<N>`: only slot 1..=9 gets one
+    // — Alt+0 has no natural mnemonic and Alt-1 through Alt-9
+    // matches N++.
+    //
+    // Sanitisation runs on the truncated visible string so
+    // any injected metacharacters are stripped before the label
+    // reaches the menu. Note: sanitisation replaces one input
+    // char with 0-2 output chars (ampersand doubles, controls
+    // drop), so the final on-screen label may fall slightly
+    // under or over `custom_max_length` — the cap governs the
+    // path characters, not the escaped rendering.
+    if index < 9 {
+        format!("&{}: {}", index + 1, sanitize_menu_label(&visible))
+    } else {
+        format!("{}: {}", index + 1, sanitize_menu_label(&visible))
+    }
+}
+
+/// Sanitise one recent-files label before it reaches the menu.
+/// Three classes of characters are neutralised, all of them
+/// potential UI-spoof vectors when a filename comes from a
+/// non-Windows filesystem (WSL, Samba, sync tools) that permits
+/// characters `CreateFileW` on Windows-native storage wouldn't:
+///
+///   * `&`  → `&&`. Doubled ampersand renders as a literal
+///     `&` — Win32's opt-out from the accelerator-hint syntax.
+///   * ASCII C0 controls + DEL (`\x00`..=`\x1F`, `\x7F`),
+///     including `\t` (which Win32 menus interpret as the
+///     accelerator-hint column separator — used legitimately
+///     by e.g. "Restore Recent Closed File\tCtrl+Shift+T" — a
+///     tab inside a filename would forge a fake shortcut
+///     column on a recent-files entry). Replaced with U+FFFD
+///     so the label preserves visible length rather than
+///     silently rejoining tokens.
+///   * Unicode bidi-control codepoints
+///     (U+202A..U+202E, U+2066..U+2069). Left-to-right override
+///     inside a filename can flip the visible order so a label
+///     doesn't match the underlying path — a well-known
+///     spoofing trick. Same U+FFFD substitution.
+///
+/// The underlying `PathBuf` is untouched — this is a purely
+/// display-side transform.
+fn sanitize_menu_label(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&&"),
+            '\u{0000}'..='\u{001F}' | '\u{007F}' => out.push('\u{FFFD}'),
+            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' => out.push('\u{FFFD}'),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Show the "About Code++" dialog modally. `main_hwnd` is the
@@ -25169,6 +25695,17 @@ fn build_default_accel_table() -> Vec<ACCEL> {
             key: VK_P.0,
             cmd: ID_FILE_PRINT_PREVIEW,
         },
+        // Ctrl+Shift+T → Restore Recent Closed File. Mirrors N++
+        // and the browser convention for "reopen the last tab I
+        // just closed". No editor-side contention: Scintilla
+        // reserves Ctrl+T for "transpose lines" but only when the
+        // accelerator table doesn't claim the key first (this
+        // entry does — same pattern as Ctrl+P).
+        ACCEL {
+            fVirt: ctrl_shift,
+            key: VK_T.0,
+            cmd: ID_FILE_RESTORE_RECENT,
+        },
         ACCEL {
             fVirt: ctrl_shift,
             key: VK_W.0,
@@ -26193,6 +26730,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
             plugin_menu,
             plugins_menu_initialized: false,
             file_menu: menus.file_menu,
+            file_menu_recent_count: 0,
             view_menu: menus.view_menu,
             encoding_menu: menus.encoding_menu,
             language_menu: menus.language_menu,
@@ -33664,6 +34202,18 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     ID_FILE_PRINT_PREVIEW => {
                         handle_print_preview(hwnd);
                     }
+                    ID_FILE_RESTORE_RECENT => {
+                        handle_restore_recent(hwnd);
+                    }
+                    ID_FILE_OPEN_ALL_RECENT => {
+                        handle_open_all_recent(hwnd);
+                    }
+                    ID_FILE_EMPTY_RECENT => {
+                        handle_empty_recent(hwnd);
+                    }
+                    id if (ID_FILE_RECENT_BASE..=ID_FILE_RECENT_END).contains(&id) => {
+                        handle_open_recent_at(hwnd, (id - ID_FILE_RECENT_BASE) as usize);
+                    }
                     ID_FILE_OPEN_IN_DEFAULT_VIEWER => {
                         // Snapshot the active tab's path under a brief
                         // borrow, then drop it before `ShellExecuteW`:
@@ -34637,6 +35187,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     ID_SETTINGS_STYLECONFIGURATOR => {
                         handle_style_config_menu(hwnd);
                     }
+                    ID_SETTINGS_PREFERENCES => {
+                        handle_preferences_menu(hwnd);
+                    }
                     // Plugins → Plugin Manager. Modal dialog listing
                     // every discovered plugin with a per-row Enabled
                     // checkbox; toggling persists to
@@ -34912,6 +35465,11 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 // None of these helpers re-enter our wnd_proc.
                 if let Some(state) = state_from_hwnd(hwnd) {
                     if popup_hmenu_value == state.file_menu.0 as usize {
+                        rebuild_file_menu_recent_region(
+                            state.file_menu,
+                            &state.shell,
+                            &mut state.file_menu_recent_count,
+                        );
                         refresh_file_menu(state.file_menu, &state.shell);
                     } else if popup_hmenu_value == state.view_menu.0 as usize {
                         refresh_view_menu(

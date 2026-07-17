@@ -76,7 +76,8 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 use codepp_core::file::{Loader, LoaderShutdown};
 use codepp_core::lang::L_TEXT;
 use codepp_core::{
-    Encoding, Eol, FindHistory, LangType, LoadResult, RequestId, Session, WindowGeometry,
+    Encoding, Eol, FindHistory, LangType, LoadResult, Preferences, RecentFiles, RequestId, Session,
+    WindowGeometry,
 };
 use codepp_platform::watch::{FileChange, FileWatcher};
 #[cfg(target_os = "windows")]
@@ -987,6 +988,29 @@ pub struct Shell {
     /// after each push (eager save — the file is tiny and the
     /// alternative is silently losing history on crash).
     pub find_history: FindHistory,
+    /// Persisted user Preferences, loaded from `config.xml` at
+    /// startup. Owned by Shell so every feature that needs a
+    /// tuning knob can read a fresh reference under the same
+    /// `&Shell` borrow it already holds. Written back to disk
+    /// through [`Self::set_preferences`], which also acts on
+    /// side effects like clearing the recent-files list when
+    /// the user disables the feature.
+    pub preferences: Preferences,
+    /// Rolling list of full paths for files the user has closed
+    /// (LRU). Two caps apply: the hard user-facing cap
+    /// `preferences.recent_files_history.max_entries` (0..=30)
+    /// governs what actually gets retained, enforced by
+    /// [`Self::new`] on load, by [`Self::close_active_tab`]
+    /// after each push, and by [`Self::set_preferences`] on
+    /// any preference change; and
+    /// [`codepp_core::recent_files::MAX_ENTRIES`] = 30 is a
+    /// defense ceiling the core enforces against hand-edited
+    /// XML. Loaded from `recent_files.xml` at startup; pushed
+    /// to on every `close_active_tab` when the tab has an
+    /// on-disk path and `is_active()` holds; saved back on
+    /// every mutation (list is tiny, and losing entries on
+    /// crash defeats the "history" contract users expect).
+    pub recent_files: RecentFiles,
     /// Find-in-files orchestrator. Owns the active-job cancel
     /// flag and the next-job-id counter; events flow back through
     /// `fif_rx` (see [`Self::drain`]).
@@ -1392,6 +1416,24 @@ impl Shell {
             codepp_udl::UdlRegistry::new()
         };
 
+        // Load both recent-files halves under local bindings so
+        // the cap invariant can be enforced before either lands
+        // on `Shell`. If `recent_files.xml` exceeds the
+        // currently-configured cap — a hand-edited `config.xml`,
+        // a crash between two saves, or an older-version file
+        // written before Adjustment C landed — truncate to the
+        // cap AND persist so the on-disk state matches what
+        // every accessor from now on will see. Without this the
+        // "menu shows exactly what's retained" invariant
+        // wouldn't hold across the first startup after a
+        // low-cap edit.
+        let preferences = load_preferences();
+        let mut recent_files = load_recent_files();
+        let recent_cap = preferences.recent_files_history.max_entries as usize;
+        if recent_files.truncate_to(recent_cap) {
+            save_recent_files(&recent_files);
+        }
+
         Ok(Self {
             session: Session::new(),
             tabs: Vec::new(),
@@ -1409,6 +1451,8 @@ impl Shell {
             #[cfg(target_os = "windows")]
             last_search: None,
             find_history: load_find_history(),
+            preferences,
+            recent_files,
             fif_orchestrator,
             fif_rx: fif_rx_outer,
             pending_fif: Vec::new(),
@@ -1432,6 +1476,133 @@ impl Shell {
     pub fn set_styles(&mut self, styles: codepp_core::styles::Styles) {
         self.styles = styles;
         save_styles(&self.styles);
+    }
+
+    /// Persist a new [`Preferences`] snapshot. Replaces
+    /// `self.preferences` in memory and writes back to
+    /// `config.xml`. When the user newly disables the
+    /// recent-files feature (`enabled` flipped `true → false`),
+    /// the retained recent-files list is also dropped and its
+    /// XML rewritten — matching N++'s behaviour where turning
+    /// the pane off wipes existing history rather than merely
+    /// hiding it.
+    pub fn set_preferences(&mut self, mut prefs: Preferences) {
+        prefs.recent_files_history.clamp();
+        let was_enabled = self.preferences.recent_files_history.enabled;
+        self.preferences = prefs;
+        save_preferences(&self.preferences);
+        if was_enabled && !self.preferences.recent_files_history.enabled {
+            self.recent_files.clear();
+            save_recent_files(&self.recent_files);
+        } else {
+            // Cap the retained list to the (possibly lowered)
+            // `max_entries` — matches N++: lowering the spinner
+            // from 20 to 5 shrinks the actual history to 5, not
+            // just what the menu shows. Same `truncate_to`
+            // helper `Shell::new` and `close_active_tab` use so
+            // the "visible == actual" invariant holds at every
+            // Shell entry point.
+            let cap = self.preferences.recent_files_history.max_entries as usize;
+            if self.recent_files.truncate_to(cap) {
+                save_recent_files(&self.recent_files);
+            }
+        }
+    }
+
+    /// Every retained recent-files path. Menu render calls this
+    /// to build the list. Under the "hard cap" model
+    /// [`Self::set_preferences`] and [`Self::close_active_tab`]
+    /// enforce, the retained slice never exceeds
+    /// `max_entries`, so this returns everything on file. The
+    /// `min()` guard is defense in depth in case a hand-edited
+    /// `recent_files.xml` load ever produces a longer list than
+    /// the current cap allows.
+    #[must_use]
+    pub fn visible_recent_files(&self) -> &[std::path::PathBuf] {
+        let cfg = &self.preferences.recent_files_history;
+        if !cfg.is_active() {
+            return &[];
+        }
+        let n = std::cmp::min(cfg.max_entries as usize, self.recent_files.entries.len());
+        &self.recent_files.entries[..n]
+    }
+
+    /// Remove and return the most-recently-closed path. Backs
+    /// File → Restore Recent Closed File (Ctrl+Shift+T). Saves
+    /// the shrunk list on success. Returns `None` when the
+    /// history is empty **or** the feature is disabled — the
+    /// gate applies here (not just at push time) because
+    /// Ctrl+Shift+T is a global accelerator that fires
+    /// `WM_COMMAND` independently of the menu's greyed / hidden
+    /// state, so without a shell-side gate the shortcut could
+    /// still reach pre-disable entries. Every recent-files
+    /// mutation entry point shares this discipline.
+    pub fn pop_last_recent_file(&mut self) -> Option<std::path::PathBuf> {
+        if !self.preferences.recent_files_history.is_active() {
+            return None;
+        }
+        let popped = self.recent_files.pop_front()?;
+        save_recent_files(&self.recent_files);
+        Some(popped)
+    }
+
+    /// Remove and return the entry at `index` in the visible
+    /// recent-files list. Backs a click on a specific numbered
+    /// recent-files menu entry. Symmetric with File → Open All
+    /// Recent Files (which drains the whole list) and with
+    /// Ctrl+Shift+T (which pops from the top): once the user
+    /// has re-opened a file via any of these paths it stops
+    /// belonging to the "recently *closed*" list.
+    ///
+    /// `index` is 0-based against the visible slice, which is
+    /// the same order the menu presented — the underlying
+    /// `entries` vec is not reordered by `visible_recent_files`
+    /// so the indices match 1:1. Returns `None` when the feature
+    /// is disabled or `index` is out of range (a raced menu
+    /// click after a concurrent Empty, for instance).
+    pub fn take_recent_file_at(&mut self, index: usize) -> Option<std::path::PathBuf> {
+        if !self.preferences.recent_files_history.is_active() {
+            return None;
+        }
+        let cap = std::cmp::min(
+            self.preferences.recent_files_history.max_entries as usize,
+            self.recent_files.entries.len(),
+        );
+        if index >= cap {
+            return None;
+        }
+        let removed = self.recent_files.entries.remove(index);
+        save_recent_files(&self.recent_files);
+        Some(removed)
+    }
+
+    /// Drain the entire recent-files list. Backs File → Open
+    /// All Recent Files. Returns the paths in most-recent-first
+    /// order (same order the menu displayed them). Saves the
+    /// now-empty list to disk. Same `is_active()` gate as
+    /// [`Self::pop_last_recent_file`] — the menu region that
+    /// exposes this is already hidden when the feature is off,
+    /// but a raw `WM_COMMAND` (plugin, hotkey binding) could
+    /// still reach the handler.
+    pub fn take_all_recent_files(&mut self) -> Vec<std::path::PathBuf> {
+        if !self.preferences.recent_files_history.is_active() {
+            return Vec::new();
+        }
+        let drained = self.recent_files.drain_all();
+        if !drained.is_empty() {
+            save_recent_files(&self.recent_files);
+        }
+        drained
+    }
+
+    /// Empty the recent-files list. Backs File → Empty Recent
+    /// Files List. No-op when the list is already empty.
+    pub fn clear_recent_files(&mut self) {
+        if self.recent_files.entries.is_empty() {
+            return;
+        }
+        self.recent_files.clear();
+        save_recent_files(&self.recent_files);
     }
 
     /// Read access to the currently-active tab, or `None` if no
@@ -1788,6 +1959,31 @@ impl Shell {
         // queue isn't fed.
         #[cfg(not(target_os = "windows"))]
         let _ = closing_id;
+
+        // Record the closed file in the recent-files history if
+        // the feature is active and the closed tab was bound to
+        // a real on-disk path. Untitled buffers (path == None)
+        // have no on-disk identity to remember. Every other
+        // recent-files entry point (`visible_recent_files`,
+        // `pop_last_recent_file`, `take_all_recent_files`)
+        // funnels through the same `is_active()` gate so a
+        // user-facing toggle change lands atomically everywhere.
+        //
+        // `max_entries` is enforced as a hard cap, not a visible
+        // slice of a larger retained list — matches N++.
+        // `RecentFiles::push` also caps at
+        // `recent_files::MAX_ENTRIES = 30` as a defense
+        // ceiling, but the user-facing cap here is the one that
+        // actually governs. Consequence: Ctrl+Shift+T and File
+        // → Open All Recent Files walk exactly what the user
+        // sees, not a hidden tail beyond the visible cap.
+        if let Some(p) = removed.path.as_deref() {
+            let cap = self.preferences.recent_files_history.max_entries as usize;
+            if self.preferences.recent_files_history.is_active() && self.recent_files.push(p) {
+                self.recent_files.truncate_to(cap);
+                save_recent_files(&self.recent_files);
+            }
+        }
 
         Some(ClosedTab {
             closed_idx: idx,
@@ -5833,6 +6029,64 @@ fn save_find_history(history: &FindHistory) {
     }
 }
 
+/// Read `config.xml` if present. Missing file (first launch) →
+/// default preferences. A corrupt file is logged + replaced with
+/// defaults so a hand-edit that breaks the schema can never lock
+/// the user out of the Preferences dialog.
+fn load_preferences() -> Preferences {
+    let Some(path) = codepp_platform::config_xml_path() else {
+        return Preferences::default();
+    };
+    match Preferences::load(&path) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "config.xml load failed; starting from defaults");
+            Preferences::default()
+        }
+    }
+}
+
+/// Save `config.xml`. Errors are logged + swallowed — the
+/// in-memory change already took effect so the active session
+/// sees the new value, and the dialog has no useful recovery
+/// path for a persistence failure.
+fn save_preferences(prefs: &Preferences) {
+    let Some(path) = codepp_platform::config_xml_path() else {
+        return;
+    };
+    if let Err(e) = prefs.save(&path) {
+        tracing::warn!(path = %path.display(), error = %e, "config.xml save failed");
+    }
+}
+
+/// Read `recent_files.xml` if present. Missing file (first
+/// launch) → empty list. Corrupt file logs + starts empty.
+fn load_recent_files() -> RecentFiles {
+    let Some(path) = codepp_platform::recent_files_xml_path() else {
+        return RecentFiles::default();
+    };
+    match RecentFiles::load(&path) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "recent_files.xml load failed; starting empty");
+            RecentFiles::default()
+        }
+    }
+}
+
+/// Save `recent_files.xml`. Errors are logged + swallowed —
+/// same rationale as [`save_find_history`]: losing history
+/// silently is preferable to an error dialog on every
+/// close-tab keystroke.
+fn save_recent_files(recent: &RecentFiles) {
+    let Some(path) = codepp_platform::recent_files_xml_path() else {
+        return;
+    };
+    if let Err(e) = recent.save(&path) {
+        tracing::warn!(path = %path.display(), error = %e, "recent_files.xml save failed");
+    }
+}
+
 /// Preinstalled Markdown UDL bundled at build time via
 /// `include_bytes!`. Copied into
 /// `<config_dir>/userDefineLangs/` on first run by
@@ -7608,6 +7862,17 @@ mod tests {
         assert!(shell.tabs.is_empty());
         assert_eq!(shell.active_tab, None);
     }
+
+    // The recent-files truncation math (hard cap on push, on
+    // preference change, and on load) is tested at the
+    // `RecentFiles::truncate_to` layer in `codepp-core`. A Shell
+    // integration test here would have to go through
+    // `Shell::set_preferences` / `Shell::new`, both of which
+    // unavoidably write to the real per-user `%APPDATA%\Code++\`
+    // config dir (no test-injectable override exists yet). The
+    // core-level tests exercise the same helper the Shell uses,
+    // so the integration is a one-line call away from being
+    // trivially correct.
 
     #[test]
     fn close_active_tab_last_tab_clears_active() {

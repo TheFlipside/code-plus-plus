@@ -11,6 +11,8 @@ pub mod file;
 pub mod find_history;
 pub mod lang;
 pub mod npp_session;
+pub mod preferences;
+pub mod recent_files;
 pub mod session;
 pub mod styles;
 
@@ -25,5 +27,9 @@ pub use file::{
 };
 pub use find_history::{FindHistory, FindHistoryError};
 pub use lang::LangType;
+pub use preferences::{
+    Preferences, PreferencesError, RecentFileDisplayMode, RecentFilesHistoryConfig,
+};
+pub use recent_files::{RecentFiles, RecentFilesError};
 pub use session::{Session, SessionError, Tab, WindowGeometry};
 pub use styles::{format_rgb_hex, parse_rgb_hex, StyleEntry, Styles, StylesError, Transparency};
