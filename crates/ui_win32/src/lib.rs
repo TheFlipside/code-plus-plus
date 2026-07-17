@@ -17740,29 +17740,74 @@ unsafe fn discard_sole_empty_untitled(hwnd: HWND) -> bool {
     // `&mut WindowState` and may spawn a nested pump for the
     // save-changes dialog, which the empty-untitled exception
     // in `handle_close_active_tab_inner` skips for us).
-    let (candidate, editor) = unsafe {
+    //
+    // Three candidacy checks matter:
+    //
+    //   * `tabs.len() == 1` — the "sole tab" premise.
+    //   * `active_tab == Some(0)` — Shell-side index consistency.
+    //     Message-dispatch flows (nested wnd_proc calls from
+    //     WM_APP_WAKE drain paths, batch-open loops that
+    //     interleave close + open) can leave `active_tab`
+    //     transiently out of sync with `tabs.len()`. Bail on
+    //     mismatch rather than trust indices into a
+    //     partially-mutated vector.
+    //   * The tab's own fields (`path`, `untitled_seq`,
+    //     `pinned`) identify a fresh scratch buffer that isn't
+    //     pinned.
+    //
+    // We also capture the Shell-side `scintilla_doc` pointer
+    // for `tabs[0]` alongside the editor handle. The length check
+    // below reads from whatever document the shared editor view
+    // is CURRENTLY bound to, which for the deferred-rebind pattern
+    // used elsewhere in this file (`handle_tab_selchange` /
+    // `apply_load_result`) is not automatically the same as
+    // `tabs[0].scintilla_doc`: Shell can set `active_tab = Some(0)`
+    // before the editor's `SCI_SETDOCPOINTER` catches up. Reading
+    // the wrong buffer's length here would either mistakenly
+    // discard a scratch that has typed content (data loss) or
+    // falsely spare an empty one (harmless nuisance). The
+    // pointer comparison after we drop the borrow closes both
+    // cases.
+    let (candidate, editor, expected_doc) = unsafe {
         let Some(state) = state_from_hwnd(hwnd) else {
             return false;
         };
+        if state.shell.tabs.len() == 1 && state.shell.active_tab != Some(0) {
+            tracing::warn!(
+                active_tab = ?state.shell.active_tab,
+                tabs_len = state.shell.tabs.len(),
+                "discard_sole_empty_untitled: skipping — active_tab out of sync with tabs.len()"
+            );
+        }
         let candidate = state.shell.tabs.len() == 1
+            && state.shell.active_tab == Some(0)
             && state.shell.tabs[0].path.is_none()
             && state.shell.tabs[0].untitled_seq.is_some()
             && !state.shell.tabs[0].pinned;
-        // Belt-and-braces future-proofing: with `tabs.len() == 1`
-        // the sole tab is always the active one, so the editor
-        // handle we cache below is bound to `tabs[0]`'s Scintilla
-        // document — the invariant `SCI_GETLENGTH` relies on. A
-        // future refactor that leaves the view mid-rebind across
-        // a re-entrant point would break this silently; fail
-        // loudly in debug builds instead.
-        debug_assert_eq!(
-            state.shell.active_tab,
-            Some(0),
-            "sole tab with active_tab != Some(0) — editor may not be bound to tabs[0]"
-        );
-        (candidate, state.editor)
+        let expected_doc = state.shell.tabs.first().map_or(0, |t| t.scintilla_doc);
+        (candidate, state.editor, expected_doc)
     };
     if !candidate {
+        return false;
+    }
+    // Verify the shared editor view is bound to the exact
+    // Scintilla document `tabs[0]` owns before we trust the
+    // length read. If a deferred rebind hasn't fired yet, the
+    // pointers will differ — bail rather than measure some
+    // other buffer's length and risk discarding a scratch tab
+    // that still has typed content sitting in its (currently
+    // unbound) document.
+    //
+    // `expected_doc == 0` means the tab hasn't been materialised
+    // yet (Shell allocates the Tab before Scintilla's
+    // `SCI_CREATEDOCUMENT` fires). In that state there's nothing
+    // to discard — the buffer is definitionally empty but also
+    // pre-editor, so bail cleanly.
+    if expected_doc == 0 {
+        return false;
+    }
+    let current_doc = editor.send(SCI_GETDOCPOINTER, 0, 0);
+    if current_doc != expected_doc {
         return false;
     }
     // Live content check via the direct-call surface. SCI_GETLENGTH
