@@ -17385,6 +17385,17 @@ fn handle_load_session(hwnd: HWND) {
         );
     }
 
+    // Discard a sole empty "new N" tab before the batch so a
+    // fresh scratch buffer doesn't linger alongside the loaded
+    // session. Idempotent across the loop below (after the first
+    // opened file lands there are 1+ real tabs, so subsequent
+    // calls no-op). Done here — after all filtering / validation
+    // succeeds — so a session that failed to load or was entirely
+    // UNC-rejected doesn't destroy the scratch buffer.
+    unsafe {
+        discard_sole_empty_untitled(hwnd);
+    }
+
     // 3. Pre-populate the by-path metadata cache and kick each open.
     //    Re-acquire `state_from_hwnd` on every iteration to match
     //    the discipline `ID_FILE_OPEN` uses — a synchronous plugin
@@ -17682,13 +17693,104 @@ fn handle_preferences_menu(hwnd: HWND) {
     }
 }
 
+/// Discard the sole open tab if it's an empty, unpinned
+/// File→New buffer ("new N" with `untitled_seq` set, no
+/// on-disk path, `pinned == false`, and zero characters in
+/// the Scintilla document). Returns `true` iff a discard
+/// actually happened.
+///
+/// Mirrors Notepad++'s tab-strip hygiene: when the user opens
+/// files while the only open tab is a fresh scratch "new 1", the
+/// scratch tab is thrown away rather than piling up next to the
+/// files just opened. "Empty" is a live Scintilla content check
+/// (`SCI_GETLENGTH == 0`), not the `Tab.dirty` flag — a typed-
+/// then-erased scratch reads as empty here and gets discarded
+/// (nothing visible is lost; Undo history for a discarded buffer
+/// is lost, which matches N++). A scratch with any typed content
+/// stays open alongside whatever gets opened.
+///
+/// The pinned check honours the same "keep this tab across
+/// automatic close operations" invariant that
+/// `pick_next_close_target(CloseMultiKind::AllButPinned)` and
+/// the tab-drag arming guard already respect: a user who
+/// explicitly pinned their scratch buffer is signalling "keep
+/// this around", and silently discarding it here would violate
+/// that signal.
+///
+/// **Callers**: every user-initiated batch open path — File →
+/// Open, File → Load Session, Restore Recent Closed File, Open
+/// All Recent Files, click on a specific recent-files entry,
+/// drag-and-drop file open, Find-in-Files double-click,
+/// Workspace-tree double-click, Workspace right-click → Open.
+/// Call **once** at the start of a batch (before the loop that
+/// opens N files), not per-file — the scratch tab only exists
+/// to be discarded on the first open.
+///
+/// **Do NOT call from**: File → New (explicitly wants a fresh
+/// tab), startup session restore (no scratch tab exists yet at
+/// that point), or `apply_file_change` reload (the tab being
+/// reloaded IS the tab, not a bystander).
+///
+/// # Safety
+///
+/// Caller must invoke from the UI thread that owns `hwnd`.
+unsafe fn discard_sole_empty_untitled(hwnd: HWND) -> bool {
+    // Cheap Shell-side checks under a brief borrow — must drop
+    // before `handle_close_active_tab` runs (it takes its own
+    // `&mut WindowState` and may spawn a nested pump for the
+    // save-changes dialog, which the empty-untitled exception
+    // in `handle_close_active_tab_inner` skips for us).
+    let (candidate, editor) = unsafe {
+        let Some(state) = state_from_hwnd(hwnd) else {
+            return false;
+        };
+        let candidate = state.shell.tabs.len() == 1
+            && state.shell.tabs[0].path.is_none()
+            && state.shell.tabs[0].untitled_seq.is_some()
+            && !state.shell.tabs[0].pinned;
+        // Belt-and-braces future-proofing: with `tabs.len() == 1`
+        // the sole tab is always the active one, so the editor
+        // handle we cache below is bound to `tabs[0]`'s Scintilla
+        // document — the invariant `SCI_GETLENGTH` relies on. A
+        // future refactor that leaves the view mid-rebind across
+        // a re-entrant point would break this silently; fail
+        // loudly in debug builds instead.
+        debug_assert_eq!(
+            state.shell.active_tab,
+            Some(0),
+            "sole tab with active_tab != Some(0) — editor may not be bound to tabs[0]"
+        );
+        (candidate, state.editor)
+    };
+    if !candidate {
+        return false;
+    }
+    // Live content check via the direct-call surface. SCI_GETLENGTH
+    // is a pure query — no state mutation, no re-entry into wnd_proc.
+    // `editor.send` is a safe method (unsafety hidden inside its
+    // impl), so no explicit `unsafe` wrapper is needed here.
+    let len = editor.send(SCI_GETLENGTH, 0, 0);
+    if len != 0 {
+        return false;
+    }
+    unsafe { handle_close_active_tab(hwnd) };
+    true
+}
+
 /// Shared open path used by the three recent-files handlers.
 /// Wraps [`Shell::open_file`] with the same `catch_unwind` guard
 /// and post-open UI refresh dance the multi-file File → Open
 /// handler uses, so behaviour is identical whether the user
 /// opened the file through the OS picker or through a
-/// recent-files menu item.
+/// recent-files menu item. Runs
+/// [`discard_sole_empty_untitled`] first so a fresh scratch
+/// tab gets thrown away before the actual open — idempotent
+/// across a batch (subsequent calls see 1+ real tabs and
+/// no-op).
 fn open_recent_path_via_shell(hwnd: HWND, path: PathBuf) {
+    unsafe {
+        discard_sole_empty_untitled(hwnd);
+    }
     let outcome = unsafe {
         if let Some(state) = state_from_hwnd(hwnd) {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| state.shell.open_file(path)))
@@ -29757,6 +29859,14 @@ unsafe fn handle_fif_listview_dblclk(main_hwnd: HWND, row: usize) {
     let Some(row) = row_data else {
         return;
     };
+    // Scratch-tab hygiene: a sole empty "new N" gets discarded
+    // before the FIF result opens, matching the File → Open /
+    // drag-drop paths. If the FIF target is already open (dedupe
+    // branch below) this is a no-op — tabs.len() >= 2 fails the
+    // sole-tab guard.
+    unsafe {
+        discard_sole_empty_untitled(main_hwnd);
+    }
     let deduped = if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
         state.fif_pending_jumps.push(row.clone());
         matches!(
@@ -30626,6 +30736,15 @@ unsafe fn handle_tree_double_click(main_hwnd: HWND, tree: HWND) {
             "workspace tree: reconstructed path escaped root; refusing to open"
         );
         return;
+    }
+    // Scratch-tab hygiene: same as the right-click → Open
+    // Workspace entry (`ID_WORKSPACE_CTX_OPEN_FILE`). Both
+    // gestures activate the same user intent — "open this file
+    // from the workspace tree" — so they must apply the same
+    // discard rule, otherwise the sole scratch buffer's fate
+    // depends on which mouse button the user pressed.
+    unsafe {
+        discard_sole_empty_untitled(main_hwnd);
     }
     // Drop the state borrow completely, then call open_file on
     // a fresh borrow — `Shell::open_file` mutates and we do NOT
@@ -34033,6 +34152,13 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 LRESULT(0)
             }
             WM_DROPFILES => {
+                // Same scratch-tab hygiene the File → Open handler
+                // applies — dragging files onto a sole empty "new N"
+                // should replace it rather than pile up alongside.
+                // Runs before `handle_dropped_files` so the first
+                // dropped file lands in a clean workspace; subsequent
+                // drops in the same batch see 1+ real tabs and no-op.
+                discard_sole_empty_untitled(hwnd);
                 let mut deduped = false;
                 if let Some(state) = state_from_hwnd(hwnd) {
                     let hdrop = HDROP(wparam.0 as *mut c_void);
@@ -34151,6 +34277,15 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // once at the end and rebinds the view to
                         // whichever tab ended up active.
                         let paths = prompt_open_paths(hwnd);
+                        // Discard a sole empty "new N" tab before the
+                        // batch so the freshly-opened files don't pile
+                        // up next to a scratch buffer no one asked to
+                        // keep. Idempotent across the loop below —
+                        // subsequent iterations see 1+ real tabs.
+                        // No-op if the user cancelled the dialog.
+                        if !paths.is_empty() {
+                            discard_sole_empty_untitled(hwnd);
+                        }
                         let mut deduped = false;
                         for p in paths {
                             let outcome = if let Some(state) = state_from_hwnd(hwnd) {
@@ -34432,6 +34567,11 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             state_from_hwnd(hwnd).and_then(|s| s.workspace_ctx_target.take());
                         if let Some(target) = taken {
                             if target.kind == WorkspaceCtxKind::File {
+                                // Scratch-tab hygiene: same as File →
+                                // Open. A right-click → Open on a
+                                // Workspace file with only a sole empty
+                                // "new N" open should replace it.
+                                discard_sole_empty_untitled(hwnd);
                                 if let Some(state) = state_from_hwnd(hwnd) {
                                     let _ = state.shell.open_file(target.path);
                                 }
