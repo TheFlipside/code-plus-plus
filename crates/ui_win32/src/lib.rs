@@ -19355,6 +19355,24 @@ fn show_style_config_dialog(
         ] {
             apply_dialog_font(child, font);
         }
+        // Strip visual style off the group boxes + checkboxes so
+        // they paint on the classic BUTTON path that honours the
+        // dialog's `WM_CTLCOLORBTN` return, giving them the same
+        // chrome colour as the surrounding dialog instead of the
+        // themed COLOR_BTNFACE (~#F0F0F0) patch. Push buttons
+        // (Save, Cancel) deliberately stay themed for the Win11
+        // rounded look — matches the discipline documented on
+        // `disable_visual_style`.
+        for child in [
+            colour_group,
+            font_group,
+            bold_check,
+            italic_check,
+            underline_check,
+            transparency_check,
+        ] {
+            disable_visual_style(child);
+        }
 
         // Stash control HWNDs onto the state so the wnd_proc
         // can read/update them.
@@ -22423,6 +22441,17 @@ fn show_goto_dialog(
         ] {
             apply_dialog_font(child, font);
         }
+        // Strip visual style off the two radios so they paint on
+        // the classic BUTTON path — that path honours
+        // `WM_CTLCOLORBTN`'s `dialog_bg_brush` return and blends
+        // with the dialog chrome, instead of the themed paint's
+        // default COLOR_BTNFACE (~#F0F0F0) rectangle that shows
+        // up as a slightly-darker patch around each radio label.
+        // Same pattern the Preferences / Style Configurator /
+        // Find-Replace dialogs use for their checkboxes and
+        // radios.
+        disable_visual_style(radio_line);
+        disable_visual_style(radio_offset);
 
         // Initial mode = Line; check the corresponding radio and
         // populate the three boxes BEFORE the dialog is shown so
@@ -25292,19 +25321,45 @@ fn show_find_replace_dialog(
         ] {
             apply_dialog_font(child, font);
         }
-        // Disable visual styles ONLY on the BS_GROUPBOX. The
-        // themed groupbox paint cuts the border line through
-        // the "Search Mode" title; classic paint with the
-        // COLOR_3DFACE brush from WM_CTLCOLORBTN clears the
-        // title rect cleanly.
+        // Strip visual style off the group box + every checkbox
+        // + every radio so they paint on the classic BUTTON path
+        // that honours our `WM_CTLCOLORBTN` return
+        // (`dialog_bg_brush`, see line ~23369). The group box
+        // already needed this for a title-clear reason (themed
+        // groupbox paint cuts the border line through the
+        // "Search Mode" title); the checkboxes/radios use the
+        // same treatment for chrome-colour blending — themed
+        // paint's default COLOR_BTNFACE (~#F0F0F0) rectangle
+        // shows up as a slightly-darker patch under each label
+        // that doesn't match the `#F9F9F9` dialog chrome.
         //
-        // Checkboxes and radios stay themed: classic-painted
-        // BS_AUTOCHECKBOX/BS_AUTORADIOBUTTON don't reliably
-        // erase their text region between toggles (DrawText's
-        // OPAQUE-bkmode clear isn't enough — tightly-drawn
-        // glyphs still stack across redraws), and themed
-        // paint handles its own redraw correctly.
-        disable_visual_style(mode_group);
+        // A prior iteration of this comment warned that
+        // classic-painted checkboxes could leave stacked glyph
+        // fragments on rapid toggle. That was observed with an
+        // earlier `NULL_BRUSH` return from `WM_CTLCOLORBTN` —
+        // the current `dialog_bg_brush` return fills each
+        // button's client rect with a solid colour before the
+        // text redraws, which clears the previous frame's
+        // glyphs cleanly. If glyph stacking is observed on any
+        // of these controls, add a per-control subclass that
+        // forces an `InvalidateRect(hwnd, None, true)` on
+        // `BM_SETCHECK` instead of reverting the theme change.
+        for child in [
+            mode_group,
+            backward_cb,
+            whole_word_cb,
+            match_case_cb,
+            wrap_around_cb,
+            in_selection_cb,
+            mode_normal_radio,
+            mode_extended_radio,
+            mode_regex_radio,
+            dot_newline_cb,
+            fif_subfolders_cb,
+            fif_hidden_folders_cb,
+        ] {
+            disable_visual_style(child);
+        }
 
         state.tab_ctrl = tab_ctrl;
         state.find_label = find_label;
