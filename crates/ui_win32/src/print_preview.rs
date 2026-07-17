@@ -278,18 +278,22 @@ pub(crate) fn show_print_preview(owner: HWND, doc_display_name: &str, editor: Ed
     // 5. If the user clicked Print (not Close / Esc), re-enter the
     //    normal print pipeline against the owner window. The
     //    editor handle + doc name are borrowed from `state`, which
-    //    is still alive here.
+    //    is still alive here. We also thread the measured page
+    //    count as a hint into `PrintDlgW`'s spinner bounds so the
+    //    user can pick a page range against real numbers instead
+    //    of the fallback 1..65535 window.
     if print_after_close {
         let editor_copy = state.editor;
         let doc = state.doc_name.clone();
+        let total_pages = state.page_breaks.len();
         // Drop the preview state (deletes the printer DC + releases
-        // Scintilla's format cache) BEFORE `print_active_document`
-        // reacquires its own printer DC via the user-facing
-        // `PrintDlgW`. Not required for correctness — the two DCs
-        // could coexist — but keeps the resource ownership picture
-        // straightforward.
+        // Scintilla's format cache) BEFORE
+        // `print_active_document_with_page_hint` reacquires its own
+        // printer DC via the user-facing `PrintDlgW`. Not required
+        // for correctness — the two DCs could coexist — but keeps
+        // the resource ownership picture straightforward.
         drop(state);
-        crate::print::print_active_document(owner, &doc, editor_copy);
+        crate::print::print_active_document_with_page_hint(owner, &doc, editor_copy, total_pages);
     }
 }
 
@@ -853,7 +857,21 @@ unsafe fn paint_preview(hwnd: HWND, state: &PreviewState) {
             state.current_page + 1,
             state.page_breaks.len(),
         );
-        render_one_page(&state.editor, mem_dc, &state.paper, cp_min, cp_max);
+        // Preview: draw into the screen-compatible mem DC (so we
+        // can BitBlt it onto the window), but measure font metrics
+        // against the printer HDC — otherwise Scintilla would use
+        // screen line-heights (~15 px at 96 dpi) inside a rect
+        // sized in printer units (~5700 units tall for A4), so
+        // each page would fill only the top ~10% of the preview.
+        // See `render_one_page`'s doc for the full mechanism.
+        render_one_page(
+            &state.editor,
+            mem_dc,
+            state.printer_hdc,
+            &state.paper,
+            cp_min,
+            cp_max,
+        );
 
         // Restore the DC's mapping mode before blit.
         if saved != 0 {

@@ -22,6 +22,18 @@
 //! the dialog-primitive abstraction; the two-pass measure/draw shape
 //! and the `SCI_FORMATRANGEFULL` message are Scintilla-agnostic, so
 //! most of the layout math ports directly.
+//!
+//! **Windows 11 "app doesn't support print preview" notice.** The
+//! modern Win11 print dialog surfaces an integrated preview panel
+//! only for apps that opt in via `PrintDlgExW` + `IPrintDialogCallback`
+//! implementing the shell's preview-rendering callback protocol.
+//! Code++ uses legacy `PrintDlgW`, which the Win11 dialog flags with
+//! that notice. Migrating to `PrintDlgExW` + the callback is a Phase 5
+//! polish item (a substantial addition — a new COM interface impl and
+//! a second render path against the dialog's own DC). The standalone
+//! `File → Print Preview` modal in `crate::print_preview` covers the
+//! same UX in the meantime and works on every Windows version we
+//! target, not just 11.
 
 use core::ffi::c_void;
 use std::path::Path;
@@ -62,6 +74,31 @@ use windows::Win32::UI::Controls::Dialogs::{
 /// grab a copy under a brief `&mut WindowState` borrow and drop it
 /// before the dialog spins its own message pump.
 pub(crate) fn print_active_document(owner: HWND, doc_display_name: &str, editor: EditorHandle) {
+    print_active_document_impl(owner, doc_display_name, editor, None);
+}
+
+/// Same as [`print_active_document`], but the caller already knows
+/// the document's page count (Print Preview → Print handoff) so we
+/// can pre-populate `PrintDlgW`'s `nMaxPage` / `nToPage` fields with
+/// the real bounds. Without the hint the OS dialog shows a spinner
+/// that goes up to 65535 and defaults `nToPage = 1`, which forces the
+/// user to memorise page numbers from the preview before switching
+/// to the dialog.
+pub(crate) fn print_active_document_with_page_hint(
+    owner: HWND,
+    doc_display_name: &str,
+    editor: EditorHandle,
+    total_pages: usize,
+) {
+    print_active_document_impl(owner, doc_display_name, editor, Some(total_pages));
+}
+
+fn print_active_document_impl(
+    owner: HWND,
+    doc_display_name: &str,
+    editor: EditorHandle,
+    known_total_pages: Option<usize>,
+) {
     // Fast path: nothing to print if the document is empty. Skips
     // showing the dialog for what would obviously produce a blank
     // page; matches N++'s "print of an empty buffer does nothing"
@@ -72,7 +109,7 @@ pub(crate) fn print_active_document(owner: HWND, doc_display_name: &str, editor:
     }
 
     // --- 1. Show `PrintDlgW`. ---------------------------------------
-    let Some(job) = show_print_dialog(owner) else {
+    let Some(job) = show_print_dialog(owner, known_total_pages) else {
         return;
     };
 
@@ -174,7 +211,11 @@ pub(crate) fn print_active_document(owner: HWND, doc_display_name: &str, editor:
             page_idx + 1,
             total_pages,
         );
-        render_one_page(&editor, job.hdc, &paper, cp_min, cp_max);
+        // Real print: draw surface and metrics surface are the
+        // same printer HDC. Preview swaps a screen mem DC in for
+        // the draw side but keeps the printer HDC as the metric
+        // target — see `render_one_page`'s doc.
+        render_one_page(&editor, job.hdc, job.hdc, &paper, cp_min, cp_max);
         // SAFETY: paired with the preceding StartPage.
         let ep = unsafe { EndPage(job.hdc) };
         if ep <= 0 {
@@ -274,7 +315,29 @@ impl PageRange {
 /// (unimplemented) selection radio stays greyed, and
 /// `PD_USEDEVMODECOPIESANDCOLLATE` so the driver's copies/collate
 /// controls take effect on the returned DC.
-fn show_print_dialog(owner: HWND) -> Option<PrintJob> {
+///
+/// `known_total_pages` is a hint from a caller that already knows
+/// how many pages the document would produce (i.e. Print Preview
+/// chaining into Print — it did its own measure pass and can pass
+/// the count so the dialog's `nMaxPage` spinner shows the real
+/// upper bound). `None` on the initial print (we haven't measured
+/// yet). `nToPage` defaults to the total so a user picking "Pages"
+/// gets the full range pre-selected instead of just page 1.
+fn show_print_dialog(owner: HWND, known_total_pages: Option<usize>) -> Option<PrintJob> {
+    // Cap the OS spinner at a sensible upper bound. With a known
+    // page count from the caller (Preview), use it. Without, fall
+    // back to `u16::MAX` — the render loop clamps the returned
+    // range against the real page count anyway
+    // ([`PageRange::resolve`]), so this ceiling is a dialog-input
+    // UX cap, not a security boundary.
+    let n_max_page = known_total_pages
+        .and_then(|n| u16::try_from(n).ok())
+        .unwrap_or(65535);
+    let n_to_page = if known_total_pages.is_some() {
+        n_max_page
+    } else {
+        1
+    };
     // Only preload defaults; PrintDlgW overwrites `Flags`,
     // `hDevMode`, `hDevNames`, `hDC` on OK.
     let mut pd = PRINTDLGW {
@@ -283,16 +346,9 @@ fn show_print_dialog(owner: HWND) -> Option<PrintJob> {
         Flags: PD_RETURNDC | PD_ALLPAGES | PD_NOSELECTION | PD_USEDEVMODECOPIESANDCOLLATE,
         nCopies: 1,
         nFromPage: 1,
-        nToPage: 1,
+        nToPage: n_to_page,
         nMinPage: 1,
-        // Upper bound for the range-selection spinner in the OS
-        // dialog. `nMaxPage` constrains what the user is allowed
-        // to type into "Pages: From ... To ..."; the render loop
-        // clamps the returned range against the real page count
-        // anyway ([`PageRange::resolve`]), so this ceiling is
-        // purely a dialog-input UX cap, not a security boundary.
-        // 65535 = `u16::MAX` for the field's own width.
-        nMaxPage: 65535,
+        nMaxPage: n_max_page,
         ..Default::default()
     };
     // SAFETY: `&mut pd` points at a fully-initialised `PRINTDLGW`
@@ -606,19 +662,38 @@ pub(crate) fn measure_page_breaks(
     (breaks, truncation)
 }
 
-/// Second pass: render one page's `(cp_min, cp_max)` into the printer
+/// Second pass: render one page's `(cp_min, cp_max)` into the target
 /// HDC. Same struct shape as `measure_page_breaks`, but wparam=1 so
-/// Scintilla writes glyphs to the printer.
+/// Scintilla writes glyphs into `hdc`.
+///
+/// `hdc` is the surface glyphs land on. `hdc_target` is the surface
+/// Scintilla measures font metrics against — Scintilla's
+/// `SurfaceGDI::Init` reads `LOGPIXELSY` from it (via `AutoSurface
+/// surfaceMeasure(pfr->hdcTarget, ...)` in `Editor::FormatRange`),
+/// so line heights and glyph sizes come out at whatever resolution
+/// `hdc_target`'s DPI reports. For a real print both are the printer
+/// HDC. For the on-screen Print Preview, `hdc` is a screen-compatible
+/// mem DC (so we can `BitBlt` it onto the preview window) while
+/// `hdc_target` stays the printer HDC — that way Scintilla lays out
+/// text at printer line-heights (typically ~100 device units per
+/// line at 600 dpi) instead of screen line-heights (~15 at 96 dpi),
+/// and the caller's anisotropic mapping on `hdc` scales the whole
+/// page down for display. Without the separation, the preview
+/// rendered text at ~15 units per line into a rectangle sized in
+/// printer coordinates (~5700 units tall), so each page filled only
+/// the top ~10% of the preview — the bug the "each page contains
+/// only the editor's visible content" user report identified.
 pub(crate) fn render_one_page(
     editor: &EditorHandle,
     hdc: HDC,
+    hdc_target: HDC,
     paper: &PaperMetrics,
     cp_min: isize,
     cp_max: isize,
 ) {
     let mut fr = Sci_RangeToFormatFull {
         hdc: hdc.0,
-        hdc_target: hdc.0,
+        hdc_target: hdc_target.0,
         rc: paper.text_rect,
         rc_page: paper.page_rect,
         chrg: Sci_CharacterRangeFull { cp_min, cp_max },
