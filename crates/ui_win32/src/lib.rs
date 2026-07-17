@@ -494,17 +494,17 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SendMessageW, SetCursor, SetLayeredWindowAttributes, SetMenu, SetMenuItemInfoW, SetParent,
     SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TrackPopupMenu,
     TranslateAcceleratorW, TranslateMessage, ACCEL, ACCEL_VIRT_FLAGS, BM_GETCHECK, BM_SETCHECK,
-    BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, BS_OWNERDRAW,
-    BS_PUSHBUTTON, CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL,
-    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID,
-    ES_AUTOHSCROLL, ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA,
-    GWL_EXSTYLE, HACCEL, HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDC_SIZEWE, IDNO,
-    IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK,
-    MB_OKCANCEL, MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS, MFS_CHECKED,
-    MFS_UNCHECKED, MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION,
-    MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE,
-    MIIM_STATE, MSG, PRF_CLIENT, PRF_ERASEBKGND, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN,
+    BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_OWNERDRAW, BS_PUSHBUTTON,
+    CBS_AUTOHSCROLL, CBS_DROPDOWN, CB_ADDSTRING, CB_RESETCONTENT, CB_SETEDITSEL, CREATESTRUCTW,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, DC_HASDEFID, DI_NORMAL, DM_GETDEFID, ES_AUTOHSCROLL,
+    ES_NUMBER, ES_READONLY, FALT, FCONTROL, FSHIFT, FVIRTKEY, GWLP_USERDATA, GWL_EXSTYLE, HACCEL,
+    HICON, HMENU, IDCANCEL, IDC_ARROW, IDC_HAND, IDC_SIZENS, IDC_SIZEWE, IDNO, IDOK, IDYES,
+    IMAGE_ICON, LR_DEFAULTCOLOR, LWA_ALPHA, MB_ICONQUESTION, MB_ICONWARNING, MB_OK, MB_OKCANCEL,
+    MB_YESNO, MB_YESNOCANCEL, MENUITEMINFOW, MENU_ITEM_FLAGS, MFS_CHECKED, MFS_UNCHECKED,
+    MFT_RADIOCHECK, MFT_RIGHTJUSTIFY, MFT_SEPARATOR, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED,
+    MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MIIM_FTYPE, MIIM_STATE,
+    MSG, PRF_CLIENT, PRF_ERASEBKGND, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN,
     TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
     WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
     WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL,
@@ -1214,7 +1214,7 @@ const SS_NOTIFY: u32 = 0x0100;
 /// on an opaque `dialog_bg_brush` background over the frame's
 /// top edge produces the same "titled group" visual with zero
 /// dependency on group-box paint behaviour.
-const SS_ETCHEDFRAME: u32 = 0x0012;
+pub(crate) const SS_ETCHEDFRAME: u32 = 0x0012;
 /// `SS_CENTER` — horizontally-centred STATIC text. Used by the
 /// About dialog's "MIT License" caption so the label reads
 /// balanced inside its opaque backing rect regardless of tiny
@@ -1228,7 +1228,7 @@ pub(crate) const SS_CENTER: u32 = 0x0001;
 /// midpoint lands on the etched-frame's top edge — without it
 /// text sits at the top of the rect and the border line reads
 /// as running through the descenders.
-const SS_CENTERIMAGE: u32 = 0x0200;
+pub(crate) const SS_CENTERIMAGE: u32 = 0x0200;
 
 /// MAKEINTRESOURCEW(1). Windows treats a `PCWSTR` whose high word is
 /// zero as a numeric resource id rather than a pointer to a string;
@@ -18964,16 +18964,43 @@ fn show_style_config_dialog(
             Some(LPARAM(0)),
         );
 
-        // === Colour Style group ===
+        // === Colour Style frame ===
+        //
+        // About-dialog pattern: unlabelled SS_ETCHEDFRAME
+        // STATIC for the frame + separate STATIC caption
+        // straddling the frame's top edge. BS_GROUPBOX's title
+        // paint on Win11 lets the top border line cut through
+        // the title glyphs regardless of theme state; the
+        // etched-frame split gives us a frame with no title
+        // area to interfere with. The caption's rect fill
+        // (via `dialog_bg_brush` return from
+        // WM_CTLCOLORSTATIC) breaks the frame line at the
+        // caption position.
+        const STYLE_CAPTION_H: i32 = 18;
         let colour_group = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            w!("Colour Style"),
-            WS_CHILD | WS_VISIBLE | style_bits(BS_GROUPBOX),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_ETCHEDFRAME as i32),
             240,
             50,
             200,
             130,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let colour_group_title = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(" Colour Style "),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_CENTERIMAGE as i32),
+            252,
+            50 - STYLE_CAPTION_H / 2,
+            96,
+            STYLE_CAPTION_H,
             Some(dlg),
             None,
             Some(instance.into()),
@@ -19041,16 +19068,31 @@ fn show_style_config_dialog(
         )
         .ok()?;
 
-        // === Font Style group ===
+        // === Font Style frame ===
         let font_group = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            w!("Font Style"),
-            WS_CHILD | WS_VISIBLE | style_bits(BS_GROUPBOX),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_ETCHEDFRAME as i32),
             460,
             50,
             200,
             200,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let font_group_title = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(" Font Style "),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_CENTERIMAGE as i32),
+            472,
+            50 - STYLE_CAPTION_H / 2,
+            80,
+            STYLE_CAPTION_H,
             Some(dlg),
             None,
             Some(instance.into()),
@@ -19336,11 +19378,13 @@ fn show_style_config_dialog(
             style_label,
             style_list,
             colour_group,
+            colour_group_title,
             fg_label,
             fg_button,
             bg_label,
             bg_button,
             font_group,
+            font_group_title,
             font_name_label,
             font_combo,
             font_size_label,
@@ -19355,17 +19399,17 @@ fn show_style_config_dialog(
         ] {
             apply_dialog_font(child, font);
         }
-        // Strip visual style off the group boxes + checkboxes so
-        // they paint on the classic BUTTON path that honours the
-        // dialog's `WM_CTLCOLORBTN` return, giving them the same
-        // chrome colour as the surrounding dialog instead of the
-        // themed COLOR_BTNFACE (~#F0F0F0) patch. Push buttons
-        // (Save, Cancel) deliberately stay themed for the Win11
-        // rounded look — matches the discipline documented on
-        // `disable_visual_style`.
+        // Strip visual style off the four checkboxes so they
+        // paint on the classic BUTTON path that honours the
+        // dialog's WM_CTLCOLORBTN return (`dialog_bg_brush`),
+        // giving them the same chrome colour as the surrounding
+        // dialog instead of the themed COLOR_BTNFACE (~#F0F0F0)
+        // patch. The two frames are now SS_ETCHEDFRAME STATICs
+        // (not BS_GROUPBOX buttons), so they never had the
+        // theme-paint problem to begin with. Push buttons
+        // (Save, Cancel) deliberately keep their visual style
+        // for the Win11 rounded look.
         for child in [
-            colour_group,
-            font_group,
             bold_check,
             italic_check,
             underline_check,
@@ -19580,13 +19624,30 @@ unsafe extern "system" fn style_config_wnd_proc_inner(
             FillRect(hdc, &raw const rect, dialog_bg_brush());
             LRESULT(1)
         },
-        // Plain STATIC labels return NULL_BRUSH + TRANSPARENT
-        // bkmode so the parent's already-painted chrome shows
-        // through their text region.
+        // Return `dialog_bg_brush` (a REAL solid brush, not
+        // NULL_BRUSH) so:
+        //
+        //   * The SS_ETCHEDFRAME caption STATICs
+        //     ("Colour Style", "Font Style") get their client
+        //     rect filled with chrome colour, breaking the
+        //     frame's top border line at the caption position
+        //     — the About-dialog pattern.
+        //   * The transparency slider (msctls_trackbar32) has
+        //     a valid erase brush for its background. A
+        //     NULL_BRUSH return leaves the slider unable to
+        //     clear pixels between drag frames, producing the
+        //     visible pixel garble the user reported.
+        //   * Any STATIC that later gets updated via
+        //     SetWindowTextW (dynamic hint text, etc.) has a
+        //     real brush to erase the previous text with,
+        //     avoiding stacked glyph ghosts.
+        //
+        // SetBkMode(TRANSPARENT) keeps text overlays clean on
+        // top of the brush-filled background.
         WM_CTLCOLORSTATIC => unsafe {
             let hdc = HDC(wparam.0 as *mut c_void);
             let _ = SetBkMode(hdc, TRANSPARENT);
-            LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
+            LRESULT(dialog_bg_brush().0 as isize)
         },
         // Classic-painted BUTTON controls (group boxes,
         // checkboxes — see `disable_visual_style` calls in
@@ -22107,7 +22168,15 @@ extern "system" fn goto_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 {
                     return LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize);
                 }
-                LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
+                // Plain STATIC default returns dialog_bg_brush
+                // (a REAL brush, not NULL_BRUSH) so labels
+                // like "You can't go further than: N" — updated
+                // via SetWindowTextW on every Line↔Offset
+                // switch — erase their old digits before
+                // drawing the new ones. NULL_BRUSH here left
+                // successive numbers stacked as unreadable
+                // ghosts.
+                LRESULT(dialog_bg_brush().0 as isize)
             }
             // Classic-painted BS_AUTORADIOBUTTON controls (see
             // the `disable_visual_style` calls in

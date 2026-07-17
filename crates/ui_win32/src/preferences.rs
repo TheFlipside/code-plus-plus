@@ -30,8 +30,7 @@ use std::ffi::c_void;
 use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    FillRect, GetStockObject, SetBkColor, SetBkMode, DEFAULT_GUI_FONT, HDC, HFONT, NULL_BRUSH,
-    TRANSPARENT,
+    FillRect, GetStockObject, SetBkColor, SetBkMode, DEFAULT_GUI_FONT, HDC, HFONT, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
@@ -40,20 +39,23 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetClientRect, GetMessageW, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
     IsDialogMessageW, IsWindow, LoadCursorW, PostMessageW, RegisterClassExW, SendMessageW,
     SetForegroundWindow, SetWindowLongPtrW, ShowWindow, TranslateMessage, BM_GETCHECK, BM_SETCHECK,
-    BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_GROUPBOX, CREATESTRUCTW,
-    CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, GW_OWNER, HCURSOR, HMENU, IDC_ARROW, LBN_SELCHANGE,
-    LBS_HASSTRINGS, LBS_NOTIFY, LB_ADDSTRING, LB_SETCURSEL, MSG, SW_SHOW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_ERASEBKGND, WM_NCCREATE, WM_NCDESTROY, WM_QUIT, WM_SETFONT, WM_SETTEXT, WNDCLASSEXW,
-    WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_POPUP,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    BN_CLICKED, BS_AUTOCHECKBOX, BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, CREATESTRUCTW, CS_HREDRAW,
+    CS_VREDRAW, GWLP_USERDATA, GW_OWNER, HCURSOR, HMENU, IDC_ARROW, LBN_SELCHANGE, LBS_HASSTRINGS,
+    LBS_NOTIFY, LB_ADDSTRING, LB_SETCURSEL, MSG, SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE,
+    WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLORSTATIC, WM_DESTROY, WM_ERASEBKGND, WM_NCCREATE,
+    WM_NCDESTROY, WM_QUIT, WM_SETFONT, WM_SETTEXT, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_GROUP, WS_POPUP, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
 use codepp_core::preferences::{
     Preferences, RecentFileDisplayMode, CUSTOM_MAX_LENGTH_LIMIT, MAX_ENTRIES_LIMIT,
 };
 
-use crate::{dialog_bg_brush, disable_visual_style, DlgDestroyGuard, OwnerEnableGuard};
+use crate::{
+    dialog_bg_brush, disable_visual_style, DlgDestroyGuard, OwnerEnableGuard, SS_CENTERIMAGE,
+    SS_ETCHEDFRAME,
+};
 
 const PREFS_CLASS: PCWSTR = windows::core::w!("CodePlusPlusPreferencesDialog");
 
@@ -324,16 +326,37 @@ unsafe extern "system" fn prefs_wnd_proc(
                 LRESULT(1)
             }
             WM_CTLCOLORSTATIC => {
-                // Static labels ask their parent for the text
-                // background colour. `SetBkMode(TRANSPARENT)` +
-                // `NULL_BRUSH` tells the STATIC control to skip
-                // its own background fill and let the parent's
-                // already-painted chrome show through — safe
-                // for plain labels because they don't animate
-                // or toggle.
+                // Return `dialog_bg_brush` (a REAL solid brush
+                // matching the dialog chrome), not
+                // `NULL_BRUSH`. Three reasons:
+                //
+                //   * The SS_ETCHEDFRAME caption STATICs
+                //     ("Recent Files History", "Display") rely
+                //     on the client-rect fill from this brush
+                //     to break the frame's top border line at
+                //     the caption position — a NULL_BRUSH
+                //     return would leave the etched line
+                //     running through the caption glyphs.
+                //   * Any STATIC updated via SetWindowTextW
+                //     (dynamic hint text, error messages,
+                //     etc.) needs a real brush to erase the
+                //     previous frame's text before the new
+                //     text draws, or successive updates stack
+                //     unreadable glyph ghosts.
+                //   * Common controls that route their
+                //     background through WM_CTLCOLORSTATIC
+                //     (`msctls_trackbar32` sliders, in
+                //     particular) fail catastrophically with
+                //     NULL_BRUSH — no erase brush means drag
+                //     interactions accumulate stale pixels
+                //     across every frame.
+                //
+                // `SetBkMode(TRANSPARENT)` keeps the text
+                // draws overlaying cleanly on the brush-filled
+                // background.
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
-                LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
+                LRESULT(dialog_bg_brush().0 as isize)
             }
             WM_CTLCOLORBTN => {
                 // BUTTON controls (group boxes, checkboxes,
@@ -546,29 +569,35 @@ unsafe fn populate_controls(hwnd: HWND) {
         // immediately labelled correctly.
         SendMessageW(category, LB_SETCURSEL, Some(WPARAM(0)), None);
 
-        // 2. Right panel: "Recent Files History" group.
+        // 2. Right panel: "Recent Files History" frame.
         //
-        // BS_GROUPBOX + BS_AUTOCHECKBOX + BS_AUTORADIOBUTTON on
-        // Win11 all render through the UxTheme layer, which
-        // paints its own COLOR_BTNFACE (~#F0F0F0) rectangle
-        // behind the control text before consulting
-        // WM_CTLCOLORBTN / WM_CTLCOLORSTATIC. That produces a
-        // visible darker patch around every label that doesn't
-        // match the dialog's #F9F9F9 chrome. `disable_visual_style`
-        // opts the control out of theming for its background paint
-        // (via `SetWindowTheme(hwnd, "", "")`), pushing it onto
-        // the classic-paint path that honours our NULL_BRUSH
-        // return — text still uses the system UI font, but its
-        // background is transparent so the dialog chrome shows
-        // through. Same fix the other Code++ modals apply.
-        // Push buttons (BS_DEFPUSHBUTTON, Close below) deliberately
-        // keep their visual style so they look right on Win11.
+        // Uses the About-dialog pattern for group boxes: an
+        // unlabelled `SS_ETCHEDFRAME` STATIC for the frame + a
+        // separate STATIC caption positioned to straddle the
+        // frame's top edge. `BS_GROUPBOX`'s title paint routine
+        // on Win11 lets the top border line run through the
+        // title glyphs regardless of theme state or
+        // WM_CTLCOLORBTN return — the etched-frame split gives
+        // us a frame that draws no title area to interfere with,
+        // plus a plain STATIC whose WM_CTLCOLORSTATIC returns
+        // `dialog_bg_brush` (opaque, not NULL_BRUSH) so its
+        // painted rect covers the frame's top edge at the
+        // caption position.
+        //
+        // Checkboxes and radios themselves still need
+        // `disable_visual_style` — their themed COLOR_BTNFACE
+        // (~#F0F0F0) rectangle would otherwise show as a
+        // darker patch around each label that doesn't match
+        // the `#F9F9F9` dialog chrome. Push buttons
+        // (BS_DEFPUSHBUTTON, Close below) deliberately keep
+        // their visual style so they look right on Win11.
         const GROUP_TOP_H: i32 = 96;
+        const CAPTION_TEXT_H: i32 = 18;
         let group_top = create_child(
             hwnd,
-            windows::core::w!("BUTTON"),
-            Some("Recent Files History"),
-            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
+            windows::core::w!("STATIC"),
+            None,
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_ETCHEDFRAME),
             PANEL_X,
             PANEL_Y,
             420,
@@ -576,7 +605,18 @@ unsafe fn populate_controls(hwnd: HWND) {
             0,
         );
         set_font(group_top, font);
-        disable_visual_style(group_top);
+        let group_top_title = create_child(
+            hwnd,
+            windows::core::w!("STATIC"),
+            Some(" Recent Files History "),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_CENTERIMAGE),
+            PANEL_X + 12,
+            PANEL_Y - CAPTION_TEXT_H / 2,
+            160,
+            CAPTION_TEXT_H,
+            0,
+        );
+        set_font(group_top_title, font);
 
         // Enabled checkbox.
         let enabled = create_child(
@@ -645,14 +685,15 @@ unsafe fn populate_controls(hwnd: HWND) {
         );
         set_font(hint_max_hwnd, font);
 
-        // 3. Display group.
+        // 3. Display frame — same SS_ETCHEDFRAME + caption
+        // treatment as the Recent Files History frame above.
         const DISPLAY_Y: i32 = PANEL_Y + GROUP_TOP_H + 12;
         const DISPLAY_H: i32 = 200;
         let group_disp = create_child(
             hwnd,
-            windows::core::w!("BUTTON"),
-            Some("Display"),
-            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(BS_GROUPBOX as u32),
+            windows::core::w!("STATIC"),
+            None,
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_ETCHEDFRAME),
             PANEL_X,
             DISPLAY_Y,
             420,
@@ -660,7 +701,18 @@ unsafe fn populate_controls(hwnd: HWND) {
             0,
         );
         set_font(group_disp, font);
-        disable_visual_style(group_disp);
+        let group_disp_title = create_child(
+            hwnd,
+            windows::core::w!("STATIC"),
+            Some(" Display "),
+            WS_CHILD | WS_VISIBLE | WINDOW_STYLE(SS_CENTERIMAGE),
+            PANEL_X + 12,
+            DISPLAY_Y - CAPTION_TEXT_H / 2,
+            80,
+            CAPTION_TEXT_H,
+            0,
+        );
+        set_font(group_disp_title, font);
 
         let in_submenu = create_child(
             hwnd,
