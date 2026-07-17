@@ -56,7 +56,7 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::Storage::Xps::{EndDoc, EndPage, StartDocW, StartPage, DOCINFOW};
 use windows::Win32::UI::Controls::Dialogs::{
-    PrintDlgW, PD_ALLPAGES, PD_NOSELECTION, PD_PAGENUMS, PD_RETURNDC,
+    PrintDlgW, PD_ALLPAGES, PD_NOSELECTION, PD_PAGENUMS, PD_RETURNDC, PD_RETURNDEFAULT,
     PD_USEDEVMODECOPIESANDCOLLATE, PRINTDLGW,
 };
 
@@ -93,6 +93,28 @@ pub(crate) fn print_active_document_with_page_hint(
     print_active_document_impl(owner, doc_display_name, editor, Some(total_pages));
 }
 
+/// File → Print Now — pushes the document straight to the default
+/// printer with no dialog, no page range selection, no
+/// confirmation. All pages, single copy. If there's no default
+/// printer, surface an error dialog and bail. Matches the "print
+/// without any prompts, right now" contract users expect from a
+/// menu item literally named "Print Now".
+pub(crate) fn print_active_document_now(owner: HWND, doc_display_name: &str, editor: EditorHandle) {
+    let text_length = editor.send(SCI_GETLENGTH, 0, 0);
+    if text_length <= 0 {
+        return;
+    }
+    let Some(job) = default_printer_job() else {
+        crate::show_error_dialog(
+            owner,
+            "Print Now",
+            "No printer is installed, or the default printer could not be opened.",
+        );
+        return;
+    };
+    execute_print_job(owner, doc_display_name, &editor, job);
+}
+
 fn print_active_document_impl(
     owner: HWND,
     doc_display_name: &str,
@@ -108,13 +130,30 @@ fn print_active_document_impl(
         return;
     }
 
-    // --- 1. Show `PrintDlgW`. ---------------------------------------
+    // Show `PrintDlgW` — user picks printer + range + copies.
     let Some(job) = show_print_dialog(owner, known_total_pages) else {
         return;
     };
+    execute_print_job(owner, doc_display_name, &editor, job);
+}
+
+/// Shared render pipeline for both the dialog-driven print
+/// (`print_active_document`) and the no-dialog Print Now
+/// (`print_active_document_now`). Given a fully-acquired `PrintJob`
+/// (HDC + page range), runs the two-pass measure/draw against the
+/// editor, handles the "Page X of M" header + truncation dialog,
+/// and cleans up on every exit.
+fn execute_print_job(owner: HWND, doc_display_name: &str, editor: &EditorHandle, job: PrintJob) {
+    let text_length = editor.send(SCI_GETLENGTH, 0, 0);
+    // The caller has already guarded against empty documents,
+    // but re-check inside the shared helper so a future caller
+    // that forgets doesn't silently print a blank page.
+    if text_length <= 0 {
+        return;
+    }
 
     // --- 2. Configure Scintilla print-side settings. ---------------
-    configure_scintilla_for_print(&editor);
+    configure_scintilla_for_print(editor);
 
     // --- 3. Compute paper metrics. ----------------------------------
     let paper = PaperMetrics::from_hdc(job.hdc);
@@ -123,12 +162,12 @@ fn print_active_document_impl(
     // Measure every page break in the document so the header can
     // display an accurate "Page X of M" without an extra pass per
     // page.
-    let (page_breaks, truncation) = measure_page_breaks(&editor, &paper, text_length, job.hdc);
+    let (page_breaks, truncation) = measure_page_breaks(editor, &paper, text_length, job.hdc);
     let total_pages = page_breaks.len();
     if total_pages == 0 {
         // Nothing to draw (extremely defensive — measure always
         // yields at least one break for a non-empty document).
-        release_format_cache(&editor);
+        release_format_cache(editor);
         return;
     }
     // Surface truncation up front — a silent partial print would
@@ -159,7 +198,7 @@ fn print_active_document_impl(
     // legal window and skip if the range is empty after clamping.
     let (start_idx, end_idx_exclusive) = job.page_range.resolve(total_pages);
     if start_idx >= end_idx_exclusive {
-        release_format_cache(&editor);
+        release_format_cache(editor);
         return;
     }
 
@@ -184,7 +223,7 @@ fn print_active_document_impl(
             code = start_result,
             "Print: StartDocW failed; job aborted before any page rendered"
         );
-        release_format_cache(&editor);
+        release_format_cache(editor);
         return;
     }
 
@@ -215,7 +254,7 @@ fn print_active_document_impl(
         // same printer HDC. Preview swaps a screen mem DC in for
         // the draw side but keeps the printer HDC as the metric
         // target — see `render_one_page`'s doc.
-        render_one_page(&editor, job.hdc, job.hdc, &paper, cp_min, cp_max);
+        render_one_page(editor, job.hdc, job.hdc, &paper, cp_min, cp_max);
         // SAFETY: paired with the preceding StartPage.
         let ep = unsafe { EndPage(job.hdc) };
         if ep <= 0 {
@@ -240,7 +279,7 @@ fn print_active_document_impl(
             "Print: EndDoc failed after all pages rendered"
         );
     }
-    release_format_cache(&editor);
+    release_format_cache(editor);
     // `PrintJob::drop` will `DeleteDC(job.hdc)` next.
 }
 
@@ -377,6 +416,49 @@ fn show_print_dialog(owner: HWND, known_total_pages: Option<usize>) -> Option<Pr
     Some(PrintJob {
         hdc: pd.hDC,
         page_range,
+    })
+}
+
+/// Obtain a printer HDC for the user's default printer without
+/// showing any dialog UI. Uses `PrintDlgW(PD_RETURNDEFAULT |
+/// PD_RETURNDC)` — same API `show_print_dialog` uses on user
+/// interaction, minus the dialog display. Returns `None` when
+/// there's no default printer configured, or the driver refused
+/// to hand out a DC.
+///
+/// The caller owns the returned HDC and MUST `DeleteDC` it. When
+/// wrapped in [`default_printer_job`] the `PrintJob`'s `Drop` handles
+/// that; the standalone form is used by
+/// [`crate::print_preview::show_print_preview`] where the HDC lives
+/// on `PreviewState` and drops with it.
+pub(crate) fn default_printer_dc() -> Option<HDC> {
+    let mut pd = PRINTDLGW {
+        lStructSize: core::mem::size_of::<PRINTDLGW>() as u32,
+        Flags: PD_RETURNDEFAULT | PD_RETURNDC | PD_ALLPAGES | PD_NOSELECTION,
+        nCopies: 1,
+        nMinPage: 1,
+        nMaxPage: 65535,
+        ..Default::default()
+    };
+    // SAFETY: `&mut pd` is a fully-initialised `PRINTDLGW`.
+    // `PD_RETURNDEFAULT` suppresses the dialog UI — no nested
+    // message pump runs — so this call is a plain query.
+    let ok = unsafe { PrintDlgW(&raw mut pd).as_bool() };
+    if !ok || pd.hDC.is_invalid() {
+        return None;
+    }
+    Some(pd.hDC)
+}
+
+/// [`default_printer_dc`] wrapped as a full `PrintJob` with
+/// [`PageRange::All`]. Used by the "Print Now" command that
+/// bypasses the OS `PrintDlgW` entirely — no printer picker, no
+/// copies control, no range selection. All pages, single copy,
+/// straight to the default printer.
+fn default_printer_job() -> Option<PrintJob> {
+    Some(PrintJob {
+        hdc: default_printer_dc()?,
+        page_range: PageRange::All,
     })
 }
 

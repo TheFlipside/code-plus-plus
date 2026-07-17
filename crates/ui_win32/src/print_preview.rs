@@ -50,9 +50,6 @@ use windows::Win32::Graphics::Gdi::{
     HGDIOBJ, MM_ANISOTROPIC, PAINTSTRUCT, SRCCOPY, WHITE_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Controls::Dialogs::{
-    PrintDlgW, PD_ALLPAGES, PD_NOSELECTION, PD_RETURNDC, PD_RETURNDEFAULT, PRINTDLGW,
-};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, SetFocus, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN,
     VK_RIGHT,
@@ -70,8 +67,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::print::{
-    configure_scintilla_for_print, draw_page_header, format_today, measure_page_breaks,
-    release_format_cache, render_one_page, PaperMetrics,
+    configure_scintilla_for_print, default_printer_dc, draw_page_header, format_today,
+    measure_page_breaks, release_format_cache, render_one_page, PaperMetrics,
 };
 use crate::{dialog_bg_brush, show_error_dialog, DlgDestroyGuard, OwnerEnableGuard};
 
@@ -297,38 +294,9 @@ pub(crate) fn show_print_preview(owner: HWND, doc_display_name: &str, editor: Ed
     }
 }
 
-// -------------------------------------------------------------------
-// Default printer DC
-// -------------------------------------------------------------------
-
-/// Obtain a printer HDC for the user's default printer without
-/// showing the print dialog UI. Uses `PrintDlgW(PD_RETURNDEFAULT |
-/// PD_RETURNDC)` — same call the real print flow uses on user
-/// interaction, minus the dialog display. Returns `None` if there's
-/// no default printer configured, or the driver refused to hand out
-/// a DC.
-///
-/// The caller owns the returned HDC and MUST `DeleteDC` it — the
-/// `PreviewState` `Drop` does this for the modal lifetime, and a
-/// stack guard in `show_print_preview` handles early-fail branches.
-fn default_printer_dc() -> Option<HDC> {
-    let mut pd = PRINTDLGW {
-        lStructSize: core::mem::size_of::<PRINTDLGW>() as u32,
-        Flags: PD_RETURNDEFAULT | PD_RETURNDC | PD_ALLPAGES | PD_NOSELECTION,
-        nCopies: 1,
-        nMinPage: 1,
-        nMaxPage: 65535,
-        ..Default::default()
-    };
-    // SAFETY: `&mut pd` is a fully-initialised `PRINTDLGW`.
-    // `PD_RETURNDEFAULT` suppresses the dialog UI — no nested
-    // message pump runs — so this call is a plain query.
-    let ok = unsafe { PrintDlgW(&raw mut pd).as_bool() };
-    if !ok || pd.hDC.is_invalid() {
-        return None;
-    }
-    Some(pd.hDC)
-}
+// `default_printer_dc` moved to `crate::print` so it can be shared
+// with the "Print Now" no-dialog print path. Re-imported at the top
+// of this file.
 
 // -------------------------------------------------------------------
 // Modal window creation + pump

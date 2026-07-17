@@ -626,6 +626,12 @@ const ID_FILE_MOVE_TO_RECYCLE_BIN: u16 = 1031;
 /// the same OS `PrintDlg` flow as [`ID_FILE_PRINT`] once the preview
 /// closes.
 const ID_FILE_PRINT_PREVIEW: u16 = 1034;
+/// File → Print Now — pushes the active document straight to the
+/// default printer with no dialog, no page-range selection, no
+/// copies control, no confirmation. Matches the "just print it,
+/// right now, without any prompts" contract users expect from a
+/// menu item literally named "Print Now".
+const ID_FILE_PRINT_NOW: u16 = 1035;
 
 /// File → Load Session... — pick a Notepad++-shaped session XML from
 /// disk, parse its `<File>` list, and open every path referenced. The
@@ -14945,6 +14951,17 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             ID_FILE_PRINT as usize,
             w!("&Print...\tCtrl+P"),
         )?;
+        // Print Now: same enable discipline as Print (greyed at
+        // build time; enabled by `refresh_file_menu` when a tab is
+        // active). No ellipsis in the label since it never
+        // prompts — the "..." convention signals a follow-up
+        // dialog, and this action deliberately skips one.
+        AppendMenuW(
+            file_menu,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_PRINT_NOW as usize,
+            w!("Print &Now"),
+        )?;
         // Print Preview: same enable / disable discipline as
         // Print (both greyed at menu-build time; enabled by
         // `refresh_file_menu` when a tab is active).
@@ -14952,7 +14969,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             file_menu,
             MF_STRING | MF_GRAYED,
             ID_FILE_PRINT_PREVIEW as usize,
-            w!("Print Pre&view..."),
+            w!("Print Pre&view...\tCtrl+Shift+P"),
         )?;
         AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
         AppendMenuW(file_menu, MF_STRING, ID_FILE_EXIT as usize, w!("E&xit"))?;
@@ -17503,6 +17520,29 @@ fn handle_print(hwnd: HWND) {
     print::print_active_document(hwnd, &display_name, editor);
 }
 
+/// File → Print Now — same snapshot pattern as `handle_print`
+/// (display name + editor handle under a brief borrow), but hands
+/// off to [`print::print_active_document_now`] which skips the OS
+/// `PrintDlgW` entirely and pushes the document straight to the
+/// default printer. All pages, single copy, no confirmation.
+fn handle_print_now(hwnd: HWND) {
+    let (display_name, editor) = unsafe {
+        let Some(state) = state_from_hwnd(hwnd) else {
+            return;
+        };
+        let Some(tab) = state.shell.active() else {
+            return;
+        };
+        let name = print::display_name_for(
+            tab.path.as_deref(),
+            tab.untitled_seq,
+            tab.custom_name.as_deref(),
+        );
+        (name, state.editor)
+    };
+    print::print_active_document_now(hwnd, &display_name, editor);
+}
+
 /// File → Print Preview — snapshot the display name + editor handle
 /// under a brief `&mut WindowState` borrow, then dispatch to the
 /// [`print_preview`] module. Same borrow-lifetime discipline as
@@ -20025,6 +20065,9 @@ unsafe fn refresh_file_menu(file_menu: HMENU, shell: &codepp_shell::Shell) {
     // refresh), so the empty-doc case falls through to the print
     // handler's own fast-path skip.
     apply(ID_FILE_PRINT, shell.active().is_some());
+    // Print Now: same enable condition — pushing "no active
+    // document" to the printer would spool a blank page.
+    apply(ID_FILE_PRINT_NOW, shell.active().is_some());
     // Print Preview: same enable condition as Print — a modal
     // preview of "no active document" is useless.
     apply(ID_FILE_PRINT_PREVIEW, shell.active().is_some());
@@ -25113,6 +25156,16 @@ fn build_default_accel_table() -> Vec<ACCEL> {
             fVirt: ctrl,
             key: VK_P.0,
             cmd: ID_FILE_PRINT,
+        },
+        // Ctrl+Shift+P → Print Preview. Symmetrical with Ctrl+P
+        // (Print) — same key, one modifier heavier, same
+        // convention Word / VS Code / Chrome all use for the
+        // "before you print, look at what you're about to print"
+        // action.
+        ACCEL {
+            fVirt: ctrl_shift,
+            key: VK_P.0,
+            cmd: ID_FILE_PRINT_PREVIEW,
         },
         ACCEL {
             fVirt: ctrl_shift,
@@ -33602,6 +33655,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     }
                     ID_FILE_PRINT => {
                         handle_print(hwnd);
+                    }
+                    ID_FILE_PRINT_NOW => {
+                        handle_print_now(hwnd);
                     }
                     ID_FILE_PRINT_PREVIEW => {
                         handle_print_preview(hwnd);
