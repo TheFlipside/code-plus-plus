@@ -19563,6 +19563,53 @@ unsafe extern "system" fn style_config_wnd_proc_inner(
             }
             LRESULT(1)
         },
+        // Same Win11 themed-paint override as goto_wnd_proc:
+        // paint the client rect with `dialog_bg_brush` so the
+        // dialog body renders our chosen chrome colour instead
+        // of whatever UxTheme paints over the class brush.
+        // Without this handler + the CTL COLOR handlers below,
+        // `disable_visual_style` on the group boxes / checkboxes
+        // wouldn't take effect — DefWindowProc would fill their
+        // client rects with the classic COLOR_BTNFACE
+        // (~#F0F0F0) default, producing the darker patches
+        // around each control the user reported.
+        WM_ERASEBKGND => unsafe {
+            let hdc = HDC(wparam.0 as *mut c_void);
+            let mut rect = RECT::default();
+            let _ = GetClientRect(hwnd, &raw mut rect);
+            FillRect(hdc, &raw const rect, dialog_bg_brush());
+            LRESULT(1)
+        },
+        // Plain STATIC labels return NULL_BRUSH + TRANSPARENT
+        // bkmode so the parent's already-painted chrome shows
+        // through their text region.
+        WM_CTLCOLORSTATIC => unsafe {
+            let hdc = HDC(wparam.0 as *mut c_void);
+            let _ = SetBkMode(hdc, TRANSPARENT);
+            LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
+        },
+        // Classic-painted BUTTON controls (group boxes,
+        // checkboxes — see `disable_visual_style` calls in
+        // `show_style_config_dialog`) get `dialog_bg_brush` so
+        // their client rects fill with the chrome colour BEFORE
+        // the button paints its text on top. Same treatment the
+        // Preferences / Find-Replace / Goto dialogs use — the
+        // solid-brush return prevents glyph stacking on toggle
+        // that a `NULL_BRUSH` return would cause.
+        WM_CTLCOLORBTN => unsafe {
+            let hdc = HDC(wparam.0 as *mut c_void);
+            let _ = SetBkMode(hdc, TRANSPARENT);
+            let _ = SetBkColor(hdc, COLORREF(DIALOG_BG));
+            LRESULT(dialog_bg_brush().0 as isize)
+        },
+        // Comboboxes and listbox keep their standard white
+        // interior — that's the modern Win11 themed-control
+        // look users expect for editable fields.
+        WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => unsafe {
+            let hdc = HDC(wparam.0 as *mut c_void);
+            let _ = SetBkMode(hdc, TRANSPARENT);
+            LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize)
+        },
         WM_HSCROLL => unsafe {
             let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut StyleConfigDialogState;
             if !state_ptr.is_null() {
@@ -22038,13 +22085,46 @@ extern "system" fn goto_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 FillRect(hdc, &raw const rect, dialog_bg_brush());
                 LRESULT(1)
             }
-            // STATIC + group-box BTN return NULL_BRUSH so the
-            // hbrBackground (now reliably our colour thanks to
-            // WM_ERASEBKGND above) shows through.
-            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
+            // Plain STATIC labels return NULL_BRUSH so the
+            // dialog's hbrBackground shows through them. The
+            // read-only "You are here" EDIT is the exception —
+            // read-only EDITs route WM_CTLCOLORSTATIC (not
+            // WM_CTLCOLOREDIT), and Win11 hover-repaints them
+            // through this path: a NULL_BRUSH return leaves the
+            // control's client area unfilled and the next paint
+            // reads whatever's in the DC, producing an all-black
+            // repaint on mouse hover. Return the standard edit
+            // brush for that HWND specifically so its interior
+            // stays white.
+            WM_CTLCOLORSTATIC => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
+                let from = HWND(lparam.0 as *mut c_void);
+                let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const GotoDialogState;
+                if !state_ptr.is_null()
+                    && (*state_ptr).controls_ready
+                    && (*state_ptr).here_hwnd == from
+                {
+                    return LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize);
+                }
                 LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
+            }
+            // Classic-painted BS_AUTORADIOBUTTON controls (see
+            // the `disable_visual_style` calls in
+            // `show_goto_dialog`) rely on this brush return to
+            // clear their client rect BEFORE the button draws
+            // its glyph + text. A NULL_BRUSH return leaves the
+            // previous frame's text in place, so successive
+            // radio toggles stack unreadable text ghosts inside
+            // the label. Returning `dialog_bg_brush` fills each
+            // button's rect with the chrome colour first so the
+            // redraw is clean AND the fill blends with the
+            // surrounding dialog.
+            WM_CTLCOLORBTN => {
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                let _ = SetBkColor(hdc, COLORREF(DIALOG_BG));
+                LRESULT(dialog_bg_brush().0 as isize)
             }
             WM_CTLCOLOREDIT => {
                 let hdc = HDC(wparam.0 as *mut c_void);
@@ -23141,7 +23221,19 @@ struct FindReplaceState {
     whole_word_cb: HWND,
     match_case_cb: HWND,
     wrap_around_cb: HWND,
+    /// Unlabelled `SS_ETCHEDFRAME` STATIC that draws the etched
+    /// rectangle around the three mode radios. Paired with
+    /// `mode_group_title` — see [`show_find_replace_dialog`]'s
+    /// Search Mode block for the rationale (`BS_GROUPBOX` title
+    /// paint lets the border line cut through the title glyphs
+    /// on Win11 regardless of theme state).
     mode_group: HWND,
+    /// Separate "Search Mode" STATIC caption positioned so its
+    /// vertical centre lands on `mode_group`'s top edge. Its
+    /// `WM_CTLCOLORSTATIC` returns `dialog_bg_brush` (opaque
+    /// fill, not `NULL_BRUSH`) so its painted rect breaks the
+    /// etched-frame border line at the caption position.
+    mode_group_title: HWND,
     mode_normal_radio: HWND,
     mode_extended_radio: HWND,
     mode_regex_radio: HWND,
@@ -23362,10 +23454,21 @@ extern "system" fn find_replace_wnd_proc(
                 LRESULT(1)
             }
             // STATIC controls return NULL_BRUSH so the dialog's
-            // painted hbrBackground shows through them — the
-            // status_label is the exception (it gets an explicit
-            // status-bg fill so it reads as a slightly-darker
-            // strip with red/blue text for error/info).
+            // painted hbrBackground shows through them. Two
+            // exceptions:
+            //
+            //   * `status_label` gets an explicit status-bg
+            //     fill so it reads as a slightly-darker strip
+            //     with red/blue text for error/info.
+            //   * `mode_group_title` (the "Search Mode" caption
+            //     that straddles the `SS_ETCHEDFRAME` frame's
+            //     top edge) gets an opaque `dialog_bg_brush`
+            //     return + explicit `SetBkColor` so its painted
+            //     rect covers the frame line at the caption
+            //     position — same About-dialog pattern.
+            //     `NULL_BRUSH` on this one would leave the
+            //     etched line running through the caption's
+            //     glyphs.
             WM_CTLCOLORSTATIC => {
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
@@ -23385,6 +23488,12 @@ extern "system" fn find_replace_wnd_proc(
                     };
                     let _ = SetTextColor(hdc, color);
                     LRESULT(status_bg_brush().0 as isize)
+                } else if !state_ptr.is_null()
+                    && (*state_ptr).controls_ready
+                    && (*state_ptr).mode_group_title == from
+                {
+                    let _ = SetBkColor(hdc, COLORREF(DIALOG_BG));
+                    LRESULT(dialog_bg_brush().0 as isize)
                 } else {
                     LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
                 }
@@ -24610,6 +24719,7 @@ fn show_find_replace_dialog(
             match_case_cb: HWND::default(),
             wrap_around_cb: HWND::default(),
             mode_group: HWND::default(),
+            mode_group_title: HWND::default(),
             mode_normal_radio: HWND::default(),
             mode_extended_radio: HWND::default(),
             mode_regex_radio: HWND::default(),
@@ -24951,15 +25061,49 @@ fn show_find_replace_dialog(
         );
 
         // Search Mode group.
+        //
+        // Uses the About-dialog pattern: an unlabelled
+        // `SS_ETCHEDFRAME` STATIC for the frame + a separate
+        // STATIC positioned to straddle the frame's top edge
+        // for the "Search Mode" caption. `BS_GROUPBOX`'s title
+        // paint routine on Win11 lets the top border line run
+        // through the title glyphs regardless of theme state
+        // or `WM_CTLCOLORBTN` return — verified across the
+        // merged (`NULL_BRUSH`), classic (`dialog_bg_brush` +
+        // `SetBkColor`), and `SetWindowTheme(hwnd, "", "")`
+        // variants. The split gives us a frame that draws no
+        // title area to interfere with, plus a plain STATIC
+        // whose `WM_CTLCOLORSTATIC` returns `dialog_bg_brush`
+        // (opaque, not NULL_BRUSH) so its painted rect covers
+        // the frame's top edge at the caption position.
+        const MODE_TITLE_TEXT_H: i32 = 18;
+        const MODE_TITLE_W: i32 = 110;
+        const MODE_TITLE_X: i32 = X_PAD + 12;
+        const MODE_TITLE_Y: i32 = MODE_GROUP_TOP - MODE_TITLE_TEXT_H / 2;
         let mode_group = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
-            w!("BUTTON"),
-            w!("Search Mode"),
-            WS_CHILD | WS_VISIBLE | style_bits(BS_GROUPBOX),
+            w!("STATIC"),
+            PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_ETCHEDFRAME as i32),
             X_PAD,
             MODE_GROUP_TOP,
             MODE_GROUP_W,
             MODE_GROUP_H,
+            Some(dlg),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()?;
+        let mode_group_title = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!(" Search Mode "),
+            WS_CHILD | WS_VISIBLE | style_bits(SS_CENTERIMAGE as i32),
+            MODE_TITLE_X,
+            MODE_TITLE_Y,
+            MODE_TITLE_W,
+            MODE_TITLE_TEXT_H,
             Some(dlg),
             None,
             Some(instance.into()),
@@ -25299,6 +25443,7 @@ fn show_find_replace_dialog(
             wrap_around_cb,
             in_selection_cb,
             mode_group,
+            mode_group_title,
             mode_normal_radio,
             mode_extended_radio,
             mode_regex_radio,
@@ -25321,17 +25466,16 @@ fn show_find_replace_dialog(
         ] {
             apply_dialog_font(child, font);
         }
-        // Strip visual style off the group box + every checkbox
-        // + every radio so they paint on the classic BUTTON path
-        // that honours our `WM_CTLCOLORBTN` return
-        // (`dialog_bg_brush`, see line ~23369). The group box
-        // already needed this for a title-clear reason (themed
-        // groupbox paint cuts the border line through the
-        // "Search Mode" title); the checkboxes/radios use the
-        // same treatment for chrome-colour blending — themed
-        // paint's default COLOR_BTNFACE (~#F0F0F0) rectangle
-        // shows up as a slightly-darker patch under each label
-        // that doesn't match the `#F9F9F9` dialog chrome.
+        // Strip visual style off every checkbox and every radio
+        // so they paint on the classic BUTTON path that honours
+        // our `WM_CTLCOLORBTN` return (`dialog_bg_brush`, see
+        // line ~23369) — themed paint's default COLOR_BTNFACE
+        // (~#F0F0F0) rectangle shows up as a slightly-darker
+        // patch under each label that doesn't match the
+        // `#F9F9F9` dialog chrome. `mode_group` is not in this
+        // list — it's now an `SS_ETCHEDFRAME` STATIC (not a
+        // BS_GROUPBOX), so it never had the theme-paint problem
+        // to begin with.
         //
         // A prior iteration of this comment warned that
         // classic-painted checkboxes could leave stacked glyph
@@ -25345,7 +25489,6 @@ fn show_find_replace_dialog(
         // forces an `InvalidateRect(hwnd, None, true)` on
         // `BM_SETCHECK` instead of reverting the theme change.
         for child in [
-            mode_group,
             backward_cb,
             whole_word_cb,
             match_case_cb,
@@ -25372,6 +25515,7 @@ fn show_find_replace_dialog(
         state.wrap_around_cb = wrap_around_cb;
         state.in_selection_cb = in_selection_cb;
         state.mode_group = mode_group;
+        state.mode_group_title = mode_group_title;
         state.mode_normal_radio = mode_normal_radio;
         state.mode_extended_radio = mode_extended_radio;
         state.mode_regex_radio = mode_regex_radio;

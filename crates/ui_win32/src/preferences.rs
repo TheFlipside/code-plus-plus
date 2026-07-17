@@ -28,9 +28,10 @@
 use std::ffi::c_void;
 
 use windows::core::{HSTRING, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    FillRect, GetStockObject, SetBkMode, DEFAULT_GUI_FONT, HDC, HFONT, NULL_BRUSH, TRANSPARENT,
+    FillRect, GetStockObject, SetBkColor, SetBkMode, DEFAULT_GUI_FONT, HDC, HFONT, NULL_BRUSH,
+    TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
@@ -322,22 +323,36 @@ unsafe extern "system" fn prefs_wnd_proc(
                 FillRect(hdc, &raw const rect, dialog_bg_brush());
                 LRESULT(1)
             }
-            WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
-                // Static labels, group boxes, checkboxes, and
-                // radio buttons ask their parent what colour to
-                // paint their text background in. Without this
-                // handler Win32 hands back `COLOR_WINDOW` (system
-                // white / dark-mode grey), which shows up as
-                // small colour patches around each control text
-                // that don't match `DIALOG_BG`. Same fix the
-                // About / Style Configurator / UDL-editor dialogs
-                // apply — `SetBkMode(TRANSPARENT)` + returning
-                // `NULL_BRUSH` tells the control to skip its own
-                // background fill and let the parent's already-
-                // painted chrome show through.
+            WM_CTLCOLORSTATIC => {
+                // Static labels ask their parent for the text
+                // background colour. `SetBkMode(TRANSPARENT)` +
+                // `NULL_BRUSH` tells the STATIC control to skip
+                // its own background fill and let the parent's
+                // already-painted chrome show through — safe
+                // for plain labels because they don't animate
+                // or toggle.
                 let hdc = HDC(wparam.0 as *mut c_void);
                 let _ = SetBkMode(hdc, TRANSPARENT);
                 LRESULT(GetStockObject(NULL_BRUSH).0 as isize)
+            }
+            WM_CTLCOLORBTN => {
+                // BUTTON controls (group boxes, checkboxes,
+                // radios) get `dialog_bg_brush` — a REAL solid
+                // brush, not `NULL_BRUSH`. The classic-painted
+                // BS_AUTOCHECKBOX / BS_AUTORADIOBUTTON (see the
+                // `disable_visual_style` calls in
+                // `populate_controls`) use this brush to fill
+                // their client rect BEFORE the glyph + text
+                // redraw on every state change. A `NULL_BRUSH`
+                // return would leave the previous frame's text
+                // in place and stack ghosts across successive
+                // toggles. `dialog_bg_brush` doubles as the
+                // chrome colour so the fill is invisible against
+                // the parent, matching the flush look.
+                let hdc = HDC(wparam.0 as *mut c_void);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                let _ = SetBkColor(hdc, COLORREF(crate::DIALOG_BG));
+                LRESULT(dialog_bg_brush().0 as isize)
             }
             WM_COMMAND => {
                 // wparam packs (notify_code, cmd_id); lparam is
