@@ -93,6 +93,7 @@
 )]
 
 mod print;
+mod print_preview;
 mod toolbar;
 mod udl_editor;
 mod udl_paint;
@@ -617,6 +618,14 @@ const ID_FILE_CLOSE_ALL_UNCHANGED: u16 = 1030;
 /// user-initiated Delete in Explorer). Greyed for untitled
 /// buffers via `refresh_file_menu`.
 const ID_FILE_MOVE_TO_RECYCLE_BIN: u16 = 1031;
+
+/// File → Print Preview... — opens a modal window showing the active
+/// document paginated against the default printer's metrics.
+/// Navigation via [< First / < Prev / > Next / >| Last] plus keyboard
+/// (arrows + PgUp/PgDn + Home/End); the Print button chains into
+/// the same OS `PrintDlg` flow as [`ID_FILE_PRINT`] once the preview
+/// closes.
+const ID_FILE_PRINT_PREVIEW: u16 = 1034;
 
 /// File → Load Session... — pick a Notepad++-shaped session XML from
 /// disk, parse its `<File>` list, and open every path referenced. The
@@ -1182,7 +1191,7 @@ const SS_ETCHEDFRAME: u32 = 0x0012;
 /// About dialog's "MIT License" caption so the label reads
 /// balanced inside its opaque backing rect regardless of tiny
 /// hand-tuned differences in the caption's rect width.
-const SS_CENTER: u32 = 0x0001;
+pub(crate) const SS_CENTER: u32 = 0x0001;
 /// `SS_CENTERIMAGE` — vertically-centre STATIC content within
 /// the control's client rect. Named "image" for historical
 /// reasons but Windows applies it to text as well (verified
@@ -14936,6 +14945,15 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             ID_FILE_PRINT as usize,
             w!("&Print...\tCtrl+P"),
         )?;
+        // Print Preview: same enable / disable discipline as
+        // Print (both greyed at menu-build time; enabled by
+        // `refresh_file_menu` when a tab is active).
+        AppendMenuW(
+            file_menu,
+            MF_STRING | MF_GRAYED,
+            ID_FILE_PRINT_PREVIEW as usize,
+            w!("Print Pre&view..."),
+        )?;
         AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
         AppendMenuW(file_menu, MF_STRING, ID_FILE_EXIT as usize, w!("E&xit"))?;
         AppendMenuW(bar, MF_POPUP, file_menu.0 as usize, w!("&File"))?;
@@ -17485,6 +17503,29 @@ fn handle_print(hwnd: HWND) {
     print::print_active_document(hwnd, &display_name, editor);
 }
 
+/// File → Print Preview — snapshot the display name + editor handle
+/// under a brief `&mut WindowState` borrow, then dispatch to the
+/// [`print_preview`] module. Same borrow-lifetime discipline as
+/// `handle_print`: the modal preview pump can re-enter this
+/// `wnd_proc`, so no borrow may span it.
+fn handle_print_preview(hwnd: HWND) {
+    let (display_name, editor) = unsafe {
+        let Some(state) = state_from_hwnd(hwnd) else {
+            return;
+        };
+        let Some(tab) = state.shell.active() else {
+            return;
+        };
+        let name = print::display_name_for(
+            tab.path.as_deref(),
+            tab.untitled_seq,
+            tab.custom_name.as_deref(),
+        );
+        (name, state.editor)
+    };
+    print_preview::show_print_preview(hwnd, &display_name, editor);
+}
+
 // --- About dialog ----------------------------------------------------
 //
 // Custom modal dialog built on a `WS_POPUP` + `WS_CAPTION` + `WS_SYSMENU`
@@ -19984,6 +20025,9 @@ unsafe fn refresh_file_menu(file_menu: HMENU, shell: &codepp_shell::Shell) {
     // refresh), so the empty-doc case falls through to the print
     // handler's own fast-path skip.
     apply(ID_FILE_PRINT, shell.active().is_some());
+    // Print Preview: same enable condition as Print — a modal
+    // preview of "no active document" is useless.
+    apply(ID_FILE_PRINT_PREVIEW, shell.active().is_some());
 }
 
 /// Show the "About Code++" dialog modally. `main_hwnd` is the
@@ -22259,7 +22303,7 @@ fn status_bg_brush() -> HBRUSH {
 /// to re-enable it on every exit path — including a panic between
 /// disable and the pump's natural exit. Without the guard a panic
 /// there would soft-lock the main window forever.
-struct OwnerEnableGuard(HWND);
+pub(crate) struct OwnerEnableGuard(pub(crate) HWND);
 impl Drop for OwnerEnableGuard {
     fn drop(&mut self) {
         unsafe {
@@ -22276,7 +22320,7 @@ impl Drop for OwnerEnableGuard {
 /// already clicked OK/Cancel: the dialog is already destroyed and
 /// `DestroyWindow` on a dead HWND is a silent error we don't care
 /// about, but skipping it keeps the trace log clean.
-struct DlgDestroyGuard(HWND);
+pub(crate) struct DlgDestroyGuard(pub(crate) HWND);
 impl Drop for DlgDestroyGuard {
     fn drop(&mut self) {
         unsafe {
@@ -33558,6 +33602,9 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     }
                     ID_FILE_PRINT => {
                         handle_print(hwnd);
+                    }
+                    ID_FILE_PRINT_PREVIEW => {
+                        handle_print_preview(hwnd);
                     }
                     ID_FILE_OPEN_IN_DEFAULT_VIEWER => {
                         // Snapshot the active tab's path under a brief

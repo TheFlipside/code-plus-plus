@@ -77,22 +77,7 @@ pub(crate) fn print_active_document(owner: HWND, doc_display_name: &str, editor:
     };
 
     // --- 2. Configure Scintilla print-side settings. ---------------
-    // `SC_PRINT_COLOURONWHITEDEFAULTBG` = lexer colours preserved, but
-    // every "default background" style gets forced to white so we
-    // don't burn the user's ink budget rendering a dark-theme
-    // backdrop. Matches N++'s default and the vast majority of
-    // editor print outputs.
-    editor.send(
-        SCI_SETPRINTCOLOURMODE,
-        SC_PRINT_COLOURONWHITEDEFAULTBG as _,
-        0,
-    );
-    // Magnification = 0 → use the same point-size the on-screen
-    // editor uses (Scintilla scales font metrics to the printer DC
-    // via `hdc_target` automatically). Word-wrap on so long lines
-    // fold at the right margin instead of running off the paper.
-    editor.send(SCI_SETPRINTMAGNIFICATION, 0, 0);
-    editor.send(SCI_SETPRINTWRAPMODE, 1 /* SC_WRAP_WORD */, 0);
+    configure_scintilla_for_print(&editor);
 
     // --- 3. Compute paper metrics. ----------------------------------
     let paper = PaperMetrics::from_hdc(job.hdc);
@@ -340,6 +325,34 @@ fn show_print_dialog(owner: HWND) -> Option<PrintJob> {
 }
 
 // -------------------------------------------------------------------
+// Shared Scintilla print-mode setup
+// -------------------------------------------------------------------
+
+/// Configure the Scintilla view's print-side settings that both the
+/// real print pipeline and the on-screen Print Preview need.
+///
+/// * `SC_PRINT_COLOURONWHITEDEFAULTBG` — lexer colours preserved,
+///   but every "default background" style gets forced to white so
+///   we don't burn the user's ink budget rendering a dark-theme
+///   backdrop. Matches N++'s default.
+/// * Magnification zero — use the same point-size the on-screen
+///   editor uses. Scintilla scales font metrics to the target DC
+///   via `hdc_target` automatically.
+/// * Word wrap on — long lines fold at the right margin instead of
+///   running off the paper (or off the preview page).
+///
+/// Idempotent. Safe to call once per print-or-preview invocation.
+pub(crate) fn configure_scintilla_for_print(editor: &EditorHandle) {
+    editor.send(
+        SCI_SETPRINTCOLOURMODE,
+        SC_PRINT_COLOURONWHITEDEFAULTBG as _,
+        0,
+    );
+    editor.send(SCI_SETPRINTMAGNIFICATION, 0, 0);
+    editor.send(SCI_SETPRINTWRAPMODE, 1 /* SC_WRAP_WORD */, 0);
+}
+
+// -------------------------------------------------------------------
 // Paper metrics
 // -------------------------------------------------------------------
 
@@ -377,30 +390,30 @@ fn show_print_dialog(owner: HWND) -> Option<PrintJob> {
 /// printable-area extents both for wire-shape consistency and
 /// as a defensible value for any future consumer that starts
 /// reading it.
-struct PaperMetrics {
+pub(crate) struct PaperMetrics {
     /// Full printable page rectangle — `(0, 0, HORZRES, VERTRES)`.
     /// Populated for `Sci_RangeToFormatFull::rc_page`; not read
     /// by the current Scintilla `FormatRange` code path (see the
     /// `PaperMetrics` doc comment for the vendored-source
     /// citation).
-    page_rect: Sci_Rectangle,
+    pub(crate) page_rect: Sci_Rectangle,
     /// The text-area rectangle — printable area minus header strip
     /// minus user-margin insets on all four sides. This is what
     /// Scintilla uses as `rc`.
-    text_rect: Sci_Rectangle,
+    pub(crate) text_rect: Sci_Rectangle,
     /// Header strip rectangle — sits above `text_rect`, contains the
     /// filename / date / page-N-of-M line and the divider rule.
-    header_rect: Sci_Rectangle,
+    pub(crate) header_rect: Sci_Rectangle,
     /// Vertical DPI — used to size the header font consistently
     /// across printers. Horizontal DPI is consumed at construction
     /// time to compute `text_rect`'s left/right margins and isn't
     /// stored separately (the ratio only matters for font metrics,
     /// which use the Y axis).
-    dpi_y: i32,
+    pub(crate) dpi_y: i32,
 }
 
 impl PaperMetrics {
-    fn from_hdc(hdc: HDC) -> Self {
+    pub(crate) fn from_hdc(hdc: HDC) -> Self {
         // SAFETY: `GetDeviceCaps` on a valid HDC is a pure query, no
         // side effects, no ownership issues. Every index below is a
         // documented value from `wingdi.h`. `HORZRES`/`VERTRES` are
@@ -499,7 +512,7 @@ fn pt_to_device_pixels(pt: i32, dpi: i32) -> i32 {
 /// be worse UX than an explicit "your document was too long to
 /// paginate cleanly" heads-up.
 #[derive(Clone, Copy, Debug)]
-enum MeasureTruncation {
+pub(crate) enum MeasureTruncation {
     /// Scintilla failed to advance `cp_min` on a page (`next <= cp_min`).
     /// Rare — implies a corrupt view state or a font/page-size
     /// combination Scintilla can't lay out. Byte offset where the
@@ -537,7 +550,7 @@ const MAX_PAGES: usize = 100_000;
 /// pathological return that fails to advance would loop forever, so
 /// we cap iterations at [`MAX_PAGES`] as defence-in-depth against a
 /// misconfigured / corrupted view.
-fn measure_page_breaks(
+pub(crate) fn measure_page_breaks(
     editor: &EditorHandle,
     paper: &PaperMetrics,
     text_length: isize,
@@ -596,7 +609,7 @@ fn measure_page_breaks(
 /// Second pass: render one page's `(cp_min, cp_max)` into the printer
 /// HDC. Same struct shape as `measure_page_breaks`, but wparam=1 so
 /// Scintilla writes glyphs to the printer.
-fn render_one_page(
+pub(crate) fn render_one_page(
     editor: &EditorHandle,
     hdc: HDC,
     paper: &PaperMetrics,
@@ -624,7 +637,7 @@ fn render_one_page(
 /// a print job — matches the "final `SCI_FORMATRANGE(0, 0)` call"
 /// contract in the Scintilla docs so cached surfaces don't leak for
 /// the remaining Scintilla-instance lifetime.
-fn release_format_cache(editor: &EditorHandle) {
+pub(crate) fn release_format_cache(editor: &EditorHandle) {
     editor.send(SCI_FORMATRANGEFULL, 0, 0);
 }
 
@@ -637,7 +650,7 @@ fn release_format_cache(editor: &EditorHandle) {
 /// edge. Font is 10pt Arial, drawn with `DrawTextW` on the printer
 /// HDC directly (Scintilla's format-range doesn't own the header
 /// strip — we're outside its `rc`).
-fn draw_page_header(
+pub(crate) fn draw_page_header(
     hdc: HDC,
     paper: &PaperMetrics,
     doc_name: &str,
@@ -833,7 +846,7 @@ fn draw_page_header(
 ///
 /// Kept as a small dedicated helper because it's the only piece of
 /// non-Win32 logic in this module and factors cleanly for testing.
-fn format_today() -> String {
+pub(crate) fn format_today() -> String {
     let epoch = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
