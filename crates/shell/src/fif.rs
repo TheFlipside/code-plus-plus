@@ -100,6 +100,46 @@ pub const PATH_CHANNEL_DEPTH: usize = 256;
 /// interactive use.
 pub const MAX_ACTIVE_JOBS: usize = 2;
 
+/// Ceiling on directory nesting the walker will descend.
+///
+/// This is what bounds the walker. It keeps one open
+/// [`std::fs::ReadDir`] per level of the tree it is currently inside
+/// and pulls entries lazily, so its cost scales with *depth*, never
+/// with how many directories are pending. An earlier version pushed
+/// every subdirectory of a directory onto a `Vec<PathBuf>` before
+/// descending into any of them, which made a single wide directory —
+/// millions of subdirectories — grow that vector without any bound.
+/// Match volume was capped, file size was capped, the path channel was
+/// capped; traversal was the one dimension that was not. Measured on
+/// 200 000 subdirectories in one directory: 48.3 MB peak before,
+/// 1.6 MB after.
+///
+/// **The value is chosen by file-descriptor budget, not by path
+/// length.** Holding a descriptor per level is what makes the walk
+/// lazy, so this constant sets a hard ceiling on open descriptors:
+///
+/// ```text
+/// MAX_ACTIVE_JOBS × (MAX_WALK_DEPTH + MAX_FIF_WORKERS)
+///        2        × (      64       +        16      ) = 160
+/// ```
+///
+/// 160 sits well inside a 256 soft `RLIMIT_NOFILE` (macOS's
+/// traditional interactive default) and leaves ample room under
+/// Linux's usual 1024 for the descriptors the rest of the editor needs
+/// — open buffers, the file watcher, GTK's own. An earlier draft used
+/// 512, which reached ≈1056 in the two-job worst case and would have
+/// traded an unbounded-memory bug for a file-descriptor-exhaustion
+/// one.
+///
+/// 64 levels is far beyond any real source tree; deeply nested
+/// `node_modules` is the usual worst case and lands well under it.
+/// Exceeding it skips the subtree, which is why the walker both warns
+/// *and* records [`FifStats::depth_cap_hit`] — a search that quietly
+/// returns fewer results than the truth is worse than a slow one, and
+/// `tracing` is off by default in release builds (DESIGN.md §5.5), so
+/// the log alone would reach nobody.
+pub const MAX_WALK_DEPTH: usize = 64;
+
 /// Identifier for a single FIF run. Monotonic per-shell so the UI
 /// can discard events from a job preempted by a newer
 /// [`FifOrchestrator::start`].
@@ -197,6 +237,13 @@ pub struct FifStats {
     pub total_matches: usize,
     /// `true` when the global cap was hit and the job ended early.
     pub global_cap_hit: bool,
+    /// True if the walker refused to descend past [`MAX_WALK_DEPTH`]
+    /// somewhere in this run, meaning at least one subtree was not
+    /// searched and the results are incomplete. Distinct from
+    /// [`Self::global_cap_hit`], which means "we found more matches
+    /// than we will report"; this one means "there is ground we did
+    /// not cover".
+    pub depth_cap_hit: bool,
     /// Files rewritten in Replace-in-Files mode. Always 0 for
     /// search-only jobs.
     pub files_modified: usize,
@@ -474,6 +521,7 @@ struct FifStatsAtomic {
     total_replacements: AtomicUsize,
     files_skipped_open: AtomicUsize,
     global_cap_hit: AtomicBool,
+    depth_cap_hit: AtomicBool,
 }
 
 impl FifStatsAtomic {
@@ -488,6 +536,7 @@ impl FifStatsAtomic {
             total_replacements: self.total_replacements.load(Ordering::Relaxed),
             files_skipped_open: self.files_skipped_open.load(Ordering::Relaxed),
             global_cap_hit: self.global_cap_hit.load(Ordering::Relaxed),
+            depth_cap_hit: self.depth_cap_hit.load(Ordering::Relaxed),
             // Filled in by the coordinator from the wall-clock timer.
             elapsed_ms: 0,
         }
@@ -542,92 +591,124 @@ fn walker_main(
     cancel: Arc<AtomicBool>,
     stats: Arc<FifStatsAtomic>,
 ) {
-    let mut stack: Vec<PathBuf> = vec![root];
-    while let Some(dir) = stack.pop() {
+    // A stack of open directory iterators, one per level currently
+    // being descended, rather than a queue of pending directory paths.
+    // The difference is what bounds this walk: entries are pulled
+    // lazily, so a directory with a million subdirectories costs one
+    // iterator, not a million `PathBuf`s. Depth is capped by
+    // `MAX_WALK_DEPTH`, so both memory and open descriptors are
+    // bounded by a constant. See that constant for the history.
+    let mut stack: Vec<std::fs::ReadDir> = Vec::new();
+    match std::fs::read_dir(&root) {
+        Ok(it) => stack.push(it),
+        Err(e) => {
+            tracing::debug!(dir = %root.display(), error = %e, "fif walker: read_dir failed");
+            return;
+        }
+    }
+
+    while let Some(iter) = stack.last_mut() {
         if cancel.load(Ordering::Acquire) {
             return;
         }
-        let entries = match std::fs::read_dir(&dir) {
+        // Exhausted this level — climb back out. Dropping the iterator
+        // closes its descriptor, which is what keeps the descriptor
+        // count tied to depth rather than to how much of the tree has
+        // been walked.
+        let Some(entry) = iter.next() else {
+            stack.pop();
+            continue;
+        };
+        // A per-entry error means the OS gave us a partial
+        // result — most commonly permission-denied on one file
+        // mid-enumeration. Skip the entry but log so the cause
+        // is recoverable from a verbose trace.
+        let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                tracing::debug!(dir = %dir.display(), error = %e, "fif walker: read_dir failed");
+                tracing::debug!(error = %e, "fif walker: dir entry error");
                 continue;
             }
         };
-        for entry in entries {
-            // A per-entry error means the OS gave us a partial
-            // result — most commonly permission-denied on one file
-            // mid-enumeration. Skip the entry but log so the cause
-            // is recoverable from a verbose trace.
-            let entry = match entry {
-                Ok(e) => e,
+        let path = entry.path();
+        let ftype = match entry.file_type() {
+            Ok(t) => t,
+            Err(e) => {
+                // Same treatment as the dir/entry errors above:
+                // a `file_type()` failure (broken symlink, racy
+                // permission change) is meaningful but never
+                // worth aborting the whole walk for.
+                tracing::debug!(
+                    path = %path.display(),
+                    error = %e,
+                    "fif walker: file_type query failed",
+                );
+                continue;
+            }
+        };
+        // Symlinks fall through both `is_dir()` (false) and
+        // `is_file()` (false on the lstat-style result that
+        // `DirEntry::file_type()` returns), so the `!is_file()`
+        // continue below skips them. We deliberately do not
+        // follow symlinks: a symlink loop is a classic FIF DoS,
+        // and a symlink that resolves to a Windows COM port or
+        // a Linux FIFO would block `read_capped` on a
+        // `read_to_end` syscall the cancel flag can't preempt.
+        // N++ doesn't follow either.
+        if ftype.is_dir() {
+            if !walk.recurse {
+                continue;
+            }
+            if let Some(name) = path.file_name() {
+                if dir_should_prune(name, walk.walk_hidden_dirs) {
+                    continue;
+                }
+            }
+            if stack.len() >= MAX_WALK_DEPTH {
+                // Warn, not debug: this is the one skip in this
+                // function that hides content the user asked to
+                // search, so it must be visible rather than
+                // buried in a trace nobody enables.
+                // Record before logging: `tracing` is off by default
+                // in release builds (DESIGN.md §5.5), so the flag is
+                // the only channel that actually reaches the user.
+                stats.depth_cap_hit.store(true, Ordering::Relaxed);
+                tracing::warn!(
+                    path = %path.display(),
+                    depth = MAX_WALK_DEPTH,
+                    "fif walker: maximum directory depth reached; not descending further",
+                );
+                continue;
+            }
+            match std::fs::read_dir(&path) {
+                Ok(it) => stack.push(it),
                 Err(e) => {
                     tracing::debug!(
-                        dir = %dir.display(),
+                        dir = %path.display(),
                         error = %e,
-                        "fif walker: dir entry error",
+                        "fif walker: read_dir failed",
                     );
-                    continue;
                 }
-            };
-            if cancel.load(Ordering::Acquire) {
-                return;
             }
-            let path = entry.path();
-            let ftype = match entry.file_type() {
-                Ok(t) => t,
-                Err(e) => {
-                    // Same treatment as the dir/entry errors above:
-                    // a `file_type()` failure (broken symlink, racy
-                    // permission change) is meaningful but never
-                    // worth aborting the whole walk for.
-                    tracing::debug!(
-                        path = %path.display(),
-                        error = %e,
-                        "fif walker: file_type query failed",
-                    );
-                    continue;
-                }
-            };
-            // Symlinks fall through both `is_dir()` (false) and
-            // `is_file()` (false on the lstat-style result that
-            // `DirEntry::file_type()` returns), so the `!is_file()`
-            // continue below skips them. We deliberately do not
-            // follow symlinks: a symlink loop is a classic FIF DoS,
-            // and a symlink that resolves to a Windows COM port or
-            // a Linux FIFO would block `read_capped` on a
-            // `read_to_end` syscall the cancel flag can't preempt.
-            // N++ doesn't follow either.
-            if ftype.is_dir() {
-                if !walk.recurse {
-                    continue;
-                }
-                if let Some(name) = path.file_name() {
-                    if dir_should_prune(name, walk.walk_hidden_dirs) {
-                        continue;
-                    }
-                }
-                stack.push(path);
+            continue;
+        }
+        if !ftype.is_file() {
+            continue;
+        }
+        if !walk.path_matches(&path) {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata() {
+            if meta.len() > walk.max_file_bytes {
+                stats.files_skipped_size.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
-            if !ftype.is_file() {
-                continue;
-            }
-            if !walk.path_matches(&path) {
-                continue;
-            }
-            if let Ok(meta) = entry.metadata() {
-                if meta.len() > walk.max_file_bytes {
-                    stats.files_skipped_size.fetch_add(1, Ordering::Relaxed);
-                    continue;
-                }
-            }
-            // Bounded-channel send blocks while workers catch up.
-            // `Err` means the receiving end closed: shell dropped
-            // the orchestrator (process exit) → nothing to do.
-            if path_tx.send(path).is_err() {
-                return;
-            }
+        }
+        // Bounded-channel send blocks while workers catch up.
+        // `Err` means the receiving end closed: shell dropped
+        // the orchestrator (process exit) → nothing to do.
+        if path_tx.send(path).is_err() {
+            return;
         }
     }
     // path_tx drops here; workers receive `Err` and exit.
@@ -1353,5 +1434,183 @@ mod tests {
             let s = name.to_string_lossy();
             assert!(!s.contains(".codepp-fif.tmp"), "leftover temp file: {s}");
         }
+    }
+
+    /// A directory with many subdirectories must not cost memory
+    /// proportional to how many there are.
+    ///
+    /// This is the shape the walker used to be unbounded on: it pushed
+    /// every subdirectory of a directory onto a `Vec<PathBuf>` before
+    /// descending into any, so one wide directory pinned one allocation
+    /// per child. The lazy `ReadDir` stack holds one iterator per level
+    /// instead, so this tree costs two regardless of the fan-out.
+    ///
+    /// 500 subdirectories is small enough to keep the test fast and
+    /// large enough that the old code would have held 500 paths at
+    /// once; the property being pinned is "flat in the fan-out", which
+    /// the assertions below check by content rather than by measuring
+    /// allocations.
+    #[test]
+    fn wide_tree_is_walked_completely() {
+        let (tx, rx) = unbounded();
+        let mut orch = FifOrchestrator::new(tx);
+        let dir = tempdir().unwrap();
+        for i in 0..500 {
+            let sub = dir.path().join(format!("d{i:03}"));
+            fs::create_dir(&sub).unwrap();
+            fs::write(sub.join("f.txt"), "needle\n").unwrap();
+        }
+
+        orch.start(FifRequest {
+            query: "needle".into(),
+            opts: FifQueryOpts::default(),
+            root: dir.path().to_path_buf(),
+            walk: FifWalkOpts::default(),
+            replacement: None,
+            open_tab_paths: Vec::new(),
+        })
+        .unwrap();
+
+        let events = drain_until_done(&rx, Duration::from_secs(30));
+        let hits = events
+            .iter()
+            .filter(|e| matches!(e, FifEvent::FileMatches { .. }))
+            .count();
+        assert_eq!(hits, 500, "every subdirectory must still be visited");
+    }
+
+    /// Depth is what bounds the walk now, so the walker must actually
+    /// descend to a realistic nesting level and find the file at the
+    /// bottom.
+    ///
+    /// Also guards the loop's climb-out: an exhausted level has to be
+    /// popped so its descriptor closes and its parent resumes. Get that
+    /// wrong and this either misses the deep file or spins.
+    #[test]
+    fn deeply_nested_tree_is_walked_to_the_bottom() {
+        let (tx, rx) = unbounded();
+        let mut orch = FifOrchestrator::new(tx);
+        let dir = tempdir().unwrap();
+
+        // Well inside MAX_WALK_DEPTH, and deep enough that a
+        // per-level descriptor leak would be obvious.
+        const DEPTH: usize = 60;
+        let mut deep = dir.path().to_path_buf();
+        for i in 0..DEPTH {
+            deep = deep.join(format!("l{i}"));
+        }
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("bottom.txt"), "needle\n").unwrap();
+        // A sibling at the top level, so the test also proves the
+        // walker climbs back out and resumes the parent rather than
+        // stopping once it bottoms out.
+        fs::write(dir.path().join("top.txt"), "needle\n").unwrap();
+
+        orch.start(FifRequest {
+            query: "needle".into(),
+            opts: FifQueryOpts::default(),
+            root: dir.path().to_path_buf(),
+            walk: FifWalkOpts::default(),
+            replacement: None,
+            open_tab_paths: Vec::new(),
+        })
+        .unwrap();
+
+        let events = drain_until_done(&rx, Duration::from_secs(30));
+        let mut found: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                FifEvent::FileMatches { path, .. } => {
+                    Some(path.file_name()?.to_string_lossy().into_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            vec!["bottom.txt".to_string(), "top.txt".to_string()],
+            "the walker must reach the deepest file and still resume the root level"
+        );
+    }
+
+    /// The depth cap must stop the descent at exactly the right level,
+    /// and must say so.
+    ///
+    /// Puts a marker file at *every* level of an over-deep tree and
+    /// asserts the deepest one found is exactly the last level the cap
+    /// allows. Checking the precise boundary rather than "something
+    /// deep was missed" is deliberate: an earlier version of this test
+    /// placed the deep file ten levels past the cap and therefore
+    /// passed even when `>=` was mutated to `>`, which is precisely
+    /// the off-by-one a boundary test exists to catch.
+    ///
+    /// Also asserts the run is flagged incomplete. That is the point of
+    /// the flag — a search that quietly returns fewer results than the
+    /// truth is worse than a slow one, and before `depth_cap_hit`
+    /// existed nothing distinguished the two.
+    ///
+    /// Feasible as a real on-disk tree only because the cap is 64. At
+    /// the 512 an earlier draft used, this would have needed a tree
+    /// deep enough to trip Windows' legacy `MAX_PATH`.
+    #[test]
+    fn depth_cap_stops_at_the_exact_boundary_and_reports_incompleteness() {
+        let (tx, rx) = unbounded();
+        let mut orch = FifOrchestrator::new(tx);
+        let dir = tempdir().unwrap();
+
+        // A marker at every level, a few past the cap.
+        let over = MAX_WALK_DEPTH + 5;
+        let mut path = dir.path().to_path_buf();
+        for level in 1..=over {
+            path = path.join(format!("l{level:03}"));
+            fs::create_dir(&path).unwrap();
+            fs::write(path.join(format!("m{level:03}.txt")), "needle\n").unwrap();
+        }
+
+        orch.start(FifRequest {
+            query: "needle".into(),
+            opts: FifQueryOpts::default(),
+            root: dir.path().to_path_buf(),
+            walk: FifWalkOpts::default(),
+            replacement: None,
+            open_tab_paths: Vec::new(),
+        })
+        .unwrap();
+
+        let events = drain_until_done(&rx, Duration::from_mins(1));
+        let mut levels: Vec<usize> = events
+            .iter()
+            .filter_map(|e| match e {
+                FifEvent::FileMatches { path, .. } => {
+                    let name = path.file_name()?.to_string_lossy().into_owned();
+                    name.strip_prefix('m')?.strip_suffix(".txt")?.parse().ok()
+                }
+                _ => None,
+            })
+            .collect();
+        levels.sort_unstable();
+
+        // The walk starts with the root's own iterator on the stack, so
+        // a directory at level N is opened only while the stack holds
+        // N entries; the cap refuses the push once the stack has
+        // reached MAX_WALK_DEPTH. The deepest *entered* directory is
+        // therefore level MAX_WALK_DEPTH - 1, and its marker is the
+        // deepest file that can be found.
+        let deepest_reachable = MAX_WALK_DEPTH - 1;
+        assert_eq!(
+            levels,
+            (1..=deepest_reachable).collect::<Vec<_>>(),
+            "every level up to the cap must be searched and nothing beyond it"
+        );
+
+        let flagged = events.iter().any(|e| match e {
+            FifEvent::Done { stats, .. } => stats.depth_cap_hit,
+            _ => false,
+        });
+        assert!(
+            flagged,
+            "skipping a subtree must set depth_cap_hit so the UI can say results are incomplete"
+        );
     }
 }

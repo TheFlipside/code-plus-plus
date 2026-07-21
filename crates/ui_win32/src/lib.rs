@@ -20942,15 +20942,23 @@ unsafe fn finalize_fif_job(main_hwnd: HWND, terminal: codepp_shell::FifEvent) {
         unsafe { close_fif_progress(p) };
     }
 
-    let (cancelled, mut files_modified, files_skipped_open, mut total_replacements) =
+    // `incomplete` folds the two "we did not search everything you
+    // asked for" signals the walker and workers can raise: the
+    // directory-depth cap (a subtree was never descended) and the
+    // global match cap (more matches exist than are reported). Both
+    // were previously recorded and never shown, so a truncated search
+    // was indistinguishable from an exhaustive one — the same failure
+    // `FifError::BadRoot` exists to avoid, one level down.
+    let (cancelled, mut files_modified, files_skipped_open, mut total_replacements, incomplete) =
         match &terminal {
             codepp_shell::FifEvent::Done { stats, .. } => (
                 false,
                 stats.files_modified,
                 stats.files_skipped_open,
                 stats.total_replacements,
+                stats.depth_cap_hit || stats.global_cap_hit,
             ),
-            codepp_shell::FifEvent::Cancelled { .. } => (true, 0, 0, 0),
+            codepp_shell::FifEvent::Cancelled { .. } => (true, 0, 0, 0, false),
             _ => return,
         };
 
@@ -21007,13 +21015,20 @@ unsafe fn finalize_fif_job(main_hwnd: HWND, terminal: codepp_shell::FifEvent) {
         } else {
             String::new()
         };
+        // Appended to whichever summary shape is chosen below, so a
+        // user never reads a match count as exhaustive when it is not.
+        let incomplete_suffix = if incomplete {
+            " — results incomplete, some content was not searched"
+        } else {
+            ""
+        };
         let s = if files_modified == 0 && files_skipped_open > 0 {
             // All matching files were open in tabs — nothing was
             // written. Distinct wording from "Replaced 0 in 0
             // files" so it doesn't read as "search ran and found
             // nothing".
             format!(
-                "{prefix}No files replaced — all {files_skipped_open} matching file{} {} open in a tab",
+                "{prefix}No files replaced — all {files_skipped_open} matching file{} {} open in a tab{incomplete_suffix}",
                 if files_skipped_open == 1 { "" } else { "s" },
                 if files_skipped_open == 1 { "is" } else { "are" },
             )
@@ -21024,13 +21039,13 @@ unsafe fn finalize_fif_job(main_hwnd: HWND, terminal: codepp_shell::FifEvent) {
             // ran uncapped, so reporting the search count would
             // undercount on dense matches.
             format!(
-                "{prefix}Replaced {total_replacements} occurrence{} in {files_modified} file{}{skip_suffix}",
+                "{prefix}Replaced {total_replacements} occurrence{} in {files_modified} file{}{skip_suffix}{incomplete_suffix}",
                 if total_replacements == 1 { "" } else { "s" },
                 if files_modified == 1 { "" } else { "s" },
             )
         } else {
             format!(
-                "{prefix}{total_hits} match{} in {} file{}",
+                "{prefix}{total_hits} match{} in {} file{}{incomplete_suffix}",
                 if total_hits == 1 { "" } else { "es" },
                 pending.len(),
                 if pending.len() == 1 { "" } else { "s" },
