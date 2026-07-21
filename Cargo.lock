@@ -259,8 +259,11 @@ dependencies = [
 name = "codepp-ui-gtk"
 version = "0.1.0"
 dependencies = [
+ "codepp-core",
  "codepp-editor",
  "codepp-scintilla-sys",
+ "codepp-shell",
+ "codepp-udl",
  "gtk",
  "tracing",
 ]

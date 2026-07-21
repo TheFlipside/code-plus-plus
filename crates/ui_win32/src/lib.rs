@@ -2303,7 +2303,19 @@ impl UiPlatform for Win32Ui {
             // Resume just past the inserted replacement; without
             // this, replacing "a" with "ab" would re-match the
             // newly-inserted "a" and loop forever.
-            cursor = self.editor.target_end();
+            let next = self.editor.target_end();
+            // A *zero-width* match needs a second guard. With regex
+            // search on, a pattern like `x*`, `^` or `\b` and an empty
+            // replacement leaves `target_end` exactly at `cursor`, so
+            // the line above would re-search the identical range
+            // forever and wedge the UI thread with no recovery but a
+            // kill. `count_matches` below has always guarded this way;
+            // these loops did not.
+            cursor = if next > cursor {
+                next
+            } else {
+                self.editor.send(SCI_POSITIONAFTER, next as usize, 0).max(0) as u64
+            };
             count += 1;
         }
         self.editor.send(SCI_ENDUNDOACTION, 0, 0);
@@ -2459,9 +2471,18 @@ impl UiPlatform for Win32Ui {
             // wrap would propagate into `range_end` and lock the
             // loop into an infinite spin.
             let new_target_end = self.editor.target_end();
+            // Same zero-width guard as `replace_all`: a match that does
+            // not advance would pin `cursor` and spin forever.
+            let advanced_end = if new_target_end > cursor {
+                new_target_end
+            } else {
+                self.editor
+                    .send(SCI_POSITIONAFTER, new_target_end as usize, 0)
+                    .max(0) as u64
+            };
             let actual_replacement_len = new_target_end.saturating_sub(match_start);
             let delta = actual_replacement_len as i64 - (match_end as i64 - match_start as i64);
-            cursor = new_target_end;
+            cursor = advanced_end;
             range_end = (range_end as i64 + delta).max(cursor as i64) as u64;
             count += 1;
             if cursor >= range_end {

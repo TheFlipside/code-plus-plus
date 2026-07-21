@@ -154,9 +154,16 @@ working needs a display, so it is marked `#[ignore]` and does not run in
 the default `cargo test`. Run it explicitly:
 
 ```sh
-cargo test -p codepp-scintilla-sys -- --ignored             # on a desktop
-xvfb-run cargo test -p codepp-scintilla-sys -- --ignored     # headless
+cargo test -p codepp-scintilla-sys -p codepp-ui-gtk -- --ignored
+xvfb-run cargo test -p codepp-scintilla-sys -p codepp-ui-gtk -- --ignored
 ```
+
+`ui_gtk` carries display-gated tests for the same reason: they drive a
+real Scintilla widget to pin the doc-pointer discipline that lets one
+view serve many tabs. Note they are deliberately a single test function
+— GTK is single-threaded and cargo's parallel test threads segfault
+inside GDK, so splitting them would require every caller to remember
+`--test-threads=1`.
 
 ### 3.4 Self-hosted CI runner provisioning
 

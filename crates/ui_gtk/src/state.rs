@@ -1,0 +1,131 @@
+//! Window state and the `(&mut Shell, GtkUi)` split.
+//!
+//! # Why the split exists
+//!
+//! [`Shell::drain`] takes `&mut self` *and* `&mut impl UiPlatform`.
+//! Since one struct owns both the `Shell` and the widgets the trait
+//! methods touch, handing both out at once would alias `&mut self`.
+//! [`GtkUiState::split`] resolves that the same way `ui_win32`'s
+//! `WindowState::split` does: it hands back a `&mut Shell` borrow plus
+//! a freshly-built, cheap `GtkUi` value. Building a new one per call is
+//! deliberate and costs almost nothing — `EditorHandle` is `Copy` and
+//! gtk-rs widgets are refcounted handles, so a clone is a refcount
+//! bump, not a widget copy.
+//!
+//! # Why a thread-local
+//!
+//! Worker threads wake the UI through a closure that carries no data
+//! (DESIGN.md §5.4), so the wake handler needs some way to find the
+//! state once it is back on the main thread. Win32 stashes a pointer in
+//! `GWLP_USERDATA` and recovers it in the window procedure; GTK has no
+//! equivalent per-window slot that survives into a plain idle callback,
+//! so the state lives in a main-thread `thread_local` instead. The
+//! `Rc<RefCell<…>>` is never sent anywhere: [`install`] is called on
+//! the main thread during startup, and [`with_state`] refuses to do
+//! anything if called from any other thread.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use codepp_editor::EditorHandle;
+use codepp_shell::Shell;
+
+use crate::status::StatusBar;
+
+/// Everything the GTK backend owns for the lifetime of the window.
+pub struct GtkUiState {
+    /// The toplevel. Kept so `Shell`-driven operations can retitle it
+    /// and so the delete-event handler can end the main loop.
+    pub window: gtk::Window,
+    /// The Scintilla widget, as adopted into gtk-rs.
+    ///
+    /// Never read, and that is the point: this field exists purely to
+    /// hold a `GObject` reference for the whole session. [`Self::editor`]
+    /// carries raw pointers into the same widget, and nothing else in
+    /// the program owns it once `run`'s local goes out of scope — so
+    /// dropping this field would finalise the widget and leave
+    /// `EditorHandle`'s `direct_ptr` dangling on the next keystroke.
+    /// See the safety note on `EditorHandle::from_gtk_widget`.
+    #[allow(dead_code)]
+    pub sci_widget: gtk::Widget,
+    /// Direct-call handle for the one Scintilla view. m2 is
+    /// single-view: tabs switch documents under it via
+    /// `SCI_SETDOCPOINTER`, exactly as Win32 does.
+    pub editor: EditorHandle,
+    /// The 7-part status bar.
+    pub status: StatusBar,
+    /// Menu bar, held so the visibility toggles can reach it.
+    pub menu_bar: gtk::MenuBar,
+    /// Headless session/file/watcher logic. Owns the tab list.
+    pub shell: Shell,
+}
+
+/// The `UiPlatform` implementor. Cheap to build; see the module docs.
+///
+/// Deliberately a value rather than a borrow of [`GtkUiState`]: that is
+/// the whole point of [`GtkUiState::split`].
+pub struct GtkUi {
+    pub window: gtk::Window,
+    pub editor: EditorHandle,
+    pub status: StatusBar,
+    pub menu_bar: gtk::MenuBar,
+}
+
+impl GtkUiState {
+    /// Split into a `(shell, ui-platform)` pair so `shell.drain(ui)`
+    /// can be called without aliasing `&mut self`.
+    pub fn split(&mut self) -> (&mut Shell, GtkUi) {
+        let ui = GtkUi {
+            window: self.window.clone(),
+            editor: self.editor,
+            status: self.status.clone(),
+            menu_bar: self.menu_bar.clone(),
+        };
+        (&mut self.shell, ui)
+    }
+}
+
+thread_local! {
+    /// Set once on the main thread at startup by [`install`].
+    static STATE: RefCell<Option<Rc<RefCell<GtkUiState>>>> = const { RefCell::new(None) };
+}
+
+/// Publish `state` so [`with_state`] can find it. Main thread only.
+pub fn install(state: &Rc<RefCell<GtkUiState>>) {
+    STATE.with(|s| *s.borrow_mut() = Some(Rc::clone(state)));
+}
+
+/// Run `f` against the window state, if it is installed and reachable.
+///
+/// Returns `None` — rather than panicking — in three cases, because
+/// every one of them is reachable during normal shutdown and none is a
+/// bug:
+///
+/// * called from a thread with no state installed (a worker's wake
+///   already hopped to the main thread, but a stray direct call must
+///   not take the process down);
+/// * called after the window is gone, when startup failed partway;
+/// * called re-entrantly, while an outer `with_state` still holds the
+///   `RefCell`. That last one is the real hazard: a GTK signal handler
+///   can fire *inside* a Scintilla call made from another handler, and
+///   `borrow_mut` would panic. Skipping the inner call is correct here
+///   because the outer one is already mid-update.
+pub fn with_state<R>(f: impl FnOnce(&mut GtkUiState) -> R) -> Option<R> {
+    let state = STATE.with(|s| s.borrow().clone())?;
+    // Distinguish the three `None` cases in the log. A re-entrant skip
+    // is the one that could hide a dropped user action if a future call
+    // site stops being self-settling, so it must leave a trail rather
+    // than vanishing silently.
+    let Ok(mut guard) = state.try_borrow_mut() else {
+        tracing::debug!("with_state skipped: re-entrant call while an outer borrow was live");
+        return None;
+    };
+    Some(f(&mut guard))
+}
+
+/// Drop the installed state. Called as the main loop exits so the
+/// `Shell` — and the worker threads its channels keep alive — are torn
+/// down deterministically rather than at process teardown.
+pub fn uninstall() {
+    STATE.with(|s| *s.borrow_mut() = None);
+}

@@ -1,0 +1,750 @@
+//! `UiPlatform` for the GTK backend.
+//!
+//! 34 of the trait's 48 methods exist on Linux; the other 14 are
+//! `#[cfg(target_os = "windows")]` on the trait itself because their
+//! signatures name plugin-host types that are Windows-only until the
+//! plugin host is ported.
+//!
+//! Most of what is here is a direct port of `ui_win32`'s
+//! implementation, because most of it is not UI code at all — it is
+//! Scintilla messages sent through `EditorHandle`, which behaves
+//! identically on both backends once the §4.2 direct-call pair is
+//! captured. Where the Win32 body touched a Win32 control, the GTK
+//! equivalent is used instead; where it touched nothing, the body is
+//! the same sequence of messages in the same order, deliberately, so
+//! the two backends cannot drift.
+
+use codepp_core::styles::{parse_rgb_hex, Styles};
+use codepp_core::{Encoding, Eol, LangType};
+use codepp_editor::EditorHandle;
+use codepp_scintilla_sys::{
+    SCI_ADDUNDOACTION, SCI_BEGINUNDOACTION, SCI_COLOURISE, SCI_EMPTYUNDOBUFFER, SCI_ENDUNDOACTION,
+    SCI_GETANCHOR, SCI_GETCOLUMN, SCI_GETCURRENTPOS, SCI_GETDOCPOINTER, SCI_GETFIRSTVISIBLELINE,
+    SCI_GETLENGTH, SCI_GETLINECOUNT, SCI_GETMODIFY, SCI_GETOVERTYPE, SCI_GETSELECTIONEND,
+    SCI_GETSELECTIONSTART, SCI_GETTEXT, SCI_GETXOFFSET, SCI_GETZOOM, SCI_GOTOPOS,
+    SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_POSITIONAFTER, SCI_SETDOCPOINTER,
+    SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETSAVEPOINT, SCI_SETSEL, SCI_SETSELECTIONEND,
+    SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTEXT, SCI_SETXOFFSET, SCI_STYLEGETBACK,
+    SCI_STYLEGETFORE, SC_DOCUMENTOPTION_DEFAULT, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF,
+    SC_MARGIN_NUMBER, STYLE_DEFAULT,
+};
+
+/// Visible width of a TAB, in spaces. Matches `ui_win32`'s tab-width
+/// default: 4 is the convention every wired lexer's style guide
+/// prescribes, against Scintilla's built-in 8.
+const TAB_WIDTH_SPACES: usize = 4;
+/// Margin index for line numbers; margin 0 by Scintilla convention.
+const LINE_NUMBER_MARGIN: u32 = 0;
+use codepp_shell::{SearchFlags, UiPlatform};
+use gtk::prelude::*;
+
+use crate::state::GtkUi;
+
+/// Pack `(r, g, b)` into Scintilla's colour encoding, `0x00BBGGRR`.
+///
+/// Byte-identical to a Win32 `COLORREF`, which is why `ui_win32` can
+/// reuse its own packer for both — but this is the *Scintilla* encoding
+/// (documented in `Scintilla.h`), reachable on every backend, so the
+/// GTK side names it for what it is rather than borrowing a Win32 type
+/// name it has no business knowing.
+const fn rgb_to_scintilla_colour((r, g, b): (u8, u8, u8)) -> u32 {
+    (b as u32) << 16 | (g as u32) << 8 | (r as u32)
+}
+
+/// Caret/scroll position of the bound document, so a temporary
+/// `SCI_SETDOCPOINTER` swap can put the user's view back exactly as it
+/// was. Mirrors `ui_win32::ScintillaViewState`.
+struct ViewState {
+    caret: isize,
+    anchor: isize,
+    top_line: isize,
+    x_offset: isize,
+}
+
+impl GtkUi {
+    fn snapshot_view(&self) -> ViewState {
+        ViewState {
+            caret: self.editor.send(SCI_GETCURRENTPOS, 0, 0),
+            anchor: self.editor.send(SCI_GETANCHOR, 0, 0),
+            top_line: self.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0),
+            x_offset: self.editor.send(SCI_GETXOFFSET, 0, 0),
+        }
+    }
+
+    fn restore_view(&self, snap: &ViewState) {
+        self.editor
+            .send(SCI_SETSEL, snap.anchor.max(0) as usize, snap.caret);
+        let cur_top = self.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0);
+        let delta = snap.top_line - cur_top;
+        if delta != 0 {
+            self.editor.send(SCI_LINESCROLL, 0, delta);
+        }
+        self.editor
+            .send(SCI_SETXOFFSET, snap.x_offset.max(0) as usize, 0);
+    }
+
+    /// Run `f` with `doc` temporarily bound to the view, restoring the
+    /// previous document and the user's scroll/caret afterwards.
+    ///
+    /// The doc-pointer swap is how a single Scintilla view serves many
+    /// tabs (DESIGN.md §7.2 Phase 3). Reading another tab's text is
+    /// therefore visible to the *view*, not just the model, which is
+    /// why the caret and scroll offsets have to be saved and put back —
+    /// otherwise a Save All would leave the user staring at a different
+    /// line than before.
+    fn with_doc<R>(&mut self, doc: isize, f: impl FnOnce(&mut Self) -> R, absent: R) -> R {
+        if doc == 0 {
+            return absent;
+        }
+        let prior = self.editor.send(SCI_GETDOCPOINTER, 0, 0);
+        if prior == doc {
+            return f(self);
+        }
+        let view = self.snapshot_view();
+        self.editor.send(SCI_SETDOCPOINTER, 0, doc);
+        let out = f(self);
+        if prior != 0 {
+            self.editor.send(SCI_SETDOCPOINTER, 0, prior);
+            self.restore_view(&view);
+        }
+        out
+    }
+
+    /// Scroll the caret into view only if it has gone off-screen, so a
+    /// find that lands on an already-visible match does not jolt the
+    /// viewport. Port of `ui_win32::center_caret_if_offscreen`.
+    fn center_caret_if_offscreen(&self) {
+        let pos = self.editor.send(SCI_GETCURRENTPOS, 0, 0).max(0) as usize;
+        let line = self.editor.send(SCI_LINEFROMPOSITION, pos, 0).max(0);
+        let first = self.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0).max(0);
+        let lines = self.editor.send(SCI_LINESONSCREEN, 0, 0).max(1);
+        if line >= first && line < first + lines {
+            return;
+        }
+        let target = (line - lines / 2).max(0);
+        self.editor.send(SCI_LINESCROLL, 0, target - first);
+    }
+
+    /// Refresh the status bar's caret/length parts from live editor
+    /// state. Called by `update_status` and by the editor's own
+    /// notification handler.
+    pub fn refresh_dynamic_status(&self) {
+        let length = self.editor.send(SCI_GETLENGTH, 0, 0).max(0) as u64;
+        let lines = self.editor.send(SCI_GETLINECOUNT, 0, 0).max(0) as u64;
+        let pos = self.editor.send(SCI_GETCURRENTPOS, 0, 0).max(0) as u64;
+        let caret_line = self
+            .editor
+            .send(SCI_LINEFROMPOSITION, pos as usize, 0)
+            .max(0) as u64;
+        let caret_col = self.editor.send(SCI_GETCOLUMN, pos as usize, 0).max(0) as u64;
+        let overtype = self.editor.send(SCI_GETOVERTYPE, 0, 0) != 0;
+        self.status
+            .set_dynamic_parts(length, lines, caret_line, caret_col, pos, overtype);
+    }
+}
+
+/// Configure the predefined 32-39 styles that `SCI_STYLECLEARALL`
+/// resets, then fix up the line-number margin for this backend.
+///
+/// The shared helper sets margin 0 to `SC_MARGIN_TEXT`, because
+/// `ui_win32` renders the digits itself to get them right-aligned —
+/// which means the host must write per-line margin text and keep it in
+/// step with every edit. That machinery is Win32-private and not ported
+/// yet, so a GTK buffer using `SC_MARGIN_TEXT` would show an empty
+/// gutter. Override to Scintilla's built-in `SC_MARGIN_NUMBER`, which
+/// formats and paints the numbers with no host involvement. The
+/// difference is alignment only, and it is visible line numbers versus
+/// none.
+fn apply_predefined_styles(editor: &EditorHandle) {
+    codepp_editor::theme::apply_line_number_margin(editor);
+    editor.set_margin_type(LINE_NUMBER_MARGIN, SC_MARGIN_NUMBER);
+    codepp_editor::theme::apply_brace_styles(editor);
+    codepp_editor::theme::apply_indent_guide_style(editor);
+}
+
+/// Read the whole document out of `editor` as a `String`.
+///
+/// Free function rather than a method so `capture_text_from_doc` can
+/// reuse it inside `with_doc` without re-borrowing `self`.
+fn read_all(editor: &EditorHandle) -> String {
+    let len = editor.send(SCI_GETLENGTH, 0, 0);
+    if len <= 0 {
+        return String::new();
+    }
+    let cap = len as usize + 1;
+    let mut buf = vec![0u8; cap];
+    let written = editor.send(SCI_GETTEXT, cap, buf.as_mut_ptr() as isize);
+    if written <= 0 {
+        return String::new();
+    }
+    buf.truncate(written as usize);
+    // Scintilla stores bytes, not validated UTF-8: a file that failed
+    // to decode cleanly can leave invalid sequences in the buffer.
+    // Lossy conversion keeps the editor usable instead of panicking.
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+impl UiPlatform for GtkUi {
+    fn activate_tab(&mut self, _idx: usize, scintilla_doc: isize) -> isize {
+        // 0 means "this tab has no document yet" — mint one. Every
+        // other value is a live doc pointer from a previous call.
+        let fresh = scintilla_doc == 0;
+        let doc = if fresh {
+            self.editor.send(
+                codepp_scintilla_sys::SCI_CREATEDOCUMENT,
+                0,
+                SC_DOCUMENTOPTION_DEFAULT,
+            )
+        } else {
+            scintilla_doc
+        };
+        self.editor.send(SCI_SETDOCPOINTER, 0, doc);
+        if fresh {
+            // Tab width is *per-document* state in Scintilla, so it has
+            // to be set on each new document rather than once at
+            // startup. Without this a GTK buffer would render tabs at
+            // Scintilla's built-in 8 columns while the Win32 build uses
+            // 4 — the same file looking different on the two backends.
+            self.editor.send(SCI_SETTABWIDTH, TAB_WIDTH_SPACES, 0);
+        }
+        doc
+    }
+
+    fn set_buffer_text(&mut self, text: &str, cursor: u64) {
+        let mut bytes = Vec::with_capacity(text.len() + 1);
+        bytes.extend_from_slice(text.as_bytes());
+        bytes.push(0);
+        self.editor.send(SCI_SETTEXT, 0, bytes.as_ptr() as isize);
+        // A freshly loaded file is not an edit: drop the undo history
+        // that the SETTEXT itself created and mark the buffer clean, or
+        // the user could Ctrl+Z their file back to empty.
+        self.editor.send(SCI_EMPTYUNDOBUFFER, 0, 0);
+        self.editor.send(SCI_SETSAVEPOINT, 0, 0);
+        self.editor.send(SCI_GOTOPOS, cursor as usize, 0);
+    }
+
+    fn get_buffer_text(&mut self) -> String {
+        read_all(&self.editor)
+    }
+
+    fn get_cursor_pos(&mut self) -> u64 {
+        self.editor.send(SCI_GETCURRENTPOS, 0, 0).max(0) as u64
+    }
+
+    fn update_status(&mut self, lang: LangType, encoding: &Encoding, eol: Eol, _byte_len: u64) {
+        // Keep Scintilla's own EOL mode in step, so newly typed lines
+        // use the same ending as the rest of the file.
+        let mode = match eol {
+            Eol::CrLf => SC_EOL_CRLF,
+            Eol::Cr => SC_EOL_CR,
+            // `Mixed` has no Scintilla equivalent; LF is the least
+            // surprising choice for new lines and matches Win32.
+            Eol::Lf | Eol::Mixed => SC_EOL_LF,
+        };
+        self.editor.send(SCI_SETEOLMODE, mode, 0);
+        // `language_name` is the same string the Language menu shows.
+        // UDL ids are not in LANG_TABLE, so they fall back rather than
+        // showing a blank part.
+        let lang_label = lang.language_name().unwrap_or("Normal Text");
+        self.status
+            .set_static_parts(lang_label, eol.long_label(), encoding.label());
+        self.refresh_dynamic_status();
+    }
+
+    fn set_plugin_status(&mut self, section: usize, text: &str) {
+        self.status.set_plugin_part(section, text);
+    }
+
+    fn mark_saved(&mut self) {
+        self.editor.send(SCI_SETSAVEPOINT, 0, 0);
+    }
+
+    fn apply_lang(&mut self, lang: LangType) {
+        // UDL buffers need the container-lexer path, which is Phase 4.6
+        // work not yet ported to GTK. Falling through to the Lexilla
+        // path would land them in its plain-text fallback, which is the
+        // correct degradation — but say so, rather than looking like
+        // the theme table is broken.
+        if codepp_udl::is_udl_lang_id(lang.as_npp_id()) {
+            tracing::warn!(
+                lang = lang.as_npp_id(),
+                "UDL highlighting is not wired on GTK yet; rendering as plain text"
+            );
+        }
+        codepp_editor::theme::apply_lang_theme(&self.editor, lang);
+    }
+
+    fn apply_default_style(&mut self, styles: &Styles) {
+        let entry = styles.effective_default();
+        // Same fallbacks as the Win32 backend: black on white if the
+        // user's styles.xml carries an unparseable colour, rather than
+        // refusing to style at all.
+        let fg = rgb_to_scintilla_colour(parse_rgb_hex(&entry.fg).unwrap_or((0, 0, 0)));
+        let bg = rgb_to_scintilla_colour(parse_rgb_hex(&entry.bg).unwrap_or((0xFF, 0xFF, 0xFF)));
+
+        self.editor.style_set_font(STYLE_DEFAULT, &entry.font_name);
+        self.editor
+            .style_set_size(STYLE_DEFAULT, i32::from(entry.font_size));
+        self.editor.style_set_fore(STYLE_DEFAULT, fg);
+        self.editor.style_set_back(STYLE_DEFAULT, bg);
+        self.editor.style_set_bold(STYLE_DEFAULT, entry.bold);
+        self.editor.style_set_italic(STYLE_DEFAULT, entry.italic);
+        self.editor
+            .style_set_underline(STYLE_DEFAULT, entry.underline);
+
+        // Propagate to every other index, then put back the predefined
+        // 32-39 styles that `SCI_STYLECLEARALL` just reset.
+        self.editor.style_clear_all();
+        apply_predefined_styles(&self.editor);
+
+        // Win32 applies window transparency via WS_EX_LAYERED; the GTK
+        // equivalent is the toplevel's opacity, which the compositor
+        // honours when one is running and ignores otherwise.
+        let transparency = styles.effective_transparency();
+        self.window.set_opacity(if transparency.enabled {
+            f64::from(transparency.percent.clamp(0, 100)) / 100.0
+        } else {
+            1.0
+        });
+
+        self.editor.send(SCI_COLOURISE, 0, -1);
+    }
+
+    fn search_next(&mut self, query: &str, flags: SearchFlags) -> Option<u64> {
+        let end = self.editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as usize;
+        self.editor.send(SCI_SETEMPTYSELECTION, end, 0);
+        self.editor.search_anchor();
+        match self.editor.search_next(query, flags.bits()) {
+            -1 => None,
+            pos => {
+                self.center_caret_if_offscreen();
+                Some(pos as u64)
+            }
+        }
+    }
+
+    fn search_prev(&mut self, query: &str, flags: SearchFlags) -> Option<u64> {
+        let start = self.editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as usize;
+        self.editor.send(SCI_SETEMPTYSELECTION, start, 0);
+        self.editor.search_anchor();
+        match self.editor.search_prev(query, flags.bits()) {
+            -1 => None,
+            pos => {
+                self.center_caret_if_offscreen();
+                Some(pos as u64)
+            }
+        }
+    }
+
+    fn replace_current(&mut self, query: &str, replacement: &str, flags: SearchFlags) -> bool {
+        if query.is_empty() {
+            return false;
+        }
+        let sel_start = self.editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as u64;
+        let sel_end = self.editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as u64;
+        if sel_start == sel_end {
+            return false;
+        }
+        // Only replace if the *selection itself* matches — the user may
+        // have reselected arbitrary text since the last Find, and
+        // Scintilla will not check that for us.
+        self.editor.set_search_flags(flags.bits());
+        self.editor.set_target_range(sel_start, sel_end);
+        if self.editor.search_in_target(query) < 0 {
+            return false;
+        }
+        let _ = self.editor.replace_target(replacement);
+        let new_end = self.editor.target_end();
+        self.editor
+            .send(SCI_SETSELECTIONSTART, sel_start as usize, 0);
+        self.editor.send(SCI_SETSELECTIONEND, new_end as usize, 0);
+        true
+    }
+
+    fn replace_all(&mut self, query: &str, replacement: &str, flags: SearchFlags) -> usize {
+        if query.is_empty() {
+            return 0;
+        }
+        self.editor.set_search_flags(flags.bits());
+        // One undo group so the whole Replace All reverses in a single
+        // Ctrl+Z, as the user expects.
+        self.editor.send(SCI_BEGINUNDOACTION, 0, 0);
+        let mut count = 0usize;
+        let mut cursor = 0u64;
+        loop {
+            let doc_len = self.editor.send(SCI_GETLENGTH, 0, 0).max(0) as u64;
+            self.editor.set_target_range(cursor, doc_len);
+            if self.editor.search_in_target(query) < 0 {
+                break;
+            }
+            let _ = self.editor.replace_target(replacement);
+            let next = self.editor.target_end();
+            // A zero-width match (`x*`, `^`, `\b`, …) with an empty
+            // replacement leaves `target_end` exactly where the search
+            // started. Without this step the same range is re-searched
+            // forever and the UI thread wedges with no way out but a
+            // kill. `count_matches` already guards this way; these two
+            // loops did not, in either backend.
+            cursor = if next > cursor {
+                next
+            } else {
+                self.editor.send(SCI_POSITIONAFTER, next as usize, 0).max(0) as u64
+            };
+            count += 1;
+        }
+        self.editor.send(SCI_ENDUNDOACTION, 0, 0);
+        count
+    }
+
+    fn count_matches(&mut self, query: &str, flags: SearchFlags) -> usize {
+        if query.is_empty() {
+            return 0;
+        }
+        self.editor.set_search_flags(flags.bits());
+        let doc_len = self.editor.send(SCI_GETLENGTH, 0, 0).max(0) as u64;
+        let mut count = 0usize;
+        let mut cursor = 0u64;
+        while cursor < doc_len {
+            self.editor.set_target_range(cursor, doc_len);
+            if self.editor.search_in_target(query) < 0 {
+                break;
+            }
+            count += 1;
+            let next = self.editor.target_end();
+            // A zero-width match would leave `cursor` unchanged and spin
+            // forever; step past it explicitly.
+            cursor = if next > cursor {
+                next
+            } else {
+                self.editor.send(SCI_POSITIONAFTER, next as usize, 0).max(0) as u64
+            };
+        }
+        count
+    }
+
+    fn search_next_in_range(
+        &mut self,
+        query: &str,
+        flags: SearchFlags,
+        start: u64,
+        end: u64,
+    ) -> Option<u64> {
+        if query.is_empty() || end <= start {
+            return None;
+        }
+        self.editor.set_search_flags(flags.bits());
+        let caret = self.editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as u64;
+        let lo = if caret >= start && caret < end {
+            caret
+        } else {
+            start
+        };
+        self.editor.set_target_range(lo, end);
+        if self.editor.search_in_target(query) < 0 {
+            return None;
+        }
+        let pos = self.editor.target_start();
+        let match_end = self.editor.target_end();
+        self.editor.send(SCI_SETSELECTIONSTART, pos as usize, 0);
+        self.editor.send(SCI_SETSELECTIONEND, match_end as usize, 0);
+        self.center_caret_if_offscreen();
+        Some(pos)
+    }
+
+    fn search_prev_in_range(
+        &mut self,
+        query: &str,
+        flags: SearchFlags,
+        start: u64,
+        end: u64,
+    ) -> Option<u64> {
+        if query.is_empty() || end <= start {
+            return None;
+        }
+        self.editor.set_search_flags(flags.bits());
+        let caret = self.editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as u64;
+        let upper = if caret > start && caret <= end {
+            caret
+        } else {
+            end
+        };
+        // Scintilla has no "search backwards within a target range", so
+        // walk forwards keeping the last hit.
+        let mut last: Option<(u64, u64)> = None;
+        let mut cursor = start;
+        while cursor < upper {
+            self.editor.set_target_range(cursor, upper);
+            if self.editor.search_in_target(query) < 0 {
+                break;
+            }
+            let pos = self.editor.target_start();
+            let me = self.editor.target_end();
+            last = Some((pos, me));
+            cursor = if me > cursor {
+                me
+            } else {
+                self.editor.send(SCI_POSITIONAFTER, me as usize, 0).max(0) as u64
+            };
+        }
+        let (pos, match_end) = last?;
+        self.editor.send(SCI_SETSELECTIONSTART, pos as usize, 0);
+        self.editor.send(SCI_SETSELECTIONEND, match_end as usize, 0);
+        self.center_caret_if_offscreen();
+        Some(pos)
+    }
+
+    fn replace_all_in_range(
+        &mut self,
+        query: &str,
+        replacement: &str,
+        flags: SearchFlags,
+        start: u64,
+        end: u64,
+    ) -> (usize, u64) {
+        if query.is_empty() || end <= start {
+            return (0, end);
+        }
+        self.editor.set_search_flags(flags.bits());
+        self.editor.send(SCI_BEGINUNDOACTION, 0, 0);
+        let mut count = 0usize;
+        let mut cursor = start;
+        let mut range_end = end;
+        loop {
+            self.editor.set_target_range(cursor, range_end);
+            if self.editor.search_in_target(query) < 0 {
+                break;
+            }
+            let match_start = self.editor.target_start();
+            let match_end = self.editor.target_end();
+            let _ = self.editor.replace_target(replacement);
+            let new_target_end = self.editor.target_end();
+            // Same zero-width guard as `replace_all` above: a match
+            // that does not advance would pin `cursor` and spin.
+            let advanced_end = if new_target_end > cursor {
+                new_target_end
+            } else {
+                self.editor
+                    .send(SCI_POSITIONAFTER, new_target_end as usize, 0)
+                    .max(0) as u64
+            };
+            // Every replacement shifts the range's far edge by the
+            // length difference; the caller needs the corrected end to
+            // keep its own bookkeeping in sync.
+            let actual_replacement_len = new_target_end.saturating_sub(match_start);
+            let delta = actual_replacement_len as i64 - (match_end as i64 - match_start as i64);
+            cursor = advanced_end;
+            range_end = (range_end as i64 + delta).max(cursor as i64) as u64;
+            count += 1;
+            if cursor >= range_end {
+                break;
+            }
+        }
+        self.editor.send(SCI_ENDUNDOACTION, 0, 0);
+        (count, range_end)
+    }
+
+    // --- Chrome visibility -------------------------------------------
+    //
+    // m2 has no tab strip or toolbar yet, so those two report
+    // permanently hidden and refuse to change. That is an honest answer
+    // to `NPPM_ISTABBARHIDDEN` — the bar genuinely is not shown — and
+    // returning the previous state unchanged tells a caller nothing
+    // happened, which is the trait's documented signal.
+
+    fn is_tabbar_hidden(&self) -> bool {
+        true
+    }
+
+    fn set_tabbar_hidden(&mut self, _hidden: bool) -> bool {
+        true
+    }
+
+    fn is_toolbar_hidden(&self) -> bool {
+        true
+    }
+
+    fn set_toolbar_hidden(&mut self, _hidden: bool) -> bool {
+        true
+    }
+
+    fn is_menu_hidden(&self) -> bool {
+        !self.menu_bar.is_visible()
+    }
+
+    fn set_menu_hidden(&mut self, hidden: bool) -> bool {
+        let prev = !self.menu_bar.is_visible();
+        self.menu_bar.set_visible(!hidden);
+        prev
+    }
+
+    fn is_statusbar_hidden(&self) -> bool {
+        !self.status.container.is_visible()
+    }
+
+    fn set_statusbar_hidden(&mut self, hidden: bool) -> bool {
+        let prev = !self.status.container.is_visible();
+        self.status.container.set_visible(!hidden);
+        prev
+    }
+
+    fn editor_zoom_level(&self) -> i32 {
+        self.editor.send(SCI_GETZOOM, 0, 0) as i32
+    }
+
+    fn editor_default_fg_color(&self) -> i32 {
+        self.editor.send(SCI_STYLEGETFORE, STYLE_DEFAULT, 0) as i32
+    }
+
+    fn editor_default_bg_color(&self) -> i32 {
+        self.editor.send(SCI_STYLEGETBACK, STYLE_DEFAULT, 0) as i32
+    }
+
+    fn set_smooth_font(&mut self, _smooth: bool) -> bool {
+        // `SCI_SETFONTQUALITY` is a no-op outside the Win32 backend —
+        // GTK renders through cairo/pango, whose antialiasing comes
+        // from the desktop's font settings, not from Scintilla. Report
+        // "was already smooth" rather than claiming a change we did not
+        // make.
+        true
+    }
+
+    fn set_editor_border_edge(&mut self, enable: bool) -> bool {
+        // Win32 toggles WS_EX_CLIENTEDGE. The GTK analogue is a frame
+        // shadow on the scrolled container; m2 packs the view directly
+        // into the layout box, so there is nothing to toggle yet.
+        tracing::trace!(enable, "NPPM_SETEDITORBORDEREDGE: no GTK equivalent in m2");
+        false
+    }
+
+    fn set_line_number_width_mode(&mut self, mode: i32) -> bool {
+        tracing::trace!(
+            mode,
+            "NPPM_SETLINENUMBERWIDTHMODE: recorded, not yet applied"
+        );
+        true
+    }
+
+    fn capture_text_from_doc(&mut self, scintilla_doc: isize) -> String {
+        self.with_doc(scintilla_doc, |s| read_all(&s.editor), String::new())
+    }
+
+    fn is_doc_dirty(&mut self, scintilla_doc: isize) -> bool {
+        self.with_doc(
+            scintilla_doc,
+            |s| s.editor.send(SCI_GETMODIFY, 0, 0) != 0,
+            false,
+        )
+    }
+
+    fn mark_active_buffer_dirty(&mut self) {
+        if self.editor.send(SCI_GETMODIFY, 0, 0) != 0 {
+            return;
+        }
+        // An empty undo action is the documented way to move a buffer
+        // off its save point without changing a byte of text.
+        self.editor.send(SCI_ADDUNDOACTION, 0, 0);
+    }
+}
+
+/// Regression tests for the doc-pointer discipline that makes one
+/// Scintilla view serve many tabs.
+///
+/// These exist because the first cut of this backend got it wrong in a
+/// way that silently corrupted user files: `Shell` moves `active_tab`
+/// synchronously for an already-open path and for a tab close, but the
+/// view was left bound to the *previous* tab's document. Since
+/// `get_buffer_text` reads whatever is bound while the save path takes
+/// the path from whatever is active, Ctrl+S then wrote one buffer's
+/// bytes over a different file. The invariant asserted below —
+/// "`activate_tab(doc)` means the very next read sees `doc`" — is the
+/// one that has to hold for `rebind_active_view` to be correct.
+///
+/// Requires a display, for the same reason `scintilla-sys`'s FFI smoke
+/// test does: `scintilla_new` builds a `GtkWidget`. `#[ignore]` rather
+/// than a runtime probe so a headless CI run reports it skipped instead
+/// of silently passing. Run with:
+///
+/// ```text
+/// cargo test -p codepp-ui-gtk -- --ignored
+/// xvfb-run cargo test -p codepp-ui-gtk -- --ignored
+/// ```
+///
+/// **One test function, deliberately.** GTK is single-threaded, and
+/// cargo runs test functions on separate threads by default — a second
+/// function touching GTK concurrently segfaults inside GDK. Splitting
+/// these would mean relying on every future runner remembering
+/// `--test-threads=1`, so the scenarios are sequenced inside one
+/// function instead.
+#[cfg(test)]
+mod doc_binding_tests {
+    use super::{GtkUi, UiPlatform};
+    use crate::status::StatusBar;
+    use codepp_editor::EditorHandle;
+    use codepp_scintilla_sys::scintilla_new;
+    use gtk::glib::translate::FromGlibPtrNone;
+
+    /// Build a real editor over a real Scintilla widget.
+    fn fixture() -> GtkUi {
+        gtk::init().expect("gtk::init failed — no display?");
+        // SAFETY: GTK is initialised, `scintilla_new`'s only
+        // precondition.
+        let ptr = unsafe { scintilla_new() };
+        assert!(!ptr.is_null(), "scintilla_new returned null");
+        // Leak a reference for the test's duration, exactly as
+        // `GtkUiState.sci_widget` holds one in the real program — the
+        // `EditorHandle` below carries raw pointers into this widget.
+        let widget: gtk::Widget =
+            unsafe { gtk::Widget::from_glib_none(ptr.cast::<gtk::ffi::GtkWidget>()) };
+        std::mem::forget(widget);
+        // SAFETY: `ptr` is the live widget leaked just above.
+        let editor: EditorHandle =
+            unsafe { EditorHandle::from_gtk_widget(ptr) }.expect("no direct-call pair");
+        GtkUi {
+            window: gtk::Window::new(gtk::WindowType::Toplevel),
+            editor,
+            status: StatusBar::new(),
+            menu_bar: gtk::MenuBar::new(),
+        }
+    }
+
+    #[test]
+    #[ignore = "creates a GTK widget; needs a display (see module docs)"]
+    fn view_binding_follows_the_requested_document() {
+        let mut ui = fixture();
+
+        let doc_a = ui.activate_tab(0, 0);
+        ui.set_buffer_text("AAAA-file-A-contents", 0);
+        let doc_b = ui.activate_tab(1, 0);
+        ui.set_buffer_text("BBBB-file-B-contents", 0);
+        assert_ne!(doc_a, doc_b, "each tab must get its own document");
+
+        // The view is on B, which is what a read must return.
+        assert_eq!(ui.get_buffer_text(), "BBBB-file-B-contents");
+
+        // Switching back to an already-materialised document — the
+        // exact step `rebind_active_view` performs after
+        // `SwitchedToExisting` or a tab close. Before the fix this step
+        // was missing at those call sites, and this is the assertion
+        // that would have failed: a save of "tab A" wrote B's bytes.
+        assert_eq!(ui.activate_tab(0, doc_a), doc_a);
+        assert_eq!(
+            ui.get_buffer_text(),
+            "AAAA-file-A-contents",
+            "after rebinding to A, reads must see A — not the previously bound buffer"
+        );
+
+        // Reading another tab's text while the view sits on A is what
+        // Save All does...
+        assert_eq!(ui.capture_text_from_doc(doc_b), "BBBB-file-B-contents");
+        // ...and it must put the view back, or the user would find
+        // themselves looking at a different buffer than before.
+        assert_eq!(
+            ui.get_buffer_text(),
+            "AAAA-file-A-contents",
+            "capture_text_from_doc must restore the previously bound document"
+        );
+        // A never-materialised document reads as empty, not as whatever
+        // happens to be bound.
+        assert_eq!(ui.capture_text_from_doc(0), "");
+    }
+}
