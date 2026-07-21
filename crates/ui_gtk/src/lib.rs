@@ -440,55 +440,22 @@ fn restore_session(initial_path: Option<PathBuf>) {
     drain_shell();
 }
 
-/// Bind the Scintilla view to whatever `Shell` currently considers the
-/// active tab, materialising that tab's document if it does not have
-/// one yet.
+/// Bind the view to `Shell`'s active tab and retitle the window.
+///
+/// The binding itself lives in `Shell::bind_active_view` so both
+/// backends share one implementation — see its docs for why the two
+/// must never disagree. This wrapper exists only to supply the
+/// `(shell, ui)` split and refresh the title afterwards.
 ///
 /// **Every `Shell` call that can move `active_tab` without queuing a
 /// load must be followed by this.** `Shell::drain` only rebinds when a
-/// load *completes* (through `apply_load_result` → `activate_tab`), so
-/// the synchronous outcomes — `close_active_tab`, and `open_file`
-/// returning `SwitchedToExisting` for an already-open path — leave the
-/// view pointed at the previous tab's document unless the UI rebinds
-/// itself. `Shell` documents this as the caller's job (see
-/// `OpenFileOutcome::SwitchedToExisting`), and `ui_win32` honours it in
-/// `handle_tab_selchange` and `handle_close_active_tab_inner`.
-///
-/// Skipping it is not cosmetic: `get_buffer_text`, `get_cursor_pos` and
-/// `mark_saved` all act on whatever document is *bound*, while the save
-/// path takes the path from whatever tab is *active*. Let those two
-/// disagree and Ctrl+S writes one buffer's bytes over another file.
+/// load *completes*, so the synchronous outcomes — `close_active_tab`,
+/// and `open_file` returning `SwitchedToExisting` — leave the view on
+/// the previous tab's document unless the UI rebinds itself.
 fn rebind_active_view() {
     with_state(|st| {
-        let Some(idx) = st.shell.active_tab else {
-            return;
-        };
-        let Some(tab) = st.shell.tabs.get(idx) else {
-            return;
-        };
-        let (existing_doc, text) = (tab.scintilla_doc, tab.text.clone());
-        let (_, mut ui) = st.split();
-        let doc = codepp_shell::UiPlatform::activate_tab(&mut ui, idx, existing_doc);
-        if existing_doc == 0 {
-            // Freshly minted document — it starts empty, so seed it
-            // from the tab's shadow copy of the text.
-            codepp_shell::UiPlatform::set_buffer_text(&mut ui, &text, 0);
-            if let Some(tab) = st.shell.tabs.get_mut(idx) {
-                tab.scintilla_doc = doc;
-            }
-        }
-        let (lang, encoding, eol, byte_len) = {
-            let tab = &st.shell.tabs[idx];
-            (tab.lang, tab.encoding.clone(), tab.eol, tab.byte_len)
-        };
-        // `apply_lang` runs unconditionally, not just for a freshly
-        // created document: lexer and style state lives on the *view*,
-        // not the document, so `SCI_SETDOCPOINTER` leaves the previous
-        // tab's lexer bound. Win32 re-applies on every activation for
-        // the same reason.
-        let (_, mut ui) = st.split();
-        codepp_shell::UiPlatform::apply_lang(&mut ui, lang);
-        codepp_shell::UiPlatform::update_status(&mut ui, lang, &encoding, eol, byte_len);
+        let (shell, mut ui) = st.split();
+        shell.bind_active_view(&mut ui);
     });
     refresh_title();
 }

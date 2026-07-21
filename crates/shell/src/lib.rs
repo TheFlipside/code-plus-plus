@@ -2389,6 +2389,20 @@ impl Shell {
     ) -> Result<(), ShellError> {
         use std::io::Write;
 
+        // Refuse while a load is still in flight for this tab. The
+        // view is not bound to it yet — `open_file` sets `active_tab`
+        // immediately but defers the bind until the loader finishes —
+        // so `ui.get_buffer_text()` below would return the *previous*
+        // tab's contents and write them out under this tab's identity.
+        // Same defect family as the failed-load reindex this commit
+        // fixes: the active tab and the bound document disagreeing.
+        // `save_current_to_disk` is already immune because it requires
+        // a path, which a still-loading fresh tab does not have; these
+        // two only require *an* active tab, so they need it explicitly.
+        if self.active().is_some_and(|t| t.pending_load.is_some()) {
+            return Err(ShellError::NoActivePath);
+        }
+
         let (old_path, encoding) = {
             let tab = self.active().ok_or(ShellError::NoActivePath)?;
             (tab.path.clone(), tab.encoding.clone())
@@ -2524,6 +2538,20 @@ impl Shell {
         path: &Path,
     ) -> Result<(), ShellError> {
         use std::io::Write;
+
+        // Refuse while a load is still in flight for this tab. The
+        // view is not bound to it yet — `open_file` sets `active_tab`
+        // immediately but defers the bind until the loader finishes —
+        // so `ui.get_buffer_text()` below would return the *previous*
+        // tab's contents and write them out under this tab's identity.
+        // Same defect family as the failed-load reindex this commit
+        // fixes: the active tab and the bound document disagreeing.
+        // `save_current_to_disk` is already immune because it requires
+        // a path, which a still-loading fresh tab does not have; these
+        // two only require *an* active tab, so they need it explicitly.
+        if self.active().is_some_and(|t| t.pending_load.is_some()) {
+            return Err(ShellError::NoActivePath);
+        }
 
         let encoding = self
             .active()
@@ -2881,7 +2909,7 @@ impl Shell {
     /// definition (the file watcher only fires for watched files,
     /// which are open files; menu-driven Reload only runs on the
     /// active tab's path). Marks the matching tab's `pending_load`
-    /// so [`Self::apply_load_result`] overwrites its contents in
+    /// so `apply_load_result` overwrites its contents in
     /// place when the loader completes.
     ///
     /// If the path *isn't* found in any tab — a defensive fallback
@@ -2908,6 +2936,67 @@ impl Shell {
         if let Some(tab) = self.tabs.get_mut(idx) {
             tab.pending_load = Some(req_id);
         }
+    }
+
+    /// Bind the editor view to the active tab's document, creating and
+    /// filling that document first if it does not have one yet.
+    ///
+    /// A single Scintilla view serves every tab, switched underneath by
+    /// `SCI_SETDOCPOINTER` (DESIGN.md §7.2 Phase 3). That makes "which
+    /// document is bound" a piece of state independent from "which tab
+    /// is active", and the two silently disagreeing is the most
+    /// damaging bug this crate can produce: [`UiPlatform::get_buffer_text`]
+    /// and friends read the *bound* document, while the save path takes
+    /// its path from the *active* tab, so a mismatch means the next
+    /// save writes one buffer's bytes over a different file.
+    ///
+    /// The document may legitimately not exist yet. The `Ok` arm of
+    /// `apply_load_result` only calls `activate_tab` when the
+    /// completing load targets the tab that is active *at that moment*,
+    /// so a file whose load finishes while the user is looking at a
+    /// later-opened tab keeps `scintilla_doc == 0` until something
+    /// activates it. That is why this materialises from `tab.text`
+    /// rather than assuming a document is already there.
+    ///
+    /// `apply_lang` runs unconditionally, not just for a fresh
+    /// document: lexer and style state lives on the view, not the
+    /// document, so `SCI_SETDOCPOINTER` leaves the previous tab's lexer
+    /// attached.
+    ///
+    /// `Shell` calls this itself for the paths that move `active_tab`
+    /// from the inside with no way to tell the UI. It is `pub` because
+    /// UI crates need exactly the same operation after the moves that
+    /// *are* handed back to them — [`Self::close_active_tab`] and
+    /// [`Self::open_file`]'s `SwitchedToExisting` — and having one
+    /// implementation means the backends cannot drift apart on the one
+    /// piece of state where disagreement corrupts files.
+    pub fn bind_active_view<U: UiPlatform>(&mut self, ui: &mut U) {
+        let Some(idx) = self.active_tab else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(idx) else {
+            return;
+        };
+        let (existing_doc, text) = (tab.scintilla_doc, tab.text.clone());
+        let bound = ui.activate_tab(idx, existing_doc);
+        if existing_doc == 0 {
+            // Caret to 0: a tab reached this way was never displayed,
+            // so there is no caret position to preserve. The session's
+            // stored cursor is applied by the `Ok` arm of
+            // `apply_load_result` when a load completes onto the active
+            // tab, which is a different path.
+            ui.set_buffer_text(&text, 0);
+            if let Some(tab) = self.tabs.get_mut(idx) {
+                tab.scintilla_doc = bound;
+            }
+        }
+        let Some(tab) = self.tabs.get(idx) else {
+            return;
+        };
+        let (lang, encoding, eol, byte_len) =
+            (tab.lang, tab.encoding.clone(), tab.eol, tab.byte_len);
+        ui.apply_lang(lang);
+        ui.update_status(lang, &encoding, eol, byte_len);
     }
 
     fn apply_load_result<U: UiPlatform>(
@@ -3058,6 +3147,7 @@ impl Shell {
                     let is_fresh = self.tabs[idx].path.is_none();
                     if is_fresh {
                         self.tabs.remove(idx);
+                        let was_active = self.active_tab == Some(idx);
                         self.active_tab = match self.active_tab {
                             Some(active_idx) if active_idx == idx => {
                                 if self.tabs.is_empty() {
@@ -3071,6 +3161,24 @@ impl Shell {
                             Some(active_idx) if active_idx > idx => Some(active_idx - 1),
                             other => other,
                         };
+                        // Removing the *active* tab hands focus to a
+                        // different buffer, so the view has to follow.
+                        // Every other place that moves `active_tab`
+                        // either binds immediately or tells the UI to
+                        // through a return value; this one fires from
+                        // inside `drain` and returns nothing, so if it
+                        // does not rebind here, nothing ever will.
+                        //
+                        // Leaving it unbound splits `Shell`'s idea of
+                        // the active tab from the document the view
+                        // actually holds — and since `get_buffer_text`
+                        // reads the bound document while the save path
+                        // takes the path from the active tab, the next
+                        // save writes one buffer's bytes over another
+                        // file.
+                        if was_active {
+                            self.bind_active_view(ui);
+                        }
                     } else {
                         // Reload failed; keep the tab's prior contents,
                         // just drop the pending marker.
@@ -10446,6 +10554,279 @@ mod tests {
             ui.apply_lang_calls.last().copied(),
             Some(codepp_core::lang::L_RUST),
             "restore_untitled must apply the resolved lang to the editor"
+        );
+    }
+
+    /// A failed load that removes the active tab must leave the view
+    /// bound to whatever tab becomes active in its place.
+    ///
+    /// The reindex below is the last place in `Shell` that moves
+    /// `active_tab` without anyone rebinding the Scintilla view. Every
+    /// other mover either binds immediately (`new_untitled`,
+    /// `restore_*`, the `Ok` arm here) or hands the job to the UI
+    /// through a documented return value (`close_active_tab`,
+    /// `open_file`'s dedupe). This one returns nothing and fires from
+    /// inside `drain`, so the UI has no way to know it happened.
+    ///
+    /// Left unbound, `Shell` believes one tab is active while the view
+    /// still shows another's document — and because `get_buffer_text`
+    /// reads the *bound* document while the save path takes the path
+    /// from the *active* tab, the next Ctrl+S writes one buffer's bytes
+    /// over a different file. Same defect class as the Phase 5 m2
+    /// blocker, but in shared code, so it hits every backend.
+    #[test]
+    fn failed_load_reindex_rebinds_the_view() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        // Tab 0: loaded and bound — this is what the view shows.
+        // Tab 1: loaded in the background while another tab was
+        //        active, so its document was never materialised
+        //        (`scintilla_doc == 0`) — reachable because the `Ok`
+        //        arm only calls `activate_tab` for the *active* tab.
+        // Tab 2: fresh, still loading, and active.
+        shell.tabs = vec![
+            Tab {
+                id: 1,
+                path: Some(PathBuf::from("/tmp/a.txt")),
+                scintilla_doc: 11,
+                ..Tab::default()
+            },
+            Tab {
+                id: 2,
+                path: Some(PathBuf::from("/tmp/b.txt")),
+                scintilla_doc: 0,
+                ..Tab::default()
+            },
+            Tab {
+                id: 3,
+                path: None,
+                pending_load: Some(99),
+                ..Tab::default()
+            },
+        ];
+        shell.active_tab = Some(2);
+
+        let mut pending = Vec::new();
+        shell.apply_load_result(
+            &mut ui,
+            Err(codepp_core::file::LoadError {
+                id: 99,
+                path: PathBuf::from("/tmp/c.txt"),
+                error: codepp_core::file::LoadErrorKind::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no such file",
+                )),
+            }),
+            &mut pending,
+        );
+
+        // The orphan tab is gone and tab 1 inherits focus.
+        assert_eq!(shell.tabs.len(), 2);
+        assert_eq!(shell.active_tab, Some(1));
+
+        // ...and the view must have been rebound to it. Without this
+        // the view is still on tab 0's document 11.
+        let bound = ui
+            .activate_tab_calls
+            .last()
+            .expect("failed-load reindex must rebind the view");
+        assert_eq!(bound.0, 1, "must rebind to the newly active tab");
+        assert_ne!(
+            shell.tabs[1].scintilla_doc, 0,
+            "the newly active tab's document must be materialised and recorded"
+        );
+    }
+
+    /// The mirror of the test above: when the removed tab was *not*
+    /// the active one, the active buffer has not changed — only its
+    /// index shifted — so the view must be left alone.
+    ///
+    /// Rebinding anyway would be visible damage, not a harmless
+    /// no-op: `bind_active_view` re-issues `SCI_SETDOCPOINTER` and
+    /// `apply_lang`, and for a tab whose document was never
+    /// materialised it would re-push the text with the caret at 0,
+    /// throwing away wherever the user was.
+    #[test]
+    fn failed_load_reindex_leaves_the_view_alone_when_a_background_tab_dies() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        // Tab 0 is a fresh tab whose load is about to fail; tab 1 is
+        // the active, already-bound buffer the user is editing.
+        shell.tabs = vec![
+            Tab {
+                id: 1,
+                path: None,
+                pending_load: Some(99),
+                ..Tab::default()
+            },
+            Tab {
+                id: 2,
+                path: Some(PathBuf::from("/tmp/b.txt")),
+                scintilla_doc: 22,
+                ..Tab::default()
+            },
+        ];
+        shell.active_tab = Some(1);
+
+        let mut pending = Vec::new();
+        shell.apply_load_result(
+            &mut ui,
+            Err(codepp_core::file::LoadError {
+                id: 99,
+                path: PathBuf::from("/tmp/a.txt"),
+                error: codepp_core::file::LoadErrorKind::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no such file",
+                )),
+            }),
+            &mut pending,
+        );
+
+        // Same buffer, new index.
+        assert_eq!(shell.tabs.len(), 1);
+        assert_eq!(shell.active_tab, Some(0));
+        assert_eq!(shell.tabs[0].id, 2);
+        assert_eq!(
+            shell.tabs[0].scintilla_doc, 22,
+            "document must be untouched"
+        );
+        assert!(
+            ui.activate_tab_calls.is_empty(),
+            "the active buffer did not change, so the view must not be rebound"
+        );
+    }
+
+    /// `bind_active_view` has to cope with a tab whose document was
+    /// never created — the state a background load leaves behind,
+    /// since the `Ok` arm only calls `activate_tab` for the tab that
+    /// is active when the load lands.
+    #[test]
+    fn bind_active_view_materialises_a_never_activated_tab() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        shell.tabs = vec![Tab {
+            id: 1,
+            path: Some(PathBuf::from("/tmp/a.txt")),
+            text: "loaded in the background".into(),
+            scintilla_doc: 0,
+            ..Tab::default()
+        }];
+        shell.active_tab = Some(0);
+
+        shell.bind_active_view(&mut ui);
+
+        assert_ne!(
+            shell.tabs[0].scintilla_doc, 0,
+            "a document must be created and recorded on the tab"
+        );
+        assert_eq!(
+            ui.buffer_text, "loaded in the background",
+            "the tab's shadow text must be pushed into the fresh document"
+        );
+        // Re-binding an already-materialised tab must not re-push text
+        // over whatever the user has since typed.
+        ui.buffer_text = "user edits".into();
+        shell.bind_active_view(&mut ui);
+        assert_eq!(
+            ui.buffer_text, "user edits",
+            "an already-materialised tab must not have its text re-pushed"
+        );
+    }
+
+    /// Third arm of the reindex `match`: a tab *after* the active one
+    /// dies. The active index is unaffected, so like the arm above
+    /// this must not rebind.
+    #[test]
+    fn failed_load_reindex_ignores_a_tab_after_the_active_one() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        shell.tabs = vec![
+            Tab {
+                id: 1,
+                path: Some(PathBuf::from("/tmp/a.txt")),
+                scintilla_doc: 11,
+                ..Tab::default()
+            },
+            Tab {
+                id: 2,
+                path: None,
+                pending_load: Some(99),
+                ..Tab::default()
+            },
+        ];
+        shell.active_tab = Some(0);
+
+        let mut pending = Vec::new();
+        shell.apply_load_result(
+            &mut ui,
+            Err(codepp_core::file::LoadError {
+                id: 99,
+                path: PathBuf::from("/tmp/b.txt"),
+                error: codepp_core::file::LoadErrorKind::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no such file",
+                )),
+            }),
+            &mut pending,
+        );
+
+        assert_eq!(shell.active_tab, Some(0), "active index is unaffected");
+        assert_eq!(shell.tabs[0].scintilla_doc, 11);
+        assert!(
+            ui.activate_tab_calls.is_empty(),
+            "the active buffer did not change, so the view must not be rebound"
+        );
+    }
+
+    /// Save-As must refuse while the active tab is still loading.
+    ///
+    /// `open_file` makes a fresh tab active immediately but defers the
+    /// view bind until the load lands, so during that window
+    /// `get_buffer_text` returns the *previous* tab's contents. Without
+    /// this guard, Save-As would write those bytes out under the new
+    /// tab's identity — the same active-tab/bound-document disagreement
+    /// the reindex fix above closes, reached by a different route.
+    #[test]
+    fn save_as_refuses_while_the_active_tab_is_still_loading() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        // The view holds a *different* buffer's text — the state that
+        // makes an ungated Save-As destructive.
+        let mut ui = FakeUi {
+            buffer_text: "contents of a DIFFERENT buffer".into(),
+            ..FakeUi::default()
+        };
+
+        shell.tabs = vec![Tab {
+            id: 1,
+            path: None,
+            pending_load: Some(7),
+            ..Tab::default()
+        }];
+        shell.active_tab = Some(0);
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("victim.txt");
+
+        assert!(
+            shell.save_buffer_as(&mut ui, target.clone()).is_err(),
+            "save-as must refuse a still-loading tab"
+        );
+        assert!(
+            shell.save_active_as_copy(&mut ui, &target).is_err(),
+            "save-a-copy must refuse a still-loading tab"
+        );
+        assert!(
+            !target.exists(),
+            "nothing may be written while the view holds another buffer"
         );
     }
 }
