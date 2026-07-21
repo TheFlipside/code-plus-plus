@@ -18,10 +18,19 @@ name = "codepp_scintilla_sys"
 
 [build-dependencies]
 cc = "1.2"
-
 # Resolves GTK 3's include paths and link flags for the Scintilla GTK
-# backend. Build-dep only, never linked into the binary. Windows and
-# macOS builds never call it — the Win32 SDK has no pkg-config, and
-# Cocoa needs none.
-[target.'cfg(target_os = "linux")'.build-dependencies]
+# backend. Build-dep only, never linked into the binary, and only ever
+# *called* on Linux — `build.rs` dispatches on `CARGO_CFG_TARGET_OS`.
+#
+# Declared unconditionally, NOT under `[target.'cfg(target_os =
+# "linux")'.build-dependencies]`, and that distinction is load-bearing:
+# Cargo matches `[target.'cfg(...)']` build-dependencies against the
+# **host** triple, because build scripts run on the host. Gating it on
+# `linux` therefore made the crate vanish from the build script's
+# extern prelude on Windows and macOS *hosts* — while `build.rs`, a
+# single compilation unit with no `#[cfg]` on `build_scintilla_gtk`,
+# still referenced `pkg_config::` there. Result: E0433 on both runners
+# and a green Linux build that could not see it. Keep this
+# unconditional; the target-vs-host decision belongs in `build.rs`'s
+# runtime `CARGO_CFG_TARGET_OS` match, where it already lives.
 pkg-config = { workspace = true }

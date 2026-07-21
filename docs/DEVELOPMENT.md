@@ -249,6 +249,39 @@ cargo test -p scintilla-sys      # smoke test must pass
 
 Commit the submodule pointer bumps in the same commit that adapts any code to API changes.
 
+### Catch cross-platform breakage before pushing
+
+CI fans out across three runners, so a change that only builds on your
+host burns a full CI cycle to tell you. `cargo check --target` catches
+most of it locally in seconds — no cross-linker needed, because `check`
+does not link:
+
+```sh
+rustup target add aarch64-apple-darwin x86_64-pc-windows-msvc
+cargo check --workspace --target aarch64-apple-darwin    # fully clean today
+cargo check -p codepp-core --target x86_64-pc-windows-msvc
+```
+
+The macOS target is the useful one: `crates/scintilla-sys/build.rs`
+takes its no-native-backend arm there, so nothing needs a C toolchain
+and the whole workspace checks. The Windows target will get as far as
+`cc-rs` and then fail on a missing `windows.h` unless you have a
+Windows SDK — that failure is expected and still informative, because
+everything before it (build-script compilation, all Rust type
+checking) has already succeeded by then.
+
+**This does not cover host-conditional dependencies.** Cargo matches
+`[target.'cfg(...)'.build-dependencies]` against the **host** triple,
+not the `--target` one, because build scripts run on the host. A build
+dependency gated that way is present on your machine and absent on a
+runner with a different OS, and no amount of `--target` checking on one
+host will reveal it — this bit `pkg-config` in Phase 5 m1 and broke
+both the macOS and Windows runners with `E0433: cannot find module or
+crate pkg_config` while Linux stayed green. Declare build dependencies
+unconditionally and branch on `CARGO_CFG_TARGET_OS` inside `build.rs`
+instead; that variable describes the *target*, which is what such
+decisions actually want.
+
 ### Run a single phase's demo
 
 Each phase in DESIGN.md §7.2 has a Demo column. The current phase's demo is always reachable via:
