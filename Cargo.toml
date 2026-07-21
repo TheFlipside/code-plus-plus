@@ -45,6 +45,7 @@ codepp-plugin-sdk = { version = "0.1.0", path = "crates/plugin-sdk" }
 codepp-scintilla-sys = { version = "0.1.0", path = "crates/scintilla-sys" }
 codepp-shell = { version = "0.1.0", path = "crates/shell" }
 codepp-udl = { version = "0.1.0", path = "crates/udl" }
+codepp-ui-gtk = { version = "0.1.0", path = "crates/ui_gtk" }
 codepp-ui-win32 = { version = "0.1.0", path = "crates/ui_win32" }
 
 # External dependencies — pin every version here so cargo-deny's wildcard
@@ -52,11 +53,21 @@ codepp-ui-win32 = { version = "0.1.0", path = "crates/ui_win32" }
 crossbeam-channel = "0.5"
 encoding_rs = "0.8"
 globset = "0.4"
+# GTK 3 bindings for `ui_gtk`. GTK 3 — not 4 — because Scintilla has no
+# GTK 4 backend (see `crates/scintilla-sys/build.rs::build_scintilla_gtk`
+# and DESIGN.md §4.1). The gtk3-rs crates are archived upstream, which
+# is why `deny.toml` carries documented advisory ignores for them; GTK
+# 3.24 is itself API-frozen, so there is nothing left for the bindings
+# to track. MIT.
+gtk = "0.18"
 notify = "8"
 # PNG decoder — only PNG, no other formats. Used by `ui_win32` to
 # turn the toolbar's compile-time-embedded PNG bytes into Win32
 # DIB sections for `HIMAGELIST`. MIT OR Apache-2.0.
 png = "0.18"
+# Build-script helper: resolves GTK 3's cflags and link flags for the
+# Scintilla GTK backend on Linux. MIT OR Apache-2.0.
+pkg-config = "0.3"
 quick-xml = { version = "0.41", features = ["serialize"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }

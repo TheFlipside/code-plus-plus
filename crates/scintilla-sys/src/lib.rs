@@ -6,8 +6,27 @@
 //! later phases.
 //!
 //! See DESIGN.md §4.1 (vendoring), §4.2 (direct-call API), §6 (plugin ABI).
+//!
+//! # Platform layout
+//!
+//! Everything below the `extern` blocks — the `SCI_*` / `SCE_*` constant
+//! set and the `#[repr(C)]` structs — is platform-neutral: those numbers
+//! come from `Scintilla.h` and are identical on every backend. Only the
+//! *entry points* differ, because Scintilla exposes a different bootstrap
+//! per platform:
+//!
+//! - **Win32** registers a window class (`Scintilla_RegisterClasses`) and
+//!   the host creates the control with `CreateWindowExW`.
+//! - **GTK** exposes a `GtkWidget` factory (`scintilla_new`) plus a
+//!   message entry point (`scintilla_send_message`); there is no window
+//!   class to register.
+//!
+//! The direct-call fast path (DESIGN.md §4.2) is available on both —
+//! `Message::GetDirectFunction` / `GetDirectPointer` are handled by
+//! `vendor/scintilla/gtk/ScintillaGTK.cxx` exactly as they are by
+//! `win32/ScintillaWin.cxx`, so `editor` is backend-agnostic once it
+//! holds the `(fn_ptr, instance_ptr)` pair.
 
-#![cfg(target_os = "windows")]
 #![allow(non_camel_case_types)]
 
 use core::ffi::c_void;
@@ -27,6 +46,7 @@ pub type uptr_t = usize;
 pub type ScintillaDirectFunction =
     unsafe extern "C" fn(ptr: *mut c_void, msg: u32, wparam: uptr_t, lparam: sptr_t) -> sptr_t;
 
+#[cfg(target_os = "windows")]
 extern "C" {
     /// Register Scintilla's window classes with the given module handle.
     /// Must be called once before creating any Scintilla controls. Returns
@@ -41,11 +61,59 @@ extern "C" {
     pub fn Scintilla_ReleaseResources() -> i32;
 }
 
+// GTK entry points, mirroring `vendor/scintilla/include/ScintillaWidget.h`.
+//
+// The GTK backend has no window class to register: `scintilla_new`
+// constructs a `GtkWidget*` the host packs into its own container, and
+// `scintilla_send_message` is the `SendMessage` equivalent used for
+// setup and for capturing the direct-call pair.
+//
+// Declared here rather than obtained from a GTK binding crate because
+// the Scintilla widget is not part of GTK — it is our statically-linked
+// vendored C++ — so no binding crate knows about it.
+#[cfg(target_os = "linux")]
+extern "C" {
+    /// Construct a new Scintilla `GtkWidget*`. The returned pointer is a
+    /// floating `GObject` reference following standard GTK ownership
+    /// rules: the container it is added to sinks the reference.
+    ///
+    /// In practice this does not return null — `ScintillaGTK.cxx`
+    /// builds the widget with `g_object_new`, and a constructor
+    /// exception is swallowed by a `catch (...)` that still yields a
+    /// non-null widget (with an uninitialised interior). Callers
+    /// should still null-check, both because that is the C contract
+    /// and because a null here is the clearest signal that linking
+    /// went wrong.
+    ///
+    /// GTK must be initialised (`gtk_init`) before this is called.
+    ///
+    /// Provided by `vendor/scintilla/gtk/ScintillaGTK.cxx` when
+    /// statically linked.
+    pub fn scintilla_new() -> *mut c_void;
+
+    /// Send a Scintilla message to the widget returned by
+    /// [`scintilla_new`]. Equivalent to Win32's `SendMessage`; reserved
+    /// for setup and for the two direct-call capture messages. Hot paths
+    /// must use the direct-call pointer instead (DESIGN.md §4.2).
+    pub fn scintilla_send_message(
+        sci: *mut c_void,
+        message: u32,
+        wparam: uptr_t,
+        lparam: sptr_t,
+    ) -> sptr_t;
+
+    /// Release Scintilla's process-wide resources. The GTK sibling of
+    /// `Scintilla_ReleaseResources`; note the different return type —
+    /// the GTK entry point returns void.
+    pub fn scintilla_release_resources();
+}
+
 // Lexilla's public C entry points are declared `__stdcall` on Win32
 // (`LEXILLA_CALL` in `Lexilla.h`); on x64 Windows that resolves to the
 // single Microsoft x64 calling convention so `extern "system"` ==
 // `extern "C"`, but `system` is the convention-agnostic spelling and
 // stays correct if/when we add an x86 build.
+#[cfg(target_os = "windows")]
 extern "system" {
     /// Construct an `ILexer5*` for the lexer registered under `name`
     /// (e.g. `b"cpp\0"`, `b"rust\0"`). Returns null if no concrete
@@ -60,7 +128,30 @@ extern "system" {
     pub fn CreateLexer(name: *const core::ffi::c_char) -> *mut c_void;
 }
 
+// Off Windows `LEXILLA_CALL` expands to nothing, so the same entry point
+// uses the platform's plain C convention. Spelled as a separate block
+// rather than reusing `extern "system"` because the two are only
+// interchangeable on x64 Windows — see the note above.
+//
+// Gated to `linux` specifically, **not** `not(windows)`: `build.rs`
+// only compiles Lexilla on the two backends that have a Scintilla
+// build, so on macOS the symbol has no definition. Declaring it there
+// anyway would compile — an unreferenced extern links fine under
+// dead-code elimination — but it would make every caller silently
+// dependent on nothing ever calling them, which is not a guarantee
+// worth resting on. Narrowing the gate turns a latent link error into
+// a compile error at the call site instead. Widen this to include
+// `macos` in the same commit that teaches `build.rs` to build the
+// Cocoa backend.
+#[cfg(target_os = "linux")]
+extern "C" {
+    /// See the Windows-side declaration above for the ownership contract.
+    pub fn CreateLexer(name: *const core::ffi::c_char) -> *mut c_void;
+}
+
 /// The Win32 window class name registered by `Scintilla_RegisterClasses`.
+/// No GTK equivalent — that backend hands out widgets, not class names.
+#[cfg(target_os = "windows")]
 pub const SCINTILLA_CLASS_NAME: &str = "Scintilla";
 
 // --- Scintilla message constants (subset used by Phase 1) -----------------
@@ -957,6 +1048,12 @@ pub const SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED: u32 = 24;
 /// the host formats each line's text with leading spaces so the
 /// rightmost digit lands in the same column for every line.
 pub const SC_MARGIN_TEXT: u32 = 4;
+/// `SC_MARGIN_NUMBER = 1` — type constant for Scintilla's built-in
+/// line-number margin, which formats and paints the numbers itself.
+/// `ui_win32` deliberately uses [`SC_MARGIN_TEXT`] instead so it can
+/// control right-alignment per line; `ui_gtk` uses this simpler
+/// built-in until the GTK backend grows the same margin plumbing.
+pub const SC_MARGIN_NUMBER: u32 = 1;
 /// `SC_MARGIN_SYMBOL = 0` — type constant for a margin that
 /// renders only markers (the `SC_MARKNUM_*` family). Code++ uses
 /// this for the change-history strip: a 4-px margin whose only
@@ -9823,8 +9920,17 @@ mod tests {
     /// (`vendor/scintilla/include/Scintilla.h:1387-1393`) produces on
     /// this target.
     ///
-    /// Values verified for `x86_64-pc-windows-msvc` / `aarch64-pc-windows-msvc`
-    /// (64-bit `void*`, 64-bit `Sci_Position`, natural alignment):
+    /// Values hold on any 64-bit target — verified for
+    /// `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`, and
+    /// `x86_64-unknown-linux-gnu`. The layout depends on pointer width,
+    /// not on the OS: every field is either a pointer, an `i32`, or an
+    /// `isize` (`Sci_Position`), so the struct is identical across
+    /// backends at a given width. Hence the `target_pointer_width`
+    /// gate rather than a per-OS one — a future 32-bit build would need
+    /// its own expectations, and should get its own arm here rather
+    /// than silently failing this one.
+    ///
+    /// 64-bit `void*`, 64-bit `Sci_Position`, natural alignment:
     ///   `hdc`         at 0   ( 8 bytes)
     ///   `hdc_target`  at 8   ( 8 bytes)
     ///   `rc`          at 16  (16 bytes)
@@ -9832,6 +9938,7 @@ mod tests {
     ///   `chrg`        at 48  (16 bytes)
     ///   size          = 64
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn range_to_format_full_layout_matches_c_abi() {
         use core::mem::{align_of, offset_of, size_of};
         assert_eq!(size_of::<Sci_RangeToFormatFull>(), 64);
@@ -9861,5 +9968,93 @@ mod tests {
         assert_eq!(align_of::<Sci_CharacterRangeFull>(), 8);
         assert_eq!(offset_of!(Sci_CharacterRangeFull, cp_min), 0);
         assert_eq!(offset_of!(Sci_CharacterRangeFull, cp_max), 8);
+    }
+}
+
+/// The FFI smoke test DESIGN.md §5.6 requires of this crate: link a real
+/// Scintilla, create a real instance, push text in and read it back.
+/// Catches build and link regressions that no amount of constant-checking
+/// would — a stale object file, a missing source in `build.rs`, or a
+/// calling-convention mismatch all surface here and nowhere else.
+///
+/// Requires a display, because `scintilla_new` builds a `GtkWidget` and
+/// GTK refuses to initialise without one. `#[ignore]` rather than a
+/// runtime display probe on purpose: a probe that skips silently reads
+/// as a pass in CI output, which is exactly the failure mode this test
+/// exists to prevent. Run it explicitly:
+///
+/// ```text
+/// cargo test -p codepp-scintilla-sys -- --ignored          # on a desktop
+/// xvfb-run cargo test -p codepp-scintilla-sys -- --ignored  # headless
+/// ```
+#[cfg(all(test, target_os = "linux"))]
+mod gtk_ffi_smoke {
+    use super::{
+        scintilla_new, scintilla_send_message, SCI_GETLENGTH, SCI_GETTEXT, SCI_INSERTTEXT,
+    };
+    use core::ffi::{c_char, c_int};
+
+    extern "C" {
+        /// GTK's fallible initialiser — returns 0 when no display is
+        /// reachable, where `gtk_init` would abort the process and take
+        /// the whole test binary with it.
+        fn gtk_init_check(argc: *mut c_int, argv: *mut *mut *mut c_char) -> c_int;
+    }
+
+    /// Payload for the round trip. Non-ASCII on purpose: a UTF-8
+    /// multi-byte sequence would be mangled by a byte-vs-character
+    /// length confusion anywhere in the FFI chain, so it makes the
+    /// length assertions below meaningfully stronger than plain ASCII
+    /// would. Trailing NUL because `SCI_INSERTTEXT` takes a C string.
+    const ROUND_TRIP_TEXT: &[u8] = b"Code++ \xE2\x86\x92 Scintilla on GTK\0";
+
+    #[test]
+    #[ignore = "creates a GTK widget; needs a display (see module docs)"]
+    fn scintilla_widget_round_trips_text() {
+        // SAFETY: the null/null form is GTK's documented "no command
+        // line to parse" call.
+        let inited = unsafe { gtk_init_check(core::ptr::null_mut(), core::ptr::null_mut()) };
+        assert_ne!(inited, 0, "gtk_init_check failed — no display available?");
+
+        // SAFETY: GTK is initialised, which is `scintilla_new`'s only
+        // precondition.
+        let sci = unsafe { scintilla_new() };
+        assert!(!sci.is_null(), "scintilla_new returned null");
+
+        let text = ROUND_TRIP_TEXT;
+
+        // SAFETY: `sci` is a live Scintilla widget; `text` is a
+        // NUL-terminated buffer that outlives the call, which is what
+        // SCI_INSERTTEXT's `lparam` requires.
+        unsafe {
+            scintilla_send_message(sci, SCI_INSERTTEXT, 0, text.as_ptr() as isize);
+        }
+
+        // Round-trip through Scintilla's own accessors rather than
+        // trusting the insert: `SCI_GETLENGTH` proves the document
+        // actually holds the bytes, not just that the call returned.
+        // SAFETY: same widget, pure query.
+        let len = unsafe { scintilla_send_message(sci, SCI_GETLENGTH, 0, 0) };
+        let expected_len = text.len() - 1; // minus the NUL
+        assert_eq!(
+            usize::try_from(len).expect("SCI_GETLENGTH returned a negative length"),
+            expected_len,
+            "document length disagrees with the inserted byte count"
+        );
+
+        // SCI_GETTEXT writes at most `wparam` bytes including the NUL it
+        // appends, so ask for len + 1 and size the buffer to match.
+        let mut buf = vec![0u8; expected_len + 1];
+        // SAFETY: `buf` has room for `expected_len + 1` bytes, which is
+        // exactly the cap handed to Scintilla as `wparam`.
+        unsafe {
+            scintilla_send_message(sci, SCI_GETTEXT, buf.len(), buf.as_mut_ptr() as isize);
+        }
+        buf.truncate(expected_len);
+        assert_eq!(
+            buf.as_slice(),
+            &text[..expected_len],
+            "text read back from Scintilla differs from what was inserted"
+        );
     }
 }

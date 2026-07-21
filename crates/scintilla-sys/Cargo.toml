@@ -18,3 +18,10 @@ name = "codepp_scintilla_sys"
 
 [build-dependencies]
 cc = "1.2"
+
+# Resolves GTK 3's include paths and link flags for the Scintilla GTK
+# backend. Build-dep only, never linked into the binary. Windows and
+# macOS builds never call it — the Win32 SDK has no pkg-config, and
+# Cocoa needs none.
+[target.'cfg(target_os = "linux")'.build-dependencies]
+pkg-config = { workspace = true }

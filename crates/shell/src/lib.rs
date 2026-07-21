@@ -10093,9 +10093,22 @@ mod tests {
             sanitize_basename_for_backup(Path::new("/etc/hosts")),
             "hosts"
         );
+        // A Windows path only splits on `\` when `std::path` is
+        // built for Windows. On Unix a backslash is an ordinary
+        // filename character, so the whole string *is* the
+        // basename and the sanitiser rewrites `:` and `\` to `_`.
+        // Both outcomes are correct and both stay inside
+        // `is_safe_backup_filename`'s grammar — assert the one
+        // that matches the host's path semantics.
+        #[cfg(windows)]
         assert_eq!(
             sanitize_basename_for_backup(Path::new(r"C:\Users\Max\foo.bar.baz")),
             "foo.bar.baz"
+        );
+        #[cfg(not(windows))]
+        assert_eq!(
+            sanitize_basename_for_backup(Path::new(r"C:\Users\Max\foo.bar.baz")),
+            "C__Users_Max_foo.bar.baz"
         );
     }
 

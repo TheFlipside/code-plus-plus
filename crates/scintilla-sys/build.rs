@@ -2,10 +2,14 @@
 // static libraries via the `cc` crate. See DESIGN.md §4.1.
 //
 // Layout:
-//   vendor/scintilla/src/*.cxx       — cross-platform editor core (33 files)
+//   vendor/scintilla/src/*.cxx       — cross-platform editor core (33 files,
+//                                      see `scintilla_core_sources`)
 //   vendor/scintilla/win32/*.cxx     — Win32 backend (3 files; ScintillaDLL.cxx
 //                                      is intentionally excluded — it's the DLL
 //                                      entry point, we link statically)
+//   vendor/scintilla/gtk/*.cxx       — GTK 3 backend (3 files + one C
+//                                      marshaller). See `build_scintilla_gtk`
+//                                      for why GTK 3 rather than GTK 4.
 //   vendor/lexilla/src/Lexilla.cxx   — lexer registry entry point
 //   vendor/lexilla/lexlib/*.cxx      — lexer base classes (12 files)
 //   vendor/lexilla/lexers/Lex*.cxx   — concrete lexers (Phase 4 m1 starter
@@ -27,6 +31,15 @@
 // comdlg32, advapi32, comctl32 — required by Scintilla's Win32 backend.
 
 use std::path::{Path, PathBuf};
+
+/// Warning opt-outs applied to every vendored third-party translation
+/// unit. See `build_scintilla_gtk` for the per-flag rationale; kept at
+/// module scope so the C++ and C builders there cannot drift apart.
+const VENDORED_WARNING_OPTOUTS: [&str; 3] = [
+    "-Wno-deprecated-declarations",
+    "-Wno-cast-function-type",
+    "-Wno-unused-parameter",
+];
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -60,45 +73,49 @@ fn main() {
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS");
 
-    if target_os != "windows" {
-        // Phase 5 adds the GTK and Cocoa backends. Until then, non-Windows
-        // targets get an empty rlib so the workspace still builds for CI.
-        println!(
-            "cargo:warning=scintilla-sys: native build is Windows-only in Phase 1; \
-             skipping on {target_os}."
-        );
-        return;
-    }
+    match target_os.as_str() {
+        "windows" => {
+            build_scintilla_win32(&scintilla);
+            build_lexilla(&scintilla, &lexilla);
 
-    build_scintilla_win32(&scintilla);
-    build_lexilla(&scintilla, &lexilla);
-
-    // Win32 system libraries that Scintilla's Win32 backend depends on.
-    // advapi32: registry (Reg*Key APIs in PlatWin.cxx).
-    // comctl32: common controls (used by Scintilla's auto-complete and call-tip).
-    for lib in &[
-        "user32", "imm32", "ole32", "oleaut32", "msimg32", "gdi32", "comdlg32", "advapi32",
-        "comctl32",
-    ] {
-        println!("cargo:rustc-link-lib=dylib={lib}");
+            // Win32 system libraries that Scintilla's Win32 backend depends on.
+            // advapi32: registry (Reg*Key APIs in PlatWin.cxx).
+            // comctl32: common controls (used by Scintilla's auto-complete and call-tip).
+            for lib in &[
+                "user32", "imm32", "ole32", "oleaut32", "msimg32", "gdi32", "comdlg32", "advapi32",
+                "comctl32",
+            ] {
+                println!("cargo:rustc-link-lib=dylib={lib}");
+            }
+        }
+        "linux" => {
+            println!("cargo:rerun-if-changed=vendor/scintilla/gtk");
+            build_scintilla_gtk(&scintilla);
+            build_lexilla(&scintilla, &lexilla);
+            // GTK's own libraries are emitted as `cargo:rustc-link-lib`
+            // lines by `pkg_config::probe_library` inside
+            // `build_scintilla_gtk` — no manual list needed here, unlike
+            // Win32 where the SDK has no pkg-config equivalent.
+        }
+        other => {
+            // Cocoa lands later in Phase 5. Until then macOS gets an empty
+            // rlib so the workspace still builds on the third CI runner.
+            println!(
+                "cargo:warning=scintilla-sys: no native backend for {other} yet; \
+                 skipping the Scintilla build (Cocoa lands in Phase 5)."
+            );
+        }
     }
 }
 
-fn build_scintilla_win32(scintilla: &Path) {
-    let mut build = cc::Build::new();
-    build
-        .cpp(true)
-        .std("c++17")
-        .define("STATIC_BUILD", None)
-        .define("UNICODE", None)
-        .define("_UNICODE", None)
-        .define("WIN32_LEAN_AND_MEAN", None)
-        .include(scintilla.join("include"))
-        .include(scintilla.join("src"))
-        .include(scintilla.join("win32"));
-
-    // Cross-platform editor core (alphabetical).
-    let core = [
+/// The cross-platform Scintilla editor core, shared verbatim by every
+/// backend. Only the platform layer (`win32/`, `gtk/`, later `cocoa/`)
+/// differs, so this list is the single source of truth — adding a file
+/// here reaches all backends at once.
+///
+/// Alphabetical, matching the order in `vendor/scintilla/src/`.
+fn scintilla_core_sources() -> [&'static str; 33] {
+    [
         "AutoComplete",
         "CallTip",
         "CaseConvert",
@@ -132,8 +149,118 @@ fn build_scintilla_win32(scintilla: &Path) {
         "UniqueString",
         "ViewStyle",
         "XPM",
-    ];
-    for f in &core {
+    ]
+}
+
+/// Compile Scintilla's GTK 3 backend.
+///
+/// **Why GTK 3 and not GTK 4:** Scintilla has no GTK 4 backend. Upstream
+/// `vendor/scintilla/doc/ScintillaDoc.html` documents support for "GTK
+/// 2.24 and 3.x" only, the highest version guard in `gtk/` is
+/// `GTK_CHECK_VERSION(3,22,0)`, and the source uses APIs GTK 4 removed
+/// outright (`GdkWindow`, `gtk_widget_get_window`, `gtk_container_add`,
+/// `gtk_widget_set_events`, `gdk_window_get_origin`). Targeting GTK 4
+/// would mean porting Scintilla's platform layer, which DESIGN.md §1.2
+/// rules out as an explicit non-goal. GTK 3.24 is the final, API-frozen
+/// GTK 3 series, so this is a stable target rather than a moving one.
+fn build_scintilla_gtk(scintilla: &Path) {
+    // `probe_library` emits the `cargo:rustc-link-lib` / `-L` lines for
+    // GTK and its transitive deps (gdk, glib, gobject, cairo, pango,
+    // atk, …) as a side effect, so the Rust link step is handled too.
+    let gtk = pkg_config::Config::new()
+        .probe("gtk+-3.0")
+        .expect("gtk+-3.0 not found. Install libgtk-3-dev (Debian/Ubuntu), gtk3-devel (Fedora), or gtk3 (Arch) — see docs/DEVELOPMENT.md §3.1.");
+    // `PlatGTK.cxx` and `ScintillaGTK.cxx` both `#include <gmodule.h>`,
+    // and upstream's `gtk/makefile` links `gmodule-2.0` explicitly.
+    // Mainstream distros ship that header in the same package as
+    // `glib.h`, so omitting this probe happens to work — but relying
+    // on that is an undeclared dependency, and the failure mode
+    // (missing header on a distro that splits them) is a confusing
+    // compile error rather than a clear one.
+    let gmodule = pkg_config::Config::new().probe("gmodule-2.0").expect(
+        "gmodule-2.0 not found; it ships with glib's dev package — see docs/DEVELOPMENT.md §3.1.",
+    );
+
+    let mut build = cc::Build::new();
+    build
+        .cpp(true)
+        .std("c++17")
+        .define("GTK", None)
+        // GLib raises its macro-deprecation notices through
+        // `#pragma GCC warning`, which no `-Wno-*` flag can suppress —
+        // this define is the documented opt-out. Needed because
+        // ScintillaGTKAccessible.cxx still uses `G_ADD_PRIVATE`'s
+        // predecessor; see the flag list below for the wider rationale.
+        .define("GLIB_DISABLE_DEPRECATION_WARNINGS", None)
+        .include(scintilla.join("include"))
+        .include(scintilla.join("src"))
+        .include(scintilla.join("gtk"));
+    for path in gtk.include_paths.iter().chain(&gmodule.include_paths) {
+        build.include(path);
+    }
+    // Silence warnings originating in vendored third-party C++. These
+    // are upstream Scintilla's to fix, not ours, and patching the
+    // vendored tree would fork it (DESIGN.md §4.1 pins release tags and
+    // expects a clean diff against the upstream tarball). Suppressing
+    // them keeps the build output signal-carrying so a warning in code
+    // we *do* own is visible. Each flag maps to a real, audited cause:
+    //   deprecated-declarations — ATK's pre-`G_ADD_PRIVATE` macros in
+    //       ScintillaGTKAccessible.cxx; GLib deprecated but still
+    //       supports them.
+    //   cast-function-type — the GObject type-system registration
+    //       idiom, which casts typed init functions to GInstanceInitFunc
+    //       / GInterfaceInitFunc. Load-bearing and correct by GObject's
+    //       contract; GCC cannot see that.
+    //   unused-parameter — signal handlers matching a GTK callback
+    //       signature that ignore some of their arguments.
+    for flag in &VENDORED_WARNING_OPTOUTS {
+        build.flag_if_supported(flag);
+    }
+
+    for f in &scintilla_core_sources() {
+        build.file(scintilla.join("src").join(format!("{f}.cxx")));
+    }
+    // GTK backend. ScintillaGTKAccessible.cxx is required — ScintillaGTK.cxx
+    // references `ScintillaGTKAccessible::` symbols directly.
+    for f in &["PlatGTK", "ScintillaGTK", "ScintillaGTKAccessible"] {
+        build.file(scintilla.join("gtk").join(format!("{f}.cxx")));
+    }
+    build.compile("scintilla");
+
+    // `scintilla-marshal.c` is plain C (GObject signal marshallers), so
+    // it needs its own `cc::Build` — `cpp(true)` applies to the whole
+    // builder and compiling C as C++ risks subtle linkage differences.
+    let mut marshal = cc::Build::new();
+    marshal
+        .define("GLIB_DISABLE_DEPRECATION_WARNINGS", None)
+        .include(scintilla.join("include"))
+        .include(scintilla.join("gtk"));
+    for path in gtk.include_paths.iter().chain(&gmodule.include_paths) {
+        marshal.include(path);
+    }
+    // Same vendored-source opt-outs as the C++ builder above — this is
+    // glib-genmarshal boilerplate, equally not ours to fix.
+    for flag in &VENDORED_WARNING_OPTOUTS {
+        marshal.flag_if_supported(flag);
+    }
+    marshal.file(scintilla.join("gtk").join("scintilla-marshal.c"));
+    marshal.compile("scintilla-marshal");
+}
+
+fn build_scintilla_win32(scintilla: &Path) {
+    let mut build = cc::Build::new();
+    build
+        .cpp(true)
+        .std("c++17")
+        .define("STATIC_BUILD", None)
+        .define("UNICODE", None)
+        .define("_UNICODE", None)
+        .define("WIN32_LEAN_AND_MEAN", None)
+        .include(scintilla.join("include"))
+        .include(scintilla.join("src"))
+        .include(scintilla.join("win32"));
+
+    for f in &scintilla_core_sources() {
         build.file(scintilla.join("src").join(format!("{f}.cxx")));
     }
 

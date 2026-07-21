@@ -1,0 +1,24 @@
+[package]
+name = "codepp-ui-gtk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "GTK 3 UI backend: window, menus, tabs, dialogs."
+
+[lints]
+workspace = true
+
+[lib]
+name = "codepp_ui_gtk"
+
+# Linux-only for now. Scintilla's GTK backend also builds on the BSDs and
+# on macOS/XQuartz, but Code++ targets Cocoa natively there, so widening
+# this gate would create a second, unwanted macOS backend.
+[target.'cfg(target_os = "linux")'.dependencies]
+codepp-editor        = { workspace = true }
+codepp-scintilla-sys = { workspace = true }
+gtk                  = { workspace = true }
+tracing              = { workspace = true }

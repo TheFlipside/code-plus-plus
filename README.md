@@ -15,7 +15,7 @@ The promise is concrete:
 - **Same UX as Notepad++.** Tabs, sessions, encoding control, EOL control, find-in-files, syntax highlighting via Scintilla's lexers — the keyboard shortcuts and menus you already know.
 - **Same plugin ecosystem.** Existing Notepad++ plugin DLLs load into Code++ on Windows unchanged. The same plugin source compiles to `.so`/`.dylib` on Linux and macOS.
 - **Same performance class.** Cold start under 80 ms, keystroke latency under 5 ms p99, empty-buffer footprint under 25 MB. These are not aspirations — they are constraints enforced at every phase boundary.
-- **Truly cross-platform.** Native Win32, GTK 4, and Cocoa front-ends over a single Rust core. No Electron. No browser engine. No GC runtime.
+- **Truly cross-platform.** Native Win32, GTK 3, and Cocoa front-ends over a single Rust core. No Electron. No browser engine. No GC runtime.
 
 ---
 

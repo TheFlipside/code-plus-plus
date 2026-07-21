@@ -1,9 +1,28 @@
 //! Safe Scintilla wrapper for Code++.
 //!
-//! Phase 1: `EditorHandle` carries the raw HWND plus the direct-call
-//! `(fn_ptr, instance_ptr)` pair captured once at construction. Hot
-//! operations route through `send` (the direct call); window-managed
-//! ones still use `SendMessage` from the UI crate. See DESIGN.md §4.2.
+//! Phase 1: `EditorHandle` carries the raw native control handle plus
+//! the direct-call `(fn_ptr, instance_ptr)` pair captured once at
+//! construction. Hot operations route through `send` (the direct call);
+//! window-managed ones still use `SendMessage` from the UI crate. See
+//! DESIGN.md §4.2.
+//!
+//! # Portability
+//!
+//! This crate contains no platform code — it holds three opaque
+//! pointers and translates Rust types into Scintilla's
+//! `wparam`/`lparam` shapes. The handle's first field is a Win32
+//! `HWND` on Windows and a `GtkWidget*` on GTK; `editor` never
+//! dereferences it, so the same code serves both.
+//!
+//! Exactly two things carry a `#[cfg]`, both for concrete
+//! link-level reasons rather than any behavioural difference:
+//!
+//! - `EditorHandle::from_gtk_widget` (Linux) — the per-backend
+//!   construction path; the Win32 side captures the same pair via
+//!   `SendMessage` in `ui_win32` and calls [`EditorHandle::new`].
+//! - `EditorHandle::set_lexer_by_name` (Windows + Linux) — the only
+//!   method that references a Lexilla symbol, and Lexilla is only
+//!   built on targets with a Scintilla backend.
 //!
 //! # Allowed pedantic lints, with rationale
 //!
@@ -20,7 +39,6 @@
 //! lines to a thin wrapper crate with no real reader-defence
 //! value; the inner attributes here document the trade-off once.
 
-#![cfg(target_os = "windows")]
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
@@ -29,19 +47,24 @@
 
 use core::ffi::c_void;
 
+// Lexilla is only built on the backends that have a Scintilla build,
+// so `CreateLexer` exists on exactly those targets — see the gate on
+// its declaration in `scintilla-sys`. Imported separately so the
+// dependency is visible rather than buried in the bulk list below.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+use codepp_scintilla_sys::CreateLexer;
 use codepp_scintilla_sys::{
-    sptr_t, uptr_t, CreateLexer, ScintillaDirectFunction, SCI_BRACEBADLIGHT, SCI_BRACEHIGHLIGHT,
-    SCI_BRACEMATCH, SCI_GETCHARAT, SCI_GETCURRENTPOS, SCI_GETENDSTYLED, SCI_GETRANGEPOINTER,
-    SCI_GETTARGETEND, SCI_GETTARGETSTART, SCI_LINEFROMPOSITION, SCI_MARKERDEFINE,
-    SCI_MARKERENABLEHIGHLIGHT, SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE,
-    SCI_POSITIONFROMLINE, SCI_REPLACETARGET, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT,
-    SCI_SEARCHPREV, SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE,
-    SCI_SETCHANGEHISTORY, SCI_SETFOLDFLAGS, SCI_SETFOLDMARGINCOLOUR, SCI_SETFOLDMARGINHICOLOUR,
-    SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN, SCI_SETMARGINSENSITIVEN,
-    SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETPROPERTY, SCI_SETSEARCHFLAGS, SCI_SETSTYLING,
-    SCI_SETTARGETRANGE, SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD,
-    SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE,
-    SCI_STYLESETUNDERLINE,
+    sptr_t, uptr_t, ScintillaDirectFunction, SCI_BRACEBADLIGHT, SCI_BRACEHIGHLIGHT, SCI_BRACEMATCH,
+    SCI_GETCHARAT, SCI_GETCURRENTPOS, SCI_GETENDSTYLED, SCI_GETRANGEPOINTER, SCI_GETTARGETEND,
+    SCI_GETTARGETSTART, SCI_LINEFROMPOSITION, SCI_MARKERDEFINE, SCI_MARKERENABLEHIGHLIGHT,
+    SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE, SCI_POSITIONFROMLINE,
+    SCI_REPLACETARGET, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT, SCI_SEARCHPREV,
+    SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE, SCI_SETCHANGEHISTORY,
+    SCI_SETFOLDFLAGS, SCI_SETFOLDMARGINCOLOUR, SCI_SETFOLDMARGINHICOLOUR, SCI_SETILEXER,
+    SCI_SETKEYWORDS, SCI_SETMARGINMASKN, SCI_SETMARGINSENSITIVEN, SCI_SETMARGINTYPEN,
+    SCI_SETMARGINWIDTHN, SCI_SETPROPERTY, SCI_SETSEARCHFLAGS, SCI_SETSTYLING, SCI_SETTARGETRANGE,
+    SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT,
+    SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE, SCI_STYLESETUNDERLINE,
 };
 
 /// Opaque handle to a Scintilla editor control.
@@ -84,6 +107,13 @@ impl EditorHandle {
     ///   - calling `SendMessage(hwnd, SCI_GETDIRECTPOINTER, 0, 0)` to
     ///     obtain the instance pointer.
     ///
+    /// GTK callers should prefer `Self::from_gtk_widget`, which does
+    /// the equivalent capture through `scintilla_send_message`. Plain
+    /// code span rather than an intra-doc link on purpose: that method
+    /// is `#[cfg(target_os = "linux")]`, so a link here would be
+    /// unresolvable — and a `rustdoc::broken_intra_doc_links` warning —
+    /// on every `cargo doc` run targeting Windows or macOS.
+    ///
     /// # Safety
     ///
     /// `direct_fn` and `direct_ptr` must be the matching pair returned by
@@ -100,6 +130,77 @@ impl EditorHandle {
             direct_fn,
             direct_ptr,
         }
+    }
+
+    /// Capture the direct-call pair from a Scintilla `GtkWidget*` and
+    /// build a handle around it.
+    ///
+    /// The GTK counterpart of the `SendMessage`-based capture documented
+    /// on [`Self::new`]: `scintilla_send_message` is the GTK backend's
+    /// message entry point, and `SCI_GETDIRECTFUNCTION` /
+    /// `SCI_GETDIRECTPOINTER` are handled there exactly as they are on
+    /// Win32 (`vendor/scintilla/gtk/ScintillaGTK.cxx`). Once captured,
+    /// every hot-path call goes through [`Self::send`] and never touches
+    /// GTK again — the §4.2 speed path is identical on both backends.
+    ///
+    /// Returns `None` if Scintilla hands back a null function or
+    /// instance pointer, which would mean `widget` is not a Scintilla
+    /// widget. Callers must treat that as a fatal setup error rather
+    /// than continuing with a half-built editor.
+    ///
+    /// # Safety
+    ///
+    /// `widget` must be a live, non-null pointer returned by
+    /// `scintilla_new()` and not yet destroyed. Passing any other
+    /// pointer is undefined behaviour — `scintilla_send_message`
+    /// casts it to a `ScintillaObject` without validation.
+    ///
+    /// Non-null is necessary but **not sufficient**, and the gap is
+    /// not checkable from Rust. `scintilla_init` wraps its
+    /// `new ScintillaGTK(...)` in a `catch (...)`, so a throwing
+    /// constructor — realistically an allocation failure during widget
+    /// setup — leaves a fully-formed `GtkWidget` whose interior
+    /// `pscin` is still null, and `scintilla_new` returns it anyway.
+    /// `scintilla_send_message` then dereferences that null without a
+    /// guard, so the first call below would fault inside vendored C++
+    /// *before* the `raw_fn == 0` check further down could reject it.
+    /// The `None` return therefore covers "not a Scintilla widget",
+    /// not "a Scintilla widget that failed to construct".
+    ///
+    /// In practice this needs local memory exhaustion at window-
+    /// construction time; it is not reachable from file contents or
+    /// plugin input, and it faults rather than corrupting memory. It
+    /// is called out because the obvious reading of "non-null implies
+    /// usable" is wrong here, and because the fix would have to live
+    /// in vendored source that DESIGN.md §4.1 keeps unforked.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub unsafe fn from_gtk_widget(widget: *mut c_void) -> Option<Self> {
+        use codepp_scintilla_sys::{
+            scintilla_send_message, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+        };
+
+        // SAFETY: the caller guarantees `widget` is a live Scintilla
+        // widget; both messages are pure queries with no side effects.
+        let (raw_fn, direct_ptr) = unsafe {
+            (
+                scintilla_send_message(widget, SCI_GETDIRECTFUNCTION, 0, 0),
+                scintilla_send_message(widget, SCI_GETDIRECTPOINTER, 0, 0),
+            )
+        };
+        if raw_fn == 0 || direct_ptr == 0 {
+            return None;
+        }
+
+        // SAFETY: a non-zero `SCI_GETDIRECTFUNCTION` result is, by
+        // Scintilla's contract, a pointer to `ScintillaGTK::DirectFunction`,
+        // whose C++ signature is exactly `ScintillaDirectFunction`.
+        let direct_fn: ScintillaDirectFunction =
+            unsafe { core::mem::transmute::<usize, ScintillaDirectFunction>(raw_fn as usize) };
+
+        // SAFETY: the pair was just captured together from this one widget,
+        // which is precisely `new`'s requirement.
+        Some(unsafe { Self::new(widget, direct_fn, direct_ptr as *mut c_void) })
     }
 
     /// Direct-call into Scintilla. The hot path — every keystroke, every
@@ -142,6 +243,14 @@ impl EditorHandle {
     /// **not** the way to detach a lexer; use [`Self::clear_lexer`]
     /// instead, which sends `SCI_SETILEXER(0, 0)` per the documented
     /// Scintilla contract.
+    ///
+    /// Available only where Lexilla is actually built — Windows and
+    /// Linux today. On a target whose `build.rs` arm produces an empty
+    /// archive (macOS, until the Cocoa backend lands) this method does
+    /// not exist, so a premature caller fails to compile instead of
+    /// failing to link. [`Self::clear_lexer`] has no such gate: it is
+    /// a plain `SCI_SETILEXER(0, 0)` and touches no Lexilla symbol.
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[must_use]
     pub fn set_lexer_by_name(&self, name: &str) -> bool {
         // CreateLexer needs a NUL-terminated `char*`. Build the buffer

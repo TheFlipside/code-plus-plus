@@ -49,6 +49,72 @@ wildcards = "deny"
 [advisories]
 version = 2
 yanked = "deny"
+# Advisory exceptions. Unlike the license allowlist above — where a
+# non-allowlisted license means "find a different crate" — these exist
+# because there *is* no different crate: `ui_gtk` must bind GTK 3, and
+# GTK 3 is the only toolkit version Scintilla supports (DESIGN.md §4.1).
+# The gtk-rs project archived its GTK 3 bindings in favour of gtk4-rs,
+# which Scintilla cannot use.
+#
+# Every entry below must stay justified. Re-audit whenever the GTK
+# dependency is touched, and delete the whole block if Scintilla ever
+# gains a GTK 4 backend and `ui_gtk` migrates to gtk4-rs.
+ignore = [
+    # --- gtk3-rs, archived upstream --------------------------------
+    #
+    # All seven are `informational = "unmaintained"`, not vulnerabilities:
+    # the maintainers archived the repositories and pointed users at
+    # gtk4-rs. Accepted because GTK 3.24 is the final GTK 3 series and
+    # is itself API-frozen — there is no upstream API churn left for
+    # the bindings to fail to track, so "unmaintained" here means
+    # "finished", not "rotting". The `-sys` crates in particular are
+    # thin `extern "C"` declarations against a frozen C ABI.
+    "RUSTSEC-2024-0412", # gdk
+    "RUSTSEC-2024-0413", # atk
+    "RUSTSEC-2024-0415", # gtk
+    "RUSTSEC-2024-0416", # atk-sys
+    "RUSTSEC-2024-0418", # gdk-sys
+    "RUSTSEC-2024-0419", # gtk3-macros
+    "RUSTSEC-2024-0420", # gtk-sys
+
+    # --- proc-macro-error, via gtk3-macros AND glib-macros ---------
+    #
+    # Also `unmaintained`. Not a gtk-rs crate itself; it arrives
+    # through two proc-macro crates in the tree, `gtk3-macros` and
+    # `glib-macros`. Exposure is limited to compile time — proc-macro
+    # crates run in the compiler, so neither they nor
+    # `proc-macro-error` contribute any code to the shipped binary.
+    #
+    # Note this entry does NOT necessarily retire with the GTK 3
+    # decision, unlike the six above: `glib-macros` reaches us via
+    # `glib`, which gtk4-rs also depends on. Re-check it on its own
+    # merits if `ui_gtk` ever migrates, rather than deleting the whole
+    # block wholesale.
+    "RUSTSEC-2024-0370", # proc-macro-error
+]
+
+# --- Audited, deliberately NOT ignored -----------------------------
+#
+# RUSTSEC-2024-0429 (glib, `unsound`) applies to glib >=0.15, <0.20 and
+# our tree resolves glib 0.18.5, so it *is* present. It is absent from
+# the list above only because cargo-deny's current policy does not
+# raise it to an error — adding the entry produces an
+# `advisory-not-detected` warning instead. Recorded here so the audit
+# is not lost: if cargo-deny starts erroring on it, add
+# "RUSTSEC-2024-0429" to `ignore` with this rationale.
+#
+# Why it is acceptable: the unsound `impl_get` is reachable only
+# through `glib::VariantStrIter::{next, nth, last, next_back,
+# nth_back}` — iterating a GVariant array of strings. Code++ never
+# constructs or iterates a GVariant; `ui_gtk` uses widgets, signals and
+# Scintilla's own message API, none of which route through
+# `VariantStrIter`. Unfixable in place regardless: the patch landed in
+# glib 0.20 and gtk3-rs 0.18 pins glib 0.18, so the only escape would
+# be dropping GTK 3 — and with it Linux support.
+#
+# Enforcement, so this stays true rather than merely asserted:
+#     grep -rn "VariantStrIter\|Variant" crates/ui_gtk/
+# must stay empty. Re-run it when touching `ui_gtk`.
 
 [sources]
 unknown-registry = "deny"

@@ -15,8 +15,31 @@ workspace = true
 name = "codepp"
 path = "src/main.rs"
 
+# UI backend selection (DESIGN.md §7.2).
+#
+# Both backend features are on by default, which sounds like it would
+# link two UIs but does not: each backing dependency is declared under a
+# `[target.'cfg(target_os = ...)'.dependencies]` block, so on any given
+# target only one of them resolves to an actual crate and the other
+# feature is inert. Cargo has no way to express a target-conditional
+# `default = [...]`, and this is the idiomatic way around that — it
+# keeps a plain `cargo build -p codepp-app` working on every platform.
+#
+# To pin a backend explicitly (useful once macOS can choose between
+# Cocoa and GTK):
+#   cargo run -p codepp-app --no-default-features --features gtk
+[features]
+default = ["win32", "gtk"]
+win32 = ["dep:codepp-ui-win32"]
+gtk = ["dep:codepp-ui-gtk"]
+
+# Optional so the `dep:` feature syntax above controls them, plus a
+# `cfg` gate so the default backend is the platform-native one.
 [target.'cfg(target_os = "windows")'.dependencies]
-codepp-ui-win32 = { workspace = true }
+codepp-ui-win32 = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+codepp-ui-gtk = { workspace = true, optional = true }
 
 [build-dependencies]
 # Shared resource-compiler plumbing. The build script uses

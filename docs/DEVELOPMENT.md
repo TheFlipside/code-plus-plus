@@ -91,7 +91,7 @@ If `cl` is not found, you opened the wrong shell. Use the **Developer** PowerShe
 
 ## 3. Linux
 
-Linux support is part of Phase 5; until then, Linux contributors can still build `core`, `scintilla-sys`, `editor`, and `plugin-host` headlessly. The full app requires GTK 4.
+Linux support lands in Phase 5. As of Phase 5 m1 the Linux build compiles real Scintilla against GTK 3, so `libgtk-3-dev` (or your distro's equivalent) is a **hard requirement** for `cargo build --workspace` — not an optional extra. GTK 3 rather than GTK 4 because Scintilla has no GTK 4 backend; see DESIGN.md §4.1.
 
 The instructions below cover Ubuntu 24.04 / Debian 12. Translate to your distro's package names as needed.
 
@@ -104,27 +104,26 @@ sudo apt install -y \
     pkg-config \
     git \
     curl \
-    libgtk-4-dev \
+    libgtk-3-dev \
     libglib2.0-dev \
     libpango1.0-dev \
     libcairo2-dev \
-    libgdk-pixbuf-2.0-dev \
-    libgraphene-1.0-dev
+    libgdk-pixbuf-2.0-dev
 ```
 
 - `build-essential` provides `gcc`, `g++`, `make`, and `libc6-dev` — required by `cc` for Scintilla.
-- `libgtk-4-dev` and its companions are needed once Phase 5 starts. Installing now avoids a second round-trip.
+- `libgtk-3-dev` and its companions are required from Phase 5 m1 onward — `crates/scintilla-sys/build.rs` probes `gtk+-3.0` via `pkg-config` and fails the build if it is missing. Self-hosted CI runners with the `linux` label need it installed too.
 
 On Fedora:
 
 ```sh
-sudo dnf install -y gcc gcc-c++ make pkgconf-pkg-config git curl gtk4-devel
+sudo dnf install -y gcc gcc-c++ make pkgconf-pkg-config git curl gtk3-devel
 ```
 
 On Arch:
 
 ```sh
-sudo pacman -S --needed base-devel pkgconf git curl gtk4
+sudo pacman -S --needed base-devel pkgconf git curl gtk3
 ```
 
 ### 3.2 Rust toolchain
@@ -142,12 +141,35 @@ Do not install `rustc` or `cargo` from `apt`/`dnf`/`pacman` — distro packages 
 ```sh
 gcc --version
 g++ --version
-pkg-config --modversion gtk4   # only required for ui_gtk; safe to skip pre-Phase-5
+pkg-config --modversion gtk+-3.0   # required: scintilla-sys probes this on Linux
 rustc --version
 cargo --version
 git submodule status
 cargo build --workspace
+cargo run -p codepp-app          # opens the GTK window
 ```
+
+The FFI smoke test that proves Scintilla is really linked and really
+working needs a display, so it is marked `#[ignore]` and does not run in
+the default `cargo test`. Run it explicitly:
+
+```sh
+cargo test -p codepp-scintilla-sys -- --ignored             # on a desktop
+xvfb-run cargo test -p codepp-scintilla-sys -- --ignored     # headless
+```
+
+### 3.4 Self-hosted CI runner provisioning
+
+The `linux`-labelled Forgejo runner needs `libgtk-3-dev` installed on
+the host. `.forgejo/workflows/ci.yml` deliberately installs nothing (see
+DESIGN.md §9.3 — no `actions/cache`, no third-party setup actions), so
+this is a one-time manual step per runner. Without it, `cargo build
+--workspace` fails in `crates/scintilla-sys/build.rs` at the
+`pkg_config` probe.
+
+Expect the Linux runner's first build after this change to take 1–3
+minutes longer: it now compiles the vendored Scintilla and Lexilla C++
+sources, which it previously skipped.
 
 ---
 
@@ -252,7 +274,7 @@ The harness loads the plugin, calls each required entry point, and asserts the l
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `error: linker 'link.exe' not found` on Windows | MSVC not on PATH | Open a **Developer** PowerShell, not a plain one. |
-| `pkg-config exited with status code 1` on Linux | `libgtk-4-dev` missing | Install GTK dev packages from §3.1. |
+| `gtk+-3.0 not found` / `pkg-config exited with status code 1` on Linux | `libgtk-3-dev` missing | Install GTK dev packages from §3.1. |
 | `error: failed to run custom build command for scintilla-sys` | Submodules not initialized | `git submodule update --init --recursive`. |
 | Build is slow on every `cargo build` | Incremental compilation off, or full rebuild of Scintilla each time | Confirm no `cargo clean` in your loop; Scintilla object files are cached in `target/`. |
 | `cargo run -p app` opens window then exits immediately | Phase 0 demo behavior — empty window with File→Exit menu only | Expected before Phase 1. |
