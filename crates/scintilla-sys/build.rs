@@ -73,6 +73,47 @@ fn main() {
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS");
 
+    // Escape hatch for cross-target *type checking*.
+    //
+    // `cargo check --target x86_64-pc-windows-msvc` from a Linux host
+    // is the only way to typecheck `ui_win32`'s ~29k lines without a
+    // Windows machine — but it dies here, because build scripts still
+    // *run* under `cargo check` and `cc` cannot find `windows.h`. That
+    // leaves the largest crate in the workspace verifiable only by
+    // pushing to CI, which is how the Phase 5 m1 `pkg_config` breakage
+    // reached both non-Linux runners.
+    //
+    // With this set, the script emits no native library and no link
+    // directives. `cargo check` is then fully useful (it never links);
+    // `cargo build` will produce an artifact that **cannot link** and
+    // must not be shipped, hence the loud warning. Never set this in
+    // CI — the runners have real toolchains and must exercise them.
+    println!("cargo:rerun-if-env-changed=CODEPP_SKIP_NATIVE_BUILD");
+    println!("cargo:rerun-if-env-changed=CI");
+    if std::env::var_os("CODEPP_SKIP_NATIVE_BUILD").is_some() {
+        // Hard-stop in CI rather than warn. A binary or test target
+        // that needs the archive fails at link time with unresolved
+        // `scintilla_*` symbols, so the shipped artifact is never at
+        // risk — but a library-only job (`cargo check -p codepp-core`,
+        // say) links nothing and would exit 0 with the native build
+        // silently skipped. That is a false green on the one gate
+        // whose whole job is to catch what local builds miss. There is
+        // no legitimate reason for a runner to set this: the runners
+        // have real toolchains and exist to exercise them.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "CODEPP_SKIP_NATIVE_BUILD must never be set in CI — it skips the Scintilla and \
+             Lexilla native build, which would let a library-only job pass without ever \
+             compiling them. Unset it in the workflow or runner environment."
+        );
+        println!(
+            "cargo:warning=CODEPP_SKIP_NATIVE_BUILD is set: skipping the Scintilla/Lexilla \
+             native build for {target_os}. Type checking only — anything that actually links \
+             (a binary, a test target) will fail with unresolved scintilla_* symbols."
+        );
+        return;
+    }
+
     match target_os.as_str() {
         "windows" => {
             build_scintilla_win32(&scintilla);

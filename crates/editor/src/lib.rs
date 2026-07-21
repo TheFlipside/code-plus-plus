@@ -45,6 +45,13 @@
     clippy::cast_sign_loss
 )]
 
+// Per-language lexer themes. Gated to the targets that build Lexilla,
+// for the same reason `set_lexer_by_name` is — the module's entry
+// point calls it, so on a target with an empty Scintilla archive the
+// whole table is unreachable anyway.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub mod theme;
+
 use core::ffi::c_void;
 
 // Lexilla is only built on the backends that have a Scintilla build,

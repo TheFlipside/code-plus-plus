@@ -270,6 +270,24 @@ Windows SDK — that failure is expected and still informative, because
 everything before it (build-script compilation, all Rust type
 checking) has already succeeded by then.
 
+To typecheck the Windows-only crates — `ui_win32` is the largest in the
+workspace and is `#![cfg(target_os = "windows")]`, so a Linux `cargo
+build` compiles it to an *empty* rlib and verifies nothing — set
+`CODEPP_SKIP_NATIVE_BUILD=1`. That makes `crates/scintilla-sys/build.rs`
+skip compiling the vendored C/C++, which is the only thing stopping a
+cross-target check on a machine with no Windows SDK:
+
+```sh
+CODEPP_SKIP_NATIVE_BUILD=1 cargo check -p codepp-ui-win32 --all-targets \
+    --target x86_64-pc-windows-msvc
+```
+
+`cargo check` never links, so skipping the native build costs nothing
+there. Anything that *does* link — a binary or a test target — fails
+with unresolved `scintilla_*` symbols instead, and the build script
+hard-errors if it sees the variable alongside `CI`. Never set it in a
+workflow or runner environment.
+
 **This does not cover host-conditional dependencies.** Cargo matches
 `[target.'cfg(...)'.build-dependencies]` against the **host** triple,
 not the `--target` one, because build scripts run on the host. A build

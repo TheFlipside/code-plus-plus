@@ -32,7 +32,7 @@ residual rows formally tracked).
 
 | Glyph | Meaning |
 | --- | --- |
-| ✅ | Keywords + theme both wired in `Win32Ui::apply_lang`'s table. Pick this language from the Language menu and a sample file picks up visibly distinct colours for comments, strings, numbers, and keywords. |
+| ✅ | Keywords + theme both wired in `codepp_editor::theme`'s table. Pick this language from the Language menu and a sample file picks up visibly distinct colours for comments, strings, numbers, and keywords. |
 | 🟡 | Lexer attached and tokenising; no host keyword list and no host theme. Buffer renders uniformly black-on-white because every `SCE_*_*` style resolves to `STYLE_DEFAULT` after `SCI_STYLECLEARALL`. (Pre-2026-05-13: this row also covered "lexer compiled but unregistered in `LexillaShim.cxx`'s catalog"; that gap is now closed for every `LANG_TABLE` row with a non-`None` lexer.) |
 | ⚫ | No Lexilla lexer (`LANG_TABLE` row has `lexer: None`). Either by design (`L_TEXT` — plain text never highlights) or because no Lexilla lexer matches the language. Effectively a permanent state for the named row. |
 | — (Keywords column only) | Not applicable. The lexer takes no wordlists at all — host installs none by design. Currently used for `props` (INI / Properties — a pure line-prefix classifier that ignores its `WordList *[]` parameter), `registry` (Windows Registry files — a state-machine lexer whose `WordListSet` unconditionally returns -1, actively REJECTING any keyword install), `txt2tags` (structural markup — the `LexerModule` registration takes no `wordListDesc` argument at all and the paint function's `WordList **` parameter is unnamed and never referenced), `srec` (Motorola S-Record ROM files — the `LexerModule` constructor takes 5 args ending in NULL `wordListDesc[]` and the paint function's unnamed `WordList *[]` parameter is never referenced), `ihex` (Intel HEX ROM files — same `LexHex.cxx` source as `srec` with the same 5-arg NULL-`wordListDesc[]` LexerModule registration), and `tehex` (Tektronix extended HEX ROM files — third and final member of the `LexHex.cxx` trio with the same zero-wordlist contract). A row with `—` in the Keywords column and ✅ in the Theme column is still ✅ overall: the wiring is complete, there are simply no keywords to wire. |
@@ -41,12 +41,15 @@ residual rows formally tracked).
 ## How to mark a row ✅
 
 The Phase 4.5 framework lives in
-[`crates/ui_win32/src/lib.rs`](../crates/ui_win32/src/lib.rs)
-under the "Phase 4.5 — table-driven language theme framework"
-banner. `Win32Ui::apply_lang` dispatches through
-`lang_theme(LangType) -> Option<&'static LangTheme>` — adding
-a row means one `else if` branch in that function plus a small
-data block of consts (keywords, styles, italic, bold, theme).
+[`crates/editor/src/theme.rs`](../crates/editor/src/theme.rs).
+It moved there from `ui_win32` in Phase 5 m2a so the GTK backend
+could share it rather than duplicate ~8000 lines of table; nothing
+in it is platform-specific. Each backend's `apply_lang` calls
+`codepp_editor::theme::apply_lang_theme`, which dispatches through
+`lang_theme(LangType) -> Option<&'static LangTheme>` — adding a row
+means one `else if` branch in that function plus a small data block
+of consts (keywords, styles, italic, bold, theme). The module's own
+doc comment carries the same recipe as this section.
 
 For each new language:
 
@@ -63,8 +66,8 @@ For each new language:
    multiple keyword classes — Lua / SQL / HTML — add
    `<LANG>_KEYWORDS2` / `_KEYWORDS3` for the secondary
    classes.) These stay in `core::lang` so a future tool or
-   plugin can read them without depending on `ui_win32`.
-3. **Style mapping.** In `crates/ui_win32/src/lib.rs`,
+   plugin can read them without depending on `editor`.
+3. **Style mapping.** In `crates/editor/src/theme.rs`,
    underneath the existing `CPP_STYLES` / `RUST_STYLES` blocks,
    author `<LANG>_STYLES: &[(usize, StyleSlot)]` listing every
    `SCE_*_INDEX` the lexer emits paired with its palette slot
@@ -98,7 +101,7 @@ For each new language:
    row.)
 
 The framework itself has its own unit tests
-(`lang_theme_tests` in `ui_win32`) verifying that wired
+(`lang_theme_tests` in `codepp_editor::theme`) verifying that wired
 languages return a `Some(&theme)` with a non-empty keyword
 list and a substantive style mapping, that LexCPP-family
 languages share their style table by reference, and that
@@ -108,7 +111,8 @@ extends these tests as appropriate.
 ## Coverage as of 2026-05-13
 
 Phase 4.5 framework landed in an earlier commit; the table-driven
-`lang_theme()` dispatch in `ui_win32` is wired. C, C++, and Rust
+`lang_theme()` dispatch is wired (in `ui_win32` at the time; it moved
+to `codepp_editor::theme` in Phase 5 m2a). C, C++, and Rust
 were migrated onto it as the no-op verification; PHP is the first
 language added on top of the new framework. The framework's unit
 tests (in the `lang_theme_tests` module) pin the contract going
@@ -1328,7 +1332,7 @@ the rest of the deferred cluster together.
 `StyleSlot::Lifetime` — direct precedent at `SCE_PL_SCALAR` /
 `SCE_PL_ARRAY` / `SCE_PL_HASH` / `SCE_PL_SYMBOLTABLE → Lifetime`
 in `PERL_STYLES`. The `Lifetime` slot is documented at the
-`StyleSlot` enum (`crates/ui_win32/src/lib.rs:3074-3077`) as
+`StyleSlot` enum (`crates/editor/src/theme.rs`) as
 reusable for "scoped binding" highlights; Bash's `$x` is the
 canonical version of the sigil-tagged-variable archetype Perl
 inherited from sh. Uniform routing across SCALAR + PARAM matches
@@ -1978,7 +1982,7 @@ pins (`defun` in class 0, `&rest` in class 1), and 10 cross-language
 non-reuse pins.
 
 **Scheme (2026-07-02):** rides the same Lexilla `lisp` lexer as
-L_LISP — `SCHEME_THEME` in `ui_win32/src/lib.rs` reuses `LISP_STYLES`
+L_LISP — `SCHEME_THEME` in `editor/src/theme.rs` reuses `LISP_STYLES`
 / `LISP_ITALIC` / `LISP_BOLD` by direct `&'static` reference (pinned
 by `std::ptr::eq` in
 `scheme_reuses_lexlisp_theme_with_r7rs_wordlists`). Only the
@@ -2965,7 +2969,7 @@ deliberately unmapped):**
   painting it would tint every bare name in an Ada source file
   with a palette accent. Every neighbor themed lexer (C, C++,
   Pascal, VHDL, KIXtart, Caml, AutoIt) omits its `_IDENTIFIER`
-  slot for the same reason — the KIX banner in `ui_win32/src/lib.rs`
+  slot for the same reason — the KIX banner in `editor/src/theme.rs`
   documents this explicitly ("SHOULD paint as default text so the
   reader isn't visually assaulted by every function name"). Ada
   matches the convention.
