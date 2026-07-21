@@ -1122,10 +1122,27 @@ mod tests {
     }
 
     #[test]
-    fn second_start_cancels_first() {
-        // Build a tree large enough that a job can't complete
-        // between back-to-back `start` calls. 200 small files is
-        // enough on debug builds.
+    fn second_start_preempts_the_prior_job() {
+        // What preemption actually guarantees, per this module's
+        // header: a new `start` flips the prior job's cancel flag, the
+        // walker exits at its next entry-loop boundary, workers exit
+        // between files, and the coordinator emits exactly one terminal
+        // event per started job.
+        //
+        // Note what that does NOT guarantee: that the prior job's
+        // terminal event is `Cancelled`. A job that has already
+        // finished its walk observes the flag only after emitting
+        // `Done`, and that is legal, documented behaviour — the flag is
+        // a request to stop early, not a promise that the job had work
+        // left. An earlier version of this test asserted `Cancelled`
+        // and was flaky at roughly one run in three, because on a fast
+        // machine the first job really can finish a 200-file tree
+        // before the second `start` lands. Enlarging the corpus would
+        // only move that threshold, not remove it.
+        //
+        // So assert the two things that are deterministic — the flag is
+        // set, and each job terminates exactly once — and accept either
+        // terminal variant for the preempted job.
         let (tx, rx) = unbounded();
         let mut orch = FifOrchestrator::new(tx);
         let dir = tempdir().unwrap();
@@ -1136,54 +1153,64 @@ mod tests {
             )
             .unwrap();
         }
+        let make_req = || FifRequest {
+            query: "needle".into(),
+            opts: FifQueryOpts::default(),
+            root: dir.path().to_path_buf(),
+            walk: FifWalkOpts::default(),
+            replacement: None,
+            open_tab_paths: Vec::new(),
+        };
 
-        let req1 = FifRequest {
-            query: "needle".into(),
-            opts: FifQueryOpts::default(),
-            root: dir.path().to_path_buf(),
-            walk: FifWalkOpts::default(),
-            replacement: None,
-            open_tab_paths: Vec::new(),
-        };
-        let id1 = orch.start(req1).unwrap();
-        let req2 = FifRequest {
-            query: "needle".into(),
-            opts: FifQueryOpts::default(),
-            root: dir.path().to_path_buf(),
-            walk: FifWalkOpts::default(),
-            replacement: None,
-            open_tab_paths: Vec::new(),
-        };
-        let id2 = orch.start(req2).unwrap();
+        let id1 = orch.start(make_req()).unwrap();
+        // Clone the first job's cancel handle before the second
+        // `start` takes it out of the orchestrator — this is the flag
+        // preemption is defined in terms of.
+        let job1_cancel = orch
+            .current
+            .as_ref()
+            .expect("a started job must be current")
+            .cancel
+            .clone();
+        assert!(
+            !job1_cancel.load(Ordering::Acquire),
+            "a freshly started job must not already be cancelled"
+        );
+
+        let id2 = orch.start(make_req()).unwrap();
         assert_ne!(id1, id2);
+        // The deterministic half of the contract, independent of how
+        // far job 1 got.
+        assert!(
+            job1_cancel.load(Ordering::Acquire),
+            "starting a second job must flip the first job's cancel flag"
+        );
 
-        // Drain everything until both jobs have terminated.
-        let mut id1_terminal = None;
-        let mut id2_terminal = None;
+        // The other deterministic half: exactly one terminal event per
+        // started job.
+        let mut terminals: Vec<FifJobId> = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while (id1_terminal.is_none() || id2_terminal.is_none()) && Instant::now() < deadline {
+        while terminals.len() < 2 && Instant::now() < deadline {
             if let Ok(ev) = rx.recv_timeout(Duration::from_millis(100)) {
-                match &ev {
+                match ev {
                     FifEvent::Done { job, .. } | FifEvent::Cancelled { job, .. } => {
-                        if *job == id1 {
-                            id1_terminal = Some(matches!(ev, FifEvent::Cancelled { .. }));
-                        } else if *job == id2 {
-                            id2_terminal = Some(matches!(ev, FifEvent::Cancelled { .. }));
-                        }
+                        assert!(
+                            !terminals.contains(&job),
+                            "job {job:?} emitted a second terminal event"
+                        );
+                        terminals.push(job);
                     }
-                    // Non-terminal events (FileMatches and any
-                    // future intermediate variants) — the test
-                    // only cares about per-job terminal
-                    // arrival.
+                    // Non-terminal. Matched explicitly rather than
+                    // with a wildcard so a future event variant has
+                    // to be classified here rather than silently
+                    // falling through as "not a terminal".
                     FifEvent::FileMatches { .. } => {}
                 }
             }
         }
-        let id1_cancelled = id1_terminal.expect("job 1 never terminated");
-        let _ = id2_terminal.expect("job 2 never terminated");
         assert!(
-            id1_cancelled,
-            "job 1 should have ended in Cancelled (preempted by job 2)"
+            terminals.contains(&id1) && terminals.contains(&id2),
+            "both jobs must terminate exactly once; saw {terminals:?}"
         );
     }
 
