@@ -745,16 +745,8 @@ fn worker_main(
         // Re-check size at read time: a concurrent writer could
         // have grown the file past the cap between the walker's
         // metadata call and now. Bound the read explicitly.
-        let bytes = match read_capped(&path, walk.max_file_bytes) {
-            Ok(b) => b,
-            Err(ReadCappedError::Oversize) => {
-                stats.files_skipped_size.fetch_add(1, Ordering::Relaxed);
-                continue;
-            }
-            Err(ReadCappedError::Io(e)) => {
-                tracing::debug!(path = %path.display(), error = %e, "fif worker: read failed");
-                continue;
-            }
+        let Some((bytes, perms)) = read_for_search(&path, walk.max_file_bytes, &stats) else {
+            continue;
         };
         let probe = &bytes[..bytes.len().min(BINARY_PROBE_BYTES)];
         if is_binary(probe) {
@@ -851,7 +843,7 @@ fn worker_main(
             // than corrupting the contents.
             match codepp_core::encoding::encode(&new_text, &enc) {
                 Ok(new_bytes) => {
-                    if let Err(e) = atomic_write(&path, &new_bytes) {
+                    if let Err(e) = atomic_write(&path, &new_bytes, &perms) {
                         tracing::warn!(
                             path = %path.display(),
                             error = %e,
@@ -889,13 +881,18 @@ fn worker_main(
 
 /// Atomic file write: emit to a temp file in the same directory,
 /// then rename over the target. Avoids truncating the original on a
-/// crash mid-write. The temp file uses a `.codepp-fif.tmp` suffix
+/// crash mid-write. The temp file gets an unpredictable name from
+/// `tempfile` (`.codepp-fif-<random>.tmp`), created `O_EXCL`
 /// so a leftover from a killed process is recognizable. Same
 /// cross-platform-rename caveat as everywhere else: on Windows,
 /// `fs::rename` succeeds atomically when both paths are on the
 /// same volume, which is guaranteed here since we generate the
 /// temp path from the target's parent.
-fn atomic_write(target: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+fn atomic_write(
+    target: &std::path::Path,
+    bytes: &[u8],
+    perms: &std::fs::Permissions,
+) -> std::io::Result<()> {
     use std::io::Write;
     let parent = target.parent().ok_or_else(|| {
         std::io::Error::new(
@@ -903,78 +900,206 @@ fn atomic_write(target: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
             "target has no parent directory",
         )
     })?;
-    let tmp = {
-        let mut name = target
-            .file_name()
-            .map(std::ffi::OsStr::to_os_string)
-            .unwrap_or_default();
-        name.push(".codepp-fif.tmp");
-        parent.join(name)
-    };
 
-    // Drop guard: removes the temp file unless `commit()` clears
-    // the flag. Covers both the `?` early-returns (Err propagation)
-    // and panic paths (e.g. `write_all` panic on a custom
-    // allocator) so a partially-written temp doesn't survive on
-    // disk to confuse a future re-run or accumulate as garbage.
-    struct TempGuard<'a> {
-        path: &'a std::path::Path,
-        committed: bool,
-    }
-    impl Drop for TempGuard<'_> {
-        fn drop(&mut self) {
-            if !self.committed {
-                let _ = std::fs::remove_file(self.path);
-            }
-        }
-    }
-    let mut guard = TempGuard {
-        path: &tmp,
-        committed: false,
-    };
-
-    {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_data()?;
-    }
-    std::fs::rename(&tmp, target)?;
-    guard.committed = true;
+    // Randomly-named temp via `tempfile`, not a predictable
+    // `<target>.codepp-fif.tmp` opened with `File::create`.
+    //
+    // The predictable form was a symlink attack: anyone able to write
+    // to the directory being searched could pre-place that exact name
+    // as a symlink, and `File::create` — which follows symlinks and
+    // truncates — would send this replacement's bytes wherever it
+    // pointed, outside the search root entirely. `tempfile` picks an
+    // unpredictable name and creates it `O_EXCL`, which POSIX requires
+    // to fail on a symlink, so neither half of that attack works.
+    //
+    // Same construction `Shell::save_current_to_disk` and
+    // `save_buffer_as` already use; this path was the odd one out.
+    //
+    // `persist` renames over `target`. POSIX rename replaces a symlink
+    // at the destination rather than following it, so a `target`
+    // swapped for a symlink mid-run gets replaced, not written through
+    // — the destructive direction was already safe here and stays that
+    // way. On Windows `persist` goes through `MoveFileExW`, which is
+    // expected to behave the same for reparse points but is not
+    // covered by a test; tracked with the rest of the Windows symlink
+    // work in DESIGN.md §7.4.
+    //
+    // `permissions` is not optional. `tempfile` creates at 0600 when
+    // it is not set, and because `persist` renames the replacement
+    // over the original, the replacement's mode wins — so omitting it
+    // would silently strip group and world access from every file a
+    // Replace-in-Files run rewrites, across a whole tree, unattended.
+    // A matched shell script would quietly lose its execute bit. The
+    // mode comes from the `fstat` in `read_capped` that already
+    // validated this file, so it is the mode of the thing actually
+    // read, not of whatever the name resolves to now.
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".codepp-fif-")
+        .suffix(".tmp")
+        .permissions(perms.clone())
+        .tempfile_in(parent)?;
+    tmp.write_all(bytes)?;
+    tmp.as_file_mut().sync_data()?;
+    tmp.persist(target).map_err(|e| e.error)?;
     Ok(())
 }
 
 #[derive(Debug)]
 enum ReadCappedError {
     Oversize,
+    /// The opened descriptor is not a regular file — a FIFO, a device,
+    /// or a directory. Determined by `fstat` on the handle rather than
+    /// by a fresh lookup on the path, so it cannot be raced: see
+    /// [`read_capped`]. Treated like any other unreadable file, which
+    /// is what the walker's own symlink policy already implies.
+    NotARegularFile,
     Io(std::io::Error),
+}
+
+/// Read a candidate file, classifying every refusal into the right
+/// statistic or log line.
+///
+/// Split out of `worker_main` so the error taxonomy sits next to
+/// [`read_capped`], which decides it, rather than padding the worker
+/// loop. Returns `None` for every "skip this file" outcome; the caller
+/// just continues.
+fn read_for_search(
+    path: &std::path::Path,
+    cap: u64,
+    stats: &FifStatsAtomic,
+) -> Option<(Vec<u8>, std::fs::Permissions)> {
+    match read_capped(path, cap) {
+        Ok(pair) => Some(pair),
+        Err(ReadCappedError::Oversize) => {
+            stats.files_skipped_size.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+        Err(ReadCappedError::NotARegularFile) => {
+            // The entry changed type between the walker's check and
+            // this open — a FIFO or device now sits where a regular
+            // file was. Warn rather than debug: on a tree nobody is
+            // racing, this never fires, so if it does the user is
+            // either searching something changing underneath them or
+            // being attacked.
+            tracing::warn!(
+                path = %path.display(),
+                "fif worker: entry is no longer a regular file; skipping",
+            );
+            None
+        }
+        // `ErrorKind::FilesystemLoop` would read better but is still
+        // unstable on the pinned toolchain, so match the errno. Unix
+        // only, which costs nothing: `O_NOFOLLOW` is unix only too, so
+        // this is the only platform that can produce ELOOP here.
+        #[cfg(unix)]
+        Err(ReadCappedError::Io(e)) if e.raw_os_error() == Some(libc::ELOOP) => {
+            // `O_NOFOLLOW` refused the open: the entry became a
+            // symlink after the walker vetted it. Same reasoning as
+            // the branch above — on a tree nobody is racing this never
+            // fires, so it earns the same visibility as the other
+            // swap, not the routine-IO treatment.
+            tracing::warn!(
+                path = %path.display(),
+                "fif worker: entry became a symlink after enumeration; skipping",
+            );
+            None
+        }
+        Err(ReadCappedError::Io(e)) => {
+            tracing::debug!(path = %path.display(), error = %e, "fif worker: read failed");
+            None
+        }
+    }
 }
 
 /// Read the file at `path`, refusing if it would exceed `cap` bytes.
 /// Bounds memory use against a runaway file even if the metadata
 /// length read by the walker disagreed with the post-open size.
-fn read_capped(path: &std::path::Path, cap: u64) -> Result<Vec<u8>, ReadCappedError> {
+fn read_capped(
+    path: &std::path::Path,
+    cap: u64,
+) -> Result<(Vec<u8>, std::fs::Permissions), ReadCappedError> {
     use std::io::Read;
-    let mut file = std::fs::File::open(path).map_err(ReadCappedError::Io)?;
-    if let Ok(meta) = file.metadata() {
-        if meta.len() > cap {
-            return Err(ReadCappedError::Oversize);
-        }
+
+    // The walker already rejected symlinks, FIFOs and devices when it
+    // enumerated this path — but that check was against the *path*,
+    // and an unbounded amount of time passes while the path sits in
+    // the bounded channel waiting for a worker. Anything able to write
+    // to the directory can swap the entry in that window, so the
+    // decision has to be re-made against the thing actually opened.
+    //
+    // Two independent guards:
+    //
+    // 1. `O_NOFOLLOW` (Unix) makes the kernel refuse the open outright
+    //    if the final component is a symlink, so a swapped entry never
+    //    yields a handle at all. Windows is not covered: it has no
+    //    `O_NOFOLLOW`, and no `O_NONBLOCK` either, so a reparse point
+    //    swapped in there is still followed — yielding wrong content
+    //    attributed to the wrong path, and, if it resolves somewhere
+    //    slow such as an unreachable UNC host, a block inside
+    //    `CreateFileW` that guard 2 never gets to veto. That hang is
+    //    the same risk class the `MAX_ACTIVE_JOBS` ceiling already
+    //    budgets for. Closing it properly means
+    //    `FILE_FLAG_OPEN_REPARSE_POINT` plus an explicit
+    //    `is_symlink()` rejection; tracked rather than done here
+    //    because it needs a Windows runner to verify and this commit
+    //    has none.
+    // 2. The file-type check below runs on `file.metadata()`, which is
+    //    `fstat` on the open descriptor rather than a fresh lookup by
+    //    name. It therefore describes exactly what was opened and
+    //    cannot be raced. Rejecting anything that is not a regular
+    //    file is what stops `read_to_end` blocking forever on a FIFO
+    //    or a character device — a hang the cancel flag cannot
+    //    preempt, which is precisely why the walker refuses to follow
+    //    symlinks in the first place.
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // `O_NONBLOCK` matters as much as `O_NOFOLLOW` here, and is
+        // easy to miss: opening a FIFO for reading *blocks inside
+        // `open` itself* until a writer appears. The type check below
+        // would never be reached, so the guard would sit after the
+        // hang it exists to prevent — which is exactly what happened
+        // to the first version of this fix, caught by the test that
+        // opens a real FIFO. With `O_NONBLOCK` the open returns
+        // immediately and the check gets its say. It is a no-op for
+        // regular files, whose reads never block.
+        opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    // Read at most cap+1 bytes so we can tell oversize vs. exact-cap.
+    let mut file = opts.open(path).map_err(ReadCappedError::Io)?;
+
+    // Strict where this used to be tolerant: the old code did
+    // `if let Ok(meta)` and read the file anyway when `fstat` failed.
+    // The type check is a safety guard now, not just a size
+    // optimisation, so a failure to classify has to mean "skip",
+    // never "proceed unchecked".
+    let meta = file.metadata().map_err(ReadCappedError::Io)?;
+    if !meta.file_type().is_file() {
+        return Err(ReadCappedError::NotARegularFile);
+    }
+    if meta.len() > cap {
+        return Err(ReadCappedError::Oversize);
+    }
+    // Carried out with the bytes so a replace can restore the mode it
+    // found. Taken from the same `fstat` that validated the type, so
+    // it describes the file actually opened rather than whatever the
+    // name resolves to later.
+    let perms = meta.permissions();
+
     let mut buf = Vec::new();
     let read = file
         .by_ref()
         .take(cap.saturating_add(1))
         .read_to_end(&mut buf)
         .map_err(ReadCappedError::Io)?;
-    // `usize → u64` widening is lossless on the project's 64-bit
-    // targets, but `try_from` keeps the comparison correct on a
-    // hypothetical 32-bit port where `usize` cannot represent
-    // values past `u32::MAX`.
+    // A file that grew between the `fstat` above and the read still
+    // gets caught here: `take` bounds the read at `cap + 1`, so
+    // exceeding `cap` means there was more to come.
     if u64::try_from(read).map_or(true, |r| r > cap) {
         return Err(ReadCappedError::Oversize);
     }
-    Ok(buf)
+    Ok((buf, perms))
 }
 
 #[cfg(test)]
@@ -1328,7 +1453,7 @@ mod tests {
         let err = read_capped(&p, 1024).unwrap_err();
         assert!(matches!(err, ReadCappedError::Oversize));
         // Same file under a generous cap reads cleanly.
-        let buf = read_capped(&p, 4096).unwrap();
+        let (buf, _perms) = read_capped(&p, 4096).unwrap();
         assert_eq!(buf.len(), 2048);
     }
 
@@ -1424,15 +1549,27 @@ mod tests {
         let _ = orch.start(req).unwrap();
         let _events = drain_until_done(&rx, Duration::from_secs(5));
 
-        // After a successful replace, no `.codepp-fif.tmp` lingers.
-        let entries: Vec<_> = fs::read_dir(dir.path())
+        // After a successful replace, no temp file lingers.
+        //
+        // Asserted against the directory's exact expected contents
+        // rather than by pattern. The previous version searched for
+        // the literal `.codepp-fif.tmp`, which the randomised naming
+        // (`.codepp-fif-<random>.tmp`) can never contain as a
+        // contiguous substring — so it had become unconditionally
+        // true and would have passed even if every temp leaked.
+        let mut entries: Vec<String> = fs::read_dir(dir.path())
             .unwrap()
             .filter_map(Result::ok)
-            .map(|e| e.file_name())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        for name in &entries {
-            let s = name.to_string_lossy();
-            assert!(!s.contains(".codepp-fif.tmp"), "leftover temp file: {s}");
+        entries.sort();
+        assert_eq!(
+            entries,
+            vec!["only.txt".to_string()],
+            "the directory must contain exactly the replaced file and nothing else",
+        );
+        for s in &entries {
+            assert!(!s.starts_with(".codepp-fif-"), "leftover temp file: {s}");
         }
     }
 
@@ -1612,5 +1749,144 @@ mod tests {
             flagged,
             "skipping a subtree must set depth_cap_hit so the UI can say results are incomplete"
         );
+    }
+
+    /// `read_capped` must refuse anything that is not a regular file,
+    /// decided from the open descriptor rather than from the path.
+    ///
+    /// The walker screens symlinks, FIFOs and devices when it
+    /// enumerates, but that check is by name and an unbounded amount
+    /// of time passes while the path waits in the bounded channel.
+    /// Anything able to write to the directory can swap the entry in
+    /// that window. A FIFO is the dangerous swap: `read_to_end` on one
+    /// blocks until a writer appears, and the cancel flag cannot
+    /// interrupt a blocking syscall — the whole reason the walker
+    /// refuses to follow symlinks in the first place.
+    #[cfg(unix)]
+    #[test]
+    fn read_capped_refuses_a_fifo() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempdir().unwrap();
+        let fifo = dir.path().join("pipe");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: `c` is a valid NUL-terminated path in a directory
+        // this test owns; mkfifo has no other precondition.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+
+        // Would hang forever without the guard, so the assertion is
+        // as much about returning at all as about the variant.
+        assert!(matches!(
+            read_capped(&fifo, 1024),
+            Err(ReadCappedError::NotARegularFile)
+        ));
+    }
+
+    /// A path swapped for a symlink after enumeration must not be
+    /// followed. `O_NOFOLLOW` makes the kernel refuse the open, so the
+    /// worker never sees content from outside the search root.
+    #[cfg(unix)]
+    #[test]
+    fn read_capped_refuses_a_symlink() {
+        let dir = tempdir().unwrap();
+        let outside = dir.path().join("outside.txt");
+        fs::write(&outside, "content the search never asked for\n").unwrap();
+        let link = dir.path().join("innocent.txt");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let got = read_capped(&link, 1024);
+        assert!(
+            matches!(got, Err(ReadCappedError::Io(_))),
+            "O_NOFOLLOW must make the open fail rather than follow the link"
+        );
+        // And the guard is specific, not a blanket refusal: the real
+        // file behind it still reads fine.
+        assert!(read_capped(&outside, 1024).is_ok());
+    }
+
+    /// Replace-in-Files must not write through a pre-placed symlink.
+    ///
+    /// `atomic_write` used to build a predictable temp name next to
+    /// the target and open it with `File::create`, which follows
+    /// symlinks and truncates. Anyone able to write to the directory
+    /// being searched could pre-place that exact name pointing
+    /// somewhere else and redirect the replacement's bytes out of the
+    /// tree. `tempfile` picks an unpredictable name and creates it
+    /// `O_EXCL`, which POSIX requires to fail on a symlink.
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_cannot_be_redirected_by_a_planted_temp_symlink() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("victim.txt");
+        fs::write(&target, "original\n").unwrap();
+
+        let elsewhere = dir.path().join("attacker_target.txt");
+        fs::write(&elsewhere, "must not be overwritten\n").unwrap();
+
+        // The name the old implementation would have used.
+        let predictable = dir.path().join("victim.txt.codepp-fif.tmp");
+        std::os::unix::fs::symlink(&elsewhere, &predictable).unwrap();
+
+        let perms = fs::metadata(&target).unwrap().permissions();
+        atomic_write(&target, b"replaced\n", &perms).unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "replaced\n");
+        assert_eq!(
+            fs::read_to_string(&elsewhere).unwrap(),
+            "must not be overwritten\n",
+            "the replacement must not have been redirected through the planted symlink"
+        );
+    }
+
+    /// Replace-in-Files must preserve each file's mode.
+    ///
+    /// `tempfile` creates at 0600 unless told otherwise, and because
+    /// the replacement is renamed over the original, the
+    /// replacement's mode is the one that survives. Left unset, a
+    /// single Replace-in-Files run would silently strip group and
+    /// world access from every file it rewrote across a whole tree —
+    /// a matched shell script would quietly lose its execute bit.
+    /// That regression rode in with the switch away from
+    /// `File::create` and is exactly what this pins.
+    #[cfg(unix)]
+    #[test]
+    fn replace_preserves_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (tx, rx) = unbounded();
+        let mut orch = FifOrchestrator::new(tx);
+        let dir = tempdir().unwrap();
+
+        // An executable script and a world-readable data file: the two
+        // modes a blanket 0600 would visibly damage.
+        let script = dir.path().join("run.sh");
+        fs::write(&script, "#!/bin/sh\nneedle\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let data = dir.path().join("data.txt");
+        fs::write(&data, "needle\n").unwrap();
+        fs::set_permissions(&data, fs::Permissions::from_mode(0o644)).unwrap();
+
+        orch.start(FifRequest {
+            query: "needle".into(),
+            opts: FifQueryOpts::default(),
+            root: dir.path().to_path_buf(),
+            walk: FifWalkOpts::default(),
+            replacement: Some("HAY".into()),
+            open_tab_paths: Vec::new(),
+        })
+        .unwrap();
+        let _ = drain_until_done(&rx, Duration::from_secs(10));
+
+        // Sanity: the replacement actually happened, so the mode
+        // assertions below are about rewritten files.
+        assert!(fs::read_to_string(&script).unwrap().contains("HAY"));
+        assert!(fs::read_to_string(&data).unwrap().contains("HAY"));
+
+        let script_mode = fs::metadata(&script).unwrap().permissions().mode() & 0o777;
+        let data_mode = fs::metadata(&data).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            script_mode, 0o755,
+            "the executable bit must survive a replace"
+        );
+        assert_eq!(data_mode, 0o644, "group/world read must survive a replace");
     }
 }

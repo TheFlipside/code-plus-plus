@@ -241,6 +241,7 @@ dependencies = [
  "codepp-plugin-host",
  "codepp-udl",
  "crossbeam-channel",
+ "libc",
  "tempfile",
  "tracing",
 ]
