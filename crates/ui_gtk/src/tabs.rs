@@ -270,7 +270,11 @@ fn tab_icon(dirty: bool, scale: i32) -> Option<Pixbuf> {
     match Pixbuf::from_read(Cursor::new(bytes)) {
         Ok(pixbuf) => Some(pixbuf),
         Err(err) => {
-            tracing::warn!(%err, dirty, "tab icon decode failed; tab renders without it");
+            tracing::warn!(
+                ?err,
+                dirty,
+                "tab icon decode failed; tab renders without it"
+            );
             None
         }
     }

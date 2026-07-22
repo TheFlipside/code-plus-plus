@@ -142,7 +142,7 @@ fn classify_entry(
         Ok(e) => e,
         Err(err) => {
             tracing::debug!(
-                error = %err,
+                error = ?err,
                 "userDefineLangs directory entry read error; skipped"
             );
             return;
@@ -188,7 +188,7 @@ fn classify_entry(
         Err(err) => {
             tracing::warn!(
                 path = ?raw_path,
-                error = %err,
+                error = ?err,
                 "UDL entry failed to canonicalise; skipped"
             );
         }
@@ -264,7 +264,7 @@ impl UdlRegistry {
             Err(err) => {
                 tracing::info!(
                     path = ?dir,
-                    error = %err,
+                    error = ?err,
                     "userDefineLangs directory not readable; \
                      no UDLs loaded"
                 );
@@ -285,7 +285,7 @@ impl UdlRegistry {
             Err(err) => {
                 tracing::warn!(
                     path = ?dir,
-                    error = %err,
+                    error = ?err,
                     "userDefineLangs directory failed to canonicalise; \
                      skipping scan to avoid disabling symlink defence"
                 );
@@ -361,7 +361,7 @@ impl UdlRegistry {
                 Err(err) => {
                     tracing::warn!(
                         path = ?path,
-                        error = %err,
+                        error = ?err,
                         "failed to parse UDL; skipped"
                     );
                 }

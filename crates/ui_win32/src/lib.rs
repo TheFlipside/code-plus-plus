@@ -2969,7 +2969,7 @@ impl UiPlatform for Win32Ui {
                 Ok(h) => h,
                 Err(e) => {
                     tracing::warn!(
-                        error = %e,
+                        error = ?e,
                         "NPPM_CREATESCINTILLAHANDLE: GetModuleHandleW failed"
                     );
                     return core::ptr::null_mut();
@@ -3002,7 +3002,7 @@ impl UiPlatform for Win32Ui {
                 Ok(h) => h,
                 Err(e) => {
                     tracing::warn!(
-                        error = %e,
+                        error = ?e,
                         parent = parent_hwnd.0 as usize,
                         "NPPM_CREATESCINTILLAHANDLE: CreateWindowExW failed"
                     );
@@ -3077,7 +3077,7 @@ impl UiPlatform for Win32Ui {
             let instance = match GetModuleHandleW(None) {
                 Ok(h) => h,
                 Err(e) => {
-                    tracing::warn!(error = %e, "NPPM_DMMREGASDCKDLG: GetModuleHandleW failed");
+                    tracing::warn!(error = ?e, "NPPM_DMMREGASDCKDLG: GetModuleHandleW failed");
                     return false;
                 }
             };
@@ -3139,7 +3139,7 @@ impl UiPlatform for Win32Ui {
             ) {
                 Ok(h) => h,
                 Err(e) => {
-                    tracing::warn!(error = %e, "NPPM_DMMREGASDCKDLG: CreateWindowExW failed");
+                    tracing::warn!(error = ?e, "NPPM_DMMREGASDCKDLG: CreateWindowExW failed");
                     return false;
                 }
             };
@@ -3311,7 +3311,7 @@ impl UiPlatform for Win32Ui {
         let new_haccel = match unsafe { CreateAcceleratorTableW(&entries) } {
             Ok(h) => h,
             Err(e) => {
-                tracing::warn!(error = %e, "NPPM_REMOVESHORTCUTBYCMDID: CreateAcceleratorTableW failed, keeping old HACCEL");
+                tracing::warn!(error = ?e, "NPPM_REMOVESHORTCUTBYCMDID: CreateAcceleratorTableW failed, keeping old HACCEL");
                 return false;
             }
         };
@@ -6219,7 +6219,7 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
                 ..Default::default()
             };
             if let Err(e) = SetMenuItemInfoW(bar, plus_pos, true, &raw mut mii) {
-                tracing::warn!(error = %e, "SetMenuItemInfoW(MFT_RIGHTJUSTIFY) failed");
+                tracing::warn!(error = ?e, "SetMenuItemInfoW(MFT_RIGHTJUSTIFY) failed");
             }
         }
 
@@ -7125,7 +7125,7 @@ unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
         let submenu = match unsafe { CreateMenu() } {
             Ok(m) => m,
             Err(e) => {
-                tracing::warn!(plugin = %plugin_name, error = %e, "CreateMenu failed");
+                tracing::warn!(plugin = ?plugin_name, error = ?e, "CreateMenu failed");
                 continue;
             }
         };
@@ -7137,7 +7137,7 @@ unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
             // dispatching MF_STRING with that label is the visible bug.
             if func.p_func.is_none() {
                 if let Err(e) = unsafe { AppendMenuW(submenu, MF_SEPARATOR, 0, PCWSTR::null()) } {
-                    tracing::warn!(plugin = %plugin_name, error = %e, "AppendMenuW (separator) failed");
+                    tracing::warn!(plugin = ?plugin_name, error = ?e, "AppendMenuW (separator) failed");
                 }
                 continue;
             }
@@ -7152,7 +7152,7 @@ unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
             // points into a static null-terminated wide string the
             // plugin owns for its lifetime.
             if let Err(e) = unsafe { AppendMenuW(submenu, MF_STRING, id, label) } {
-                tracing::warn!(plugin = %plugin_name, error = %e, "AppendMenuW (item) failed");
+                tracing::warn!(plugin = ?plugin_name, error = ?e, "AppendMenuW (item) failed");
             }
         }
         // Attach the submenu to the parent "Plugins" popup.
@@ -7171,7 +7171,7 @@ unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
                 PCWSTR(plugin_label_w.as_ptr()),
             )
         } {
-            tracing::warn!(plugin = %plugin_name, error = %e, "AppendMenuW (popup) failed");
+            tracing::warn!(plugin = ?plugin_name, error = ?e, "AppendMenuW (popup) failed");
         }
     }
     // Append the Plugin Manager entry at the bottom of the menu,
@@ -10664,7 +10664,7 @@ fn open_udl_folder(hwnd: HWND) {
     if let Err(e) = std::fs::create_dir_all(&dir) {
         tracing::warn!(
             path = ?dir,
-            error = %e,
+            error = ?e,
             "failed to create userDefineLangs directory; \
              ShellExecuteW may still succeed if it exists"
         );
@@ -11456,14 +11456,14 @@ unsafe fn rebuild_file_menu_recent_region(
             let popup = match CreatePopupMenu() {
                 Ok(h) => h,
                 Err(e) => {
-                    tracing::warn!(error = %e, "CreatePopupMenu for Recent Files submenu failed; skipping submenu render");
+                    tracing::warn!(error = ?e, "CreatePopupMenu for Recent Files submenu failed; skipping submenu render");
                     return;
                 }
             };
             append_recent_file_entries(popup, entries, cfg);
             if !entries.is_empty() {
                 if let Err(e) = AppendMenuW(popup, MF_SEPARATOR, 0, PCWSTR::null()) {
-                    tracing::warn!(error = %e, "AppendMenuW separator inside Recent Files submenu failed");
+                    tracing::warn!(error = ?e, "AppendMenuW separator inside Recent Files submenu failed");
                 }
             }
             append_recent_action_entries(popup);
@@ -11475,7 +11475,7 @@ unsafe fn rebuild_file_menu_recent_region(
                 popup.0 as usize,
                 PCWSTR(submenu_label.as_ptr()),
             ) {
-                tracing::warn!(error = %e, "InsertMenuW for Recent Files submenu failed");
+                tracing::warn!(error = ?e, "InsertMenuW for Recent Files submenu failed");
                 let _ = DestroyMenu(popup);
                 return;
             }
@@ -11493,7 +11493,7 @@ unsafe fn rebuild_file_menu_recent_region(
                     id as usize,
                     PCWSTR(wide.as_ptr()),
                 ) {
-                    tracing::warn!(error = %e, "InsertMenuW for recent-files entry failed");
+                    tracing::warn!(error = ?e, "InsertMenuW for recent-files entry failed");
                     continue;
                 }
                 insert_pos += 1;
@@ -11512,7 +11512,7 @@ unsafe fn rebuild_file_menu_recent_region(
                     0,
                     PCWSTR::null(),
                 ) {
-                    tracing::warn!(error = %e, "InsertMenuW separator (above inline actions) failed");
+                    tracing::warn!(error = ?e, "InsertMenuW separator (above inline actions) failed");
                 } else {
                     insert_pos += 1;
                     *recent_count += 1;
@@ -11532,7 +11532,7 @@ unsafe fn rebuild_file_menu_recent_region(
                     id as usize,
                     PCWSTR(label_utf16.as_ptr()),
                 ) {
-                    tracing::warn!(error = %e, cmd = id, "InsertMenuW for inline action entry failed");
+                    tracing::warn!(error = ?e, cmd = id, "InsertMenuW for inline action entry failed");
                     continue;
                 }
                 insert_pos += 1;
@@ -11549,7 +11549,7 @@ unsafe fn rebuild_file_menu_recent_region(
             0,
             PCWSTR::null(),
         ) {
-            tracing::warn!(error = %e, "InsertMenuW trailing separator failed");
+            tracing::warn!(error = ?e, "InsertMenuW trailing separator failed");
         } else {
             *recent_count += 1;
         }
@@ -11571,7 +11571,7 @@ unsafe fn append_recent_file_entries(
             let wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
             let id = u32::from(ID_FILE_RECENT_BASE) + i as u32;
             if let Err(e) = AppendMenuW(popup, MF_STRING, id as usize, PCWSTR(wide.as_ptr())) {
-                tracing::warn!(error = %e, "AppendMenuW for recent-files submenu item failed");
+                tracing::warn!(error = ?e, "AppendMenuW for recent-files submenu item failed");
             }
         }
     }
@@ -11587,7 +11587,7 @@ unsafe fn append_recent_action_entries(popup: HMENU) {
         for (label_utf16, id) in inline_action_labels() {
             if let Err(e) = AppendMenuW(popup, MF_STRING, id as usize, PCWSTR(label_utf16.as_ptr()))
             {
-                tracing::warn!(error = %e, cmd = id, "AppendMenuW for submenu action entry failed");
+                tracing::warn!(error = ?e, cmd = id, "AppendMenuW for submenu action entry failed");
             }
         }
     }
@@ -17925,7 +17925,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                     tracing::info!(plugins_dir = ?dir, count = count, "plugin candidates discovered");
                 }
                 Err(e) => {
-                    tracing::warn!(plugins_dir = ?dir, error = %e, "plugin discovery failed");
+                    tracing::warn!(plugins_dir = ?dir, error = ?e, "plugin discovery failed");
                 }
             }
         }
@@ -17955,14 +17955,14 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         let tab_save_blue_hbm = match toolbar::png_to_hbitmap(tab_save_blue_png) {
             Ok(h) => h,
             Err(e) => {
-                tracing::warn!(error = %e, "tab-save (clean) icon decode failed; tab strip will paint without it");
+                tracing::warn!(error = ?e, "tab-save (clean) icon decode failed; tab strip will paint without it");
                 HBITMAP(core::ptr::null_mut())
             }
         };
         let tab_save_red_hbm = match toolbar::png_to_hbitmap(tab_save_red_png) {
             Ok(h) => h,
             Err(e) => {
-                tracing::warn!(error = %e, "tab-save (dirty) icon decode failed; tab strip will paint without it");
+                tracing::warn!(error = ?e, "tab-save (dirty) icon decode failed; tab strip will paint without it");
                 HBITMAP(core::ptr::null_mut())
             }
         };
@@ -21606,7 +21606,7 @@ unsafe fn insert_tree_folder_children(tree: HWND, parent: HTREEITEM, dir: &Path)
             }
         }
         Err(e) => {
-            tracing::warn!(dir = ?dir, error = %e, "workspace read_dir failed; showing empty folder");
+            tracing::warn!(dir = ?dir, error = ?e, "workspace read_dir failed; showing empty folder");
             return;
         }
     }
@@ -26153,7 +26153,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         if let Err(e) = move_path_to_recycle_bin(&path) {
                             tracing::warn!(
                                 path = ?path,
-                                error = %e,
+                                error = ?e,
                                 "SHFileOperationW(FO_DELETE|FOF_ALLOWUNDO) failed"
                             );
                             show_error_dialog(
@@ -27014,7 +27014,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         match result {
                             Ok(Ok(())) => {}
                             Ok(Err(e)) => {
-                                tracing::warn!(error = %e, "auto-save failed");
+                                tracing::warn!(error = ?e, "auto-save failed");
                             }
                             Err(_) => {
                                 tracing::warn!("auto-save panicked");
@@ -27103,7 +27103,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     }));
                     match result {
                         Ok(Ok(())) => {}
-                        Ok(Err(e)) => tracing::warn!(error = %e, "session save failed"),
+                        Ok(Err(e)) => tracing::warn!(error = ?e, "session save failed"),
                         Err(_) => tracing::warn!("session save panicked"),
                     }
                 }

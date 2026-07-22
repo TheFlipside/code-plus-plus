@@ -1518,7 +1518,7 @@ where
         Err(e) => {
             tracing::warn!(
                 path = ?path,
-                error = %e,
+                error = ?e,
                 "file-watcher: try_exists failed; classifying as Removed"
             );
             FileChange::Removed(path)
@@ -1623,7 +1623,7 @@ impl Shell {
             if let Err(err) = std::fs::create_dir_all(&dir) {
                 tracing::warn!(
                     path = ?dir,
-                    error = %err,
+                    error = ?err,
                     "failed to create userDefineLangs directory; \
                      scan_dir will still run against the possibly-\
                      missing path"
@@ -2114,7 +2114,7 @@ impl Shell {
         if let Some(p) = &removed.path {
             if let Err(e) = self.file_watcher.unwatch(p) {
                 tracing::debug!(
-                    error = %e,
+                    error = ?e,
                     path = ?p,
                     "unwatch on close (already unwatched is fine)"
                 );
@@ -2284,7 +2284,7 @@ impl Shell {
                 })
                 .collect();
             if let Err(e) = write_disabled_plugins_list(&disabled_filenames) {
-                tracing::warn!(error = %e, "failed to persist disabled plugins list");
+                tracing::warn!(error = ?e, "failed to persist disabled plugins list");
             }
         }
         changed
@@ -2318,7 +2318,7 @@ impl Shell {
             .collect();
         for idx in pending {
             if let Err(e) = self.plugins.load(idx, npp_data) {
-                tracing::warn!(idx = idx, error = %e, "plugin load failed");
+                tracing::warn!(idx = idx, error = ?e, "plugin load failed");
             }
         }
     }
@@ -2689,7 +2689,7 @@ impl Shell {
                     tab.custom_name = None;
                 }
                 if let Err(e) = self.file_watcher.watch(&new_path) {
-                    tracing::warn!(error = %e, path = ?new_path, "failed to watch new path after Save As");
+                    tracing::warn!(error = ?e, path = ?new_path, "failed to watch new path after Save As");
                 }
                 // Debounce fence — same rationale as
                 // save_current_to_disk. The atomic-rename event
@@ -2728,7 +2728,7 @@ impl Shell {
                 if was_watching_old {
                     if let Some(p) = old_path.as_ref() {
                         if let Err(e) = self.file_watcher.watch(p) {
-                            tracing::warn!(error = %e, path = ?p, "failed to re-watch old path after Save As failure");
+                            tracing::warn!(error = ?e, path = ?p, "failed to re-watch old path after Save As failure");
                         }
                     }
                 }
@@ -3246,7 +3246,7 @@ impl Shell {
                 // the editor — if the watch fails the user still gets
                 // the buffer; we just won't catch external changes.
                 if let Err(e) = self.file_watcher.watch(&loaded.path) {
-                    tracing::warn!(error = %e, path = ?loaded.path, "failed to watch file");
+                    tracing::warn!(error = ?e, path = ?loaded.path, "failed to watch file");
                 }
 
                 // Single by-path lookup covering every attribute the
@@ -3581,7 +3581,7 @@ impl Shell {
         // anyway (the file itself wasn't replaced), so it's harmless.
         if was_watching {
             if let Err(e) = self.file_watcher.watch(&path) {
-                tracing::warn!(error = %e, path = ?path, "failed to re-watch after save");
+                tracing::warn!(error = ?e, path = ?path, "failed to re-watch after save");
             }
         }
         // Register a debounce fence covering the atomic-rename
@@ -3720,8 +3720,8 @@ impl Shell {
         }
         tracing::debug!(
             buffer_id = id,
-            from = %tab.encoding.label(),
-            to = %encoding.label(),
+            from = ?tab.encoding.label(),
+            to = ?encoding.label(),
             "set_buffer_encoding_by_id"
         );
         tab.encoding = encoding;
@@ -3747,8 +3747,8 @@ impl Shell {
         }
         tracing::debug!(
             buffer_id = id,
-            from = %tab.eol.label(),
-            to = %eol.label(),
+            from = ?tab.eol.label(),
+            to = ?eol.label(),
             "set_buffer_eol_by_id"
         );
         tab.eol = eol;
@@ -4086,7 +4086,7 @@ impl Shell {
                             tracing::warn!(
                                 path = ?tab.path,
                                 untitled_seq = ?tab.untitled_seq,
-                                error = %e,
+                                error = ?e,
                                 "failed to write backup file; unsaved edits not protected",
                             );
                             if tab.path.is_none() {
@@ -4214,7 +4214,7 @@ impl Shell {
         let mut session = match Session::load_from_xml(&path) {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!(path = %path.display(), error = ?e, "session.xml load failed; starting clean");
+                tracing::warn!(path = ?path, error = ?e, "session.xml load failed; starting clean");
                 return Vec::new();
             }
         };
@@ -4253,7 +4253,7 @@ impl Shell {
                     t.backup.as_deref().and_then(|name| {
                         if !is_safe_backup_filename(name) {
                             tracing::warn!(
-                                backup = %name,
+                                backup = ?name,
                                 "session.xml backup name failed safety check; backup ignored",
                             );
                             return None;
@@ -4264,8 +4264,8 @@ impl Shell {
                             Ok(text) => Some((text, abs_path)),
                             Err(e) => {
                                 tracing::warn!(
-                                    backup = %abs_path.display(),
-                                    error = %e,
+                                    backup = ?abs_path,
+                                    error = ?e,
                                     "failed to read backup file; falling back to disk content if path-bound",
                                 );
                                 None
@@ -4453,7 +4453,7 @@ impl Shell {
                 |n| format!("new {n}"),
             );
             tracing::warn!(
-                untitled = %label,
+                untitled = ?label,
                 "backup file modified externally; surfacing warning",
             );
             self.deferred_dialogs.push(PendingDialog::Error {
@@ -4557,7 +4557,7 @@ impl Shell {
         // open. A failed watch is non-fatal — the tab still
         // works, just without external-change detection.
         if let Err(e) = self.file_watcher.watch(&path) {
-            tracing::debug!(error = %e, path = ?path, "watch on dirty restore");
+            tracing::debug!(error = ?e, path = ?path, "watch on dirty restore");
         }
         // External-edit detection. If the on-disk file was
         // modified during the recovery window (between the
@@ -4931,7 +4931,7 @@ fn read_disabled_plugins_list() -> Vec<String> {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "disabled-plugins read failed");
+            tracing::warn!(path = ?path, error = ?e, "disabled-plugins read failed");
             return Vec::new();
         }
     };
@@ -4966,7 +4966,7 @@ fn write_disabled_plugins_list(filenames: &[String]) -> std::io::Result<()> {
         // launch. Skip + log; one-line-per-record is the file
         // format's invariant.
         if f.contains('\n') || f.contains('\r') {
-            tracing::warn!(filename = %f, "skipping disabled-plugin entry with embedded newline");
+            tracing::warn!(filename = ?f, "skipping disabled-plugin entry with embedded newline");
             continue;
         }
         body.push_str(f);
@@ -5228,7 +5228,7 @@ fn prune_unreferenced_backups(dir: &Path, keep: &[String]) {
             continue;
         }
         if let Err(e) = std::fs::remove_file(entry.path()) {
-            tracing::warn!(file = ?entry.path(), error = %e, "failed to remove stale backup file");
+            tracing::warn!(file = ?entry.path(), error = ?e, "failed to remove stale backup file");
         }
     }
 }
@@ -5418,7 +5418,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
 
     fn save_current_file(&mut self) {
         if let Err(e) = self.shell.save_current_to_disk(self.ui) {
-            tracing::warn!(error = %e, "plugin-triggered save failed");
+            tracing::warn!(error = ?e, "plugin-triggered save failed");
         }
     }
 
@@ -5693,7 +5693,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             // observable; the wiring is tracked as a follow-up.
             tracing::warn!(
                 buffer_id = id,
-                path = %path.display(),
+                path = ?path,
                 "NPPM_RELOADBUFFERID with_alert=true: silent reload until \
                  dialog-queue wiring lands (Phase 5 polish)",
             );
@@ -5915,8 +5915,8 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
                 Ok(()) => true,
                 Err(e) => {
                     tracing::warn!(
-                        path = %path.display(),
-                        error = %e,
+                        path = ?path,
+                        error = ?e,
                         "NPPM_SAVEFILE: write failed"
                     );
                     false
@@ -5935,12 +5935,12 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
                 .any(|t| t.path.as_deref() == Some(path.as_path()));
             if known_background {
                 tracing::warn!(
-                    path = %path.display(),
+                    path = ?path,
                     "NPPM_SAVEFILE: cross-tab save not yet supported (Phase 5)",
                 );
             } else {
                 tracing::trace!(
-                    path = %path.display(),
+                    path = ?path,
                     "NPPM_SAVEFILE: path does not match any open tab",
                 );
             }
@@ -6144,7 +6144,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // Save All path produces.
         let errors = self.shell.save_all(self.ui);
         for (tab_idx, err) in errors {
-            tracing::warn!(tab_idx, error = %err, "plugin-triggered save_all: per-tab failure");
+            tracing::warn!(tab_idx, error = ?err, "plugin-triggered save_all: per-tab failure");
         }
     }
 
@@ -6212,7 +6212,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             match self.shell.save_active_as_copy(self.ui, &path) {
                 Ok(()) => true,
                 Err(e) => {
-                    tracing::warn!(error = %e, path = %path.display(),
+                    tracing::warn!(error = ?e, path = ?path,
                         "NPPM_SAVECURRENTFILEAS(asCopy=TRUE) failed");
                     false
                 }
@@ -6221,7 +6221,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             match self.shell.save_buffer_as(self.ui, path.clone()) {
                 Ok(()) => true,
                 Err(e) => {
-                    tracing::warn!(error = %e, path = %path.display(),
+                    tracing::warn!(error = ?e, path = ?path,
                         "NPPM_SAVECURRENTFILEAS(asCopy=FALSE) failed");
                     false
                 }
@@ -6242,7 +6242,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         let session = match codepp_core::session::Session::load_from_xml(&path) {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!(error = %e, path = %path.display(),
+                tracing::warn!(error = ?e, path = ?path,
                     "NPPM_LOADSESSION: failed to read session file");
                 return false;
             }
@@ -6278,7 +6278,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     fn read_session_file_paths(&self, path: PathBuf) -> Option<Vec<PathBuf>> {
         let session = codepp_core::session::Session::load_from_xml(&path)
             .map_err(|e| {
-                tracing::warn!(error = %e, path = %path.display(),
+                tracing::warn!(error = ?e, path = ?path,
                     "NPPM_GETSESSIONFILES: failed to read session file");
                 e
             })
@@ -6318,7 +6318,7 @@ fn write_session_files(path: &Path, files: &[PathBuf]) -> bool {
     match session.save_to_xml(path) {
         Ok(()) => true,
         Err(e) => {
-            tracing::warn!(error = %e, path = %path.display(),
+            tracing::warn!(error = ?e, path = ?path,
                 "NPPM_SAVE*SESSION: failed to write session file");
             false
         }
@@ -6339,7 +6339,7 @@ fn load_find_history() -> FindHistory {
     match FindHistory::load(&path) {
         Ok(h) => h,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "find_history.xml load failed; starting empty");
+            tracing::warn!(path = ?path, error = ?e, "find_history.xml load failed; starting empty");
             FindHistory::default()
         }
     }
@@ -6357,7 +6357,7 @@ fn save_find_history(history: &FindHistory) {
         return;
     };
     if let Err(e) = history.save(&path) {
-        tracing::warn!(path = %path.display(), error = %e, "find_history.xml save failed");
+        tracing::warn!(path = ?path, error = ?e, "find_history.xml save failed");
     }
 }
 
@@ -6372,7 +6372,7 @@ fn load_preferences() -> Preferences {
     match Preferences::load(&path) {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "config.xml load failed; starting from defaults");
+            tracing::warn!(path = ?path, error = ?e, "config.xml load failed; starting from defaults");
             Preferences::default()
         }
     }
@@ -6387,7 +6387,7 @@ fn save_preferences(prefs: &Preferences) {
         return;
     };
     if let Err(e) = prefs.save(&path) {
-        tracing::warn!(path = %path.display(), error = %e, "config.xml save failed");
+        tracing::warn!(path = ?path, error = ?e, "config.xml save failed");
     }
 }
 
@@ -6400,7 +6400,7 @@ fn load_recent_files() -> RecentFiles {
     match RecentFiles::load(&path) {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "recent_files.xml load failed; starting empty");
+            tracing::warn!(path = ?path, error = ?e, "recent_files.xml load failed; starting empty");
             RecentFiles::default()
         }
     }
@@ -6415,7 +6415,7 @@ fn save_recent_files(recent: &RecentFiles) {
         return;
     };
     if let Err(e) = recent.save(&path) {
-        tracing::warn!(path = %path.display(), error = %e, "recent_files.xml save failed");
+        tracing::warn!(path = ?path, error = ?e, "recent_files.xml save failed");
     }
 }
 
@@ -6501,7 +6501,7 @@ fn copy_preinstalled_udls(dir: &Path) {
         Err(err) => {
             tracing::warn!(
                 path = ?target,
-                error = %err,
+                error = ?err,
                 "failed to create preinstalled Markdown UDL; \
                  skipping (Language menu will not show Markdown \
                  (preinstalled) until this file is present)"
@@ -6512,7 +6512,7 @@ fn copy_preinstalled_udls(dir: &Path) {
     if let Err(err) = file.write_all(PREINSTALLED_MARKDOWN_UDL) {
         tracing::warn!(
             path = ?target,
-            error = %err,
+            error = ?err,
             "failed to write preinstalled Markdown UDL contents; \
              partial file left on disk (Language menu may show \
              Markdown (preinstalled) with a parse error until \
@@ -6531,7 +6531,7 @@ fn load_styles() -> codepp_core::styles::Styles {
     match codepp_core::styles::Styles::load_from_xml(&path) {
         Ok(s) => s,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "styles.xml load failed; starting with defaults");
+            tracing::warn!(path = ?path, error = ?e, "styles.xml load failed; starting with defaults");
             codepp_core::styles::Styles::default()
         }
     }
@@ -6547,7 +6547,7 @@ fn save_styles(styles: &codepp_core::styles::Styles) {
         return;
     };
     if let Err(e) = styles.save_to_xml(&path) {
-        tracing::warn!(path = %path.display(), error = %e, "styles.xml save failed");
+        tracing::warn!(path = ?path, error = ?e, "styles.xml save failed");
     }
 }
 

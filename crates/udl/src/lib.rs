@@ -707,7 +707,7 @@ fn parse_hex_color(s: &str) -> u32 {
             // calls in this file.
             tracing::warn!(
                 value = ?s,
-                error = %err,
+                error = ?err,
                 "malformed UDL hex colour; defaulting to 0 (black)"
             );
             0

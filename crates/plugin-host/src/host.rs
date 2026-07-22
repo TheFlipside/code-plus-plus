@@ -528,7 +528,7 @@ impl PluginHost {
         }
 
         let path = plugin.path.clone();
-        let _span = tracing::info_span!("plugin_load", path = %path.display()).entered();
+        let _span = tracing::info_span!("plugin_load", path = ?path).entered();
 
         let cmd_id_base = self.next_cmd_id;
         let result = load_inner(&path, npp_data, cmd_id_base);
@@ -578,7 +578,7 @@ impl PluginHost {
                     // told `Ok(())` regardless of whether the
                     // notification panicked.
                     tracing::warn!(
-                        path = %path.display(),
+                        path = ?path,
                         "plugin panicked in beNotified(NPPN_READY)",
                     );
                 }
@@ -612,7 +612,7 @@ impl PluginHost {
                 }));
                 if tbmod_result.is_err() {
                     tracing::warn!(
-                        path = %path.display(),
+                        path = ?path,
                         "plugin panicked in beNotified(NPPN_TBMODIFICATION)",
                     );
                 }

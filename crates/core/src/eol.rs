@@ -83,7 +83,7 @@ impl Eol {
             "CR" => Eol::Cr,
             "Mixed" => Eol::Mixed,
             other => {
-                tracing::warn!(label = %other, "unknown EOL label; defaulting to LF");
+                tracing::warn!(label = ?other, "unknown EOL label; defaulting to LF");
                 Eol::Lf
             }
         }

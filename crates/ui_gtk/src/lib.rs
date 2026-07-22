@@ -132,7 +132,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<(), GtkUiError> {
     // likely cause (no display), which would misreport any other
     // failure mode if the real message were discarded entirely.
     gtk::init().map_err(|err| {
-        tracing::error!(%err, "gtk::init failed");
+        tracing::error!(?err, "gtk::init failed");
         GtkUiError::GtkInit
     })?;
 
@@ -681,7 +681,7 @@ pub(crate) fn save_session_now() {
     with_state(|st| {
         let (shell, mut ui) = st.split();
         if let Err(err) = shell.save_session(&mut ui) {
-            tracing::warn!(%err, "session save failed");
+            tracing::warn!(?err, "session save failed");
         }
     });
 }

@@ -581,7 +581,7 @@ pub fn notify_all(host: &PluginHost, notification: &Notification, npp_hwnd: Hwnd
         };
         let _span = tracing::trace_span!(
             "plugin_notify",
-            plugin = %plugin.display_label(),
+            plugin = ?plugin.display_label(),
             code = notification.code(),
         )
         .entered();
@@ -594,7 +594,7 @@ pub fn notify_all(host: &PluginHost, notification: &Notification, npp_hwnd: Hwnd
         }));
         if result.is_err() {
             tracing::warn!(
-                plugin = %plugin.display_label(),
+                plugin = ?plugin.display_label(),
                 "plugin panicked in beNotified",
             );
         }

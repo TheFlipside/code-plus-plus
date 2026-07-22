@@ -178,7 +178,7 @@ fn on_save() {
         shell.save_current_to_disk(&mut ui)
     });
     if let Some(Err(err)) = result {
-        tracing::warn!(%err, "save failed");
+        tracing::warn!(?err, "save failed");
     }
     refresh_tab_chrome();
 }
@@ -192,7 +192,7 @@ fn on_save_as() {
         shell.save_buffer_as(&mut ui, path)
     });
     if let Some(Err(err)) = result {
-        tracing::warn!(%err, "save-as failed");
+        tracing::warn!(?err, "save-as failed");
     }
     refresh_tab_chrome();
 }

@@ -602,7 +602,7 @@ fn walker_main(
     match std::fs::read_dir(&root) {
         Ok(it) => stack.push(it),
         Err(e) => {
-            tracing::debug!(dir = %root.display(), error = %e, "fif walker: read_dir failed");
+            tracing::debug!(dir = ?root, error = ?e, "fif walker: read_dir failed");
             return;
         }
     }
@@ -626,7 +626,7 @@ fn walker_main(
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                tracing::debug!(error = %e, "fif walker: dir entry error");
+                tracing::debug!(error = ?e, "fif walker: dir entry error");
                 continue;
             }
         };
@@ -639,8 +639,8 @@ fn walker_main(
                 // permission change) is meaningful but never
                 // worth aborting the whole walk for.
                 tracing::debug!(
-                    path = %path.display(),
-                    error = %e,
+                    path = ?path,
+                    error = ?e,
                     "fif walker: file_type query failed",
                 );
                 continue;
@@ -674,7 +674,7 @@ fn walker_main(
                 // the only channel that actually reaches the user.
                 stats.depth_cap_hit.store(true, Ordering::Relaxed);
                 tracing::warn!(
-                    path = %path.display(),
+                    path = ?path,
                     depth = MAX_WALK_DEPTH,
                     "fif walker: maximum directory depth reached; not descending further",
                 );
@@ -684,8 +684,8 @@ fn walker_main(
                 Ok(it) => stack.push(it),
                 Err(e) => {
                     tracing::debug!(
-                        dir = %path.display(),
-                        error = %e,
+                        dir = ?path,
+                        error = ?e,
                         "fif walker: read_dir failed",
                     );
                 }
@@ -845,8 +845,8 @@ fn worker_main(
                 Ok(new_bytes) => {
                     if let Err(e) = atomic_write(&path, &new_bytes, &perms) {
                         tracing::warn!(
-                            path = %path.display(),
-                            error = %e,
+                            path = ?path,
+                            error = ?e,
                             "fif worker: replace write failed"
                         );
                     } else {
@@ -858,8 +858,8 @@ fn worker_main(
                 }
                 Err(e) => {
                     tracing::warn!(
-                        path = %path.display(),
-                        error = %e,
+                        path = ?path,
+                        error = ?e,
                         "fif worker: replacement encoding failed (file kept unchanged)",
                     );
                 }
@@ -982,7 +982,7 @@ fn read_for_search(
             // either searching something changing underneath them or
             // being attacked.
             tracing::warn!(
-                path = %path.display(),
+                path = ?path,
                 "fif worker: entry is no longer a regular file; skipping",
             );
             None
@@ -999,13 +999,13 @@ fn read_for_search(
             // fires, so it earns the same visibility as the other
             // swap, not the routine-IO treatment.
             tracing::warn!(
-                path = %path.display(),
+                path = ?path,
                 "fif worker: entry became a symlink after enumeration; skipping",
             );
             None
         }
         Err(ReadCappedError::Io(e)) => {
-            tracing::debug!(path = %path.display(), error = %e, "fif worker: read failed");
+            tracing::debug!(path = ?path, error = ?e, "fif worker: read failed");
             None
         }
     }

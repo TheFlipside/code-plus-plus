@@ -62,7 +62,7 @@ impl FileWatcher {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "file watcher error");
+                    tracing::warn!(error = ?e, "file watcher error");
                 }
             })?;
         Ok(Self { inner })
