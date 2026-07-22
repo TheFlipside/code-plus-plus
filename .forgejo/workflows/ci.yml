@@ -54,8 +54,20 @@ jobs:
       - name: cargo build
         run: cargo build --workspace --all-targets
 
-      - name: cargo test (core)
-        run: cargo test -p codepp-core --all-targets
+      # Whole workspace, not just `core`. The original `-p codepp-core`
+      # was written at Phase 0, when `core` was the only crate that had
+      # any tests; it stopped describing reality long ago. At the time
+      # this widened, 512 of the workspace's tests ran on Linux and
+      # only 180 of them — core's — ran in CI, so every test in
+      # `shell`, `editor`, `udl`, `platform` and `scintilla-sys` was
+      # verified on contributors' machines and nowhere else.
+      #
+      # The Windows runner is the one that changes most: `ui_win32` is
+      # `#![cfg(target_os = "windows")]`, so on any other host it
+      # compiles to an empty rlib and its 130 tests do not exist. This
+      # is the first time they run anywhere.
+      - name: cargo test
+        run: cargo test --workspace --all-targets
 
   # rustfmt is deterministic across platforms — running it on more
   # than one runner is wasted CI time. Linux is fine.
