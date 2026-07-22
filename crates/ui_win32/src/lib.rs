@@ -1597,13 +1597,29 @@ struct WindowState {
     /// bound on `TrackMouseEvent` calls per second is documented as
     /// "implementation-defined" — being explicit is safer).
     tab_mouse_tracking: bool,
-    /// `Some(idx)` while the user is mid-click on a close-X glyph
-    /// (mouse pressed but not yet released). The close fires on the
-    /// matching `WM_LBUTTONUP` only if the cursor is still over the
-    /// same X — Win32 button convention. Clears on `WM_CAPTURECHANGED`
-    /// so a click-and-drag-away pattern cancels the close instead of
-    /// firing it on a release outside the X.
-    tab_close_armed: Option<usize>,
+    /// `Some(tab_id)` while the user is mid-click on a close-X
+    /// glyph (mouse pressed but not yet released). Stores the
+    /// **`Tab.id`** rather than the vector index: mouse capture
+    /// gates further mouse messages onto the tab strip but does
+    /// *not* gate keyboard input, so a `Ctrl+W`, plugin
+    /// `NPPM_MENUCOMMAND`, or any other keyboard-triggered
+    /// `Shell::move_tab` / `close_active_tab` between DOWN and UP
+    /// can reorder or shrink `Shell.tabs` while the arm is live.
+    /// An index-keyed arm would then match a release-time
+    /// hit-test index whose tab is a different buffer — "clicked
+    /// X, closed Y". Keying on `Tab.id` gives a stable identity
+    /// across those mutations, and the release-side commit
+    /// re-resolves the id to a current position after verifying
+    /// the release still lands on the same buffer.
+    ///
+    /// The close fires on the matching `WM_LBUTTONUP` only if the
+    /// cursor is still over the same X *and* the tab at that X is
+    /// still the armed buffer — Win32 button convention plus the
+    /// id-verification described above. Clears on
+    /// `WM_CAPTURECHANGED` so a click-and-drag-away pattern
+    /// cancels the close instead of firing it on a release
+    /// outside the X.
+    tab_close_armed: Option<i32>,
     /// True iff the cursor sits over the pin-toggle clickable rect
     /// of the tab in [`Self::tab_hover_idx`]. Symmetric to
     /// [`Self::tab_hover_close_x`] — drives the pin's hover paint
@@ -1613,13 +1629,17 @@ struct WindowState {
     /// detection. Always `false` when [`Self::tab_hover_idx`] is
     /// `None`.
     tab_hover_pin: bool,
-    /// `Some(idx)` while the user is mid-click on a pin glyph
-    /// (pressed but not yet released). The pin toggle fires on
-    /// the matching `WM_LBUTTONUP` only if the cursor is still
-    /// over the same pin — Win32 button convention, mirroring
-    /// [`Self::tab_close_armed`]. A click-and-drag-away cancels
-    /// the toggle instead of firing on release outside the pin.
-    tab_pin_armed: Option<usize>,
+    /// `Some(tab_id)` while the user is mid-click on a pin glyph
+    /// (pressed but not yet released). Stores the **`Tab.id`**
+    /// for the same reason as [`Self::tab_close_armed`] — see
+    /// that docstring for the mouse-capture-doesn't-gate-keyboard
+    /// scenario the id-keyed arm exists to defend against. The
+    /// pin toggle fires on the matching `WM_LBUTTONUP` only if
+    /// the cursor is still over the same pin *and* the tab at
+    /// that pin is still the armed buffer. A click-and-drag-away
+    /// cancels the toggle instead of firing on release outside
+    /// the pin.
+    tab_pin_armed: Option<i32>,
     editor: EditorHandle,
     shell: Shell,
 }
@@ -4622,6 +4642,35 @@ fn pick_next_close_target(
                 .map(|rel| keeper_pos + 1 + rel)
         }
         CloseMultiKind::AllUnchanged => tabs.iter().position(|t| !t.dirty && is_closable(t)),
+    }
+}
+
+/// Resolve a tab-strip arm/commit pair — used by the close-X and
+/// pin-toggle click handlers in the tab-strip subclass.
+///
+/// The arm captured a `Tab.id` on `WM_LBUTTONDOWN`; the release
+/// re-hit-tested the same coordinates and looked up the id of
+/// the tab currently at that position. This returns
+/// `Some(current_idx)` — the tab's *current* vector index — iff
+/// the release lands on the same buffer that was armed, so the
+/// caller can drive the commit against the id's live position
+/// rather than the stale arm-time index. `None` on any of:
+/// arm missing (nothing was pressed), release id missing (release
+/// missed every tab), id mismatch (release drifted to a different
+/// buffer, or a mid-click `move_tab` slid a different tab into
+/// the same visual slot), or armed id no longer present (buffer
+/// was closed between DOWN and UP).
+///
+/// Pure inspector; extracted so the invariant can be pinned by
+/// unit tests without needing a live `SysTabControl32` HWND.
+fn resolve_tab_arm_commit(
+    tabs: &[codepp_shell::Tab],
+    armed_id: Option<i32>,
+    release_id: Option<i32>,
+) -> Option<usize> {
+    match (armed_id, release_id) {
+        (Some(a), Some(r)) if a == r => tabs.iter().position(|t| t.id == a),
+        _ => None,
     }
 }
 
@@ -24090,7 +24139,16 @@ extern "system" fn tab_subclass_proc(
                 let close_hit = tab_close_x_hit_test(hwnd, x, y);
                 if let Some(idx) = close_hit {
                     if let Some(state) = state_from_hwnd(parent) {
-                        state.tab_close_armed = Some(idx);
+                        // Arm on `Tab.id`, not the vector index —
+                        // see the field docstring for why.
+                        // Silently skip the arm on the (defensive)
+                        // case where the hit index does not resolve
+                        // to a live tab: the strip and `Shell.tabs`
+                        // should be in sync on the UI thread, but a
+                        // race would be worse than a missed close.
+                        if let Some(id) = state.shell.tabs.get(idx).map(|t| t.id) {
+                            state.tab_close_armed = Some(id);
+                        }
                         // Clear any drag the previous click might
                         // have left armed. Belt-and-braces — drag
                         // is only set when the press is over a tab
@@ -24113,7 +24171,10 @@ extern "system" fn tab_subclass_proc(
                 let pin_hit = tab_pin_hit_test(hwnd, x, y);
                 if let Some(idx) = pin_hit {
                     if let Some(state) = state_from_hwnd(parent) {
-                        state.tab_pin_armed = Some(idx);
+                        // Arm on `Tab.id` — see the field docstring.
+                        if let Some(id) = state.shell.tabs.get(idx).map(|t| t.id) {
+                            state.tab_pin_armed = Some(id);
+                        }
                         state.tab_drag = None;
                     }
                     let _ = SetCapture(hwnd);
@@ -24269,53 +24330,95 @@ extern "system" fn tab_subclass_proc(
                 let parent = GetParent(hwnd).unwrap_or_default();
                 // Commit the close-X arm if the release lands on the
                 // same X the press did — Win32 button convention
-                // ("click and drag away to cancel"). The arm clears
-                // unconditionally so a release outside the X (or on
-                // a different tab's X) just dismisses without firing.
-                let release_close_hit = tab_close_x_hit_test(hwnd, x, y);
-                let release_pin_hit = tab_pin_hit_test(hwnd, x, y);
-                let (close_armed, pin_armed) = if let Some(state) = state_from_hwnd(parent) {
-                    let c = state.tab_close_armed.take();
-                    let p = state.tab_pin_armed.take();
-                    state.tab_drag = None;
-                    (c, p)
-                } else {
-                    (None, None)
-                };
-                let _ = ReleaseCapture();
-                if let Some(armed_idx) = close_armed {
-                    if release_close_hit == Some(armed_idx) {
-                        // Activate the clicked tab if it wasn't
-                        // already, then post the close. The
-                        // activation runs synchronously via
-                        // `TCM_SETCURSEL` + a synthesised
-                        // `TCN_SELCHANGE`; the close runs after
-                        // we return so any per-tab close prompt
-                        // appears against the just-activated
-                        // buffer.
-                        let cur = SendMessageW(hwnd, TCM_GETCURSEL, None, None).0 as i32;
-                        if cur != armed_idx as i32 {
-                            SendMessageW(
-                                hwnd,
-                                TCM_SETCURSEL,
-                                Some(WPARAM(armed_idx)),
-                                Some(LPARAM(0)),
-                            );
-                            // TCM_SETCURSEL doesn't fire
-                            // TCN_SELCHANGE — synthesise it so
-                            // `handle_tab_selchange` runs the
-                            // SCI_SETDOCPOINTER swap and the
-                            // close path operates on the right
-                            // buffer.
-                            handle_tab_selchange(parent);
-                        }
-                        let _ = PostMessageW(
-                            Some(parent),
-                            WM_COMMAND,
-                            WPARAM(ID_FILE_CLOSE as usize),
-                            LPARAM(0),
+                // ("click and drag away to cancel") — *and* the tab
+                // still living at that X carries the buffer id that
+                // was armed. The second half of that is what makes
+                // this id-keyed rather than index-keyed: mouse
+                // capture does not gate keyboard input, so a
+                // `Ctrl+W` / plugin `NPPM_MENUCOMMAND` / any other
+                // keyboard-triggered `move_tab` / `close_active_tab`
+                // between DOWN and UP can reorder or shrink
+                // `Shell.tabs` under the arm, and a pure "same
+                // index" check would then close a *different*
+                // buffer from the one the user pressed on. See the
+                // field docstrings on `tab_close_armed` /
+                // `tab_pin_armed`.
+                //
+                // The arm clears unconditionally so a release
+                // outside the X (or on a different tab's X) just
+                // dismisses without firing.
+                let release_close_hit_idx = tab_close_x_hit_test(hwnd, x, y);
+                let release_pin_hit_idx = tab_pin_hit_test(hwnd, x, y);
+                // In one borrow: take the two armed ids, resolve
+                // the release-hit indices to ids, and (if the ids
+                // match) translate the armed id back into a
+                // current position for the TCM_SETCURSEL /
+                // set_pinned calls below. `close_current_idx` /
+                // `pin_current_idx` are `Some(idx)` iff a commit
+                // should happen; otherwise the arm was stale, the
+                // release drifted, the buffer was closed
+                // out-from-under the arm, or state_from_hwnd
+                // returned None — every reject-and-do-nothing case
+                // collapses to `None` here.
+                let (close_current_idx, pin_current_idx): (Option<usize>, Option<usize>) =
+                    if let Some(state) = state_from_hwnd(parent) {
+                        let close_armed_id = state.tab_close_armed.take();
+                        let pin_armed_id = state.tab_pin_armed.take();
+                        state.tab_drag = None;
+                        let close_release_id = release_close_hit_idx
+                            .and_then(|i| state.shell.tabs.get(i))
+                            .map(|t| t.id);
+                        let pin_release_id = release_pin_hit_idx
+                            .and_then(|i| state.shell.tabs.get(i))
+                            .map(|t| t.id);
+                        let close_current_idx = resolve_tab_arm_commit(
+                            &state.shell.tabs,
+                            close_armed_id,
+                            close_release_id,
                         );
+                        let pin_current_idx =
+                            resolve_tab_arm_commit(&state.shell.tabs, pin_armed_id, pin_release_id);
+                        (close_current_idx, pin_current_idx)
+                    } else {
+                        (None, None)
+                    };
+                let _ = ReleaseCapture();
+                if let Some(armed_idx) = close_current_idx {
+                    // Activate the clicked tab if it wasn't
+                    // already, then post the close. The
+                    // activation runs synchronously via
+                    // `TCM_SETCURSEL` + a synthesised
+                    // `TCN_SELCHANGE`; the close runs after we
+                    // return so any per-tab close prompt appears
+                    // against the just-activated buffer.
+                    //
+                    // `armed_idx` here is the *current* position
+                    // of the armed `Tab.id`, resolved above — so
+                    // even if a mid-click `move_tab` shuffled the
+                    // strip, the SETCURSEL and the queued
+                    // `ID_FILE_CLOSE` still operate on the buffer
+                    // the user pressed on.
+                    let cur = SendMessageW(hwnd, TCM_GETCURSEL, None, None).0 as i32;
+                    if cur != armed_idx as i32 {
+                        SendMessageW(
+                            hwnd,
+                            TCM_SETCURSEL,
+                            Some(WPARAM(armed_idx)),
+                            Some(LPARAM(0)),
+                        );
+                        // TCM_SETCURSEL doesn't fire
+                        // TCN_SELCHANGE — synthesise it so
+                        // `handle_tab_selchange` runs the
+                        // SCI_SETDOCPOINTER swap and the close
+                        // path operates on the right buffer.
+                        handle_tab_selchange(parent);
                     }
+                    let _ = PostMessageW(
+                        Some(parent),
+                        WM_COMMAND,
+                        WPARAM(ID_FILE_CLOSE as usize),
+                        LPARAM(0),
+                    );
                 }
                 // Pin arm commits on same-pin release, mirroring
                 // the close-X convention. `Shell::set_pinned` does
@@ -24334,26 +24437,26 @@ extern "system" fn tab_subclass_proc(
                 // `wnd_proc` and double-borrow `&mut WindowState`
                 // — same rationale the drag-reorder path relies
                 // on.
-                if let Some(armed_idx) = pin_armed {
-                    if release_pin_hit == Some(armed_idx) {
-                        if let Some(state) = state_from_hwnd(parent) {
-                            let want = !state.shell.tabs.get(armed_idx).is_some_and(|t| t.pinned);
-                            if state.shell.set_pinned(armed_idx, want) {
-                                force_tab_strip_resync(state);
-                                // Refresh hover state against the
-                                // NEW tab order — the cursor
-                                // hasn't moved but a different
-                                // logical tab now sits under it,
-                                // so `tab_hover_idx` /
-                                // `tab_hover_pin` etc. are stale.
-                                // Without this, the next paint
-                                // renders hover-darkened glyphs
-                                // on whichever tab happens to
-                                // land at the stale index until
-                                // the user's next physical mouse
-                                // move corrects it.
-                                refresh_tab_hover_from_cursor(state, hwnd);
-                            }
+                if let Some(armed_idx) = pin_current_idx {
+                    if let Some(state) = state_from_hwnd(parent) {
+                        // `armed_idx` is the *current* position of
+                        // the armed `Tab.id`, resolved above — see
+                        // the close-X commit block for the same
+                        // rationale.
+                        let want = !state.shell.tabs.get(armed_idx).is_some_and(|t| t.pinned);
+                        if state.shell.set_pinned(armed_idx, want) {
+                            force_tab_strip_resync(state);
+                            // Refresh hover state against the NEW
+                            // tab order — the cursor hasn't moved
+                            // but a different logical tab now sits
+                            // under it, so `tab_hover_idx` /
+                            // `tab_hover_pin` etc. are stale.
+                            // Without this, the next paint renders
+                            // hover-darkened glyphs on whichever
+                            // tab happens to land at the stale
+                            // index until the user's next physical
+                            // mouse move corrects it.
+                            refresh_tab_hover_from_cursor(state, hwnd);
                         }
                     }
                 }
@@ -29243,6 +29346,163 @@ mod close_multi_target_tests {
             pick_next_close_target(&tabs, CloseMultiKind::AllButActive, 3),
             Some(0)
         );
+    }
+}
+
+#[cfg(test)]
+mod tab_arm_commit_tests {
+    //! Unit tests for `resolve_tab_arm_commit` — the pure
+    //! inspector that drives the id-keyed commit for tab-strip
+    //! close-X and pin-toggle clicks. Focus is on the DESIGN.md
+    //! §7.4 "clicked X, closed Y" bug: mouse capture holds the
+    //! button-down/up pair on the tab strip but does *not* gate
+    //! keyboard input, so a `Ctrl+W` / plugin `NPPM_MENUCOMMAND`
+    //! / any other keyboard-triggered `move_tab` /
+    //! `close_active_tab` between DOWN and UP can slide a
+    //! different tab into the same visual slot. Keying the arm on
+    //! `Tab.id` gives a stable identity across those mutations
+    //! and re-resolves the id to a current position at commit
+    //! time.
+    //!
+    //! Every failure mode the `wnd_proc` rejects — arm missing,
+    //! release drifted, buffer closed under the arm, keyboard
+    //! reorder between DOWN and UP — collapses to `None` here,
+    //! and every commit path takes the returned `Some(idx)` as
+    //! the *live* current position, so the tests below stand in
+    //! for the whole invariant.
+
+    use super::resolve_tab_arm_commit;
+    use codepp_shell::Tab;
+
+    fn mk(id: i32) -> Tab {
+        Tab {
+            id,
+            ..Tab::default()
+        }
+    }
+
+    #[test]
+    fn release_on_the_same_buffer_id_commits_at_current_position() {
+        // Static case, no mutation between DOWN and UP: press on
+        // tab id=5 at idx=1, release on the same. The returned
+        // idx must equal the press-time idx because nothing moved.
+        let tabs = vec![mk(3), mk(5), mk(7)];
+        assert_eq!(
+            resolve_tab_arm_commit(&tabs, Some(5), Some(5)),
+            Some(1),
+            "arm and release on the same id: commit at the id's current index"
+        );
+    }
+
+    #[test]
+    fn move_tab_between_down_and_up_translates_id_to_new_position() {
+        // The heart of the fix. Suppose the user presses on tab
+        // id=5 while it sits at idx=1 (so `tab_close_armed =
+        // Some(5)`). Between DOWN and UP a Ctrl+W or a plugin
+        // NPPM sliced the strip so id=5 now sits at idx=0. The
+        // release hit-test still lands on idx=0 (mouse didn't
+        // move), which is now id=5 — same buffer, moved cell.
+        // Commit must still fire, and the returned idx must be
+        // the *new* idx=0 so TCM_SETCURSEL and ID_FILE_CLOSE
+        // operate on the buffer the user pressed on. The pre-fix
+        // index-keyed code would have (correctly) matched on
+        // release position but (incorrectly) driven the commit
+        // against the arm-time idx=1 — activating a different
+        // buffer.
+        let tabs_at_up = vec![mk(5), mk(3), mk(7)];
+        assert_eq!(
+            resolve_tab_arm_commit(&tabs_at_up, Some(5), Some(5)),
+            Some(0),
+            "id=5 lives at idx=0 in the post-move state; commit tracks it there"
+        );
+    }
+
+    #[test]
+    fn release_drifts_to_a_different_tab_rejects() {
+        // Mouse moved off the armed tab's close-X onto a
+        // different tab's close-X between DOWN and UP. The
+        // canonical Win32 "click and drag away to cancel"
+        // behaviour applies: no commit.
+        let tabs = vec![mk(3), mk(5), mk(7)];
+        assert_eq!(
+            resolve_tab_arm_commit(&tabs, Some(5), Some(7)),
+            None,
+            "armed on id=5, released on id=7: no commit"
+        );
+    }
+
+    #[test]
+    fn different_tab_slid_into_the_armed_slot_rejects() {
+        // The other half of the "clicked X, closed Y" bug the
+        // fix exists to prevent, and the case the pre-fix
+        // index-keyed code got wrong: user pressed on tab id=5
+        // (armed), then a keyboard-triggered `move_tab` shuffled
+        // the strip so id=7 now sits at the arm's visual slot.
+        // Release lands on the same visual slot (mouse didn't
+        // move), so the release-hit id is now 7. Must reject —
+        // the buffer under the cursor is not the buffer the user
+        // pressed on.
+        let tabs_after_move = vec![mk(3), mk(7), mk(5)];
+        assert_eq!(
+            resolve_tab_arm_commit(&tabs_after_move, Some(5), Some(7)),
+            None,
+            "armed on id=5, but a different id now sits at the same visual slot"
+        );
+    }
+
+    #[test]
+    fn armed_buffer_closed_between_down_and_up_rejects() {
+        // A keyboard-triggered close removed the armed buffer
+        // entirely. The release-hit id is whatever slid in. The
+        // helper doesn't care whether id reuse is possible or
+        // not — `Shell::allocate_buffer_id` is a monotonic
+        // counter without reuse, so a fresh tab landing on the
+        // vacated visual slot never carries the same id as the
+        // just-closed one — but even if it did, the helper's
+        // contract is still "commit at the id's current
+        // position," and here `Shell.tabs` has no id=5 at all,
+        // so a match is impossible.
+        let tabs_after_close = vec![mk(3), mk(7)];
+        assert_eq!(
+            resolve_tab_arm_commit(&tabs_after_close, Some(5), Some(3)),
+            None,
+            "arm id no longer in Shell.tabs and release id mismatches: no commit"
+        );
+        // And even if the release *happens* to hit an id that
+        // matches the arm but the id is nowhere in `tabs` (an
+        // impossible steady state but a defensible reject case
+        // if a caller passes a mismatched pair), no commit fires.
+        assert_eq!(
+            resolve_tab_arm_commit(&tabs_after_close, Some(5), Some(5)),
+            None,
+            "arm-release id agrees but no live tab carries it: no commit"
+        );
+    }
+
+    #[test]
+    fn no_arm_rejects_regardless_of_release() {
+        // WM_LBUTTONUP fires with no prior close-X arm — the
+        // press landed on a tab body, or the pin, or a WM_CAPTURE
+        // teardown cleared the arm. Nothing to commit.
+        let tabs = vec![mk(3), mk(5), mk(7)];
+        assert_eq!(resolve_tab_arm_commit(&tabs, None, Some(5)), None);
+    }
+
+    #[test]
+    fn release_missed_every_tab_rejects() {
+        // Mouse released in the tab strip gutter — no close-X /
+        // pin under it, hit-test returned None. Canonical Win32
+        // "click and drag away to cancel" — no commit.
+        let tabs = vec![mk(3), mk(5), mk(7)];
+        assert_eq!(resolve_tab_arm_commit(&tabs, Some(5), None), None);
+    }
+
+    #[test]
+    fn both_arm_and_release_absent_is_a_no_op() {
+        // Belt-and-braces: a WM_LBUTTONUP with no arm and no
+        // release hit must not accidentally commit anything.
+        let tabs = vec![mk(3)];
+        assert_eq!(resolve_tab_arm_commit(&tabs, None, None), None);
     }
 }
 
