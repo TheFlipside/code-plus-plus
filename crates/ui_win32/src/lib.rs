@@ -7372,22 +7372,19 @@ fn resolve_lang_label(lang: LangType, udl_registry: &codepp_udl::UdlRegistry) ->
 }
 
 fn write_status_part(status_hwnd: HWND, part_index: usize, text: &str) {
-    // Strip embedded NUL characters before building the wide buffer.
-    // SB_SETTEXTW reads up to the first U+0000 unit; an embedded NUL
-    // in plugin-supplied text would silently truncate the visible
-    // string mid-glyph. Stripping puts the visible/encoded length in
-    // sync so any future multi-part status logic that compares
-    // `vec.len()` with what the control consumed stays consistent.
-    let cleaned: String;
-    let payload = if text.contains('\0') {
-        cleaned = text.replace('\0', "");
-        cleaned.as_str()
-    } else {
-        text
-    };
+    // Callers reach this via either static/formatted strings or
+    // `Shell::set_status_bar`, which runs plugin-supplied text
+    // through `sanitize_str_for_display` first — U+0000 (which
+    // would otherwise truncate `SB_SETTEXTW` mid-glyph, since the
+    // control reads up to the first zero UTF-16 unit) is
+    // substituted with U+FFFD upstream, along with every other
+    // display-hostile character. Do not reintroduce a local strip
+    // here: the whole point of the consolidation is one place
+    // that owns the policy. A new caller that needs its own
+    // sanitization should route through the shared helper too.
     // Null-terminated UTF-16 buffer — Vec<u16> over HSTRING so the
     // layout is unambiguous; HSTRING has its own refcounted header.
-    let wide: Vec<u16> = payload.encode_utf16().chain(std::iter::once(0)).collect();
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     // SB_SETTEXTW = 0x040B (wide variant; 0x0401 is the ANSI
     // SB_SETTEXTA, which the SendMessageW call would mismatch).
     // wparam packs `(part_index | drawing_type << 8)`; drawing type 0
@@ -29347,12 +29344,12 @@ mod udl_menu_sanitizer_tests {
         // label across visual lines. Both get replaced with
         // U+FFFD — the shared sanitizer's substitute policy.
         // U+FFFD encodes as 0xFFFD in UTF-16, not zero, so it
-        // doesn't retrigger the SB_SETTEXTW truncation the NUL
-        // strip in `write_status_part` also defends against; and
-        // it isn't a line-break character, so no multi-line
-        // render either. Both failure modes closed, and the
-        // hostile input remains visible instead of silently
-        // vanishing into a collision with a legitimate name.
+        // doesn't retrigger the wide-null truncation the underlying
+        // SetWindowTextW / SB_SETTEXTW would otherwise honour; and
+        // it isn't a line-break character, so no multi-line render
+        // either. Both failure modes closed, and the hostile input
+        // remains visible instead of silently vanishing into a
+        // collision with a legitimate name.
         assert_eq!(sanitize_udl_name_for_menu("A\0B"), "A\u{FFFD}B");
         assert_eq!(
             sanitize_udl_name_for_menu("Line1\nLine2"),

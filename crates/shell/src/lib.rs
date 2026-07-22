@@ -1047,6 +1047,37 @@ pub fn sanitize_filename_for_display(name: &str) -> String {
         .collect()
 }
 
+/// Sanitize an arbitrary chrome string — status-bar overrides,
+/// short prompt captions, anything that reaches a text-rendering sink
+/// but isn't a filename with the [`DISPLAY_NAME_MAX_CHARS`] budget in
+/// mind.
+///
+/// Same character policy as [`sanitize_filename_for_display`] and
+/// [`sanitize_path_for_display`] (see [`is_display_hostile`]), with
+/// **no length cap.** The cap on filenames exists because chrome that
+/// renders a name is refreshed per keystroke, so pathological length
+/// is a repeated cost; this sink's callers already know what they're
+/// putting into the display and don't need a wraparound guard.
+///
+/// The specific sink this exists for is the `NPPM_SETSTATUSBAR`
+/// plugin message — dispatched through
+/// [`Shell::dispatch_plugin_message`] onto `HostServices::set_status_bar`
+/// — whose text argument is plugin-supplied and therefore
+/// attacker-influenceable via any plugin that forwards untrusted
+/// content into it. Without this, embedded `\r`/`\n` on GTK would
+/// break the label across visual lines, a bidi override would
+/// reverse the visible order of a following segment on either
+/// backend, a zero-width run would let one label render identically
+/// to a legitimate one, and control characters like `\t` and DEL
+/// would render as glyph noise. None of these are `SB_SETTEXTW`
+/// column-separator semantics — the status bar has no menu-style
+/// accelerator column — but they still corrupt what the user
+/// reads.
+#[must_use]
+pub fn sanitize_str_for_display(s: &str) -> String {
+    s.chars().map(sanitize_display_char).collect()
+}
+
 /// The user-facing display name for a tab — the same string the tab
 /// strip renders, the window title shows, and the save-confirmation
 /// prompt names.
@@ -5511,7 +5542,25 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     }
 
     fn set_status_bar(&mut self, section: usize, text: String) {
-        self.ui.set_plugin_status(section, &text);
+        // Plugin-supplied text is attacker-influenceable — a
+        // legitimate plugin that forwards a branch name, archive
+        // entry, or filename it just opened would otherwise pipe
+        // display-hostile characters straight into the chrome. On
+        // GTK an embedded `\r`/`\n` breaks the label across visual
+        // lines; on both backends a bidi override (U+202E and
+        // friends) reverses the visible order of any following
+        // segment, and a zero-width run lets one label render
+        // identically to a legitimate one. `SB_SETTEXTW` on Win32
+        // has no accelerator-column concept (that's a menu-string
+        // property, not a status-bar one), but control characters
+        // like `\t`/DEL still render as glyph noise there. Route
+        // through the shared substitute-with-U+FFFD policy here at
+        // the shell layer so both `ui_win32::set_plugin_status`
+        // and `ui_gtk::set_plugin_status` inherit the fix from one
+        // call site — closes the follow-up recorded in DESIGN.md
+        // §7.4.
+        let sanitized = sanitize_str_for_display(&text);
+        self.ui.set_plugin_status(section, &sanitized);
     }
 
     fn open_file(&mut self, path: PathBuf) {
@@ -6935,6 +6984,33 @@ mod tab_display_name_tests {
     }
 
     #[test]
+    fn arbitrary_strs_are_sanitized_but_never_truncated() {
+        use super::sanitize_str_for_display;
+        // Same character policy as filenames/paths — the sinks this
+        // exists for (status-bar overrides, short chrome captions)
+        // must not let a plugin-supplied `\t` steer a menu-column
+        // split on Win32 or an embedded `\r`/`\n` break a GTK label
+        // across visual lines. Threat model matches
+        // `resolve_lang_label`'s UDL branch — attacker-influenceable
+        // input reaching a text-rendering sink that wasn't a
+        // filename.
+        assert_eq!(sanitize_str_for_display("A\tB"), "A\u{FFFD}B");
+        assert_eq!(sanitize_str_for_display("A\rB\nC"), "A\u{FFFD}B\u{FFFD}C");
+        assert_eq!(
+            sanitize_str_for_display("plain: \u{202E}exe.pdf"),
+            "plain: \u{FFFD}exe.pdf"
+        );
+        assert_eq!(
+            sanitize_str_for_display("zwsp\u{200B}here"),
+            "zwsp\u{FFFD}here"
+        );
+        // No cap — a legitimate plugin might emit a longer status
+        // message; a name-length budget would truncate mid-glyph.
+        let long: String = std::iter::repeat_n('x', DISPLAY_NAME_MAX_CHARS * 4).collect();
+        assert_eq!(sanitize_str_for_display(&long).chars().count(), long.len());
+    }
+
+    #[test]
     fn capping_counts_chars_not_bytes_and_never_splits_one() {
         // A 4-byte-per-char name is where a byte-based cap would
         // slice through a UTF-8 sequence. Counting `char`s cannot,
@@ -7984,6 +8060,48 @@ mod tests {
         };
         assert_eq!(r, Some(1));
         assert_eq!(ui.plugin_status_calls, vec![(2usize, "Hello!".to_string())]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn plugin_dispatch_set_status_substitutes_display_hostile_chars() {
+        // A legitimate plugin that forwards attacker-influenced text
+        // (a branch name, an archive entry, the basename of a file
+        // it just opened) into `NPPM_SETSTATUSBAR` must not steer
+        // Win32's accelerator-column split (`\t`), break the label
+        // across multiple visual lines (`\r`/`\n`), reverse the
+        // rendered order of a following segment (U+202E), or make
+        // one label render identically to another via zero-widths
+        // (U+200B). `Shell::set_status_bar` routes through
+        // `sanitize_str_for_display` before dispatching, so both
+        // backends inherit the fix from one call site — asserted at
+        // the FakeUi boundary rather than each backend's status
+        // widget because the sanitization sits above the platform
+        // split and per-backend live-widget tests would need
+        // display-gated infrastructure the workspace doesn't have.
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        const NPPM_SETSTATUSBAR: u32 = (0x0400 + 1000) + 24;
+        // Real menu-item wording that would silently spoof a
+        // Ctrl+R accelerator column, with a bidi override and a
+        // ZWSP mixed in for the other two failure modes.
+        let hostile = "branch: main\tCtrl+R\r\ninv\u{202E}exe.pdf\u{200B}!";
+        let text: Vec<u16> = hostile.encode_utf16().chain(std::iter::once(0)).collect();
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                HostHandles::null(),
+                NPPM_SETSTATUSBAR,
+                1,
+                text.as_ptr() as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        let expected =
+            "branch: main\u{FFFD}Ctrl+R\u{FFFD}\u{FFFD}inv\u{FFFD}exe.pdf\u{FFFD}!".to_string();
+        assert_eq!(ui.plugin_status_calls, vec![(1usize, expected)]);
     }
 
     #[cfg(target_os = "windows")]
