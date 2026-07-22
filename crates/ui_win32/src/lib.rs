@@ -100,6 +100,7 @@ mod udl_editor;
 mod udl_paint;
 
 use core::ffi::c_void;
+use std::collections::HashMap;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1399,6 +1400,36 @@ struct WindowState {
     /// with N++, which walks the whole tree eagerly on open
     /// and freezes on large workspaces.
     workspace_tree_hwnd: HWND,
+    /// Real (unsanitized) filesystem component name for every
+    /// non-placeholder item in the workspace tree, keyed by
+    /// `HTREEITEM.0`.
+    ///
+    /// The text that reaches [`TVITEMW::pszText`] is passed
+    /// through [`sanitize_filename_for_display`] first — a
+    /// filename carrying a bidi override (U+202E, the "PDF that
+    /// runs as an EXE" trick), a zero-width space, a C0 control,
+    /// or any other display-hostile codepoint renders as U+FFFD
+    /// so the panel can't spoof an extension. The real name still
+    /// has to reach the filesystem for `Open`, `Run by system`,
+    /// FIF, Explorer-here etc., so it lives here out of band:
+    /// [`tree_item_full_path`] rebuilds a path by looking each
+    /// ancestor up in this map, never by reading `pszText` back.
+    ///
+    /// Same shape as [`Self::fif_listview_index`] — the real
+    /// value lives in a side table, the sanitized string lives in
+    /// the widget, neither is reconstructed from the other. See
+    /// the "Workspace tree renders unsanitized filenames…" entry
+    /// in DESIGN.md §7.4 for the full rationale, including why
+    /// sanitizing at insert time without a side table would break
+    /// every hostile-named file in the panel.
+    ///
+    /// Cleared by [`tree_clear_all`] (which fires on remove-root
+    /// and on re-root through [`show_workspace_panel`]).
+    /// Placeholder children (inserted via
+    /// [`tree_insert_placeholder`]) are deliberately absent —
+    /// they carry no name and never appear on a reconstructed
+    /// path.
+    workspace_tree_names: HashMap<isize, String>,
     /// DFS queue for the async "Unfold All" walk. Non-empty ⇔
     /// walk in progress. On each `WM_TIMER(WORKSPACE_UNFOLD_TIMER_ID)`
     /// tick we pop one folder, expand it (which fires
@@ -18055,6 +18086,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             workspace_action_fold,
             workspace_action_locate,
             workspace_tree_hwnd,
+            workspace_tree_names: HashMap::new(),
             workspace_unfold_pending: Vec::new(),
             workspace_unfold_count: 0,
             workspace_unfold_progress,
@@ -19311,7 +19343,7 @@ extern "system" fn workspace_panel_wnd_proc(
                             // subclass one day. Same discipline as
                             // the other snapshot-then-drop sites.
                             let _ = state;
-                            handle_tree_item_expanding(tree, ntv.itemNew.hItem, &root);
+                            handle_tree_item_expanding(parent, tree, ntv.itemNew.hItem, &root);
                         }
                     }
                     // Return 0 = allow the expand/collapse to proceed.
@@ -21595,6 +21627,17 @@ unsafe fn sys_icon_index_for(name_wide: &[u16], is_dir: bool) -> i32 {
 /// item's handle, or a null handle on failure (caller should
 /// treat as "insert dropped").
 ///
+/// `real_name` is the on-disk basename as returned by
+/// `read_dir`. It is passed through
+/// [`sanitize_filename_for_display`] before it reaches
+/// `TVITEMW::pszText`, so a hostile filename (bidi override,
+/// zero-width space, C0 control, etc.) can't render as a spoofed
+/// extension in the panel. The real, unsanitized name is stashed
+/// on [`WindowState::workspace_tree_names`] keyed by the new
+/// item's handle, so [`tree_item_full_path`] can rebuild a path
+/// that actually hits the file — reading `pszText` back would
+/// give U+FFFD placeholders that don't match anything on disk.
+///
 /// `has_placeholder`: if true AND `is_dir`, the caller is
 /// responsible for inserting a placeholder child so the [+]
 /// chevron appears; the item's `lParam` is set to
@@ -21604,15 +21647,22 @@ unsafe fn sys_icon_index_for(name_wide: &[u16], is_dir: bool) -> i32 {
 ///
 /// # Safety
 ///
-/// `tree` must be a live `SysTreeView32` HWND. UI-thread only.
+/// `tree` must be a live `SysTreeView32` HWND, `main_hwnd` the
+/// live main window whose `WindowState` owns the side table. UI
+/// thread only.
 unsafe fn tree_insert_item(
+    main_hwnd: HWND,
     tree: HWND,
     parent: HTREEITEM,
-    name: &str,
+    real_name: &str,
     is_dir: bool,
     has_placeholder: bool,
 ) -> HTREEITEM {
-    let name_wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    // Sanitize for the display path only. The real name is kept
+    // for the filesystem path — see the security note in
+    // `WindowState::workspace_tree_names`.
+    let display = sanitize_filename_for_display(real_name);
+    let name_wide: Vec<u16> = display.encode_utf16().chain(std::iter::once(0)).collect();
     let icon = unsafe { sys_icon_index_for(&name_wide, is_dir) };
     let lparam_val = if !is_dir {
         WORKSPACE_ITEM_FILE
@@ -21668,7 +21718,21 @@ unsafe fn tree_insert_item(
             Some(LPARAM(&raw const insert as isize)),
         )
     };
-    HTREEITEM(result.0)
+    let new_item = HTREEITEM(result.0);
+    if new_item.0 != 0 {
+        // Stash the *real* filename (not the sanitized display)
+        // so `tree_item_full_path` reconstructs a path that
+        // resolves on the filesystem. Reading `pszText` back
+        // would give the sanitized string and every hostile-named
+        // file in the panel would stop opening — the exact trap
+        // documented on `WindowState::workspace_tree_names`.
+        if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+            state
+                .workspace_tree_names
+                .insert(new_item.0, real_name.to_string());
+        }
+    }
+    new_item
 }
 
 /// Insert a hidden "placeholder" child under `parent` so its
@@ -21721,7 +21785,7 @@ unsafe fn tree_insert_placeholder(tree: HWND, parent: HTREEITEM) {
 /// # Safety
 ///
 /// Same as [`tree_insert_item`].
-unsafe fn insert_tree_folder_children(tree: HWND, parent: HTREEITEM, dir: &Path) {
+unsafe fn insert_tree_folder_children(main_hwnd: HWND, tree: HWND, parent: HTREEITEM, dir: &Path) {
     let mut folders: Vec<String> = Vec::new();
     let mut files: Vec<String> = Vec::new();
     match std::fs::read_dir(dir) {
@@ -21749,13 +21813,13 @@ unsafe fn insert_tree_folder_children(tree: HWND, parent: HTREEITEM, dir: &Path)
     folders.sort_by_key(|s| s.to_lowercase());
     files.sort_by_key(|s| s.to_lowercase());
     for name in &folders {
-        let node = unsafe { tree_insert_item(tree, parent, name, true, true) };
+        let node = unsafe { tree_insert_item(main_hwnd, tree, parent, name, true, true) };
         if node.0 != 0 {
             unsafe { tree_insert_placeholder(tree, node) };
         }
     }
     for name in &files {
-        unsafe { tree_insert_item(tree, parent, name, false, false) };
+        unsafe { tree_insert_item(main_hwnd, tree, parent, name, false, false) };
     }
 }
 
@@ -21763,10 +21827,19 @@ unsafe fn insert_tree_folder_children(tree: HWND, parent: HTREEITEM, dir: &Path)
 /// Called before re-populating (e.g. on `File → Open Folder
 /// as Workspace...` re-root).
 ///
+/// Also clears [`WindowState::workspace_tree_names`] — every
+/// `HTREEITEM` this map keyed on is now freed, and if the OS
+/// reuses those handles for the next populate the stale entries
+/// would map to the wrong file. The paired
+/// [`tree_insert_item`] insertion is what keeps the map in
+/// step during populate; this is what resets it between
+/// populates.
+///
 /// # Safety
 ///
-/// `tree` must be a live `SysTreeView32` HWND.
-unsafe fn tree_clear_all(tree: HWND) {
+/// `tree` must be a live `SysTreeView32` HWND, `main_hwnd` the
+/// live main window whose `WindowState` owns the side table.
+unsafe fn tree_clear_all(main_hwnd: HWND, tree: HWND) {
     unsafe {
         SendMessageW(
             tree,
@@ -21774,6 +21847,9 @@ unsafe fn tree_clear_all(tree: HWND) {
             Some(WPARAM(0)),
             Some(LPARAM(TVI_ROOT.0)),
         );
+    }
+    if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+        state.workspace_tree_names.clear();
     }
 }
 
@@ -21789,9 +21865,11 @@ unsafe fn tree_clear_all(tree: HWND) {
 ///
 /// # Safety
 ///
-/// `tree` must be a live `SysTreeView32` HWND. UI-thread only.
-unsafe fn populate_workspace_root(tree: HWND, root: &Path) {
-    unsafe { tree_clear_all(tree) };
+/// `tree` must be a live `SysTreeView32` HWND, `main_hwnd` the
+/// live main window whose `WindowState` owns the side table. UI
+/// thread only.
+unsafe fn populate_workspace_root(main_hwnd: HWND, tree: HWND, root: &Path) {
+    unsafe { tree_clear_all(main_hwnd, tree) };
     let root_name = root.file_name().map_or_else(
         || root.to_string_lossy().into_owned(),
         |s| s.to_string_lossy().into_owned(),
@@ -21800,11 +21878,11 @@ unsafe fn populate_workspace_root(tree: HWND, root: &Path) {
     // top-level item." `HTREEITEM::default()` (i.e. NULL) happens
     // to work as a synonym on current Windows but isn't part of
     // the documented contract — use the explicit sentinel.
-    let root_node = unsafe { tree_insert_item(tree, TVI_ROOT, &root_name, true, false) };
+    let root_node = unsafe { tree_insert_item(main_hwnd, tree, TVI_ROOT, &root_name, true, false) };
     if root_node.0 == 0 {
         return;
     }
-    unsafe { insert_tree_folder_children(tree, root_node, root) };
+    unsafe { insert_tree_folder_children(main_hwnd, tree, root_node, root) };
     // Auto-expand the root so the user sees the first level
     // without clicking. Second- and deeper-level expands remain
     // lazy per [`TVN_ITEMEXPANDINGW`].
@@ -21818,56 +21896,42 @@ unsafe fn populate_workspace_root(tree: HWND, root: &Path) {
     }
 }
 
-/// Read the text of a tree item into an owned `String`. Used
-/// by [`tree_item_full_path`] to reconstruct a filesystem path
-/// by walking from an item up to the root.
-///
-/// # Safety
-///
-/// `tree` must be a live `SysTreeView32` HWND, `item` a live
-/// item in it.
-unsafe fn tree_item_text(tree: HWND, item: HTREEITEM) -> String {
-    // MAX_PATH is enough for one path component; components
-    // longer than that are exceptionally rare (Windows'
-    // NAME_MAX per-component is 255 typically).
-    let mut buf = [0u16; 260];
-    let mut item_out = TVITEMW {
-        mask: TVIF_TEXT,
-        hItem: item,
-        pszText: windows::core::PWSTR(buf.as_mut_ptr()),
-        cchTextMax: buf.len() as i32,
-        ..Default::default()
-    };
-    unsafe {
-        SendMessageW(
-            tree,
-            TVM_GETITEMW,
-            Some(WPARAM(0)),
-            Some(LPARAM(&raw mut item_out as isize)),
-        );
-    }
-    let null_idx = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-    use std::os::windows::ffi::OsStringExt;
-    std::ffi::OsString::from_wide(&buf[..null_idx])
-        .to_string_lossy()
-        .into_owned()
-}
-
 /// Reconstruct the full filesystem path of `item` by walking
-/// from it up to the root, collecting each item's text as a
-/// path component, and joining onto `workspace_root`. The
-/// topmost item (the root node) is skipped — its text is
-/// `workspace_root`'s basename, which is already implicit in
-/// `workspace_root` itself.
+/// from it up to the root, collecting each item's real
+/// filesystem name from
+/// [`WindowState::workspace_tree_names`], and joining onto
+/// `workspace_root`. The topmost item (the root node) is
+/// skipped — its name is `workspace_root`'s basename, which is
+/// already implicit in `workspace_root` itself.
+///
+/// Returns `None` if any intermediate item is missing from the
+/// side table. That is a bug — every non-placeholder insert
+/// stashes its real name in [`tree_insert_item`] — and callers
+/// treat it the same way they treat the `starts_with(root)`
+/// defence-in-depth check: refuse the operation rather than
+/// silently open the wrong file.
+///
+/// **Do not** reintroduce a "read `pszText` back" path here.
+/// That's what this fix eliminated: the text on the control has
+/// been passed through [`sanitize_filename_for_display`], so a
+/// name carrying a bidi override or a zero-width space no
+/// longer round-trips to a filesystem-valid path.
 ///
 /// # Safety
 ///
-/// Same as [`tree_item_text`].
-unsafe fn tree_item_full_path(tree: HWND, item: HTREEITEM, workspace_root: &Path) -> PathBuf {
+/// `tree` must be a live `SysTreeView32` HWND, `main_hwnd` the
+/// live main window whose `WindowState` owns the side table.
+unsafe fn tree_item_full_path(
+    main_hwnd: HWND,
+    tree: HWND,
+    item: HTREEITEM,
+    workspace_root: &Path,
+) -> Option<PathBuf> {
     let mut components: Vec<String> = Vec::new();
     let mut cur = item;
-    // Walk up: for each item, if it has a parent, keep its text;
-    // when we hit the root (parent == null), stop.
+    // Walk up: for each item, if it has a parent, look its real
+    // name up in the side table; when we hit the root (parent
+    // == null), stop.
     loop {
         let parent = unsafe {
             SendMessageW(
@@ -21878,13 +21942,37 @@ unsafe fn tree_item_full_path(tree: HWND, item: HTREEITEM, workspace_root: &Path
             )
         };
         if parent.0 == 0 {
-            // `cur` is the root node — its text (workspace_root
+            // `cur` is the root node — its name (workspace_root
             // basename) is NOT a path component to append; the
             // components collected so far are already relative
             // to workspace_root.
             break;
         }
-        components.push(unsafe { tree_item_text(tree, cur) });
+        let state_opt = unsafe { state_from_hwnd(main_hwnd) };
+        let Some(state) = state_opt else {
+            // `state_from_hwnd` returned `None` — the main window
+            // has no `WindowState` right now (either not yet
+            // installed or already torn down). Distinct from the
+            // map-miss case below because the caller can't do
+            // anything about it.
+            tracing::warn!(
+                item = cur.0,
+                "workspace tree: no WindowState on main window; refusing to reconstruct path"
+            );
+            return None;
+        };
+        let Some(name) = state.workspace_tree_names.get(&cur.0).cloned() else {
+            // Map miss — a non-root, non-placeholder item that
+            // was never registered by `tree_insert_item`. That
+            // is a bug (the placeholder's TVIF_PARAM lparam is
+            // -1 and is filtered at the walk anchor, not here).
+            tracing::warn!(
+                item = cur.0,
+                "workspace tree: no real-name entry for item; refusing to reconstruct path"
+            );
+            return None;
+        };
+        components.push(name);
         cur = HTREEITEM(parent.0);
     }
     components.reverse();
@@ -21892,7 +21980,7 @@ unsafe fn tree_item_full_path(tree: HWND, item: HTREEITEM, workspace_root: &Path
     for c in components {
         path.push(c);
     }
-    path
+    Some(path)
 }
 
 /// Read a tree item's `lParam` (our state sentinel: file /
@@ -21900,7 +21988,8 @@ unsafe fn tree_item_full_path(tree: HWND, item: HTREEITEM, workspace_root: &Path
 ///
 /// # Safety
 ///
-/// Same as [`tree_item_text`].
+/// `tree` must be a live `SysTreeView32` HWND, `item` a live
+/// item in it.
 unsafe fn tree_item_lparam(tree: HWND, item: HTREEITEM) -> isize {
     let mut item_out = TVITEMW {
         mask: TVIF_PARAM,
@@ -21925,7 +22014,7 @@ unsafe fn tree_item_lparam(tree: HWND, item: HTREEITEM) -> isize {
 ///
 /// # Safety
 ///
-/// Same as [`tree_item_text`].
+/// Same as [`tree_item_lparam`].
 unsafe fn tree_set_item_lparam(tree: HWND, item: HTREEITEM, lparam: isize) {
     let item_set = TVITEMW {
         mask: TVIF_PARAM,
@@ -21946,10 +22035,24 @@ unsafe fn tree_set_item_lparam(tree: HWND, item: HTREEITEM, lparam: isize) {
 /// Remove every child of `parent`. Used to strip the placeholder
 /// off an `UNPOP` folder before inserting real children.
 ///
+/// Each doomed subtree is walked first and its handles removed
+/// from [`WindowState::workspace_tree_names`] — the map's
+/// invariant is "every entry keys on a live `HTREEITEM`", and
+/// `TVM_DELETEITEM` recursively frees the whole subtree, not just
+/// the direct child. For today's only caller
+/// ([`handle_tree_item_expanding`]), the child is always the
+/// placeholder created by [`tree_insert_placeholder`] and the
+/// pruning is a no-op — placeholders never enter the map. The
+/// prune is here to keep the invariant enforced by construction
+/// so a future caller that runs this on a populated folder
+/// doesn't silently orphan entries.
+///
 /// # Safety
 ///
-/// Same as [`tree_item_text`].
-unsafe fn tree_delete_all_children(tree: HWND, parent: HTREEITEM) {
+/// `tree` must be a live `SysTreeView32` HWND on the UI thread,
+/// `main_hwnd` the live main window whose `WindowState` owns the
+/// side table.
+unsafe fn tree_delete_all_children(main_hwnd: HWND, tree: HWND, parent: HTREEITEM) {
     loop {
         let child = unsafe {
             SendMessageW(
@@ -21961,6 +22064,23 @@ unsafe fn tree_delete_all_children(tree: HWND, parent: HTREEITEM) {
         };
         if child.0 == 0 {
             break;
+        }
+        let child_item = HTREEITEM(child.0);
+        // Collect the full subtree's handles BEFORE
+        // `TVM_DELETEITEM`, because after the delete they're
+        // freed and unreachable. Then drain the map. `remove`
+        // on a handle that was never inserted (placeholders,
+        // root) is a no-op.
+        let mut handles: Vec<isize> = Vec::new();
+        unsafe {
+            tree_walk_descendants(tree, child_item, &mut |_t, node| {
+                handles.push(node.0);
+            });
+        }
+        if let Some(state) = unsafe { state_from_hwnd(main_hwnd) } {
+            for h in handles {
+                state.workspace_tree_names.remove(&h);
+            }
         }
         unsafe {
             SendMessageW(tree, TVM_DELETEITEM, Some(WPARAM(0)), Some(LPARAM(child.0)));
@@ -21977,17 +22097,30 @@ unsafe fn tree_delete_all_children(tree: HWND, parent: HTREEITEM) {
 ///
 /// # Safety
 ///
-/// `tree` must be a live `SysTreeView32` HWND on the UI thread.
-/// `workspace_root` must match the tree's current population
-/// (it's what path reconstruction joins against).
-unsafe fn handle_tree_item_expanding(tree: HWND, item: HTREEITEM, workspace_root: &Path) {
+/// `tree` must be a live `SysTreeView32` HWND on the UI thread,
+/// `main_hwnd` the live main window whose `WindowState` owns the
+/// side table. `workspace_root` must match the tree's current
+/// population (it's what path reconstruction joins against).
+unsafe fn handle_tree_item_expanding(
+    main_hwnd: HWND,
+    tree: HWND,
+    item: HTREEITEM,
+    workspace_root: &Path,
+) {
     let state = unsafe { tree_item_lparam(tree, item) };
     if state != WORKSPACE_ITEM_UNPOP {
         return;
     }
-    let path = unsafe { tree_item_full_path(tree, item, workspace_root) };
-    unsafe { tree_delete_all_children(tree, item) };
-    unsafe { insert_tree_folder_children(tree, item, &path) };
+    // Refuse to populate if the side table lost the ancestor
+    // names — the alternative would be reading `pszText` back
+    // (which is now sanitized) and calling `read_dir` on a path
+    // containing U+FFFD characters. That would produce a spurious
+    // "empty folder" and confuse the user; better to no-op.
+    let Some(path) = (unsafe { tree_item_full_path(main_hwnd, tree, item, workspace_root) }) else {
+        return;
+    };
+    unsafe { tree_delete_all_children(main_hwnd, tree, item) };
+    unsafe { insert_tree_folder_children(main_hwnd, tree, item, &path) };
     unsafe { tree_set_item_lparam(tree, item, WORKSPACE_ITEM_POP) };
 }
 
@@ -22032,9 +22165,15 @@ unsafe fn handle_tree_double_click(main_hwnd: HWND, tree: HWND) {
     let Some(root) = root else {
         return;
     };
-    let path = unsafe { tree_item_full_path(tree, item, &root) };
+    // `None` here means the side table lost the item's ancestor
+    // chain — a bug, logged inside `tree_item_full_path`. Refuse
+    // the operation rather than fall back to display text and
+    // open the wrong file.
+    let Some(path) = (unsafe { tree_item_full_path(main_hwnd, tree, item, &root) }) else {
+        return;
+    };
     // Defense in depth: `tree_item_full_path` joins each tree
-    // item's displayed text (which came from `read_dir`) onto
+    // item's real name (from the side table) onto
     // `workspace_root` via `PathBuf::push`. On a well-behaved
     // Windows filesystem, `read_dir` never returns entries with
     // path separators or absolute-path syntax — so the joined
@@ -22485,8 +22624,9 @@ fn strip_prefix_case_insensitive(target: &Path, prefix: &Path) -> Option<PathBuf
 ///
 /// # Safety
 ///
-/// `tree` must be a live `SysTreeView32` HWND.
-unsafe fn tree_locate_path(tree: HWND, target: &Path, workspace_root: &Path) {
+/// `tree` must be a live `SysTreeView32` HWND, `main_hwnd` the
+/// live main window whose `WindowState` owns the side table.
+unsafe fn tree_locate_path(main_hwnd: HWND, tree: HWND, target: &Path, workspace_root: &Path) {
     // Only meaningful if `target` is under the workspace root.
     // Case-insensitive strip — Windows filesystems are
     // case-insensitive, and `Path::strip_prefix` is case-sensitive
@@ -22531,19 +22671,31 @@ unsafe fn tree_locate_path(tree: HWND, target: &Path, workspace_root: &Path) {
         let mut found = HTREEITEM(0);
         let mut child = unsafe { tree_first_child(tree, cur) };
         while child.0 != 0 {
-            let name = unsafe { tree_item_text(tree, child) };
-            // Case-insensitive compare — Windows paths are case-
-            // insensitive on NTFS/FAT, and Explorer displays the
-            // filesystem's canonical case. Using `eq_ignore_ascii_case`
-            // is faithful to the FS behaviour for ASCII; for non-
-            // ASCII, fall back to `to_lowercase` (imperfect but
-            // "good enough" — Unicode case folding is complex and
-            // Explorer itself has quirks).
-            if name.eq_ignore_ascii_case(&comp_name_str)
-                || name.to_lowercase() == comp_name_str.to_lowercase()
-            {
-                found = child;
-                break;
+            // Compare against the *real* stored name, not what
+            // TreeView shows. The tree displays a sanitized
+            // string, but `target`'s path components are raw
+            // filenames — matching on display text would silently
+            // fail Locate for any workspace entry whose filename
+            // carries a display-hostile codepoint. Placeholder
+            // rows have no entry in the side table and simply
+            // don't match, which is the correct behaviour.
+            let name_opt = unsafe { state_from_hwnd(main_hwnd) }
+                .and_then(|state| state.workspace_tree_names.get(&child.0).cloned());
+            if let Some(name) = name_opt {
+                // Case-insensitive compare — Windows paths are
+                // case-insensitive on NTFS/FAT, and Explorer
+                // displays the filesystem's canonical case. Using
+                // `eq_ignore_ascii_case` is faithful to the FS
+                // behaviour for ASCII; for non-ASCII, fall back
+                // to `to_lowercase` (imperfect but "good enough"
+                // — Unicode case folding is complex and Explorer
+                // itself has quirks).
+                if name.eq_ignore_ascii_case(&comp_name_str)
+                    || name.to_lowercase() == comp_name_str.to_lowercase()
+                {
+                    found = child;
+                    break;
+                }
             }
             child = unsafe { tree_next_sibling(tree, child) };
         }
@@ -22593,7 +22745,7 @@ unsafe fn locate_current_file_in_workspace(main_hwnd: HWND) {
     let (Some(root), Some(active)) = (root, active_path) else {
         return;
     };
-    unsafe { tree_locate_path(tree, &active, &root) };
+    unsafe { tree_locate_path(main_hwnd, tree, &active, &root) };
 }
 
 /// Right-click context menu for the workspace tree. Called from
@@ -22707,7 +22859,14 @@ unsafe fn show_workspace_tree_context_menu(main_hwnd: HWND, tree: HWND) {
     let Some(root) = root else {
         return;
     };
-    let path = unsafe { tree_item_full_path(tree, item, &root) };
+    // `None` means the side table lost this item's ancestor
+    // chain — a bug, logged inside `tree_item_full_path`. Refuse
+    // to show a context menu whose actions would then operate on
+    // a reconstructed-from-display-text path (i.e. one carrying
+    // U+FFFD placeholders that don't hit the real file).
+    let Some(path) = (unsafe { tree_item_full_path(main_hwnd, tree, item, &root) }) else {
+        return;
+    };
     // Same defence as `handle_tree_double_click`: a hostile
     // filesystem returning a component with an absolute-path
     // prefix could escape workspace_root via `PathBuf::push`. All
@@ -22877,7 +23036,7 @@ unsafe fn remove_workspace_root(main_hwnd: HWND) {
     } else {
         return;
     };
-    unsafe { tree_clear_all(tree) };
+    unsafe { tree_clear_all(main_hwnd, tree) };
     // Persist the cleared state so quitting Code++ now doesn't
     // resurrect the removed root on the next launch — matches
     // the "session persistence" fix landed with m4.
@@ -22955,7 +23114,7 @@ unsafe fn show_workspace_panel(main_hwnd: HWND, root: PathBuf) {
         // Clear + repopulate the tree. Only the root + its
         // direct children hit disk here (one `read_dir`);
         // subfolders defer to `TVN_ITEMEXPANDING`.
-        populate_workspace_root(tree, &root);
+        populate_workspace_root(main_hwnd, tree, &root);
         let _ = ShowWindow(workspace.panel, SW_SHOW);
         let _ = ShowWindow(workspace.splitter, SW_SHOW);
         let mut rect = RECT::default();
