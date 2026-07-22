@@ -329,12 +329,19 @@ measurements — name the target explicitly if you want both:
 keystroke-latency distribution **at exit** — so quit the window
 normally rather than killing the process, or the distribution is lost.
 
-Read DESIGN.md §8 before drawing conclusions from the latency figures.
-The per-keystroke median (~0.7 ms) is solid; the p99 is not, because a
-short manual run gives it only a handful of samples and synthetic input
-tools do not reliably preserve inter-key spacing. §8 also records a
-retracted earlier conclusion about the display's frame clock, which came
-from a measurement bug — worth reading before repeating the experiment.
+`--perf` reports two distributions: keystroke latency, and the **gap
+between arriving keystrokes**. Read the second before the first — a
+latency p99 means something different at 8 characters per second than
+at 20, and it is the only way to know what an input tool actually
+delivered. `xdotool type --delay N` types a character every *N/2* ms
+despite its man page, so trusting the flag understates the rate by 2×.
+
+Read DESIGN.md §8 before drawing conclusions. It records the measured
+figures (p99 4.62 ms at a fast-human rate, inside the 5 ms budget), a
+tail above ~15 char/s whose cause is still unidentified, and two
+retracted earlier conclusions — one about the display's frame clock,
+one calling the tail queueing — both of which came from measurement
+error rather than from the editor.
 
 ### Run a single phase's demo
 

@@ -81,6 +81,19 @@ pub struct Perf {
     /// backend can call [`Perf::mark_first_draw`] from every paint
     /// without special-casing the first.
     first_draw_done: Cell<bool>,
+    /// Instant of the previous key press, for inter-arrival timing.
+    last_press: Cell<Option<Instant>>,
+    /// Gaps between consecutive key presses, in microseconds.
+    ///
+    /// Reported alongside latency because a latency distribution is
+    /// close to meaningless without the input rate that produced it: a
+    /// p99 of 100 ms at four characters per second is a stall, the
+    /// same figure at forty is a queue. It also makes a synthetic
+    /// input tool auditable — `xdotool` injects through XTEST and does
+    /// not reliably preserve the spacing its `--delay` implies, so a
+    /// measured tail may be describing the injector rather than the
+    /// editor. Recording arrivals is the only way to tell.
+    gaps: RefCell<Vec<u32>>,
     /// The most recent key press that has not yet been shown to have
     /// changed the document. Promoted to [`Self::pending`] by
     /// [`Perf::text_modified`], discarded if the next key press
@@ -122,6 +135,8 @@ impl Perf {
             start,
             enabled,
             first_draw_done: Cell::new(false),
+            last_press: Cell::new(None),
+            gaps: RefCell::new(Vec::new()),
             candidate: Cell::new(None),
             pending: RefCell::new(Vec::new()),
             samples: RefCell::new(Vec::new()),
@@ -175,7 +190,17 @@ impl Perf {
         if !self.enabled {
             return;
         }
-        self.candidate.set(Some(Instant::now()));
+        let now = Instant::now();
+        if let Some(prev) = self.last_press.replace(Some(now)) {
+            let mut gaps = self.gaps.borrow_mut();
+            if gaps.len() < MAX_SAMPLES {
+                gaps.push(
+                    u32::try_from(now.saturating_duration_since(prev).as_micros())
+                        .unwrap_or(u32::MAX),
+                );
+            }
+        }
+        self.candidate.set(Some(now));
     }
 
     /// Record that the document's text changed, promoting the pending
@@ -226,7 +251,8 @@ impl Perf {
         }
     }
 
-    /// Log the keystroke-latency distribution. Call at shutdown.
+    /// Log the keystroke-latency distribution and the input rate that
+    /// produced it. Call at shutdown.
     ///
     /// Says so explicitly when there is nothing to report: a run that
     /// took no measurements and one whose measurements were all zero
@@ -239,23 +265,44 @@ impl Perf {
         if samples.is_empty() {
             tracing::info!(
                 target: "codepp::perf",
-                "keystroke latency: no samples (nothing was typed)"
+                "keystroke latency: no samples (nothing was typed, or nothing it typed changed the buffer)"
             );
-            return;
+        } else {
+            let mut sorted = samples.clone();
+            sorted.sort_unstable();
+            for pct in REPORTED_PERCENTILES {
+                let micros = percentile(&sorted, pct);
+                tracing::info!(
+                    target: "codepp::perf",
+                    percentile = pct,
+                    ms = f64::from(micros) / 1000.0,
+                    samples = sorted.len(),
+                    budget_ms = 5.0,
+                    "keystroke latency: typed char to redraw"
+                );
+            }
         }
-        let mut sorted = samples.clone();
-        sorted.sort_unstable();
-        for pct in REPORTED_PERCENTILES {
-            let micros = percentile(&sorted, pct);
-            tracing::info!(
-                target: "codepp::perf",
-                percentile = pct,
-                ms = f64::from(micros) / 1000.0,
-                samples = sorted.len(),
-                budget_ms = 5.0,
-                "keystroke latency: typed char to redraw"
-            );
+
+        // The input rate, so the distribution above can be read. Also
+        // the audit trail on a synthetic input tool: if these gaps do
+        // not match what the tool was asked for, the latency tail is
+        // partly the tool's.
+        let gaps = self.gaps.borrow();
+        if !gaps.is_empty() {
+            let mut sorted = gaps.clone();
+            sorted.sort_unstable();
+            for pct in REPORTED_PERCENTILES {
+                let micros = percentile(&sorted, pct);
+                tracing::info!(
+                    target: "codepp::perf",
+                    percentile = pct,
+                    ms = f64::from(micros) / 1000.0,
+                    samples = sorted.len(),
+                    "key arrival: gap since the previous keystroke"
+                );
+            }
         }
+
         let dropped = self.dropped.get();
         if dropped > 0 {
             tracing::warn!(
@@ -314,6 +361,34 @@ mod tests {
             perf.samples.borrow().is_empty(),
             "a disabled Perf must not accumulate; it is on the keystroke path"
         );
+    }
+
+    #[test]
+    fn key_arrival_gaps_are_recorded_between_presses() {
+        // The input rate is what makes a latency figure readable, and
+        // it is the only way to audit a synthetic input tool: if the
+        // gaps do not match what the tool was told to produce, part of
+        // the measured tail belongs to the tool.
+        let perf = Perf::new(true);
+        perf.key_pressed();
+        assert!(
+            perf.gaps.borrow().is_empty(),
+            "the first press has no predecessor to measure from"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(12));
+        perf.key_pressed();
+        let gaps = perf.gaps.borrow().clone();
+        assert_eq!(gaps.len(), 1);
+        assert!(
+            gaps[0] >= 12_000,
+            "gap should reflect the real wait; got {}us",
+            gaps[0]
+        );
+        // Gaps track *arrivals*, so a press that modifies nothing
+        // still counts toward the rate.
+        drop(gaps);
+        perf.key_pressed();
+        assert_eq!(perf.gaps.borrow().len(), 2);
     }
 
     #[test]
