@@ -29,8 +29,9 @@ tracing  = { workspace = true }
 # `O_NOFOLLOW` + `O_NONBLOCK` for the find-in-files worker's open, so a
 # path swapped for a symlink or a FIFO between the walker's check and
 # the worker's open is refused by the kernel rather than followed or
-# blocked on. Unix only; the Windows gap is documented at the call
-# site in `fif.rs::read_capped`.
+# blocked on. Unix arm only; the Windows equivalent uses
+# `FILE_FLAG_OPEN_REPARSE_POINT` (bare hex `u32`, no Win32 crate
+# needed) and lives at the same call site in `fif.rs::read_capped`.
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 

@@ -984,10 +984,15 @@ fn atomic_write(
     // at the destination rather than following it, so a `target`
     // swapped for a symlink mid-run gets replaced, not written through
     // — the destructive direction was already safe here and stays that
-    // way. On Windows `persist` goes through `MoveFileExW`, which is
-    // expected to behave the same for reparse points but is not
-    // covered by a test; tracked with the rest of the Windows symlink
-    // work in DESIGN.md §7.4.
+    // way. On Windows `persist` goes through `MoveFileExW`, which
+    // documents the same behaviour (destination reparse points are
+    // replaced, not followed). Pinned on both platforms by
+    // `atomic_write_replaces_a_symlink_at_the_destination`. The
+    // Windows variant of that test is `#[ignore]`d because creating
+    // the setup symlink needs `SeCreateSymbolicLinkPrivilege`, so
+    // CI needs Windows developer mode and
+    // `cargo test -- --include-ignored` for it to run — see
+    // docs/DEVELOPMENT.md §2.6.
     //
     // `permissions` is not optional. `tempfile` creates at 0600 when
     // it is not set, and because `persist` renames the replacement
@@ -1094,43 +1099,60 @@ fn read_capped(
     //
     // Two independent guards:
     //
-    // 1. `O_NOFOLLOW` (Unix) makes the kernel refuse the open outright
-    //    if the final component is a symlink, so a swapped entry never
-    //    yields a handle at all. Windows is not covered: it has no
-    //    `O_NOFOLLOW`, and no `O_NONBLOCK` either, so a reparse point
-    //    swapped in there is still followed — yielding wrong content
-    //    attributed to the wrong path, and, if it resolves somewhere
-    //    slow such as an unreachable UNC host, a block inside
-    //    `CreateFileW` that guard 2 never gets to veto. That hang is
-    //    the same risk class the `MAX_ACTIVE_JOBS` ceiling already
-    //    budgets for. Closing it properly means
-    //    `FILE_FLAG_OPEN_REPARSE_POINT` plus an explicit
-    //    `is_symlink()` rejection; tracked rather than done here
-    //    because it needs a Windows runner to verify and this commit
-    //    has none.
-    // 2. The file-type check below runs on `file.metadata()`, which is
-    //    `fstat` on the open descriptor rather than a fresh lookup by
-    //    name. It therefore describes exactly what was opened and
-    //    cannot be raced. Rejecting anything that is not a regular
-    //    file is what stops `read_to_end` blocking forever on a FIFO
-    //    or a character device — a hang the cancel flag cannot
-    //    preempt, which is precisely why the walker refuses to follow
-    //    symlinks in the first place.
+    // 1. The open itself refuses to follow a reparse point at the
+    //    final path component, so a swapped-in symlink or Windows
+    //    junction hands us a descriptor to the reparse point itself
+    //    (which then fails guard 2) rather than to whatever it names.
+    //    * Unix: `O_NOFOLLOW` makes the kernel refuse the open
+    //      outright — no descriptor at all. `O_NONBLOCK` is paired
+    //      because opening a FIFO for reading otherwise blocks
+    //      *inside `open` itself* until a writer appears, and the
+    //      type check below would sit after the hang it exists to
+    //      prevent (exactly what happened to the first version of
+    //      this fix, caught by the FIFO test).
+    //    * Windows: `FILE_FLAG_OPEN_REPARSE_POINT` (`0x00200000`)
+    //      tells `CreateFileW` to open the reparse point itself
+    //      rather than following it. `Metadata::file_type()` reads
+    //      `FILE_ATTRIBUTE_REPARSE_POINT` and, for a reparse point,
+    //      makes a second handle-bound
+    //      `GetFileInformationByHandleEx(FileAttributeTagInfo)` call
+    //      so `is_symlink()` reflects the reparse tag's
+    //      name-surrogate bit specifically (not every reparse tag —
+    //      OneDrive placeholders and other non-surrogate tags stay
+    //      classified as regular files, which is the correct
+    //      behaviour here). The descriptor from a swapped-in
+    //      symlink or junction therefore surfaces with
+    //      `is_file() == false` and guard 2 refuses it as
+    //      `NotARegularFile`. Named pipes and
+    //      character devices reachable through the namespace do not
+    //      block on open the way POSIX FIFOs do, so no `O_NONBLOCK`
+    //      analogue is needed — if a future adversarial harness
+    //      demonstrates otherwise, `FILE_FLAG_OVERLAPPED` +
+    //      `GetFileType` screening is the shape to add.
+    // 2. The file-type check below runs on `file.metadata()`, which
+    //    is `fstat` on the open descriptor rather than a fresh
+    //    lookup by name. It therefore describes exactly what was
+    //    opened and cannot be raced. Rejecting anything that is not
+    //    a regular file is what stops `read_to_end` blocking forever
+    //    on a FIFO or a character device on Unix, and what catches
+    //    the reparse-point-carrying descriptor on Windows.
     let mut opts = std::fs::OpenOptions::new();
     opts.read(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        // `O_NONBLOCK` matters as much as `O_NOFOLLOW` here, and is
-        // easy to miss: opening a FIFO for reading *blocks inside
-        // `open` itself* until a writer appears. The type check below
-        // would never be reached, so the guard would sit after the
-        // hang it exists to prevent — which is exactly what happened
-        // to the first version of this fix, caught by the test that
-        // opens a real FIFO. With `O_NONBLOCK` the open returns
-        // immediately and the check gets its say. It is a no-op for
-        // regular files, whose reads never block.
         opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Bare integer rather than the `windows` crate's named
+        // constant so the shell crate stays free of a Windows-only
+        // dep pulled in just for one `u32`. Value is the documented
+        // `FILE_FLAG_OPEN_REPARSE_POINT` from `winnt.h`, stable
+        // since Windows 2000.
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        opts.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let mut file = opts.open(path).map_err(ReadCappedError::Io)?;
 
@@ -1907,6 +1929,290 @@ mod tests {
             fs::read_to_string(&elsewhere).unwrap(),
             "must not be overwritten\n",
             "the replacement must not have been redirected through the planted symlink"
+        );
+    }
+
+    /// Windows equivalent of the Unix `read_capped_refuses_a_symlink`
+    /// (which is the file-symlink case), and the one test that
+    /// actually regression-covers the new
+    /// `FILE_FLAG_OPEN_REPARSE_POINT` code path: neutralising that
+    /// flag would let `CreateFileW` follow the symlink and return
+    /// bytes from `outside.txt`, which this test's `matches!` would
+    /// catch as an `Ok(_)` where a reject was required.
+    ///
+    /// **`#[ignore]` because the setup needs
+    /// `SeCreateSymbolicLinkPrivilege`.** Windows only grants that
+    /// privilege to elevated shells or to processes running under
+    /// developer mode; a runner without either sees
+    /// `symlink_file` return `ERROR_PRIVILEGE_NOT_HELD` (1314). The
+    /// earlier revision of this test tried to skip that quietly
+    /// with an `eprintln!`, but `cargo test`'s default output
+    /// capture hides the message on a pass, so a CI runner without
+    /// developer mode would go on reporting fully green while
+    /// silently running no assertions at all — proven empirically
+    /// during the security audit by neutralising
+    /// `FILE_FLAG_OPEN_REPARSE_POINT` in the source and observing
+    /// the suite still pass. `#[ignore]` puts the skip in the test
+    /// summary where it can't be missed. Windows runners set up
+    /// per `docs/DEVELOPMENT.md` §2 with developer mode should run
+    /// `cargo test -- --include-ignored` (or `--ignored`) to
+    /// exercise this.
+    ///
+    /// The junction test below is not a substitute: it exercises a
+    /// directory reparse point, which `std::fs::OpenOptions`
+    /// already refuses via `ERROR_ACCESS_DENIED` (directories need
+    /// `FILE_FLAG_BACKUP_SEMANTICS` to open at all) regardless of
+    /// whether `FILE_FLAG_OPEN_REPARSE_POINT` is set. Still worth
+    /// keeping as a belt-and-suspenders "worker never returns
+    /// bytes from outside the search root," but only this test
+    /// pins the fix itself.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs SeCreateSymbolicLinkPrivilege — Windows developer mode; \
+                run with `cargo test -- --include-ignored` on a properly \
+                provisioned runner. See docs/DEVELOPMENT.md §2."]
+    fn read_capped_refuses_a_symlink() {
+        let dir = tempdir().unwrap();
+        let outside = dir.path().join("outside.txt");
+        fs::write(&outside, "content the search never asked for\n").unwrap();
+        let link = dir.path().join("innocent.txt");
+        // With `#[ignore]` gating this test, a
+        // `SeCreateSymbolicLinkPrivilege` failure here means the
+        // runner is misconfigured — panic loudly rather than skip.
+        std::os::windows::fs::symlink_file(&outside, &link)
+            .expect("symlink_file failed — is developer mode on?");
+
+        let got = read_capped(&link, 1024);
+        assert!(
+            matches!(got, Err(ReadCappedError::NotARegularFile)),
+            "FILE_FLAG_OPEN_REPARSE_POINT must surface the reparse point \
+             itself so is_file() rejects it; got {got:?}"
+        );
+        // The guard is specific, not a blanket refusal: the real
+        // file behind it still reads fine.
+        assert!(read_capped(&outside, 1024).is_ok());
+    }
+
+    /// A directory junction sitting in the search root must be
+    /// refused the same way a symlink is — junctions are reparse
+    /// points too, they just point at directories instead of
+    /// files. Unlike file symlinks, junctions are user-creatable
+    /// on Windows without any privilege (they were originally
+    /// added for the Distributed File System and predate the
+    /// symlink privilege model), so this test runs on every
+    /// Windows CI runner regardless of developer-mode state.
+    ///
+    /// Two acceptable reject paths, both valid — the security
+    /// invariant is "worker returns `Err` and never surfaces bytes
+    /// from outside the search root":
+    ///   * `NotARegularFile` — the reparse point opened but
+    ///     `is_file()` was false and guard 2 refused it.
+    ///   * `Io(PermissionDenied)` — the open itself failed. This
+    ///     is what actually happens for a junction: without
+    ///     `FILE_FLAG_BACKUP_SEMANTICS`, `CreateFileW` on a
+    ///     directory reparse point returns `ERROR_ACCESS_DENIED`
+    ///     (5). Guard 1 has already done its job — the descriptor
+    ///     never carried a follow-through to the target directory.
+    ///
+    /// Also confirms the guard fires against a reparse point that
+    /// CI runners in the wild can actually plant — a symlink swap
+    /// requires elevated privileges, a junction swap does not, so
+    /// junctions are the higher-likelihood adversarial shape here.
+    #[cfg(windows)]
+    #[test]
+    fn read_capped_refuses_a_junction() {
+        let dir = tempdir().unwrap();
+        // Real directory the junction points at.
+        let target_dir = dir.path().join("outside");
+        fs::create_dir(&target_dir).unwrap();
+        // A file inside it — proves the target is a live tree; the
+        // junction itself is what read_capped opens, not this file.
+        fs::write(target_dir.join("outside.txt"), "not for the search\n").unwrap();
+
+        // `mklink /J <link> <target>` creates a directory junction.
+        // Runs under `cmd /c` since mklink is a cmd builtin, not a
+        // standalone executable.
+        let junction = dir.path().join("innocent");
+        let status = std::process::Command::new("cmd")
+            .args([
+                "/c",
+                "mklink",
+                "/J",
+                junction.to_str().expect("tempdir path is UTF-8"),
+                target_dir.to_str().expect("tempdir path is UTF-8"),
+            ])
+            .output()
+            .expect("cmd /c mklink /J must be available");
+        assert!(
+            status.status.success(),
+            "mklink /J failed: stdout={:?} stderr={:?}",
+            String::from_utf8_lossy(&status.stdout),
+            String::from_utf8_lossy(&status.stderr)
+        );
+
+        let got = read_capped(&junction, 1024);
+        // See the doc comment above for why both variants are
+        // acceptable rejects. What is *not* acceptable is `Ok(_)` —
+        // that would mean the worker had followed the junction and
+        // read content from outside the search root.
+        let is_access_denied = matches!(
+            &got,
+            Err(ReadCappedError::Io(e))
+                if e.kind() == std::io::ErrorKind::PermissionDenied
+        );
+        let is_wrong_type = matches!(&got, Err(ReadCappedError::NotARegularFile));
+        assert!(
+            is_wrong_type || is_access_denied,
+            "FILE_FLAG_OPEN_REPARSE_POINT must stop the worker \
+             following the junction — either by refusing the open \
+             (Io(PermissionDenied)) or by surfacing the reparse \
+             point so is_file() rejects it (NotARegularFile); got \
+             {got:?}"
+        );
+    }
+
+    /// Windows equivalent of the Unix
+    /// `atomic_write_cannot_be_redirected_by_a_planted_temp_symlink`
+    /// — pins the same "the switch to `tempfile`'s randomly-named
+    /// temp closes the predictable-name attack the old
+    /// `File::create` path was vulnerable to" property, on the
+    /// Windows path. Does *not* test the separate
+    /// `MoveFileExW`-replaces-a-destination-reparse-point
+    /// property — that's what
+    /// `atomic_write_replaces_a_symlink_at_the_destination`
+    /// below covers.
+    ///
+    /// `#[ignore]`d for the same setup reason as
+    /// `read_capped_refuses_a_symlink` above — see that
+    /// docstring for the full rationale.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs SeCreateSymbolicLinkPrivilege — Windows developer mode; \
+                run with `cargo test -- --include-ignored` on a properly \
+                provisioned runner. See docs/DEVELOPMENT.md §2."]
+    fn atomic_write_cannot_be_redirected_by_a_planted_temp_symlink() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("victim.txt");
+        fs::write(&target, "original\n").unwrap();
+
+        let elsewhere = dir.path().join("attacker_target.txt");
+        fs::write(&elsewhere, "must not be overwritten\n").unwrap();
+
+        // The name the old implementation would have used.
+        let predictable = dir.path().join("victim.txt.codepp-fif.tmp");
+        std::os::windows::fs::symlink_file(&elsewhere, &predictable)
+            .expect("symlink_file failed — is developer mode on?");
+
+        let perms = fs::metadata(&target).unwrap().permissions();
+        atomic_write(&target, b"replaced\n", &perms).unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "replaced\n");
+        assert_eq!(
+            fs::read_to_string(&elsewhere).unwrap(),
+            "must not be overwritten\n",
+            "the replacement must not have been redirected through the planted symlink"
+        );
+    }
+
+    /// A `target` that is (or gets swapped for) a symlink at the
+    /// moment `atomic_write` runs must be *replaced*, not written
+    /// through — anything else would let anyone able to write into
+    /// the search-root directory redirect the replacement bytes to
+    /// an arbitrary victim path via a pre-placed symlink at a
+    /// filename FIF is about to rewrite. The property is a
+    /// documented `MoveFileExW` invariant on Windows and an equally
+    /// documented POSIX `rename` invariant on Unix, but until this
+    /// test landed it was asserted in the `atomic_write` docstring
+    /// on both platforms without being exercised (DESIGN.md §7.4
+    /// flagged the Windows half specifically).
+    ///
+    /// Unix version — creates `target` directly as a symlink to
+    /// `elsewhere` (no privilege needed on Unix), then asserts
+    /// after `atomic_write` that `target` reads as a regular file
+    /// with the replacement content and `elsewhere` still carries
+    /// its original content. Also asserts that `target` is *no
+    /// longer* a symlink post-write, since "replaces the symlink"
+    /// is the load-bearing half of the invariant — a
+    /// hypothetical implementation that opened through the
+    /// symlink but wrote to a same-name target would satisfy the
+    /// content asserts alone.
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_replaces_a_symlink_at_the_destination() {
+        let dir = tempdir().unwrap();
+
+        // The file the symlink points at — must survive untouched.
+        let elsewhere = dir.path().join("elsewhere.txt");
+        fs::write(&elsewhere, "the symlink's target must survive\n").unwrap();
+
+        // `target` IS the symlink. `atomic_write(target, …)` must
+        // replace it in-place rather than following it to
+        // `elsewhere`.
+        let target = dir.path().join("target.txt");
+        std::os::unix::fs::symlink(&elsewhere, &target).unwrap();
+
+        // A conservative default — `read_capped` normally supplies
+        // the perms from its `fstat` on the read side, but this
+        // test isn't exercising that pipeline.
+        let perms = fs::metadata(&elsewhere).unwrap().permissions();
+        atomic_write(&target, b"replaced\n", &perms).unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "replaced\n");
+        assert_eq!(
+            fs::read_to_string(&elsewhere).unwrap(),
+            "the symlink's target must survive\n",
+            "atomic_write followed the symlink instead of replacing it"
+        );
+        assert!(
+            !fs::symlink_metadata(&target)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "target should be a regular file after the replace, not a symlink"
+        );
+    }
+
+    /// Windows twin of `atomic_write_replaces_a_symlink_at_the_destination`.
+    /// The specific gap DESIGN.md §7.4 flagged: the `atomic_write`
+    /// docstring asserted `NamedTempFile::persist` on Windows
+    /// (which calls `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`)
+    /// replaces a destination reparse point rather than following
+    /// it, but nothing exercised it. This test closes that gap.
+    ///
+    /// `#[ignore]`d because the setup needs
+    /// `SeCreateSymbolicLinkPrivilege` — see
+    /// `read_capped_refuses_a_symlink`'s docstring for the full
+    /// developer-mode rationale.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs SeCreateSymbolicLinkPrivilege — Windows developer mode; \
+                run with `cargo test -- --include-ignored` on a properly \
+                provisioned runner. See docs/DEVELOPMENT.md §2."]
+    fn atomic_write_replaces_a_symlink_at_the_destination() {
+        let dir = tempdir().unwrap();
+
+        let elsewhere = dir.path().join("elsewhere.txt");
+        fs::write(&elsewhere, "the symlink's target must survive\n").unwrap();
+
+        let target = dir.path().join("target.txt");
+        std::os::windows::fs::symlink_file(&elsewhere, &target)
+            .expect("symlink_file failed — is developer mode on?");
+
+        let perms = fs::metadata(&elsewhere).unwrap().permissions();
+        atomic_write(&target, b"replaced\n", &perms).unwrap();
+
+        assert_eq!(fs::read_to_string(&target).unwrap(), "replaced\n");
+        assert_eq!(
+            fs::read_to_string(&elsewhere).unwrap(),
+            "the symlink's target must survive\n",
+            "atomic_write followed the symlink instead of replacing it"
+        );
+        assert!(
+            !fs::symlink_metadata(&target)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "target should be a regular file after the replace, not a symlink"
         );
     }
 

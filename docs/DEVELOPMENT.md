@@ -87,6 +87,42 @@ If `cl` is not found, you opened the wrong shell. Use the **Developer** PowerShe
 - **VS Code** with `rust-analyzer` and `CodeLLDB` extensions — debugging native Rust + Win32 is much easier with a real debugger.
 - **Sysinternals Process Explorer** for the Phase 1 demo verification (memory and DLL load checks).
 
+### 2.6 Developer Mode (needed for the FIF symlink adversarial tests)
+
+The find-in-files worker's per-file open uses
+`FILE_FLAG_OPEN_REPARSE_POINT` on Windows so a path swapped for a
+symlink or junction between enumeration and open is refused rather
+than followed. The regression tests for that guard need to *create*
+a symlink at test-setup time, which requires
+`SeCreateSymbolicLinkPrivilege` — granted to processes running under
+Windows Developer Mode, or to elevated shells.
+
+Two tests are `#[ignore]`d for this reason:
+
+  * `codepp_shell::fif::tests::read_capped_refuses_a_symlink`
+  * `codepp_shell::fif::tests::atomic_write_cannot_be_redirected_by_a_planted_temp_symlink`
+
+The default `cargo test` run reports them as ignored — visible in the
+per-target summary line — so a runner in the wrong state can't
+silently drop coverage. To exercise them, enable Developer Mode
+(**Settings → System → For developers → Developer Mode**, or from an
+**elevated** PowerShell — the `HKLM` write requires it, same shell
+class the §2.4 `cl` note already establishes:
+`reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+/v AllowDevelopmentWithoutDevLicense /t REG_DWORD /d 1 /f`) and run:
+
+```powershell
+cargo test -p codepp-shell --lib -- --include-ignored
+```
+
+The self-hosted `windows`-label CI runner should have Developer Mode
+enabled and run the workspace tests with `--include-ignored`. Without
+that, the `FILE_FLAG_OPEN_REPARSE_POINT` arm in `read_capped` has no
+active regression coverage — the sibling `read_capped_refuses_a_junction`
+test still runs (directory junctions don't need the privilege), but
+it exercises a different reject path (`ERROR_ACCESS_DENIED` on the
+directory open) and would still pass even if the flag were removed.
+
 ---
 
 ## 3. Linux
