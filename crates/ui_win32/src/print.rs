@@ -36,7 +36,6 @@
 //! target, not just 11.
 
 use core::ffi::c_void;
-use std::path::Path;
 use std::ptr;
 use std::time::SystemTime;
 
@@ -1035,28 +1034,15 @@ fn format_ymd_from_epoch_seconds(epoch: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// Display name for a document — basename for saved files, `new N` /
-/// custom name for untitled. Broken out so the `WM_COMMAND` arm can
-/// derive it cheaply from a `codepp_shell::Tab` snapshot.
-pub(crate) fn display_name_for(
-    path: Option<&Path>,
-    untitled_seq: Option<u32>,
-    custom: Option<&str>,
-) -> String {
-    if let Some(name) = custom {
-        return name.to_string();
-    }
-    if let Some(p) = path {
-        return p.file_name().map_or_else(
-            || p.to_string_lossy().into_owned(),
-            |s| s.to_string_lossy().into_owned(),
-        );
-    }
-    if let Some(n) = untitled_seq {
-        return format!("new {n}");
-    }
-    "untitled".to_string()
-}
+// The document display name this module renders into page headers and
+// into `DOCINFOW.lpszDocName` comes from
+// `codepp_shell::tab_display_name`, resolved by the `WM_COMMAND` arm in
+// `lib.rs` and passed in. It used to be a local `display_name_for` that
+// reimplemented the same priority order and sanitized nothing — so a
+// filename carrying an embedded NUL truncated the spooler's job name,
+// and one carrying a bidi override printed spoofed onto the physical
+// page and the preview surface. A second implementation bought nothing
+// here; the caller always has the `&Tab`.
 
 // Silence "unused" while wparam/lparam names are aligned with the
 // Scintilla docs — `_lparam` is intentionally the field being read via
@@ -1073,6 +1059,7 @@ const _: fn() = || {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn mm_conversion_at_600_dpi() {
@@ -1173,15 +1160,50 @@ mod tests {
 
     #[test]
     fn display_name_prefers_custom_then_path_then_untitled() {
+        // Was `print::display_name_for`, now the shared resolver. Kept
+        // as a test *here* because the print pipeline is a distinct
+        // consumer with its own sinks (`DOCINFOW.lpszDocName`, the
+        // page header), and a future refactor that stopped routing
+        // through `tab_display_name` should trip something in this
+        // module rather than only in `shell`.
+        use codepp_shell::{tab_display_name, Tab};
+        let named = |path, untitled_seq, custom: Option<&str>| {
+            tab_display_name(&Tab {
+                path,
+                untitled_seq,
+                custom_name: custom.map(str::to_string),
+                ..Tab::default()
+            })
+        };
+        assert_eq!(named(None, Some(3), Some("release notes")), "release notes");
         assert_eq!(
-            display_name_for(None, Some(3), Some("release notes")),
-            "release notes"
-        );
-        assert_eq!(
-            display_name_for(Some(Path::new(r"C:\src\foo.rs")), None, None),
+            named(Some(PathBuf::from(r"C:\src\foo.rs")), None, None),
             "foo.rs"
         );
-        assert_eq!(display_name_for(None, Some(2), None), "new 2");
-        assert_eq!(display_name_for(None, None, None), "untitled");
+        assert_eq!(named(None, Some(2), None), "new 2");
+        // Capitalised, where the old local copy returned "untitled".
+        // The shared resolver's spelling wins — it is what the tab
+        // strip and window title have always shown.
+        assert_eq!(named(None, None, None), "Untitled");
+    }
+
+    #[test]
+    fn document_name_reaching_the_spooler_is_sanitized() {
+        // The regression this consolidation exists to prevent. An
+        // embedded NUL truncates `DOCINFOW.lpszDocName` at the NUL, so
+        // the print queue would name a different document than the one
+        // printing; a bidi override renders spoofed onto the page
+        // itself. The old local resolver passed both through verbatim.
+        use codepp_shell::{tab_display_name, Tab};
+        let name = tab_display_name(&Tab {
+            path: Some(PathBuf::from("report\u{0}.txt")),
+            ..Tab::default()
+        });
+        assert!(!name.contains('\u{0}'), "NUL survived: {name:?}");
+        let spoof = tab_display_name(&Tab {
+            custom_name: Some("photo_\u{202E}gnp.exe".to_string()),
+            ..Tab::default()
+        });
+        assert!(!spoof.contains('\u{202E}'), "RTLO survived: {spoof:?}");
     }
 }

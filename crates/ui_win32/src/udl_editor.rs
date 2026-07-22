@@ -2829,8 +2829,8 @@ fn save_action(state: &mut UdlEditorState, force_prompt: bool) {
             let msg = format!(
                 "The UDL was saved to:\n\n  {}\n\nThis is outside the UDL directory:\n\n  {}\n\n\
                  The UDL will NOT appear in the Language menu until it's copied there.",
-                target.display(),
-                dir.display(),
+                codepp_shell::sanitize_path_for_display(&target),
+                codepp_shell::sanitize_path_for_display(&dir),
             );
             with_modal_pump(|| show_warning(owner, "UDL saved outside menu directory", &msg));
         }

@@ -155,8 +155,9 @@ use codepp_scintilla_sys::{
     SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
-    HostHandles, OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab,
-    UiPlatform, MAX_SESSION_TABS,
+    sanitize_filename_for_display, sanitize_path_for_display, tab_display_name, HostHandles,
+    OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
+    MAX_SESSION_TABS,
 };
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
@@ -5280,34 +5281,6 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
     }
 }
 
-/// Sanitize a filename string for display in chrome (tab labels,
-/// window titles): strip embedded NULs, CR/LF/TAB, and cap at
-/// `TAB_LABEL_MAX_TCHARS - 1` UTF-16 code units. Without this:
-///
-///   - An embedded U+0000 (legal on some network filesystems,
-///     trivially injectable via `NPPM_DOOPEN` from a plugin)
-///     truncates `SetWindowTextW`/`SB_SETTEXTW` silently — the
-///     chrome no longer reflects the real open file, confusing
-///     users into acting on the wrong file.
-///   - CR/LF/TAB render as glyph noise on tab strips and may
-///     produce odd line wrapping in title bars.
-///   - Multi-MB paths (legal on some filesystems) produce huge
-///     temporary allocations on every chrome refresh.
-fn sanitize_filename_for_display(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .filter(|&c| !matches!(c, '\0' | '\r' | '\n' | '\t'))
-        .collect();
-    // Cap by char count rather than code-unit count for simplicity;
-    // the difference is small for chrome strings and stays safely
-    // under the wide-buffer cap downstream.
-    if cleaned.chars().count() > TAB_LABEL_MAX_TCHARS - 1 {
-        cleaned.chars().take(TAB_LABEL_MAX_TCHARS - 1).collect()
-    } else {
-        cleaned
-    }
-}
-
 /// Set the main window's title to reflect the currently-active tab:
 /// `"<filename> - Code++"` when there's an active path,
 /// `"Untitled - Code++"` when the active tab has no path yet,
@@ -5591,59 +5564,10 @@ unsafe fn sync_tab_strip(state: &mut WindowState) {
     }
 }
 
-/// Build the wide-char tab label for `tab`: the file basename if
-/// the tab has a path, else "Untitled". Trailing NUL is appended so
-/// the buffer can be passed to `TCITEMW.pszText` directly.
-///
-/// The output is capped at `TAB_LABEL_MAX_TCHARS - 1` UTF-16 code
-/// units (plus the trailing NUL). Without a cap, a path whose
-/// `file_name()` is multiple-MB long (legal on some network
-/// filesystems) would produce an equally long allocation and a
-/// degenerate tab strip. Embedded control characters (`\n`,
-/// `\r`, `\t`) are stripped — they're legal on some filesystems
-/// but render as glyph noise on the tab strip.
-const TAB_LABEL_MAX_TCHARS: usize = 260;
-
-/// The user-facing display name for a tab — same string the tab
-/// strip renders. Three sources, in order:
-///   1. Real path → `file_name` basename (the common case).
-///   2. No path but `untitled_seq` set → "new N" (created by
-///      File→New).
-///   3. Fallback "Untitled" (a path with no parseable basename —
-///      extremely rare in practice, but a safe label for defense
-///      in depth).
-///
-/// Embedded control characters (`\n`, `\r`, `\t`) are stripped —
-/// they're legal on some filesystems but render as glyph noise.
-/// Returned as an owned `String` so callers can format it into
-/// other strings (the "Save file '<name>' ?" prompt uses this);
-/// [`tab_label_for`] wraps it for the Win32 tab-strip API which
-/// needs a NUL-terminated UTF-16 buffer.
-fn tab_display_name(tab: &Tab) -> String {
-    // Resolution order: user-chosen `custom_name` (set via File →
-    // Rename...) wins over both the on-disk filename and the
-    // `new N` sequence so the renamed buffer keeps its label
-    // through tab switches and session restores. `custom_name` is
-    // cleared by `save_buffer_as` once the buffer gains a real
-    // path, so a Saved-As-then-renamed flow correctly picks up
-    // the on-disk filename.
-    let owned = tab
-        .custom_name
-        .clone()
-        .or_else(|| {
-            tab.path.as_ref().and_then(|p| {
-                p.file_name()
-                    .and_then(|s| s.to_str())
-                    .map(std::string::ToString::to_string)
-            })
-        })
-        .unwrap_or_else(|| match tab.untitled_seq {
-            Some(n) => format!("new {n}"),
-            None => "Untitled".to_string(),
-        });
-    sanitize_filename_for_display(&owned)
-}
-
+/// Build the wide-char tab label for `tab` — [`tab_display_name`]
+/// wrapped for the Win32 tab-strip API, which needs a NUL-terminated
+/// UTF-16 buffer. Sanitizing and length-capping already happened in
+/// `tab_display_name`; this only re-encodes.
 fn tab_label_for(tab: &Tab) -> Vec<u16> {
     tab_display_name(tab)
         .encode_utf16()
@@ -7575,7 +7499,7 @@ fn refresh_status_dynamic_parts(status_hwnd: HWND, editor: &EditorHandle) {
 fn show_reload_dialog(main_hwnd: HWND, path: &Path) -> bool {
     let prompt = HSTRING::from(format!(
         "{}\n\nThis file changed on disk. Reload from disk and discard any unsaved edits?",
-        path.display()
+        sanitize_path_for_display(path)
     ));
     let title = w!("Code++: file changed externally");
     let response =
@@ -7634,7 +7558,7 @@ fn show_ok_cancel_dialog(main_hwnd: HWND, title: &str, message: &str) -> bool {
 fn move_to_recycle_bin_prompt_for(path: &Path) -> String {
     format!(
         "The file \"{}\"\nwill be moved to your Recycle Bin and this document will be closed.\nContinue?",
-        path.display()
+        sanitize_path_for_display(path)
     )
 }
 
@@ -8158,7 +8082,7 @@ fn handle_save_session(hwnd: HWND) {
             "Save Session failed",
             &format!(
                 "Could not write the session file:\n\n{}\n\n{}",
-                save_path.display(),
+                sanitize_path_for_display(&save_path),
                 e
             ),
         );
@@ -8192,7 +8116,7 @@ fn handle_load_session(hwnd: HWND) {
                 "Load Session failed",
                 &format!(
                     "Could not read the session file:\n\n{}\n\n{}",
-                    load_path.display(),
+                    sanitize_path_for_display(&load_path),
                     e
                 ),
             );
@@ -8465,11 +8389,7 @@ fn handle_print(hwnd: HWND) {
         let Some(tab) = state.shell.active() else {
             return;
         };
-        let name = print::display_name_for(
-            tab.path.as_deref(),
-            tab.untitled_seq,
-            tab.custom_name.as_deref(),
-        );
+        let name = tab_display_name(tab);
         (name, state.editor)
     };
     print::print_active_document(hwnd, &display_name, editor);
@@ -8488,11 +8408,7 @@ fn handle_print_now(hwnd: HWND) {
         let Some(tab) = state.shell.active() else {
             return;
         };
-        let name = print::display_name_for(
-            tab.path.as_deref(),
-            tab.untitled_seq,
-            tab.custom_name.as_deref(),
-        );
+        let name = tab_display_name(tab);
         (name, state.editor)
     };
     print::print_active_document_now(hwnd, &display_name, editor);
@@ -8511,11 +8427,7 @@ fn handle_print_preview(hwnd: HWND) {
         let Some(tab) = state.shell.active() else {
             return;
         };
-        let name = print::display_name_for(
-            tab.path.as_deref(),
-            tab.untitled_seq,
-            tab.custom_name.as_deref(),
-        );
+        let name = tab_display_name(tab);
         (name, state.editor)
     };
     print_preview::show_print_preview(hwnd, &display_name, editor);
@@ -11751,37 +11663,42 @@ fn format_recent_menu_label(
 }
 
 /// Sanitise one recent-files label before it reaches the menu.
-/// Three classes of characters are neutralised, all of them
-/// potential UI-spoof vectors when a filename comes from a
-/// non-Windows filesystem (WSL, Samba, sync tools) that permits
-/// characters `CreateFileW` on Windows-native storage wouldn't:
 ///
-///   * `&`  → `&&`. Doubled ampersand renders as a literal
-///     `&` — Win32's opt-out from the accelerator-hint syntax.
-///   * ASCII C0 controls + DEL (`\x00`..=`\x1F`, `\x7F`),
-///     including `\t` (which Win32 menus interpret as the
-///     accelerator-hint column separator — used legitimately
-///     by e.g. "Restore Recent Closed File\tCtrl+Shift+T" — a
-///     tab inside a filename would forge a fake shortcut
-///     column on a recent-files entry). Replaced with U+FFFD
-///     so the label preserves visible length rather than
-///     silently rejoining tokens.
-///   * Unicode bidi-control codepoints
-///     (U+202A..U+202E, U+2066..U+2069). Left-to-right override
-///     inside a filename can flip the visible order so a label
-///     doesn't match the underlying path — a well-known
-///     spoofing trick. Same U+FFFD substitution.
+/// Two transforms, from two different sources:
+///
+///   * **The shared display-character policy**, via
+///     [`codepp_shell::sanitize_display_char`] — C0/C1 controls and
+///     DEL, bidi marks and overrides, zero-width characters, and the
+///     Unicode line/paragraph separators, each replaced with U+FFFD.
+///     That list used to be duplicated here, with the two copies
+///     already out of step: this one had bidi coverage that
+///     `sanitize_filename_for_display` lacked, while lacking the
+///     C1/zero-width/U+2028 coverage that one has now grown. One
+///     policy, one place, so the next character class gets added once.
+///   * **`&` → `&&`**, which stays local because it is specific to
+///     this sink: a doubled ampersand is Win32's opt-out from the
+///     menu accelerator-hint syntax, meaningless to any other chrome.
+///     `\t` needs no special case beyond the shared policy but is
+///     worth naming — Win32 menus read it as the accelerator column
+///     separator (as in "Restore Recent Closed File\tCtrl+Shift+T"),
+///     so a tab inside a filename would forge a fake shortcut on a
+///     recent-files entry.
+///
+/// No length cap here, unlike [`codepp_shell::sanitize_filename_for_display`]:
+/// recent-files entries render a whole path. One caller —
+/// `RecentFileDisplayMode::CustomMaxLength` — applies its own bound
+/// first; the `OnlyFileName` and `FullPath` modes are deliberately
+/// unbounded, so nothing caps them and nothing needs to.
 ///
 /// The underlying `PathBuf` is untouched — this is a purely
 /// display-side transform.
 fn sanitize_menu_label(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
-        match c {
-            '&' => out.push_str("&&"),
-            '\u{0000}'..='\u{001F}' | '\u{007F}' => out.push('\u{FFFD}'),
-            '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' => out.push('\u{FFFD}'),
-            other => out.push(other),
+        if c == '&' {
+            out.push_str("&&");
+        } else {
+            out.push(codepp_shell::sanitize_display_char(c));
         }
     }
     out
@@ -13732,7 +13649,7 @@ extern "system" fn rename_wnd_proc(
 /// treated as empty input rather than as a valid name.
 unsafe fn read_rename_value(edit: HWND) -> Option<String> {
     // 256 UTF-16 units is plenty for a tab label — well within
-    // the `TAB_LABEL_MAX_TCHARS` cap downstream.
+    // `codepp_shell::DISPLAY_NAME_MAX_CHARS` downstream.
     let mut buf = [0u16; 256];
     let len = unsafe { GetWindowTextW(edit, &mut buf) };
     if len <= 0 {
@@ -14986,6 +14903,17 @@ unsafe fn apply_fif_prefill(dlg: HWND, prefill: &codepp_shell::FifLaunchPrefill)
         }
         let state = &*state_ptr;
         if let Some(dir) = &prefill.directory {
+            // Deliberately *not* run through
+            // `codepp_shell::sanitize_path_for_display`, unlike the
+            // read-only chrome elsewhere in this file. This is a
+            // functional value, not a label: the user edits it and the
+            // text is read back as the search root, so substituting
+            // U+FFFD for a character would silently retarget the
+            // search at a path that does not exist. The display policy
+            // applies to strings the user only *reads*; a string the
+            // program round-trips has to stay byte-faithful. Same
+            // distinction the workspace tree needs (DESIGN.md §7.4).
+            //
             // `to_string_lossy()` makes the lossy decoding explicit;
             // `display().to_string()` is functionally identical but
             // hides the lossy step. The lossy path is unreachable in
@@ -20700,7 +20628,19 @@ unsafe fn fif_progress_set_path(progress: HWND, path: &Path) {
     // common). `char_indices().rev().nth(78)` finds the byte
     // offset 79 chars back from the end.
     const MAX_DISPLAY_CHARS: usize = 80;
-    let display = path.to_string_lossy();
+    // Composed from the per-char primitive rather than from
+    // `sanitize_path_for_display`, deliberately. This label updates
+    // once per file scanned — the one place in the codebase where the
+    // uncapped path helper would turn a bounded cost into an unbounded
+    // one repeated across a whole search. Sanitizing char-by-char here
+    // keeps the existing 80-char truncation as the bound while still
+    // applying the shared policy. `sanitize_display_char` is 1:1 in
+    // `char`s, so the truncation arithmetic below is unaffected.
+    let display: String = path
+        .to_string_lossy()
+        .chars()
+        .map(codepp_shell::sanitize_display_char)
+        .collect();
     let truncated = if display.chars().count() > MAX_DISPLAY_CHARS {
         let start = display
             .char_indices()
@@ -20709,7 +20649,7 @@ unsafe fn fif_progress_set_path(progress: HWND, path: &Path) {
             .map_or(0, |(i, _)| i);
         format!("…{}", &display[start..])
     } else {
-        display.into_owned()
+        display
     };
     let mut buf: Vec<u16> = truncated.encode_utf16().chain(std::iter::once(0)).collect();
     unsafe {
@@ -20978,10 +20918,12 @@ unsafe fn finalize_fif_job(main_hwnd: HWND, terminal: codepp_shell::FifEvent) {
     let total_hits: usize = pending.iter().map(|f| f.matches.len()).sum();
     unsafe { fif_listview_clear(listview) };
     for file in &pending {
-        let display = file.path.to_string_lossy();
+        // Sanitized, not raw: a result row's path comes straight
+        // off the filesystem, and the list is chrome like any other.
+        let display = sanitize_path_for_display(&file.path);
         let suffix = if file.truncated { " (truncated)" } else { "" };
         let display_with = if suffix.is_empty() {
-            display.into_owned()
+            display
         } else {
             format!("{display}{suffix}")
         };
@@ -26219,7 +26161,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                 "Delete failed",
                                 &format!(
                                     "The file could not be moved to the Recycle Bin.\n\n{}\n\n{}",
-                                    path.display(),
+                                    sanitize_path_for_display(&path),
                                     e
                                 ),
                             );
@@ -28561,88 +28503,41 @@ mod wide_string_equals_tests {
 }
 
 #[cfg(test)]
-mod tab_display_name_tests {
-    use super::{move_to_recycle_bin_prompt_for, save_confirm_prompt_for, tab_display_name};
-    use codepp_shell::Tab;
-    use std::path::PathBuf;
+mod chrome_prompt_tests {
+    //! The user-facing wording of the close/delete confirmations.
+    //! The display *name* those prompts embed is
+    //! `codepp_shell::tab_display_name`, tested there.
+    use super::{move_to_recycle_bin_prompt_for, sanitize_menu_label, save_confirm_prompt_for};
 
     #[test]
-    fn titled_tab_returns_basename() {
-        let tab = Tab {
-            path: Some(PathBuf::from("C:/Users/foo/notes.txt")),
-            ..Tab::default()
-        };
-        assert_eq!(tab_display_name(&tab), "notes.txt");
-    }
-
-    #[test]
-    fn untitled_tab_with_seq_returns_new_n() {
-        let tab = Tab {
-            path: None,
-            untitled_seq: Some(3),
-            ..Tab::default()
-        };
-        assert_eq!(tab_display_name(&tab), "new 3");
-    }
-
-    #[test]
-    fn untitled_tab_without_seq_returns_untitled_fallback() {
-        // Defensive case — a path-less tab with no sequence
-        // shouldn't normally exist, but the display name must
-        // still be a sensible label.
-        let tab = Tab {
-            path: None,
-            untitled_seq: None,
-            ..Tab::default()
-        };
-        assert_eq!(tab_display_name(&tab), "Untitled");
-    }
-
-    #[test]
-    fn custom_name_overrides_untitled_seq() {
-        // File → Rename... on `new 3` produces a tab with
-        // `untitled_seq = Some(3)` AND `custom_name = Some(...)`.
-        // The display label must be the user-chosen name, not
-        // the sequence number — that's the entire point of the
-        // feature.
-        let tab = Tab {
-            path: None,
-            untitled_seq: Some(3),
-            custom_name: Some("scratchpad".to_string()),
-            ..Tab::default()
-        };
-        assert_eq!(tab_display_name(&tab), "scratchpad");
-    }
-
-    #[test]
-    fn custom_name_overrides_path_basename() {
-        // Defensive priority test: even if a tab has both a path
-        // and a `custom_name` (which shouldn't normally happen
-        // because `save_buffer_as` clears `custom_name`), the
-        // custom name still wins so the tab strip honours the
-        // documented priority order. Catches a regression where
-        // the `or_else` arms in `tab_display_name` get reordered.
-        let tab = Tab {
-            path: Some(PathBuf::from("/tmp/notes.txt")),
-            custom_name: Some("renamed".to_string()),
-            ..Tab::default()
-        };
-        assert_eq!(tab_display_name(&tab), "renamed");
-    }
-
-    #[test]
-    fn control_chars_in_basename_are_stripped() {
-        // `sanitize_filename_for_display` removes control
-        // characters before the dialog format inserts the
-        // name into the prompt — without that, a filename
-        // with `\n` would inject newlines into the message
-        // box.
-        let tab = Tab {
-            path: Some(PathBuf::from("with\nlinefeed.txt")),
-            ..Tab::default()
-        };
-        let name = tab_display_name(&tab);
-        assert!(!name.contains('\n'), "got {name:?}");
+    fn menu_label_doubles_ampersands_and_applies_the_shared_policy() {
+        // `sanitize_menu_label` had no tests at all before it started
+        // delegating its character policy to `codepp_shell`, which is
+        // precisely when a delegation could regress unnoticed. Pin
+        // both halves: the local `&`-doubling that must stay here, and
+        // the shared policy it now inherits.
+        //
+        // `&&` is Win32's opt-out from the menu accelerator-hint
+        // syntax — without it, `R&D notes.txt` renders as "RD notes"
+        // with a D accelerator.
+        assert_eq!(sanitize_menu_label("R&D notes.txt"), "R&&D notes.txt");
+        // TAB is the accelerator-column separator in a Win32 menu, so
+        // a filename containing one would forge a fake shortcut on a
+        // recent-files entry.
+        assert_eq!(sanitize_menu_label("a\tb"), "a\u{FFFD}b");
+        // Classes the delegation *gained* — none of these were
+        // filtered by the old local copy.
+        assert_eq!(sanitize_menu_label("a\u{200B}b"), "a\u{FFFD}b");
+        assert_eq!(sanitize_menu_label("a\u{0085}b"), "a\u{FFFD}b");
+        assert_eq!(sanitize_menu_label("a\u{2028}b"), "a\u{FFFD}b");
+        // Classes it already had, which must not have been lost.
+        assert_eq!(sanitize_menu_label("a\u{202E}b"), "a\u{FFFD}b");
+        assert_eq!(sanitize_menu_label("a\u{0000}b"), "a\u{FFFD}b");
+        // No length cap here, unlike the filename sanitizer: a recent-
+        // files entry renders a whole path and the caller applies its
+        // own `custom_max_length` first.
+        let long = "x".repeat(codepp_shell::DISPLAY_NAME_MAX_CHARS * 2);
+        assert_eq!(sanitize_menu_label(&long).len(), long.len());
     }
 
     #[test]
@@ -28671,6 +28566,32 @@ mod tab_display_name_tests {
             r"C:\Users\Max\Downloads\example - Copy.rb",
         ));
         assert!(out.contains(r#""C:\Users\Max\Downloads\example - Copy.rb""#));
+    }
+
+    #[test]
+    fn recycle_bin_prompt_cannot_have_extra_lines_injected() {
+        // This prompt gates a destructive action, and `MessageBoxW`
+        // honours `\n` as a real line break — the prompt's own
+        // wording relies on that. So a filename carrying a newline
+        // could forge additional lines that read as part of the
+        // official text: here, a fake reassurance placed above the
+        // real "Continue?". Filenames like this are reachable from
+        // WSL / Samba / sync-tool mounts, which permit characters
+        // Windows-native `CreateFileW` would refuse.
+        let hostile = std::path::PathBuf::from(
+            "safe.txt\"\nThis file will NOT be deleted.\nThe file \"decoy.txt",
+        );
+        let out = move_to_recycle_bin_prompt_for(&hostile);
+        // Exactly the two newlines the format string itself writes.
+        assert_eq!(
+            out.matches('\n').count(),
+            2,
+            "extra lines were injected: {out:?}"
+        );
+        // And a bidi override cannot flip the rendered path either.
+        let spoof = std::path::PathBuf::from("C:\\tmp\\photo_\u{202E}gnp.exe");
+        let out = move_to_recycle_bin_prompt_for(&spoof);
+        assert!(!out.contains('\u{202E}'), "RTLO survived: {out:?}");
     }
 
     #[test]

@@ -855,6 +855,226 @@ impl Default for Tab {
     }
 }
 
+/// Upper bound on a display name, in `char`s, for chrome that renders
+/// one: tab labels, window titles, status-bar parts, confirmation
+/// prompts.
+///
+/// 260 is `MAX_PATH`, which is not a limit Code++ enforces anywhere —
+/// it is just a length past which no basename is a label any more. The
+/// cap exists because paths of multi-megabyte length are legal on some
+/// filesystems, and chrome refreshes run per keystroke.
+///
+/// **This is a `char` count and bounds nothing else.** In particular it
+/// does *not* bound the UTF-16 code units a sanitized name occupies:
+/// astral-plane characters encode as surrogate pairs, so the 259-`char`
+/// output of [`sanitize_filename_for_display`] can reach 518 code
+/// units. Nothing overflows today because every re-encoding site
+/// (`ui_win32`'s `tab_label_for`, `HSTRING::from`) allocates
+/// dynamically — but do not size a fixed `[u16; DISPLAY_NAME_MAX_CHARS]`
+/// from this constant. Rust's `char` does at least make truncation
+/// mid-surrogate structurally impossible: a lone surrogate cannot exist
+/// in a `String`.
+pub const DISPLAY_NAME_MAX_CHARS: usize = 260;
+
+/// True for characters that must never reach UI chrome verbatim.
+///
+/// Filenames are attacker-influenced: a plugin can pick one via
+/// `NPPM_DOOPEN`, and a user can be induced to open a file out of an
+/// untrusted archive. Non-Windows filesystems reachable from Windows
+/// (WSL, Samba, sync tools) happily store names that `CreateFileW` on
+/// native storage would refuse. Four classes cause real harm:
+///
+///   - **C0 controls and DEL, and the C1 range.** An embedded U+0000
+///     silently truncates `SetWindowTextW` / `SB_SETTEXTW` on Win32 and
+///     `gtk_window_set_title` on GTK, so the chrome names a *different*
+///     file than the one that is open — which invites the user to save,
+///     delete, or run the wrong one. TAB forges Win32's
+///     accelerator-hint column. U+0085 NEL is a mandatory line break to
+///     Uniscribe/DirectWrite and Pango alike.
+///   - **Line and paragraph separators** (U+2028/U+2029). Same
+///     mandatory-break treatment per UAX #14: they split a single-line
+///     label across several visual lines and corrupt a segmented status
+///     bar's layout.
+///   - **Bidi marks, embeddings, overrides and isolates.** U+202E and
+///     friends flip visible order so a label stops matching its path —
+///     the classic `photo_gnp.exe` → `photo_exe.png` spoof (CWE-451).
+///   - **Invisible zero-width characters** (ZWSP, word joiner, BOM). A
+///     decoy `notes.txt␣ZWSP␣` renders pixel-identical to a genuine
+///     `notes.txt` tab while being a different file.
+///
+/// **U+200C ZWNJ and U+200D ZWJ are deliberately *not* listed, and that
+/// is a real residual risk, not a free win.** Both do genuine
+/// orthographic work — ZWNJ in Persian and Indic scripts, ZWJ in every
+/// multi-person emoji sequence — so neutralising them visibly corrupts
+/// legitimate filenames. But the cost of keeping them is honest: a bare
+/// ZWJ between two Latin letters, where no ligature rule applies, has
+/// no visible effect in most fonts, which makes `report␣ZWJ␣.txt`
+/// indistinguishable on screen from `report.txt` — exactly the collision
+/// U+200B is filtered to prevent. The trade is "certain corruption of
+/// real names" against "a narrower version of a spoof we otherwise
+/// block", and it went the way it did because the first harm is
+/// unconditional. Closing it properly means context-aware handling
+/// (preserve only when adjacent to a joining or combining script),
+/// which is worth doing if this class ever shows up in practice.
+///
+/// The invisible-character list is also a denylist, so it trails
+/// Unicode by construction: `Cf`-category codepoints such as the Tag
+/// block (U+E0000–U+E007F) reproduce the same primitive. Keying off the
+/// `Cf` general category with ZWNJ/ZWJ as named carve-outs would be
+/// self-updating, at the cost of a Unicode-table dependency.
+fn is_display_hostile(c: char) -> bool {
+    matches!(c,
+        // C0 controls (NUL, TAB, LF, CR, …), DEL, and C1 (incl. NEL).
+        '\u{0000}'..='\u{001F}' | '\u{007F}'..='\u{009F}'
+        // Zero-width space, word joiner, and the BOM as ZWNBSP.
+        | '\u{200B}' | '\u{2060}' | '\u{FEFF}'
+        // Bidi. This is the complete `Bidi_Control=Yes` set minus
+        // nothing: ALM, the two directional marks, the embeddings and
+        // overrides, and the isolates — twelve codepoints. ALM is the
+        // weakest of them (it steers neutrals locally rather than
+        // reversing a span) but it is invisible and in the class, so
+        // leaving it out would make the set arbitrary.
+        | '\u{061C}'
+        | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        // Line and paragraph separators.
+        | '\u{2028}' | '\u{2029}'
+    )
+}
+
+/// Replacement for a character [`is_display_hostile`] rejects.
+///
+/// Substituting rather than deleting is the security-relevant half of
+/// this design, and matches what `ui_win32`'s `sanitize_menu_label`
+/// already does. Deletion *manufactures* the collision it is supposed
+/// to prevent: `report␣ZWSP␣.txt` with the ZWSP dropped is byte-identical
+/// to a genuine `report.txt`, so a decoy would render not merely similar
+/// to the real file but indistinguishable from it. U+FFFD keeps the
+/// label visibly distinct and preserves its length.
+const DISPLAY_REPLACEMENT: char = '\u{FFFD}';
+
+/// Apply the shared display-character policy to one `char`: hostile
+/// ones become [`DISPLAY_REPLACEMENT`], everything else passes through.
+///
+/// Exposed as a per-`char` primitive so sinks with their own escaping
+/// rules or their own length budget can adopt the policy without
+/// inheriting [`sanitize_filename_for_display`]'s cap — `ui_win32`'s
+/// `sanitize_menu_label` needs exactly that, since it renders a whole
+/// path and additionally has to double `&` for Win32's
+/// accelerator-hint syntax.
+#[must_use]
+pub fn sanitize_display_char(c: char) -> char {
+    if is_display_hostile(c) {
+        DISPLAY_REPLACEMENT
+    } else {
+        c
+    }
+}
+
+/// Sanitize a whole path for display in chrome — confirmation prompts,
+/// error dialogs, the find-in-files results list.
+///
+/// Same character policy as [`sanitize_filename_for_display`] (see
+/// [`is_display_hostile`]) and for the same reasons, with one
+/// deliberate difference: **no length cap.**
+///
+/// The cap on names exists because chrome that renders a name is
+/// refreshed per keystroke, so a pathological length is a repeated
+/// cost. The sinks here are shown once, on an explicit user action, and
+/// two of them (`show_reload_dialog`, `move_to_recycle_bin_prompt_for`)
+/// gate a destructive yes/no. Truncating the path in *those* would
+/// trade a spoofing risk for a worse one — a user asked to confirm
+/// discarding unsaved work, or moving a file to the Recycle Bin, has to
+/// be able to see which file. A pathologically long path here costs one
+/// oversized allocation on a dialog the user opened, which is a UX
+/// annoyance rather than a security property.
+///
+/// Takes `&Path` rather than `&str` so callers cannot accidentally pass
+/// an already-`display()`ed string and think they are protected — the
+/// whole failure mode this fixes was `format!("{}", path.display())`
+/// reaching a `MessageBoxW`, where an embedded newline injects extra
+/// lines into a prompt that the surrounding text makes look official.
+#[must_use]
+pub fn sanitize_path_for_display(path: &Path) -> String {
+    path.to_string_lossy()
+        .chars()
+        .map(sanitize_display_char)
+        .collect()
+}
+
+/// Sanitize a filename for display in chrome, and cap it at
+/// [`DISPLAY_NAME_MAX_CHARS`].
+///
+/// Every character [`is_display_hostile`] rejects is replaced with
+/// [`DISPLAY_REPLACEMENT`]; see those two items for the threat model
+/// and for why substitution beats deletion. The cap is separate and
+/// exists because multi-megabyte basenames are legal on some
+/// filesystems while chrome refreshes run per keystroke.
+///
+/// Lives here rather than in a UI crate because every backend needs
+/// identical output — DESIGN.md §7.5 makes chrome parity a Phase 5
+/// requirement, and a duplicated sanitizer is exactly the kind of thing
+/// that drifts silently. It already had: before this became the shared
+/// implementation there were three divergent copies, one of which
+/// (`ui_win32`'s print header) did no sanitizing at all.
+#[must_use]
+pub fn sanitize_filename_for_display(name: &str) -> String {
+    // Single pass: the substitution is 1:1 in `char`s, so the cap can
+    // be applied as we go rather than by counting a second time.
+    name.chars()
+        .take(DISPLAY_NAME_MAX_CHARS - 1)
+        .map(sanitize_display_char)
+        .collect()
+}
+
+/// The user-facing display name for a tab — the same string the tab
+/// strip renders, the window title shows, and the save-confirmation
+/// prompt names.
+///
+/// Four sources, in priority order:
+///
+///   1. `custom_name` — set via File → Rename…, and deliberately
+///      highest so a renamed buffer keeps its label across tab
+///      switches and session restores. Cleared by
+///      [`Shell::save_buffer_as`], so a save-then-rename flow
+///      correctly falls through to the on-disk name.
+///   2. `path`'s basename — the common case.
+///   3. `untitled_seq` → `"new N"`, for File → New buffers.
+///   4. `"Untitled"` — a path with no parseable basename. Rare enough
+///      to be defensive rather than expected, but a label is still
+///      better than an empty tab.
+///
+/// The result is always passed through
+/// [`sanitize_filename_for_display`], so callers can format it into
+/// other strings without re-checking it.
+#[must_use]
+pub fn tab_display_name(tab: &Tab) -> String {
+    let owned = tab
+        .custom_name
+        .clone()
+        .or_else(|| {
+            tab.path.as_ref().and_then(|p| {
+                // `to_string_lossy`, not `to_str`. A basename that is
+                // not valid UTF-8 is routine on Linux — an ext4 file
+                // named `café.txt` in latin-1 is perfectly legal — and
+                // `to_str` returns `None` for it, which would drop
+                // through to the `"Untitled"` arm below and label a
+                // plainly-saved file as unsaved in the tab strip, the
+                // window title, and the `Save file '…' ?` prompt.
+                // Lossy gives `caf<U+FFFD>.txt`, which is honest about
+                // the undecodable byte and still identifies the file.
+                // On Windows this changes nothing in practice: `OsStr`
+                // is WTF-8 there, so `to_str` only fails on unpaired
+                // surrogates.
+                p.file_name().map(|s| s.to_string_lossy().into_owned())
+            })
+        })
+        .unwrap_or_else(|| match tab.untitled_seq {
+            Some(n) => format!("new {n}"),
+            None => "Untitled".to_string(),
+        });
+    sanitize_filename_for_display(&owned)
+}
+
 /// Snapshot returned by [`Shell::close_active_tab`] describing the
 /// platform-side cleanup the UI must perform. Shell has already
 /// removed the tab from `Shell.tabs`, updated `Shell.active_tab`,
@@ -3187,7 +3407,7 @@ impl Shell {
                 }
                 pending.push(PendingDialog::Error {
                     title: "Open failed".to_string(),
-                    message: format!("{}: {}", err.path.display(), err.error),
+                    message: format!("{}: {}", sanitize_path_for_display(&err.path), err.error),
                 });
                 // Pair every `FileBeforeOpen` issued by `open_file`
                 // with one of `FileOpened` / `FileLoadFailed`.
@@ -3268,7 +3488,7 @@ impl Shell {
                         title: "File removed".to_string(),
                         message: format!(
                             "{} was deleted or moved externally. The buffer is still in memory.",
-                            path.display()
+                            sanitize_path_for_display(&path)
                         ),
                     });
                 }
@@ -4366,11 +4586,15 @@ impl Shell {
         // user's mental model of which file changed how stays
         // accurate.
         if backup_modified_externally {
-            let label = path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown")
-                .to_string();
+            // Through the shared resolver, not `to_str().unwrap_or`:
+            // this string lands in a dialog body, and the raw form
+            // reintroduced both bugs the sanitizer exists to stop — a
+            // non-UTF-8 name degrading to "unknown", and a newline or
+            // bidi override reaching the prompt verbatim.
+            let label = path.file_name().map_or_else(
+                || "unknown".to_string(),
+                |s| sanitize_filename_for_display(&s.to_string_lossy()),
+            );
             tracing::warn!(
                 path = ?path,
                 "backup file modified externally; surfacing warning",
@@ -6344,6 +6568,251 @@ fn spawn_forwarder<T: Send + 'static>(
             }
         })
         .expect("forwarder thread spawn");
+}
+
+#[cfg(test)]
+mod tab_display_name_tests {
+    //! Chrome-label resolution. Lives in `shell` because both UI
+    //! backends render from it — see [`super::tab_display_name`].
+    use super::{sanitize_filename_for_display, tab_display_name, Tab, DISPLAY_NAME_MAX_CHARS};
+    use std::path::PathBuf;
+
+    #[test]
+    fn titled_tab_returns_basename() {
+        let tab = Tab {
+            path: Some(PathBuf::from("C:/Users/foo/notes.txt")),
+            ..Tab::default()
+        };
+        assert_eq!(tab_display_name(&tab), "notes.txt");
+    }
+
+    #[test]
+    fn untitled_tab_with_seq_returns_new_n() {
+        let tab = Tab {
+            path: None,
+            untitled_seq: Some(3),
+            ..Tab::default()
+        };
+        assert_eq!(tab_display_name(&tab), "new 3");
+    }
+
+    #[test]
+    fn untitled_tab_without_seq_returns_untitled_fallback() {
+        // Defensive case — a path-less tab with no sequence
+        // shouldn't normally exist, but the display name must
+        // still be a sensible label.
+        let tab = Tab {
+            path: None,
+            untitled_seq: None,
+            ..Tab::default()
+        };
+        assert_eq!(tab_display_name(&tab), "Untitled");
+    }
+
+    #[test]
+    fn custom_name_overrides_untitled_seq() {
+        // File → Rename... on `new 3` produces a tab with
+        // `untitled_seq = Some(3)` AND `custom_name = Some(...)`.
+        // The display label must be the user-chosen name, not
+        // the sequence number — that's the entire point of the
+        // feature.
+        let tab = Tab {
+            path: None,
+            untitled_seq: Some(3),
+            custom_name: Some("scratchpad".to_string()),
+            ..Tab::default()
+        };
+        assert_eq!(tab_display_name(&tab), "scratchpad");
+    }
+
+    #[test]
+    fn custom_name_overrides_path_basename() {
+        // Defensive priority test: even if a tab has both a path
+        // and a `custom_name` (which shouldn't normally happen
+        // because `save_buffer_as` clears `custom_name`), the
+        // custom name still wins so the tab strip honours the
+        // documented priority order. Catches a regression where
+        // the `or_else` arms in `tab_display_name` get reordered.
+        let tab = Tab {
+            path: Some(PathBuf::from("/tmp/notes.txt")),
+            custom_name: Some("renamed".to_string()),
+            ..Tab::default()
+        };
+        assert_eq!(tab_display_name(&tab), "renamed");
+    }
+
+    #[test]
+    fn control_chars_in_basename_are_neutralised() {
+        // Without this a filename with `\n` would inject newlines
+        // into a message box and break a single-line tab label
+        // into several.
+        let tab = Tab {
+            path: Some(PathBuf::from("with\nlinefeed.txt")),
+            ..Tab::default()
+        };
+        let name = tab_display_name(&tab);
+        assert!(!name.contains('\n'), "got {name:?}");
+    }
+
+    #[test]
+    fn non_utf8_basenames_keep_identifying_the_file() {
+        // An ext4 file named `café.txt` in latin-1 is legal and
+        // routine on Linux. `to_str()` returns `None` for it, so
+        // resolving through it would fall through to the untitled
+        // arm and label a plainly-saved file `"Untitled"` — in the
+        // tab strip, the window title, and the save prompt alike.
+        // Build the OsString from raw bytes to get a genuinely
+        // undecodable name rather than a merely unusual one.
+        #[cfg(unix)]
+        {
+            use std::ffi::OsString;
+            use std::os::unix::ffi::OsStringExt;
+            let raw = OsString::from_vec(b"caf\xe9.txt".to_vec());
+            let tab = Tab {
+                path: Some(PathBuf::from(raw)),
+                ..Tab::default()
+            };
+            let name = tab_display_name(&tab);
+            assert_ne!(name, "Untitled", "a saved file was labelled unsaved");
+            // The undecodable 0xE9 becomes U+FFFD and everything
+            // around it survives, so the label still names the file.
+            assert_eq!(name, "caf\u{FFFD}.txt");
+        }
+    }
+
+    #[test]
+    fn hostile_chars_are_replaced_not_deleted() {
+        // Substitution, not deletion, is the security-relevant
+        // half of the design: deleting would turn a decoy
+        // `report<ZWSP>.txt` into a byte-identical `report.txt`,
+        // manufacturing the exact collision the sanitizer exists
+        // to prevent. Assert the length is preserved, which is
+        // what distinguishes the two.
+        assert_eq!(sanitize_filename_for_display("report\u{200B}.txt"), {
+            let mut s = "report".to_string();
+            s.push('\u{FFFD}');
+            s.push_str(".txt");
+            s
+        });
+        // Deletion would have produced exactly this. Pin that it
+        // does not, since the collision is the whole hazard.
+        assert_ne!(
+            sanitize_filename_for_display("report\u{200B}.txt"),
+            "report.txt"
+        );
+    }
+
+    #[test]
+    fn every_hostile_class_is_actually_neutralised() {
+        // One representative per class the policy claims to cover.
+        // A char-by-char reading of the match arms is exactly the
+        // kind of review that misses a gap, so enumerate instead.
+        for (label, c) in [
+            ("NUL", '\u{0000}'),         // truncates SetWindowTextW / gtk_window_set_title
+            ("TAB", '\u{0009}'),         // forges a Win32 accelerator column
+            ("LF", '\u{000A}'),          // multi-line label
+            ("CR", '\u{000D}'),          // multi-line label
+            ("DEL", '\u{007F}'),         // C0-adjacent control
+            ("NEL", '\u{0085}'),         // C1; a mandatory break to Pango/DirectWrite
+            ("ZWSP", '\u{200B}'),        // invisible: decoy tab looks identical
+            ("ALM", '\u{061C}'),         // weakest bidi control, but in the class
+            ("LRM", '\u{200E}'),         // bidi mark
+            ("RLM", '\u{200F}'),         // bidi mark
+            ("RTLO", '\u{202E}'),        // the photo_gnp.exe spoof
+            ("LINE SEP", '\u{2028}'),    // mandatory break per UAX #14
+            ("PARA SEP", '\u{2029}'),    // mandatory break per UAX #14
+            ("WORD JOINER", '\u{2060}'), // invisible
+            ("ISOLATE", '\u{2066}'),     // bidi isolate
+            ("BOM/ZWNBSP", '\u{FEFF}'),  // invisible
+        ] {
+            let input = format!("a{c}b");
+            let out = sanitize_filename_for_display(&input);
+            assert!(
+                !out.contains(c),
+                "{label} (U+{:04X}) survived sanitization: {out:?}",
+                c as u32
+            );
+            assert_eq!(out.chars().count(), 3, "{label} changed the length");
+        }
+    }
+
+    #[test]
+    fn zero_width_joiners_are_deliberately_preserved() {
+        // The counterpart to the test above, and the reason the
+        // policy is not simply "strip everything invisible". ZWNJ
+        // does orthographic work in Persian and Indic scripts and
+        // ZWJ builds every multi-person emoji sequence, so
+        // neutralising them corrupts legitimate filenames — a
+        // certain harm traded against a marginal one. If that
+        // trade is ever revisited, this test is the place it gets
+        // argued, not a silent behaviour change.
+        let family = "photo\u{200D}album.png";
+        assert_eq!(sanitize_filename_for_display(family), family);
+        let persian = "کتاب\u{200C}ها.txt";
+        assert_eq!(sanitize_filename_for_display(persian), persian);
+    }
+
+    #[test]
+    fn over_long_names_are_capped() {
+        // Multi-MB basenames are legal on some filesystems and
+        // chrome refreshes run per keystroke, so the cap is a real
+        // bound, not decoration.
+        let long = "x".repeat(DISPLAY_NAME_MAX_CHARS * 4);
+        assert_eq!(
+            sanitize_filename_for_display(&long).chars().count(),
+            DISPLAY_NAME_MAX_CHARS - 1
+        );
+        // The two sides of the exact boundary. The upper one is
+        // load-bearing: with only the 259-char and the far-too-long
+        // cases, a comparison off-by-one (`> MAX` where `> MAX - 1`
+        // was meant, `.take()` untouched) passes both and ships a
+        // cap one character loose. Verified by mutation.
+        let at_limit = "y".repeat(DISPLAY_NAME_MAX_CHARS - 1);
+        assert_eq!(sanitize_filename_for_display(&at_limit), at_limit);
+        let smallest_clipped = "z".repeat(DISPLAY_NAME_MAX_CHARS);
+        assert_eq!(
+            sanitize_filename_for_display(&smallest_clipped)
+                .chars()
+                .count(),
+            DISPLAY_NAME_MAX_CHARS - 1
+        );
+    }
+
+    #[test]
+    fn paths_are_sanitized_but_never_truncated() {
+        use super::sanitize_path_for_display;
+        // Same character policy as names — a newline here would
+        // forge extra lines in a destructive confirmation prompt,
+        // since `MessageBoxW` and `GtkMessageDialog` both honour
+        // `\n` and the prompts' own wording relies on that.
+        let hostile = PathBuf::from("/tmp/safe.txt\nThis file will NOT be deleted.");
+        let out = sanitize_path_for_display(&hostile);
+        assert!(!out.contains('\n'), "newline survived: {out:?}");
+        assert!(!sanitize_path_for_display(&PathBuf::from("/tmp/a\u{202E}b")).contains('\u{202E}'));
+
+        // But *not* capped, unlike a name. A destructive prompt has
+        // to show which file, so truncating it would trade one
+        // hazard for a worse one. Pin that a long path survives
+        // whole, since reusing the name path would silently clip it.
+        let long = PathBuf::from(format!("/{}", "d/".repeat(DISPLAY_NAME_MAX_CHARS)));
+        assert_eq!(
+            sanitize_path_for_display(&long).chars().count(),
+            long.to_string_lossy().chars().count()
+        );
+    }
+
+    #[test]
+    fn capping_counts_chars_not_bytes_and_never_splits_one() {
+        // A 4-byte-per-char name is where a byte-based cap would
+        // slice through a UTF-8 sequence. Counting `char`s cannot,
+        // but pin it: a rewrite to `as_bytes()[..n]` plus
+        // `from_utf8_lossy` would leave replacement characters
+        // here, which the second assertion catches.
+        let wide = "🦀".repeat(DISPLAY_NAME_MAX_CHARS);
+        let out = sanitize_filename_for_display(&wide);
+        assert_eq!(out.chars().count(), DISPLAY_NAME_MAX_CHARS - 1);
+        assert!(out.chars().all(|c| c == '🦀'));
+    }
 }
 
 #[cfg(test)]

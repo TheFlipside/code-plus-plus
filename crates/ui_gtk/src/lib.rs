@@ -313,9 +313,15 @@ fn present_dialog(dialog: &PendingDialog) {
                 gtk::MessageType::Question,
                 gtk::ButtonsType::YesNo,
                 "File changed on disk",
+                // Sanitized: this prompt gates discarding unsaved
+                // edits, and `set_secondary_text` renders `\n` as a
+                // real line break, so a filename carrying one could
+                // forge extra lines that read as part of the official
+                // wording. The Win32 sibling (`show_reload_dialog`)
+                // does the same; DESIGN.md §7.5 requires them to agree.
                 &format!(
                     "{} was modified outside Code++.\n\nReload it?",
-                    path.display()
+                    codepp_shell::sanitize_path_for_display(path)
                 ),
             );
             if response == gtk::ResponseType::Yes {
@@ -528,18 +534,28 @@ pub(crate) fn save_session_now() {
 }
 
 /// Retitle the window from the active tab, Notepad++ style.
+///
+/// The name comes from `codepp_shell::tab_display_name` rather than
+/// from `tab.path` directly, which matters for three separate reasons:
+///
+///   * **Correctness.** It honours `custom_name` (File → Rename…) and
+///     the real `untitled_seq`; the hand-rolled version this replaced
+///     ignored the first and hard-coded `"new 1"` for the second, so a
+///     renamed buffer and every untitled buffer past the first were
+///     both titled wrongly.
+///   * **Safety.** It sanitizes. `gtk_window_set_title` takes a C
+///     string, so an embedded NUL in a plugin-supplied path — one
+///     `NPPM_DOOPEN` away — truncates the title at the NUL in a
+///     release build (the window then names a file that is not the one
+///     open) and panics inside glib's interior-NUL check in a debug
+///     build. Verified against the pinned glib 0.18.5.
+///   * **Parity.** DESIGN.md §7.5 requires the backends to agree;
+///     `ui_win32`'s `refresh_window_title` resolves the same way.
 pub(crate) fn refresh_title() {
     with_state(|st| {
         let title = st.shell.active().map_or_else(
             || "Code++".to_string(),
-            |tab| {
-                let name = tab
-                    .path
-                    .as_deref()
-                    .and_then(|p| p.file_name())
-                    .map_or_else(|| "new 1".to_string(), |n| n.to_string_lossy().into_owned());
-                format!("{name} - Code++")
-            },
+            |tab| format!("{} - Code++", codepp_shell::tab_display_name(tab)),
         );
         st.window.set_title(&title);
     });
