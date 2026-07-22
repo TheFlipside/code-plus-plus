@@ -1,10 +1,11 @@
 //! GTK 3 UI backend for Code++.
 //!
-//! Phase 5 m2 scope: bring Linux to Phase 2 parity — open, edit, save
-//! and restore a session against real files, with encoding and EOL
-//! shown in the status bar and external changes detected. The tab
-//! strip, Find/Replace and Goto dialogs, the toolbar, UDL styling and
-//! the plugin host are later milestones. (Plain code spans, not
+//! Scope through Phase 5 m3: Linux opens, edits, saves and restores a
+//! session against real files, with encoding and EOL in the status
+//! bar, external changes detected, and a working tab strip — switch,
+//! close, middle-click-close and drag-to-reorder. Find/Replace and
+//! Goto dialogs, the toolbar, UDL styling and the plugin host are
+//! later milestones. (Plain code spans, not
 //! intra-doc links, for cross-crate references in this file — `ui_gtk`
 //! deliberately does not depend on `ui_win32`, so links to it would be
 //! unresolvable and would warn on `cargo doc`.)
@@ -43,6 +44,7 @@ mod menu;
 mod platform;
 mod state;
 mod status;
+mod tabs;
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -165,6 +167,11 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<(), GtkUiError> {
     let menu_bar = menu::build();
     layout.pack_start(&menu_bar, false, false, 0);
 
+    // The strip sits above the editor as a sibling, not a parent —
+    // its pages are empty and collapse to zero height. See `tabs`.
+    let tab_strip = tabs::TabStrip::new();
+    layout.pack_start(&tab_strip.notebook, false, false, 0);
+
     // SAFETY: `gtk::init` succeeded above, which is `scintilla_new`'s
     // only precondition.
     let sci_ptr = unsafe { scintilla_new() };
@@ -199,6 +206,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<(), GtkUiError> {
         editor,
         status,
         menu_bar,
+        tabs: tab_strip.clone(),
         shell,
     }));
     state::install(&st);
@@ -219,8 +227,74 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<(), GtkUiError> {
             let (_, ui) = st.split();
             ui.refresh_dynamic_status();
         });
+        // Resync the strip only when the dirty marker actually flips —
+        // twice per edit session (first keystroke after a save, and
+        // the save itself), not on every caret move. `sync` rebuilds
+        // each tab's label widget, which is far too much to do per
+        // notification.
+        if refresh_active_dirty() == DirtyPoll::Changed {
+            sync_tab_strip();
+        }
         None
     });
+
+    // --- Tab strip signals ----------------------------------------
+    //
+    // Both handlers bail on `is_suppressed`, because `TabStrip::sync`
+    // provokes both of these signals itself while rewriting the
+    // notebook — see the `tabs` module docs for the measurements.
+    tab_strip.notebook.connect_switch_page(|_, _, num| {
+        if tabs::is_suppressed() {
+            return;
+        }
+        // Attribute the outgoing buffer's modify bit to the outgoing
+        // tab, while the view is still bound to its document. After
+        // `active_tab` moves it would land on the wrong tab.
+        capture_active_dirty();
+        let moved = with_state(|st| {
+            let idx = num as usize;
+            if idx < st.shell.tabs.len() {
+                st.shell.active_tab = Some(idx);
+                true
+            } else {
+                // The control and the model disagree. Defensive only —
+                // `sync` keeps them in lockstep — but silently doing
+                // nothing beats binding the view to a tab that is not
+                // there.
+                tracing::warn!(idx, "switch-page for an index Shell does not have");
+                false
+            }
+        });
+        if moved == Some(true) {
+            rebind_active_view();
+            // No `queue_buffer_activated` here: it is
+            // `#[cfg(target_os = "windows")]` in `shell` because it
+            // queues the `NPPN_BUFFERACTIVATED` plugin notification,
+            // and `platform::dynlib` has no `dlopen` arm yet, so GTK
+            // loads no plugins to notify. It joins this handler when
+            // the plugin host is ported.
+        }
+    });
+
+    let strip_for_reorder = tab_strip.clone();
+    tab_strip
+        .notebook
+        .connect_page_reordered(move |_, child, num| {
+            if tabs::is_suppressed() {
+                return;
+            }
+            let Some(from) = strip_for_reorder.index_before_reorder(child) else {
+                tracing::warn!("page-reordered for a page the strip does not know");
+                return;
+            };
+            // `move_tab` enforces the pinned-prefix invariant and returns
+            // false for a drag that would break it. Either way the strip
+            // is resynced below: on success it reflects the new order, and
+            // on rejection the relabel-by-index puts the visible order
+            // back where the model says it should be.
+            with_state(|st| st.shell.move_tab(from, num as usize));
+            refresh_tab_chrome();
+        });
 
     // --- Startup work ---------------------------------------------
     restore_window_geometry(&window);
@@ -277,7 +351,7 @@ pub(crate) fn drain_shell() {
     // checkout`, say) would stack them arbitrarily deep.
     DIALOG_QUEUE.with(|q| q.borrow_mut().extend(dialogs.unwrap_or_default()));
     pump_dialogs();
-    refresh_title();
+    refresh_tab_chrome();
 }
 
 thread_local! {
@@ -405,6 +479,24 @@ fn restore_window_geometry(window: &gtk::Window) {
 /// `codepp file.txt` expects.
 fn restore_session(initial_path: Option<PathBuf>) {
     let entries = with_state(|st| st.shell.load_session_entries()).unwrap_or_default();
+    // Resolve the persisted active tab by *path*, not by position.
+    //
+    // `session_active_index` indexes the persisted tab list, and that
+    // index does not survive the trip into `Shell.tabs`: this backend
+    // skips every dirty/backup entry, and `load_session_entries` drops
+    // an untitled entry outright when its backup will not read back.
+    // Either shifts the correspondence, and the shifted index is
+    // usually still in range — so a bounds check does not catch it, it
+    // just silently activates a different file. Matching on the path
+    // has neither failure mode.
+    let want_active_path = with_state(|st| {
+        st.shell
+            .session_active_index()
+            .and_then(|idx| st.shell.session.tabs.get(idx))
+            .and_then(|tab| tab.path.clone())
+    })
+    .flatten();
+    let mut restored_active = None;
     for entry in entries {
         match entry {
             SessionRestoreEntry::OpenFile(path) => {
@@ -412,27 +504,79 @@ fn restore_session(initial_path: Option<PathBuf>) {
                 // whose completion rebinds the view. A duplicate path
                 // in session.xml would dedupe to `SwitchedToExisting`
                 // though, so handle that the same way `on_open` does.
-                if let Some(codepp_shell::OpenFileOutcome::SwitchedToExisting(_)) =
-                    with_state(|st| st.shell.open_file(path))
-                {
+                // Match *before* opening: `Tab.path` is not populated
+                // until the asynchronous load completes, so matching on
+                // it afterwards finds nothing. `open_file` does set
+                // `active_tab` synchronously, so reading that right
+                // after the call gives the index this entry landed on.
+                let is_wanted = want_active_path.as_deref() == Some(path.as_path());
+                let outcome = with_state(|st| st.shell.open_file(path));
+                if let Some(codepp_shell::OpenFileOutcome::SwitchedToExisting(_)) = outcome {
                     rebind_active_view();
                 }
+                // Only trust `active_tab` for outcomes where the file
+                // is actually open. `Rejected` (tab cap, loader shut
+                // down) leaves `active_tab` untouched, so reading it
+                // would record the *previous* entry's index and then
+                // activate the wrong file — the very failure this
+                // resolution exists to prevent, arriving through an
+                // unhandled variant instead of a bad index.
+                //
+                // Neither `Rejected` trigger can fire here today:
+                // `MAX_SESSION_TABS` (512) is below `MAX_OPEN_TABS`
+                // (1024), so a session restore into a fresh `Shell`
+                // cannot reach the cap, and `Shell` owns the loader's
+                // shutdown handle, so the channel is alive for as long
+                // as it is. Both are invariants of *other* code, which
+                // is exactly why this checks rather than assumes.
+                let opened = matches!(
+                    outcome,
+                    Some(
+                        codepp_shell::OpenFileOutcome::Loading
+                            | codepp_shell::OpenFileOutcome::SwitchedToExisting(_)
+                            | codepp_shell::OpenFileOutcome::AlreadyActive
+                    )
+                );
+                if is_wanted && opened {
+                    restored_active = with_state(|st| st.shell.active_tab).flatten();
+                }
             }
-            // The backup-restore variants need the dirty-buffer
-            // plumbing that arrives with the tab strip. Opening the
-            // on-disk file instead would silently discard the user's
-            // unsaved work, so skip and say so rather than doing the
-            // wrong thing quietly.
+            // The backup-restore variants need dirty-buffer restore,
+            // which this backend does not have yet — `restore_dirty_with_text`
+            // and `restore_untitled_with_text` are wired on Win32 only.
+            // Opening the on-disk file instead would silently discard
+            // the user's unsaved work, so skip and say so rather than
+            // doing the wrong thing quietly. Tracked for the milestone
+            // that ports them.
             // `SessionRestoreEntry` is not `Debug`, so name the case
             // rather than formatting the value.
             _ => {
                 tracing::warn!(
-                    "session entry needs dirty-buffer restore, which GTK gains with the \
-                     tab strip; skipped rather than silently discarding unsaved work"
+                    "session entry needs dirty-buffer restore, which this backend does not \
+                     implement yet; skipped rather than silently discarding unsaved work"
                 );
             }
         }
     }
+    // Restore *which* tab was in front, not just which files were open.
+    // Each `open_file` above makes its own tab active, so without this
+    // the session always comes back on whichever file happened to be
+    // last in the list, and the tab the user was actually working in is
+    // silently lost. Applied before the command-line path below, so an
+    // explicitly-named file still wins.
+    if let Some(idx) = restored_active {
+        with_state(|st| st.shell.active_tab = Some(idx));
+    } else if want_active_path.is_some() {
+        // The persisted active tab is not among the restored ones — it
+        // was a skipped dirty entry, or `load_session_entries` dropped
+        // it outright. Leaving the last-opened tab in front is the
+        // honest fallback; guessing an index would just pick a
+        // different wrong file.
+        tracing::info!(
+            "session's active file is not among the restored tabs; keeping the last-opened tab"
+        );
+    }
+
     if let Some(path) = initial_path {
         if let Some(codepp_shell::OpenFileOutcome::SwitchedToExisting(_)) =
             with_state(|st| st.shell.open_file(path))
@@ -444,6 +588,15 @@ fn restore_session(initial_path: Option<PathBuf>) {
     // arrive. Drain once now so anything already queued lands before
     // the first paint.
     drain_shell();
+    // And bind the view to whichever tab ended up active. `drain_shell`
+    // only rebinds for a load that completes *onto the active tab*, so
+    // a restore where the active tab's bytes arrived before the index
+    // above was applied would otherwise leave the view showing a
+    // different buffer than the strip highlights — the exact
+    // active-vs-bound split `Shell::bind_active_view` documents as the
+    // most damaging state this crate can produce. Idempotent, so
+    // running it when the drain already bound correctly costs nothing.
+    rebind_active_view();
 }
 
 /// Bind the view to `Shell`'s active tab and retitle the window.
@@ -463,7 +616,7 @@ fn rebind_active_view() {
         let (shell, mut ui) = st.split();
         shell.bind_active_view(&mut ui);
     });
-    refresh_title();
+    refresh_tab_chrome();
 }
 
 /// Close the active tab, releasing its Scintilla document and rebinding
@@ -519,7 +672,7 @@ pub(crate) fn close_active_tab() {
                     .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, placeholder);
             }
         });
-        refresh_title();
+        refresh_tab_chrome();
     }
 }
 
@@ -533,10 +686,124 @@ pub(crate) fn save_session_now() {
     });
 }
 
-/// Retitle the window from the active tab, Notepad++ style.
+/// Re-read the active buffer's modify bit into `Tab.dirty`, returning
+/// `true` if it changed.
 ///
-/// The name comes from `codepp_shell::tab_display_name` rather than
-/// from `tab.path` directly, which matters for three separate reasons:
+/// `Tab.dirty` is a cache the UI maintains — its own doc comment says
+/// it "mirrors Scintilla's `SCI_GETMODIFY`" — because the tab strip has
+/// to paint a dirty marker for *inactive* tabs too, and reading the
+/// live bit for those would need the expensive doc-pointer swap on
+/// every repaint.
+///
+/// Polling `SCI_GETMODIFY` here rather than unpacking the notification
+/// is deliberate. Win32 keys off `SCN_SAVEPOINTREACHED` /
+/// `SCN_SAVEPOINTLEFT`, but GTK delivers notifications as a boxed
+/// `SCNotification` through the `sci-notify` `GObject` signal, so reading
+/// the code means declaring the struct's layout and unpacking a
+/// `glib::Value` — for an answer `SCI_GETMODIFY` gives authoritatively
+/// in one direct call. The savepoint notifications are exactly the ones
+/// that flip this bit, so polling on every `sci-notify` is equivalent,
+/// and one extra direct call sits inside a handler that already makes
+/// several.
+///
+/// Only the *active* tab is updated: it is the only one whose document
+/// is bound to the view. Inactive tabs keep the value captured when
+/// they were last active, which is what `capture_active_dirty` on the
+/// way out of a tab switch is for.
+///
+/// Returns `Unavailable` rather than `Unchanged` when it could not
+/// look, and the distinction is load-bearing. Scintilla's GTK backend
+/// emits `sci-notify` *synchronously* from inside the message that
+/// caused it — `ScintillaGTK::NotifyParent` calls `g_signal_emit`
+/// directly — so `SCI_SETSAVEPOINT` issued from inside a `with_state`
+/// closure re-enters this function while that closure still holds the
+/// `RefCell`, and `with_state` correctly declines. Collapsing that into
+/// `Unchanged` told the caller the dirty bit had not moved when in fact
+/// it had just been cleared by the very save in progress, leaving the
+/// tab showing an unsaved-changes marker for a file that was on disk.
+fn refresh_active_dirty() -> DirtyPoll {
+    with_state(|st| {
+        let dirty = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0;
+        let Some(idx) = st.shell.active_tab else {
+            return DirtyPoll::Unchanged;
+        };
+        let Some(tab) = st.shell.tabs.get_mut(idx) else {
+            return DirtyPoll::Unchanged;
+        };
+        if tab.dirty == dirty {
+            return DirtyPoll::Unchanged;
+        }
+        tab.dirty = dirty;
+        DirtyPoll::Changed
+    })
+    .unwrap_or(DirtyPoll::Unavailable)
+}
+
+/// Outcome of [`refresh_active_dirty`]. See its docs for why
+/// "could not look" must not be conflated with "nothing moved".
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum DirtyPoll {
+    /// The cached flag was updated; the strip needs a repaint.
+    Changed,
+    /// The flag already matched Scintilla. Nothing to do.
+    Unchanged,
+    /// A re-entrant call could not take the borrow, so the flag was not
+    /// examined at all and may now be stale.
+    Unavailable,
+}
+
+/// Record the outgoing tab's dirty state before a tab switch moves the
+/// view off its document.
+///
+/// Must run *before* `active_tab` changes: it reads the modify bit of
+/// whatever document is currently bound, and attributes it to whatever
+/// tab is currently active. Reversing the order records the outgoing
+/// buffer's dirtiness against the incoming tab.
+fn capture_active_dirty() {
+    let _ = refresh_active_dirty();
+}
+
+/// Close the tab with buffer id `id`, wherever it currently sits.
+///
+/// Keyed on the id rather than on a captured index because the tab
+/// strip's close buttons outlive any particular ordering — see the
+/// `tabs` module docs. Activates the tab first, matching Win32, so that
+/// a future per-tab save prompt appears against the buffer being
+/// closed rather than against whatever was previously in front.
+pub(crate) fn close_tab_by_id(id: i32) {
+    let Some(Some(idx)) = with_state(|st| st.shell.tabs.iter().position(|t| t.id == id)) else {
+        // The tab went away between the label being built and the
+        // click landing. Nothing to close, and nothing wrong.
+        return;
+    };
+    let already_active = with_state(|st| st.shell.active_tab == Some(idx)).unwrap_or(false);
+    if !already_active {
+        capture_active_dirty();
+        with_state(|st| st.shell.active_tab = Some(idx));
+        rebind_active_view();
+    }
+    close_active_tab();
+}
+
+/// Make the tab strip match `Shell`. Safe and cheap to call often.
+pub(crate) fn sync_tab_strip() {
+    with_state(|st| {
+        let strip = st.tabs.clone();
+        strip.sync(&st.shell.tabs, st.shell.active_tab);
+    });
+}
+
+/// Resync the window title and the tab strip from `Shell`.
+///
+/// One entry point for both, deliberately: every operation that can
+/// change which buffers exist or which one is active has to update
+/// both, and having two functions to remember is how a call site ends
+/// up updating one and not the other. Named to match `ui_win32`'s
+/// `refresh_tab_chrome`, which plays the same role there.
+///
+/// The title's name comes from `codepp_shell::tab_display_name` rather
+/// than from `tab.path` directly, which matters for three separate
+/// reasons:
 ///
 ///   * **Correctness.** It honours `custom_name` (File → Rename…) and
 ///     the real `untitled_seq`; the hand-rolled version this replaced
@@ -551,7 +818,7 @@ pub(crate) fn save_session_now() {
 ///     build. Verified against the pinned glib 0.18.5.
 ///   * **Parity.** DESIGN.md §7.5 requires the backends to agree;
 ///     `ui_win32`'s `refresh_window_title` resolves the same way.
-pub(crate) fn refresh_title() {
+pub(crate) fn refresh_tab_chrome() {
     with_state(|st| {
         let title = st.shell.active().map_or_else(
             || "Code++".to_string(),
@@ -559,4 +826,14 @@ pub(crate) fn refresh_title() {
         );
         st.window.set_title(&title);
     });
+    // Re-poll the dirty bit before rendering. Every caller reaches
+    // this *after* its own `with_state` block has returned, so unlike
+    // the `sci-notify` handler this call is never re-entrant and the
+    // borrow is always available. That is what makes the marker
+    // correct after a save: the synchronous notification fired from
+    // inside `save_current_to_disk`'s borrow was skipped, so without
+    // this the strip would repaint from a `Tab.dirty` that still said
+    // "modified".
+    let _ = refresh_active_dirty();
+    sync_tab_strip();
 }

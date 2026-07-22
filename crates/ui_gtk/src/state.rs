@@ -31,6 +31,7 @@ use codepp_editor::EditorHandle;
 use codepp_shell::Shell;
 
 use crate::status::StatusBar;
+use crate::tabs::TabStrip;
 
 /// Everything the GTK backend owns for the lifetime of the window.
 pub struct GtkUiState {
@@ -56,6 +57,9 @@ pub struct GtkUiState {
     pub status: StatusBar,
     /// Menu bar, held so the visibility toggles can reach it.
     pub menu_bar: gtk::MenuBar,
+    /// The tab strip. Purely a selector — the one Scintilla view is
+    /// its sibling, not its child. See `crate::tabs`.
+    pub tabs: TabStrip,
     /// Headless session/file/watcher logic. Owns the tab list.
     pub shell: Shell,
 }
@@ -69,6 +73,7 @@ pub struct GtkUi {
     pub editor: EditorHandle,
     pub status: StatusBar,
     pub menu_bar: gtk::MenuBar,
+    pub tabs: TabStrip,
 }
 
 impl GtkUiState {
@@ -80,6 +85,7 @@ impl GtkUiState {
             editor: self.editor,
             status: self.status.clone(),
             menu_bar: self.menu_bar.clone(),
+            tabs: self.tabs.clone(),
         };
         (&mut self.shell, ui)
     }

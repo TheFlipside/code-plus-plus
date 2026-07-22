@@ -545,18 +545,21 @@ impl UiPlatform for GtkUi {
 
     // --- Chrome visibility -------------------------------------------
     //
-    // m2 has no tab strip or toolbar yet, so those two report
-    // permanently hidden and refuse to change. That is an honest answer
-    // to `NPPM_ISTABBARHIDDEN` — the bar genuinely is not shown — and
-    // returning the previous state unchanged tells a caller nothing
-    // happened, which is the trait's documented signal.
+    // The tab strip is real as of m3, so its pair below reports and
+    // toggles the live widget. There is still no toolbar, so that pair
+    // reports permanently hidden and refuses to change — an honest
+    // answer to `NPPM_ISTOOLBARHIDDEN`, since the bar genuinely is not
+    // shown, and returning the previous state unchanged tells a caller
+    // nothing happened, which is the trait's documented signal.
 
     fn is_tabbar_hidden(&self) -> bool {
-        true
+        !self.tabs.notebook.is_visible()
     }
 
-    fn set_tabbar_hidden(&mut self, _hidden: bool) -> bool {
-        true
+    fn set_tabbar_hidden(&mut self, hidden: bool) -> bool {
+        let prev = !self.tabs.notebook.is_visible();
+        self.tabs.notebook.set_visible(!hidden);
+        prev
     }
 
     fn is_toolbar_hidden(&self) -> bool {
@@ -679,6 +682,7 @@ impl UiPlatform for GtkUi {
 mod doc_binding_tests {
     use super::{GtkUi, UiPlatform};
     use crate::status::StatusBar;
+    use crate::tabs::TabStrip;
     use codepp_editor::EditorHandle;
     use codepp_scintilla_sys::scintilla_new;
     use gtk::glib::translate::FromGlibPtrNone;
@@ -704,6 +708,7 @@ mod doc_binding_tests {
             editor,
             status: StatusBar::new(),
             menu_bar: gtk::MenuBar::new(),
+            tabs: TabStrip::new(),
         }
     }
 
@@ -746,5 +751,112 @@ mod doc_binding_tests {
         // A never-materialised document reads as empty, not as whatever
         // happens to be bound.
         assert_eq!(ui.capture_text_from_doc(0), "");
+
+        tab_strip_scenarios(&ui);
+    }
+
+    /// Tab-strip behaviour, sequenced inside the single GTK test
+    /// function above rather than given its own `#[test]` — see the
+    /// module docs for why a second concurrent GTK test segfaults.
+    fn tab_strip_scenarios(ui: &GtkUi) {
+        use codepp_shell::Tab;
+        use gtk::prelude::*;
+        use std::cell::Cell;
+        use std::path::PathBuf;
+        use std::rc::Rc;
+
+        let strip = &ui.tabs;
+        let tab = |name: &str| Tab {
+            path: Some(PathBuf::from(format!("/tmp/{name}"))),
+            ..Tab::default()
+        };
+
+        // Count any `switch-page` that arrives *without* the sync guard
+        // set. Every one of those would re-enter `Shell` and move
+        // `active_tab` behind the user's back — the specific trap the
+        // suppression exists for, and the one thing here that a
+        // reviewer cannot verify by reading.
+        let leaked = Rc::new(Cell::new(0usize));
+        let leaked_probe = Rc::clone(&leaked);
+        strip.notebook.connect_switch_page(move |_, _, _| {
+            if !crate::tabs::is_suppressed() {
+                leaked_probe.set(leaked_probe.get() + 1);
+            }
+        });
+
+        // Grow.
+        let tabs = vec![tab("a.rs"), tab("b.rs"), tab("c.rs")];
+        strip.sync(&tabs, Some(0));
+        assert_eq!(strip.notebook.n_pages(), 3, "one page per tab");
+        assert_eq!(strip.notebook.current_page(), Some(0));
+
+        // Select a different tab.
+        strip.sync(&tabs, Some(2));
+        assert_eq!(strip.notebook.current_page(), Some(2));
+
+        // Shrink. `remove_page` shifts the selection without emitting
+        // `switch-page`, which is exactly why `sync` sets the selection
+        // explicitly instead of trusting a signal.
+        let fewer = vec![tab("a.rs")];
+        strip.sync(&fewer, Some(0));
+        assert_eq!(strip.notebook.n_pages(), 1, "pages follow the model down");
+        assert_eq!(strip.notebook.current_page(), Some(0));
+
+        // Empty.
+        strip.sync(&[], None);
+        assert_eq!(strip.notebook.n_pages(), 0);
+
+        // An out-of-range active index must not panic or select
+        // anything — `Shell` and the strip can disagree for one call
+        // while a load is in flight.
+        strip.sync(&fewer, Some(99));
+        assert_eq!(strip.notebook.n_pages(), 1);
+
+        // Not one unsuppressed `switch-page` across all of the above.
+        // Without the guard, the first `append_page` and every
+        // `set_current_page` would each have produced one.
+        assert_eq!(
+            leaked.get(),
+            0,
+            "sync leaked switch-page signals; handlers would re-enter Shell"
+        );
+
+        // The reorder handler's pre-drag lookup. `sync` records page
+        // order, so each page reports the index it currently occupies;
+        // an unknown widget reports nothing rather than a wrong index.
+        let three = vec![tab("a.rs"), tab("b.rs"), tab("c.rs")];
+        strip.sync(&three, Some(0));
+        for i in 0..3u32 {
+            let page = strip.notebook.nth_page(Some(i)).expect("page exists");
+            assert_eq!(strip.index_before_reorder(&page), Some(i as usize));
+        }
+        let stranger: gtk::Widget = gtk::Label::new(None).upcast();
+        assert_eq!(strip.index_before_reorder(&stranger), None);
+
+        // Labels carry the display name, and are rebuilt from the model
+        // on every sync — a renamed tab must not keep its old label.
+        let renamed = vec![Tab {
+            custom_name: Some("renamed".to_string()),
+            ..tab("a.rs")
+        }];
+        strip.sync(&renamed, Some(0));
+        let page = strip.notebook.nth_page(Some(0)).expect("page exists");
+        let label = strip.notebook.tab_label(&page).expect("tab has a label");
+        assert!(
+            label_text(&label).is_some_and(|t| t == "renamed"),
+            "label should show the resolved display name"
+        );
+    }
+
+    /// Depth-first search for the first `GtkLabel`'s text inside a tab
+    /// label widget, which is an `EventBox` wrapping a box of icon +
+    /// label + close button.
+    fn label_text(widget: &gtk::Widget) -> Option<String> {
+        use gtk::prelude::*;
+        if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+            return Some(label.text().to_string());
+        }
+        let container = widget.downcast_ref::<gtk::Container>()?;
+        container.children().iter().find_map(label_text)
     }
 }

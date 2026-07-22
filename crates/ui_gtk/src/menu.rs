@@ -16,7 +16,9 @@ use codepp_shell::OpenFileOutcome;
 use gtk::prelude::*;
 
 use crate::state::with_state;
-use crate::{close_active_tab, drain_shell, rebind_active_view, refresh_title, save_session_now};
+use crate::{
+    close_active_tab, drain_shell, rebind_active_view, refresh_tab_chrome, save_session_now,
+};
 
 /// Menu item labels paired with the accelerator each one advertises.
 /// Kept next to the handler wiring so a label and its shortcut cannot
@@ -139,7 +141,7 @@ fn on_new() {
         let (shell, mut ui) = st.split();
         shell.new_untitled(&mut ui);
     });
-    refresh_title();
+    refresh_tab_chrome();
 }
 
 fn on_open() {
@@ -178,7 +180,7 @@ fn on_save() {
     if let Some(Err(err)) = result {
         tracing::warn!(%err, "save failed");
     }
-    refresh_title();
+    refresh_tab_chrome();
 }
 
 fn on_save_as() {
@@ -192,7 +194,7 @@ fn on_save_as() {
     if let Some(Err(err)) = result {
         tracing::warn!(%err, "save-as failed");
     }
-    refresh_title();
+    refresh_tab_chrome();
 }
 
 fn on_reload() {
