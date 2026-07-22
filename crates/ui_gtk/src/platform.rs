@@ -753,6 +753,56 @@ mod doc_binding_tests {
         assert_eq!(ui.capture_text_from_doc(0), "");
 
         tab_strip_scenarios(&ui);
+        single_view_invariant(&ui);
+    }
+
+    /// Exercises the pattern the single-view model makes safe: a
+    /// handle copied *before* a burst of tab-like document churn is
+    /// still usable after it, because only documents were created and
+    /// released — the view underneath was not.
+    ///
+    /// Be clear about what this does **not** cover. It cannot detect a
+    /// future change that destroys the view, because that would fault
+    /// inside vendored C++ rather than fail an assertion. The check
+    /// that catches *that* is the source-level one in
+    /// `single_view_source_invariant`, which is why both exist.
+    fn single_view_invariant(ui: &GtkUi) {
+        // A copy, taken before the churn — the shape that goes wrong.
+        let stale_copy = ui.editor;
+        let mut churn = GtkUi { ..fixture_from(ui) };
+        let mut docs = Vec::new();
+        for i in 0..8 {
+            let doc = churn.activate_tab(i, 0);
+            churn.set_buffer_text(&format!("buffer {i}"), 0);
+            docs.push(doc);
+        }
+        // Release them all, as closing every tab would.
+        for doc in docs {
+            if doc != 0 {
+                churn
+                    .editor
+                    .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, doc);
+            }
+        }
+        // The copy taken before all of that must still be usable,
+        // because the *view* was never destroyed — only documents were.
+        let len = stale_copy.send(codepp_scintilla_sys::SCI_GETLENGTH, 0, 0);
+        assert!(
+            len >= 0,
+            "a handle copied before document churn must still address a live view"
+        );
+    }
+
+    /// Rebuild a `GtkUi` around the same editor, mirroring what
+    /// `GtkUiState::split` hands out per drain.
+    fn fixture_from(ui: &GtkUi) -> GtkUi {
+        GtkUi {
+            window: ui.window.clone(),
+            editor: ui.editor,
+            status: ui.status.clone(),
+            menu_bar: ui.menu_bar.clone(),
+            tabs: ui.tabs.clone(),
+        }
     }
 
     /// Tab-strip behaviour, sequenced inside the single GTK test

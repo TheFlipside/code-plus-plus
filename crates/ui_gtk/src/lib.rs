@@ -918,3 +918,123 @@ pub(crate) fn refresh_tab_chrome() {
     let _ = refresh_active_dirty();
     sync_tab_strip();
 }
+
+/// Guards the single-view model at the source level.
+///
+/// `EditorHandle` is `Copy` with no lifetime, so a copy outliving its
+/// Scintilla widget is not a compile error (see the safety note on
+/// `EditorHandle::from_gtk_widget`). What prevents it here is
+/// structural: this backend builds exactly one Scintilla widget, never
+/// destroys it, and gives tabs their own buffers through
+/// `SCI_SETDOCPOINTER` instead of their own views.
+///
+/// That invariant is a property of the source, so a source check is
+/// what can hold it. A runtime test cannot: destroying the view would
+/// fault inside vendored C++ on the next direct call rather than fail
+/// an assertion, so the failure mode this exists to prevent is exactly
+/// the one a runtime test cannot observe.
+///
+/// DESIGN.md §7.4 carried this as an open ownership question from the
+/// Phase 5 m1 security audit until the tab strip landed and settled it.
+#[cfg(test)]
+mod single_view_source_invariant {
+    /// Strip line comments and the contents of string literals, so a
+    /// scanner matches code rather than prose. Crude — it does not
+    /// handle raw strings or block comments — but the first version of
+    /// this guard counted its own assertion text and a doc comment as
+    /// real calls, so "crude" needs to at least exclude those.
+    fn code_only(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        for line in text.lines() {
+            let line = line.split("//").next().unwrap_or("");
+            let mut in_str = false;
+            let mut prev_backslash = false;
+            for c in line.chars() {
+                match c {
+                    '"' if !prev_backslash => in_str = !in_str,
+                    _ if in_str => {}
+                    _ => out.push(c),
+                }
+                prev_backslash = c == '\\' && !prev_backslash;
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// This backend's own source, comments and string literals
+    /// removed, tests excluded.
+    fn production_code() -> String {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut out = String::new();
+        for entry in std::fs::read_dir(&dir)
+            .expect("ui_gtk/src is readable")
+            .flatten()
+        {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                // Fixtures legitimately build their own widget, so cut
+                // at the first test module in each file.
+                let cut = text.find("#[cfg(test)]").unwrap_or(text.len());
+                out.push_str(&code_only(&text[..cut]));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_scanner_ignores_comments_and_strings() {
+        // The first version of this guard reported three
+        // `scintilla_new()` calls where there is one, because it
+        // counted a doc comment and its own failure message. Pin that.
+        let sample = "\
+let a = scintilla_new();
+// let b = scintilla_new();
+/// `scintilla_new()` returned null
+let msg = \"found scintilla_new() calls\";
+";
+        assert_eq!(code_only(sample).matches("scintilla_new()").count(), 1);
+        // And it must not swallow real code that follows a string.
+        assert!(code_only("let x = \"a\"; scintilla_new();").contains("scintilla_new()"));
+    }
+
+    #[test]
+    fn exactly_one_scintilla_widget_is_ever_created() {
+        let src = production_code();
+        assert!(
+            src.len() > 5_000,
+            "scanned only {} bytes; the walk is broken, so a clean result proves nothing",
+            src.len()
+        );
+        let calls = src.matches("scintilla_new()").count();
+        assert_eq!(
+            calls, 1,
+            "this backend must build exactly one Scintilla view — found {calls}. \
+             A view per tab would leave every copied `EditorHandle` dangling when a \
+             tab closes; give tabs their own documents via SCI_SETDOCPOINTER instead."
+        );
+    }
+
+    #[test]
+    fn the_view_is_never_destroyed_or_reassigned() {
+        let src = production_code();
+        // `let sci_widget = ...` is the one legitimate binding; any
+        // other assignment replaces a live view.
+        let reassigned = src
+            .match_indices("sci_widget =")
+            .filter(|(i, _)| !src[..*i].trim_end().ends_with("let"))
+            .count();
+        assert_eq!(
+            reassigned, 0,
+            "the Scintilla view is reassigned after creation"
+        );
+        for forbidden in ["sci_widget.destroy()", "remove(&sci_widget)"] {
+            assert!(
+                !src.contains(forbidden),
+                "found `{forbidden}`: destroying the view dangles every copy of \
+                 `EditorHandle`, which is `Copy` and carries no lifetime to stop it"
+            );
+        }
+    }
+}

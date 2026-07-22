@@ -47,6 +47,17 @@ pub struct GtkUiState {
     /// dropping this field would finalise the widget and leave
     /// `EditorHandle`'s `direct_ptr` dangling on the next keystroke.
     /// See the safety note on `EditorHandle::from_gtk_widget`.
+    ///
+    /// **This is the whole of how the backend satisfies that note.**
+    /// `EditorHandle` is `Copy` with no lifetime, so the compiler will
+    /// not catch a copy outliving the widget; the guarantee is instead
+    /// structural — the widget is created once in `run`, never
+    /// destroyed, removed from its container, or reassigned, and tabs
+    /// get their own buffers through `SCI_SETDOCPOINTER` rather than
+    /// through their own views. Anything that closes over a tab by
+    /// destroying a Scintilla widget breaks it. DESIGN.md §7.4 tracked
+    /// this as an open ownership question until the tab strip landed
+    /// and settled it this way.
     #[allow(dead_code)]
     pub sci_widget: gtk::Widget,
     /// Direct-call handle for the one Scintilla view. m2 is

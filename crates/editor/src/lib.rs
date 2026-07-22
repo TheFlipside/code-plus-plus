@@ -162,6 +162,26 @@ impl EditorHandle {
     /// pointer is undefined behaviour — `scintilla_send_message`
     /// casts it to a `ScintillaObject` without validation.
     ///
+    /// **The obligation continues after this returns.** `EditorHandle`
+    /// is `Copy` and has no `Drop`; it stores raw pointers into the
+    /// widget without expressing a lifetime, so nothing stops a copy
+    /// from outliving what it points at. The caller must keep the
+    /// widget alive for as long as *any* copy of the returned handle
+    /// might still be used. Destroying it leaves every copy's
+    /// `direct_ptr` dangling, and the next [`Self::send`] calls
+    /// through it.
+    ///
+    /// Both backends discharge that by never destroying the view at
+    /// all: one Scintilla widget is created at startup and lives for
+    /// the process, with tabs switched underneath it by
+    /// `SCI_SETDOCPOINTER` (DESIGN.md §7.2). A backend that instead
+    /// gave each tab its own widget would have to tie the handle's
+    /// lifetime to the widget — closing a tab would otherwise finalise
+    /// the widget while other code still held a copy. That is a real
+    /// design constraint on any future backend, not a stylistic
+    /// preference; a `ui_cocoa` that reaches for one `NSView` per tab
+    /// inherits the problem the single-view model avoids.
+    ///
     /// Non-null is necessary but **not sufficient**, and the gap is
     /// not checkable from Rust. `scintilla_init` wraps its
     /// `new ScintillaGTK(...)` in a `catch (...)`, so a throwing
