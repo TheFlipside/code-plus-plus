@@ -307,6 +307,35 @@ unconditionally and branch on `CARGO_CFG_TARGET_OS` inside `build.rs`
 instead; that variable describes the *target*, which is what such
 decisions actually want.
 
+### Diagnostics and performance measurement
+
+```sh
+codepp --help                 # flags and environment
+codepp --verbose              # turn the tracing sink on at `info`
+CODEPP_LOG=codepp_shell=debug codepp   # per-crate filter; no flag needed
+codepp --perf file.rs         # log the DESIGN.md §8 measurements
+```
+
+The sink is **off** unless asked for, so the ~230 `tracing::` call sites
+cost nothing in a normal run (DESIGN.md §5.5). Before this existed there
+was no subscriber at all and every one of them was silently discarded.
+
+`CODEPP_LOG` *overrides* `--verbose` rather than adding to it, so
+combining a narrow filter with `--perf` silently drops the
+measurements — name the target explicitly if you want both:
+`CODEPP_LOG=codepp_shell=debug,codepp::perf=info codepp --perf`.
+
+`--perf` reports cold start (`main()` to first draw) once, and the
+keystroke-latency distribution **at exit** — so quit the window
+normally rather than killing the process, or the distribution is lost.
+
+Read DESIGN.md §8 before drawing conclusions from the latency figures.
+The per-keystroke median (~0.7 ms) is solid; the p99 is not, because a
+short manual run gives it only a handful of samples and synthetic input
+tools do not reliably preserve inter-key spacing. §8 also records a
+retracted earlier conclusion about the display's frame clock, which came
+from a measurement bug — worth reading before repeating the experiment.
+
 ### Run a single phase's demo
 
 Each phase in DESIGN.md §7.2 has a Demo column. The current phase's demo is always reachable via:

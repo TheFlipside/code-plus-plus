@@ -57,6 +57,7 @@ use gtk::glib;
 use gtk::glib::translate::FromGlibPtrNone;
 use gtk::prelude::*;
 
+use codepp_core::perf::Perf;
 use codepp_editor::EditorHandle;
 use codepp_scintilla_sys::scintilla_new;
 use codepp_shell::{PendingDialog, SessionRestoreEntry, Shell};
@@ -120,13 +121,17 @@ impl std::error::Error for GtkUiError {}
 /// Build the window, wire `Shell`, and run the GTK main loop until the
 /// user closes the window.
 ///
+/// `perf` carries the clock `main` started; it is inert unless
+/// `--perf` was passed. See `codepp_core::perf` for what is measured
+/// and why the clock is not started here.
+///
 /// # Errors
 ///
 /// Returns [`GtkUiError`] if GTK will not initialise, if Scintilla will
 /// not construct its widget, if the direct-call pair cannot be
 /// captured, or if `Shell` will not start. All four are fatal setup
 /// failures.
-pub fn run(initial_path: Option<PathBuf>) -> Result<(), GtkUiError> {
+pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> {
     // Log the underlying `BoolError` before collapsing it: the
     // `Display` impl on `GtkUiError::GtkInit` names the overwhelmingly
     // likely cause (no display), which would misreport any other
@@ -200,6 +205,9 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<(), GtkUiError> {
     let editor =
         unsafe { EditorHandle::from_gtk_widget(sci_ptr) }.ok_or(GtkUiError::DirectCallCapture)?;
 
+    let perf = Rc::new(perf);
+    connect_perf_probes(&sci_widget, &perf);
+
     let st = Rc::new(RefCell::new(GtkUiState {
         window: window.clone(),
         sci_widget: sci_widget.clone(),
@@ -238,7 +246,52 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<(), GtkUiError> {
         None
     });
 
-    // --- Tab strip signals ----------------------------------------
+    connect_tab_strip_signals(&tab_strip);
+
+    // --- Startup work ---------------------------------------------
+    restore_window_geometry(&window);
+    apply_startup_styles();
+    menu::connect();
+    restore_session(initial_path);
+
+    window.connect_delete_event(|_, _| {
+        // Persist before tearing down: `Shell::save_session` needs the
+        // editor alive to read the caret position back out.
+        save_session_now();
+        gtk::main_quit();
+        glib::Propagation::Proceed
+    });
+
+    // Periodic session auto-save. Win32 uses SetTimer + WM_TIMER;
+    // `timeout_add_seconds_local` is the direct GTK analogue and stays
+    // on the main thread, so it can touch the editor safely.
+    glib::timeout_add_seconds_local(AUTOSAVE_INTERVAL_SECS, || {
+        save_session_now();
+        glib::ControlFlow::Continue
+    });
+
+    window.show_all();
+    // Focus the editor so the first keystroke lands in the buffer
+    // rather than on the menu bar.
+    sci_widget.grab_focus();
+
+    gtk::main();
+
+    // Drop the state explicitly so `Shell` — and the worker threads its
+    // channels keep alive — tear down here rather than at process exit.
+    state::uninstall();
+    // After the loop, so the distribution covers the whole session.
+    perf.report();
+    Ok(())
+}
+
+/// Wire the tab strip's two signals to `Shell`.
+///
+/// Split out of `run` for length, but they belong together anyway:
+/// both are guarded by `tabs::is_suppressed`, and the reason is the
+/// same for both — see the `tabs` module docs for the GTK 3.24
+/// measurements behind that guard.
+fn connect_tab_strip_signals(tab_strip: &tabs::TabStrip) {
     //
     // Both handlers bail on `is_suppressed`, because `TabStrip::sync`
     // provokes both of these signals itself while rewriting the
@@ -295,40 +348,68 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<(), GtkUiError> {
             with_state(|st| st.shell.move_tab(from, num as usize));
             refresh_tab_chrome();
         });
+}
 
-    // --- Startup work ---------------------------------------------
-    restore_window_geometry(&window);
-    apply_startup_styles();
-    menu::connect();
-    restore_session(initial_path);
-
-    window.connect_delete_event(|_, _| {
-        // Persist before tearing down: `Shell::save_session` needs the
-        // editor alive to read the caret position back out.
-        save_session_now();
-        gtk::main_quit();
+/// Attach the DESIGN.md §8 probes to the Scintilla widget.
+///
+/// Both are no-ops unless `--perf` was passed, so this costs two
+/// signal connections and, per event, one predictable branch.
+///
+/// The clock starts at `key-press-event` rather than at any Scintilla
+/// notification because §8 budgets "typed char → Scintilla redraw",
+/// and the input event is the earliest point the application can
+/// observe the keystroke. `ui_win32` hooks `WM_CHAR` in its message
+/// pump for the same reason, so the two platforms' numbers describe
+/// the same interval and can be compared — which is the entire point
+/// of a budget shared across backends.
+///
+/// `Propagation::Proceed` on both: these observe, they must never
+/// swallow an event. A `Stop` here would silently break typing.
+fn connect_perf_probes(sci_widget: &gtk::Widget, perf: &Rc<Perf>) {
+    let perf_key = Rc::clone(perf);
+    sci_widget.connect_key_press_event(move |_, ev| {
+        // Only keys that insert a character, which is what §8's
+        // "typed char" means and what Win32's `WM_CHAR` hook observes.
+        // GTK's `key-press-event` fires for every physical key down —
+        // arrows, Home/End, bare modifiers, function keys — none of
+        // which `WM_CHAR` ever sees.
+        //
+        // Tab, Enter and Backspace are control codes and so are
+        // excluded too, on both backends, despite editing the buffer:
+        // none of them repaints unconditionally, so opening a
+        // measurement on the key press would orphan a sample. See the
+        // fuller note on `ui_win32`'s `inserts_text` and the follow-up
+        // in DESIGN.md §7.4.
+        //
+        // The modifier check is separate and not redundant:
+        // `keyval()` is independent of modifier state and
+        // `gdk_keyval_to_unicode` is a pure function of it, so Ctrl+C
+        // yields `'c'` exactly as the bare letter does. Counting it
+        // would be worse than a merely inflated sample count —
+        // copy and select-all frequently repaint nothing at all, so
+        // the bogus press would sit in `pending` until some unrelated
+        // later paint closed it, landing a fabricated
+        // hundreds-of-milliseconds outlier straight into p99. Ctrl is
+        // the only modifier filtered: Shift is how capitals are typed,
+        // and AltGr is how many layouts reach `@`, `#` and `~`.
+        let ctrl = ev.state().contains(gtk::gdk::ModifierType::CONTROL_MASK);
+        if !ctrl && ev.keyval().to_unicode().is_some_and(|c| !c.is_control()) {
+            perf_key.key_pressed();
+        }
         glib::Propagation::Proceed
     });
-
-    // Periodic session auto-save. Win32 uses SetTimer + WM_TIMER;
-    // `timeout_add_seconds_local` is the direct GTK analogue and stays
-    // on the main thread, so it can touch the editor safely.
-    glib::timeout_add_seconds_local(AUTOSAVE_INTERVAL_SECS, || {
-        save_session_now();
-        glib::ControlFlow::Continue
+    // `connect_draw` runs before Scintilla's own draw handler, so the
+    // measurement closes slightly early — it excludes the cairo work
+    // of that frame. `connect_draw_after` would be the tighter hook,
+    // but gtk-rs exposes no `_after` variant for `draw` on `Widget`,
+    // so the number is a lower bound on paint completion. Recorded
+    // here rather than left for a reader to discover.
+    let perf_draw = Rc::clone(perf);
+    sci_widget.connect_draw(move |_, _| {
+        perf_draw.mark_first_draw();
+        perf_draw.painted();
+        glib::Propagation::Proceed
     });
-
-    window.show_all();
-    // Focus the editor so the first keystroke lands in the buffer
-    // rather than on the menu bar.
-    sci_widget.grab_focus();
-
-    gtk::main();
-
-    // Drop the state explicitly so `Shell` — and the worker threads its
-    // channels keep alive — tear down here rather than at process exit.
-    state::uninstall();
-    Ok(())
 }
 
 /// Drain everything `Shell` has queued and present any dialogs it

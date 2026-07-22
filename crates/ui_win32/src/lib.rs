@@ -142,7 +142,7 @@ use codepp_scintilla_sys::{
     SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETVSCROLLBAR,
     SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE,
     SCI_TEXTHEIGHT, SCI_UNDO, SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI,
+    SCN_PAINTED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI,
     SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
     SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
     SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_EOL_CR, SC_EOL_CRLF,
@@ -239,12 +239,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MSG, PRF_CLIENT, PRF_ERASEBKGND, SHOW_WINDOW_CMD, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNORMAL, TPM_BOTTOMALIGN,
     TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-    WM_CAPTURECHANGED, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
-    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND, WM_HSCROLL,
-    WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE,
-    WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER,
-    WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
+    WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
+    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_DROPFILES, WM_ERASEBKGND,
+    WM_HSCROLL, WM_INITMENUPOPUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PRINTCLIENT, WM_QUIT, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SETREDRAW, WM_SETTINGCHANGE, WM_SIZE,
+    WM_TIMER, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
     WS_EX_CONTROLPARENT, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_GROUP,
     WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
@@ -1183,6 +1183,10 @@ struct DockEntry {
 /// window's own HWND is passed to `wnd_proc` on every dispatch, so we
 /// don't store it here.
 struct WindowState {
+    /// DESIGN.md §8 instrumentation. Inert unless `--perf` was passed;
+    /// `Rc` because the message pump in `run` and the `wnd_proc`'s
+    /// `SCN_PAINTED` arm both need it and neither owns the other.
+    perf: std::rc::Rc<codepp_core::perf::Perf>,
     scintilla_hwnd: HWND,
     status_hwnd: HWND,
     /// Toolbar control HWND. Sits between the menu bar and the tab
@@ -17042,7 +17046,8 @@ fn build_default_accel_table() -> Vec<ACCEL> {
 /// the window is shown — same code path as drag-and-drop and as
 /// session-restore. Used for Phase 2 demo verification and for
 /// `codepp.exe <path>` from the shell.
-pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
+pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Result<()> {
+    let perf = std::rc::Rc::new(perf);
     unsafe {
         let instance = GetModuleHandleW(None)?;
 
@@ -17975,6 +17980,7 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         // simultaneously live. `state_from_hwnd` returns `None`
         // until the slot is filled at the bottom of this block.
         let mut state = Box::new(WindowState {
+            perf: std::rc::Rc::clone(&perf),
             scintilla_hwnd,
             status_hwnd,
             toolbar_hwnd,
@@ -18451,6 +18457,28 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
         let mut msg = MSG::default();
         loop {
             let ret = GetMessageW(&raw mut msg, None, 0, 0);
+            // Start the keystroke clock at the input event, which is
+            // the earliest point the application can observe the
+            // keypress — matching where `ui_gtk` hooks
+            // `key-press-event`, so the two platforms' numbers mean
+            // the same thing. `WM_CHAR` rather than `WM_KEYDOWN`:
+            // §8 budgets a *typed character*, and `WM_KEYDOWN` also
+            // fires for modifiers and navigation keys that insert
+            // nothing.
+            // Only characters typed into the editor itself. The
+            // filter mirrors the one on the closing side
+            // (`SCN_PAINTED` checks `nmhdr.hwndFrom`), and without it
+            // the two halves are asymmetric in a way that fabricates
+            // outliers: this same loop routes the modeless Find/Replace,
+            // the UDL editor and plugin dialogs through
+            // `IsDialogMessageW` below, so typing into a find box would
+            // open measurements that no editor paint ever closes. They
+            // would sit in `pending` until some unrelated repaint
+            // finally closed them, reporting however long the user
+            // spent in the dialog as keystroke latency.
+            if msg.message == WM_CHAR && msg.hwnd == scintilla_hwnd && inserts_text(msg.wParam) {
+                perf.key_pressed();
+            }
             match ret.0 {
                 0 => break,
                 -1 => return Err(windows::core::Error::from_thread()),
@@ -18591,8 +18619,70 @@ pub fn run(initial_path: Option<PathBuf>) -> Result<()> {
                 }
             }
         }
+        // After the pump, so the distribution covers the whole
+        // session. No-op without `--perf`.
+        perf.report();
         Ok(())
     }
+}
+
+/// True when a `WM_CHAR`'s payload is a character Scintilla will
+/// actually insert.
+///
+/// Derived from Scintilla's own criterion, deliberately simplified.
+/// `ScintillaWin.cxx`'s `WM_CHAR` arm inserts when
+/// `((wParam >= 128) || !iscntrl(wParam)) || !lastKeyDownConsumed` —
+/// this takes the first disjunct, "not a control code", and drops the
+/// second. The simplification only ever **under**-counts, never over-:
+/// dropping a disjunct can turn a real insert into "not counted" but
+/// can never claim an insert Scintilla would not perform, so it cannot
+/// reproduce the orphaned-sample failure mode this filter exists to
+/// prevent.
+///
+/// The dropped clause is reachable here: `NPPM_REMOVESHORTCUTBYCMDID`
+/// lets a plugin unbind, say, Ctrl+C, after which `lastKeyDownConsumed`
+/// is false and Scintilla inserts the raw `0x03` byte — a real
+/// insertion this probe will not count. Accepted, because the
+/// alternative is tracking Scintilla's internal key-consumption state
+/// from outside it.
+///
+/// It replaces an earlier modifier-state check that asked "is Ctrl
+/// down?". That was wrong twice over. It let **Escape** through —
+/// `KeyMap.cxx` binds bare Escape to `Message::Cancel`, whose handler
+/// invalidates nothing when there is one caret and no autocomplete
+/// open, so Scintilla never paints, the press was never closed off,
+/// and it sat pending until some unrelated later repaint attributed a
+/// fabricated latency to it. And it needed a companion "is Alt up?"
+/// clause to avoid dropping `AltGr`-composed characters, since Windows
+/// delivers `AltGr` as Ctrl+Alt. A code-point test has neither
+/// problem: the six Scintilla-owned chords (Ctrl+Z/Y/X/C/V/A) arrive
+/// as C0 codes and are excluded, Escape is `0x1B` and is excluded, and
+/// every `AltGr` composition is a printable character and is kept.
+///
+/// It also makes this backend count the same events as `ui_gtk`, whose
+/// probe filters on `!char::is_control`. The two must agree or DESIGN.md
+/// §8's cross-platform comparison is meaningless.
+///
+/// **Tab, Enter and Backspace are control codes and so are excluded**,
+/// on both platforms, even though they do edit the buffer. That is a
+/// deliberate gap, not an oversight: none of the three repaints
+/// unconditionally — Backspace at position 0, or any of them on a
+/// read-only buffer, is a no-op that returns before invalidating — so
+/// opening a measurement on the key press would orphan a sample
+/// exactly as Escape used to, and the caret-blink timer would
+/// eventually close it with a fabricated latency. Counting them
+/// properly means opening on a following `SCN_MODIFIED` rather than on
+/// the key, which is tracked in DESIGN.md §7.4.
+///
+/// Lone surrogates return `None` from `char::from_u32` and are not
+/// counted, so an astral character typed as a surrogate pair
+/// contributes no sample. Rare enough in practice to accept, and it
+/// errs toward under-counting rather than toward a fabricated outlier.
+fn inserts_text(wparam: WPARAM) -> bool {
+    u32::try_from(wparam.0)
+        .ok()
+        .and_then(char::from_u32)
+        .is_some_and(|c| !c.is_control())
 }
 
 /// Layout children: tab strip across the top, status bar at the
@@ -27470,6 +27560,39 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             let sci = &*(lparam.0 as *const SCNotification);
                             let target = sci.position.max(0) as usize;
                             handle_udl_style_needed(hwnd, target);
+                        }
+                    } else if nmhdr.code == SCN_PAINTED {
+                        // Scintilla finished painting. This is the
+                        // Win32 counterpart of GTK's `draw` signal:
+                        // it closes off a pending keystroke
+                        // measurement and, the first time, reports
+                        // cold start. Both calls are no-ops without
+                        // `--perf`; the cost on this notification path
+                        // is a state lookup, a handle comparison, and
+                        // on a match one `Rc` clone.
+                        //
+                        // The `hwndFrom` filter is required, not
+                        // defensive: this `WM_NOTIFY` arm dispatches on
+                        // notification code alone, and a plugin's own
+                        // Scintilla control created through
+                        // `NPPM_CREATESCINTILLAHANDLE` is normally
+                        // parented to `_nppHandle`, so its every
+                        // repaint arrives here too. Without the check,
+                        // a plugin panel redrawing would consume the
+                        // `pending_key` set by a keystroke in the main
+                        // editor and silently corrupt both the
+                        // cold-start figure and the latency
+                        // distribution. Same guard the sibling
+                        // `SCN_STYLENEEDED` / `SCN_MODIFIED` /
+                        // `SCN_SAVEPOINT*` / `SCN_UPDATEUI` arms apply,
+                        // for the same reason.
+                        let perf = state_from_hwnd(hwnd).and_then(|state| {
+                            (nmhdr.hwndFrom == state.scintilla_hwnd)
+                                .then(|| std::rc::Rc::clone(&state.perf))
+                        });
+                        if let Some(perf) = perf {
+                            perf.mark_first_draw();
+                            perf.painted();
                         }
                     } else if nmhdr.code == SCN_MODIFIED {
                         // Scintilla's tracking-mode horizontal

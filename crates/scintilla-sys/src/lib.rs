@@ -675,6 +675,12 @@ pub const SCN_MODIFIED: u32 = 2008;
 /// `SCN_UPDATEUI` so they track the live caret without needing a
 /// separate timer.
 pub const SCN_UPDATEUI: u32 = 2007;
+/// Notification fired after Scintilla has finished painting. The
+/// closest thing the Win32 backend has to GTK's `draw` signal, and so
+/// what `--perf` uses on that platform to close off a keystroke→redraw
+/// measurement (DESIGN.md §8). Carries no payload beyond the standard
+/// `SCNotification.nmhdr`.
+pub const SCN_PAINTED: u32 = 2013;
 /// Notification fired when the bound document transitions back to
 /// the save-point state — typically because `SCI_SETSAVEPOINT` was
 /// called (after a successful save) or the user undid every edit

@@ -11,6 +11,7 @@ pub mod file;
 pub mod find_history;
 pub mod lang;
 pub mod npp_session;
+pub mod perf;
 pub mod preferences;
 pub mod recent_files;
 pub mod session;

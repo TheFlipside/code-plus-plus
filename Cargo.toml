@@ -77,6 +77,16 @@ regex = "1"
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 tracing = "0.1"
+# Log/diagnostic sink for the 232 `tracing::` call sites, which were
+# no-ops until this landed — `tracing` alone records nothing without a
+# subscriber. Off unless `--verbose` / `--perf` / `CODEPP_LOG` asks for
+# it, per DESIGN.md §5.5. `env-filter` provides `CODEPP_LOG`'s syntax;
+# default features are off to keep the tree small. MIT.
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "fmt",
+    "env-filter",
+    "ansi",
+] }
 
 [profile.release]
 lto = "thin"

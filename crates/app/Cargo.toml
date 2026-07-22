@@ -41,6 +41,11 @@ codepp-ui-win32 = { workspace = true, optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 codepp-ui-gtk = { workspace = true, optional = true }
 
+[dependencies]
+codepp-core.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
 [build-dependencies]
 # Shared resource-compiler plumbing. The build script uses
 # `embed_app_icon` to turn `assets/code++.ico` into a `.res` Windows
