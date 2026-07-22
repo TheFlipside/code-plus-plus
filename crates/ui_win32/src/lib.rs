@@ -3361,6 +3361,38 @@ impl UiPlatform for Win32Ui {
         text
     }
 
+    fn replace_doc_text(&mut self, doc: isize, text: &str) -> bool {
+        if doc == 0 {
+            return false;
+        }
+        let mut bytes = Vec::with_capacity(text.len() + 1);
+        bytes.extend_from_slice(text.as_bytes());
+        bytes.push(0);
+        let prior_doc = self.editor.send(SCI_GETDOCPOINTER, 0, 0);
+        if prior_doc == doc {
+            // Already bound — no swap, and no view snapshot needed
+            // since nothing rebinds. `SCI_SETTEXT` still moves the
+            // caret to the start, which is the same thing Replace All
+            // does and is acceptable for a whole-document rewrite.
+            self.editor.send(SCI_SETTEXT, 0, bytes.as_ptr() as isize);
+            return true;
+        }
+        // Same view-snapshot dance as `capture_text_from_doc`: every
+        // `SCI_SETDOCPOINTER` clears the selection, including the swap
+        // back, so the active tab's caret and scroll must be restored.
+        let view = self.snapshot_active_view();
+        self.editor.send(SCI_SETDOCPOINTER, 0, doc);
+        // `SCI_SETTEXT` only. See the trait docs for why the
+        // `SCI_EMPTYUNDOBUFFER` / `SCI_SETSAVEPOINT` pair that
+        // `set_buffer_text` adds would be wrong here.
+        self.editor.send(SCI_SETTEXT, 0, bytes.as_ptr() as isize);
+        if prior_doc != 0 {
+            self.editor.send(SCI_SETDOCPOINTER, 0, prior_doc);
+            self.restore_active_view(view);
+        }
+        true
+    }
+
     fn is_doc_dirty(&mut self, scintilla_doc: isize) -> bool {
         if scintilla_doc == 0 {
             return false;
@@ -20868,6 +20900,41 @@ unsafe fn drain_fif_events(main_hwnd: HWND) {
                         truncated: outcome.truncated,
                     });
                 }
+            }
+            // Replace-in-Files on a file the user has open. `Shell::drain`
+            // has already applied it to the tab's buffer — or declined
+            // to, if the tab had unsaved edits — and rewritten the
+            // event to say which. The dock's per-file rows come from
+            // the `FileMatches` the worker emits alongside this, so
+            // there is nothing to add to the list here; the counts
+            // belong on the completion toast, which is Phase 5 dock
+            // work (DESIGN.md §7.4).
+            codepp_shell::FifEvent::ReplacedInOpenBuffer {
+                job,
+                ref path,
+                replaced,
+                outcome,
+            } => {
+                if job.raw() == active_job {
+                    tracing::debug!(
+                        path = ?path,
+                        replaced,
+                        outcome = ?outcome,
+                        "replace-in-files: open tab handled in buffer"
+                    );
+                }
+            }
+            // Never reaches the UI: `Shell::drain` consumes it and
+            // emits `ReplacedInOpenBuffer` in its place. Matched
+            // explicitly rather than by wildcard so that if drain ever
+            // stops consuming it, this fails loudly here rather than
+            // being silently ignored.
+            codepp_shell::FifEvent::ReplaceInOpenBuffer { ref path, .. } => {
+                tracing::error!(
+                    path = ?path,
+                    "replace-in-files: an unapplied open-buffer replacement reached the UI; \
+                     Shell::drain should have consumed it"
+                );
             }
             term @ (codepp_shell::FifEvent::Done { .. }
             | codepp_shell::FifEvent::Cancelled { .. }) => {

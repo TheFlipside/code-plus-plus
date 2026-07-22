@@ -639,6 +639,30 @@ impl UiPlatform for GtkUi {
         )
     }
 
+    fn replace_doc_text(&mut self, doc: isize, text: &str) -> bool {
+        if doc == 0 {
+            return false;
+        }
+        self.with_doc(
+            doc,
+            |s| {
+                let mut bytes = Vec::with_capacity(text.len() + 1);
+                bytes.extend_from_slice(text.as_bytes());
+                bytes.push(0);
+                // `SCI_SETTEXT` alone, deliberately. `set_buffer_text`
+                // follows it with `SCI_EMPTYUNDOBUFFER` and
+                // `SCI_SETSAVEPOINT`, which is right when installing
+                // freshly-loaded file content and wrong here: the user
+                // must be able to undo a Replace-in-Files, and the
+                // buffer must read as modified so the change is not
+                // lost when the tab closes.
+                s.editor.send(SCI_SETTEXT, 0, bytes.as_ptr() as isize);
+                true
+            },
+            false,
+        )
+    }
+
     fn mark_active_buffer_dirty(&mut self) {
         if self.editor.send(SCI_GETMODIFY, 0, 0) != 0 {
             return;

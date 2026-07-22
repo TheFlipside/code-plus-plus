@@ -147,6 +147,17 @@ pub const MAX_WALK_DEPTH: usize = 64;
 pub struct FifJobId(u64);
 
 impl FifJobId {
+    /// Build an id with a chosen counter value.
+    ///
+    /// Test-only, and deliberately not part of the public API: ids are
+    /// minted by [`FifOrchestrator::start`] so that "newer job wins"
+    /// preemption is decided by a single monotonic counter. A caller
+    /// that could invent one could make two live jobs share an id.
+    #[cfg(test)]
+    pub(crate) fn for_test(raw: u64) -> Self {
+        Self(raw)
+    }
+
     /// Raw counter value, useful for `tracing` spans and diagnostics.
     #[must_use]
     pub fn raw(self) -> u64 {
@@ -212,6 +223,37 @@ pub enum FifEvent {
         /// Matches plus per-file truncation flag.
         outcome: FileSearchOutcome,
     },
+    /// A file that matched is **open in a tab**, so the worker did not
+    /// rewrite it on disk. Carries the replacement it computed, for
+    /// `Shell::drain` to apply to the buffer instead.
+    ///
+    /// Writing to disk here would be wrong twice over: the atomic
+    /// temp+rename looks like delete-then-create to the file watcher,
+    /// popping an "external change" dialog for every modified open
+    /// file, and it would clobber unsaved in-buffer edits.
+    ///
+    /// `new_text` is computed from what is **on disk**, so it is only
+    /// valid for a tab whose buffer still matches disk. `drain` checks
+    /// that and skips a dirty buffer rather than overwriting the
+    /// user's unsaved work — see `Shell::apply_open_buffer_replacement`.
+    ReplaceInOpenBuffer {
+        job: FifJobId,
+        path: PathBuf,
+        /// The file's full contents with every match replaced.
+        new_text: String,
+        /// How many matches the replacement covered.
+        replaced: usize,
+    },
+    /// What `Shell::drain` did with a [`FifEvent::ReplaceInOpenBuffer`].
+    /// Replaces it in the event stream, so the UI reports what
+    /// actually happened rather than what was requested.
+    ReplacedInOpenBuffer {
+        job: FifJobId,
+        path: PathBuf,
+        /// Matches replaced. Zero unless `outcome` is `Replaced`.
+        replaced: usize,
+        outcome: OpenBufferOutcome,
+    },
     /// Job ran to completion (walker exhausted, all workers idle).
     /// Stats include the elapsed wall time the walker took.
     Done { job: FifJobId, stats: FifStats },
@@ -219,6 +261,21 @@ pub enum FifEvent {
     /// down). No further events for this `job` will be emitted after
     /// this one.
     Cancelled { job: FifJobId },
+}
+
+/// How an open file's Replace-in-Files replacement was handled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenBufferOutcome {
+    /// Applied to the tab's buffer. The user can undo it, the file
+    /// watcher stayed silent, and the tab is now unsaved.
+    Replaced,
+    /// The tab had unsaved edits, so the worker's replacement — which
+    /// it computed from the on-disk bytes — did not describe what the
+    /// user is looking at. Declined rather than discarding their work.
+    SkippedDirty,
+    /// The tab closed between the walker listing open paths and this
+    /// event being handled. Nothing was written to disk either.
+    TabClosed,
 }
 
 /// Per-job aggregate stats. Captured for the UI's "complete" toast
@@ -816,16 +873,24 @@ fn worker_main(
         // re-run after closing those tabs.
         if let Some(repl) = &replacement {
             if open_paths.contains(&path) {
-                // TODO(m4 polish, DESIGN.md §7.4): apply the
-                // replacement to the open tab's Scintilla buffer
-                // instead of skipping. N++ does this so the user
-                // gets undo + no watcher event, and the on-disk
-                // file isn't out of sync with the editor.
-                stats.files_skipped_open.fetch_add(1, Ordering::Relaxed);
+                // Compute the replacement but do not write it: hand it
+                // to the UI thread, which can apply it to the tab's
+                // Scintilla buffer where the user keeps undo and the
+                // file watcher stays silent. Only the UI thread may
+                // touch Scintilla (DESIGN.md §5.4), so this is as far
+                // as a worker can take it.
+                let (new_text, n_replaced) =
+                    codepp_core::fif::replace_in_text(&query, &text, &repl.0, repl.1);
                 let _ = event_tx.send(FifEvent::FileMatches {
                     job: id,
-                    path,
+                    path: path.clone(),
                     outcome,
+                });
+                let _ = event_tx.send(FifEvent::ReplaceInOpenBuffer {
+                    job: id,
+                    path,
+                    new_text: new_text.into_owned(),
+                    replaced: n_replaced,
                 });
                 continue;
             }
@@ -1258,6 +1323,12 @@ mod tests {
                 }
                 FifEvent::Done { stats, .. } => done_stats = Some(stats),
                 FifEvent::Cancelled { .. } => panic!("unexpected cancel"),
+                // This job is search-only with no open files, so
+                // neither can occur. Named rather than wildcarded so a
+                // future variant has to be considered here.
+                FifEvent::ReplaceInOpenBuffer { .. } | FifEvent::ReplacedInOpenBuffer { .. } => {
+                    panic!("search-only job emitted an open-buffer replacement")
+                }
             }
         }
         let stats = done_stats.expect("no Done event");
@@ -1410,7 +1481,9 @@ mod tests {
                     // with a wildcard so a future event variant has
                     // to be classified here rather than silently
                     // falling through as "not a terminal".
-                    FifEvent::FileMatches { .. } => {}
+                    FifEvent::FileMatches { .. }
+                    | FifEvent::ReplaceInOpenBuffer { .. }
+                    | FifEvent::ReplacedInOpenBuffer { .. } => {}
                 }
             }
         }

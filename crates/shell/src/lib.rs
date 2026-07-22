@@ -87,7 +87,7 @@ use codepp_plugin_host::{
 };
 
 pub mod fif;
-pub use fif::{FifError, FifEvent, FifJobId, FifRequest, FifStats};
+pub use fif::{FifError, FifEvent, FifJobId, FifRequest, FifStats, OpenBufferOutcome};
 
 /// Plugin-driven pre-fill for the next FIF dialog open. Populated
 /// by `NPPM_LAUNCHFINDINFILESDLG` and drained by the Win32 plugin
@@ -549,6 +549,27 @@ pub trait UiPlatform {
     /// the backup write entirely, dirty tabs get one so the
     /// user's unsaved edits survive a restart.
     fn is_doc_dirty(&mut self, scintilla_doc: isize) -> bool;
+
+    /// Replace a document's entire text, as one undoable action.
+    ///
+    /// Used by Replace-in-Files to update a file the user has open
+    /// rather than rewriting it on disk underneath them. `doc` need not
+    /// be the active document; implementations bind it, replace, and
+    /// restore the previous binding, the same dance
+    /// [`Self::capture_text_from_doc`] performs.
+    ///
+    /// **Must leave the undo history intact and must not touch the
+    /// save point.** Both are the point of the call: the user has to be
+    /// able to undo a Replace-in-Files that went wrong, and the buffer
+    /// must read as modified so the change is not silently lost when
+    /// the tab is closed. That rules out reusing
+    /// [`Self::set_buffer_text`], which empties the undo buffer and
+    /// marks the document clean because it exists to install
+    /// freshly-loaded file content.
+    ///
+    /// Returns `false` when `doc` is zero or unknown, so the caller can
+    /// tell "nothing was applied" from "applied, replacing nothing".
+    fn replace_doc_text(&mut self, doc: isize, text: &str) -> bool;
 
     /// Dispatch a Notepad++-ABI `IDM_*` command id. Drives
     /// `NPPM_MENUCOMMAND`. The implementation maps the N++
@@ -3058,6 +3079,22 @@ impl Shell {
         // jobs. Win32 calls `take_fif_events` on every WM_APP_WAKE,
         // so practical depth stays below the per-job ceiling.
         while let Ok(event) = self.fif_rx.try_recv() {
+            // Replace-in-Files on a file the user has open is applied
+            // to the tab's buffer here rather than written to disk by
+            // the worker — this is the only place that holds both the
+            // event and a `UiPlatform`, and only the UI thread may
+            // touch Scintilla (DESIGN.md §5.4). Doing it in `drain`
+            // rather than in each backend's dock means both platforms
+            // get the behaviour with no UI wiring at all.
+            let event = match event {
+                FifEvent::ReplaceInOpenBuffer {
+                    job,
+                    path,
+                    new_text,
+                    replaced,
+                } => self.apply_open_buffer_replacement(ui, job, path, &new_text, replaced),
+                other => other,
+            };
             self.pending_fif.push(event);
         }
         // Append dialogs queued by sync paths (currently
@@ -3095,6 +3132,102 @@ impl Shell {
     /// operation that mustn't run with shell state locked.
     pub fn take_fif_events(&mut self) -> Vec<FifEvent> {
         std::mem::take(&mut self.pending_fif)
+    }
+
+    /// Apply a Replace-in-Files result to an open tab's buffer.
+    ///
+    /// Returns the event the UI should see: either
+    /// [`FifEvent::ReplacedInOpenBuffer`] describing what happened, or
+    /// the outcome of declining to act.
+    ///
+    /// **Only a buffer that still matches disk is replaced.** The
+    /// worker computed `new_text` from the file's on-disk contents, so
+    /// it is the right answer only while the buffer agrees with disk.
+    /// If the user has unsaved edits, the worker was reading different
+    /// bytes than the user is looking at, and applying its result
+    /// would silently discard their work. That is the one case this
+    /// still declines, and it is a much smaller hole than the previous
+    /// behaviour, which skipped *every* open file.
+    ///
+    /// Fixing the remaining case needs re-searching the buffer itself,
+    /// which cannot reuse the worker's answer and cannot reuse its
+    /// regex either: find-in-files compiles to the `regex` crate
+    /// because it runs off the UI thread, while an in-editor search
+    /// goes through Scintilla's C++11 engine, and the two dialects
+    /// disagree about lookarounds and backreferences among other
+    /// things. Re-searching would therefore risk replacing a different
+    /// set of matches than the results dock just reported. Tracked in
+    /// DESIGN.md §7.4.
+    fn apply_open_buffer_replacement<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        job: FifJobId,
+        path: PathBuf,
+        new_text: &str,
+        replaced: usize,
+    ) -> FifEvent {
+        let Some(idx) = self
+            .tabs
+            .iter()
+            .position(|t| t.path.as_deref() == Some(path.as_path()))
+        else {
+            // The tab closed between the walker snapshotting open
+            // paths and this event arriving. The file is no longer
+            // open, so nothing was written and nothing was replaced —
+            // re-running the search now would rewrite it on disk.
+            return FifEvent::ReplacedInOpenBuffer {
+                job,
+                path,
+                replaced: 0,
+                outcome: OpenBufferOutcome::TabClosed,
+            };
+        };
+        let doc = self.tabs[idx].scintilla_doc;
+
+        // A tab whose document was never materialised has no buffer to
+        // edit — its content is still the text the loader produced,
+        // which by definition matches disk. Update the shadow directly;
+        // whenever the tab is first activated, `bind_active_view`
+        // installs this text.
+        if doc == 0 {
+            self.tabs[idx].text = new_text.to_string();
+            self.tabs[idx].dirty = true;
+            return FifEvent::ReplacedInOpenBuffer {
+                job,
+                path,
+                replaced,
+                outcome: OpenBufferOutcome::Replaced,
+            };
+        }
+
+        if ui.is_doc_dirty(doc) {
+            return FifEvent::ReplacedInOpenBuffer {
+                job,
+                path,
+                replaced: 0,
+                outcome: OpenBufferOutcome::SkippedDirty,
+            };
+        }
+
+        if !ui.replace_doc_text(doc, new_text) {
+            return FifEvent::ReplacedInOpenBuffer {
+                job,
+                path,
+                replaced: 0,
+                outcome: OpenBufferOutcome::TabClosed,
+            };
+        }
+        // The buffer now differs from disk. `Tab.dirty` is the cache
+        // the tab strip paints from, and for a tab that is not active
+        // nothing else will refresh it.
+        self.tabs[idx].dirty = true;
+        self.tabs[idx].text = new_text.to_string();
+        FifEvent::ReplacedInOpenBuffer {
+            job,
+            path,
+            replaced,
+            outcome: OpenBufferOutcome::Replaced,
+        }
     }
 
     /// Drain the pending `NPPM_LAUNCHFINDINFILESDLG` prefill, if a
@@ -6834,6 +6967,9 @@ mod tests {
         buffer_text: String,
         cursor: u64,
         set_text_calls: Vec<(String, u64)>,
+        /// Every `replace_doc_text` call, for the Replace-in-Files
+        /// open-buffer tests.
+        replaced_docs: Vec<(isize, String)>,
         status_calls: Vec<(LangType, String, String, u64)>,
         plugin_status_calls: Vec<(usize, String)>,
         /// (`tab_idx`, `in_doc`, `returned_doc`) per `activate_tab` call.
@@ -7201,6 +7337,14 @@ mod tests {
             // the current single-buffer test fixtures. Per-doc
             // tracking can be added when a test needs it.
             self.dirty
+        }
+        fn replace_doc_text(&mut self, doc: isize, text: &str) -> bool {
+            if doc == 0 {
+                return false;
+            }
+            self.replaced_docs.push((doc, text.to_string()));
+            self.buffer_text = text.to_string();
+            true
         }
         #[cfg(target_os = "windows")]
         fn dispatch_npp_menu_command(&mut self, idm: i32) -> bool {
@@ -11106,6 +11250,265 @@ mod tests {
             shell.tabs[1].scintilla_doc, 0,
             "the newly active tab's document must be materialised and recorded"
         );
+    }
+
+    /// End-to-end: a real Replace-in-Files job over real files on
+    /// disk, with a real worker pool, where one of the matched files
+    /// is open in a tab.
+    ///
+    /// The unit tests above drive `apply_open_buffer_replacement`
+    /// directly, which proves the decision logic but not that the
+    /// worker actually routes an open file to it — and routing was
+    /// the whole change. This asserts the observable outcome: the
+    /// closed file is rewritten on disk, the open one is **not**, and
+    /// its buffer receives the replacement instead.
+    #[test]
+    fn replace_in_files_routes_open_files_to_the_buffer_and_others_to_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let open_path = dir.path().join("open.txt");
+        let closed_path = dir.path().join("closed.txt");
+        std::fs::write(&open_path, "alpha beta alpha\n").expect("write");
+        std::fs::write(&closed_path, "alpha gamma\n").expect("write");
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).expect("shell");
+        let mut ui = FakeUi {
+            dirty: false,
+            ..FakeUi::default()
+        };
+
+        // One file open, clean, with a materialised document.
+        shell.tabs = vec![Tab {
+            id: 1,
+            path: Some(open_path.clone()),
+            scintilla_doc: 7,
+            text: "alpha beta alpha\n".to_string(),
+            ..Tab::default()
+        }];
+        shell.active_tab = Some(0);
+
+        shell
+            .start_fif(FifRequest {
+                query: "alpha".to_string(),
+                opts: codepp_core::fif::FifQueryOpts::default(),
+                root: dir.path().to_path_buf(),
+                walk: codepp_core::fif::FifWalkOpts::default(),
+                replacement: Some("ALPHA".to_string()),
+                // What tells the worker which files not to rewrite.
+                open_tab_paths: vec![open_path.clone()],
+            })
+            .expect("job starts");
+
+        // Drain until the job reports Done, or give up. `drain` is
+        // what applies the buffer replacement, so it must be the thing
+        // in this loop.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut done = false;
+        while !done && std::time::Instant::now() < deadline {
+            let _ = shell.drain(&mut ui);
+            for ev in shell.take_fif_events() {
+                if matches!(ev, FifEvent::Done { .. }) {
+                    done = true;
+                }
+                if let FifEvent::ReplacedInOpenBuffer { outcome, .. } = ev {
+                    assert_eq!(
+                        outcome,
+                        OpenBufferOutcome::Replaced,
+                        "the open tab is clean, so it must be replaced in place"
+                    );
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(done, "job never completed");
+
+        // The closed file was rewritten on disk.
+        assert_eq!(
+            std::fs::read_to_string(&closed_path).expect("read closed"),
+            "ALPHA gamma\n"
+        );
+        // The open file was **not** touched on disk — that is the
+        // point: an atomic temp+rename would have fired the file
+        // watcher and popped an external-change dialog.
+        assert_eq!(
+            std::fs::read_to_string(&open_path).expect("read open"),
+            "alpha beta alpha\n",
+            "an open file must not be rewritten underneath the user"
+        );
+        // Its buffer got the replacement instead.
+        assert_eq!(
+            ui.replaced_docs,
+            vec![(7, "ALPHA beta ALPHA\n".to_string())],
+            "the open file's replacement must land in its Scintilla document"
+        );
+        assert!(shell.tabs[0].dirty, "the tab now differs from disk");
+    }
+
+    /// Replace-in-Files applies to a clean open tab's buffer rather
+    /// than rewriting the file underneath it.
+    ///
+    /// Writing to disk here is what the previous behaviour avoided by
+    /// skipping open files entirely, and for good reason: the atomic
+    /// temp+rename reads as delete-then-create to the file watcher, so
+    /// every modified open file would pop an "external change" dialog.
+    /// Going through the buffer keeps the watcher silent and leaves
+    /// the change undoable.
+    #[test]
+    fn replace_in_files_edits_a_clean_open_tab_in_place() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi {
+            dirty: false,
+            ..FakeUi::default()
+        };
+
+        shell.tabs = vec![Tab {
+            id: 1,
+            path: Some(PathBuf::from("/tmp/open.txt")),
+            scintilla_doc: 42,
+            text: "before".to_string(),
+            ..Tab::default()
+        }];
+        shell.active_tab = Some(0);
+
+        let out = shell.apply_open_buffer_replacement(
+            &mut ui,
+            FifJobId::for_test(1),
+            PathBuf::from("/tmp/open.txt"),
+            "after",
+            3,
+        );
+        assert!(matches!(
+            out,
+            FifEvent::ReplacedInOpenBuffer {
+                replaced: 3,
+                outcome: OpenBufferOutcome::Replaced,
+                ..
+            }
+        ));
+        assert_eq!(
+            ui.replaced_docs,
+            vec![(42, "after".to_string())],
+            "the edit must go to that tab's document, not whatever is bound"
+        );
+        assert!(
+            shell.tabs[0].dirty,
+            "the buffer now differs from disk; the tab strip paints from this flag and \
+             nothing else refreshes it for a background tab"
+        );
+        assert_eq!(
+            shell.tabs[0].text, "after",
+            "the shadow must track the buffer"
+        );
+    }
+
+    /// A tab with unsaved edits is left alone. The worker computed its
+    /// replacement from the bytes *on disk*, which are not what the
+    /// user is looking at, so applying it would discard their work.
+    #[test]
+    fn replace_in_files_declines_a_dirty_open_tab() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi {
+            dirty: true,
+            ..FakeUi::default()
+        };
+
+        shell.tabs = vec![Tab {
+            id: 1,
+            path: Some(PathBuf::from("/tmp/open.txt")),
+            scintilla_doc: 42,
+            text: "user edits".to_string(),
+            ..Tab::default()
+        }];
+
+        let out = shell.apply_open_buffer_replacement(
+            &mut ui,
+            FifJobId::for_test(1),
+            PathBuf::from("/tmp/open.txt"),
+            "from disk",
+            3,
+        );
+        assert!(matches!(
+            out,
+            FifEvent::ReplacedInOpenBuffer {
+                replaced: 0,
+                outcome: OpenBufferOutcome::SkippedDirty,
+                ..
+            }
+        ));
+        assert!(ui.replaced_docs.is_empty(), "nothing may be written");
+        assert_eq!(
+            shell.tabs[0].text, "user edits",
+            "the user's unsaved work must survive untouched"
+        );
+    }
+
+    /// A tab whose document was never materialised has no buffer to
+    /// edit, but its text still came from disk — so the replacement
+    /// applies to the shadow, and `bind_active_view` installs it when
+    /// the tab is first shown.
+    #[test]
+    fn replace_in_files_updates_a_tab_with_no_materialised_document() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        shell.tabs = vec![Tab {
+            id: 1,
+            path: Some(PathBuf::from("/tmp/bg.txt")),
+            scintilla_doc: 0,
+            text: "before".to_string(),
+            ..Tab::default()
+        }];
+
+        let out = shell.apply_open_buffer_replacement(
+            &mut ui,
+            FifJobId::for_test(1),
+            PathBuf::from("/tmp/bg.txt"),
+            "after",
+            1,
+        );
+        assert!(matches!(
+            out,
+            FifEvent::ReplacedInOpenBuffer {
+                outcome: OpenBufferOutcome::Replaced,
+                ..
+            }
+        ));
+        assert_eq!(shell.tabs[0].text, "after");
+        assert!(shell.tabs[0].dirty);
+        assert!(
+            ui.replaced_docs.is_empty(),
+            "no document exists, so Scintilla must not be asked to edit one"
+        );
+    }
+
+    /// The tab can close between the walker snapshotting open paths
+    /// and the event being handled. Nothing was written to disk for
+    /// it either, so the honest report is that nothing happened.
+    #[test]
+    fn replace_in_files_reports_a_tab_that_closed_mid_job() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        let out = shell.apply_open_buffer_replacement(
+            &mut ui,
+            FifJobId::for_test(1),
+            PathBuf::from("/tmp/gone.txt"),
+            "after",
+            5,
+        );
+        assert!(matches!(
+            out,
+            FifEvent::ReplacedInOpenBuffer {
+                replaced: 0,
+                outcome: OpenBufferOutcome::TabClosed,
+                ..
+            }
+        ));
+        assert!(ui.replaced_docs.is_empty());
     }
 
     /// The mirror of the test above: when the removed tab was *not*
