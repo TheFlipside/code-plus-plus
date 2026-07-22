@@ -6975,13 +6975,24 @@ unsafe fn refresh_udl_registry(main_hwnd: HWND) {
 /// links users to a public GitHub collection to download them),
 /// so we treat it exactly like tab-title chrome:
 ///
-/// 1. Strip control characters (`\0`, `\r`, `\n`, `\t`) and cap
-///    length via [`sanitize_filename_for_display`]. Without the
-///    tab strip, a UDL name containing an embedded `\t` would
-///    produce a spoofed right-aligned "shortcut" column in the
-///    menu (Win32 uses `\t` as the label/accelerator separator),
-///    letting a hostile UDL visually impersonate a menu item
-///    with a specific hotkey binding.
+/// 1. Replace display-hostile characters — C0 controls (incl.
+///    `\0`, `\r`, `\n`, `\t`), DEL/C1, zero-widths, bidi
+///    overrides, line/paragraph separators — with U+FFFD via
+///    [`sanitize_filename_for_display`], and cap length. Without
+///    the `\t` replacement a UDL name like `Reload File\tCtrl+R`
+///    would produce a spoofed right-aligned "shortcut" column in
+///    the menu (Win32 uses `\t` as the label/accelerator
+///    separator), impersonating a menu item with a specific
+///    hotkey binding. Substitution beats deletion for exactly
+///    the reason the shared sanitizer picked it — see the
+///    `DISPLAY_REPLACEMENT` docstring in `codepp_shell`.
+///    Deletion would let a hostile name collapse onto a
+///    legitimate one (a UDL named `A\tB` renders identically to
+///    a real `AB` under stripping), manufacturing the collision
+///    this sanitizer is supposed to prevent. Substitution does
+///    not distinguish two hostile inputs from each other —
+///    `A\tB` and `A\nB` both become `A\u{FFFD}B` — but that is
+///    not a property the threat model requires.
 /// 2. Escape ampersands as `&&`. Win32 treats a single `&` as
 ///    the mnemonic-underline marker, so `Save & Continue` would
 ///    render as `Save _C_ontinue` with `C` underlined. Doubling
@@ -6993,9 +7004,9 @@ unsafe fn refresh_udl_registry(main_hwnd: HWND) {
 ///
 /// Returns a new `String`; caller wraps in `wide_terminated`.
 fn sanitize_udl_name_for_menu(name: &str) -> String {
-    let stripped_and_capped = sanitize_filename_for_display(name);
-    let mut escaped = String::with_capacity(stripped_and_capped.len());
-    for c in stripped_and_capped.chars() {
+    let sanitized_and_capped = sanitize_filename_for_display(name);
+    let mut escaped = String::with_capacity(sanitized_and_capped.len());
+    for c in sanitized_and_capped.chars() {
         if c == '&' {
             escaped.push_str("&&");
         } else {
@@ -7331,14 +7342,16 @@ unsafe fn relayout_main_window_via_post(child_hwnd: HWND) {
 /// **UDL-name sanitisation.** The UDL branch runs the name
 /// through [`sanitize_filename_for_display`] before returning
 /// — the string comes from third-party XML the user may have
-/// downloaded, so control characters (`\0`/`\r`/`\n`/`\t`) that
-/// would garble the status bar are stripped and the length is
-/// capped so an oversized name can't visually push the adjacent
-/// EOL / encoding / caret slots. Consistent with the same
-/// discipline the menu-label path already applies via
-/// `sanitize_udl_name_for_menu`; the `&`-doubling done there is
-/// menu-specific (mnemonic marker) and doesn't apply here since
-/// the status bar renders `&` literally.
+/// downloaded, so display-hostile characters (C0 controls incl.
+/// `\0`/`\r`/`\n`/`\t`, DEL, C1, zero-widths, bidi overrides,
+/// line/paragraph separators) that would garble the status bar
+/// are replaced with U+FFFD and the length is capped so an
+/// oversized name can't visually push the adjacent EOL /
+/// encoding / caret slots. Consistent with the same discipline
+/// the menu-label path applies via `sanitize_udl_name_for_menu`;
+/// the `&`-doubling done there is menu-specific (mnemonic
+/// marker) and doesn't apply here since the status bar renders
+/// `&` literally.
 ///
 /// Extracted into a free function so the branching can be unit-
 /// tested without a live `Win32Ui` or `HWND`. The single caller
@@ -11716,12 +11729,17 @@ fn format_recent_menu_label(
     // matches N++.
     //
     // Sanitisation runs on the truncated visible string so
-    // any injected metacharacters are stripped before the label
-    // reaches the menu. Note: sanitisation replaces one input
-    // char with 0-2 output chars (ampersand doubles, controls
-    // drop), so the final on-screen label may fall slightly
-    // under or over `custom_max_length` — the cap governs the
-    // path characters, not the escaped rendering.
+    // any injected metacharacters are neutralised before the
+    // label reaches the menu. Note: `sanitize_menu_label` maps
+    // one input char to 1 or 2 output chars (`&` doubles for
+    // the mnemonic escape, everything else stays 1:1 — hostile
+    // controls are substituted with U+FFFD, never dropped, so a
+    // hostile name can't collapse onto a legitimate one — see
+    // the `sanitize_udl_name_for_menu` docstring for the full
+    // rationale). The final on-screen label may therefore be
+    // slightly longer than `custom_max_length` but never shorter
+    // — the cap governs the path characters, not the escaped
+    // rendering.
     if index < 9 {
         format!("&{}: {}", index + 1, sanitize_menu_label(&visible))
     } else {
@@ -29292,13 +29310,18 @@ mod udl_menu_sanitizer_tests {
     }
 
     #[test]
-    fn tab_stripped_so_shortcut_column_cannot_be_spoofed() {
+    fn tab_replaced_so_shortcut_column_cannot_be_spoofed() {
         // Win32 treats `\t` as the label/accelerator separator in
         // menu items; a UDL name like "Reload File\tCtrl+R" would
-        // render as if it had a real keyboard shortcut. Strip.
+        // render as if it had a real keyboard shortcut. Replace
+        // with U+FFFD — the shared sanitizer substitutes rather
+        // than deletes so a hostile name can't collapse onto a
+        // legitimate one at the label level. The U+FFFD glyph is
+        // not `\t`, so it never triggers Win32's shortcut-column
+        // layout, which is all this test is guarding.
         assert_eq!(
             sanitize_udl_name_for_menu("Reload File\tCtrl+R"),
-            "Reload FileCtrl+R"
+            "Reload File\u{FFFD}Ctrl+R"
         );
     }
 
@@ -29318,12 +29341,24 @@ mod udl_menu_sanitizer_tests {
     }
 
     #[test]
-    fn null_and_newline_stripped() {
+    fn null_and_newline_replaced_with_u_fffd() {
         // Embedded NULs truncate `SetWindowTextW`-family calls
-        // silently; CR/LF render as glyph noise. Both must go.
-        assert_eq!(sanitize_udl_name_for_menu("A\0B"), "AB");
-        assert_eq!(sanitize_udl_name_for_menu("Line1\nLine2"), "Line1Line2");
-        assert_eq!(sanitize_udl_name_for_menu("A\r\nB"), "AB");
+        // silently; CR/LF render as glyph noise or break the
+        // label across visual lines. Both get replaced with
+        // U+FFFD — the shared sanitizer's substitute policy.
+        // U+FFFD encodes as 0xFFFD in UTF-16, not zero, so it
+        // doesn't retrigger the SB_SETTEXTW truncation the NUL
+        // strip in `write_status_part` also defends against; and
+        // it isn't a line-break character, so no multi-line
+        // render either. Both failure modes closed, and the
+        // hostile input remains visible instead of silently
+        // vanishing into a collision with a legitimate name.
+        assert_eq!(sanitize_udl_name_for_menu("A\0B"), "A\u{FFFD}B");
+        assert_eq!(
+            sanitize_udl_name_for_menu("Line1\nLine2"),
+            "Line1\u{FFFD}Line2"
+        );
+        assert_eq!(sanitize_udl_name_for_menu("A\r\nB"), "A\u{FFFD}\u{FFFD}B");
     }
 
     #[test]
@@ -29431,8 +29466,13 @@ mod status_lang_label_tests {
         // would render as glyph noise, an embedded `\r`/`\n`
         // could break the label into multiple visual lines.
         // Confirm `sanitize_filename_for_display` runs on the
-        // UDL branch, stripping those characters before the
-        // label reaches `write_status_part`.
+        // UDL branch, replacing those characters with U+FFFD
+        // before the label reaches `write_status_part`. The
+        // shared sanitizer substitutes rather than deletes on
+        // purpose — deletion would let a UDL named `A\tB` and a
+        // legitimate `AB` share the same rendered label, which
+        // is precisely the collision this trust boundary is
+        // meant to prevent.
         //
         // XML attribute-value normalization (spec §3.3.3)
         // silently converts literal `\t`/`\r`/`\n` bytes in
@@ -29461,7 +29501,7 @@ mod status_lang_label_tests {
         let registry = codepp_udl::UdlRegistry::scan_dir(tmp.path());
         let entry = registry.entries().first().expect("one entry");
         let label = resolve_lang_label(LangType(entry.lang_type_id), &registry);
-        assert_eq!(label, "BadUDLName");
+        assert_eq!(label, "Bad\u{FFFD}UDL\u{FFFD}Name\u{FFFD}");
     }
 }
 
