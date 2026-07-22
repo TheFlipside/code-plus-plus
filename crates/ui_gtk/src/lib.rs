@@ -352,64 +352,96 @@ fn connect_tab_strip_signals(tab_strip: &tabs::TabStrip) {
 
 /// Attach the DESIGN.md §8 probes to the Scintilla widget.
 ///
-/// Both are no-ops unless `--perf` was passed, so this costs two
-/// signal connections and, per event, one predictable branch.
+/// All three are no-ops unless `--perf` was passed.
 ///
-/// The clock starts at `key-press-event` rather than at any Scintilla
-/// notification because §8 budgets "typed char → Scintilla redraw",
-/// and the input event is the earliest point the application can
-/// observe the keystroke. `ui_win32` hooks `WM_CHAR` in its message
-/// pump for the same reason, so the two platforms' numbers describe
-/// the same interval and can be compared — which is the entire point
-/// of a budget shared across backends.
+/// The interval is opened by a key press and closed by Scintilla's own
+/// `SCN_PAINTED`, with `SCN_MODIFIED` in between deciding whether the
+/// press counted at all. That middle step is what makes the
+/// measurement honest: plenty of keys repaint nothing — Escape,
+/// arrows, a Backspace at position 0 — and a press committed without
+/// it would wait until some unrelated later paint closed it with a
+/// fabricated latency. It is also what lets Tab, Enter and Backspace
+/// be measured, which an earlier character-class filter had to exclude
+/// wholesale because it could not tell an editing key from an inert
+/// one.
 ///
-/// `Propagation::Proceed` on both: these observe, they must never
-/// swallow an event. A `Stop` here would silently break typing.
+/// Ctrl chords are skipped: paste, undo, redo and cut all modify the
+/// document, but §8 budgets a *typed character*, and a paste's redraw
+/// cost is a different quantity that would dominate the tail. `Alt`
+/// held alongside `Ctrl` is `AltGr` on many layouts — the way `@`,
+/// `{`, `}` and `~` are typed — so those must not be skipped.
+///
+/// `Propagation::Proceed` on the key handler: it observes, it must
+/// never swallow an event.
 fn connect_perf_probes(sci_widget: &gtk::Widget, perf: &Rc<Perf>) {
     let perf_key = Rc::clone(perf);
     sci_widget.connect_key_press_event(move |_, ev| {
-        // Only keys that insert a character, which is what §8's
-        // "typed char" means and what Win32's `WM_CHAR` hook observes.
-        // GTK's `key-press-event` fires for every physical key down —
-        // arrows, Home/End, bare modifiers, function keys — none of
-        // which `WM_CHAR` ever sees.
-        //
-        // Tab, Enter and Backspace are control codes and so are
-        // excluded too, on both backends, despite editing the buffer:
-        // none of them repaints unconditionally, so opening a
-        // measurement on the key press would orphan a sample. See the
-        // fuller note on `ui_win32`'s `inserts_text` and the follow-up
-        // in DESIGN.md §7.4.
-        //
-        // The modifier check is separate and not redundant:
-        // `keyval()` is independent of modifier state and
-        // `gdk_keyval_to_unicode` is a pure function of it, so Ctrl+C
-        // yields `'c'` exactly as the bare letter does. Counting it
-        // would be worse than a merely inflated sample count —
-        // copy and select-all frequently repaint nothing at all, so
-        // the bogus press would sit in `pending` until some unrelated
-        // later paint closed it, landing a fabricated
-        // hundreds-of-milliseconds outlier straight into p99. Ctrl is
-        // the only modifier filtered: Shift is how capitals are typed,
-        // and AltGr is how many layouts reach `@`, `#` and `~`.
-        let ctrl = ev.state().contains(gtk::gdk::ModifierType::CONTROL_MASK);
-        if !ctrl && ev.keyval().to_unicode().is_some_and(|c| !c.is_control()) {
+        let state = ev.state();
+        // Ctrl held without Alt is an editing chord. With Alt it is
+        // `AltGr` on many layouts, which types real characters.
+        let is_chord = state.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+            && !state.contains(gtk::gdk::ModifierType::MOD1_MASK);
+        if !is_chord {
             perf_key.key_pressed();
         }
         glib::Propagation::Proceed
     });
-    // `connect_draw` runs before Scintilla's own draw handler, so the
-    // measurement closes slightly early — it excludes the cairo work
-    // of that frame. `connect_draw_after` would be the tighter hook,
-    // but gtk-rs exposes no `_after` variant for `draw` on `Widget`,
-    // so the number is a lower bound on paint completion. Recorded
-    // here rather than left for a reader to discover.
-    let perf_draw = Rc::clone(perf);
-    sci_widget.connect_draw(move |_, _| {
-        perf_draw.mark_first_draw();
-        perf_draw.painted();
-        glib::Propagation::Proceed
+
+    // Scintilla reports both remaining edges through `sci-notify`.
+    // Using its notifications rather than GTK's `draw` signal matters
+    // for the closing edge: `connect_draw` runs *before* Scintilla's
+    // own draw handler, so it closed the interval a frame's cairo work
+    // early. `SCN_PAINTED` fires when painting is actually done, and
+    // is the same notification `ui_win32` uses — so the two platforms
+    // now measure the same span rather than approximately the same one.
+    let perf_notify = Rc::clone(perf);
+    sci_widget.connect_local("sci-notify", false, move |values| {
+        match notification_code(values) {
+            // `SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT` would be the
+            // tighter filter, but reading `modificationType` means
+            // depending on the layout of the whole `SCNotification`
+            // rather than just its header. Every `SCN_MODIFIED` this
+            // backend can receive is a text change today — it sets no
+            // margin, annotation or fold-level state — so the code
+            // alone is sufficient and the ABI surface stays minimal.
+            Some(codepp_scintilla_sys::SCN_MODIFIED) => perf_notify.text_modified(),
+            Some(codepp_scintilla_sys::SCN_PAINTED) => {
+                perf_notify.mark_first_draw();
+                perf_notify.painted();
+            }
+            _ => {}
+        }
+        None
     });
+}
+
+/// Pull the notification code out of a `sci-notify` emission.
+///
+/// The signal carries `(ScintillaObject, gint, SCNotification)`, and
+/// the payload is a **boxed** type — `g_value_get_pointer` fails on it
+/// with a `GLib` critical, which is how the first attempt at this went.
+/// `g_value_get_boxed` yields the `SCNotification*`, whose first
+/// member is the header this reads.
+///
+/// Returns `None` rather than guessing if the emission does not have
+/// the expected shape.
+fn notification_code(values: &[glib::Value]) -> Option<u32> {
+    let payload = values.last()?;
+    // SAFETY: the value belongs to a `sci-notify` emission, whose
+    // payload Scintilla declares as `SCINTILLA_TYPE_NOTIFICATION` —
+    // a boxed `SCNotification*`. `g_value_get_boxed` returns that
+    // pointer or null; the null case is handled below. Scintilla owns
+    // the allocation and it outlives this synchronous handler.
+    let header = unsafe {
+        glib::gobject_ffi::g_value_get_boxed(payload.as_ptr())
+            .cast::<codepp_scintilla_sys::Sci_NotifyHeader>()
+    };
+    if header.is_null() {
+        return None;
+    }
+    // SAFETY: non-null, and points at a live `SCNotification` for the
+    // duration of this handler.
+    Some(unsafe { (*header).code })
 }
 
 /// Drain everything `Shell` has queued and present any dialogs it

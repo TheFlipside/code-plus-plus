@@ -675,6 +675,31 @@ pub const SCN_MODIFIED: u32 = 2008;
 /// `SCN_UPDATEUI` so they track the live caret without needing a
 /// separate timer.
 pub const SCN_UPDATEUI: u32 = 2007;
+/// `struct Sci_NotifyHeader` from `Scintilla.h` — the first member of
+/// every `SCNotification`, and the only part the perf instrumentation
+/// needs.
+///
+/// Layout is ABI-critical and matches the C declaration exactly:
+/// `void *hwndFrom; uptr_t idFrom; unsigned int code;`. The header
+/// comment calls it "compatible with Windows NMHDR", which is why
+/// `ui_win32` can read the same bytes through the `windows` crate's
+/// `NMHDR`.
+///
+/// Declared here rather than in `plugin-host` because that crate's
+/// `ffi` module is `#![cfg(target_os = "windows")]` — it exists to
+/// mirror the plugin ABI — whereas this is a Scintilla type both
+/// backends need. GTK reaches it by pulling the boxed `SCNotification`
+/// out of the `sci-notify` signal's third `GValue` with
+/// `g_value_get_boxed`; the payload is the same struct Win32 receives
+/// through `WM_NOTIFY`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Sci_NotifyHeader {
+    pub hwnd_from: *mut c_void,
+    pub id_from: uptr_t,
+    pub code: u32,
+}
+
 /// Notification fired after Scintilla has finished painting. The
 /// closest thing the Win32 backend has to GTK's `draw` signal, and so
 /// what `--perf` uses on that platform to close off a keystroke→redraw

@@ -81,7 +81,13 @@ pub struct Perf {
     /// backend can call [`Perf::mark_first_draw`] from every paint
     /// without special-casing the first.
     first_draw_done: Cell<bool>,
-    /// Timestamps of every key press not yet closed off by a paint.
+    /// The most recent key press that has not yet been shown to have
+    /// changed the document. Promoted to [`Self::pending`] by
+    /// [`Perf::text_modified`], discarded if the next key press
+    /// arrives first.
+    candidate: Cell<Option<Instant>>,
+    /// Timestamps of key presses that *did* change the document and
+    /// are now waiting on the paint that shows the change.
     ///
     /// A `Vec`, not a single slot, because several keystrokes commonly
     /// arrive within one frame. See [`Perf::key_pressed`] for why each
@@ -116,6 +122,7 @@ impl Perf {
             start,
             enabled,
             first_draw_done: Cell::new(false),
+            candidate: Cell::new(None),
             pending: RefCell::new(Vec::new()),
             samples: RefCell::new(Vec::new()),
             dropped: Cell::new(0),
@@ -148,36 +155,56 @@ impl Perf {
         );
     }
 
-    /// Record that a character was typed.
+    /// Record that a key was pressed. Provisional until
+    /// [`Perf::text_modified`] confirms it changed something.
     ///
-    /// Every press is retained until a paint closes it off, and each
-    /// becomes its own sample measured from its own press time. An
-    /// earlier design kept only the most recent press, on the argument
-    /// that the queueing delay of a fast typist is not redraw cost —
-    /// but §8 defines the budget as "typed char → redraw", and from
-    /// the user's side a character that waited through two frames
-    /// waited through two frames. Worse, keeping only the newest press
-    /// discards the *longest* latency in any burst, which biases the
-    /// tail downward exactly when keystrokes are backing up — the one
-    /// situation a p99 budget exists to catch. Reporting per press
-    /// cannot make that mistake.
+    /// **Nothing is measured from a press alone**, because plenty of
+    /// keys change no text: Escape, arrows, Home/End, a Backspace at
+    /// position 0, anything at all on a read-only buffer. Scintilla
+    /// does not repaint for those, so a press committed here would
+    /// wait in [`Self::pending`] until an unrelated later paint — the
+    /// caret-blink timer will do — closed it with a fabricated latency
+    /// running into hundreds of milliseconds, landing straight in p99.
+    /// Requiring a modification first is what makes Tab, Enter and
+    /// Backspace measurable at all: they edit the buffer, but only
+    /// sometimes.
+    ///
+    /// A press that never modifies is simply overwritten by the next
+    /// one and costs nothing.
     pub fn key_pressed(&self) {
         if !self.enabled {
             return;
         }
+        self.candidate.set(Some(Instant::now()));
+    }
+
+    /// Record that the document's text changed, promoting the pending
+    /// key press to a real measurement.
+    ///
+    /// A modification with no candidate — a plugin insert, a
+    /// find-in-files replace, a file load — is ignored rather than
+    /// timed from nothing.
+    pub fn text_modified(&self) {
+        if !self.enabled {
+            return;
+        }
+        let Some(pressed) = self.candidate.take() else {
+            return;
+        };
         let mut pending = self.pending.borrow_mut();
         if pending.len() >= MAX_PENDING {
             self.dropped.set(self.dropped.get() + 1);
             return;
         }
-        pending.push(Instant::now());
+        pending.push(pressed);
     }
 
     /// Record that a paint completed, closing off every keystroke
     /// waiting on it — one sample each, measured from that key's own
     /// press. A paint with nothing pending — a resize, an exposure, a
-    /// scroll — is ignored rather than recorded as a zero-latency
-    /// sample, which would deflate every percentile.
+    /// scroll, or a key that changed no text — is ignored rather than
+    /// recorded as a zero-latency sample, which would deflate every
+    /// percentile.
     pub fn painted(&self) {
         if !self.enabled {
             return;
@@ -281,11 +308,64 @@ mod tests {
     fn disabled_perf_records_nothing() {
         let perf = Perf::new(false);
         perf.key_pressed();
+        perf.text_modified();
         perf.painted();
         assert!(
             perf.samples.borrow().is_empty(),
             "a disabled Perf must not accumulate; it is on the keystroke path"
         );
+    }
+
+    #[test]
+    fn a_key_that_changes_nothing_is_never_measured() {
+        // Escape, arrows, Backspace at position 0, anything on a
+        // read-only buffer. Scintilla does not repaint for these, so a
+        // committed press would sit until an unrelated later paint —
+        // the caret blink — closed it with a fabricated latency.
+        let perf = Perf::new(true);
+        perf.key_pressed();
+        perf.painted();
+        assert!(perf.samples.borrow().is_empty());
+        assert!(
+            perf.pending.borrow().is_empty(),
+            "nothing may be left waiting"
+        );
+        // And it must not linger to be picked up by a later, unrelated
+        // modification either.
+        perf.key_pressed();
+        perf.key_pressed();
+        perf.text_modified();
+        perf.painted();
+        assert_eq!(
+            perf.samples.borrow().len(),
+            1,
+            "only the press that actually modified may be measured"
+        );
+    }
+
+    #[test]
+    fn a_modification_with_no_key_press_is_not_measured() {
+        // A plugin insert, a find-in-files replace, a file load. There
+        // is no keystroke to time from.
+        let perf = Perf::new(true);
+        perf.text_modified();
+        perf.painted();
+        assert!(perf.samples.borrow().is_empty());
+    }
+
+    #[test]
+    fn editing_keys_are_measured_once_they_modify() {
+        // Tab, Enter and Backspace were excluded outright before this
+        // gate existed, because they could not be told apart from keys
+        // that repaint nothing. They are measured now, on the runs
+        // where they do edit.
+        let perf = Perf::new(true);
+        for _ in 0..3 {
+            perf.key_pressed();
+            perf.text_modified();
+        }
+        perf.painted();
+        assert_eq!(perf.samples.borrow().len(), 3);
     }
 
     #[test]
@@ -307,9 +387,10 @@ mod tests {
         // keystrokes are backing up, which is what the budget exists
         // to catch.
         let perf = Perf::new(true);
-        perf.key_pressed();
-        perf.key_pressed();
-        perf.key_pressed();
+        for _ in 0..3 {
+            perf.key_pressed();
+            perf.text_modified();
+        }
         perf.painted();
         assert_eq!(
             perf.samples.borrow().len(),
@@ -329,8 +410,10 @@ mod tests {
         // is the one nearest the budget.
         let perf = Perf::new(true);
         perf.key_pressed();
+        perf.text_modified();
         std::thread::sleep(std::time::Duration::from_millis(8));
         perf.key_pressed();
+        perf.text_modified();
         perf.painted();
         let samples = perf.samples.borrow().clone();
         assert_eq!(samples.len(), 2);
@@ -348,6 +431,7 @@ mod tests {
         let perf = Perf::new(true);
         for _ in 0..super::MAX_PENDING + 10 {
             perf.key_pressed();
+            perf.text_modified();
         }
         assert_eq!(perf.pending.borrow().len(), super::MAX_PENDING);
         assert_eq!(perf.dropped.get(), 10);
@@ -359,6 +443,7 @@ mod tests {
         // One press per paint, so sample count tracks press count.
         for _ in 0..super::MAX_SAMPLES + 5 {
             perf.key_pressed();
+            perf.text_modified();
             perf.painted();
         }
         assert_eq!(perf.samples.borrow().len(), super::MAX_SAMPLES);

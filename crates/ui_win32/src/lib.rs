@@ -205,9 +205,9 @@ use windows::Win32::UI::Controls::{
     TVS_SHOWSELALWAYS, WC_COMBOBOX, WC_LISTVIEWW, WC_TABCONTROL, WC_TREEVIEWW, WM_MOUSELEAVE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
-    TRACKMOUSEEVENT, VK_0, VK_F, VK_F1, VK_F2, VK_F3, VK_G, VK_H, VK_N, VK_O, VK_OEM_MINUS,
-    VK_OEM_PLUS, VK_P, VK_R, VK_S, VK_T, VK_W,
+    EnableWindow, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
+    TRACKMOUSEEVENT, VK_0, VK_CONTROL, VK_F, VK_F1, VK_F2, VK_F3, VK_G, VK_H, VK_MENU, VK_N, VK_O,
+    VK_OEM_MINUS, VK_OEM_PLUS, VK_P, VK_R, VK_S, VK_T, VK_W,
 };
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW,
@@ -18476,7 +18476,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             // would sit in `pending` until some unrelated repaint
             // finally closed them, reporting however long the user
             // spent in the dialog as keystroke latency.
-            if msg.message == WM_CHAR && msg.hwnd == scintilla_hwnd && inserts_text(msg.wParam) {
+            if msg.message == WM_CHAR && msg.hwnd == scintilla_hwnd && !is_editing_chord() {
                 perf.key_pressed();
             }
             match ret.0 {
@@ -18626,63 +18626,39 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
     }
 }
 
-/// True when a `WM_CHAR`'s payload is a character Scintilla will
-/// actually insert.
+/// True when a `WM_CHAR` is a Ctrl chord — paste, undo, redo, cut —
+/// rather than a typed character.
 ///
-/// Derived from Scintilla's own criterion, deliberately simplified.
-/// `ScintillaWin.cxx`'s `WM_CHAR` arm inserts when
-/// `((wParam >= 128) || !iscntrl(wParam)) || !lastKeyDownConsumed` —
-/// this takes the first disjunct, "not a control code", and drops the
-/// second. The simplification only ever **under**-counts, never over-:
-/// dropping a disjunct can turn a real insert into "not counted" but
-/// can never claim an insert Scintilla would not perform, so it cannot
-/// reproduce the orphaned-sample failure mode this filter exists to
-/// prevent.
+/// §8 budgets a *typed character*. Those chords do modify the
+/// document, so the `SCN_MODIFIED` gate alone would let them through,
+/// and a paste's redraw cost is a different quantity large enough to
+/// dominate the tail.
 ///
-/// The dropped clause is reachable here: `NPPM_REMOVESHORTCUTBYCMDID`
-/// lets a plugin unbind, say, Ctrl+C, after which `lastKeyDownConsumed`
-/// is false and Scintilla inserts the raw `0x03` byte — a real
-/// insertion this probe will not count. Accepted, because the
-/// alternative is tracking Scintilla's internal key-consumption state
-/// from outside it.
+/// **`Alt` must be up as well as `Ctrl` down**, and that half is not
+/// decoration: Windows delivers `AltGr` as Ctrl+Alt — this file
+/// documents it in `build_default_accel_table`'s "`AltGr` caveat" — so a
+/// bare Ctrl test would drop every `AltGr`-composed character, which
+/// is how `@`, `{`, `}`, `~` and `€` are typed on German, French,
+/// Nordic and Spanish layouts. None of the Scintilla-owned chords
+/// (Ctrl+Z/Y/X/C/V/A) involves Alt, so requiring it up does not let
+/// them back in.
 ///
-/// It replaces an earlier modifier-state check that asked "is Ctrl
-/// down?". That was wrong twice over. It let **Escape** through —
-/// `KeyMap.cxx` binds bare Escape to `Message::Cancel`, whose handler
-/// invalidates nothing when there is one caret and no autocomplete
-/// open, so Scintilla never paints, the press was never closed off,
-/// and it sat pending until some unrelated later repaint attributed a
-/// fabricated latency to it. And it needed a companion "is Alt up?"
-/// clause to avoid dropping `AltGr`-composed characters, since Windows
-/// delivers `AltGr` as Ctrl+Alt. A code-point test has neither
-/// problem: the six Scintilla-owned chords (Ctrl+Z/Y/X/C/V/A) arrive
-/// as C0 codes and are excluded, Escape is `0x1B` and is excluded, and
-/// every `AltGr` composition is a printable character and is kept.
+/// This replaced a code-point test that excluded every C0 control.
+/// That test could not distinguish Ctrl+I from Tab — they are the same
+/// `WM_CHAR` value, `0x09` — so it had to exclude Tab, Enter and
+/// Backspace outright. With `SCN_MODIFIED` deciding whether a press
+/// counted, only genuine chords need excluding and those three become
+/// measurable.
 ///
-/// It also makes this backend count the same events as `ui_gtk`, whose
-/// probe filters on `!char::is_control`. The two must agree or DESIGN.md
-/// §8's cross-platform comparison is meaningless.
-///
-/// **Tab, Enter and Backspace are control codes and so are excluded**,
-/// on both platforms, even though they do edit the buffer. That is a
-/// deliberate gap, not an oversight: none of the three repaints
-/// unconditionally — Backspace at position 0, or any of them on a
-/// read-only buffer, is a no-op that returns before invalidating — so
-/// opening a measurement on the key press would orphan a sample
-/// exactly as Escape used to, and the caret-blink timer would
-/// eventually close it with a fabricated latency. Counting them
-/// properly means opening on a following `SCN_MODIFIED` rather than on
-/// the key, which is tracked in DESIGN.md §7.4.
-///
-/// Lone surrogates return `None` from `char::from_u32` and are not
-/// counted, so an astral character typed as a surrogate pair
-/// contributes no sample. Rare enough in practice to accept, and it
-/// errs toward under-counting rather than toward a fabricated outlier.
-fn inserts_text(wparam: WPARAM) -> bool {
-    u32::try_from(wparam.0)
-        .ok()
-        .and_then(char::from_u32)
-        .is_some_and(|c| !c.is_control())
+/// `GetKeyState`, not `GetAsyncKeyState`: it reports the state as of
+/// the message being processed rather than the live hardware state, so
+/// it stays correct when the queue is backed up — exactly the
+/// condition worth measuring.
+fn is_editing_chord() -> bool {
+    // The high-order bit is "currently down"; the low bit is a toggle
+    // state, meaningless for these keys.
+    let down = |vk: i32| (unsafe { GetKeyState(vk) } as u16 & 0x8000) != 0;
+    down(VK_CONTROL.0 as i32) && !down(VK_MENU.0 as i32)
 }
 
 /// Layout children: tab strip across the top, status bar at the
@@ -27595,6 +27571,18 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             perf.painted();
                         }
                     } else if nmhdr.code == SCN_MODIFIED {
+                        // Confirms the pending keystroke actually
+                        // changed text, which is what promotes it to a
+                        // measurement. See `codepp_core::perf`.
+                        // Filtered to the main editor for the same
+                        // reason `SCN_PAINTED` is: a plugin's own
+                        // Scintilla control routes through this arm too.
+                        if let Some(state) = state_from_hwnd(hwnd) {
+                            if nmhdr.hwndFrom == state.scintilla_hwnd {
+                                let perf = std::rc::Rc::clone(&state.perf);
+                                perf.text_modified();
+                            }
+                        }
                         // Scintilla's tracking-mode horizontal
                         // scrollWidth is high-water-mark — it grows
                         // when a wider line appears but never
