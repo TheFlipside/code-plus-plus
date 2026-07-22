@@ -337,11 +337,23 @@ delivered. `xdotool type --delay N` types a character every *N/2* ms
 despite its man page, so trusting the flag understates the rate by 2×.
 
 Read DESIGN.md §8 before drawing conclusions. It records the measured
-figures (p99 4.62 ms at a fast-human rate, inside the 5 ms budget), a
-tail above ~15 char/s whose cause is still unidentified, and two
-retracted earlier conclusions — one about the display's frame clock,
-one calling the tail queueing — both of which came from measurement
-error rather than from the editor.
+figures on both backends now — GTK at p99 4.62 ms at a fast-human rate,
+inside the 5 ms budget; Win32 at p99 ≈ 7–9 ms and cold start ≈ 94 ms,
+both outside their budgets — plus the GTK tail above ~15 char/s whose
+cause is still unidentified and two retracted earlier conclusions.
+
+To reproduce the Win32 numbers on a Windows session, `SendKeys.SendWait`
+from a PowerShell harness is what those measurements used — the
+tool's sync-per-key round trip is ~35 ms on its own, so a
+`Start-Sleep -Milliseconds 100` between calls lands near the ≈7 char/s
+"fast typist" band, and `Start-Sleep -Milliseconds 15` saturates near
+20 char/s (the tool's own delivery cost bounds it, so the sleep
+below ~15 ms stops mattering). Drive the process's
+`MainWindowHandle` rather than `FindWindowW`; that avoids depending
+on the main-window class name (`CodePlusPlusMainWindow` at the time
+of writing) and works even if the process took a moment to register
+its class. Quit with a `PostMessageW WM_CLOSE`, not `Stop-Process` —
+the distribution is emitted at pump-exit and is lost on a kill.
 
 ### Run a single phase's demo
 
