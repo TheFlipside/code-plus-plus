@@ -48,6 +48,7 @@ mod state;
 mod status;
 mod tabs;
 mod toolbar;
+mod workspace;
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -209,8 +210,14 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // Win32's dock splitter.
     let editor_dock_paned = gtk::Paned::new(gtk::Orientation::Vertical);
     editor_dock_paned.pack1(&sci_widget, true, false);
-    layout.pack_start(&editor_dock_paned, true, true, 0);
     let fif_dock = fif::build_dock(&editor_dock_paned);
+
+    // Wrap the editor/dock column in a horizontal splitter whose left
+    // pane is the "Folder as Workspace" tree (hidden until a folder is
+    // opened) — the horizontal analogue of the FIF dock's vertical one.
+    // The splitter, not the editor column, is what goes into `layout`.
+    let workspace = workspace::WorkspacePanel::build(editor_dock_paned.upcast_ref::<gtk::Widget>());
+    layout.pack_start(workspace.paned(), true, true, 0);
 
     let status = StatusBar::new();
     layout.pack_start(&status.container, false, false, 0);
@@ -237,6 +244,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
         find_replace: None,
         fif_dock,
         toolbar: toolbar.clone(),
+        workspace,
     }));
     state::install(&st);
 
@@ -280,6 +288,9 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // checks, but the toolbar toggles start unpressed until this runs.
     menu::refresh_view_indicators();
     restore_session(initial_path);
+    // Reopen the workspace folder the last session left open (if any and
+    // it still exists), sizing and showing the panel to match.
+    workspace::apply_saved();
 
     window.connect_delete_event(|_, _| {
         // Persist before tearing down: `Shell::save_session` needs the
@@ -1206,6 +1217,10 @@ pub(crate) fn close_active_tab() -> bool {
 
 /// Persist the session. Safe to call repeatedly.
 pub(crate) fn save_session_now() {
+    // Snapshot the live workspace-panel state into the shell first, so
+    // `save_session` carries the current root / visibility / width — the
+    // same "sync right before every save" discipline `ui_win32` follows.
+    workspace::sync_to_shell();
     with_state(|st| {
         let (shell, mut ui) = st.split();
         if let Err(err) = shell.save_session(&mut ui) {

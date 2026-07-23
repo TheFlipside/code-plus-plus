@@ -88,6 +88,14 @@ pub struct GtkUiState {
     /// until a search produces results; lives in the lower pane of the
     /// editor/dock splitter. See [`crate::fif`].
     pub fif_dock: crate::fif::FifDock,
+    /// The "Folder as Workspace" side panel: a lazily-populated directory
+    /// tree in the left pane of a horizontal splitter that wraps the
+    /// editor column. Hidden until a folder is opened. See
+    /// [`crate::workspace`].
+    ///
+    /// Not part of [`GtkUi`]: no `UiPlatform` method touches it, so it is
+    /// reached only through [`with_state`] and stays out of the split.
+    pub workspace: crate::workspace::WorkspacePanel,
 }
 
 /// The `UiPlatform` implementor. Cheap to build; see the module docs.

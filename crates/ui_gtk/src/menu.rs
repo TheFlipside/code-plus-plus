@@ -171,6 +171,13 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     populate(&menu, accel, &entries);
     menu.append(&gtk::SeparatorMenuItem::new());
 
+    // Open Folder as Workspace — pops the folder picker and roots the
+    // side tree there. Enabled always, matching Win32.
+    let ws = gtk::MenuItem::with_mnemonic("Open Folder as _Workspace…");
+    ws.connect_activate(|_| crate::workspace::open_folder_flow());
+    menu.append(&ws);
+    menu.append(&gtk::SeparatorMenuItem::new());
+
     // Rename — a real path move (Save As) for a saved file, a display-name
     // change for an untitled buffer. Matches Win32's File → Rename.
     let rename = gtk::MenuItem::with_mnemonic("Rena_me…");
@@ -524,6 +531,22 @@ fn build_view_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
         reg.menu_show_whitespace = Some(ws);
         reg.menu_show_eol = Some(eol);
     });
+
+    // Folder as Workspace toggle. Unlike the three checks above it does
+    // not track editor state, so it stays out of `VIEW_INDICATORS`; the
+    // workspace module owns its own check↔toolbar↔panel sync (guarded
+    // against the `set_active` feedback loop by `workspace::syncing`).
+    menu.append(&gtk::SeparatorMenuItem::new());
+    let workspace = gtk::CheckMenuItem::with_mnemonic("Folder as Works_pace");
+    workspace.connect_toggled(|it| {
+        if crate::workspace::syncing() {
+            return;
+        }
+        crate::workspace::set_visible(it.is_active());
+    });
+    menu.append(&workspace);
+    crate::workspace::register_menu_check(workspace);
+
     menu.connect_show(|_| refresh_view_indicators());
     menu.show_all();
 }

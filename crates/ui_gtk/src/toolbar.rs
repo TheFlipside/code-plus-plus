@@ -253,12 +253,23 @@ fn add_view_tools_macros(
     disabled_toggle(toolbar, icon!("document-map"), "Document Map", scale);
     disabled_toggle(toolbar, icon!("document-list"), "Document List", scale);
     disabled_toggle(toolbar, icon!("function-list"), "Function List", scale);
-    disabled_toggle(
+    // Folder as Workspace is wired: the toggle drives the side panel, and
+    // the workspace module keeps it in step with the View-menu check and
+    // the panel's own close button (guarded against the `set_active`
+    // feedback loop by `workspace::syncing`).
+    let workspace = toggle(
         toolbar,
         icon!("folder-workspace"),
         "Folder as Workspace",
         scale,
     );
+    workspace.connect_toggled(|b| {
+        if crate::workspace::syncing() {
+            return;
+        }
+        crate::workspace::set_visible(b.is_active());
+    });
+    crate::workspace::register_toolbar_toggle(workspace);
     separator(toolbar);
 
     push(

@@ -172,6 +172,19 @@ pub fn show_find_in_files() {
     open_dialog(PAGE_FIND_IN_FILES);
 }
 
+/// Open the Find-in-Files tab pre-filled with `directory`, for the
+/// workspace tree's "Find in Files…" context action. The directory is set
+/// unconditionally (an explicit user choice, unlike the empty-only auto
+/// seed in [`open_dialog`]).
+pub fn show_find_in_files_at(directory: &str) {
+    open_dialog(PAGE_FIND_IN_FILES);
+    with_state(|st| {
+        if let Some(d) = &st.find_replace {
+            d.fif_directory.set_text(directory);
+        }
+    });
+}
+
 /// Ensure the dialog exists, select `page`, and present it.
 ///
 /// Focus goes to the find field with any current selection prefilled,
