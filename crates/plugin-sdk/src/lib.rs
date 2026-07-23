@@ -19,14 +19,19 @@
 //! independent `NPP_HANDLE` / `SCINTILLA_*` slots; each plugin's
 //! `setInfo` writes to its own copy.
 //!
-//! ## Cross-platform note
+//! ## Cross-platform transport
 //!
-//! The whole crate is `#![cfg(target_os = "windows")]` today — the
-//! plugin host is Windows-only until Phase 5 ports it to
-//! `dlopen`/`dlsym`. Non-Windows builds emit an empty rlib so the
-//! workspace's cross-platform `cargo build` still passes.
-
-#![cfg(target_os = "windows")]
+//! On Windows the plugin's `SendMessage(scintillaHandle, SCI_*, …)` is
+//! routed by the OS message pump for free — the handle *is* the
+//! Scintilla window — so `SendMessageW` is a direct `#[link(name =
+//! "user32")]` import. On Linux/macOS a plugin `.so`/`.dylib` has no
+//! Scintilla linked and there is no OS pump, so `SendMessageW` forwards
+//! to a **host-installed callback** ([`HOST_DISPATCH`]) instead. The
+//! host resolves [`codepp_plugin_set_dispatch`] in the loaded library
+//! right after `dlopen` and hands the plugin a routing function that
+//! sends `NPPM_*` to the host dispatcher and `SCI_*` to the Scintilla
+//! widget. Every SDK helper (and every plugin) goes through the one
+//! `SendMessageW` alias, so the transport swap is invisible above it.
 
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
@@ -39,27 +44,79 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 // each plugin only needs `codepp-plugin-sdk` as a dep, not both
 // `codepp-plugin-sdk` and `codepp-plugin-host`.
 
-pub use codepp_plugin_host::ffi::{FuncItem, NppData, SCNotification, MENU_TITLE_LENGTH};
+// `Hwnd` and `HostDispatchFn` are re-exported (not redefined) so this
+// ABI-critical pair can never silently drift from the host's copy.
+pub use codepp_plugin_host::ffi::{
+    FuncItem, HostDispatchFn, Hwnd, NppData, SCNotification, MENU_TITLE_LENGTH,
+};
 
-// ---- Win32 SendMessageW link ------------------------------------
+// ---- SendMessageW transport -------------------------------------
 //
-// The `#[link(name = "user32")]` attribute propagates to dependent
-// cdylibs at link time, so each plugin gets `user32.dll` resolved
-// without re-declaring the link itself. `pub` so plugins can call
-// `SendMessageW` directly when they need a one-off Scintilla
-// message that isn't covered by the helpers below.
+// On Windows this is the Win32 `#[link(name = "user32")]` import; the
+// attribute propagates to dependent cdylibs at link time, so each
+// plugin gets `user32.dll` resolved without re-declaring the link. On
+// non-Windows it forwards to the host callback installed via
+// [`codepp_plugin_set_dispatch`]. Either way it is `pub` so plugins can
+// send one-off messages the helpers below don't cover, and the two
+// definitions share one signature so call sites are identical.
 
-/// Win32 `HWND` alias. Mirrors `codepp_plugin_host::ffi::Hwnd` for
-/// concision in plugin FFI bodies — the type alias keeps the
-/// pointer-cast call sites readable.
-pub type Hwnd = *mut c_void;
-
+/// Win32 `SendMessageW`. Synchronous round-trip into the target
+/// window's `wnd_proc`; returns whatever the message handler produced.
+#[cfg(target_os = "windows")]
 #[link(name = "user32")]
 extern "system" {
-    /// Win32 `SendMessageW`. Synchronous round-trip into the target
-    /// window's `wnd_proc`; returns whatever the message handler
-    /// produced.
     pub fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
+}
+
+/// The host callback installed by [`codepp_plugin_set_dispatch`]. Null
+/// until the host runs the handshake (i.e. before the plugin's
+/// `setInfo`), the same window in which the handle atomics are also
+/// null — so a message sent that early is a no-op either way.
+#[cfg(not(target_os = "windows"))]
+static HOST_DISPATCH: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Install the host's message-routing callback into this plugin.
+///
+/// The host resolves this symbol in each freshly-loaded plugin (via
+/// `dlsym`) and calls it once, before `setInfo`, passing the routing
+/// function. It replaces the Win32 OS message pump the Windows build
+/// gets for free. A null argument clears the callback.
+///
+/// # Safety
+///
+/// The host must pass a function pointer valid for the plugin's entire
+/// loaded lifetime, matching [`HostDispatchFn`]'s ABI.
+#[cfg(not(target_os = "windows"))]
+#[no_mangle]
+pub extern "C" fn codepp_plugin_set_dispatch(dispatch: Option<HostDispatchFn>) {
+    let ptr = dispatch.map_or(core::ptr::null_mut(), |f| f as *mut c_void);
+    HOST_DISPATCH.store(ptr, Ordering::Release);
+}
+
+/// Non-Windows `SendMessageW`: forward to the host callback installed
+/// via [`codepp_plugin_set_dispatch`]. Returns 0 when no callback is
+/// installed yet — mirroring Win32 `SendMessage` to a null/invalid
+/// window, which also returns 0 without dereferencing.
+///
+/// # Safety
+///
+/// Same contract as Win32 `SendMessageW`: `wparam`/`lparam` must be
+/// valid for whatever the message documents (e.g. a valid out-pointer
+/// for `NPPM_GETCURRENTSCINTILLA`), and the host callback must be a live
+/// [`HostDispatchFn`].
+#[cfg(not(target_os = "windows"))]
+#[allow(non_snake_case)]
+pub unsafe fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize {
+    let ptr = HOST_DISPATCH.load(Ordering::Acquire);
+    if ptr.is_null() {
+        return 0;
+    }
+    // SAFETY: `ptr` was stored from a valid `HostDispatchFn` by
+    // `codepp_plugin_set_dispatch`; transmuting it back to that fn type
+    // and calling it is sound. The message-argument contract is the
+    // caller's responsibility, exactly as for the Win32 import.
+    let dispatch: HostDispatchFn = unsafe { core::mem::transmute(ptr) };
+    unsafe { dispatch(hwnd, msg, wparam, lparam) }
 }
 
 // ---- SyncCell ---------------------------------------------------
@@ -226,12 +283,14 @@ pub fn npp_handle() -> Hwnd {
 //
 //   * Each helper null-checks the input HWND and returns
 //     empty / no-op on null.
-//   * For non-null but dangling HWNDs (host destroyed the
-//     window), Win32's `SendMessageW` returns 0 without
-//     dereferencing — that's documented behaviour, not a
-//     hidden risk. Plugins can't construct a synthetic-but-
-//     dangerous HWND that would corrupt memory through these
-//     APIs; the worst case is "nothing happens".
+//   * For non-null but dangling / unrecognised handles, the
+//     transport fails soft on both platforms: Win32's
+//     `SendMessageW` returns 0 without dereferencing (documented
+//     behaviour), and the non-Windows host routing identity-checks
+//     the handle (npp sentinel vs. its own Scintilla widget) and
+//     returns 0 for anything else rather than dereferencing it. So
+//     plugins can't corrupt memory through these APIs on either
+//     backend; the worst case is "nothing happens".
 //   * Plugins always source HWNDs through `active_scintilla()`
 //     or `npp_handle()`, both of which wrap atomics that the
 //     SDK initialised from `setInfo`.

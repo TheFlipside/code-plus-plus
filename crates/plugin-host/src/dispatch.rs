@@ -20,8 +20,13 @@
 //! receive `0` and a `tracing::warn!` is logged — that's the
 //! documented contract, so plugins always *link* and Code++ surfaces
 //! coverage gaps at runtime, not at plugin-build time.
-
-#![cfg(target_os = "windows")]
+//!
+//! On GTK/Linux the Win32 `wnd_proc` routing is replaced by the SDK's
+//! host-dispatch handshake (see `codepp-plugin-sdk`): a plugin's
+//! `SendMessage(npp_handle, NPPM_*, …)` reaches [`dispatch_nppm`]
+//! through the host's routing callback rather than the OS message pump.
+//! The dispatcher itself is platform-neutral (pure `HostServices` +
+//! `#[repr(C)]` types), so it is unconditional since Phase 5.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;

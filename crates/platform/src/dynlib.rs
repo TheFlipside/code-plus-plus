@@ -73,14 +73,103 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(unix)]
+mod imp {
+    use super::Path;
+    use std::ffi::{CStr, CString};
+    use std::os::unix::ffi::OsStrExt;
+
+    /// Owns the `dlopen` handle; `dlclose`d on drop.
+    pub struct DynLibInner {
+        handle: *mut core::ffi::c_void,
+    }
+
+    /// Pull the most recent `dlerror()` text, or a generic fallback.
+    /// `dlerror()` returns a pointer to a thread-local static string
+    /// (borrowed, not owned) or null when there is no pending error.
+    fn last_dlerror() -> String {
+        // SAFETY: `dlerror` takes no arguments and returns either null
+        // or a pointer to a NUL-terminated C string valid until the
+        // next `dlerror` call on this thread — which does not happen
+        // before we copy it out here.
+        let msg = unsafe { libc::dlerror() };
+        if msg.is_null() {
+            return "unknown dynamic-loader error".to_string();
+        }
+        // SAFETY: `msg` is non-null and NUL-terminated per the contract
+        // above.
+        unsafe { CStr::from_ptr(msg) }
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    pub fn load(path: &Path) -> Result<DynLibInner, String> {
+        // Reject relative paths for the same reason the Windows arm
+        // does: a bare name (`"libc.so.6"`) sends `dlopen` through the
+        // `LD_LIBRARY_PATH` / default search order, a hijack vector if
+        // any searched directory is attacker-controlled. Plugin loads
+        // always pass absolute paths from `read_dir`.
+        if !path.is_absolute() {
+            return Err(format!(
+                "DynLib::load requires an absolute path; got {}",
+                path.display()
+            ));
+        }
+        let cpath = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| format!("path contains an interior NUL: {}", path.display()))?;
+        // Clear any stale pending error so `last_dlerror()` reports
+        // *this* load's failure rather than a previous one.
+        // SAFETY: `dlerror` is always safe to call to reset the state.
+        unsafe { libc::dlerror() };
+        // RTLD_NOW: resolve every symbol at load time, so a plugin with
+        // an unsatisfied dependency fails here (with a diagnostic)
+        // rather than crashing later on first use. RTLD_LOCAL: keep the
+        // plugin's symbols out of the global scope, so two plugins that
+        // happen to export the same name don't collide — the host
+        // resolves each plugin's exports through its own handle.
+        // SAFETY: `cpath` is a valid NUL-terminated path for the call.
+        let handle = unsafe { libc::dlopen(cpath.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+        if handle.is_null() {
+            return Err(format!("dlopen({}): {}", path.display(), last_dlerror()));
+        }
+        Ok(DynLibInner { handle })
+    }
+
+    pub fn resolve(inner: &DynLibInner, symbol: &str) -> Option<*mut core::ffi::c_void> {
+        let csym = CString::new(symbol).ok()?;
+        // SAFETY: `inner.handle` came from a successful `dlopen` and is
+        // still open (we hold `&DynLibInner`); `csym` is a valid
+        // NUL-terminated symbol name for the call. `dlsym` returns null
+        // when the symbol isn't exported — treated as `None`, matching
+        // the Windows `GetProcAddress` arm.
+        let ptr = unsafe { libc::dlsym(inner.handle, csym.as_ptr()) };
+        if ptr.is_null() {
+            None
+        } else {
+            Some(ptr)
+        }
+    }
+
+    impl Drop for DynLibInner {
+        fn drop(&mut self) {
+            // SAFETY: `handle` came from a successful `dlopen` and has
+            // not been closed. `dlclose` refcounts like `FreeLibrary`;
+            // the underlying object stays mapped until the last close.
+            unsafe {
+                libc::dlclose(self.handle);
+            }
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "windows", unix)))]
 mod imp {
     use super::Path;
 
     pub struct DynLibInner;
 
     pub fn load(_path: &Path) -> Result<DynLibInner, String> {
-        Err("dynlib: non-Windows backend not implemented until Phase 5".into())
+        Err("dynlib: no dynamic-loader backend for this target".into())
     }
 
     pub fn resolve(_inner: &DynLibInner, _symbol: &str) -> Option<*mut core::ffi::c_void> {
@@ -168,8 +257,8 @@ impl DynLib {
     }
 }
 
-/// Plugin DLL filename extension on this platform. Phase 5 expands
-/// this to `.so`/`.dylib` when the non-Windows backends land.
+/// Plugin library filename extension on this platform: `.dll` on
+/// Windows, `.so` on Linux, `.dylib` on macOS.
 #[cfg(target_os = "windows")]
 pub const PLUGIN_EXTENSION: &str = "dll";
 
@@ -276,5 +365,71 @@ mod tests {
         assert!(result.is_err(), "relative path should be rejected");
         let result = DynLib::load("subdir/user32.dll");
         assert!(result.is_err(), "relative path should be rejected");
+    }
+
+    // --- Unix (dlopen) loader tests ---------------------------------
+    //
+    // libc is mapped into every process, so it's a reliable target the
+    // same way user32.dll is on Windows. `dlopen(NULL)` would give the
+    // global handle but `DynLib` needs a real absolute path, so we open
+    // libc by its canonical soname via an absolute path when we can find
+    // one; falling back to the linker's search is exactly what we forbid,
+    // so instead we resolve a well-known symbol out of the already-mapped
+    // libc through a freshly-opened handle to the system C library.
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn libc_path() -> PathBuf {
+        // Glibc and musl both install the runtime C library under one of
+        // these absolute paths on the CI/dev targets; try each.
+        for candidate in [
+            "/lib/x86_64-linux-gnu/libc.so.6",
+            "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "/lib64/libc.so.6",
+            "/usr/lib/libc.so.6",
+            "/lib/libc.so.6",
+        ] {
+            let p = PathBuf::from(candidate);
+            if p.exists() {
+                return p;
+            }
+        }
+        // Last resort for exotic layouts: libm, which `getauxval`-free
+        // targets still ship. If none exist the test self-skips below.
+        PathBuf::from("/usr/lib/libc.so.6")
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn loads_and_resolves_libc() {
+        let path = libc_path();
+        if !path.exists() {
+            // No known absolute libc path on this host; nothing to load.
+            eprintln!("skipping: no libc at a known absolute path");
+            return;
+        }
+        let lib = DynLib::load(&path).expect("libc load");
+        unsafe {
+            // `strlen` is exported by every C library.
+            type StrlenFn = unsafe extern "C" fn(*const core::ffi::c_char) -> usize;
+            let strlen: StrlenFn = lib.resolve("strlen").expect("strlen export");
+            let s = b"hello\0";
+            assert_eq!(strlen(s.as_ptr().cast()), 5);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_library_returns_err_unix() {
+        let result = DynLib::load("/definitely/not/a/real/library-name.so");
+        assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_relative_path_unix() {
+        // Same search-order hijack class as the Windows arm: a bare
+        // soname would send dlopen through LD_LIBRARY_PATH.
+        assert!(DynLib::load("libc.so.6").is_err());
+        assert!(DynLib::load("subdir/libc.so.6").is_err());
     }
 }

@@ -81,10 +81,9 @@ use codepp_core::{
     WindowGeometry,
 };
 use codepp_platform::watch::{FileChange, FileWatcher};
-#[cfg(target_os = "windows")]
 use codepp_plugin_host::{
-    dispatch_nppm, notify_all, FuncItem, HostServices, Hwnd, Notification, NppData, PluginCmd,
-    PluginHost, NPPMAINMENU, NPPPLUGINMENU,
+    dispatch_nppm, notify_all, FuncItem, HostDispatchFn, HostServices, Hwnd, Notification, NppData,
+    PluginCmd, PluginHost, NPPMAINMENU, NPPPLUGINMENU,
 };
 
 pub mod fif;
@@ -424,8 +423,9 @@ pub trait UiPlatform {
     /// method against their native shortcut systems
     /// (`gtk_application_set_accels_for_action` /
     /// `NSMenuItem.keyEquivalent`).
-    #[cfg(target_os = "windows")]
-    fn shortcut_for_cmd_id(&self, cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey>;
+    fn shortcut_for_cmd_id(&self, _cmd_id: i32) -> Option<codepp_plugin_host::ShortcutKey> {
+        None
+    }
 
     /// Remove every accelerator-table binding for `cmd_id`.
     /// Returns `true` if at least one binding was removed,
@@ -434,8 +434,9 @@ pub trait UiPlatform {
     /// `NPPM_REMOVESHORTCUTBYCMDID`. Same `cfg(windows)` gate
     /// rationale as `shortcut_for_cmd_id` — the dispatcher
     /// lives in `plugin-host`, which is Windows-only.
-    #[cfg(target_os = "windows")]
-    fn remove_shortcut_for_cmd_id(&mut self, cmd_id: i32) -> bool;
+    fn remove_shortcut_for_cmd_id(&mut self, _cmd_id: i32) -> bool {
+        false
+    }
 
     /// Register or unregister a plugin-owned modeless-dialog
     /// HWND with the host's message pump. `register == true`
@@ -443,30 +444,38 @@ pub trait UiPlatform {
     /// `IsDialogMessageW` against it; `register == false`
     /// removes it. Same `cfg(windows)` gate rationale as the
     /// shortcut methods — `Hwnd` comes from `plugin-host`.
-    #[cfg(target_os = "windows")]
-    fn register_modeless_dialog(&mut self, dlg: codepp_plugin_host::Hwnd, register: bool) -> bool;
+    fn register_modeless_dialog(
+        &mut self,
+        _dlg: codepp_plugin_host::Hwnd,
+        _register: bool,
+    ) -> bool {
+        false
+    }
 
     /// Add a plugin-supplied icon (HICON) to the host toolbar
     /// bound to `cmd_id`. Drives `NPPM_ADDTOOLBARICON`. Same
     /// `cfg(windows)` gate rationale as the shortcut messages
     /// — `Hwnd` (the plugin's HICON shape) comes from
     /// `plugin-host`.
-    #[cfg(target_os = "windows")]
-    fn add_toolbar_icon(&mut self, cmd_id: i32, hicon: codepp_plugin_host::Hwnd) -> bool;
+    fn add_toolbar_icon(&mut self, _cmd_id: i32, _hicon: codepp_plugin_host::Hwnd) -> bool {
+        false
+    }
 
     /// Whether the host is currently rendering its own chrome
     /// in dark mode. Drives `NPPM_ISDARKMODEENABLED`. Code++
     /// Phase 4 returns `false` (no host-side dark mode); Phase
     /// 5 wires the live theme state. Same `cfg(windows)` gate
     /// as the other plugin-host-typed methods.
-    #[cfg(target_os = "windows")]
-    fn is_dark_mode_enabled(&self) -> bool;
+    fn is_dark_mode_enabled(&self) -> bool {
+        false
+    }
 
     /// Write the host's dark-mode palette into `out` if dark
     /// mode is active. Drives `NPPM_GETDARKMODECOLORS`. Code++
     /// Phase 4 returns `false` without touching `out`.
-    #[cfg(target_os = "windows")]
-    fn dark_mode_colors(&self, out: &mut codepp_plugin_host::NppDarkModeColors) -> bool;
+    fn dark_mode_colors(&self, _out: &mut codepp_plugin_host::NppDarkModeColors) -> bool {
+        false
+    }
 
     /// Create a fresh Scintilla control as a child of the
     /// plugin-supplied `parent` HWND. Drives
@@ -476,11 +485,12 @@ pub trait UiPlatform {
     /// parent goes away). Same `cfg(windows)` gate rationale
     /// as the other plugin-HWND methods — `Hwnd` comes from
     /// `plugin-host`.
-    #[cfg(target_os = "windows")]
     fn create_plugin_scintilla(
         &mut self,
-        parent: codepp_plugin_host::Hwnd,
-    ) -> codepp_plugin_host::Hwnd;
+        _parent: codepp_plugin_host::Hwnd,
+    ) -> codepp_plugin_host::Hwnd {
+        core::ptr::null_mut()
+    }
 
     /// Register a plugin's docking dialog and create the
     /// host-owned floating frame that wraps it. Drives
@@ -489,36 +499,45 @@ pub trait UiPlatform {
     /// it visible. Returns `true` on success, `false` for dead
     /// `params.h_client`, frame-creation failure, or duplicate
     /// `h_client` registration.
-    #[cfg(target_os = "windows")]
-    fn register_dock_dialog(&mut self, params: codepp_plugin_host::DockDialogParams) -> bool;
+    fn register_dock_dialog(&mut self, _params: codepp_plugin_host::DockDialogParams) -> bool {
+        false
+    }
 
     /// Show the floating frame previously registered for
     /// `h_client`. Drives `NPPM_DMMSHOW`. Returns `true` on
     /// success, `false` for unregistered HWND.
-    #[cfg(target_os = "windows")]
-    fn show_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool;
+    fn show_dock_dialog(&mut self, _h_client: codepp_plugin_host::Hwnd) -> bool {
+        false
+    }
 
     /// Hide the floating frame previously registered for
     /// `h_client`. Drives `NPPM_DMMHIDE`. The registration
     /// survives — a subsequent `show_dock_dialog` re-shows.
     /// Returns `true` on success, `false` for unregistered
     /// HWND.
-    #[cfg(target_os = "windows")]
-    fn hide_dock_dialog(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool;
+    fn hide_dock_dialog(&mut self, _h_client: codepp_plugin_host::Hwnd) -> bool {
+        false
+    }
 
     /// Refresh the floating frame's title (and add-info /
     /// icon) from the cached `DockDialogParams`. Drives
     /// `NPPM_DMMUPDATEDISPINFO`. Returns `true` on success,
     /// `false` for unregistered HWND.
-    #[cfg(target_os = "windows")]
-    fn update_dock_disp_info(&mut self, h_client: codepp_plugin_host::Hwnd) -> bool;
+    fn update_dock_disp_info(&mut self, _h_client: codepp_plugin_host::Hwnd) -> bool {
+        false
+    }
 
     /// Look up a registered docking dialog by display name
     /// (and optional module-name disambiguator). Drives
     /// `NPPM_DMMGETPLUGINHWNDBYNAME`. Returns the registered
     /// `h_client` HWND, or NULL if no entry matches.
-    #[cfg(target_os = "windows")]
-    fn dock_hwnd_by_name(&self, name: &str, module_name: Option<&str>) -> codepp_plugin_host::Hwnd;
+    fn dock_hwnd_by_name(
+        &self,
+        _name: &str,
+        _module_name: Option<&str>,
+    ) -> codepp_plugin_host::Hwnd {
+        core::ptr::null_mut()
+    }
 
     /// Pull the current text content of the buffer backed by the
     /// Scintilla document at `scintilla_doc`. The implementation may
@@ -584,8 +603,9 @@ pub trait UiPlatform {
     /// `cfg(windows)` gate rationale as the other plugin-host-
     /// dispatched methods — `NPPM_MENUCOMMAND` lives in
     /// `plugin-host`, which is Windows-only until Phase 5.
-    #[cfg(target_os = "windows")]
-    fn dispatch_npp_menu_command(&mut self, idm: i32) -> bool;
+    fn dispatch_npp_menu_command(&mut self, _idm: i32) -> bool {
+        false
+    }
 
     /// Set the checked state of the menu item bound to N++-ABI
     /// command id `idm`. Drives `NPPM_SETMENUITEMCHECK`. The
@@ -596,8 +616,9 @@ pub trait UiPlatform {
     /// state was applied, `false` if the id has no menu item
     /// (unmapped built-in id, or a plugin cmd id whose owning
     /// plugin didn't publish a menu entry).
-    #[cfg(target_os = "windows")]
-    fn set_npp_menu_item_check(&mut self, idm: i32, checked: bool) -> bool;
+    fn set_npp_menu_item_check(&mut self, _idm: i32, _checked: bool) -> bool {
+        false
+    }
 
     /// Mark the active buffer as modified, so save prompts, the
     /// title-bar asterisk, and `SCI_GETMODIFY` all report dirty
@@ -1171,7 +1192,6 @@ pub struct ClosedTab {
 ///
 /// The struct is `Copy` so the `wnd_proc` can build it on the stack
 /// per call without any allocation cost.
-#[cfg(target_os = "windows")]
 #[derive(Clone, Copy)]
 pub struct HostHandles {
     /// Main host window — `nmhdr.hwndFrom` for outbound notifications,
@@ -1189,7 +1209,6 @@ pub struct HostHandles {
     pub main_menu: Hwnd,
 }
 
-#[cfg(target_os = "windows")]
 impl HostHandles {
     /// All-NULL handles. **Tests and stub implementations only.**
     /// Production code must supply real handles before any plugin
@@ -1228,17 +1247,15 @@ pub struct Shell {
     /// don't accidentally resolve a plugin lookup to a different
     /// buffer.
     next_buffer_id: i32,
-    /// Plugin registry. Windows-only until Phase 5 wires the same
-    /// trait surface against `dlopen`.
-    #[cfg(target_os = "windows")]
+    /// Plugin registry. Cross-platform since Phase 5 (Win32 via
+    /// `LoadLibraryW`, GTK/Linux via `dlopen`).
     plugins: PluginHost,
     /// Outbound NPPN_* notifications queued by shell operations
     /// (load complete, save complete) since the last
     /// [`Self::take_notifications`] drain. The UI fires each one
     /// **after** dropping any `&mut Shell` borrow, since `beNotified`
     /// runs synchronous plugin code that may `SendMessage(NPPM_*)`
-    /// back into the `wnd_proc`.
-    #[cfg(target_os = "windows")]
+    /// back into the host dispatcher.
     pending_notifications: Vec<Notification>,
     loader: Loader,
     _loader_shutdown: LoaderShutdown,
@@ -1302,7 +1319,6 @@ pub struct Shell {
     /// filters pre-populated. `None` is the common case (menu /
     /// hotkey driven open uses whatever the dialog already
     /// holds).
-    #[cfg(target_os = "windows")]
     pending_fif_launch: Option<FifLaunchPrefill>,
     /// Modal-dialog requests queued by *synchronous* shell methods
     /// that don't go through `drain` (the dialog source for the
@@ -1735,9 +1751,7 @@ impl Shell {
             tabs: Vec::new(),
             active_tab: None,
             next_buffer_id: 1,
-            #[cfg(target_os = "windows")]
             plugins: PluginHost::new(),
-            #[cfg(target_os = "windows")]
             pending_notifications: Vec::new(),
             loader,
             _loader_shutdown: loader_shutdown,
@@ -1751,7 +1765,6 @@ impl Shell {
             fif_orchestrator,
             fif_rx: fif_rx_outer,
             pending_fif: Vec::new(),
-            #[cfg(target_os = "windows")]
             pending_fif_launch: None,
             deferred_dialogs: Vec::new(),
             unsaved_restore_ids: HashSet::new(),
@@ -1969,7 +1982,6 @@ impl Shell {
     /// [`Self::notify_plugins`] **after** dropping the `&mut Shell`
     /// borrow, since `beNotified` runs synchronous plugin code that
     /// may re-enter the `wnd_proc`.
-    #[cfg(target_os = "windows")]
     pub fn take_notifications(&mut self) -> Vec<Notification> {
         std::mem::take(&mut self.pending_notifications)
     }
@@ -1985,7 +1997,6 @@ impl Shell {
     ///
     /// Idempotent — a no-op when there's no active tab. Safe to
     /// call from sites that may race with a close-tab path.
-    #[cfg(target_os = "windows")]
     pub fn queue_buffer_activated(&mut self) {
         if let Some(tab) = self.active() {
             let buffer_id = tab.id as isize;
@@ -2065,7 +2076,6 @@ impl Shell {
         // the early `from == to` short-circuit above filters
         // out no-op drags that "land back where they started"
         // so plugins don't see a spurious "list changed" event.
-        #[cfg(target_os = "windows")]
         self.pending_notifications
             .push(Notification::DocOrderChanged);
         true
@@ -2156,7 +2166,6 @@ impl Shell {
             }
             self.session.active = self.active_tab;
         }
-        #[cfg(target_os = "windows")]
         self.pending_notifications
             .push(Notification::DocOrderChanged);
         true
@@ -2238,7 +2247,6 @@ impl Shell {
         // mid-operation, currently not part of the architecture);
         // the change is bigger than this batch should carry.
         let closing_id = removed.id as isize;
-        #[cfg(target_os = "windows")]
         {
             self.pending_notifications
                 .push(Notification::FileBeforeClose {
@@ -2253,8 +2261,6 @@ impl Shell {
         }
         // Suppress "unused" on non-Windows builds where the notification
         // queue isn't fed.
-        #[cfg(not(target_os = "windows"))]
-        let _ = closing_id;
 
         // Record the closed file in the recent-files history if
         // the feature is active and the closed tab was bound to
@@ -2294,7 +2300,6 @@ impl Shell {
     /// only records paths; first-touch load happens when a plugin's
     /// menu is opened (DESIGN.md §6.4). Returns the count discovered.
     /// A non-existent directory is not an error (first-run case).
-    #[cfg(target_os = "windows")]
     pub fn discover_plugins(&mut self, dir: &Path) -> std::io::Result<usize> {
         let count = self.plugins.discover(dir)?;
         // Apply the user's disabled-plugin list right after
@@ -2310,7 +2315,6 @@ impl Shell {
     }
 
     /// Total plugins known to the host (any lifecycle state).
-    #[cfg(target_os = "windows")]
     #[must_use]
     pub fn plugin_count(&self) -> usize {
         self.plugins.len()
@@ -2320,7 +2324,6 @@ impl Shell {
     /// Manager UI — see [`PluginAdminEntry`]. Caller takes
     /// ownership; no borrow on `Shell.plugins` is held across
     /// the modal pump.
-    #[cfg(target_os = "windows")]
     #[must_use]
     pub fn installed_plugins(&self) -> Vec<codepp_plugin_host::PluginAdminEntry> {
         self.plugins.snapshot_for_admin()
@@ -2339,7 +2342,6 @@ impl Shell {
     /// matches Notepad++'s "restart required" semantics —
     /// unloading a live plugin mid-session would yank function
     /// pointers the host (and other plugins) might still hold.
-    #[cfg(target_os = "windows")]
     pub fn set_plugin_disabled(&mut self, idx: usize, disabled: bool) -> bool {
         let changed = self.plugins.set_disabled(idx, disabled);
         if changed {
@@ -2370,7 +2372,6 @@ impl Shell {
     /// `npp_hwnd` is reported in `SCNotification.nmhdr.hwndFrom`.
     /// Synchronous on the UI thread (parity with Notepad++); plugins
     /// that block here block the host.
-    #[cfg(target_os = "windows")]
     pub fn notify_plugins(&self, notification: Notification, npp_hwnd: Hwnd) {
         notify_all(&self.plugins, &notification, npp_hwnd);
     }
@@ -2383,8 +2384,12 @@ impl Shell {
     /// `npp_data` is the `NppData` struct each plugin's `setInfo`
     /// receives. The same struct is passed to every plugin loaded by
     /// this call.
-    #[cfg(target_os = "windows")]
-    pub fn ensure_plugins_loaded(&mut self, npp_data: NppData) {
+    ///
+    /// `dispatch` is the host's message-routing callback, installed into
+    /// each freshly-loaded plugin so its `SendMessage` transport reaches
+    /// the host (non-Windows — see `codepp-plugin-sdk`). Win32 passes
+    /// `None`; its plugins route through the OS message pump instead.
+    pub fn ensure_plugins_loaded(&mut self, npp_data: NppData, dispatch: Option<HostDispatchFn>) {
         let pending: Vec<usize> = self
             .plugins
             .iter()
@@ -2393,7 +2398,7 @@ impl Shell {
             .map(|(i, _)| i)
             .collect();
         for idx in pending {
-            if let Err(e) = self.plugins.load(idx, npp_data) {
+            if let Err(e) = self.plugins.load(idx, npp_data, dispatch) {
                 tracing::warn!(idx = idx, error = ?e, "plugin load failed");
             }
         }
@@ -2405,7 +2410,6 @@ impl Shell {
     ///
     /// Plugins with zero `FuncItems` are skipped — they're loaded but
     /// contribute no menu items (typically `beNotified`-only plugins).
-    #[cfg(target_os = "windows")]
     pub fn loaded_plugin_funcs(&self) -> impl Iterator<Item = (String, &[FuncItem])> {
         self.plugins
             .iter()
@@ -2429,7 +2433,6 @@ impl Shell {
     ///
     /// The returned pointer is valid as long as the plugin's DLL
     /// stays loaded (i.e. for the lifetime of `self`).
-    #[cfg(target_os = "windows")]
     #[must_use]
     pub fn lookup_plugin_command(&self, cmd_id: i32) -> Option<PluginCmd> {
         self.plugins.lookup_cmd(cmd_id)
@@ -2459,7 +2462,6 @@ impl Shell {
     /// At that point the plugin is the trust boundary and is bound
     /// by the documented NPPM_* ABI in
     /// `plugins/nppcompat-headers/Notepad_plus_msgs.h`.
-    #[cfg(target_os = "windows")]
     #[must_use = "the wnd_proc must return the LRESULT this produced for handled messages, or fall through for None"]
     pub unsafe fn dispatch_plugin_message<U: UiPlatform>(
         &mut self,
@@ -2536,7 +2538,6 @@ impl Shell {
         // arrived"; matches Notepad++'s convention. BUFFERACTIVATED
         // fires so plugins observing buffer changes pick up the new
         // id and tab index.
-        #[cfg(target_os = "windows")]
         self.queue_buffer_activated();
     }
 
@@ -2794,7 +2795,6 @@ impl Shell {
                 );
                 // Notification push first, then dirty-glyph clear —
                 // see save_current_to_disk for the ordering rationale.
-                #[cfg(target_os = "windows")]
                 {
                     let buffer_id = self.active().map_or(0, |t| t.id as isize);
                     self.pending_notifications
@@ -2941,7 +2941,6 @@ impl Shell {
                 OpenFileOutcome::AlreadyActive
             } else {
                 self.active_tab = Some(idx);
-                #[cfg(target_os = "windows")]
                 self.queue_buffer_activated();
                 OpenFileOutcome::SwitchedToExisting(idx)
             };
@@ -2973,7 +2972,6 @@ impl Shell {
         // hasn't been allocated yet) — N++ uses the same convention.
         // Skipped on dedupe (already-open path) above; that's a
         // tab activation, not a file open.
-        #[cfg(target_os = "windows")]
         self.pending_notifications
             .push(Notification::FileBeforeOpen);
 
@@ -2985,7 +2983,6 @@ impl Shell {
             // in-flight opens via BEFORE/AFTER doesn't leak
             // state — same contract as the
             // `apply_load_result` Err arm.
-            #[cfg(target_os = "windows")]
             self.pending_notifications
                 .push(Notification::FileLoadFailed);
             return OpenFileOutcome::Rejected;
@@ -3310,7 +3307,6 @@ impl Shell {
     /// dispatch consumes this immediately after
     /// `dispatch_plugin_message` returns and feeds it to the FIF
     /// dialog opener.
-    #[cfg(target_os = "windows")]
     pub fn take_fif_launch_prefill(&mut self) -> Option<FifLaunchPrefill> {
         self.pending_fif_launch.take()
     }
@@ -3322,7 +3318,6 @@ impl Shell {
     /// write path mirrors the read path; the field itself stays
     /// private so external callers can't bypass the take/set
     /// contract.
-    #[cfg(target_os = "windows")]
     pub fn set_fif_launch_prefill(&mut self, prefill: FifLaunchPrefill) {
         self.pending_fif_launch = Some(prefill);
     }
@@ -3500,7 +3495,6 @@ impl Shell {
                 tab.pinned = stored_pinned;
                 let stored_doc = tab.scintilla_doc;
                 let lang = tab.lang;
-                #[cfg(target_os = "windows")]
                 let buffer_id = tab.id as isize;
 
                 // Apply UI updates only when this load targets the
@@ -3532,7 +3526,6 @@ impl Shell {
                 // matches Notepad++'s canonical sequence: file-open
                 // events fire before buffer-activation events on
                 // the same load.
-                #[cfg(target_os = "windows")]
                 self.pending_notifications
                     .push(Notification::FileOpened { buffer_id });
 
@@ -3554,7 +3547,6 @@ impl Shell {
                     // buffer — fire NPPN_BUFFERACTIVATED so plugins
                     // observing buffer changes pick up the new id.
                     // Notification queue is Windows-gated.
-                    #[cfg(target_os = "windows")]
                     self.queue_buffer_activated();
                 }
             }
@@ -3623,7 +3615,6 @@ impl Shell {
                 // pairing — without `FileLoadFailed` they'd never
                 // hear back about a failed open and would track
                 // an in-flight open forever.
-                #[cfg(target_os = "windows")]
                 self.pending_notifications
                     .push(Notification::FileLoadFailed);
             }
@@ -3679,7 +3670,6 @@ impl Shell {
                         tab.id
                     });
                 if let Some(id) = matched_id {
-                    #[cfg(target_os = "windows")]
                     {
                         let buffer_id = id as isize;
                         self.pending_notifications
@@ -3690,8 +3680,6 @@ impl Shell {
                     // plugin host bridges land in Phase 5, the
                     // notification push above moves out of the
                     // cfg gate and `id` becomes used unconditionally.
-                    #[cfg(not(target_os = "windows"))]
-                    let _ = id;
                     pending.push(PendingDialog::Error {
                         title: "File removed".to_string(),
                         message: format!(
@@ -3756,7 +3744,6 @@ impl Shell {
         // ordering matches Notepad++'s ABI and lets a future
         // synchronous-delivery wiring (DESIGN.md §7.4) honour the
         // contract correctly without rearranging this code.
-        #[cfg(target_os = "windows")]
         self.pending_notifications
             .push(Notification::FileBeforeSave { buffer_id });
 
@@ -3837,7 +3824,6 @@ impl Shell {
         // `FileBeforeSave` queue push so both notifications agree
         // on the id even in the edge case where a future refactor
         // moves the active-tab change inside this method.
-        #[cfg(target_os = "windows")]
         self.pending_notifications
             .push(Notification::FileSaved { buffer_id });
 
@@ -4912,7 +4898,6 @@ impl Shell {
         // subsequent buffer-id-keyed events. Drained after
         // the `&mut Shell` borrow ends, same pattern as the
         // other lifecycle notifications.
-        #[cfg(target_os = "windows")]
         self.pending_notifications
             .push(Notification::SnapshotDirtyFileLoaded {
                 buffer_id: id as isize,
@@ -5227,7 +5212,6 @@ fn is_backup_modified_externally(backup_path: &Path, backup_filename: &str) -> b
 /// list (first-run case). Read failure → empty list with a
 /// warn-level log, so a corrupted file never locks the user out
 /// of every plugin.
-#[cfg(target_os = "windows")]
 fn read_disabled_plugins_list() -> Vec<String> {
     let Some(path) = codepp_platform::disabled_plugins_path() else {
         return Vec::new();
@@ -5253,7 +5237,6 @@ fn read_disabled_plugins_list() -> Vec<String> {
 /// `filenames` writes an empty file rather than removing — keeps
 /// the file's existence as a marker that the feature is wired up.
 /// Creates the parent directory on first use.
-#[cfg(target_os = "windows")]
 fn write_disabled_plugins_list(filenames: &[String]) -> std::io::Result<()> {
     let Some(path) = codepp_platform::disabled_plugins_path() else {
         return Ok(());
@@ -5607,14 +5590,12 @@ impl std::error::Error for ShellError {}
 /// one `dispatch_plugin_message` call; carries `&mut Shell` and
 /// `&mut U` so the trait's mutating methods (open, save, status-bar)
 /// reach the right places without `Shell` having to know any HWND.
-#[cfg(target_os = "windows")]
 struct HostBridge<'a, U: UiPlatform> {
     shell: &'a mut Shell,
     ui: &'a mut U,
     handles: HostHandles,
 }
 
-#[cfg(target_os = "windows")]
 impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
     fn current_scintilla_hwnd(&self) -> Hwnd {
         self.handles.scintilla_main
@@ -6622,7 +6603,6 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
 /// the `HostBridge` impl, which is similarly gated. Without the
 /// gate, Linux / macOS CI runs the dead-code lint and fails
 /// (`-D warnings`).
-#[cfg(target_os = "windows")]
 fn write_session_files(path: &Path, files: &[PathBuf]) -> bool {
     let session = codepp_core::session::Session {
         active: None,

@@ -6,8 +6,12 @@
 //! types must match the header verbatim. Any divergence is an ABI
 //! break — verified by the static asserts in the header's
 //! companion compile-test (and re-checked here in `cfg(test)`).
-
-#![cfg(target_os = "windows")]
+//!
+//! These are pure `#[repr(C)]` types over explicit-width fields and
+//! `*mut c_void` handles — no `windows`-crate types — so they are ABI
+//! identical on every platform (a `GtkWidget*` fits an `Hwnd` slot just
+//! as an `HWND` does). Unconditional since the plugin host went
+//! cross-platform in Phase 5.
 
 use core::ffi::c_void;
 
@@ -176,6 +180,19 @@ pub type MessageProcFn = unsafe extern "C" fn(u32, usize, isize) -> isize;
 
 /// `isUnicode() -> BOOL`. Win32 `BOOL` is a 4-byte int.
 pub type IsUnicodeFn = unsafe extern "C" fn() -> i32;
+
+/// The host's message-routing callback, installed into a plugin on
+/// non-Windows via its `codepp_plugin_set_dispatch` export so the
+/// plugin's `SendMessage(handle, msg, w, l)` reaches the host (the SDK
+/// forwards to this). The host routes `NPPM_*` (handle == npp) to the
+/// dispatcher and `SCI_*` (handle == a Scintilla widget) to that widget.
+/// Not used on Windows, where the OS message pump does the routing.
+pub type HostDispatchFn = unsafe extern "C" fn(Hwnd, u32, usize, isize) -> isize;
+
+/// Signature of the SDK's `codepp_plugin_set_dispatch(f)` export, which
+/// the host resolves and calls once per loaded plugin (non-Windows) to
+/// install [`HostDispatchFn`].
+pub type SetDispatchFn = unsafe extern "C" fn(Option<HostDispatchFn>);
 
 /// Mirror of Notepad++'s `toolbarIcons` struct used by
 /// `NPPM_ADDTOOLBARICON`. The plugin populates the two icon

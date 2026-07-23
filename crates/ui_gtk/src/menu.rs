@@ -43,10 +43,10 @@ struct Entry {
 pub fn build() -> gtk::MenuBar {
     let bar = gtk::MenuBar::new();
     // Order mirrors Notepad++/Win32: File, Edit, Search, View, Encoding,
-    // Language, … , ?. "?" is N++'s Help menu; kept as-is for parity. The
-    // menus Win32 has between Language and ? (Settings, Tools, Macro, Run,
-    // Plugins, Window) are not built yet, so Language sits directly before
-    // Help here — their absence just leaves a gap, not a mis-order.
+    // Language, Plugins, ?. "?" is N++'s Help menu; kept as-is for parity.
+    // The menus Win32 has between Language and Plugins (Settings, Tools,
+    // Macro, Run, Window) are not built yet, so Plugins sits directly after
+    // Language here — their absence just leaves a gap, not a mis-order.
     for title in [
         "_File",
         "_Edit",
@@ -54,6 +54,7 @@ pub fn build() -> gtk::MenuBar {
         "_View",
         "E_ncoding",
         "_Language",
+        "_Plugins",
         "?",
     ] {
         let root = gtk::MenuItem::with_mnemonic(title);
@@ -114,7 +115,23 @@ pub fn connect() {
     build_view_menu(&bar, &accel);
     build_encoding_menu(&bar);
     build_language_menu(&bar, &window);
+    build_plugins_menu(&bar);
     build_help_menu(&bar, &accel);
+}
+
+/// Build the Plugins menu. Contents are lazy: the `show` handler loads
+/// every pending plugin on first open (deferred load — DESIGN.md §6.4)
+/// and rebuilds the per-plugin submenus from the loaded set. A greyed
+/// placeholder shows until then (and whenever no plugin is installed).
+fn build_plugins_menu(bar: &gtk::MenuBar) {
+    let Some(menu) = submenu_at(bar, 6, "Plugins") else {
+        return;
+    };
+    menu.connect_show(crate::plugin::ensure_loaded_and_rebuild);
+    let placeholder = gtk::MenuItem::with_label("No plugins loaded");
+    placeholder.set_sensitive(false);
+    menu.append(&placeholder);
+    menu.show_all();
 }
 
 fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
@@ -928,7 +945,7 @@ fn build_help_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
         accel: Some((key::F1, none)),
         action: on_about,
     }];
-    let Some(menu) = submenu_at(bar, 6, "?") else {
+    let Some(menu) = submenu_at(bar, 7, "?") else {
         return;
     };
     populate(&menu, accel, &entries);

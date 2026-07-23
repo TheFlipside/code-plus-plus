@@ -10,8 +10,11 @@
 //!
 //! NPPM_*/NPPN_* dispatching, menu integration, and the actual
 //! example-hello DLL land in subsequent milestones.
-
-#![cfg(target_os = "windows")]
+//!
+//! Platform-neutral: discovery and lifecycle go through
+//! `codepp_platform::DynLib` (whose Windows/Unix arms this crate does
+//! not care about) and `std::panic::catch_unwind`, with no OS-specific
+//! code. Unconditional since Phase 5's GTK/Linux host port.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -512,7 +515,12 @@ impl PluginHost {
     /// `beNotified`, `messageProc`), or a `setInfo` /
     /// `getFuncsArray` call that panicked across the
     /// `catch_unwind` boundary.
-    pub fn load(&mut self, idx: usize, npp_data: NppData) -> Result<(), String> {
+    pub fn load(
+        &mut self,
+        idx: usize,
+        npp_data: NppData,
+        dispatch: Option<crate::ffi::HostDispatchFn>,
+    ) -> Result<(), String> {
         let Some(plugin) = self.plugins.get_mut(idx) else {
             return Err(format!("plugin index {idx} out of range"));
         };
@@ -531,7 +539,7 @@ impl PluginHost {
         let _span = tracing::info_span!("plugin_load", path = ?path).entered();
 
         let cmd_id_base = self.next_cmd_id;
-        let result = load_inner(&path, npp_data, cmd_id_base);
+        let result = load_inner(&path, npp_data, cmd_id_base, dispatch);
         match result {
             Ok(loaded) => {
                 // Reserve the assigned ids — never reused, even if a
@@ -691,7 +699,41 @@ fn filenames_eq(a: &str, b: &str) -> bool {
 /// the plugin's `FuncItems` — incremented by one per item, written
 /// back through the plugin's pointer so the plugin's own copy of
 /// `_cmdID` matches the value the host installs in the menu.
-fn load_inner(path: &Path, npp_data: NppData, cmd_id_base: i32) -> Result<LoadedPlugin, String> {
+/// Install the host's message-routing callback into a freshly-loaded
+/// plugin, so its `SendMessage` transport reaches the host.
+///
+/// Only meaningful off Windows: there the plugin exports
+/// `codepp_plugin_set_dispatch` (from `codepp-plugin-sdk`) and has no OS
+/// message pump. On Windows `dispatch` is `None` and the symbol is
+/// absent (the SDK's export is `#[cfg(not(windows))]`), so this is a
+/// no-op. A plugin that doesn't use our SDK simply won't have the symbol
+/// and can't talk back to the host — acceptable, since Linux only ever
+/// loads SDK-built cdylibs.
+fn install_dispatch(lib: &DynLib, dispatch: Option<crate::ffi::HostDispatchFn>, path: &Path) {
+    let Some(dispatch) = dispatch else {
+        return;
+    };
+    // SAFETY: `SetDispatchFn` is the ABI of the SDK's export.
+    let set_dispatch =
+        unsafe { lib.resolve::<crate::ffi::SetDispatchFn>("codepp_plugin_set_dispatch") };
+    let Some(set_dispatch) = set_dispatch else {
+        tracing::debug!(
+            path = ?path,
+            "plugin exports no codepp_plugin_set_dispatch; it cannot send messages to the host",
+        );
+        return;
+    };
+    // SAFETY: resolved to the SDK's `codepp_plugin_set_dispatch`, which
+    // stores the pointer in an atomic — no unwinding, no retained borrow.
+    unsafe { set_dispatch(Some(dispatch)) };
+}
+
+fn load_inner(
+    path: &Path,
+    npp_data: NppData,
+    cmd_id_base: i32,
+    dispatch: Option<crate::ffi::HostDispatchFn>,
+) -> Result<LoadedPlugin, String> {
     // Cap on the FuncItem count a plugin can contribute. Hoisted
     // above all statements (clippy's `items_after_statements`)
     // so the constant declaration sits with the function's
@@ -734,6 +776,12 @@ fn load_inner(path: &Path, npp_data: NppData, cmd_id_base: i32) -> Result<Loaded
             is_unicode,
         )
     };
+
+    // Install the host's message-routing callback *before* setInfo, so
+    // the plugin's `SendMessage` transport is live for every message it
+    // could send once initialised (NPPN_READY's beNotified, menu
+    // commands).
+    install_dispatch(&lib, dispatch, path);
 
     // setInfo first — plugin stashes the host handles before we ask
     // it for menu items. Wrap each FFI call in `catch_unwind` so a
@@ -906,7 +954,14 @@ unsafe fn wide_to_string(mut p: *const u16) -> String {
     String::from_utf16_lossy(&units)
 }
 
-#[cfg(test)]
+// These tests were authored against Windows discovery (`.dll` filenames,
+// the stem-matches-dirname walk) and stay Windows-only for now — they
+// exercise platform-neutral logic, but parametrising the 23 hardcoded
+// `.dll` fixtures on `PLUGIN_EXTENSION` is a tracked follow-up. The
+// Linux load path (including the new dispatch handshake) is covered
+// end-to-end by the GTK plugin demo, and `has_plugin_extension` is
+// already tested per-OS in `codepp-platform`.
+#[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
 
@@ -1086,7 +1141,7 @@ mod tests {
             scintilla_main_handle: core::ptr::null_mut(),
             scintilla_second_handle: core::ptr::null_mut(),
         };
-        let result = host.load(0, npp_data);
+        let result = host.load(0, npp_data, None);
         assert!(result.is_err());
         let info = host.iter().next().unwrap();
         assert!(!info.is_loaded());
@@ -1101,7 +1156,7 @@ mod tests {
             scintilla_main_handle: core::ptr::null_mut(),
             scintilla_second_handle: core::ptr::null_mut(),
         };
-        let result = host.load(99, npp_data);
+        let result = host.load(99, npp_data, None);
         assert!(result.is_err());
     }
 

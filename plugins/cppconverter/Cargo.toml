@@ -19,7 +19,9 @@ workspace = true
 crate-type = ["cdylib"]
 name = "cppconverter"
 
-[target.'cfg(target_os = "windows")'.dependencies]
+# Cross-platform: the plugin builds on Windows (LoadLibraryW) and Linux
+# (dlopen). macOS stays stubbed until Scintilla has a Cocoa backend.
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 codepp-plugin-sdk = { workspace = true }
 
 [build-dependencies]

@@ -26,5 +26,9 @@ windows = { version = "0.62", features = [
     "Win32_System_SystemInformation",
 ] }
 
+# The dlopen/dlsym/dlclose arm of `dynlib` on Unix (Linux plugin loading).
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }

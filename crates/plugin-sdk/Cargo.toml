@@ -24,5 +24,8 @@ workspace = true
 [lib]
 crate-type = ["rlib"]
 
-[target.'cfg(target_os = "windows")'.dependencies]
+# The SDK re-exports the host's `#[repr(C)]` FFI types (`FuncItem`,
+# `NppData`, `SCNotification`) on every platform now that the host is
+# cross-platform, so the dependency is unconditional.
+[dependencies]
 codepp-plugin-host = { workspace = true }

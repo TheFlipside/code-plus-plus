@@ -21,7 +21,9 @@ workspace = true
 crate-type = ["cdylib"]
 name = "cppmimetools"
 
-[target.'cfg(target_os = "windows")'.dependencies]
+# Cross-platform: the plugin builds on Windows (LoadLibraryW) and Linux
+# (dlopen). macOS stays stubbed until Scintilla has a Cocoa backend.
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 codepp-plugin-sdk = { workspace = true }
 # Raw-DEFLATE inflate for SAML Decode (SAML Redirect Binding payloads
 # are URL-encoded + Base64-encoded + raw-DEFLATE compressed). Pure

@@ -43,6 +43,7 @@
 mod fif;
 mod menu;
 mod platform;
+mod plugin;
 mod search;
 mod state;
 mod status;
@@ -145,6 +146,16 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
         GtkUiError::GtkInit
     })?;
 
+    // Stage the bundled plugin `.so`s into the user's plugins dir so
+    // they are discoverable without a manual install. Copies only on
+    // first run (or after a rebuild); a no-op cost otherwise, so it does
+    // not weigh on the warm-cache cold-start budget. Runs before
+    // discovery, which reads that directory.
+    let staged = codepp_platform::stage_bundled_plugins();
+    if staged > 0 {
+        tracing::info!(count = staged, "staged bundled plugins");
+    }
+
     // --- Shell, and the §5.4 cross-thread wake --------------------
     //
     // Worker threads (the file loader, the watcher, find-in-files)
@@ -236,6 +247,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     let st = Rc::new(RefCell::new(GtkUiState {
         window: window.clone(),
         sci_widget: sci_widget.clone(),
+        sci_ptr,
         editor,
         status,
         menu_bar,
@@ -291,6 +303,10 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // Reopen the workspace folder the last session left open (if any and
     // it still exists), sizing and showing the panel to match.
     workspace::apply_saved();
+    // Enumerate installed plugins (records paths only; loading is
+    // deferred to the first Plugins-menu open — DESIGN.md §6.4). The app
+    // has already staged the bundled plugins into this directory.
+    plugin::discover();
 
     window.connect_delete_event(|_, _| {
         // Persist before tearing down: `Shell::save_session` needs the
@@ -667,6 +683,10 @@ pub(crate) fn drain_shell() {
     // so the borrow isn't held across the `TreeView` update). Staged during
     // `Shell::drain`, taken via `take_fif_events`.
     fif::drain_into_dock();
+    // Deliver any `NPPN_*` notifications shell operations queued (file
+    // opened/saved/closed, buffer activated) to the loaded plugins — after
+    // the borrow above is dropped, so a plugin's `beNotified` can call back.
+    plugin::deliver_notifications();
 }
 
 thread_local! {

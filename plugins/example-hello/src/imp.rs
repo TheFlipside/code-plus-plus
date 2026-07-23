@@ -11,7 +11,7 @@
 //! menu callback that inserts "Hello from plugin" via
 //! `SCI_INSERTTEXT`.
 
-#![cfg(target_os = "windows")]
+#![cfg(any(target_os = "windows", target_os = "linux"))]
 
 use codepp_plugin_sdk::{self as sdk, FuncItem, NppData, SCNotification, SyncCell};
 

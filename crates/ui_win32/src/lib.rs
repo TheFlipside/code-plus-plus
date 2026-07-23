@@ -27122,7 +27122,10 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                         // `fire_queued_notifications`.
                         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             let _guard = PluginCallGuard::enter();
-                            state.shell.ensure_plugins_loaded(npp_data);
+                            // `None`: Win32 plugins route `SendMessage`
+                            // through the OS message pump, not the host
+                            // dispatch callback the GTK backend installs.
+                            state.shell.ensure_plugins_loaded(npp_data, None);
                         }));
                     }
                     // Populate the menu from loaded plugins. We rebuild

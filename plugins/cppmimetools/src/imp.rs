@@ -43,7 +43,7 @@
 //! AND decode outputs that are arbitrary bytes both survive the
 //! buffer write intact.
 
-#![cfg(target_os = "windows")]
+#![cfg(any(target_os = "windows", target_os = "linux"))]
 
 use codepp_plugin_sdk::{self as sdk, FuncItem, NppData, SCNotification, SyncCell};
 

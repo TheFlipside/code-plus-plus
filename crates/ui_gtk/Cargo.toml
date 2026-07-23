@@ -21,6 +21,7 @@ name = "codepp_ui_gtk"
 codepp-core          = { workspace = true }
 codepp-editor        = { workspace = true }
 codepp-platform      = { workspace = true }
+codepp-plugin-host   = { workspace = true }
 codepp-scintilla-sys = { workspace = true }
 codepp-shell         = { workspace = true }
 codepp-udl           = { workspace = true }

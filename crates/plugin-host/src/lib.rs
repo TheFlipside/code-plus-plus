@@ -29,24 +29,24 @@
     clippy::cast_sign_loss
 )]
 
-#[cfg(target_os = "windows")]
+// The whole crate is pure `#[repr(C)]` FFI types + platform-neutral
+// discovery/dispatch logic — no `windows`-crate usage. It was
+// Windows-only through Phase 4 because only Win32 wired a plugin host;
+// Phase 5 ports the host to GTK/Linux (loader in `platform::dynlib`,
+// message transport in `codepp-plugin-sdk`), so these are unconditional.
 pub mod dispatch;
-#[cfg(target_os = "windows")]
 pub mod ffi;
-#[cfg(target_os = "windows")]
 pub mod host;
 
-#[cfg(target_os = "windows")]
 pub use ffi::{
-    BeNotifiedFn, CommunicationInfo, FuncItem, GetFuncsArrayFn, GetNameFn, Hwnd, IsUnicodeFn,
-    MessageProcFn, NppDarkModeColors, NppData, PluginCmd, SCNotification, SciNotifyHeader,
-    SessionInfo, SetInfoFn, ShortcutKey, TbData, TbRect, ToolbarIcons, DMN_CLOSE, DMN_DOCK,
-    DMN_FIRST, DMN_FLOAT, DWS_ADDINFO, DWS_DF_CONT_BOTTOM, DWS_DF_CONT_LEFT, DWS_DF_CONT_RIGHT,
-    DWS_DF_CONT_TOP, DWS_DF_FLOATING, DWS_ICONBAR, DWS_ICONTAB, DWS_USEOWNDARKMODE,
-    MENU_TITLE_LENGTH,
+    BeNotifiedFn, CommunicationInfo, FuncItem, GetFuncsArrayFn, GetNameFn, HostDispatchFn, Hwnd,
+    IsUnicodeFn, MessageProcFn, NppDarkModeColors, NppData, PluginCmd, SCNotification,
+    SciNotifyHeader, SessionInfo, SetInfoFn, ShortcutKey, TbData, TbRect, ToolbarIcons, DMN_CLOSE,
+    DMN_DOCK, DMN_FIRST, DMN_FLOAT, DWS_ADDINFO, DWS_DF_CONT_BOTTOM, DWS_DF_CONT_LEFT,
+    DWS_DF_CONT_RIGHT, DWS_DF_CONT_TOP, DWS_DF_FLOATING, DWS_ICONBAR, DWS_ICONTAB,
+    DWS_USEOWNDARKMODE, MENU_TITLE_LENGTH,
 };
 
-#[cfg(target_os = "windows")]
 pub use dispatch::{
     dispatch_nppm, notify_all, DockDialogParams, HostServices, Notification, ALL_OPEN_FILES,
     LINENUMWIDTH_CONSTANT, LINENUMWIDTH_DYNAMIC, MAC_FORMAT, MODELESSDIALOGADD,
@@ -56,7 +56,6 @@ pub use dispatch::{
     WIN_FORMAT,
 };
 
-#[cfg(target_os = "windows")]
 pub use host::{
     PluginAdminEntry, PluginHost, PluginInfo, PLUGIN_ALLOC_CMD_BASE, PLUGIN_ALLOC_CMD_LIMIT,
     PLUGIN_ALLOC_MARKER_BASE, PLUGIN_ALLOC_MARKER_LIMIT, PLUGIN_CMD_ID_BASE,

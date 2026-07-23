@@ -60,6 +60,11 @@ pub struct GtkUiState {
     /// and settled it this way.
     #[allow(dead_code)]
     pub sci_widget: gtk::Widget,
+    /// Raw `ScintillaObject*` (the `scintilla_new()` return). Handed to
+    /// plugins as `NppData._scintillaMainHandle` and used as the sink for
+    /// `scintilla_send_message` when a plugin routes an `SCI_*` message —
+    /// the GTK analogue of the real Scintilla `HWND` a Win32 plugin holds.
+    pub sci_ptr: *mut std::ffi::c_void,
     /// Direct-call handle for the one Scintilla view. m2 is
     /// single-view: tabs switch documents under it via
     /// `SCI_SETDOCPOINTER`, exactly as Win32 does.

@@ -18,7 +18,7 @@
 //! the two-item `FUNCS` array, the menu callbacks, and the pure-
 //! Rust ASCII↔HEX transforms with their unit tests.
 
-#![cfg(target_os = "windows")]
+#![cfg(any(target_os = "windows", target_os = "linux"))]
 
 use codepp_plugin_sdk::{self as sdk, FuncItem, NppData, SCNotification, SyncCell};
 

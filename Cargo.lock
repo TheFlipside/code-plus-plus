@@ -202,6 +202,7 @@ name = "codepp-platform"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "libc",
  "notify",
  "tempfile",
  "tracing",
@@ -266,6 +267,7 @@ dependencies = [
  "codepp-core",
  "codepp-editor",
  "codepp-platform",
+ "codepp-plugin-host",
  "codepp-scintilla-sys",
  "codepp-shell",
  "codepp-udl",
