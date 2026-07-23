@@ -144,16 +144,15 @@ use codepp_scintilla_sys::{
     SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE,
     SCI_TEXTHEIGHT, SCI_UNDO, SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
     SCN_PAINTED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI,
-    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
-    SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS, SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT,
-    SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED, SC_EOL_CR, SC_EOL_CRLF,
-    SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL,
-    SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
-    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL,
-    SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS,
-    SC_MARK_BOXPLUSCONNECTED, SC_MARK_EMPTY, SC_MARK_FULLRECT, SC_MARK_LCORNER, SC_MARK_TCORNER,
-    SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT,
-    SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CP_UTF8,
+    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
+    SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH,
+    SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
+    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
+    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED,
+    SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE,
+    SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION,
+    SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     sanitize_filename_for_display, sanitize_path_for_display, tab_display_name, HostHandles,
@@ -1937,7 +1936,7 @@ impl UiPlatform for Win32Ui {
         // (the `scintilla_doc != 0` branch) had history enabled at
         // their own creation site, so the call would be a no-op.
         if freshly_created {
-            enable_change_history(&self.editor);
+            self.editor.enable_change_history();
             // Tab width is per-document Scintilla state (mutates
             // `pdoc->tabInChars`), so every fresh doc needs it
             // re-applied — otherwise the doc starts with
@@ -3779,7 +3778,7 @@ impl Win32Ui {
 /// (mutates `pdoc->tabInChars` per `vendor/scintilla/src/
 /// Editor.cxx:7011-7015`), so [`apply_tab_width`] must fire at
 /// every `SCI_CREATEDOCUMENT` site — same discipline as
-/// [`enable_change_history`]. Per-language overrides (e.g.
+/// `EditorHandle::enable_change_history`. Per-language overrides (e.g.
 /// Makefile → 8) are future work; when they land, the override
 /// must repeat at every doc creation for the same reason.
 const TAB_WIDTH_DEFAULT: usize = 4;
@@ -3812,87 +3811,21 @@ const CHANGE_HISTORY_MARGIN: u32 = 4;
 /// is wide enough for a strip to read at every supported DPI
 /// without competing with the line-number column to its left.
 const CHANGE_HISTORY_MARGIN_PX: i32 = 4;
-/// Marker bitmask for [`CHANGE_HISTORY_MARGIN`]. Includes only the
-/// `SC_MARKNUM_HISTORY_MODIFIED` slot so a plugin marker assigned
-/// to a different number can't bleed into the strip. Built as
-/// `1 << SC_MARKNUM_HISTORY_MODIFIED`; the const-fn shape is
-/// preferred over a raw literal so the relationship to the marker
-/// number stays auditable.
-const CHANGE_HISTORY_MARGIN_MASK: u32 = 1 << SC_MARKNUM_HISTORY_MODIFIED;
 /// Stroke colour for the change-history strip — same Material
 /// `orange 400` shade [`TAB_ACTIVE_INDICATOR`] uses for the
 /// active-tab indicator. Reusing the colour ties the two
 /// "you're editing this" cues into one visual language.
 const CHANGE_HISTORY_COLOR: u32 = 0x00_26_A7_FF;
 
-/// Configure the change-history margin: type, width, mask, and the
-/// `SC_MARKNUM_HISTORY_MODIFIED` marker's symbol + colour. The
-/// marker symbol is `SC_MARK_FULLRECT` so it fills the full margin
-/// column for any line Scintilla flags as modified. The margin
-/// settings are stored on the **view** (not the document), so this
-/// one call is enough — surviving every `SCI_SETDOCPOINTER` cycle
-/// the tab strip drives. Per-document change-history *enablement*
-/// is a separate per-doc setting (see [`enable_change_history`]).
-///
-/// Critical detail: Scintilla's default mask for margin 1 is
-/// `~SC_MASK_FOLDERS` — covering markers 0-24, which *includes*
-/// the history-marker family at 21-24. With
-/// `SC_CHANGE_HISTORY_MARKERS` enabled, every margin whose mask
-/// matches the marker bit renders it. So without explicit cleanup,
-/// the history strip would also render in margin 1 at margin 1's
-/// width — visually a strip much wider than the 4-px slice we want.
-/// Defensively clear margins 1-3's masks (and zero their widths in
-/// case a Scintilla update bumps the default) so the strip is
-/// confined to margin 4. A future bookmarks/folder-marker feature
-/// claiming one of those indices will reconfigure both sides.
-fn apply_change_history_margin(editor: &EditorHandle) {
-    for unused in 1..=3u32 {
-        editor.set_margin_mask(unused, 0);
-        editor.set_margin_width(unused, 0);
-    }
-    // Silence the three sibling history markers we don't want to
-    // visualise. Scintilla 5.x's `SC_CHANGE_HISTORY_MARKERS` flag
-    // *auto-applies* every member of the family
-    // (`REVERTED_TO_ORIGIN`, `SAVED`, `MODIFIED`,
-    // `REVERTED_TO_MODIFIED`) to the lines they describe — and
-    // each marker carries Scintilla's default symbol/colour until
-    // overridden. In particular `SC_MARKNUM_HISTORY_SAVED` paints
-    // a green line-background under every line that was modified
-    // before the last save (i.e. essentially every line of the
-    // file at first display, since the SCI_SETSAVEPOINT after
-    // load reclassifies all inserted lines as "saved"). Setting
-    // those three to `SC_MARK_EMPTY` makes them no-op visually
-    // while preserving Scintilla's internal tracking, so a future
-    // feature can light them up without re-enabling the history
-    // engine.
-    use codepp_scintilla_sys::{
-        SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
-        SC_MARKNUM_HISTORY_SAVED,
-    };
-    for silenced in [
-        SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
-        SC_MARKNUM_HISTORY_SAVED,
-        SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED,
-    ] {
-        editor.marker_define(silenced, SC_MARK_EMPTY);
-    }
-    editor.set_margin_type(CHANGE_HISTORY_MARGIN, SC_MARGIN_SYMBOL);
-    editor.set_margin_mask(CHANGE_HISTORY_MARGIN, CHANGE_HISTORY_MARGIN_MASK);
-    editor.marker_define(SC_MARKNUM_HISTORY_MODIFIED, SC_MARK_FULLRECT);
-    editor.marker_set_back(SC_MARKNUM_HISTORY_MODIFIED, CHANGE_HISTORY_COLOR);
-    editor.set_margin_width(CHANGE_HISTORY_MARGIN, CHANGE_HISTORY_MARGIN_PX);
-}
-
-/// Enable Scintilla's change-history tracking on the **currently
-/// bound** document. Per-document setting — every fresh document
-/// minted via `SCI_CREATEDOCUMENT` starts with history disabled,
-/// so this must be called on each new doc immediately after
-/// binding it via `SCI_SETDOCPOINTER`. Margin configuration lives
-/// on the view ([`apply_change_history_margin`]); only the
-/// per-doc enablement is repeated here.
-fn enable_change_history(editor: &EditorHandle) {
-    editor.set_change_history(SC_CHANGE_HISTORY_ENABLED | SC_CHANGE_HISTORY_MARKERS);
-}
+// The change-history margin/marker setup and per-document enablement now
+// live on the shared `EditorHandle` — `configure_change_history_margin`
+// (view-level: margin type/mask/width + the SC_MARKNUM_HISTORY_MODIFIED
+// marker, clearing margins 1-3 and silencing the sibling history markers)
+// and `enable_change_history` (per-document). Both are called from
+// `Win32Ui::run` (view) and each `SCI_CREATEDOCUMENT` site (per-doc), and
+// the GTK backend uses the identical pair so the strip matches across
+// platforms. Only the placement constants (`CHANGE_HISTORY_MARGIN`,
+// `_PX`, `_COLOR`) stay here as the Win32 call's arguments.
 
 // --- Fold margin colours + geometry ---------------------------------
 //
@@ -3972,7 +3905,7 @@ fn apply_eol_mode(editor: &EditorHandle, eol: Eol) {
 /// Every fresh document minted via `SCI_CREATEDOCUMENT` starts
 /// with Scintilla's built-in `tabInChars = 8`, so this must be
 /// called immediately after each such creation — same
-/// discipline as [`enable_change_history`]. Currently called at
+/// discipline as `EditorHandle::enable_change_history`. Currently called at
 /// four sites: editor creation in [`Win32Ui::run`], and each of
 /// the three real-doc `SCI_CREATEDOCUMENT` sites in
 /// [`Win32Ui::activate_tab`], the post-close-tab lazy-materialise
@@ -4004,11 +3937,11 @@ fn apply_tab_width(editor: &EditorHandle) {
 /// click / marker visibility / auto-expand-on-edit to Scintilla
 /// via `SCI_SETAUTOMATICFOLD`.
 ///
-/// **Must be called AFTER [`apply_change_history_margin`]** — that
+/// **Must be called AFTER `EditorHandle::configure_change_history_margin`** — that
 /// function's defensive `set_margin_mask(1..=3, 0)` loop would
 /// otherwise wipe [`FOLD_MARGIN`]'s mask right back to zero. The
 /// call order at editor creation is
-/// [`apply_change_history_margin`] → [`enable_change_history`] →
+/// `EditorHandle::configure_change_history_margin` → `EditorHandle::enable_change_history` →
 /// [`apply_fold_margin`].
 ///
 /// The `fold` property itself is NOT set here — it lives on the
@@ -5030,9 +4963,9 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
                 // change-history enabled AND tab width re-applied
                 // (`SCI_SETTABWIDTH` is per-document; see the
                 // `apply_tab_width` doc). The view-side margin
-                // already exists from `apply_change_history_margin`
+                // already exists from `configure_change_history_margin`
                 // at editor creation.
-                enable_change_history(&state.editor);
+                state.editor.enable_change_history();
                 apply_tab_width(&state.editor);
                 let mut bytes = Vec::with_capacity(text.len() + 1);
                 bytes.extend_from_slice(text.as_bytes());
@@ -5307,7 +5240,7 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
         // Critical to call `enable_change_history` BEFORE
         // `SCI_SETTEXT` so the initial text-insert is treated as
         // the document's starting state (not as edits to track).
-        enable_change_history(&state.editor);
+        state.editor.enable_change_history();
         apply_tab_width(&state.editor);
         let mut bytes = Vec::with_capacity(text.len() + 1);
         bytes.extend_from_slice(text.as_bytes());
@@ -17977,8 +17910,12 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // Scintilla control creates at construction; subsequent
         // documents minted via `SCI_CREATEDOCUMENT` get the same
         // treatment at their respective creation sites.
-        apply_change_history_margin(&editor);
-        enable_change_history(&editor);
+        editor.configure_change_history_margin(
+            CHANGE_HISTORY_MARGIN,
+            CHANGE_HISTORY_MARGIN_PX,
+            CHANGE_HISTORY_COLOR,
+        );
+        editor.enable_change_history();
 
         // Brace-match visual: initialise STYLE_BRACELIGHT (34) and
         // STYLE_BRACEBAD (35) with the N++ red/dark-red palette. The
@@ -18019,7 +17956,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // Fold margin GEOMETRY: allocate margin index 2, install the
         // box-style markers, set colours, enable automatic click-
         // toggle and auto-expand-on-edit. Must run AFTER
-        // `apply_change_history_margin` — that function's defensive
+        // `configure_change_history_margin` — that function's defensive
         // `set_margin_mask(1..=3, 0)` loop would otherwise wipe our
         // mask right back to zero. The fold *classifier* property
         // (`fold=1`) is issued per-language in `apply_lang` because
