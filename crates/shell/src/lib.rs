@@ -3935,6 +3935,38 @@ impl Shell {
         true
     }
 
+    /// Set the active tab's display name — File → Rename on an *untitled*
+    /// buffer, which has no path to move. The name feeds
+    /// [`tab_display_name`] (which prefers `custom_name` over the
+    /// `untitled_seq` fallback) and persists in `session.xml`. A blank name
+    /// after trimming clears the override, reverting to the `new N` label.
+    /// Renaming a *saved* buffer is a Save-As instead (a real path move),
+    /// handled UI-side.
+    ///
+    /// Returns `true` on a real change, `false` on a same-value no-op or
+    /// with no active tab — the same "false ⇒ nothing to refresh" contract
+    /// as [`Self::set_active_lang`] and [`Self::set_buffer_encoding`], so
+    /// the caller can skip the tab/title repaint when nothing moved.
+    pub fn set_active_custom_name(&mut self, name: &str) -> bool {
+        let Some(idx) = self.active_tab else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get_mut(idx) else {
+            return false;
+        };
+        let trimmed = name.trim();
+        let new_name = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+        if tab.custom_name == new_name {
+            return false;
+        }
+        tab.custom_name = new_name;
+        true
+    }
+
     /// Like [`Self::set_buffer_encoding`] but addresses an arbitrary
     /// open buffer by id rather than the active one. Plumbs
     /// `NPPM_SETBUFFERENCODING` from a plugin onto a specific buffer
@@ -7673,6 +7705,31 @@ mod tests {
         assert_eq!(shell.active().unwrap().lang, codepp_core::lang::L_CPP);
         // Re-selecting C++ is a no-op.
         assert!(!shell.set_active_lang(codepp_core::lang::L_CPP));
+    }
+
+    #[test]
+    fn set_active_custom_name_sets_and_clears() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        // No active tab yet.
+        assert!(!shell.set_active_custom_name("x"));
+
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        assert!(shell.set_active_custom_name("  My Notes  "));
+        // Trimmed, and reflected in the display name.
+        assert_eq!(
+            shell.active().unwrap().custom_name.as_deref(),
+            Some("My Notes")
+        );
+        assert_eq!(tab_display_name(shell.active().unwrap()), "My Notes");
+        // Re-setting the same name (modulo surrounding space) is a no-op.
+        assert!(!shell.set_active_custom_name("My Notes"));
+        // A blank name clears the override back to the untitled label.
+        assert!(shell.set_active_custom_name("   "));
+        assert_eq!(shell.active().unwrap().custom_name, None);
+        // Clearing an already-cleared name is likewise a no-op.
+        assert!(!shell.set_active_custom_name(""));
     }
 
     #[test]

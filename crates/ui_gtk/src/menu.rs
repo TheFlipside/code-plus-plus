@@ -23,6 +23,7 @@ use gtk::prelude::*;
 use crate::state::with_state;
 use crate::{
     close_active_tab, drain_shell, rebind_active_view, refresh_tab_chrome, save_session_now,
+    sync_tab_strip,
 };
 
 /// Menu item labels paired with the accelerator each one advertises.
@@ -169,6 +170,34 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     };
     populate(&menu, accel, &entries);
     menu.append(&gtk::SeparatorMenuItem::new());
+
+    // Rename — a real path move (Save As) for a saved file, a display-name
+    // change for an untitled buffer. Matches Win32's File → Rename.
+    let rename = gtk::MenuItem::with_mnemonic("Rena_me…");
+    rename.connect_activate(|_| on_rename());
+    menu.append(&rename);
+
+    // Restore Recent Closed File — a persistent item (unlike the rebuilt
+    // Recent Files submenu below) so its Ctrl+Shift+T accelerator stays
+    // registered in the accel group. A top-level File item here, matching
+    // Notepad++. Mnemonic on the `t` (not `R`, which `_Reload` already
+    // claims) so it also echoes the Ctrl+Shift+T shortcut. `key::T`
+    // uppercase matches this file's convention for Shift combos
+    // (`key::S`/`key::W`); GTK normalises either case for a Shift accel.
+    let restore = gtk::MenuItem::with_mnemonic("Res_tore Recent Closed File");
+    restore.add_accelerator(
+        "activate",
+        accel,
+        *key::T,
+        ctrl_shift,
+        gtk::AccelFlags::VISIBLE,
+    );
+    restore.connect_activate(|_| restore_recent_closed());
+    menu.append(&restore);
+
+    menu.append(&build_recent_files_submenu());
+    menu.append(&gtk::SeparatorMenuItem::new());
+
     let exit = gtk::MenuItem::with_mnemonic("E_xit");
     exit.connect_activate(|_| {
         save_session_now();
@@ -176,6 +205,161 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     });
     menu.append(&exit);
     menu.show_all();
+}
+
+/// Build the "Recent Files" submenu. Its contents are the recently-*closed*
+/// files (the shell pushes a path on close), rebuilt every time the submenu
+/// opens so a file re-opened since last time drops off. Below the list sit
+/// Open All Recent Files and Empty Recent Files List — greyed when the list
+/// is empty. (Restore Recent Closed File is a persistent File-menu item, so
+/// it can hold the Ctrl+Shift+T accelerator.)
+fn build_recent_files_submenu() -> gtk::MenuItem {
+    let item = gtk::MenuItem::with_mnemonic("Recent _Files");
+    let submenu = gtk::Menu::new();
+    submenu.connect_show(rebuild_recent_files_submenu);
+    item.set_submenu(Some(&submenu));
+    item
+}
+
+/// Clear and repopulate the Recent Files submenu from the shell.
+fn rebuild_recent_files_submenu(submenu: &gtk::Menu) {
+    for child in submenu.children() {
+        submenu.remove(&child);
+    }
+    let recents = with_state(|st| st.shell.visible_recent_files().to_vec()).unwrap_or_default();
+
+    if recents.is_empty() {
+        let empty = gtk::MenuItem::with_label("(no recent files)");
+        empty.set_sensitive(false);
+        submenu.append(&empty);
+    } else {
+        for (index, path) in recents.iter().enumerate() {
+            // Sanitized: a recently-closed path can carry hostile
+            // characters, and it renders straight into chrome.
+            let label = codepp_shell::sanitize_path_for_display(path);
+            // `with_label`, not `with_mnemonic`, on purpose: a filename's
+            // own `_` must not become an accelerator underscore, and there
+            // is no Pango markup to interpret. Do not "simplify" to
+            // `with_mnemonic` for consistency with the rest of the file.
+            let entry = gtk::MenuItem::with_label(&label);
+            entry.connect_activate(move |_| open_recent_at(index));
+            submenu.append(&entry);
+        }
+    }
+
+    submenu.append(&gtk::SeparatorMenuItem::new());
+    let has_recents = !recents.is_empty();
+    let open_all = gtk::MenuItem::with_mnemonic("_Open All Recent Files");
+    open_all.set_sensitive(has_recents);
+    open_all.connect_activate(|_| open_all_recent());
+    submenu.append(&open_all);
+    let empty_list = gtk::MenuItem::with_mnemonic("_Empty Recent Files List");
+    empty_list.set_sensitive(has_recents);
+    empty_list.connect_activate(|_| empty_recent());
+    submenu.append(&empty_list);
+
+    submenu.show_all();
+}
+
+/// Open the recent-files entry at `index` (removing it from the list — it
+/// is now open, and will re-enter on its next close).
+///
+/// `index` is captured when the submenu is (re)built on show; the GTK main
+/// loop is single-threaded, so the list cannot change between show and
+/// click, and `take_recent_file_at` re-validates the bound anyway (`None`
+/// out of range, never a panic).
+fn open_recent_at(index: usize) {
+    let path = with_state(|st| st.shell.take_recent_file_at(index)).flatten();
+    if let Some(path) = path {
+        open_paths(vec![path]);
+    }
+}
+
+/// Ctrl+Shift+T / Restore Recent Closed File: reopen the most-recently
+/// closed file.
+fn restore_recent_closed() {
+    let path = with_state(|st| st.shell.pop_last_recent_file()).flatten();
+    if let Some(path) = path {
+        open_paths(vec![path]);
+    }
+}
+
+/// Open every recent file, most-recent first, emptying the list.
+fn open_all_recent() {
+    let paths = with_state(|st| st.shell.take_all_recent_files()).unwrap_or_default();
+    open_paths(paths);
+}
+
+/// Drop every tracked recent path.
+fn empty_recent() {
+    with_state(|st| st.shell.clear_recent_files());
+}
+
+/// File → Rename. A saved buffer routes to Save As (a real on-disk move to
+/// the chosen path); an untitled buffer gets a display-name change through
+/// a small modal, matching Win32's two-branch behaviour.
+fn on_rename() {
+    let has_path =
+        with_state(|st| st.shell.active().is_some_and(|t| t.path.is_some())).unwrap_or(false);
+    if has_path {
+        on_save_as();
+        return;
+    }
+    // Untitled: prompt for a display name, seeded with the current one.
+    let current = with_state(|st| st.shell.active().map(codepp_shell::tab_display_name)).flatten();
+    let Some(current) = current else {
+        return;
+    };
+    if let Some(new_name) = prompt_rename(&current) {
+        let changed = with_state(|st| st.shell.set_active_custom_name(&new_name)).unwrap_or(false);
+        if changed {
+            sync_tab_strip();
+            refresh_tab_chrome();
+        }
+    }
+}
+
+/// Modal name prompt for renaming an untitled buffer. Returns the entered
+/// text on OK (empty string clears the name back to `new N`), `None` on
+/// Cancel. Mirrors the Goto dialog's shape.
+fn prompt_rename(current: &str) -> Option<String> {
+    let parent = with_state(|st| st.window.clone());
+    let dialog = gtk::Dialog::with_buttons(
+        Some("Rename"),
+        parent.as_ref(),
+        gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+        &[
+            ("_Cancel", gtk::ResponseType::Cancel),
+            ("_Rename", gtk::ResponseType::Accept),
+        ],
+    );
+    dialog.set_default_response(gtk::ResponseType::Accept);
+    let content = dialog.content_area();
+    content.set_spacing(6);
+    content.set_margin_top(8);
+    content.set_margin_bottom(8);
+    content.set_margin_start(8);
+    content.set_margin_end(8);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.pack_start(&gtk::Label::new(Some("Name:")), false, false, 0);
+    let entry = gtk::Entry::new();
+    entry.set_text(current);
+    entry.set_activates_default(true);
+    entry.set_width_chars(28);
+    row.pack_start(&entry, true, true, 0);
+    content.pack_start(&row, false, false, 0);
+    dialog.show_all();
+
+    let result = if dialog.run() == gtk::ResponseType::Accept {
+        Some(entry.text().to_string())
+    } else {
+        None
+    };
+    // SAFETY: created here, never handed out — same as the Goto dialog.
+    unsafe {
+        dialog.destroy();
+    }
+    result
 }
 
 /// The Edit menu — Win32's minimal Scintilla-backed set. Delete carries
