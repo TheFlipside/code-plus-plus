@@ -45,6 +45,26 @@ const CHANGE_HISTORY_MARGIN_PX: i32 = 4;
 /// `0x00BBGGRR` order, the same shade the active-tab indicator uses.
 const CHANGE_HISTORY_COLOR: u32 = 0x00_26_A7_FF;
 
+thread_local! {
+    /// Clamped digit count the line-number margin is currently sized for
+    /// (`max(line-count digits, LINE_NUMBER_MARGIN_DIGITS)`). The margin
+    /// only needs re-measuring when this moves — which, because of the
+    /// clamp, happens only when a file grows past the digit budget, never
+    /// on the 9→10 / 99→100 crossings within it. GTK is single-threaded so
+    /// one cell suffices.
+    ///
+    /// Cross-tab correctness does **not** rest on this gate: every
+    /// tab-switch / load / reload path runs `apply_lang`, which calls
+    /// `enable_line_number_margin` *ungated* and re-measures against the
+    /// newly-active document's true line count. This gate is only the
+    /// mid-edit backup that catches a live budget crossing between those
+    /// ungated calls; because the cache is a single un-keyed cell, a
+    /// coincidental match after a switch merely skips a redundant
+    /// re-measure the ungated call already performed — it can never leave
+    /// a stale width (`STYLE_LINENUMBER`'s font is editor-wide, so equal
+    /// clamped digit counts imply equal pixel widths).
+    static LAST_LINE_NUMBER_DIGITS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
 use codepp_shell::{SearchFlags, UiPlatform};
 use gtk::prelude::*;
 
@@ -150,9 +170,18 @@ impl GtkUi {
         let overtype = self.editor.send(SCI_GETOVERTYPE, 0, 0) != 0;
         self.status
             .set_dynamic_parts(length, lines, caret_line, caret_col, pos, overtype);
-        // The line-number margin is a fixed width (sized once in
-        // `enable_line_number_margin`), so nothing to re-measure here as the
-        // line count changes — the gutter stays constant, matching Win32.
+        // The line-number margin holds a fixed *minimum* width and only
+        // grows for files past the digit budget. This fires on *every*
+        // `sci-notify` — caret moves included — so gate the actual
+        // `SCI_TEXTWIDTH` re-measure on the *clamped* digit count changing:
+        // within the budget the clamp pins it to the floor, so nothing
+        // re-measures on ordinary edits; only crossing 99 999 → 100 000 (or
+        // higher) moves it and widens the gutter to fit.
+        let digits = codepp_editor::line_number_digits(lines.max(1))
+            .max(codepp_editor::LINE_NUMBER_MARGIN_DIGITS);
+        if LAST_LINE_NUMBER_DIGITS.with(|c| c.replace(digits)) != digits {
+            self.editor.update_line_number_width(LINE_NUMBER_MARGIN);
+        }
     }
 }
 
@@ -172,8 +201,8 @@ fn apply_predefined_styles(editor: &EditorHandle) {
     // `apply_line_number_margin` styles STYLE_LINENUMBER (fore/back) and,
     // for Win32's manual renderer, sets margin 0 to `SC_MARGIN_TEXT`.
     // GTK/Cocoa use Scintilla's built-in number margin, so override the
-    // type and take a fixed, constant width via the shared method (the
-    // gutter never grows while editing, matching Win32).
+    // type and take the shared fixed-minimum width (steady for typical
+    // files, grows only past the digit budget — same as Win32).
     codepp_editor::theme::apply_line_number_margin(editor);
     editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
     // The change-history "edit indicator" strip. Shared config so it looks

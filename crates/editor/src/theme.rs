@@ -407,14 +407,6 @@ const FG_INDENT_GUIDE: u32 = 0x00_BE_BE_BE;
 /// reserved for symbols/bookmarks and margin 2 for fold markers
 /// when those land in a later phase.
 const LINE_NUMBER_MARGIN: u32 = 0;
-/// Pixel width of [`LINE_NUMBER_MARGIN`]. Fixed rather than
-/// font-metric-derived because the brief is a deliberately roomy
-/// bar that fits comfortably for typical files without ever
-/// needing to grow during editing. A future settings-driven view
-/// toggle will flip the width between this value and `0` (Scintilla
-/// hides a margin via width-zero without resetting its type or
-/// styles).
-const LINE_NUMBER_MARGIN_PX: i32 = 50;
 /// Initialise `STYLE_DEFAULT` then reset every other style to it. This is
 /// Scintilla's idiomatic "blank slate before lexer-specific styling"
 /// sequence and stops the previous lexer's colours from leaking through
@@ -456,8 +448,13 @@ pub fn apply_default_styles(editor: &EditorHandle) {
 /// (re-applies after `SCI_STYLECLEARALL` has reset
 /// `STYLE_LINENUMBER` back to `STYLE_DEFAULT`).
 ///
-/// A future "show line numbers" view toggle becomes
-/// `editor.set_margin_width(LINE_NUMBER_MARGIN, if on { LINE_NUMBER_MARGIN_PX } else { 0 })`.
+/// Width comes from [`EditorHandle::update_line_number_width`]: a fixed
+/// minimum that holds steady for typical files and grows only for ones
+/// past the digit budget, so the bar neither jiggles during ordinary
+/// editing nor clips a very large file's numbers. A future "show line
+/// numbers" view toggle becomes
+/// `editor.set_margin_width(LINE_NUMBER_MARGIN, 0)` to hide (Scintilla
+/// hides a margin via width-zero without resetting its type or styles).
 ///
 /// We use `SC_MARGIN_TEXT` (left-aligned per-line text we manage
 /// ourselves) rather than `SC_MARGIN_NUMBER` (right-aligned,
@@ -470,7 +467,7 @@ pub fn apply_line_number_margin(editor: &EditorHandle) {
     editor.set_margin_type(LINE_NUMBER_MARGIN, SC_MARGIN_TEXT);
     editor.style_set_fore(STYLE_LINENUMBER, FG_LINE_NUMBER);
     editor.style_set_back(STYLE_LINENUMBER, BG_LINE_NUMBER);
-    editor.set_margin_width(LINE_NUMBER_MARGIN, LINE_NUMBER_MARGIN_PX);
+    editor.update_line_number_width(LINE_NUMBER_MARGIN);
 }
 // --- Brace-match highlight colours ----------------------------------
 //

@@ -4060,6 +4060,13 @@ fn update_brace_highlight(editor: &EditorHandle) {
 /// `SCN_UPDATEUI` lands.
 const LINE_NUMBER_OVERSCAN: u64 = 4;
 
+/// Margin index for the line-number bar; margin 0 by Scintilla
+/// convention, matching `codepp_editor::theme`'s own `LINE_NUMBER_MARGIN`
+/// and the GTK backend. Used to resize the margin when a file grows past
+/// the digit budget (the text population targets the margin implicitly via
+/// `SCI_MARGINSETTEXT`, so it doesn't need the index).
+const LINE_NUMBER_MARGIN: u32 = 0;
+
 /// Number of decimal digits needed to render `line_count` (so a
 /// 100-line buffer wants width `3`, a 99-line buffer wants `2`).
 /// The width drives the right-alignment column for every visible
@@ -4067,14 +4074,13 @@ const LINE_NUMBER_OVERSCAN: u64 = 4;
 /// etc. boundary, every visible row's text shifts one column
 /// right in lockstep, so 3-digit "100" lines up over the 2-digit
 /// "99" with their last digits in the same column.
+///
+/// Thin `usize` adapter over the shared [`codepp_editor::line_number_digits`]
+/// so the digit-count algorithm lives in exactly one place (the margin
+/// *pixel* width, computed from the same helper, is set in
+/// `EditorHandle::update_line_number_width`).
 fn line_number_width(line_count: u64) -> usize {
-    let mut digits: usize = 1;
-    let mut n = line_count.max(1);
-    while n >= 10 {
-        digits += 1;
-        n /= 10;
-    }
-    digits
+    codepp_editor::line_number_digits(line_count) as usize
 }
 
 /// Write per-line line-number text for lines `[start, end)` into
@@ -17891,8 +17897,9 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
         // the first paint, then `apply_default_styles` (called on
         // every language switch) re-applies `STYLE_LINENUMBER`
         // colours that `SCI_STYLECLEARALL` clobbers. The margin's
-        // width is a fixed `LINE_NUMBER_MARGIN_PX` and doesn't
-        // change between calls.
+        // width is a fixed *minimum* (held steady for typical files,
+        // grown only for ones past the digit budget), re-measured
+        // against the current line count on each call.
         apply_line_number_margin(&editor);
 
         // Caret-line highlight: paints the line containing the
@@ -27917,6 +27924,17 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                     // viewport.
                                     if lines_added != 0 {
                                         populate_visible_line_numbers(&state.editor);
+                                        // Grow (or restore) the margin's
+                                        // pixel width to the shared
+                                        // fixed-minimum: a no-op while the
+                                        // file stays within the digit
+                                        // budget (Scintilla short-circuits
+                                        // an unchanged SCI_SETMARGINWIDTHN),
+                                        // a genuine widen once it crosses
+                                        // past it. Only fires on a
+                                        // line-count change, never on plain
+                                        // typing, so no per-keystroke cost.
+                                        state.editor.update_line_number_width(LINE_NUMBER_MARGIN);
                                     }
                                     // Length / lines refresh on
                                     // every text-modifying edit.
