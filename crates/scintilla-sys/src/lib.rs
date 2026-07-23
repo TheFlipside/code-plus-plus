@@ -717,6 +717,36 @@ pub struct Sci_NotifyHeader {
     pub code: u32,
 }
 
+/// Fired when the user drops a URI (a file, on every desktop) onto the
+/// Scintilla view. The dropped `text/uri-list` arrives in
+/// [`Sci_NotificationText::text`]; the host opens the referenced files.
+/// `2015` in `Scintilla.h`.
+pub const SCN_URIDROPPED: u32 = 2015;
+
+/// The prefix of `SCNotification` up to its `text` pointer — enough to
+/// read the URI list for [`SCN_URIDROPPED`] without redeclaring the whole
+/// ~24-field struct (the full form lives in `plugin-host`'s Windows-only
+/// `ffi` module).
+///
+/// `#[repr(C)]` lays these fields out in declaration order, matching
+/// `Scintilla.h`, so each field's offset here equals its offset in the
+/// full notification Scintilla allocates. Reading this struct as a view
+/// over the real, longer allocation is therefore sound — a prefix read,
+/// not a reinterpretation. Only `nmhdr.code` and `text` are meaningful
+/// for a URI drop; the middle fields exist solely to place `text` at the
+/// right offset.
+#[repr(C)]
+pub struct Sci_NotificationText {
+    pub nmhdr: Sci_NotifyHeader,
+    pub position: sptr_t,
+    pub ch: i32,
+    pub modifiers: i32,
+    pub modification_type: i32,
+    /// For `SCN_URIDROPPED`, a NUL-terminated `text/uri-list` — the
+    /// newline-separated `file://` URIs the user dropped.
+    pub text: *const u8,
+}
+
 /// Notification fired after Scintilla has finished painting. The
 /// closest thing the Win32 backend has to GTK's `draw` signal, and so
 /// what `--perf` uses on that platform to close off a keystroke→redraw
@@ -10000,6 +10030,24 @@ mod tests {
         assert_eq!(offset_of!(Sci_RangeToFormatFull, rc), 16);
         assert_eq!(offset_of!(Sci_RangeToFormatFull, rc_page), 32);
         assert_eq!(offset_of!(Sci_RangeToFormatFull, chrg), 48);
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn sci_notification_text_layout_matches_c_abi() {
+        use core::mem::{align_of, offset_of, size_of};
+        // A prefix of Scintilla's `SCNotification`; each field's offset
+        // must equal its offset in the full struct so `text` is read from
+        // the right place. The 24-byte `Sci_NotifyHeader` (8+8+4, padded
+        // to 8) puts `position` at 24; `text` then aligns to 48.
+        assert_eq!(align_of::<Sci_NotificationText>(), 8);
+        assert_eq!(offset_of!(Sci_NotificationText, nmhdr), 0);
+        assert_eq!(offset_of!(Sci_NotificationText, position), 24);
+        assert_eq!(offset_of!(Sci_NotificationText, ch), 32);
+        assert_eq!(offset_of!(Sci_NotificationText, modifiers), 36);
+        assert_eq!(offset_of!(Sci_NotificationText, modification_type), 40);
+        assert_eq!(offset_of!(Sci_NotificationText, text), 48);
+        assert_eq!(size_of::<Sci_NotificationText>(), 56);
     }
 
     #[test]

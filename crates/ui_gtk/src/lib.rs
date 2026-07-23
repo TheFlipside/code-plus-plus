@@ -259,6 +259,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
         None
     });
 
+    connect_file_drop(&window, &sci_widget);
+
     connect_tab_strip_signals(&tab_strip);
 
     // --- Startup work ---------------------------------------------
@@ -455,6 +457,153 @@ fn notification_code(values: &[glib::Value]) -> Option<u32> {
     // SAFETY: non-null, and points at a live `SCNotification` for the
     // duration of this handler.
     Some(unsafe { (*header).code })
+}
+
+/// Read the dropped `text/uri-list` out of an `SCN_URIDROPPED` emission;
+/// `None` for any other notification. Companion to [`notification_code`],
+/// but views the payload through its `Sci_NotificationText` prefix so the
+/// `text` pointer is reachable.
+fn dropped_uri_list(values: &[glib::Value]) -> Option<String> {
+    let payload = values.last()?;
+    // SAFETY: same contract as `notification_code` — the payload is the
+    // boxed `SCNotification*`. `Sci_NotificationText` is a `#[repr(C)]`
+    // prefix of that struct, so reading it over the real (longer)
+    // allocation is a sound prefix read. Scintilla owns the allocation and
+    // it outlives this synchronous handler.
+    let notif = unsafe {
+        glib::gobject_ffi::g_value_get_boxed(payload.as_ptr())
+            .cast::<codepp_scintilla_sys::Sci_NotificationText>()
+    };
+    if notif.is_null() {
+        return None;
+    }
+    // SAFETY: non-null; the prefix fields are valid for this handler.
+    let notif = unsafe { &*notif };
+    if notif.nmhdr.code != codepp_scintilla_sys::SCN_URIDROPPED || notif.text.is_null() {
+        return None;
+    }
+    // SAFETY: for `SCN_URIDROPPED`, `text` is a NUL-terminated C string
+    // Scintilla keeps alive for the duration of this notification.
+    let cstr = unsafe { std::ffi::CStr::from_ptr(notif.text.cast::<std::os::raw::c_char>()) };
+    Some(cstr.to_string_lossy().into_owned())
+}
+
+/// Wire drag-and-drop file open across the whole window.
+///
+/// Two disjoint drop regions, together covering everything Win32's
+/// frame-wide `DragAcceptFiles` does:
+///
+/// * **The editor.** Scintilla's GTK backend already registers itself as a
+///   `text/uri-list` drop target and reports a drop through
+///   `SCN_URIDROPPED` (rather than inserting the URIs as text), so a file
+///   dropped on the editing surface opens instead of pasting its path.
+/// * **The chrome.** A toplevel `text/uri-list` target catches drops onto
+///   the menu bar, tab strip and status bar — the areas outside the
+///   editor's own drop window.
+///
+/// Both funnel into the shared [`menu::open_paths`]; the two regions never
+/// overlap, so a drop is handled exactly once.
+fn connect_file_drop(window: &gtk::Window, sci_widget: &gtk::Widget) {
+    sci_widget.connect_local("sci-notify", false, |values| {
+        if let Some(list) = dropped_uri_list(values) {
+            let paths = parse_uri_list(&list);
+            tracing::debug!(?paths, "SCN_URIDROPPED on the editor");
+            if !paths.is_empty() {
+                menu::open_paths(paths);
+            }
+        }
+        None
+    });
+
+    let uri_targets = [gtk::TargetEntry::new(
+        "text/uri-list",
+        gtk::TargetFlags::empty(),
+        0,
+    )];
+    // `DestDefaults::ALL` includes `GTK_DEST_DEFAULT_DROP`, so GTK calls
+    // `gtk_drag_finish` for us — that is why the handler never touches the
+    // `DragContext` or timestamp and issues no explicit finish.
+    window.drag_dest_set(
+        gtk::DestDefaults::ALL,
+        &uri_targets,
+        gtk::gdk::DragAction::COPY,
+    );
+    window.connect_drag_data_received(|_, _, _, _, data, _, _| {
+        let paths: Vec<PathBuf> = data
+            .uris()
+            .iter()
+            .filter_map(|uri| uri_to_local_path(uri))
+            .collect();
+        tracing::debug!(?paths, "text/uri-list dropped on the window chrome");
+        if !paths.is_empty() {
+            menu::open_paths(paths);
+        }
+    });
+}
+
+/// Convert one `text/uri-list` entry to a **local** file path, or `None`
+/// if it is not a local `file://` URI.
+///
+/// `filename_from_uri` rejects non-`file:` schemes and does the
+/// percent-decoding; the host must be the local machine — `None`, or an
+/// explicit `localhost` (RFC 8089, which some drag sources emit) — so a
+/// remote-looking `file://otherhost/…` can never be turned into a local
+/// path. The single filter behind both drop regions, so they cannot drift.
+fn uri_to_local_path(uri: &str) -> Option<PathBuf> {
+    let (path, host) = glib::filename_from_uri(uri).ok()?;
+    match host.as_deref() {
+        None | Some("localhost") => Some(path),
+        Some(_) => None,
+    }
+}
+
+/// Parse a `text/uri-list` payload into local file paths: skip blank lines
+/// and `#` comments (RFC 2483), tolerate CRLF or LF, and keep only the
+/// local `file://` URIs (via [`uri_to_local_path`]).
+fn parse_uri_list(list: &str) -> Vec<PathBuf> {
+    list.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(uri_to_local_path)
+        .collect()
+}
+
+#[cfg(test)]
+mod uri_list_tests {
+    use super::parse_uri_list;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parses_file_uris_skipping_comments_and_blanks() {
+        // RFC 2483 uri-list: CRLF-separated, `#` comments, and
+        // percent-encoding (`%20` → space) that must be decoded.
+        let list = "# a comment\r\nfile:///tmp/a.txt\r\n\r\nfile:///home/u/b%20c.txt\r\n";
+        assert_eq!(
+            parse_uri_list(list),
+            vec![
+                PathBuf::from("/tmp/a.txt"),
+                PathBuf::from("/home/u/b c.txt"),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_non_file_schemes_and_remote_hosts() {
+        // Only the local `file://` URI survives: a web URL has the wrong
+        // scheme, and `file://otherhost/…` names a non-local host.
+        let list = "https://example.com/x\r\nfile://otherhost/tmp/x\r\nfile:///tmp/ok.txt";
+        assert_eq!(parse_uri_list(list), vec![PathBuf::from("/tmp/ok.txt")]);
+    }
+
+    #[test]
+    fn accepts_explicit_localhost_host() {
+        // RFC 8089 lets a local file URI name `localhost` explicitly;
+        // treat it as local rather than dropping a legitimate file.
+        assert_eq!(
+            parse_uri_list("file://localhost/tmp/ok.txt"),
+            vec![PathBuf::from("/tmp/ok.txt")]
+        );
+    }
 }
 
 /// Drain everything `Shell` has queued and present any dialogs it

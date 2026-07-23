@@ -670,17 +670,21 @@ fn on_open() {
     // Multi-select, mirroring Win32's `OFN_ALLOWMULTISELECT` Open: the
     // user can Ctrl/Shift-click several files and they all open in one
     // dialog. Empty `Vec` on Cancel.
-    let paths = choose_open_paths();
-    if paths.is_empty() {
-        return;
-    }
-    // Run the exact single-open handling once per picked path. The shell
-    // dedupes already-open paths and pushes fresh tabs for the rest;
-    // processing them in order leaves the view on the last file, just as
-    // picking that one file alone would. There is deliberately no trailing
-    // rebind: a fresh open's async load rebinds itself when its wake
-    // drains, so forcing a synchronous rebind here would paint the
-    // still-empty buffer for a frame before the real content lands.
+    open_paths(choose_open_paths());
+}
+
+/// Open every path in `paths`, in order — the shared open loop behind both
+/// File → Open and drag-and-drop.
+///
+/// The shell dedupes already-open paths and pushes fresh tabs for the
+/// rest; processing them in order leaves the view on the last file, just
+/// as opening that one file alone would. There is deliberately no trailing
+/// rebind after a fresh open: its async load rebinds itself when its wake
+/// drains, so forcing a synchronous rebind here would paint the
+/// still-empty buffer for a frame before the real content lands. An empty
+/// `paths` (a cancelled dialog, or a drop that carried no local files) is
+/// a no-op.
+pub(crate) fn open_paths(paths: Vec<PathBuf>) {
     for path in paths {
         match with_state(|st| st.shell.open_file(path)) {
             // Already open: `Shell` moved `active_tab` with no load to
