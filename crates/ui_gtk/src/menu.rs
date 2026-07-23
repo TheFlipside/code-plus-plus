@@ -34,11 +34,35 @@ struct Entry {
 /// because they need the window state installed first.
 pub fn build() -> gtk::MenuBar {
     let bar = gtk::MenuBar::new();
-    let file_menu = gtk::Menu::new();
-    let file_root = gtk::MenuItem::with_mnemonic("_File");
-    file_root.set_submenu(Some(&file_menu));
-    bar.append(&file_root);
+    for title in ["_File", "_Search"] {
+        let root = gtk::MenuItem::with_mnemonic(title);
+        root.set_submenu(Some(&gtk::Menu::new()));
+        bar.append(&root);
+    }
     bar
+}
+
+/// Fetch a top-level menu's submenu by its position in the bar.
+///
+/// `build` populates the bar in a fixed order, so position is a stable
+/// handle without threading each `gtk::Menu` through the state struct.
+/// Returns `None` — logged — rather than panicking if the bar is not
+/// the shape `build` produced, since a menu that fails to wire is a
+/// degraded UI, not a crash.
+fn submenu_at(bar: &gtk::MenuBar, index: usize, name: &str) -> Option<gtk::Menu> {
+    let root = bar
+        .children()
+        .get(index)
+        .and_then(|c| c.clone().downcast::<gtk::MenuItem>().ok());
+    let Some(root) = root else {
+        tracing::error!(index, name, "menu bar is missing a top-level item");
+        return None;
+    };
+    let sub = root.submenu().and_then(|m| m.downcast::<gtk::Menu>().ok());
+    if sub.is_none() {
+        tracing::error!(name, "top-level menu item has no submenu");
+    }
+    sub
 }
 
 /// Populate the File menu and bind its accelerators.
@@ -93,38 +117,10 @@ pub fn connect() {
         },
     ];
 
-    // `build` left the File submenu empty so this function owns the
-    // whole population step; fetch it back rather than threading it
-    // through the state struct.
-    let Some(file_root) = bar
-        .children()
-        .first()
-        .and_then(|c| c.clone().downcast::<gtk::MenuItem>().ok())
-    else {
-        tracing::error!("menu bar has no File item; menu not wired");
+    let Some(file_menu) = submenu_at(&bar, 0, "File") else {
         return;
     };
-    let Some(file_menu) = file_root
-        .submenu()
-        .and_then(|m| m.downcast::<gtk::Menu>().ok())
-    else {
-        tracing::error!("File item has no submenu; menu not wired");
-        return;
-    };
-
-    for e in entries {
-        let item = gtk::MenuItem::with_mnemonic(e.label);
-        let action = e.action;
-        item.connect_activate(move |_| action());
-        item.add_accelerator(
-            "activate",
-            &accel,
-            *e.key,
-            e.modifier,
-            gtk::AccelFlags::VISIBLE,
-        );
-        file_menu.append(&item);
-    }
+    populate(&file_menu, &accel, &entries);
 
     file_menu.append(&gtk::SeparatorMenuItem::new());
     let exit = gtk::MenuItem::with_mnemonic("E_xit");
@@ -134,6 +130,63 @@ pub fn connect() {
     });
     file_menu.append(&exit);
     file_menu.show_all();
+
+    // --- Search -------------------------------------------------------
+    let search_entries = [
+        Entry {
+            label: "_Find…",
+            key: gtk::gdk::keys::constants::f,
+            modifier: ctrl,
+            action: crate::search::show_find,
+        },
+        Entry {
+            label: "_Replace…",
+            key: gtk::gdk::keys::constants::h,
+            modifier: ctrl,
+            action: crate::search::show_replace,
+        },
+        Entry {
+            label: "Find _Next",
+            key: gtk::gdk::keys::constants::F3,
+            modifier: gtk::gdk::ModifierType::empty(),
+            action: crate::search::find_next_repeat,
+        },
+        Entry {
+            label: "Find _Previous",
+            key: gtk::gdk::keys::constants::F3,
+            modifier: gtk::gdk::ModifierType::SHIFT_MASK,
+            action: crate::search::find_prev_repeat,
+        },
+        Entry {
+            label: "_Go to…",
+            key: gtk::gdk::keys::constants::g,
+            modifier: ctrl,
+            action: crate::search::show_goto,
+        },
+    ];
+    if let Some(search_menu) = submenu_at(&bar, 1, "Search") {
+        populate(&search_menu, &accel, &search_entries);
+        search_menu.show_all();
+    }
+}
+
+/// Append each entry to `menu` as a mnemonic item bound to its
+/// accelerator. Shared by every top-level menu so a label and its
+/// shortcut are wired the same way everywhere.
+fn populate(menu: &gtk::Menu, accel: &gtk::AccelGroup, entries: &[Entry]) {
+    for e in entries {
+        let item = gtk::MenuItem::with_mnemonic(e.label);
+        let action = e.action;
+        item.connect_activate(move |_| action());
+        item.add_accelerator(
+            "activate",
+            accel,
+            *e.key,
+            e.modifier,
+            gtk::AccelFlags::VISIBLE,
+        );
+        menu.append(&item);
+    }
 }
 
 fn on_new() {

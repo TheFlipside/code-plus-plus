@@ -73,6 +73,14 @@ pub struct GtkUiState {
     pub tabs: TabStrip,
     /// Headless session/file/watcher logic. Owns the tab list.
     pub shell: Shell,
+    /// The modeless Find/Replace dialog, once opened.
+    ///
+    /// Modeless per Notepad++: it stays up while the user reads results
+    /// and edits between clicks, so it must outlive the handler that
+    /// opened it — hence a field rather than a local. Reopening reuses
+    /// this rather than stacking a second dialog. `None` until the
+    /// user first invokes Find or Replace.
+    pub find_replace: Option<crate::search::FindReplaceDialog>,
 }
 
 /// The `UiPlatform` implementor. Cheap to build; see the module docs.

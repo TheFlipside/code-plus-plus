@@ -265,13 +265,11 @@ pub trait UiPlatform {
     // The four trait methods below are unconditionally part of the
     // UiPlatform contract — every platform backend (current Win32,
     // future GTK and Cocoa from Phase 5) must implement them. The
-    // matching `Shell::find_next` / `replace_*` driver methods are
-    // currently `#[cfg(target_os = "windows")]` because their
-    // backing infrastructure (the `last_search` field, the plugin
-    // dispatcher) is also Windows-only until Phase 5. When the
-    // Linux/macOS UI crates land, those `#[cfg]` gates come off
-    // alongside the rest of the host plumbing — the trait methods
-    // here don't need to change.
+    // matching `Shell::find_next` / `replace_*` driver methods were
+    // `#[cfg(target_os = "windows")]` until Phase 5, because their
+    // backing state (`last_search`, `find_history`) had no non-Windows
+    // caller. The GTK Find/Replace + Goto wiring is that caller, so the
+    // gates came off; the trait methods here never needed to change.
 
     /// Search the active editor forward for `query` under `flags`.
     /// On a hit, Scintilla moves the selection to the match (also
@@ -1252,7 +1250,6 @@ pub struct Shell {
     /// Stored so F3 / Shift+F3 (and the dialog's Find Next button)
     /// can repeat the search without the user re-entering anything.
     /// `None` until the user issues their first search.
-    #[cfg(target_os = "windows")]
     last_search: Option<(String, SearchFlags)>,
     /// Rolling Find/Replace dropdown history. Loaded from
     /// `find_history.xml` at startup; pushed to on every Find
@@ -1396,6 +1393,14 @@ impl SearchFlags {
     #[must_use]
     pub const fn union(self, other: SearchFlags) -> SearchFlags {
         SearchFlags(self.0 | other.0)
+    }
+
+    /// True if every bit in `other` is set in `self`. Used to ask
+    /// "was this a regex search?" without the caller poking at raw
+    /// bits: `flags.contains(SearchFlags::REGEX)`.
+    #[must_use]
+    pub const fn contains(self, other: SearchFlags) -> bool {
+        self.0 & other.0 == other.0
     }
 
     /// Raw bits, ready for `SCI_SETSEARCHFLAGS`'s wparam.
@@ -1720,7 +1725,6 @@ impl Shell {
             file_watcher,
             load_rx: load_rx_outer,
             change_rx: fc_rx_outer,
-            #[cfg(target_os = "windows")]
             last_search: None,
             find_history: load_find_history(),
             preferences,
@@ -3936,7 +3940,6 @@ impl Shell {
     /// search target rather than re-typing the query. Callers
     /// that want different semantics should clear `last_search`
     /// themselves on a `None` return.
-    #[cfg(target_os = "windows")]
     pub fn find_next<U: UiPlatform>(
         &mut self,
         ui: &mut U,
@@ -3956,7 +3959,6 @@ impl Shell {
     /// Repeat the last `find_next` with its stored query and flags.
     /// Returns `None` if no search has been issued yet, or if the
     /// query missed.
-    #[cfg(target_os = "windows")]
     pub fn find_next_repeat<U: UiPlatform>(&mut self, ui: &mut U) -> Option<u64> {
         let (query, flags) = self.last_search.clone()?;
         ui.search_next(&query, flags)
@@ -3966,7 +3968,6 @@ impl Shell {
     /// dialog when the "Backward direction" checkbox is on. Stores
     /// the query+flags as the new `last_search` so a subsequent
     /// `find_next_repeat` / `find_prev_repeat` reuses them.
-    #[cfg(target_os = "windows")]
     pub fn find_prev<U: UiPlatform>(
         &mut self,
         ui: &mut U,
@@ -3984,7 +3985,6 @@ impl Shell {
     }
 
     /// Repeat the last `find_next` going backward.
-    #[cfg(target_os = "windows")]
     pub fn find_prev_repeat<U: UiPlatform>(&mut self, ui: &mut U) -> Option<u64> {
         let (query, flags) = self.last_search.clone()?;
         ui.search_prev(&query, flags)
@@ -3999,7 +3999,6 @@ impl Shell {
     /// replacing arbitrary text the user dragged a selection over
     /// after the find — Scintilla doesn't gate on that itself.
     /// Returns true if a replacement happened.
-    #[cfg(target_os = "windows")]
     pub fn replace_current<U: UiPlatform>(
         &mut self,
         ui: &mut U,
@@ -4024,7 +4023,6 @@ impl Shell {
     /// user can Ctrl+Z the entire Replace-All in a single step.
     /// Empty `query` is a no-op (returns 0) — Scintilla would
     /// otherwise spin in an infinite loop on an empty match.
-    #[cfg(target_os = "windows")]
     pub fn replace_all<U: UiPlatform>(
         &mut self,
         ui: &mut U,
@@ -4046,7 +4044,6 @@ impl Shell {
     /// Count occurrences of `query` in the active buffer. The
     /// Find dialog's "Count" button surfaces the result; does
     /// not affect selection or `last_search` state (matching N++).
-    #[cfg(target_os = "windows")]
     pub fn count_matches<U: UiPlatform>(
         &mut self,
         ui: &mut U,
@@ -4067,7 +4064,6 @@ impl Shell {
     /// checked and forwards them on every Find Next click;
     /// `last_search` is still recorded so an F3 outside the
     /// dialog falls back to the whole-buffer behaviour.
-    #[cfg(target_os = "windows")]
     pub fn find_next_in_range<U: UiPlatform>(
         &mut self,
         ui: &mut U,
@@ -4087,7 +4083,6 @@ impl Shell {
     }
 
     /// Backward sibling of [`Self::find_next_in_range`].
-    #[cfg(target_os = "windows")]
     pub fn find_prev_in_range<U: UiPlatform>(
         &mut self,
         ui: &mut U,
@@ -4109,7 +4104,6 @@ impl Shell {
     /// Replace All restricted to `[start, end)`. Returns
     /// `(count, new_end)` so the caller can refresh its
     /// in-selection range after the document length shifts.
-    #[cfg(target_os = "windows")]
     pub fn replace_all_in_range<U: UiPlatform>(
         &mut self,
         ui: &mut U,
@@ -6533,7 +6527,6 @@ fn load_find_history() -> FindHistory {
 /// because every caller is on a cfg-gated find/replace method;
 /// without the gate, a Linux/macOS lint build flags it as
 /// dead code.
-#[cfg(target_os = "windows")]
 fn save_find_history(history: &FindHistory) {
     let Some(path) = codepp_platform::find_history_xml_path() else {
         return;
@@ -9245,7 +9238,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "windows")]
     fn find_next_stores_last_search_and_repeat_reuses_it() {
         // First find_next records the query+flags so a later
         // find_next_repeat (the F3 / Find Next path) can fire

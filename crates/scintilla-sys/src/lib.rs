@@ -637,6 +637,13 @@ pub const SCI_GETTARGETSTART: u32 = 2191;
 pub const SCI_GETTARGETEND: u32 = 2193;
 pub const SCI_SEARCHINTARGET: u32 = 2197;
 pub const SCI_REPLACETARGET: u32 = 2194;
+/// `SCI_REPLACETARGETRE(length, text)` — like [`SCI_REPLACETARGET`] but
+/// expands regex group references in `text` against the most recent
+/// regex match in the target. With `SCFIND_CXX11REGEX` the reference
+/// syntax is `$1`..`$9` (`std::regex`'s `format` grammar); the older
+/// POSIX engine uses `\1`. Only meaningful immediately after a regex
+/// `SCI_SEARCHINTARGET`.
+pub const SCI_REPLACETARGETRE: u32 = 2195;
 
 // SCFIND_* search flag bits, OR'd into the wparam of
 // SCI_SETSEARCHFLAGS. The numeric layout is the public ABI plugins

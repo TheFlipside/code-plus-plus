@@ -2324,7 +2324,9 @@ impl UiPlatform for Win32Ui {
         // SEARCHINTARGET narrows the target to the match; replace
         // exactly that. Then re-anchor selection on the inserted
         // text so a subsequent Find Next walks past it.
-        let _ = self.editor.replace_target(replacement);
+        let _ = self
+            .editor
+            .replace_target_with(replacement, flags.contains(SearchFlags::REGEX));
         let new_end = self.editor.target_end();
         self.editor
             .send(SCI_SETSELECTIONSTART, sel_start as usize, 0);
@@ -2355,7 +2357,9 @@ impl UiPlatform for Win32Ui {
             if hit < 0 {
                 break;
             }
-            let _ = self.editor.replace_target(replacement);
+            let _ = self
+                .editor
+                .replace_target_with(replacement, flags.contains(SearchFlags::REGEX));
             // Resume just past the inserted replacement; without
             // this, replacing "a" with "ab" would re-match the
             // newly-inserted "a" and loop forever.
@@ -2515,7 +2519,9 @@ impl UiPlatform for Win32Ui {
             }
             let match_start = self.editor.target_start();
             let match_end = self.editor.target_end();
-            let _ = self.editor.replace_target(replacement);
+            let _ = self
+                .editor
+                .replace_target_with(replacement, flags.contains(SearchFlags::REGEX));
             // The actual byte length inserted is read back from
             // `target_end()` after `replace_target` — using
             // `replacement.len()` would be wrong under regex

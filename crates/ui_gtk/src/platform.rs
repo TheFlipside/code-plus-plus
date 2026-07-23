@@ -353,7 +353,9 @@ impl UiPlatform for GtkUi {
         if self.editor.search_in_target(query) < 0 {
             return false;
         }
-        let _ = self.editor.replace_target(replacement);
+        let _ = self
+            .editor
+            .replace_target_with(replacement, flags.contains(SearchFlags::REGEX));
         let new_end = self.editor.target_end();
         self.editor
             .send(SCI_SETSELECTIONSTART, sel_start as usize, 0);
@@ -377,7 +379,9 @@ impl UiPlatform for GtkUi {
             if self.editor.search_in_target(query) < 0 {
                 break;
             }
-            let _ = self.editor.replace_target(replacement);
+            let _ = self
+                .editor
+                .replace_target_with(replacement, flags.contains(SearchFlags::REGEX));
             let next = self.editor.target_end();
             // A zero-width match (`x*`, `^`, `\b`, …) with an empty
             // replacement leaves `target_end` exactly where the search
@@ -516,7 +520,9 @@ impl UiPlatform for GtkUi {
             }
             let match_start = self.editor.target_start();
             let match_end = self.editor.target_end();
-            let _ = self.editor.replace_target(replacement);
+            let _ = self
+                .editor
+                .replace_target_with(replacement, flags.contains(SearchFlags::REGEX));
             let new_target_end = self.editor.target_end();
             // Same zero-width guard as `replace_all` above: a match
             // that does not advance would pin `cursor` and spin.
@@ -778,6 +784,42 @@ mod doc_binding_tests {
 
         tab_strip_scenarios(&ui);
         single_view_invariant(&ui);
+        regex_replace_expands_groups(&mut ui);
+    }
+
+    /// `replace_all` with the REGEX flag must expand `\1` against the
+    /// match; without it, the replacement is literal.
+    ///
+    /// This is the end-to-end check behind the `replace_target_with`
+    /// change: the flag has to reach `SCI_REPLACETARGETRE` for the
+    /// group to expand, and `SCI_REPLACETARGET` for it to stay literal.
+    /// Only a real Scintilla can prove that, since the substitution
+    /// happens inside vendored C++.
+    fn regex_replace_expands_groups(ui: &mut GtkUi) {
+        use codepp_shell::SearchFlags;
+
+        // Regex mode: `\1` is the captured digits.
+        ui.activate_tab(90, 0);
+        ui.set_buffer_text("item12 = x\nitem34 = y\n", 0);
+        let n = ui.replace_all(r"item(\d+)", r"key_\1", SearchFlags::REGEX);
+        assert_eq!(n, 2, "both lines match");
+        assert_eq!(
+            ui.get_buffer_text(),
+            "key_12 = x\nkey_34 = y\n",
+            "regex replace must expand the capture group, not insert `\\1` literally"
+        );
+
+        // Literal mode: `\1` is two characters, and the query is not a
+        // pattern — so nothing matches `item(\d+)` as literal text.
+        ui.activate_tab(91, 0);
+        ui.set_buffer_text("a\\1b\n", 0);
+        let n = ui.replace_all(r"\1", "Z", SearchFlags::NONE);
+        assert_eq!(n, 1, "the literal two-char string `\\1` occurs once");
+        assert_eq!(
+            ui.get_buffer_text(),
+            "aZb\n",
+            "literal replace must treat `\\1` as text, not a group reference"
+        );
     }
 
     /// Exercises the pattern the single-view model makes safe: a

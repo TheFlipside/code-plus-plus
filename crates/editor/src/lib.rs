@@ -65,13 +65,14 @@ use codepp_scintilla_sys::{
     SCI_GETCHARAT, SCI_GETCURRENTPOS, SCI_GETENDSTYLED, SCI_GETRANGEPOINTER, SCI_GETTARGETEND,
     SCI_GETTARGETSTART, SCI_LINEFROMPOSITION, SCI_MARKERDEFINE, SCI_MARKERENABLEHIGHLIGHT,
     SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE, SCI_POSITIONFROMLINE,
-    SCI_REPLACETARGET, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT, SCI_SEARCHPREV,
-    SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE, SCI_SETCHANGEHISTORY,
-    SCI_SETFOLDFLAGS, SCI_SETFOLDMARGINCOLOUR, SCI_SETFOLDMARGINHICOLOUR, SCI_SETILEXER,
-    SCI_SETKEYWORDS, SCI_SETMARGINMASKN, SCI_SETMARGINSENSITIVEN, SCI_SETMARGINTYPEN,
-    SCI_SETMARGINWIDTHN, SCI_SETPROPERTY, SCI_SETSEARCHFLAGS, SCI_SETSTYLING, SCI_SETTARGETRANGE,
-    SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT,
-    SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE, SCI_STYLESETUNDERLINE,
+    SCI_REPLACETARGET, SCI_REPLACETARGETRE, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT,
+    SCI_SEARCHPREV, SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE,
+    SCI_SETCHANGEHISTORY, SCI_SETFOLDFLAGS, SCI_SETFOLDMARGINCOLOUR, SCI_SETFOLDMARGINHICOLOUR,
+    SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN, SCI_SETMARGINSENSITIVEN,
+    SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETPROPERTY, SCI_SETSEARCHFLAGS, SCI_SETSTYLING,
+    SCI_SETTARGETRANGE, SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD,
+    SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE,
+    SCI_STYLESETUNDERLINE,
 };
 
 /// Opaque handle to a Scintilla editor control.
@@ -846,12 +847,40 @@ impl EditorHandle {
         )
     }
 
-    /// Replace the current target range with `replacement` (literal
-    /// text, NOT regex `\1` substitution — that's
-    /// `SCI_REPLACETARGETRE`, not yet wired). After the replace,
-    /// the target range is reset to point at the inserted text so
-    /// the next `search_in_target` resumes from just past the
-    /// substitution. Returns the byte length of the replacement.
+    /// Replace the current target range with `replacement`, expanding
+    /// regex group references (`$1`..`$9` under `SCFIND_CXX11REGEX`)
+    /// against the last regex match when `regex` is set.
+    ///
+    /// `regex` must match the flag the preceding `search_in_target`
+    /// used: `SCI_REPLACETARGETRE` only has a meaningful last-match to
+    /// reference after a regex search, and running it after a literal
+    /// search would expand `$1` against stale or absent group state.
+    /// Callers therefore pass the same regex bit they searched with.
+    ///
+    /// After the replace, the target range is reset to point at the
+    /// inserted text so the next `search_in_target` resumes just past
+    /// the substitution. Returns the byte length of the replacement.
+    #[must_use]
+    pub fn replace_target_with(&self, replacement: &str, regex: bool) -> isize {
+        debug_assert!(
+            replacement.len() != usize::MAX,
+            "replacement length must not equal usize::MAX",
+        );
+        let msg = if regex {
+            SCI_REPLACETARGETRE
+        } else {
+            SCI_REPLACETARGET
+        };
+        self.send(
+            msg,
+            replacement.len() as uptr_t,
+            replacement.as_ptr() as sptr_t,
+        )
+    }
+
+    /// Literal replacement — [`Self::replace_target_with`] with
+    /// `regex = false`. Kept for the callers that never search by
+    /// regex.
     #[must_use]
     pub fn replace_target(&self, replacement: &str) -> isize {
         // Scintilla's `ViewFromParams(lParam, wParam)` treats

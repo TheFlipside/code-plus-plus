@@ -1,10 +1,10 @@
 //! GTK 3 UI backend for Code++.
 //!
-//! Scope through Phase 5 m3: Linux opens, edits, saves and restores a
-//! session against real files, with encoding and EOL in the status
-//! bar, external changes detected, and a working tab strip — switch,
-//! close, middle-click-close and drag-to-reorder. Find/Replace and
-//! Goto dialogs, the toolbar, UDL styling and the plugin host are
+//! Scope so far: Linux opens, edits, saves and restores a session
+//! against real files, with encoding and EOL in the status bar,
+//! external changes detected, a working tab strip (switch, close,
+//! middle-click-close, drag-to-reorder), and Find/Replace + Goto with
+//! a Search menu. The toolbar, UDL styling and the plugin host are
 //! later milestones. (Plain code spans, not
 //! intra-doc links, for cross-crate references in this file — `ui_gtk`
 //! deliberately does not depend on `ui_win32`, so links to it would be
@@ -42,6 +42,7 @@
 
 mod menu;
 mod platform;
+mod search;
 mod state;
 mod status;
 mod tabs;
@@ -216,6 +217,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
         menu_bar,
         tabs: tab_strip.clone(),
         shell,
+        find_replace: None,
     }));
     state::install(&st);
 
