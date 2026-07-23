@@ -3,9 +3,11 @@
 //! Wired: File (New, Open, Save, Save As, Save All, Reload, Close, Close
 //! All, Exit), Edit (Undo/Redo, Cut/Copy/Paste/Delete, Select All),
 //! Search (Find, Replace, Find Next/Previous, Go to), View (zoom, Word
-//! Wrap, Show Whitespace, Show EOL) and ? (About). Still to come, tracked
-//! against the Win32 parity list: Encoding, Language, Settings, Tools,
-//! Macro, Run, Plugins and Window.
+//! Wrap, Show Whitespace, Show EOL), Encoding (UTF-8 / UTF-8 BOM / UTF-16
+//! LE·BE BOM, ANSI greyed), Language (Normal Text + the ~88
+//! Lexilla-backed languages, letter-grouped, plus the User-Defined
+//! language submenu) and ? (About). Still to come, tracked against the
+//! Win32 parity list: Settings, Tools, Macro, Run, Plugins and Window.
 //!
 //! Accelerators match the Win32 backend's `CreateAcceleratorTableW`
 //! block, which DESIGN.md §7.5 names as the source of truth for
@@ -13,8 +15,9 @@
 
 use std::path::PathBuf;
 
-use codepp_shell::OpenFileOutcome;
+use codepp_shell::{OpenFileOutcome, UiPlatform};
 use gtk::gdk::keys::constants as key;
+use gtk::glib;
 use gtk::prelude::*;
 
 use crate::state::with_state;
@@ -38,9 +41,20 @@ struct Entry {
 /// because they need the window state installed first.
 pub fn build() -> gtk::MenuBar {
     let bar = gtk::MenuBar::new();
-    // Order mirrors Notepad++/Win32: File, Edit, Search, View, … , ?.
-    // "?" is N++'s Help menu; kept as-is for parity.
-    for title in ["_File", "_Edit", "_Search", "_View", "?"] {
+    // Order mirrors Notepad++/Win32: File, Edit, Search, View, Encoding,
+    // Language, … , ?. "?" is N++'s Help menu; kept as-is for parity. The
+    // menus Win32 has between Language and ? (Settings, Tools, Macro, Run,
+    // Plugins, Window) are not built yet, so Language sits directly before
+    // Help here — their absence just leaves a gap, not a mis-order.
+    for title in [
+        "_File",
+        "_Edit",
+        "_Search",
+        "_View",
+        "E_ncoding",
+        "_Language",
+        "?",
+    ] {
         let root = gtk::MenuItem::with_mnemonic(title);
         root.set_submenu(Some(&gtk::Menu::new()));
         bar.append(&root);
@@ -97,6 +111,8 @@ pub fn connect() {
     build_edit_menu(&bar, &accel);
     build_search_menu(&bar, &accel);
     build_view_menu(&bar, &accel);
+    build_encoding_menu(&bar);
+    build_language_menu(&bar, &window);
     build_help_menu(&bar, &accel);
 }
 
@@ -318,6 +334,286 @@ fn build_view_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     menu.show_all();
 }
 
+// --- Encoding menu ----------------------------------------------------
+
+thread_local! {
+    /// True while a menu's `show` handler is re-syncing its check marks.
+    /// The programmatic `set_active` used there can re-fire an item's
+    /// `activate`; the apply handlers bail when this is set so a refresh
+    /// never re-applies the language/encoding it is merely *reflecting*.
+    ///
+    /// Deliberately shared by both the Encoding and Language menus: they
+    /// run on the one GTK main thread and their show/activate sequences
+    /// never interleave, so one flag is enough. A future third menu reusing
+    /// it must hold that same "never concurrently refreshing" property.
+    static REFRESHING_MARKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Build the Encoding menu: the four wired Unicode save targets plus a
+/// greyed ANSI row, mirroring `ui_win32`. Selecting one flips the active
+/// tab's save encoding — a metadata change realised on the next save,
+/// since Scintilla always holds UTF-8 in memory — and repaints the status
+/// bar. Each row is a radio-drawn `CheckMenuItem`, re-synced to the active
+/// encoding every time the menu opens (`connect_show`). ANSI stays
+/// disabled because `codepp_core::Encoding` has no ANSI variant yet — the
+/// same reason it is greyed on Win32.
+fn build_encoding_menu(bar: &gtk::MenuBar) {
+    let Some(menu) = submenu_at(bar, 4, "Encoding") else {
+        return;
+    };
+    let rows: [(&str, Option<codepp_core::Encoding>); 5] = [
+        ("_ANSI", None),
+        ("UTF-_8 (no BOM)", Some(codepp_core::Encoding::Utf8)),
+        ("UTF-8 with _BOM", Some(codepp_core::Encoding::Utf8Bom)),
+        ("UTF-16 _LE BOM", Some(codepp_core::Encoding::Utf16LeBom)),
+        ("UTF-16 B_E BOM", Some(codepp_core::Encoding::Utf16BeBom)),
+    ];
+    let mut items: Vec<(codepp_core::Encoding, gtk::CheckMenuItem)> = Vec::new();
+    for (label, enc) in rows {
+        let item = gtk::CheckMenuItem::with_mnemonic(label);
+        item.set_draw_as_radio(true);
+        match enc {
+            None => item.set_sensitive(false),
+            Some(e) => {
+                let apply = e.clone();
+                item.connect_activate(move |_| apply_encoding(apply.clone()));
+                items.push((e, item.clone()));
+            }
+        }
+        menu.append(&item);
+    }
+    menu.connect_show(move |_| {
+        let active = with_state(|st| st.shell.active().map(|t| t.encoding.clone())).flatten();
+        set_encoding_marks(&items, active.as_ref());
+    });
+    menu.show_all();
+}
+
+/// Apply a chosen save encoding to the active buffer, then repaint the
+/// status bar. Skips the work while a `show`-driven mark refresh is in
+/// flight (see [`REFRESHING_MARKS`]).
+fn apply_encoding(encoding: codepp_core::Encoding) {
+    if REFRESHING_MARKS.with(std::cell::Cell::get) {
+        return;
+    }
+    let changed = with_state(|st| st.shell.set_buffer_encoding(encoding)).unwrap_or(false);
+    if changed {
+        refresh_active_status();
+    }
+}
+
+/// Set the encoding menu's radio marks. Both the BOM and detected-no-BOM
+/// UTF-16 encodings mark the single BOM row, matching `ui_win32`; an
+/// unfamiliar `Other(_)` leaves no mark (the "unknown encoding" cue).
+fn set_encoding_marks(
+    items: &[(codepp_core::Encoding, gtk::CheckMenuItem)],
+    active: Option<&codepp_core::Encoding>,
+) {
+    REFRESHING_MARKS.with(|r| r.set(true));
+    for (enc, item) in items {
+        item.set_active(active.is_some_and(|a| same_encoding_family(a, enc)));
+    }
+    REFRESHING_MARKS.with(|r| r.set(false));
+}
+
+/// Whether `active` should light up the menu row for `item` — treating the
+/// detected no-BOM UTF-16 variants as the same family as their BOM rows.
+fn same_encoding_family(active: &codepp_core::Encoding, item: &codepp_core::Encoding) -> bool {
+    use codepp_core::Encoding::{Utf16Be, Utf16BeBom, Utf16Le, Utf16LeBom, Utf8, Utf8Bom};
+    matches!(
+        (active, item),
+        (Utf8, Utf8)
+            | (Utf8Bom, Utf8Bom)
+            | (Utf16LeBom | Utf16Le, Utf16LeBom)
+            | (Utf16BeBom | Utf16Be, Utf16BeBom)
+    )
+}
+
+// --- Language menu ----------------------------------------------------
+
+/// Notepad++'s community UDL collection, opened by the Language menu's
+/// User-Defined-language submenu. Compile-time constant — no user string
+/// reaches the URI handler. Matches `ui_win32`'s `UDL_COLLECTION_URL`.
+const UDL_COLLECTION_URL: &str = "https://github.com/notepad-plus-plus/userDefinedLanguages";
+
+/// Build the Language menu from `codepp_core::lang::LANG_TABLE`, mirroring
+/// Notepad++/`ui_win32`: "Normal Text" on top, a separator, then the ~88
+/// languages alphabetically — a run of two or more sharing an uppercased
+/// first letter collapses into a letter submenu, a lone letter stays a
+/// flat item — then a separator and the "User-Defined language" submenu.
+/// Each language is a radio-drawn `CheckMenuItem` whose click applies that
+/// `LangType`; the active language's mark is re-synced on menu open.
+fn build_language_menu(bar: &gtk::MenuBar, window: &gtk::Window) {
+    let Some(menu) = submenu_at(bar, 5, "Language") else {
+        return;
+    };
+    let table = codepp_core::lang::LANG_TABLE;
+    let mut items: Vec<(i32, gtk::CheckMenuItem)> = Vec::new();
+
+    // [0] is pinned to Normal Text — top-level, then a separator.
+    if let Some(first) = table.first() {
+        items.push(add_lang_item(
+            &menu,
+            first.menu_label,
+            first.lang.as_npp_id(),
+        ));
+    }
+    menu.append(&gtk::SeparatorMenuItem::new());
+
+    // [1..] is alphabetical by `menu_label`; group same-first-letter runs.
+    let rest = &table[1..];
+    let mut i = 0;
+    while i < rest.len() {
+        let letter = first_letter(rest[i].menu_label);
+        let mut j = i + 1;
+        while j < rest.len() && first_letter(rest[j].menu_label) == letter {
+            j += 1;
+        }
+        if j - i == 1 {
+            items.push(add_lang_item(
+                &menu,
+                rest[i].menu_label,
+                rest[i].lang.as_npp_id(),
+            ));
+        } else {
+            let sub = gtk::Menu::new();
+            for e in &rest[i..j] {
+                items.push(add_lang_item(&sub, e.menu_label, e.lang.as_npp_id()));
+            }
+            let parent = gtk::MenuItem::with_label(&letter.to_string());
+            parent.set_submenu(Some(&sub));
+            menu.append(&parent);
+        }
+        i = j;
+    }
+
+    menu.append(&gtk::SeparatorMenuItem::new());
+    menu.append(&build_udl_submenu(window));
+
+    menu.connect_show(move |_| {
+        let active = with_state(|st| st.shell.active().map(|t| t.lang.as_npp_id())).flatten();
+        set_language_marks(&items, active);
+    });
+    menu.show_all();
+}
+
+/// Uppercased first character of a language label, for letter grouping.
+/// Non-alphabetic / empty labels floor at a space, keeping them together.
+fn first_letter(label: &str) -> char {
+    label.chars().next().map_or(' ', |c| c.to_ascii_uppercase())
+}
+
+/// Append one language row (a radio-drawn `CheckMenuItem`) that applies
+/// `lang_id` on click, and return it paired with its id for mark refresh.
+/// Plain label, not mnemonic: language names carry `+`/`#`/`_` that a
+/// mnemonic parse would mangle, and 88 auto-assigned mnemonics would
+/// collide anyway.
+fn add_lang_item(menu: &gtk::Menu, label: &str, lang_id: i32) -> (i32, gtk::CheckMenuItem) {
+    let item = gtk::CheckMenuItem::with_label(label);
+    item.set_draw_as_radio(true);
+    item.connect_activate(move |_| apply_language(lang_id));
+    menu.append(&item);
+    (lang_id, item.clone())
+}
+
+/// Apply a chosen language to the active buffer: flip the tab's `lang`,
+/// re-lex/re-colour via `apply_lang`, and repaint the status bar. Skips
+/// the work during a `show`-driven mark refresh (see [`REFRESHING_MARKS`]).
+fn apply_language(lang_id: i32) {
+    if REFRESHING_MARKS.with(std::cell::Cell::get) {
+        return;
+    }
+    let lang = codepp_core::LangType(lang_id);
+    let changed = with_state(|st| st.shell.set_active_lang(lang)).unwrap_or(false);
+    if changed {
+        with_state(|st| {
+            let (shell, mut ui) = st.split();
+            ui.apply_lang(lang);
+            if let Some(tab) = shell.active() {
+                let (l, enc, eol, blen) = (tab.lang, tab.encoding.clone(), tab.eol, tab.byte_len);
+                ui.update_status(l, &enc, eol, blen);
+            }
+        });
+    }
+}
+
+/// Set the language menu's radio marks to the active language's id.
+fn set_language_marks(items: &[(i32, gtk::CheckMenuItem)], active: Option<i32>) {
+    REFRESHING_MARKS.with(|r| r.set(true));
+    for (id, item) in items {
+        item.set_active(active == Some(*id));
+    }
+    REFRESHING_MARKS.with(|r| r.set(false));
+}
+
+/// The "User-Defined language" submenu at the bottom of the Language menu.
+///
+/// "Define your language…" is greyed — the UDL editor modal is Phase 4.6
+/// m3 and exists only on Win32 so far. The other two work: one opens the
+/// `userDefineLangs` folder in the file manager, the other the N++ UDL
+/// collection in the browser. Loaded UDLs are deliberately *not* listed
+/// flat here yet: GTK's `apply_lang` does not style UDL buffers (it logs
+/// and falls through — see `platform.rs`), so a menu entry would set a
+/// language that produces no highlighting. They land when UDL styling does.
+fn build_udl_submenu(window: &gtk::Window) -> gtk::MenuItem {
+    let parent = gtk::MenuItem::with_label("User-Defined language");
+    let sub = gtk::Menu::new();
+
+    let define = gtk::MenuItem::with_label("Define your language…");
+    define.set_sensitive(false);
+    sub.append(&define);
+
+    let open_folder = gtk::MenuItem::with_label("Open User Defined Language folder…");
+    let win = window.clone();
+    open_folder.connect_activate(move |_| open_udl_folder(&win));
+    sub.append(&open_folder);
+
+    let collection = gtk::MenuItem::with_label("Notepad++ User Defined Languages Collection");
+    let win = window.clone();
+    collection.connect_activate(move |_| open_uri(&win, UDL_COLLECTION_URL));
+    sub.append(&collection);
+
+    parent.set_submenu(Some(&sub));
+    parent
+}
+
+/// Open the `userDefineLangs` folder in the desktop file manager.
+/// `create_dir_all` first — matching Win32 — so a click that races a
+/// between-boots deletion still targets a valid path.
+fn open_udl_folder(window: &gtk::Window) {
+    let Some(dir) = codepp_platform::user_define_langs_dir() else {
+        tracing::warn!("no config dir; cannot open the User Defined Language folder");
+        return;
+    };
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(?e, "could not create the User Defined Language folder");
+        return;
+    }
+    match glib::filename_to_uri(&dir, None) {
+        Ok(uri) => open_uri(window, &uri),
+        Err(e) => tracing::warn!(?e, "filename_to_uri failed for the UDL folder"),
+    }
+}
+
+/// Open `uri` with the desktop's default handler (file manager / browser).
+fn open_uri(window: &gtk::Window, uri: &str) {
+    if let Err(e) = gtk::show_uri_on_window(Some(window), uri, gtk::current_event_time()) {
+        tracing::warn!(?e, uri, "show_uri_on_window failed");
+    }
+}
+
+/// Repaint the status bar's static parts (language / EOL / encoding) from
+/// the active tab — used after an encoding change, which does not re-lex.
+fn refresh_active_status() {
+    with_state(|st| {
+        let (shell, mut ui) = st.split();
+        if let Some(tab) = shell.active() {
+            let (l, enc, eol, blen) = (tab.lang, tab.encoding.clone(), tab.eol, tab.byte_len);
+            ui.update_status(l, &enc, eol, blen);
+        }
+    });
+}
+
 fn build_help_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     let none = gtk::gdk::ModifierType::empty();
     let entries = [Entry {
@@ -325,7 +621,7 @@ fn build_help_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
         accel: Some((key::F1, none)),
         action: on_about,
     }];
-    let Some(menu) = submenu_at(bar, 4, "?") else {
+    let Some(menu) = submenu_at(bar, 6, "?") else {
         return;
     };
     populate(&menu, accel, &entries);

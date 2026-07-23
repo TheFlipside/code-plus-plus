@@ -265,6 +265,7 @@ version = "0.1.0"
 dependencies = [
  "codepp-core",
  "codepp-editor",
+ "codepp-platform",
  "codepp-scintilla-sys",
  "codepp-shell",
  "codepp-udl",

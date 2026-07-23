@@ -3900,6 +3900,41 @@ impl Shell {
         true
     }
 
+    /// Set the **active** tab's syntax-highlighting language — the
+    /// menu-driven counterpart to the Windows-only, id-keyed
+    /// [`set_buffer_lang_type`](Self::set_buffer_lang_type), which lives on
+    /// the plugin `HostBridge` and so is unavailable to the GTK/Cocoa
+    /// backends.
+    ///
+    /// Metadata-only, matching [`Self::set_buffer_encoding`]: it flips
+    /// `tab.lang` and returns `true` on a real change so the caller re-lexes
+    /// via [`UiPlatform::apply_lang`] and repaints the status bar; `false`
+    /// on a same-value no-op or with no active tab (so a re-click of the
+    /// already-active language neither re-styles nor flickers the chrome).
+    /// The new language persists to `session.xml` on the next save — the
+    /// tab's `lang` is written whenever it differs from the extension
+    /// default.
+    ///
+    /// Unlike the Windows `set_buffer_lang_type` path, this does **not**
+    /// queue an `NPPN_LANGCHANGED` plugin notification — the whole plugin
+    /// dispatch surface is Windows-only today (no `dlopen` arm on GTK/Cocoa
+    /// yet, DESIGN.md §5 Phase 5). When a cross-platform plugin host lands,
+    /// the menu handler must route through the notification path so loaded
+    /// plugins observe the change, not just flip metadata here.
+    pub fn set_active_lang(&mut self, lang: codepp_core::LangType) -> bool {
+        let Some(idx) = self.active_tab else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get_mut(idx) else {
+            return false;
+        };
+        if tab.lang == lang {
+            return false;
+        }
+        tab.lang = lang;
+        true
+    }
+
     /// Like [`Self::set_buffer_encoding`] but addresses an arbitrary
     /// open buffer by id rather than the active one. Plumbs
     /// `NPPM_SETBUFFERENCODING` from a plugin onto a specific buffer
@@ -7604,6 +7639,40 @@ mod tests {
         let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
         let mut shell = Shell::new(wake).unwrap();
         assert!(!shell.set_buffer_encoding(codepp_core::Encoding::Utf16LeBom));
+    }
+
+    #[test]
+    fn set_active_lang_no_active_tab_returns_false() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        assert!(!shell.set_active_lang(codepp_core::lang::L_CPP));
+    }
+
+    #[test]
+    fn set_active_lang_flips_then_no_ops_on_repeat() {
+        // A real change returns true (caller re-lexes); re-selecting the
+        // same language is a silent no-op so the menu doesn't re-style or
+        // flicker the status bar on every click.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plain.txt");
+        std::fs::write(&path, "hello\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.open_file(path);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| !u.set_text_calls.is_empty(),
+            Duration::from_secs(2),
+        );
+
+        // `.txt` detects as Normal Text; switching to C++ is a real change.
+        assert!(shell.set_active_lang(codepp_core::lang::L_CPP));
+        assert_eq!(shell.active().unwrap().lang, codepp_core::lang::L_CPP);
+        // Re-selecting C++ is a no-op.
+        assert!(!shell.set_active_lang(codepp_core::lang::L_CPP));
     }
 
     #[test]

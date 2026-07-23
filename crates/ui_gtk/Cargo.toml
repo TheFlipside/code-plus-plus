@@ -20,6 +20,7 @@ name = "codepp_ui_gtk"
 [target.'cfg(target_os = "linux")'.dependencies]
 codepp-core          = { workspace = true }
 codepp-editor        = { workspace = true }
+codepp-platform      = { workspace = true }
 codepp-scintilla-sys = { workspace = true }
 codepp-shell         = { workspace = true }
 codepp-udl           = { workspace = true }
