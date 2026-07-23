@@ -108,21 +108,40 @@ pub fn show_goto() {
     }
 }
 
-/// The modeless Find/Replace dialog's widgets, held on the window state
-/// for the session.
+/// Notebook page index for each mode. Matches `ui_win32`'s
+/// Find/Replace/Find-in-Files tab order.
+const PAGE_FIND: u32 = 0;
+const PAGE_REPLACE: u32 = 1;
+const PAGE_FIND_IN_FILES: u32 = 2;
+
+/// The modeless Find/Replace/Find-in-Files dialog's widgets, held on the
+/// window state for the session.
 ///
-/// One dialog serves both Find and Replace: opening Replace reveals the
-/// replace row that Find hides, matching Notepad++'s single dialog with
-/// a mode toggle rather than two separate windows.
+/// One window serves all three modes as notebook tabs, matching
+/// Notepad++ (and `ui_win32`): the query field and the Match case / Whole
+/// word / Regular expression options sit above the notebook and are
+/// *shared* across every tab, while each tab carries only its own
+/// controls — Find has just its buttons, Replace adds a replacement
+/// field, and Find in Files adds directory / filters / its own
+/// replacement plus the two scan-scope checkboxes.
 pub struct FindReplaceDialog {
     window: gtk::Window,
+    notebook: gtk::Notebook,
     find_entry: gtk::Entry,
     replace_entry: gtk::Entry,
-    replace_row: gtk::Box,
-    replace_buttons: gtk::Box,
     match_case: gtk::CheckButton,
     whole_word: gtk::CheckButton,
     regex: gtk::CheckButton,
+    /// Find-in-Files tab: directory to search.
+    fif_directory: gtk::Entry,
+    /// Find-in-Files tab: whitespace-separated include globs.
+    fif_filters: gtk::Entry,
+    /// Find-in-Files tab: its own replacement field (Replace in Files).
+    fif_replace: gtk::Entry,
+    /// Find-in-Files tab: recurse into subdirectories.
+    fif_subfolders: gtk::CheckButton,
+    /// Find-in-Files tab: descend into hidden (dot-prefixed) folders.
+    fif_hidden: gtk::CheckButton,
     /// Transient one-line result readout ("3 replaced", "not found").
     status: gtk::Label,
 }
@@ -138,24 +157,28 @@ impl FindReplaceDialog {
     }
 }
 
-/// Open Find, building the dialog on first use.
+/// Open the Find tab, building the dialog on first use.
 pub fn show_find() {
-    open_dialog(false);
+    open_dialog(PAGE_FIND);
 }
 
-/// Open Replace, building the dialog on first use and revealing the
-/// replace controls.
+/// Open the Replace tab, building the dialog on first use.
 pub fn show_replace() {
-    open_dialog(true);
+    open_dialog(PAGE_REPLACE);
 }
 
-/// Ensure the dialog exists, set its mode, and present it.
+/// Open the Find-in-Files tab, building the dialog on first use.
+pub fn show_find_in_files() {
+    open_dialog(PAGE_FIND_IN_FILES);
+}
+
+/// Ensure the dialog exists, select `page`, and present it.
 ///
 /// Focus goes to the find field with any current selection prefilled,
 /// which is what a user pressing Ctrl+F over a highlighted word
 /// expects. Reusing the one dialog rather than building a second is the
 /// whole reason it lives on the state.
-fn open_dialog(replace_mode: bool) {
+fn open_dialog(page: u32) {
     // Build outside `with_state` if needed: constructing the dialog does
     // not touch `Shell`, and doing it inside would hold the borrow
     // across widget setup for no reason.
@@ -182,29 +205,65 @@ fn open_dialog(replace_mode: bool) {
     })
     .flatten();
 
+    // Seed the Find-in-Files directory with the active file's folder on
+    // first open, matching Notepad++ — only when empty, so a user's own
+    // entry is never clobbered.
+    let seed_dir = if page == PAGE_FIND_IN_FILES {
+        with_state(|st| {
+            st.shell
+                .active_tab
+                .and_then(|i| st.shell.tabs.get(i))
+                .and_then(|t| t.path.as_ref())
+                .and_then(|p| p.parent())
+                .map(|p| p.to_string_lossy().into_owned())
+        })
+        .flatten()
+    } else {
+        None
+    };
+
     with_state(|st| {
         let Some(d) = &st.find_replace else {
             return;
         };
-        set_replace_visible(d, replace_mode);
+        set_page(d, page);
         if let Some(text) = &selection {
             if !text.contains('\n') {
                 d.find_entry.set_text(text);
             }
         }
+        if let Some(dir) = &seed_dir {
+            // Only auto-seed a display-clean path. The field is functional
+            // — it becomes the search root — so it can't be sanitized in
+            // place without corrupting the path; a component carrying
+            // control / bidi characters would otherwise render them into
+            // the Entry. When it isn't clean, leave the field for the user.
+            if d.fif_directory.text().is_empty()
+                && codepp_shell::sanitize_str_for_display(dir) == *dir
+            {
+                d.fif_directory.set_text(dir);
+            }
+        }
         d.status.set_text("");
         d.window.show_all();
-        set_replace_visible(d, replace_mode);
+        set_page(d, page);
         d.window.present();
-        d.find_entry.grab_focus();
+        if page == PAGE_FIND_IN_FILES && d.find_entry.text().is_empty() {
+            d.fif_directory.grab_focus();
+        } else {
+            d.find_entry.grab_focus();
+        }
     });
 }
 
-/// Show or hide the replace row and its buttons.
-fn set_replace_visible(d: &FindReplaceDialog, visible: bool) {
-    d.replace_row.set_visible(visible);
-    d.replace_buttons.set_visible(visible);
-    let title = if visible { "Replace" } else { "Find" };
+/// Select the notebook page and retitle the window to match.
+fn set_page(d: &FindReplaceDialog, page: u32) {
+    d.notebook.set_current_page(Some(page));
+    let title = match page {
+        PAGE_REPLACE => "Replace",
+        PAGE_FIND_IN_FILES => "Find in Files",
+        _ => "Find",
+    };
     d.window.set_title(title);
 }
 
@@ -283,18 +342,11 @@ fn build_dialog() -> FindReplaceDialog {
     outer.set_margin_end(10);
     window.add(&outer);
 
-    // Find row.
+    // --- Shared: query field + options (above the notebook) --------
     let find_entry = gtk::Entry::new();
     find_entry.set_activates_default(false);
-    let find_row = labelled_row("Find:", &find_entry);
-    outer.pack_start(&find_row, false, false, 0);
+    outer.pack_start(&labelled_row("Find:", &find_entry), false, false, 0);
 
-    // Replace row (hidden in Find mode).
-    let replace_entry = gtk::Entry::new();
-    let replace_row = labelled_row("Replace:", &replace_entry);
-    outer.pack_start(&replace_row, false, false, 0);
-
-    // Options.
     let match_case = gtk::CheckButton::with_label("Match case");
     let whole_word = gtk::CheckButton::with_label("Whole word");
     let regex = gtk::CheckButton::with_label("Regular expression");
@@ -304,7 +356,12 @@ fn build_dialog() -> FindReplaceDialog {
     opts.pack_start(&regex, false, false, 0);
     outer.pack_start(&opts, false, false, 0);
 
-    // Find buttons.
+    let notebook = gtk::Notebook::new();
+    outer.pack_start(&notebook, false, false, 0);
+
+    // --- Find page -------------------------------------------------
+    let find_page = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    find_page.set_margin_top(8);
     let find_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let btn_next = gtk::Button::with_label("Find Next");
     let btn_prev = gtk::Button::with_label("Find Previous");
@@ -312,15 +369,24 @@ fn build_dialog() -> FindReplaceDialog {
     find_buttons.pack_start(&btn_next, false, false, 0);
     find_buttons.pack_start(&btn_prev, false, false, 0);
     find_buttons.pack_start(&btn_count, false, false, 0);
-    outer.pack_start(&find_buttons, false, false, 0);
+    find_page.pack_start(&find_buttons, false, false, 0);
+    notebook.append_page(&find_page, Some(&gtk::Label::new(Some("Find"))));
 
-    // Replace buttons (hidden in Find mode).
+    // --- Replace page ----------------------------------------------
+    let replace_page = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    replace_page.set_margin_top(8);
+    let replace_entry = gtk::Entry::new();
+    replace_page.pack_start(&labelled_row("Replace:", &replace_entry), false, false, 0);
     let replace_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let btn_replace = gtk::Button::with_label("Replace");
     let btn_replace_all = gtk::Button::with_label("Replace All");
     replace_buttons.pack_start(&btn_replace, false, false, 0);
     replace_buttons.pack_start(&btn_replace_all, false, false, 0);
-    outer.pack_start(&replace_buttons, false, false, 0);
+    replace_page.pack_start(&replace_buttons, false, false, 0);
+    notebook.append_page(&replace_page, Some(&gtk::Label::new(Some("Replace"))));
+
+    // --- Find in Files page ----------------------------------------
+    let fif = build_fif_page(&notebook);
 
     let status = gtk::Label::new(None);
     status.set_xalign(0.0);
@@ -339,14 +405,76 @@ fn build_dialog() -> FindReplaceDialog {
 
     FindReplaceDialog {
         window,
+        notebook,
         find_entry,
         replace_entry,
-        replace_row,
-        replace_buttons,
         match_case,
         whole_word,
         regex,
+        fif_directory: fif.directory,
+        fif_filters: fif.filters,
+        fif_replace: fif.replace,
+        fif_subfolders: fif.subfolders,
+        fif_hidden: fif.hidden,
         status,
+    }
+}
+
+/// The Find-in-Files tab's own widgets, returned by [`build_fif_page`].
+struct FifPageWidgets {
+    directory: gtk::Entry,
+    filters: gtk::Entry,
+    replace: gtk::Entry,
+    subfolders: gtk::CheckButton,
+    hidden: gtk::CheckButton,
+}
+
+/// Build the Find-in-Files notebook page, wire its buttons, append it to
+/// `notebook`, and return its input widgets for the dialog struct.
+fn build_fif_page(notebook: &gtk::Notebook) -> FifPageWidgets {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    page.set_margin_top(8);
+
+    let directory = gtk::Entry::new();
+    let dir_row = labelled_row("Directory:", &directory);
+    let btn_browse = gtk::Button::with_label("Browse…");
+    dir_row.pack_start(&btn_browse, false, false, 0);
+    page.pack_start(&dir_row, false, false, 0);
+
+    let filters = gtk::Entry::new();
+    filters.set_placeholder_text(Some("e.g. *.rs *.toml — empty for all files"));
+    page.pack_start(&labelled_row("Filters:", &filters), false, false, 0);
+
+    let replace = gtk::Entry::new();
+    page.pack_start(&labelled_row("Replace with:", &replace), false, false, 0);
+
+    let subfolders = gtk::CheckButton::with_label("In sub-folders");
+    subfolders.set_active(true);
+    let hidden = gtk::CheckButton::with_label("In hidden folders");
+    let opts = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    opts.pack_start(&subfolders, false, false, 0);
+    opts.pack_start(&hidden, false, false, 0);
+    page.pack_start(&opts, false, false, 0);
+
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let btn_find_all = gtk::Button::with_label("Find All");
+    let btn_replace_in_files = gtk::Button::with_label("Replace in Files");
+    buttons.pack_start(&btn_find_all, false, false, 0);
+    buttons.pack_start(&btn_replace_in_files, false, false, 0);
+    page.pack_start(&buttons, false, false, 0);
+
+    notebook.append_page(&page, Some(&gtk::Label::new(Some("Find in Files"))));
+
+    btn_browse.connect_clicked(|_| browse_fif_directory());
+    btn_find_all.connect_clicked(|_| do_find_all());
+    btn_replace_in_files.connect_clicked(|_| do_replace_in_files());
+
+    FifPageWidgets {
+        directory,
+        filters,
+        replace,
+        subfolders,
+        hidden,
     }
 }
 
@@ -482,4 +610,141 @@ fn do_replace_all() {
             d.status.set_text(&format!("{n} replaced"));
         }
     });
+}
+
+// --- Find in Files ----------------------------------------------------
+
+/// Read the Find-in-Files tab into a [`crate::fif::FifInputs`], including
+/// the shared query/options and the tab's own directory/filters/scope.
+///
+/// `is_replace` decides whether the replacement string (the FIF tab's own
+/// "Replace with" field) is captured — so Find All sends `None` and
+/// Replace in Files sends `Some(..)`.
+fn gather_fif_inputs(is_replace: bool) -> Option<crate::fif::FifInputs> {
+    with_state(|st| {
+        st.find_replace.as_ref().map(|d| crate::fif::FifInputs {
+            query: d.find_entry.text().to_string(),
+            replacement: is_replace.then(|| d.fif_replace.text().to_string()),
+            match_case: d.match_case.is_active(),
+            whole_word: d.whole_word.is_active(),
+            regex: d.regex.is_active(),
+            directory: d.fif_directory.text().to_string(),
+            filters: d.fif_filters.text().to_string(),
+            recurse: d.fif_subfolders.is_active(),
+            hidden: d.fif_hidden.is_active(),
+        })
+    })
+    .flatten()
+}
+
+/// Put a message on the dialog's status line, if it is open.
+///
+/// Sanitized: `msg` can be a `FifError` display string that embeds the
+/// user's directory path (e.g. `BadRoot`), and a hostile path component
+/// would otherwise render its control / bidi characters straight into the
+/// chrome. Same substitute-with-U+FFFD policy the rest of the feature
+/// applies to result rows and the destructive-confirm prompt.
+fn set_fif_status(msg: &str) {
+    let clean = codepp_shell::sanitize_str_for_display(msg);
+    with_state(|st| {
+        if let Some(d) = &st.find_replace {
+            d.status.set_text(&clean);
+        }
+    });
+}
+
+/// Hide the Find/Replace window and clear its status. Called after a FIF
+/// job starts so the results dock is unobstructed (matches `ui_win32`,
+/// which hides the dialog on FIF start).
+fn hide_search_window() {
+    with_state(|st| {
+        if let Some(d) = &st.find_replace {
+            d.status.set_text("");
+            d.window.hide();
+        }
+    });
+}
+
+/// "Find All" on the Find-in-Files tab: start a plain search.
+fn do_find_all() {
+    let Some(inputs) = gather_fif_inputs(false) else {
+        return;
+    };
+    match crate::fif::run_search(inputs) {
+        Ok(()) => hide_search_window(),
+        Err(msg) => set_fif_status(&msg),
+    }
+}
+
+/// "Replace in Files": confirm the destructive rewrite, then start it.
+///
+/// All inputs are captured *before* the confirm modal runs, so the
+/// wording the user approves cannot diverge from the parameters actually
+/// executed — the modal spins a nested main loop that would otherwise let
+/// the fields change between Yes and dispatch. Mirrors `ui_win32`.
+fn do_replace_in_files() {
+    let Some(inputs) = gather_fif_inputs(true) else {
+        return;
+    };
+    // Validate here — duplicating `run_search`'s own empty-input guards —
+    // specifically so an empty query/directory doesn't pop the destructive
+    // confirm dialog before `run_search` would reject it anyway.
+    if inputs.query.is_empty() {
+        set_fif_status("Enter a search term");
+        return;
+    }
+    if inputs.directory.trim().is_empty() {
+        set_fif_status("Enter a directory to search");
+        return;
+    }
+    // Sanitized: this prompt gates a destructive on-disk rewrite, and
+    // `set_secondary_text` renders control characters, so scrub them from
+    // the echoed query / replacement / path.
+    let confirm = format!(
+        "Replace \"{}\" with \"{}\" in files under {}{}?\n\nThis rewrites matching files on disk and cannot be undone.",
+        codepp_shell::sanitize_str_for_display(&inputs.query),
+        codepp_shell::sanitize_str_for_display(inputs.replacement.as_deref().unwrap_or("")),
+        codepp_shell::sanitize_str_for_display(inputs.directory.trim()),
+        if inputs.recurse { " (and sub-folders)" } else { "" },
+    );
+    let response = crate::message_dialog(
+        gtk::MessageType::Warning,
+        gtk::ButtonsType::YesNo,
+        "Replace in Files",
+        &confirm,
+    );
+    if response != gtk::ResponseType::Yes {
+        return;
+    }
+    match crate::fif::run_search(inputs) {
+        Ok(()) => hide_search_window(),
+        Err(msg) => set_fif_status(&msg),
+    }
+}
+
+/// Pick the Find-in-Files search directory with a native folder chooser
+/// and write it into the Directory field.
+fn browse_fif_directory() {
+    let parent = with_state(|st| st.window.clone());
+    let chooser = gtk::FileChooserNative::new(
+        Some("Choose folder to search"),
+        parent.as_ref(),
+        gtk::FileChooserAction::SelectFolder,
+        Some("_Select"),
+        Some("_Cancel"),
+    );
+    let chosen = if chooser.run() == gtk::ResponseType::Accept {
+        chooser.filename()
+    } else {
+        None
+    };
+    // `FileChooserNative` keeps its window alive until destroyed.
+    chooser.destroy();
+    if let Some(dir) = chosen {
+        with_state(|st| {
+            if let Some(d) = &st.find_replace {
+                d.fif_directory.set_text(&dir.to_string_lossy());
+            }
+        });
+    }
 }

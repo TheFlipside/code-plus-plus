@@ -40,6 +40,7 @@
     clippy::cast_sign_loss
 )]
 
+mod fif;
 mod menu;
 mod platform;
 mod search;
@@ -193,7 +194,16 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // SAFETY: `sci_ptr` is a non-null widget that `scintilla_new` just
     // returned and nothing has unreffed since.
     let sci_widget = unsafe { gtk::Widget::from_glib_none(sci_ptr.cast::<gtk::ffi::GtkWidget>()) };
-    layout.pack_start(&sci_widget, true, true, 0);
+
+    // The editor sits in the upper pane of a vertical splitter; the
+    // Find-in-Files results dock is the lower pane, hidden until a search
+    // runs. `pack1(resize=true)` lets the editor absorb window resizing
+    // while the dock keeps its dragged height — the GTK analogue of
+    // Win32's dock splitter.
+    let editor_dock_paned = gtk::Paned::new(gtk::Orientation::Vertical);
+    editor_dock_paned.pack1(&sci_widget, true, false);
+    layout.pack_start(&editor_dock_paned, true, true, 0);
+    let fif_dock = fif::build_dock(&editor_dock_paned);
 
     let status = StatusBar::new();
     layout.pack_start(&status.container, false, false, 0);
@@ -218,6 +228,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
         tabs: tab_strip.clone(),
         shell,
         find_replace: None,
+        fif_dock,
     }));
     state::install(&st);
 
@@ -479,6 +490,11 @@ pub(crate) fn drain_shell() {
     DIALOG_QUEUE.with(|q| q.borrow_mut().extend(dialogs.unwrap_or_default()));
     pump_dialogs();
     refresh_tab_chrome();
+    // Find-in-Files results arrive on the same wake as everything else;
+    // render them into the dock after the main drain (its own `with_state`
+    // so the borrow isn't held across the `TreeView` update). Staged during
+    // `Shell::drain`, taken via `take_fif_events`.
+    fif::drain_into_dock();
 }
 
 thread_local! {
@@ -838,7 +854,7 @@ fn reseed_active_caret() {
 /// load *completes*, so the synchronous outcomes — `close_active_tab`,
 /// and `open_file` returning `SwitchedToExisting` — leave the view on
 /// the previous tab's document unless the UI rebinds itself.
-fn rebind_active_view() {
+pub(crate) fn rebind_active_view() {
     with_state(|st| {
         let (shell, mut ui) = st.split();
         shell.bind_active_view(&mut ui);

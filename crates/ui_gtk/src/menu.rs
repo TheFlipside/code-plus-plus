@@ -233,6 +233,11 @@ fn build_search_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
             action: crate::search::show_replace,
         },
         Entry {
+            label: "Find in _Files…",
+            accel: Some((key::f, ctrl | shift)),
+            action: crate::search::show_find_in_files,
+        },
+        Entry {
             label: "Find _Next",
             accel: Some((key::F3, none)),
             action: crate::search::find_next_repeat,

@@ -81,6 +81,10 @@ pub struct GtkUiState {
     /// this rather than stacking a second dialog. `None` until the
     /// user first invokes Find or Replace.
     pub find_replace: Option<crate::search::FindReplaceDialog>,
+    /// The Find-in-Files results dock. Built once at startup and hidden
+    /// until a search produces results; lives in the lower pane of the
+    /// editor/dock splitter. See [`crate::fif`].
+    pub fif_dock: crate::fif::FifDock,
 }
 
 /// The `UiPlatform` implementor. Cheap to build; see the module docs.
