@@ -82,30 +82,19 @@ pub fn init(verbose: bool) -> bool {
         Err(err) => {
             // A malformed `CODEPP_LOG` must not take the editor down,
             // and must not silently behave as though it were valid.
-            // `{directives:?}` and not `{directives}`: this echoes an
-            // environment variable straight back to the terminal, and
-            // `Display` on a `String` passes control bytes through
-            // untouched — so a value carrying an xterm OSC escape
-            // would retitle the user's terminal, or use CR to overwrite
-            // the line above. `Debug` escapes them to `\u{1b}` and
-            // quotes the value, which also makes a stray-whitespace
-            // typo visible.
-            // `{directives:?}` escapes the value. `err` is escaped
-            // too, via `escape_debug`, even though the pinned
-            // `tracing-subscriber` only ever produces fixed strings
-            // here — verified by feeding it directives carrying an
-            // xterm OSC sequence and confirming none reached the
-            // message. That is a property of a dependency at a pinned
-            // version, not a guarantee, and it costs one call not to
-            // depend on it.
-            // `directives` is escaped because it is an environment
-            // value bound for a terminal. `err` is escaped too, but
-            // only when it actually contains a control character: the
-            // pinned `tracing-subscriber` emits fixed strings here —
-            // checked by feeding it directives carrying an xterm OSC
-            // sequence — so the branch never fires in practice and an
-            // ordinary typo is reported unmangled. It exists so the
-            // safety does not rest on a dependency's behaviour at one
+            //
+            // Both interpolated values are attacker-influenceable and
+            // terminal-bound, so both are escaped rather than passed to
+            // `Display`, which lets control bytes through — a value
+            // carrying an xterm OSC escape could retitle the terminal
+            // or overwrite the line above via CR. `directives` uses
+            // `{:?}` unconditionally. `err` comes from the pinned
+            // `tracing-subscriber`, which only ever produces fixed
+            // strings here (checked by feeding it directives carrying
+            // an OSC sequence and confirming none reached the message),
+            // so it is escaped only when it actually contains a control
+            // character — that keeps an ordinary typo readable while
+            // not resting the safety on a dependency's behaviour at one
             // pinned version.
             let err = err.to_string();
             let err = if err.chars().any(char::is_control) {
