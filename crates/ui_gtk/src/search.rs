@@ -334,6 +334,18 @@ fn build_dialog() -> FindReplaceDialog {
         w.hide();
         glib::Propagation::Stop
     });
+    // Escape closes (hides) the window too, matching the modal dialogs
+    // (Goto, the confirm prompts) that get it from GTK for free. A plain
+    // `gtk::Window` has no such behaviour, so wire it explicitly; hide
+    // rather than destroy for the same reuse reason as delete-event.
+    window.connect_key_press_event(|w, ev| {
+        if ev.keyval() == gtk::gdk::keys::constants::Escape {
+            w.hide();
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
 
     let outer = gtk::Box::new(gtk::Orientation::Vertical, 6);
     outer.set_margin_top(10);
