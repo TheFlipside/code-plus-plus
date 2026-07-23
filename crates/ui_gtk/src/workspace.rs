@@ -74,6 +74,61 @@ const MIN_WIDTH_PX: i32 = 120;
 const ICON_FOLDER: &str = "folder";
 const ICON_FILE: &str = "text-x-generic";
 
+/// The panel's resting header title, restored after an Unfold All walk.
+const PANEL_TITLE: &str = "Folder as Workspace";
+
+/// "Unfold All" async-walk tuning, mirroring Win32's batched walk.
+/// Folders are expanded [`UNFOLD_BATCH`] per [`UNFOLD_TICK_MS`] timer
+/// tick; the tree is *not* re-expanded row-by-row during the walk —
+/// children are read into the model under collapsed rows, so no
+/// per-folder repaint happens, and a single `expand_all` reveals
+/// everything at the end. The header title doubles as an "Expanding
+/// folders: N" counter meanwhile. 20 folders / 15 ms ≈ 1300 folders/s,
+/// the same envelope as the Win32 walk — and, like it, the GTK main loop
+/// keeps pumping between ticks so the UI stays responsive on a huge tree.
+const UNFOLD_BATCH: usize = 20;
+const UNFOLD_TICK_MS: u64 = 15;
+
+/// Ceiling on folders an Unfold All will *descend into* before it stops
+/// itself and leaves the rest collapsed (still lazily expandable by
+/// click). Bounds the directory reads a pathological tree (a cloned repo
+/// with a huge `node_modules`, a fork bomb of empty dirs) turns one click
+/// into. Paired with [`UNFOLD_MAX_ROWS`], which bounds the *rows* those
+/// folders materialise — folder count bounds I/O, row count bounds memory,
+/// and the walk stops at whichever it reaches first.
+const UNFOLD_MAX_FOLDERS: usize = 25_000;
+
+/// Ceiling on rows a single Unfold All will materialise. [`UNFOLD_MAX_FOLDERS`]
+/// alone doesn't bound this — 25 000 folders each holding [`MAX_DIR_ENTRIES`]
+/// files would be 125 M rows — so this caps how much *one click* can grow
+/// the model, in the spirit of §8's memory floor. Whichever ceiling hits
+/// first stops the walk. Note this bounds the walk's *own* insertions, not
+/// the model's total row count: rows the user already lazy-expanded by hand
+/// (or a previous walk left behind) aren't recounted — unbounded manual
+/// accumulation over a session is a pre-existing property of lazy loading,
+/// shared with Win32 and outside this cap's remit.
+const UNFOLD_MAX_ROWS: usize = 100_000;
+
+/// Per-tick ceiling on rows materialised, checked *between* folders. Keeps
+/// one tick from synchronously inserting the whole of a fat batch (up to
+/// [`UNFOLD_BATCH`] × [`MAX_DIR_ENTRIES`] rows) before yielding to the main
+/// loop — the responsiveness half of the bound, distinct from the total
+/// [`UNFOLD_MAX_ROWS`] memory half. A folder is populated atomically and the
+/// check runs after it, so one tick can carry up to `UNFOLD_ROWS_PER_TICK - 1`
+/// rows and then add a whole [`MAX_DIR_ENTRIES`]-sized directory on top —
+/// a worst-case tick of roughly `UNFOLD_ROWS_PER_TICK + MAX_DIR_ENTRIES`
+/// rows, still bounded and sub-millisecond.
+const UNFOLD_ROWS_PER_TICK: usize = 2_000;
+
+/// Per-directory entry cap. A single `read_dir` materialises at most this
+/// many rows into the model; the surplus is replaced by one non-functional
+/// "more items" marker row. Without it, one directory with millions of
+/// entries would block the UI thread for the whole read regardless of the
+/// inter-directory batching — the intra-directory analogue of
+/// [`UNFOLD_MAX_FOLDERS`]. Applies to ordinary lazy expansion too, not
+/// only Unfold All, so a giant directory never stalls the tree.
+const MAX_DIR_ENTRIES: usize = 5_000;
+
 thread_local! {
     /// The View-menu check item reflecting panel visibility, if built.
     static MENU_CHECK: std::cell::RefCell<Option<gtk::CheckMenuItem>> =
@@ -112,6 +167,34 @@ pub struct WorkspacePanel {
     /// Last known panel width, seeded from the session and updated from
     /// the live paned position whenever the panel is visible.
     width: i32,
+    /// Header title label, doubling as the "Expanding folders: N"
+    /// progress counter during an Unfold All walk.
+    title: gtk::Label,
+    /// DFS queue of folder rows still to expand in the async Unfold All
+    /// walk; non-empty iff a walk is in progress. `GtkTreeStore`
+    /// iterators are persistent, so these stay valid across the ticks'
+    /// model inserts — only placeholder rows, never a queued folder, are
+    /// ever removed.
+    unfold_pending: Vec<gtk::TreeIter>,
+    /// Folders expanded so far this walk — the counter shown in [`title`].
+    ///
+    /// [`title`]: Self::title
+    unfold_count: usize,
+    /// Rows this walk has inserted, capped by [`UNFOLD_MAX_ROWS`]. Counts
+    /// only the walk's own inserts, not rows already in the model — see the
+    /// [`UNFOLD_MAX_ROWS`] note.
+    unfold_rows: usize,
+    /// True while an Unfold All walk is running. Guards re-entry (a second
+    /// click is a no-op) and lets a still-scheduled tick self-cancel after
+    /// [`cancel_unfold`] clears it.
+    unfold_active: bool,
+    /// Generation of the current walk, bumped on each [`unfold_all`]. Each
+    /// scheduled tick captures the value it was started with and bails on
+    /// mismatch, so a Fold-then-Expand within one tick interval can't leave
+    /// the previous walk's still-scheduled `GSource` draining the new
+    /// walk's queue ("exactly one live timer", made explicit rather than
+    /// resting on the `unfold_active` flag alone).
+    unfold_gen: u64,
 }
 
 impl WorkspacePanel {
@@ -126,16 +209,23 @@ impl WorkspacePanel {
         // A width floor so a drag can't collapse the tree to unusable.
         container.set_size_request(MIN_WIDTH_PX, -1);
 
-        // Header: title label (springs) + fold-all / locate / close.
+        // Header: title label (springs) + expand-all / fold-all / locate
+        // / close, matching Win32's action-button order.
         let header = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         header.set_margin_top(2);
         header.set_margin_bottom(2);
         header.set_margin_start(6);
         header.set_margin_end(2);
-        let title = gtk::Label::new(Some("Folder as Workspace"));
+        let title = gtk::Label::new(Some(PANEL_TITLE));
         title.set_xalign(0.0);
+        // The title is also the progress counter; a mid-walk ellipsis
+        // keeps "Expanding folders: N" from widening the pane.
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         header.pack_start(&title, true, true, 0);
 
+        let expand_btn = header_button("⊞", "Expand All");
+        expand_btn.connect_clicked(|_| unfold_all());
+        header.pack_start(&expand_btn, false, false, 0);
         let fold_btn = header_button("⊟", "Fold All");
         fold_btn.connect_clicked(|_| fold_all());
         header.pack_start(&fold_btn, false, false, 0);
@@ -204,6 +294,12 @@ impl WorkspacePanel {
             root: None,
             visible: false,
             width: DEFAULT_WIDTH_PX,
+            title,
+            unfold_pending: Vec::new(),
+            unfold_count: 0,
+            unfold_rows: 0,
+            unfold_active: false,
+            unfold_gen: 0,
         }
     }
 
@@ -327,11 +423,21 @@ pub(crate) fn set_visible(visible: bool) {
             // to here, the moment it becomes visible.
             ShowAction::Populate => {
                 if let Some(root) = &root {
+                    // `populate_root` clears the store; cancel any walk
+                    // first so a queued tick can't touch invalidated iters.
+                    // (Today a walk can't be active with an empty model, but
+                    // this states the invariant rather than resting on it —
+                    // the same defence-in-depth `within_root` uses.)
+                    cancel_unfold();
                     with_state(|st| populate_root(&mut st.workspace, root));
                 }
             }
             ShowAction::ShowOnly => {}
         }
+    } else {
+        // Hiding: stop any in-flight Unfold All so a queued tick can't
+        // walk a pane the user just closed.
+        cancel_unfold();
     }
     with_state(|st| st.workspace.set_shown(visible));
     sync_indicators(visible);
@@ -363,6 +469,9 @@ fn resolve_show_action(root: Option<&Path>, model_empty: bool) -> ShowAction {
 /// Root the panel at `root`, populate it, and show it. Idempotent —
 /// re-roots in place if a workspace is already open.
 fn show_at(root: &Path) {
+    // Re-rooting clears the store, invalidating any iters a running walk
+    // has queued — stop it first.
+    cancel_unfold();
     with_state(|st| {
         st.workspace.root = Some(root.to_path_buf());
         populate_root(&mut st.workspace, root);
@@ -448,32 +557,48 @@ fn populate_root(ws: &mut WorkspacePanel, root: &Path) {
 /// first, then files, each case-insensitively sorted — Explorer order.
 /// A `read_dir` error is logged and treated as an empty directory.
 ///
-/// No entry cap: the whole directory materialises into the model on
-/// expand. A user-chosen workspace with a pathologically large flat
-/// directory could stall the UI thread — accepted for now (the folder is
-/// an explicit user choice, and this matches every file manager), tracked
-/// as a follow-up to add a cap + "N more…" placeholder like FIF's capped
-/// reads. Symlinks are classified by their own `file_type` (Win32 /
-/// file-manager parity), so a symlinked directory shows as a leaf and is
-/// not descended — which also makes symlink-loop recursion unreachable.
-fn populate_children(ws: &mut WorkspacePanel, parent: &gtk::TreeIter, dir: &Path) {
-    for (name, path, is_dir) in read_dir_sorted(dir) {
+/// Capped at [`MAX_DIR_ENTRIES`] rows; a directory with more gets one
+/// trailing non-functional "more items" marker instead of the surplus, so
+/// a single giant directory can neither stall the UI thread nor bloat the
+/// model unboundedly (the intra-directory half of the Unfold All bound).
+/// Symlinks are classified by their own `file_type` (Win32 / file-manager
+/// parity), so a symlinked directory shows as a leaf and is not descended
+/// — which also keeps symlink-loop recursion unreachable.
+/// Returns the number of rows inserted (entries plus the truncation
+/// marker, if any) so the Unfold All walk can budget against it.
+fn populate_children(ws: &mut WorkspacePanel, parent: &gtk::TreeIter, dir: &Path) -> usize {
+    let (entries, truncated) = read_dir_sorted(dir);
+    let mut inserted = entries.len();
+    for (name, path, is_dir) in entries {
         insert_row(ws, Some(parent), &name, path, is_dir);
     }
+    if truncated {
+        insert_truncation_marker(&ws.store, parent);
+        inserted += 1;
+    }
+    inserted
 }
 
-/// Directory entries as `(display-source name, full path, is_dir)`,
-/// sorted folders-first then case-insensitively by name.
-fn read_dir_sorted(dir: &Path) -> Vec<(String, PathBuf, bool)> {
+/// Directory entries as `(display-source name, full path, is_dir)`, sorted
+/// folders-first then case-insensitively by name, plus a `truncated` flag
+/// set when the directory held more than [`MAX_DIR_ENTRIES`] entries.
+///
+/// At most `MAX_DIR_ENTRIES + 1` entries are read from the iterator (one
+/// extra only to detect the overflow), so the expensive `file_type` / path
+/// work is bounded regardless of how large the directory actually is.
+fn read_dir_sorted(dir: &Path) -> (Vec<(String, PathBuf, bool)>, bool) {
     let reader = match std::fs::read_dir(dir) {
         Ok(reader) => reader,
         Err(err) => {
             tracing::warn!(?err, ?dir, "workspace: read_dir failed");
-            return Vec::new();
+            return (Vec::new(), false);
         }
     };
     let mut entries: Vec<(String, PathBuf, bool)> = reader
         .filter_map(Result::ok)
+        // One past the cap: enough to know the directory overflowed
+        // without walking (and stat-ing) all of a million-entry dir.
+        .take(MAX_DIR_ENTRIES + 1)
         .map(|entry| {
             let path = entry.path();
             // `file_type()` avoids a stat where the OS already knows; fall
@@ -485,8 +610,33 @@ fn read_dir_sorted(dir: &Path) -> Vec<(String, PathBuf, bool)> {
             (name, path, is_dir)
         })
         .collect();
+    let truncated = entries.len() > MAX_DIR_ENTRIES;
+    if truncated {
+        entries.truncate(MAX_DIR_ENTRIES);
+    }
     sort_dir_entries(&mut entries);
-    entries
+    (entries, truncated)
+}
+
+/// Insert the non-functional "directory truncated" marker row. It carries
+/// [`PLACEHOLDER_ID`] (no side-map entry), so `row_path` returns `None`
+/// and every click/context action safely no-ops on it — and, being a
+/// non-folder, the Unfold All walk never enqueues it.
+fn insert_truncation_marker(store: &gtk::TreeStore, parent: &gtk::TreeIter) {
+    store.insert_with_values(
+        Some(parent),
+        None,
+        &[
+            (COL_ICON, &""),
+            (
+                COL_NAME,
+                &format!("… more than {MAX_DIR_ENTRIES} items — not shown"),
+            ),
+            (COL_ID, &PLACEHOLDER_ID),
+            (COL_IS_DIR, &false),
+            (COL_POPULATED, &true),
+        ],
+    );
 }
 
 /// Order directory entries the way a file manager does: folders before
@@ -611,8 +761,185 @@ fn on_button_press(tree: &gtk::TreeView, ev: &gtk::gdk::EventButton) -> glib::Pr
 // --- Header actions ----------------------------------------------------
 
 /// Collapse the whole tree (the root row stays, its subtree folds).
+/// Cancels any in-flight Unfold All first, so a `collapse_all` can't race
+/// the walk's expansions.
 fn fold_all() {
+    cancel_unfold();
     with_state(|st| st.workspace.tree.collapse_all());
+}
+
+/// Expand every folder in the tree, reading each unread directory once.
+///
+/// This mirrors the Win32 "Unfold All": an **async batched walk** rather
+/// than a synchronous recursion, so a workspace with thousands of folders
+/// stays responsive (DESIGN.md §8 — the UI thread must not block) and the
+/// user sees progress. The header title becomes an "Expanding folders: N"
+/// counter, and — because the walk populates the model under *collapsed*
+/// rows and only calls `expand_all` once at the end — there is no
+/// per-folder repaint flicker, only a single paint when the tree is
+/// finally revealed. A second click while a walk runs is a no-op.
+///
+/// The walk is bounded on every axis so one click can't exhaust the UI:
+/// [`UNFOLD_MAX_FOLDERS`] directories descended, [`UNFOLD_MAX_ROWS`] rows
+/// materialised total, [`MAX_DIR_ENTRIES`] rows per directory, and
+/// [`UNFOLD_ROWS_PER_TICK`] rows per tick before yielding to the main
+/// loop. The one thing it does *not* bound is wall-clock per tick — a
+/// batch of slow/network `read_dir`s can still exceed one tick interval,
+/// the same accepted risk the lazy single-expand path already carries.
+fn unfold_all() {
+    let generation = with_state(|st| {
+        let ws = &mut st.workspace;
+        if ws.unfold_active {
+            return None; // already walking — ignore the extra click
+        }
+        let Some(root) = ws.store.iter_first() else {
+            return None; // no workspace open
+        };
+        ws.unfold_pending.clear();
+        ws.unfold_pending.push(root);
+        ws.unfold_count = 0;
+        ws.unfold_rows = 0;
+        ws.unfold_active = true;
+        ws.unfold_gen = ws.unfold_gen.wrapping_add(1);
+        Some(ws.unfold_gen)
+    })
+    .flatten();
+    let Some(generation) = generation else {
+        return;
+    };
+    glib::timeout_add_local(
+        std::time::Duration::from_millis(UNFOLD_TICK_MS),
+        move || tick_unfold(generation),
+    );
+}
+
+/// Whether the walk should stop: the queue drained, or a resource ceiling
+/// (folders descended or rows materialised) was reached. Pure so the
+/// ceilings that bound a pathological tree stay unit-testable.
+fn unfold_should_stop(pending_empty: bool, folders: usize, rows: usize) -> bool {
+    pending_empty || folders >= UNFOLD_MAX_FOLDERS || rows >= UNFOLD_MAX_ROWS
+}
+
+/// What one Unfold All tick decided, so the `with_state` borrow can be
+/// dropped before touching the tree (`expand_all` fires `row-expanded`,
+/// which re-enters `with_state`).
+enum TickOutcome {
+    /// More folders remain; the counter (updated in-place) keeps climbing.
+    More,
+    /// The queue drained — reveal the fully-expanded tree.
+    Done,
+    /// The walk was cancelled (Fold All / hide / remove) — just stop.
+    Stop,
+}
+
+/// Process one batch of the Unfold All queue. Scheduled on a
+/// [`UNFOLD_TICK_MS`] timeout; returns [`glib::ControlFlow::Break`] to
+/// unschedule itself when the walk finishes or is cancelled.
+///
+/// `generation` is the walk this tick belongs to; a mismatch against the
+/// panel's current generation means a newer walk superseded this one (a
+/// Fold-then-Expand within one tick interval), so it bails without
+/// touching the new walk's state.
+fn tick_unfold(generation: u64) -> glib::ControlFlow {
+    let outcome = with_state(|st| {
+        let ws = &mut st.workspace;
+        if !ws.unfold_active || ws.unfold_gen != generation {
+            return TickOutcome::Stop; // cancelled or superseded since queued
+        }
+        // Rows inserted this tick — kept separate from the walk total so a
+        // single fat batch yields to the main loop mid-tick rather than
+        // inserting up to `UNFOLD_BATCH × MAX_DIR_ENTRIES` rows at once.
+        let mut rows_this_tick = 0usize;
+        for _ in 0..UNFOLD_BATCH {
+            let Some(node) = ws.unfold_pending.pop() else {
+                break;
+            };
+            // Reads this folder's directory on first touch (drops its
+            // placeholder), a no-op if already populated. Does not expand
+            // the view row — that is deferred to the final `expand_all`.
+            let inserted = ensure_populated(ws, &node);
+            ws.unfold_rows += inserted;
+            rows_this_tick += inserted;
+            // Enqueue its subfolder children (DFS via the stack).
+            if let Some(child) = ws.store.iter_children(Some(&node)) {
+                loop {
+                    if row_bool(&ws.store, &child, COL_IS_DIR) {
+                        // `TreeIter` is `Copy`; each push snapshots the
+                        // iter's current position before `iter_next` moves it.
+                        ws.unfold_pending.push(child);
+                    }
+                    if !ws.store.iter_next(&child) {
+                        break;
+                    }
+                }
+            }
+            ws.unfold_count += 1;
+            // Yield to the main loop once this tick has done enough work,
+            // or once a resource ceiling is reached (checked here, not only
+            // after the full batch, so a fat batch can't overshoot).
+            if rows_this_tick >= UNFOLD_ROWS_PER_TICK
+                || unfold_should_stop(false, ws.unfold_count, ws.unfold_rows)
+            {
+                break;
+            }
+        }
+        if unfold_should_stop(
+            ws.unfold_pending.is_empty(),
+            ws.unfold_count,
+            ws.unfold_rows,
+        ) {
+            if !ws.unfold_pending.is_empty() {
+                // Hit a resource ceiling with folders still queued: stop
+                // here and leave them collapsed (still expandable by click)
+                // rather than letting one click read an unbounded tree.
+                tracing::warn!(
+                    folders = ws.unfold_count,
+                    rows = ws.unfold_rows,
+                    "workspace: Unfold All hit a resource ceiling; remaining folders left collapsed"
+                );
+                ws.unfold_pending.clear();
+            }
+            ws.unfold_active = false;
+            ws.title.set_text(PANEL_TITLE);
+            TickOutcome::Done
+        } else {
+            ws.title
+                .set_text(&format!("Expanding folders: {}", ws.unfold_count));
+            TickOutcome::More
+        }
+    })
+    .unwrap_or(TickOutcome::Stop);
+
+    match outcome {
+        TickOutcome::More => glib::ControlFlow::Continue,
+        TickOutcome::Stop => glib::ControlFlow::Break,
+        TickOutcome::Done => {
+            // Reveal outside the borrow above: `expand_all` fires
+            // `row-expanded` synchronously, and `on_row_expanded`'s
+            // `with_state` would be a re-entrant skip. Every row is already
+            // populated, so that skip is harmless, but doing it cleanly
+            // keeps the one visible paint honest.
+            if let Some(tree) = with_state(|st| st.workspace.tree.clone()) {
+                tree.expand_all();
+            }
+            glib::ControlFlow::Break
+        }
+    }
+}
+
+/// Stop an in-flight Unfold All and restore the header title. A pending
+/// tick, if any, sees `unfold_active == false` and unschedules itself.
+/// Safe to call when no walk is running.
+fn cancel_unfold() {
+    with_state(|st| {
+        let ws = &mut st.workspace;
+        if ws.unfold_active {
+            ws.unfold_active = false;
+            ws.unfold_pending.clear();
+            ws.unfold_count = 0;
+            ws.title.set_text(PANEL_TITLE);
+        }
+    });
 }
 
 /// Select and scroll to the active file's row, expanding ancestors as
@@ -674,16 +1001,20 @@ fn locate_current() {
 /// under an escaped path in the tree, but no action on it launches
 /// without the root re-check — the same scope the Win32 tree accepts
 /// (DESIGN.md §7.4).
-fn ensure_populated(ws: &mut WorkspacePanel, iter: &gtk::TreeIter) {
+///
+/// Returns the number of rows inserted — zero if the folder was already
+/// populated (an idempotent no-op) — so the walk can budget against it.
+fn ensure_populated(ws: &mut WorkspacePanel, iter: &gtk::TreeIter) -> usize {
     if row_bool(&ws.store, iter, COL_POPULATED) {
-        return;
+        return 0;
     }
     let Some(path) = row_path(ws, iter) else {
-        return;
+        return 0;
     };
     clear_children(ws, iter); // drops the placeholder
-    populate_children(ws, iter, &path);
+    let inserted = populate_children(ws, iter, &path);
     set_populated(&ws.store, iter, true);
+    inserted
 }
 
 /// The direct child of `parent` whose real path equals `target`, if any.
@@ -802,6 +1133,8 @@ fn add_separator(menu: &gtk::Menu) {
 /// Remove the workspace root and hide the panel, keeping no root so the
 /// next show routes to the picker.
 fn remove_root() {
+    // Clearing the store invalidates any iters a running walk queued.
+    cancel_unfold();
     with_state(|st| {
         let ws = &mut st.workspace;
         ws.store.clear();
@@ -927,6 +1260,26 @@ mod tests {
             order,
             vec!["apple", "Cherry", "art.rs", "Banana.md", "Zebra.txt"]
         );
+    }
+
+    #[test]
+    fn unfold_stops_when_drained_or_at_a_ceiling() {
+        use super::{unfold_should_stop, UNFOLD_MAX_FOLDERS, UNFOLD_MAX_ROWS};
+        // Not empty, under both ceilings → keep going.
+        assert!(!unfold_should_stop(false, 0, 0));
+        assert!(!unfold_should_stop(
+            false,
+            UNFOLD_MAX_FOLDERS - 1,
+            UNFOLD_MAX_ROWS - 1
+        ));
+        // Queue drained → stop, however little was processed.
+        assert!(unfold_should_stop(true, 0, 0));
+        // Folder ceiling reached with work queued → stop (bounds I/O).
+        assert!(unfold_should_stop(false, UNFOLD_MAX_FOLDERS, 0));
+        // Row ceiling reached with few folders → stop (bounds memory), so
+        // a handful of enormous directories can't blow past the folder cap.
+        assert!(unfold_should_stop(false, 1, UNFOLD_MAX_ROWS));
+        assert!(unfold_should_stop(false, 1, UNFOLD_MAX_ROWS + 1));
     }
 
     #[test]
