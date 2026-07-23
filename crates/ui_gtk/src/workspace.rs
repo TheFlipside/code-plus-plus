@@ -209,33 +209,51 @@ impl WorkspacePanel {
         // A width floor so a drag can't collapse the tree to unusable.
         container.set_size_request(MIN_WIDTH_PX, -1);
 
-        // Header: title label (springs) + expand-all / fold-all / locate
-        // / close, matching Win32's action-button order.
-        let header = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        header.set_margin_top(2);
-        header.set_margin_bottom(2);
-        header.set_margin_start(6);
-        header.set_margin_end(2);
+        // Title row: the panel title and the close button, alone. The
+        // three tree-command buttons live on their own bar below, so this
+        // row is just "Folder as Workspace … ✕".
+        let title_row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        title_row.set_margin_top(2);
+        title_row.set_margin_bottom(2);
+        title_row.set_margin_start(6);
+        title_row.set_margin_end(2);
         let title = gtk::Label::new(Some(PANEL_TITLE));
         title.set_xalign(0.0);
         // The title is also the progress counter; a mid-walk ellipsis
         // keeps "Expanding folders: N" from widening the pane.
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        header.pack_start(&title, true, true, 0);
-
-        let expand_btn = header_button("⊞", "Expand All");
-        expand_btn.connect_clicked(|_| unfold_all());
-        header.pack_start(&expand_btn, false, false, 0);
-        let fold_btn = header_button("⊟", "Fold All");
-        fold_btn.connect_clicked(|_| fold_all());
-        header.pack_start(&fold_btn, false, false, 0);
-        let locate_btn = header_button("◎", "Locate Current File");
-        locate_btn.connect_clicked(|_| locate_current());
-        header.pack_start(&locate_btn, false, false, 0);
+        title_row.pack_start(&title, true, true, 0);
         let close_btn = header_button("✕", "Close Workspace Panel");
         close_btn.connect_clicked(|_| set_visible(false));
-        header.pack_start(&close_btn, false, false, 0);
-        container.pack_start(&header, false, false, 0);
+        title_row.pack_end(&close_btn, false, false, 0);
+        container.pack_start(&title_row, false, false, 0);
+
+        // Separator between the title and the action bar.
+        container.pack_start(
+            &gtk::Separator::new(gtk::Orientation::Horizontal),
+            false,
+            false,
+            0,
+        );
+
+        // Action bar: expand-all / fold-all / locate, right-aligned and
+        // packed tight (spacing 0, no relief) so they don't hog width —
+        // Win32's action-button order, `pack_end` in reverse so left→right
+        // still reads ⊞ ⊟ ◎.
+        let action_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        action_row.set_margin_top(1);
+        action_row.set_margin_bottom(1);
+        action_row.set_margin_end(2);
+        let expand_btn = header_button("⊞", "Expand All");
+        expand_btn.connect_clicked(|_| unfold_all());
+        let fold_btn = header_button("⊟", "Fold All");
+        fold_btn.connect_clicked(|_| fold_all());
+        let locate_btn = header_button("◎", "Locate Current File");
+        locate_btn.connect_clicked(|_| locate_current());
+        action_row.pack_end(&locate_btn, false, false, 0);
+        action_row.pack_end(&fold_btn, false, false, 0);
+        action_row.pack_end(&expand_btn, false, false, 0);
+        container.pack_start(&action_row, false, false, 0);
 
         let store = gtk::TreeStore::new(&[
             glib::Type::STRING, // icon name
@@ -343,12 +361,44 @@ impl WorkspacePanel {
     }
 }
 
-/// A small flat header button carrying a glyph and a tooltip.
+/// A small flat header button carrying a glyph and a tooltip. The theme's
+/// default button padding is trimmed so single-glyph buttons sit close
+/// together instead of each claiming a wide hit-target.
 fn header_button(glyph: &str, tip: &str) -> gtk::Button {
     let button = gtk::Button::with_label(glyph);
     button.set_relief(gtk::ReliefStyle::None);
     WidgetExt::set_tooltip_text(&button, Some(tip));
+    apply_compact_button_css(&button);
     button
+}
+
+/// CSS class the compact styling is scoped to. A class selector rather
+/// than a blanket `button {}` so a future header button with an icon+label
+/// child (itself a `button` node) isn't compressed by inheritance.
+const COMPACT_BUTTON_CLASS: &str = "codepp-compact-header-btn";
+
+/// Attach a shared `CssProvider` that shrinks a button's padding and drops
+/// its theme minimum size, so the header's glyph buttons are tight. The
+/// provider is built once and reused; failing to parse the (static) CSS is
+/// cosmetic, so a parse error is logged and ignored rather than fatal.
+fn apply_compact_button_css(button: &gtk::Button) {
+    thread_local! {
+        static PROVIDER: gtk::CssProvider = {
+            let provider = gtk::CssProvider::new();
+            let css = format!(
+                ".{COMPACT_BUTTON_CLASS} {{ padding: 1px 3px; min-width: 0; min-height: 0; }}"
+            );
+            if let Err(err) = provider.load_from_data(css.as_bytes()) {
+                tracing::warn!(?err, "workspace: compact-button CSS failed to parse");
+            }
+            provider
+        };
+    }
+    let context = button.style_context();
+    context.add_class(COMPACT_BUTTON_CLASS);
+    PROVIDER.with(|provider| {
+        context.add_provider(provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    });
 }
 
 // --- Registration + indicator sync -----------------------------------
