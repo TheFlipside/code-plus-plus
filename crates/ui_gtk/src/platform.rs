@@ -198,7 +198,19 @@ impl UiPlatform for GtkUi {
         } else {
             scintilla_doc
         };
-        self.editor.send(SCI_SETDOCPOINTER, 0, doc);
+        // Skip the swap when this doc is already bound. `SCI_SETDOCPOINTER`
+        // clears the caret to 0 on every bind — even a redundant re-point
+        // at the current document — so avoiding the no-op swap preserves
+        // the caret whenever the view is already showing the target doc
+        // (e.g. the trailing `bind_active_view` after a single-tab restore,
+        // or re-activating the current tab). It does not help when the
+        // active tab genuinely differs from what is bound; `restore_session`
+        // re-seeds the caret explicitly for that case. Same shape as
+        // `with_doc`'s `prior == doc` short-circuit below. A fresh doc is
+        // never the current one, so it always binds.
+        if doc != self.editor.send(SCI_GETDOCPOINTER, 0, 0) {
+            self.editor.send(SCI_SETDOCPOINTER, 0, doc);
+        }
         if fresh {
             // Tab width is *per-document* state in Scintilla, so it has
             // to be set on each new document rather than once at

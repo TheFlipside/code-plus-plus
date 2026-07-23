@@ -67,6 +67,7 @@
     clippy::missing_errors_doc
 )]
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -1312,6 +1313,24 @@ pub struct Shell {
     /// UI's existing dialog-presentation path picks them up
     /// without a new code path.
     deferred_dialogs: Vec<PendingDialog>,
+    /// Buffer ids of tabs restored from a recovery backup that have
+    /// **not yet been saved to a real path**. These are "unsaved" even
+    /// though their Scintilla document sits at its save point (the backup
+    /// text was seeded via `set_buffer_text`, which sets the save point):
+    /// an untitled buffer has no on-disk file, and a `DirtyFromBackup`
+    /// tab's edits were never written to its real path. Kept as a set
+    /// decoupled from `SCI_GETMODIFY` because there is no public Scintilla
+    /// API for a durable modified-with-intact-text state — a phantom undo
+    /// action would let a single Ctrl+Z reach the save point and report
+    /// clean, which would then prune the recovery backup (data loss).
+    ///
+    /// Membership forces the tab to count as dirty in
+    /// [`Self::save_session`]'s backup-write decision and in the UI's
+    /// dirty-glyph poll. An id is removed the moment the tab is written to
+    /// a real path (`save_current_to_disk` / `save_buffer_as` /
+    /// `save_all`). Ids are monotonic and never reused, so a closed tab's
+    /// stale id is harmless and needs no cleanup.
+    unsaved_restore_ids: HashSet<i32>,
     /// Per-path debounce deadlines for file-change dialogs. An
     /// entry with a future timestamp means new file-change
     /// events for that path are silently discarded until now
@@ -1735,6 +1754,7 @@ impl Shell {
             #[cfg(target_os = "windows")]
             pending_fif_launch: None,
             deferred_dialogs: Vec::new(),
+            unsaved_restore_ids: HashSet::new(),
             file_change_debounce: std::collections::HashMap::new(),
             styles: load_styles(),
             udl_registry,
@@ -2600,6 +2620,8 @@ impl Shell {
                     if let Some(tab) = self.tabs.get_mut(idx) {
                         tab.dirty = false;
                     }
+                    // Written to disk, so no longer unsaved-from-restore.
+                    self.unsaved_restore_ids.remove(&id);
                 }
                 Ok(Err(e)) => errors.push((id, e)),
                 Err(_) => {
@@ -2779,6 +2801,11 @@ impl Shell {
                         .push(Notification::FileSaved { buffer_id });
                 }
                 ui.mark_saved();
+                // Save As writes to a real path, so the buffer is no
+                // longer unsaved-from-restore.
+                if let Some(id) = self.active().map(|t| t.id) {
+                    self.unsaved_restore_ids.remove(&id);
+                }
                 // Push the new lang through the UI so the lexer
                 // re-attaches and the chrome refreshes.
                 if let Some(tab) = self.active() {
@@ -3707,8 +3734,9 @@ impl Shell {
         // the active tab were re-bound between the two reads). The
         // contract holds today because this method is fully
         // synchronous on the UI thread, but binding once removes the
-        // implicit invariant.
-        #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+        // implicit invariant. (`buffer_id` is used on every platform now
+        // — the Windows notifications and the unsaved-restore release
+        // below — so it needs no `unused_variables` gate.)
         let (path, encoding, buffer_id) = {
             let tab = self.active().ok_or(ShellError::NoActivePath)?;
             (
@@ -3820,6 +3848,14 @@ impl Shell {
         // the glyph when *every* tab succeeded, since the UI
         // handler folds save-points only on a fully-clean batch.
         ui.mark_saved();
+        // Written to a real path now, so it is no longer
+        // unsaved-from-restore (no-op for a tab that never was). Reuse the
+        // id bound once at the top rather than a second `self.active()`
+        // read, honouring that binding's own single-read discipline; the
+        // `try_from` always succeeds since `buffer_id` is a widened `i32`.
+        if let Ok(id) = i32::try_from(buffer_id) {
+            self.unsaved_restore_ids.remove(&id);
+        }
 
         Ok(())
     }
@@ -4137,6 +4173,16 @@ impl Shell {
         ui.replace_all_in_range(query, replacement, flags, start, end)
     }
 
+    /// Whether `tab` needs a recovery backup written on session save.
+    /// Untitled buffers always do; a saved file only when it has unsaved
+    /// edits (`SCI_GETMODIFY`) or is a restored-but-unsaved tab whose
+    /// document reads clean (`unsaved_restore_ids`).
+    fn tab_needs_backup<U: UiPlatform>(&self, tab: &Tab, ui: &mut U) -> bool {
+        tab.path.is_none()
+            || ui.is_doc_dirty(tab.scintilla_doc)
+            || self.unsaved_restore_ids.contains(&tab.id)
+    }
+
     /// Persist the open-tab list to `session.xml` at the configured
     /// path. Called on clean shutdown. The active tab's cursor is
     /// pulled live from the editor so the next launch restores the
@@ -4222,7 +4268,7 @@ impl Shell {
             // backup write entirely — the disk file IS the
             // authoritative state.
             let mut backup_filename: Option<String> = None;
-            let needs_backup = tab.path.is_none() || ui.is_doc_dirty(tab.scintilla_doc);
+            let needs_backup = self.tab_needs_backup(tab, ui);
             if needs_backup {
                 if let Some(dir) = &backups_dir {
                     let display = if let Some(seq) = tab.untitled_seq {
@@ -4579,13 +4625,14 @@ impl Shell {
             scintilla_doc: 0,
             lang: resolved_lang,
             untitled_seq,
-            // Initial value — Scintilla's `SCN_SAVEPOINTLEFT` fires
-            // when the UI populates the new doc with the backup
-            // text, which flips this to `true` synchronously. The
-            // brief paint window before the notification arrives
-            // shows the clean icon; visible only on a paint that
-            // races the load completion (rarely observable).
-            dirty: false,
+            // A restored untitled buffer has never been written to a
+            // real file — only to its recovery backup — so it is still
+            // unsaved and paints red, matching `restore_dirty_with_text`
+            // and Notepad++. The durable "unsaved" state lives in
+            // `unsaved_restore_ids` (inserted below), not in this cached
+            // flag or Scintilla's modified bit — either of which a re-poll
+            // or a Ctrl+Z would clear.
+            dirty: true,
             custom_name,
             pinned,
         });
@@ -4601,10 +4648,14 @@ impl Shell {
         // to having opened the buffer at the same position last
         // session.
         ui.set_buffer_text(&text, cursor);
-        // Mark the new doc clean so the editor doesn't show a
-        // dirty glyph immediately — the buffer matches what's on
-        // (backup-)disk, even though there's no real file path.
-        ui.mark_saved();
+        // Track this buffer as unsaved-from-restore: `set_buffer_text`
+        // set the save point (Scintilla reports clean), but an untitled
+        // buffer with no real on-disk file is unsaved by definition, so it
+        // must paint red and keep its recovery backup until the user saves
+        // it to a proper path. The set — not a phantom undo action —
+        // carries that state, because undoing a phantom would reach the
+        // save point and report clean, pruning the backup (data loss).
+        self.unsaved_restore_ids.insert(id);
         // Apply the resolved language to the Scintilla view so a
         // restored untitled buffer with a persisted lang override
         // (e.g. user picked Rust on a renamed `new 1`) actually
@@ -4715,12 +4766,18 @@ impl Shell {
         if let Some(tab) = self.tabs.get_mut(new_idx) {
             tab.scintilla_doc = new_doc;
         }
-        // Seed the buffer with the backup text + cursor. We
-        // deliberately do NOT call `mark_saved` here — that's the
-        // whole point of this code path. `set_buffer_text` leaves
-        // Scintilla's modified flag set, so the dirty glyph
-        // appears and the user knows there's unsaved work.
+        // Seed the buffer with the backup text + cursor, then record it as
+        // unsaved-from-restore. `set_buffer_text` sets the save point, so
+        // `SCI_GETMODIFY` reads clean and the cached `Tab.dirty = true`
+        // alone would be cleared by a backend that re-polls it (GTK's
+        // `refresh_active_dirty`) — and, worse, `save_session`'s
+        // `needs_backup` keys off the same clean bit, so the recovery
+        // backup would be pruned. The set carries the unsaved state
+        // durably (see `unsaved_restore_ids`); a phantom undo action would
+        // instead let one Ctrl+Z reach the save point and trigger exactly
+        // that prune.
         ui.set_buffer_text(&text, cursor);
+        self.unsaved_restore_ids.insert(id);
         ui.apply_lang(lang);
         ui.update_status(lang, &encoding, eol, byte_len);
         // Watch the file so a future external edit prompts a
@@ -4890,6 +4947,16 @@ impl Shell {
     /// new value through to disk and the next launch restores it.
     pub fn set_view_settings(&mut self, view: codepp_core::session::ViewSettings) {
         self.session.view = view;
+    }
+
+    /// Whether the tab with buffer id `id` was restored from a recovery
+    /// backup and has not yet been saved to a real path — i.e. it is
+    /// unsaved even though its Scintilla document reads clean. A backend
+    /// polling `SCI_GETMODIFY` for the dirty glyph must OR this in so a
+    /// restored buffer keeps its unsaved marker. See `unsaved_restore_ids`.
+    #[must_use]
+    pub fn is_unsaved_restore(&self, id: i32) -> bool {
+        self.unsaved_restore_ids.contains(&id)
     }
 }
 
@@ -11290,6 +11357,119 @@ mod tests {
             ui.apply_lang_calls.last().copied(),
             Some(codepp_core::lang::L_RUST),
             "restore_untitled must apply the resolved lang to the editor"
+        );
+    }
+
+    /// A restored untitled buffer has never been written to a real file
+    /// (only to its recovery backup), so it must come back **unsaved**
+    /// (red), not clean. Regression guard for the mark-clean → mark-dirty
+    /// change: the tab reports dirty AND the UI is told to make the
+    /// document genuinely modified, so a backend that re-polls
+    /// `SCI_GETMODIFY` cannot flip the marker back to blue.
+    #[test]
+    fn restore_untitled_comes_back_dirty() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        shell.restore_untitled_with_text(
+            &mut ui,
+            Some(1),
+            "unsaved text".into(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            None,
+            None,
+            false,
+        );
+
+        let idx = shell.active_tab.expect("a tab was just restored");
+        let id = shell.tabs[idx].id;
+        assert!(
+            shell.tabs[idx].dirty,
+            "a restored untitled buffer is unsaved until written to a real path"
+        );
+        assert!(
+            shell.is_unsaved_restore(id),
+            "it must be tracked as unsaved-from-restore (durably, not via an \
+             undoable phantom action) so its backup survives and the glyph stays red"
+        );
+    }
+
+    /// A restored saved-file buffer with unsaved edits must likewise come
+    /// back dirty. It always intended to, but rested on the cached flag
+    /// while `set_buffer_text` had already set the save point — so assert
+    /// the document is now genuinely modified too.
+    #[test]
+    fn restore_dirty_comes_back_dirty() {
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        shell.restore_dirty_with_text(
+            &mut ui,
+            std::path::PathBuf::from("/tmp/codepp-restore-dirty-test.txt"),
+            "edited but not saved".into(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            false,
+            None,
+            false,
+        );
+
+        let idx = shell.active_tab.expect("a tab was just restored");
+        let id = shell.tabs[idx].id;
+        assert!(
+            shell.tabs[idx].dirty,
+            "restored unsaved edits must report dirty"
+        );
+        assert!(
+            shell.is_unsaved_restore(id),
+            "tracked as unsaved-from-restore so save_session keeps its backup"
+        );
+    }
+
+    /// Saving a restored buffer to a real path releases the
+    /// unsaved-from-restore hold, so `save_session` stops force-keeping its
+    /// backup and the glyph can go clean. This is the release valve that
+    /// makes the set safe — without it the tab would stay "dirty" forever.
+    #[test]
+    fn saving_a_restored_buffer_clears_unsaved_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("recovered.txt");
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+
+        shell.restore_untitled_with_text(
+            &mut ui,
+            Some(1),
+            "recovered".into(),
+            0,
+            Encoding::Utf8,
+            Eol::Lf,
+            false,
+            None,
+            None,
+            false,
+        );
+        let id = shell.tabs[shell.active_tab.unwrap()].id;
+        assert!(
+            shell.is_unsaved_restore(id),
+            "precondition: unsaved on restore"
+        );
+
+        ui.buffer_text = "recovered".to_string();
+        shell.save_buffer_as(&mut ui, path).unwrap();
+
+        assert!(
+            !shell.is_unsaved_restore(id),
+            "a real save must release the unsaved-from-restore hold"
         );
     }
 

@@ -647,102 +647,108 @@ fn restore_window_geometry(window: &gtk::Window) {
 /// `codepp file.txt` expects.
 fn restore_session(initial_path: Option<PathBuf>) {
     let entries = with_state(|st| st.shell.load_session_entries()).unwrap_or_default();
-    // Resolve the persisted active tab by *path*, not by position.
-    //
-    // `session_active_index` indexes the persisted tab list, and that
-    // index does not survive the trip into `Shell.tabs`: this backend
-    // skips every dirty/backup entry, and `load_session_entries` drops
-    // an untitled entry outright when its backup will not read back.
-    // Either shifts the correspondence, and the shifted index is
-    // usually still in range — so a bounds check does not catch it, it
-    // just silently activates a different file. Matching on the path
-    // has neither failure mode.
-    let want_active_path = with_state(|st| {
-        st.shell
-            .session_active_index()
-            .and_then(|idx| st.shell.session.tabs.get(idx))
-            .and_then(|tab| tab.path.clone())
-    })
-    .flatten();
-    let mut restored_active = None;
     for entry in entries {
         match entry {
             SessionRestoreEntry::OpenFile(path) => {
-                // Restores are all fresh opens, so each queues a load
-                // whose completion rebinds the view. A duplicate path
-                // in session.xml would dedupe to `SwitchedToExisting`
-                // though, so handle that the same way `on_open` does.
-                // Match *before* opening: `Tab.path` is not populated
-                // until the asynchronous load completes, so matching on
-                // it afterwards finds nothing. `open_file` does set
-                // `active_tab` synchronously, so reading that right
-                // after the call gives the index this entry landed on.
-                let is_wanted = want_active_path.as_deref() == Some(path.as_path());
-                let outcome = with_state(|st| st.shell.open_file(path));
-                if let Some(codepp_shell::OpenFileOutcome::SwitchedToExisting(_)) = outcome {
+                // Fresh opens: each queues an async load whose completion
+                // rebinds the view. A duplicate path in session.xml would
+                // dedupe to `SwitchedToExisting`, with no load to wake, so
+                // rebind now — same as `on_open`.
+                if let Some(codepp_shell::OpenFileOutcome::SwitchedToExisting(_)) =
+                    with_state(|st| st.shell.open_file(path))
+                {
                     rebind_active_view();
                 }
-                // Only trust `active_tab` for outcomes where the file
-                // is actually open. `Rejected` (tab cap, loader shut
-                // down) leaves `active_tab` untouched, so reading it
-                // would record the *previous* entry's index and then
-                // activate the wrong file — the very failure this
-                // resolution exists to prevent, arriving through an
-                // unhandled variant instead of a bad index.
-                //
-                // Neither `Rejected` trigger can fire here today:
-                // `MAX_SESSION_TABS` (512) is below `MAX_OPEN_TABS`
-                // (1024), so a session restore into a fresh `Shell`
-                // cannot reach the cap, and `Shell` owns the loader's
-                // shutdown handle, so the channel is alive for as long
-                // as it is. Both are invariants of *other* code, which
-                // is exactly why this checks rather than assumes.
-                let opened = matches!(
-                    outcome,
-                    Some(
-                        codepp_shell::OpenFileOutcome::Loading
-                            | codepp_shell::OpenFileOutcome::SwitchedToExisting(_)
-                            | codepp_shell::OpenFileOutcome::AlreadyActive
-                    )
-                );
-                if is_wanted && opened {
-                    restored_active = with_state(|st| st.shell.active_tab).flatten();
-                }
             }
-            // The backup-restore variants need dirty-buffer restore,
-            // which this backend does not have yet — `restore_dirty_with_text`
-            // and `restore_untitled_with_text` are wired on Win32 only.
-            // Opening the on-disk file instead would silently discard
-            // the user's unsaved work, so skip and say so rather than
-            // doing the wrong thing quietly. Tracked for the milestone
-            // that ports them.
-            // `SessionRestoreEntry` is not `Debug`, so name the case
-            // rather than formatting the value.
-            _ => {
-                tracing::warn!(
-                    "session entry needs dirty-buffer restore, which this backend does not \
-                     implement yet; skipped rather than silently discarding unsaved work"
-                );
+            // Re-create an untitled buffer from its backup text, seeded
+            // synchronously into a fresh Scintilla document. Mirrors the
+            // Win32 restore loop; `Shell::restore_untitled_with_text`
+            // does the work and both backends share it.
+            SessionRestoreEntry::UntitledFromBackup {
+                untitled_seq,
+                text,
+                cursor,
+                encoding,
+                eol,
+                backup_modified_externally,
+                custom_name,
+                lang,
+                pinned,
+            } => {
+                with_state(|st| {
+                    let (shell, mut ui) = st.split();
+                    shell.restore_untitled_with_text(
+                        &mut ui,
+                        untitled_seq,
+                        text,
+                        cursor,
+                        encoding,
+                        eol,
+                        backup_modified_externally,
+                        custom_name,
+                        lang,
+                        pinned,
+                    );
+                });
+            }
+            // Re-create a path-bound tab whose backup holds the user's
+            // last unsaved edits: the tab opens associated with `path`
+            // but seeded with the backup text and left dirty, so Save
+            // flushes the recovered edits. The two "changed externally"
+            // flags route their warnings through `deferred_dialogs`,
+            // surfaced by the `drain_shell` at the end of this function.
+            SessionRestoreEntry::DirtyFromBackup {
+                path,
+                text,
+                cursor,
+                encoding,
+                eol,
+                disk_changed_externally,
+                backup_modified_externally,
+                lang,
+                pinned,
+            } => {
+                with_state(|st| {
+                    let (shell, mut ui) = st.split();
+                    shell.restore_dirty_with_text(
+                        &mut ui,
+                        path,
+                        text,
+                        cursor,
+                        encoding,
+                        eol,
+                        disk_changed_externally,
+                        backup_modified_externally,
+                        lang,
+                        pinned,
+                    );
+                });
             }
         }
     }
-    // Restore *which* tab was in front, not just which files were open.
-    // Each `open_file` above makes its own tab active, so without this
-    // the session always comes back on whichever file happened to be
-    // last in the list, and the tab the user was actually working in is
-    // silently lost. Applied before the command-line path below, so an
-    // explicitly-named file still wins.
-    if let Some(idx) = restored_active {
-        with_state(|st| st.shell.active_tab = Some(idx));
-    } else if want_active_path.is_some() {
-        // The persisted active tab is not among the restored ones — it
-        // was a skipped dirty entry, or `load_session_entries` dropped
-        // it outright. Leaving the last-opened tab in front is the
-        // honest fallback; guessing an index would just pick a
-        // different wrong file.
-        tracing::info!(
-            "session's active file is not among the restored tabs; keeping the last-opened tab"
-        );
+    // Restore which tab was in front. Every entry now pushes exactly one
+    // tab in session order — `OpenFile` synchronously (its load lands
+    // later), the backup variants synchronously with their text — so the
+    // persisted active index maps straight across, the same resolution
+    // Win32 uses. (This backend previously matched by path because it
+    // skipped the backup variants and the resulting index shift was
+    // silent; with nothing skipped that workaround is gone, and it also
+    // never handled an untitled active tab, which has no path to match.)
+    // A rare unreadable-backup drop in `load_session_entries` can still
+    // shift it, so bounds-check and fall back to the last-restored tab,
+    // exactly as Win32 does.
+    if let Some(idx) = with_state(|st| st.shell.session_active_index()).flatten() {
+        with_state(|st| {
+            if idx < st.shell.tabs.len() {
+                st.shell.active_tab = Some(idx);
+            } else {
+                tracing::warn!(
+                    session_active = idx,
+                    restored = st.shell.tabs.len(),
+                    "session.xml active index out of range; using last-restored tab"
+                );
+            }
+        });
     }
 
     if let Some(path) = initial_path {
@@ -751,6 +757,19 @@ fn restore_session(initial_path: Option<PathBuf>) {
         {
             rebind_active_view();
         }
+    }
+    // Nothing restored and nothing named on the command line: start with
+    // a fresh untitled buffer, the "new 1" Win32's `ensure_one_tab`
+    // creates. Without this the placeholder document bound at startup has
+    // no backing `Tab`, so anything typed into it cannot be saved, backed
+    // up, or restored — which is exactly the recovery path this milestone
+    // is about.
+    let has_tabs = with_state(|st| !st.shell.tabs.is_empty()).unwrap_or(false);
+    if !has_tabs {
+        with_state(|st| {
+            let (shell, mut ui) = st.split();
+            shell.new_untitled(&mut ui);
+        });
     }
     // Loads are asynchronous: the worker threads wake us when the bytes
     // arrive. Drain once now so anything already queued lands before
@@ -765,6 +784,46 @@ fn restore_session(initial_path: Option<PathBuf>) {
     // most damaging state this crate can produce. Idempotent, so
     // running it when the drain already bound correctly costs nothing.
     rebind_active_view();
+    reseed_active_caret();
+}
+
+/// Restore the active tab's caret to its persisted position after a
+/// session restore.
+///
+/// The trailing `bind_active_view` can perform a real `SCI_SETDOCPOINTER`,
+/// and Scintilla clears the caret to 0 on every genuine doc swap — while
+/// `bind_active_view`'s existing-doc path never re-applies the stored
+/// cursor. `activate_tab`'s same-doc guard avoids the swap only when the
+/// active tab is the one already bound (a single-tab restore, or a
+/// multi-tab one whose active tab was the last synchronously bound); when
+/// an *earlier* backup tab is the active one the swap is unavoidable, so
+/// the caret is restored explicitly here. `session.tabs` still holds the
+/// loaded cursor (`load_session_entries` kept it). For an `OpenFile`
+/// active tab the buffer is still empty now, so this clamps to 0 and
+/// `apply_load_result` applies the real cursor when the async load lands —
+/// harmless either way. Scintilla clamps an out-of-range value to the
+/// document length.
+///
+/// Only fires when the active tab is still the session's persisted active
+/// tab: a command-line file (`initial_path`) moves `active_tab` onto its
+/// own freshly-opened tab, whose caret is that file's concern — stamping
+/// the session tab's cursor onto it would land the caret at an unrelated
+/// position.
+fn reseed_active_caret() {
+    let cursor = with_state(|st| {
+        let active_idx = st.shell.session_active_index()?;
+        if st.shell.active_tab != Some(active_idx) {
+            return None;
+        }
+        st.shell.session.tabs.get(active_idx).map(|t| t.cursor)
+    })
+    .flatten();
+    if let Some(cursor) = cursor {
+        with_state(|st| {
+            st.editor
+                .send(codepp_scintilla_sys::SCI_GOTOPOS, cursor as usize, 0);
+        });
+    }
 }
 
 /// Bind the view to `Shell`'s active tab and retitle the window.
@@ -1015,10 +1074,19 @@ pub(crate) fn save_session_now() {
 /// tab showing an unsaved-changes marker for a file that was on disk.
 fn refresh_active_dirty() -> DirtyPoll {
     with_state(|st| {
-        let dirty = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0;
+        let modified = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0;
         let Some(idx) = st.shell.active_tab else {
             return DirtyPoll::Unchanged;
         };
+        // Read the id before the mutable borrow below so the
+        // `is_unsaved_restore` check (an `&self` method) can run first.
+        let Some(id) = st.shell.tabs.get(idx).map(|t| t.id) else {
+            return DirtyPoll::Unchanged;
+        };
+        // A buffer restored from a recovery backup is unsaved even though
+        // its document reads clean, so it stays dirty until saved to a
+        // real path — otherwise this poll would clear the marker to blue.
+        let dirty = modified || st.shell.is_unsaved_restore(id);
         let Some(tab) = st.shell.tabs.get_mut(idx) else {
             return DirtyPoll::Unchanged;
         };
