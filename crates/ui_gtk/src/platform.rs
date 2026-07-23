@@ -25,8 +25,7 @@ use codepp_scintilla_sys::{
     SCI_LINEFROMPOSITION, SCI_LINESCROLL, SCI_LINESONSCREEN, SCI_POSITIONAFTER, SCI_SETDOCPOINTER,
     SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETSAVEPOINT, SCI_SETSEL, SCI_SETSELECTIONEND,
     SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTEXT, SCI_SETXOFFSET, SCI_STYLEGETBACK,
-    SCI_STYLEGETFORE, SC_DOCUMENTOPTION_DEFAULT, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF,
-    SC_MARGIN_NUMBER, STYLE_DEFAULT,
+    SCI_STYLEGETFORE, SC_DOCUMENTOPTION_DEFAULT, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, STYLE_DEFAULT,
 };
 
 /// Visible width of a TAB, in spaces. Matches `ui_win32`'s tab-width
@@ -35,6 +34,26 @@ use codepp_scintilla_sys::{
 const TAB_WIDTH_SPACES: usize = 4;
 /// Margin index for line numbers; margin 0 by Scintilla convention.
 const LINE_NUMBER_MARGIN: u32 = 0;
+/// Margin index for the change-history "edit indicator" strip. 4 sits to
+/// the right of the line-number margin (and a future fold margin), the
+/// same slot `ui_win32` uses so both backends match.
+const CHANGE_HISTORY_MARGIN: u32 = 4;
+/// Pixel width of the change-history strip when populated — a thin slice,
+/// matching `ui_win32`.
+const CHANGE_HISTORY_MARGIN_PX: i32 = 4;
+/// Change-history strip colour: Material orange 400 in Scintilla's
+/// `0x00BBGGRR` order, the same shade the active-tab indicator uses.
+const CHANGE_HISTORY_COLOR: u32 = 0x00_26_A7_FF;
+
+thread_local! {
+    /// Digit count the line-number margin is currently sized for. The
+    /// margin only needs re-measuring when this moves (see
+    /// `refresh_dynamic_status`); GTK is single-threaded so one cell is
+    /// enough, and because the margin width is view-level it also tracks
+    /// correctly across tab switches (the next status refresh re-measures
+    /// only if the new document's digit count differs).
+    static LAST_LINE_NUMBER_DIGITS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
 use codepp_shell::{SearchFlags, UiPlatform};
 use gtk::prelude::*;
 
@@ -140,6 +159,16 @@ impl GtkUi {
         let overtype = self.editor.send(SCI_GETOVERTYPE, 0, 0) != 0;
         self.status
             .set_dynamic_parts(length, lines, caret_line, caret_col, pos, overtype);
+        // Keep the line-number margin wide enough for the current line
+        // count (99 → 100 needs another digit). This fires on *every*
+        // `sci-notify` — caret moves included — so gate the actual
+        // `SCI_TEXTWIDTH` measurement (a real font-metrics call) on the
+        // digit count changing, reusing the `lines` already read above.
+        // Everything the §8 keystroke budget can spare matters here.
+        let digits = codepp_editor::line_number_digits(lines.max(1));
+        if LAST_LINE_NUMBER_DIGITS.with(|c| c.replace(digits)) != digits {
+            self.editor.update_line_number_width(LINE_NUMBER_MARGIN);
+        }
     }
 }
 
@@ -156,8 +185,20 @@ impl GtkUi {
 /// difference is alignment only, and it is visible line numbers versus
 /// none.
 fn apply_predefined_styles(editor: &EditorHandle) {
+    // `apply_line_number_margin` styles STYLE_LINENUMBER (fore/back) and,
+    // for Win32's manual renderer, sets margin 0 to `SC_MARGIN_TEXT`.
+    // GTK/Cocoa use Scintilla's built-in number margin, so override the
+    // type and take a dynamic, digit-fitted width via the shared method.
     codepp_editor::theme::apply_line_number_margin(editor);
-    editor.set_margin_type(LINE_NUMBER_MARGIN, SC_MARGIN_NUMBER);
+    editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
+    // The change-history "edit indicator" strip. Shared config so it looks
+    // and behaves identically to Win32 (and the coming Cocoa backend);
+    // per-document enablement happens in `activate_tab`.
+    editor.configure_change_history_margin(
+        CHANGE_HISTORY_MARGIN,
+        CHANGE_HISTORY_MARGIN_PX,
+        CHANGE_HISTORY_COLOR,
+    );
     codepp_editor::theme::apply_brace_styles(editor);
     codepp_editor::theme::apply_indent_guide_style(editor);
 }
@@ -218,6 +259,10 @@ impl UiPlatform for GtkUi {
             // Scintilla's built-in 8 columns while the Win32 build uses
             // 4 — the same file looking different on the two backends.
             self.editor.send(SCI_SETTABWIDTH, TAB_WIDTH_SPACES, 0);
+            // Change-history tracking is per-document too: every fresh
+            // SCI_CREATEDOCUMENT starts with it off. The margin itself is
+            // view-level (configured once in apply_predefined_styles).
+            self.editor.enable_change_history();
         }
         doc
     }
@@ -284,6 +329,12 @@ impl UiPlatform for GtkUi {
             );
         }
         codepp_editor::theme::apply_lang_theme(&self.editor, lang);
+        // `apply_lang_theme` routes through `apply_default_styles`, which
+        // resets margin 0 to `SC_MARGIN_TEXT` for Win32's manual renderer
+        // (and re-styles STYLE_LINENUMBER). Re-assert the built-in number
+        // margin here, or a file load / language change would blank the
+        // gutter on GTK.
+        self.editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
     }
 
     fn apply_default_style(&mut self, styles: &Styles) {

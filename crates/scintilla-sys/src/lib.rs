@@ -1011,6 +1011,10 @@ pub const STYLE_LINENUMBER: usize = 33;
 // change line count.
 pub const SCI_SETMARGINTYPEN: u32 = 2240;
 pub const SCI_SETMARGINWIDTHN: u32 = 2242;
+/// `SCI_TEXTWIDTH(int style, const char *text)` — pixel width of `text`
+/// rendered in `style`. Used to size the built-in line-number margin
+/// (`SC_MARGIN_NUMBER`) to exactly fit the widest line number.
+pub const SCI_TEXTWIDTH: u32 = 2276;
 /// Set the marker bitmask for margin `n`. Each margin renders a
 /// marker only if the marker's id is set in the margin's mask;
 /// without this filter every plugin-installed marker would appear
