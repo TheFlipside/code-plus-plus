@@ -45,15 +45,6 @@ const CHANGE_HISTORY_MARGIN_PX: i32 = 4;
 /// `0x00BBGGRR` order, the same shade the active-tab indicator uses.
 const CHANGE_HISTORY_COLOR: u32 = 0x00_26_A7_FF;
 
-thread_local! {
-    /// Digit count the line-number margin is currently sized for. The
-    /// margin only needs re-measuring when this moves (see
-    /// `refresh_dynamic_status`); GTK is single-threaded so one cell is
-    /// enough, and because the margin width is view-level it also tracks
-    /// correctly across tab switches (the next status refresh re-measures
-    /// only if the new document's digit count differs).
-    static LAST_LINE_NUMBER_DIGITS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
 use codepp_shell::{SearchFlags, UiPlatform};
 use gtk::prelude::*;
 
@@ -159,16 +150,9 @@ impl GtkUi {
         let overtype = self.editor.send(SCI_GETOVERTYPE, 0, 0) != 0;
         self.status
             .set_dynamic_parts(length, lines, caret_line, caret_col, pos, overtype);
-        // Keep the line-number margin wide enough for the current line
-        // count (99 → 100 needs another digit). This fires on *every*
-        // `sci-notify` — caret moves included — so gate the actual
-        // `SCI_TEXTWIDTH` measurement (a real font-metrics call) on the
-        // digit count changing, reusing the `lines` already read above.
-        // Everything the §8 keystroke budget can spare matters here.
-        let digits = codepp_editor::line_number_digits(lines.max(1));
-        if LAST_LINE_NUMBER_DIGITS.with(|c| c.replace(digits)) != digits {
-            self.editor.update_line_number_width(LINE_NUMBER_MARGIN);
-        }
+        // The line-number margin is a fixed width (sized once in
+        // `enable_line_number_margin`), so nothing to re-measure here as the
+        // line count changes — the gutter stays constant, matching Win32.
     }
 }
 
@@ -188,7 +172,8 @@ fn apply_predefined_styles(editor: &EditorHandle) {
     // `apply_line_number_margin` styles STYLE_LINENUMBER (fore/back) and,
     // for Win32's manual renderer, sets margin 0 to `SC_MARGIN_TEXT`.
     // GTK/Cocoa use Scintilla's built-in number margin, so override the
-    // type and take a dynamic, digit-fitted width via the shared method.
+    // type and take a fixed, constant width via the shared method (the
+    // gutter never grows while editing, matching Win32).
     codepp_editor::theme::apply_line_number_margin(editor);
     editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
     // The change-history "edit indicator" strip. Shared config so it looks

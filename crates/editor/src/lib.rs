@@ -62,18 +62,18 @@ use core::ffi::c_void;
 use codepp_scintilla_sys::CreateLexer;
 use codepp_scintilla_sys::{
     sptr_t, uptr_t, ScintillaDirectFunction, SCI_BRACEBADLIGHT, SCI_BRACEHIGHLIGHT, SCI_BRACEMATCH,
-    SCI_GETCHARAT, SCI_GETCURRENTPOS, SCI_GETENDSTYLED, SCI_GETLINECOUNT, SCI_GETRANGEPOINTER,
-    SCI_GETTARGETEND, SCI_GETTARGETSTART, SCI_LINEFROMPOSITION, SCI_MARKERDEFINE,
-    SCI_MARKERENABLEHIGHLIGHT, SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE,
-    SCI_POSITIONFROMLINE, SCI_REPLACETARGET, SCI_REPLACETARGETRE, SCI_SEARCHANCHOR,
-    SCI_SEARCHINTARGET, SCI_SEARCHNEXT, SCI_SEARCHPREV, SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK,
-    SCI_SETCARETLINEVISIBLE, SCI_SETCHANGEHISTORY, SCI_SETFOLDFLAGS, SCI_SETFOLDMARGINCOLOUR,
-    SCI_SETFOLDMARGINHICOLOUR, SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN,
-    SCI_SETMARGINSENSITIVEN, SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETPROPERTY,
-    SCI_SETSEARCHFLAGS, SCI_SETSTYLING, SCI_SETTARGETRANGE, SCI_STARTSTYLING, SCI_STYLECLEARALL,
-    SCI_STYLESETBACK, SCI_STYLESETBOLD, SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC,
-    SCI_STYLESETSIZE, SCI_STYLESETUNDERLINE, SCI_TEXTWIDTH, SC_CHANGE_HISTORY_ENABLED,
-    SC_CHANGE_HISTORY_MARKERS, SC_MARGIN_NUMBER, SC_MARGIN_SYMBOL, SC_MARKNUM_HISTORY_MODIFIED,
+    SCI_GETCHARAT, SCI_GETCURRENTPOS, SCI_GETENDSTYLED, SCI_GETRANGEPOINTER, SCI_GETTARGETEND,
+    SCI_GETTARGETSTART, SCI_LINEFROMPOSITION, SCI_MARKERDEFINE, SCI_MARKERENABLEHIGHLIGHT,
+    SCI_MARKERSETBACK, SCI_MARKERSETBACKSELECTED, SCI_MARKERSETFORE, SCI_POSITIONFROMLINE,
+    SCI_REPLACETARGET, SCI_REPLACETARGETRE, SCI_SEARCHANCHOR, SCI_SEARCHINTARGET, SCI_SEARCHNEXT,
+    SCI_SEARCHPREV, SCI_SETAUTOMATICFOLD, SCI_SETCARETLINEBACK, SCI_SETCARETLINEVISIBLE,
+    SCI_SETCHANGEHISTORY, SCI_SETFOLDFLAGS, SCI_SETFOLDMARGINCOLOUR, SCI_SETFOLDMARGINHICOLOUR,
+    SCI_SETILEXER, SCI_SETKEYWORDS, SCI_SETMARGINMASKN, SCI_SETMARGINSENSITIVEN,
+    SCI_SETMARGINTYPEN, SCI_SETMARGINWIDTHN, SCI_SETPROPERTY, SCI_SETSEARCHFLAGS, SCI_SETSTYLING,
+    SCI_SETTARGETRANGE, SCI_STARTSTYLING, SCI_STYLECLEARALL, SCI_STYLESETBACK, SCI_STYLESETBOLD,
+    SCI_STYLESETFONT, SCI_STYLESETFORE, SCI_STYLESETITALIC, SCI_STYLESETSIZE,
+    SCI_STYLESETUNDERLINE, SCI_TEXTWIDTH, SC_CHANGE_HISTORY_ENABLED, SC_CHANGE_HISTORY_MARKERS,
+    SC_MARGIN_NUMBER, SC_MARGIN_SYMBOL, SC_MARKNUM_HISTORY_MODIFIED,
     SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN,
     SC_MARKNUM_HISTORY_SAVED, SC_MARK_EMPTY, SC_MARK_FULLRECT, STYLE_LINENUMBER,
 };
@@ -808,22 +808,24 @@ impl EditorHandle {
 
     /// Turn `margin` into Scintilla's built-in line-number margin
     /// (`SC_MARGIN_NUMBER`, which auto-renders `STYLE_LINENUMBER`-styled
-    /// numbers with no per-line population) and size it to the current
-    /// document. Call once per view; call [`Self::update_line_number_width`]
-    /// afterwards whenever the line count may have changed.
+    /// numbers with no per-line population) and size it to a fixed,
+    /// font-/DPI-correct width. Call once per view; re-call after any
+    /// `SCI_STYLECLEARALL` (which resets `STYLE_LINENUMBER`) so the width
+    /// re-measures against the restored font.
+    ///
+    /// The width is **constant** — sized for `LINE_NUMBER_MARGIN_DIGITS`
+    /// digits regardless of the document's actual line count — so the left
+    /// gutter never jiggles while editing (crossing 9→10 or 99→100 lines
+    /// leaves it untouched). This mirrors the Win32 backend's deliberately
+    /// roomy fixed bar; both trade clipping on files past the digit budget
+    /// for a stable, non-shifting gutter.
     pub fn enable_line_number_margin(&self, margin: u32) {
         self.set_margin_type(margin, SC_MARGIN_NUMBER);
-        self.update_line_number_width(margin);
-    }
-
-    /// Resize the line-number margin to exactly fit the widest line number
-    /// in the current document, measured in pixels via `SCI_TEXTWIDTH` so
-    /// it is font- and DPI-correct. Cheap; call on content changes.
-    pub fn update_line_number_width(&self, margin: u32) {
-        let lines = self.send(SCI_GETLINECOUNT, 0, 0).max(1) as u64;
-        let digits = line_number_digits(lines) as usize;
-        // Sample = one-space pad + `digits` nines + NUL. The pad gives the
-        // column a little breathing room from the text, matching N++.
+        // Sample = one-space pad + a fixed run of nines + NUL. The pad gives
+        // the column a little breathing room from the text, matching N++;
+        // the fixed digit count (not the live line count) is what keeps the
+        // width constant. `SCI_TEXTWIDTH` makes it font- and DPI-correct.
+        let digits = LINE_NUMBER_MARGIN_DIGITS as usize;
         let mut sample = Vec::with_capacity(digits + 2);
         sample.push(b'_');
         sample.resize(sample.len() + digits, b'9');
@@ -1000,36 +1002,10 @@ impl EditorHandle {
     }
 }
 
-/// Decimal digit count of `n`, floored at 1. The line-number margin only
-/// needs re-sizing when this changes (99 → 100 gains a digit), so a caller
-/// on a hot path can compare this against a cached value and skip the
-/// `SCI_TEXTWIDTH` measurement in [`EditorHandle::update_line_number_width`]
-/// when it hasn't moved.
-#[must_use]
-pub fn line_number_digits(n: u64) -> u32 {
-    let mut digits: u32 = 1;
-    let mut m = n.max(1);
-    while m >= 10 {
-        digits += 1;
-        m /= 10;
-    }
-    digits
-}
-
-#[cfg(test)]
-mod tests {
-    use super::line_number_digits;
-
-    #[test]
-    fn digit_count_boundaries() {
-        assert_eq!(line_number_digits(0), 1, "empty doc still floors at 1");
-        assert_eq!(line_number_digits(1), 1);
-        assert_eq!(line_number_digits(9), 1);
-        assert_eq!(line_number_digits(10), 2);
-        assert_eq!(line_number_digits(99), 2);
-        assert_eq!(line_number_digits(100), 3);
-        assert_eq!(line_number_digits(999), 3);
-        assert_eq!(line_number_digits(1000), 4);
-        assert_eq!(line_number_digits(u64::from(u32::MAX)), 10);
-    }
-}
+/// Fixed digit budget the built-in line-number margin is sized for. The
+/// margin width is held constant at this many digits regardless of the
+/// document's actual line count, so the left gutter never grows or shrinks
+/// while editing — the same deliberately-roomy fixed-bar choice the Win32
+/// backend makes. Five digits (99 999 lines) comfortably covers typical
+/// files; larger ones clip, exactly as the Win32 fixed-width bar does.
+const LINE_NUMBER_MARGIN_DIGITS: u32 = 5;
