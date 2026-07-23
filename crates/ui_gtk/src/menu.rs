@@ -198,23 +198,32 @@ fn on_new() {
 }
 
 fn on_open() {
-    let Some(path) = choose_file(gtk::FileChooserAction::Open, "Open") else {
+    // Multi-select, mirroring Win32's `OFN_ALLOWMULTISELECT` Open: the
+    // user can Ctrl/Shift-click several files and they all open in one
+    // dialog. Empty `Vec` on Cancel.
+    let paths = choose_open_paths();
+    if paths.is_empty() {
         return;
-    };
-    let outcome = with_state(|st| st.shell.open_file(path));
-    match outcome {
-        // The path was already open, so no load runs and no wake will
-        // fire — `Shell` moved `active_tab` and it is on us to move the
-        // view to match. See `rebind_active_view` for what goes wrong
-        // otherwise.
-        Some(OpenFileOutcome::SwitchedToExisting(_)) => rebind_active_view(),
-        // Already the active tab: nothing moved, nothing to rebind.
-        Some(OpenFileOutcome::AlreadyActive) => {}
-        // A load was queued. The worker's wake drains it and
-        // `apply_load_result` rebinds the view, so there is nothing to
-        // do synchronously — drain anyway to flush anything already
-        // sitting in the channel from an earlier operation.
-        _ => drain_shell(),
+    }
+    // Run the exact single-open handling once per picked path. The shell
+    // dedupes already-open paths and pushes fresh tabs for the rest;
+    // processing them in order leaves the view on the last file, just as
+    // picking that one file alone would. There is deliberately no trailing
+    // rebind: a fresh open's async load rebinds itself when its wake
+    // drains, so forcing a synchronous rebind here would paint the
+    // still-empty buffer for a frame before the real content lands.
+    for path in paths {
+        match with_state(|st| st.shell.open_file(path)) {
+            // Already open: `Shell` moved `active_tab` with no load to
+            // wake, so move the view to match. See `rebind_active_view`.
+            Some(OpenFileOutcome::SwitchedToExisting(_)) => rebind_active_view(),
+            // Already the active tab: nothing moved, nothing to rebind.
+            Some(OpenFileOutcome::AlreadyActive) => {}
+            // A load was queued; its wake drains and rebinds the view.
+            // Drain anyway to flush anything already sitting in the
+            // channel from an earlier iteration or operation.
+            _ => drain_shell(),
+        }
     }
 }
 
@@ -237,7 +246,7 @@ fn on_save() {
 }
 
 fn on_save_as() {
-    let Some(path) = choose_file(gtk::FileChooserAction::Save, "Save As") else {
+    let Some(path) = choose_save_path("Save As") else {
         return;
     };
     let result = with_state(|st| {
@@ -259,30 +268,55 @@ fn on_close() {
     close_active_tab();
 }
 
-/// Run a native file chooser and return the chosen path.
+/// Run a native Open chooser with multi-selection enabled and return
+/// every path the user picked (empty on Cancel).
+///
+/// The GTK counterpart of Win32's
+/// [`prompt_open_paths`](../../ui_win32/index.html) — `set_select_multiple(true)`
+/// is the `OFN_ALLOWMULTISELECT` analogue, and `filenames()` returns the
+/// whole selection already decoded to `PathBuf`s, so there is no
+/// double-NUL buffer to parse. Save stays single-select via
+/// [`choose_save_path`].
+fn choose_open_paths() -> Vec<PathBuf> {
+    let parent = with_state(|st| st.window.clone());
+    let chooser = gtk::FileChooserNative::new(
+        Some("Open"),
+        parent.as_ref(),
+        gtk::FileChooserAction::Open,
+        Some("_Open"),
+        Some("_Cancel"),
+    );
+    chooser.set_select_multiple(true);
+    let paths = if chooser.run() == gtk::ResponseType::Accept {
+        chooser.filenames()
+    } else {
+        Vec::new()
+    };
+    // `FileChooserNative` keeps the dialog alive until destroyed
+    // explicitly; without this a cancelled chooser leaks its window.
+    chooser.destroy();
+    paths
+}
+
+/// Run a native Save chooser and return the chosen path (None on Cancel).
 ///
 /// `FileChooserNative` rather than `FileChooserDialog` so the dialog is
 /// the desktop's own — the GTK counterpart of Win32's
-/// `GetOpenFileNameW`/`GetSaveFileNameW`, and what a portal-based
-/// desktop expects.
-fn choose_file(action: gtk::FileChooserAction, title: &str) -> Option<PathBuf> {
+/// `GetSaveFileNameW`, and what a portal-based desktop expects. Open is a
+/// separate function ([`choose_open_paths`]) because it is multi-select
+/// and returns a `Vec`; keeping this save-only avoids a dead Open branch.
+fn choose_save_path(title: &str) -> Option<PathBuf> {
     let parent = with_state(|st| st.window.clone());
-    let accept = if action == gtk::FileChooserAction::Save {
-        "_Save"
-    } else {
-        "_Open"
-    };
     let chooser = gtk::FileChooserNative::new(
         Some(title),
         parent.as_ref(),
-        action,
-        Some(accept),
+        gtk::FileChooserAction::Save,
+        Some("_Save"),
         Some("_Cancel"),
     );
     // Offer to overwrite rather than silently clobbering.
-    chooser.set_do_overwrite_confirmation(action == gtk::FileChooserAction::Save);
-    let response = chooser.run();
-    let path = if response == gtk::ResponseType::Accept {
+    chooser.set_do_overwrite_confirmation(true);
+    let path = if chooser.run() == gtk::ResponseType::Accept {
         chooser.filename()
     } else {
         None
