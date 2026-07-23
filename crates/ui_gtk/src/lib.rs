@@ -449,6 +449,18 @@ fn notification_code(values: &[glib::Value]) -> Option<u32> {
 /// Drain everything `Shell` has queued and present any dialogs it
 /// returned. Runs on the main thread, from the wake handler.
 pub(crate) fn drain_shell() {
+    // Frozen for the duration of a tab close (see `close_active_tab`).
+    // The close-confirm modal spins a nested main loop that still
+    // dispatches the §5.4 wake, and a drain from inside it can remove a
+    // tab and shift `active_tab` — `apply_load_result`'s failed-fresh-open
+    // branch and `apply_file_change` both do — moving the buffer out from
+    // under the user's Save / Don't Save / Cancel decision. It could also
+    // stack a second modal via `pump_dialogs`. `close_active_tab` clears
+    // the freeze and flushes once, so nothing a worker finished meanwhile
+    // is lost; it just lands after the close rather than during it.
+    if DrainFreeze::active() {
+        return;
+    }
     let dialogs = with_state(|st| {
         let (shell, mut ui) = st.split();
         let pending = shell.drain(&mut ui);
@@ -475,6 +487,47 @@ thread_local! {
         const { RefCell::new(VecDeque::new()) };
     /// True while [`pump_dialogs`] owns the queue.
     static PRESENTING: Cell<bool> = const { Cell::new(false) };
+    /// Nesting depth of active [`DrainFreeze`] guards. Non-zero while a
+    /// close operation is deferring [`drain_shell`]. See [`DrainFreeze`].
+    static CLOSE_CONFIRM_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+/// RAII freeze of [`drain_shell`] for the span of a tab close.
+///
+/// A close runs a confirm modal that spins a nested main loop; a drain
+/// dispatched there could move `active_tab` off the buffer the user is
+/// deciding about, or stack a second dialog (see [`drain_shell`]). This
+/// guard blocks that for as long as it is held.
+///
+/// Two properties the bare flag it replaced did not have:
+///
+///   * **Panic-safe.** The freeze lifts in `Drop`, so a panic inside the
+///     confirm handler cannot leave `drain_shell` frozen for the rest of
+///     the session (which would silently kill reload prompts and
+///     load-completion rebinds). Matters in unwinding debug/test builds;
+///     release is `panic = "abort"`.
+///   * **Reentrancy-safe.** It is a depth count, not a boolean, so a
+///     future Close All that loops `close_active_tab` stays frozen until
+///     the *outermost* close finishes rather than the first inner one
+///     lifting the freeze early.
+struct DrainFreeze;
+
+impl DrainFreeze {
+    fn new() -> Self {
+        CLOSE_CONFIRM_DEPTH.with(|d| d.set(d.get() + 1));
+        Self
+    }
+
+    /// Whether any close is currently holding the freeze.
+    fn active() -> bool {
+        CLOSE_CONFIRM_DEPTH.with(Cell::get) > 0
+    }
+}
+
+impl Drop for DrainFreeze {
+    fn drop(&mut self) {
+        CLOSE_CONFIRM_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
 }
 
 /// Present queued dialogs one at a time, never nesting.
@@ -533,7 +586,7 @@ fn present_dialog(dialog: &PendingDialog) {
 }
 
 /// Run a modal message dialog and return the user's response.
-fn message_dialog(
+pub(crate) fn message_dialog(
     kind: gtk::MessageType,
     buttons: gtk::ButtonsType,
     title: &str,
@@ -734,6 +787,105 @@ fn rebind_active_view() {
     refresh_tab_chrome();
 }
 
+/// Show the "Save file 'NAME' ?" Save / Don't Save / Cancel prompt when
+/// the active buffer has unsaved changes, and act on the choice. Returns
+/// `true` if the close may proceed (buffer clean, user chose Don't Save,
+/// or a requested save succeeded) and `false` if it must be aborted (user
+/// chose Cancel, or the save failed / its Save-As chooser was cancelled).
+///
+/// This mirrors Win32's `handle_close_active_tab_inner` gate. Both GTK
+/// close paths funnel through [`close_active_tab`] with the target tab
+/// already active (see [`close_tab_by_id`]), so sampling the *active*
+/// buffer is correct for a tab-strip close as much as a menu close.
+fn confirm_discard_active() -> bool {
+    // Sample under a brief borrow, dropped before the modal runs: the
+    // dialog spins its own main loop that re-enters our handlers, and a
+    // live borrow at that point would make `with_state` decline.
+    //
+    // The "dirty" test ORs the live `SCI_GETMODIFY` bit against the
+    // cached `Tab.dirty` for the same reason Win32 does — an externally
+    // removed file flips `Tab.dirty` without the Scintilla doc being
+    // touched, and closing then must still guard the only surviving copy.
+    let sample = with_state(|st| {
+        st.shell.active().map(|tab| {
+            let name = codepp_shell::tab_display_name(tab);
+            let has_path = tab.path.is_some();
+            let has_pending_load = tab.pending_load.is_some();
+            let dirty = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0 || tab.dirty;
+            let length = st.editor.send(codepp_scintilla_sys::SCI_GETLENGTH, 0, 0);
+            (name, has_path, has_pending_load, dirty, length)
+        })
+    });
+    let Some(active) = sample else {
+        // Borrow unavailable — a re-entrant call we do not expect here.
+        // Abort rather than guess at a buffer's dirty state and risk
+        // discarding it.
+        return false;
+    };
+    let Some((name, has_path, has_pending_load, dirty, length)) = active else {
+        // No active tab: nothing to guard, and the close is a no-op.
+        return true;
+    };
+    // Data-loss safeguard, verbatim from Win32: a tab whose async load is
+    // still in flight shows an empty buffer the user has not seen, so its
+    // "dirty" bit is a lazy-populate artefact, not an edit — never prompt
+    // to write it over the real file. And an untitled buffer the user
+    // typed-then-erased reports modified but has nothing to save.
+    if !(dirty && !has_pending_load && (has_path || length > 0)) {
+        return true;
+    }
+    match save_confirm_dialog(&name) {
+        // Discard the edits and proceed; the doc is freed on close.
+        gtk::ResponseType::No => true,
+        gtk::ResponseType::Yes => {
+            // Save via the same path the Save / Save As menu items use: it
+            // saves a titled buffer in place, routes an untitled one
+            // through the Save As chooser, and shows its own sanitized
+            // error dialog on failure. Then re-read the modify bit — a
+            // still-dirty buffer means the save failed or its chooser was
+            // cancelled, and the close must abort so nothing is lost.
+            crate::menu::on_save();
+            matches!(
+                with_state(|st| st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0),
+                Some(false)
+            )
+        }
+        // Cancel, the window's close button, or any unexpected response:
+        // abort the close and leave the buffer open.
+        _ => false,
+    }
+}
+
+/// The "Save file 'NAME' ?" three-way prompt. Title `Save`, question icon
+/// (matching Win32's `MB_ICONQUESTION`), buttons Save / Don't Save /
+/// Cancel — the GTK sibling of Win32's [`show_save_confirm_dialog`],
+/// wording matched verbatim so muscle memory carries across platforms
+/// (DESIGN.md §7.5).
+fn save_confirm_dialog(name: &str) -> gtk::ResponseType {
+    let parent = with_state(|st| st.window.clone());
+    let dialog = gtk::MessageDialog::new(
+        parent.as_ref(),
+        gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+        gtk::MessageType::Question,
+        gtk::ButtonsType::None,
+        // `name` is `tab_display_name` output, already sanitized — the
+        // control chars that could forge extra dialog lines are gone.
+        &format!("Save file '{name}' ?"),
+    );
+    // Titlebar caption "Save", matching Win32's `MessageBoxW` title.
+    dialog.set_title("Save");
+    dialog.add_button("_Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("_Don't Save", gtk::ResponseType::No);
+    dialog.add_button("_Save", gtk::ResponseType::Yes);
+    dialog.set_default_response(gtk::ResponseType::Yes);
+    let response = dialog.run();
+    // SAFETY: created here and never handed out — see `message_dialog`.
+    unsafe {
+        dialog.destroy();
+    }
+    response
+}
+
 /// Close the active tab, releasing its Scintilla document and rebinding
 /// the view.
 ///
@@ -744,51 +896,71 @@ fn rebind_active_view() {
 /// view still holds its own implicit reference, so the document cannot
 /// be freed out from under the view mid-call.
 pub(crate) fn close_active_tab() {
-    let closed_doc = with_state(|st| st.shell.close_active_tab().map(|c| c.scintilla_doc));
-    if let Some(Some(doc)) = closed_doc {
-        if doc != 0 {
-            with_state(|st| {
-                st.editor
-                    .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, doc);
-            });
+    {
+        // Freeze shell drains for the whole close. The data-loss gate
+        // below runs a modal that spins a nested main loop; without this a
+        // worker wake dispatched there could move `active_tab` off the
+        // buffer the user is deciding about (see `drain_shell`). The guard
+        // lifts on scope exit — including a panic in the confirm handler —
+        // so the flush below always runs unfrozen.
+        let _freeze = DrainFreeze::new();
+
+        // Data-loss gate: prompt before discarding unsaved edits. Cancel
+        // (or a failed save) aborts the close entirely.
+        if confirm_discard_active() {
+            let closed_doc = with_state(|st| st.shell.close_active_tab().map(|c| c.scintilla_doc));
+            if let Some(Some(doc)) = closed_doc {
+                if doc != 0 {
+                    with_state(|st| {
+                        st.editor
+                            .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, doc);
+                    });
+                }
+            }
+            // With no tabs left the view would still show the closed
+            // buffer, so give it a fresh empty document to sit on.
+            let has_active = with_state(|st| st.shell.active_tab.is_some()).unwrap_or(false);
+            if has_active {
+                rebind_active_view();
+            } else {
+                with_state(|st| {
+                    let (_, mut ui) = st.split();
+                    let placeholder = codepp_shell::UiPlatform::activate_tab(&mut ui, 0, 0);
+                    codepp_shell::UiPlatform::set_buffer_text(&mut ui, "", 0);
+                    // Release immediately, unlike every other freshly-created
+                    // document. Elsewhere the new pointer is written onto a
+                    // `Tab.scintilla_doc`, and that tab owns Code++'s reference
+                    // until it is itself closed through this function. This
+                    // placeholder has no tab — `shell.tabs` is empty by
+                    // construction in this branch — so nothing would ever
+                    // release it, and closing the last tab would leak a
+                    // document for the rest of the process.
+                    //
+                    // Refcount walk, matching `ui_win32`'s placeholder path:
+                    // CREATEDOCUMENT gives 1 (ours), SETDOCPOINTER makes it 2
+                    // (view AddRefs), RELEASEDOCUMENT here drops it back to 1 —
+                    // just the view's implicit reference. The next
+                    // SETDOCPOINTER, from a future open's `activate_tab`, drops
+                    // that last one and frees it cleanly.
+                    //
+                    // Guarded on non-zero: `SCI_CREATEDOCUMENT` returns 0 on
+                    // allocation failure, and releasing null is not part of
+                    // Scintilla's published ABI contract.
+                    if placeholder != 0 {
+                        st.editor
+                            .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, placeholder);
+                    }
+                });
+                refresh_tab_chrome();
+            }
         }
     }
-    // With no tabs left the view would still show the closed buffer,
-    // so give it a fresh empty document to sit on.
-    let has_active = with_state(|st| st.shell.active_tab.is_some()).unwrap_or(false);
-    if has_active {
-        rebind_active_view();
-    } else {
-        with_state(|st| {
-            let (_, mut ui) = st.split();
-            let placeholder = codepp_shell::UiPlatform::activate_tab(&mut ui, 0, 0);
-            codepp_shell::UiPlatform::set_buffer_text(&mut ui, "", 0);
-            // Release immediately, unlike every other freshly-created
-            // document. Elsewhere the new pointer is written onto a
-            // `Tab.scintilla_doc`, and that tab owns Code++'s reference
-            // until it is itself closed through this function. This
-            // placeholder has no tab — `shell.tabs` is empty by
-            // construction in this branch — so nothing would ever
-            // release it, and closing the last tab would leak a
-            // document for the rest of the process.
-            //
-            // Refcount walk, matching `ui_win32`'s placeholder path:
-            // CREATEDOCUMENT gives 1 (ours), SETDOCPOINTER makes it 2
-            // (view AddRefs), RELEASEDOCUMENT here drops it back to 1 —
-            // just the view's implicit reference. The next
-            // SETDOCPOINTER, from a future open's `activate_tab`, drops
-            // that last one and frees it cleanly.
-            //
-            // Guarded on non-zero: `SCI_CREATEDOCUMENT` returns 0 on
-            // allocation failure, and releasing null is not part of
-            // Scintilla's published ABI contract.
-            if placeholder != 0 {
-                st.editor
-                    .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, placeholder);
-            }
-        });
-        refresh_tab_chrome();
-    }
+
+    // Unfrozen now: flush anything a worker completed while the modal held
+    // the main loop, applied against the post-close state. If this close
+    // was itself nested inside another (a future Close All), an outer
+    // freeze is still held and this drain defers to the outer flush.
+    drain_shell();
 }
 
 /// Persist the session. Safe to call repeatedly.

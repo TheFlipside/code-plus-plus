@@ -227,7 +227,10 @@ fn on_open() {
     }
 }
 
-fn on_save() {
+/// `pub(crate)` because the close-confirm gate in `lib.rs` routes a
+/// dirty buffer's Save through this same path (in place if titled, via
+/// Save As if untitled), so the two never diverge.
+pub(crate) fn on_save() {
     // An untitled buffer has no path to save to, so Save behaves as
     // Save As — same as Notepad++.
     let has_path = with_state(|st| st.shell.active().is_some_and(|t| t.path.is_some()));
@@ -240,7 +243,15 @@ fn on_save() {
         shell.save_current_to_disk(&mut ui)
     });
     if let Some(Err(err)) = result {
-        tracing::warn!(?err, "save failed");
+        // Surface, don't just log: a silent Ctrl+S failure (permission
+        // denied, disk full) leaves the user believing their work is on
+        // disk when it is not. Sanitized as elsewhere.
+        crate::message_dialog(
+            gtk::MessageType::Error,
+            gtk::ButtonsType::Ok,
+            "Save failed",
+            &codepp_shell::sanitize_str_for_display(&err.to_string()),
+        );
     }
     refresh_tab_chrome();
 }
@@ -254,7 +265,17 @@ fn on_save_as() {
         shell.save_buffer_as(&mut ui, path)
     });
     if let Some(Err(err)) = result {
-        tracing::warn!(?err, "save-as failed");
+        // Surface it rather than only logging: the standalone Save As
+        // menu action and the close-confirm gate both need the user to
+        // know the write did not happen. Sanitized — `ShellError`'s
+        // Display can carry a path, and secondary text renders control
+        // chars as real dialog lines.
+        crate::message_dialog(
+            gtk::MessageType::Error,
+            gtk::ButtonsType::Ok,
+            "Save As failed",
+            &codepp_shell::sanitize_str_for_display(&err.to_string()),
+        );
     }
     refresh_tab_chrome();
 }
