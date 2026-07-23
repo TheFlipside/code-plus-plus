@@ -2587,7 +2587,20 @@ impl Shell {
                 self.save_current_to_disk(ui)
             }));
             match r {
-                Ok(Ok(())) => {}
+                Ok(Ok(())) => {
+                    // A just-saved buffer is clean. Clear the cached
+                    // `Tab.dirty` here rather than leaving it to the UI's
+                    // `SCN_SAVEPOINTREACHED` poll: that poll re-enters the
+                    // UI while `save_all` still holds the shell borrow, so
+                    // a backend guarding its state (GTK's `with_state`
+                    // declines the re-entrant borrow) never clears the
+                    // flag for the inactive tabs, and their tab-strip
+                    // marker stays "modified" until the next activation.
+                    // Making the shell authoritative fixes every backend.
+                    if let Some(tab) = self.tabs.get_mut(idx) {
+                        tab.dirty = false;
+                    }
+                }
                 Ok(Err(e)) => errors.push((id, e)),
                 Err(_) => {
                     errors.push((

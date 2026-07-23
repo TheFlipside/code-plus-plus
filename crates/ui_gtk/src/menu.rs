@@ -1,10 +1,11 @@
 //! The menu bar and its handlers.
 //!
-//! m2 wires File only, and only the entries whose `Shell` methods
-//! already exist: New, Open, Save, Save As, Reload, Close, Exit. The
-//! full Notepad++ menu set (Edit, Search, View, Encoding, Language,
-//! Settings, Tools, Macro, Run, Plugins, Window, ?) lands alongside the
-//! tab strip and the dialogs in a later milestone.
+//! Wired: File (New, Open, Save, Save As, Save All, Reload, Close, Close
+//! All, Exit), Edit (Undo/Redo, Cut/Copy/Paste/Delete, Select All),
+//! Search (Find, Replace, Find Next/Previous, Go to), View (zoom, Word
+//! Wrap, Show Whitespace, Show EOL) and ? (About). Still to come, tracked
+//! against the Win32 parity list: Encoding, Language, Settings, Tools,
+//! Macro, Run, Plugins and Window.
 //!
 //! Accelerators match the Win32 backend's `CreateAcceleratorTableW`
 //! block, which DESIGN.md §7.5 names as the source of truth for
@@ -13,6 +14,7 @@
 use std::path::PathBuf;
 
 use codepp_shell::OpenFileOutcome;
+use gtk::gdk::keys::constants as key;
 use gtk::prelude::*;
 
 use crate::state::with_state;
@@ -25,8 +27,10 @@ use crate::{
 /// drift apart.
 struct Entry {
     label: &'static str,
-    key: gtk::gdk::keys::Key,
-    modifier: gtk::gdk::ModifierType,
+    /// `None` for an item with no application accelerator — either it has
+    /// no shortcut, or the key is left to Scintilla's own keymap (Delete
+    /// forward-deletes there; the menu just exposes the command).
+    accel: Option<(gtk::gdk::keys::Key, gtk::gdk::ModifierType)>,
     action: fn(),
 }
 
@@ -34,7 +38,9 @@ struct Entry {
 /// because they need the window state installed first.
 pub fn build() -> gtk::MenuBar {
     let bar = gtk::MenuBar::new();
-    for title in ["_File", "_Search"] {
+    // Order mirrors Notepad++/Win32: File, Edit, Search, View, … , ?.
+    // "?" is N++'s Help menu; kept as-is for parity.
+    for title in ["_File", "_Edit", "_Search", "_View", "?"] {
         let root = gtk::MenuItem::with_mnemonic(title);
         root.set_submenu(Some(&gtk::Menu::new()));
         bar.append(&root);
@@ -65,10 +71,21 @@ fn submenu_at(bar: &gtk::MenuBar, index: usize, name: &str) -> Option<gtk::Menu>
     sub
 }
 
-/// Populate the File menu and bind its accelerators.
+/// Populate every top-level menu and bind its accelerators.
 ///
 /// Split from [`build`] so the window is fully constructed and the
 /// state installed before any handler can possibly fire.
+///
+/// Accelerators mirror the Win32 backend's `CreateAcceleratorTableW`
+/// block, DESIGN.md §7.5's source of truth. The edit shortcuts
+/// (Undo/Cut/Copy/…) are live GTK accelerators here rather than left to
+/// Scintilla's keymap as on Win32, but they route to the identical
+/// `SCI_*` command, so the user-visible behaviour matches. GTK dispatches
+/// a window accelerator before the focused widget, so exactly one action
+/// fires — no double-undo — and the main window's only editable widget is
+/// the Scintilla view, so the routing target is never ambiguous. The
+/// modeless Find/Replace and modal Goto dialogs are separate windows with
+/// their own focus, so their text entries keep their own Ctrl+C/V.
 pub fn connect() {
     let Some((bar, window)) = with_state(|st| (st.menu_bar.clone(), st.window.clone())) else {
         return;
@@ -76,98 +93,238 @@ pub fn connect() {
     let accel = gtk::AccelGroup::new();
     window.add_accel_group(&accel);
 
+    build_file_menu(&bar, &accel);
+    build_edit_menu(&bar, &accel);
+    build_search_menu(&bar, &accel);
+    build_view_menu(&bar, &accel);
+    build_help_menu(&bar, &accel);
+}
+
+fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     let ctrl = gtk::gdk::ModifierType::CONTROL_MASK;
     let ctrl_shift = ctrl | gtk::gdk::ModifierType::SHIFT_MASK;
+    // MOD1 is Alt. Save As is Ctrl+Alt+S (Win32 parity), which frees
+    // Ctrl+Shift+S for Save All.
+    let ctrl_alt = ctrl | gtk::gdk::ModifierType::MOD1_MASK;
     let entries = [
         Entry {
             label: "_New",
-            key: gtk::gdk::keys::constants::n,
-            modifier: ctrl,
+            accel: Some((key::n, ctrl)),
             action: on_new,
         },
         Entry {
             label: "_Open…",
-            key: gtk::gdk::keys::constants::o,
-            modifier: ctrl,
+            accel: Some((key::o, ctrl)),
             action: on_open,
         },
         Entry {
             label: "_Save",
-            key: gtk::gdk::keys::constants::s,
-            modifier: ctrl,
+            accel: Some((key::s, ctrl)),
             action: on_save,
         },
         Entry {
             label: "Save _As…",
-            key: gtk::gdk::keys::constants::S,
-            modifier: ctrl_shift,
+            accel: Some((key::s, ctrl_alt)),
             action: on_save_as,
         },
         Entry {
+            label: "Sa_ve All",
+            accel: Some((key::S, ctrl_shift)),
+            action: on_save_all,
+        },
+        Entry {
             label: "_Reload",
-            key: gtk::gdk::keys::constants::r,
-            modifier: ctrl,
+            accel: Some((key::r, ctrl)),
             action: on_reload,
         },
         Entry {
             label: "_Close",
-            key: gtk::gdk::keys::constants::w,
-            modifier: ctrl,
+            accel: Some((key::w, ctrl)),
             action: on_close,
         },
+        Entry {
+            label: "Close A_ll",
+            accel: Some((key::W, ctrl_shift)),
+            action: on_close_all,
+        },
     ];
-
-    let Some(file_menu) = submenu_at(&bar, 0, "File") else {
+    let Some(menu) = submenu_at(bar, 0, "File") else {
         return;
     };
-    populate(&file_menu, &accel, &entries);
-
-    file_menu.append(&gtk::SeparatorMenuItem::new());
+    populate(&menu, accel, &entries);
+    menu.append(&gtk::SeparatorMenuItem::new());
     let exit = gtk::MenuItem::with_mnemonic("E_xit");
     exit.connect_activate(|_| {
         save_session_now();
         gtk::main_quit();
     });
-    file_menu.append(&exit);
-    file_menu.show_all();
+    menu.append(&exit);
+    menu.show_all();
+}
 
-    // --- Search -------------------------------------------------------
-    let search_entries = [
+/// The Edit menu — Win32's minimal Scintilla-backed set. Delete carries
+/// no application accelerator: the Del key stays with Scintilla for
+/// normal forward-delete; the menu item just exposes `SCI_CLEAR`.
+fn build_edit_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
+    let ctrl = gtk::gdk::ModifierType::CONTROL_MASK;
+    let undo = [
+        Entry {
+            label: "_Undo",
+            accel: Some((key::z, ctrl)),
+            action: on_undo,
+        },
+        Entry {
+            label: "_Redo",
+            accel: Some((key::y, ctrl)),
+            action: on_redo,
+        },
+    ];
+    let clip = [
+        Entry {
+            label: "Cu_t",
+            accel: Some((key::x, ctrl)),
+            action: on_cut,
+        },
+        Entry {
+            label: "_Copy",
+            accel: Some((key::c, ctrl)),
+            action: on_copy,
+        },
+        Entry {
+            label: "_Paste",
+            accel: Some((key::v, ctrl)),
+            action: on_paste,
+        },
+        Entry {
+            label: "_Delete",
+            accel: None,
+            action: on_delete,
+        },
+    ];
+    let select = [Entry {
+        label: "Select _All",
+        accel: Some((key::a, ctrl)),
+        action: on_select_all,
+    }];
+    let Some(menu) = submenu_at(bar, 1, "Edit") else {
+        return;
+    };
+    populate(&menu, accel, &undo);
+    menu.append(&gtk::SeparatorMenuItem::new());
+    populate(&menu, accel, &clip);
+    menu.append(&gtk::SeparatorMenuItem::new());
+    populate(&menu, accel, &select);
+    menu.show_all();
+}
+
+fn build_search_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
+    let none = gtk::gdk::ModifierType::empty();
+    let ctrl = gtk::gdk::ModifierType::CONTROL_MASK;
+    let shift = gtk::gdk::ModifierType::SHIFT_MASK;
+    let entries = [
         Entry {
             label: "_Find…",
-            key: gtk::gdk::keys::constants::f,
-            modifier: ctrl,
+            accel: Some((key::f, ctrl)),
             action: crate::search::show_find,
         },
         Entry {
             label: "_Replace…",
-            key: gtk::gdk::keys::constants::h,
-            modifier: ctrl,
+            accel: Some((key::h, ctrl)),
             action: crate::search::show_replace,
         },
         Entry {
             label: "Find _Next",
-            key: gtk::gdk::keys::constants::F3,
-            modifier: gtk::gdk::ModifierType::empty(),
+            accel: Some((key::F3, none)),
             action: crate::search::find_next_repeat,
         },
         Entry {
             label: "Find _Previous",
-            key: gtk::gdk::keys::constants::F3,
-            modifier: gtk::gdk::ModifierType::SHIFT_MASK,
+            accel: Some((key::F3, shift)),
             action: crate::search::find_prev_repeat,
         },
         Entry {
             label: "_Go to…",
-            key: gtk::gdk::keys::constants::g,
-            modifier: ctrl,
+            accel: Some((key::g, ctrl)),
             action: crate::search::show_goto,
         },
     ];
-    if let Some(search_menu) = submenu_at(&bar, 1, "Search") {
-        populate(&search_menu, &accel, &search_entries);
-        search_menu.show_all();
+    let Some(menu) = submenu_at(bar, 2, "Search") else {
+        return;
+    };
+    populate(&menu, accel, &entries);
+    menu.show_all();
+}
+
+fn build_view_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
+    let ctrl = gtk::gdk::ModifierType::CONTROL_MASK;
+    let zoom = [
+        Entry {
+            label: "Zoom _In",
+            accel: Some((key::plus, ctrl)),
+            action: on_zoom_in,
+        },
+        Entry {
+            label: "Zoom _Out",
+            accel: Some((key::minus, ctrl)),
+            action: on_zoom_out,
+        },
+        Entry {
+            label: "_Restore Default Zoom",
+            accel: Some((key::_0, ctrl)),
+            action: on_zoom_reset,
+        },
+    ];
+    let Some(menu) = submenu_at(bar, 3, "View") else {
+        return;
+    };
+    populate(&menu, accel, &zoom);
+    // Ctrl+= is the same physical key as Ctrl++ on most layouts (+ is
+    // Shift+=), so accept it for Zoom In too — matching how Win32 treats
+    // VK_OEM_PLUS.
+    if let Some(zoom_in) = menu.children().first() {
+        zoom_in.add_accelerator(
+            "activate",
+            accel,
+            *key::equal,
+            ctrl,
+            gtk::AccelFlags::VISIBLE,
+        );
     }
+    menu.append(&gtk::SeparatorMenuItem::new());
+    // Restore the persisted View toggles: apply them to the live editor
+    // and seed the check items so the menu and the view agree from the
+    // first frame — the cold-start restore Win32 does at
+    // `apply_saved_view_settings` time. Read once here; the toggle
+    // handlers keep `Shell`'s copy updated from now on.
+    let view = with_state(|st| {
+        let view = st.shell.saved_view_settings();
+        apply_view_settings(&st.editor, view);
+        view
+    })
+    .unwrap_or_default();
+    add_check(&menu, "_Word Wrap", view.word_wrap, on_word_wrap);
+    add_check(
+        &menu,
+        "Show White_space",
+        view.show_whitespace,
+        on_show_whitespace,
+    );
+    add_check(&menu, "Show _End of Line", view.show_eol, on_show_eol);
+    menu.show_all();
+}
+
+fn build_help_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
+    let none = gtk::gdk::ModifierType::empty();
+    let entries = [Entry {
+        label: "_About Code++",
+        accel: Some((key::F1, none)),
+        action: on_about,
+    }];
+    let Some(menu) = submenu_at(bar, 4, "?") else {
+        return;
+    };
+    populate(&menu, accel, &entries);
+    menu.show_all();
 }
 
 /// Append each entry to `menu` as a mnemonic item bound to its
@@ -178,15 +335,26 @@ fn populate(menu: &gtk::Menu, accel: &gtk::AccelGroup, entries: &[Entry]) {
         let item = gtk::MenuItem::with_mnemonic(e.label);
         let action = e.action;
         item.connect_activate(move |_| action());
-        item.add_accelerator(
-            "activate",
-            accel,
-            *e.key,
-            e.modifier,
-            gtk::AccelFlags::VISIBLE,
-        );
+        if let Some((key, modifier)) = e.accel {
+            item.add_accelerator("activate", accel, *key, modifier, gtk::AccelFlags::VISIBLE);
+        }
         menu.append(&item);
     }
+}
+
+/// Append a checkable menu item that reflects and drives a Scintilla view
+/// flag. `initial` seeds the check to the persisted state; `toggled`
+/// receives the item's new state on every user toggle.
+///
+/// `set_active` runs before `connect_toggled`, so seeding the restored
+/// state does not fire the handler. No refresh-on-popup is needed either:
+/// nothing outside these items changes wrap / whitespace / EOL
+/// visibility, so the check *is* the state once seeded.
+fn add_check(menu: &gtk::Menu, label: &str, initial: bool, toggled: fn(bool)) {
+    let item = gtk::CheckMenuItem::with_mnemonic(label);
+    item.set_active(initial);
+    item.connect_toggled(move |it| toggled(it.is_active()));
+    menu.append(&item);
 }
 
 fn on_new() {
@@ -287,6 +455,203 @@ fn on_reload() {
 
 fn on_close() {
     close_active_tab();
+}
+
+fn on_save_all() {
+    let errors = with_state(|st| {
+        let (shell, mut ui) = st.split();
+        shell.save_all(&mut ui)
+    })
+    .unwrap_or_default();
+    refresh_tab_chrome();
+    if errors.is_empty() {
+        return;
+    }
+    // List the failures by buffer name. `tab_display_name` sanitizes the
+    // name and the error text is sanitized here; the `\n` joiners are
+    // ours, added after sanitization (which would otherwise strip them).
+    let body = with_state(|st| {
+        errors
+            .iter()
+            .map(|(id, err)| {
+                let name = st
+                    .shell
+                    .tabs
+                    .iter()
+                    .find(|t| t.id == *id)
+                    .map_or_else(|| format!("buffer {id}"), codepp_shell::tab_display_name);
+                format!(
+                    "{name}: {}",
+                    codepp_shell::sanitize_str_for_display(&err.to_string())
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+    .unwrap_or_default();
+    crate::message_dialog(
+        gtk::MessageType::Error,
+        gtk::ButtonsType::Ok,
+        "Save All — some files were not saved",
+        &body,
+    );
+}
+
+fn on_close_all() {
+    // Loop the single-tab close so each dirty buffer gets its own
+    // Save / Don't Save / Cancel prompt and a Cancel stops the rest —
+    // matching Win32's `close_multiple_documents`. `close_active_tab`
+    // returns `false` when the user aborts.
+    loop {
+        let before = with_state(|st| st.shell.tabs.len()).unwrap_or(0);
+        if before == 0 {
+            break;
+        }
+        if !close_active_tab() {
+            break;
+        }
+        // Defensive: never spin if a close somehow made no progress.
+        if with_state(|st| st.shell.tabs.len()).unwrap_or(0) >= before {
+            break;
+        }
+    }
+}
+
+/// Send a parameterless command to the active Scintilla view. The `SCI_*`
+/// edit and zoom commands all take this shape.
+fn editor_cmd(msg: u32) {
+    with_state(|st| {
+        st.editor.send(msg, 0, 0);
+    });
+}
+
+fn on_undo() {
+    editor_cmd(codepp_scintilla_sys::SCI_UNDO);
+    refresh_tab_chrome();
+}
+
+fn on_redo() {
+    editor_cmd(codepp_scintilla_sys::SCI_REDO);
+    refresh_tab_chrome();
+}
+
+fn on_cut() {
+    editor_cmd(codepp_scintilla_sys::SCI_CUT);
+    refresh_tab_chrome();
+}
+
+fn on_copy() {
+    editor_cmd(codepp_scintilla_sys::SCI_COPY);
+}
+
+fn on_paste() {
+    editor_cmd(codepp_scintilla_sys::SCI_PASTE);
+    refresh_tab_chrome();
+}
+
+fn on_delete() {
+    editor_cmd(codepp_scintilla_sys::SCI_CLEAR);
+    refresh_tab_chrome();
+}
+
+fn on_select_all() {
+    editor_cmd(codepp_scintilla_sys::SCI_SELECTALL);
+}
+
+fn on_zoom_in() {
+    editor_cmd(codepp_scintilla_sys::SCI_ZOOMIN);
+}
+
+fn on_zoom_out() {
+    editor_cmd(codepp_scintilla_sys::SCI_ZOOMOUT);
+}
+
+fn on_zoom_reset() {
+    with_state(|st| {
+        st.editor.send(codepp_scintilla_sys::SCI_SETZOOM, 0, 0);
+    });
+}
+
+/// Push the three GTK-exposed view toggles into the live editor. Shared
+/// by cold-start restore ([`build_view_menu`]) and — via each handler's
+/// read-modify-write — every user toggle, so the editor and `Shell`'s
+/// persisted copy never disagree. `indent_guide` is in `ViewSettings`
+/// too, but GTK exposes no toggle for it, so it is left alone here.
+fn apply_view_settings(
+    editor: &codepp_editor::EditorHandle,
+    view: codepp_core::session::ViewSettings,
+) {
+    let wrap = if view.word_wrap {
+        codepp_scintilla_sys::SC_WRAP_WORD
+    } else {
+        codepp_scintilla_sys::SC_WRAP_NONE
+    };
+    let ws = if view.show_whitespace {
+        codepp_scintilla_sys::SCWS_VISIBLEALWAYS
+    } else {
+        codepp_scintilla_sys::SCWS_INVISIBLE
+    };
+    editor.send(codepp_scintilla_sys::SCI_SETWRAPMODE, wrap, 0);
+    editor.send(codepp_scintilla_sys::SCI_SETVIEWWS, ws, 0);
+    editor.send(
+        codepp_scintilla_sys::SCI_SETVIEWEOL,
+        usize::from(view.show_eol),
+        0,
+    );
+}
+
+fn on_word_wrap(active: bool) {
+    with_state(|st| {
+        let mut view = st.shell.saved_view_settings();
+        view.word_wrap = active;
+        apply_view_settings(&st.editor, view);
+        // Persist so the choice survives to the next session save.
+        st.shell.set_view_settings(view);
+    });
+}
+
+fn on_show_whitespace(active: bool) {
+    with_state(|st| {
+        let mut view = st.shell.saved_view_settings();
+        view.show_whitespace = active;
+        apply_view_settings(&st.editor, view);
+        st.shell.set_view_settings(view);
+    });
+}
+
+fn on_show_eol(active: bool) {
+    with_state(|st| {
+        let mut view = st.shell.saved_view_settings();
+        view.show_eol = active;
+        apply_view_settings(&st.editor, view);
+        st.shell.set_view_settings(view);
+    });
+}
+
+/// Code++ home page, the About dialog's website link. Mirrors
+/// `ui_win32`'s `HELP_HOME_URL`; the two backends must agree.
+const HELP_HOME_URL: &str = "https://code-plus-plus.org/";
+
+fn on_about() {
+    let parent = with_state(|st| st.window.clone());
+    let dialog = gtk::AboutDialog::new();
+    dialog.set_program_name("Code++");
+    dialog.set_version(Some(env!("CARGO_PKG_VERSION")));
+    dialog.set_comments(Some(
+        "A fast, cross-platform code and text editor built on Scintilla.",
+    ));
+    dialog.set_website(Some(HELP_HOME_URL));
+    dialog.set_website_label(Some("code-plus-plus.org"));
+    dialog.set_license_type(gtk::License::MitX11);
+    if let Some(parent) = parent.as_ref() {
+        dialog.set_transient_for(Some(parent));
+    }
+    dialog.set_modal(true);
+    dialog.run();
+    // SAFETY: created here and never handed out — see `message_dialog`.
+    unsafe {
+        dialog.destroy();
+    }
 }
 
 /// Run a native Open chooser with multi-selection enabled and return

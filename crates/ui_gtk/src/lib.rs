@@ -887,7 +887,9 @@ fn save_confirm_dialog(name: &str) -> gtk::ResponseType {
 }
 
 /// Close the active tab, releasing its Scintilla document and rebinding
-/// the view.
+/// the view. Returns `false` if the user aborted at the save prompt
+/// (Cancel, or a failed/cancelled save) and the tab stayed open; `true`
+/// otherwise. Close All relies on the return value to stop on Cancel.
 ///
 /// The release is not optional: documents are reference-counted, and
 /// `SCI_CREATEDOCUMENT` hands back a reference Code++ owns. Dropping the
@@ -895,7 +897,8 @@ fn save_confirm_dialog(name: &str) -> gtk::ResponseType {
 /// of the process. Order matters — release *before* rebinding, while the
 /// view still holds its own implicit reference, so the document cannot
 /// be freed out from under the view mid-call.
-pub(crate) fn close_active_tab() {
+pub(crate) fn close_active_tab() -> bool {
+    let proceed;
     {
         // Freeze shell drains for the whole close. The data-loss gate
         // below runs a modal that spins a nested main loop; without this a
@@ -907,7 +910,8 @@ pub(crate) fn close_active_tab() {
 
         // Data-loss gate: prompt before discarding unsaved edits. Cancel
         // (or a failed save) aborts the close entirely.
-        if confirm_discard_active() {
+        proceed = confirm_discard_active();
+        if proceed {
             let closed_doc = with_state(|st| st.shell.close_active_tab().map(|c| c.scintilla_doc));
             if let Some(Some(doc)) = closed_doc {
                 if doc != 0 {
@@ -961,6 +965,7 @@ pub(crate) fn close_active_tab() {
     // was itself nested inside another (a future Close All), an outer
     // freeze is still held and this drain defers to the outer flush.
     drain_shell();
+    proceed
 }
 
 /// Persist the session. Safe to call repeatedly.

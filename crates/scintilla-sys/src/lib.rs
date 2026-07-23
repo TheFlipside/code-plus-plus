@@ -355,8 +355,18 @@ pub const SCI_DOCUMENTEND: u32 = 2318;
 // View toggles + zoom — driven by the View menu.
 pub const SCI_SETWRAPMODE: u32 = 2268;
 pub const SCI_GETWRAPMODE: u32 = 2269;
+/// `SC_WRAP_NONE = 0` — no line wrapping (the default).
+pub const SC_WRAP_NONE: usize = 0;
+/// `SC_WRAP_WORD = 1` — wrap long lines at word boundaries, which is
+/// what Notepad++'s View → Word Wrap enables.
+pub const SC_WRAP_WORD: usize = 1;
 pub const SCI_SETVIEWWS: u32 = 2021;
 pub const SCI_GETVIEWWS: u32 = 2020;
+/// `SCWS_INVISIBLE = 0` — whitespace not shown (the default).
+pub const SCWS_INVISIBLE: usize = 0;
+/// `SCWS_VISIBLEALWAYS = 1` — render every space/tab as a visible mark,
+/// matching Notepad++'s View → Show Whitespace.
+pub const SCWS_VISIBLEALWAYS: usize = 1;
 pub const SCI_SETVIEWEOL: u32 = 2356;
 pub const SCI_GETVIEWEOL: u32 = 2355;
 pub const SCI_SETINDENTATIONGUIDES: u32 = 2132;
