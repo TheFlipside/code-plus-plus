@@ -323,14 +323,24 @@ fn build_view_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
         view
     })
     .unwrap_or_default();
-    add_check(&menu, "_Word Wrap", view.word_wrap, on_word_wrap);
-    add_check(
+    let ww = add_check(&menu, "_Word Wrap", view.word_wrap, on_word_wrap);
+    let ws = add_check(
         &menu,
         "Show White_space",
         view.show_whitespace,
         on_show_whitespace,
     );
-    add_check(&menu, "Show _End of Line", view.show_eol, on_show_eol);
+    let eol = add_check(&menu, "Show _End of Line", view.show_eol, on_show_eol);
+    // Register the checks so `refresh_view_indicators` can keep them in
+    // step with the toolbar toggles, and re-sync every time the menu opens
+    // (a toolbar toggle may have changed a setting since it last showed).
+    VIEW_INDICATORS.with(|reg| {
+        let mut reg = reg.borrow_mut();
+        reg.menu_word_wrap = Some(ww);
+        reg.menu_show_whitespace = Some(ws);
+        reg.menu_show_eol = Some(eol);
+    });
+    menu.connect_show(|_| refresh_view_indicators());
     menu.show_all();
 }
 
@@ -347,6 +357,96 @@ thread_local! {
     /// never interleave, so one flag is enough. A future third menu reusing
     /// it must hold that same "never concurrently refreshing" property.
     static REFRESHING_MARKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+    /// The View-toggle indicators that must agree with the live editor:
+    /// the three View-menu check items and the two toolbar toggle buttons.
+    /// One [`refresh_view_indicators`] reads the editor and sets all of
+    /// them, so Word Wrap and Show All Characters read the same whether the
+    /// user toggled from the menu or the toolbar. Populated as the View
+    /// menu and the toolbar are built; empty until then.
+    static VIEW_INDICATORS: std::cell::RefCell<ViewIndicators> =
+        const { std::cell::RefCell::new(ViewIndicators::new()) };
+}
+
+/// Handles to every widget that reflects a View toggle. See
+/// [`VIEW_INDICATORS`].
+struct ViewIndicators {
+    menu_word_wrap: Option<gtk::CheckMenuItem>,
+    menu_show_whitespace: Option<gtk::CheckMenuItem>,
+    menu_show_eol: Option<gtk::CheckMenuItem>,
+    tb_word_wrap: Option<gtk::ToggleToolButton>,
+    tb_show_all_chars: Option<gtk::ToggleToolButton>,
+}
+
+impl ViewIndicators {
+    const fn new() -> Self {
+        Self {
+            menu_word_wrap: None,
+            menu_show_whitespace: None,
+            menu_show_eol: None,
+            tb_word_wrap: None,
+            tb_show_all_chars: None,
+        }
+    }
+}
+
+/// Register the toolbar's two functional toggle buttons so
+/// [`refresh_view_indicators`] can keep them in step with the menu checks.
+/// Called by [`crate::toolbar::build_toolbar`].
+pub(crate) fn register_toolbar_view_toggles(
+    word_wrap: gtk::ToggleToolButton,
+    show_all_chars: gtk::ToggleToolButton,
+) {
+    VIEW_INDICATORS.with(|reg| {
+        let mut reg = reg.borrow_mut();
+        reg.tb_word_wrap = Some(word_wrap);
+        reg.tb_show_all_chars = Some(show_all_chars);
+    });
+}
+
+/// Set every View-toggle indicator from the live editor state, so the
+/// menu checks and toolbar toggles always agree regardless of which
+/// surface changed a setting.
+///
+/// Guarded by [`REFRESHING_MARKS`]: `set_active` re-fires an item's
+/// toggled/activate signal, and the toggle handlers bail while this is set
+/// so a refresh never re-applies the setting it is merely reflecting. The
+/// editor is the source of truth — Show All Characters is on only when
+/// both whitespace and EOL display are on, matching Win32.
+pub(crate) fn refresh_view_indicators() {
+    use codepp_scintilla_sys::{
+        SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCWS_INVISIBLE, SC_WRAP_NONE,
+    };
+    let Some((wrap, ws, eol)) = with_state(|st| {
+        let e = &st.editor;
+        (
+            e.send(SCI_GETWRAPMODE, 0, 0) != SC_WRAP_NONE as isize,
+            e.send(SCI_GETVIEWWS, 0, 0) != SCWS_INVISIBLE as isize,
+            e.send(SCI_GETVIEWEOL, 0, 0) != 0,
+        )
+    }) else {
+        return;
+    };
+    REFRESHING_MARKS.with(|r| r.set(true));
+    VIEW_INDICATORS.with(|reg| {
+        let reg = reg.borrow();
+        if let Some(i) = &reg.menu_word_wrap {
+            i.set_active(wrap);
+        }
+        if let Some(i) = &reg.menu_show_whitespace {
+            i.set_active(ws);
+        }
+        if let Some(i) = &reg.menu_show_eol {
+            i.set_active(eol);
+        }
+        if let Some(b) = &reg.tb_word_wrap {
+            b.set_active(wrap);
+        }
+        if let Some(b) = &reg.tb_show_all_chars {
+            b.set_active(ws && eol);
+        }
+    });
+    REFRESHING_MARKS.with(|r| r.set(false));
 }
 
 /// Build the Encoding menu: the four wired Unicode save targets plus a
@@ -644,21 +744,28 @@ fn populate(menu: &gtk::Menu, accel: &gtk::AccelGroup, entries: &[Entry]) {
 }
 
 /// Append a checkable menu item that reflects and drives a Scintilla view
-/// flag. `initial` seeds the check to the persisted state; `toggled`
-/// receives the item's new state on every user toggle.
+/// flag, returning it so the caller can register it for refresh. `initial`
+/// seeds the check to the persisted state; `toggled` receives the item's
+/// new state on every user toggle.
 ///
 /// `set_active` runs before `connect_toggled`, so seeding the restored
-/// state does not fire the handler. No refresh-on-popup is needed either:
-/// nothing outside these items changes wrap / whitespace / EOL
-/// visibility, so the check *is* the state once seeded.
-fn add_check(menu: &gtk::Menu, label: &str, initial: bool, toggled: fn(bool)) {
+/// state does not fire the handler. The item is now also re-synced from
+/// the editor whenever the View menu opens (see [`build_view_menu`]), so
+/// it stays correct even after a toolbar toggle changed the same setting.
+fn add_check(
+    menu: &gtk::Menu,
+    label: &str,
+    initial: bool,
+    toggled: fn(bool),
+) -> gtk::CheckMenuItem {
     let item = gtk::CheckMenuItem::with_mnemonic(label);
     item.set_active(initial);
     item.connect_toggled(move |it| toggled(it.is_active()));
     menu.append(&item);
+    item
 }
 
-fn on_new() {
+pub(crate) fn on_new() {
     with_state(|st| {
         let (shell, mut ui) = st.split();
         shell.new_untitled(&mut ui);
@@ -666,7 +773,7 @@ fn on_new() {
     refresh_tab_chrome();
 }
 
-fn on_open() {
+pub(crate) fn on_open() {
     // Multi-select, mirroring Win32's `OFN_ALLOWMULTISELECT` Open: the
     // user can Ctrl/Shift-click several files and they all open in one
     // dialog. Empty `Vec` on Cancel.
@@ -758,11 +865,11 @@ fn on_reload() {
     drain_shell();
 }
 
-fn on_close() {
+pub(crate) fn on_close() {
     close_active_tab();
 }
 
-fn on_save_all() {
+pub(crate) fn on_save_all() {
     let errors = with_state(|st| {
         let (shell, mut ui) = st.split();
         shell.save_all(&mut ui)
@@ -802,7 +909,7 @@ fn on_save_all() {
     );
 }
 
-fn on_close_all() {
+pub(crate) fn on_close_all() {
     // Loop the single-tab close so each dirty buffer gets its own
     // Save / Don't Save / Cancel prompt and a Cancel stops the rest —
     // matching Win32's `close_multiple_documents`. `close_active_tab`
@@ -830,26 +937,26 @@ fn editor_cmd(msg: u32) {
     });
 }
 
-fn on_undo() {
+pub(crate) fn on_undo() {
     editor_cmd(codepp_scintilla_sys::SCI_UNDO);
     refresh_tab_chrome();
 }
 
-fn on_redo() {
+pub(crate) fn on_redo() {
     editor_cmd(codepp_scintilla_sys::SCI_REDO);
     refresh_tab_chrome();
 }
 
-fn on_cut() {
+pub(crate) fn on_cut() {
     editor_cmd(codepp_scintilla_sys::SCI_CUT);
     refresh_tab_chrome();
 }
 
-fn on_copy() {
+pub(crate) fn on_copy() {
     editor_cmd(codepp_scintilla_sys::SCI_COPY);
 }
 
-fn on_paste() {
+pub(crate) fn on_paste() {
     editor_cmd(codepp_scintilla_sys::SCI_PASTE);
     refresh_tab_chrome();
 }
@@ -863,11 +970,11 @@ fn on_select_all() {
     editor_cmd(codepp_scintilla_sys::SCI_SELECTALL);
 }
 
-fn on_zoom_in() {
+pub(crate) fn on_zoom_in() {
     editor_cmd(codepp_scintilla_sys::SCI_ZOOMIN);
 }
 
-fn on_zoom_out() {
+pub(crate) fn on_zoom_out() {
     editor_cmd(codepp_scintilla_sys::SCI_ZOOMOUT);
 }
 
@@ -905,31 +1012,43 @@ fn apply_view_settings(
     );
 }
 
-fn on_word_wrap(active: bool) {
+/// Mutate the persisted View settings with `f`, apply them to the editor,
+/// then re-sync every indicator. Bails while a refresh is in flight (see
+/// [`refresh_view_indicators`]) so a programmatic `set_active` cannot
+/// re-apply the setting it is only reflecting. Shared by every View
+/// toggle, from either the menu or the toolbar.
+pub(crate) fn toggle_view_setting(f: impl FnOnce(&mut codepp_core::session::ViewSettings)) {
+    if REFRESHING_MARKS.with(std::cell::Cell::get) {
+        return;
+    }
     with_state(|st| {
         let mut view = st.shell.saved_view_settings();
-        view.word_wrap = active;
+        f(&mut view);
         apply_view_settings(&st.editor, view);
         // Persist so the choice survives to the next session save.
         st.shell.set_view_settings(view);
     });
+    refresh_view_indicators();
+}
+
+pub(crate) fn on_word_wrap(active: bool) {
+    toggle_view_setting(|v| v.word_wrap = active);
 }
 
 fn on_show_whitespace(active: bool) {
-    with_state(|st| {
-        let mut view = st.shell.saved_view_settings();
-        view.show_whitespace = active;
-        apply_view_settings(&st.editor, view);
-        st.shell.set_view_settings(view);
-    });
+    toggle_view_setting(|v| v.show_whitespace = active);
 }
 
 fn on_show_eol(active: bool) {
-    with_state(|st| {
-        let mut view = st.shell.saved_view_settings();
-        view.show_eol = active;
-        apply_view_settings(&st.editor, view);
-        st.shell.set_view_settings(view);
+    toggle_view_setting(|v| v.show_eol = active);
+}
+
+/// The toolbar's "Show All Characters" toggle — whitespace *and* EOL
+/// together, matching Win32's combined button.
+pub(crate) fn on_show_all_chars(active: bool) {
+    toggle_view_setting(|v| {
+        v.show_whitespace = active;
+        v.show_eol = active;
     });
 }
 

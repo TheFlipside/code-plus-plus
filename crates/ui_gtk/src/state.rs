@@ -68,6 +68,9 @@ pub struct GtkUiState {
     pub status: StatusBar,
     /// Menu bar, held so the visibility toggles can reach it.
     pub menu_bar: gtk::MenuBar,
+    /// The toolbar, held so its visibility toggle (`NPPM_HIDETOOLBAR`) and
+    /// the split's `is_/set_toolbar_hidden` can reach the live widget.
+    pub toolbar: gtk::Toolbar,
     /// The tab strip. Purely a selector — the one Scintilla view is
     /// its sibling, not its child. See `crate::tabs`.
     pub tabs: TabStrip,
@@ -96,6 +99,7 @@ pub struct GtkUi {
     pub editor: EditorHandle,
     pub status: StatusBar,
     pub menu_bar: gtk::MenuBar,
+    pub toolbar: gtk::Toolbar,
     pub tabs: TabStrip,
 }
 
@@ -108,6 +112,7 @@ impl GtkUiState {
             editor: self.editor,
             status: self.status.clone(),
             menu_bar: self.menu_bar.clone(),
+            toolbar: self.toolbar.clone(),
             tabs: self.tabs.clone(),
         };
         (&mut self.shell, ui)

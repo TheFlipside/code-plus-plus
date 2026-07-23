@@ -47,6 +47,7 @@ mod search;
 mod state;
 mod status;
 mod tabs;
+mod toolbar;
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -174,6 +175,12 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     let menu_bar = menu::build();
     layout.pack_start(&menu_bar, false, false, 0);
 
+    // The toolbar sits between the menu bar and the tab strip, the same
+    // slot Win32 uses. Handlers are wired at build time (they reach the
+    // state through `with_state` when clicked, like the menu items).
+    let toolbar = toolbar::build_toolbar(window.scale_factor());
+    layout.pack_start(&toolbar, false, false, 0);
+
     // The strip sits above the editor as a sibling, not a parent —
     // its pages are empty and collapse to zero height. See `tabs`.
     let tab_strip = tabs::TabStrip::new();
@@ -229,6 +236,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
         shell,
         find_replace: None,
         fif_dock,
+        toolbar: toolbar.clone(),
     }));
     state::install(&st);
 
@@ -267,6 +275,10 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     restore_window_geometry(&window);
     apply_startup_styles();
     menu::connect();
+    // Sync the toolbar's Word Wrap / Show All Characters toggles to the
+    // view settings the View menu just applied — the menu seeds its own
+    // checks, but the toolbar toggles start unpressed until this runs.
+    menu::refresh_view_indicators();
     restore_session(initial_path);
 
     window.connect_delete_event(|_, _| {

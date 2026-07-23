@@ -628,12 +628,9 @@ impl UiPlatform for GtkUi {
 
     // --- Chrome visibility -------------------------------------------
     //
-    // The tab strip is real as of m3, so its pair below reports and
-    // toggles the live widget. There is still no toolbar, so that pair
-    // reports permanently hidden and refuses to change — an honest
-    // answer to `NPPM_ISTOOLBARHIDDEN`, since the bar genuinely is not
-    // shown, and returning the previous state unchanged tells a caller
-    // nothing happened, which is the trait's documented signal.
+    // The tab strip and the toolbar are real, so each pair reports and
+    // toggles its live widget; `set_*` returns the *previous* hidden state
+    // the trait documents as its result.
 
     fn is_tabbar_hidden(&self) -> bool {
         !self.tabs.notebook.is_visible()
@@ -646,11 +643,13 @@ impl UiPlatform for GtkUi {
     }
 
     fn is_toolbar_hidden(&self) -> bool {
-        true
+        !self.toolbar.is_visible()
     }
 
-    fn set_toolbar_hidden(&mut self, _hidden: bool) -> bool {
-        true
+    fn set_toolbar_hidden(&mut self, hidden: bool) -> bool {
+        let prev = !self.toolbar.is_visible();
+        self.toolbar.set_visible(!hidden);
+        prev
     }
 
     fn is_menu_hidden(&self) -> bool {
@@ -815,6 +814,7 @@ mod doc_binding_tests {
             editor,
             status: StatusBar::new(),
             menu_bar: gtk::MenuBar::new(),
+            toolbar: gtk::Toolbar::new(),
             tabs: TabStrip::new(),
         }
     }
@@ -944,6 +944,7 @@ mod doc_binding_tests {
             editor: ui.editor,
             status: ui.status.clone(),
             menu_bar: ui.menu_bar.clone(),
+            toolbar: ui.toolbar.clone(),
             tabs: ui.tabs.clone(),
         }
     }
