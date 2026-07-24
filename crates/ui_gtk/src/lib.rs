@@ -40,6 +40,7 @@
     clippy::cast_sign_loss
 )]
 
+mod docmap;
 mod fif;
 mod menu;
 mod platform;
@@ -214,6 +215,16 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // returned and nothing has unreffed since.
     let sci_widget = unsafe { gtk::Widget::from_glib_none(sci_ptr.cast::<gtk::ffi::GtkWidget>()) };
 
+    // A SECOND Scintilla widget: the Document Map's miniature. Created
+    // once here and, like the main view, never destroyed or reassigned —
+    // it shares each tab's document through `SCI_SETDOCPOINTER` rather
+    // than owning its own, so the single-view lifetime discipline (and
+    // the `single_view_source_invariant` guard) holds for two permanent
+    // views. See `crate::docmap`. `docmap_widget` is named without a
+    // `sci_widget` substring so that guard's scanner treats it as a
+    // distinct binding from the main view.
+    let (docmap_widget, docmap_editor) = build_docmap_miniature()?;
+
     // The editor sits in the upper pane of a vertical splitter; the
     // Find-in-Files results dock is the lower pane, hidden until a search
     // runs. `pack1(resize=true)` lets the editor absorb window resizing
@@ -226,9 +237,16 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // Wrap the editor/dock column in a horizontal splitter whose left
     // pane is the "Folder as Workspace" tree (hidden until a folder is
     // opened) — the horizontal analogue of the FIF dock's vertical one.
-    // The splitter, not the editor column, is what goes into `layout`.
     let workspace = workspace::WorkspacePanel::build(editor_dock_paned.upcast_ref::<gtk::Widget>());
-    layout.pack_start(workspace.paned(), true, true, 0);
+
+    // Wrap the workspace column in a second horizontal splitter whose
+    // right pane is the Document Map (hidden until opened). The docmap
+    // splitter, not the workspace one, is what goes into `layout`.
+    let docmap = docmap::DocMapPanel::build(
+        workspace.paned().upcast_ref::<gtk::Widget>(),
+        &docmap_widget,
+    );
+    layout.pack_start(docmap.paned(), true, true, 0);
 
     let status = StatusBar::new();
     layout.pack_start(&status.container, false, false, 0);
@@ -249,6 +267,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
         sci_widget: sci_widget.clone(),
         sci_ptr,
         editor,
+        docmap_sci: docmap_widget.clone(),
+        docmap_editor,
         status,
         menu_bar,
         tabs: tab_strip.clone(),
@@ -257,6 +277,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
         fif_dock,
         toolbar: toolbar.clone(),
         workspace,
+        docmap,
     }));
     state::install(&st);
 
@@ -284,6 +305,10 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
         if refresh_active_dirty() == DirtyPoll::Changed {
             sync_tab_strip();
         }
+        // Track the main editor's viewport in the Document Map. A no-op
+        // when the map is hidden; when shown it re-centres the miniature
+        // and repaints the orange box for the current visible range.
+        docmap::refresh();
         None
     });
 
@@ -303,6 +328,10 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // Reopen the workspace folder the last session left open (if any and
     // it still exists), sizing and showing the panel to match.
     workspace::apply_saved();
+    // Reopen the Document Map if the last session left it open, sized to
+    // match. Runs after `restore_session` so the miniature binds to the
+    // restored active buffer.
+    docmap::apply_saved();
     // Enumerate installed plugins (records paths only; loading is
     // deferred to the first Plugins-menu open — DESIGN.md §6.4). The app
     // has already staged the bundled plugins into this directory.
@@ -337,6 +366,32 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // After the loop, so the distribution covers the whole session.
     perf.report();
     Ok(())
+}
+
+/// Create the Document Map's miniature Scintilla widget, adopt it into
+/// gtk-rs, capture its direct-call handle, and apply the once-only
+/// read-only-miniature view settings. Returns the widget (a `GObject`
+/// reference the caller must keep alive for the process) and the handle.
+///
+/// Split out of `run` for length. This is the second of the backend's two
+/// permanent Scintilla views (see the `single_view_source_invariant`
+/// guard); it is created here and never destroyed or reassigned.
+fn build_docmap_miniature() -> Result<(gtk::Widget, EditorHandle), GtkUiError> {
+    // SAFETY: `gtk::init` has already succeeded by the time `run` calls
+    // this — `scintilla_new`'s only precondition.
+    let ptr = unsafe { scintilla_new() };
+    if ptr.is_null() {
+        return Err(GtkUiError::ScintillaCreate);
+    }
+    // SAFETY: a non-null widget `scintilla_new` just returned, unreffed by
+    // nothing — `from_glib_none` sinks its floating reference.
+    let widget = unsafe { gtk::Widget::from_glib_none(ptr.cast::<gtk::ffi::GtkWidget>()) };
+    // SAFETY: `ptr` is that same live widget; the returned handle stays
+    // valid as long as the widget the caller holds is not destroyed.
+    let handle =
+        unsafe { EditorHandle::from_gtk_widget(ptr) }.ok_or(GtkUiError::DirectCallCapture)?;
+    docmap::configure_miniature(handle);
+    Ok((widget, handle))
 }
 
 /// Wire the tab strip's two signals to `Shell`.
@@ -1052,6 +1107,10 @@ pub(crate) fn rebind_active_view() {
         shell.bind_active_view(&mut ui);
     });
     refresh_tab_chrome();
+    // Point the Document Map's miniature at whatever buffer ended up
+    // active. A no-op when the map is hidden; a fresh `with_state` borrow,
+    // so it must run after the one above is dropped.
+    docmap::sync_to_active_tab();
 }
 
 /// Show the "Save file 'NAME' ?" Save / Don't Save / Cancel prompt when
@@ -1241,6 +1300,7 @@ pub(crate) fn save_session_now() {
     // `save_session` carries the current root / visibility / width — the
     // same "sync right before every save" discipline `ui_win32` follows.
     workspace::sync_to_shell();
+    docmap::sync_to_shell();
     with_state(|st| {
         let (shell, mut ui) = st.split();
         if let Err(err) = shell.save_session(&mut ui) {
@@ -1410,23 +1470,32 @@ pub(crate) fn refresh_tab_chrome() {
     sync_tab_strip();
 }
 
-/// Guards the single-view model at the source level.
+/// Guards the permanent-view model at the source level.
 ///
 /// `EditorHandle` is `Copy` with no lifetime, so a copy outliving its
 /// Scintilla widget is not a compile error (see the safety note on
 /// `EditorHandle::from_gtk_widget`). What prevents it here is
-/// structural: this backend builds exactly one Scintilla widget, never
-/// destroys it, and gives tabs their own buffers through
-/// `SCI_SETDOCPOINTER` instead of their own views.
+/// structural: this backend builds a **fixed set of Scintilla widgets**,
+/// each created once and never destroyed, and gives tabs their own
+/// buffers through `SCI_SETDOCPOINTER` instead of their own views.
+///
+/// There are exactly **two** such views, and the safety argument is the
+/// same for both: the main editor (`sci_widget`) and the Document Map's
+/// miniature (`docmap_widget`). The count is two rather than one because
+/// a second *permanent* view does not reintroduce the hazard — that
+/// hazard is a view created *per tab* and destroyed when the tab closes,
+/// which would dangle every `EditorHandle` copy. Neither of these two is
+/// per-tab; both live for the whole process, so every copy stays valid.
 ///
 /// That invariant is a property of the source, so a source check is
-/// what can hold it. A runtime test cannot: destroying the view would
+/// what can hold it. A runtime test cannot: destroying a view would
 /// fault inside vendored C++ on the next direct call rather than fail
 /// an assertion, so the failure mode this exists to prevent is exactly
 /// the one a runtime test cannot observe.
 ///
 /// DESIGN.md §7.4 carried this as an open ownership question from the
-/// Phase 5 m1 security audit until the tab strip landed and settled it.
+/// Phase 5 m1 security audit until the tab strip landed and settled it;
+/// the Document Map extended it from one permanent view to two.
 #[cfg(test)]
 mod single_view_source_invariant {
     /// Strip line comments and the contents of string literals, so a
@@ -1491,7 +1560,7 @@ let msg = \"found scintilla_new() calls\";
     }
 
     #[test]
-    fn exactly_one_scintilla_widget_is_ever_created() {
+    fn exactly_two_scintilla_widgets_are_ever_created() {
         let src = production_code();
         assert!(
             src.len() > 5_000,
@@ -1500,32 +1569,46 @@ let msg = \"found scintilla_new() calls\";
         );
         let calls = src.matches("scintilla_new()").count();
         assert_eq!(
-            calls, 1,
-            "this backend must build exactly one Scintilla view — found {calls}. \
-             A view per tab would leave every copied `EditorHandle` dangling when a \
-             tab closes; give tabs their own documents via SCI_SETDOCPOINTER instead."
+            calls, 2,
+            "this backend must build exactly two permanent Scintilla views — the main \
+             editor and the Document Map miniature — found {calls}. Each is created once \
+             and shares tab documents via SCI_SETDOCPOINTER; a *per-tab* view would leave \
+             every copied `EditorHandle` dangling when a tab closes, which is the hazard \
+             this count guards. Adding a third permanent view is fine, but update this."
         );
     }
 
     #[test]
-    fn the_view_is_never_destroyed_or_reassigned() {
+    fn the_views_are_never_destroyed_or_reassigned() {
         let src = production_code();
-        // `let sci_widget = ...` is the one legitimate binding; any
-        // other assignment replaces a live view.
-        let reassigned = src
-            .match_indices("sci_widget =")
-            .filter(|(i, _)| !src[..*i].trim_end().ends_with("let"))
-            .count();
-        assert_eq!(
-            reassigned, 0,
-            "the Scintilla view is reassigned after creation"
-        );
-        for forbidden in ["sci_widget.destroy()", "remove(&sci_widget)"] {
-            assert!(
-                !src.contains(forbidden),
-                "found `{forbidden}`: destroying the view dangles every copy of \
-                 `EditorHandle`, which is `Copy` and carries no lifetime to stop it"
+        // Both permanent views, by every name they are bound under: the
+        // main editor (`sci_widget`, also its state-field name), and the
+        // docmap miniature (`docmap_widget` local, `docmap_sci` field).
+        // The reassignment scan below flags any `<name> =` not preceded by
+        // `let`. Note `docmap_widget` is introduced by a tuple destructure
+        // (`let (docmap_widget, docmap_editor) = ...`), so the substring
+        // `docmap_widget =` never appears for it — its reassignment check
+        // is therefore vacuously clean rather than affirmatively verified;
+        // the substantive guard for it is the `.destroy()`/`remove` scan,
+        // which does hold. A future single-`let` rebind of any name still
+        // trips the reassignment scan.
+        for view in ["sci_widget", "docmap_widget", "docmap_sci"] {
+            let assign = format!("{view} =");
+            let reassigned = src
+                .match_indices(&assign)
+                .filter(|(i, _)| !src[..*i].trim_end().ends_with("let"))
+                .count();
+            assert_eq!(
+                reassigned, 0,
+                "the `{view}` Scintilla view is reassigned after creation"
             );
+            for forbidden in [format!("{view}.destroy()"), format!("remove(&{view})")] {
+                assert!(
+                    !src.contains(&forbidden),
+                    "found `{forbidden}`: destroying a view dangles every copy of \
+                     `EditorHandle`, which is `Copy` and carries no lifetime to stop it"
+                );
+            }
         }
     }
 }

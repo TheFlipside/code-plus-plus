@@ -69,6 +69,16 @@ pub struct GtkUiState {
     /// single-view: tabs switch documents under it via
     /// `SCI_SETDOCPOINTER`, exactly as Win32 does.
     pub editor: EditorHandle,
+    /// The Document Map's miniature Scintilla widget, held for the same
+    /// reason as [`Self::sci_widget`]: a `GObject` reference for the whole
+    /// session so [`Self::docmap_editor`]'s raw pointers never dangle.
+    /// Created once, never destroyed or reassigned — the same discipline
+    /// that lets [`Self::sci_widget`] be safe. See [`crate::docmap`].
+    #[allow(dead_code)]
+    pub docmap_sci: gtk::Widget,
+    /// Direct-call handle for the Document Map's miniature view. Shares
+    /// each tab's document via `SCI_SETDOCPOINTER`; see [`crate::docmap`].
+    pub docmap_editor: EditorHandle,
     /// The 7-part status bar.
     pub status: StatusBar,
     /// Menu bar, held so the visibility toggles can reach it.
@@ -101,6 +111,10 @@ pub struct GtkUiState {
     /// Not part of [`GtkUi`]: no `UiPlatform` method touches it, so it is
     /// reached only through [`with_state`] and stays out of the split.
     pub workspace: crate::workspace::WorkspacePanel,
+    /// The right-side "Document Map" panel: a zoomed-out miniature of the
+    /// active buffer with a translucent orange viewport box. Hidden until
+    /// opened. Reached only through [`with_state`]; see [`crate::docmap`].
+    pub docmap: crate::docmap::DocMapPanel,
 }
 
 /// The `UiPlatform` implementor. Cheap to build; see the module docs.

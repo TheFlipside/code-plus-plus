@@ -250,7 +250,18 @@ fn add_view_tools_macros(
         scale,
         None,
     );
-    disabled_toggle(toolbar, icon!("document-map"), "Document Map", scale);
+    // Document Map is wired: the toggle drives the right-side minimap
+    // panel, kept in step with the View-menu check and the panel's close
+    // button (guarded against the `set_active` feedback loop by
+    // `docmap::syncing`), the same shape as Folder as Workspace below.
+    let docmap = toggle(toolbar, icon!("document-map"), "Document Map", scale);
+    docmap.connect_toggled(|b| {
+        if crate::docmap::syncing() {
+            return;
+        }
+        crate::docmap::set_visible(b.is_active());
+    });
+    crate::docmap::register_toolbar_toggle(docmap);
     disabled_toggle(toolbar, icon!("document-list"), "Document List", scale);
     disabled_toggle(toolbar, icon!("function-list"), "Function List", scale);
     // Folder as Workspace is wired: the toggle drives the side panel, and

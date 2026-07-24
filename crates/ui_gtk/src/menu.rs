@@ -564,6 +564,20 @@ fn build_view_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     menu.append(&workspace);
     crate::workspace::register_menu_check(workspace);
 
+    // Document Map toggle. Like the workspace toggle it tracks a panel's
+    // visibility rather than an editor setting, so it owns its own
+    // check↔toolbar↔panel sync (guarded against the `set_active` feedback
+    // loop by `docmap::syncing`) and stays out of `VIEW_INDICATORS`.
+    let docmap = gtk::CheckMenuItem::with_mnemonic("Document _Map");
+    docmap.connect_toggled(|it| {
+        if crate::docmap::syncing() {
+            return;
+        }
+        crate::docmap::set_visible(it.is_active());
+    });
+    menu.append(&docmap);
+    crate::docmap::register_menu_check(docmap);
+
     menu.connect_show(|_| refresh_view_indicators());
     menu.show_all();
 }
