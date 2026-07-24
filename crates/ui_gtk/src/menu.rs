@@ -43,10 +43,10 @@ struct Entry {
 pub fn build() -> gtk::MenuBar {
     let bar = gtk::MenuBar::new();
     // Order mirrors Notepad++/Win32: File, Edit, Search, View, Encoding,
-    // Language, Plugins, ?. "?" is N++'s Help menu; kept as-is for parity.
-    // The menus Win32 has between Language and Plugins (Settings, Tools,
-    // Macro, Run, Window) are not built yet, so Plugins sits directly after
-    // Language here — their absence just leaves a gap, not a mis-order.
+    // Language, Settings, Plugins, ?. "?" is N++'s Help menu; kept as-is
+    // for parity. The menus Win32 has that GTK doesn't build yet (Tools,
+    // Macro, Run, Window) are omitted, so Plugins sits directly after
+    // Settings here — their absence just leaves a gap, not a mis-order.
     for title in [
         "_File",
         "_Edit",
@@ -54,6 +54,7 @@ pub fn build() -> gtk::MenuBar {
         "_View",
         "E_ncoding",
         "_Language",
+        "Se_ttings",
         "_Plugins",
         "?",
     ] {
@@ -115,8 +116,9 @@ pub fn connect() {
     build_view_menu(&bar, &accel);
     build_encoding_menu(&bar);
     build_language_menu(&bar, &window);
+    build_settings_menu(&bar, &window);
     build_plugins_menu(&bar);
-    build_help_menu(&bar, &accel);
+    build_help_menu(&bar, &accel, &window);
 }
 
 /// Build the Plugins menu. Contents are lazy: the `show` handler loads
@@ -124,7 +126,7 @@ pub fn connect() {
 /// and rebuilds the per-plugin submenus from the loaded set. A greyed
 /// placeholder shows until then (and whenever no plugin is installed).
 fn build_plugins_menu(bar: &gtk::MenuBar) {
-    let Some(menu) = submenu_at(bar, 6, "Plugins") else {
+    let Some(menu) = submenu_at(bar, 7, "Plugins") else {
         return;
     };
     menu.connect_show(crate::plugin::ensure_loaded_and_rebuild);
@@ -952,17 +954,81 @@ fn refresh_active_status() {
     });
 }
 
-fn build_help_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
-    let none = gtk::gdk::ModifierType::empty();
-    let entries = [Entry {
-        label: "_About Code++",
-        accel: Some((key::F1, none)),
-        action: on_about,
-    }];
-    let Some(menu) = submenu_at(bar, 7, "?") else {
+/// Build the Settings menu, mirroring Win32's two entries.
+///
+/// "Preferences…" opens the GTK Preferences dialog (the Recent Files
+/// History pane — the only one wired on either backend so far). "Style
+/// Configurator…" is greyed for now: its Win32 dialog is a ~1000-line
+/// syntax-colour editor whose GTK port is a tracked Phase-5 follow-up.
+fn build_settings_menu(bar: &gtk::MenuBar, window: &gtk::Window) {
+    let Some(menu) = submenu_at(bar, 6, "Settings") else {
         return;
     };
-    populate(&menu, accel, &entries);
+
+    let prefs = gtk::MenuItem::with_mnemonic("_Preferences…");
+    let win = window.clone();
+    prefs.connect_activate(move |_| crate::preferences::show(&win));
+    menu.append(&prefs);
+
+    let style = gtk::MenuItem::with_mnemonic("_Style Configurator…");
+    style.set_sensitive(false);
+    menu.append(&style);
+
+    menu.show_all();
+}
+
+/// Build the ? (Help) menu, mirroring Win32's layout: the three external
+/// links, then the greyed Online Manual placeholder, a separator, the
+/// greyed Update placeholder, a separator, then About (F1). The greyed
+/// entries hold N++-parity slots whose targets aren't wired yet.
+fn build_help_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup, window: &gtk::Window) {
+    let Some(menu) = submenu_at(bar, 8, "?") else {
+        return;
+    };
+
+    // Three external links — each opens a compile-time-fixed URL in the
+    // desktop's default browser via `open_uri`; no user string is ever
+    // passed to the URI handler.
+    for (label, url) in [
+        ("Code++ _Home", HELP_HOME_URL),
+        ("Code++ _Project Page", HELP_PROJECT_URL),
+        ("Code++ _Community (Forum)", HELP_COMMUNITY_URL),
+    ] {
+        let item = gtk::MenuItem::with_mnemonic(label);
+        let win = window.clone();
+        item.connect_activate(move |_| open_uri(&win, url));
+        menu.append(&item);
+    }
+
+    // Online User Manual — greyed placeholder (no manual site yet), same as
+    // Win32's `ID_HELP_MANUAL`. Sits between the links and the first
+    // separator to match the Win32 order.
+    let manual = gtk::MenuItem::with_mnemonic("Code++ Online User _Manual");
+    manual.set_sensitive(false);
+    menu.append(&manual);
+
+    menu.append(&gtk::SeparatorMenuItem::new());
+
+    // Update Code++ — greyed placeholder (no auto-update yet), Win32's
+    // `ID_HELP_UPDATE`.
+    let update = gtk::MenuItem::with_mnemonic("_Update Code++");
+    update.set_sensitive(false);
+    menu.append(&update);
+
+    menu.append(&gtk::SeparatorMenuItem::new());
+
+    // About — the one interactive item with an accelerator (F1).
+    let about = gtk::MenuItem::with_mnemonic("_About Code++");
+    about.connect_activate(|_| on_about());
+    about.add_accelerator(
+        "activate",
+        accel,
+        *key::F1,
+        gtk::gdk::ModifierType::empty(),
+        gtk::AccelFlags::VISIBLE,
+    );
+    menu.append(&about);
+
     menu.show_all();
 }
 
@@ -1290,9 +1356,14 @@ pub(crate) fn on_show_all_chars(active: bool) {
     });
 }
 
-/// Code++ home page, the About dialog's website link. Mirrors
-/// `ui_win32`'s `HELP_HOME_URL`; the two backends must agree.
+/// Code++ home page, the About dialog's website link and the ? →
+/// "Code++ Home" entry. Mirrors `ui_win32`'s `HELP_HOME_URL`; the two
+/// backends must agree.
 const HELP_HOME_URL: &str = "https://code-plus-plus.org/";
+/// ? → "Code++ Project Page". Mirrors `ui_win32`'s `HELP_PROJECT_URL`.
+const HELP_PROJECT_URL: &str = "https://github.com/TheFlipside/code-plus-plus";
+/// ? → "Code++ Community (Forum)". Mirrors `ui_win32`'s `HELP_COMMUNITY_URL`.
+const HELP_COMMUNITY_URL: &str = "https://community.code-plus-plus.org/";
 
 fn on_about() {
     let parent = with_state(|st| st.window.clone());

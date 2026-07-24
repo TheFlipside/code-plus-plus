@@ -45,6 +45,7 @@ mod fif;
 mod menu;
 mod platform;
 mod plugin;
+mod preferences;
 mod search;
 mod state;
 mod status;
