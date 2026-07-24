@@ -313,12 +313,13 @@ impl UiPlatform for GtkUi {
             Eol::Lf | Eol::Mixed => SC_EOL_LF,
         };
         self.editor.send(SCI_SETEOLMODE, mode, 0);
-        // `language_name` is the same string the Language menu shows.
-        // UDL ids are not in LANG_TABLE, so they fall back rather than
-        // showing a blank part.
-        let lang_label = lang.language_name().unwrap_or("Normal Text");
+        // Resolve the language label: a UDL id shows the UDL's own name
+        // (from the registry), a built-in shows its `language_name`, both
+        // falling back to "Normal Text". Mirrors Win32's `resolve_lang_label`
+        // so a UDL buffer doesn't read as "Normal Text" while UDL-styled.
+        let lang_label = crate::udl::resolve_lang_label(lang, self.udl_registry);
         self.status
-            .set_static_parts(lang_label, eol.long_label(), encoding.label());
+            .set_static_parts(&lang_label, eol.long_label(), encoding.label());
         self.refresh_dynamic_status();
     }
 
@@ -331,16 +332,17 @@ impl UiPlatform for GtkUi {
     }
 
     fn apply_lang(&mut self, lang: LangType) {
-        // UDL buffers need the container-lexer path, which is Phase 4.6
-        // work not yet ported to GTK. Falling through to the Lexilla
-        // path would land them in its plain-text fallback, which is the
-        // correct degradation — but say so, rather than looking like
-        // the theme table is broken.
-        if codepp_udl::is_udl_lang_id(lang.as_npp_id()) {
-            tracing::warn!(
-                lang = lang.as_npp_id(),
-                "UDL highlighting is not wired on GTK yet; rendering as plain text"
-            );
+        // UDL buffers take the container-lexer path (SCLEX_CONTAINER +
+        // host-side `SCN_STYLENEEDED` painting via `crate::udl`); every
+        // other language uses the shared Lexilla theme table. `apply_lang`
+        // returns `false` for a non-UDL id, falling through below.
+        if crate::udl::apply_lang(&self.editor, self.udl_registry, lang) {
+            // Re-assert the built-in number margin: the UDL path routes
+            // through `apply_default_styles`, which resets margin 0 to
+            // `SC_MARGIN_TEXT` for Win32's manual renderer — same fixup the
+            // Lexilla branch below needs.
+            self.editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
+            return;
         }
         codepp_editor::theme::apply_lang_theme(&self.editor, lang);
         // `apply_lang_theme` routes through `apply_default_styles`, which
@@ -816,6 +818,10 @@ mod doc_binding_tests {
             menu_bar: gtk::MenuBar::new(),
             toolbar: gtk::Toolbar::new(),
             tabs: TabStrip::new(),
+            // Tests here don't exercise the UDL path; a null registry
+            // pointer is never dereferenced (apply_lang short-circuits on
+            // non-UDL ids before reaching it).
+            udl_registry: std::ptr::null(),
         }
     }
 
@@ -946,6 +952,7 @@ mod doc_binding_tests {
             menu_bar: ui.menu_bar.clone(),
             toolbar: ui.toolbar.clone(),
             tabs: ui.tabs.clone(),
+            udl_registry: ui.udl_registry,
         }
     }
 

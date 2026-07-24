@@ -97,7 +97,12 @@ mod print;
 mod print_preview;
 mod toolbar;
 mod udl_editor;
-mod udl_paint;
+
+// UDL container-lexer painting was lifted to `codepp_editor::udl_paint`
+// (Phase 5) so the GTK/Cocoa backends share one copy — the same move the
+// lexer-theme table made. Aliased so the existing `udl_paint::` call sites
+// resolve unchanged.
+use codepp_editor::udl_paint;
 
 use core::ffi::c_void;
 use std::collections::HashMap;
@@ -2171,7 +2176,7 @@ impl UiPlatform for Win32Ui {
         // into the plain-text fallback. `apply_udl_lang` puts Scintilla
         // in container-lexer mode, where styling arrives as
         // `SCN_STYLENEEDED` notifications that the WM_NOTIFY handler
-        // dispatches to `udl_paint::paint_udl_range`.
+        // dispatches to `udl_paint::paint_style_needed`.
         if codepp_udl::is_udl_lang_id(lang.as_npp_id()) {
             self.apply_udl_lang(lang);
             return;
@@ -3692,49 +3697,11 @@ impl Win32Ui {
         // Container-lexer mode: no Lexilla lexer attached. Every
         // subsequent `SCN_STYLENEEDED` on this document fires
         // through the WM_NOTIFY dispatch in `main_wnd_proc` and
-        // routes to `udl_paint::paint_udl_range`.
-        //
-        // **Why the paint below is bounded rather than full-
-        // document.** `clear_lexer()` doesn't reset Scintilla's
-        // `endStyled` cursor (verified against
-        // `vendor/scintilla/src/Document.cxx:65-67` —
-        // `SCI_SETILEXER(0, 0)` swaps only the lexer pointer
-        // and leaves `endStyled` alone). Without an explicit
-        // paint the previously-Lexilla-styled bytes keep their
-        // old style indices — which now point at the freshly-
-        // cleared per-style palette we just installed above —
-        // producing visually-empty styling for the whole
-        // document until the user scrolls. So an initial
-        // paint IS required.
-        //
-        // But full-document paint here would violate DESIGN.md
-        // §8's UI-never-blocks constraint on the tens-of-MB
-        // range. Instead we cap the synchronous initial paint
-        // at [`INITIAL_PAINT_CAP`] bytes; the rest fills in
-        // via `SCN_STYLENEEDED` as the user scrolls. 64 KiB
-        // comfortably covers viewport-sized files AND the
-        // visible window on multi-MB files, and the m1c-2
-        // tokeniser is linear-time so this bounds the initial-
-        // paint wall clock deterministically.
-        self.editor.clear_lexer();
-        apply_default_styles(&self.editor);
-        udl_paint::apply_udl_styles(&self.editor, &styles);
-        const INITIAL_PAINT_CAP: usize = 64 * 1024;
-        let doc_len = self.editor.send(SCI_GETLENGTH, 0, 0).max(0) as usize;
-        let cap = doc_len.min(INITIAL_PAINT_CAP);
-        // Align to end-of-line so the tokeniser doesn't see a
-        // mid-line partial delimiter span at the cap.
-        let end_line = self.editor.line_from_position(cap);
-        let paint_end = self
-            .editor
-            .position_from_line(end_line + 1)
-            .unwrap_or(doc_len)
-            .min(doc_len);
-        if paint_end > 0 {
-            if let Some(bytes) = self.editor.get_range_bytes(0, paint_end) {
-                udl_paint::paint_udl_range(&self.editor, &compiled_rules, 0, &bytes);
-            }
-        }
+        // routes to `udl_paint::paint_style_needed`. The shared
+        // helper puts Scintilla in container mode, installs the
+        // palette, and does the bounded initial paint (see its
+        // docstring for the `endStyled` / §8 rationale).
+        udl_paint::apply_udl_lang(&self.editor, &styles, &compiled_rules);
     }
 
     /// Capture every piece of view state that `SCI_SETDOCPOINTER`
@@ -5157,41 +5124,12 @@ unsafe fn handle_udl_style_needed(hwnd: HWND, target: usize) {
     // DESIGN.md §8 keystroke-budget rationale.
     let compiled = std::sync::Arc::clone(&entry.compiled);
     let editor = state.editor;
-    // Compute line-aligned tokenise range. See
-    // `udl_paint::line_aligned_range` for the discipline.
-    let (range_start, range_end) = udl_paint::line_aligned_range(&editor, target);
-    if range_end <= range_start {
-        // Nothing to style (empty range or one that inverted
-        // under document-length clamping). Skip cleanly.
-        return;
-    }
-    // **Per-notification paint cap** — reviewer-required DoS
-    // defence. A plugin or a stray `SCI_COLOURISE(0, -1)` can
-    // fire `SCN_STYLENEEDED` with `position` = whole-document,
-    // and Scintilla synchronously blocks the UI thread until
-    // the handler returns. Cap the per-call paint at 64 KiB
-    // (line-aligned). Each `SCI_SETSTYLING` advances Scintilla's
-    // `endStyled`, so any bytes past the cap trigger a fresh
-    // `SCN_STYLENEEDED` on Scintilla's next paint iteration.
-    // The tokeniser is linear-time; 64 KiB is well inside
-    // DESIGN.md §8's keystroke budget.
-    const MAX_TOKENISE_RANGE: usize = 64 * 1024;
-    let capped_end = range_start
-        .saturating_add(MAX_TOKENISE_RANGE)
-        .min(range_end);
-    // Re-align to end-of-line so a mid-line cap doesn't produce
-    // a partial-delimiter tail.
-    let capped_line = editor.line_from_position(capped_end);
-    let doc_len = editor.send(SCI_GETLENGTH, 0, 0).max(0) as usize;
-    let capped_range_end = editor
-        .position_from_line(capped_line + 1)
-        .unwrap_or(doc_len)
-        .min(range_end);
-    let range_len = capped_range_end - range_start;
-    let Some(bytes) = editor.get_range_bytes(range_start, range_len) else {
-        return;
-    };
-    udl_paint::paint_udl_range(&editor, &compiled, range_start, &bytes);
+    // `state`'s borrow ends at the line above (its last use), so the
+    // paint below runs with no live `&WindowState` — mandatory, because
+    // each `SCI_SETSTYLING` fires a reentrant `SCN_MODIFIED` that
+    // re-enters this WM_NOTIFY dispatcher. The shared helper does the
+    // line-aligned range + 64 KiB per-call cap + paint; see its docstring.
+    udl_paint::paint_style_needed(&editor, &compiled, target);
 }
 
 /// # Safety

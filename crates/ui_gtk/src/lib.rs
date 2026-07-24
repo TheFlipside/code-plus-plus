@@ -50,6 +50,7 @@ mod state;
 mod status;
 mod tabs;
 mod toolbar;
+mod udl;
 mod workspace;
 
 use std::cell::{Cell, RefCell};
@@ -281,36 +282,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     }));
     state::install(&st);
 
-    // Scintilla reports caret moves, edits and save-point transitions
-    // through its own `sci-notify` GObject signal (declared in
-    // `ScintillaWidget.h` as `SCINTILLA_NOTIFY`), which is the GTK
-    // analogue of Win32's `WM_NOTIFY`. The payload is ignored on
-    // purpose: m2 only needs "something changed, resync the chrome",
-    // and refreshing unconditionally is both simpler and cheaper than
-    // unpacking `SCNotification` — the refresh is a handful of
-    // direct-calls plus label writes GTK elides when the text is
-    // unchanged, so it stays far inside the §8 keystroke budget.
-    // Milestones that need to distinguish notification codes (UDL
-    // container styling needs `SCN_STYLENEEDED`) will unpack it then.
-    sci_widget.connect_local("sci-notify", false, |_| {
-        with_state(|st| {
-            let (_, ui) = st.split();
-            ui.refresh_dynamic_status();
-        });
-        // Resync the strip only when the dirty marker actually flips —
-        // twice per edit session (first keystroke after a save, and
-        // the save itself), not on every caret move. `sync` rebuilds
-        // each tab's label widget, which is far too much to do per
-        // notification.
-        if refresh_active_dirty() == DirtyPoll::Changed {
-            sync_tab_strip();
-        }
-        // Track the main editor's viewport in the Document Map. A no-op
-        // when the map is hidden; when shown it re-centres the miniature
-        // and repaints the orange box for the current visible range.
-        docmap::refresh();
-        None
-    });
+    connect_sci_notify(&sci_widget);
 
     connect_file_drop(&window, &sci_widget);
 
@@ -366,6 +338,57 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // After the loop, so the distribution covers the whole session.
     perf.report();
     Ok(())
+}
+
+/// Wire the two `sci-notify` handlers. Split out of `run` for length.
+///
+/// Scintilla reports caret moves, edits and save-point transitions through
+/// its own `sci-notify` `GObject` signal (declared in `ScintillaWidget.h`
+/// as `SCINTILLA_NOTIFY`), the GTK analogue of Win32's `WM_NOTIFY`.
+///
+/// Two handlers, deliberately separate:
+///   1. Chrome resync — ignores the payload; refreshing unconditionally is
+///      cheaper than unpacking `SCNotification`, and the work (a few
+///      direct-calls + label writes GTK elides when unchanged, plus a
+///      docmap repaint that no-ops when hidden) stays inside the §8 budget.
+///   2. UDL container styling — unpacks the payload and, only on
+///      `SCN_STYLENEEDED`, drives the host-side tokeniser (`crate::udl`).
+///      Kept apart so the hot styling path unpacks the payload only when it
+///      must and its borrow-drop discipline (see `udl::on_style_needed`)
+///      stays isolated.
+fn connect_sci_notify(sci_widget: &gtk::Widget) {
+    sci_widget.connect_local("sci-notify", false, |values| {
+        // A UDL container-lexer paint fires an `SCN_MODIFIED(ChangeStyle)`
+        // per `SCI_SETSTYLING`; skip those so one capped paint doesn't
+        // re-run this whole resync once per token. See
+        // `is_style_only_modification`.
+        if is_style_only_modification(values) {
+            return None;
+        }
+        with_state(|st| {
+            let (_, ui) = st.split();
+            ui.refresh_dynamic_status();
+        });
+        // Resync the strip only when the dirty marker actually flips —
+        // twice per edit session (first keystroke after a save, and the
+        // save itself), not on every caret move. `sync` rebuilds each tab's
+        // label widget, far too much to do per notification.
+        if refresh_active_dirty() == DirtyPoll::Changed {
+            sync_tab_strip();
+        }
+        // Track the main editor's viewport in the Document Map. A no-op when
+        // the map is hidden; when shown it re-centres the miniature and
+        // repaints the orange box for the current visible range.
+        docmap::refresh();
+        None
+    });
+
+    sci_widget.connect_local("sci-notify", false, |values| {
+        if let Some(position) = style_needed_position(values) {
+            udl::on_style_needed(position);
+        }
+        None
+    });
 }
 
 /// Create the Document Map's miniature Scintilla widget, adopt it into
@@ -551,6 +574,65 @@ fn notification_code(values: &[glib::Value]) -> Option<u32> {
     // SAFETY: non-null, and points at a live `SCNotification` for the
     // duration of this handler.
     Some(unsafe { (*header).code })
+}
+
+/// The `position` field of an `SCN_STYLENEEDED` emission — the byte offset
+/// up to which Scintilla wants container-lexer styling — or `None` for any
+/// other notification. Companion to [`notification_code`], but views the
+/// payload through its `Sci_NotificationText` prefix so `position` is
+/// reachable (the same trick [`dropped_uri_list`] uses for `text`).
+fn style_needed_position(values: &[glib::Value]) -> Option<usize> {
+    let payload = values.last()?;
+    // SAFETY: same as `notification_code` — the boxed payload is an
+    // `SCNotification*`; its `#[repr(C)]` prefix `Sci_NotificationText`
+    // exposes `nmhdr` then `position`. Read only for the duration of this
+    // synchronous handler; Scintilla owns the allocation.
+    let notif = unsafe {
+        glib::gobject_ffi::g_value_get_boxed(payload.as_ptr())
+            .cast::<codepp_scintilla_sys::Sci_NotificationText>()
+    };
+    if notif.is_null() {
+        return None;
+    }
+    // SAFETY: non-null, live for this handler.
+    let notif = unsafe { &*notif };
+    if notif.nmhdr.code != codepp_scintilla_sys::SCN_STYLENEEDED {
+        return None;
+    }
+    // `position` is a `Sci_Position` (isize); a negative value would be a
+    // Scintilla contract violation — treat it as "nothing to style".
+    usize::try_from(notif.position).ok()
+}
+
+/// True iff the emission is an `SCN_MODIFIED` carrying *only* a style /
+/// marker change (no text insert or delete). The UDL container lexer fires
+/// one such notification per `SCI_SETSTYLING` during a paint, so the
+/// generic chrome-resync handler skips these — otherwise a single capped
+/// 64 KiB paint would re-run the status-bar / dirty / docmap refresh
+/// reentrantly once per token. A style change moves no caret, flips no
+/// dirty bit (Scintilla does not mark the document modified for styling),
+/// and scrolls nothing, so nothing there needs to react. Mirrors Win32's
+/// `modtype & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT)` gate.
+fn is_style_only_modification(values: &[glib::Value]) -> bool {
+    let Some(payload) = values.last() else {
+        return false;
+    };
+    // SAFETY: same boxed-`SCNotification` contract as `notification_code`.
+    let notif = unsafe {
+        glib::gobject_ffi::g_value_get_boxed(payload.as_ptr())
+            .cast::<codepp_scintilla_sys::Sci_NotificationText>()
+    };
+    if notif.is_null() {
+        return false;
+    }
+    // SAFETY: non-null, live for this handler.
+    let notif = unsafe { &*notif };
+    if notif.nmhdr.code != codepp_scintilla_sys::SCN_MODIFIED {
+        return false;
+    }
+    let text_change =
+        codepp_scintilla_sys::SC_MOD_INSERTTEXT | codepp_scintilla_sys::SC_MOD_DELETETEXT;
+    notif.modification_type & text_change == 0
 }
 
 /// Read the dropped `text/uri-list` out of an `SCN_URIDROPPED` emission;

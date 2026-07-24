@@ -17,4 +17,5 @@ name = "codepp_editor"
 [dependencies]
 codepp-core = { workspace = true }
 codepp-scintilla-sys = { workspace = true }
+codepp-udl = { workspace = true }
 tracing = { workspace = true }

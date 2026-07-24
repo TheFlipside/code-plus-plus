@@ -128,12 +128,34 @@ pub struct GtkUi {
     pub menu_bar: gtk::MenuBar,
     pub toolbar: gtk::Toolbar,
     pub tabs: TabStrip,
+    /// Read-only pointer to `Shell.udl_registry` for the UDL
+    /// container-lexer path. `apply_lang` runs inside a `drain` (the split
+    /// `&mut Shell` borrow is live), so it can't reach the registry through
+    /// `with_state`; this raw pointer is the same escape hatch
+    /// `Win32Ui.udl_registry` uses.
+    ///
+    /// **Aliasing discipline** (mirrors `Win32Ui::udl_registry`). Today the
+    /// registry is populated once at `Shell::new` and never mutated on GTK
+    /// (the UDL editor modal — Phase 4.6 m3 — is not yet ported here), so
+    /// every read through this pointer is shared and never races the
+    /// `&mut Shell` the split hands out. When the GTK UDL editor *does*
+    /// land, its "save UDL → rescan" must mutate `shell.udl_registry`
+    /// through `with_state` **only** (no `GtkUi` on the stack), so this
+    /// pointer never observes a `&mut UdlRegistry`. Win32 relies on the
+    /// same hand-maintained discipline — see its field doc.
+    pub udl_registry: *const codepp_udl::UdlRegistry,
 }
 
 impl GtkUiState {
     /// Split into a `(shell, ui-platform)` pair so `shell.drain(ui)`
     /// can be called without aliasing `&mut self`.
     pub fn split(&mut self) -> (&mut Shell, GtkUi) {
+        // SAFETY of `&raw const`: the pointer is created without forming a
+        // reference, so it doesn't conflict with the `&mut self.shell`
+        // returned below. It is only dereferenced (read-only) later while a
+        // `GtkUi` is in scope, and the registry is never mutated after
+        // `Shell::new`. Same pattern as `Win32Ui`'s `udl_registry` capture.
+        let udl_registry = &raw const self.shell.udl_registry;
         let ui = GtkUi {
             window: self.window.clone(),
             editor: self.editor,
@@ -141,6 +163,7 @@ impl GtkUiState {
             menu_bar: self.menu_bar.clone(),
             toolbar: self.toolbar.clone(),
             tabs: self.tabs.clone(),
+            udl_registry,
         };
         (&mut self.shell, ui)
     }

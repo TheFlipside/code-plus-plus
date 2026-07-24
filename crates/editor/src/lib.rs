@@ -51,6 +51,11 @@
 // whole table is unreachable anyway.
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub mod theme;
+/// UDL container-lexer painting, shared by every UI backend. Gated to the
+/// platforms that build a real editor for the same reason as [`theme`]
+/// (it calls [`theme::apply_default_styles`]); macOS has no backend yet.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+pub mod udl_paint;
 
 use core::ffi::c_void;
 
