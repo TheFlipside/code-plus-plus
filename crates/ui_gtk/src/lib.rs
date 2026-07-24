@@ -1306,6 +1306,12 @@ fn save_confirm_dialog(name: &str) -> gtk::ResponseType {
 /// of the process. Order matters — release *before* rebinding, while the
 /// view still holds its own implicit reference, so the document cannot
 /// be freed out from under the view mid-call.
+///
+/// Closing the *last* tab restores the "always at least one tab"
+/// invariant by opening a fresh "new 1" via `new_untitled` (Win32's
+/// `ensure_one_tab`), not a tab-less placeholder — see the inline comment
+/// at that branch for why, and for the refcount hand-off between the
+/// just-released doc and the new tab's document.
 pub(crate) fn close_active_tab() -> bool {
     let proceed;
     {
@@ -1330,42 +1336,28 @@ pub(crate) fn close_active_tab() -> bool {
                     });
                 }
             }
-            // With no tabs left the view would still show the closed
-            // buffer, so give it a fresh empty document to sit on.
+            // Closing the *last* tab must leave a fresh "new 1" untitled
+            // buffer, not a tab-less placeholder document. A placeholder
+            // with no backing `Tab` is the "null" state: the tab strip
+            // (which paints from `shell.tabs`) collapses to nothing, and
+            // because nothing tracks the buffer, typing into it and hitting
+            // Ctrl+W discards the edits with no Save prompt. `new_untitled`
+            // creates a real, tracked, saveable tab — the GTK equivalent of
+            // Win32's `ensure_one_tab`. (No document leak: the new doc is
+            // owned by the new `Tab` and released when that tab is itself
+            // closed through the release path above.)
             let has_active = with_state(|st| st.shell.active_tab.is_some()).unwrap_or(false);
-            if has_active {
-                rebind_active_view();
-            } else {
+            if !has_active {
                 with_state(|st| {
-                    let (_, mut ui) = st.split();
-                    let placeholder = codepp_shell::UiPlatform::activate_tab(&mut ui, 0, 0);
-                    codepp_shell::UiPlatform::set_buffer_text(&mut ui, "", 0);
-                    // Release immediately, unlike every other freshly-created
-                    // document. Elsewhere the new pointer is written onto a
-                    // `Tab.scintilla_doc`, and that tab owns Code++'s reference
-                    // until it is itself closed through this function. This
-                    // placeholder has no tab — `shell.tabs` is empty by
-                    // construction in this branch — so nothing would ever
-                    // release it, and closing the last tab would leak a
-                    // document for the rest of the process.
-                    //
-                    // Refcount walk, matching `ui_win32`'s placeholder path:
-                    // CREATEDOCUMENT gives 1 (ours), SETDOCPOINTER makes it 2
-                    // (view AddRefs), RELEASEDOCUMENT here drops it back to 1 —
-                    // just the view's implicit reference. The next
-                    // SETDOCPOINTER, from a future open's `activate_tab`, drops
-                    // that last one and frees it cleanly.
-                    //
-                    // Guarded on non-zero: `SCI_CREATEDOCUMENT` returns 0 on
-                    // allocation failure, and releasing null is not part of
-                    // Scintilla's published ABI contract.
-                    if placeholder != 0 {
-                        st.editor
-                            .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, placeholder);
-                    }
+                    let (shell, mut ui) = st.split();
+                    shell.new_untitled(&mut ui);
                 });
-                refresh_tab_chrome();
             }
+            // Bind the view to whatever tab is now active — the surviving
+            // tab, or the "new 1" just created. `rebind_active_view` also
+            // repoints the Document Map's miniature, so it stops showing the
+            // just-closed file and follows the now-active (empty) buffer.
+            rebind_active_view();
         }
     }
 
