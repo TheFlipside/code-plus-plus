@@ -122,8 +122,8 @@ use codepp_editor::theme::{
 };
 use codepp_plugin_host::ffi::SCNotification;
 use codepp_plugin_host::{
-    Notification, NppData, PluginAdminEntry, NPPMSG, NPPMSG_RANGE, PLUGIN_ALLOC_CMD_LIMIT,
-    PLUGIN_CMD_ID_BASE, RUNCOMMAND_RANGE, RUNCOMMAND_USER,
+    Notification, NppData, PluginAdminEntry, CODEPPMSG, CODEPPMSG_RANGE, NPPMSG, NPPMSG_RANGE,
+    PLUGIN_ALLOC_CMD_LIMIT, PLUGIN_CMD_ID_BASE, RUNCOMMAND_RANGE, RUNCOMMAND_USER,
 };
 use codepp_scintilla_sys::{
     ScintillaDirectFunction, Scintilla_RegisterClasses, CARETSTYLE_INVISIBLE, SCI_ADDUNDOACTION,
@@ -3606,6 +3606,58 @@ impl UiPlatform for Win32Ui {
             return;
         }
         self.editor.send(SCI_ADDUNDOACTION, 0, 0);
+    }
+
+    fn set_clipboard(&mut self, payloads: &[codepp_shell::ClipboardData]) -> bool {
+        use codepp_shell::ClipboardData;
+        // Encode each abstract format into its Win32 clipboard blob
+        // (each NUL-terminated as its format expects), then set them all
+        // in one Open/Empty/Close pass so a pasting app picks the
+        // richest format it understands. The CF_HTML byte-offset
+        // envelope is applied *here* — that wrapping is a Win32
+        // clipboard concern, so the exporter plugin never sees it.
+        let mut blobs: Vec<(u32, Vec<u8>)> = Vec::with_capacity(payloads.len());
+        for payload in payloads {
+            match payload {
+                ClipboardData::Plain(bytes) => {
+                    let text = String::from_utf8_lossy(bytes);
+                    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+                    let mut buf = Vec::with_capacity(wide.len() * 2);
+                    for unit in wide {
+                        buf.extend_from_slice(&unit.to_ne_bytes());
+                    }
+                    blobs.push((u32::from(CF_UNICODETEXT_U16), buf));
+                }
+                ClipboardData::Html(bytes) => {
+                    let fmt = cf_html_format();
+                    if fmt != 0 {
+                        let html = String::from_utf8_lossy(bytes);
+                        let mut buf = build_cf_html(&html).into_bytes();
+                        buf.push(0);
+                        blobs.push((fmt, buf));
+                    }
+                }
+                ClipboardData::Rtf(bytes) => {
+                    let fmt = cf_rtf_format();
+                    if fmt != 0 {
+                        let mut buf = bytes.clone();
+                        buf.push(0);
+                        blobs.push((fmt, buf));
+                    }
+                }
+            }
+        }
+        if blobs.is_empty() {
+            return false;
+        }
+        // Any of the app's windows can own the clipboard; the top-level
+        // frame is the natural owner. `GetAncestor(GA_ROOT)` avoids
+        // carrying a separate main-HWND field on `Win32Ui`.
+        use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GA_ROOT};
+        // SAFETY: `status_hwnd` is a live child of the main frame on this
+        // UI thread; `GetAncestor` returns the top-level owner.
+        let owner = unsafe { GetAncestor(self.status_hwnd, GA_ROOT) };
+        unsafe { set_clipboard_blobs(owner, &blobs) }
     }
 }
 
@@ -7661,6 +7713,68 @@ pub(crate) fn show_error_dialog(main_hwnd: HWND, title: &str, message: &str) {
     }
 }
 
+/// Present one queued [`PendingDialog`] on the Win32 UI thread. Called
+/// with **no** `WindowState` borrow held (each arm reacquires state via
+/// `state_from_hwnd` as needed) so the modal pumps it spins are safe.
+/// Shared by the `WM_APP_WAKE` drain and the post-plugin-command drain.
+fn present_pending_dialog(hwnd: HWND, dialog: PendingDialog) {
+    match dialog {
+        PendingDialog::ConfirmReload(path) => {
+            if show_reload_dialog(hwnd, &path) {
+                // SAFETY: called on the UI thread with no aliasing
+                // `WindowState` borrow live (the drain's borrow ended
+                // before this fn was called).
+                if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+                    state.shell.confirm_reload(path);
+                }
+            }
+        }
+        PendingDialog::Error { title, message } => {
+            show_error_dialog(hwnd, &title, &message);
+        }
+        PendingDialog::SaveExport {
+            data,
+            suggested_name,
+            kind,
+        } => {
+            // Deferred handler for a plugin's CODEPPM_EXPORTSAVEDIALOG:
+            // pop a Save-As dialog seeded from the kind's filter, write
+            // the bytes, and report on the status bar. Cancel is silent.
+            let (desc, glob, default_ext) = kind.dialog_filter();
+            let seed = if suggested_name.is_empty() {
+                if default_ext.is_empty() {
+                    "export".to_owned()
+                } else {
+                    format!("export.{default_ext}")
+                }
+            } else {
+                suggested_name
+            };
+            // Kind-specific filter (e.g. "HTML Files (*.html)"), with an
+            // All-Files fallback — same shape the GTK backend builds.
+            let filter: Vec<u16> = format!("{desc}\0{glob}\0All Files (*.*)\0*.*\0\0")
+                .encode_utf16()
+                .collect();
+            let ext_opt = (!default_ext.is_empty()).then_some(default_ext);
+            let Some(path) = prompt_save_path_filtered(hwnd, Some(&seed), &filter, ext_opt) else {
+                return; // cancelled — leave the prior status line intact
+            };
+            let msg = match std::fs::write(&path, &data) {
+                Ok(()) => format!("Export: wrote {}", sanitize_path_for_display(&path)),
+                Err(e) => format!(
+                    "Export failed: {}",
+                    sanitize_str_for_display(&e.to_string())
+                ),
+            };
+            // SAFETY: as above — UI thread, no live aliasing borrow.
+            if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+                let (_shell, mut ui) = state.split();
+                ui.set_plugin_status(0, &msg);
+            }
+        }
+    }
+}
+
 /// File-open / file-save filter strings the OS dialog displays in
 /// the "Files of type" combo box. Win32 expects pairs of
 /// NUL-terminated wide strings (display label, glob) terminated
@@ -7835,7 +7949,21 @@ fn parse_ofn_multi_select_buffer(buf: &[u16]) -> Vec<PathBuf> {
 /// directories at the dialog level rather than letting the save
 /// fail later with a less helpful error.
 fn prompt_save_path(owner: HWND, default_name: Option<&str>) -> Option<PathBuf> {
-    let filter = build_dialog_filter();
+    prompt_save_path_filtered(owner, default_name, &build_dialog_filter(), None)
+}
+
+/// Like [`prompt_save_path`] but with a caller-supplied file-type
+/// `filter` (a double-NUL pair list, same wire format as
+/// [`build_dialog_filter`]) and an optional `default_ext` that the OS
+/// appends when the user types a name without one. Used by the plugin
+/// export flow so the Save-As dialog shows an "HTML Files (*.html)" /
+/// "RTF Files (*.rtf)" filter, matching the GTK backend.
+fn prompt_save_path_filtered(
+    owner: HWND,
+    default_name: Option<&str>,
+    filter: &[u16],
+    default_ext: Option<&str>,
+) -> Option<PathBuf> {
     let mut path = vec![0u16; MAX_PATH as usize + 1];
     if let Some(name) = default_name {
         // Pre-fill the file-name edit field. Truncate to MAX_PATH
@@ -7857,6 +7985,11 @@ fn prompt_save_path(owner: HWND, default_name: Option<&str>) -> Option<PathBuf> 
         path[len] = 0;
     }
 
+    // `lpstrDefExt` must stay alive for the GetSaveFileNameW call, so
+    // bind the wide buffer here in the caller's frame.
+    let def_ext_buf: Option<Vec<u16>> =
+        default_ext.map(|e| e.encode_utf16().chain(std::iter::once(0)).collect());
+
     let mut ofn = OPENFILENAMEW {
         lStructSize: core::mem::size_of::<OPENFILENAMEW>() as u32,
         hwndOwner: owner,
@@ -7864,6 +7997,9 @@ fn prompt_save_path(owner: HWND, default_name: Option<&str>) -> Option<PathBuf> 
         lpstrFile: PWSTR(path.as_mut_ptr()),
         nMaxFile: path.len() as u32,
         nFilterIndex: 1,
+        lpstrDefExt: def_ext_buf
+            .as_ref()
+            .map_or(PCWSTR::null(), |b| PCWSTR(b.as_ptr())),
         // See `prompt_open_path` for why OFN_NOCHANGEDIR is mandatory.
         Flags: OFN_OVERWRITEPROMPT
             | OFN_PATHMUSTEXIST
@@ -10728,6 +10864,171 @@ unsafe fn copy_text_to_clipboard(owner: HWND, text: &str) {
 /// this one call). The value is fixed at 13 by the Win32 API
 /// and has been since Windows 3.1.
 const CF_UNICODETEXT_U16: u16 = 13;
+
+/// Registered "HTML Format" (`CF_HTML`) clipboard id, cached per
+/// process. `0` on registration failure (the caller then skips HTML).
+fn cf_html_format() -> u32 {
+    use std::sync::OnceLock;
+    use windows::core::w;
+    use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+    static CACHED: OnceLock<u32> = OnceLock::new();
+    // SAFETY: the argument is a static null-terminated wide literal.
+    *CACHED.get_or_init(|| unsafe { RegisterClipboardFormatW(w!("HTML Format")) })
+}
+
+/// Registered "Rich Text Format" clipboard id, cached. `0` on failure.
+fn cf_rtf_format() -> u32 {
+    use std::sync::OnceLock;
+    use windows::core::w;
+    use windows::Win32::System::DataExchange::RegisterClipboardFormatW;
+    static CACHED: OnceLock<u32> = OnceLock::new();
+    // SAFETY: the argument is a static null-terminated wide literal.
+    *CACHED.get_or_init(|| unsafe { RegisterClipboardFormatW(w!("Rich Text Format")) })
+}
+
+/// Place several already-encoded clipboard blobs — `(format_id, bytes)`,
+/// each pre-terminated as its format requires — on the clipboard in one
+/// `OpenClipboard`/`EmptyClipboard`/`CloseClipboard` sequence, so a
+/// pasting app can pick whichever format it understands. Skips entries
+/// with a `0` format id (an unregistered format) or empty bytes.
+/// Returns `true` if at least one blob was accepted.
+///
+/// # Safety
+///
+/// `owner` must be a valid HWND on the calling (UI) thread. The classic
+/// Win32 ownership hand-off applies: a successful `SetClipboardData`
+/// transfers the `HGLOBAL` to the clipboard subsystem (must not free);
+/// every failure path frees the allocation it made.
+unsafe fn set_clipboard_blobs(owner: HWND, blobs: &[(u32, Vec<u8>)]) -> bool {
+    use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+
+    // SAFETY: OpenClipboard binds the clipboard to this thread; each
+    // early-continue either hasn't allocated yet or frees what it did.
+    unsafe {
+        if OpenClipboard(Some(owner)).is_err() {
+            tracing::warn!("set_clipboard_blobs: OpenClipboard failed");
+            return false;
+        }
+        // Best-effort: a failed empty just leaks the prior owner.
+        let _ = EmptyClipboard();
+        let mut any = false;
+        for (format, bytes) in blobs {
+            if *format == 0 || bytes.is_empty() {
+                continue;
+            }
+            let Ok(hglobal) = GlobalAlloc(GMEM_MOVEABLE, bytes.len()) else {
+                tracing::warn!(len = bytes.len(), "set_clipboard_blobs: GlobalAlloc failed");
+                continue;
+            };
+            let hglobal: HGLOBAL = hglobal;
+            let dst = GlobalLock(hglobal);
+            if dst.is_null() {
+                let _ = GlobalFree(Some(hglobal));
+                continue;
+            }
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst.cast::<u8>(), bytes.len());
+            let _ = GlobalUnlock(hglobal);
+            let handle = HANDLE(hglobal.0);
+            if SetClipboardData(*format, Some(handle)).is_err() {
+                // Ownership NOT transferred on failure — free it.
+                let _ = GlobalFree(Some(hglobal));
+                tracing::warn!(
+                    format = *format,
+                    "set_clipboard_blobs: SetClipboardData failed"
+                );
+                continue;
+            }
+            any = true;
+        }
+        let _ = CloseClipboard();
+        any
+    }
+}
+
+/// Wrap an HTML document in `CF_HTML`'s documented byte-offset header so
+/// Word, Outlook, and CF_HTML-aware browsers paste it as styled HTML.
+/// This wrapping is a Win32-clipboard concern (the `CF_HTML` format),
+/// so it lives here rather than in the portable exporter plugin, which
+/// hands the host semantic HTML via `CODEPPM_SETCLIPBOARD`.
+///
+/// Returns an empty string if the injected fragment markers can't be
+/// located afterwards (a defensive path that must never panic across
+/// the plugin FFI boundary).
+fn build_cf_html(full_html: &str) -> String {
+    const SF_MARKER: &str = "<!--StartFragment-->";
+    const EF_MARKER: &str = "<!--EndFragment-->";
+    const BODY_OPEN: &str = "<body>";
+    const BODY_CLOSE: &str = "</body>";
+
+    // Locate a *well-ordered* `<body>…</body>` span. `close_idx >=
+    // after_open` is a hard requirement, not a formality: this HTML is
+    // plugin-controlled (any plugin can send arbitrary bytes via
+    // `CODEPPM_SETCLIPBOARD` + `CLIP_FORMAT_HTML`), and a string like
+    // `"</body><body>"` has the last `</body>` *before* the first
+    // `<body>`, so an unchecked `full_html[after_open..close_idx]` slice
+    // inverts its bounds and panics — which is an `abort` (release
+    // `panic = "abort"`) that takes down the whole editor. Fall back to
+    // the wrap-whole-input branch instead.
+    let body_span = full_html.find(BODY_OPEN).and_then(|open_idx| {
+        let after_open = open_idx + BODY_OPEN.len();
+        full_html
+            .rfind(BODY_CLOSE)
+            .filter(|&close_idx| close_idx >= after_open)
+            .map(|close_idx| (after_open, close_idx))
+    });
+    let html_with_markers = if let Some((after_open, close_idx)) = body_span {
+        let mut s = String::with_capacity(full_html.len() + SF_MARKER.len() + EF_MARKER.len());
+        s.push_str(&full_html[..after_open]);
+        s.push_str(SF_MARKER);
+        s.push_str(&full_html[after_open..close_idx]);
+        s.push_str(EF_MARKER);
+        s.push_str(&full_html[close_idx..]);
+        s
+    } else {
+        // No well-ordered <body>…</body> — wrap the whole input.
+        format!("<html><body>{SF_MARKER}{full_html}{EF_MARKER}</body></html>")
+    };
+
+    let (sf_offset, ef_offset) = match (
+        html_with_markers.find(SF_MARKER),
+        html_with_markers.find(EF_MARKER),
+    ) {
+        (Some(sf), Some(ef)) => (sf, ef),
+        _ => return String::new(),
+    };
+
+    // Size the header with zero offsets, then emit with real ones — both
+    // pass through the same `{:010}` template, so the length is identical.
+    let header_len = cf_html_header(0, 0, 0, 0).len();
+    let start_html = header_len;
+    let start_fragment = header_len + sf_offset + SF_MARKER.len();
+    let end_fragment = header_len + ef_offset;
+    let end_html = header_len + html_with_markers.len();
+    let header = cf_html_header(start_html, end_html, start_fragment, end_fragment);
+    debug_assert_eq!(header.len(), header_len, "CF_HTML header length drifted");
+    format!("{header}{html_with_markers}")
+}
+
+/// Format a `CF_HTML` header with the four 10-digit byte offsets. Shared
+/// by [`build_cf_html`]'s sizing and emission passes.
+fn cf_html_header(
+    start_html: usize,
+    end_html: usize,
+    start_frag: usize,
+    end_frag: usize,
+) -> String {
+    format!(
+        "Version:0.9\r\n\
+         StartHTML:{start_html:010}\r\n\
+         EndHTML:{end_html:010}\r\n\
+         StartFragment:{start_frag:010}\r\n\
+         EndFragment:{end_frag:010}\r\n",
+    )
+}
 
 /// Open a Windows Explorer window rooted at `folder`. Uses
 /// `ShellExecuteW("open", <folder>, ...)` — Windows resolves
@@ -25301,19 +25602,7 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 };
                 // No state borrow held below this point.
                 for dialog in pending {
-                    match dialog {
-                        PendingDialog::ConfirmReload(path) => {
-                            let yes = show_reload_dialog(hwnd, &path);
-                            if yes {
-                                if let Some(state) = state_from_hwnd(hwnd) {
-                                    state.shell.confirm_reload(path);
-                                }
-                            }
-                        }
-                        PendingDialog::Error { title, message } => {
-                            show_error_dialog(hwnd, &title, &message);
-                        }
-                    }
+                    present_pending_dialog(hwnd, dialog);
                 }
                 // Fire any NPPN_* notifications queued by the drain
                 // (NPPN_FILEOPENED on a successful load). Done AFTER
@@ -26759,6 +27048,21 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                                         let _guard = PluginCallGuard::enter();
                                         f();
                                     }));
+                                // A plugin command can queue a deferred
+                                // dialog (e.g. cppexport's
+                                // CODEPPM_EXPORTSAVEDIALOG →
+                                // PendingDialog::SaveExport). Unlike a
+                                // file load it posts no worker wake, so
+                                // the WM_APP_WAKE drain wouldn't fire —
+                                // surface them here, after the
+                                // PluginCallGuard is dropped so the
+                                // Save-As modal's nested pump is safe.
+                                let deferred = state_from_hwnd(hwnd)
+                                    .map(|s| s.shell.take_deferred_dialogs())
+                                    .unwrap_or_default();
+                                for dialog in deferred {
+                                    present_pending_dialog(hwnd, dialog);
+                                }
                             }
                         }
                     }
@@ -27310,7 +27614,8 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
             // the `state_from_hwnd` traversal it requires) off the
             // hot path for every non-plugin WM_USER message.
             m if (NPPMSG..NPPMSG + NPPMSG_RANGE).contains(&m)
-                || (RUNCOMMAND_USER..RUNCOMMAND_USER + RUNCOMMAND_RANGE).contains(&m) =>
+                || (RUNCOMMAND_USER..RUNCOMMAND_USER + RUNCOMMAND_RANGE).contains(&m)
+                || (CODEPPMSG..CODEPPMSG + CODEPPMSG_RANGE).contains(&m) =>
             {
                 if let Some(state) = state_from_hwnd(hwnd) {
                     // Snapshot the active tab before dispatch so
@@ -28022,6 +28327,81 @@ unsafe fn handle_dropped_files(state: &mut WindowState, hdrop: HDROP) -> bool {
         any_deduped |= matches!(outcome, OpenFileOutcome::SwitchedToExisting(_));
     }
     any_deduped
+}
+
+#[cfg(test)]
+mod cf_html_tests {
+    use super::build_cf_html;
+
+    #[test]
+    fn emits_required_header_fields() {
+        let html = "<!DOCTYPE html>\n<html>\n<body>\n<span>x</span>\n</body>\n</html>\n";
+        let payload = build_cf_html(html);
+        assert!(payload.starts_with("Version:0.9\r\n"));
+        for key in ["StartHTML:", "EndHTML:", "StartFragment:", "EndFragment:"] {
+            assert!(payload.contains(key), "missing {key}");
+        }
+        assert!(payload.contains("<!--StartFragment-->"));
+        assert!(payload.contains("<!--EndFragment-->"));
+    }
+
+    #[test]
+    fn offsets_point_at_documented_positions() {
+        let html = "<!DOCTYPE html>\n<html>\n<body>\n<span>x</span>\n</body>\n</html>\n";
+        let payload = build_cf_html(html);
+        let parse = |key: &str| -> usize {
+            let at = payload.find(key).unwrap() + key.len();
+            payload[at..at + 10].parse::<usize>().unwrap()
+        };
+        let start_html = parse("StartHTML:");
+        let end_html = parse("EndHTML:");
+        let start_fragment = parse("StartFragment:");
+        let end_fragment = parse("EndFragment:");
+        assert_eq!(&payload.as_bytes()[start_html..=start_html], b"<");
+        assert_eq!(end_html, payload.len());
+        let sf_end = payload.find("<!--StartFragment-->").unwrap() + "<!--StartFragment-->".len();
+        assert_eq!(start_fragment, sf_end);
+        assert_eq!(end_fragment, payload.find("<!--EndFragment-->").unwrap());
+    }
+
+    #[test]
+    fn offset_fields_are_zero_padded_to_ten_digits() {
+        let payload = build_cf_html("<html><body>x</body></html>");
+        for key in ["StartHTML:", "EndHTML:", "StartFragment:", "EndFragment:"] {
+            let pos = payload.find(key).unwrap() + key.len();
+            assert!(payload[pos..pos + 10].chars().all(|c| c.is_ascii_digit()));
+            assert_eq!(payload.as_bytes()[pos + 10], b'\r');
+        }
+    }
+
+    #[test]
+    fn falls_back_when_body_tags_missing() {
+        let payload = build_cf_html("<span>just a fragment</span>");
+        assert!(payload.contains("<!--StartFragment-->"));
+        assert!(payload.contains("just a fragment"));
+        assert!(payload.contains("<!--EndFragment-->"));
+        assert!(payload.contains("<html>") && payload.contains("</html>"));
+    }
+
+    #[test]
+    fn does_not_panic_on_reversed_body_tags() {
+        // `</body>` before `<body>` (plugin-controlled HTML via
+        // CODEPPM_SETCLIPBOARD): an unchecked slice would invert its
+        // bounds and panic → abort → whole-editor crash. The ordering
+        // guard must route these to the wrap-whole-input fallback.
+        for evil in [
+            "</body><body>",
+            "</body>x<body>",
+            "</body>",
+            "<body></body></body>", // valid first pair, trailing stray
+            "text</body>more<body>text",
+        ] {
+            let payload = build_cf_html(evil);
+            assert!(payload.starts_with("Version:0.9\r\n"), "input {evil:?}");
+            assert!(payload.contains("<!--StartFragment-->"), "input {evil:?}");
+            assert!(payload.contains("<!--EndFragment-->"), "input {evil:?}");
+        }
+    }
 }
 
 #[cfg(test)]

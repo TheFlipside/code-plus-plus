@@ -31,6 +31,9 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
+use crate::codepp_ext::{
+    CODEPPMSG, CODEPPMSG_RANGE, CODEPPM_EXPORTSAVEDIALOG, CODEPPM_SETCLIPBOARD,
+};
 use crate::ffi::{Hwnd, SCNotification};
 use crate::host::PluginHost;
 
@@ -349,6 +352,19 @@ pub const MAX_PATH_TCHARS: usize = 260;
 /// scope and the plugin contract has no way to signal partial
 /// success on truncation.
 pub const MAX_SESSION_FILES: usize = 1024;
+
+/// Cap on the number of clipboard formats a single
+/// [`CODEPPM_SETCLIPBOARD`](crate::CODEPPM_SETCLIPBOARD) call may carry.
+/// Real callers need three (plain/HTML/RTF); this bounds a malformed
+/// `count` before the per-entry loop allocates.
+const MAX_CLIP_ENTRIES: usize = 16;
+
+/// Cap on the byte length of any single clipboard payload or exported
+/// file the host will copy out of a plugin buffer. Defensive against a
+/// bad `data_len` (e.g. `usize::MAX`) forcing a runaway allocation —
+/// not a tuned limit. 256 MiB is far above any realistic styled-buffer
+/// export.
+const MAX_PLUGIN_PAYLOAD_BYTES: usize = 256 * 1024 * 1024;
 
 /// Host-owned parameters extracted from a plugin's `tTbData` at
 /// `NPPM_DMMREGASDCKDLG` dispatch time. The dispatcher reads the
@@ -1234,6 +1250,26 @@ pub trait HostServices {
     /// gating on [`Self::is_dark_mode_enabled`] (which also
     /// returns `false`) never reach this call in production.
     fn dark_mode_colors(&self, out: &mut crate::ffi::NppDarkModeColors) -> bool;
+
+    /// Code++ extension for [`CODEPPM_SETCLIPBOARD`](crate::CODEPPM_SETCLIPBOARD).
+    /// Place one or more abstract clipboard formats on the system
+    /// clipboard in a single operation. Each entry is `(format, bytes)`
+    /// where `format` is a `CLIP_FORMAT_*` constant and the backend maps
+    /// it to a native clipboard type. Runs inline on the UI thread — no
+    /// nested dialog pump — so it returns synchronously. Returns `true`
+    /// if the clipboard now holds the payload, `false` on failure or an
+    /// empty set.
+    fn set_clipboard(&mut self, payloads: &[(u32, Vec<u8>)]) -> bool;
+
+    /// Code++ extension for [`CODEPPM_EXPORTSAVEDIALOG`](crate::CODEPPM_EXPORTSAVEDIALOG).
+    /// Queue a *deferred* native Save-As dialog: the host shows it after
+    /// the dispatch returns (an inline modal would re-enter the message
+    /// pump while the host borrow is live, aliasing `WindowState`), then
+    /// writes `data` to the chosen path and reports the result on the
+    /// status bar. `kind` is an `EXPORT_KIND_*` constant selecting the
+    /// dialog filter + default extension; `suggested_name` pre-fills the
+    /// file name. Fire-and-forget — the plugin gets no path back.
+    fn queue_export_save(&mut self, data: Vec<u8>, suggested_name: String, kind: u32);
 }
 
 /// Dispatch an inbound NPPM_* message. Returns `Some(lresult)` if the
@@ -1279,7 +1315,11 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
     // host's own UI continue to dispatch normally.
     let in_nppm = (NPPMSG..NPPMSG + NPPMSG_RANGE).contains(&msg);
     let in_runcmd = (RUNCOMMAND_USER..RUNCOMMAND_USER + RUNCOMMAND_RANGE).contains(&msg);
-    if !in_nppm && !in_runcmd {
+    // Code++'s own extension band (`WM_USER+5000..`), clear of both N++
+    // ranges — the two host-service messages `cppexport` uses. Additive,
+    // never collides with a real Notepad++ message. See [`crate::codepp_ext`].
+    let in_codepp = (CODEPPMSG..CODEPPMSG + CODEPPMSG_RANGE).contains(&msg);
+    if !in_nppm && !in_runcmd && !in_codepp {
         return None;
     }
 
@@ -2680,6 +2720,132 @@ pub unsafe fn dispatch_nppm<S: HostServices>(
         // Known NPPM_* range, but no v1 implementation. Plugins that
         // depend on the real semantics of these messages will see
         // sensible defaults (zero) and a log entry.
+        CODEPPM_SETCLIPBOARD => {
+            // Code++ extension. wparam: unused. lparam: pointer to a
+            // `ClipboardSetRequest`. Returns 1 if the clipboard now
+            // holds the payload, 0 on bad arguments / empty set /
+            // backend failure. Runs inline — `set_clipboard` does no
+            // nested modal pump, so returning a synchronous result is
+            // safe under the live host borrow.
+            if lparam == 0 {
+                return Some(0);
+            }
+            let req = lparam as *const crate::codepp_ext::ClipboardSetRequest;
+            // SAFETY: plugin promises `req` points to a valid
+            // `ClipboardSetRequest` it owns for the call. Fields are read
+            // via `addr_of!` + `read_unaligned` so no aligned reference
+            // to a possibly-unaligned plugin field is ever formed.
+            let (count, entries_ptr) = unsafe {
+                (
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*req).count)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*req).entries)),
+                )
+            };
+            if count > MAX_CLIP_ENTRIES {
+                tracing::warn!(
+                    count = count,
+                    cap = MAX_CLIP_ENTRIES,
+                    "CODEPPM_SETCLIPBOARD: rejecting unreasonable entry count",
+                );
+                return Some(0);
+            }
+            // `entries_ptr.add(i)` on a null pointer is UB even for a
+            // read; reject a positive count with a null array. `count==0`
+            // never enters the loop, so a null array is a harmless
+            // degenerate "set nothing".
+            if count > 0 && entries_ptr.is_null() {
+                return Some(0);
+            }
+            let mut payloads: Vec<(u32, Vec<u8>)> = Vec::with_capacity(count);
+            // Aggregate byte budget across the whole request, not just
+            // per-entry: with a 16-entry cap and a 256 MiB per-entry cap
+            // an unchecked call could still force ~4 GiB of copies. Bound
+            // the *sum* at one per-entry cap so a single call can't be
+            // used to pressure host memory.
+            let mut total_bytes: usize = 0;
+            for i in 0..count {
+                // SAFETY: `entries_ptr` points to `count` `ClipEntry`
+                // records per the plugin contract; each field read
+                // unaligned. `data`'s bytes are copied into an owned
+                // buffer here so the plugin may free its allocation the
+                // moment `SendMessage` returns.
+                let entry = unsafe { entries_ptr.add(i) };
+                let (format, data_ptr, data_len) = unsafe {
+                    (
+                        core::ptr::read_unaligned(core::ptr::addr_of!((*entry).format)),
+                        core::ptr::read_unaligned(core::ptr::addr_of!((*entry).data)),
+                        core::ptr::read_unaligned(core::ptr::addr_of!((*entry).data_len)),
+                    )
+                };
+                if data_ptr.is_null() || data_len == 0 {
+                    // Degenerate entry — skip rather than reject the
+                    // whole set (a caller may leave a format empty).
+                    continue;
+                }
+                // Per-entry and running-total caps (the running total
+                // also subsumes the per-entry check, but keep both for a
+                // clear log at the point each limit trips).
+                total_bytes = total_bytes.saturating_add(data_len);
+                if data_len > MAX_PLUGIN_PAYLOAD_BYTES || total_bytes > MAX_PLUGIN_PAYLOAD_BYTES {
+                    tracing::warn!(
+                        data_len = data_len,
+                        total_bytes = total_bytes,
+                        cap = MAX_PLUGIN_PAYLOAD_BYTES,
+                        "CODEPPM_SETCLIPBOARD: rejecting oversized payload",
+                    );
+                    return Some(0);
+                }
+                let bytes = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
+                payloads.push((format, bytes));
+            }
+            if payloads.is_empty() {
+                return Some(0);
+            }
+            isize::from(services.set_clipboard(&payloads))
+        }
+        CODEPPM_EXPORTSAVEDIALOG => {
+            // Code++ extension. wparam: unused. lparam: pointer to an
+            // `ExportSaveRequest`. Returns 1 = accepted (the host will
+            // pop a Save-As dialog after this dispatch returns), 0 = bad
+            // arguments. Fire-and-forget: the chosen path is never
+            // returned to the plugin — an inline modal that could return
+            // it would re-enter the pump under the live host borrow.
+            if lparam == 0 {
+                return Some(0);
+            }
+            let req = lparam as *const crate::codepp_ext::ExportSaveRequest;
+            // SAFETY: same contract as the SETCLIPBOARD arm above.
+            let (data_ptr, data_len, name_ptr, kind) = unsafe {
+                (
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*req).data)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*req).data_len)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*req).suggested_name)),
+                    core::ptr::read_unaligned(core::ptr::addr_of!((*req).kind)),
+                )
+            };
+            if data_ptr.is_null() || data_len == 0 {
+                return Some(0);
+            }
+            if data_len > MAX_PLUGIN_PAYLOAD_BYTES {
+                tracing::warn!(
+                    data_len = data_len,
+                    cap = MAX_PLUGIN_PAYLOAD_BYTES,
+                    "CODEPPM_EXPORTSAVEDIALOG: rejecting oversized payload",
+                );
+                return Some(0);
+            }
+            // Copy the bytes out before returning — the plugin owns the
+            // buffer only for the duration of the call.
+            let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
+            let suggested_name = if name_ptr.is_null() {
+                String::new()
+            } else {
+                // SAFETY: plugin promises a null-terminated wide string.
+                unsafe { wide_ptr_to_string(name_ptr) }
+            };
+            services.queue_export_save(data, suggested_name, kind);
+            1
+        }
         _ => {
             tracing::warn!(msg = msg, "unhandled NPPM_*");
             0
@@ -3518,6 +3684,22 @@ mod tests {
             } else {
                 false
             }
+        }
+        fn set_clipboard(&mut self, payloads: &[(u32, Vec<u8>)]) -> bool {
+            // Record one line per format so tests can assert both the
+            // count and each payload's (format, byte-length).
+            let summary: Vec<String> = payloads
+                .iter()
+                .map(|(f, b)| format!("{f}:{}", b.len()))
+                .collect();
+            self.record(format!("set_clipboard([{}])", summary.join(",")));
+            true
+        }
+        fn queue_export_save(&mut self, data: Vec<u8>, suggested_name: String, kind: u32) {
+            self.record(format!(
+                "queue_export_save(len={}, name={suggested_name:?}, kind={kind})",
+                data.len()
+            ));
         }
         fn create_plugin_scintilla(&mut self, parent: crate::ffi::Hwnd) -> crate::ffi::Hwnd {
             self.record(format!(
@@ -5090,6 +5272,120 @@ mod tests {
             s.calls(),
             vec!["save_session_with_files=D:/out.xml files=[D:/foo.txt]"]
         );
+    }
+
+    // --- Code++ extension messages: CODEPPM_SETCLIPBOARD / EXPORTSAVEDIALOG ---
+    use crate::codepp_ext::{CLIP_FORMAT_HTML, CLIP_FORMAT_PLAIN, EXPORT_KIND_HTML};
+
+    #[test]
+    fn set_clipboard_dispatches_each_nonempty_format() {
+        use crate::codepp_ext::{ClipEntry, ClipboardSetRequest};
+        let mut s = MockServices::default();
+        let plain = b"hello".to_vec();
+        let html = b"<b>hi</b>".to_vec();
+        let entries = [
+            ClipEntry {
+                format: CLIP_FORMAT_PLAIN,
+                data: plain.as_ptr(),
+                data_len: plain.len(),
+            },
+            ClipEntry {
+                format: CLIP_FORMAT_HTML,
+                data: html.as_ptr(),
+                data_len: html.len(),
+            },
+        ];
+        let req = ClipboardSetRequest {
+            count: entries.len(),
+            entries: entries.as_ptr(),
+        };
+        let r = unsafe { dispatch_nppm(&mut s, CODEPPM_SETCLIPBOARD, 0, &raw const req as isize) };
+        assert_eq!(r, Some(1));
+        assert_eq!(
+            s.calls(),
+            vec![format!(
+                "set_clipboard([{CLIP_FORMAT_PLAIN}:5,{CLIP_FORMAT_HTML}:9])"
+            )]
+        );
+    }
+
+    #[test]
+    fn set_clipboard_null_lparam_returns_zero() {
+        let mut s = MockServices::default();
+        let r = unsafe { dispatch_nppm(&mut s, CODEPPM_SETCLIPBOARD, 0, 0) };
+        assert_eq!(r, Some(0));
+        assert!(s.calls().is_empty());
+    }
+
+    #[test]
+    fn set_clipboard_all_empty_entries_reject_without_calling() {
+        use crate::codepp_ext::{ClipEntry, ClipboardSetRequest};
+        let mut s = MockServices::default();
+        // Single entry with null data → nothing survives → reject, no call.
+        let entries = [ClipEntry {
+            format: CLIP_FORMAT_PLAIN,
+            data: core::ptr::null(),
+            data_len: 0,
+        }];
+        let req = ClipboardSetRequest {
+            count: entries.len(),
+            entries: entries.as_ptr(),
+        };
+        let r = unsafe { dispatch_nppm(&mut s, CODEPPM_SETCLIPBOARD, 0, &raw const req as isize) };
+        assert_eq!(r, Some(0));
+        assert!(s.calls().is_empty());
+    }
+
+    #[test]
+    fn set_clipboard_rejects_unreasonable_count() {
+        use crate::codepp_ext::ClipboardSetRequest;
+        let mut s = MockServices::default();
+        let req = ClipboardSetRequest {
+            count: MAX_CLIP_ENTRIES + 1,
+            entries: core::ptr::null(),
+        };
+        let r = unsafe { dispatch_nppm(&mut s, CODEPPM_SETCLIPBOARD, 0, &raw const req as isize) };
+        assert_eq!(r, Some(0));
+        assert!(s.calls().is_empty());
+    }
+
+    #[test]
+    fn export_save_dialog_queues_bytes_and_metadata() {
+        use crate::codepp_ext::ExportSaveRequest;
+        let mut s = MockServices::default();
+        let data = b"<html/>".to_vec();
+        let name = make_wide("report.html");
+        let req = ExportSaveRequest {
+            data: data.as_ptr(),
+            data_len: data.len(),
+            suggested_name: name.as_ptr(),
+            kind: EXPORT_KIND_HTML,
+        };
+        let r =
+            unsafe { dispatch_nppm(&mut s, CODEPPM_EXPORTSAVEDIALOG, 0, &raw const req as isize) };
+        assert_eq!(r, Some(1));
+        assert_eq!(
+            s.calls(),
+            vec![format!(
+                "queue_export_save(len=7, name=\"report.html\", kind={EXPORT_KIND_HTML})"
+            )]
+        );
+    }
+
+    #[test]
+    fn export_save_dialog_null_data_returns_zero() {
+        use crate::codepp_ext::ExportSaveRequest;
+        let mut s = MockServices::default();
+        let req = ExportSaveRequest {
+            data: core::ptr::null(),
+            data_len: 0,
+            suggested_name: core::ptr::null(),
+            kind: EXPORT_KIND_HTML,
+        };
+        let r =
+            unsafe { dispatch_nppm(&mut s, CODEPPM_EXPORTSAVEDIALOG, 0, &raw const req as isize) };
+        assert_eq!(r, Some(0));
+        assert!(s.calls().is_empty());
     }
 
     // --- Chrome toggles: HIDETOOLBAR / HIDEMENU / HIDESTATUSBAR ---

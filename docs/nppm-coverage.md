@@ -138,6 +138,15 @@ at all, the same as in 64-bit Notepad++.)
 | `NPPM_GETDARKMODECOLORS` | ✅ | v3 | wparam: `sizeof(NppDarkModeColors)` (48 bytes — 12 × COLORREF). lparam: pointer to a plugin-allocated `NppDarkModeColors`. Returns `BOOL` — `TRUE` if the host wrote 12 COLORREFs into the buffer, `FALSE` otherwise. **Code++ Phase 4 returns `FALSE`** because no dark-mode palette is available; the plugin's buffer is left untouched. The dispatcher validates the wparam size against the host's `sizeof(NppDarkModeColors)` and rejects mismatches up front (defends against plugin/host layout drift). New `NppDarkModeColors` FFI struct with a 48-byte size assertion. |
 | Long tail (other v3 entries) | ⚫ | v3 | |
 
+## Code++ extension messages (`CODEPPM_*`)
+
+**Not part of the Notepad++ ABI.** Notepad++'s message set has no way for a plugin to ask the host to pop a native Save-As dialog or to place arbitrary formats on the system clipboard — upstream plugins (e.g. `NppExport`) call the OS API directly, which is exactly what makes them non-portable. Code++ closes that gap with two host-provided capabilities so the in-tree `cppexport` plugin stays platform-agnostic: it hands the host semantic bytes, and each backend (Win32 / GTK / Cocoa) does the OS-specific dialog, file write, and clipboard packaging. These live in a dedicated numeric band (`WM_USER + 5000`) clear of both `NPPMSG` and `RUNCOMMAND_USER`, so they can never collide with a present or future real N++ message. Defined in `codepp_plugin_host::codepp_ext`; re-exported for plugins through `codepp-plugin-sdk`.
+
+| Message | Status | Phase | Notes |
+| --- | --- | --- | --- |
+| `CODEPPM_SETCLIPBOARD` | ✅ | v3 (5) | wparam: unused. lparam: `ClipboardSetRequest*` — a count + array of `ClipEntry{format, data, data_len}`, where `format` is `CLIP_FORMAT_{PLAIN,HTML,RTF}`. The host copies each payload out (bounded by `MAX_CLIP_ENTRIES` / `MAX_PLUGIN_PAYLOAD_BYTES`), maps the abstract format to the platform's native clipboard type (Win32 `CF_UNICODETEXT` / registered `HTML Format` with the `CF_HTML` byte-offset envelope applied host-side / registered `Rich Text Format`; GTK `text/plain` / `text/html` / `text/rtf` targets), and sets them in one operation. Runs inline (no nested dialog pump) and returns `1` on success / `0` on bad args / empty set / backend failure. Exercised by `cppexport`'s "Copy HTML/RTF/All to Clipboard". |
+| `CODEPPM_EXPORTSAVEDIALOG` | ✅ | v3 (5) | wparam: unused. lparam: `ExportSaveRequest*` — `{data, data_len, suggested_name (wide), kind}` where `kind` is `EXPORT_KIND_{HTML,RTF,OTHER}`. The host **defers** a native Save-As dialog (an inline modal would re-enter the pump under the live host borrow), then writes the bytes to the chosen path and reports the outcome on the status bar. Fire-and-forget: returns `1` = accepted / `0` = bad args, never the chosen path. The suggested name is display-sanitised host-side before pre-filling the dialog. Exercised by `cppexport`'s "Export to HTML/RTF…". |
+
 ## NPPN_* (notifications)
 
 | Notification | Status | Phase | Notes |

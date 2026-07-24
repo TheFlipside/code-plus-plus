@@ -19,17 +19,28 @@ use std::path::Path;
 /// `[lib] name`. Each name is also the plugin's directory and stem in
 /// the plugins folder (the stem-equals-dirname rule discovery enforces).
 ///
-/// `cppexport` is intentionally absent on non-Windows: its output sinks
-/// (native Save-As dialog, `CF_HTML`/`CF_RTF` clipboard) are Win32-only,
-/// so its Linux/macOS port is a tracked follow-up. It still builds as an
-/// empty cdylib on those targets, but is not staged (an empty stub would
-/// only fail to load). The other three are SDK-only and fully portable.
+/// All four now stage on Linux as well as Windows: `cppexport`'s
+/// cross-platform port (it routes its Save-As and clipboard sinks
+/// through the host's `CODEPPM_EXPORTSAVEDIALOG` / `CODEPPM_SETCLIPBOARD`
+/// extension messages instead of calling the OS directly) makes it as
+/// portable as the other three.
+///
+/// **The list must match each plugin's `mod imp` cfg gate** — every
+/// in-tree plugin gates its entry points on `any(windows, linux)`, so on
+/// macOS (and any other target) they compile to empty cdylibs with none
+/// of the six ABI exports. Staging one there would only make the host
+/// log a failed load, so that list is empty until Phase 5's Cocoa
+/// bring-up adds the macOS `mod imp` arm and populates it.
 #[cfg(target_os = "windows")]
 pub const BUNDLED_PLUGINS: &[&str] =
     &["example_hello", "cppmimetools", "cppconverter", "cppexport"];
 
-#[cfg(not(target_os = "windows"))]
-pub const BUNDLED_PLUGINS: &[&str] = &["example_hello", "cppmimetools", "cppconverter"];
+#[cfg(target_os = "linux")]
+pub const BUNDLED_PLUGINS: &[&str] =
+    &["example_hello", "cppmimetools", "cppconverter", "cppexport"];
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+pub const BUNDLED_PLUGINS: &[&str] = &[];
 
 /// cdylib output filename prefix: `lib` on Unix, empty on Windows.
 #[cfg(unix)]

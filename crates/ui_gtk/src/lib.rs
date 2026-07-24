@@ -941,7 +941,81 @@ fn present_dialog(dialog: &PendingDialog) {
                 message,
             );
         }
+        PendingDialog::SaveExport {
+            data,
+            suggested_name,
+            kind,
+        } => {
+            present_save_export(data, suggested_name, *kind);
+        }
     }
+}
+
+/// Deferred handler for a plugin's `CODEPPM_EXPORTSAVEDIALOG`: pop a
+/// native Save-As dialog seeded from `suggested_name` + `kind`'s filter,
+/// write `data` to the chosen path, and report the outcome on the status
+/// bar. A cancelled dialog is silent (matches the plugin's own N++-style
+/// "silent cancel"). Runs from `pump_dialogs`, i.e. with no `with_state`
+/// borrow held, so it may spin the chooser's nested loop and re-acquire
+/// state for the status update.
+fn present_save_export(data: &[u8], suggested_name: &str, kind: codepp_shell::ExportFileKind) {
+    let (filter_desc, glob, default_ext) = kind.dialog_filter();
+    let parent = with_state(|st| st.window.clone());
+    let chooser = gtk::FileChooserNative::new(
+        Some("Export"),
+        parent.as_ref(),
+        gtk::FileChooserAction::Save,
+        Some("_Save"),
+        Some("_Cancel"),
+    );
+    chooser.set_do_overwrite_confirmation(true);
+    let name = if suggested_name.is_empty() {
+        if default_ext.is_empty() {
+            "export".to_owned()
+        } else {
+            format!("export.{default_ext}")
+        }
+    } else {
+        suggested_name.to_owned()
+    };
+    chooser.set_current_name(&name);
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some(filter_desc));
+    filter.add_pattern(glob);
+    chooser.add_filter(filter);
+    let all = gtk::FileFilter::new();
+    all.set_name(Some("All Files"));
+    all.add_pattern("*");
+    chooser.add_filter(all);
+
+    let response = chooser.run();
+    let chosen = (response == gtk::ResponseType::Accept)
+        .then(|| chooser.filename())
+        .flatten();
+    chooser.destroy();
+    let Some(mut path) = chosen else {
+        return; // cancelled — leave the previous status line intact
+    };
+    // Match Win32's `lpstrDefExt`: append the kind's extension when the
+    // user typed none, so "report" becomes "report.html".
+    if !default_ext.is_empty() && path.extension().is_none() {
+        path.set_extension(default_ext);
+    }
+    let msg = match std::fs::write(&path, data) {
+        Ok(()) => format!(
+            "Export: wrote {}",
+            codepp_shell::sanitize_path_for_display(&path)
+        ),
+        Err(e) => format!(
+            "Export failed: {}",
+            codepp_shell::sanitize_str_for_display(&e.to_string())
+        ),
+    };
+    with_state(|st| {
+        use codepp_shell::UiPlatform;
+        let (_shell, mut ui) = st.split();
+        ui.set_plugin_status(0, &msg);
+    });
 }
 
 /// Run a modal message dialog and return the user's response.

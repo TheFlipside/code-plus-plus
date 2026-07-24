@@ -50,6 +50,14 @@ pub use codepp_plugin_host::ffi::{
     FuncItem, HostDispatchFn, Hwnd, NppData, SCNotification, MENU_TITLE_LENGTH,
 };
 
+/// Code++ extension messages + payload constants (see
+/// [`export_save_dialog`] / [`set_clipboard`]). Re-exported so a plugin
+/// depends only on the SDK, not directly on `codepp-plugin-host`.
+pub use codepp_plugin_host::{
+    CLIP_FORMAT_HTML, CLIP_FORMAT_PLAIN, CLIP_FORMAT_RTF, EXPORT_KIND_HTML, EXPORT_KIND_OTHER,
+    EXPORT_KIND_RTF,
+};
+
 // ---- SendMessageW transport -------------------------------------
 //
 // On Windows this is the Win32 `#[link(name = "user32")]` import; the
@@ -453,4 +461,92 @@ pub fn set_status(text: &str) {
             wide.as_ptr() as isize,
         );
     }
+}
+
+// ---- Code++ host services (export dialog + clipboard) -----------
+//
+// These wrap the two Code++ extension messages so a plugin never has
+// to touch the platform's Save-As dialog or clipboard directly — the
+// host does the OS-specific work, which is what keeps the plugin
+// portable across Win32 / GTK / Cocoa. See `codepp_plugin_host::codepp_ext`.
+
+/// Ask the host to write `data` to a user-picked path via a native
+/// Save-As dialog. `suggested_name` pre-fills the dialog's file name;
+/// `kind` is one of [`EXPORT_KIND_HTML`] / [`EXPORT_KIND_RTF`] /
+/// [`EXPORT_KIND_OTHER`] (dialog filter + default extension). The host
+/// shows the dialog, writes the bytes, and reports the outcome on the
+/// status bar.
+///
+/// Fire-and-forget: the dialog runs *after* this call returns, so the
+/// return value is only whether the host **accepted** the request
+/// (`true`), never the chosen path or the write result. No-op returning
+/// `false` if `setInfo` hasn't run yet (`NPP_HANDLE` null) or `data` is
+/// empty.
+pub fn export_save_dialog(data: &[u8], suggested_name: &str, kind: u32) -> bool {
+    let npp = NPP_HANDLE.load(Ordering::Acquire);
+    if npp.is_null() || data.is_empty() {
+        return false;
+    }
+    let name: Vec<u16> = suggested_name
+        .encode_utf16()
+        .chain(core::iter::once(0))
+        .collect();
+    let req = codepp_plugin_host::ExportSaveRequest {
+        data: data.as_ptr(),
+        data_len: data.len(),
+        suggested_name: name.as_ptr(),
+        kind,
+    };
+    // SAFETY: `req` and every buffer it points at (`data`, `name`)
+    // outlive this synchronous `SendMessage`; the host copies the bytes
+    // out before returning and retains no pointer past the call.
+    let r = unsafe {
+        SendMessageW(
+            npp,
+            codepp_plugin_host::CODEPPM_EXPORTSAVEDIALOG,
+            0,
+            core::ptr::addr_of!(req) as isize,
+        )
+    };
+    r != 0
+}
+
+/// Put one or more clipboard formats on the system clipboard in a
+/// single operation, so a pasting app can pick whichever it
+/// understands. Each entry is `(format, bytes)` where `format` is one
+/// of [`CLIP_FORMAT_PLAIN`] / [`CLIP_FORMAT_HTML`] / [`CLIP_FORMAT_RTF`]
+/// and the host maps it to the platform's native clipboard type.
+///
+/// Runs synchronously (no dialog) and returns `true` if the clipboard
+/// now holds the payload. No-op returning `false` if `setInfo` hasn't
+/// run yet or `payloads` is empty.
+pub fn set_clipboard(payloads: &[(u32, &[u8])]) -> bool {
+    let npp = NPP_HANDLE.load(Ordering::Acquire);
+    if npp.is_null() || payloads.is_empty() {
+        return false;
+    }
+    let entries: Vec<codepp_plugin_host::ClipEntry> = payloads
+        .iter()
+        .map(|(format, bytes)| codepp_plugin_host::ClipEntry {
+            format: *format,
+            data: bytes.as_ptr(),
+            data_len: bytes.len(),
+        })
+        .collect();
+    let req = codepp_plugin_host::ClipboardSetRequest {
+        count: entries.len(),
+        entries: entries.as_ptr(),
+    };
+    // SAFETY: `req`, the `entries` vec, and every slice each entry
+    // points at outlive this synchronous `SendMessage`; the host copies
+    // every payload out before returning.
+    let r = unsafe {
+        SendMessageW(
+            npp,
+            codepp_plugin_host::CODEPPM_SETCLIPBOARD,
+            0,
+            core::ptr::addr_of!(req) as isize,
+        )
+    };
+    r != 0
 }

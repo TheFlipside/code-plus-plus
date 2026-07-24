@@ -34,9 +34,16 @@
 // Windows-only through Phase 4 because only Win32 wired a plugin host;
 // Phase 5 ports the host to GTK/Linux (loader in `platform::dynlib`,
 // message transport in `codepp-plugin-sdk`), so these are unconditional.
+pub mod codepp_ext;
 pub mod dispatch;
 pub mod ffi;
 pub mod host;
+
+pub use codepp_ext::{
+    ClipEntry, ClipboardSetRequest, ExportSaveRequest, CLIP_FORMAT_HTML, CLIP_FORMAT_PLAIN,
+    CLIP_FORMAT_RTF, CODEPPMSG, CODEPPMSG_RANGE, CODEPPM_EXPORTSAVEDIALOG, CODEPPM_SETCLIPBOARD,
+    EXPORT_KIND_HTML, EXPORT_KIND_OTHER, EXPORT_KIND_RTF,
+};
 
 pub use ffi::{
     BeNotifiedFn, CommunicationInfo, FuncItem, GetFuncsArrayFn, GetNameFn, HostDispatchFn, Hwnd,

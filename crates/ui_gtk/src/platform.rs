@@ -65,7 +65,7 @@ thread_local! {
     /// clamped digit counts imply equal pixel widths).
     static LAST_LINE_NUMBER_DIGITS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
-use codepp_shell::{SearchFlags, UiPlatform};
+use codepp_shell::{ClipboardData, SearchFlags, UiPlatform};
 use gtk::prelude::*;
 
 use crate::state::GtkUi;
@@ -754,6 +754,86 @@ impl UiPlatform for GtkUi {
         // An empty undo action is the documented way to move a buffer
         // off its save point without changing a byte of text.
         self.editor.send(SCI_ADDUNDOACTION, 0, 0);
+    }
+
+    fn set_clipboard(&mut self, payloads: &[ClipboardData]) -> bool {
+        use gtk::gdk;
+        use gtk::{TargetEntry, TargetFlags};
+
+        // One slot per registered target atom (1:1 with a `TargetEntry`,
+        // keyed by its `info` index). Plain text registers several text
+        // atoms sharing the same string; HTML / RTF register their MIME
+        // atoms. The whole table is moved into the `'static` data
+        // callback that GTK invokes when a pasting app requests a
+        // target.
+        enum Slot {
+            /// Served via `SelectionData::set_text` so GTK encodes for
+            /// whichever text target was requested.
+            Text(String),
+            /// Raw bytes served for a specific MIME atom (format 8).
+            Bytes(String, Vec<u8>),
+        }
+
+        let mut targets: Vec<TargetEntry> = Vec::new();
+        let mut slots: Vec<Slot> = Vec::new();
+        // Register a target atom sharing the next `info` index with the
+        // slot pushed alongside it.
+        let add =
+            |atom: &str, slot: Slot, targets: &mut Vec<TargetEntry>, slots: &mut Vec<Slot>| {
+                let info = u32::try_from(slots.len()).unwrap_or(u32::MAX);
+                targets.push(TargetEntry::new(atom, TargetFlags::empty(), info));
+                slots.push(slot);
+            };
+
+        for payload in payloads {
+            match payload {
+                ClipboardData::Plain(bytes) => {
+                    let text = String::from_utf8_lossy(bytes).into_owned();
+                    for atom in ["UTF8_STRING", "text/plain;charset=utf-8", "text/plain"] {
+                        add(atom, Slot::Text(text.clone()), &mut targets, &mut slots);
+                    }
+                }
+                ClipboardData::Html(bytes) => {
+                    add(
+                        "text/html",
+                        Slot::Bytes("text/html".to_owned(), bytes.clone()),
+                        &mut targets,
+                        &mut slots,
+                    );
+                }
+                ClipboardData::Rtf(bytes) => {
+                    for atom in ["text/rtf", "application/rtf"] {
+                        add(
+                            atom,
+                            Slot::Bytes(atom.to_owned(), bytes.clone()),
+                            &mut targets,
+                            &mut slots,
+                        );
+                    }
+                }
+            }
+        }
+        if targets.is_empty() {
+            return false;
+        }
+
+        let clipboard = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
+        // NB: `set_with_data` keeps the payload only while this process
+        // owns the selection — a paste after Code++ exits won't see it
+        // (no clipboard-manager `store`, matching a plain in-app copy).
+        clipboard.set_with_data(&targets, move |_clip, sel, info| {
+            let Some(slot) = slots.get(info as usize) else {
+                return;
+            };
+            match slot {
+                Slot::Text(s) => {
+                    sel.set_text(s);
+                }
+                Slot::Bytes(atom, data) => {
+                    sel.set(&gdk::Atom::intern(atom), 8, data);
+                }
+            }
+        })
     }
 }
 

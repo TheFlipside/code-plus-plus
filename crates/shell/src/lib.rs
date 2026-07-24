@@ -632,6 +632,22 @@ pub trait UiPlatform {
     /// Windows only — the primitive is Scintilla-level and every
     /// backend has the same shape.
     fn mark_active_buffer_dirty(&mut self);
+
+    /// Place one or more abstract clipboard formats
+    /// ([`ClipboardData`]) on the system clipboard in a single
+    /// operation. Drives the Code++ extension
+    /// [`CODEPPM_SETCLIPBOARD`](codepp_plugin_host::CODEPPM_SETCLIPBOARD)
+    /// that `cppexport`'s "Copy … to Clipboard" items use. Runs inline
+    /// on the UI thread (no nested dialog pump), so it returns
+    /// synchronously: `true` if the clipboard now holds the payload.
+    ///
+    /// Provided default returns `false` ("no clipboard support") so a
+    /// backend without one degrades gracefully — the plugin then
+    /// reports a clipboard failure rather than believing it succeeded.
+    /// The Win32 and GTK backends override it.
+    fn set_clipboard(&mut self, _payloads: &[ClipboardData]) -> bool {
+        false
+    }
 }
 
 /// One restored tab from `Shell::load_session_entries`. Tells the UI
@@ -758,6 +774,75 @@ pub enum PendingDialog {
     ConfirmReload(PathBuf),
     /// Non-fatal error: title and message strings to display.
     Error { title: String, message: String },
+    /// A plugin (via `CODEPPM_EXPORTSAVEDIALOG`) asked the host to write
+    /// exported bytes to a user-picked path. The UI pops a native
+    /// Save-As dialog seeded from `suggested_name` and `kind`'s filter,
+    /// writes `data` to the chosen path, and reports the outcome on the
+    /// status bar. Deferred (rather than inline in the plugin dispatch)
+    /// because a modal there would re-enter the message pump while the
+    /// host borrow is live. See [`crate::ExportFileKind`].
+    SaveExport {
+        /// Raw file bytes to write (UTF-8 HTML/RTF, or any bytes).
+        data: Vec<u8>,
+        /// Suggested file name (no directory), pre-filled in the dialog.
+        /// Empty → the backend picks a default.
+        suggested_name: String,
+        /// File-type hint driving the dialog filter + default extension.
+        kind: ExportFileKind,
+    },
+}
+
+/// One clipboard payload the plugin host hands a backend: an abstract
+/// format plus its bytes. Each backend maps a variant to its native
+/// clipboard type (Win32 `CF_*` / GTK target atoms). Mirrors the
+/// `CLIP_FORMAT_*` wire constants a plugin sends via
+/// [`CODEPPM_SETCLIPBOARD`](codepp_plugin_host::CODEPPM_SETCLIPBOARD).
+#[derive(Debug, Clone)]
+pub enum ClipboardData {
+    /// UTF-8 plain text.
+    Plain(Vec<u8>),
+    /// UTF-8 HTML fragment/document.
+    Html(Vec<u8>),
+    /// RTF document bytes.
+    Rtf(Vec<u8>),
+}
+
+/// File-type hint for a plugin export Save-As dialog. Mirrors the
+/// `EXPORT_KIND_*` wire constants; selects the dialog filter and default
+/// extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFileKind {
+    /// `*.html`, default extension `html`.
+    Html,
+    /// `*.rtf`, default extension `rtf`.
+    Rtf,
+    /// `*.*`, no forced extension.
+    Other,
+}
+
+impl ExportFileKind {
+    /// Map an `EXPORT_KIND_*` wire value; anything unrecognised becomes
+    /// [`ExportFileKind::Other`].
+    #[must_use]
+    pub fn from_wire(kind: u32) -> Self {
+        match kind {
+            codepp_plugin_host::EXPORT_KIND_HTML => ExportFileKind::Html,
+            codepp_plugin_host::EXPORT_KIND_RTF => ExportFileKind::Rtf,
+            _ => ExportFileKind::Other,
+        }
+    }
+
+    /// `(filter description, glob, default extension)` for the native
+    /// Save-As dialog. The default extension is `""` for
+    /// [`ExportFileKind::Other`] (no extension is forced).
+    #[must_use]
+    pub fn dialog_filter(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            ExportFileKind::Html => ("HTML Files", "*.html", "html"),
+            ExportFileKind::Rtf => ("RTF Files", "*.rtf", "rtf"),
+            ExportFileKind::Other => ("All Files", "*.*", ""),
+        }
+    }
 }
 
 /// Which branch [`Shell::open_file`] took, so the UI knows whether
@@ -3092,6 +3177,18 @@ impl Shell {
             self.active_tab = Some(self.tabs.len() - 1);
         }
         OpenFileOutcome::Loading
+    }
+
+    /// Take (and clear) the queued deferred dialogs without running a
+    /// full [`Self::drain`]. Used by the Win32 backend to surface a
+    /// plugin-queued [`PendingDialog::SaveExport`] immediately after a
+    /// plugin menu command returns — that path posts no worker wake, so
+    /// the usual `drain` cycle wouldn't otherwise fire. The GTK backend
+    /// drains after every plugin command already, so it takes these via
+    /// `drain`.
+    #[must_use]
+    pub fn take_deferred_dialogs(&mut self) -> Vec<PendingDialog> {
+        std::mem::take(&mut self.deferred_dialogs)
     }
 
     /// Drain pending tasks and apply each to the shell + UI. Returns
@@ -6835,6 +6932,47 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
             })
             .ok()?;
         Some(session.tabs.into_iter().filter_map(|t| t.path).collect())
+    }
+
+    fn set_clipboard(&mut self, payloads: &[(u32, Vec<u8>)]) -> bool {
+        // Map the abstract `CLIP_FORMAT_*` wire tags onto the typed
+        // `ClipboardData` the backend consumes, dropping any format the
+        // host doesn't model (an unknown tag from a buggy plugin is
+        // skipped, not passed through as raw bytes). If nothing survives
+        // the mapping there's nothing to place — report failure so the
+        // plugin doesn't believe an empty set succeeded.
+        let mapped: Vec<ClipboardData> = payloads
+            .iter()
+            .filter_map(|(fmt, bytes)| match *fmt {
+                codepp_plugin_host::CLIP_FORMAT_PLAIN => Some(ClipboardData::Plain(bytes.clone())),
+                codepp_plugin_host::CLIP_FORMAT_HTML => Some(ClipboardData::Html(bytes.clone())),
+                codepp_plugin_host::CLIP_FORMAT_RTF => Some(ClipboardData::Rtf(bytes.clone())),
+                other => {
+                    tracing::warn!(
+                        format = other,
+                        "CODEPPM_SETCLIPBOARD: unknown clipboard format"
+                    );
+                    None
+                }
+            })
+            .collect();
+        if mapped.is_empty() {
+            return false;
+        }
+        self.ui.set_clipboard(&mapped)
+    }
+
+    fn queue_export_save(&mut self, data: Vec<u8>, suggested_name: String, kind: u32) {
+        // Defer the Save-As dialog + write to the post-dispatch drain
+        // (an inline modal would re-enter the pump under the live host
+        // borrow). The suggested name is display-sanitised — it's
+        // plugin-supplied and pre-fills a dialog edit field, the same
+        // attacker-influenceable surface `set_status_bar` guards.
+        self.shell.deferred_dialogs.push(PendingDialog::SaveExport {
+            data,
+            suggested_name: sanitize_str_for_display(&suggested_name),
+            kind: ExportFileKind::from_wire(kind),
+        });
     }
 }
 
@@ -12482,5 +12620,27 @@ mod tests {
             !target.exists(),
             "nothing may be written while the view holds another buffer"
         );
+    }
+
+    #[test]
+    fn export_file_kind_maps_wire_values() {
+        assert_eq!(
+            ExportFileKind::from_wire(codepp_plugin_host::EXPORT_KIND_HTML),
+            ExportFileKind::Html
+        );
+        assert_eq!(
+            ExportFileKind::from_wire(codepp_plugin_host::EXPORT_KIND_RTF),
+            ExportFileKind::Rtf
+        );
+        // Unknown / out-of-range wire values degrade to Other.
+        assert_eq!(ExportFileKind::from_wire(999), ExportFileKind::Other);
+    }
+
+    #[test]
+    fn export_file_kind_dialog_filter_shapes() {
+        assert_eq!(ExportFileKind::Html.dialog_filter().2, "html");
+        assert_eq!(ExportFileKind::Rtf.dialog_filter().2, "rtf");
+        // Other forces no extension, so a chosen name is written verbatim.
+        assert_eq!(ExportFileKind::Other.dialog_filter().2, "");
     }
 }
