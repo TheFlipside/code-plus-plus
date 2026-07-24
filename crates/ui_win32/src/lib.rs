@@ -11641,29 +11641,10 @@ fn format_recent_menu_label(
     path: &std::path::Path,
     cfg: &codepp_core::RecentFilesHistoryConfig,
 ) -> String {
-    let visible = match cfg.display_mode {
-        codepp_core::RecentFileDisplayMode::OnlyFileName => path.file_name().map_or_else(
-            || path.to_string_lossy().into_owned(),
-            |s| s.to_string_lossy().into_owned(),
-        ),
-        codepp_core::RecentFileDisplayMode::FullPath => path.to_string_lossy().into_owned(),
-        codepp_core::RecentFileDisplayMode::CustomMaxLength => {
-            let full = path.to_string_lossy();
-            let cap = cfg.custom_max_length as usize;
-            if full.chars().count() <= cap {
-                full.into_owned()
-            } else {
-                // Truncate to the last `cap - 3` characters and
-                // prepend "..." so the meaningful tail (usually
-                // the filename) remains visible. Char-aware to
-                // avoid slicing multibyte sequences.
-                let keep = cap.saturating_sub(3);
-                let start = full.chars().count().saturating_sub(keep);
-                let tail: String = full.chars().skip(start).collect();
-                format!("...{tail}")
-            }
-        }
-    };
+    // Display-mode formatting is shared with the GTK backend — see
+    // `RecentFilesHistoryConfig::display_path`. Only the numbering +
+    // `&`-mnemonic escaping below is Win32-specific.
+    let visible = cfg.display_path(path);
     // Menu accelerator prefix `&<N>`: only slot 1..=9 gets one
     // — Alt+0 has no natural mnemonic and Alt-1 through Alt-9
     // matches N++.

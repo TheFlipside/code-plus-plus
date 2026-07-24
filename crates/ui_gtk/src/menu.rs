@@ -221,8 +221,19 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     restore.connect_activate(|_| restore_recent_closed());
     menu.append(&restore);
 
-    menu.append(&build_recent_files_submenu());
-    menu.append(&gtk::SeparatorMenuItem::new());
+    // The recent-files region — the numbered file list plus the Open All /
+    // Empty actions — is rebuilt on every File-menu open: its contents are
+    // dynamic, and its shape follows the Preferences "In Submenu" setting
+    // (inline flat by default, or nested in a "Recent Files" submenu). It
+    // is inserted just above this anchor separator; see
+    // `rebuild_recent_region`. (Restore Recent Closed File stays a
+    // persistent item above, so its global Ctrl+Shift+T accelerator keeps
+    // its binding — the one deliberate divergence from Win32, which nests
+    // Restore inside the region.)
+    let anchor = gtk::SeparatorMenuItem::new();
+    menu.append(&anchor);
+    RECENT_ANCHOR.with(|a| *a.borrow_mut() = Some(anchor));
+    menu.connect_show(rebuild_recent_region);
 
     let exit = gtk::MenuItem::with_mnemonic("E_xit");
     exit.connect_activate(|_| {
@@ -233,58 +244,126 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     menu.show_all();
 }
 
-/// Build the "Recent Files" submenu. Its contents are the recently-*closed*
-/// files (the shell pushes a path on close), rebuilt every time the submenu
-/// opens so a file re-opened since last time drops off. Below the list sit
-/// Open All Recent Files and Empty Recent Files List — greyed when the list
-/// is empty. (Restore Recent Closed File is a persistent File-menu item, so
-/// it can hold the Ctrl+Shift+T accelerator.)
-fn build_recent_files_submenu() -> gtk::MenuItem {
-    let item = gtk::MenuItem::with_mnemonic("Recent _Files");
-    let submenu = gtk::Menu::new();
-    submenu.connect_show(rebuild_recent_files_submenu);
-    item.set_submenu(Some(&submenu));
-    item
+thread_local! {
+    /// The persistent separator anchoring the recent-files region's lower
+    /// edge; the region is rebuilt just above it on each File-menu open.
+    /// Set once by [`build_file_menu`].
+    static RECENT_ANCHOR: std::cell::RefCell<Option<gtk::SeparatorMenuItem>> =
+        const { std::cell::RefCell::new(None) };
+    /// The region items inserted at the last rebuild, removed at the next.
+    /// Tracked so a rebuild removes exactly what it added, leaving the
+    /// static File-menu items untouched. Same discipline as Win32's
+    /// `recent_count` bookkeeping in `rebuild_file_menu_recent_region`.
+    static RECENT_REGION: std::cell::RefCell<Vec<gtk::Widget>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Clear and repopulate the Recent Files submenu from the shell.
-fn rebuild_recent_files_submenu(submenu: &gtk::Menu) {
-    for child in submenu.children() {
-        submenu.remove(&child);
-    }
-    let recents = with_state(|st| st.shell.visible_recent_files().to_vec()).unwrap_or_default();
-
-    if recents.is_empty() {
-        let empty = gtk::MenuItem::with_label("(no recent files)");
-        empty.set_sensitive(false);
-        submenu.append(&empty);
-    } else {
-        for (index, path) in recents.iter().enumerate() {
-            // Sanitized: a recently-closed path can carry hostile
-            // characters, and it renders straight into chrome.
-            let label = codepp_shell::sanitize_path_for_display(path);
-            // `with_label`, not `with_mnemonic`, on purpose: a filename's
-            // own `_` must not become an accelerator underscore, and there
-            // is no Pango markup to interpret. Do not "simplify" to
-            // `with_mnemonic` for consistency with the rest of the file.
-            let entry = gtk::MenuItem::with_label(&label);
-            entry.connect_activate(move |_| open_recent_at(index));
-            submenu.append(&entry);
+/// Rebuild the recent-files region on the File menu, respecting the
+/// Preferences "In Submenu" setting. Mirror of Win32's
+/// `rebuild_file_menu_recent_region`: remove the previous region, then
+/// insert the fresh one just above the anchor separator. Runs on every
+/// File-menu `show`.
+fn rebuild_recent_region(menu: &gtk::Menu) {
+    // Remove exactly the widgets the previous rebuild inserted.
+    RECENT_REGION.with(|r| {
+        for w in r.borrow_mut().drain(..) {
+            menu.remove(&w);
         }
+    });
+
+    let Some(anchor) = RECENT_ANCHOR.with(|a| a.borrow().clone()) else {
+        return;
+    };
+    let anchor: gtk::Widget = anchor.upcast();
+    let Some(base) = menu.children().iter().position(|c| *c == anchor) else {
+        return;
+    };
+
+    let items = recent_region_items();
+    for (offset, item) in items.iter().enumerate() {
+        // Insert above the anchor; each prior insert pushed the anchor down
+        // by one, so `base + offset` keeps the region ordered and contiguous.
+        menu.insert(item, i32::try_from(base + offset).unwrap_or(i32::MAX));
+    }
+    // Hand ownership of the freshly-inserted widgets to the tracker so the
+    // next rebuild can remove exactly these.
+    RECENT_REGION.with(|r| *r.borrow_mut() = items);
+    menu.show_all();
+}
+
+/// Build the recent-files region items for the current state + Preferences.
+///
+/// Layout mirrors Win32's `rebuild_file_menu_recent_region`: when the
+/// feature is inactive the region is empty; otherwise the numbered file
+/// list (formatted per the display mode) is followed — after an inner
+/// separator when non-empty — by the Open All / Empty actions. With "In
+/// Submenu" on, all of that nests inside a single "Recent Files" popup;
+/// off (the default) it is inlined flat, ready to insert on the File menu.
+fn recent_region_items() -> Vec<gtk::Widget> {
+    let (recents, cfg) = with_state(|st| {
+        (
+            st.shell.visible_recent_files().to_vec(),
+            st.shell.preferences.recent_files_history.clone(),
+        )
+    })
+    .unwrap_or_default();
+
+    // Feature off (unchecked, or a zero cap): render nothing — matching
+    // Win32's `!cfg.is_active()` early return.
+    if !cfg.is_active() {
+        return Vec::new();
     }
 
-    submenu.append(&gtk::SeparatorMenuItem::new());
-    let has_recents = !recents.is_empty();
-    let open_all = gtk::MenuItem::with_mnemonic("_Open All Recent Files");
-    open_all.set_sensitive(has_recents);
-    open_all.connect_activate(|_| open_all_recent());
-    submenu.append(&open_all);
-    let empty_list = gtk::MenuItem::with_mnemonic("_Empty Recent Files List");
-    empty_list.set_sensitive(has_recents);
-    empty_list.connect_activate(|_| empty_recent());
-    submenu.append(&empty_list);
+    // Numbered file entries. `format!("{N}: {display}")` mirrors Win32's
+    // `format_recent_menu_label` (its `&`-mnemonic is a Win32 accelerator
+    // detail; the on-screen text is the same "N: name"). `with_label`, not
+    // `with_mnemonic`: a filename's own `_` must not become an accelerator,
+    // and the display string is already sanitised against hostile chars.
+    let file_items: Vec<gtk::MenuItem> = recents
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let label = format!(
+                "{}: {}",
+                index + 1,
+                codepp_shell::sanitize_str_for_display(&cfg.display_path(path))
+            );
+            let item = gtk::MenuItem::with_label(&label);
+            item.connect_activate(move |_| open_recent_at(index));
+            item
+        })
+        .collect();
 
-    submenu.show_all();
+    let has = !recents.is_empty();
+    let open_all = gtk::MenuItem::with_mnemonic("_Open All Recent Files");
+    open_all.set_sensitive(has);
+    open_all.connect_activate(|_| open_all_recent());
+    let empty = gtk::MenuItem::with_mnemonic("_Empty Recent Files List");
+    empty.set_sensitive(has);
+    empty.connect_activate(|_| empty_recent());
+
+    if cfg.in_submenu {
+        let submenu = gtk::Menu::new();
+        for it in &file_items {
+            submenu.append(it);
+        }
+        if has {
+            submenu.append(&gtk::SeparatorMenuItem::new());
+        }
+        submenu.append(&open_all);
+        submenu.append(&empty);
+        let parent = gtk::MenuItem::with_mnemonic("Recent _Files");
+        parent.set_submenu(Some(&submenu));
+        vec![parent.upcast()]
+    } else {
+        let mut out: Vec<gtk::Widget> = file_items.into_iter().map(Cast::upcast).collect();
+        if has {
+            out.push(gtk::SeparatorMenuItem::new().upcast());
+        }
+        out.push(open_all.upcast());
+        out.push(empty.upcast());
+        out
+    }
 }
 
 /// Open the recent-files entry at `index` (removing it from the list — it

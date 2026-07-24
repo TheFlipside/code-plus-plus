@@ -134,6 +134,45 @@ impl RecentFilesHistoryConfig {
     pub fn is_active(&self) -> bool {
         self.enabled && self.max_entries > 0
     }
+
+    /// The visible string for `path` under this config's [`display_mode`]
+    /// — the part that follows a recent-files menu entry's number, before
+    /// any platform mnemonic escaping or sanitisation. Shared by both UI
+    /// backends so the three modes render identically:
+    ///
+    /// * [`RecentFileDisplayMode::OnlyFileName`] — the last path component.
+    /// * [`RecentFileDisplayMode::FullPath`] — the path verbatim.
+    /// * [`RecentFileDisplayMode::CustomMaxLength`] — the full path
+    ///   truncated to [`custom_max_length`] characters, keeping the tail
+    ///   (usually the filename) and prepending `...` when it doesn't fit.
+    ///
+    /// [`display_mode`]: Self::display_mode
+    /// [`custom_max_length`]: Self::custom_max_length
+    #[must_use]
+    pub fn display_path(&self, path: &std::path::Path) -> String {
+        match self.display_mode {
+            RecentFileDisplayMode::OnlyFileName => path.file_name().map_or_else(
+                || path.to_string_lossy().into_owned(),
+                |s| s.to_string_lossy().into_owned(),
+            ),
+            RecentFileDisplayMode::FullPath => path.to_string_lossy().into_owned(),
+            RecentFileDisplayMode::CustomMaxLength => {
+                let full = path.to_string_lossy();
+                let cap = self.custom_max_length as usize;
+                if full.chars().count() <= cap {
+                    full.into_owned()
+                } else {
+                    // Keep the last `cap - 3` characters and prepend "..."
+                    // so the meaningful tail stays visible. Char-aware so a
+                    // multibyte sequence is never sliced mid-codepoint.
+                    let keep = cap.saturating_sub(3);
+                    let start = full.chars().count().saturating_sub(keep);
+                    let tail: String = full.chars().skip(start).collect();
+                    format!("...{tail}")
+                }
+            }
+        }
+    }
 }
 
 /// Upper bound on `RecentFilesHistoryConfig::max_entries`.
@@ -273,6 +312,49 @@ mod tests {
             RecentFileDisplayMode::FullPath
         );
         assert_eq!(p.recent_files_history.custom_max_length, 60);
+    }
+
+    #[test]
+    fn display_path_only_file_name_keeps_last_component() {
+        let cfg = RecentFilesHistoryConfig {
+            display_mode: RecentFileDisplayMode::OnlyFileName,
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.display_path(std::path::Path::new("/home/max/notes/todo.md")),
+            "todo.md"
+        );
+    }
+
+    #[test]
+    fn display_path_full_path_is_verbatim() {
+        let cfg = RecentFilesHistoryConfig {
+            display_mode: RecentFileDisplayMode::FullPath,
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.display_path(std::path::Path::new("/a/b/c.txt")),
+            "/a/b/c.txt"
+        );
+    }
+
+    #[test]
+    fn display_path_custom_length_truncates_keeping_the_tail() {
+        let cfg = RecentFilesHistoryConfig {
+            display_mode: RecentFileDisplayMode::CustomMaxLength,
+            custom_max_length: 12,
+            ..Default::default()
+        };
+        // 19-char path, cap 12 → "..." + the last 9 chars ("/path.txt").
+        assert_eq!(
+            cfg.display_path(std::path::Path::new("/very/long/path.txt")),
+            ".../path.txt"
+        );
+        // A path within the cap is returned verbatim (no ellipsis).
+        assert_eq!(
+            cfg.display_path(std::path::Path::new("/a/b.txt")),
+            "/a/b.txt"
+        );
     }
 
     #[test]
