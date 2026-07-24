@@ -146,12 +146,12 @@ pub struct Tab {
 /// is purely additive (new `Option<i32>` fields default to `None`
 /// and existing session.xml files round-trip unchanged).
 ///
-/// `Default` produces `{ width: None, height: None, maximized: false }`
-/// — which is *load-bearing*: the UI's runtime tracking calls
-/// `Shell::saved_window_geometry().unwrap_or_default()` on every
-/// `WM_SIZE`, so flipping any field to a non-zero default would
-/// silently rewrite the saved state on every interaction. Keep
-/// the all-zero default.
+/// `Default` produces `{ width: None, height: None, x: None, y: None,
+/// maximized: false }` — which is *load-bearing*: the UI's runtime
+/// tracking calls `Shell::saved_window_geometry().unwrap_or_default()`
+/// on every `WM_SIZE`, so flipping any field to a non-zero default would
+/// silently rewrite the saved state on every interaction. Keep the
+/// all-zero default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WindowGeometry {
     /// Restored (non-maximized) outer width in pixels. The UI is
@@ -164,10 +164,24 @@ pub struct WindowGeometry {
     /// expectation as `width`.
     #[serde(rename = "@height", skip_serializing_if = "Option::is_none", default)]
     pub height: Option<i32>,
+    /// Restored (non-maximized) outer X position in pixels — the
+    /// window's top-left in root/screen coordinates. **May be
+    /// negative** (a monitor left of the primary has negative X), so
+    /// unlike `width`/`height` the UI must not positive-filter it. The
+    /// UI is expected to apply it only if it still lands on a connected
+    /// monitor, so unplugging a monitor or changing resolution can't
+    /// strand the window off-screen. `None` when unknown or when the
+    /// platform can't place its own windows (Wayland — a no-op there).
+    #[serde(rename = "@x", skip_serializing_if = "Option::is_none", default)]
+    pub x: Option<i32>,
+    /// Restored outer Y position in pixels. Same semantics (and same
+    /// may-be-negative, apply-only-if-on-a-monitor caveat) as `x`.
+    #[serde(rename = "@y", skip_serializing_if = "Option::is_none", default)]
+    pub y: Option<i32>,
     /// True iff the window was maximized at the moment session.xml
     /// was last written. The UI restores this by showing
-    /// maximized while still using the `width`/`height` as the
-    /// "un-maximize back to this size" fallback.
+    /// maximized while still using the `width`/`height` (and
+    /// `x`/`y`) as the "un-maximize back to this" fallback.
     #[serde(rename = "@maximized", default, skip_serializing_if = "is_false")]
     pub maximized: bool,
 }
@@ -826,6 +840,10 @@ mod tests {
             window: Some(WindowGeometry {
                 width: Some(1440),
                 height: Some(900),
+                // Negative X exercises the "monitor left of primary"
+                // case the UI must preserve verbatim (no positive-filter).
+                x: Some(-120),
+                y: Some(48),
                 maximized: false,
             }),
             workspace: None,
@@ -846,6 +864,8 @@ mod tests {
             window: Some(WindowGeometry {
                 width: Some(1280),
                 height: Some(720),
+                x: Some(200),
+                y: Some(100),
                 maximized: true,
             }),
             workspace: None,
@@ -856,6 +876,26 @@ mod tests {
         session.save_to_xml(&path).unwrap();
         let loaded = Session::load_from_xml(&path).unwrap();
         assert_eq!(session, loaded);
+    }
+
+    /// A `<window>` element written by a build that predates the `x`/`y`
+    /// position attributes must still parse — the two new attributes
+    /// default to `None` and every other field loads unchanged. This is
+    /// the narrower, more likely real-world back-compat case than a
+    /// session with no `<window>` element at all (covered above).
+    #[test]
+    fn pre_position_window_element_loads_with_none_xy() {
+        let (_dir, path) = temp_session_path();
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<session active="0"><window width="1024" height="768" maximized="true"/></session>"#;
+        std::fs::write(&path, xml).unwrap();
+        let loaded = Session::load_from_xml(&path).unwrap();
+        let g = loaded.window.expect("window element should parse");
+        assert_eq!(g.width, Some(1024));
+        assert_eq!(g.height, Some(768));
+        assert!(g.maximized);
+        assert_eq!(g.x, None, "missing @x must default to None");
+        assert_eq!(g.y, None, "missing @y must default to None");
     }
 
     /// A session.xml written before the window-geometry feature

@@ -1086,7 +1086,8 @@ fn apply_startup_styles() {
     });
 }
 
-/// Restore the window size the last session ended with.
+/// Restore the window size, position, and maximized state the last
+/// session ended with.
 fn restore_window_geometry(window: &gtk::Window) {
     let Some(Some(g)) = with_state(|st| st.shell.saved_window_geometry()) else {
         return;
@@ -1096,9 +1097,61 @@ fn restore_window_geometry(window: &gtk::Window) {
             window.set_default_size(w, h);
         }
     }
+    // Position: apply only if the saved top-left still lands on a
+    // connected monitor — the guard against a window stranded off-screen
+    // after a monitor is unplugged or the resolution changes. `x`/`y` are
+    // used verbatim (they may be negative for a monitor left of the
+    // primary — never positive-filtered). On Wayland `move_` is a silent
+    // no-op (clients can't self-position); harmless. Runs even when
+    // restoring maximized, seeding the un-maximize location.
+    //
+    // Coordinate space: the saved `x`/`y` and the monitor rectangles are
+    // both GDK root-window pixels (`gtk_window_get_position` on save,
+    // `GdkMonitor::geometry` here), the same space `move_` consumes — so
+    // the containment check is apples-to-apples. On a fractional-scale
+    // display GDK still reports this space consistently; on Wayland
+    // `move_` is a no-op regardless, so a mismatch there can't misplace
+    // anything.
+    if let (Some(x), Some(y)) = (g.x, g.y) {
+        if point_in_any_monitor(x, y, &monitor_rects()) {
+            window.move_(x, y);
+        } else {
+            tracing::debug!(
+                x,
+                y,
+                maximized = g.maximized,
+                "saved window position is off all monitors; not restoring it"
+            );
+        }
+    }
     if g.maximized {
         window.maximize();
     }
+}
+
+/// Whether the point `(x, y)` lies inside any monitor rectangle
+/// `(x, y, width, height)`. Pure — the display query lives in
+/// [`monitor_rects`] — so the geometry math is unit-testable without a
+/// display.
+fn point_in_any_monitor(x: i32, y: i32, monitors: &[(i32, i32, i32, i32)]) -> bool {
+    monitors
+        .iter()
+        .any(|&(mx, my, w, h)| x >= mx && x < mx + w && y >= my && y < my + h)
+}
+
+/// Rectangles of every connected monitor on the default display, as
+/// `(x, y, width, height)`. Empty when no display is available.
+fn monitor_rects() -> Vec<(i32, i32, i32, i32)> {
+    let Some(display) = gtk::gdk::Display::default() else {
+        return Vec::new();
+    };
+    (0..display.n_monitors())
+        .filter_map(|i| display.monitor(i))
+        .map(|m| {
+            let r = m.geometry();
+            (r.x(), r.y(), r.width(), r.height())
+        })
+        .collect()
 }
 
 /// Reopen last session's files, then the command-line path if given.
@@ -1501,41 +1554,61 @@ pub(crate) fn close_active_tab() -> bool {
 fn sync_window_geometry_to_shell() {
     with_state(|st| {
         let prev = st.shell.saved_window_geometry().unwrap_or_default();
-        let geom = window_geometry_to_persist(st.window.is_maximized(), st.window.size(), prev);
+        let geom = window_geometry_to_persist(
+            st.window.is_maximized(),
+            st.window.size(),
+            st.window.position(),
+            prev,
+        );
         st.shell.set_window_geometry(geom);
     });
 }
 
 /// Decide the [`WindowGeometry`](codepp_core::WindowGeometry) to persist
 /// from the window's current state. Pure (no GTK) so the
-/// maximized-preserves-restored-size rule is unit-testable without a
-/// display.
+/// maximized-preserves-restored rule is unit-testable without a display.
 ///
-/// - Not maximized: store the current `size` (a non-positive dimension —
-///   e.g. a not-yet-realized window — is dropped to `None`).
-/// - Maximized: keep `prev`'s restored width/height (the current size is
-///   the maximized extent, not the un-maximize fallback) and flag it.
+/// - Not maximized (realized): store the current `size` + `position`.
+///   `position` is stored verbatim — it may be negative (a monitor left
+///   of the primary), so unlike size it is *not* positive-filtered.
+/// - Not maximized but an unrealized / bogus `(0, 0)` size: keep `prev`
+///   rather than overwriting good geometry with garbage.
+/// - Maximized: keep `prev`'s restored size + position (the live
+///   size/position report the maximized extent, not the un-maximize
+///   fallback) and flag it.
 fn window_geometry_to_persist(
     maximized: bool,
     size: (i32, i32),
+    position: (i32, i32),
     prev: codepp_core::WindowGeometry,
 ) -> codepp_core::WindowGeometry {
     if maximized {
-        // Carry the previous restored size forward as the un-maximize
-        // fallback. Filter to positive values as defence-in-depth against
-        // a hand-edited / corrupt session.xml seeding a non-positive
-        // "restored" size that would then be reapplied on un-maximize.
+        // Carry the previous restored size + position forward as the
+        // un-maximize fallback. Width/height are positive-filtered as
+        // defence against a corrupt session.xml; x/y may legitimately be
+        // negative, so they pass through unfiltered (the on-restore
+        // monitor check validates them).
         codepp_core::WindowGeometry {
             width: prev.width.filter(|&w| w > 0),
             height: prev.height.filter(|&h| h > 0),
+            x: prev.x,
+            y: prev.y,
             maximized: true,
         }
-    } else {
-        let (w, h) = size;
+    } else if size.0 > 0 && size.1 > 0 {
         codepp_core::WindowGeometry {
-            width: (w > 0).then_some(w),
-            height: (h > 0).then_some(h),
+            width: Some(size.0),
+            height: Some(size.1),
+            x: Some(position.0),
+            y: Some(position.1),
             maximized: false,
+        }
+    } else {
+        // Not-yet-realized window reports (0, 0); don't clobber the good
+        // geometry we already hold.
+        codepp_core::WindowGeometry {
+            maximized: false,
+            ..prev
         }
     }
 }
@@ -1861,85 +1934,169 @@ let msg = \"found scintilla_new() calls\";
     }
 }
 
-/// Pure tests for the window-geometry persistence rule — no GTK / no
-/// display, so they run in the default `cargo test`.
+/// Pure tests for the window-geometry persistence rule + the
+/// off-screen-position guard — no GTK / no display, so they run in the
+/// default `cargo test`.
 #[cfg(test)]
 mod window_geometry_tests {
-    use super::window_geometry_to_persist;
+    use super::{point_in_any_monitor, window_geometry_to_persist};
     use codepp_core::WindowGeometry;
 
     #[test]
-    fn non_maximized_stores_current_size() {
-        let g = window_geometry_to_persist(false, (1000, 800), WindowGeometry::default());
+    fn non_maximized_stores_current_size_and_position() {
+        let g = window_geometry_to_persist(false, (1000, 800), (60, 40), WindowGeometry::default());
         assert_eq!(
             g,
             WindowGeometry {
                 width: Some(1000),
                 height: Some(800),
+                x: Some(60),
+                y: Some(40),
                 maximized: false,
             }
         );
     }
 
     #[test]
-    fn maximized_flags_and_preserves_the_restored_size() {
-        // The window is maximized now, but a previous non-maximized save
-        // recorded 1200x900 — that stays as the un-maximize fallback.
+    fn negative_position_is_stored_verbatim() {
+        // A monitor left of the primary gives a negative X; it must NOT be
+        // positive-filtered the way width/height are.
+        let g =
+            window_geometry_to_persist(false, (900, 700), (-1280, 0), WindowGeometry::default());
+        assert_eq!(g.x, Some(-1280));
+        assert_eq!(g.y, Some(0));
+    }
+
+    #[test]
+    fn maximized_preserves_the_restored_size_and_position() {
+        // Maximized now, but a previous non-maximized save recorded
+        // 1200x900 at (200, 120) — those stay as the un-maximize fallback.
         let prev = WindowGeometry {
             width: Some(1200),
             height: Some(900),
+            x: Some(200),
+            y: Some(120),
             maximized: false,
         };
-        let g = window_geometry_to_persist(true, (3840, 2160), prev);
+        let g = window_geometry_to_persist(true, (3840, 2160), (0, 0), prev);
         assert_eq!(
             g,
             WindowGeometry {
                 width: Some(1200),
                 height: Some(900),
+                x: Some(200),
+                y: Some(120),
                 maximized: true,
             }
         );
     }
 
     #[test]
-    fn first_run_maximized_has_no_restored_size_yet() {
-        // Maximized with no prior restored size (fresh session): flag it,
-        // leave width/height None so restore just maximizes.
-        let g = window_geometry_to_persist(true, (3840, 2160), WindowGeometry::default());
+    fn first_run_maximized_has_no_restored_geometry_yet() {
+        let g = window_geometry_to_persist(true, (3840, 2160), (0, 0), WindowGeometry::default());
         assert_eq!(
             g,
             WindowGeometry {
-                width: None,
-                height: None,
                 maximized: true,
+                ..WindowGeometry::default()
             }
         );
     }
 
     #[test]
-    fn non_positive_size_is_dropped() {
-        // A not-yet-realized window can report (0, 0); don't persist it.
-        let g = window_geometry_to_persist(false, (0, 0), WindowGeometry::default());
-        assert_eq!(g, WindowGeometry::default());
+    fn non_positive_size_keeps_previous_geometry() {
+        // A not-yet-realized window reports (0, 0); don't clobber good
+        // geometry with garbage.
+        let prev = WindowGeometry {
+            width: Some(1024),
+            height: Some(768),
+            x: Some(10),
+            y: Some(20),
+            maximized: false,
+        };
+        let g = window_geometry_to_persist(false, (0, 0), (999, 999), prev);
+        assert_eq!(g, prev); // unchanged (maximized already false)
+    }
+
+    #[test]
+    fn unrealized_size_forces_maximized_false_even_when_prev_was_maximized() {
+        // A spurious (0,0) report while the current call is non-maximized
+        // must override a stale `prev.maximized == true` rather than carry
+        // it forward — the `maximized: false, ..prev` override, not a
+        // silent field carry.
+        let prev = WindowGeometry {
+            width: Some(800),
+            height: Some(600),
+            x: Some(5),
+            y: Some(5),
+            maximized: true,
+        };
+        let g = window_geometry_to_persist(false, (0, 0), (1, 1), prev);
+        assert_eq!(
+            g,
+            WindowGeometry {
+                maximized: false,
+                ..prev
+            }
+        );
+        assert!(!g.maximized);
     }
 
     #[test]
     fn maximized_drops_a_corrupt_non_positive_restored_size() {
         // Defence-in-depth: a hand-edited session.xml with a non-positive
-        // restored width must not survive into the next save.
+        // restored width must not survive into the next save. x/y are left
+        // as-is (validated on restore by the monitor check).
         let prev = WindowGeometry {
             width: Some(-1),
             height: Some(0),
+            x: Some(50),
+            y: Some(50),
             maximized: false,
         };
-        let g = window_geometry_to_persist(true, (3840, 2160), prev);
+        let g = window_geometry_to_persist(true, (3840, 2160), (0, 0), prev);
         assert_eq!(
             g,
             WindowGeometry {
                 width: None,
                 height: None,
+                x: Some(50),
+                y: Some(50),
                 maximized: true,
             }
         );
+    }
+
+    // --- off-screen position guard ---
+
+    #[test]
+    fn point_inside_a_monitor_is_accepted() {
+        // Dual-monitor: primary 1920x1080 at (0,0), secondary to the right.
+        let monitors = [(0, 0, 1920, 1080), (1920, 0, 1920, 1080)];
+        assert!(point_in_any_monitor(100, 50, &monitors));
+        assert!(point_in_any_monitor(2000, 500, &monitors)); // on the second
+    }
+
+    #[test]
+    fn point_off_all_monitors_is_rejected() {
+        // The classic "closed on an unplugged monitor" case: the saved
+        // top-left is beyond every current monitor.
+        let monitors = [(0, 0, 1920, 1080)];
+        assert!(!point_in_any_monitor(3000, 500, &monitors)); // second monitor gone
+        assert!(!point_in_any_monitor(-2000, 0, &monitors)); // monitor to the left gone
+        assert!(!point_in_any_monitor(0, 2000, &monitors)); // below
+    }
+
+    #[test]
+    fn negative_position_on_a_left_monitor_is_accepted() {
+        // A monitor left of the primary occupies negative X — a saved
+        // (-1280, 0) is legitimately on-screen and must be accepted.
+        let monitors = [(-1280, 0, 1280, 1024), (0, 0, 1920, 1080)];
+        assert!(point_in_any_monitor(-1000, 200, &monitors));
+    }
+
+    #[test]
+    fn no_monitors_rejects_everything() {
+        assert!(!point_in_any_monitor(0, 0, &[]));
     }
 }
