@@ -311,6 +311,26 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // has already staged the bundled plugins into this directory.
     plugin::discover();
 
+    // Track window geometry continuously so the size the user leaves the
+    // window at — and the maximized state — is always current in the shell
+    // for the next save. This is the Win32 parity for its `WM_SIZE` /
+    // maximize handler: without it, capturing only at save time would lose
+    // a resize that happened immediately before maximizing (the maximized
+    // branch keeps the *previous* restored size). `configure-event` covers
+    // resizes/moves; `window-state-event` covers the maximize toggle. Both
+    // only refresh the shell's cached geometry (cheap); the persist to
+    // disk still happens at save time. Connected after
+    // `restore_window_geometry` so the restore's own `maximize()` doesn't
+    // capture a transient size.
+    window.connect_configure_event(|_, _| {
+        sync_window_geometry_to_shell();
+        false // observe only — GTK must still process the resize
+    });
+    window.connect_window_state_event(|_, _| {
+        sync_window_geometry_to_shell();
+        glib::Propagation::Proceed
+    });
+
     window.connect_delete_event(|_, _| {
         // Persist before tearing down: `Shell::save_session` needs the
         // editor alive to read the caret position back out.
@@ -1456,13 +1476,71 @@ pub(crate) fn close_active_tab() -> bool {
     proceed
 }
 
+/// Snapshot the window's current size + maximized state into the shell's
+/// cached geometry, which [`save_session`](codepp_shell::Shell::save_session)
+/// then persists. Called continuously as the window changes (from the
+/// `configure-event` / `window-state-event` handlers — the GTK analogue of
+/// Win32's `WM_SIZE` / maximize handler) *and* once more right before each
+/// save, alongside [`workspace::sync_to_shell`] / [`docmap::sync_to_shell`].
+///
+/// When maximized, `window.size()` reports the *maximized* extent, which
+/// must not be stored as the restored size. Keep the last non-maximized
+/// width/height already in the shell (kept current by the resize handler)
+/// so un-maximizing after a maximized restart returns to a sensible
+/// window — the same split Win32's `GetWindowPlacement` makes, and exactly
+/// what `WindowGeometry`'s doc prescribes ("show maximized while still
+/// using width/height as the un-maximize fallback").
+fn sync_window_geometry_to_shell() {
+    with_state(|st| {
+        let prev = st.shell.saved_window_geometry().unwrap_or_default();
+        let geom = window_geometry_to_persist(st.window.is_maximized(), st.window.size(), prev);
+        st.shell.set_window_geometry(geom);
+    });
+}
+
+/// Decide the [`WindowGeometry`](codepp_core::WindowGeometry) to persist
+/// from the window's current state. Pure (no GTK) so the
+/// maximized-preserves-restored-size rule is unit-testable without a
+/// display.
+///
+/// - Not maximized: store the current `size` (a non-positive dimension —
+///   e.g. a not-yet-realized window — is dropped to `None`).
+/// - Maximized: keep `prev`'s restored width/height (the current size is
+///   the maximized extent, not the un-maximize fallback) and flag it.
+fn window_geometry_to_persist(
+    maximized: bool,
+    size: (i32, i32),
+    prev: codepp_core::WindowGeometry,
+) -> codepp_core::WindowGeometry {
+    if maximized {
+        // Carry the previous restored size forward as the un-maximize
+        // fallback. Filter to positive values as defence-in-depth against
+        // a hand-edited / corrupt session.xml seeding a non-positive
+        // "restored" size that would then be reapplied on un-maximize.
+        codepp_core::WindowGeometry {
+            width: prev.width.filter(|&w| w > 0),
+            height: prev.height.filter(|&h| h > 0),
+            maximized: true,
+        }
+    } else {
+        let (w, h) = size;
+        codepp_core::WindowGeometry {
+            width: (w > 0).then_some(w),
+            height: (h > 0).then_some(h),
+            maximized: false,
+        }
+    }
+}
+
 /// Persist the session. Safe to call repeatedly.
 pub(crate) fn save_session_now() {
-    // Snapshot the live workspace-panel state into the shell first, so
-    // `save_session` carries the current root / visibility / width — the
-    // same "sync right before every save" discipline `ui_win32` follows.
+    // Snapshot the live workspace-panel + window state into the shell
+    // first, so `save_session` carries the current root / visibility /
+    // width / window geometry — the same "sync right before every save"
+    // discipline `ui_win32` follows.
     workspace::sync_to_shell();
     docmap::sync_to_shell();
+    sync_window_geometry_to_shell();
     with_state(|st| {
         let (shell, mut ui) = st.split();
         if let Err(err) = shell.save_session(&mut ui) {
@@ -1772,5 +1850,88 @@ let msg = \"found scintilla_new() calls\";
                 );
             }
         }
+    }
+}
+
+/// Pure tests for the window-geometry persistence rule — no GTK / no
+/// display, so they run in the default `cargo test`.
+#[cfg(test)]
+mod window_geometry_tests {
+    use super::window_geometry_to_persist;
+    use codepp_core::WindowGeometry;
+
+    #[test]
+    fn non_maximized_stores_current_size() {
+        let g = window_geometry_to_persist(false, (1000, 800), WindowGeometry::default());
+        assert_eq!(
+            g,
+            WindowGeometry {
+                width: Some(1000),
+                height: Some(800),
+                maximized: false,
+            }
+        );
+    }
+
+    #[test]
+    fn maximized_flags_and_preserves_the_restored_size() {
+        // The window is maximized now, but a previous non-maximized save
+        // recorded 1200x900 — that stays as the un-maximize fallback.
+        let prev = WindowGeometry {
+            width: Some(1200),
+            height: Some(900),
+            maximized: false,
+        };
+        let g = window_geometry_to_persist(true, (3840, 2160), prev);
+        assert_eq!(
+            g,
+            WindowGeometry {
+                width: Some(1200),
+                height: Some(900),
+                maximized: true,
+            }
+        );
+    }
+
+    #[test]
+    fn first_run_maximized_has_no_restored_size_yet() {
+        // Maximized with no prior restored size (fresh session): flag it,
+        // leave width/height None so restore just maximizes.
+        let g = window_geometry_to_persist(true, (3840, 2160), WindowGeometry::default());
+        assert_eq!(
+            g,
+            WindowGeometry {
+                width: None,
+                height: None,
+                maximized: true,
+            }
+        );
+    }
+
+    #[test]
+    fn non_positive_size_is_dropped() {
+        // A not-yet-realized window can report (0, 0); don't persist it.
+        let g = window_geometry_to_persist(false, (0, 0), WindowGeometry::default());
+        assert_eq!(g, WindowGeometry::default());
+    }
+
+    #[test]
+    fn maximized_drops_a_corrupt_non_positive_restored_size() {
+        // Defence-in-depth: a hand-edited session.xml with a non-positive
+        // restored width must not survive into the next save.
+        let prev = WindowGeometry {
+            width: Some(-1),
+            height: Some(0),
+            maximized: false,
+        };
+        let g = window_geometry_to_persist(true, (3840, 2160), prev);
+        assert_eq!(
+            g,
+            WindowGeometry {
+                width: None,
+                height: None,
+                maximized: true,
+            }
+        );
     }
 }
