@@ -60,11 +60,11 @@ pub use codepp_plugin_host::ffi::{
 // send one-off messages the helpers below don't cover, and the two
 // definitions share one signature so call sites are identical.
 
-/// Win32 `SendMessageW`. Synchronous round-trip into the target
-/// window's `wnd_proc`; returns whatever the message handler produced.
 #[cfg(target_os = "windows")]
 #[link(name = "user32")]
 extern "system" {
+    /// Win32 `SendMessageW`. Synchronous round-trip into the target
+    /// window's `wnd_proc`; returns whatever the message handler produced.
     pub fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
 }
 

@@ -110,7 +110,7 @@ fn cppmimetools_loads_and_publishes_twenty_func_items() {
     let count = host.discover(staging.path()).unwrap();
     assert_eq!(count, 1, "discovery should find exactly the staged DLL");
 
-    host.load(0, npp_data_with_bogus_handles())
+    host.load(0, npp_data_with_bogus_handles(), None)
         .expect("load cppmimetools.dll");
 
     let info = host.iter().next().expect("one plugin");
