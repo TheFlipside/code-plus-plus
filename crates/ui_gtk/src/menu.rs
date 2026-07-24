@@ -1512,6 +1512,18 @@ fn apply_view_settings(
         codepp_scintilla_sys::SCWS_INVISIBLE
     };
     editor.send(codepp_scintilla_sys::SCI_SETWRAPMODE, wrap, 0);
+    // Clear the tracking-mode horizontal scroll high-water mark
+    // (`view.lineWidthMaxSeen`) so it recomputes for the current — possibly
+    // newly-unwrapped — content. That mark never shrinks on its own and is
+    // shared across the single view, so a long line seen earlier (or the
+    // full-view-width wrapped layout itself) would otherwise leave a
+    // phantom horizontal scroll into empty space every time wrap is toggled
+    // back off. `SCI_SETSCROLLWIDTH(1)` zeroes it; the re-layout re-measures
+    // the visible lines. See the setup in `crate::run`.
+    //
+    // This also fires for the whitespace / EOL toggles, which share this
+    // function — harmless there: it just forces a same-content re-measure.
+    editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, 1, 0);
     editor.send(codepp_scintilla_sys::SCI_SETVIEWWS, ws, 0);
     editor.send(
         codepp_scintilla_sys::SCI_SETVIEWEOL,

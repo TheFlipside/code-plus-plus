@@ -1487,6 +1487,18 @@ pub(crate) fn rebind_active_view() {
         let (shell, mut ui) = st.split();
         shell.bind_active_view(&mut ui);
     });
+    // The single view now holds a different document. Reset the
+    // tracking-mode horizontal scroll high-water mark
+    // (`view.lineWidthMaxSeen`, shared across every tab bound to this one
+    // view and never self-shrinking) so the newly-active tab recomputes
+    // its own width on the next paint instead of inheriting the widest
+    // line ever seen in a previously-active tab — otherwise switching from
+    // a long-line file to a short one leaves a phantom horizontal scroll.
+    // See `menu::apply_view_settings` / the setup in `run`.
+    with_state(|st| {
+        st.editor
+            .send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, 1, 0);
+    });
     refresh_tab_chrome();
     // Point the Document Map's miniature at whatever buffer ended up
     // active. A no-op when the map is hidden; a fresh `with_state` borrow,
