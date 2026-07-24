@@ -1782,7 +1782,11 @@ impl Shell {
     /// has no useful recovery path for a write failure other than
     /// re-prompting the user (which would be more disruptive than
     /// the silent log).
-    pub fn set_styles(&mut self, styles: codepp_core::styles::Styles) {
+    pub fn set_styles(&mut self, mut styles: codepp_core::styles::Styles) {
+        // Bound the same fields the load path bounds, so a Style Configurator
+        // save can never write a `styles.xml` the next launch would refuse
+        // (e.g. an over-long font family name pushing past the size cap).
+        styles.clamp();
         self.styles = styles;
         save_styles(&self.styles);
     }

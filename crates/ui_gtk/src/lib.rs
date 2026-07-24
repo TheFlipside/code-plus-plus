@@ -49,6 +49,7 @@ mod preferences;
 mod search;
 mod state;
 mod status;
+mod style_config;
 mod tabs;
 mod toolbar;
 mod udl;

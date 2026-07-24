@@ -185,6 +185,23 @@ fn truncate_font_name(name: &mut String) {
 }
 
 impl Styles {
+    /// Clamp fields that the load path bounds, so the *save* path can never
+    /// produce a `styles.xml` the load path would then refuse. Today that is
+    /// the default entry's [`StyleEntry::font_name`], truncated to
+    /// [`FONT_NAME_MAX_LEN`] chars: a pathological system font family name
+    /// (picked in the Style Configurator) could otherwise push the file past
+    /// [`STYLES_XML_MAX_BYTES`], which `load_from_xml` rejects — silently
+    /// reverting the user's saved styles to defaults on next launch.
+    ///
+    /// Called by [`Self::load_from_xml`] (so a hand-edited file is bounded on
+    /// read) and by the shell's `set_styles` (so the Configurator's output is
+    /// bounded on write). Single-sources the rule for both backends.
+    pub fn clamp(&mut self) {
+        if let Some(entry) = &mut self.default {
+            truncate_font_name(&mut entry.font_name);
+        }
+    }
+
     /// Return the active default style — the persisted value if
     /// present, otherwise the built-in defaults. Callers should
     /// use this rather than `.default.unwrap_or_default()` so the
@@ -239,9 +256,7 @@ impl Styles {
         let text = std::str::from_utf8(&bytes).map_err(|e| StylesError::Utf8(e.to_string()))?;
         let mut parsed: Styles =
             quick_xml::de::from_str(text).map_err(|e| StylesError::Parse(e.to_string()))?;
-        if let Some(ref mut entry) = parsed.default {
-            truncate_font_name(&mut entry.font_name);
-        }
+        parsed.clamp();
         Ok(parsed)
     }
 
@@ -312,7 +327,11 @@ impl Styles {
 #[must_use]
 pub fn parse_rgb_hex(s: &str) -> Option<(u8, u8, u8)> {
     let trimmed = s.strip_prefix('#').unwrap_or(s);
-    if trimmed.len() != 6 {
+    // Reject non-ASCII before slicing by byte offset: `trimmed.len()` counts
+    // bytes, so a 6-byte string carrying a multi-byte codepoint (e.g.
+    // "a€12") would otherwise panic when `&trimmed[0..2]` splits it
+    // mid-codepoint. Valid hex is ASCII, so this also fails fast on garbage.
+    if trimmed.len() != 6 || !trimmed.is_ascii() {
         return None;
     }
     let r = u8::from_str_radix(&trimmed[0..2], 16).ok()?;
@@ -368,6 +387,36 @@ mod tests {
         s.save_to_xml(&path).unwrap();
         let loaded = Styles::load_from_xml(&path).unwrap();
         assert_eq!(s, loaded);
+    }
+
+    #[test]
+    fn clamp_truncates_an_over_long_font_name_on_the_save_path() {
+        // A Style-Configurator save could carry a pathological system font
+        // family name; `clamp` (called by `Shell::set_styles`) must bound it
+        // to FONT_NAME_MAX_LEN chars so the written file never exceeds the
+        // read-side size cap. Char-aware: a multibyte name stays valid UTF-8.
+        let mut s = Styles {
+            default: Some(StyleEntry {
+                font_name: "字".repeat(FONT_NAME_MAX_LEN + 50),
+                ..Default::default()
+            }),
+            transparency: None,
+        };
+        s.clamp();
+        let chars = s.default.unwrap().font_name.chars().count();
+        assert_eq!(chars, FONT_NAME_MAX_LEN);
+    }
+
+    #[test]
+    fn parse_rgb_hex_rejects_non_ascii_six_byte_string_without_panicking() {
+        // "a€12" is 6 bytes but 4 chars; slicing `[0..2]` would split the
+        // 3-byte '€' mid-codepoint and panic. The `is_ascii` guard makes it
+        // return None instead. (Reachable at startup via apply_default_style
+        // on a hand-crafted styles.xml, so this pins a real crash fix.)
+        assert_eq!(parse_rgb_hex("a€12"), None);
+        // A genuine 6-hex-digit string still parses.
+        assert_eq!(parse_rgb_hex("1A2B3C"), Some((0x1A, 0x2B, 0x3C)));
+        assert_eq!(parse_rgb_hex("#FFFFFF"), Some((0xFF, 0xFF, 0xFF)));
     }
 
     #[test]

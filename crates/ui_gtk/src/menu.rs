@@ -1037,8 +1037,8 @@ fn refresh_active_status() {
 ///
 /// "Preferences…" opens the GTK Preferences dialog (the Recent Files
 /// History pane — the only one wired on either backend so far). "Style
-/// Configurator…" is greyed for now: its Win32 dialog is a ~1000-line
-/// syntax-colour editor whose GTK port is a tracked Phase-5 follow-up.
+/// Configurator…" opens the GTK style editor (the Default Style + window
+/// transparency, mirroring Win32's dialog scope).
 fn build_settings_menu(bar: &gtk::MenuBar, window: &gtk::Window) {
     let Some(menu) = submenu_at(bar, 6, "Settings") else {
         return;
@@ -1050,7 +1050,8 @@ fn build_settings_menu(bar: &gtk::MenuBar, window: &gtk::Window) {
     menu.append(&prefs);
 
     let style = gtk::MenuItem::with_mnemonic("_Style Configurator…");
-    style.set_sensitive(false);
+    let win = window.clone();
+    style.connect_activate(move |_| crate::style_config::show(&win));
     menu.append(&style);
 
     menu.show_all();
