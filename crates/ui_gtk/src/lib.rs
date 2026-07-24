@@ -1154,6 +1154,82 @@ fn monitor_rects() -> Vec<(i32, i32, i32, i32)> {
         .collect()
 }
 
+thread_local! {
+    /// True while a "Restore Default Window Size" reset is settling — see
+    /// [`restore_default_window_size`] / [`sync_window_geometry_to_shell`].
+    /// GTK is single-threaded, so one cell suffices.
+    static WINDOW_RESET_SETTLING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// View → Restore Default Window Size. Un-maximize, resize to the
+/// built-in default dimensions, and re-centre on the primary monitor — a
+/// recovery escape hatch for a window that has ended up in an awkward
+/// state (dragged mostly off-screen, sized oddly). The reset is persisted
+/// so the next launch also opens at the default. On Wayland the re-centre
+/// `move_` is a no-op (the compositor owns placement), but the
+/// un-maximize + resize still take effect.
+pub(crate) fn restore_default_window_size() {
+    let centred = centered_on_primary(DEFAULT_WIDTH, DEFAULT_HEIGHT);
+    // Freeze geometry capture *before* issuing the requests, so the
+    // `configure-event`/`window-state-event` they trigger (which fire
+    // asynchronously as the WM settles them) can't capture a transitional
+    // size/position and overwrite the default we persist below. The WM
+    // settles this well within the window; capture resumes when the
+    // one-shot timer clears the flag.
+    WINDOW_RESET_SETTLING.with(|c| c.set(true));
+    with_state(|st| {
+        let win = &st.window;
+        win.unmaximize();
+        win.resize(DEFAULT_WIDTH, DEFAULT_HEIGHT);
+        if let Some((cx, cy)) = centred {
+            win.move_(cx, cy);
+        }
+        // Persist the reset with the *known* values rather than reading
+        // them back — `resize`/`move_` are async, so an immediate
+        // `window.size()` would race them.
+        st.shell.set_window_geometry(codepp_core::WindowGeometry {
+            width: Some(DEFAULT_WIDTH),
+            height: Some(DEFAULT_HEIGHT),
+            x: centred.map(|(x, _)| x),
+            y: centred.map(|(_, y)| y),
+            maximized: false,
+        });
+    });
+    // Thaw once the requests have settled. 500 ms is generously beyond any
+    // WM's resize/move latency (typically <100 ms); a save that lands
+    // before the thaw sees the frozen default, and after it the window has
+    // reached the default so normal capture is a no-op change anyway.
+    //
+    // The freeze is blanket, so it also drops a *legitimate* user resize
+    // that happens to land in this same 500 ms window (reset, then drag,
+    // then close, all within half a second). Accepted: the worst outcome
+    // is the default persists instead of that just-made manual change —
+    // strictly better than the reset itself failing to stick.
+    glib::timeout_add_local_once(std::time::Duration::from_millis(500), || {
+        WINDOW_RESET_SETTLING.with(|c| c.set(false));
+    });
+}
+
+/// Top-left that centres a `w`×`h` window on the primary monitor (or the
+/// first monitor if none is designated primary). `None` when no display
+/// is available.
+fn centered_on_primary(w: i32, h: i32) -> Option<(i32, i32)> {
+    let display = gtk::gdk::Display::default()?;
+    let mon = display.primary_monitor().or_else(|| display.monitor(0))?;
+    let r = mon.geometry();
+    Some(centered_in((r.x(), r.y(), r.width(), r.height()), w, h))
+}
+
+/// Top-left that centres a `w`×`h` window inside monitor rect
+/// `(mx, my, mw, mh)`. Pure (no GDK) so the centring math is unit-
+/// testable. Clamps the offset to the monitor origin when the window is
+/// larger than the monitor, so the title bar never lands above/left of
+/// the monitor.
+fn centered_in(mon: (i32, i32, i32, i32), w: i32, h: i32) -> (i32, i32) {
+    let (mx, my, mw, mh) = mon;
+    (mx + (mw - w).max(0) / 2, my + (mh - h).max(0) / 2)
+}
+
 /// Reopen last session's files, then the command-line path if given.
 ///
 /// A path on the command line is opened *after* the session so it ends
@@ -1552,6 +1628,16 @@ pub(crate) fn close_active_tab() -> bool {
 /// what `WindowGeometry`'s doc prescribes ("show maximized while still
 /// using width/height as the un-maximize fallback").
 fn sync_window_geometry_to_shell() {
+    // A "Restore Default Window Size" reset is settling: its
+    // `unmaximize`/`resize`/`move_` requests fire `configure-event` /
+    // `window-state-event` asynchronously, and one captured mid-settle
+    // would overwrite the known-good default the reset just persisted with
+    // a transitional value — silently defeating the recovery if a save
+    // lands in that window. Freeze capture until the WM settles (see
+    // [`restore_default_window_size`]).
+    if WINDOW_RESET_SETTLING.with(Cell::get) {
+        return;
+    }
     with_state(|st| {
         let prev = st.shell.saved_window_geometry().unwrap_or_default();
         let geom = window_geometry_to_persist(
@@ -2098,5 +2184,28 @@ mod window_geometry_tests {
     #[test]
     fn no_monitors_rejects_everything() {
         assert!(!point_in_any_monitor(0, 0, &[]));
+    }
+
+    // --- Restore-default-size centring ---
+
+    #[test]
+    fn centres_on_the_primary_monitor() {
+        use super::centered_in;
+        // 1024x768 window on a 1920x1080 monitor at origin.
+        assert_eq!(centered_in((0, 0, 1920, 1080), 1024, 768), (448, 156));
+    }
+
+    #[test]
+    fn centres_on_a_negative_origin_monitor() {
+        use super::centered_in;
+        // Monitor left of the primary: centred offset stays inside it.
+        assert_eq!(centered_in((-1280, 0, 1280, 1024), 800, 600), (-1040, 212));
+    }
+
+    #[test]
+    fn window_larger_than_monitor_clamps_to_the_origin() {
+        use super::centered_in;
+        // A window bigger than the monitor must not land above/left of it.
+        assert_eq!(centered_in((0, 0, 800, 600), 1024, 768), (0, 0));
     }
 }

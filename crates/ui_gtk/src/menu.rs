@@ -673,6 +673,15 @@ fn build_view_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     menu.append(&docmap);
     crate::docmap::register_menu_check(docmap);
 
+    // Recovery action: reset the window to its default size, centred and
+    // un-maximized. A plain action item (not a toggle) for when the
+    // window ends up in an awkward state — e.g. dragged mostly
+    // off-screen, or restored onto a monitor that has since changed.
+    menu.append(&gtk::SeparatorMenuItem::new());
+    let reset_window = gtk::MenuItem::with_mnemonic("Restore _Default Window Size");
+    reset_window.connect_activate(|_| crate::restore_default_window_size());
+    menu.append(&reset_window);
+
     menu.connect_show(|_| refresh_view_indicators());
     menu.show_all();
 }
