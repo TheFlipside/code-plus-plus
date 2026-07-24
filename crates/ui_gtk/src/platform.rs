@@ -757,84 +757,98 @@ impl UiPlatform for GtkUi {
     }
 
     fn set_clipboard(&mut self, payloads: &[ClipboardData]) -> bool {
-        use gtk::gdk;
-        use gtk::{TargetEntry, TargetFlags};
-
-        // One slot per registered target atom (1:1 with a `TargetEntry`,
-        // keyed by its `info` index). Plain text registers several text
-        // atoms sharing the same string; HTML / RTF register their MIME
-        // atoms. The whole table is moved into the `'static` data
-        // callback that GTK invokes when a pasting app requests a
-        // target.
-        enum Slot {
-            /// Served via `SelectionData::set_text` so GTK encodes for
-            /// whichever text target was requested.
-            Text(String),
-            /// Raw bytes served for a specific MIME atom (format 8).
-            Bytes(String, Vec<u8>),
-        }
-
-        let mut targets: Vec<TargetEntry> = Vec::new();
-        let mut slots: Vec<Slot> = Vec::new();
-        // Register a target atom sharing the next `info` index with the
-        // slot pushed alongside it.
-        let add =
-            |atom: &str, slot: Slot, targets: &mut Vec<TargetEntry>, slots: &mut Vec<Slot>| {
-                let info = u32::try_from(slots.len()).unwrap_or(u32::MAX);
-                targets.push(TargetEntry::new(atom, TargetFlags::empty(), info));
-                slots.push(slot);
-            };
-
-        for payload in payloads {
-            match payload {
-                ClipboardData::Plain(bytes) => {
-                    let text = String::from_utf8_lossy(bytes).into_owned();
-                    for atom in ["UTF8_STRING", "text/plain;charset=utf-8", "text/plain"] {
-                        add(atom, Slot::Text(text.clone()), &mut targets, &mut slots);
-                    }
-                }
-                ClipboardData::Html(bytes) => {
-                    add(
-                        "text/html",
-                        Slot::Bytes("text/html".to_owned(), bytes.clone()),
-                        &mut targets,
-                        &mut slots,
-                    );
-                }
-                ClipboardData::Rtf(bytes) => {
-                    for atom in ["text/rtf", "application/rtf"] {
-                        add(
-                            atom,
-                            Slot::Bytes(atom.to_owned(), bytes.clone()),
-                            &mut targets,
-                            &mut slots,
-                        );
-                    }
-                }
-            }
-        }
-        if targets.is_empty() {
-            return false;
-        }
-
-        let clipboard = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
-        // NB: `set_with_data` keeps the payload only while this process
-        // owns the selection — a paste after Code++ exits won't see it
-        // (no clipboard-manager `store`, matching a plain in-app copy).
-        clipboard.set_with_data(&targets, move |_clip, sel, info| {
-            let Some(slot) = slots.get(info as usize) else {
-                return;
-            };
-            match slot {
-                Slot::Text(s) => {
-                    sel.set_text(s);
-                }
-                Slot::Bytes(atom, data) => {
-                    sel.set(&gdk::Atom::intern(atom), 8, data);
-                }
-            }
-        })
+        set_clipboard_payloads(payloads)
     }
+}
+
+/// One planned clipboard target: how the bytes for a given target atom
+/// should be served when a pasting app requests it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ClipSlot {
+    /// Served via `SelectionData::set_text` (GTK encodes for whichever
+    /// text target was requested). Holds the UTF-8 text.
+    Text(String),
+    /// Raw bytes served for a specific MIME atom (format 8).
+    Bytes(Vec<u8>),
+}
+
+/// Decide the `(target-atom, content)` pairs to advertise on the
+/// clipboard for `payloads`. Pure (no GTK / no display) so the target set
+/// is unit-testable. A `Plain` payload registers the standard text atoms
+/// (`UTF8_STRING` / `text/plain…`); `Html`/`Rtf` register their MIME
+/// atoms.
+///
+/// The "single rich copy pastes nothing into a text target" fix lives one
+/// layer up in `HostBridge::set_clipboard` (shell), which ensures a
+/// `Plain` payload is always present so both backends stay pasteable —
+/// see the note there. This planner therefore just maps whatever it is
+/// handed.
+pub(crate) fn plan_clipboard_targets(payloads: &[ClipboardData]) -> Vec<(String, ClipSlot)> {
+    let mut plan: Vec<(String, ClipSlot)> = Vec::new();
+    for payload in payloads {
+        match payload {
+            ClipboardData::Plain(bytes) => {
+                let text = String::from_utf8_lossy(bytes).into_owned();
+                for atom in ["UTF8_STRING", "text/plain;charset=utf-8", "text/plain"] {
+                    plan.push((atom.to_owned(), ClipSlot::Text(text.clone())));
+                }
+            }
+            ClipboardData::Html(bytes) => {
+                plan.push(("text/html".to_owned(), ClipSlot::Bytes(bytes.clone())));
+            }
+            ClipboardData::Rtf(bytes) => {
+                for atom in ["text/rtf", "application/rtf"] {
+                    plan.push((atom.to_owned(), ClipSlot::Bytes(bytes.clone())));
+                }
+            }
+        }
+    }
+    plan
+}
+
+/// Place the abstract clipboard `payloads` on the system clipboard via
+/// [`plan_clipboard_targets`]. Self-contained (no `GtkUi` state).
+pub(crate) fn set_clipboard_payloads(payloads: &[ClipboardData]) -> bool {
+    use gtk::gdk;
+    use gtk::{TargetEntry, TargetFlags};
+
+    let plan = plan_clipboard_targets(payloads);
+    if plan.is_empty() {
+        return false;
+    }
+    // `info` is the plan index; the callback looks the slot back up by it.
+    let targets: Vec<TargetEntry> = plan
+        .iter()
+        .enumerate()
+        .map(|(i, (atom, _))| {
+            TargetEntry::new(
+                atom,
+                TargetFlags::empty(),
+                u32::try_from(i).unwrap_or(u32::MAX),
+            )
+        })
+        .collect();
+    // Pair each slot with its atom so a `Bytes` slot can name the exact
+    // target it serves; moved into the `'static` callback.
+    let slots: Vec<(String, ClipSlot)> = plan;
+
+    let clipboard = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
+    // NB: `set_with_data` keeps the payload only while this process owns
+    // the selection — a paste after Code++ exits won't see it (no
+    // clipboard-manager `store`, matching a plain in-app copy).
+    clipboard.set_with_data(&targets, move |_clip, sel, info| {
+        let Some((atom, slot)) = slots.get(info as usize) else {
+            return;
+        };
+        match slot {
+            ClipSlot::Text(s) => {
+                sel.set_text(s);
+            }
+            ClipSlot::Bytes(data) => {
+                sel.set(&gdk::Atom::intern(atom), 8, data);
+            }
+        }
+    })
 }
 
 /// Regression tests for the doc-pointer discipline that makes one
@@ -1139,5 +1153,82 @@ mod doc_binding_tests {
         }
         let container = widget.downcast_ref::<gtk::Container>()?;
         container.children().iter().find_map(label_text)
+    }
+}
+
+/// Pure tests for the clipboard target planner — no GTK / no display, so
+/// they run in the default `cargo test` (unlike the `#[ignore]`d
+/// GDK-dependent tests above).
+#[cfg(test)]
+mod clipboard_plan_tests {
+    use super::{plan_clipboard_targets, ClipSlot};
+    use codepp_shell::ClipboardData;
+
+    fn text_for(plan: &[(String, ClipSlot)], atom: &str) -> Option<String> {
+        plan.iter().find_map(|(a, s)| match s {
+            ClipSlot::Text(t) if a == atom => Some(t.clone()),
+            _ => None,
+        })
+    }
+    fn bytes_for(plan: &[(String, ClipSlot)], atom: &str) -> Option<Vec<u8>> {
+        plan.iter().find_map(|(a, s)| match s {
+            ClipSlot::Bytes(b) if a == atom => Some(b.clone()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn plain_payload_registers_the_standard_text_atoms() {
+        let plan = plan_clipboard_targets(&[ClipboardData::Plain(b"code".to_vec())]);
+        assert_eq!(text_for(&plan, "text/plain").as_deref(), Some("code"));
+        assert_eq!(text_for(&plan, "UTF8_STRING").as_deref(), Some("code"));
+    }
+
+    #[test]
+    fn html_and_rtf_register_their_mime_atoms() {
+        let plan = plan_clipboard_targets(&[
+            ClipboardData::Html(b"<b>x</b>".to_vec()),
+            ClipboardData::Rtf(b"{\\rtf1 x}".to_vec()),
+        ]);
+        assert_eq!(
+            bytes_for(&plan, "text/html").as_deref(),
+            Some(&b"<b>x</b>"[..])
+        );
+        assert_eq!(
+            bytes_for(&plan, "text/rtf").as_deref(),
+            Some(&b"{\\rtf1 x}"[..])
+        );
+        assert_eq!(
+            bytes_for(&plan, "application/rtf").as_deref(),
+            Some(&b"{\\rtf1 x}"[..])
+        );
+    }
+
+    #[test]
+    fn full_set_serves_the_plain_text_and_both_rich_targets() {
+        // The shape a "Copy All" (or the fallback-augmented single copy)
+        // hands the planner: one plain payload → the text atoms, plus the
+        // rich MIME targets.
+        let plan = plan_clipboard_targets(&[
+            ClipboardData::Plain(b"code".to_vec()),
+            ClipboardData::Html(b"<b>code</b>".to_vec()),
+            ClipboardData::Rtf(b"{\\rtf1 code}".to_vec()),
+        ]);
+        let plain_atoms: Vec<_> = plan.iter().filter(|(a, _)| a == "text/plain").collect();
+        assert_eq!(plain_atoms.len(), 1, "exactly one text/plain target");
+        assert_eq!(text_for(&plan, "text/plain").as_deref(), Some("code"));
+        assert_eq!(
+            bytes_for(&plan, "text/html").as_deref(),
+            Some(&b"<b>code</b>"[..])
+        );
+        assert_eq!(
+            bytes_for(&plan, "text/rtf").as_deref(),
+            Some(&b"{\\rtf1 code}"[..])
+        );
+    }
+
+    #[test]
+    fn empty_payload_set_plans_nothing() {
+        assert!(plan_clipboard_targets(&[]).is_empty());
     }
 }

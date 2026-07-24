@@ -797,7 +797,7 @@ pub enum PendingDialog {
 /// clipboard type (Win32 `CF_*` / GTK target atoms). Mirrors the
 /// `CLIP_FORMAT_*` wire constants a plugin sends via
 /// [`CODEPPM_SETCLIPBOARD`](codepp_plugin_host::CODEPPM_SETCLIPBOARD).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClipboardData {
     /// UTF-8 plain text.
     Plain(Vec<u8>),
@@ -805,6 +805,35 @@ pub enum ClipboardData {
     Html(Vec<u8>),
     /// RTF document bytes.
     Rtf(Vec<u8>),
+}
+
+/// Ensure a clipboard payload set carries a plain-text representation.
+///
+/// The bug this fixes: a single rich-format copy (cppexport's "Copy HTML"
+/// / "Copy RTF" send exactly one `Html` / `Rtf` payload) otherwise puts
+/// only `text/html` / `text/rtf` (GTK) or `CF_HTML` / the registered RTF
+/// format (Win32) on the clipboard, with no plain-text target. Pasting
+/// into anything that requests plain text — a text editor, a terminal, a
+/// text field — then finds nothing, while "Copy All" (which carries an
+/// explicit `Plain` payload) works. Both backends observed this.
+///
+/// When no `Plain` payload is present, derive one from the first rich
+/// payload's bytes — the HTML/RTF *source*, which is the sensible thing
+/// to drop into a plain-text target for a "copy the markup" action — and
+/// prepend it so the text atoms / `CF_UNICODETEXT` are always advertised.
+/// Rich targets are unaffected, so a rich-paste target still gets the
+/// formatted content.
+fn ensure_plain_clipboard_fallback(mapped: &mut Vec<ClipboardData>) {
+    if mapped.iter().any(|d| matches!(d, ClipboardData::Plain(_))) {
+        return;
+    }
+    let fallback = mapped.iter().find_map(|d| match d {
+        ClipboardData::Html(b) | ClipboardData::Rtf(b) => Some(b.clone()),
+        ClipboardData::Plain(_) => None,
+    });
+    if let Some(bytes) = fallback {
+        mapped.insert(0, ClipboardData::Plain(bytes));
+    }
 }
 
 /// File-type hint for a plugin export Save-As dialog. Mirrors the
@@ -6941,7 +6970,7 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         // skipped, not passed through as raw bytes). If nothing survives
         // the mapping there's nothing to place — report failure so the
         // plugin doesn't believe an empty set succeeded.
-        let mapped: Vec<ClipboardData> = payloads
+        let mut mapped: Vec<ClipboardData> = payloads
             .iter()
             .filter_map(|(fmt, bytes)| match *fmt {
                 codepp_plugin_host::CLIP_FORMAT_PLAIN => Some(ClipboardData::Plain(bytes.clone())),
@@ -6959,6 +6988,9 @@ impl<U: UiPlatform> HostServices for HostBridge<'_, U> {
         if mapped.is_empty() {
             return false;
         }
+        // Guarantee a plain-text target so a single rich-format copy is
+        // pasteable into plain-text targets on every backend.
+        ensure_plain_clipboard_fallback(&mut mapped);
         self.ui.set_clipboard(&mapped)
     }
 
@@ -7553,6 +7585,9 @@ mod tests {
         replaced_docs: Vec<(isize, String)>,
         status_calls: Vec<(LangType, String, String, u64)>,
         plugin_status_calls: Vec<(usize, String)>,
+        /// Every `set_clipboard` call's payload set, so a test can assert
+        /// the shared plain-text fallback was applied before the UI saw it.
+        clipboard_calls: Vec<Vec<ClipboardData>>,
         /// (`tab_idx`, `in_doc`, `returned_doc`) per `activate_tab` call.
         activate_tab_calls: Vec<(usize, isize, isize)>,
         /// Stand-in for `SCI_CREATEDOCUMENT` — hand out monotonically
@@ -7644,6 +7679,10 @@ mod tests {
         }
         fn set_plugin_status(&mut self, section: usize, text: &str) {
             self.plugin_status_calls.push((section, text.to_string()));
+        }
+        fn set_clipboard(&mut self, payloads: &[ClipboardData]) -> bool {
+            self.clipboard_calls.push(payloads.to_vec());
+            true
         }
         fn mark_saved(&mut self) {
             self.mark_saved_calls += 1;
@@ -12620,6 +12659,93 @@ mod tests {
             !target.exists(),
             "nothing may be written while the view holds another buffer"
         );
+    }
+
+    #[test]
+    fn dispatch_set_clipboard_adds_plain_fallback_before_reaching_ui() {
+        // End-to-end wiring: a plugin's CODEPPM_SETCLIPBOARD with a single
+        // HTML entry must reach the UI as [Plain(source), Html] — pinning
+        // that `HostBridge::set_clipboard` applies the shared fallback, not
+        // just that the pure helper works in isolation.
+        use codepp_plugin_host::{
+            ClipEntry, ClipboardSetRequest, CLIP_FORMAT_HTML, CODEPPM_SETCLIPBOARD,
+        };
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        let handles = HostHandles {
+            npp_hwnd: core::ptr::null_mut(),
+            scintilla_main: core::ptr::null_mut(),
+            scintilla_secondary: core::ptr::null_mut(),
+            plugin_menu: core::ptr::null_mut(),
+            main_menu: core::ptr::null_mut(),
+        };
+        let html = b"<b>x</b>".to_vec();
+        let entries = [ClipEntry {
+            format: CLIP_FORMAT_HTML,
+            data: html.as_ptr(),
+            data_len: html.len(),
+        }];
+        let req = ClipboardSetRequest {
+            count: 1,
+            entries: entries.as_ptr(),
+        };
+        // SAFETY: `req`/`entries`/`html` outlive this synchronous call.
+        let r = unsafe {
+            shell.dispatch_plugin_message(
+                &mut ui,
+                handles,
+                CODEPPM_SETCLIPBOARD,
+                0,
+                core::ptr::addr_of!(req) as isize,
+            )
+        };
+        assert_eq!(r, Some(1));
+        assert_eq!(
+            ui.clipboard_calls,
+            vec![vec![
+                ClipboardData::Plain(html.clone()),
+                ClipboardData::Html(html),
+            ]]
+        );
+    }
+
+    #[test]
+    fn clipboard_fallback_synthesizes_plain_from_single_html() {
+        // "Copy HTML" sends one Html payload; the fallback must prepend a
+        // Plain carrying the HTML source so a plain-text paste isn't empty.
+        let mut m = vec![ClipboardData::Html(b"<b>x</b>".to_vec())];
+        ensure_plain_clipboard_fallback(&mut m);
+        assert_eq!(
+            m,
+            vec![
+                ClipboardData::Plain(b"<b>x</b>".to_vec()),
+                ClipboardData::Html(b"<b>x</b>".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn clipboard_fallback_uses_rtf_source_for_single_rtf() {
+        let mut m = vec![ClipboardData::Rtf(b"{\\rtf1 x}".to_vec())];
+        ensure_plain_clipboard_fallback(&mut m);
+        assert_eq!(
+            m.first(),
+            Some(&ClipboardData::Plain(b"{\\rtf1 x}".to_vec()))
+        );
+    }
+
+    #[test]
+    fn clipboard_fallback_is_noop_when_plain_already_present() {
+        // "Copy All" already carries a Plain payload — leave it untouched.
+        let orig = vec![
+            ClipboardData::Plain(b"code".to_vec()),
+            ClipboardData::Html(b"<b>code</b>".to_vec()),
+            ClipboardData::Rtf(b"{\\rtf1 code}".to_vec()),
+        ];
+        let mut m = orig.clone();
+        ensure_plain_clipboard_fallback(&mut m);
+        assert_eq!(m, orig);
     }
 
     #[test]
