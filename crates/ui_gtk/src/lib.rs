@@ -291,7 +291,6 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     connect_tab_strip_signals(&tab_strip);
 
     // --- Startup work ---------------------------------------------
-    restore_window_geometry(&window);
     apply_startup_styles();
     menu::connect();
     // Sync the toolbar's Word Wrap / Show All Characters toggles to the
@@ -299,6 +298,15 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // checks, but the toolbar toggles start unpressed until this runs.
     menu::refresh_view_indicators();
     restore_session(initial_path);
+    // Restore the last session's window size + maximized state. MUST run
+    // *after* `restore_session` — that is what loads session.xml into the
+    // shell, and `restore_window_geometry` reads `saved_window_geometry()`
+    // from it. Called earlier (before the load) it read an empty session
+    // and silently did nothing, which is why the window never remembered
+    // its size. Still before `window.show_all()` below, so `set_default_size`
+    // takes effect. Mirrors how `workspace`/`docmap` apply saved state
+    // after the load.
+    restore_window_geometry(&window);
     // Reopen the workspace folder the last session left open (if any and
     // it still exists), sizing and showing the panel to match.
     workspace::apply_saved();
