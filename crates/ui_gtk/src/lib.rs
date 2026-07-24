@@ -262,6 +262,18 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     let editor =
         unsafe { EditorHandle::from_gtk_widget(sci_ptr) }.ok_or(GtkUiError::DirectCallCapture)?;
 
+    // Horizontal scroll: Scintilla seeds scrollWidth at 2000 px and never
+    // shrinks it, so with word wrap off the user can scroll far past the
+    // end of any visible line into empty space. Width tracking makes
+    // Scintilla recompute scrollWidth as the longest *visible* line, and
+    // `SCI_SETSCROLLWIDTH(1)` seeds the starting value at 1 px so the first
+    // paint doesn't carry the 2000 default forward. Together the
+    // horizontal scrollbar only appears when content actually overflows.
+    // Mirrors `ui_win32`; the per-edit high-water-mark reset lives in the
+    // SCN_MODIFIED branch of `connect_sci_notify`.
+    editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, 1, 0);
+    editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTHTRACKING, 1, 0);
+
     let perf = Rc::new(perf);
     connect_perf_probes(&sci_widget, &perf);
 
@@ -381,6 +393,9 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
 ///      cheaper than unpacking `SCNotification`, and the work (a few
 ///      direct-calls + label writes GTK elides when unchanged, plus a
 ///      docmap repaint that no-ops when hidden) stays inside the §8 budget.
+///      Also re-seeds the horizontal scroll width on text inserts/deletes
+///      (the one case it *does* peek at the payload) so tracking-mode
+///      `scrollWidth` shrinks back after a long line is removed.
 ///   2. UDL container styling — unpacks the payload and, only on
 ///      `SCN_STYLENEEDED`, drives the host-side tokeniser (`crate::udl`).
 ///      Kept apart so the hot styling path unpacks the payload only when it
@@ -395,7 +410,18 @@ fn connect_sci_notify(sci_widget: &gtk::Widget) {
         if is_style_only_modification(values) {
             return None;
         }
+        let text_modified = is_text_modification(values);
         with_state(|st| {
+            if text_modified {
+                // Tracking-mode scrollWidth is a high-water mark — it grows
+                // for a wider line but never shrinks when long lines are
+                // deleted, so the scrollbar would linger after the long
+                // line is gone. Reset to 1 px on every text insert/delete;
+                // the next paint recomputes from visible content. Mirrors
+                // Win32's SCN_MODIFIED handler.
+                st.editor
+                    .send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, 1, 0);
+            }
             let (_, ui) = st.split();
             ui.refresh_dynamic_status();
         });
@@ -663,6 +689,34 @@ fn is_style_only_modification(values: &[glib::Value]) -> bool {
     let text_change =
         codepp_scintilla_sys::SC_MOD_INSERTTEXT | codepp_scintilla_sys::SC_MOD_DELETETEXT;
     notif.modification_type & text_change == 0
+}
+
+/// True iff the emission is an `SCN_MODIFIED` carrying a text insert or
+/// delete (the inverse selector to [`is_style_only_modification`], but
+/// still requiring `SCN_MODIFIED` — a non-modification notification is
+/// neither). Used to re-seed the horizontal scroll width so it tracks the
+/// current content rather than a stale high-water mark. Mirrors Win32's
+/// `modtype & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT)` gate.
+fn is_text_modification(values: &[glib::Value]) -> bool {
+    let Some(payload) = values.last() else {
+        return false;
+    };
+    // SAFETY: same boxed-`SCNotification` contract as `is_style_only_modification`.
+    let notif = unsafe {
+        glib::gobject_ffi::g_value_get_boxed(payload.as_ptr())
+            .cast::<codepp_scintilla_sys::Sci_NotificationText>()
+    };
+    if notif.is_null() {
+        return false;
+    }
+    // SAFETY: non-null, live for this handler.
+    let notif = unsafe { &*notif };
+    if notif.nmhdr.code != codepp_scintilla_sys::SCN_MODIFIED {
+        return false;
+    }
+    let text_change =
+        codepp_scintilla_sys::SC_MOD_INSERTTEXT | codepp_scintilla_sys::SC_MOD_DELETETEXT;
+    notif.modification_type & text_change != 0
 }
 
 /// Read the dropped `text/uri-list` out of an `SCN_URIDROPPED` emission;
