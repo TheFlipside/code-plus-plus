@@ -155,9 +155,9 @@ use codepp_scintilla_sys::{
     SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
-    sanitize_filename_for_display, sanitize_path_for_display, tab_display_name, HostHandles,
-    OpenFileOutcome, PendingDialog, SearchFlags, SessionRestoreEntry, Shell, Tab, UiPlatform,
-    MAX_SESSION_TABS,
+    sanitize_filename_for_display, sanitize_path_for_display, sanitize_str_for_display,
+    tab_display_name, HostHandles, OpenFileOutcome, PendingDialog, SearchFlags,
+    SessionRestoreEntry, Shell, Tab, UiPlatform, MAX_SESSION_TABS,
 };
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
@@ -552,6 +552,9 @@ const UDL_COLLECTION_URL: &str = "https://github.com/notepad-plus-plus/userDefin
 /// the per-plugin enabled flag (persisted to
 /// `<plugins_config_dir>/disabled.txt`).
 const ID_PLUGINS_ADMIN: u16 = 1910;
+/// Plugins → Open Plugin Folder menu item. Opens the plugins
+/// directory in Explorer.
+const ID_PLUGINS_OPEN_FOLDER: u16 = 1911;
 
 // Macro (2000-2099) — toolbar-only entries; same M2 status.
 const ID_MACRO_RECORD: u16 = 2000;
@@ -7261,6 +7264,14 @@ unsafe fn populate_plugin_menu(plugin_menu: HMENU, shell: &Shell) {
             w!("&Plugin Manager..."),
         )
     };
+    let _ = unsafe {
+        AppendMenuW(
+            plugin_menu,
+            MF_STRING,
+            ID_PLUGINS_OPEN_FOLDER as usize,
+            w!("&Open Plugin Folder"),
+        )
+    };
 }
 
 /// Write `text` into status-bar part `part_index`. Centralizes the
@@ -12720,8 +12731,12 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
         // arm filters on `old_check == 0` to suppress reacting to
         // these populate-time sets.
         for (row, entry) in state.entries.iter().enumerate() {
-            let mut name_w: Vec<u16> = entry
-                .display_label
+            // Sanitize the plugin-supplied name before it reaches
+            // listview chrome: `display_label` derives from the plugin's
+            // `getName()`, so a hostile plugin could embed BiDi overrides
+            // or control characters to spoof the entry. Matches the GTK
+            // Plugin Manager, which sanitizes the same field.
+            let mut name_w: Vec<u16> = sanitize_str_for_display(&entry.display_label)
                 .encode_utf16()
                 .chain(std::iter::once(0))
                 .collect();
@@ -12741,7 +12756,10 @@ fn show_plugin_admin_dialog(main_hwnd: HWND) {
             // Subitem 1: version. Read once per row; an empty
             // `read_pe_file_version` result renders as an em-dash
             // so the column still reads cleanly.
-            let version = read_pe_file_version(&entry.path).unwrap_or_else(|| "—".to_string());
+            // The version is read from the plugin's own PE resource table,
+            // so it is equally plugin-controlled — sanitize it too.
+            let version = read_pe_file_version(&entry.path)
+                .map_or_else(|| "—".to_string(), |v| sanitize_str_for_display(&v));
             let mut version_w: Vec<u16> =
                 version.encode_utf16().chain(std::iter::once(0)).collect();
             let sub = LVITEMW {
@@ -26884,6 +26902,29 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                     // hooks under fresh borrows.
                     ID_PLUGINS_ADMIN => {
                         show_plugin_admin_dialog(hwnd);
+                    }
+                    // Plugins → Open Plugin Folder. Open the plugins
+                    // directory in Explorer. `create_dir_all` first so a
+                    // click before any plugin is installed still targets a
+                    // valid path, matching the UDL-folder opener.
+                    ID_PLUGINS_OPEN_FOLDER => {
+                        if let Some(dir) = codepp_platform::plugins_dir() {
+                            if let Err(e) = std::fs::create_dir_all(&dir) {
+                                tracing::warn!(
+                                    path = ?dir,
+                                    error = ?e,
+                                    "failed to create plugins directory; \
+                                     ShellExecuteW may still succeed if it \
+                                     exists"
+                                );
+                            }
+                            open_explorer_at(hwnd, &dir);
+                        } else {
+                            tracing::warn!(
+                                "no config_dir resolved; skipping \
+                                 Open Plugin Folder (APPDATA / HOME unset?)"
+                            );
+                        }
                     }
                     // Go to... (m3b1). Pull the caret's line + offset
                     // and the document's line count + length off the

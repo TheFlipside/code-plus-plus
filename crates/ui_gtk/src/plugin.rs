@@ -32,6 +32,7 @@ use std::ffi::c_void;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+use gtk::glib;
 use gtk::prelude::*;
 
 use codepp_plugin_host::{HostDispatchFn, NppData};
@@ -180,9 +181,13 @@ pub(crate) fn ensure_loaded_and_rebuild(menu: &gtk::Menu) {
     crate::drain_shell();
 }
 
-/// Rebuild the Plugins menu: one submenu per loaded plugin, its items
-/// taken from the plugin's `FuncItem` array (null `p_func` → separator).
-/// A greyed "No plugins loaded" placeholder when the set is empty.
+/// Rebuild the Plugins menu: one submenu per loaded plugin (its items
+/// taken from the plugin's `FuncItem` array, null `p_func` → separator),
+/// or a greyed "No plugins loaded" placeholder when empty. Then, always,
+/// a separator and the admin entries "Plugin Manager…" + "Open Plugin
+/// Folder" — matching Win32's layout (per-plugin entries, separator,
+/// admin items), so the manager is reachable even to re-enable plugins
+/// the user previously disabled.
 fn rebuild_menu(menu: &gtk::Menu) {
     for child in menu.children() {
         menu.remove(&child);
@@ -205,28 +210,191 @@ fn rebuild_menu(menu: &gtk::Menu) {
         let placeholder = gtk::MenuItem::with_label("No plugins loaded");
         placeholder.set_sensitive(false);
         menu.append(&placeholder);
-        menu.show_all();
-        return;
+    } else {
+        for (name, items) in entries {
+            let submenu = gtk::Menu::new();
+            for (label, cmd_id, is_command) in items {
+                if is_command {
+                    let item = gtk::MenuItem::with_label(&label);
+                    item.connect_activate(move |_| on_plugin_command(cmd_id));
+                    submenu.append(&item);
+                } else {
+                    submenu.append(&gtk::SeparatorMenuItem::new());
+                }
+            }
+            // Sanitize the plugin-supplied display name — a plugin is an
+            // untrusted source of chrome text, same policy as filenames.
+            let top = gtk::MenuItem::with_label(&codepp_shell::sanitize_str_for_display(&name));
+            top.set_submenu(Some(&submenu));
+            menu.append(&top);
+        }
     }
 
-    for (name, items) in entries {
-        let submenu = gtk::Menu::new();
-        for (label, cmd_id, is_command) in items {
-            if is_command {
-                let item = gtk::MenuItem::with_label(&label);
-                item.connect_activate(move |_| on_plugin_command(cmd_id));
-                submenu.append(&item);
-            } else {
-                submenu.append(&gtk::SeparatorMenuItem::new());
+    menu.append(&gtk::SeparatorMenuItem::new());
+    let manager = gtk::MenuItem::with_mnemonic("_Plugin Manager…");
+    manager.connect_activate(|_| show_plugin_manager());
+    menu.append(&manager);
+    let folder = gtk::MenuItem::with_mnemonic("_Open Plugin Folder");
+    folder.connect_activate(|_| open_plugin_folder());
+    menu.append(&folder);
+
+    menu.show_all();
+}
+
+/// Show the modal Plugin Manager: every discovered plugin with an Enabled
+/// checkbox and a status column. Toggling a checkbox writes through to
+/// `<plugins_config_dir>/disabled.txt` via `Shell::set_plugin_disabled`;
+/// the change takes effect on the next launch (Notepad++'s
+/// restart-required semantics), mirroring the Win32 Plugin Manager.
+fn show_plugin_manager() {
+    let Some(window) = with_state(|st| st.window.clone()) else {
+        return;
+    };
+    let dialog = gtk::Dialog::with_buttons(
+        Some("Plugin Manager"),
+        Some(&window),
+        gtk::DialogFlags::MODAL | gtk::DialogFlags::DESTROY_WITH_PARENT,
+        &[("_Close", gtk::ResponseType::Close)],
+    );
+    dialog.set_default_size(520, 380);
+    let content = dialog.content_area();
+    content.set_spacing(6);
+    content.set_margin_top(8);
+    content.set_margin_bottom(8);
+    content.set_margin_start(8);
+    content.set_margin_end(8);
+
+    // Columns: enabled (toggle) | plugin name | status | registry index.
+    // The index is the functional value `set_plugin_disabled` takes; it is
+    // kept out of the visible columns.
+    let store = gtk::ListStore::new(&[
+        glib::Type::BOOL,
+        glib::Type::STRING,
+        glib::Type::STRING,
+        glib::Type::U64,
+    ]);
+    let tree = gtk::TreeView::with_model(&store);
+
+    let toggle = gtk::CellRendererToggle::new();
+    let store_toggle = store.clone();
+    toggle.connect_toggled(move |_, path| {
+        let Some(iter) = store_toggle.iter(&path) else {
+            return;
+        };
+        // Fail safe rather than fall back to a substitute row: a type
+        // mismatch here would otherwise silently toggle plugin index 0 (or
+        // the wrong enabled state). The model is first-party and correctly
+        // typed, so this never triggers today, but a future column-order
+        // change fails closed instead of mutating the wrong plugin.
+        let (Ok(was_enabled), Ok(index)) = (
+            store_toggle.value(&iter, 0).get::<bool>(),
+            store_toggle.value(&iter, 3).get::<u64>(),
+        ) else {
+            return;
+        };
+        let now_enabled = !was_enabled;
+        // `disabled == !enabled`. Persists to disabled.txt; effective next
+        // launch (an already-loaded plugin isn't unloaded mid-session).
+        with_state(|st| st.shell.set_plugin_disabled(index as usize, !now_enabled));
+        store_toggle.set_value(&iter, 0, &now_enabled.to_value());
+    });
+    let enabled_col = gtk::TreeViewColumn::new();
+    enabled_col.set_title("Enabled");
+    gtk::prelude::TreeViewColumnExt::pack_start(&enabled_col, &toggle, false);
+    gtk::prelude::TreeViewColumnExt::add_attribute(&enabled_col, &toggle, "active", 0);
+    tree.append_column(&enabled_col);
+    append_admin_text_column(&tree, "Plugin", 1, 260);
+    append_admin_text_column(&tree, "Status", 2, 200);
+
+    let scroll = gtk::ScrolledWindow::builder()
+        .min_content_height(240)
+        .build();
+    scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+    scroll.add(&tree);
+    content.pack_start(&scroll, true, true, 0);
+
+    let hint = gtk::Label::new(Some(
+        "Enabling or disabling a plugin takes effect the next time Code++ starts.",
+    ));
+    hint.set_xalign(0.0);
+    hint.set_line_wrap(true);
+    content.pack_start(&hint, false, false, 0);
+
+    // Populate from the shell's admin snapshot (index-keyed; sanitized).
+    let admin = with_state(|st| st.shell.installed_plugins()).unwrap_or_default();
+    for entry in &admin {
+        let status = if entry.loaded {
+            "Loaded".to_string()
+        } else if let Some(reason) = &entry.failed_reason {
+            format!("Failed: {reason}")
+        } else {
+            "Not loaded".to_string()
+        };
+        store.insert_with_values(
+            None,
+            &[
+                (0, &(!entry.disabled)),
+                (
+                    1,
+                    &codepp_shell::sanitize_str_for_display(&entry.display_label),
+                ),
+                (2, &codepp_shell::sanitize_str_for_display(&status)),
+                (3, &(entry.index as u64)),
+            ],
+        );
+    }
+
+    dialog.show_all();
+    dialog.run();
+    // SAFETY: created here, never handed out — same idiom as the Rename /
+    // Goto modal dialogs.
+    unsafe {
+        dialog.destroy();
+    }
+}
+
+/// Append a resizable left-aligned text column bound to `model_col`.
+fn append_admin_text_column(tree: &gtk::TreeView, title: &str, model_col: u32, width: i32) {
+    let renderer = gtk::CellRendererText::new();
+    let column = gtk::TreeViewColumn::new();
+    column.set_title(title);
+    column.set_resizable(true);
+    column.set_fixed_width(width);
+    gtk::prelude::TreeViewColumnExt::pack_start(&column, &renderer, true);
+    gtk::prelude::TreeViewColumnExt::add_attribute(&column, &renderer, "text", model_col as i32);
+    tree.append_column(&column);
+}
+
+/// Open the plugins directory in the desktop file manager — the GTK
+/// analogue of Win32's "Open Plugin Folder" (`ShellExecute` open on the
+/// folder). `create_dir_all` first so a click before any plugin has been
+/// staged still targets a valid path.
+fn open_plugin_folder() {
+    let Some(window) = with_state(|st| st.window.clone()) else {
+        return;
+    };
+    let Some(dir) = codepp_platform::plugins_dir() else {
+        tracing::warn!("no config dir; cannot open the plugins folder");
+        return;
+    };
+    if let Err(err) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(?err, "could not create the plugins folder");
+        return;
+    }
+    match glib::filename_to_uri(&dir, None) {
+        Ok(uri) => {
+            if let Err(err) =
+                gtk::show_uri_on_window(Some(&window), &uri, gtk::current_event_time())
+            {
+                tracing::warn!(
+                    ?err,
+                    ?uri,
+                    "show_uri_on_window failed for the plugins folder"
+                );
             }
         }
-        // Sanitize the plugin-supplied display name — a plugin is an
-        // untrusted source of chrome text, same policy as filenames.
-        let top = gtk::MenuItem::with_label(&codepp_shell::sanitize_str_for_display(&name));
-        top.set_submenu(Some(&submenu));
-        menu.append(&top);
+        Err(err) => tracing::warn!(?err, "filename_to_uri failed for the plugins folder"),
     }
-    menu.show_all();
 }
 
 /// Decode a `FuncItem`'s NUL-terminated UTF-16 `item_name` to a String,
