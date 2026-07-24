@@ -1182,6 +1182,37 @@ pub struct ClosedTab {
     pub new_active_doc: isize,
 }
 
+/// The active tab's live caret/scroll, snapshotted by the UI (it owns the
+/// `EditorHandle`) and handed to [`Shell::save_npp_session`] so the saved
+/// session records where the user was in the active file. Non-active tabs
+/// record zeros — per-tab caret across switches is the DESIGN.md m6b gap
+/// the automatic `session.xml` save shares.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SessionCaret {
+    pub start_pos: u64,
+    pub end_pos: u64,
+    pub first_visible_line: u32,
+}
+
+/// Counts from a [`Shell::load_npp_session`] run, for the UI to surface to
+/// the user (a dialog) and the log.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LoadSessionReport {
+    /// `<File>` entries handed to `open_file` (queued or switched-to).
+    pub opened: usize,
+    /// Entries dropped as non-local (UNC / device / verbatim) paths — a
+    /// Windows-only reject (see [`codepp_core::npp_session::is_non_local_windows_path`]).
+    pub rejected_nonlocal: usize,
+    /// Entries dropped because the list exceeded [`MAX_SESSION_TABS`].
+    pub dropped_over_cap: usize,
+    /// True iff the load needs a synchronous view rebind: an already-open
+    /// path was switched-to (no async wake fires for it), or the recorded
+    /// active tab overrode the last-opened one. When false, the async load
+    /// completions bind the view on their own — the UI can skip a redundant
+    /// rebind.
+    pub needs_rebind: bool,
+}
+
 /// Per-call platform handles the UI hands the dispatcher when
 /// routing an inbound NPPM_* message. The host crate is platform-
 /// agnostic; the UI fills these with whatever opaque pointer types
@@ -4246,6 +4277,218 @@ impl Shell {
     /// caret where the user left it; non-active tabs use cursor 0
     /// for now (milestone 6b's UI tab control records per-tab cursors
     /// at switch time).
+    /// File → Save Session: write a Notepad++-shape session XML at `path`
+    /// capturing every path-bound open tab (untitled buffers are skipped —
+    /// there is no path to record). `active_caret` is the live caret of the
+    /// active tab, applied to its `<File>` entry when the active tab is
+    /// path-bound; every other entry carries zeros. Cross-platform: the UI
+    /// snapshots the caret and picks the path, this builds and writes the
+    /// N++-shape document so the file is reopenable by Notepad++ too.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying [`NppSessionError`](codepp_core::npp_session::NppSessionError)
+    /// on serialisation / I/O failure (the UI surfaces it in an error dialog).
+    pub fn save_npp_session(
+        &self,
+        path: &Path,
+        active_caret: Option<SessionCaret>,
+    ) -> Result<(), codepp_core::npp_session::NppSessionError> {
+        use codepp_core::npp_session::{
+            npp_name_for_lang, NppFile, NppSession, NppSessionDoc, NppView, YesNo,
+        };
+        // `active_index` against the FILTERED (path-bound) list — count the
+        // path-bound tabs preceding the active one. Zero when there is no
+        // active tab or the active tab is untitled (no `<File>` of its own).
+        let active_index = self.active_tab.map_or(0, |ai| {
+            self.tabs
+                .iter()
+                .take(ai)
+                .filter(|t| t.path.is_some())
+                .count()
+        });
+        let files: Vec<NppFile> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| {
+                let filename = t.path.clone()?;
+                let caret = if self.active_tab == Some(i) {
+                    active_caret.unwrap_or_default()
+                } else {
+                    SessionCaret::default()
+                };
+                Some(NppFile {
+                    filename,
+                    lang: npp_name_for_lang(t.lang).to_string(),
+                    first_visible_line: caret.first_visible_line,
+                    start_pos: caret.start_pos,
+                    end_pos: caret.end_pos,
+                    tab_pinned: YesNo::from_bool(t.pinned),
+                    encoding: -1,
+                    user_read_only: YesNo::No,
+                })
+            })
+            .collect();
+        let doc = NppSessionDoc {
+            session: NppSession {
+                active_view: 0,
+                main_view: NppView {
+                    active_index,
+                    files,
+                },
+                // Empty sub view for N++ shape parity (Code++ is single-view).
+                sub_view: Some(NppView::default()),
+            },
+        };
+        doc.save_to_xml(path)
+    }
+
+    /// File → Load Session: parse a Notepad++-shape session XML at `path`
+    /// and open every path-bound `<File>` entry, applying its recorded
+    /// caret / language / pin. Per-file metadata is applied by pre-seeding
+    /// `self.session.tabs` so [`apply_load_result`](Self::apply_load_result)'s
+    /// by-path lookup picks it up on async load completion — the same
+    /// mechanism startup restore uses. Already-open paths dedupe via
+    /// `open_file`. The recorded active tab is restored by its stable `id`
+    /// (positional indices shift under the pin relocations below).
+    ///
+    /// Untrusted input: empty-`filename` entries are skipped, the list is
+    /// capped at [`MAX_SESSION_TABS`], and non-local paths are rejected on
+    /// Windows (UNC → SMB NTLM capture defence; a no-op on Unix, whose
+    /// paths have no such auto-auth vector). The [`LoadSessionReport`] the
+    /// UI surfaces carries the drop counts.
+    ///
+    /// The loads are asynchronous — the caller drains as usual after this
+    /// returns. The caller should also discard a sole empty scratch buffer
+    /// beforehand (that releases a Scintilla document, so it stays UI-side);
+    /// a caller that does so must guarantee at least one tab survives when
+    /// this returns `opened == 0` (Win32 pairs it with `ensure_one_tab`).
+    ///
+    /// Re-entrancy: the whole open loop runs under one `&mut self` borrow.
+    /// That is sound today because `open_file` only *queues* notifications —
+    /// it never dispatches a plugin callback that could re-enter the UI and
+    /// alias `self`. When the synchronous `NPPN_FILEBEFOREOPEN` hook tracked
+    /// in DESIGN.md §7.4 lands, this signature (and the per-file open) will
+    /// need a re-entry seam, the same way the pre-lift Win32 loop re-acquired
+    /// its `WindowState` on every iteration as a guard against exactly that.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`NppSessionError`](codepp_core::npp_session::NppSessionError)
+    /// when the file can't be read or parsed.
+    pub fn load_npp_session(
+        &mut self,
+        path: &Path,
+    ) -> Result<LoadSessionReport, codepp_core::npp_session::NppSessionError> {
+        use codepp_core::npp_session::{
+            is_non_local_windows_path, lang_type_from_npp_name, NppSessionDoc,
+        };
+        let doc = NppSessionDoc::load_from_xml(path)?;
+
+        // Anchor the recorded active tab to its PATH before filtering shifts
+        // indices; resolved back to a live tab id after the opens.
+        let recorded_active_path: Option<PathBuf> = doc
+            .session
+            .main_view
+            .files
+            .get(doc.session.main_view.active_index)
+            .map(|f| f.filename.clone());
+
+        let raw_count = doc.session.main_view.files.len();
+        let mut rejected_nonlocal = 0usize;
+        // Cap BEFORE the per-entry clone so an adversarial n-way `<File>`
+        // list can't eat unbounded allocations before the truncation.
+        let entries: Vec<(PathBuf, u64, Option<i32>, bool)> = doc
+            .session
+            .main_view
+            .files
+            .into_iter()
+            .take(MAX_SESSION_TABS)
+            .filter_map(|f| {
+                if f.filename.as_os_str().is_empty() {
+                    return None;
+                }
+                if is_non_local_windows_path(&f.filename) {
+                    tracing::warn!(
+                        path = ?f.filename,
+                        "load_npp_session: rejected non-local (UNC/device) path"
+                    );
+                    rejected_nonlocal += 1;
+                    return None;
+                }
+                let lang_id = lang_type_from_npp_name(&f.lang).map(|l| l.0);
+                Some((f.filename, f.start_pos, lang_id, f.tab_pinned.as_bool()))
+            })
+            .collect();
+        let dropped_over_cap = raw_count.saturating_sub(MAX_SESSION_TABS);
+
+        let mut opened = 0usize;
+        let mut deduped = false;
+        let mut recorded_active_target_id: Option<i32> = None;
+        for (file_path, cursor, lang, pinned) in entries {
+            let is_recorded_active = recorded_active_path.as_deref() == Some(file_path.as_path());
+            // Upsert the by-path metadata so apply_load_result applies the
+            // caret / lang / pin when the async load completes. Overwrite an
+            // existing record rather than piling up duplicates.
+            match self
+                .session
+                .tabs
+                .iter_mut()
+                .find(|t| t.path.as_deref() == Some(file_path.as_path()))
+            {
+                Some(existing) => {
+                    existing.cursor = cursor;
+                    existing.lang = lang;
+                    existing.pinned = pinned;
+                }
+                None => self.session.tabs.push(codepp_core::session::Tab {
+                    path: Some(file_path.clone()),
+                    cursor,
+                    lang,
+                    pinned,
+                    ..codepp_core::session::Tab::default()
+                }),
+            }
+            let outcome = self.open_file(file_path);
+            if matches!(outcome, OpenFileOutcome::SwitchedToExisting(_)) {
+                deduped = true;
+            }
+            if !matches!(outcome, OpenFileOutcome::Rejected) {
+                opened += 1;
+                // `open_file` leaves `active_tab` on the affected tab.
+                // Capture the recorded-active id BEFORE `set_pinned`
+                // relocates, then apply the pin.
+                if let Some(idx) = self.active_tab {
+                    if is_recorded_active {
+                        recorded_active_target_id = self.tabs.get(idx).map(|t| t.id);
+                    }
+                    let _ = self.set_pinned(idx, pinned);
+                }
+            }
+        }
+
+        // Restore the recorded active tab by its stable id (the loop above
+        // left the LAST opened file active). Making it active before its
+        // async load completes lets the paint land on the right buffer.
+        let mut active_overridden = false;
+        if let Some(target_id) = recorded_active_target_id {
+            if let Some(idx) = self.tabs.iter().position(|t| t.id == target_id) {
+                if self.active_tab != Some(idx) {
+                    self.active_tab = Some(idx);
+                    active_overridden = true;
+                }
+            }
+        }
+
+        Ok(LoadSessionReport {
+            opened,
+            rejected_nonlocal,
+            dropped_over_cap,
+            needs_rebind: deduped || active_overridden,
+        })
+    }
+
     pub fn save_session<U: UiPlatform>(&self, ui: &mut U) -> Result<(), ShellError> {
         let Some(session_path) = codepp_platform::session_xml_path() else {
             // No config dir resolvable (sandboxed environment); skip
@@ -10359,6 +10602,132 @@ mod tests {
             .collect();
         shell.active_tab = active;
         shell
+    }
+
+    #[test]
+    fn save_npp_session_round_trips_path_bound_tabs() {
+        let mut shell = shell_with_synthetic_tabs(3, Some(2));
+        shell.tabs[1].pinned = true;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.xml");
+        let caret = SessionCaret {
+            start_pos: 10,
+            end_pos: 15,
+            first_visible_line: 3,
+        };
+        shell.save_npp_session(&path, Some(caret)).unwrap();
+
+        let doc = codepp_core::npp_session::NppSessionDoc::load_from_xml(&path).unwrap();
+        let files = &doc.session.main_view.files;
+        assert_eq!(files.len(), 3);
+        assert_eq!(doc.session.main_view.active_index, 2);
+        // The active tab (index 2) carries the live caret; the others zeros.
+        assert_eq!(files[2].start_pos, 10);
+        assert_eq!(files[2].end_pos, 15);
+        assert_eq!(files[2].first_visible_line, 3);
+        assert_eq!(files[0].start_pos, 0);
+        // Pin state round-trips.
+        assert_eq!(files[1].tab_pinned, codepp_core::npp_session::YesNo::Yes);
+    }
+
+    #[test]
+    fn load_npp_session_opens_local_files_skips_empty_and_restores_active() {
+        use codepp_core::npp_session::{NppFile, NppSession, NppSessionDoc, NppView};
+        let dir = tempfile::tempdir().unwrap();
+        let f1 = dir.path().join("a.txt");
+        let f2 = dir.path().join("b.txt");
+        std::fs::write(&f1, "aaa").unwrap();
+        std::fs::write(&f2, "bbb").unwrap();
+        // f1, an empty-filename entry (must be skipped), f2; recorded
+        // active = f1 (index 0). Since `open_file` makes the *last* opened
+        // file active, restoring f1 proves the recorded-active override
+        // fired rather than defaulting to the last open.
+        let doc = NppSessionDoc {
+            session: NppSession {
+                active_view: 0,
+                main_view: NppView {
+                    active_index: 0,
+                    files: vec![
+                        NppFile {
+                            filename: f1.clone(),
+                            ..Default::default()
+                        },
+                        NppFile {
+                            filename: PathBuf::from(""),
+                            ..Default::default()
+                        },
+                        NppFile {
+                            filename: f2.clone(),
+                            ..Default::default()
+                        },
+                    ],
+                },
+                sub_view: None,
+            },
+        };
+        let sess_path = dir.path().join("sess.xml");
+        doc.save_to_xml(&sess_path).unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let report = shell.load_npp_session(&sess_path).unwrap();
+
+        assert_eq!(report.opened, 2, "the empty-filename entry must be skipped");
+        assert_eq!(report.rejected_nonlocal, 0);
+        assert_eq!(report.dropped_over_cap, 0);
+        // `open_file` pushes the tab synchronously, so both are present now.
+        assert_eq!(shell.tabs.len(), 2);
+        // Recorded active was f1 (opened first, index 0). The override
+        // restored it over the last-opened f2 — proves the recorded-active
+        // logic fired. (Paths are `None` until the async load completes, so
+        // the index, not the path, is what's populated synchronously here.)
+        assert_eq!(shell.active_tab, Some(0));
+    }
+
+    #[test]
+    fn load_npp_session_with_all_entries_filtered_opens_nothing() {
+        // A session whose every <File> is filtered out (here: all
+        // empty-named) opens no tabs and reports `opened == 0`, adding no
+        // tab to the shell. This is the contract the Win32 handler relies
+        // on when it pairs the pre-load scratch discard with `ensure_one_tab`
+        // — the shell can legitimately return zero opens, so the UI must not
+        // assume a load always yields a tab. (The invariant restore itself
+        // is UI-side and covered by the Win32 demo, not testable headless.)
+        use codepp_core::npp_session::{NppFile, NppSession, NppSessionDoc, NppView};
+        let dir = tempfile::tempdir().unwrap();
+        let doc = NppSessionDoc {
+            session: NppSession {
+                active_view: 0,
+                main_view: NppView {
+                    active_index: 0,
+                    files: vec![
+                        NppFile {
+                            filename: PathBuf::from(""),
+                            ..Default::default()
+                        },
+                        NppFile {
+                            filename: PathBuf::from(""),
+                            ..Default::default()
+                        },
+                    ],
+                },
+                sub_view: None,
+            },
+        };
+        let sess_path = dir.path().join("empty_names.xml");
+        doc.save_to_xml(&sess_path).unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let before = shell.tabs.len();
+        let report = shell.load_npp_session(&sess_path).unwrap();
+        assert_eq!(report.opened, 0);
+        assert_eq!(report.rejected_nonlocal, 0);
+        assert_eq!(
+            shell.tabs.len(),
+            before,
+            "an all-filtered session must open no tabs",
+        );
     }
 
     #[test]

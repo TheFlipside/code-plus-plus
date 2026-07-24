@@ -111,10 +111,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use codepp_core::npp_session::{
-    is_non_local_windows_path, lang_type_from_npp_name, npp_name_for_lang, NppFile, NppSession,
-    NppSessionDoc, NppView, YesNo,
-};
 use codepp_core::{Encoding, Eol, LangType, WindowGeometry};
 use codepp_editor::EditorHandle;
 // Style helpers that used to live in this file. They moved to
@@ -7995,115 +7991,49 @@ fn prompt_save_session_xml_path(owner: HWND) -> Option<PathBuf> {
 /// can reopen from disk. The active tab contributes live caret +
 /// scroll positions pulled from Scintilla; the rest carry zeros.
 ///
-/// Dialog and file-write happen with **no** `&mut WindowState` borrow
-/// held — the OS dialog spins its own message pump that would
-/// re-enter `wnd_proc`. Metadata is snapshotted out of state before
-/// the dialog opens.
+/// The dialog happens with **no** `&mut WindowState` borrow held — the
+/// OS dialog spins its own message pump that would re-enter `wnd_proc`.
+/// The caret snapshot and the session build then happen together under a
+/// single borrow taken *after* the dialog closes, so the recorded caret
+/// and the tab list it attaches to are one consistent snapshot even if an
+/// async load or watcher event moved `active_tab` during the modal pump.
 fn handle_save_session(hwnd: HWND) {
-    // 1. Snapshot the metadata under a brief borrow. Clone every
-    //    field into an owned tuple so the borrow ends before the
-    //    dialog opens. Editor reads happen inside the same block
-    //    because state.editor and state.shell are disjoint fields
-    //    on `&mut WindowState` — the borrow checker treats them
-    //    independently.
-    struct SaveMeta {
-        files: Vec<NppFile>,
-        active_index: usize,
-    }
-    let Some(meta) = (unsafe {
-        state_from_hwnd(hwnd).map(|state| {
-            let active = state.shell.active_tab;
-            // Collect path-bound tabs alongside their original
-            // vector index. The original index tells us whether
-            // the tab is the active one (so we pull live caret /
-            // scroll) or a background tab (zeros).
-            let path_tabs: Vec<(usize, PathBuf, LangType, bool)> = state
-                .shell
-                .tabs
-                .iter()
-                .enumerate()
-                .filter_map(|(i, t)| t.path.as_ref().map(|p| (i, p.clone(), t.lang, t.pinned)))
-                .collect();
-            // active_index against the FILTERED list — count
-            // path-bound tabs preceding the active one. Zero if
-            // no active tab or the active tab is untitled.
-            let active_index = active.map_or(0, |ai| {
-                state
-                    .shell
-                    .tabs
-                    .iter()
-                    .take(ai)
-                    .filter(|t| t.path.is_some())
-                    .count()
-            });
-            let files: Vec<NppFile> = path_tabs
-                .into_iter()
-                .map(|(orig_idx, path, lang, pinned)| {
-                    let (start_pos, end_pos, first_visible_line) = if Some(orig_idx) == active {
-                        let s = state.editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as u64;
-                        let e = state.editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as u64;
-                        let fv = state.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0).max(0) as u32;
-                        (s, e, fv)
-                    } else {
-                        // Non-active tabs: zeros for now. Per-tab
-                        // caret persistence across tab switches is
-                        // tracked as milestone 6b in DESIGN.md and
-                        // has the same "future" shape here — same
-                        // gap the internal session.xml save path
-                        // documents.
-                        (0, 0, 0)
-                    };
-                    NppFile {
-                        filename: path,
-                        lang: npp_name_for_lang(lang).to_string(),
-                        first_visible_line,
-                        start_pos,
-                        end_pos,
-                        tab_pinned: YesNo::from_bool(pinned),
-                        encoding: -1,
-                        user_read_only: YesNo::No,
-                    }
-                })
-                .collect();
-            SaveMeta {
-                files,
-                active_index,
-            }
-        })
-    }) else {
-        return;
-    };
-
-    // 2. Prompt for a path. This spins a nested message loop; no
+    // 1. Prompt for a path first. This spins a nested message loop; no
     //    state borrow may be alive when it does.
     let Some(save_path) = prompt_save_session_xml_path(hwnd) else {
         return;
     };
 
-    // 3. Emit the XML. Errors surface via the standard error dialog
-    //    — the user picked this path and expects a filesystem
-    //    outcome, so a silent log wouldn't be right.
-    let doc = NppSessionDoc {
-        session: NppSession {
-            active_view: 0,
-            main_view: NppView {
-                active_index: meta.active_index,
-                files: meta.files,
-            },
-            // Sub view is always empty on our side (single view) but
-            // written for N++ shape parity so an N++ opening the
-            // file sees the element it expects.
-            sub_view: Some(NppView::default()),
-        },
+    // 2. Snapshot the active tab's live caret and build + write, all under
+    //    one post-dialog borrow. The caret is captured only when the active
+    //    tab is path-bound (an untitled active tab has no `<File>` entry, so
+    //    its caret has nowhere to go). `state.editor` and `state.shell` are
+    //    disjoint fields, so the reads coexist. Errors surface via the
+    //    standard dialog — the user picked this path and expects a
+    //    filesystem outcome, so a silent log wouldn't be right.
+    let result = unsafe {
+        state_from_hwnd(hwnd).map(|state| {
+            let active_caret = state
+                .shell
+                .active()
+                .is_some_and(|t| t.path.is_some())
+                .then(|| codepp_shell::SessionCaret {
+                    start_pos: state.editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as u64,
+                    end_pos: state.editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as u64,
+                    first_visible_line: state.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0).max(0)
+                        as u32,
+                });
+            state.shell.save_npp_session(&save_path, active_caret)
+        })
     };
-    if let Err(e) = doc.save_to_xml(&save_path) {
+    if let Some(Err(e)) = result {
         show_error_dialog(
             hwnd,
             "Save Session failed",
             &format!(
                 "Could not write the session file:\n\n{}\n\n{}",
                 sanitize_path_for_display(&save_path),
-                e
+                codepp_shell::sanitize_str_for_display(&e.to_string()),
             ),
         );
     }
@@ -8127,257 +8057,81 @@ fn handle_load_session(hwnd: HWND) {
         return;
     };
 
-    // 2. Read + parse. Errors surface via the standard dialog.
-    let doc = match NppSessionDoc::load_from_xml(&load_path) {
-        Ok(d) => d,
-        Err(e) => {
+    // 2. Discard a sole empty scratch buffer before the batch so a fresh
+    //    "new N" doesn't linger alongside the loaded session. UI-side (it
+    //    closes a tab + releases a Scintilla document); no-op when there's
+    //    real content open. Done before the shell call rather than after
+    //    parse-validation as before — the scratch is empty by definition,
+    //    so a parse failure at worst swaps one empty scratch for another.
+    unsafe {
+        discard_sole_empty_untitled(hwnd);
+    }
+
+    // 3. Parse + open via the shared shell method. It filters empty-name /
+    //    non-local / over-cap entries, pre-seeds the by-path metadata,
+    //    opens each file, restores pins, and re-activates the recorded tab.
+    let report =
+        unsafe { state_from_hwnd(hwnd).map(|state| state.shell.load_npp_session(&load_path)) };
+    let report = match report {
+        Some(Ok(r)) => r,
+        Some(Err(e)) => {
             show_error_dialog(
                 hwnd,
                 "Load Session failed",
                 &format!(
                     "Could not read the session file:\n\n{}\n\n{}",
                     sanitize_path_for_display(&load_path),
-                    e
+                    codepp_shell::sanitize_str_for_display(&e.to_string()),
                 ),
             );
+            // Step 2 already discarded the sole scratch buffer; a parse
+            // failure means nothing replaced it, so restore the one-tab
+            // invariant before returning.
+            unsafe {
+                ensure_one_tab(hwnd);
+            }
             return;
         }
+        None => return,
     };
 
-    // Resolve `active_index` to an absolute path *before* filtering
-    // — the UNC/empty-filename `filter_map` below drops entries,
-    // which shifts every downstream index left by one and would
-    // silently activate the wrong tab (or none, falling back to the
-    // last-file-wins effect of `Shell::open_file`). Anchoring to a
-    // path instead of a positional index makes the restore
-    // independent of what got filtered / truncated. If the recorded
-    // active file is itself a rejected UNC path or a corrupt empty
-    // entry, `recorded_active_path` naturally becomes `None` when
-    // filtering removes it — the later `tabs.iter().position(...)`
-    // returns `None` and no override happens, which is the correct
-    // fallback ("we can't restore that tab; leave the last-loaded
-    // one active").
-    let recorded_active_path: Option<PathBuf> = doc
-        .session
-        .main_view
-        .files
-        .get(doc.session.main_view.active_index)
-        .map(|f| f.filename.clone());
-
-    // Cap the parse-time cost too — bound how many `<File>` entries
-    // we walk BEFORE the filter runs, not just after it (the
-    // filter allocates one `PathBuf` clone per surviving entry, so
-    // an attacker-controlled n-way `<File>` list would otherwise
-    // eat unbounded CPU + allocations before the post-filter
-    // `.take` truncation caught it). Truncated count is logged
-    // below.
-    let raw_file_count = doc.session.main_view.files.len();
-    let mut rejected_unc = 0usize;
-    let entries: Vec<(PathBuf, u64, Option<i32>, bool)> = doc
-        .session
-        .main_view
-        .files
-        .into_iter()
-        .take(MAX_SESSION_TABS)
-        .filter_map(|f| {
-            // Skip <File> elements with no filename — corrupt / hand-
-            // authored entries. Also skip entries whose filename is
-            // empty (parses cleanly but resolves to `.`).
-            if f.filename.as_os_str().is_empty() {
-                return None;
-            }
-            // Reject non-local paths. On Windows, any path starting
-            // with `\\` is UNC (`\\server\share\...`) or a device /
-            // verbatim namespace (`\\.\...`, `\\?\...`). Feeding a
-            // hostile UNC into `std::fs::open` triggers an outbound
-            // SMB connection with the current user's NTLM
-            // credentials — a Responder/ntlmrelayx-style hash
-            // capture primitive. A session `.xml` can arrive from a
-            // low-trust source (email, chat, "restore my workspace"
-            // link), unlike a plugin-driven `NPPM_DOOPEN` where the
-            // caller is already in-process trusted code. Reject
-            // silently at the parse boundary; count rejections and
-            // warn the user once at the end so a legitimate-looking
-            // session that happens to reference network shares
-            // doesn't disappear without an explanation.
-            if is_non_local_windows_path(&f.filename) {
-                tracing::warn!(
-                    path = ?f.filename,
-                    "Load Session: rejected non-local path (UNC / device / verbatim namespace)"
-                );
-                rejected_unc += 1;
-                return None;
-            }
-            let lang_id = lang_type_from_npp_name(&f.lang).map(|l| l.0);
-            Some((f.filename, f.start_pos, lang_id, f.tab_pinned.as_bool()))
-        })
-        .collect();
-
-    if entries.is_empty() {
-        if rejected_unc > 0 {
-            show_error_dialog(
-                hwnd,
-                "Load Session",
-                &format!(
-                    "This session file contained {rejected_unc} network / UNC path(s), \
-                     which Code++ does not open from session files for security reasons.\n\n\
-                     No local files were opened."
-                ),
-            );
-        }
-        return;
+    // 4. Surface the drop counts. A session entirely UNC-rejected gets an
+    //    explanatory dialog so it doesn't vanish silently; the over-cap
+    //    truncation is logged for the post-mortem.
+    if report.opened == 0 && report.rejected_nonlocal > 0 {
+        show_error_dialog(
+            hwnd,
+            "Load Session",
+            &format!(
+                "This session file contained {} network / UNC path(s), \
+                 which Code++ does not open from session files for security reasons.\n\n\
+                 No local files were opened.",
+                report.rejected_nonlocal
+            ),
+        );
     }
-
-    // Report the truncation from the earlier `.take` — `entries`
-    // is already capped, but the user (and future post-mortem
-    // reader of the log) needs to know how many `<File>` entries
-    // were silently dropped. The cap protects the O(n²) find loop
-    // below AND the parse-time allocation cost of the filter above.
-    let over_cap = raw_file_count.saturating_sub(MAX_SESSION_TABS);
-    if over_cap > 0 {
+    if report.dropped_over_cap > 0 {
         tracing::warn!(
             cap = MAX_SESSION_TABS,
-            dropped = over_cap,
+            dropped = report.dropped_over_cap,
             "Load Session: entries exceed cap; excess dropped",
         );
     }
 
-    // Discard a sole empty "new N" tab before the batch so a
-    // fresh scratch buffer doesn't linger alongside the loaded
-    // session. Idempotent across the loop below (after the first
-    // opened file lands there are 1+ real tabs, so subsequent
-    // calls no-op). Done here — after all filtering / validation
-    // succeeds — so a session that failed to load or was entirely
-    // UNC-rejected doesn't destroy the scratch buffer.
+    // 5. Restore the one-tab invariant, then sync the tab strip + drain
+    //    queued plugin notifications. Step 2 discarded the sole scratch
+    //    buffer unconditionally; a session that resolved to zero opened
+    //    files (empty, all-empty-named, or all-UNC-rejected on Windows)
+    //    would otherwise leave the window with no tab and nothing scheduled
+    //    to heal it, so `ensure_one_tab` runs first (a no-op once any file
+    //    opened). The loader's async completions re-sync on WM_APP_WAKE; the
+    //    sync rebind here covers the dedupe / active-override cases.
+    // SAFETY: these helpers operate on the wnd_proc's own state via HWND
+    // lookup; no aliasing `&mut WindowState` is alive at this point.
     unsafe {
-        discard_sole_empty_untitled(hwnd);
-    }
-
-    // 3. Pre-populate the by-path metadata cache and kick each open.
-    //    Re-acquire `state_from_hwnd` on every iteration to match
-    //    the discipline `ID_FILE_OPEN` uses — a synchronous plugin
-    //    hook added to `Shell::open_file` in a future change
-    //    (`NPPN_FILEBEFOREOPEN`, DESIGN.md §7.4) would re-enter
-    //    `wnd_proc` and alias the borrow otherwise. Belt and
-    //    braces; `open_file` today does not reenter.
-    //
-    // While iterating we also:
-    //
-    //   * Apply the pin state via `Shell::set_pinned` on the
-    //     just-opened tab. `apply_load_result` only mutates the
-    //     `tab.pinned` flag, not the vector position, so without
-    //     this call a pinned tab would land at wherever `open_file`
-    //     pushed it (end of the vector) and the "pinned before
-    //     unpinned" invariant would be broken until the next app
-    //     restart, when `normalize_session_pinning` sorts session.xml
-    //     back into shape. `set_pinned` is the one path that
-    //     relocates the tab into the correct cluster.
-    //
-    //   * Capture the recorded-active file's stable `tab.id` at
-    //     the moment we process its entry. Positional indices
-    //     would shift under the `set_pinned` relocations that
-    //     happen later in the same loop, and a by-path lookup in
-    //     step 4 wouldn't find a still-loading tab (its `tab.path`
-    //     stays `None` until `apply_load_result` fires). `tab.id`
-    //     is assigned synchronously by `open_file` and never
-    //     moves, so it's the only identity that survives both.
-    let mut deduped = false;
-    let mut recorded_active_target_id: Option<i32> = None;
-    for (path, cursor, lang, pinned) in entries {
-        let is_recorded_active = recorded_active_path.as_ref() == Some(&path);
-        let outcome = unsafe {
-            let Some(state) = state_from_hwnd(hwnd) else {
-                continue;
-            };
-            // Merge into shell.session.tabs so apply_load_result's
-            // by-path lookup finds our cursor/lang/pinned values
-            // when the async load completes. Insert-or-update: if
-            // the path already has an entry (e.g. a startup-restore
-            // record we haven't consumed yet, or a previous Load
-            // Session invocation), overwrite its metadata rather
-            // than piling up duplicates.
-            let stored = &mut state.shell.session.tabs;
-            match stored
-                .iter_mut()
-                .find(|t| t.path.as_deref() == Some(path.as_path()))
-            {
-                Some(existing) => {
-                    existing.cursor = cursor;
-                    existing.lang = lang;
-                    existing.pinned = pinned;
-                }
-                None => stored.push(codepp_core::Tab {
-                    path: Some(path.clone()),
-                    cursor,
-                    lang,
-                    pinned,
-                    ..codepp_core::Tab::default()
-                }),
-            }
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                state.shell.open_file(path)
-            }))
-            .unwrap_or(OpenFileOutcome::Rejected);
-            // Post-open reconcile: `open_file` leaves
-            // `shell.active_tab` pointing at the affected tab
-            // (freshly-pushed or the dedupe target). Capture the
-            // stable id BEFORE `set_pinned` potentially relocates,
-            // then apply the pin state.
-            if !matches!(outcome, OpenFileOutcome::Rejected) {
-                if let Some(idx) = state.shell.active_tab {
-                    if is_recorded_active {
-                        recorded_active_target_id = state.shell.tabs.get(idx).map(|t| t.id);
-                    }
-                    let _ = state.shell.set_pinned(idx, pinned);
-                }
-            }
-            outcome
-        };
-        if matches!(outcome, OpenFileOutcome::SwitchedToExisting(_)) {
-            deduped = true;
-        }
-    }
-
-    // 4. Restore the recorded active tab. `Shell::open_file` sets
-    //    the just-opened tab as active on every call, so the loop
-    //    above ends with the *last* file active — override that by
-    //    resolving `recorded_active_target_id` (the tab-id captured
-    //    inside the loop at the moment the recorded active file
-    //    was processed) back to a live index and setting
-    //    `shell.active_tab`. When each async load completes,
-    //    `apply_load_result` reads `active_tab` and binds the
-    //    Scintilla view to the matching doc iff the just-loaded
-    //    tab is the active one; making the target active *before*
-    //    its load completes is what lets the paint land on the
-    //    correct buffer without a second manual rebind. Using
-    //    `tab.id` here (not path, not position) so `set_pinned`
-    //    relocations from later iterations don't invalidate the
-    //    target.
-    let mut activated_recorded = false;
-    if let Some(target_id) = recorded_active_target_id {
-        unsafe {
-            if let Some(state) = state_from_hwnd(hwnd) {
-                if let Some(idx) = state.shell.tabs.iter().position(|t| t.id == target_id) {
-                    if state.shell.active_tab != Some(idx) {
-                        state.shell.active_tab = Some(idx);
-                        activated_recorded = true;
-                    }
-                }
-            }
-        }
-    }
-
-    // 5. Sync the tab strip + drain any queued plugin notifications.
-    //    Same tail as ID_FILE_OPEN — the loader's async completions
-    //    will re-sync on WM_APP_WAKE, this handles the sync
-    //    "switched to existing tab" case and the manual
-    //    active-tab override above.
-    // SAFETY: these helpers operate on the wnd_proc's own state via
-    // HWND lookup; no aliasing `&mut WindowState` is alive at this
-    // point (the last state borrow ended with the `if let` above).
-    unsafe {
+        ensure_one_tab(hwnd);
         refresh_tab_chrome(hwnd);
-        if deduped || activated_recorded {
+        if report.needs_rebind {
             handle_tab_selchange(hwnd);
         }
         fire_queued_notifications(hwnd);

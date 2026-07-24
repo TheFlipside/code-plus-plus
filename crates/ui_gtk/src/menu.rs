@@ -235,6 +235,20 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     RECENT_ANCHOR.with(|a| *a.borrow_mut() = Some(anchor));
     menu.connect_show(rebuild_recent_region);
 
+    // Session interchange (Notepad++-shape XML at a user-picked path,
+    // distinct from the automatic session.xml restore). Enabled at all
+    // times — Load prompts regardless of what's open; Save writes even a
+    // zero-tab session. No accelerators, matching Win32.
+    // Mnemonic on the `d` — `_L` is already claimed by `Close A_ll`'s `l`,
+    // which this File menu is careful to avoid colliding with elsewhere.
+    let load_session = gtk::MenuItem::with_mnemonic("Loa_d Session…");
+    load_session.connect_activate(|_| on_load_session());
+    menu.append(&load_session);
+    let save_session = gtk::MenuItem::with_mnemonic("Save Sess_ion…");
+    save_session.connect_activate(|_| on_save_session());
+    menu.append(&save_session);
+    menu.append(&gtk::SeparatorMenuItem::new());
+
     let exit = gtk::MenuItem::with_mnemonic("E_xit");
     exit.connect_activate(|_| {
         save_session_now();
@@ -1242,6 +1256,107 @@ fn on_save_as() {
         );
     }
     refresh_tab_chrome();
+}
+
+/// File → Save Session… — write every path-bound open tab to a
+/// Notepad++-shape session XML at a user-picked path (distinct from the
+/// automatic `session.xml` restore). Untitled buffers are skipped — they
+/// have no path to record. The active tab carries its live caret + scroll
+/// position; the rest record zeros, the same per-file-caret gap the
+/// automatic session save documents. The intricate build lives in the
+/// shared `Shell::save_npp_session`; this only snapshots the caret and
+/// picks the path.
+fn on_save_session() {
+    use codepp_scintilla_sys::{
+        SCI_GETFIRSTVISIBLELINE, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
+    };
+    let Some(path) = choose_save_path("Save Session") else {
+        return;
+    };
+    // Snapshot the caret and build + write under one borrow taken *after*
+    // the dialog closes, so the recorded caret and the tab list it attaches
+    // to are a single consistent snapshot — an async load or watcher event
+    // during the chooser's nested loop can't split them apart. The caret is
+    // captured only when the active tab is path-bound (an untitled active
+    // tab contributes no `<File>` entry).
+    let result = with_state(|st| {
+        let active_caret = st
+            .shell
+            .active()
+            .is_some_and(|t| t.path.is_some())
+            .then(|| codepp_shell::SessionCaret {
+                start_pos: st.editor.send(SCI_GETSELECTIONSTART, 0, 0).max(0) as u64,
+                end_pos: st.editor.send(SCI_GETSELECTIONEND, 0, 0).max(0) as u64,
+                first_visible_line: st.editor.send(SCI_GETFIRSTVISIBLELINE, 0, 0).max(0) as u32,
+            });
+        st.shell.save_npp_session(&path, active_caret)
+    });
+    if let Some(Err(err)) = result {
+        crate::message_dialog(
+            gtk::MessageType::Error,
+            gtk::ButtonsType::Ok,
+            "Save Session failed",
+            &codepp_shell::sanitize_str_for_display(&err.to_string()),
+        );
+    }
+}
+
+/// File → Load Session… — open the tabs recorded in a Notepad++-shape
+/// session XML at a user-picked path. The shared `Shell::load_npp_session`
+/// filters empty-name / over-cap entries, pre-seeds each tab's
+/// caret/lang/pin metadata, opens the files, and restores the recorded
+/// active tab; the async loads land on their own wakes, so a final
+/// `drain_shell` flushes anything already queued and `rebind_active_view`
+/// moves the view onto the resolved active tab.
+///
+/// Unlike Win32 this does not first discard a sole empty "new 1" scratch
+/// buffer — a leftover empty tab alongside the loaded session is cosmetic,
+/// and GTK's tab layer always keeps at least one tab, so there is no
+/// null-state hazard. Tracked as a follow-up for exact Win32 parity.
+fn on_load_session() {
+    let Some(path) = choose_open_paths().into_iter().next() else {
+        return;
+    };
+    let report = with_state(|st| st.shell.load_npp_session(&path));
+    match report {
+        Some(Ok(r)) => {
+            // A session that was *entirely* rejected opened nothing; say
+            // so rather than let it vanish silently. (Non-local paths are
+            // only rejected on Windows; on Linux this count is always 0.)
+            if r.opened == 0 && r.rejected_nonlocal > 0 {
+                crate::message_dialog(
+                    gtk::MessageType::Info,
+                    gtk::ButtonsType::Ok,
+                    "Load Session",
+                    &format!(
+                        "This session file contained {} network / UNC path(s), \
+                         which Code++ does not open from session files. \
+                         No local files were opened.",
+                        r.rejected_nonlocal
+                    ),
+                );
+            }
+            if r.dropped_over_cap > 0 {
+                tracing::warn!(
+                    cap = codepp_shell::MAX_SESSION_TABS,
+                    dropped = r.dropped_over_cap,
+                    "Load Session: entries exceed cap; excess dropped",
+                );
+            }
+        }
+        Some(Err(err)) => {
+            crate::message_dialog(
+                gtk::MessageType::Error,
+                gtk::ButtonsType::Ok,
+                "Load Session failed",
+                &codepp_shell::sanitize_str_for_display(&err.to_string()),
+            );
+            return;
+        }
+        None => return,
+    }
+    rebind_active_view();
+    drain_shell();
 }
 
 fn on_reload() {

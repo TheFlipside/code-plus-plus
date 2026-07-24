@@ -164,6 +164,16 @@ impl YesNo {
     }
 }
 
+/// Hard cap on the size of a session XML file [`NppSessionDoc::load_from_xml`]
+/// will read. Real N++ session files are kilobytes; even a 512-tab session
+/// (the `MAX_SESSION_TABS` ceiling) with long paths stays well under a
+/// megabyte. The cap bounds the synchronous read + full-document
+/// deserialisation of a *user-picked* (hence untrusted) file so a hostile
+/// multi-hundred-MB "session" can't freeze the UI thread before the tab
+/// cap — which only applies after the parse — has a chance to. 8 MiB is
+/// generous headroom over any legitimate session.
+pub const MAX_SESSION_XML_BYTES: u64 = 8 * 1024 * 1024;
+
 /// Errors from reading / writing an N++ session file.
 #[derive(Debug)]
 pub enum NppSessionError {
@@ -173,6 +183,12 @@ pub enum NppSessionError {
     Parse(quick_xml::DeError),
     /// Serialisation to XML failed.
     Serialize(quick_xml::SeError),
+    /// The file exceeds [`MAX_SESSION_XML_BYTES`] and was refused before
+    /// being parsed.
+    TooLarge {
+        /// The byte cap that was exceeded.
+        limit: u64,
+    },
 }
 
 impl std::fmt::Display for NppSessionError {
@@ -181,6 +197,9 @@ impl std::fmt::Display for NppSessionError {
             NppSessionError::Io(e) => write!(f, "npp session I/O error: {e}"),
             NppSessionError::Parse(e) => write!(f, "npp session parse error: {e}"),
             NppSessionError::Serialize(e) => write!(f, "npp session serialize error: {e}"),
+            NppSessionError::TooLarge { limit } => {
+                write!(f, "npp session file exceeds the {limit}-byte size limit")
+            }
         }
     }
 }
@@ -204,7 +223,27 @@ impl NppSessionDoc {
     /// Returns `Io` on any read failure; `Parse` on malformed XML or
     /// a shape that doesn't fit [`NppSessionDoc`].
     pub fn load_from_xml(path: &Path) -> Result<Self, NppSessionError> {
-        let contents = std::fs::read_to_string(path).map_err(NppSessionError::Io)?;
+        use std::io::Read;
+        let file = std::fs::File::open(path).map_err(NppSessionError::Io)?;
+        // Bounded read: `take(cap + 1)` so a file exactly at the cap still
+        // reads whole, while anything larger trips the length check below.
+        // Reading through the cap (rather than trusting `metadata().len()`)
+        // is deliberate — a file can grow between a stat and the read, so
+        // the bound has to live on the read itself.
+        let mut buf = Vec::new();
+        file.take(MAX_SESSION_XML_BYTES + 1)
+            .read_to_end(&mut buf)
+            .map_err(NppSessionError::Io)?;
+        if buf.len() as u64 > MAX_SESSION_XML_BYTES {
+            return Err(NppSessionError::TooLarge {
+                limit: MAX_SESSION_XML_BYTES,
+            });
+        }
+        // Preserve `read_to_string`'s contract: non-UTF-8 is an
+        // `InvalidData` I/O error, not a silently lossy decode.
+        let contents = String::from_utf8(buf).map_err(|e| {
+            NppSessionError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        })?;
         Self::from_xml_str(&contents)
     }
 
@@ -539,6 +578,41 @@ mod tests {
     fn malformed_xml_returns_parse_error() {
         let err = NppSessionDoc::from_xml_str("<not-a-npp-session>").unwrap_err();
         assert!(matches!(err, NppSessionError::Parse(_)));
+    }
+
+    #[test]
+    fn load_from_xml_refuses_a_file_over_the_size_cap() {
+        // An untrusted session file just past the cap is rejected before
+        // any parse allocation happens — the DoS guard the security audit
+        // asked for. Pad valid-ish XML out with a comment so the rejection
+        // is about size, not shape.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("huge.xml");
+        let over_cap = usize::try_from(MAX_SESSION_XML_BYTES + 1).unwrap();
+        let mut bytes = Vec::with_capacity(over_cap + 8);
+        bytes.extend_from_slice(b"<!-- ");
+        bytes.resize(over_cap, b'x');
+        std::fs::write(&path, &bytes).unwrap();
+        let err = NppSessionDoc::load_from_xml(&path).unwrap_err();
+        assert!(
+            matches!(err, NppSessionError::TooLarge { limit } if limit == MAX_SESSION_XML_BYTES),
+            "expected TooLarge, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn load_from_xml_accepts_a_file_at_the_size_cap() {
+        // Boundary: exactly the cap reads whole (the `+1` in the bounded
+        // read is what makes an at-cap file distinguishable from an
+        // over-cap one). Content is a valid empty session so the parse
+        // succeeds and only the size gate is under test.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("at_cap.xml");
+        let doc = NppSessionDoc::default();
+        let xml = doc.to_xml_string().unwrap();
+        assert!((xml.len() as u64) <= MAX_SESSION_XML_BYTES);
+        std::fs::write(&path, xml.as_bytes()).unwrap();
+        assert!(NppSessionDoc::load_from_xml(&path).is_ok());
     }
 
     // --- LangType <-> name mapping ---
