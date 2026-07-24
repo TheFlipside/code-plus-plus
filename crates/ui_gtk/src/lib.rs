@@ -816,6 +816,18 @@ pub(crate) fn drain_shell() {
     DIALOG_QUEUE.with(|q| q.borrow_mut().extend(dialogs.unwrap_or_default()));
     pump_dialogs();
     refresh_tab_chrome();
+    // A drain can change the active document — an async file load
+    // completing, a session/recent-files restore landing, or a file-watcher
+    // reload all bind a new (or freshly-populated) document to the main view
+    // via `Shell::drain`, but none of them route through `rebind_active_view`
+    // the way a tab switch does. Repoint the Document Map's miniature so it
+    // follows the loaded buffer instead of showing the previous one until
+    // the next tab switch. Idempotent and a no-op when the map is hidden or
+    // the active document is unchanged, so calling it on every wake is cheap.
+    // (On the tab-close path this also runs a second time — `rebind_active_view`
+    // already synced it inside the freeze, and the unfrozen flush lands here —
+    // but the repeat is a harmless no-op, not a bug to "optimize" away.)
+    docmap::sync_to_active_tab();
     // Find-in-Files results arrive on the same wake as everything else;
     // render them into the dock after the main drain (its own `with_state`
     // so the borrow isn't held across the `TreeView` update). Staged during
