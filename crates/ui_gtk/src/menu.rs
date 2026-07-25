@@ -20,7 +20,8 @@ use std::path::{Path, PathBuf};
 use codepp_shell::{OpenFileOutcome, UiPlatform};
 use gtk::gdk::keys::constants as key;
 use gtk::glib;
-use gtk::prelude::*;
+use gtk::glib::prelude::ToVariant;
+use gtk::{gio, prelude::*};
 
 use crate::state::with_state;
 use crate::{
@@ -318,11 +319,11 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     menu.show_all();
 }
 
-/// Which "Open Containing Folder" action to run on the active buffer's
-/// parent directory.
+/// Which "Open Containing Folder" action to run on the active buffer.
 #[derive(Clone, Copy)]
 enum ContainingAction {
-    /// Open the folder in the desktop file manager.
+    /// Show the file selected (and scrolled into view) in the desktop file
+    /// manager.
     FileManager,
     /// Open a terminal emulator with its working directory at the folder.
     Terminal,
@@ -331,9 +332,10 @@ enum ContainingAction {
 }
 
 /// Insert the "Open Containing Folder" submenu directly after Open, matching
-/// Win32's order. The three actions all operate on the active buffer's parent
-/// directory, resolved at click time. The whole submenu is greyed while the
-/// active buffer has no on-disk parent (untitled), refreshed on File-menu
+/// Win32's order. The three actions are resolved against the active buffer at
+/// click time — File Explorer selects the file, Terminal and Folder as
+/// Workspace act on its parent directory. The whole submenu is greyed while
+/// the active buffer has no on-disk parent (untitled), refreshed on File-menu
 /// open — so it lives here rather than in the static `entries` array.
 ///
 /// Win32's submenu is Explorer / cmd / PowerShell / — / Folder as Workspace;
@@ -375,35 +377,98 @@ fn insert_open_containing_folder(menu: &gtk::Menu) {
     });
 }
 
-/// Run an "Open Containing Folder" action against the active buffer's parent
-/// directory (resolved now, at click time). A no-op for an untitled buffer or
-/// a path with no parent — the submenu is also greyed in that state.
+/// Run an "Open Containing Folder" action against the active buffer's file
+/// (resolved now, at click time). A no-op for an untitled buffer or a path
+/// with no parent — the submenu is also greyed in that state. File Explorer
+/// acts on the file itself (to select it); Terminal and Folder as Workspace
+/// act on its parent directory.
 fn open_containing(action: ContainingAction) {
-    let dir = with_state(|st| {
-        st.shell
-            .active()
-            .and_then(|t| t.path.as_deref())
-            .and_then(Path::parent)
-            .map(Path::to_path_buf)
-    })
-    .flatten();
-    let Some(dir) = dir else {
+    let file = with_state(|st| st.shell.active().and_then(|t| t.path.clone())).flatten();
+    let Some(file) = file else {
+        return;
+    };
+    let Some(dir) = file.parent().map(Path::to_path_buf) else {
         return;
     };
     match action {
-        ContainingAction::FileManager => {
-            // Same primitive as Open in Default Viewer, on the folder: the
-            // desktop file manager is the default handler for a directory URI.
-            let Some(window) = with_state(|st| st.window.clone()) else {
-                return;
-            };
-            match glib::filename_to_uri(&dir, None) {
-                Ok(uri) => open_uri(&window, &uri),
-                Err(e) => tracing::warn!(?e, "open_containing: filename_to_uri failed"),
-            }
-        }
+        ContainingAction::FileManager => show_file_in_manager(&file),
         ContainingAction::Terminal => open_terminal_in(&dir),
         ContainingAction::Workspace => crate::workspace::open_at(&dir),
+    }
+}
+
+/// Timeout (ms) for the `ShowItems` D-Bus call before its fallback runs. The
+/// call is asynchronous, so the UI never blocks regardless — this only bounds
+/// how long a hung or absent file manager delays the folder-open fallback.
+const SHOW_ITEMS_TIMEOUT_MS: i32 = 3000;
+
+/// Show `file` selected — and scrolled into view — in the desktop file
+/// manager, the Linux analogue of Win32's `explorer /select,`. Uses the
+/// freedesktop `org.freedesktop.FileManager1.ShowItems` D-Bus method, which
+/// Nautilus, Dolphin, Nemo, Caja, Thunar and `PCManFM` all implement.
+///
+/// The `ShowItems` call is asynchronous, so the GTK thread does not block on
+/// the file manager itself (which may need D-Bus activation); only the
+/// one-off `bus_get_sync` session-bus handshake is synchronous — a local
+/// Unix-socket round trip in the sub-millisecond range, on par with the other
+/// synchronous glib calls in this file. If the interface is unavailable or
+/// the call errors, fall back to opening the *containing folder* (no
+/// selection) with the default handler — every file manager handles that. The
+/// URI is built by `filename_to_uri` (percent-escaped) and passed as method
+/// data, never to a shell.
+fn show_file_in_manager(file: &Path) {
+    let Ok(uri) = glib::filename_to_uri(file, None) else {
+        tracing::warn!(?file, "show in file manager: filename_to_uri failed");
+        return;
+    };
+    // Captured for the async fallback (and the no-bus fallback below).
+    let parent = file.parent().map(Path::to_path_buf);
+    let window = with_state(|st| st.window.clone());
+
+    let conn = match gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE) {
+        Ok(conn) => conn,
+        Err(e) => {
+            tracing::warn!(?e, "no session bus; opening the containing folder instead");
+            open_containing_folder_fallback(parent.as_deref(), window.as_ref());
+            return;
+        }
+    };
+    let params = (vec![uri.to_string()], String::new()).to_variant();
+    conn.call(
+        Some("org.freedesktop.FileManager1"),
+        "/org/freedesktop/FileManager1",
+        "org.freedesktop.FileManager1",
+        "ShowItems",
+        Some(&params),
+        None,
+        gio::DBusCallFlags::NONE,
+        SHOW_ITEMS_TIMEOUT_MS,
+        gio::Cancellable::NONE,
+        move |res| {
+            if let Err(e) = res {
+                tracing::warn!(
+                    ?e,
+                    "FileManager1.ShowItems failed; opening the folder instead"
+                );
+                open_containing_folder_fallback(parent.as_deref(), window.as_ref());
+            }
+        },
+    );
+}
+
+/// Fallback for [`show_file_in_manager`]: open the containing folder itself
+/// (no file selection) through the default handler — the same primitive as
+/// Open in Default Viewer, on the directory.
+fn open_containing_folder_fallback(dir: Option<&Path>, window: Option<&gtk::Window>) {
+    let (Some(dir), Some(window)) = (dir, window) else {
+        return;
+    };
+    match glib::filename_to_uri(dir, None) {
+        Ok(uri) => open_uri(window, &uri),
+        Err(e) => tracing::warn!(
+            ?e,
+            "open containing folder fallback: filename_to_uri failed"
+        ),
     }
 }
 
