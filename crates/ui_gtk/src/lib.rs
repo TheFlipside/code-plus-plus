@@ -410,6 +410,14 @@ fn connect_sci_notify(sci_widget: &gtk::Widget) {
         if is_style_only_modification(values) {
             return None;
         }
+        // The mouse-wheel / trackpad horizontal-scroll path
+        // (`Editor::HorizontalScrollTo`) has no upper clamp, so a
+        // horizontal gesture glides `xOffset` far past the content into
+        // empty space — independent of `scrollWidth`, which only bounds
+        // the scrollbar thumb. Re-clamp it here on every `SCN_UPDATEUI`.
+        if notification_code(values) == Some(codepp_scintilla_sys::SCN_UPDATEUI) {
+            with_state(|st| clamp_horizontal_overscroll(st));
+        }
         let text_modified = is_text_modification(values);
         with_state(|st| {
             if text_modified {
@@ -445,6 +453,57 @@ fn connect_sci_notify(sci_widget: &gtk::Widget) {
         }
         None
     });
+}
+
+/// Pull the editor's horizontal scroll offset back inside the real
+/// content extent, defeating the wheel/trackpad over-scroll into empty
+/// space.
+///
+/// Scintilla's `Editor::HorizontalScrollTo` clamps only the lower bound
+/// (`xPos < 0`), so a horizontal wheel / trackpad gesture (or
+/// `Shift`+wheel) drives `xOffset` arbitrarily far right — `scrollWidth`
+/// bounds the scrollbar *thumb* but not this path. We re-derive the
+/// legitimate maximum, `max(0, scrollWidth - pageWidth)`, and snap
+/// `xOffset` back to it.
+///
+/// The interplay with the `scrollWidth` machinery (see `crate::run` and
+/// the `SCN_MODIFIED` reset) is exact:
+///
+/// - Every line fits → tracking keeps `scrollWidth` at the seeded 1 px,
+///   so `max_x` is 0 and the wheel does nothing (the reported symptom).
+/// - A line genuinely overflows → the scrollbar becomes visible →
+///   tracking grows `scrollWidth` to that line's width → `max_x` opens
+///   up exactly far enough to bring the line's end to the right edge.
+///
+/// Runs on every `SCN_UPDATEUI`, but does real work only while
+/// `xOffset > 0`; once snapped to a fitting view it early-returns on the
+/// `xOffset <= 0` guard, so the steady-state cost is one direct call.
+fn clamp_horizontal_overscroll(st: &GtkUiState) {
+    use codepp_scintilla_sys::{
+        sptr_t, uptr_t, SCI_GETMARGINWIDTHN, SCI_GETSCROLLWIDTH, SCI_GETWRAPMODE, SCI_GETXOFFSET,
+        SCI_SETXOFFSET,
+    };
+    // Word wrap pins xOffset at 0 (HorizontalScrollTo early-returns while
+    // wrapping), so there is nothing to clamp.
+    if st.editor.send(SCI_GETWRAPMODE, 0, 0) != 0 {
+        return;
+    }
+    let xoffset = st.editor.send(SCI_GETXOFFSET, 0, 0);
+    if xoffset <= 0 {
+        return;
+    }
+    let scroll_width = st.editor.send(SCI_GETSCROLLWIDTH, 0, 0);
+    // Visible text-area width = widget allocation minus every left margin
+    // (line numbers, symbols, fold) and a small slop for the vertical
+    // scrollbar. Scintilla supports at most 5 margins by default.
+    let margins: sptr_t = (0..5)
+        .map(|m| st.editor.send(SCI_GETMARGINWIDTHN, m as uptr_t, 0))
+        .sum();
+    let page_width = (st.sci_widget.allocated_width() as sptr_t - margins - 16).max(1);
+    let max_x = (scroll_width - page_width).max(0);
+    if xoffset > max_x {
+        st.editor.send(SCI_SETXOFFSET, max_x as uptr_t, 0);
+    }
 }
 
 /// Create the Document Map's miniature Scintilla widget, adopt it into

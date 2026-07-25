@@ -617,13 +617,29 @@ pub const SCI_TEXTHEIGHT: u32 = 2279;
 // actual longest visible line and update `scrollWidth` accordingly,
 // so the horizontal scrollbar appears only when content overflows
 // and stops at the real end of the longest line. Tracking only
-// grows `scrollWidth` (high-water-mark behaviour); to make it
-// shrink when long lines are deleted, the host explicitly sets
+// grows `scrollWidth` (high-water-mark behaviour) and only while the
+// horizontal scrollbar is visible (Editor.cxx `PaintText`); to make
+// it shrink when long lines are deleted, the host explicitly sets
 // `SCI_SETSCROLLWIDTH(1)` on every text-modifying SCN_MODIFIED so
 // Scintilla resets `lineWidthMaxSeen` and recomputes from the
 // current visible content.
+//
+// This governs the scrollbar *thumb* range, but NOT the mouse-wheel /
+// trackpad horizontal path: `Editor::HorizontalScrollTo` clamps only
+// the lower bound (`xPos < 0`), so a horizontal wheel/trackpad gesture
+// (or Shift+wheel) pushes `xOffset` arbitrarily far past the content
+// into empty space regardless of `scrollWidth`. The host closes that
+// gap by clamping `xOffset` to `max(0, scrollWidth - pageWidth)` on
+// every `SCN_UPDATEUI` (see `ui_gtk`), using `scrollWidth` — which the
+// machinery above keeps equal to the real content width — as the
+// content-extent oracle. `SCI_GETSCROLLWIDTH` reads it back for that.
 pub const SCI_SETSCROLLWIDTH: u32 = 2274;
+pub const SCI_GETSCROLLWIDTH: u32 = 2275;
 pub const SCI_SETSCROLLWIDTHTRACKING: u32 = 2516;
+pub const SCI_GETSCROLLWIDTHTRACKING: u32 = 2517;
+/// Width in pixels of margin `n` (`wparam`), summed across all left
+/// margins to derive the text-area width for the `xOffset` clamp above.
+pub const SCI_GETMARGINWIDTHN: u32 = 2243;
 
 // Search & replace — Phase 4 m3. Two parallel APIs:
 //   1. Anchor-based: SCI_SEARCHANCHOR + SCI_SEARCHNEXT/PREV walks

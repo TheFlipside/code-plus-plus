@@ -40,25 +40,26 @@ pub struct GtkUiState {
     pub window: gtk::Window,
     /// The Scintilla widget, as adopted into gtk-rs.
     ///
-    /// Never read, and that is the point: this field exists purely to
-    /// hold a `GObject` reference for the whole session. [`Self::editor`]
-    /// carries raw pointers into the same widget, and nothing else in
-    /// the program owns it once `run`'s local goes out of scope — so
-    /// dropping this field would finalise the widget and leave
-    /// `EditorHandle`'s `direct_ptr` dangling on the next keystroke.
-    /// See the safety note on `EditorHandle::from_gtk_widget`.
+    /// Its load-bearing job is to hold a `GObject` reference for the
+    /// whole session. [`Self::editor`] carries raw pointers into the same
+    /// widget, and nothing else in the program owns it once `run`'s local
+    /// goes out of scope — so dropping this field would finalise the
+    /// widget and leave `EditorHandle`'s `direct_ptr` dangling on the
+    /// next keystroke. See the safety note on
+    /// `EditorHandle::from_gtk_widget`. (It is also read for its
+    /// allocated width in `clamp_horizontal_overscroll`, but that is
+    /// incidental — the keep-alive is the reason it is a field.)
     ///
-    /// **This is the whole of how the backend satisfies that note.**
-    /// `EditorHandle` is `Copy` with no lifetime, so the compiler will
-    /// not catch a copy outliving the widget; the guarantee is instead
-    /// structural — the widget is created once in `run`, never
+    /// **The keep-alive is the whole of how the backend satisfies that
+    /// note.** `EditorHandle` is `Copy` with no lifetime, so the compiler
+    /// will not catch a copy outliving the widget; the guarantee is
+    /// instead structural — the widget is created once in `run`, never
     /// destroyed, removed from its container, or reassigned, and tabs
     /// get their own buffers through `SCI_SETDOCPOINTER` rather than
     /// through their own views. Anything that closes over a tab by
     /// destroying a Scintilla widget breaks it. DESIGN.md §7.4 tracked
     /// this as an open ownership question until the tab strip landed
     /// and settled it this way.
-    #[allow(dead_code)]
     pub sci_widget: gtk::Widget,
     /// Raw `ScintillaObject*` (the `scintilla_new()` return). Handed to
     /// plugins as `NppData._scintillaMainHandle` and used as the sink for
