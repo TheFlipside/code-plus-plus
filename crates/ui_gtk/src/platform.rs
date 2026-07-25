@@ -655,12 +655,12 @@ impl UiPlatform for GtkUi {
     }
 
     fn is_menu_hidden(&self) -> bool {
-        !self.menu_bar.is_visible()
+        !self.menu_row.is_visible()
     }
 
     fn set_menu_hidden(&mut self, hidden: bool) -> bool {
-        let prev = !self.menu_bar.is_visible();
-        self.menu_bar.set_visible(!hidden);
+        let prev = !self.menu_row.is_visible();
+        self.menu_row.set_visible(!hidden);
         prev
     }
 
@@ -909,7 +909,7 @@ mod doc_binding_tests {
             window: gtk::Window::new(gtk::WindowType::Toplevel),
             editor,
             status: StatusBar::new(),
-            menu_bar: gtk::MenuBar::new(),
+            menu_row: gtk::Box::new(gtk::Orientation::Horizontal, 0),
             toolbar: gtk::Toolbar::new(),
             tabs: TabStrip::new(),
             // Tests here don't exercise the UDL path; a null registry
@@ -1043,7 +1043,7 @@ mod doc_binding_tests {
             window: ui.window.clone(),
             editor: ui.editor,
             status: ui.status.clone(),
-            menu_bar: ui.menu_bar.clone(),
+            menu_row: ui.menu_row.clone(),
             toolbar: ui.toolbar.clone(),
             tabs: ui.tabs.clone(),
             udl_registry: ui.udl_registry,

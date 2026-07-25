@@ -82,8 +82,13 @@ pub struct GtkUiState {
     pub docmap_editor: EditorHandle,
     /// The 7-part status bar.
     pub status: StatusBar,
-    /// Menu bar, held so the visibility toggles can reach it.
+    /// Menu bar, held so [`connect`](crate::menu::connect) can address its
+    /// top-level menus by position.
     pub menu_bar: gtk::MenuBar,
+    /// The horizontal strip that holds the menu bar plus the right-shortcut
+    /// group (`＋ ▼ X`). The menu-hide toggle flips *this* so both hide
+    /// together, matching Win32 where the shortcuts live on the one bar.
+    pub menu_row: gtk::Box,
     /// The toolbar, held so its visibility toggle (`NPPM_HIDETOOLBAR`) and
     /// the split's `is_/set_toolbar_hidden` can reach the live widget.
     pub toolbar: gtk::Toolbar,
@@ -126,7 +131,10 @@ pub struct GtkUi {
     pub window: gtk::Window,
     pub editor: EditorHandle,
     pub status: StatusBar,
-    pub menu_bar: gtk::MenuBar,
+    /// The menu strip (menu bar + right-shortcut group), for the menu-hide
+    /// toggle — hiding it hides both, matching Win32. See
+    /// [`GtkUiState::menu_row`].
+    pub menu_row: gtk::Box,
     pub toolbar: gtk::Toolbar,
     pub tabs: TabStrip,
     /// Read-only pointer to `Shell.udl_registry` for the UDL
@@ -161,7 +169,7 @@ impl GtkUiState {
             window: self.window.clone(),
             editor: self.editor,
             status: self.status.clone(),
-            menu_bar: self.menu_bar.clone(),
+            menu_row: self.menu_row.clone(),
             toolbar: self.toolbar.clone(),
             tabs: self.tabs.clone(),
             udl_registry,

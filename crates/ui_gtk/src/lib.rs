@@ -188,8 +188,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 0);
     window.add(&layout);
 
-    let menu_bar = menu::build();
-    layout.pack_start(&menu_bar, false, false, 0);
+    let menu_parts = menu::build();
+    layout.pack_start(&menu_parts.row, false, false, 0);
 
     // The toolbar sits between the menu bar and the tab strip, the same
     // slot Win32 uses. Handlers are wired at build time (they reach the
@@ -197,8 +197,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     let toolbar = toolbar::build_toolbar(window.scale_factor());
     layout.pack_start(&toolbar, false, false, 0);
 
-    // The strip sits above the editor as a sibling, not a parent —
-    // its pages are empty and collapse to zero height. See `tabs`.
+    // Tab strip: a sibling above the editor, not a parent; its empty pages
+    // collapse to zero height. See `tabs`.
     let tab_strip = tabs::TabStrip::new();
     layout.pack_start(&tab_strip.notebook, false, false, 0);
 
@@ -271,8 +271,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // horizontal scrollbar only appears when content actually overflows.
     // Mirrors `ui_win32`; the per-edit high-water-mark reset lives in the
     // SCN_MODIFIED branch of `connect_sci_notify`.
-    editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, 1, 0);
-    editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTHTRACKING, 1, 0);
+    seed_horizontal_scroll(&editor);
 
     let perf = Rc::new(perf);
     connect_perf_probes(&sci_widget, &perf);
@@ -285,7 +284,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
         docmap_sci: docmap_widget.clone(),
         docmap_editor,
         status,
-        menu_bar,
+        menu_bar: menu_parts.bar,
+        menu_row: menu_parts.row,
         tabs: tab_strip.clone(),
         shell,
         find_replace: None,
@@ -529,6 +529,16 @@ fn build_docmap_miniature() -> Result<(gtk::Widget, EditorHandle), GtkUiError> {
         unsafe { EditorHandle::from_gtk_widget(ptr) }.ok_or(GtkUiError::DirectCallCapture)?;
     docmap::configure_miniature(handle);
     Ok((widget, handle))
+}
+
+/// Seed the horizontal-scroll width + tracking at startup so the scrollbar
+/// only appears once content overflows. Split out of `run` so the two
+/// direct-call sends read as one intent. See the call site for the full
+/// rationale; `SCI_SETSCROLLWIDTH(1)` is re-issued per doc swap in
+/// [`rebind_active_view`].
+fn seed_horizontal_scroll(editor: &codepp_editor::EditorHandle) {
+    editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, 1, 0);
+    editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTHTRACKING, 1, 0);
 }
 
 /// Wire the tab strip's two signals to `Shell`.
@@ -1946,6 +1956,27 @@ pub(crate) fn close_tab_by_id(id: i32) {
         rebind_active_view();
     }
     close_active_tab();
+}
+
+/// Switch the active buffer to the tab with `id`, if it still exists.
+///
+/// Behaves exactly like the switch half of [`close_tab_by_id`] (capture the
+/// outgoing dirty bit, move `active_tab`, rebind the view) — id-keyed for
+/// the same reason: the open-files switcher's rows outlive any particular
+/// ordering, so an index captured when the menu was built could address a
+/// different buffer by the time the row is clicked. A no-op if the target is
+/// already active or has since closed. `rebind_active_view` refreshes the
+/// tab strip and title.
+pub(crate) fn select_tab_by_id(id: i32) {
+    let Some(Some(idx)) = with_state(|st| st.shell.tabs.iter().position(|t| t.id == id)) else {
+        return;
+    };
+    if with_state(|st| st.shell.active_tab == Some(idx)).unwrap_or(false) {
+        return;
+    }
+    capture_active_dirty();
+    with_state(|st| st.shell.active_tab = Some(idx));
+    rebind_active_view();
 }
 
 /// Make the tab strip match `Shell`. Safe and cheap to call often.

@@ -38,9 +38,24 @@ struct Entry {
     action: fn(),
 }
 
-/// Build the menu bar. Handlers are attached separately by [`connect`],
-/// because they need the window state installed first.
-pub fn build() -> gtk::MenuBar {
+/// The pieces [`build`] hands back: the strip that goes into the window,
+/// and the main menu bar addressed by position.
+pub struct MenuBarParts {
+    /// The horizontal strip packed into the window: the main menu bar
+    /// (expanding to fill) followed by the right-shortcut group. The
+    /// menu-hide toggle flips *this* so both groups hide together, matching
+    /// Win32 where the right shortcuts live on the one menu bar.
+    pub row: gtk::Box,
+    /// The main menu bar (File … ?). [`connect`] / [`submenu_at`] address it
+    /// by position, so it is handed out separately from the strip.
+    pub bar: gtk::MenuBar,
+}
+
+/// Build the menu bar and its right-edge shortcut group. Menu handlers are
+/// attached separately by [`connect`] (they need the window state installed
+/// first); the right-shortcut handlers are wired here — see
+/// [`build_right_shortcuts`].
+pub fn build() -> MenuBarParts {
     let bar = gtk::MenuBar::new();
     // Order mirrors Notepad++/Win32: File, Edit, Search, View, Encoding,
     // Language, Settings, Plugins, ?. "?" is N++'s Help menu; kept as-is
@@ -62,7 +77,99 @@ pub fn build() -> gtk::MenuBar {
         root.set_submenu(Some(&gtk::Menu::new()));
         bar.append(&root);
     }
+
+    // The main bar expands to fill; the right-shortcut bar is packed to the
+    // far end so its three glyphs hug the right edge — the deterministic GTK
+    // equivalent of Win32's `MFT_RIGHTJUSTIFY` group (GTK 3's
+    // `set_right_justified` only ever right-anchors a single item, so it
+    // cannot group three).
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    row.pack_start(&bar, true, true, 0);
+    row.pack_end(&build_right_shortcuts(), false, false, 0);
+
+    MenuBarParts { row, bar }
+}
+
+/// The `＋ ▼ X` group pinned to the far right of the menu strip, mirroring
+/// Win32's "right shortcuts": new untitled, open-files switcher, close
+/// active tab. Rendered as a second `gtk::MenuBar` so the three appear as
+/// native menu-bar entries — in this left-to-right order — flush right.
+///
+/// Handlers are wired here rather than in [`connect`]: they only close over
+/// [`with_state`], which resolves the installed state at click time, so
+/// `connect`'s "state must be installed first" constraint does not apply.
+fn build_right_shortcuts() -> gtk::MenuBar {
+    let bar = gtk::MenuBar::new();
+
+    // ＋ new untitled. U+FF0B FULLWIDTH PLUS SIGN, as on Win32, so the glyph
+    // sits at the menu font's full em height rather than ASCII '+'s
+    // x-height. `with_label` (not `with_mnemonic`) so the glyph is literal.
+    let new_item = gtk::MenuItem::with_label("\u{FF0B}");
+    new_item.set_tooltip_text(Some("New"));
+    new_item.connect_activate(|_| on_new());
+    bar.append(&new_item);
+
+    // ▼ open-files switcher. Its submenu is rebuilt from the live tab list
+    // on every open (`connect_show`); each row switches to that buffer.
+    let list_item = gtk::MenuItem::with_label("\u{25BC}");
+    list_item.set_tooltip_text(Some("Switch to open file"));
+    let list_menu = gtk::Menu::new();
+    list_menu.connect_show(populate_open_files_menu);
+    list_item.set_submenu(Some(&list_menu));
+    bar.append(&list_item);
+
+    // X close active tab — the same handler as File → Close.
+    let close_item = gtk::MenuItem::with_label("X");
+    close_item.set_tooltip_text(Some("Close"));
+    close_item.connect_activate(|_| on_close());
+    bar.append(&close_item);
+
     bar
+}
+
+/// (Re)populate the `▼` open-files switcher from the live tab list. Rebuilt
+/// on every open so it always matches `Shell`. Each row switches to its
+/// buffer by stable id — robust to reordering, exactly as the tab strip's
+/// close buttons are keyed (see the `tabs` module docs). The active buffer's
+/// row is drawn checked. An empty list shows a single greyed placeholder.
+///
+/// Row labels deliberately use `tab_display_name` (custom-name / untitled-seq
+/// aware, and sanitized) rather than Win32 `refresh_window_menu`'s raw
+/// `path.file_name()` + numeric prefix: it is the same name the tab strip
+/// and title show, so the switcher stays consistent with them. This is a
+/// deliberate improvement over the Win32 label, not an oversight to "fix"
+/// back to parity.
+fn populate_open_files_menu(menu: &gtk::Menu) {
+    for child in menu.children() {
+        menu.remove(&child);
+    }
+    let rows = with_state(|st| {
+        let active = st.shell.active_tab;
+        st.shell
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.id, codepp_shell::tab_display_name(t), active == Some(i)))
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+    if rows.is_empty() {
+        let empty = gtk::MenuItem::with_label("(no open files)");
+        empty.set_sensitive(false);
+        menu.append(&empty);
+    } else {
+        for (id, name, is_active) in rows {
+            // `tab_display_name` already sanitizes control/bidi characters
+            // for display, and `with_label` does not parse mnemonics, so the
+            // filename reaches the menu verbatim and inert.
+            let item = gtk::CheckMenuItem::with_label(&name);
+            item.set_draw_as_radio(true);
+            item.set_active(is_active);
+            item.connect_activate(move |_| crate::select_tab_by_id(id));
+            menu.append(&item);
+        }
+    }
+    menu.show_all();
 }
 
 /// Fetch a top-level menu's submenu by its position in the bar.
