@@ -1331,6 +1331,28 @@ pub fn pick_next_close_target(tabs: &[Tab], kind: CloseMultiKind, keeper_id: i32
     }
 }
 
+/// Where a just-pinned tab at `idx` must move so the pinned-before-unpinned
+/// invariant holds, or `None` if it is already correctly placed. Used to
+/// repair the placement after a load restores a pin (see
+/// [`Shell::apply_load_result`]).
+///
+/// Only *settled* (fully loaded, `pending_load.is_none()`) unpinned tabs count
+/// as blockers. This is the crux: during a full session restore the pinned
+/// tabs are pushed pinned-first but their flags are set incrementally as their
+/// async loads complete, so a not-yet-loaded pinned tab looks unpinned. Gating
+/// on "settled" means those in-flight tabs are neither treated as blockers nor
+/// jumped ahead of — the tab vector was already assembled in the right order,
+/// so this returns `None` for every restore case. It returns `Some` only when
+/// a genuinely-settled unpinned tab sits before `idx`, i.e. a single
+/// mid-session open of a pinned file whose tab was pushed at the end.
+#[must_use]
+fn pinned_restore_target(tabs: &[Tab], idx: usize) -> Option<usize> {
+    let first_settled_unpinned = tabs
+        .iter()
+        .position(|t| !t.pinned && t.pending_load.is_none())?;
+    (first_settled_unpinned < idx).then_some(first_settled_unpinned)
+}
+
 /// Whether the "Close Multiple Documents" entry for `kind` should be enabled,
 /// given the current tabs and the active tab's index. An entry is enabled iff
 /// the close loop would actually find a tab to close — so it is defined *as*
@@ -2409,6 +2431,38 @@ impl Shell {
         self.pending_notifications
             .push(Notification::DocOrderChanged);
         true
+    }
+
+    /// Repair the pinned-before-unpinned invariant after a load restores a pin
+    /// onto the tab at `target_idx` (see [`apply_load_result`]). Moves the tab
+    /// to the end of the pinned prefix and adjusts `active_tab`, but ONLY if it
+    /// is actually misplaced per [`pinned_restore_target`] — which ignores
+    /// still-loading tabs, so a full session restore (whose pinned tabs are
+    /// pushed pinned-first and load asynchronously) is untouched. A no-op
+    /// unless the tab is a mid-session open pushed at the end of the strip.
+    fn repair_restored_pin_placement(&mut self, target_idx: usize) {
+        // Only a pinned tab needs cluster placement; an unpinned tab freshly
+        // opened at the end is already correctly after the pinned prefix.
+        if !self.tabs.get(target_idx).is_some_and(|t| t.pinned) {
+            return;
+        }
+        let Some(target) = pinned_restore_target(&self.tabs, target_idx) else {
+            return;
+        };
+        // `pinned_restore_target` only ever returns `target < target_idx`, so
+        // this is a left move: elements in `[target, target_idx)` shift right.
+        let tab = self.tabs.remove(target_idx);
+        self.tabs.insert(target, tab);
+        if let Some(active) = self.active_tab.as_mut() {
+            if *active == target_idx {
+                *active = target;
+            } else if target <= *active && *active < target_idx {
+                *active += 1;
+            }
+        }
+        self.session.active = self.active_tab;
+        self.pending_notifications
+            .push(Notification::DocOrderChanged);
     }
 
     /// Close the currently-active tab. Returns a [`ClosedTab`] the
@@ -3738,12 +3792,14 @@ impl Shell {
                 // `NPPM_SETBUFFERLANGTYPE`.
                 tab.lang =
                     stored_lang_override.unwrap_or_else(|| LangType::from_path(&loaded.path));
-                // Restore the persisted pin state — the
-                // pinned-before-unpinned invariant is preserved
-                // because `save_session` writes tabs in that order
-                // and `load_session_entries` iterates in the same
-                // order, so the tab vector is reassembled with the
-                // pinned prefix intact.
+                // Restore the persisted pin state. For a full session restore
+                // the tab vector is already assembled pinned-first, so setting
+                // the flag alone keeps the invariant; for a single mid-session
+                // open of a pinned file the tab was pushed at the *end*, so the
+                // flag alone would leave it outside the pinned cluster (stuck
+                // right of the unpinned tabs, and unmovable because it's
+                // pinned). `repair_restored_pin_placement` below relocates it —
+                // a no-op in the restore case (see `pinned_restore_target`).
                 tab.pinned = stored_pinned;
                 let stored_doc = tab.scintilla_doc;
                 let lang = tab.lang;
@@ -3801,6 +3857,16 @@ impl Shell {
                     // Notification queue is Windows-gated.
                     self.queue_buffer_activated();
                 }
+
+                // If restoring the pin above left this tab outside the pinned
+                // cluster — which happens when a single mid-session open of a
+                // pinned file pushes its tab at the end of the strip — relocate
+                // it into the cluster. A no-op for a full session restore
+                // (tabs already pinned-first) and for an unpinned open. Runs
+                // whether or not the tab is active: the placement is a model
+                // fact, not a view one. Done last so it can't shift
+                // `target_idx` under the UI calls above.
+                self.repair_restored_pin_placement(target_idx);
             }
             Err(err) => {
                 // A failed load on a fresh tab (one that never had a
@@ -7661,7 +7727,9 @@ mod close_multi_tests {
     //! because activating it to close it would seed the editor with an empty
     //! document and risk a 0-byte overwrite on a "Save changes?" Yes.
 
-    use super::{close_multi_enabled, pick_next_close_target, CloseMultiKind, Tab};
+    use super::{
+        close_multi_enabled, pick_next_close_target, pinned_restore_target, CloseMultiKind, Tab,
+    };
 
     fn mk(id: i32) -> Tab {
         Tab {
@@ -7876,6 +7944,41 @@ mod close_multi_tests {
             Some(2),
             CloseMultiKind::AllToRight
         ));
+    }
+
+    // --- pinned_restore_target (pin-placement repair on load) --------
+
+    #[test]
+    fn pinned_restore_target_relocates_a_mid_session_pinned_open() {
+        // All settled: [pinned(1), unpinned(2), unpinned(3), just-pinned(4)].
+        // The tab at idx 3 must move to idx 1 — the end of the pinned prefix.
+        let tabs = vec![mk_pinned(1), mk(2), mk(3), mk_pinned(4)];
+        assert_eq!(pinned_restore_target(&tabs, 3), Some(1));
+    }
+
+    #[test]
+    fn pinned_restore_target_none_when_already_in_cluster() {
+        // A pinned tab already at the front, ahead of the unpinned tabs.
+        let tabs = vec![mk_pinned(1), mk(2), mk(3)];
+        assert_eq!(pinned_restore_target(&tabs, 0), None);
+    }
+
+    #[test]
+    fn pinned_restore_target_ignores_still_loading_tabs() {
+        // Full-restore shape: pinned tabs pushed first, one still loading
+        // (pending, flag not yet set). The just-loaded pinned tab at idx 1 must
+        // NOT move — the pending tab at idx 0 is not a settled-unpinned
+        // blocker, and the settled-unpinned tab (idx 2) sits after it.
+        let tabs = vec![mk_pending(1), mk_pinned(2), mk(3)];
+        assert_eq!(pinned_restore_target(&tabs, 1), None);
+    }
+
+    #[test]
+    fn pinned_restore_target_moves_to_end_of_settled_pinned_prefix() {
+        // [pinned(1), pinned(2), unpinned(3), just-pinned(4)] → move idx 3 to
+        // idx 2 (just after the two-tab pinned prefix, before the unpinned).
+        let tabs = vec![mk_pinned(1), mk_pinned(2), mk(3), mk_pinned(4)];
+        assert_eq!(pinned_restore_target(&tabs, 3), Some(2));
     }
 
     #[test]
@@ -11138,6 +11241,35 @@ mod tests {
             .collect();
         shell.active_tab = active;
         shell
+    }
+
+    #[test]
+    fn repair_restored_pin_relocates_a_mid_session_open_and_follows_active() {
+        // [P(pinned), U, U, U, E] — E is a just-reopened pinned file pushed at
+        // the end and active. Repair moves E into the pinned cluster (idx 1,
+        // right after P) and the active index follows the moved tab.
+        let mut shell = shell_with_synthetic_tabs(5, Some(4));
+        shell.tabs[0].pinned = true; // existing pinned cluster
+        shell.tabs[4].pinned = true; // the just-restored pin, misplaced at end
+        let moved_id = shell.tabs[4].id;
+        shell.repair_restored_pin_placement(4);
+        assert_eq!(shell.tabs[1].id, moved_id, "moved into the pinned prefix");
+        assert_eq!(shell.active_tab, Some(1), "active follows the moved tab");
+        // Invariant: every pinned tab precedes every unpinned tab.
+        let first_unpinned = shell.tabs.iter().position(|t| !t.pinned).unwrap();
+        assert!(shell.tabs[..first_unpinned].iter().all(|t| t.pinned));
+        assert!(shell.tabs[first_unpinned..].iter().all(|t| !t.pinned));
+    }
+
+    #[test]
+    fn repair_restored_pin_is_a_no_op_for_an_unpinned_open() {
+        // A fresh unpinned open at the end is already correctly placed after
+        // the pinned prefix — the self-guard must leave it untouched.
+        let mut shell = shell_with_synthetic_tabs(3, Some(2));
+        shell.tabs[0].pinned = true;
+        shell.repair_restored_pin_placement(2); // tab at idx 2 is unpinned
+        assert_eq!(shell.active_tab, Some(2));
+        assert_eq!(shell.tabs[2].id, 3, "unmoved");
     }
 
     #[test]

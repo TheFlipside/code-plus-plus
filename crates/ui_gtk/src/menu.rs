@@ -348,10 +348,13 @@ fn insert_move_to_recycle_bin(menu: &gtk::Menu) {
 /// on-disk file to the desktop Trash (`g_file_trash`) and close the buffer —
 /// the GTK analogue of Win32's `SHFileOperation(FO_DELETE | FOF_ALLOWUNDO)`.
 ///
-/// Mirrors Win32's order: confirm → force the buffer clean (the file and its
-/// edits are being discarded, so the close must not pop a "Save changes?"
-/// prompt) → close the tab → trash the file. The file is only trashed if the
-/// close actually happened. A no-op for an untitled buffer (also greyed).
+/// Order: confirm → trash → close (only on trash success). This deliberately
+/// reverses Win32's close-then-trash: `g_file_trash` fails on filesystems with
+/// no trash support (an NTFS mount, say), and trashing first means a failure
+/// leaves the buffer open and the file intact instead of closing the tab out
+/// from under a file that never moved. A no-op for an untitled buffer (also
+/// greyed). The buffer's unsaved edits are discarded without a save prompt —
+/// the user's confirmation is that consent.
 fn on_move_to_recycle_bin() {
     // Snapshot the active buffer's stable id + on-disk path together.
     let Some((id, path)) = with_state(|st| {
@@ -392,42 +395,51 @@ fn on_move_to_recycle_bin() {
         return;
     }
 
-    // Suppress the close path's save prompt: the file is being deleted, so
-    // prompting to save first is nonsensical (Win32 does the same via
-    // SCI_SETSAVEPOINT). The editor is bound to the active document, so this
-    // marks exactly that buffer clean.
-    with_state(|st| {
-        st.editor.send(codepp_scintilla_sys::SCI_SETSAVEPOINT, 0, 0);
-    });
-    // `SCI_SETSAVEPOINT` re-enters `refresh_active_dirty` synchronously via
-    // `sci-notify` while the borrow above is held, so the cached `Tab.dirty`
-    // isn't refreshed there. Refresh it now, with the borrow dropped, so
-    // `confirm_discard_active` — which ORs the cache with `SCI_GETMODIFY` —
-    // sees the buffer clean and skips the redundant "Save changes?" prompt for
-    // this deliberate discard. Same resync `on_save` does after `mark_saved`.
-    refresh_tab_chrome();
-
-    // Close before trashing, matching Win32: if the close is aborted (a
-    // re-entrant path declining the borrow), leave the file on disk.
-    if !close_active_tab() {
-        return;
-    }
-
+    // Trash FIRST, then close only on success — the reverse of Win32's order,
+    // deliberately: `g_file_trash` fails on filesystems with no trash support
+    // (e.g. an NTFS mount from a dual-boot Windows install, which has no
+    // `.Trash-1000` directory), and closing the buffer before finding that out
+    // would leave the user with the file still on disk but its tab gone. This
+    // way a failed trash is a clean no-op: the buffer stays open, nothing is
+    // lost, and the error explains why.
+    //
     // `trash()` runs synchronously on the UI thread. Accepted: a
-    // same-filesystem trash is a rename (effectively instant), the common
-    // case; only a cross-filesystem or slow-media trash (GVfs's copy+delete
-    // fallback) could stall the UI briefly, which is tolerable for a single,
-    // user-initiated, already-confirmed delete. `g_file_trash_async` is the
-    // lever if that ever needs revisiting.
-
+    // same-filesystem trash is a rename (effectively instant), the common case;
+    // a cross-filesystem or slow-media trash (GVfs's copy+delete fallback)
+    // could stall the UI briefly, tolerable for a single, user-initiated,
+    // already-confirmed delete. `g_file_trash_async` is the lever if needed.
     if let Err(err) = gio::File::for_path(&path).trash(gio::Cancellable::NONE) {
-        // The buffer is already closed, but the file is still on disk — say so
-        // rather than silently leaving the user thinking it was removed.
         crate::message_dialog(
             gtk::MessageType::Error,
             gtk::ButtonsType::Ok,
             "Move to Recycle Bin failed",
             &codepp_shell::sanitize_str_for_display(&err.to_string()),
+        );
+        return;
+    }
+
+    // The file is gone; now close the buffer. Suppress the close path's save
+    // prompt — the file and its edits are being discarded, so prompting to save
+    // is nonsensical (Win32 does the same via SCI_SETSAVEPOINT). The editor is
+    // bound to the active document, so this marks exactly that buffer clean.
+    with_state(|st| {
+        st.editor.send(codepp_scintilla_sys::SCI_SETSAVEPOINT, 0, 0);
+    });
+    // SCI_SETSAVEPOINT re-enters `refresh_active_dirty` synchronously via
+    // `sci-notify` while the borrow above is held, so the cached `Tab.dirty`
+    // isn't refreshed there. Refresh it now, with the borrow dropped, so
+    // `confirm_discard_active` — which ORs the cache with `SCI_GETMODIFY` —
+    // sees the buffer clean and skips the redundant "Save changes?" prompt.
+    // Same resync `on_save` does after `mark_saved`.
+    refresh_tab_chrome();
+    if !close_active_tab() {
+        // The close can only decline here via a re-entrant `with_state`
+        // (vanishingly rare, and the prompt is already suppressed). The file is
+        // already trashed, so the tab is left pointing at a deleted path — a
+        // later Save would simply recreate it. Log rather than swallow it.
+        tracing::warn!(
+            ?path,
+            "recycle-bin close declined after trash; buffer left open on a now-deleted path"
         );
     }
 }
