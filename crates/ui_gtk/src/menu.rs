@@ -1,9 +1,9 @@
 //! The menu bar and its handlers.
 //!
-//! Wired: File (New, Open, Open in Default Viewer, Open Folder as Workspace,
-//! Reload from Disk, Save, Save As, Save All, Rename, Close, Close All,
-//! Load/Save Session, Print, recent files, Exit), Edit (Undo/Redo,
-//! Cut/Copy/Paste/Delete, Select All),
+//! Wired: File (New, Open, Open Containing Folder, Open in Default Viewer,
+//! Open Folder as Workspace, Reload from Disk, Save, Save As, Save All,
+//! Rename, Close, Close All, Load/Save Session, Print, recent files, Exit),
+//! Edit (Undo/Redo, Cut/Copy/Paste/Delete, Select All),
 //! Search (Find, Replace, Find Next/Previous, Go to), View (zoom, Word
 //! Wrap, Show Whitespace, Show EOL), Encoding (UTF-8 / UTF-8 BOM / UTF-16
 //! LE·BE BOM, ANSI greyed), Language (Normal Text + the ~88
@@ -15,7 +15,7 @@
 //! block, which DESIGN.md §7.5 names as the source of truth for
 //! hotkeys across all three platforms.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use codepp_shell::{OpenFileOutcome, UiPlatform};
 use gtk::gdk::keys::constants as key;
@@ -311,10 +311,134 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
         return;
     };
     populate(&menu, accel, &entries);
+    insert_open_containing_folder(&menu);
     insert_open_in_default_viewer(&menu);
     menu.append(&gtk::SeparatorMenuItem::new());
     build_file_menu_lower(&menu, accel);
     menu.show_all();
+}
+
+/// Which "Open Containing Folder" action to run on the active buffer's
+/// parent directory.
+#[derive(Clone, Copy)]
+enum ContainingAction {
+    /// Open the folder in the desktop file manager.
+    FileManager,
+    /// Open a terminal emulator with its working directory at the folder.
+    Terminal,
+    /// Root the workspace panel at the folder.
+    Workspace,
+}
+
+/// Insert the "Open Containing Folder" submenu directly after Open, matching
+/// Win32's order. The three actions all operate on the active buffer's parent
+/// directory, resolved at click time. The whole submenu is greyed while the
+/// active buffer has no on-disk parent (untitled), refreshed on File-menu
+/// open — so it lives here rather than in the static `entries` array.
+///
+/// Win32's submenu is Explorer / cmd / PowerShell / — / Folder as Workspace;
+/// the GTK equivalents are File Explorer and Terminal (there is no single
+/// Windows-shell analogue), plus the shared Folder as Workspace.
+fn insert_open_containing_folder(menu: &gtk::Menu) {
+    let submenu = gtk::Menu::new();
+    // Submenu mnemonics (E / T / W) are scoped to this popup, so they cannot
+    // clash with the top-level File-menu mnemonics.
+    let explorer = gtk::MenuItem::with_mnemonic("File _Explorer");
+    explorer.connect_activate(|_| open_containing(ContainingAction::FileManager));
+    submenu.append(&explorer);
+    let terminal = gtk::MenuItem::with_mnemonic("_Terminal");
+    terminal.connect_activate(|_| open_containing(ContainingAction::Terminal));
+    submenu.append(&terminal);
+    submenu.append(&gtk::SeparatorMenuItem::new());
+    let workspace = gtk::MenuItem::with_mnemonic("Folder as _Workspace");
+    workspace.connect_activate(|_| open_containing(ContainingAction::Workspace));
+    submenu.append(&workspace);
+
+    // Mnemonic on `g` — `_C`ontaining would clash with `_Close`, and every
+    // other letter of the label is already claimed in this flat File menu.
+    let parent = gtk::MenuItem::with_mnemonic("Open Containin_g Folder");
+    parent.set_submenu(Some(&submenu));
+    // Position 2: after New (0) and Open (1); the ODV insert that follows
+    // lands at 3, keeping New, Open, Open Containing Folder, Open in Default
+    // Viewer, Open Folder as Workspace — Win32's order.
+    menu.insert(&parent, 2);
+    menu.connect_show(move |_| {
+        let has_parent = with_state(|st| {
+            st.shell
+                .active()
+                .and_then(|t| t.path.as_deref())
+                .and_then(Path::parent)
+                .is_some()
+        })
+        .unwrap_or(false);
+        parent.set_sensitive(has_parent);
+    });
+}
+
+/// Run an "Open Containing Folder" action against the active buffer's parent
+/// directory (resolved now, at click time). A no-op for an untitled buffer or
+/// a path with no parent — the submenu is also greyed in that state.
+fn open_containing(action: ContainingAction) {
+    let dir = with_state(|st| {
+        st.shell
+            .active()
+            .and_then(|t| t.path.as_deref())
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+    })
+    .flatten();
+    let Some(dir) = dir else {
+        return;
+    };
+    match action {
+        ContainingAction::FileManager => {
+            // Same primitive as Open in Default Viewer, on the folder: the
+            // desktop file manager is the default handler for a directory URI.
+            let Some(window) = with_state(|st| st.window.clone()) else {
+                return;
+            };
+            match glib::filename_to_uri(&dir, None) {
+                Ok(uri) => open_uri(&window, &uri),
+                Err(e) => tracing::warn!(?e, "open_containing: filename_to_uri failed"),
+            }
+        }
+        ContainingAction::Terminal => open_terminal_in(&dir),
+        ContainingAction::Workspace => crate::workspace::open_at(&dir),
+    }
+}
+
+/// Launch a terminal emulator with its working directory at `dir`. Linux has
+/// no single "open a terminal here" standard, so try a prioritised list of
+/// the common emulators, each spawned with `dir` as its working directory —
+/// the interactive shell it starts inherits that directory. The directory is
+/// never passed as a command argument, so a folder name containing shell
+/// metacharacters cannot inject anything (there is no shell in the chain).
+/// The child is reaped in a detached thread so a closed terminal leaves no
+/// zombie.
+fn open_terminal_in(dir: &Path) {
+    // `x-terminal-emulator` is the Debian/Ubuntu alternatives symlink to the
+    // user's chosen terminal; the rest cover the common desktops.
+    const TERMINALS: &[&str] = &[
+        "x-terminal-emulator",
+        "gnome-terminal",
+        "konsole",
+        "xfce4-terminal",
+        "kitty",
+        "alacritty",
+        "xterm",
+    ];
+    for term in TERMINALS {
+        if let Ok(mut child) = std::process::Command::new(term).current_dir(dir).spawn() {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            return;
+        }
+    }
+    tracing::warn!(
+        ?dir,
+        "open terminal: no known terminal emulator found on PATH"
+    );
 }
 
 /// Insert "Open in Default Viewer" directly after Open, matching Win32's
@@ -328,8 +452,9 @@ fn insert_open_in_default_viewer(menu: &gtk::Menu) {
     // on), `_D`efault with `Loa_d Session`, and `_V`iewer with `Sa_ve All`.
     let odv = gtk::MenuItem::with_mnemonic("Open in Default Vi_ewer");
     odv.connect_activate(|_| on_open_in_default_viewer());
-    // Position 2: after New (0) and Open (1), before Open Folder as Workspace.
-    menu.insert(&odv, 2);
+    // Position 3: after New (0), Open (1) and Open Containing Folder (2),
+    // before Open Folder as Workspace.
+    menu.insert(&odv, 3);
     menu.connect_show(move |_| {
         let has_path =
             with_state(|st| st.shell.active().is_some_and(|t| t.path.is_some())).unwrap_or(false);

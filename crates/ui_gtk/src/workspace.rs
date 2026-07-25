@@ -516,6 +516,14 @@ fn resolve_show_action(root: Option<&Path>, model_empty: bool) -> ShowAction {
     }
 }
 
+/// Open `root` as the workspace directly, with no folder picker — for
+/// callers that already know the directory (e.g. File → Open Containing
+/// Folder → Folder as Workspace). Idempotent; re-roots in place if a
+/// workspace is already open.
+pub(crate) fn open_at(root: &Path) {
+    show_at(root);
+}
+
 /// Root the panel at `root`, populate it, and show it. Idempotent —
 /// re-roots in place if a workspace is already open.
 fn show_at(root: &Path) {
