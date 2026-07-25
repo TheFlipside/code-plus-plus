@@ -356,6 +356,14 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     menu.append(&save_session);
     menu.append(&gtk::SeparatorMenuItem::new());
 
+    // Print the active buffer (Ctrl+P). Its own separated group just above
+    // Exit, matching Notepad++'s low placement of Print in the File menu.
+    let print = gtk::MenuItem::with_mnemonic("_Print…");
+    print.add_accelerator("activate", accel, *key::p, ctrl, gtk::AccelFlags::VISIBLE);
+    print.connect_activate(|_| crate::print::show());
+    menu.append(&print);
+    menu.append(&gtk::SeparatorMenuItem::new());
+
     let exit = gtk::MenuItem::with_mnemonic("E_xit");
     exit.connect_activate(|_| {
         save_session_now();

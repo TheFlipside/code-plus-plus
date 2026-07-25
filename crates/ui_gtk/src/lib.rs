@@ -46,6 +46,7 @@ mod menu;
 mod platform;
 mod plugin;
 mod preferences;
+mod print;
 mod search;
 mod state;
 mod status;

@@ -4,10 +4,9 @@
 //! Buttons carry no command-dispatch logic of their own — each functional
 //! button calls the exact same `menu`/`search` handler its menu item does,
 //! so a toolbar click and a menu click share one code path. Buttons whose
-//! underlying feature is not wired on GTK yet (Print, the panel toggles,
-//! macros, monitoring, sync-scroll, Define Language) are present but
-//! **greyed**, so the bar matches Win32's layout exactly while never
-//! offering a dead click.
+//! underlying feature is not wired on GTK yet (the panel toggles, macros,
+//! monitoring, sync-scroll, Define Language) are present but **greyed**, so
+//! the bar matches Win32's layout exactly while never offering a dead click.
 //!
 //! # Icons
 //!
@@ -131,7 +130,7 @@ pub fn build_toolbar(scale: i32) -> gtk::Toolbar {
     toolbar
 }
 
-/// Groups 1-3: File ops (Print greyed), Clipboard, History.
+/// Groups 1-3: File ops, Clipboard, History.
 fn add_file_clipboard_history(toolbar: &gtk::Toolbar, scale: i32) {
     push(toolbar, icon!("new"), "New", scale, Some(menu::on_new));
     push(toolbar, icon!("open"), "Open…", scale, Some(menu::on_open));
@@ -157,7 +156,13 @@ fn add_file_clipboard_history(toolbar: &gtk::Toolbar, scale: i32) {
         scale,
         Some(menu::on_close_all),
     );
-    push(toolbar, icon!("print"), "Print", scale, None);
+    push(
+        toolbar,
+        icon!("print"),
+        "Print",
+        scale,
+        Some(crate::print::show),
+    );
     separator(toolbar);
 
     push(toolbar, icon!("cut"), "Cut", scale, Some(menu::on_cut));
