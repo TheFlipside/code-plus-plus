@@ -1,8 +1,9 @@
 //! The menu bar and its handlers.
 //!
-//! Wired: File (New, Open, Open Folder as Workspace, Reload from Disk, Save,
-//! Save As, Save All, Rename, Close, Close All, Load/Save Session, Print,
-//! recent files, Exit), Edit (Undo/Redo, Cut/Copy/Paste/Delete, Select All),
+//! Wired: File (New, Open, Open in Default Viewer, Open Folder as Workspace,
+//! Reload from Disk, Save, Save As, Save All, Rename, Close, Close All,
+//! Load/Save Session, Print, recent files, Exit), Edit (Undo/Redo,
+//! Cut/Copy/Paste/Delete, Select All),
 //! Search (Find, Replace, Find Next/Previous, Go to), View (zoom, Word
 //! Wrap, Show Whitespace, Show EOL), Encoding (UTF-8 / UTF-8 BOM / UTF-16
 //! LE·BE BOM, ANSI greyed), Language (Normal Text + the ~88
@@ -310,9 +311,53 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
         return;
     };
     populate(&menu, accel, &entries);
+    insert_open_in_default_viewer(&menu);
     menu.append(&gtk::SeparatorMenuItem::new());
     build_file_menu_lower(&menu, accel);
     menu.show_all();
+}
+
+/// Insert "Open in Default Viewer" directly after Open, matching Win32's
+/// order. Launches the active buffer's on-disk file with its OS-associated
+/// application. Greyed while the active buffer has no path (untitled), so it
+/// lives here rather than in the static `entries` array — its sensitivity is
+/// refreshed on every File-menu open.
+fn insert_open_in_default_viewer(menu: &gtk::Menu) {
+    // Mnemonic on `e` — in this flat File menu `_f` clashes with the
+    // "Recent _Files" submenu (shown when the In-Submenu recent-files pref is
+    // on), `_D`efault with `Loa_d Session`, and `_V`iewer with `Sa_ve All`.
+    let odv = gtk::MenuItem::with_mnemonic("Open in Default Vi_ewer");
+    odv.connect_activate(|_| on_open_in_default_viewer());
+    // Position 2: after New (0) and Open (1), before Open Folder as Workspace.
+    menu.insert(&odv, 2);
+    menu.connect_show(move |_| {
+        let has_path =
+            with_state(|st| st.shell.active().is_some_and(|t| t.path.is_some())).unwrap_or(false);
+        odv.set_sensitive(has_path);
+    });
+}
+
+/// File → Open in Default Viewer: hand the active buffer's on-disk file to
+/// the desktop's associated application, the GTK analogue of Win32's
+/// `ShellExecuteW("open", path)`. `show_uri_on_window` routes a `file://`
+/// URI through the default handler for its content type — no shell is
+/// involved, and `filename_to_uri` escapes the path, so a filename with
+/// shell metacharacters cannot inject anything (same envelope as Win32's
+/// `"open"` verb). A no-op for an untitled buffer (also greyed); a missing
+/// handler surfaces as a logged warning in `open_uri`.
+fn on_open_in_default_viewer() {
+    let Some((Some(path), window)) = with_state(|st| {
+        (
+            st.shell.active().and_then(|t| t.path.clone()),
+            st.window.clone(),
+        )
+    }) else {
+        return;
+    };
+    match glib::filename_to_uri(&path, None) {
+        Ok(uri) => open_uri(&window, &uri),
+        Err(e) => tracing::warn!(?e, "open_in_default_viewer: filename_to_uri failed"),
+    }
 }
 
 /// The lower half of the File menu, below the first separator: Load/Save
