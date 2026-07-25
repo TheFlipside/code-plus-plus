@@ -98,6 +98,84 @@ const LABEL_MAX_CHARS: i32 = 24;
 /// X11/Wayland button number for the middle button.
 const MIDDLE_BUTTON: u32 = 2;
 
+/// Logical size reserved for the per-tab pin glyph, mirroring Win32's
+/// `TAB_PIN_SIZE_PX`; drawn centred in a slightly larger relief-less button.
+const PIN_GLYPH_PX: i32 = 16;
+/// Pinned-state thumbtack (upright), a 12×12 design canvas — verbatim from
+/// Win32's `TAB_PIN_POLYGON_PINNED` so the two backends draw the same shape.
+const PIN_POLY_PINNED: &[(f64, f64)] = &[
+    (3.0, 2.0),
+    (9.0, 2.0),
+    (9.0, 4.0),
+    (7.0, 4.0),
+    (7.0, 8.0),
+    (6.0, 11.0),
+    (5.0, 8.0),
+    (5.0, 4.0),
+    (3.0, 4.0),
+];
+/// Unpinned-state thumbtack (the same shape rotated 45° CCW) — from Win32's
+/// `TAB_PIN_POLYGON_UNPINNED`. The tilt distinguishes it from the pinned tack.
+const PIN_POLY_UNPINNED: &[(f64, f64)] = &[
+    (1.0, 5.0),
+    (5.0, 1.0),
+    (7.0, 2.0),
+    (5.0, 4.0),
+    (8.0, 7.0),
+    (10.0, 10.0),
+    (7.0, 8.0),
+    (4.0, 5.0),
+    (2.0, 7.0),
+];
+/// Pinned fill — Material Blue 500 (#2196F3), matching Win32's
+/// `TAB_PIN_FILL_PINNED`.
+const PIN_RGB_PINNED: (f64, f64, f64) = (33.0 / 255.0, 150.0 / 255.0, 243.0 / 255.0);
+/// Unpinned outline — grey (#808080), Win32's `TAB_PIN_OUTLINE_UNPINNED`.
+const PIN_RGB_UNPINNED: (f64, f64, f64) = (0.5, 0.5, 0.5);
+
+/// Draw the pin thumbtack centred in the allocation: an upright filled-blue
+/// tack when pinned, a 45°-tilted grey outline when not — the GTK mirror of
+/// Win32's two-state pin glyph. The 12×12 design canvas is scaled to fit and
+/// centred; cairo already carries the display scale, so this works on `HiDPI`.
+fn draw_pin_glyph(cr: &gtk::cairo::Context, pinned: bool, width: f64, height: f64) {
+    let scale = width.min(height) / 12.0;
+    if scale <= 0.0 {
+        return;
+    }
+    let off_x = (width - 12.0 * scale) / 2.0;
+    let off_y = (height - 12.0 * scale) / 2.0;
+    let verts = if pinned {
+        PIN_POLY_PINNED
+    } else {
+        PIN_POLY_UNPINNED
+    };
+    cr.new_path();
+    for (i, &(x, y)) in verts.iter().enumerate() {
+        let point = (off_x + x * scale, off_y + y * scale);
+        if i == 0 {
+            cr.move_to(point.0, point.1);
+        } else {
+            cr.line_to(point.0, point.1);
+        }
+    }
+    cr.close_path();
+    let rgb = if pinned {
+        PIN_RGB_PINNED
+    } else {
+        PIN_RGB_UNPINNED
+    };
+    cr.set_source_rgb(rgb.0, rgb.1, rgb.2);
+    let res = if pinned {
+        cr.fill()
+    } else {
+        cr.set_line_width(scale.max(1.0));
+        cr.stroke()
+    };
+    if let Err(err) = res {
+        tracing::warn!(?err, "tab pin glyph paint failed");
+    }
+}
+
 thread_local! {
     /// True while [`TabStrip::sync`] is rewriting the notebook. See the
     /// module docs for why every handler has to honour it.
@@ -221,6 +299,11 @@ impl TabStrip {
                 };
                 let label = build_tab_label(tab, scale);
                 self.notebook.set_tab_label(&page, Some(&label));
+                // Pinned tabs are fixed in place — disable their drag-reorder,
+                // mirroring Win32's "skip drag arming on pinned tabs". The
+                // shell would reject a `move_tab` into/out of the pinned
+                // cluster anyway; this stops the drag from starting at all.
+                self.notebook.set_tab_reorderable(&page, !tab.pinned);
             }
 
             // Selection is set explicitly, never inferred: removing a
@@ -330,6 +413,31 @@ fn build_tab_label(tab: &Tab, scale: i32) -> gtk::Widget {
     // Both gestures below capture `id`, never an index — see the
     // module docs for why.
     let id = tab.id;
+
+    // Pin toggle — between the label and the close-X, mirroring Win32. A
+    // relief-less button drawing the state-dependent thumbtack; clicking it
+    // pins/unpins via `Shell::set_pinned`, which relocates the tab into or out
+    // of the pinned cluster. The button consumes its own click, so pinning a
+    // background tab does not also switch to it (same as the close button).
+    let pinned = tab.pinned;
+    let pin_area = gtk::DrawingArea::new();
+    pin_area.set_size_request(PIN_GLYPH_PX, PIN_GLYPH_PX);
+    pin_area.connect_draw(move |area, cr| {
+        draw_pin_glyph(
+            cr,
+            pinned,
+            f64::from(area.allocated_width()),
+            f64::from(area.allocated_height()),
+        );
+        glib::Propagation::Proceed
+    });
+    let pin = gtk::Button::new();
+    pin.set_relief(gtk::ReliefStyle::None);
+    pin.set_focus_on_click(false);
+    pin.set_tooltip_text(Some(if pinned { "Unpin" } else { "Pin" }));
+    pin.add(&pin_area);
+    pin.connect_clicked(move |_| crate::toggle_pin_by_id(id));
+    row.pack_start(&pin, false, false, 0);
 
     let close = gtk::Button::new();
     close.set_relief(gtk::ReliefStyle::None);

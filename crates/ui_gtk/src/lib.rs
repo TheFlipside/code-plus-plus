@@ -2019,6 +2019,26 @@ pub(crate) fn close_multiple_documents(kind: codepp_shell::CloseMultiKind) {
     }
 }
 
+/// Toggle the pin state of the tab with `id` — the tab-strip pin glyph.
+/// `Shell::set_pinned` flips the flag and relocates the tab into or out of
+/// the pinned cluster (adjusting `active_tab` so the active buffer follows its
+/// tab), then the strip re-renders in the new order. Id-keyed like the
+/// close/select handlers so a tab sliding under the click can't pin the wrong
+/// buffer. A no-op if the tab has since closed.
+pub(crate) fn toggle_pin_by_id(id: i32) {
+    // The id→index lookup and the `set_pinned(idx, …)` mutation MUST stay in
+    // one `with_state` closure: splitting them across two borrows would let a
+    // tab move between them and pin the wrong buffer (the same index-staleness
+    // the id-keying guards against). `set_pinned` also range-checks `idx`.
+    with_state(|st| {
+        if let Some(idx) = st.shell.tabs.iter().position(|t| t.id == id) {
+            let want = !st.shell.tabs[idx].pinned;
+            st.shell.set_pinned(idx, want);
+        }
+    });
+    refresh_tab_chrome();
+}
+
 /// Make the tab strip match `Shell`. Safe and cheap to call often.
 pub(crate) fn sync_tab_strip() {
     with_state(|st| {
