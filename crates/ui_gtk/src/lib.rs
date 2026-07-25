@@ -305,12 +305,10 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // --- Startup work ---------------------------------------------
     apply_startup_styles();
     menu::connect();
-    // Sync the toolbar's Word Wrap / Show All Characters / Show Indent
-    // Guide toggles to the view settings the View menu just applied — the
-    // menu seeds its own checks, but the toolbar toggles start unpressed
-    // until this runs.
-    menu::refresh_view_indicators();
     restore_session(initial_path);
+    // Apply the persisted View toggles + sync every indicator, now that
+    // session.xml is loaded. MUST be post-load — see the function.
+    menu::apply_saved_view_settings();
     // Restore the last session's window size + maximized state. MUST run
     // *after* `restore_session` — that is what loads session.xml into the
     // shell, and `restore_window_geometry` reads `saved_window_geometry()`

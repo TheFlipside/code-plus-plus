@@ -615,17 +615,14 @@ fn build_view_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
         );
     }
     menu.append(&gtk::SeparatorMenuItem::new());
-    // Restore the persisted View toggles: apply them to the live editor
-    // and seed the check items so the menu and the view agree from the
-    // first frame — the cold-start restore Win32 does at
-    // `apply_saved_view_settings` time. Read once here; the toggle
-    // handlers keep `Shell`'s copy updated from now on.
-    let view = with_state(|st| {
-        let view = st.shell.saved_view_settings();
-        apply_view_settings(&st.editor, view);
-        view
-    })
-    .unwrap_or_default();
+    // Seed the check items from the persisted View toggles. This runs while
+    // the menu bar is built — *before* `restore_session` has loaded
+    // session.xml into the shell — so `saved_view_settings` still returns
+    // defaults here and these seeds are provisional. The authoritative
+    // application to the live editor and the final check/toolbar state both
+    // happen post-load in `apply_saved_view_settings` + `refresh_view_indicators`
+    // (see `crate::run`), which is why nothing is pushed to the editor here.
+    let view = with_state(|st| st.shell.saved_view_settings()).unwrap_or_default();
     let ww = add_check(&menu, "_Word Wrap", view.word_wrap, on_word_wrap);
     let ws = add_check(
         &menu,
@@ -1555,6 +1552,31 @@ fn apply_view_settings(
         usize::from(view.show_eol),
         0,
     );
+}
+
+/// Push the persisted View settings onto the live editor at cold start,
+/// then sync every indicator (menu checks + toolbar toggles) to match.
+///
+/// Called from [`crate::run`] **after** `restore_session` has loaded
+/// session.xml into the shell — the point at which `saved_view_settings`
+/// finally returns the user's stored choices rather than defaults. This is
+/// the GTK analogue of Win32's `apply_saved_view_settings`. Without it the
+/// editor keeps Scintilla's built-in off-defaults, and the first user
+/// toggle would resurface every stored setting at once via
+/// [`toggle_view_setting`]'s full re-apply — the "toggling indent guide also
+/// turned word wrap on after a restart" bug.
+///
+/// Safe to run before `restore_session`'s async `OpenFile` loads land: wrap
+/// mode, whitespace, EOL and indent guides are Scintilla *view* properties,
+/// not per-document, so the `SCI_SETDOCPOINTER` rebinds those loads perform
+/// later do not reset them — one application to the single view covers every
+/// tab.
+pub(crate) fn apply_saved_view_settings() {
+    with_state(|st| {
+        let view = st.shell.saved_view_settings();
+        apply_view_settings(&st.editor, view);
+    });
+    refresh_view_indicators();
 }
 
 /// Mutate the persisted View settings with `f`, apply them to the editor,
