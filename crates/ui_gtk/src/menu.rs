@@ -718,6 +718,9 @@ struct ViewIndicators {
     menu_show_eol: Option<gtk::CheckMenuItem>,
     tb_word_wrap: Option<gtk::ToggleToolButton>,
     tb_show_all_chars: Option<gtk::ToggleToolButton>,
+    /// Toolbar-only — Show Indent Guide has no View-menu check (Win32
+    /// parity), so this is the sole surface that reflects the setting.
+    tb_indent_guide: Option<gtk::ToggleToolButton>,
 }
 
 impl ViewIndicators {
@@ -728,21 +731,26 @@ impl ViewIndicators {
             menu_show_eol: None,
             tb_word_wrap: None,
             tb_show_all_chars: None,
+            tb_indent_guide: None,
         }
     }
 }
 
-/// Register the toolbar's two functional toggle buttons so
-/// [`refresh_view_indicators`] can keep them in step with the menu checks.
-/// Called by [`crate::toolbar::build_toolbar`].
+/// Register the toolbar's functional view-toggle buttons so
+/// [`refresh_view_indicators`] can keep them in step with the editor (and,
+/// for the first two, the menu checks). `indent_guide` has no menu check —
+/// it is toolbar-only, matching Win32. Called by
+/// [`crate::toolbar::build_toolbar`].
 pub(crate) fn register_toolbar_view_toggles(
     word_wrap: gtk::ToggleToolButton,
     show_all_chars: gtk::ToggleToolButton,
+    indent_guide: gtk::ToggleToolButton,
 ) {
     VIEW_INDICATORS.with(|reg| {
         let mut reg = reg.borrow_mut();
         reg.tb_word_wrap = Some(word_wrap);
         reg.tb_show_all_chars = Some(show_all_chars);
+        reg.tb_indent_guide = Some(indent_guide);
     });
 }
 
@@ -757,14 +765,16 @@ pub(crate) fn register_toolbar_view_toggles(
 /// both whitespace and EOL display are on, matching Win32.
 pub(crate) fn refresh_view_indicators() {
     use codepp_scintilla_sys::{
-        SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCWS_INVISIBLE, SC_WRAP_NONE,
+        SCI_GETINDENTATIONGUIDES, SCI_GETVIEWEOL, SCI_GETVIEWWS, SCI_GETWRAPMODE, SCWS_INVISIBLE,
+        SC_IV_NONE, SC_WRAP_NONE,
     };
-    let Some((wrap, ws, eol)) = with_state(|st| {
+    let Some((wrap, ws, eol, indent)) = with_state(|st| {
         let e = &st.editor;
         (
             e.send(SCI_GETWRAPMODE, 0, 0) != SC_WRAP_NONE as isize,
             e.send(SCI_GETVIEWWS, 0, 0) != SCWS_INVISIBLE as isize,
             e.send(SCI_GETVIEWEOL, 0, 0) != 0,
+            e.send(SCI_GETINDENTATIONGUIDES, 0, 0) != SC_IV_NONE as isize,
         )
     }) else {
         return;
@@ -786,6 +796,9 @@ pub(crate) fn refresh_view_indicators() {
         }
         if let Some(b) = &reg.tb_show_all_chars {
             b.set_active(ws && eol);
+        }
+        if let Some(b) = &reg.tb_indent_guide {
+            b.set_active(indent);
         }
     });
     REFRESHING_MARKS.with(|r| r.set(false));
@@ -1492,11 +1505,10 @@ fn on_zoom_reset() {
     });
 }
 
-/// Push the three GTK-exposed view toggles into the live editor. Shared
+/// Push the four GTK-exposed view toggles into the live editor. Shared
 /// by cold-start restore ([`build_view_menu`]) and — via each handler's
 /// read-modify-write — every user toggle, so the editor and `Shell`'s
-/// persisted copy never disagree. `indent_guide` is in `ViewSettings`
-/// too, but GTK exposes no toggle for it, so it is left alone here.
+/// persisted copy never disagree.
 fn apply_view_settings(
     editor: &codepp_editor::EditorHandle,
     view: codepp_core::session::ViewSettings,
@@ -1511,6 +1523,19 @@ fn apply_view_settings(
     } else {
         codepp_scintilla_sys::SCWS_INVISIBLE
     };
+    // Indent guides: `SC_IV_LOOKBOTH` (guides drawn through blank lines too)
+    // when on, `SC_IV_NONE` when off — the exact pair Win32's toggle uses.
+    // The guide colour (`STYLE_INDENTGUIDE`) is seeded once at startup by
+    // `apply_indent_guide_style`, so flipping the mode alone makes it appear.
+    editor.send(
+        codepp_scintilla_sys::SCI_SETINDENTATIONGUIDES,
+        if view.indent_guide {
+            codepp_scintilla_sys::SC_IV_LOOKBOTH
+        } else {
+            codepp_scintilla_sys::SC_IV_NONE
+        },
+        0,
+    );
     editor.send(codepp_scintilla_sys::SCI_SETWRAPMODE, wrap, 0);
     // Clear the tracking-mode horizontal scroll high-water mark
     // (`view.lineWidthMaxSeen`) so it recomputes for the current — possibly
@@ -1570,6 +1595,14 @@ pub(crate) fn on_show_all_chars(active: bool) {
         v.show_whitespace = active;
         v.show_eol = active;
     });
+}
+
+/// The toolbar's "Show Indent Guide" toggle — the vertical guide lines
+/// drawn through leading whitespace. Toolbar-only, matching Win32 (there is
+/// no View-menu counterpart on either backend). Persisted on `ViewSettings`
+/// so the choice survives to the next launch, exactly like the siblings.
+pub(crate) fn on_indent_guide(active: bool) {
+    toggle_view_setting(|v| v.indent_guide = active);
 }
 
 /// Code++ home page, the About dialog's website link and the ? →

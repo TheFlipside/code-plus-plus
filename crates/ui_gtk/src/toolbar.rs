@@ -5,9 +5,9 @@
 //! button calls the exact same `menu`/`search` handler its menu item does,
 //! so a toolbar click and a menu click share one code path. Buttons whose
 //! underlying feature is not wired on GTK yet (Print, the panel toggles,
-//! macros, monitoring, sync-scroll, Define Language, indent guide) are
-//! present but **greyed**, so the bar matches Win32's layout exactly while
-//! never offering a dead click.
+//! macros, monitoring, sync-scroll, Define Language) are present but
+//! **greyed**, so the bar matches Win32's layout exactly while never
+//! offering a dead click.
 //!
 //! # Icons
 //!
@@ -18,11 +18,12 @@
 //!
 //! # Toggle state
 //!
-//! Word Wrap and Show All Characters are toggle buttons whose pressed
-//! state must track the live editor. They register into [`crate::menu`]'s
-//! view-indicator registry so one `refresh_view_indicators` keeps the
-//! toolbar toggles and the View-menu check items in agreement, from either
-//! surface, guarded against re-entrancy.
+//! Word Wrap, Show All Characters and Show Indent Guide are toggle buttons
+//! whose pressed state must track the live editor. They register into
+//! [`crate::menu`]'s view-indicator registry so one `refresh_view_indicators`
+//! keeps the toolbar toggles and the View-menu check items in agreement,
+//! from either surface, guarded against re-entrancy. (Show Indent Guide is
+//! toolbar-only — it has no View-menu check, matching Win32.)
 
 use std::io::Cursor;
 
@@ -120,11 +121,12 @@ pub fn build_toolbar(scale: i32) -> gtk::Toolbar {
 
     add_file_clipboard_history(&toolbar, scale);
     add_search_zoom_sync(&toolbar, scale);
-    let (word_wrap, show_all_chars) = add_view_tools_macros(&toolbar, scale);
+    let (word_wrap, show_all_chars, indent_guide) = add_view_tools_macros(&toolbar, scale);
 
-    // Hand the two functional toggles to the view-indicator registry so
-    // one refresh keeps them and the View-menu checks in agreement.
-    menu::register_toolbar_view_toggles(word_wrap, show_all_chars);
+    // Hand the functional toggles to the view-indicator registry so one
+    // refresh keeps them in agreement with the editor (and, for the first
+    // two, the View-menu checks). Indent Guide is toolbar-only.
+    menu::register_toolbar_view_toggles(word_wrap, show_all_chars, indent_guide);
 
     toolbar
 }
@@ -219,13 +221,17 @@ fn add_search_zoom_sync(toolbar: &gtk::Toolbar, scale: i32) {
     separator(toolbar);
 }
 
-/// Groups 7-10: View toggles (Word Wrap + Show All Characters functional,
-/// Show Indent Guide greyed), Tools/panels (all greyed), Monitoring
-/// (greyed), Macros (all greyed). Returns the two functional toggles.
+/// Groups 7-10: View toggles (Word Wrap, Show All Characters and Show
+/// Indent Guide functional), Tools/panels (all greyed), Monitoring
+/// (greyed), Macros (all greyed). Returns the three functional toggles.
 fn add_view_tools_macros(
     toolbar: &gtk::Toolbar,
     scale: i32,
-) -> (gtk::ToggleToolButton, gtk::ToggleToolButton) {
+) -> (
+    gtk::ToggleToolButton,
+    gtk::ToggleToolButton,
+    gtk::ToggleToolButton,
+) {
     let word_wrap = toggle(toolbar, icon!("word-wrap"), "Word Wrap", scale);
     word_wrap.connect_toggled(|b| menu::on_word_wrap(b.is_active()));
     let show_all_chars = toggle(
@@ -235,12 +241,13 @@ fn add_view_tools_macros(
         scale,
     );
     show_all_chars.connect_toggled(|b| menu::on_show_all_chars(b.is_active()));
-    disabled_toggle(
+    let indent_guide = toggle(
         toolbar,
         icon!("show-indent-guide"),
         "Show Indent Guide",
         scale,
     );
+    indent_guide.connect_toggled(|b| menu::on_indent_guide(b.is_active()));
     separator(toolbar);
 
     push(
@@ -316,5 +323,5 @@ fn add_view_tools_macros(
         None,
     );
 
-    (word_wrap, show_all_chars)
+    (word_wrap, show_all_chars, indent_guide)
 }

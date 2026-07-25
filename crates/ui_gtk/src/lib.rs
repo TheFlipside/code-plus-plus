@@ -305,9 +305,10 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // --- Startup work ---------------------------------------------
     apply_startup_styles();
     menu::connect();
-    // Sync the toolbar's Word Wrap / Show All Characters toggles to the
-    // view settings the View menu just applied — the menu seeds its own
-    // checks, but the toolbar toggles start unpressed until this runs.
+    // Sync the toolbar's Word Wrap / Show All Characters / Show Indent
+    // Guide toggles to the view settings the View menu just applied — the
+    // menu seeds its own checks, but the toolbar toggles start unpressed
+    // until this runs.
     menu::refresh_view_indicators();
     restore_session(initial_path);
     // Restore the last session's window size + maximized state. MUST run
