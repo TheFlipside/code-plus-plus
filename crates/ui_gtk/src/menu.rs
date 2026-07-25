@@ -1,7 +1,8 @@
 //! The menu bar and its handlers.
 //!
-//! Wired: File (New, Open, Save, Save As, Save All, Reload, Close, Close
-//! All, Exit), Edit (Undo/Redo, Cut/Copy/Paste/Delete, Select All),
+//! Wired: File (New, Open, Open Folder as Workspace, Reload from Disk, Save,
+//! Save As, Save All, Rename, Close, Close All, Load/Save Session, Print,
+//! recent files, Exit), Edit (Undo/Redo, Cut/Copy/Paste/Delete, Select All),
 //! Search (Find, Replace, Find Next/Previous, Go to), View (zoom, Word
 //! Wrap, Show Whitespace, Show EOL), Encoding (UTF-8 / UTF-8 BOM / UTF-16
 //! LE·BE BOM, ANSI greyed), Language (Normal Text + the ~88
@@ -249,6 +250,10 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     // MOD1 is Alt. Save As is Ctrl+Alt+S (Win32 parity), which frees
     // Ctrl+Shift+S for Save All.
     let ctrl_alt = ctrl | gtk::gdk::ModifierType::MOD1_MASK;
+    // Order mirrors Win32's File menu (`build_main_menu`): New, Open, Open
+    // Folder as Workspace, Reload from Disk, Save, Save As, Save All, Rename,
+    // Close, Close All. Open Folder as Workspace and Rename are plain `fn()`
+    // actions, so they live in this array rather than as separate appends.
     let entries = [
         Entry {
             label: "_New",
@@ -259,6 +264,16 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
             label: "_Open…",
             accel: Some((key::o, ctrl)),
             action: on_open,
+        },
+        Entry {
+            label: "Open Folder as _Workspace…",
+            accel: None,
+            action: crate::workspace::open_folder_flow,
+        },
+        Entry {
+            label: "_Reload from Disk",
+            accel: Some((key::r, ctrl)),
+            action: on_reload,
         },
         Entry {
             label: "_Save",
@@ -276,9 +291,9 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
             action: on_save_all,
         },
         Entry {
-            label: "_Reload",
-            accel: Some((key::r, ctrl)),
-            action: on_reload,
+            label: "Rena_me…",
+            accel: None,
+            action: on_rename,
         },
         Entry {
             label: "_Close",
@@ -296,51 +311,16 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     };
     populate(&menu, accel, &entries);
     menu.append(&gtk::SeparatorMenuItem::new());
+    build_file_menu_lower(&menu, accel);
+    menu.show_all();
+}
 
-    // Open Folder as Workspace — pops the folder picker and roots the
-    // side tree there. Enabled always, matching Win32.
-    let ws = gtk::MenuItem::with_mnemonic("Open Folder as _Workspace…");
-    ws.connect_activate(|_| crate::workspace::open_folder_flow());
-    menu.append(&ws);
-    menu.append(&gtk::SeparatorMenuItem::new());
-
-    // Rename — a real path move (Save As) for a saved file, a display-name
-    // change for an untitled buffer. Matches Win32's File → Rename.
-    let rename = gtk::MenuItem::with_mnemonic("Rena_me…");
-    rename.connect_activate(|_| on_rename());
-    menu.append(&rename);
-
-    // Restore Recent Closed File — a persistent item (unlike the rebuilt
-    // Recent Files submenu below) so its Ctrl+Shift+T accelerator stays
-    // registered in the accel group. A top-level File item here, matching
-    // Notepad++. Mnemonic on the `t` (not `R`, which `_Reload` already
-    // claims) so it also echoes the Ctrl+Shift+T shortcut. `key::T`
-    // uppercase matches this file's convention for Shift combos
-    // (`key::S`/`key::W`); GTK normalises either case for a Shift accel.
-    let restore = gtk::MenuItem::with_mnemonic("Res_tore Recent Closed File");
-    restore.add_accelerator(
-        "activate",
-        accel,
-        *key::T,
-        ctrl_shift,
-        gtk::AccelFlags::VISIBLE,
-    );
-    restore.connect_activate(|_| restore_recent_closed());
-    menu.append(&restore);
-
-    // The recent-files region — the numbered file list plus the Open All /
-    // Empty actions — is rebuilt on every File-menu open: its contents are
-    // dynamic, and its shape follows the Preferences "In Submenu" setting
-    // (inline flat by default, or nested in a "Recent Files" submenu). It
-    // is inserted just above this anchor separator; see
-    // `rebuild_recent_region`. (Restore Recent Closed File stays a
-    // persistent item above, so its global Ctrl+Shift+T accelerator keeps
-    // its binding — the one deliberate divergence from Win32, which nests
-    // Restore inside the region.)
-    let anchor = gtk::SeparatorMenuItem::new();
-    menu.append(&anchor);
-    RECENT_ANCHOR.with(|a| *a.borrow_mut() = Some(anchor));
-    menu.connect_show(rebuild_recent_region);
+/// The lower half of the File menu, below the first separator: Load/Save
+/// Session, Print, the recent-files region (with its always-on Ctrl+Shift+T
+/// binding), and Exit. Split out of [`build_file_menu`] purely for length.
+fn build_file_menu_lower(menu: &gtk::Menu, accel: &gtk::AccelGroup) {
+    let ctrl = gtk::gdk::ModifierType::CONTROL_MASK;
+    let ctrl_shift = ctrl | gtk::gdk::ModifierType::SHIFT_MASK;
 
     // Session interchange (Notepad++-shape XML at a user-picked path,
     // distinct from the automatic session.xml restore). Enabled at all
@@ -356,21 +336,58 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     menu.append(&save_session);
     menu.append(&gtk::SeparatorMenuItem::new());
 
-    // Print the active buffer (Ctrl+P). Its own separated group just above
-    // Exit, matching Notepad++'s low placement of Print in the File menu.
+    // Print the active buffer (Ctrl+P).
     let print = gtk::MenuItem::with_mnemonic("_Print…");
     print.add_accelerator("activate", accel, *key::p, ctrl, gtk::AccelFlags::VISIBLE);
     print.connect_activate(|_| crate::print::show());
     menu.append(&print);
-    menu.append(&gtk::SeparatorMenuItem::new());
 
+    // Ctrl+Shift+T (Restore Recent Closed File) is registered directly on the
+    // accel group so it works from startup — the menu item that echoes it is
+    // rebuilt inside the recent region (below), and a rebuilt item's binding
+    // would only exist after the File menu had first been opened. The item
+    // shows the hint via a display-only accel group (see `FILE_HINT_ACCEL`),
+    // which never routes the key, so there is no double binding.
+    accel.connect_accel_group(
+        *key::T,
+        ctrl_shift,
+        gtk::AccelFlags::VISIBLE,
+        |_, _, _, _| {
+            restore_recent_closed();
+            true
+        },
+    );
+    let hint = gtk::AccelGroup::new();
+    FILE_HINT_ACCEL.with(|h| *h.borrow_mut() = Some(hint));
+
+    // The recent-files region — the numbered file list, then Restore Recent
+    // Closed File / Open All / Empty — is rebuilt on every File-menu open: its
+    // contents are dynamic, and its shape follows the Preferences "In Submenu"
+    // setting (inline flat by default, or nested in a "Recent Files" submenu).
+    // It is inserted just above this anchor separator, which sits directly
+    // above Exit; see `rebuild_recent_region`. Matches Win32's placement of
+    // the recent region after Print and its Restore/Open All/Empty order.
+    let anchor = gtk::SeparatorMenuItem::new();
+    menu.append(&anchor);
+    RECENT_ANCHOR.with(|a| *a.borrow_mut() = Some(anchor));
+    menu.connect_show(rebuild_recent_region);
+
+    // Exit stays at the bottom; Alt+F4 is the conventional close accelerator
+    // and is shown as its hint (the window manager typically also maps it to
+    // the window's delete path, which saves + quits the same way).
     let exit = gtk::MenuItem::with_mnemonic("E_xit");
+    exit.add_accelerator(
+        "activate",
+        accel,
+        *key::F4,
+        gtk::gdk::ModifierType::MOD1_MASK,
+        gtk::AccelFlags::VISIBLE,
+    );
     exit.connect_activate(|_| {
         save_session_now();
         gtk::main_quit();
     });
     menu.append(&exit);
-    menu.show_all();
 }
 
 thread_local! {
@@ -385,6 +402,13 @@ thread_local! {
     /// `recent_count` bookkeeping in `rebuild_file_menu_recent_region`.
     static RECENT_REGION: std::cell::RefCell<Vec<gtk::Widget>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// A display-only accel group for the rebuilt Restore Recent Closed File
+    /// item's `Ctrl+Shift+T` hint. Deliberately never added to any window, so
+    /// `add_accelerator` on it renders the shortcut label without routing the
+    /// key — the real, always-on binding is the persistent
+    /// `connect_accel_group` in [`build_file_menu`]. Set once there.
+    static FILE_HINT_ACCEL: std::cell::RefCell<Option<gtk::AccelGroup>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Rebuild the recent-files region on the File menu, respecting the
@@ -423,11 +447,14 @@ fn rebuild_recent_region(menu: &gtk::Menu) {
 /// Build the recent-files region items for the current state + Preferences.
 ///
 /// Layout mirrors Win32's `rebuild_file_menu_recent_region`: when the
-/// feature is inactive the region is empty; otherwise the numbered file
-/// list (formatted per the display mode) is followed — after an inner
-/// separator when non-empty — by the Open All / Empty actions. With "In
-/// Submenu" on, all of that nests inside a single "Recent Files" popup;
-/// off (the default) it is inlined flat, ready to insert on the File menu.
+/// feature is inactive the region is empty (so only the anchor separator
+/// sits between Print and Exit); otherwise a leading separator is followed
+/// by the numbered file list (formatted per the display mode), then — after
+/// an inner separator when non-empty — Restore Recent Closed File / Open All
+/// / Empty. With "In Submenu" on, all of that nests inside a single "Recent
+/// Files" popup; off (the default) it is inlined flat on the File menu. The
+/// region owns its leading separator so an inactive region never leaves two
+/// adjacent separators above Exit.
 fn recent_region_items() -> Vec<gtk::Widget> {
     let (recents, cfg) = with_state(|st| {
         (
@@ -464,10 +491,30 @@ fn recent_region_items() -> Vec<gtk::Widget> {
         .collect();
 
     let has = !recents.is_empty();
-    let open_all = gtk::MenuItem::with_mnemonic("_Open All Recent Files");
+    // Restore Recent Closed File, above Open All / Empty — Win32's order. Its
+    // functional Ctrl+Shift+T lives on the accel group (see `build_file_menu`);
+    // here it only carries the display-only hint accel so the shortcut shows.
+    // Mnemonic on `t`, not `R` (which `_Reload from Disk` claims in the same
+    // flat File menu), and it echoes the Ctrl+Shift+T shortcut.
+    let restore = gtk::MenuItem::with_mnemonic("Res_tore Recent Closed File");
+    restore.set_sensitive(has);
+    if let Some(hint) = FILE_HINT_ACCEL.with(|h| h.borrow().clone()) {
+        let ctrl_shift = gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::SHIFT_MASK;
+        restore.add_accelerator(
+            "activate",
+            &hint,
+            *key::T,
+            ctrl_shift,
+            gtk::AccelFlags::VISIBLE,
+        );
+    }
+    restore.connect_activate(|_| restore_recent_closed());
+    // No mnemonics on these two, matching Win32 (`inline_action_labels`) — and
+    // it avoids an `O` clash with `_Open…` in the same flat menu.
+    let open_all = gtk::MenuItem::with_label("Open All Recent Files");
     open_all.set_sensitive(has);
     open_all.connect_activate(|_| open_all_recent());
-    let empty = gtk::MenuItem::with_mnemonic("_Empty Recent Files List");
+    let empty = gtk::MenuItem::with_label("Empty Recent Files List");
     empty.set_sensitive(has);
     empty.connect_activate(|_| empty_recent());
 
@@ -479,16 +526,22 @@ fn recent_region_items() -> Vec<gtk::Widget> {
         if has {
             submenu.append(&gtk::SeparatorMenuItem::new());
         }
+        submenu.append(&restore);
         submenu.append(&open_all);
         submenu.append(&empty);
         let parent = gtk::MenuItem::with_mnemonic("Recent _Files");
         parent.set_submenu(Some(&submenu));
-        vec![parent.upcast()]
+        // The region owns its leading separator (Print sits above it) so an
+        // inactive region leaves exactly one separator before Exit, never two.
+        vec![gtk::SeparatorMenuItem::new().upcast(), parent.upcast()]
     } else {
-        let mut out: Vec<gtk::Widget> = file_items.into_iter().map(Cast::upcast).collect();
+        // Leading separator first — see the submenu branch's note.
+        let mut out: Vec<gtk::Widget> = vec![gtk::SeparatorMenuItem::new().upcast()];
+        out.extend(file_items.into_iter().map(Cast::upcast));
         if has {
             out.push(gtk::SeparatorMenuItem::new().upcast());
         }
+        out.push(restore.upcast());
         out.push(open_all.upcast());
         out.push(empty.upcast());
         out
