@@ -132,13 +132,24 @@ const PIN_POLY_UNPINNED: &[(f64, f64)] = &[
 const PIN_RGB_PINNED: (f64, f64, f64) = (33.0 / 255.0, 150.0 / 255.0, 243.0 / 255.0);
 /// Unpinned outline — grey (#808080), Win32's `TAB_PIN_OUTLINE_UNPINNED`.
 const PIN_RGB_UNPINNED: (f64, f64, f64) = (0.5, 0.5, 0.5);
+/// The unpinned glyph is drawn at this fraction of the pinned glyph's size, so
+/// the "not pinned" hint reads as a subtle affordance rather than competing
+/// with the filled pinned tack. It also thins the outline stroke by the same
+/// factor (the stroke width scales with the glyph, floored at 1 px), which is
+/// part of making it quieter. Purely cosmetic.
+const PIN_UNPINNED_SHRINK: f64 = 0.7;
 
 /// Draw the pin thumbtack centred in the allocation: an upright filled-blue
 /// tack when pinned, a 45°-tilted grey outline when not — the GTK mirror of
 /// Win32's two-state pin glyph. The 12×12 design canvas is scaled to fit and
 /// centred; cairo already carries the display scale, so this works on `HiDPI`.
 fn draw_pin_glyph(cr: &gtk::cairo::Context, pinned: bool, width: f64, height: f64) {
-    let scale = width.min(height) / 12.0;
+    // Shrink the unpinned outline so it is a quieter affordance; recompute the
+    // centring offsets from the (possibly smaller) canvas so it stays centred.
+    let mut scale = width.min(height) / 12.0;
+    if !pinned {
+        scale *= PIN_UNPINNED_SHRINK;
+    }
     if scale <= 0.0 {
         return;
     }
