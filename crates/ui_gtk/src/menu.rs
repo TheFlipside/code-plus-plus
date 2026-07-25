@@ -2,9 +2,9 @@
 //!
 //! Wired: File (New, Open, Open Containing Folder, Open in Default Viewer,
 //! Open Folder as Workspace, Reload from Disk, Save, Save As, Save All,
-//! Rename, Close, Close All, Close Multiple Documents, Load/Save Session,
-//! Print, recent files, Exit), Edit (Undo/Redo, Cut/Copy/Paste/Delete,
-//! Select All),
+//! Rename, Close, Close All, Close Multiple Documents, Move to Recycle Bin,
+//! Load/Save Session, Print, recent files, Exit), Edit (Undo/Redo,
+//! Cut/Copy/Paste/Delete, Select All),
 //! Search (Find, Replace, Find Next/Previous, Go to), View (zoom, Word
 //! Wrap, Show Whitespace, Show EOL), Encoding (UTF-8 / UTF-8 BOM / UTF-16
 //! LE·BE BOM, ANSI greyed), Language (Normal Text + the ~88
@@ -318,9 +318,118 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     // Appends after Close All (the current last child), matching Win32's
     // placement directly below it.
     insert_close_multiple_documents(&menu);
+    // Directly below Close Multiple Documents, before the session separator —
+    // Win32's placement.
+    insert_move_to_recycle_bin(&menu);
     menu.append(&gtk::SeparatorMenuItem::new());
     build_file_menu_lower(&menu, accel);
     menu.show_all();
+}
+
+/// Insert "Move to Recycle Bin" below Close Multiple Documents, matching
+/// Win32. Moves the active buffer's on-disk file to the desktop Trash (the
+/// freedesktop analogue of the Recycle Bin) after a confirmation, then closes
+/// the buffer. Greyed while the active buffer is untitled — refreshed on
+/// File-menu open — so it lives here rather than in the static `entries`
+/// array.
+fn insert_move_to_recycle_bin(menu: &gtk::Menu) {
+    // Mnemonic on `b` (free in this flat File menu).
+    let item = gtk::MenuItem::with_mnemonic("Move to Recycle _Bin");
+    item.connect_activate(|_| on_move_to_recycle_bin());
+    menu.append(&item);
+    menu.connect_show(move |_| {
+        let has_path =
+            with_state(|st| st.shell.active().is_some_and(|t| t.path.is_some())).unwrap_or(false);
+        item.set_sensitive(has_path);
+    });
+}
+
+/// File → Move to Recycle Bin: after confirming, move the active buffer's
+/// on-disk file to the desktop Trash (`g_file_trash`) and close the buffer —
+/// the GTK analogue of Win32's `SHFileOperation(FO_DELETE | FOF_ALLOWUNDO)`.
+///
+/// Mirrors Win32's order: confirm → force the buffer clean (the file and its
+/// edits are being discarded, so the close must not pop a "Save changes?"
+/// prompt) → close the tab → trash the file. The file is only trashed if the
+/// close actually happened. A no-op for an untitled buffer (also greyed).
+fn on_move_to_recycle_bin() {
+    // Snapshot the active buffer's stable id + on-disk path together.
+    let Some((id, path)) = with_state(|st| {
+        st.shell
+            .active()
+            .and_then(|t| t.path.clone().map(|p| (t.id, p)))
+    })
+    .flatten() else {
+        return;
+    };
+
+    // Confirm — this discards the buffer's unsaved edits and moves the file.
+    // `message_dialog` parents itself to the main window via `with_state`.
+    let body = format!(
+        "The file “{}” will be moved to the Recycle Bin (Trash) and this \
+         document will be closed.\nContinue?",
+        codepp_shell::sanitize_path_for_display(&path)
+    );
+    let resp = crate::message_dialog(
+        gtk::MessageType::Question,
+        gtk::ButtonsType::OkCancel,
+        "Move to Recycle Bin",
+        &body,
+    );
+    if resp != gtk::ResponseType::Ok {
+        return;
+    }
+
+    // Guard the destructive step against a worker wake that activated a
+    // different tab while the modal was up: only proceed if the active buffer
+    // is still the one we prompted about. Keyed on the stable `Tab.id` (not the
+    // path — ids are never reused, so this can't be fooled by a different tab
+    // that happens to share the path). Abort otherwise — closing/trashing the
+    // wrong buffer would be data loss.
+    let still_active =
+        with_state(|st| st.shell.active().map(|t| t.id) == Some(id)).unwrap_or(false);
+    if !still_active {
+        return;
+    }
+
+    // Suppress the close path's save prompt: the file is being deleted, so
+    // prompting to save first is nonsensical (Win32 does the same via
+    // SCI_SETSAVEPOINT). The editor is bound to the active document, so this
+    // marks exactly that buffer clean.
+    with_state(|st| {
+        st.editor.send(codepp_scintilla_sys::SCI_SETSAVEPOINT, 0, 0);
+    });
+    // `SCI_SETSAVEPOINT` re-enters `refresh_active_dirty` synchronously via
+    // `sci-notify` while the borrow above is held, so the cached `Tab.dirty`
+    // isn't refreshed there. Refresh it now, with the borrow dropped, so
+    // `confirm_discard_active` — which ORs the cache with `SCI_GETMODIFY` —
+    // sees the buffer clean and skips the redundant "Save changes?" prompt for
+    // this deliberate discard. Same resync `on_save` does after `mark_saved`.
+    refresh_tab_chrome();
+
+    // Close before trashing, matching Win32: if the close is aborted (a
+    // re-entrant path declining the borrow), leave the file on disk.
+    if !close_active_tab() {
+        return;
+    }
+
+    // `trash()` runs synchronously on the UI thread. Accepted: a
+    // same-filesystem trash is a rename (effectively instant), the common
+    // case; only a cross-filesystem or slow-media trash (GVfs's copy+delete
+    // fallback) could stall the UI briefly, which is tolerable for a single,
+    // user-initiated, already-confirmed delete. `g_file_trash_async` is the
+    // lever if that ever needs revisiting.
+
+    if let Err(err) = gio::File::for_path(&path).trash(gio::Cancellable::NONE) {
+        // The buffer is already closed, but the file is still on disk — say so
+        // rather than silently leaving the user thinking it was removed.
+        crate::message_dialog(
+            gtk::MessageType::Error,
+            gtk::ButtonsType::Ok,
+            "Move to Recycle Bin failed",
+            &codepp_shell::sanitize_str_for_display(&err.to_string()),
+        );
+    }
 }
 
 /// Append the "Close Multiple Documents" submenu after Close All, matching
