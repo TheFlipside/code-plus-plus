@@ -1261,6 +1261,97 @@ pub fn tab_display_name(tab: &Tab) -> String {
     sanitize_filename_for_display(&owned)
 }
 
+/// Which subset of tabs the "Close Multiple Documents" menu closes. Every
+/// variant is realised by reusing the single-tab close path (dirty-check
+/// prompt + Cancel short-circuit) per target, so the user's choices on
+/// individual dirty buffers are honoured exactly as for `File → Close All`.
+/// Shared by both backends so the menu behaviour cannot drift between them.
+// The shared `All` prefix on every variant mirrors the user-facing menu
+// labels ("Close All but Active", "Close All to the Left", …), so silence the
+// pedantic lint rather than trade one context for a glob at every call site.
+#[allow(clippy::enum_variant_names)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CloseMultiKind {
+    /// Every tab except the one that was active when the loop started. If the
+    /// active tab is unpinned it stays open; pinned/unpinned is irrelevant
+    /// for this variant.
+    AllButActive,
+    /// Every tab that is NOT pinned. Pinned tabs stay. The active tab may or
+    /// may not survive depending on whether it's pinned.
+    AllButPinned,
+    /// Every tab whose current index is < the active tab's index (to the left
+    /// of it in the tab strip).
+    AllToLeft,
+    /// Every tab whose current index is > the active tab's index (to the
+    /// right of it).
+    AllToRight,
+    /// Every tab that is not dirty (no unsaved changes). Uses the cached
+    /// `Tab.dirty` flag, so this is O(n) with no doc-pointer-swap dance. The
+    /// active tab is closed too if it happens to be clean.
+    AllUnchanged,
+}
+
+/// Pick the vector index of the next tab to close for `kind`, or `None` if no
+/// candidate remains. `keeper_id` is the tab id that must survive for the
+/// "All but Active" / "All to the Left" / "All to the Right" variants —
+/// captured once at the loop's start so mid-loop activations don't shift the
+/// reference point. A pure inspector: no mutation, no I/O.
+///
+/// **Data-loss safeguard.** A tab whose async load is still in flight
+/// (`pending_load.is_some()`) is never chosen: activating it to close it would
+/// bind the editor to a freshly-created *empty* document seeded from the empty
+/// `tab.text`, and a "Save changes to X?" prompt there could write 0 bytes
+/// over the real file. Skipping such tabs here makes them unreachable by this
+/// bulk-close path — the same discipline `Shell::save_all` uses. The user can
+/// still close a loading tab with Ctrl+W once its load completes.
+#[must_use]
+pub fn pick_next_close_target(tabs: &[Tab], kind: CloseMultiKind, keeper_id: i32) -> Option<usize> {
+    let is_closable = |t: &Tab| t.pending_load.is_none();
+    match kind {
+        CloseMultiKind::AllButActive => tabs
+            .iter()
+            .position(|t| t.id != keeper_id && is_closable(t)),
+        CloseMultiKind::AllButPinned => tabs.iter().position(|t| !t.pinned && is_closable(t)),
+        CloseMultiKind::AllToLeft => {
+            // Scan the [0, keeper) prefix for the first closable tab. Indices
+            // inside a slice starting at 0 are already absolute.
+            let keeper_pos = tabs.iter().position(|t| t.id == keeper_id)?;
+            tabs[..keeper_pos].iter().position(is_closable)
+        }
+        CloseMultiKind::AllToRight => {
+            // Symmetric on the (keeper, end) suffix; `position` returns a
+            // relative index, so add `keeper_pos + 1` to make it absolute.
+            let keeper_pos = tabs.iter().position(|t| t.id == keeper_id)?;
+            tabs[keeper_pos + 1..]
+                .iter()
+                .position(is_closable)
+                .map(|rel| keeper_pos + 1 + rel)
+        }
+        CloseMultiKind::AllUnchanged => tabs.iter().position(|t| !t.dirty && is_closable(t)),
+    }
+}
+
+/// Whether the "Close Multiple Documents" entry for `kind` should be enabled,
+/// given the current tabs and the active tab's index. An entry is enabled iff
+/// the close loop would actually find a tab to close — so it is defined *as*
+/// `pick_next_close_target(..).is_some()` (with the active tab as keeper),
+/// which guarantees the menu greying never diverges from what activating the
+/// item does, including the `pending_load` skip: an item whose only candidates
+/// are still-loading tabs is correctly greyed rather than enabled-but-no-op.
+///
+/// Baseline is at least two tabs, and — like the loop — a keeper (active tab)
+/// must exist; with none, no variant can close anything.
+#[must_use]
+pub fn close_multi_enabled(tabs: &[Tab], active_idx: Option<usize>, kind: CloseMultiKind) -> bool {
+    if tabs.len() < 2 {
+        return false;
+    }
+    let Some(keeper) = active_idx.and_then(|i| tabs.get(i)) else {
+        return false;
+    };
+    pick_next_close_target(tabs, kind, keeper.id).is_some()
+}
+
 /// Snapshot returned by [`Shell::close_active_tab`] describing the
 /// platform-side cleanup the UI must perform. Shell has already
 /// removed the tab from `Shell.tabs`, updated `Shell.active_tab`,
@@ -7558,6 +7649,274 @@ mod tab_display_name_tests {
         let out = sanitize_filename_for_display(&wide);
         assert_eq!(out.chars().count(), DISPLAY_NAME_MAX_CHARS - 1);
         assert!(out.chars().all(|c| c == '🦀'));
+    }
+}
+
+#[cfg(test)]
+mod close_multi_tests {
+    //! `pick_next_close_target` (which subset to close next) and
+    //! `close_multi_enabled` (menu greying). The `pick_next_close_target`
+    //! focus is the data-loss-preventing `pending_load` filter: a
+    //! still-loading tab must never be a close target under any variant,
+    //! because activating it to close it would seed the editor with an empty
+    //! document and risk a 0-byte overwrite on a "Save changes?" Yes.
+
+    use super::{close_multi_enabled, pick_next_close_target, CloseMultiKind, Tab};
+
+    fn mk(id: i32) -> Tab {
+        Tab {
+            id,
+            ..Tab::default()
+        }
+    }
+
+    fn mk_pending(id: i32) -> Tab {
+        // `pending_load` is `Option<RequestId>` (a `u64` alias); any Some value
+        // makes `.is_some()` fire.
+        Tab {
+            id,
+            pending_load: Some(1),
+            ..Tab::default()
+        }
+    }
+
+    fn mk_pinned(id: i32) -> Tab {
+        Tab {
+            id,
+            pinned: true,
+            ..Tab::default()
+        }
+    }
+
+    fn mk_dirty(id: i32) -> Tab {
+        Tab {
+            id,
+            dirty: true,
+            ..Tab::default()
+        }
+    }
+
+    #[test]
+    fn all_to_left_skips_pending_load_adjacent_to_keeper() {
+        // [pending(1), real(2), keeper(3)] with keeper=3: skip the pending tab
+        // at index 0, return the real tab at index 1.
+        let tabs = vec![mk_pending(1), mk(2), mk(3)];
+        assert_eq!(
+            pick_next_close_target(&tabs, CloseMultiKind::AllToLeft, 3),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn all_to_left_returns_none_when_only_pending_left_of_keeper() {
+        let tabs = vec![mk_pending(1), mk(2)];
+        assert_eq!(
+            pick_next_close_target(&tabs, CloseMultiKind::AllToLeft, 2),
+            None
+        );
+    }
+
+    #[test]
+    fn all_to_right_skips_pending_load_adjacent_to_keeper() {
+        // [keeper(1), pending(2), real(3)] with keeper=1: skip keeper_pos+1,
+        // return index 2.
+        let tabs = vec![mk(1), mk_pending(2), mk(3)];
+        assert_eq!(
+            pick_next_close_target(&tabs, CloseMultiKind::AllToRight, 1),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn all_to_right_returns_none_when_only_pending_right_of_keeper() {
+        let tabs = vec![mk(1), mk_pending(2)];
+        assert_eq!(
+            pick_next_close_target(&tabs, CloseMultiKind::AllToRight, 1),
+            None
+        );
+    }
+
+    #[test]
+    fn all_but_active_skips_pending_load() {
+        // keeper=2; candidates 1 (pending) and 3 (real) — must pick index 2.
+        let tabs = vec![mk_pending(1), mk(2), mk(3)];
+        assert_eq!(
+            pick_next_close_target(&tabs, CloseMultiKind::AllButActive, 2),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn all_but_pinned_skips_pending_load() {
+        // [pinned(1), pending(2), real(3)] — only index 2 is valid.
+        let tabs = vec![mk_pinned(1), mk_pending(2), mk(3)];
+        assert_eq!(
+            pick_next_close_target(&tabs, CloseMultiKind::AllButPinned, 3),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn all_unchanged_skips_pending_load() {
+        // A pending-load tab has `dirty = false`, so the naive "not dirty"
+        // predicate would pick it; the pending filter must gate it out.
+        let tabs = vec![mk_pending(1), mk_dirty(2), mk(3)];
+        assert_eq!(
+            pick_next_close_target(&tabs, CloseMultiKind::AllUnchanged, 2),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn all_pending_returns_none_across_every_variant() {
+        let tabs = vec![mk_pending(1), mk_pending(2), mk_pending(3)];
+        for kind in [
+            CloseMultiKind::AllButActive,
+            CloseMultiKind::AllButPinned,
+            CloseMultiKind::AllToLeft,
+            CloseMultiKind::AllToRight,
+            CloseMultiKind::AllUnchanged,
+        ] {
+            assert_eq!(
+                pick_next_close_target(&tabs, kind, 2),
+                None,
+                "kind={kind:?} should return None"
+            );
+        }
+    }
+
+    #[test]
+    fn baseline_no_pending_still_produces_expected_targets() {
+        // [A(1), B(2), C(3), D(4), E(5)] with keeper C(3).
+        let tabs = vec![mk(1), mk(2), mk(3), mk(4), mk(5)];
+        assert_eq!(
+            pick_next_close_target(&tabs, CloseMultiKind::AllToLeft, 3),
+            Some(0)
+        );
+        assert_eq!(
+            pick_next_close_target(&tabs, CloseMultiKind::AllToRight, 3),
+            Some(3)
+        );
+        assert_eq!(
+            pick_next_close_target(&tabs, CloseMultiKind::AllButActive, 3),
+            Some(0)
+        );
+    }
+
+    // --- close_multi_enabled (menu greying) ---------------------------
+
+    #[test]
+    fn enabled_needs_at_least_two_tabs() {
+        let one = vec![mk(1)];
+        for kind in [
+            CloseMultiKind::AllButActive,
+            CloseMultiKind::AllButPinned,
+            CloseMultiKind::AllToLeft,
+            CloseMultiKind::AllToRight,
+            CloseMultiKind::AllUnchanged,
+        ] {
+            assert!(!close_multi_enabled(&one, Some(0), kind), "kind={kind:?}");
+            assert!(!close_multi_enabled(&[], None, kind), "kind={kind:?} empty");
+        }
+    }
+
+    #[test]
+    fn but_active_needs_an_active_tab() {
+        let tabs = vec![mk(1), mk(2)];
+        assert!(close_multi_enabled(
+            &tabs,
+            Some(0),
+            CloseMultiKind::AllButActive
+        ));
+        assert!(!close_multi_enabled(
+            &tabs,
+            None,
+            CloseMultiKind::AllButActive
+        ));
+    }
+
+    #[test]
+    fn but_pinned_needs_an_unpinned_tab() {
+        let mixed = vec![mk_pinned(1), mk(2)];
+        assert!(close_multi_enabled(
+            &mixed,
+            Some(0),
+            CloseMultiKind::AllButPinned
+        ));
+        let all_pinned = vec![mk_pinned(1), mk_pinned(2)];
+        assert!(!close_multi_enabled(
+            &all_pinned,
+            Some(0),
+            CloseMultiKind::AllButPinned
+        ));
+    }
+
+    #[test]
+    fn to_left_and_right_track_the_active_index() {
+        let tabs = vec![mk(1), mk(2), mk(3)];
+        // Active at the left edge: nothing to the left, something to the right.
+        assert!(!close_multi_enabled(
+            &tabs,
+            Some(0),
+            CloseMultiKind::AllToLeft
+        ));
+        assert!(close_multi_enabled(
+            &tabs,
+            Some(0),
+            CloseMultiKind::AllToRight
+        ));
+        // Active at the right edge: mirror.
+        assert!(close_multi_enabled(
+            &tabs,
+            Some(2),
+            CloseMultiKind::AllToLeft
+        ));
+        assert!(!close_multi_enabled(
+            &tabs,
+            Some(2),
+            CloseMultiKind::AllToRight
+        ));
+    }
+
+    #[test]
+    fn unchanged_needs_a_clean_tab() {
+        let one_clean = vec![mk_dirty(1), mk(2)];
+        assert!(close_multi_enabled(
+            &one_clean,
+            Some(0),
+            CloseMultiKind::AllUnchanged
+        ));
+        let all_dirty = vec![mk_dirty(1), mk_dirty(2)];
+        assert!(!close_multi_enabled(
+            &all_dirty,
+            Some(0),
+            CloseMultiKind::AllUnchanged
+        ));
+    }
+
+    #[test]
+    fn greying_tracks_the_pending_load_skip() {
+        // Active-and-dirty(1) + a still-loading tab(2): every variant is left
+        // with no closable candidate (the active tab is dirty so AllUnchanged
+        // skips it too, and the only other tab is still loading), so each must
+        // be greyed — the close loop would skip the pending tab and do
+        // nothing. Enable is defined as "the loop would find a target".
+        let tabs = vec![mk_dirty(1), mk_pending(2)];
+        for kind in [
+            CloseMultiKind::AllButActive,
+            CloseMultiKind::AllToRight,
+            CloseMultiKind::AllUnchanged,
+        ] {
+            assert!(
+                !close_multi_enabled(&tabs, Some(0), kind),
+                "kind={kind:?} should be greyed when its only candidate is loading"
+            );
+            assert_eq!(
+                close_multi_enabled(&tabs, Some(0), kind),
+                pick_next_close_target(&tabs, kind, 1).is_some(),
+                "greying must equal pick-a-target for kind={kind:?}"
+            );
+        }
     }
 }
 

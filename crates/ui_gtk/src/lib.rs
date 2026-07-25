@@ -1980,6 +1980,45 @@ pub(crate) fn select_tab_by_id(id: i32) {
     rebind_active_view();
 }
 
+/// Close the subset of tabs named by `kind` — the "Close Multiple Documents"
+/// submenu actions. Mirrors Win32's `close_multiple_documents`: each target is
+/// closed through the ordinary single-tab path so every dirty buffer still
+/// gets its Save / Don't Save / Cancel prompt, and Cancel aborts the whole
+/// run (the tabs already closed stay closed — the user committed to those).
+///
+/// The keeper (the active tab id, for the All-but-Active / To-the-Left /
+/// To-the-Right variants) and the initial tab count are snapshotted before the
+/// loop: the count bounds the iterations so a misbehaving close can't spin,
+/// and a fixed keeper means mid-loop activations don't shift the reference
+/// point. Target selection (`codepp_shell::pick_next_close_target`) skips
+/// still-loading tabs, the shared data-loss safeguard. The ≥1-tab invariant is
+/// restored for free — `close_active_tab` recreates a "new 1" when it drains
+/// the last tab, and the count bound stops the loop re-closing that.
+pub(crate) fn close_multiple_documents(kind: codepp_shell::CloseMultiKind) {
+    let Some((keeper_id, initial_count)) =
+        with_state(|st| st.shell.active().map(|t| (t.id, st.shell.tabs.len()))).flatten()
+    else {
+        return;
+    };
+    for _ in 0..initial_count {
+        // Resolve the next target's stable id under a fresh borrow.
+        let target_id = with_state(|st| {
+            codepp_shell::pick_next_close_target(&st.shell.tabs, kind, keeper_id)
+                .and_then(|idx| st.shell.tabs.get(idx).map(|t| t.id))
+        })
+        .flatten();
+        let Some(target_id) = target_id else {
+            break; // No more targets.
+        };
+        // Activate the target so `close_active_tab` prompts for its document,
+        // then close it; Cancel / a failed save aborts the run.
+        select_tab_by_id(target_id);
+        if !close_active_tab() {
+            break;
+        }
+    }
+}
+
 /// Make the tab strip match `Shell`. Safe and cheap to call often.
 pub(crate) fn sync_tab_strip() {
     with_state(|st| {

@@ -2,8 +2,9 @@
 //!
 //! Wired: File (New, Open, Open Containing Folder, Open in Default Viewer,
 //! Open Folder as Workspace, Reload from Disk, Save, Save As, Save All,
-//! Rename, Close, Close All, Load/Save Session, Print, recent files, Exit),
-//! Edit (Undo/Redo, Cut/Copy/Paste/Delete, Select All),
+//! Rename, Close, Close All, Close Multiple Documents, Load/Save Session,
+//! Print, recent files, Exit), Edit (Undo/Redo, Cut/Copy/Paste/Delete,
+//! Select All),
 //! Search (Find, Replace, Find Next/Previous, Go to), View (zoom, Word
 //! Wrap, Show Whitespace, Show EOL), Encoding (UTF-8 / UTF-8 BOM / UTF-16
 //! LE·BE BOM, ANSI greyed), Language (Normal Text + the ~88
@@ -314,9 +315,58 @@ fn build_file_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     populate(&menu, accel, &entries);
     insert_open_containing_folder(&menu);
     insert_open_in_default_viewer(&menu);
+    // Appends after Close All (the current last child), matching Win32's
+    // placement directly below it.
+    insert_close_multiple_documents(&menu);
     menu.append(&gtk::SeparatorMenuItem::new());
     build_file_menu_lower(&menu, accel);
     menu.show_all();
+}
+
+/// Append the "Close Multiple Documents" submenu after Close All, matching
+/// Win32. The five variants each close a subset of tabs through
+/// [`crate::close_multiple_documents`] (per-tab dirty prompt; Cancel aborts).
+/// Each item is greyed independently on File-menu open via the shared
+/// `codepp_shell::close_multi_enabled`, so the greying agrees with what the
+/// close loop — driven by the same crate's `pick_next_close_target` — does.
+fn insert_close_multiple_documents(menu: &gtk::Menu) {
+    use codepp_shell::CloseMultiKind::{
+        AllButActive, AllButPinned, AllToLeft, AllToRight, AllUnchanged,
+    };
+    // Labels + mnemonics (A / P / L / R / U) match Win32 and are scoped to
+    // this popup, so they can't clash with the top-level File-menu mnemonics.
+    let rows = [
+        ("Close All but _Active Document", AllButActive),
+        ("Close All but _Pinned Documents", AllButPinned),
+        ("Close All To the _Left", AllToLeft),
+        ("Close All To the _Right", AllToRight),
+        ("Close All _Unchanged", AllUnchanged),
+    ];
+    let submenu = gtk::Menu::new();
+    let mut items: Vec<(gtk::MenuItem, codepp_shell::CloseMultiKind)> = Vec::new();
+    for (label, kind) in rows {
+        let item = gtk::MenuItem::with_mnemonic(label);
+        item.connect_activate(move |_| crate::close_multiple_documents(kind));
+        submenu.append(&item);
+        items.push((item, kind));
+    }
+
+    // Mnemonic on `u` — `_M`ultiple would clash with `Rena_me`, and it is the
+    // only otherwise-unclaimed letter of the label in this flat File menu.
+    let parent = gtk::MenuItem::with_mnemonic("Close M_ultiple Documents");
+    parent.set_submenu(Some(&submenu));
+    menu.append(&parent);
+
+    // Grey each entry per the shared predicate whenever the File menu opens.
+    menu.connect_show(move |_| {
+        with_state(|st| {
+            for (item, kind) in &items {
+                let enabled =
+                    codepp_shell::close_multi_enabled(&st.shell.tabs, st.shell.active_tab, *kind);
+                item.set_sensitive(enabled);
+            }
+        });
+    });
 }
 
 /// Which "Open Containing Folder" action to run on the active buffer.
