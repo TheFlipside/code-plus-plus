@@ -748,6 +748,20 @@ fn build_file_menu_lower(menu: &gtk::Menu, accel: &gtk::AccelGroup) {
     print.connect_activate(|_| crate::print::show());
     menu.append(&print);
 
+    // Print Now: straight to the default printer, no dialog. Placed directly
+    // below Print, mirroring Win32's print cluster. No ellipsis (it never
+    // prompts) and no accelerator — matching Win32, where the "just print it"
+    // action is menu-only so a stray Ctrl-chord can't fire a job by accident.
+    // `N` matches the key Win32 uses (`Print &Now`), and inherits the same
+    // collision Win32 has: `_New` already claims `N` in this flat menu, and
+    // every other letter of "Print Now" is taken too (P=Print, O=Open,
+    // R=Reload, W=Close/Workspace, I=Save Session, T=Restore). So the item is
+    // click-reachable but not mnemonic-reachable — an accepted parity quirk,
+    // not a free key.
+    let print_now = gtk::MenuItem::with_mnemonic("Print _Now");
+    print_now.connect_activate(|_| crate::print::print_now());
+    menu.append(&print_now);
+
     // Ctrl+Shift+T (Restore Recent Closed File) is registered directly on the
     // accel group so it works from startup — the menu item that echoes it is
     // rebuilt inside the recent region (below), and a rebuilt item's binding

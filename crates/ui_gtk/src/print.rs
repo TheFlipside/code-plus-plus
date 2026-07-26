@@ -43,6 +43,7 @@ use codepp_scintilla_sys::{
     SC_PRINT_COLOURONWHITEDEFAULTBG, SC_WRAP_WORD,
 };
 use gtk::prelude::*;
+use gtk::PrintOperationAction;
 
 use crate::state::with_state;
 use crate::DrainFreeze;
@@ -67,6 +68,39 @@ const MAX_PAGES: usize = 100_000;
 /// render every requested page. The shared entry point behind File → Print,
 /// its Ctrl+P accelerator, and the toolbar Print button.
 pub(crate) fn show() {
+    run_operation(PrintOperationAction::PrintDialog, "Print failed", false);
+}
+
+/// File → Print Now — push the active document straight to the default
+/// printer with no dialog, no page-range selection, no copies control, no
+/// confirmation. All pages, single copy. Mirrors `ui_win32`'s
+/// `print_active_document_now`.
+///
+/// `PrintOperationAction::Print` runs the same render pipeline as [`show`]
+/// but skips the dialog, using the operation's print settings; with none set,
+/// GTK sends the job to the system default printer. An empty buffer is a
+/// silent no-op (matching Win32 — nothing to print, so no blank page), and a
+/// failure to reach a printer surfaces the same error dialog as [`show`].
+pub(crate) fn print_now() {
+    run_operation(PrintOperationAction::Print, "Print Now failed", true);
+}
+
+/// Shared driver behind [`show`] and [`print_now`]: snapshot the active
+/// editor + display name, build the operation, and `run` it under a
+/// [`DrainFreeze`] with the requested action.
+///
+/// `no_dialog` is set only by [`print_now`] (the `Print` action). It changes
+/// two things relative to the dialog path:
+/// 1. An empty buffer is a silent no-op — there is no dialog to cancel out of,
+///    so bail before spooling a blank page (matching Win32).
+/// 2. A `Cancel` *result* (not an `Err`) is surfaced as an error. With the
+///    dialog suppressed, `GtkPrintOperation` returns `Cancel` when it cannot
+///    resolve a printer — i.e. no system default printer is configured — with
+///    no `GError`. There is no user cancellation to respect in that case, so
+///    it maps to Win32's "No printer is installed…" dialog rather than a
+///    silent no-op. On the dialog path a `Cancel` is the user dismissing the
+///    dialog and stays silent.
+fn run_operation(action: PrintOperationAction, error_title: &str, no_dialog: bool) {
     // Capture everything the operation needs up front, under one short
     // borrow that is dropped before `run` spins its nested main loop.
     // `EditorHandle` is `Copy` and outlives the process (the single view is
@@ -83,6 +117,12 @@ pub(crate) fn show() {
         return;
     };
 
+    // Print Now on an empty buffer does nothing — no dialog to cancel out of,
+    // so bail before building the operation rather than spooling a blank page.
+    if no_dialog && editor.send(SCI_GETLENGTH, 0, 0) <= 0 {
+        return;
+    }
+
     let op = build_print_operation(editor, &doc_name);
 
     // Freeze background drains for the span of `run`: it spins a nested main
@@ -96,15 +136,31 @@ pub(crate) fn show() {
     // the main window, so that path should not fire here.)
     let result = {
         let _freeze = DrainFreeze::new();
-        op.run(gtk::PrintOperationAction::PrintDialog, Some(&window))
+        op.run(action, Some(&window))
     };
-    if let Err(err) = result {
-        crate::message_dialog(
-            gtk::MessageType::Error,
-            gtk::ButtonsType::Ok,
-            "Print failed",
-            &codepp_shell::sanitize_str_for_display(&err.to_string()),
-        );
+    match result {
+        Err(err) => {
+            crate::message_dialog(
+                gtk::MessageType::Error,
+                gtk::ButtonsType::Ok,
+                error_title,
+                &codepp_shell::sanitize_str_for_display(&err.to_string()),
+            );
+        }
+        // No-dialog path: `Cancel` means no printer could be resolved (no
+        // default configured), not a user cancellation — surface it. See the
+        // `no_dialog` contract on this fn. The message is a static literal, so
+        // no sanitization is needed. `PrintOperationResult` is non-exhaustive,
+        // hence the catch-all.
+        Ok(gtk::PrintOperationResult::Cancel) if no_dialog => {
+            crate::message_dialog(
+                gtk::MessageType::Error,
+                gtk::ButtonsType::Ok,
+                error_title,
+                "No printer is installed, or the default printer could not be opened.",
+            );
+        }
+        Ok(_) => {}
     }
 }
 
