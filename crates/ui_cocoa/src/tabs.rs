@@ -337,6 +337,7 @@ impl TabButton {
         let mut peers: Vec<(Retained<NSView>, usize)> = Vec::new();
         let mut from_slot = 0usize;
         let mut drag_guard: Option<DragGuard> = None;
+        let mut backdrop: Option<Retained<TabBackdrop>> = None;
 
         loop {
             let mask = NSEventMask::LeftMouseDragged | NSEventMask::LeftMouseUp;
@@ -389,6 +390,22 @@ impl TabButton {
                 // responder stays the Scintilla content view, so the
                 // restack does not steal the caret.
                 container.addSubview_positioned_relativeTo(&me, NSWindowOrderingMode::Above, None);
+                // Raising it is not enough on its own — see
+                // [`TabBackdrop`] for why an unselected tab is otherwise
+                // see-through for the whole gesture.
+                //
+                // Only when unselected. The selected tab already draws a
+                // filled bezel, so it occludes on its own — which is why
+                // the user who reported this saw the *active* tab drag
+                // correctly and every other tab drag wrong. And since the
+                // backdrop is a *subview*, it paints after the button's
+                // own drawing, so installing it on a selected tab would
+                // cover the very bezel that makes it look selected.
+                // Gating on the state says the same thing either way:
+                // "this tab has no background of its own".
+                if me.state() == 0 {
+                    backdrop = Some(TabBackdrop::install(&me, mtm));
+                }
             }
             if dragging {
                 self.setFrameOrigin(NSPoint::new(origin.x + dx, origin.y));
@@ -413,6 +430,15 @@ impl TabButton {
                     }
                 }
             }
+        }
+
+        // Take the drag's opacity backing away again. Done explicitly
+        // rather than left to the resync so it is gone even on the paths
+        // that do not resync, and done here — before the mutation —
+        // because afterwards the button it belongs to may already have
+        // been detached.
+        if let Some(backdrop) = backdrop {
+            backdrop.removeFromSuperview();
         }
 
         // ---- Past this point `self` is not touched again, deliberately.
@@ -634,6 +660,88 @@ impl PinView {
         } else {
             "Pin"
         })));
+        view
+    }
+}
+
+define_class!(
+    // SAFETY: an `NSView` subclass that overrides only `drawRect:` and
+    // adds no state AppKit reads. Main-thread-only like every other view
+    // here.
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "CodeppTabBackdrop"]
+    pub struct TabBackdrop;
+
+    unsafe impl NSObjectProtocol for TabBackdrop {}
+
+    impl TabBackdrop {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            crate::at_callback_boundary("TabBackdrop::drawRect:", (), || {
+                // The window background, so a dragged tab reads as a
+                // solid card cut from the chrome rather than as a new
+                // colour. Resolves per appearance, so dark mode is free.
+                NSColor::windowBackgroundColor().setFill();
+                NSBezierPath::fillRect(self.bounds());
+            });
+        }
+    }
+);
+
+impl TabBackdrop {
+    /// Make a tab opaque for the duration of a drag.
+    ///
+    /// **Why a dragged tab needs this at all.** Raising the z-order
+    /// stopped the dragged tab being painted *under* its neighbours, but
+    /// an unselected `AccessoryBar` button draws no background — so the
+    /// tab on top was see-through, and the tabs beneath showed through
+    /// it wherever it straddled two slots, which it does throughout the
+    /// gesture. The symptom was that dragging the *active* tab looked
+    /// right (its selected bezel is filled, so it occludes) while
+    /// dragging any inactive one still looked merged. Same defect the
+    /// z-order fix addressed, one layer down.
+    ///
+    /// Inserted **below** the button's other subviews — including the
+    /// `_NSCoreHostingView` AppKit uses to render the title and image —
+    /// so it backs the content rather than covering it.
+    ///
+    /// **That last point rests on an undocumented implementation
+    /// detail, and is recorded here rather than assumed.** An
+    /// `AccessoryBar` button renders its title and image through a
+    /// lazily-created private subview, so a backdrop placed at index 0
+    /// paints behind them. Verified on the current OS by dumping a
+    /// configured button's subview tree; subview paint order itself is
+    /// documented, but the fact that the label lives in a subview at all
+    /// is not. If a future macOS moves that drawing back into the
+    /// button's own `drawRect:`, this backdrop would paint *over* the
+    /// dragged tab's label — visible immediately to anyone dragging a
+    /// tab, but nothing here would fail. The migration then is to drop
+    /// the subview and override `TabButton::drawRect:` to fill the
+    /// background before chaining to `super`. Same discipline as the
+    /// note on the deprecated `registerNotifyCallback:` in
+    /// `ScintillaCocoaShim.mm`: name the private thing being relied on,
+    /// and say what to do when it goes.
+    ///
+    /// Not given a `hitTest:` override to make it click-through, because
+    /// it does not need one: it exists only between the start of a drag
+    /// and [`TabButton::track`] removing it, and for that whole span the
+    /// tracking loop is consuming the mouse itself.
+    fn install(on: &NSButton, mtm: MainThreadMarker) -> Retained<Self> {
+        let bounds = on.bounds();
+        let this = Self::alloc(mtm);
+        // SAFETY: `NSView`'s designated initialiser on a fresh instance
+        // of a subclass that adds no ivars.
+        //
+        // Sent to `this` rather than `super(this)`, unlike [`PinView`]
+        // and [`TabButton`] just above. Not a style slip: the `super(..)`
+        // form is only available once `set_ivars` has produced a
+        // `PartialInit`, and this class declares no ivars, so `alloc`
+        // yields a plain `Allocated<Self>` and `super(..)` does not
+        // typecheck. `dropview::ContentView`, the crate's other
+        // ivar-less subclass, is written the same way.
+        let view: Retained<Self> = unsafe { msg_send![this, initWithFrame: bounds] };
+        on.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, None);
         view
     }
 }
