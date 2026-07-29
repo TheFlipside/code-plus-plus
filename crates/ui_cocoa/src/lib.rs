@@ -538,6 +538,14 @@ unsafe extern "C" fn on_sci_notify(_windowid: isize, message: u32, _wparam: usiz
             LAST_DIRTY.with(|c| c.set(false));
             refresh_tab_chrome();
         }
+        // Width tracking recomputes `scrollWidth` during layout, so the
+        // floor has to be re-asserted after Scintilla has painted —
+        // otherwise it lasts only until the next relayout. Cheap: one
+        // read, and a write only when the width actually fell below the
+        // viewport. See `clamp_scroll_width_to_viewport`.
+        codepp_scintilla_sys::SCN_PAINTED => {
+            with_state(|st| clamp_scroll_width_to_viewport(st));
+        }
         _ => {}
     }
 }
@@ -595,6 +603,66 @@ pub(crate) fn report_perf() {
 fn seed_horizontal_scroll(editor: &EditorHandle) {
     editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, 1, 0);
     editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTHTRACKING, 1, 0);
+}
+
+/// Widen `scrollWidth` so the document view always covers the visible
+/// text area.
+///
+/// **Why this is needed at all.** Scintilla's Cocoa backend sizes the
+/// `NSScrollView`'s document view from `scrollWidth`
+/// (`cocoa/ScintillaCocoa.mm::SetScrollingSize`) and explicitly clamps
+/// the *height* to the clip rect — "Ensure all of clipRect covered by
+/// Scintilla drawing" — but does **not** do the same for the width:
+/// `docWidth = Wrapping() ? clipRect.width : scrollWidth`. With width
+/// tracking on, `scrollWidth` is the longest *visible* line, so the
+/// document view ends exactly where the longest line ends and every
+/// click to the right of it lands on the enclosing `NSClipView` instead.
+///
+/// The user-visible effect is that only the text itself is clickable:
+/// double-clicking in the empty space right of a line to select it — an
+/// ordinary editing gesture that works on Win32 and GTK — does nothing.
+/// Neither of those backends shows it, because neither sizes a view from
+/// `scrollWidth`; the whole editor widget is the click target there.
+///
+/// Fixed host-side rather than by patching the vendored tree, which
+/// DESIGN.md §4.1 keeps unforked. Tracking stays on, so a genuinely long
+/// line still scrolls horizontally and the width still shrinks back when
+/// that line is deleted; this only raises the floor.
+fn clamp_scroll_width_to_viewport(st: &crate::state::CocoaUiState) {
+    let Some(visible) = text_area_width(&st.sci_view) else {
+        return;
+    };
+    // Round down: a floor one pixel under the clip width leaves no
+    // dead strip, whereas overshooting would create a scrollable range
+    // that does not exist.
+    let target = visible.floor() as isize;
+    if target <= 0 {
+        return;
+    }
+    if st
+        .editor
+        .send(codepp_scintilla_sys::SCI_GETSCROLLWIDTH, 0, 0)
+        < target
+    {
+        st.editor
+            .send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, target as usize, 0);
+    }
+}
+
+/// Width of the scrolling text area, read from the `NSClipView` that
+/// actually bounds it.
+///
+/// Taken from the live view rather than computed as "view width minus
+/// margins minus scroller": the clip view already accounts for the
+/// margin view, the vertical scroller and any inset, so reading it is
+/// both exact and immune to those changing.
+fn text_area_width(sci_view: &NSView) -> Option<f64> {
+    for sub in sci_view.subviews() {
+        if let Ok(scroll) = sub.downcast::<objc2_app_kit::NSScrollView>() {
+            return Some(scroll.contentView().bounds().size.width);
+        }
+    }
+    None
 }
 
 /// Baseline editor styling, applied once before any buffer exists.
@@ -772,6 +840,10 @@ pub(crate) fn rebind_active_view() {
         // helper so the *tracking* flag is re-asserted with it; the
         // reset alone would pin the document view to one point wide.
         seed_horizontal_scroll(&st.editor);
+        // Immediately restore the viewport floor: the reset above drops
+        // the width to 1, and without this the newly-bound document is
+        // un-clickable outside its text until the first paint lands.
+        clamp_scroll_width_to_viewport(st);
     });
     refresh_tab_chrome();
 }
@@ -1451,19 +1523,31 @@ mod source_invariants {
     /// That shipped once, reported as "the mouse stops working after
     /// switching tabs".
     ///
-    /// Keeping both sends inside one helper is the whole fix, so the
-    /// guard is simply that there is only one call site.
+    /// There are exactly two legitimate senders, and both are named
+    /// here: `seed_horizontal_scroll` (which pairs the reset with
+    /// tracking) and `clamp_scroll_width_to_viewport` (which raises the
+    /// floor so the whole visible area stays clickable). A third call
+    /// site is almost certainly one of the two bugs above coming back.
     #[test]
     fn scroll_width_is_only_set_together_with_tracking() {
         let src = production_src();
         assert!(src.len() > 5_000, "source scan read too little to be real");
         let sets = src.matches("SCI_SETSCROLLWIDTH,").count();
         assert_eq!(
-            sets, 1,
-            "`SCI_SETSCROLLWIDTH` should be sent from exactly one place \
-             (`seed_horizontal_scroll`), which also enables tracking. \
-             Found {sets} call sites — an unpaired reset collapses the \
-             document view to one point wide and kills mouse input."
+            sets, 2,
+            "`SCI_SETSCROLLWIDTH` should be sent from exactly two places \
+             — `seed_horizontal_scroll`, which also enables tracking, and \
+             `clamp_scroll_width_to_viewport`, which floors it at the \
+             viewport width. Found {sets}. An unpaired reset collapses \
+             the document view to one point wide and kills mouse input \
+             entirely; a missing floor makes only the text clickable."
+        );
+        let clamp = fn_body(src, "clamp_scroll_width_to_viewport");
+        assert!(
+            clamp.contains("SCI_SETSCROLLWIDTH,") && clamp.contains("SCI_GETSCROLLWIDTH"),
+            "`clamp_scroll_width_to_viewport` no longer raises the floor \
+             — clicks to the right of a line's text would stop reaching \
+             the editor."
         );
         let body = fn_body(src, "seed_horizontal_scroll");
         assert!(
