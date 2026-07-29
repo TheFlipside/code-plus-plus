@@ -35,7 +35,7 @@ use objc2::{define_class, msg_send, sel, AnyThread, MainThreadOnly};
 use objc2_app_kit::{
     NSAboutPanelOptionApplicationIcon, NSAboutPanelOptionApplicationName,
     NSAboutPanelOptionApplicationVersion, NSAboutPanelOptionCredits, NSAboutPanelOptionKey,
-    NSAboutPanelOptionVersion, NSApplication, NSControl, NSImage, NSMenu, NSMenuDelegate,
+    NSAboutPanelOptionVersion, NSApplication, NSButton, NSControl, NSImage, NSMenu, NSMenuDelegate,
     NSMenuItem, NSWorkspace,
 };
 use objc2_foundation::{
@@ -170,6 +170,44 @@ define_class!(
             crate::at_callback_boundary("menu:toggleView", (), || {
                 if let Some(sender) = sender {
                     crate::toggle_view_setting_by_tag(sender.tag());
+                }
+            });
+        }
+
+        /// The toolbar's Word Wrap toggle.
+        ///
+        /// Separate selectors from the View menu's single
+        /// `codeppToggleView:` because these are `PushOnPushOff` buttons:
+        /// AppKit has already flipped the button's own state by the time
+        /// the action fires, so the handler must *apply* that state rather
+        /// than invert the model — inverting would fight the button and
+        /// land on the wrong value every other click.
+        #[unsafe(method(codeppToolbarWordWrap:))]
+        fn toolbar_word_wrap(&self, sender: Option<&NSButton>) {
+            crate::at_callback_boundary("toolbar:wordWrap", (), || {
+                if let Some(sender) = sender {
+                    crate::set_view_setting(0, sender.state() != 0);
+                }
+            });
+        }
+
+        /// The toolbar's Show All Characters toggle — whitespace *and*
+        /// EOL together, matching Win32's combined button.
+        #[unsafe(method(codeppToolbarShowAllChars:))]
+        fn toolbar_show_all_chars(&self, sender: Option<&NSButton>) {
+            crate::at_callback_boundary("toolbar:showAllChars", (), || {
+                if let Some(sender) = sender {
+                    crate::set_show_all_chars(sender.state() != 0);
+                }
+            });
+        }
+
+        /// The toolbar's Show Indent Guide toggle.
+        #[unsafe(method(codeppToolbarIndentGuide:))]
+        fn toolbar_indent_guide(&self, sender: Option<&NSButton>) {
+            crate::at_callback_boundary("toolbar:indentGuide", (), || {
+                if let Some(sender) = sender {
+                    crate::set_view_setting(3, sender.state() != 0);
                 }
             });
         }

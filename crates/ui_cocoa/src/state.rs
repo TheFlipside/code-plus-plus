@@ -38,6 +38,7 @@ use objc2_app_kit::{NSMenu, NSView, NSWindow};
 use crate::menu::Actions;
 use crate::status::StatusBar;
 use crate::tabs::TabStrip;
+use crate::toolbar::Toolbar;
 
 /// Everything the Cocoa backend owns for the lifetime of the window.
 pub struct CocoaUiState {
@@ -87,6 +88,9 @@ pub struct CocoaUiState {
     /// The tab strip. Purely a selector — the one Scintilla view is its
     /// sibling, not its child. See [`crate::tabs`].
     pub tabs: TabStrip,
+    /// The toolbar. Held so its three functional toggles can be repainted
+    /// when a View setting is changed from the menu instead of from here.
+    pub toolbar: Toolbar,
     /// The Objective-C receiver for menu and tab-strip actions. Held
     /// here because `NSMenuItem.target` and `NSControl.target` are both
     /// *weak*, so nothing else keeps it alive — and the tab strip
@@ -106,10 +110,20 @@ pub struct CocoaUiState {
 /// is the whole point of [`CocoaUiState::split`].
 pub struct CocoaUi {
     pub window: Retained<NSWindow>,
+    /// The Scintilla view, so [`CocoaUi::relayout_chrome`] can resize it.
+    ///
+    /// **Why the view and not just the handle.** Hiding a chrome strip has
+    /// to give the freed band back to the editor, and that is a *frame*
+    /// change on the view — `EditorHandle` addresses the Scintilla
+    /// document, not the `NSView`. It has to live here rather than be
+    /// fetched through `with_state`, because every trait method runs
+    /// *inside* a `with_state` borrow already and a nested one is declined.
+    pub sci_view: Retained<NSView>,
     pub editor: EditorHandle,
     pub status: StatusBar,
     pub menu: Retained<NSMenu>,
     pub tabs: TabStrip,
+    pub toolbar: Toolbar,
 }
 
 impl CocoaUiState {
@@ -118,10 +132,12 @@ impl CocoaUiState {
     pub fn split(&mut self) -> (&mut Shell, CocoaUi) {
         let ui = CocoaUi {
             window: self.window.clone(),
+            sci_view: self.sci_view.clone(),
             editor: self.editor,
             status: self.status.clone(),
             menu: self.menu.clone(),
             tabs: self.tabs.clone(),
+            toolbar: self.toolbar.clone(),
         };
         (&mut self.shell, ui)
     }

@@ -27,6 +27,7 @@ use codepp_scintilla_sys::{
     SCI_STYLEGETBACK, SCI_STYLEGETFORE, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, STYLE_DEFAULT,
 };
 use codepp_shell::{SearchFlags, UiPlatform};
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 
 use crate::state::CocoaUi;
 
@@ -71,6 +72,68 @@ struct ViewState {
 }
 
 impl CocoaUi {
+    /// Re-lay the content view after a chrome strip was shown or hidden.
+    ///
+    /// The autoresizing masks handle a *window resize* — one flexible
+    /// editor between fixed strips — but they say nothing about a strip
+    /// becoming invisible, because a hidden view keeps its frame. Without
+    /// this, hiding the toolbar or the tab strip leaves a blank band where
+    /// it was.
+    ///
+    /// Win32 does the same thing (`relayout_main_window_via_post` after
+    /// its `ShowWindow`). An earlier version of this backend's comment
+    /// claimed Win32 left the gap; that was simply wrong.
+    ///
+    /// **A method on `CocoaUi`, deliberately, not a free function reaching
+    /// through `with_state`.** Every `UiPlatform` method already runs
+    /// inside a `with_state` borrow, so a nested one is declined and a
+    /// free function would silently never run — measured: the first
+    /// version was written that way and the editor's frame did not move
+    /// on any of the four hide/show calls in a driven test. Everything
+    /// this touches is therefore a field of `self`.
+    ///
+    /// Recomputed from scratch rather than adjusted by a delta, so it is
+    /// correct however many strips are hidden and in whatever order they
+    /// were toggled.
+    fn relayout_chrome(&self) {
+        let Some(content) = self.window.contentView() else {
+            return;
+        };
+        let size = content.bounds().size;
+        let toolbar_h = if self.toolbar.is_hidden() {
+            0.0
+        } else {
+            crate::toolbar::TOOLBAR_HEIGHT
+        };
+        let tabs_h = if self.tabs.is_hidden() {
+            0.0
+        } else {
+            crate::tabs::TAB_STRIP_HEIGHT
+        };
+        // Bottom-up, in Cocoa's unflipped content coordinates: status bar,
+        // editor, tab strip, toolbar. The editor absorbs what is left, and
+        // is floored at zero so a very short window cannot ask for a
+        // negative height.
+        let editor_h =
+            (size.height - crate::status::STATUS_BAR_HEIGHT - tabs_h - toolbar_h).max(0.0);
+        self.status.container.setFrame(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(size.width, crate::status::STATUS_BAR_HEIGHT),
+        ));
+        self.sci_view.setFrame(NSRect::new(
+            NSPoint::new(0.0, crate::status::STATUS_BAR_HEIGHT),
+            NSSize::new(size.width, editor_h),
+        ));
+        self.tabs.container.setFrame(NSRect::new(
+            NSPoint::new(0.0, crate::status::STATUS_BAR_HEIGHT + editor_h),
+            NSSize::new(size.width, tabs_h),
+        ));
+        self.toolbar.container.setFrame(NSRect::new(
+            NSPoint::new(0.0, crate::status::STATUS_BAR_HEIGHT + editor_h + tabs_h),
+            NSSize::new(size.width, toolbar_h),
+        ));
+    }
+
     fn snapshot_view(&self) -> ViewState {
         ViewState {
             caret: self.editor.send(SCI_GETCURRENTPOS, 0, 0),
@@ -601,18 +664,34 @@ impl UiPlatform for CocoaUi {
         self.tabs.is_hidden()
     }
 
+    /// `NPPM_HIDETABBAR`. Returns the *previous* hidden state, which is
+    /// the trait's contract and what the plugin sees.
     fn set_tabbar_hidden(&mut self, hidden: bool) -> bool {
         let was = self.tabs.is_hidden();
         self.tabs.set_hidden(hidden);
+        // Give the freed band back to the editor rather than leaving a
+        // gap — see [`CocoaUi::relayout_chrome`].
+        self.relayout_chrome();
         was
     }
 
     fn is_toolbar_hidden(&self) -> bool {
-        false
+        self.toolbar.is_hidden()
     }
 
-    fn set_toolbar_hidden(&mut self, _hidden: bool) -> bool {
-        false
+    /// `NPPM_HIDETOOLBAR`, and the View menu once it grows the entry.
+    ///
+    /// Returns the **previous** hidden state, not whether the call
+    /// succeeded. That is the trait's stated contract and it is what
+    /// reaches the plugin as `NPPM_HIDETOOLBAR`'s return value, pinned by
+    /// `plugin-host`'s own `hide_toolbar_returns_previous_and_flips`
+    /// test — returning `true` unconditionally told every plugin the bar
+    /// had already been hidden.
+    fn set_toolbar_hidden(&mut self, hidden: bool) -> bool {
+        let was = self.toolbar.is_hidden();
+        self.toolbar.set_hidden(hidden);
+        self.relayout_chrome();
+        was
     }
 
     fn is_menu_hidden(&self) -> bool {

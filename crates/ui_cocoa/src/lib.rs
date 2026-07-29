@@ -48,6 +48,7 @@ mod platform;
 mod state;
 mod status;
 mod tabs;
+mod toolbar;
 
 use std::cell::RefCell;
 use std::fmt;
@@ -70,9 +71,11 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSURL};
 
+use crate::menu::Actions;
 use crate::state::{install, uninstall, with_state, CocoaUiState};
 use crate::status::{StatusBar, STATUS_BAR_HEIGHT};
 use crate::tabs::{TabStrip, TAB_STRIP_HEIGHT};
+use crate::toolbar::{Toolbar, TOOLBAR_HEIGHT};
 
 /// Initial window size, matching the other two backends' defaults.
 const DEFAULT_WIDTH: f64 = 1024.0;
@@ -287,41 +290,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     unsafe { window.setReleasedWhenClosed(false) };
     window.setTitle(&NSString::from_str("Code++"));
 
-    // Content layout, bottom-up in Cocoa's flipped-origin coordinates:
-    // status bar, then the editor, then the tab strip at the top. The
-    // editor is the only flexible one. Springs-and-struts rather than
-    // Auto Layout — one flexible view between two fixed-height strips is
-    // exactly what autoresizing masks express.
-    //
-    // The content view is a subclass so the whole window accepts dropped
-    // files (see `crate::dropview`); Cocoa attaches drag destinations to
-    // views, not windows.
-    let content = dropview::ContentView::new(content_rect, mtm);
-    let status = StatusBar::new(DEFAULT_WIDTH, mtm);
-    let tab_strip = TabStrip::new(DEFAULT_WIDTH, mtm);
-
-    let editor_height = DEFAULT_HEIGHT - STATUS_BAR_HEIGHT - TAB_STRIP_HEIGHT;
-    sci_view.setFrame(NSRect::new(
-        NSPoint::new(0.0, STATUS_BAR_HEIGHT),
-        NSSize::new(DEFAULT_WIDTH, editor_height),
-    ));
-    sci_view.setAutoresizingMask(
-        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
-    );
-    // The strip sits at the top and stays there as the window grows:
-    // width-sizable, with the flexible gap below it.
-    tab_strip.container.setFrame(NSRect::new(
-        NSPoint::new(0.0, STATUS_BAR_HEIGHT + editor_height),
-        NSSize::new(DEFAULT_WIDTH, TAB_STRIP_HEIGHT),
-    ));
-    tab_strip.container.setAutoresizingMask(
-        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
-    );
-
-    content.addSubview(&sci_view);
-    content.addSubview(&status.container);
-    content.addSubview(&tab_strip.container);
-    window.setContentView(Some(&content));
+    let (status, tab_strip, toolbar) =
+        build_content(&window, content_rect, &sci_view, &actions, mtm);
 
     // --- Install the state ----------------------------------------
     let st = Rc::new(RefCell::new(CocoaUiState {
@@ -331,6 +301,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
         editor,
         status,
         tabs: tab_strip,
+        toolbar,
         actions: actions.clone(),
         menu,
         shell,
@@ -619,6 +590,69 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
         }
         _ => {}
     }
+}
+
+/// Assemble the window's content view and the three chrome strips.
+///
+/// Split out of [`run`] purely for length; the layout reasoning lives in
+/// the comments below rather than at the call site.
+fn build_content(
+    window: &NSWindow,
+    content_rect: NSRect,
+    sci_view: &NSView,
+    actions: &Actions,
+    mtm: MainThreadMarker,
+) -> (StatusBar, TabStrip, Toolbar) {
+    // Content layout, bottom-up in Cocoa's flipped-origin coordinates:
+    // status bar, then the editor, then the tab strip at the top. The
+    // editor is the only flexible one. Springs-and-struts rather than
+    // Auto Layout — one flexible view between two fixed-height strips is
+    // exactly what autoresizing masks express.
+    //
+    // The content view is a subclass so the whole window accepts dropped
+    // files (see `crate::dropview`); Cocoa attaches drag destinations to
+    // views, not windows.
+    let content = dropview::ContentView::new(content_rect, mtm);
+    let status = StatusBar::new(DEFAULT_WIDTH, mtm);
+    let tab_strip = TabStrip::new(DEFAULT_WIDTH, mtm);
+    let toolbar = Toolbar::new(DEFAULT_WIDTH, actions, mtm);
+
+    let editor_height = DEFAULT_HEIGHT - STATUS_BAR_HEIGHT - TAB_STRIP_HEIGHT - TOOLBAR_HEIGHT;
+    sci_view.setFrame(NSRect::new(
+        NSPoint::new(0.0, STATUS_BAR_HEIGHT),
+        NSSize::new(DEFAULT_WIDTH, editor_height),
+    ));
+    sci_view.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    // The strip sits at the top and stays there as the window grows:
+    // width-sizable, with the flexible gap below it.
+    tab_strip.container.setFrame(NSRect::new(
+        NSPoint::new(0.0, STATUS_BAR_HEIGHT + editor_height),
+        NSSize::new(DEFAULT_WIDTH, TAB_STRIP_HEIGHT),
+    ));
+    tab_strip.container.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
+    );
+
+    // The toolbar is the topmost strip, above the tabs — Notepad++'s
+    // order, and `ui_gtk`'s. Same springs-and-struts treatment as the tab
+    // strip: pinned to the top, width-sizable, flexible gap below.
+    toolbar.container.setFrame(NSRect::new(
+        NSPoint::new(0.0, STATUS_BAR_HEIGHT + editor_height + TAB_STRIP_HEIGHT),
+        NSSize::new(DEFAULT_WIDTH, TOOLBAR_HEIGHT),
+    ));
+    toolbar.container.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
+    );
+
+    content.addSubview(sci_view);
+    content.addSubview(&status.container);
+    content.addSubview(&tab_strip.container);
+    content.addSubview(&toolbar.container);
+    window.setContentView(Some(&content));
+
+    (status, tab_strip, toolbar)
 }
 
 /// Order the main window front, focus the editor, and activate the app.
@@ -1100,6 +1134,14 @@ pub(crate) const VIEW_TOGGLES: [&str; 4] = [
     "Show Indent Guide",
 ];
 
+/// The persisted View settings, or `None` when the state is
+/// unreachable. The toolbar's toggle refresh needs the whole struct
+/// rather than one flag, because its Show All Characters button stands
+/// for two of them.
+pub(crate) fn view_settings() -> Option<codepp_core::session::ViewSettings> {
+    with_state(|st| st.shell.saved_view_settings())
+}
+
 /// Read one View toggle by its tag. Used to paint the menu's check mark.
 pub(crate) fn view_setting_by_tag(tag: isize) -> bool {
     with_state(|st| {
@@ -1113,6 +1155,29 @@ pub(crate) fn view_setting_by_tag(tag: isize) -> bool {
         }
     })
     .unwrap_or(false)
+}
+
+/// Set one View toggle by its tag to an explicit value.
+///
+/// The toolbar's entry point, as distinct from the menu's
+/// [`toggle_view_setting_by_tag`]. A `PushOnPushOff` button has already
+/// changed its own state by the time its action fires, so the handler
+/// applies that state; a toggle would invert the model against the
+/// button and land on the wrong value every other click.
+pub(crate) fn set_view_setting(tag: isize, on: bool) {
+    with_state(|st| {
+        let mut view = st.shell.saved_view_settings();
+        match tag {
+            0 => view.word_wrap = on,
+            1 => view.show_whitespace = on,
+            2 => view.show_eol = on,
+            3 => view.indent_guide = on,
+            _ => return,
+        }
+        apply_view_settings(&st.editor, view);
+        st.shell.set_view_settings(view);
+    });
+    refresh_toolbar_toggles();
 }
 
 /// Flip one View toggle by its tag, apply it to the editor and persist.
@@ -1135,6 +1200,35 @@ pub(crate) fn toggle_view_setting_by_tag(tag: isize) {
         apply_view_settings(&st.editor, view);
         st.shell.set_view_settings(view);
     });
+    refresh_toolbar_toggles();
+}
+
+/// Set the whitespace and EOL settings together — the toolbar's combined
+/// Show All Characters button, matching Win32's.
+pub(crate) fn set_show_all_chars(on: bool) {
+    with_state(|st| {
+        let mut view = st.shell.saved_view_settings();
+        view.show_whitespace = on;
+        view.show_eol = on;
+        apply_view_settings(&st.editor, view);
+        st.shell.set_view_settings(view);
+    });
+    refresh_toolbar_toggles();
+}
+
+/// Repaint the toolbar's toggles from the model.
+///
+/// The single point of agreement between the toolbar and the View menu:
+/// every mutation of a View setting ends here, and the menu resolves its
+/// own marks on open, so neither surface can show a stale state. `ui_gtk`
+/// achieves the same thing with a registry of widget handles and one
+/// `refresh_view_indicators`; here the buttons live on the window state,
+/// so there is nothing to register.
+pub(crate) fn refresh_toolbar_toggles() {
+    let toolbar = with_state(|st| st.toolbar.clone());
+    if let Some(toolbar) = toolbar {
+        toolbar.refresh_toggles();
+    }
 }
 
 /// Push a `ViewSettings` onto the live editor.
@@ -1196,6 +1290,7 @@ pub(crate) fn apply_saved_view_settings() {
         apply_view_settings(&st.editor, view);
         clamp_scroll_width_to_viewport(st);
     });
+    refresh_toolbar_toggles();
 }
 
 /// Send one Scintilla command to the active view.
