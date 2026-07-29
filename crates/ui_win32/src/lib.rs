@@ -140,20 +140,21 @@ use codepp_scintilla_sys::{
     SCI_SETCODEPAGE, SCI_SETDOCPOINTER, SCI_SETEMPTYSELECTION, SCI_SETEOLMODE, SCI_SETFONTQUALITY,
     SCI_SETHSCROLLBAR, SCI_SETINDENTATIONGUIDES, SCI_SETMARGINWIDTHN, SCI_SETREADONLY,
     SCI_SETSAVEPOINT, SCI_SETSCROLLWIDTH, SCI_SETSCROLLWIDTHTRACKING, SCI_SETSEL,
-    SCI_SETSELECTIONEND, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH, SCI_SETTARGETEND,
-    SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS, SCI_SETVSCROLLBAR,
-    SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK, SCI_STYLEGETFORE,
-    SCI_TEXTHEIGHT, SCI_UNDO, SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT, SCN_MODIFIED,
-    SCN_PAINTED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED, SCN_UPDATEUI,
-    SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW, SC_CP_UTF8,
-    SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED, SC_EFF_QUALITY_NON_ANTIALIASED,
-    SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF, SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH,
-    SC_IV_NONE, SC_MARGIN_SYMBOL, SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND,
-    SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN, SC_MARKNUM_FOLDEROPENMID,
-    SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARK_BOXMINUS, SC_MARK_BOXMINUSCONNECTED,
-    SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_LCORNER, SC_MARK_TCORNER, SC_MARK_VLINE,
-    SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION,
-    SC_UPDATE_V_SCROLL, STYLE_DEFAULT, STYLE_LINENUMBER,
+    SCI_SETSELECTIONEND, SCI_SETSELECTIONMODE, SCI_SETSELECTIONSTART, SCI_SETTABWIDTH,
+    SCI_SETTARGETEND, SCI_SETTARGETSTART, SCI_SETTEXT, SCI_SETVIEWEOL, SCI_SETVIEWWS,
+    SCI_SETVSCROLLBAR, SCI_SETWRAPMODE, SCI_SETXOFFSET, SCI_SETZOOM, SCI_STYLEGETBACK,
+    SCI_STYLEGETFORE, SCI_TEXTHEIGHT, SCI_UNDO, SCI_VISIBLEFROMDOCLINE, SCI_ZOOMIN, SCI_ZOOMOUT,
+    SCN_MODIFIED, SCN_PAINTED, SCN_SAVEPOINTLEFT, SCN_SAVEPOINTREACHED, SCN_STYLENEEDED,
+    SCN_UPDATEUI, SC_AUTOMATICFOLD_CHANGE, SC_AUTOMATICFOLD_CLICK, SC_AUTOMATICFOLD_SHOW,
+    SC_CP_UTF8, SC_DOCUMENTOPTION_DEFAULT, SC_EFF_QUALITY_LCD_OPTIMIZED,
+    SC_EFF_QUALITY_NON_ANTIALIASED, SC_EOL_CR, SC_EOL_CRLF, SC_EOL_LF,
+    SC_FOLDFLAG_LINEAFTER_CONTRACTED, SC_IV_LOOKBOTH, SC_IV_NONE, SC_MARGIN_SYMBOL,
+    SC_MARKNUM_FOLDER, SC_MARKNUM_FOLDEREND, SC_MARKNUM_FOLDERMIDTAIL, SC_MARKNUM_FOLDEROPEN,
+    SC_MARKNUM_FOLDEROPENMID, SC_MARKNUM_FOLDERSUB, SC_MARKNUM_FOLDERTAIL, SC_MARK_BOXMINUS,
+    SC_MARK_BOXMINUSCONNECTED, SC_MARK_BOXPLUS, SC_MARK_BOXPLUSCONNECTED, SC_MARK_LCORNER,
+    SC_MARK_TCORNER, SC_MARK_VLINE, SC_MASK_FOLDERS, SC_MOD_DELETETEXT, SC_MOD_INSERTTEXT,
+    SC_SEL_RECTANGLE, SC_SEL_STREAM, SC_UPDATE_CONTENT, SC_UPDATE_SELECTION, SC_UPDATE_V_SCROLL,
+    STYLE_DEFAULT, STYLE_LINENUMBER,
 };
 use codepp_shell::{
     close_multi_enabled, pick_next_close_target, sanitize_filename_for_display,
@@ -208,8 +209,8 @@ use windows::Win32::UI::Controls::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE,
-    TRACKMOUSEEVENT, VK_0, VK_CONTROL, VK_F, VK_F1, VK_F2, VK_F3, VK_G, VK_H, VK_MENU, VK_N, VK_O,
-    VK_OEM_MINUS, VK_OEM_PLUS, VK_P, VK_R, VK_S, VK_T, VK_W,
+    TRACKMOUSEEVENT, VK_0, VK_B, VK_CONTROL, VK_F, VK_F1, VK_F2, VK_F3, VK_G, VK_H, VK_MENU, VK_N,
+    VK_O, VK_OEM_MINUS, VK_OEM_PLUS, VK_P, VK_R, VK_S, VK_T, VK_W,
 };
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, DefSubclassProc, DragAcceptFiles, DragFinish, DragQueryFileW,
@@ -414,6 +415,16 @@ const ID_EDIT_COPY: u16 = 1103;
 const ID_EDIT_PASTE: u16 = 1104;
 const ID_EDIT_DELETE: u16 = 1105;
 const ID_EDIT_SELECTALL: u16 = 1106;
+/// Notepad++'s "Begin/End Select" — a two-click / two-keypress
+/// selection: first press marks the current caret as an anchor,
+/// second press (after the caret has moved) stretches the selection
+/// from the anchor to the current caret and clears the mode. While
+/// stream mode is armed the column entry is greyed out.
+const ID_EDIT_BEGIN_END_SELECT: u16 = 1107;
+/// The column-mode sibling of [`ID_EDIT_BEGIN_END_SELECT`]. Second
+/// press produces a rectangular selection via `SC_SEL_RECTANGLE`.
+/// While armed, the stream entry is greyed out.
+const ID_EDIT_BEGIN_END_SELECT_COLUMN: u16 = 1108;
 
 // Search (1200-1299) — disabled stubs until Phase 4 m3 wires
 // Find/Replace dialogs.
@@ -1182,6 +1193,101 @@ struct DockEntry {
     u_mask: u32,
 }
 
+/// State of Notepad++'s "Begin/End Select" feature — see
+/// [`ID_EDIT_BEGIN_END_SELECT`] and [`ID_EDIT_BEGIN_END_SELECT_COLUMN`].
+///
+/// While one of the armed variants is set, the corresponding Edit-menu
+/// entry paints checked and its sibling is greyed out — a plain
+/// keyboard-driven mode indicator, no modal chrome. Resets to `None`
+/// whenever the active tab changes.
+///
+/// The armed variants carry the originating tab's monotonic id
+/// ([`codepp_shell::Shell::allocate_buffer_id`], never reused) alongside
+/// the anchor byte position. [`resolve_begin_end_step`] verifies both
+/// against the active tab and its current document length before
+/// applying the selection, so a stale anchor from a closed / replaced /
+/// reloaded-and-shrunk buffer resolves to [`SelectStep::Invalidated`]
+/// and disarms silently instead of feeding a nonsense range to
+/// `SCI_SETSEL`. Same self-healing shape the tab-arm-commit fix uses
+/// (DESIGN.md §7.4, `resolve_tab_arm_commit`).
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum SelectMarkMode {
+    None,
+    /// Stream (contiguous) selection armed. `anchor` is the caret byte
+    /// position at "Begin"; `tab_id` is the [`codepp_shell::Tab`] id
+    /// that was active then.
+    Stream {
+        anchor: isize,
+        tab_id: i32,
+    },
+    /// Rectangular (column) selection armed. As above.
+    Column {
+        anchor: isize,
+        tab_id: i32,
+    },
+}
+
+/// Output of the Begin/End Select state machine. See
+/// [`resolve_begin_end_step`] — kept as a plain enum so the transition
+/// is testable without an HWND / editor / message pump.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum SelectStep {
+    /// Fresh first press — arm the given variant at the current caret.
+    Begin { column: bool },
+    /// Matching second press — apply `SCI_SETSEL(anchor, current)` in
+    /// stream / rectangular mode and disarm.
+    End { anchor: isize, column: bool },
+    /// Armed variant matched, but the anchor is no longer valid for the
+    /// current buffer (tab closed/replaced, buffer shrunk past the
+    /// anchor). Silently disarm — no selection is applied. Prevents the
+    /// clamped-but-wrong `SCI_SETSEL(stale_anchor, current)` outcome
+    /// the security audit flagged as data-loss adjacent.
+    Invalidated,
+    /// Sibling variant is armed (Stream when Column pressed, or vice
+    /// versa). Leave the arm alone — the greyed menu entry already
+    /// blocks the mouse path, but Win32 accelerators still fire even
+    /// when the target is greyed, so the handler no-ops here to match
+    /// the intended UX.
+    Ignored,
+}
+
+/// Pure state transition for Begin/End Select. See [`SelectStep`] for
+/// the four outputs. Broken out from the handler so the transition can
+/// be tested exhaustively without an HWND — matches the
+/// [`resolve_tab_arm_commit`] precedent (DESIGN.md §7.4).
+#[must_use]
+fn resolve_begin_end_step(
+    current: SelectMarkMode,
+    press_column: bool,
+    active_tab_id: i32,
+    active_doc_length: isize,
+) -> SelectStep {
+    match (current, press_column) {
+        (SelectMarkMode::None, column) => SelectStep::Begin { column },
+        (SelectMarkMode::Stream { anchor, tab_id }, false) => {
+            if tab_id == active_tab_id && anchor >= 0 && anchor <= active_doc_length {
+                SelectStep::End {
+                    anchor,
+                    column: false,
+                }
+            } else {
+                SelectStep::Invalidated
+            }
+        }
+        (SelectMarkMode::Column { anchor, tab_id }, true) => {
+            if tab_id == active_tab_id && anchor >= 0 && anchor <= active_doc_length {
+                SelectStep::End {
+                    anchor,
+                    column: true,
+                }
+            } else {
+                SelectStep::Invalidated
+            }
+        }
+        (SelectMarkMode::Stream { .. } | SelectMarkMode::Column { .. }, _) => SelectStep::Ignored,
+    }
+}
+
 /// Per-window state. Box-allocated, pointer stashed in
 /// `GWLP_USERDATA`. `wnd_proc` reads it back via
 /// `GetWindowLongPtrW(GWLP_USERDATA)` on every message. The main
@@ -1260,6 +1366,10 @@ struct WindowState {
     /// and File → Exit before inserting the fresh ones. Zero on
     /// first paint (nothing to remove).
     file_menu_recent_count: usize,
+    /// Edit submenu HMENU. Held addressable so `WM_INITMENUPOPUP` can
+    /// drive Begin/End Select's check + grey state — see
+    /// [`refresh_edit_menu`].
+    edit_menu: HMENU,
     view_menu: HMENU,
     encoding_menu: HMENU,
     language_menu: HMENU,
@@ -1644,6 +1754,10 @@ struct WindowState {
     /// cancels the toggle instead of firing on release outside
     /// the pin.
     tab_pin_armed: Option<i32>,
+    /// Notepad++'s Begin/End Select mode — see [`SelectMarkMode`].
+    /// Set by [`ID_EDIT_BEGIN_END_SELECT`] / `_COLUMN`, applied and
+    /// cleared on the second press, reset to `None` on tab switch.
+    select_mark: SelectMarkMode,
     editor: EditorHandle,
     shell: Shell,
 }
@@ -4752,6 +4866,14 @@ unsafe fn handle_close_active_tab_inner(hwnd: HWND) -> CloseOutcome {
     // code runs in this phase either (TCM_*, SCI_* are all
     // synchronous and don't re-enter our wnd_proc).
     if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        // Begin/End Select is anchored to a byte position inside the
+        // buffer that was active at "Begin" time. Closing that buffer
+        // makes the anchor stale — the tab-id check inside
+        // [`resolve_begin_end_step`] already catches it on the next
+        // press, but resetting here also clears the checked glyph off
+        // the Edit-menu entry before the next `WM_INITMENUPOPUP`.
+        state.select_mark = SelectMarkMode::None;
+
         // Nuclear-resync the visible strip: delete every item the
         // tab control holds and re-insert from `state.shell.tabs`.
         // This is heavier than a single `TCM_DELETEITEM` for the
@@ -5107,6 +5229,12 @@ unsafe fn handle_tab_selchange(hwnd: HWND) {
         return;
     }
     state.shell.active_tab = Some(new_idx);
+    // Begin/End Select is anchored to the byte position of a specific
+    // buffer; switching tabs makes the anchor meaningless. Reset the
+    // arm so the menu refresh on the new tab paints both entries
+    // idle. Cheap unconditional write — `SelectMarkMode::None` is
+    // Copy and matches the fresh-state default.
+    state.select_mark = SelectMarkMode::None;
 
     // Snapshot what we need from the tab, then drop the borrow
     // before reaching for `state.editor` (a Copy field) so we can
@@ -5549,6 +5677,10 @@ struct BuiltMenuBar {
     /// state, driven by the active tab's on-disk path + extension
     /// association).
     file_menu: HMENU,
+    /// Edit submenu. Held addressable so `WM_INITMENUPOPUP` can drive
+    /// the Begin/End Select entries' check + grey state via
+    /// [`refresh_edit_menu`].
+    edit_menu: HMENU,
     view_menu: HMENU,
     encoding_menu: HMENU,
     language_menu: HMENU,
@@ -5797,22 +5929,36 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             w!("Print &Now"),
         )?;
         AppendMenuW(file_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
-        AppendMenuW(file_menu, MF_STRING, ID_FILE_EXIT as usize, w!("E&xit"))?;
+        // Alt+F4 hint is display-only — Windows intercepts Alt+F4 at
+        // `DefWindowProc` (WM_SYSCOMMAND / SC_CLOSE), so no accelerator
+        // table entry is needed; the `\t` separator right-aligns the hint
+        // the same way `&Undo\tCtrl+Z` does above.
+        AppendMenuW(
+            file_menu,
+            MF_STRING,
+            ID_FILE_EXIT as usize,
+            w!("E&xit\tAlt+F4"),
+        )?;
         AppendMenuW(bar, MF_POPUP, file_menu.0 as usize, w!("&File"))?;
 
         // ----- Edit ----- (Scintilla-backed; all enabled.)
+        // Undo/Redo advertise their dual bindings — Scintilla's built-in
+        // keymap (KeyMap.cxx) routes all four keys natively, so this is a
+        // display-only change; no accelerator-table entry is required.
+        // Select All sits directly below Delete with no separator, per N++'s
+        // Edit-menu layout.
         let edit_menu = CreateMenu()?;
         AppendMenuW(
             edit_menu,
             MF_STRING,
             ID_EDIT_UNDO as usize,
-            w!("&Undo\tCtrl+Z"),
+            w!("&Undo\tCtrl+Z / Alt+Backspace"),
         )?;
         AppendMenuW(
             edit_menu,
             MF_STRING,
             ID_EDIT_REDO as usize,
-            w!("&Redo\tCtrl+Y"),
+            w!("&Redo\tCtrl+Y / Ctrl+Shift+Z"),
         )?;
         AppendMenuW(edit_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
         AppendMenuW(
@@ -5839,12 +5985,29 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             ID_EDIT_DELETE as usize,
             w!("&Delete\tDel"),
         )?;
-        AppendMenuW(edit_menu, MF_SEPARATOR, 0, PCWSTR::null())?;
         AppendMenuW(
             edit_menu,
             MF_STRING,
             ID_EDIT_SELECTALL as usize,
             w!("Select &All\tCtrl+A"),
+        )?;
+        // Begin/End Select — Notepad++'s two-press selection mode.
+        // Neither entry is checked initially; `refresh_edit_menu` on
+        // `WM_INITMENUPOPUP` flips the check + greys the sibling out
+        // when [`WindowState::select_mark`] is armed. Kept directly
+        // below Select All (no separator) to keep the whole
+        // selection-related cluster visually adjacent.
+        AppendMenuW(
+            edit_menu,
+            MF_STRING,
+            ID_EDIT_BEGIN_END_SELECT as usize,
+            w!("&Begin/End Select\tCtrl+Shift+B"),
+        )?;
+        AppendMenuW(
+            edit_menu,
+            MF_STRING,
+            ID_EDIT_BEGIN_END_SELECT_COLUMN as usize,
+            w!("Begin/End Select in Column &Mode\tAlt+Shift+B"),
         )?;
         AppendMenuW(bar, MF_POPUP, edit_menu.0 as usize, w!("&Edit"))?;
 
@@ -6184,12 +6347,130 @@ fn build_main_menu() -> windows::core::Result<BuiltMenuBar> {
             bar,
             plugin_menu,
             file_menu,
+            edit_menu,
             view_menu,
             encoding_menu,
             language_menu,
             window_menu,
             right_shortcuts_menu,
         })
+    }
+}
+
+/// Refresh the Edit menu's Begin/End Select entries so they reflect
+/// [`WindowState::select_mark`]. The armed variant paints checked and
+/// its sibling greys out; both idle when the state is `None`. Called
+/// on every Edit-menu `WM_INITMENUPOPUP`, so a plugin flipping the
+/// mode between menu opens is picked up on the very next open.
+///
+/// # Safety
+///
+/// `edit_menu` must be a live HMENU (from `build_main_menu`); caller
+/// runs on the UI thread.
+unsafe fn refresh_edit_menu(edit_menu: HMENU, mode: SelectMarkMode) {
+    let (stream_checked, column_checked) = match mode {
+        SelectMarkMode::None => (false, false),
+        SelectMarkMode::Stream { .. } => (true, false),
+        SelectMarkMode::Column { .. } => (false, true),
+    };
+    let mark = |id: u16, on: bool| {
+        let flags = MF_BYCOMMAND.0 | if on { MF_CHECKED.0 } else { MF_UNCHECKED.0 };
+        unsafe {
+            let _ = CheckMenuItem(edit_menu, u32::from(id), flags);
+        }
+    };
+    mark(ID_EDIT_BEGIN_END_SELECT, stream_checked);
+    mark(ID_EDIT_BEGIN_END_SELECT_COLUMN, column_checked);
+    // Grey the *other* entry while a mode is armed, so the user can't
+    // start a second selection under the first one. `MF_GRAYED` also
+    // disables `WM_COMMAND` dispatch from the menu click — the accel-
+    // table entry still fires the `WM_COMMAND`, and `handle_begin_end_select`
+    // treats a mismatched arm as a no-op for symmetry.
+    let enable = |id: u16, on: bool| {
+        let flags = MENU_ITEM_FLAGS(MF_BYCOMMAND.0 | if on { MF_ENABLED.0 } else { MF_GRAYED.0 });
+        unsafe {
+            let _ = EnableMenuItem(edit_menu, u32::from(id), flags);
+        }
+    };
+    match mode {
+        SelectMarkMode::None => {
+            enable(ID_EDIT_BEGIN_END_SELECT, true);
+            enable(ID_EDIT_BEGIN_END_SELECT_COLUMN, true);
+        }
+        SelectMarkMode::Stream { .. } => {
+            enable(ID_EDIT_BEGIN_END_SELECT, true);
+            enable(ID_EDIT_BEGIN_END_SELECT_COLUMN, false);
+        }
+        SelectMarkMode::Column { .. } => {
+            enable(ID_EDIT_BEGIN_END_SELECT, false);
+            enable(ID_EDIT_BEGIN_END_SELECT_COLUMN, true);
+        }
+    }
+}
+
+/// Toggle Begin/End Select for the active view. `column = false` is
+/// stream mode ([`ID_EDIT_BEGIN_END_SELECT`], Ctrl+Shift+B); `true`
+/// is rectangular mode ([`ID_EDIT_BEGIN_END_SELECT_COLUMN`],
+/// Alt+Shift+B).
+///
+/// Delegates the state transition to [`resolve_begin_end_step`], then
+/// interprets the resulting [`SelectStep`] against the live editor:
+/// [`SelectStep::Begin`] captures the caret and arms the variant,
+/// [`SelectStep::End`] applies `SCI_SETSEL` in the matching selection
+/// mode and disarms, [`SelectStep::Invalidated`] silently disarms
+/// (stale anchor from a closed/reloaded buffer), and
+/// [`SelectStep::Ignored`] leaves the arm alone (sibling accel while
+/// the other mode is armed — Win32 accelerators bypass menu-grey
+/// state so the handler no-ops even though the menu blocks the mouse
+/// path).
+unsafe fn handle_begin_end_select(hwnd: HWND, column: bool) {
+    if let Some(state) = unsafe { state_from_hwnd(hwnd) } {
+        let editor = state.editor;
+        let active_tab_id = state.shell.active().map_or(-1, |t| t.id);
+        let doc_length = editor.send(SCI_GETLENGTH, 0, 0);
+        let step = resolve_begin_end_step(state.select_mark, column, active_tab_id, doc_length);
+        state.select_mark = match step {
+            SelectStep::Begin { column } => {
+                let pos = editor.send(SCI_GETCURRENTPOS, 0, 0);
+                if column {
+                    SelectMarkMode::Column {
+                        anchor: pos,
+                        tab_id: active_tab_id,
+                    }
+                } else {
+                    SelectMarkMode::Stream {
+                        anchor: pos,
+                        tab_id: active_tab_id,
+                    }
+                }
+            }
+            SelectStep::End { anchor, column } => {
+                let current = editor.send(SCI_GETCURRENTPOS, 0, 0);
+                let mode = if column {
+                    SC_SEL_RECTANGLE
+                } else {
+                    SC_SEL_STREAM
+                };
+                // Order matters: Scintilla's `SCI_SETSEL` handler
+                // (`Editor.cxx:6324-6337`) unconditionally forces
+                // `sel.selType = stream` before applying the new
+                // range, so a preceding `SCI_SETSELECTIONMODE` is
+                // silently clobbered. Set the anchor/caret first,
+                // then flip the selection mode — `SCI_SETSELECTIONMODE`
+                // converts the *current* selection into the requested
+                // shape (`Editor::SetSelectionMode` at
+                // `Editor.cxx:6124`), which is what actually produces
+                // a rectangular selection for column mode.
+                //
+                // `anchor` was gated `>= 0` by `resolve_begin_end_step`.
+                #[allow(clippy::cast_sign_loss)]
+                editor.send(SCI_SETSEL, anchor as usize, current);
+                editor.send(SCI_SETSELECTIONMODE, mode as usize, 0);
+                SelectMarkMode::None
+            }
+            SelectStep::Invalidated => SelectMarkMode::None,
+            SelectStep::Ignored => state.select_mark,
+        };
     }
 }
 
@@ -16846,6 +17127,7 @@ fn build_default_accel_table() -> Vec<ACCEL> {
     let ctrl = ACCEL_VIRT_FLAGS(FCONTROL.0 | FVIRTKEY.0);
     let ctrl_shift = ACCEL_VIRT_FLAGS(FCONTROL.0 | FSHIFT.0 | FVIRTKEY.0);
     let ctrl_alt = ACCEL_VIRT_FLAGS(FCONTROL.0 | FALT.0 | FVIRTKEY.0);
+    let alt_shift = ACCEL_VIRT_FLAGS(FALT.0 | FSHIFT.0 | FVIRTKEY.0);
     vec![
         // File — the Save family follows Notepad++'s conventions:
         //   Ctrl+S       → Save (active buffer)
@@ -17002,6 +17284,25 @@ fn build_default_accel_table() -> Vec<ACCEL> {
             fVirt: ACCEL_VIRT_FLAGS(FVIRTKEY.0),
             key: VK_F2.0,
             cmd: ID_FILE_RENAME,
+        },
+        // Edit → Begin/End Select. Ctrl+Shift+B toggles stream
+        // mode, Alt+Shift+B toggles column mode. Scintilla's
+        // default keymap doesn't bind `B` with any modifier, so
+        // both live at host level with no editor contention. The
+        // handler in `WM_COMMAND` (`ID_EDIT_BEGIN_END_SELECT` /
+        // `_COLUMN`) enforces the "only the armed mode's accel
+        // ends it; the sibling accel is a no-op while armed"
+        // discipline that also drives the greyed-out sibling in
+        // `refresh_edit_menu`.
+        ACCEL {
+            fVirt: ctrl_shift,
+            key: VK_B.0,
+            cmd: ID_EDIT_BEGIN_END_SELECT,
+        },
+        ACCEL {
+            fVirt: alt_shift,
+            key: VK_B.0,
+            cmd: ID_EDIT_BEGIN_END_SELECT_COLUMN,
         },
     ]
 }
@@ -17962,6 +18263,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             plugins_menu_initialized: false,
             file_menu: menus.file_menu,
             file_menu_recent_count: 0,
+            edit_menu: menus.edit_menu,
             view_menu: menus.view_menu,
             encoding_menu: menus.encoding_menu,
             language_menu: menus.language_menu,
@@ -18025,6 +18327,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: codepp_core::perf::Perf) -> Resu
             tab_close_armed: None,
             tab_hover_pin: false,
             tab_pin_armed: None,
+            select_mark: SelectMarkMode::None,
             editor,
             shell,
             accel_handle: initial_accel_handle,
@@ -26501,6 +26804,17 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             editor.send(sci_msg, 0, 0);
                         }
                     }
+                    // Begin/End Select — the two-press selection.
+                    // First press captures the current caret as an
+                    // anchor and arms `select_mark`; the second press
+                    // (of the *same* variant — the sibling's accel is
+                    // a no-op while armed, mirroring the greyed-out
+                    // menu entry) resolves the selection between the
+                    // anchor and the caret's new position, sets stream
+                    // or rectangular mode as appropriate, and disarms.
+                    ID_EDIT_BEGIN_END_SELECT | ID_EDIT_BEGIN_END_SELECT_COLUMN => {
+                        handle_begin_end_select(hwnd, cmd_u16 == ID_EDIT_BEGIN_END_SELECT_COLUMN);
+                    }
                     // View toggles — flip the corresponding Scintilla
                     // setting; the next WM_INITMENUPOPUP refreshes
                     // the check mark from the now-updated state.
@@ -27075,6 +27389,8 @@ extern "system" fn main_wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                             &mut state.file_menu_recent_count,
                         );
                         refresh_file_menu(state.file_menu, &state.shell);
+                    } else if popup_hmenu_value == state.edit_menu.0 as usize {
+                        refresh_edit_menu(state.edit_menu, state.select_mark);
                     } else if popup_hmenu_value == state.view_menu.0 as usize {
                         refresh_view_menu(
                             state.view_menu,
@@ -29642,5 +29958,231 @@ mod brace_match_tests {
         // change-history at index 4 layout).
         assert_eq!(FOLD_MARGIN, 2);
         assert_eq!(FOLD_MARGIN_PX, 14);
+    }
+}
+
+#[cfg(test)]
+mod begin_end_select_step_tests {
+    //! Exhaustive coverage of [`resolve_begin_end_step`]. Runs on every
+    //! CI runner (no HWND, no editor widget) so a regression in the
+    //! Begin/End Select state machine is caught even from a non-Windows
+    //! runner — matches the [`tab_arm_commit_tests`] discipline of
+    //! testing the pure inspector rather than the `wnd_proc` entry point.
+    //!
+    //! Two of these tests directly cover the security audit's High
+    //! (`tab_id_mismatch_invalidates_stream`) and Medium
+    //! (`anchor_past_doc_length_invalidates`) findings.
+    use super::{resolve_begin_end_step, SelectMarkMode, SelectStep};
+
+    const TAB: i32 = 5;
+    const OTHER_TAB: i32 = 6;
+    const DOC_LEN: isize = 200;
+
+    #[test]
+    fn none_plus_stream_press_arms_stream() {
+        let step = resolve_begin_end_step(SelectMarkMode::None, false, TAB, DOC_LEN);
+        assert_eq!(step, SelectStep::Begin { column: false });
+    }
+
+    #[test]
+    fn none_plus_column_press_arms_column() {
+        let step = resolve_begin_end_step(SelectMarkMode::None, true, TAB, DOC_LEN);
+        assert_eq!(step, SelectStep::Begin { column: true });
+    }
+
+    #[test]
+    fn stream_armed_matching_press_ends_when_anchor_in_range() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Stream {
+                anchor: 100,
+                tab_id: TAB,
+            },
+            false,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(
+            step,
+            SelectStep::End {
+                anchor: 100,
+                column: false
+            }
+        );
+    }
+
+    #[test]
+    fn column_armed_matching_press_ends_when_anchor_in_range() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Column {
+                anchor: 42,
+                tab_id: TAB,
+            },
+            true,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(
+            step,
+            SelectStep::End {
+                anchor: 42,
+                column: true
+            }
+        );
+    }
+
+    #[test]
+    fn tab_id_mismatch_invalidates_stream() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Stream {
+                anchor: 100,
+                tab_id: OTHER_TAB,
+            },
+            false,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(step, SelectStep::Invalidated);
+    }
+
+    #[test]
+    fn tab_id_mismatch_invalidates_column() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Column {
+                anchor: 100,
+                tab_id: OTHER_TAB,
+            },
+            true,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(step, SelectStep::Invalidated);
+    }
+
+    #[test]
+    fn anchor_past_doc_length_invalidates() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Stream {
+                anchor: 1000,
+                tab_id: TAB,
+            },
+            false,
+            TAB,
+            500,
+        );
+        assert_eq!(step, SelectStep::Invalidated);
+    }
+
+    #[test]
+    fn negative_anchor_invalidates() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Stream {
+                anchor: -1,
+                tab_id: TAB,
+            },
+            false,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(step, SelectStep::Invalidated);
+    }
+
+    #[test]
+    fn anchor_at_exactly_doc_length_is_valid() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Stream {
+                anchor: DOC_LEN,
+                tab_id: TAB,
+            },
+            false,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(
+            step,
+            SelectStep::End {
+                anchor: DOC_LEN,
+                column: false
+            }
+        );
+    }
+
+    #[test]
+    fn stream_armed_plus_column_press_is_ignored() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Stream {
+                anchor: 100,
+                tab_id: TAB,
+            },
+            true,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(step, SelectStep::Ignored);
+    }
+
+    #[test]
+    fn column_armed_plus_stream_press_is_ignored() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Column {
+                anchor: 100,
+                tab_id: TAB,
+            },
+            false,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(step, SelectStep::Ignored);
+    }
+
+    // Column-arm bounds parity — the `(Column, true)` arm carries the
+    // same anchor-range guard as `(Stream, false)`. Reviewer noted the
+    // Stream side had three boundary tests and Column had none, so a
+    // regression in the Column arm's bounds check would slip through.
+    #[test]
+    fn column_anchor_past_doc_length_invalidates() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Column {
+                anchor: 1000,
+                tab_id: TAB,
+            },
+            true,
+            TAB,
+            500,
+        );
+        assert_eq!(step, SelectStep::Invalidated);
+    }
+
+    #[test]
+    fn column_negative_anchor_invalidates() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Column {
+                anchor: -1,
+                tab_id: TAB,
+            },
+            true,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(step, SelectStep::Invalidated);
+    }
+
+    #[test]
+    fn column_anchor_at_exactly_doc_length_is_valid() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Column {
+                anchor: DOC_LEN,
+                tab_id: TAB,
+            },
+            true,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(
+            step,
+            SelectStep::End {
+                anchor: DOC_LEN,
+                column: true
+            }
+        );
     }
 }

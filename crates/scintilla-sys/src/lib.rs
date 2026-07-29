@@ -863,6 +863,26 @@ pub const SCI_SETSEL: u32 = 2160;
 /// document pointers via `SCI_SETDOCPOINTER`, so the user's
 /// pre-swap selection state can be restored on the swap-back.
 pub const SCI_GETANCHOR: u32 = 2009;
+/// Set the selection mode: `wparam = SC_SEL_STREAM | SC_SEL_RECTANGLE
+/// | SC_SEL_LINES | SC_SEL_THIN`. Applied by Notepad++'s Begin/End
+/// Select feature *after* the final `SCI_SETSEL(anchor, caret)` call
+/// so the produced selection is stream (Ctrl+Shift+B) or rectangular
+/// (Alt+Shift+B).
+///
+/// **Order matters.** Scintilla's `SCI_SETSEL` handler unconditionally
+/// forces `sel.selType = stream` before applying the new range
+/// (`Editor.cxx:6324-6337`), which clobbers any preceding
+/// `SCI_SETSELECTIONMODE`. `Editor::SetSelectionMode` (`Editor.cxx:6124`)
+/// converts the *current* selection into the requested shape, so it
+/// must run *after* `SCI_SETSEL` for a rectangular selection to survive
+/// — an empirical trap the code-review pass on the Begin/End Select
+/// feature caught by building a throwaway Scintilla test.
+pub const SCI_SETSELECTIONMODE: u32 = 2422;
+/// Ordinary stream selection — one contiguous run of bytes.
+pub const SC_SEL_STREAM: u32 = 0;
+/// Rectangular (column) selection — one span per line inside the
+/// bounding box of anchor and caret.
+pub const SC_SEL_RECTANGLE: u32 = 1;
 /// Horizontal scroll offset in pixels — paired with
 /// `SCI_GETFIRSTVISIBLELINE` to fully snapshot the view's scroll
 /// position around a doc-pointer swap.

@@ -1069,23 +1069,165 @@ fn prompt_rename(current: &str) -> Option<String> {
     result
 }
 
+/// State of Notepad++'s "Begin/End Select" feature. See
+/// [`on_begin_end_select`] for the state machine and [`refresh_edit_menu`]
+/// for the menu-side check + grey indicator. Lives on
+/// [`crate::state::GtkUiState::select_mark`]; the Win32 backend carries
+/// an equivalent [`SelectMarkMode`](../../ui_win32/src/lib.rs) enum,
+/// deliberately duplicated rather than shared because the whole feature
+/// is UI-mode state that never leaves its own backend.
+///
+/// The armed variants carry the originating tab's monotonic id (from
+/// [`codepp_shell::Shell::allocate_buffer_id`], never reused) alongside
+/// the anchor byte position. [`resolve_begin_end_step`] verifies both
+/// against the active tab and its current document length before
+/// applying the selection — a stale anchor from a closed / replaced /
+/// shrunk buffer resolves to [`SelectStep::Invalidated`] and disarms
+/// silently instead of feeding a nonsense range to `SCI_SETSEL`.
+/// Same self-healing shape the tab-arm-commit fix uses (DESIGN.md §7.4,
+/// `resolve_tab_arm_commit`).
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum SelectMarkMode {
+    /// No selection currently armed.
+    None,
+    /// Stream (contiguous) selection armed. `anchor` is the caret byte
+    /// position at "Begin" time; `tab_id` is the [`codepp_shell::Tab`]
+    /// id that was active then.
+    Stream { anchor: isize, tab_id: i32 },
+    /// Rectangular (column) selection armed. As above.
+    Column { anchor: isize, tab_id: i32 },
+}
+
+/// Output of the Begin/End Select state machine. Kept as a plain enum so
+/// [`resolve_begin_end_step`] can be a pure function of the four inputs
+/// (current mode, pressed variant, active tab id, active doc length),
+/// unit-testable without an editor widget or a GTK display. The handler
+/// interprets each variant against the live editor.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub(crate) enum SelectStep {
+    /// Fresh first press — capture the current caret and arm the given
+    /// variant.
+    Begin { column: bool },
+    /// Matching second press — apply `SCI_SETSEL(anchor, current)` in
+    /// stream / rectangular mode and disarm.
+    End { anchor: isize, column: bool },
+    /// Armed variant matched, but the anchor is no longer valid for the
+    /// current buffer (tab closed/replaced, buffer shrunk past the
+    /// anchor). Silently disarm — no selection is applied. Prevents the
+    /// clamped-but-wrong `SCI_SETSEL(stale_anchor, current)` outcome
+    /// the security audit flagged as data-loss adjacent.
+    Invalidated,
+    /// Sibling variant is armed (Stream when Column pressed, or vice
+    /// versa). Leave the arm alone — the greyed menu entry already
+    /// blocks this via mouse, and on Win32 the accel-table still fires
+    /// the `WM_COMMAND`, so the pure step exists to make both backends
+    /// no-op symmetrically.
+    Ignored,
+}
+
+/// Pure state transition for Begin/End Select. See [`SelectStep`] for
+/// the four outputs. Broken out from the handler so the transition can
+/// be tested exhaustively without spinning up a widget — matches the
+/// [`resolve_tab_arm_commit`] precedent (DESIGN.md §7.4).
+#[must_use]
+pub(crate) fn resolve_begin_end_step(
+    current: SelectMarkMode,
+    press_column: bool,
+    active_tab_id: i32,
+    active_doc_length: isize,
+) -> SelectStep {
+    match (current, press_column) {
+        (SelectMarkMode::None, column) => SelectStep::Begin { column },
+        (SelectMarkMode::Stream { anchor, tab_id }, false) => {
+            if tab_id == active_tab_id && anchor >= 0 && anchor <= active_doc_length {
+                SelectStep::End {
+                    anchor,
+                    column: false,
+                }
+            } else {
+                SelectStep::Invalidated
+            }
+        }
+        (SelectMarkMode::Column { anchor, tab_id }, true) => {
+            if tab_id == active_tab_id && anchor >= 0 && anchor <= active_doc_length {
+                SelectStep::End {
+                    anchor,
+                    column: true,
+                }
+            } else {
+                SelectStep::Invalidated
+            }
+        }
+        (SelectMarkMode::Stream { .. } | SelectMarkMode::Column { .. }, _) => SelectStep::Ignored,
+    }
+}
+
+thread_local! {
+    /// The Edit menu's "Begin/End Select" `CheckMenuItem`, stashed at
+    /// build time so [`refresh_edit_menu`] can flip its check and
+    /// sensitivity in place. Same pattern as [`RECENT_ANCHOR`].
+    static BEGIN_END_SELECT_ITEM: std::cell::RefCell<Option<gtk::CheckMenuItem>> =
+        const { std::cell::RefCell::new(None) };
+    /// The column-mode sibling of [`BEGIN_END_SELECT_ITEM`].
+    static BEGIN_END_SELECT_COLUMN_ITEM: std::cell::RefCell<Option<gtk::CheckMenuItem>> =
+        const { std::cell::RefCell::new(None) };
+    /// Reentrancy guard for [`refresh_edit_menu`]. `set_active` on a
+    /// `GtkCheckMenuItem` calls `gtk_menu_item_activate()` internally
+    /// when the value actually changes, which re-emits `activate` and
+    /// would re-enter [`on_begin_end_select`] mid-refresh — unbounded
+    /// recursion, easily triggered by a tab switch on an armed mode.
+    /// The handler bails while this is set. Same pattern as
+    /// [`REFRESHING_MARKS`], which exists for the same reason on the
+    /// Encoding / Language menus.
+    static REFRESHING_EDIT_MENU_MARKS: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
 /// The Edit menu — Win32's minimal Scintilla-backed set. Delete carries
 /// no application accelerator: the Del key stays with Scintilla for
 /// normal forward-delete; the menu item just exposes `SCI_CLEAR`.
+///
+/// Undo and Redo advertise their dual bindings (Ctrl+Z / Alt+Backspace,
+/// Ctrl+Y / Ctrl+Shift+Z) via a custom hint label — `GtkAccelLabel` only
+/// renders one binding per item, so the second is shown as static text.
+/// All four keys are already routed by Scintilla's built-in keymap
+/// (`KeyMap.cxx`), so the menu-level accelerator only needs to bind the
+/// primary one for menu-driven activation; the secondary key reaches
+/// Scintilla directly. Select All sits directly below Delete with no
+/// separator between them, matching Notepad++'s Edit-menu layout.
+///
+/// Below Select All sit the two Begin/End Select entries (Ctrl+Shift+B
+/// stream, Alt+Shift+B column). Each is a [`gtk::CheckMenuItem`] whose
+/// check mark reflects [`crate::state::GtkUiState::select_mark`] — the
+/// currently-armed variant paints checked and its sibling greys out
+/// (GTK's `set_sensitive(false)` blocks both mouse click *and*
+/// accelerator dispatch, which matches the intended UX). Handles are
+/// stashed in [`BEGIN_END_SELECT_ITEM`] / `_COLUMN_ITEM` so
+/// [`refresh_edit_menu`] can update them from anywhere.
 fn build_edit_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
     let ctrl = gtk::gdk::ModifierType::CONTROL_MASK;
-    let undo = [
-        Entry {
-            label: "_Undo",
-            accel: Some((key::z, ctrl)),
-            action: on_undo,
-        },
-        Entry {
-            label: "_Redo",
-            accel: Some((key::y, ctrl)),
-            action: on_redo,
-        },
-    ];
+    let ctrl_shift = ctrl | gtk::gdk::ModifierType::SHIFT_MASK;
+    let alt_shift = gtk::gdk::ModifierType::MOD1_MASK | gtk::gdk::ModifierType::SHIFT_MASK;
+    let Some(menu) = submenu_at(bar, 1, "Edit") else {
+        return;
+    };
+    append_dual_accel_edit_item(
+        &menu,
+        accel,
+        "_Undo",
+        "Ctrl+Z / Alt+Backspace",
+        (key::z, ctrl),
+        on_undo,
+    );
+    append_dual_accel_edit_item(
+        &menu,
+        accel,
+        "_Redo",
+        "Ctrl+Y / Ctrl+Shift+Z",
+        (key::y, ctrl),
+        on_redo,
+    );
+    menu.append(&gtk::SeparatorMenuItem::new());
     let clip = [
         Entry {
             label: "Cu_t",
@@ -1107,21 +1249,430 @@ fn build_edit_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {
             accel: None,
             action: on_delete,
         },
+        Entry {
+            label: "Select _All",
+            accel: Some((key::a, ctrl)),
+            action: on_select_all,
+        },
     ];
-    let select = [Entry {
-        label: "Select _All",
-        accel: Some((key::a, ctrl)),
-        action: on_select_all,
-    }];
-    let Some(menu) = submenu_at(bar, 1, "Edit") else {
-        return;
-    };
-    populate(&menu, accel, &undo);
-    menu.append(&gtk::SeparatorMenuItem::new());
     populate(&menu, accel, &clip);
-    menu.append(&gtk::SeparatorMenuItem::new());
-    populate(&menu, accel, &select);
+    // Begin/End Select — CheckMenuItem so the "armed" state renders as
+    // a check mark. Connect to `activate` (fires only on user click or
+    // accelerator; not on programmatic `set_active`) so the state
+    // machine below is the sole driver of `select_mark`, and any
+    // corrective `set_active` call is a silent visual sync.
+    let begin_end = gtk::CheckMenuItem::with_mnemonic("_Begin/End Select");
+    begin_end.add_accelerator(
+        "activate",
+        accel,
+        *key::b,
+        ctrl_shift,
+        gtk::AccelFlags::VISIBLE,
+    );
+    begin_end.connect_activate(|_| on_begin_end_select(false));
+    menu.append(&begin_end);
+    let begin_end_column = gtk::CheckMenuItem::with_mnemonic("Begin/End Select in Column _Mode");
+    begin_end_column.add_accelerator(
+        "activate",
+        accel,
+        *key::b,
+        alt_shift,
+        gtk::AccelFlags::VISIBLE,
+    );
+    begin_end_column.connect_activate(|_| on_begin_end_select(true));
+    menu.append(&begin_end_column);
+    BEGIN_END_SELECT_ITEM.with(|c| *c.borrow_mut() = Some(begin_end));
+    BEGIN_END_SELECT_COLUMN_ITEM.with(|c| *c.borrow_mut() = Some(begin_end_column));
     menu.show_all();
+}
+
+/// Toggle Begin/End Select for the active view. `column = false` is
+/// stream mode (Ctrl+Shift+B); `true` is rectangular mode
+/// (Alt+Shift+B).
+///
+/// Delegates the transition to [`resolve_begin_end_step`], then
+/// interprets the resulting [`SelectStep`] against the live editor.
+/// The step machine's tab-id + doc-length verification means an
+/// anchor from a tab that was closed / replaced / reloaded-and-shrunk
+/// resolves to [`SelectStep::Invalidated`] and disarms silently
+/// rather than feeding a stale byte offset to `SCI_SETSEL`.
+///
+/// Guarded by [`REFRESHING_EDIT_MENU_MARKS`]: `set_active` on a
+/// `GtkCheckMenuItem` calls `gtk_menu_item_activate()` internally when
+/// the value actually changes, which re-emits `activate` and would
+/// re-enter this handler mid-refresh. The guard makes such
+/// reentrancy a no-op instead of an unbounded recursion; the earlier
+/// audit caught a stack overflow triggered by a tab switch on an
+/// armed mode driving exactly that reentrancy path.
+pub(crate) fn on_begin_end_select(column: bool) {
+    if REFRESHING_EDIT_MENU_MARKS.with(std::cell::Cell::get) {
+        return;
+    }
+    with_state(|st| {
+        let editor = st.editor;
+        let active_tab_id = st.shell.active().map_or(-1, |t| t.id);
+        let doc_length = editor.send(codepp_scintilla_sys::SCI_GETLENGTH, 0, 0);
+        let step = resolve_begin_end_step(st.select_mark, column, active_tab_id, doc_length);
+        st.select_mark = match step {
+            SelectStep::Begin { column } => {
+                let pos = editor.send(codepp_scintilla_sys::SCI_GETCURRENTPOS, 0, 0);
+                if column {
+                    SelectMarkMode::Column {
+                        anchor: pos,
+                        tab_id: active_tab_id,
+                    }
+                } else {
+                    SelectMarkMode::Stream {
+                        anchor: pos,
+                        tab_id: active_tab_id,
+                    }
+                }
+            }
+            SelectStep::End { anchor, column } => {
+                let current = editor.send(codepp_scintilla_sys::SCI_GETCURRENTPOS, 0, 0);
+                let mode = if column {
+                    codepp_scintilla_sys::SC_SEL_RECTANGLE
+                } else {
+                    codepp_scintilla_sys::SC_SEL_STREAM
+                };
+                // Order matters: Scintilla's `SCI_SETSEL` handler
+                // (`Editor.cxx:6324-6337`) unconditionally forces
+                // `sel.selType = stream` before applying the new
+                // range, so a preceding `SCI_SETSELECTIONMODE` is
+                // silently clobbered. Set the anchor/caret first,
+                // then flip the selection mode — `SCI_SETSELECTIONMODE`
+                // converts the *current* selection into the requested
+                // shape (`Editor::SetSelectionMode` at
+                // `Editor.cxx:6124`), which is what actually produces
+                // a rectangular selection for column mode.
+                //
+                // `anchor` was gated `>= 0` by `resolve_begin_end_step`.
+                #[allow(clippy::cast_sign_loss)]
+                editor.send(codepp_scintilla_sys::SCI_SETSEL, anchor as usize, current);
+                editor.send(codepp_scintilla_sys::SCI_SETSELECTIONMODE, mode as usize, 0);
+                SelectMarkMode::None
+            }
+            SelectStep::Invalidated => SelectMarkMode::None,
+            SelectStep::Ignored => st.select_mark,
+        };
+    });
+    refresh_edit_menu();
+}
+
+/// Sync the two Begin/End Select `CheckMenuItem`s' check state and
+/// sensitivity to whatever [`crate::state::GtkUiState::select_mark`]
+/// currently holds. Called after every state change (on_click,
+/// tab-switch reset) so the menu is always up to date without needing
+/// a menu-open handler.
+///
+/// Sets [`REFRESHING_EDIT_MENU_MARKS`] around the `set_active` /
+/// `set_sensitive` calls: the former re-emits `activate` when the
+/// value flips, which would re-enter [`on_begin_end_select`]
+/// synchronously (GTK 3's `gtk_check_menu_item_set_active` routes
+/// through `gtk_menu_item_activate()`, not just `toggled`). The
+/// handler bails while the guard is set — same shape as
+/// [`refresh_view_indicators`]'s use of [`REFRESHING_MARKS`].
+pub(crate) fn refresh_edit_menu() {
+    let mode = with_state(|st| st.select_mark).unwrap_or(SelectMarkMode::None);
+    let (stream_checked, column_checked, stream_enabled, column_enabled) = match mode {
+        SelectMarkMode::None => (false, false, true, true),
+        SelectMarkMode::Stream { .. } => (true, false, true, false),
+        SelectMarkMode::Column { .. } => (false, true, false, true),
+    };
+    REFRESHING_EDIT_MENU_MARKS.with(|r| r.set(true));
+    BEGIN_END_SELECT_ITEM.with(|c| {
+        if let Some(item) = c.borrow().as_ref() {
+            item.set_active(stream_checked);
+            item.set_sensitive(stream_enabled);
+        }
+    });
+    BEGIN_END_SELECT_COLUMN_ITEM.with(|c| {
+        if let Some(item) = c.borrow().as_ref() {
+            item.set_active(column_checked);
+            item.set_sensitive(column_enabled);
+        }
+    });
+    REFRESHING_EDIT_MENU_MARKS.with(|r| r.set(false));
+}
+
+#[cfg(test)]
+mod begin_end_select_step_tests {
+    //! Exhaustive coverage of [`resolve_begin_end_step`]. Runs on every
+    //! CI runner — no GTK display, no editor widget, no `with_state` —
+    //! so a regression in the state machine is caught even from the
+    //! Windows runner.
+    use super::{resolve_begin_end_step, SelectMarkMode, SelectStep};
+
+    const TAB: i32 = 5;
+    const OTHER_TAB: i32 = 6;
+    const DOC_LEN: isize = 200;
+
+    #[test]
+    fn none_plus_stream_press_arms_stream() {
+        let step = resolve_begin_end_step(SelectMarkMode::None, false, TAB, DOC_LEN);
+        assert_eq!(step, SelectStep::Begin { column: false });
+    }
+
+    #[test]
+    fn none_plus_column_press_arms_column() {
+        let step = resolve_begin_end_step(SelectMarkMode::None, true, TAB, DOC_LEN);
+        assert_eq!(step, SelectStep::Begin { column: true });
+    }
+
+    #[test]
+    fn stream_armed_matching_press_ends_when_anchor_in_range() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Stream {
+                anchor: 100,
+                tab_id: TAB,
+            },
+            false,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(
+            step,
+            SelectStep::End {
+                anchor: 100,
+                column: false
+            }
+        );
+    }
+
+    #[test]
+    fn column_armed_matching_press_ends_when_anchor_in_range() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Column {
+                anchor: 42,
+                tab_id: TAB,
+            },
+            true,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(
+            step,
+            SelectStep::End {
+                anchor: 42,
+                column: true
+            }
+        );
+    }
+
+    #[test]
+    fn tab_id_mismatch_invalidates_stream() {
+        // High finding: user armed on tab A, closed A, active tab is now
+        // B (fresh id). Second press must NOT apply the stale anchor.
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Stream {
+                anchor: 100,
+                tab_id: OTHER_TAB,
+            },
+            false,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(step, SelectStep::Invalidated);
+    }
+
+    #[test]
+    fn tab_id_mismatch_invalidates_column() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Column {
+                anchor: 100,
+                tab_id: OTHER_TAB,
+            },
+            true,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(step, SelectStep::Invalidated);
+    }
+
+    #[test]
+    fn anchor_past_doc_length_invalidates() {
+        // Medium finding: reload shrank the file. Same tab id, but the
+        // anchor now points past EOF — a raw SCI_SETSEL(anchor, current)
+        // would clamp and select "current caret to EOF".
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Stream {
+                anchor: 1000,
+                tab_id: TAB,
+            },
+            false,
+            TAB,
+            500,
+        );
+        assert_eq!(step, SelectStep::Invalidated);
+    }
+
+    #[test]
+    fn negative_anchor_invalidates() {
+        // Defensive: `SCI_GETCURRENTPOS` doesn't return negatives, but
+        // the type is `isize` so guard the invariant here too.
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Stream {
+                anchor: -1,
+                tab_id: TAB,
+            },
+            false,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(step, SelectStep::Invalidated);
+    }
+
+    #[test]
+    fn anchor_at_exactly_doc_length_is_valid() {
+        // Boundary — Scintilla treats the position one past the last
+        // byte as valid (that's where the caret sits at end-of-buffer).
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Stream {
+                anchor: DOC_LEN,
+                tab_id: TAB,
+            },
+            false,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(
+            step,
+            SelectStep::End {
+                anchor: DOC_LEN,
+                column: false
+            }
+        );
+    }
+
+    #[test]
+    fn stream_armed_plus_column_press_is_ignored() {
+        // Sibling variant pressed while other is armed. Menu greys the
+        // sibling out, but Win32 accel-table still fires WM_COMMAND —
+        // must leave the arm alone.
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Stream {
+                anchor: 100,
+                tab_id: TAB,
+            },
+            true,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(step, SelectStep::Ignored);
+    }
+
+    #[test]
+    fn column_armed_plus_stream_press_is_ignored() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Column {
+                anchor: 100,
+                tab_id: TAB,
+            },
+            false,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(step, SelectStep::Ignored);
+    }
+
+    // Column-arm bounds parity with the Stream side above. The
+    // `(Column, true)` arm duplicates the same anchor-range guard as
+    // `(Stream, false)`, so both branches need identical boundary
+    // coverage — otherwise a regression on the Column-arm bounds
+    // check would go uncaught.
+    #[test]
+    fn column_anchor_past_doc_length_invalidates() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Column {
+                anchor: 1000,
+                tab_id: TAB,
+            },
+            true,
+            TAB,
+            500,
+        );
+        assert_eq!(step, SelectStep::Invalidated);
+    }
+
+    #[test]
+    fn column_negative_anchor_invalidates() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Column {
+                anchor: -1,
+                tab_id: TAB,
+            },
+            true,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(step, SelectStep::Invalidated);
+    }
+
+    #[test]
+    fn column_anchor_at_exactly_doc_length_is_valid() {
+        let step = resolve_begin_end_step(
+            SelectMarkMode::Column {
+                anchor: DOC_LEN,
+                tab_id: TAB,
+            },
+            true,
+            TAB,
+            DOC_LEN,
+        );
+        assert_eq!(
+            step,
+            SelectStep::End {
+                anchor: DOC_LEN,
+                column: true
+            }
+        );
+    }
+}
+
+/// Append a menu item whose right-aligned shortcut hint is arbitrary
+/// text (used by Undo / Redo, which each advertise two accelerators).
+/// The primary accelerator is bound with `AccelFlags::empty()` — the
+/// standard `GtkAccelLabel` hint would otherwise render on top of the
+/// custom label. The secondary accelerator relies on Scintilla's own
+/// keymap and needs no menu-level binding.
+///
+/// The child is a plain `GtkBox` rather than a `GtkAccelLabel`: the
+/// left `GtkLabel` handles the mnemonic (`set_use_underline` +
+/// `set_mnemonic_widget` back onto the item, mirroring what
+/// `MenuItem::with_mnemonic` sets up internally), and the right
+/// `GtkLabel` carries the free-form hint text with the `accelerator`
+/// CSS class so it picks up the same styling the sibling items get
+/// from `GtkAccelLabel`.
+fn append_dual_accel_edit_item(
+    menu: &gtk::Menu,
+    accel: &gtk::AccelGroup,
+    mnemonic: &str,
+    hint: &str,
+    primary: (gtk::gdk::keys::Key, gtk::gdk::ModifierType),
+    action: fn(),
+) {
+    let item = gtk::MenuItem::new();
+    let hbox = gtk::Box::new(gtk::Orientation::Horizontal, 24);
+    let name = gtk::Label::new(None);
+    name.set_use_underline(true);
+    name.set_label(mnemonic);
+    name.set_xalign(0.0);
+    name.set_mnemonic_widget(Some(&item));
+    let hint_label = gtk::Label::new(Some(hint));
+    hint_label.set_xalign(1.0);
+    hint_label.style_context().add_class("accelerator");
+    hbox.pack_start(&name, true, true, 0);
+    hbox.pack_end(&hint_label, false, false, 0);
+    item.add(&hbox);
+    item.connect_activate(move |_| action());
+    item.add_accelerator(
+        "activate",
+        accel,
+        *primary.0,
+        primary.1,
+        gtk::AccelFlags::empty(),
+    );
+    menu.append(&item);
 }
 
 fn build_search_menu(bar: &gtk::MenuBar, accel: &gtk::AccelGroup) {

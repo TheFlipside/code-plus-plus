@@ -30,6 +30,7 @@ use std::rc::Rc;
 use codepp_editor::EditorHandle;
 use codepp_shell::Shell;
 
+use crate::menu::SelectMarkMode;
 use crate::status::StatusBar;
 use crate::tabs::TabStrip;
 
@@ -121,6 +122,12 @@ pub struct GtkUiState {
     /// active buffer with a translucent orange viewport box. Hidden until
     /// opened. Reached only through [`with_state`]; see [`crate::docmap`].
     pub docmap: crate::docmap::DocMapPanel,
+    /// Notepad++'s Begin/End Select mode. Set by the two Edit-menu items,
+    /// applied and cleared on the second press, reset to `None` on every
+    /// tab switch (via [`crate::rebind_active_view`]). The stored anchor
+    /// is a byte position into the buffer that was active at "Begin"
+    /// time and is meaningless in any other buffer — hence the reset.
+    pub select_mark: SelectMarkMode,
 }
 
 /// The `UiPlatform` implementor. Cheap to build; see the module docs.

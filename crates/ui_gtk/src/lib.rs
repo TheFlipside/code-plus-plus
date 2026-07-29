@@ -294,6 +294,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
         toolbar: toolbar.clone(),
         workspace,
         docmap,
+        select_mark: crate::menu::SelectMarkMode::None,
     }));
     state::install(&st);
 
@@ -1556,6 +1557,15 @@ pub(crate) fn rebind_active_view() {
         let (shell, mut ui) = st.split();
         shell.bind_active_view(&mut ui);
     });
+    // Begin/End Select is anchored to a byte position inside the buffer
+    // that was active when "Begin" fired; another buffer's bytes are a
+    // different sequence entirely, so switching tabs invalidates the
+    // arm. Reset before the menu refresh below so both entries paint
+    // idle on the new tab.
+    with_state(|st| {
+        st.select_mark = crate::menu::SelectMarkMode::None;
+    });
+    crate::menu::refresh_edit_menu();
     // The single view now holds a different document. Reset the
     // tracking-mode horizontal scroll high-water mark
     // (`view.lineWidthMaxSeen`, shared across every tab bound to this one
