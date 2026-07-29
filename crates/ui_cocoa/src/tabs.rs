@@ -57,11 +57,12 @@ use std::cell::Cell;
 use codepp_shell::Tab;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadOnly, Message};
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBezelStyle, NSBezierPath, NSBitmapImageRep,
     NSButton, NSButtonType, NSCellImagePosition, NSColor, NSEvent, NSEventMask,
     NSEventTrackingRunLoopMode, NSEventType, NSFont, NSImage, NSImageRep, NSLineBreakMode, NSView,
+    NSWindowOrderingMode,
 };
 use objc2_foundation::{
     MainThreadMarker, NSData, NSDate, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
@@ -138,6 +139,60 @@ const PIN_RGB_UNPINNED: (f64, f64, f64) = (0.5, 0.5, 0.5);
 /// "not pinned" reads as a quiet affordance rather than competing with
 /// the filled tack. Same factor `ui_gtk` uses.
 const PIN_UNPINNED_SHRINK: f64 = 0.7;
+
+thread_local! {
+    /// True while a tab-strip drag is in flight. See [`DragGuard`].
+    ///
+    /// A flag rather than the depth counter [`crate::DrainFreeze`] uses,
+    /// because AppKit's tracking loop is synchronous and owns the mouse
+    /// for its duration: a second drag cannot begin while one is
+    /// running, so there is nothing to nest. If that ever stops being
+    /// true — a gesture recogniser, a second pointing device — this must
+    /// become a counter, since an inner guard's `Drop` would otherwise
+    /// clear the outer one's flag early and unfreeze the strip mid-drag.
+    static DRAGGING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Suppresses [`TabStrip::sync`] for the span of a drag.
+///
+/// **Why the strip must not be rebuilt mid-drag.** `TabButton::track`
+/// snapshots its neighbours once when the gesture starts and then moves
+/// them by frame; a `sync` in between detaches every one of those views
+/// and builds fresh ones, so the drag would go on shuffling orphans
+/// while the visible strip sat frozen in model order — and the drop
+/// index would be read from a button no longer in the strip.
+///
+/// A [`crate::DrainFreeze`] does not cover this. It stops the *worker
+/// wake* path, which is where the danger was thought to be, but
+/// `on_sci_notify` calls `refresh_tab_chrome` directly and is not
+/// gated by it. No current notification can fire mid-drag — the arms
+/// that rebuild the strip all require an edit or a save, and neither can
+/// happen while a mouse button is held on a tab — so this is closing a
+/// latent path rather than a live bug. It is worth closing anyway: the
+/// reasoning that makes it unreachable is about what a *user* can do,
+/// which is exactly the kind of premise that stops holding when a plugin
+/// or a timer gains the ability to touch a buffer.
+///
+/// Nothing is lost by suppressing: `track` ends by calling
+/// `select_tab_by_id` or `reorder_tab_by_id`, both of which resync after
+/// the guard is dropped.
+struct DragGuard;
+
+impl DragGuard {
+    fn new() -> Self {
+        DRAGGING.with(|d| d.set(true));
+        Self
+    }
+}
+
+impl Drop for DragGuard {
+    /// On drop, not on the normal exit path only: an early return or a
+    /// panic must not leave the strip permanently unable to redraw,
+    /// which would look like every tab operation silently failing.
+    fn drop(&mut self) {
+        DRAGGING.with(|d| d.set(false));
+    }
+}
 
 /// Per-instance state for [`TabButton`].
 ///
@@ -262,10 +317,26 @@ impl TabButton {
         // the model mutation at the end of this function.
         let freeze = crate::DrainFreeze::new();
 
+        // An owned reference for the whole gesture. Two jobs: it is what
+        // `addSubview:positioned:relativeTo:` needs to re-order this
+        // button safely (that call removes and re-inserts the subview,
+        // which without a reference of our own would drop the container's
+        // only one), and it makes the receiver outlive the resync at the
+        // end of this function outright. See the note there — the
+        // decide-inside/act-outside ordering is kept as well, but this is
+        // now the primary guarantee rather than the only one.
+        let me = self.retain();
+
         let app = NSApplication::sharedApplication(mtm);
         let start = container.convertPoint_fromView(event.locationInWindow(), None);
         let origin = self.frame().origin;
         let mut dragging = false;
+        // The other tabs, and where each sat when the drag began.
+        // Captured at the moment a press becomes a drag rather than at
+        // the top, so an ordinary click walks no subview arrays.
+        let mut peers: Vec<(Retained<NSView>, usize)> = Vec::new();
+        let mut from_slot = 0usize;
+        let mut drag_guard: Option<DragGuard> = None;
 
         loop {
             let mask = NSEventMask::LeftMouseDragged | NSEventMask::LeftMouseUp;
@@ -301,9 +372,46 @@ impl TabButton {
             let dx = here.x - start.x;
             if !dragging && dx.abs() >= DRAG_THRESHOLD {
                 dragging = true;
+                // Freeze the strip's rebuild for the rest of the
+                // gesture; see [`DragGuard`]. Taken here rather than at
+                // the top so an ordinary click never suppresses anything.
+                drag_guard = Some(DragGuard::new());
+                from_slot = slot_of(origin.x);
+                peers = peer_tabs(&container, id);
+                // **Raise it above the others before it starts moving.**
+                // Subview order is paint order, so a button left at its
+                // original index in the array is painted *under* every
+                // tab that comes after it — which reads as the dragged
+                // tab merging into its neighbours rather than being
+                // picked up. Re-adding an existing subview is AppKit's
+                // documented way to restack it, and it is focus-neutral:
+                // measured either side of a drag, the window's first
+                // responder stays the Scintilla content view, so the
+                // restack does not steal the caret.
+                container.addSubview_positioned_relativeTo(&me, NSWindowOrderingMode::Above, None);
             }
             if dragging {
                 self.setFrameOrigin(NSPoint::new(origin.x + dx, origin.y));
+                // Open a gap under the dragged tab by shuffling the
+                // others live, so nothing ever sits behind it. Raising
+                // the z-order alone would leave the dragged tab visibly
+                // covering its neighbours; together the two give the
+                // "picked up, and the rest step aside" feel `GtkNotebook`
+                // provides for free.
+                let total = peers.len() + 1;
+                let target = drop_target_index(origin.x + dx).min(total.saturating_sub(1));
+                for (peer, slot) in &peers {
+                    // A strip holds tens of tabs, not 2^53 of them, so
+                    // the widening is exact in every reachable case.
+                    #[allow(clippy::cast_precision_loss)]
+                    let want = slot_after_shift(*slot, from_slot, target) as f64 * TAB_WIDTH;
+                    let at = peer.frame().origin;
+                    // Only write when it actually moved: `setFrameOrigin`
+                    // invalidates, and this runs per mouse-moved event.
+                    if (at.x - want).abs() > 0.5 {
+                        peer.setFrameOrigin(NSPoint::new(want, at.y));
+                    }
+                }
             }
         }
 
@@ -312,13 +420,20 @@ impl TabButton {
         // Both arms below end in `refresh_tab_chrome`, which rebuilds the
         // strip and sends `removeFromSuperview` to every control in it —
         // including this button, whose `mouseDown:` is still on the stack
-        // underneath us. The superview holds the only strong reference,
-        // so that release can deallocate the receiver while this frame is
-        // live. Objective-C message dispatch does not retain the
-        // receiver, so a `self.` after the mutation is a use-after-free,
-        // not merely a stale read. Deciding inside the loop and acting
-        // outside it is what keeps the last use of `self` strictly before
-        // the mutation.
+        // underneath us. Objective-C message dispatch does not retain the
+        // receiver, so with the container holding the only reference that
+        // release would deallocate it while this frame is live, and a
+        // `self.` after the mutation would be a use-after-free rather
+        // than a stale read.
+        //
+        // `me` above now holds a reference of our own for exactly as long
+        // as this function runs, so the object survives the resync
+        // regardless. The ordering discipline is kept anyway, and pinned
+        // by a source-scan test: it costs nothing, it does not depend on
+        // a reader noticing that `me` is load-bearing rather than merely
+        // convenient, and it keeps the *values* read after the mutation
+        // honest — a frame read back from a button the resync has already
+        // detached would be stale even where it is safe.
         //
         // The freeze goes first so the resync it guards is not itself
         // deferred, and the flush after replaces the wake that the freeze
@@ -327,12 +442,29 @@ impl TabButton {
         // retry — the same unconditional flush `action_close_tab` does on
         // release, for the same reason.
         drop(freeze);
+        // Released before the resync below, which is the one that has to
+        // land: it is what puts the strip back in agreement with the
+        // model after a drag.
+        drop(drag_guard);
         match outcome {
             Some(Gesture::Select) => crate::select_tab_by_id(id),
             Some(Gesture::Reorder(target)) => crate::reorder_tab_by_id(id, target),
-            // The queue closed under us without a mouse-up. Nothing to
-            // commit; the strip is already in model order.
-            None => return,
+            // The queue closed under us without a mouse-up — the run
+            // loop tearing down mid-gesture, i.e. the app quitting.
+            // Nothing to commit, but the strip is *not* necessarily in
+            // model order: if the drag had progressed far enough to
+            // shuffle the peers, they are sitting in uncommitted
+            // positions. Resync rather than returning, so an abnormal end
+            // leaves the same state a normal one does. (An earlier
+            // version returned here on the reasoning that there was
+            // nothing to commit, which is only true when the press never
+            // became a drag.)
+            None => {
+                if dragging {
+                    crate::refresh_tab_chrome();
+                }
+                return;
+            }
         }
         crate::drain_shell();
     }
@@ -346,6 +478,57 @@ impl TabButton {
 enum Gesture {
     Select,
     Reorder(usize),
+}
+
+/// The slot a tab currently at `origin_x` occupies.
+///
+/// Rounds rather than truncates: at rest every button sits exactly at
+/// `slot * TAB_WIDTH`, but the value comes back through Core Graphics
+/// floats, and truncating would turn a 149.9999 into slot 0.
+fn slot_of(origin_x: f64) -> usize {
+    let slot = (origin_x / TAB_WIDTH).round();
+    if slot <= 0.0 {
+        return 0;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        slot as usize
+    }
+}
+
+/// Where a *non-dragged* tab sits while a drag from `from` hovers over
+/// `target`.
+///
+/// The dragged tab is conceptually lifted out of the row, so everything
+/// between its origin and its current target closes up behind it — which
+/// is what leaves an empty slot underneath it. Dragging right shifts the
+/// tabs it has passed one slot left; dragging left shifts them one
+/// right; everything outside that span stays put.
+fn slot_after_shift(slot: usize, from: usize, target: usize) -> usize {
+    if target > from && slot > from && slot <= target {
+        slot - 1
+    } else if target < from && slot >= target && slot < from {
+        slot + 1
+    } else {
+        slot
+    }
+}
+
+/// Every tab body in `container` except the one with `id`, paired with
+/// the slot it currently occupies.
+///
+/// Reads the slot back out of each button's frame rather than from the
+/// model: the two agree (the strip is laid out from the model), and
+/// reading the view keeps this a pure view-layer operation needing no
+/// borrow of `Shell` — which matters because it runs inside a
+/// `DrainFreeze`d tracking loop.
+fn peer_tabs(container: &NSView, id: i32) -> Vec<(Retained<NSView>, usize)> {
+    container
+        .subviews()
+        .iter()
+        .filter(|view| view.downcast_ref::<TabButton>().is_some() && view.tag() != id as isize)
+        .map(|view| (view.clone(), slot_of(view.frame().origin.x)))
+        .collect()
 }
 
 /// Which slot a tab dropped at `origin_x` lands in.
@@ -548,6 +731,12 @@ impl TabStrip {
         actions: &Actions,
         mtm: MainThreadMarker,
     ) {
+        if DRAGGING.with(Cell::get) {
+            // A drag owns the strip's layout right now. Rebuilding would
+            // detach the views it is moving; the drag resyncs when it
+            // ends. See [`DragGuard`].
+            return;
+        }
         // Drop the previous generation of controls.
         for view in self.container.subviews() {
             view.removeFromSuperview();
@@ -733,7 +922,7 @@ fn make_close_button(
 
 #[cfg(test)]
 mod tests {
-    use super::{drop_target_index, TAB_WIDTH};
+    use super::{drop_target_index, slot_after_shift, slot_of, TAB_WIDTH};
 
     #[test]
     fn a_tab_left_where_it_started_maps_to_its_own_slot() {
@@ -765,5 +954,66 @@ mod tests {
         // test that asserted a clamp here would be pinning the wrong
         // contract.
         assert_eq!(drop_target_index(99.0 * TAB_WIDTH), 99);
+    }
+
+    #[test]
+    fn a_tab_at_rest_reports_its_own_slot() {
+        assert_eq!(slot_of(0.0), 0);
+        assert_eq!(slot_of(TAB_WIDTH), 1);
+        // Core Graphics hands frames back as floats, so the rounding is
+        // load-bearing: truncating would call this slot 0.
+        assert_eq!(slot_of(TAB_WIDTH - 0.0001), 1);
+        assert_eq!(slot_of(-5.0), 0);
+    }
+
+    #[test]
+    fn dragging_right_closes_the_gap_behind_the_dragged_tab() {
+        // Tab 0 dragged onto slot 2: tabs 1 and 2 shift left, 3 stays.
+        assert_eq!(slot_after_shift(1, 0, 2), 0);
+        assert_eq!(slot_after_shift(2, 0, 2), 1);
+        assert_eq!(slot_after_shift(3, 0, 2), 3);
+    }
+
+    #[test]
+    fn dragging_left_closes_the_gap_the_other_way() {
+        // Tab 3 dragged onto slot 1: tabs 1 and 2 shift right, 0 stays.
+        assert_eq!(slot_after_shift(0, 3, 1), 0);
+        assert_eq!(slot_after_shift(1, 3, 1), 2);
+        assert_eq!(slot_after_shift(2, 3, 1), 3);
+    }
+
+    #[test]
+    fn a_drag_that_has_not_left_its_own_slot_moves_nothing() {
+        for slot in 0..4 {
+            assert_eq!(slot_after_shift(slot, 2, 2), slot);
+        }
+    }
+
+    #[test]
+    fn the_shift_is_a_permutation_so_no_two_tabs_share_a_slot() {
+        // The property that actually matters visually: whatever the
+        // drag, the tabs that stay behind must occupy distinct slots,
+        // and must leave exactly one free for the dragged tab.
+        const N: usize = 5;
+        for from in 0..N {
+            for target in 0..N {
+                let mut seen: Vec<usize> = (0..N)
+                    .filter(|s| *s != from)
+                    .map(|s| slot_after_shift(s, from, target))
+                    .collect();
+                seen.sort_unstable();
+                let before = seen.len();
+                seen.dedup();
+                assert_eq!(
+                    seen.len(),
+                    before,
+                    "from={from} target={target}: two tabs collided"
+                );
+                assert!(
+                    !seen.contains(&target),
+                    "from={from} target={target}: nothing left a gap for the dragged tab"
+                );
+            }
+        }
     }
 }
