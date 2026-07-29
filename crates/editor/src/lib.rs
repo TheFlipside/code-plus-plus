@@ -25,13 +25,15 @@
 //! - `EditorHandle::set_lexer_by_name` (Windows + Linux + macOS) — the
 //!   only method that references a Lexilla symbol, and Lexilla is only
 //!   built on targets with a Scintilla backend.
-//! - [`theme`] and [`udl_paint`] (Windows + Linux) — not yet widened to
-//!   macOS. Nothing blocks it technically now that `set_lexer_by_name`
-//!   is available there; it waits until the Cocoa backend has a
-//!   consumer (Phase 5 m4, per the milestone plan) so the ~8 000-line
-//!   table is not compiled into a build that cannot reach it. Widening
-//!   the gate would also run `theme`'s 88 tests on the macOS runner,
-//!   which is a reason to do it sooner rather than later.
+//! - [`theme`] and [`udl_paint`] (Windows + Linux + macOS) — every
+//!   target with a Scintilla backend, since both reach Lexilla through
+//!   `set_lexer_by_name`. macOS joined at Phase 5 m2 rather than m4 as
+//!   originally planned: `apply_lang` and `apply_default_style` are
+//!   required `UiPlatform` methods, so a Cocoa backend has to answer
+//!   them the moment it wires `Shell`, and `theme::apply_line_number_margin`
+//!   is what gives it a line-number gutter. Sharing the table was
+//!   cheaper than stubbing it twice, and it also means `theme`'s 88
+//!   tests now run on the macOS runner.
 //!
 //! # Allowed pedantic lints, with rationale
 //!
@@ -58,12 +60,12 @@
 // for the same reason `set_lexer_by_name` is — the module's entry
 // point calls it, so on a target with an empty Scintilla archive the
 // whole table is unreachable anyway.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub mod theme;
 /// UDL container-lexer painting, shared by every UI backend. Gated to the
 /// platforms that build a real editor for the same reason as [`theme`]
-/// (it calls [`theme::apply_default_styles`]); macOS has no backend yet.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+/// (it calls [`theme::apply_default_styles`]).
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub mod udl_paint;
 
 use core::ffi::c_void;

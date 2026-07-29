@@ -77,6 +77,14 @@ notify = "8"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
+# Grand Central Dispatch bindings, from the same maintainer as `objc2`.
+# `ui_cocoa` needs exactly one thing from it: `dispatch_async` onto the
+# main queue, which is the Cocoa half of DESIGN.md §5.4's cross-thread
+# wake (Win32 uses `PostMessage(WM_APP_WAKE)`, GTK
+# `MainContext::invoke`). Hand-rolling it would mean declaring
+# `_dispatch_main_q` and `dispatch_async_f` by hand; this is the same
+# FFI with the ownership rules already encoded. Zlib OR Apache-2.0 OR MIT.
+dispatch2 = "0.3"
 # PNG decoder — only PNG, no other formats. Used by `ui_win32` to
 # turn the toolbar's compile-time-embedded PNG bytes into Win32
 # DIB sections for `HIMAGELIST`. MIT OR Apache-2.0.

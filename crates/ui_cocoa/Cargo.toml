@@ -30,7 +30,10 @@ harness = false
 [target.'cfg(target_os = "macos")'.dependencies]
 codepp-core          = { workspace = true }
 codepp-editor        = { workspace = true }
+codepp-platform      = { workspace = true }
 codepp-scintilla-sys = { workspace = true }
+codepp-shell         = { workspace = true }
+dispatch2            = { workspace = true }
 objc2                = { workspace = true }
 objc2-app-kit        = { workspace = true }
 objc2-foundation     = { workspace = true }
