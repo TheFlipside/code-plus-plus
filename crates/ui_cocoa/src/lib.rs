@@ -59,7 +59,7 @@ use codepp_core::perf::Perf;
 use codepp_core::session::WindowGeometry;
 use codepp_editor::EditorHandle;
 use codepp_scintilla_sys::scintilla_cocoa_new;
-use codepp_shell::{PendingDialog, SessionRestoreEntry, Shell};
+use codepp_shell::{PendingDialog, SessionRestoreEntry, Shell, UiPlatform};
 use dispatch2::DispatchQueue;
 
 use objc2::rc::Retained;
@@ -348,6 +348,10 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // empty session and silently do nothing. Same ordering constraint
     // GTK documents.
     restore_window_geometry(&window, mtm);
+    // Same ordering constraint, same reason: the persisted View toggles
+    // only become readable once session.xml is in the shell. See the
+    // function.
+    apply_saved_view_settings();
 
     // The auto-save timer is retained by the run loop; `actions` must
     // outlive it, which the binding below guarantees.
@@ -1081,6 +1085,272 @@ pub(crate) fn reorder_tab_by_id(id: i32, target: usize) {
     refresh_tab_chrome();
 }
 
+/// The View menu's toggles, in tag order.
+///
+/// A table rather than four selectors so the menu, the tag→setting
+/// mapping and the mark refresh all read from one place. `ui_win32` and
+/// `ui_gtk` expose the same four; Show Indent Guide has no View-menu
+/// entry on those two (it is toolbar-only there), and is included here
+/// because this backend has no toolbar yet — leaving it out would make
+/// it unreachable rather than merely elsewhere.
+pub(crate) const VIEW_TOGGLES: [&str; 4] = [
+    "Word Wrap",
+    "Show Whitespace",
+    "Show End of Line",
+    "Show Indent Guide",
+];
+
+/// Read one View toggle by its tag. Used to paint the menu's check mark.
+pub(crate) fn view_setting_by_tag(tag: isize) -> bool {
+    with_state(|st| {
+        let view = st.shell.saved_view_settings();
+        match tag {
+            0 => view.word_wrap,
+            1 => view.show_whitespace,
+            2 => view.show_eol,
+            3 => view.indent_guide,
+            _ => false,
+        }
+    })
+    .unwrap_or(false)
+}
+
+/// Flip one View toggle by its tag, apply it to the editor and persist.
+///
+/// Mutating the whole `ViewSettings` and re-applying it — rather than
+/// sending just the one Scintilla message — is deliberate and matches
+/// `ui_gtk::toggle_view_setting`: the settings are stored together and
+/// applied together, so a partial application is what lets the live
+/// editor drift from what the next session save records.
+pub(crate) fn toggle_view_setting_by_tag(tag: isize) {
+    with_state(|st| {
+        let mut view = st.shell.saved_view_settings();
+        match tag {
+            0 => view.word_wrap = !view.word_wrap,
+            1 => view.show_whitespace = !view.show_whitespace,
+            2 => view.show_eol = !view.show_eol,
+            3 => view.indent_guide = !view.indent_guide,
+            _ => return,
+        }
+        apply_view_settings(&st.editor, view);
+        st.shell.set_view_settings(view);
+    });
+}
+
+/// Push a `ViewSettings` onto the live editor.
+///
+/// A straight port of `ui_gtk::apply_view_settings`, including the
+/// `SCI_SETSCROLLWIDTH` reset: the tracking-mode high-water mark is
+/// shared by the single view and never shrinks on its own, so toggling
+/// wrap back off would otherwise leave a phantom horizontal scroll into
+/// empty space. Re-seeded through [`seed_horizontal_scroll`] rather than
+/// sent raw, because on this backend an unpaired reset collapses the
+/// document view to one point wide — see that function.
+fn apply_view_settings(editor: &EditorHandle, view: codepp_core::session::ViewSettings) {
+    editor.send(
+        codepp_scintilla_sys::SCI_SETINDENTATIONGUIDES,
+        if view.indent_guide {
+            codepp_scintilla_sys::SC_IV_LOOKBOTH
+        } else {
+            codepp_scintilla_sys::SC_IV_NONE
+        },
+        0,
+    );
+    editor.send(
+        codepp_scintilla_sys::SCI_SETWRAPMODE,
+        if view.word_wrap {
+            codepp_scintilla_sys::SC_WRAP_WORD
+        } else {
+            codepp_scintilla_sys::SC_WRAP_NONE
+        },
+        0,
+    );
+    seed_horizontal_scroll(editor);
+    editor.send(
+        codepp_scintilla_sys::SCI_SETVIEWWS,
+        if view.show_whitespace {
+            codepp_scintilla_sys::SCWS_VISIBLEALWAYS
+        } else {
+            codepp_scintilla_sys::SCWS_INVISIBLE
+        },
+        0,
+    );
+    editor.send(
+        codepp_scintilla_sys::SCI_SETVIEWEOL,
+        usize::from(view.show_eol),
+        0,
+    );
+}
+
+/// Push the persisted View settings onto the editor at startup.
+///
+/// Must run *after* `restore_session`, which is when
+/// `saved_view_settings` starts returning the user's stored choices
+/// rather than defaults. Without it the editor keeps Scintilla's
+/// off-defaults and the first toggle resurfaces every stored setting at
+/// once, because [`toggle_view_setting_by_tag`] re-applies the whole
+/// struct. `ui_gtk` records the same trap.
+pub(crate) fn apply_saved_view_settings() {
+    with_state(|st| {
+        let view = st.shell.saved_view_settings();
+        apply_view_settings(&st.editor, view);
+        clamp_scroll_width_to_viewport(st);
+    });
+}
+
+/// Send one Scintilla command to the active view.
+fn editor_cmd(message: u32) {
+    with_state(|st| st.editor.send(message, 0, 0));
+}
+
+/// Reset the zoom level to 100%.
+pub(crate) fn reset_zoom() {
+    with_state(|st| st.editor.send(codepp_scintilla_sys::SCI_SETZOOM, 0, 0));
+}
+
+/// The active buffer's language id, for the Language menu's radio mark.
+pub(crate) fn active_lang_id() -> Option<i32> {
+    with_state(|st| st.shell.active().map(|t| t.lang.as_npp_id())).flatten()
+}
+
+/// The active buffer's id, for the Window menu's mark.
+pub(crate) fn active_tab_id() -> Option<i32> {
+    with_state(|st| st.shell.active().map(|t| t.id)).flatten()
+}
+
+/// Apply a language to the active buffer, re-lex, and repaint the status
+/// bar. A no-op if the buffer already has it.
+pub(crate) fn apply_language(lang_id: i32) {
+    let lang = codepp_core::LangType(lang_id);
+    if with_state(|st| st.shell.set_active_lang(lang)) != Some(true) {
+        return;
+    }
+    with_state(|st| {
+        let (shell, mut ui) = st.split();
+        ui.apply_lang(lang);
+        if let Some(tab) = shell.active() {
+            let (l, enc, eol, len) = (tab.lang, tab.encoding.clone(), tab.eol, tab.byte_len);
+            ui.update_status(l, &enc, eol, len);
+        }
+    });
+}
+
+/// The Encoding menu tag matching the active buffer's encoding, or
+/// `None` when it is one this menu does not list (a codepage, or a
+/// BOM-less UTF-16). Those simply show no mark rather than being
+/// misreported as one of the five rows.
+pub(crate) fn active_encoding_tag() -> Option<isize> {
+    let active = with_state(|st| st.shell.active().map(|t| t.encoding.clone())).flatten()?;
+    match active {
+        codepp_core::Encoding::Utf8 => Some(1),
+        codepp_core::Encoding::Utf8Bom => Some(2),
+        // The no-BOM UTF-16 variants mark their BOM row. They are what
+        // `core::encoding`'s zero-byte heuristic produces for a real
+        // un-BOM'd UTF-16 file, and both other backends deliberately
+        // treat them as the same family — `ui_gtk::same_encoding_family`
+        // and `ui_win32::refresh_encoding_menu` each say so in as many
+        // words. Falling through to `None` instead would leave the menu
+        // showing no selection at all for a perfectly ordinary file.
+        codepp_core::Encoding::Utf16LeBom | codepp_core::Encoding::Utf16Le => Some(3),
+        codepp_core::Encoding::Utf16BeBom | codepp_core::Encoding::Utf16Be => Some(4),
+        // A codepage. Genuinely not one of the five rows, so no mark.
+        // Named rather than wildcarded so a new `Encoding` variant is a
+        // compile error here — the two above are exactly the case a
+        // wildcard would have swallowed silently.
+        codepp_core::Encoding::Other(_) => None,
+    }
+}
+
+/// Apply the save encoding chosen from the Encoding menu.
+pub(crate) fn apply_encoding_by_tag(tag: isize) {
+    let encoding = match tag {
+        1 => codepp_core::Encoding::Utf8,
+        2 => codepp_core::Encoding::Utf8Bom,
+        3 => codepp_core::Encoding::Utf16LeBom,
+        4 => codepp_core::Encoding::Utf16BeBom,
+        // Tag 0 is the disabled ANSI row, which cannot be chosen.
+        _ => return,
+    };
+    if with_state(|st| st.shell.set_buffer_encoding(encoding)) == Some(true) {
+        // `refresh_title` as well as the status bar, unlike
+        // `ui_gtk::refresh_active_status`: on this backend the window
+        // title is rebuilt from the tab rather than tracked, and changing
+        // the save encoding can mark the buffer dirty.
+        with_state(|st| {
+            let (shell, mut ui) = st.split();
+            if let Some(tab) = shell.active() {
+                let (l, enc, eol, len) = (tab.lang, tab.encoding.clone(), tab.eol, tab.byte_len);
+                ui.update_status(l, &enc, eol, len);
+            }
+        });
+        refresh_title();
+    }
+}
+
+/// Every open buffer as `(id, display name)`, in tab order — the Window
+/// menu's rows.
+///
+/// `None` — not an empty `Vec` — when the state is unreachable, so the
+/// caller can leave the menu as it is rather than rebuilding it into
+/// "no files open". The distinction is the same one `active_dirty`
+/// draws, and it matters for the same reason: "could not look" is not
+/// "nothing there".
+pub(crate) fn open_buffer_rows() -> Option<Vec<(i32, String)>> {
+    with_state(|st| {
+        st.shell
+            .tabs
+            .iter()
+            .map(|t| (t.id, codepp_shell::tab_display_name(t)))
+            .collect()
+    })
+}
+
+/// File → Close All.
+///
+/// Loops the single-tab close so each dirty buffer gets its own
+/// Save / Don't Save / Cancel prompt and a Cancel stops the rest,
+/// matching `ui_gtk::on_close_all` and Win32's
+/// `close_multiple_documents`.
+pub(crate) fn action_close_all() {
+    loop {
+        let before = with_state(|st| st.shell.tabs.len()).unwrap_or(0);
+        if before == 0 {
+            break;
+        }
+        if !action_close_tab() {
+            break;
+        }
+        // **The termination condition, and it is not optional.**
+        // `action_close_tab` reseeds a fresh untitled buffer when it
+        // closes the last one, so the list never actually reaches zero —
+        // and that reseeded buffer is clean, so the close gate waves it
+        // through without a prompt and the loop would close-and-recreate
+        // forever, pinning a core with no visible cause. Ending on "the
+        // close made no progress" is what leaves the workspace at one
+        // empty untitled buffer, which is what Notepad++ does and what
+        // `ui_gtk::on_close_all` carries the same guard to achieve.
+        if with_state(|st| st.shell.tabs.len()).unwrap_or(0) >= before {
+            break;
+        }
+    }
+}
+
+/// View → Restore Default Window Size.
+///
+/// A recovery action for a window left in an awkward state — dragged
+/// mostly off-screen, or restored onto a display that has since changed.
+/// Same entry `ui_gtk` carries, for the same reason.
+pub(crate) fn restore_default_window_size() {
+    with_state(|st| {
+        if st.window.isZoomed() {
+            st.window.zoom(None);
+        }
+        st.window
+            .setContentSize(NSSize::new(DEFAULT_WIDTH, DEFAULT_HEIGHT));
+        st.window.center();
+    });
+}
+
 /// Open a path that was dropped onto the window.
 pub(crate) fn open_dropped_path(path: PathBuf) {
     open_path(path);
@@ -1517,8 +1787,16 @@ fn confirm_discard_active() -> bool {
 }
 
 /// Close the active tab, gated on the unsaved-changes prompt.
-pub(crate) fn action_close_tab() {
-    if confirm_discard_active() {
+/// Close the active tab, gated on the Save / Don't Save / Cancel
+/// prompt.
+///
+/// Returns `false` when the user cancelled, so a caller closing several
+/// buffers in a row stops rather than prompting for every remaining one
+/// — that is what File → Close All relies on, and it matches
+/// `ui_gtk::close_active_tab`'s contract.
+pub(crate) fn action_close_tab() -> bool {
+    let closed = confirm_discard_active();
+    if closed {
         // Release the closed buffer's Scintilla document. `ClosedTab`
         // hands back the doc pointer precisely so the UI can do this —
         // dropping the tab without `SCI_RELEASEDOCUMENT` leaks the whole
@@ -1559,6 +1837,7 @@ pub(crate) fn action_close_tab() {
     // without this flush a pending dialog for an unrelated tab could sit
     // unpresented indefinitely.
     drain_shell();
+    closed
 }
 
 pub(crate) fn action_reload() {
