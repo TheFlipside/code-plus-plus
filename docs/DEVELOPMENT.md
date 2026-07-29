@@ -244,9 +244,19 @@ rustup default stable
 
 `rustup` selects `aarch64-apple-darwin` on Apple Silicon and `x86_64-apple-darwin` on Intel — both are supported.
 
-### 4.4 No extra system libraries pre-Phase-5
+### 4.4 No extra system libraries
 
-Cocoa is provided by the SDK that comes with the Command Line Tools. Phase 5 will add `objc2` and `objc2-app-kit` as Cargo dependencies; nothing to install at the system level.
+Nothing to install beyond the Command Line Tools. Cocoa and QuartzCore
+come from the SDK they ship, and `crates/scintilla-sys/build.rs` links
+them by name — macOS has no pkg-config equivalent for system
+frameworks, so unlike the Linux path there is no dev package to add.
+`objc2`, `objc2-app-kit` and `objc2-foundation` are ordinary Cargo
+dependencies and need no system-level setup.
+
+From Phase 5 m1 the macOS build compiles the vendored Scintilla Cocoa
+backend (`vendor/scintilla/cocoa/*.mm`) as Objective-C++, so the first
+build takes 1–3 minutes longer than it used to — it previously skipped
+the native build entirely and produced an empty rlib.
 
 ### 4.5 Verify
 
@@ -256,7 +266,40 @@ rustc --version
 cargo --version
 git submodule status
 cargo build --workspace
+cargo run -p codepp-app          # opens the Cocoa window
 ```
+
+The smoke test that proves Scintilla is really linked and really
+working drives a real `NSView` hierarchy, so it needs a window server
+and is opt-in — the same convention as the GTK display tests in §3.3:
+
+```sh
+cargo test -p codepp-ui-cocoa --test cocoa_smoke -- --ignored
+```
+
+A plain `cargo test` reports it as ignored in the summary line rather
+than skipping it silently, so a runner without a window session cannot
+drop the coverage while still looking green.
+
+Note it is a `harness = false` test. That is load-bearing: AppKit is
+main-thread-only and **libtest never yields the main thread** — it runs
+every `#[test]` on a spawned worker even at `--test-threads=1`
+(measured, not assumed). Replacing the harness gives the test file its
+own `main`, which cargo runs on the real main thread. `ui_gtk` does not
+need this because GTK only requires all its calls happen on *one*
+thread, not specifically the first.
+
+Two harmless `NSLog` lines appear on every macOS run:
+
+```text
+Wait cursor is invalid.
+Reverse arrow cursor is invalid.
+```
+
+They come from vendored source (`cocoa/ScintillaView.mm:1255`, `:1264`)
+looking for cursor images in a framework bundle's resources. Code++
+static-links Scintilla rather than shipping its framework, so those two
+cursors fall back to system defaults. Cosmetic; not a build problem.
 
 ---
 

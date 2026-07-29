@@ -108,6 +108,53 @@ extern "C" {
     pub fn scintilla_release_resources();
 }
 
+// Cocoa entry points, supplied by our own `cxx/ScintillaCocoaShim.mm`
+// rather than by the vendored tree.
+//
+// Unlike Win32 (which registers a window class) and GTK (which exports
+// `scintilla_new`), Scintilla's Cocoa backend exposes no C surface at
+// all — `cocoa/ScintillaView.h` declares only `@interface ScintillaView
+// : NSView`, and Objective-C methods are not callable from Rust. The
+// shim supplies the missing pair, deliberately mirroring the GTK names
+// and signatures so `codepp_editor` treats the two identically once it
+// holds the direct-call pair.
+#[cfg(target_os = "macos")]
+extern "C" {
+    /// Construct a `ScintillaView` and return an **owned** reference to
+    /// it, or null if AppKit refused to build the view.
+    ///
+    /// Ownership differs from [`scintilla_new`]'s despite the mirrored
+    /// name: GTK returns a *floating* reference that the container sinks,
+    /// whereas `NSView` has no floating-reference concept, so this is a
+    /// genuine +1 the caller keeps. Adding the view to a superview
+    /// retains it independently.
+    ///
+    /// There is deliberately no release counterpart. Code++ creates its
+    /// Scintilla views once and never destroys them, switching buffers
+    /// underneath a permanent view with `SCI_SETDOCPOINTER`
+    /// (DESIGN.md §7.2, §7.4) — that discipline is what makes
+    /// `EditorHandle`'s raw pointers sound, so no API is offered for
+    /// breaking it.
+    ///
+    /// Must be called on the main thread, after `NSApplication` exists:
+    /// AppKit view construction is main-thread-only.
+    pub fn scintilla_cocoa_new() -> *mut c_void;
+
+    /// Send a Scintilla message to a view from [`scintilla_cocoa_new`].
+    /// The Cocoa sibling of [`scintilla_send_message`], and like it
+    /// reserved for setup and for capturing the direct-call pair — hot
+    /// paths use the function pointer instead (DESIGN.md §4.2).
+    ///
+    /// Returns 0 if `view` is null. A dangling or foreign pointer is
+    /// undefined behaviour, exactly as on the GTK side.
+    pub fn scintilla_cocoa_send_message(
+        view: *mut c_void,
+        message: u32,
+        wparam: uptr_t,
+        lparam: sptr_t,
+    ) -> sptr_t;
+}
+
 // Lexilla's public C entry points are declared `__stdcall` on Win32
 // (`LEXILLA_CALL` in `Lexilla.h`); on x64 Windows that resolves to the
 // single Microsoft x64 calling convention so `extern "system"` ==
@@ -133,17 +180,20 @@ extern "system" {
 // rather than reusing `extern "system"` because the two are only
 // interchangeable on x64 Windows — see the note above.
 //
-// Gated to `linux` specifically, **not** `not(windows)`: `build.rs`
-// only compiles Lexilla on the two backends that have a Scintilla
-// build, so on macOS the symbol has no definition. Declaring it there
-// anyway would compile — an unreferenced extern links fine under
-// dead-code elimination — but it would make every caller silently
-// dependent on nothing ever calling them, which is not a guarantee
-// worth resting on. Narrowing the gate turns a latent link error into
-// a compile error at the call site instead. Widen this to include
-// `macos` in the same commit that teaches `build.rs` to build the
-// Cocoa backend.
-#[cfg(target_os = "linux")]
+// Gated to the targets whose `build.rs` arm actually compiles Lexilla,
+// **not** `not(windows)`: on a target with no Scintilla build the symbol
+// has no definition. Declaring it there anyway would compile — an
+// unreferenced extern links fine under dead-code elimination — but it
+// would make every caller silently dependent on nothing ever calling
+// them, which is not a guarantee worth resting on. Narrowing the gate
+// turns a latent link error into a compile error at the call site
+// instead.
+//
+// `macos` joined `linux` here when `build.rs` gained its Cocoa arm; the
+// two now compile the identical `build_lexilla` and share this
+// declaration. Any future target needs the same paired change — a
+// `build.rs` arm and this gate, together.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 extern "C" {
     /// See the Windows-side declaration above for the ownership contract.
     pub fn CreateLexer(name: *const core::ffi::c_char) -> *mut c_void;

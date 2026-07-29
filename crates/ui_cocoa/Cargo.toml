@@ -1,0 +1,37 @@
+[package]
+name = "codepp-ui-cocoa"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Cocoa UI backend: window, menus, tabs, dialogs."
+
+[lints]
+workspace = true
+
+[lib]
+name = "codepp_ui_cocoa"
+
+# `harness = false` is load-bearing, not a style choice: AppKit is
+# main-thread-only and libtest runs every `#[test]` on a spawned worker
+# thread — including at `--test-threads=1`. Replacing the harness gives
+# the test file its own `main`, which cargo runs on the real main
+# thread. See the module docs in `tests/cocoa_smoke.rs`.
+[[test]]
+name = "cocoa_smoke"
+path = "tests/cocoa_smoke.rs"
+harness = false
+
+# macOS-only, for the same reason `ui_gtk` is Linux-only: the two are
+# alternative backends for the same `UiPlatform` trait, and exactly one
+# is linked per target (see `crates/app`'s feature/cfg pairing).
+[target.'cfg(target_os = "macos")'.dependencies]
+codepp-core          = { workspace = true }
+codepp-editor        = { workspace = true }
+codepp-scintilla-sys = { workspace = true }
+objc2                = { workspace = true }
+objc2-app-kit        = { workspace = true }
+objc2-foundation     = { workspace = true }
+tracing              = { workspace = true }

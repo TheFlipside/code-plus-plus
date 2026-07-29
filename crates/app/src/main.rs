@@ -61,14 +61,18 @@ fn startup() -> Result<args::Args, ExitCode> {
 
 // The `cfg` predicate below — "some backend is linked" — is repeated
 // rather than aliased because `cfg(...)` does not accept macro
-// expansion; keep the copies in sync when the Cocoa arm lands.
+// expansion. Two places carry the full three-arm `any(...)`: this one
+// and the `not(any(...))` fallback at the bottom. (Each per-backend
+// `main` carries only its own single arm.) Keep both in sync when a
+// backend is added or removed.
 
 /// Collapse a backend's `Result` into a process exit code, reporting
-/// any error on stderr. Shared by both backends so their failure
+/// any error on stderr. Shared by every backend so their failure
 /// reporting cannot drift apart.
 #[cfg(any(
     all(target_os = "windows", feature = "win32"),
-    all(target_os = "linux", feature = "gtk")
+    all(target_os = "linux", feature = "gtk"),
+    all(target_os = "macos", feature = "cocoa")
 ))]
 fn finish<E: std::fmt::Display>(result: Result<(), E>) -> ExitCode {
     match result {
@@ -107,21 +111,38 @@ fn main() -> ExitCode {
     finish(codepp_ui_gtk::run(parsed.path, perf))
 }
 
+#[cfg(all(target_os = "macos", feature = "cocoa"))]
+fn main() -> ExitCode {
+    // See the Win32 arm for why the clock starts here.
+    let started = std::time::Instant::now();
+    let parsed = match startup() {
+        Ok(a) => a,
+        Err(code) => return code,
+    };
+    let perf = codepp_core::perf::Perf::started_at(started, parsed.perf);
+    finish(codepp_ui_cocoa::run(parsed.path, perf))
+}
+
 #[cfg(not(any(
     all(target_os = "windows", feature = "win32"),
-    all(target_os = "linux", feature = "gtk")
+    all(target_os = "linux", feature = "gtk"),
+    all(target_os = "macos", feature = "cocoa")
 )))]
 fn main() -> ExitCode {
     // Still parse first, so `--help` and a mistyped flag report
-    // properly on a platform whose backend has not landed.
+    // properly on a platform whose backend is not linked.
     let parsed = match startup() {
         Ok(a) => a,
         Err(code) => return code,
     };
     let _ = parsed.path;
+    // Every platform Code++ targets has a backend now, so reaching this
+    // means the backend feature was switched off explicitly — e.g.
+    // `--no-default-features` without naming one.
     eprintln!(
         "Code++ has no UI backend for this platform/feature combination. \
-         The Cocoa backend lands in Phase 5 — see DESIGN.md §7.2."
+         Build with one of --features win32 / gtk / cocoa, matching the \
+         target platform — see DESIGN.md §7.2."
     );
     ExitCode::FAILURE
 }

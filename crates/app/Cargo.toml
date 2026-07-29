@@ -25,13 +25,14 @@ path = "src/main.rs"
 # `default = [...]`, and this is the idiomatic way around that — it
 # keeps a plain `cargo build -p codepp-app` working on every platform.
 #
-# To pin a backend explicitly (useful once macOS can choose between
-# Cocoa and GTK):
-#   cargo run -p codepp-app --no-default-features --features gtk
+# To pin a backend explicitly (useful on macOS, which could in principle
+# also run the GTK backend under XQuartz):
+#   cargo run -p codepp-app --no-default-features --features cocoa
 [features]
-default = ["win32", "gtk"]
+default = ["win32", "gtk", "cocoa"]
 win32 = ["dep:codepp-ui-win32"]
 gtk = ["dep:codepp-ui-gtk"]
+cocoa = ["dep:codepp-ui-cocoa"]
 
 # Optional so the `dep:` feature syntax above controls them, plus a
 # `cfg` gate so the default backend is the platform-native one.
@@ -40,6 +41,9 @@ codepp-ui-win32 = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 codepp-ui-gtk = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+codepp-ui-cocoa = { workspace = true, optional = true }
 
 [dependencies]
 codepp-core.workspace = true

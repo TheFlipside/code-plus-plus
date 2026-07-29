@@ -45,6 +45,7 @@ codepp-plugin-sdk = { version = "0.1.0", path = "crates/plugin-sdk" }
 codepp-scintilla-sys = { version = "0.1.0", path = "crates/scintilla-sys" }
 codepp-shell = { version = "0.1.0", path = "crates/shell" }
 codepp-udl = { version = "0.1.0", path = "crates/udl" }
+codepp-ui-cocoa = { version = "0.1.0", path = "crates/ui_cocoa" }
 codepp-ui-gtk = { version = "0.1.0", path = "crates/ui_gtk" }
 codepp-ui-win32 = { version = "0.1.0", path = "crates/ui_win32" }
 
@@ -65,6 +66,17 @@ gtk = "0.18"
 # hatch. MIT OR Apache-2.0.
 libc = "0.2"
 notify = "8"
+# Objective-C runtime bindings for `ui_cocoa`. `objc2` is the successor
+# to the unmaintained `objc`/`cocoa` crates and is what DESIGN.md §4.3
+# specifies; it provides the message-send machinery and `Retained<T>`,
+# the reference-counting smart pointer that keeps AppKit ownership
+# honest without hand-written retain/release. `objc2-app-kit` and
+# `objc2-foundation` are the generated framework bindings — versioned
+# independently of `objc2` itself, which is why the two version numbers
+# differ. All MIT.
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
 # PNG decoder — only PNG, no other formats. Used by `ui_win32` to
 # turn the toolbar's compile-time-embedded PNG bytes into Win32
 # DIB sections for `HIMAGELIST`. MIT OR Apache-2.0.

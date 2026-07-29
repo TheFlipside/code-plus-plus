@@ -11,18 +11,27 @@
 //! This crate contains no platform code — it holds three opaque
 //! pointers and translates Rust types into Scintilla's
 //! `wparam`/`lparam` shapes. The handle's first field is a Win32
-//! `HWND` on Windows and a `GtkWidget*` on GTK; `editor` never
-//! dereferences it, so the same code serves both.
+//! `HWND` on Windows, a `GtkWidget*` on GTK and a `ScintillaView*` on
+//! Cocoa; `editor` never dereferences it, so the same code serves all
+//! three.
 //!
-//! Exactly two things carry a `#[cfg]`, both for concrete
-//! link-level reasons rather than any behavioural difference:
+//! What carries a `#[cfg]` does so for concrete link-level reasons
+//! rather than any behavioural difference:
 //!
-//! - `EditorHandle::from_gtk_widget` (Linux) — the per-backend
-//!   construction path; the Win32 side captures the same pair via
+//! - `EditorHandle::from_gtk_widget` (Linux) and
+//!   `EditorHandle::from_cocoa_view` (macOS) — the per-backend
+//!   construction paths; the Win32 side captures the same pair via
 //!   `SendMessage` in `ui_win32` and calls [`EditorHandle::new`].
-//! - `EditorHandle::set_lexer_by_name` (Windows + Linux) — the only
-//!   method that references a Lexilla symbol, and Lexilla is only
+//! - `EditorHandle::set_lexer_by_name` (Windows + Linux + macOS) — the
+//!   only method that references a Lexilla symbol, and Lexilla is only
 //!   built on targets with a Scintilla backend.
+//! - [`theme`] and [`udl_paint`] (Windows + Linux) — not yet widened to
+//!   macOS. Nothing blocks it technically now that `set_lexer_by_name`
+//!   is available there; it waits until the Cocoa backend has a
+//!   consumer (Phase 5 m4, per the milestone plan) so the ~8 000-line
+//!   table is not compiled into a build that cannot reach it. Widening
+//!   the gate would also run `theme`'s 88 tests on the macOS runner,
+//!   which is a reason to do it sooner rather than later.
 //!
 //! # Allowed pedantic lints, with rationale
 //!
@@ -63,7 +72,7 @@ use core::ffi::c_void;
 // so `CreateLexer` exists on exactly those targets — see the gate on
 // its declaration in `scintilla-sys`. Imported separately so the
 // dependency is visible rather than buried in the bulk list below.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 use codepp_scintilla_sys::CreateLexer;
 use codepp_scintilla_sys::{
     sptr_t, uptr_t, ScintillaDirectFunction, SCI_BRACEBADLIGHT, SCI_BRACEHIGHLIGHT, SCI_BRACEMATCH,
@@ -239,6 +248,85 @@ impl EditorHandle {
         Some(unsafe { Self::new(widget, direct_fn, direct_ptr as *mut c_void) })
     }
 
+    /// Capture the direct-call pair from a Cocoa `ScintillaView`.
+    ///
+    /// The macOS sibling of `from_gtk_widget`, and identical in effect:
+    /// `ScintillaCocoa::DirectFunction` answers `SCI_GETDIRECTFUNCTION`
+    /// exactly as `ScintillaGTK` and `ScintillaWin` do, so once the pair
+    /// is captured this crate is backend-agnostic — the §4.2 speed path
+    /// is the same on all three.
+    ///
+    /// Returns `None` if Scintilla hands back a null function or
+    /// instance pointer, which would mean `view` is not a Scintilla
+    /// view. Callers must treat that as a fatal setup error rather than
+    /// continuing with a half-built editor.
+    ///
+    /// # Safety
+    ///
+    /// `view` must be a live, non-null pointer returned by
+    /// `scintilla_cocoa_new()` and not yet released. Passing any other
+    /// pointer is undefined behaviour — the shim bridge-casts it to a
+    /// `ScintillaView` without validation.
+    ///
+    /// **The obligation continues after this returns.** `EditorHandle`
+    /// is `Copy` and has no `Drop`; it stores raw pointers into the view
+    /// without expressing a lifetime, so nothing stops a copy from
+    /// outliving what it points at. The caller must keep the view alive
+    /// for as long as *any* copy of the returned handle might still be
+    /// used. Releasing it leaves every copy's `direct_ptr` dangling, and
+    /// the next [`Self::send`] calls through it.
+    ///
+    /// Every backend discharges that by never destroying the view at
+    /// all: Scintilla views are created at startup and live for the
+    /// process, with tabs switched underneath them by
+    /// `SCI_SETDOCPOINTER` (DESIGN.md §7.2, §7.4). On this backend the
+    /// constraint is enforced one level lower as well — the shim exposes
+    /// no release entry point at all, so there is no supported way to
+    /// finalise a view. An `NSView`-per-tab design would have to tie the
+    /// handle's lifetime to the view instead, which is precisely the
+    /// problem the single-view model avoids.
+    ///
+    /// Unlike the GTK constructor, non-null here **is** sufficient. GTK's
+    /// `scintilla_init` swallows a throwing constructor in `catch (...)`
+    /// and hands back a well-formed widget with a null interior, so its
+    /// null check cannot distinguish "not Scintilla" from "Scintilla that
+    /// failed to build". Cocoa's `-initWithFrame:` has no such handler,
+    /// and `scintilla_cocoa_new` wraps it in `@try`/`@catch` — both
+    /// because an exception crossing that `extern "C"` boundary would
+    /// unwind into Rust, and because converting it to a null return makes
+    /// this function's `None` mean what it appears to mean. A non-null
+    /// `view` here is a fully constructed one.
+    #[cfg(target_os = "macos")]
+    #[must_use]
+    pub unsafe fn from_cocoa_view(view: *mut c_void) -> Option<Self> {
+        use codepp_scintilla_sys::{
+            scintilla_cocoa_send_message, SCI_GETDIRECTFUNCTION, SCI_GETDIRECTPOINTER,
+        };
+
+        // SAFETY: the caller guarantees `view` is a live Scintilla view;
+        // both messages are pure queries with no side effects.
+        let (raw_fn, direct_ptr) = unsafe {
+            (
+                scintilla_cocoa_send_message(view, SCI_GETDIRECTFUNCTION, 0, 0),
+                scintilla_cocoa_send_message(view, SCI_GETDIRECTPOINTER, 0, 0),
+            )
+        };
+        if raw_fn == 0 || direct_ptr == 0 {
+            return None;
+        }
+
+        // SAFETY: a non-zero `SCI_GETDIRECTFUNCTION` result is, by
+        // Scintilla's contract, a pointer to
+        // `ScintillaCocoa::DirectFunction`, whose C++ signature is
+        // exactly `ScintillaDirectFunction`.
+        let direct_fn: ScintillaDirectFunction =
+            unsafe { core::mem::transmute::<usize, ScintillaDirectFunction>(raw_fn as usize) };
+
+        // SAFETY: the pair was just captured together from this one view,
+        // which is precisely `new`'s requirement.
+        Some(unsafe { Self::new(view, direct_fn, direct_ptr as *mut c_void) })
+    }
+
     /// Direct-call into Scintilla. The hot path — every keystroke, every
     /// selection update, every style query goes through this.
     ///
@@ -280,13 +368,13 @@ impl EditorHandle {
     /// instead, which sends `SCI_SETILEXER(0, 0)` per the documented
     /// Scintilla contract.
     ///
-    /// Available only where Lexilla is actually built — Windows and
-    /// Linux today. On a target whose `build.rs` arm produces an empty
-    /// archive (macOS, until the Cocoa backend lands) this method does
-    /// not exist, so a premature caller fails to compile instead of
-    /// failing to link. [`Self::clear_lexer`] has no such gate: it is
-    /// a plain `SCI_SETILEXER(0, 0)` and touches no Lexilla symbol.
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    /// Available only where Lexilla is actually built — Windows, Linux
+    /// and macOS, i.e. every target with a `build.rs` backend arm. On a
+    /// target whose arm produces an empty archive this method does not
+    /// exist, so a premature caller fails to compile instead of failing
+    /// to link. [`Self::clear_lexer`] has no such gate: it is a plain
+    /// `SCI_SETILEXER(0, 0)` and touches no Lexilla symbol.
+    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
     #[must_use]
     pub fn set_lexer_by_name(&self, name: &str) -> bool {
         // CreateLexer needs a NUL-terminated `char*`. Build the buffer

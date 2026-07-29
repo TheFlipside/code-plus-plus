@@ -70,6 +70,7 @@ fn main() {
     println!("cargo:rerun-if-changed=vendor/lexilla/lexers");
     println!("cargo:rerun-if-changed=vendor/lexilla/include");
     println!("cargo:rerun-if-changed=cxx/LexillaShim.cxx");
+    println!("cargo:rerun-if-changed=cxx/ScintillaCocoaShim.mm");
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS");
 
@@ -138,12 +139,28 @@ fn main() {
             // `build_scintilla_gtk` — no manual list needed here, unlike
             // Win32 where the SDK has no pkg-config equivalent.
         }
+        "macos" => {
+            println!("cargo:rerun-if-changed=vendor/scintilla/cocoa");
+            build_scintilla_cocoa(&scintilla);
+            build_lexilla(&scintilla, &lexilla);
+
+            // Frameworks Scintilla's Cocoa backend depends on
+            // (DESIGN.md §4.1). Listed by hand rather than probed: macOS
+            // has no pkg-config equivalent for system frameworks, so this
+            // follows the Win32 arm's shape rather than the GTK one's.
+            //   Cocoa      — AppKit/Foundation, the whole backend.
+            //   QuartzCore — CALayer, used by PlatCocoa's rendering path.
+            for framework in &["Cocoa", "QuartzCore"] {
+                println!("cargo:rustc-link-lib=framework={framework}");
+            }
+        }
         other => {
-            // Cocoa lands later in Phase 5. Until then macOS gets an empty
-            // rlib so the workspace still builds on the third CI runner.
+            // Every platform Code++ targets now has a backend; this arm
+            // exists so an unexpected target degrades to an empty rlib
+            // with a clear warning rather than a confusing link error.
             println!(
-                "cargo:warning=scintilla-sys: no native backend for {other} yet; \
-                 skipping the Scintilla build (Cocoa lands in Phase 5)."
+                "cargo:warning=scintilla-sys: no native backend for {other}; \
+                 skipping the Scintilla build."
             );
         }
     }
@@ -286,6 +303,92 @@ fn build_scintilla_gtk(scintilla: &Path) {
     }
     marshal.file(scintilla.join("gtk").join("scintilla-marshal.c"));
     marshal.compile("scintilla-marshal");
+}
+
+/// Compile Scintilla's Cocoa backend, plus our own `ScintillaCocoaShim.mm`.
+///
+/// **Two builders, not one.** The cross-platform editor core is plain
+/// C++; the backend is Objective-C++ and *must* be compiled with
+/// `-fobjc-arc` (`cocoa/ScintillaView.mm:29` is a literal `#error ARC
+/// must be enabled`, and `cocoa/PlatCocoa.mm` is written throughout in
+/// `__bridge` casts). `cc::Build` applies its flags to every file it is
+/// given, so mixing the two would push an Objective-C flag onto ~33
+/// pure-C++ translation units. Splitting them is the same reasoning the
+/// GTK arm uses for `scintilla-marshal.c` — a language difference gets
+/// its own builder rather than a shared flag set that suits neither.
+///
+/// No `-x objective-c++` is needed: clang infers Objective-C++ from the
+/// `.mm` extension, and `.cpp(true)` already selects the C++ driver.
+fn build_scintilla_cocoa(scintilla: &Path) {
+    // 1. The cross-platform core, shared verbatim with Win32 and GTK.
+    let mut core = cc::Build::new();
+    core.cpp(true)
+        .std("c++17")
+        .include(scintilla.join("include"))
+        .include(scintilla.join("src"));
+    for flag in &VENDORED_WARNING_OPTOUTS {
+        core.flag_if_supported(flag);
+    }
+    for f in &scintilla_core_sources() {
+        core.file(scintilla.join("src").join(format!("{f}.cxx")));
+    }
+    core.compile("scintilla");
+
+    // 2. The Objective-C++ backend and our shim.
+    let mut backend = cc::Build::new();
+    backend
+        .cpp(true)
+        .std("c++17")
+        // Required by the vendored tree, not a preference — see the
+        // function doc comment above and `cxx/ScintillaCocoaShim.mm`'s
+        // ARC section for what it means for the shim's return value.
+        .flag("-fobjc-arc")
+        // ARC does not emit unwind cleanup for its locals by default in
+        // Objective-C++; this asks for it. The one place it matters is
+        // `-[ScintillaView initWithFrame:]`, whose bare
+        // `new ScintillaCocoa(...)` can throw and whose frame would
+        // otherwise unwind without releasing what it had already built.
+        // The shim's `@catch` stops that reaching Rust either way — this
+        // narrows how much is leaked when it happens. Costs a little
+        // code size on a path taken twice per process.
+        .flag("-fobjc-arc-exceptions")
+        .include(scintilla.join("include"))
+        .include(scintilla.join("src"))
+        .include(scintilla.join("cocoa"));
+    for flag in &VENDORED_WARNING_OPTOUTS {
+        backend.flag_if_supported(flag);
+    }
+    // Two more opt-outs the shared list does not carry, both specific to
+    // this backend and both for the same reason as the flags above —
+    // vendored source is upstream's to fix, and patching it would fork
+    // the tree (DESIGN.md §4.1).
+    //   unguarded-availability-new — fires where the vendored source
+    //       calls an AppKit API newer than the deployment target without
+    //       an `@available` guard.
+    //   sign-compare — 13 instances across PlatCocoa.mm,
+    //       ScintillaCocoa.mm and ScintillaView.mm, all of the
+    //       `for (int i = 0; i < text.length(); i++)` shape against a
+    //       `size_type`/`NSUInteger`. Left unsuppressed they are the only
+    //       warnings a clean macOS build emits, which trains the reader
+    //       to ignore build output — the exact outcome the shared list's
+    //       rationale exists to prevent.
+    // Scoped to this builder rather than added to
+    // `VENDORED_WARNING_OPTOUTS` so the Win32 and GTK arms keep
+    // reporting these two; nothing there emits them today, and that is
+    // worth keeping true.
+    for flag in &["-Wno-unguarded-availability-new", "-Wno-sign-compare"] {
+        backend.flag_if_supported(flag);
+    }
+
+    for f in &["PlatCocoa", "ScintillaCocoa", "ScintillaView", "InfoBar"] {
+        backend.file(scintilla.join("cocoa").join(format!("{f}.mm")));
+    }
+    // Our own entry points. Compiled alongside the vendored backend
+    // because it needs the identical ARC and include configuration —
+    // it imports `ScintillaView.h` and hands out a `__bridge_retained`
+    // reference to a `ScintillaView`.
+    backend.file("cxx/ScintillaCocoaShim.mm");
+    backend.compile("scintilla-cocoa");
 }
 
 fn build_scintilla_win32(scintilla: &Path) {

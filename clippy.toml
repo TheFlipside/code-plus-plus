@@ -1,0 +1,29 @@
+# Clippy configuration for the Code++ workspace.
+#
+# `cargo clippy --workspace --all-targets -- -W clippy::pedantic -D warnings`
+# is a required CI job on all three runners (DESIGN.md §9.3), so anything
+# here changes what that gate accepts. Keep additions justified.
+
+# Proper nouns that `clippy::doc_markdown` mistakes for un-backticked
+# code because they carry an internal capital.
+#
+# `".."` preserves clippy's own default allowlist — which already covers
+# this exact category (GitHub, JavaScript, TypeScript, WebAssembly,
+# OpenGL, PowerShell, …) — and the entries below extend it rather than
+# replacing it. Dropping the `".."` would silently un-allow every default
+# and light up doc comments across the whole workspace; `PowerShell` in
+# `core/src/lang.rs` is the one that would go first.
+#
+# These are Apple framework and class names that appear as ordinary prose
+# nouns in `ui_cocoa`'s documentation ("AppKit is main-thread-only").
+# Backticking them would be the wrong fix: a backtick claims the word is
+# a code identifier in this codebase, and these are not — they are the
+# names of things we talk *about*. The same reasoning is why clippy ships
+# defaults for this at all.
+doc-valid-idents = [
+    "..",
+    "AppKit",
+    "ObjC",
+    "QuartzCore",
+    "ScintillaView",
+]
