@@ -35,8 +35,8 @@ use objc2::{define_class, msg_send, sel, AnyThread, MainThreadOnly};
 use objc2_app_kit::{
     NSAboutPanelOptionApplicationIcon, NSAboutPanelOptionApplicationName,
     NSAboutPanelOptionApplicationVersion, NSAboutPanelOptionCredits, NSAboutPanelOptionKey,
-    NSAboutPanelOptionVersion, NSApplication, NSButton, NSControl, NSImage, NSMenu, NSMenuDelegate,
-    NSMenuItem, NSWorkspace,
+    NSAboutPanelOptionVersion, NSApplication, NSButton, NSControl, NSEventModifierFlags, NSImage,
+    NSMenu, NSMenuDelegate, NSMenuItem, NSWorkspace,
 };
 use objc2_foundation::{
     MainThreadMarker, NSAttributedString, NSData, NSDictionary, NSObject, NSObjectProtocol, NSSize,
@@ -212,6 +212,61 @@ define_class!(
             });
         }
 
+        // ---- m4a: search -------------------------------------------
+
+        #[unsafe(method(codeppShowFind:))]
+        fn show_find(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:showFind", (), crate::search::show_find);
+        }
+
+        #[unsafe(method(codeppShowReplace:))]
+        fn show_replace(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:showReplace", (), crate::search::show_replace);
+        }
+
+        #[unsafe(method(codeppShowGoto:))]
+        fn show_goto(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:showGoto", (), crate::search::show_goto);
+        }
+
+        #[unsafe(method(codeppFindNext:))]
+        fn find_next(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("search:findNext", (), || crate::search::do_find(true));
+        }
+
+        #[unsafe(method(codeppFindPrevious:))]
+        fn find_previous(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("search:findPrev", (), || crate::search::do_find(false));
+        }
+
+        /// Find Next from the *menu*, which must work with the panel
+        /// closed — so it repeats the shell's remembered query rather than
+        /// reading the panel's field. See `search::find_next_repeat`.
+        #[unsafe(method(codeppFindNextRepeat:))]
+        fn find_next_repeat(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:findNext", (), crate::search::find_next_repeat);
+        }
+
+        #[unsafe(method(codeppFindPrevRepeat:))]
+        fn find_prev_repeat(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:findPrev", (), crate::search::find_prev_repeat);
+        }
+
+        #[unsafe(method(codeppCount:))]
+        fn count_matches(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("search:count", (), crate::search::do_count);
+        }
+
+        #[unsafe(method(codeppReplace:))]
+        fn replace_one(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("search:replace", (), crate::search::do_replace_one);
+        }
+
+        #[unsafe(method(codeppReplaceAll:))]
+        fn replace_all(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("search:replaceAll", (), crate::search::do_replace_all);
+        }
+
         #[unsafe(method(codeppSetEncoding:))]
         fn set_encoding(&self, sender: Option<&NSMenuItem>) {
             crate::at_callback_boundary("menu:setEncoding", (), || {
@@ -374,13 +429,19 @@ pub fn install(app: &NSApplication, actions: &Actions, mtm: MainThreadMarker) ->
     main_menu.addItem(&build_app_menu(actions, mtm));
     main_menu.addItem(&build_file_menu(actions, mtm));
     main_menu.addItem(&build_edit_menu(mtm));
-    main_menu.addItem(&build_search_menu(mtm));
+    main_menu.addItem(&build_search_menu(actions, mtm));
     main_menu.addItem(&build_view_menu(actions, mtm));
     main_menu.addItem(&build_encoding_menu(actions, mtm));
     main_menu.addItem(&build_language_menu(actions, mtm));
     main_menu.addItem(&build_window_menu(actions, mtm));
     main_menu.addItem(&build_help_menu(actions, mtm));
     app.setMainMenu(Some(&main_menu));
+    debug_assert!(
+        duplicate_key_equivalent(&main_menu).is_none(),
+        "two menu items share a key equivalent: {:?} — the earlier menu wins and \
+         the later item's shortcut is dead",
+        duplicate_key_equivalent(&main_menu)
+    );
     main_menu
 }
 
@@ -581,21 +642,65 @@ fn encoding_rows() -> [(&'static str, Option<codepp_core::Encoding>); 5] {
 /// placeholders, `ui_gtk`'s greyed "Online User Manual"): the tree a user
 /// navigates stays the one Notepad++ has, and the gap is visible instead
 /// of looking like a missing feature.
-fn build_search_menu(mtm: MainThreadMarker) -> Retained<NSMenuItem> {
+fn build_search_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuItem> {
     let (item, menu) = submenu("Search", mtm);
-    // No key equivalents yet: AppKit would swallow the chord for a
-    // command that cannot run, so ⌘F would do nothing rather than
-    // falling through. They arrive with the dialogs in m4.
-    for label in [
+    add(
+        &menu,
+        mtm,
         "Find…",
+        sel!(codeppShowFind:),
+        "f",
+        Some(actions),
+    );
+    // **⌥⌘F, not Notepad++'s Ctrl+H.** ⌘H is taken by "Hide Code++" in
+    // the application menu, which macOS mandates — and the App menu is
+    // installed first, so `performKeyEquivalent:` finds Hide and never
+    // reaches here: the shortcut would be advertised in the menu and
+    // silently do nothing but hide the app. ⌥⌘F is what macOS editors use
+    // for find-and-replace, so it is both free and the expected chord.
+    add_with_modifiers(
+        &menu,
+        mtm,
         "Replace…",
-        "Find in Files…",
+        sel!(codeppShowReplace:),
+        "f",
+        NSEventModifierFlags::Command | NSEventModifierFlags::Option,
+        Some(actions),
+    );
+    // Find in Files needs somewhere to put its results, so it waits for
+    // the results dock. Greyed rather than omitted, as before.
+    add_disabled(&menu, mtm, "Find in Files…");
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    // ⌘G / ⇧⌘G — the macOS convention for find-again, in place of
+    // Notepad++'s F3. These repeat the *shell's* query so they work with
+    // the panel closed.
+    add(
+        &menu,
+        mtm,
         "Find Next",
+        sel!(codeppFindNextRepeat:),
+        "g",
+        Some(actions),
+    );
+    add(
+        &menu,
+        mtm,
         "Find Previous",
+        sel!(codeppFindPrevRepeat:),
+        "G",
+        Some(actions),
+    );
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    // ⌘L, not Notepad++'s Ctrl+G: ⌘G is taken by find-again on this
+    // platform, and ⌘L is what macOS editors use for go-to-line.
+    add(
+        &menu,
+        mtm,
         "Go to…",
-    ] {
-        add_disabled(&menu, mtm, label);
-    }
+        sel!(codeppShowGoto:),
+        "l",
+        Some(actions),
+    );
     item
 }
 
@@ -1061,6 +1166,69 @@ fn add_disabled(menu: &NSMenu, mtm: MainThreadMarker, title: &str) {
     let item = NSMenuItem::new(mtm);
     item.setTitle(&NSString::from_str(title));
     menu.addItem(&item);
+}
+
+/// The first key equivalent claimed by two different items, if any.
+///
+/// **Why this is worth asserting.** `performKeyEquivalent:` walks the bar
+/// in order and stops at the first match, so a duplicate does not
+/// conflict loudly — the later item simply never fires while still
+/// advertising the shortcut next to its name. That is invisible until
+/// someone presses it and gets the wrong command. It shipped once: ⌘H was
+/// given to Replace while the application menu, which macOS mandates and
+/// which is installed first, already had it for Hide.
+///
+/// Walks submenus recursively, so a shortcut buried in the Language
+/// menu's letter groups is covered too. Returns the offending key and the
+/// two titles, which is what a developer needs to fix it.
+fn duplicate_key_equivalent(menu: &NSMenu) -> Option<(String, String, String)> {
+    let mut seen: Vec<(String, usize, String)> = Vec::new();
+    collect_key_equivalents(menu, &mut seen);
+    for (index, (key, mask, title)) in seen.iter().enumerate() {
+        if let Some((_, _, other)) = seen[..index].iter().find(|(k, m, _)| k == key && m == mask) {
+            return Some((key.clone(), other.clone(), title.clone()));
+        }
+    }
+    None
+}
+
+/// Depth-first walk collecting `(key, modifier mask, title)` for every
+/// item that claims a key equivalent.
+fn collect_key_equivalents(menu: &NSMenu, out: &mut Vec<(String, usize, String)>) {
+    for item in &menu.itemArray() {
+        if let Some(sub) = item.submenu() {
+            collect_key_equivalents(&sub, out);
+            continue;
+        }
+        let key = item.keyEquivalent().to_string();
+        if key.is_empty() {
+            continue;
+        }
+        out.push((
+            key,
+            item.keyEquivalentModifierMask().bits(),
+            item.title().to_string(),
+        ));
+    }
+}
+
+/// Append a menu item whose key equivalent needs modifiers other than
+/// the implicit ⌘ (or ⇧⌘ via an uppercase letter).
+///
+/// [`add`] covers the common cases; this exists for chords like ⌥⌘F,
+/// where the modifier set has to be stated because there is no spelling
+/// of it in the key string.
+fn add_with_modifiers(
+    menu: &NSMenu,
+    mtm: MainThreadMarker,
+    title: &str,
+    action: Sel,
+    key: &str,
+    modifiers: NSEventModifierFlags,
+    target: Option<&Actions>,
+) {
+    let item = add(menu, mtm, title, action, key, target);
+    item.setKeyEquivalentModifierMask(modifiers);
 }
 
 /// Append one menu item.

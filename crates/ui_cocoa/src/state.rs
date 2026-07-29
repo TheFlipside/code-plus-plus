@@ -100,6 +100,12 @@ pub struct CocoaUiState {
     /// reach it. Cocoa has no "hide the menu bar" for an ordinary app
     /// the way Win32 does — see `platform.rs`'s `set_menu_hidden`.
     pub menu: Retained<NSMenu>,
+    /// The modeless Find/Replace panel, built on first use and then kept
+    /// for the session — its controls are read by every search command,
+    /// so they have to outlive the click that opened it. `None` until
+    /// the user first asks for Find or Replace, so a session that never
+    /// searches never builds it.
+    pub find_replace: Option<crate::search::FindReplaceDialog>,
     /// Headless session/file/watcher logic. Owns the tab list.
     pub shell: Shell,
 }

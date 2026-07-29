@@ -45,6 +45,7 @@ mod delegate;
 mod dropview;
 mod menu;
 mod platform;
+mod search;
 mod state;
 mod status;
 mod tabs;
@@ -304,6 +305,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
         toolbar,
         actions: actions.clone(),
         menu,
+        find_replace: None,
         shell,
     }));
     install(&st);

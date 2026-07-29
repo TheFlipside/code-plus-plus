@@ -148,10 +148,9 @@ impl Toolbar {
         bar.responder(icon!("redo"), "Redo", sel!(redo:));
         bar.separator();
 
-        // Group 4 — search. Greyed until the dialogs land in m4, matching
-        // the Search menu.
-        bar.push(icon!("find"), "Find…", None);
-        bar.push(icon!("replace"), "Replace…", None);
+        // Group 4 — search.
+        bar.push(icon!("find"), "Find…", Some(sel!(codeppShowFind:)));
+        bar.push(icon!("replace"), "Replace…", Some(sel!(codeppShowReplace:)));
         bar.separator();
 
         // Group 5 — zoom.
