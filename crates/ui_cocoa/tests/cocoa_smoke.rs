@@ -59,12 +59,14 @@
 mod smoke {
     use codepp_editor::EditorHandle;
     use codepp_scintilla_sys::{
-        scintilla_cocoa_new, sptr_t, SCI_CANUNDO, SCI_GETLENGTH, SCI_GETSELECTIONEND,
-        SCI_GETSELECTIONSTART, SCI_REDO, SCI_SELECTALL, SCI_SETTEXT, SCI_UNDO,
+        scintilla_cocoa_new, scintilla_cocoa_set_notify_callback, sptr_t, Sci_NotifyHeader,
+        COCOA_WM_NOTIFY, SCI_CANUNDO, SCI_GETLENGTH, SCI_GETSELECTIONEND, SCI_GETSELECTIONSTART,
+        SCI_REDO, SCI_SELECTALL, SCI_SETTEXT, SCI_UNDO, SCN_SAVEPOINTLEFT, SCN_UPDATEUI,
     };
     use objc2_app_kit::NSApplication;
     use objc2_foundation::MainThreadMarker;
     use std::ffi::CString;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     const TEST_TEXT: &str = "hello from cocoa";
 
@@ -92,9 +94,12 @@ mod smoke {
         let _app = NSApplication::sharedApplication(mtm);
 
         direct_call_round_trip();
-
         println!("test cocoa_smoke::direct_call_round_trip ... ok");
-        println!("\ntest result: ok. 1 passed; 0 failed; 0 ignored\n");
+
+        notifications_are_delivered();
+        println!("test cocoa_smoke::notifications_are_delivered ... ok");
+
+        println!("\ntest result: ok. 2 passed; 0 failed; 0 ignored\n");
     }
 
     /// Drive a real Scintilla view through the captured direct-call pair.
@@ -171,6 +176,84 @@ mod smoke {
         // `scintilla_cocoa_new`'s ownership contract in the shim. A backend
         // that never destroys views leaks exactly one per run here, which is
         // the intended behaviour rather than an oversight.
+    }
+
+    static UPDATEUI_SEEN: AtomicUsize = AtomicUsize::new(0);
+    static SAVEPOINTLEFT_SEEN: AtomicUsize = AtomicUsize::new(0);
+    static ANY_SEEN: AtomicUsize = AtomicUsize::new(0);
+
+    /// SAFETY: matches `SciNotifyFunc`; called synchronously by
+    /// Scintilla on the main thread with a live `SCNotification*` in
+    /// `lparam` when `message` is `COCOA_WM_NOTIFY`.
+    unsafe extern "C" fn counting_notify(_id: isize, message: u32, _w: usize, lparam: usize) {
+        if message != COCOA_WM_NOTIFY || lparam == 0 {
+            return;
+        }
+        // SAFETY: prefix read of the live notification, as documented on
+        // `Sci_NotifyHeader`.
+        let code = unsafe { (*(lparam as *const Sci_NotifyHeader)).code };
+        ANY_SEEN.fetch_add(1, Ordering::Relaxed);
+        match code {
+            SCN_UPDATEUI => {
+                UPDATEUI_SEEN.fetch_add(1, Ordering::Relaxed);
+            }
+            SCN_SAVEPOINTLEFT => {
+                SAVEPOINTLEFT_SEEN.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+    }
+
+    /// Prove Scintilla's notifications actually reach Rust.
+    ///
+    /// Without this the wiring is only proven by "the app did not
+    /// crash", which is exactly the kind of evidence that let the m3a
+    /// dirty-tracking bug ship-and-be-caught: code that compiled, ran,
+    /// and silently did nothing. `SCN_UPDATEUI` is what makes the status
+    /// bar track typing and `SCN_SAVEPOINTLEFT` is what drives the tab
+    /// strip's dirty marker, so a regression in either is a
+    /// user-visible, silent one.
+    fn notifications_are_delivered() {
+        // SAFETY: `NSApplication` exists and this is the main thread.
+        let sci_ptr = unsafe { scintilla_cocoa_new() };
+        assert!(!sci_ptr.is_null(), "scintilla_cocoa_new() returned null");
+
+        // SAFETY: live view; the callback matches `SciNotifyFunc`.
+        unsafe { scintilla_cocoa_set_notify_callback(sci_ptr, counting_notify, 0) };
+
+        // SAFETY: `sci_ptr` is the live view just constructed.
+        let editor = unsafe { EditorHandle::from_cocoa_view(sci_ptr) }
+            .expect("Scintilla did not surrender its direct-call pair");
+
+        let text = CString::new(TEST_TEXT).expect("no interior NUL");
+        editor.send(SCI_SETTEXT, 0, text.as_ptr() as sptr_t);
+
+        // The wiring itself: notifications reach Rust at all.
+        assert!(
+            ANY_SEEN.load(Ordering::Relaxed) > 0,
+            "no Scintilla notifications reached Rust — the callback is \
+             not wired, and the status bar and dirty marker would both \
+             be permanently stale"
+        );
+        // The dirty edge that drives the tab strip's marker. Emitted
+        // synchronously from the edit, so it is observable here.
+        assert!(
+            SAVEPOINTLEFT_SEEN.load(Ordering::Relaxed) > 0,
+            "no SCN_SAVEPOINTLEFT after an edit — the tab strip's dirty \
+             marker would never light up"
+        );
+        // `SCN_UPDATEUI` is deliberately **not** asserted, and the
+        // reason is a test-harness limitation rather than a production
+        // concern: it is emitted from `Editor::Paint`/`Idle`, which need
+        // a running run loop and a view inside a window, and this test
+        // has neither. Measured here as zero while four other
+        // notifications arrived.
+        //
+        // That measurement is what motivated `on_sci_notify` handling
+        // `SCN_MODIFIED` alongside `SCN_UPDATEUI` — the status bar
+        // should not depend on paint timing. This test cannot observe
+        // that arm firing (no run loop), so it asserts the wiring and
+        // the synchronous edge instead of pretending otherwise.
     }
 }
 

@@ -83,6 +83,10 @@ const DEFAULT_HEIGHT: f64 = 768.0;
 pub(crate) const AUTOSAVE_INTERVAL_SECS: f64 = 7.0;
 
 thread_local! {
+    /// Last dirty state pushed into the tab strip, so a notification
+    /// storm only rebuilds it when the marker actually changes. See
+    /// [`on_sci_notify`].
+    static LAST_DIRTY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Nesting depth of active [`DrainFreeze`] guards. Non-zero while a
     /// modal is up and [`drain_shell`] must not run.
     static MODAL_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -230,6 +234,19 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // returned, still owned by `sci_view` and not yet released.
     let editor =
         unsafe { EditorHandle::from_cocoa_view(sci_ptr) }.ok_or(CocoaUiError::DirectCallCapture)?;
+
+    // Notifications: caret moves, edits and save-point transitions. The
+    // Cocoa analogue of GTK's `sci-notify` connection and Win32's
+    // `WM_NOTIFY` handling. Registered before the window is shown so no
+    // early edit is missed.
+    //
+    // SAFETY: `sci_ptr` is the live view; `on_sci_notify` matches
+    // `SciNotifyFunc`'s signature and is `extern "C"`, so nothing can
+    // unwind across the boundary from it (it only calls back into
+    // `with_state`, whose failure mode is `None`, not a panic).
+    unsafe {
+        codepp_scintilla_sys::scintilla_cocoa_set_notify_callback(sci_ptr, on_sci_notify, 0);
+    }
 
     // --- The window ------------------------------------------------
     let content_rect = NSRect::new(
@@ -423,6 +440,104 @@ impl Drop for DrainFreeze {
     }
 }
 
+/// Scintilla's notification callback.
+///
+/// The Cocoa counterpart of GTK's `sci-notify` handler and Win32's
+/// `WM_NOTIFY` arm. Registered once in [`run`]; see
+/// `scintilla_cocoa_set_notify_callback` for why the entry point it goes
+/// through is the deprecated one.
+///
+/// **This is on the keystroke path**, so what it does per notification
+/// matters against DESIGN.md §8's 5 ms p99 budget:
+///
+///   * `SCN_UPDATEUI` and `SCN_MODIFIED` both refresh the status bar —
+///     a handful of direct-calls plus label writes AppKit elides when
+///     the string is unchanged. This is what makes Ln/Col/length track
+///     typing instead of updating only when some unrelated model event
+///     happened to repaint them. Both are handled because the two have
+///     different timing; see the comment on the arm itself.
+///   * `SCN_SAVEPOINTLEFT` / `SCN_SAVEPOINTREACHED` are the dirty
+///     transitions. They are *edges*, not per-keystroke, so rebuilding
+///     the strip there is cheap — but the strip is also rebuilt from
+///     `SCN_UPDATEUI` when the cached marker disagrees with reality,
+///     guarded by `LAST_DIRTY` so the common case is one `Cell` read.
+///
+/// Deliberately does **not** call `drain_shell`: that is the worker-wake
+/// path, and running it per keystroke would poll channels thousands of
+/// times a second for no reason.
+///
+/// # The re-entrancy contract this depends on
+///
+/// This fires synchronously from inside Scintilla, which may be inside
+/// a `with_state` borrow *we* took — `Shell::drain` reaching
+/// `replace_doc_text` → `SCI_SETTEXT` → `SCN_MODIFIED` is a live example.
+/// `with_state` then declines (`try_borrow_mut` fails) and this handler
+/// silently does nothing, which is why it cannot panic across the FFI
+/// boundary — but it also means the refresh is *skipped* for that edit.
+///
+/// **So any code path that changes buffer text from inside a
+/// `with_state` closure must refresh the chrome itself afterwards.**
+/// Every current one does (`drain_shell` calls `refresh_dynamic_status`
+/// inline and `refresh_tab_chrome` after the borrow; `run`'s startup
+/// path calls `refresh_tab_chrome`). Nothing enforces it, so a new
+/// caller that forgets would leave the status bar and dirty marker
+/// stale with no other symptom.
+///
+/// # Safety
+///
+/// Called by Scintilla on the main thread. `lparam` is an
+/// `SCNotification*` when `message` is [`COCOA_WM_NOTIFY`], live for the
+/// duration of this synchronous call and owned by Scintilla.
+unsafe extern "C" fn on_sci_notify(_windowid: isize, message: u32, _wparam: usize, lparam: usize) {
+    if message != codepp_scintilla_sys::COCOA_WM_NOTIFY || lparam == 0 {
+        return;
+    }
+    // SAFETY: for `WM_NOTIFY` the Cocoa backend passes `&scn` — a live
+    // `SCNotification` — and `Sci_NotifyHeader` is its `#[repr(C)]`
+    // prefix, so this is a prefix read rather than a reinterpretation.
+    // Valid only for this synchronous call, which is all it is used for.
+    let code = unsafe { (*(lparam as *const codepp_scintilla_sys::Sci_NotifyHeader)).code };
+
+    match code {
+        // Both, not just `SCN_UPDATEUI`. `SCN_MODIFIED` is emitted
+        // synchronously from the edit itself, whereas `SCN_UPDATEUI`
+        // arrives on Scintilla's paint/idle pass (`Editor::Paint` →
+        // `NotifyUpdateUI`). Measured, not assumed: the smoke test
+        // drives an edit with no run loop running and observes
+        // `SCN_SAVEPOINTLEFT` but zero `SCN_UPDATEUI`. Handling only the
+        // latter would tie Ln/Col/length to paint timing rather than to
+        // the edit — fine while the window is visible, wrong when it is
+        // occluded or a batch of programmatic edits lands between
+        // frames. The refresh is idempotent, so handling both costs a
+        // repeat rather than risking a stale bar.
+        codepp_scintilla_sys::SCN_UPDATEUI | codepp_scintilla_sys::SCN_MODIFIED => {
+            with_state(|st| {
+                let (_, ui) = st.split();
+                ui.refresh_dynamic_status();
+            });
+            // Cheap guard: only touch the strip when the dirty marker
+            // would actually change. Without this, every caret move
+            // would rebuild every tab button.
+            let live =
+                with_state(|st| st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0)
+                    .unwrap_or(false);
+            if LAST_DIRTY.with(std::cell::Cell::get) != live {
+                LAST_DIRTY.with(|c| c.set(live));
+                refresh_tab_chrome();
+            }
+        }
+        codepp_scintilla_sys::SCN_SAVEPOINTLEFT => {
+            LAST_DIRTY.with(|c| c.set(true));
+            refresh_tab_chrome();
+        }
+        codepp_scintilla_sys::SCN_SAVEPOINTREACHED => {
+            LAST_DIRTY.with(|c| c.set(false));
+            refresh_tab_chrome();
+        }
+        _ => {}
+    }
+}
+
 /// Emit the `--perf` distribution. Called from the application
 /// delegate's `applicationWillTerminate:`, which is the only shutdown
 /// hook `terminate:` actually reaches.
@@ -549,13 +664,13 @@ fn refresh_title() {
 /// wholesale) and never on the keystroke path.
 pub(crate) fn refresh_tab_chrome() {
     // Pull the live modified bit into the active tab before painting, so
-    // the strip's dirty marker reflects reality. Scintilla's
-    // notifications are not wired on this backend yet, so `Tab.dirty`
-    // would otherwise stay at whatever the shell last set it to — see
-    // `confirm_discard_active` for the same gap and the same fix. The
-    // consequence of not having the notification is that the marker
-    // updates on model events rather than on the keystroke that first
-    // dirties the buffer; wiring `SCN_MODIFIED` is tracked for m3b.
+    // the strip's dirty marker reflects reality. `Tab.dirty` is only
+    // ever written by the shell's crash-recovery restore paths, so
+    // without this it would not reflect editing at all — the same gap
+    // `confirm_discard_active` closes the same way. Since m3b wired
+    // Scintilla's notifications, `on_sci_notify` also drives this on the
+    // dirty *edges*; this call is what keeps the two in agreement when a
+    // model event (a tab switch, a save) repaints outside that path.
     with_state(|st| {
         let live_dirty = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0;
         if let Some(idx) = st.shell.active_tab {
@@ -563,6 +678,11 @@ pub(crate) fn refresh_tab_chrome() {
                 tab.dirty = live_dirty;
             }
         }
+        // Keep the notification handler's cached edge in step, so a
+        // model-driven refresh (a tab switch, a save) does not leave
+        // `LAST_DIRTY` disagreeing with what was just painted and cause
+        // a redundant rebuild on the next caret move.
+        LAST_DIRTY.with(|c| c.set(live_dirty));
     });
     with_state(|st| {
         let mtm = MainThreadMarker::new();

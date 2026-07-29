@@ -171,4 +171,45 @@ sptr_t scintilla_cocoa_send_message(void *view, unsigned int message,
 	return [sv message: message wParam: wparam lParam: lparam];
 }
 
+/// Register a C callback to receive Scintilla's notifications.
+///
+/// **Why the deprecated API, deliberately.** `ScintillaView.h:144`
+/// marks `registerNotifyCallback:value:` deprecated and points at the
+/// `delegate` property instead. The delegate is the wrong tool here,
+/// because the two are not equivalent:
+///
+///   * `ScintillaCocoa::NotifyParent` (`ScintillaCocoa.mm:2119`) calls
+///     `notifyProc` **and** its delegate — they are additive.
+///   * `ScintillaView` installs *itself* as the backend's delegate
+///     (`ScintillaView.mm:1491`), and its `-notification:`
+///     (`:1376`) does the built-in fold-margin click handling. But when
+///     a *host* delegate is set, that method hands the notification over
+///     and then `return`s for every code except Zoom and UpdateUI
+///     (`:1379-1384`) — so setting `ScintillaView.delegate` silently
+///     disables folding by margin click.
+///
+/// So the recommended replacement is destructive of behaviour Code++
+/// wants, and the deprecated path is the non-destructive one. It is also
+/// cheaper: a direct C call per notification rather than an
+/// Objective-C message send, and `SCN_MODIFIED` fires on every
+/// keystroke, which DESIGN.md §8 budgets at 5 ms p99.
+///
+/// If a future Scintilla bump removes the entry point, the migration is
+/// to set the delegate *and* re-implement the margin-click fold toggle
+/// host-side — not simply to swap one call for the other.
+///
+/// `windowid` is passed back to the callback verbatim; Code++ has one
+/// view and passes 0.
+void scintilla_cocoa_set_notify_callback(void *view, SciNotifyFunc callback,
+					 intptr_t windowid) {
+	if (view == nullptr) {
+		return;
+	}
+	ScintillaView *sv = (__bridge ScintillaView *)view;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+	[sv registerNotifyCallback: windowid value: callback];
+#pragma clang diagnostic pop
+}
+
 } // extern "C"

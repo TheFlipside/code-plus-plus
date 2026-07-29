@@ -153,7 +153,43 @@ extern "C" {
         wparam: uptr_t,
         lparam: sptr_t,
     ) -> sptr_t;
+
+    /// Register a callback to receive Scintilla's notifications from a
+    /// view returned by [`scintilla_cocoa_new`].
+    ///
+    /// The Cocoa analogue of GTK's `sci-notify` signal and Win32's
+    /// `WM_NOTIFY`. `windowid` is handed back to the callback verbatim.
+    ///
+    /// The shim reaches this through `registerNotifyCallback:value:`,
+    /// which upstream deprecates in favour of the `delegate` property —
+    /// a substitution that would be wrong here, because setting the
+    /// delegate suppresses `ScintillaView`'s own margin-click fold
+    /// handling while the callback is purely additive. The full
+    /// reasoning is in `cxx/ScintillaCocoaShim.mm`; read it before
+    /// changing this.
+    pub fn scintilla_cocoa_set_notify_callback(
+        view: *mut c_void,
+        callback: SciNotifyFunc,
+        windowid: isize,
+    );
 }
+
+/// Scintilla's Cocoa notification callback signature
+/// (`SciNotifyFunc` in `cocoa/ScintillaView.h:37`).
+///
+/// For a `WM_NOTIFY` message (`1002`), `lparam` is an `SCNotification*`
+/// — read it through [`Sci_NotifyHeader`] for the code, or
+/// [`Sci_NotificationText`] for the wider prefix.
+#[cfg(target_os = "macos")]
+pub type SciNotifyFunc =
+    unsafe extern "C" fn(windowid: isize, message: u32, wparam: uptr_t, lparam: uptr_t);
+
+/// The `iMessage` value Scintilla's Cocoa backend uses when the payload
+/// is an `SCNotification*` (`WM_NOTIFY` in `cocoa/ScintillaView.h:24`).
+/// Its sibling `WM_COMMAND` (`1001`) carries packed shorts instead and
+/// is not a notification struct.
+#[cfg(target_os = "macos")]
+pub const COCOA_WM_NOTIFY: u32 = 1002;
 
 // Lexilla's public C entry points are declared `__stdcall` on Win32
 // (`LEXILLA_CALL` in `Lexilla.h`); on x64 Windows that resolves to the
