@@ -332,41 +332,9 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // has already staged the bundled plugins into this directory.
     plugin::discover();
 
-    // Track window geometry continuously so the size the user leaves the
-    // window at — and the maximized state — is always current in the shell
-    // for the next save. This is the Win32 parity for its `WM_SIZE` /
-    // maximize handler: without it, capturing only at save time would lose
-    // a resize that happened immediately before maximizing (the maximized
-    // branch keeps the *previous* restored size). `configure-event` covers
-    // resizes/moves; `window-state-event` covers the maximize toggle. Both
-    // only refresh the shell's cached geometry (cheap); the persist to
-    // disk still happens at save time. Connected after
-    // `restore_window_geometry` so the restore's own `maximize()` doesn't
-    // capture a transient size.
-    window.connect_configure_event(|_, _| {
-        sync_window_geometry_to_shell();
-        false // observe only — GTK must still process the resize
-    });
-    window.connect_window_state_event(|_, _| {
-        sync_window_geometry_to_shell();
-        glib::Propagation::Proceed
-    });
-
-    window.connect_delete_event(|_, _| {
-        // Persist before tearing down: `Shell::save_session` needs the
-        // editor alive to read the caret position back out.
-        save_session_now();
-        gtk::main_quit();
-        glib::Propagation::Proceed
-    });
-
-    // Periodic session auto-save. Win32 uses SetTimer + WM_TIMER;
-    // `timeout_add_seconds_local` is the direct GTK analogue and stays
-    // on the main thread, so it can touch the editor safely.
-    glib::timeout_add_seconds_local(AUTOSAVE_INTERVAL_SECS, || {
-        save_session_now();
-        glib::ControlFlow::Continue
-    });
+    // Geometry tracking, save-on-close and the periodic auto-save. MUST
+    // run after `restore_window_geometry` — see the function.
+    connect_session_persistence(&window);
 
     window.show_all();
     // Focus the editor so the first keystroke lands in the buffer
@@ -381,6 +349,52 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), GtkUiError> 
     // After the loop, so the distribution covers the whole session.
     perf.report();
     Ok(())
+}
+
+/// Wire everything that keeps `session.xml` current. Split out of `run`
+/// for length.
+///
+/// All four callbacks exist to persist session state, which is why they
+/// are grouped:
+///
+///   * `configure-event` (resizes/moves) and `window-state-event` (the
+///     maximize toggle) track window geometry continuously, so the size
+///     the user leaves the window at — and the maximized state — is
+///     always current in the shell for the next save. This is the Win32
+///     parity for its `WM_SIZE` / maximize handler: without it, capturing
+///     only at save time would lose a resize that happened immediately
+///     before maximizing (the maximized branch keeps the *previous*
+///     restored size). Both only refresh the shell's cached geometry
+///     (cheap); the persist to disk still happens at save time.
+///   * `delete-event` persists before tearing down — `Shell::save_session`
+///     needs the editor alive to read the caret position back out — then
+///     quits the main loop.
+///   * The periodic auto-save. Win32 uses `SetTimer` + `WM_TIMER`;
+///     `timeout_add_seconds_local` is the direct GTK analogue and stays on
+///     the main thread, so it can touch the editor safely.
+///
+/// **Call this after [`restore_window_geometry`]**, so the restore's own
+/// `maximize()` does not capture a transient size.
+fn connect_session_persistence(window: &gtk::Window) {
+    window.connect_configure_event(|_, _| {
+        sync_window_geometry_to_shell();
+        false // observe only — GTK must still process the resize
+    });
+    window.connect_window_state_event(|_, _| {
+        sync_window_geometry_to_shell();
+        glib::Propagation::Proceed
+    });
+
+    window.connect_delete_event(|_, _| {
+        save_session_now();
+        gtk::main_quit();
+        glib::Propagation::Proceed
+    });
+
+    glib::timeout_add_seconds_local(AUTOSAVE_INTERVAL_SECS, || {
+        save_session_now();
+        glib::ControlFlow::Continue
+    });
 }
 
 /// Wire the two `sci-notify` handlers. Split out of `run` for length.

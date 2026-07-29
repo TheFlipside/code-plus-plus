@@ -1361,9 +1361,9 @@ pub(crate) fn on_begin_end_select(column: bool) {
 
 /// Sync the two Begin/End Select `CheckMenuItem`s' check state and
 /// sensitivity to whatever [`crate::state::GtkUiState::select_mark`]
-/// currently holds. Called after every state change (on_click,
-/// tab-switch reset) so the menu is always up to date without needing
-/// a menu-open handler.
+/// currently holds. Called after every state change
+/// ([`on_begin_end_select`], tab-switch reset) so the menu is always up
+/// to date without needing a menu-open handler.
 ///
 /// Sets [`REFRESHING_EDIT_MENU_MARKS`] around the `set_active` /
 /// `set_sensitive` calls: the former re-emits `activate` when the
