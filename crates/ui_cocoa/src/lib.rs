@@ -788,8 +788,32 @@ pub(crate) fn close_tab_by_id(id: i32) {
 
 /// Open a path that was dropped onto the window.
 pub(crate) fn open_dropped_path(path: PathBuf) {
-    with_state(|st| st.shell.open_file(path));
-    refresh_tab_chrome();
+    open_path(path);
+}
+
+/// Open `path`, rebinding the view when the shell only switched tabs.
+///
+/// **The return value is load-bearing.** A fresh open queues an async
+/// load, and the view is rebound when that load lands through
+/// `drain_shell`. But if the path is *already open*, the shell just
+/// flips `active_tab` and no load — and therefore no wake — ever fires,
+/// so nothing rebinds the single Scintilla view. `OpenFileOutcome`'s own
+/// documentation says exactly this: the UI must issue a synchronous
+/// rebind "otherwise the tab bar shows the switch while the editor keeps
+/// rendering the previous buffer".
+///
+/// Ignoring it is what made the editor appear to stop responding to the
+/// mouse after opening a file: the strip showed the new tab, the view
+/// still held the old (often empty) document, and clicks moved a caret
+/// nobody could see. `ui_gtk` has always handled this; the Cocoa port
+/// did not.
+fn open_path(path: PathBuf) {
+    let outcome = with_state(|st| st.shell.open_file(path));
+    if let Some(codepp_shell::OpenFileOutcome::SwitchedToExisting(_)) = outcome {
+        rebind_active_view();
+    } else {
+        refresh_tab_chrome();
+    }
 }
 
 /// Restore the previous session's buffers, then any path from the
@@ -799,9 +823,12 @@ fn restore_session(initial_path: Option<PathBuf>) {
     for entry in entries {
         match entry {
             SessionRestoreEntry::OpenFile(path) => {
-                // Each queues an async load whose completion rebinds the
-                // view through `drain_shell`.
-                with_state(|st| st.shell.open_file(path));
+                // Each normally queues an async load whose completion
+                // rebinds the view through `drain_shell` — but a
+                // duplicate path in session.xml dedupes to
+                // `SwitchedToExisting`, which has no load to wake. See
+                // `open_path`.
+                open_path(path);
             }
             // Re-create an untitled buffer from its backup text, seeded
             // synchronously into a fresh Scintilla document. The shell
@@ -886,7 +913,7 @@ fn restore_session(initial_path: Option<PathBuf>) {
         });
     }
     if let Some(path) = initial_path {
-        with_state(|st| st.shell.open_file(path));
+        open_path(path);
     }
     // Nothing restored? Give the user an empty buffer to type into,
     // matching what the other backends do.
@@ -1028,7 +1055,9 @@ pub(crate) fn action_open_file() {
     }
     for url in panel.URLs() {
         if let Some(path) = url_to_path(&url) {
-            with_state(|st| st.shell.open_file(path));
+            // Same rebind requirement as every other open path — see
+            // `open_path`.
+            open_path(path);
         }
     }
     refresh_tab_chrome();
@@ -1268,6 +1297,20 @@ mod activation_source_invariant {
     //! that would have caught it. Same tool `ui_gtk` uses for its
     //! single-view invariant, and for the same reason.
 
+    /// The crate source with its own test module removed.
+    ///
+    /// `include_str!` embeds this whole file, tests included — so a
+    /// pattern quoted inside an assertion message would count as a real
+    /// call site and the scan would flag itself. Cutting at the first
+    /// `#[cfg(test)]` is the same trick `ui_gtk`'s source scanner uses.
+    fn production_src() -> &'static str {
+        let src = include_str!("lib.rs");
+        match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        }
+    }
+
     /// The body of `fn name`, by brace matching from its signature.
     fn fn_body(src: &str, name: &str) -> String {
         let sig = format!("fn {name}(");
@@ -1291,7 +1334,7 @@ mod activation_source_invariant {
 
     #[test]
     fn activation_lives_in_the_delegate_not_in_run() {
-        let src = include_str!("lib.rs");
+        let src = production_src();
         // Sanity: a broken read must not let this pass vacuously.
         assert!(src.len() > 5_000, "source scan read too little to be real");
 
@@ -1315,6 +1358,45 @@ mod activation_source_invariant {
                  window would never become key."
             );
         }
+    }
+
+    /// Every open must go through `open_path`, which handles
+    /// `OpenFileOutcome::SwitchedToExisting`.
+    ///
+    /// A fresh open queues an async load and the view is rebound when it
+    /// lands. Re-opening an *already open* path only flips `active_tab`
+    /// — no load, no wake, no rebind — so a caller that ignores the
+    /// return value leaves the strip showing the new tab while the view
+    /// keeps rendering the previous document. `OpenFileOutcome`'s own
+    /// documentation states this requirement; ignoring it shipped as
+    /// "the mouse stops working after opening a file", because clicks
+    /// were landing in a stale (often empty) buffer.
+    ///
+    /// Guarded by a source scan for the same reason as the activation
+    /// invariant above: it needs a real window and a real document swap
+    /// to observe, and it fails by *absence* of a rebind.
+    #[test]
+    fn opens_go_through_the_rebinding_helper() {
+        let src = production_src();
+        assert!(src.len() > 5_000, "source scan read too little to be real");
+        let calls = src.matches("shell.open_file(").count();
+        assert_eq!(
+            calls, 1,
+            "`shell.open_file(` should appear exactly once, inside \
+             `open_path` — every other caller must go through it so \
+             `SwitchedToExisting` still rebinds the view. Found {calls}."
+        );
+        let open_path_body = fn_body(src, "open_path");
+        assert!(
+            open_path_body.contains("SwitchedToExisting"),
+            "`open_path` no longer handles `SwitchedToExisting`; \
+             re-opening an already-open file would leave the editor on \
+             the previous document."
+        );
+        assert!(
+            open_path_body.contains("rebind_active_view"),
+            "`open_path` no longer rebinds the view."
+        );
     }
 
     #[test]
