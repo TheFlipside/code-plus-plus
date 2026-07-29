@@ -352,10 +352,13 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // outlive it, which the binding below guarantees.
     let autosave = actions.start_autosave(mtm);
 
-    // Focus the editor so the first keystroke lands in the buffer.
-    window.makeFirstResponder(Some(&sci_view));
-    window.makeKeyAndOrderFront(None);
-    app.activate();
+    // Ordering the window front and activating happens in the
+    // application delegate's `applicationDidFinishLaunching:`, **not**
+    // here. Doing it before `-[NSApplication run]` silently fails for a
+    // process outside an `.app` bundle — the window never becomes key
+    // and the app never becomes active, so the window server does not
+    // route mouse clicks to it. See `crate::activate_main_window` and
+    // the delegate for the measurements.
 
     // The window is on screen and the event loop is about to take over,
     // which is the closest honest analogue of the other backends' first
@@ -536,6 +539,27 @@ unsafe extern "C" fn on_sci_notify(_windowid: isize, message: u32, _wparam: usiz
         }
         _ => {}
     }
+}
+
+/// Order the main window front, focus the editor, and activate the app.
+///
+/// Called from the application delegate's
+/// `applicationDidFinishLaunching:` rather than from [`run`]. Doing it
+/// before `-[NSApplication run]` has no effect for a non-bundled
+/// process; the delegate carries the measurements that established
+/// that, and the symptom it produces (mouse dead, keyboard apparently
+/// fine) is misleading enough to be worth reading before moving this.
+pub(crate) fn activate_main_window() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    with_state(|st| {
+        // Focus the editor so the first keystroke lands in the buffer
+        // rather than on a tab-strip button.
+        st.window.makeFirstResponder(Some(&st.sci_view));
+        st.window.makeKeyAndOrderFront(None);
+    });
+    NSApplication::sharedApplication(mtm).activate();
 }
 
 /// Emit the `--perf` distribution. Called from the application
@@ -1219,4 +1243,91 @@ pub(crate) fn action_reload() {
 /// Convert an `NSURL` from a panel into a filesystem path.
 fn url_to_path(url: &NSURL) -> Option<PathBuf> {
     url.path().map(|p| PathBuf::from(p.to_string()))
+}
+
+#[cfg(test)]
+mod activation_source_invariant {
+    //! Guards where window activation happens.
+    //!
+    //! Ordering the window front and activating the application must
+    //! run from the application delegate's
+    //! `applicationDidFinishLaunching:`, never from [`run`] before
+    //! `-[NSApplication run]`. Doing it early silently fails for a
+    //! process outside an `.app` bundle: the window never becomes key,
+    //! the app never becomes active, and the window server stops routing
+    //! mouse clicks to it — while keyboard input still appears to work,
+    //! so the symptom reads as "the mouse is broken".
+    //!
+    //! **Why a source scan and not a runtime test.** The failure only
+    //! manifests with a real run loop and a real window server, and it
+    //! manifests as *absence* — no click arrives. A headless test cannot
+    //! observe it, and the display-gated `cocoa_smoke` test has no run
+    //! loop either (it is `harness = false` precisely so it owns the
+    //! main thread, not so it pumps events). This shipped once and was
+    //! found by a user, not by the suite; a scan is the cheapest thing
+    //! that would have caught it. Same tool `ui_gtk` uses for its
+    //! single-view invariant, and for the same reason.
+
+    /// The body of `fn name`, by brace matching from its signature.
+    fn fn_body(src: &str, name: &str) -> String {
+        let sig = format!("fn {name}(");
+        let start = src.find(&sig).unwrap_or_else(|| panic!("no fn {name}"));
+        let open = src[start..].find('{').expect("no body") + start;
+        let mut depth = 0usize;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return src[open..=open + i].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unterminated body for {name}");
+    }
+
+    #[test]
+    fn activation_lives_in_the_delegate_not_in_run() {
+        let src = include_str!("lib.rs");
+        // Sanity: a broken read must not let this pass vacuously.
+        assert!(src.len() > 5_000, "source scan read too little to be real");
+
+        let run_body = fn_body(src, "run");
+        for forbidden in ["makeKeyAndOrderFront", "makeFirstResponder", ".activate("] {
+            assert!(
+                !run_body.contains(forbidden),
+                "`{forbidden}` is back inside `run()`. Activation there is \
+                 silently ignored for a non-bundled process, which kills \
+                 mouse input while leaving the keyboard working. Move it \
+                 to `activate_main_window`, called from the delegate's \
+                 `applicationDidFinishLaunching:`."
+            );
+        }
+
+        let activate_body = fn_body(src, "activate_main_window");
+        for required in ["makeKeyAndOrderFront", "makeFirstResponder", ".activate("] {
+            assert!(
+                activate_body.contains(required),
+                "`activate_main_window` no longer calls `{required}` — the \
+                 window would never become key."
+            );
+        }
+    }
+
+    #[test]
+    fn the_delegate_calls_activate_main_window() {
+        let src = include_str!("delegate.rs");
+        assert!(src.len() > 1_000, "source scan read too little to be real");
+        assert!(
+            src.contains("applicationDidFinishLaunching:"),
+            "the delegate no longer implements applicationDidFinishLaunching:"
+        );
+        assert!(
+            src.contains("activate_main_window"),
+            "applicationDidFinishLaunching: no longer activates the window"
+        );
+    }
 }

@@ -51,6 +51,31 @@ define_class!(
             true
         }
 
+        /// Order the window front and activate, once the run loop is
+        /// actually turning.
+        ///
+        /// **This is why the app responds to the mouse at all.** Doing
+        /// it before `-[NSApplication run]` — which is where `run`
+        /// naturally builds the window — silently does nothing for a
+        /// process that is not inside an `.app` bundle: the window never
+        /// becomes key and the application never becomes active, so the
+        /// window server does not route clicks to it. Keyboard input can
+        /// still appear to work, which makes the failure look like
+        /// "mouse is broken" rather than "the app was never activated".
+        ///
+        /// Measured, not inferred. With activation left before `run()`,
+        /// a bare `./codepp` reports
+        /// `app_active=false has_key_window=false` from inside the run
+        /// loop, while the *same binary* copied into a minimal `.app`
+        /// and launched with `open` reports all true. Moving activation
+        /// here makes the bare binary report all true as well — which
+        /// matters because `cargo run` is the documented development
+        /// workflow (DEVELOPMENT.md §4.5).
+        #[unsafe(method(applicationDidFinishLaunching:))]
+        fn did_finish_launching(&self, _notification: &NSNotification) {
+            crate::activate_main_window();
+        }
+
         /// Persist and tear down before `exit()`.
         ///
         /// This is the *only* reliable shutdown hook on macOS: the Quit
