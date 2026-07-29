@@ -340,6 +340,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
 
     // --- Startup work ---------------------------------------------
     apply_startup_styles();
+    seed_horizontal_scroll(&editor);
     restore_session(initial_path);
     // MUST run *after* `restore_session` — that is what loads
     // session.xml into the shell, and this reads
@@ -571,6 +572,31 @@ pub(crate) fn report_perf() {
     }
 }
 
+/// Seed the horizontal scroll width, and enable tracking.
+///
+/// **Both calls, always — the second is what makes the first safe.**
+/// Scintilla seeds `scrollWidth` at 2000 px and never shrinks it, so
+/// with word wrap off the user can scroll far past the longest line.
+/// Width *tracking* makes Scintilla recompute `scrollWidth` from the
+/// longest visible line, and seeding it at 1 px stops the 2000 default
+/// carrying into the first paint.
+///
+/// Shipping the reset without tracking is a bug with a very confusing
+/// symptom on this backend, and it shipped once: on Cocoa `scrollWidth`
+/// directly sizes the `NSScrollView`'s document view, so a
+/// `SCI_SETSCROLLWIDTH(1)` with nothing to recompute it collapses
+/// `SCIContentView` to **one point wide**. Hit-testing then lands on the
+/// enclosing `NSClipView` for every click past x=1, Scintilla never sees
+/// a `mouseDown:`, and the editor looks like it has stopped responding
+/// to the mouse — while the keyboard, which goes to the first responder
+/// rather than through hit-testing, keeps working. GTK does not show
+/// this because its backend does not size a document view from
+/// `scrollWidth`.
+fn seed_horizontal_scroll(editor: &EditorHandle) {
+    editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, 1, 0);
+    editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTHTRACKING, 1, 0);
+}
+
 /// Baseline editor styling, applied once before any buffer exists.
 fn apply_startup_styles() {
     with_state(|st| {
@@ -739,8 +765,13 @@ pub(crate) fn rebind_active_view() {
     // without this, switching from a long-line file to a short one
     // leaves a phantom horizontal scroll. Same fix `ui_gtk` applies.
     with_state(|st| {
-        st.editor
-            .send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, 1, 0);
+        // Tracking-mode `scrollWidth` is a high-water mark shared by
+        // every tab bound to this one view, and never self-shrinks — so
+        // without this reset, switching from a long-line file to a short
+        // one leaves a phantom horizontal scroll. Re-seeded through the
+        // helper so the *tracking* flag is re-asserted with it; the
+        // reset alone would pin the document view to one point wide.
+        seed_horizontal_scroll(&st.editor);
     });
     refresh_tab_chrome();
 }
@@ -1396,6 +1427,45 @@ mod activation_source_invariant {
         assert!(
             open_path_body.contains("rebind_active_view"),
             "`open_path` no longer rebinds the view."
+        );
+    }
+
+    /// `SCI_SETSCROLLWIDTH` must never be sent without
+    /// `SCI_SETSCROLLWIDTHTRACKING` beside it.
+    ///
+    /// On Cocoa `scrollWidth` directly sizes the `NSScrollView`'s
+    /// document view. Resetting it to 1 with nothing to recompute it
+    /// collapses `SCIContentView` to one point wide, hit-testing falls
+    /// through to the enclosing `NSClipView`, and Scintilla stops
+    /// receiving `mouseDown:` entirely — the editor appears to ignore
+    /// the mouse while the keyboard still works, because keyboard input
+    /// goes to the first responder rather than through hit-testing.
+    /// That shipped once, reported as "the mouse stops working after
+    /// switching tabs".
+    ///
+    /// Keeping both sends inside one helper is the whole fix, so the
+    /// guard is simply that there is only one call site.
+    #[test]
+    fn scroll_width_is_only_set_together_with_tracking() {
+        let src = production_src();
+        assert!(src.len() > 5_000, "source scan read too little to be real");
+        let sets = src.matches("SCI_SETSCROLLWIDTH,").count();
+        assert_eq!(
+            sets, 1,
+            "`SCI_SETSCROLLWIDTH` should be sent from exactly one place \
+             (`seed_horizontal_scroll`), which also enables tracking. \
+             Found {sets} call sites — an unpaired reset collapses the \
+             document view to one point wide and kills mouse input."
+        );
+        let body = fn_body(src, "seed_horizontal_scroll");
+        assert!(
+            body.contains("SCI_SETSCROLLWIDTH,"),
+            "`seed_horizontal_scroll` no longer seeds the width"
+        );
+        assert!(
+            body.contains("SCI_SETSCROLLWIDTHTRACKING"),
+            "`seed_horizontal_scroll` no longer enables width tracking — \
+             the reset alone pins the document view to one point wide."
         );
     }
 
