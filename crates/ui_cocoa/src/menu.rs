@@ -30,10 +30,18 @@
 //! and the dialogs it drives.
 
 use objc2::rc::Retained;
-use objc2::runtime::{ProtocolObject, Sel};
-use objc2::{define_class, msg_send, sel, MainThreadOnly};
-use objc2_app_kit::{NSApplication, NSControl, NSMenu, NSMenuDelegate, NSMenuItem, NSWorkspace};
-use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSString, NSTimer, NSURL};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
+use objc2::{define_class, msg_send, sel, AnyThread, MainThreadOnly};
+use objc2_app_kit::{
+    NSAboutPanelOptionApplicationIcon, NSAboutPanelOptionApplicationName,
+    NSAboutPanelOptionApplicationVersion, NSAboutPanelOptionCredits, NSAboutPanelOptionKey,
+    NSAboutPanelOptionVersion, NSApplication, NSControl, NSImage, NSMenu, NSMenuDelegate,
+    NSMenuItem, NSWorkspace,
+};
+use objc2_foundation::{
+    MainThreadMarker, NSAttributedString, NSData, NSDictionary, NSObject, NSObjectProtocol, NSSize,
+    NSString, NSTimer, NSURL,
+};
 
 use crate::AUTOSAVE_INTERVAL_SECS;
 
@@ -63,6 +71,8 @@ define_class!(
             crate::at_callback_boundary("menu:needsUpdate", (), || {
                 if is_window_menu(menu) {
                     rebuild_window_menu(menu, self);
+                } else if is_language_menu(menu) {
+                    mark_language_letter_groups(menu);
                 }
             });
         }
@@ -202,6 +212,11 @@ define_class!(
             });
         }
 
+        #[unsafe(method(codeppAbout:))]
+        fn about(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("menu:about", (), || show_about(self.mtm()));
+        }
+
         #[unsafe(method(codeppRestoreWindowSize:))]
         fn restore_window_size(&self, _sender: Option<&NSObject>) {
             crate::at_callback_boundary(
@@ -318,7 +333,7 @@ impl Actions {
 /// chain (see the module docs).
 pub fn install(app: &NSApplication, actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenu> {
     let main_menu = NSMenu::new(mtm);
-    main_menu.addItem(&build_app_menu(mtm));
+    main_menu.addItem(&build_app_menu(actions, mtm));
     main_menu.addItem(&build_file_menu(actions, mtm));
     main_menu.addItem(&build_edit_menu(mtm));
     main_menu.addItem(&build_search_menu(mtm));
@@ -336,16 +351,16 @@ pub fn install(app: &NSApplication, actions: &Actions, mtm: MainThreadMarker) ->
 /// macOS mandates this menu and gives it the process name. The first
 /// item of the main menu is *always* treated as the application menu
 /// regardless of its title, so the title here is never displayed.
-fn build_app_menu(mtm: MainThreadMarker) -> Retained<NSMenuItem> {
+fn build_app_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuItem> {
     let app_item = NSMenuItem::new(mtm);
     let app_menu = NSMenu::new(mtm);
     add(
         &app_menu,
         mtm,
         "About Code++",
-        sel!(orderFrontStandardAboutPanel:),
+        sel!(codeppAbout:),
         "",
-        None,
+        Some(actions),
     );
     app_menu.addItem(&NSMenuItem::separatorItem(mtm));
     add(&app_menu, mtm, "Hide Code++", sel!(hide:), "h", None);
@@ -628,7 +643,16 @@ fn build_encoding_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSM
 /// collapsed into a lettered submenu. ~88 flat items would be a menu
 /// taller than the screen.
 fn build_language_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuItem> {
-    let (item, menu) = submenu("Language", mtm);
+    let (item, menu) = submenu(LANGUAGE_MENU_TITLE, mtm);
+    // The letter groups are marked on open rather than at build time: the
+    // active language changes with every tab switch, and a submenu item
+    // is not something `validateMenuItem:` is asked about. See
+    // [`mark_language_letter_groups`].
+    //
+    // SAFETY: as for the Window menu — `Actions` implements
+    // `NSMenuDelegate` and AppKit's delegate reference is weak, while the
+    // window state owns `actions` for the process lifetime.
+    menu.setDelegate(Some(ProtocolObject::from_ref(actions)));
     let table = codepp_core::lang::LANG_TABLE;
 
     if let Some(first) = table.first() {
@@ -783,6 +807,174 @@ fn rebuild_window_menu(menu: &NSMenu, actions: &Actions) {
             Some(actions),
         );
         entry.setTag(id as isize);
+    }
+}
+
+/// Title identifying the Language menu to the shared menu delegate.
+const LANGUAGE_MENU_TITLE: &str = "Language";
+
+/// True if `menu` is the one [`build_language_menu`] built.
+fn is_language_menu(menu: &NSMenu) -> bool {
+    menu.title().to_string() == LANGUAGE_MENU_TITLE
+}
+
+/// Mark the lettered group that contains the active language.
+///
+/// **Why this is needed at all.** The leaf language rows get their radio
+/// mark from `validateMenuItem:`, but ~80 of them live inside a lettered
+/// submenu, and a closed submenu shows nothing — so a buffer detected as
+/// C++ gave the user no way to see that without opening "C" and looking.
+/// Marking the group itself is the hint.
+///
+/// **Why on menu-open rather than from `validateMenuItem:`.** AppKit does
+/// not validate an item that owns a submenu: validation resolves an
+/// item's *action* against the responder chain, and a submenu item has no
+/// action. So the mark has to be pushed, and menu-open is the point at
+/// which it is both cheap and guaranteed current.
+///
+/// The mark is cleared from every group first, so a language change that
+/// moves the active buffer from one letter to another leaves no stale
+/// tick behind. Only items that own a submenu are touched; the leaf rows
+/// at the top level (Normal Text and the single-language letters) keep
+/// the mark `validateMenuItem:` gives them.
+fn mark_language_letter_groups(menu: &NSMenu) {
+    let Some(active) = crate::active_lang_id() else {
+        // Unreadable state, or no active buffer. Leave the marks alone
+        // rather than clearing them from a read that never happened —
+        // the same distinction `open_buffer_rows` draws.
+        return;
+    };
+    for item in &menu.itemArray() {
+        let Some(sub) = item.submenu() else {
+            continue;
+        };
+        let contains = sub
+            .itemArray()
+            .iter()
+            .any(|child| child.tag() == active as isize);
+        item.setState(isize::from(contains));
+    }
+}
+
+/// The application icon, embedded rather than read from disk.
+///
+/// Needed because there is no `.app` bundle for AppKit to take an icon
+/// from, so the About panel falls back to a generic document icon —
+/// measured, not assumed: the first version of this panel rendered a blue
+/// folder. The same source PNG `ui_gtk` loads and `ui_win32` compiles
+/// into `code++.ico`, so all three show one icon. §9.2 schedules a real
+/// bundle for macOS distribution; this keeps `cargo run` — the documented
+/// development workflow — looking right in the meantime.
+const PNG_APP_ICON: &[u8] = include_bytes!("../../../assets/code++.png");
+
+/// Logical edge length the About panel's icon is drawn at. AppKit's panel
+/// reserves a 64-point square; the source art is far larger, so pinning
+/// the logical size lets it downsample rather than overflow.
+const ABOUT_ICON_PX: f64 = 64.0;
+
+/// Architecture suffix for the About panel, matching `ui_win32`'s
+/// `ABOUT_ARCH`. Compile-time, so the two backends report the same thing
+/// for the same build.
+///
+/// Passed as `NSAboutPanelOptionVersion`, which AppKit documents as the
+/// *build* version and renders parenthesised after the marketing
+/// version. Using it for the architecture is deliberately off-label: it
+/// puts the panel's first line at "Version 0.1.0 (64-bit)", which is the
+/// same shape `ui_win32`'s About title has ("Code++ v0.1.0  (64-bit)"),
+/// and Code++ has no build number to put there instead. If one is ever
+/// introduced, it takes this key and the arch moves into the credits
+/// block.
+const ABOUT_ARCH: &str = if cfg!(target_pointer_width = "64") {
+    "64-bit"
+} else {
+    "32-bit"
+};
+
+/// The one-line description, verbatim from `ui_gtk`'s About dialog so the
+/// two do not drift.
+const ABOUT_SUMMARY: &str = "A fast, cross-platform code and text editor built on Scintilla.";
+
+/// Copyright and licence line. The full MIT text is what `ui_win32`'s
+/// About shows in a group box; here it is named rather than reproduced,
+/// because macOS's About panel is a compact one and `LICENSE` at the repo
+/// root is the authoritative copy either way.
+const ABOUT_COPYRIGHT: &str =
+    "Copyright (c) 2026 Max Fiedler and Code++ contributors. MIT licensed.";
+
+/// Show the About panel.
+///
+/// Uses AppKit's own About panel with our content substituted, rather
+/// than a hand-built window. That is the same call the m1 convention
+/// decision makes for every other App-menu item: About is one of the
+/// three macOS *mandates* there, so the panel should look like the one
+/// users get from every other application — while carrying the
+/// information `ui_win32` and `ui_gtk` show, which is what this exists to
+/// fix. The bare `orderFrontStandardAboutPanel:` it replaces showed only
+/// a process name and nothing else, because there is no `.app` bundle
+/// `Info.plist` for AppKit to read any of this out of.
+///
+/// The credits block carries what does not fit the panel's fixed fields:
+/// the summary line, the home page, and the upstream acknowledgement
+/// DESIGN.md's own README considers due.
+fn show_about(mtm: MainThreadMarker) {
+    let credits = format!(
+        "{ABOUT_SUMMARY}\n\n{}\n\nBuilt on Scintilla and Lexilla by Neil Hodgson and \
+         contributors.\nInspired by Notepad++ by Don Ho and contributors.\n\n{ABOUT_COPYRIGHT}",
+        HELP_URLS[0].1
+    );
+    let credits = NSAttributedString::initWithString(
+        NSAttributedString::alloc(),
+        &NSString::from_str(&credits),
+    );
+    let version = NSString::from_str(env!("CARGO_PKG_VERSION"));
+    let arch = NSString::from_str(ABOUT_ARCH);
+    let name = NSString::from_str("Code++");
+
+    // The icon is optional: a decode failure costs the panel its artwork
+    // and nothing else, which is the same way the tab strip degrades.
+    let icon = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(PNG_APP_ICON));
+    if let Some(icon) = icon.as_deref() {
+        icon.setSize(NSSize::new(ABOUT_ICON_PX, ABOUT_ICON_PX));
+    }
+
+    // SAFETY: every key is one of AppKit's own `extern "C"` statics, and
+    // every value has the type its key documents — `NSAttributedString`
+    // for Credits, `NSImage` for ApplicationIcon, `NSString` for the
+    // rest. `AnyObject` is what the dictionary is declared over, so each
+    // is upcast to it.
+    let (keys, values): (Vec<&NSAboutPanelOptionKey>, Vec<&AnyObject>) = unsafe {
+        let mut keys = vec![
+            NSAboutPanelOptionApplicationName,
+            NSAboutPanelOptionApplicationVersion,
+            NSAboutPanelOptionVersion,
+            NSAboutPanelOptionCredits,
+        ];
+        let mut values = vec![
+            name.as_ref() as &AnyObject,
+            version.as_ref() as &AnyObject,
+            arch.as_ref() as &AnyObject,
+            credits.as_ref() as &AnyObject,
+        ];
+        // **The key is omitted, not defaulted, when the icon is missing.**
+        // The tempting shortcut is to pass some other object and rely on
+        // AppKit ignoring a wrong-typed value, but the header documents
+        // only what happens when the key is *absent* (fall back to
+        // `imageNamed:`, then to a generic icon) and says nothing about a
+        // present-but-wrong value — which could as easily mean an
+        // `NSImage`-only selector sent to an `NSString` and an
+        // `NSInvalidArgumentException`. Absent is the documented path, so
+        // take it rather than assert something unverified.
+        if let Some(icon) = icon.as_deref() {
+            keys.push(NSAboutPanelOptionApplicationIcon);
+            values.push(icon as &AnyObject);
+        }
+        (keys, values)
+    };
+    let options = NSDictionary::from_slices::<NSAboutPanelOptionKey>(&keys, &values);
+    // SAFETY: main-thread-only AppKit call, proven by `mtm`, with a
+    // well-formed options dictionary.
+    unsafe {
+        NSApplication::sharedApplication(mtm).orderFrontStandardAboutPanelWithOptions(&options);
     }
 }
 
