@@ -32,7 +32,7 @@
 use objc2::rc::Retained;
 use objc2::runtime::Sel;
 use objc2::{define_class, msg_send, sel, MainThreadOnly};
-use objc2_app_kit::{NSApplication, NSMenu, NSMenuItem};
+use objc2_app_kit::{NSApplication, NSControl, NSMenu, NSMenuItem};
 use objc2_foundation::{MainThreadMarker, NSObject, NSObjectProtocol, NSString, NSTimer};
 
 use crate::AUTOSAVE_INTERVAL_SECS;
@@ -77,6 +77,31 @@ define_class!(
         #[unsafe(method(codeppReload:))]
         fn reload(&self, _sender: Option<&NSObject>) {
             crate::action_reload();
+        }
+
+        /// Select the tab whose `Tab.id` is in the sender's `tag`.
+        ///
+        /// The tag carries an **id, not an index** — see
+        /// `tabs::TabStrip::sync` for why, and DESIGN.md §7.4 for the
+        /// Win32 bug that made it a rule.
+        #[unsafe(method(codeppSelectTab:))]
+        fn select_tab(&self, sender: Option<&NSControl>) {
+            if let Some(sender) = sender {
+                crate::select_tab_by_id(sender.tag() as i32);
+            }
+        }
+
+        /// Close the tab whose `Tab.id` is in the sender's `tag`.
+        #[unsafe(method(codeppCloseTab:))]
+        fn close_tab(&self, sender: Option<&NSControl>) {
+            if let Some(sender) = sender {
+                crate::close_tab_by_id(sender.tag() as i32);
+            }
+        }
+
+        #[unsafe(method(codeppCloseCurrentTab:))]
+        fn close_current_tab(&self, _sender: Option<&NSObject>) {
+            crate::action_close_tab();
         }
 
         /// The 7-second session auto-save. Win32 uses `SetTimer` +
@@ -235,6 +260,15 @@ fn build_file_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuI
         "Save All",
         sel!(codeppSaveAll:),
         "",
+        Some(actions),
+    );
+    file_menu.addItem(&NSMenuItem::separatorItem(mtm));
+    add(
+        &file_menu,
+        mtm,
+        "Close",
+        sel!(codeppCloseCurrentTab:),
+        "w",
         Some(actions),
     );
     file_item.setSubmenu(Some(&file_menu));

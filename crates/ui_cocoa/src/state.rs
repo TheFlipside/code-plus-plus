@@ -35,7 +35,9 @@ use codepp_shell::Shell;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSMenu, NSView, NSWindow};
 
+use crate::menu::Actions;
 use crate::status::StatusBar;
+use crate::tabs::TabStrip;
 
 /// Everything the Cocoa backend owns for the lifetime of the window.
 pub struct CocoaUiState {
@@ -82,6 +84,14 @@ pub struct CocoaUiState {
     pub editor: EditorHandle,
     /// The 7-part status bar.
     pub status: StatusBar,
+    /// The tab strip. Purely a selector — the one Scintilla view is its
+    /// sibling, not its child. See [`crate::tabs`].
+    pub tabs: TabStrip,
+    /// The Objective-C receiver for menu and tab-strip actions. Held
+    /// here because `NSMenuItem.target` and `NSControl.target` are both
+    /// *weak*, so nothing else keeps it alive — and the tab strip
+    /// rebuilds its buttons against it on every sync.
+    pub actions: Retained<Actions>,
     /// The application's main menu, held so the menu-hide toggle can
     /// reach it. Cocoa has no "hide the menu bar" for an ordinary app
     /// the way Win32 does — see `platform.rs`'s `set_menu_hidden`.
@@ -99,6 +109,7 @@ pub struct CocoaUi {
     pub editor: EditorHandle,
     pub status: StatusBar,
     pub menu: Retained<NSMenu>,
+    pub tabs: TabStrip,
 }
 
 impl CocoaUiState {
@@ -110,6 +121,7 @@ impl CocoaUiState {
             editor: self.editor,
             status: self.status.clone(),
             menu: self.menu.clone(),
+            tabs: self.tabs.clone(),
         };
         (&mut self.shell, ui)
     }

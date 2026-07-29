@@ -42,10 +42,12 @@
 )]
 
 mod delegate;
+mod dropview;
 mod menu;
 mod platform;
 mod state;
 mod status;
+mod tabs;
 
 use std::cell::RefCell;
 use std::fmt;
@@ -70,6 +72,7 @@ use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSUR
 
 use crate::state::{install, uninstall, with_state, CocoaUiState};
 use crate::status::{StatusBar, STATUS_BAR_HEIGHT};
+use crate::tabs::{TabStrip, TAB_STRIP_HEIGHT};
 
 /// Initial window size, matching the other two backends' defaults.
 const DEFAULT_WIDTH: f64 = 1024.0;
@@ -267,22 +270,40 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     unsafe { window.setReleasedWhenClosed(false) };
     window.setTitle(&NSString::from_str("Code++"));
 
-    // Content layout: the editor fills everything above a bottom-pinned
-    // status bar. Springs-and-struts rather than Auto Layout — the
-    // arrangement is one flexible view over one fixed-height strip,
-    // which autoresizing masks express exactly.
-    let content = NSView::initWithFrame(NSView::alloc(mtm), content_rect);
+    // Content layout, bottom-up in Cocoa's flipped-origin coordinates:
+    // status bar, then the editor, then the tab strip at the top. The
+    // editor is the only flexible one. Springs-and-struts rather than
+    // Auto Layout — one flexible view between two fixed-height strips is
+    // exactly what autoresizing masks express.
+    //
+    // The content view is a subclass so the whole window accepts dropped
+    // files (see `crate::dropview`); Cocoa attaches drag destinations to
+    // views, not windows.
+    let content = dropview::ContentView::new(content_rect, mtm);
     let status = StatusBar::new(DEFAULT_WIDTH, mtm);
+    let tab_strip = TabStrip::new(DEFAULT_WIDTH, mtm);
 
+    let editor_height = DEFAULT_HEIGHT - STATUS_BAR_HEIGHT - TAB_STRIP_HEIGHT;
     sci_view.setFrame(NSRect::new(
         NSPoint::new(0.0, STATUS_BAR_HEIGHT),
-        NSSize::new(DEFAULT_WIDTH, DEFAULT_HEIGHT - STATUS_BAR_HEIGHT),
+        NSSize::new(DEFAULT_WIDTH, editor_height),
     ));
     sci_view.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
+    // The strip sits at the top and stays there as the window grows:
+    // width-sizable, with the flexible gap below it.
+    tab_strip.container.setFrame(NSRect::new(
+        NSPoint::new(0.0, STATUS_BAR_HEIGHT + editor_height),
+        NSSize::new(DEFAULT_WIDTH, TAB_STRIP_HEIGHT),
+    ));
+    tab_strip.container.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
+    );
+
     content.addSubview(&sci_view);
     content.addSubview(&status.container);
+    content.addSubview(&tab_strip.container);
     window.setContentView(Some(&content));
 
     // --- Install the state ----------------------------------------
@@ -292,6 +313,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
         sci_ptr,
         editor,
         status,
+        tabs: tab_strip,
+        actions: actions.clone(),
         menu,
         shell,
     }));
@@ -442,7 +465,7 @@ pub(crate) fn drain_shell() {
     for dialog in dialogs.unwrap_or_default() {
         present_dialog(dialog);
     }
-    refresh_title();
+    refresh_tab_chrome();
 }
 
 /// Present one deferred dialog.
@@ -516,6 +539,113 @@ fn refresh_title() {
         );
         st.window.setTitle(&NSString::from_str(&title));
     });
+}
+
+/// Resync the tab strip and the window title from the shell.
+///
+/// Called after anything that can change the tab list or which tab is
+/// active — a drain, a tab switch, a close, an open. Cheap enough to
+/// call unconditionally (see `TabStrip::sync` on why it rebuilds
+/// wholesale) and never on the keystroke path.
+pub(crate) fn refresh_tab_chrome() {
+    // Pull the live modified bit into the active tab before painting, so
+    // the strip's dirty marker reflects reality. Scintilla's
+    // notifications are not wired on this backend yet, so `Tab.dirty`
+    // would otherwise stay at whatever the shell last set it to — see
+    // `confirm_discard_active` for the same gap and the same fix. The
+    // consequence of not having the notification is that the marker
+    // updates on model events rather than on the keystroke that first
+    // dirties the buffer; wiring `SCN_MODIFIED` is tracked for m3b.
+    with_state(|st| {
+        let live_dirty = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0;
+        if let Some(idx) = st.shell.active_tab {
+            if let Some(tab) = st.shell.tabs.get_mut(idx) {
+                tab.dirty = live_dirty;
+            }
+        }
+    });
+    with_state(|st| {
+        let mtm = MainThreadMarker::new();
+        if let Some(mtm) = mtm {
+            let active = st.shell.active_tab;
+            // Clone the receiver out first: `sync` borrows the tab list
+            // immutably while it reads, and `actions` lives on the same
+            // struct.
+            let actions = st.actions.clone();
+            st.tabs.sync(&st.shell.tabs, active, &actions, mtm);
+        }
+    });
+    refresh_title();
+}
+
+/// Rebind the single Scintilla view to whatever tab is now active.
+///
+/// The counterpart of `ui_gtk::rebind_active_view`. Every tab switch
+/// goes through here, because switching tabs on this backend means
+/// pointing one view at a different document rather than showing a
+/// different view.
+pub(crate) fn rebind_active_view() {
+    with_state(|st| {
+        let (shell, mut ui) = st.split();
+        shell.bind_active_view(&mut ui);
+    });
+    // The single view now holds a different document. Reset the
+    // tracking-mode horizontal scroll high-water mark, which is shared
+    // across every tab bound to this view and never self-shrinks — so
+    // without this, switching from a long-line file to a short one
+    // leaves a phantom horizontal scroll. Same fix `ui_gtk` applies.
+    with_state(|st| {
+        st.editor
+            .send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, 1, 0);
+    });
+    refresh_tab_chrome();
+}
+
+/// Switch the active buffer to the tab with `id`, if it still exists.
+///
+/// **Id-keyed, not index-keyed.** The strip's buttons outlive any
+/// particular ordering, so an index captured when a button was built
+/// could address a different buffer by the time it is clicked — DESIGN.md
+/// §7.4 records exactly that bug on Win32. Ids are allocated
+/// monotonically without reuse, so a stale one resolves to "gone".
+pub(crate) fn select_tab_by_id(id: i32) {
+    let Some(Some(idx)) = with_state(|st| st.shell.tabs.iter().position(|t| t.id == id)) else {
+        return;
+    };
+    if with_state(|st| st.shell.active_tab == Some(idx)).unwrap_or(false) {
+        // Already active — but the click still toggled the button's own
+        // push-on/push-off state off, and nothing else would put it
+        // back, leaving the current tab painted as unselected. Rebuild
+        // the strip so the selection state is re-derived from the model
+        // rather than left to AppKit's per-button toggle.
+        refresh_tab_chrome();
+        return;
+    }
+    with_state(|st| st.shell.active_tab = Some(idx));
+    rebind_active_view();
+}
+
+/// Close the tab with `id`, if it still exists.
+///
+/// Activates it first, so the close path always acts on the active
+/// buffer — which is what makes a future save-confirm prompt name the
+/// right file. Same shape as `ui_gtk::close_tab_by_id`.
+pub(crate) fn close_tab_by_id(id: i32) {
+    let Some(Some(idx)) = with_state(|st| st.shell.tabs.iter().position(|t| t.id == id)) else {
+        return;
+    };
+    let already_active = with_state(|st| st.shell.active_tab == Some(idx)).unwrap_or(false);
+    if !already_active {
+        with_state(|st| st.shell.active_tab = Some(idx));
+        rebind_active_view();
+    }
+    action_close_tab();
+}
+
+/// Open a path that was dropped onto the window.
+pub(crate) fn open_dropped_path(path: PathBuf) {
+    with_state(|st| st.shell.open_file(path));
+    refresh_tab_chrome();
 }
 
 /// Restore the previous session's buffers, then any path from the
@@ -600,6 +730,17 @@ fn restore_session(initial_path: Option<PathBuf>) {
             }
         }
     }
+    // Restore which tab was in front. Every entry above pushes exactly
+    // one tab in session order, so the persisted index maps straight
+    // across. Done before the command-line path is opened, so an
+    // explicitly requested file still ends up active.
+    if let Some(Some(idx)) = with_state(|st| st.shell.session_active_index()) {
+        with_state(|st| {
+            if idx < st.shell.tabs.len() {
+                st.shell.active_tab = Some(idx);
+            }
+        });
+    }
     if let Some(path) = initial_path {
         with_state(|st| st.shell.open_file(path));
     }
@@ -614,7 +755,7 @@ fn restore_session(initial_path: Option<PathBuf>) {
             shell.bind_active_view(&mut ui);
         }
     });
-    refresh_title();
+    refresh_tab_chrome();
 }
 
 /// Apply the saved window size and position, clamped to a real screen.
@@ -723,7 +864,7 @@ pub(crate) fn action_new_file() {
         let (shell, mut ui) = st.split();
         shell.new_untitled(&mut ui);
     });
-    refresh_title();
+    refresh_tab_chrome();
 }
 
 pub(crate) fn action_open_file() {
@@ -746,7 +887,7 @@ pub(crate) fn action_open_file() {
             with_state(|st| st.shell.open_file(path));
         }
     }
-    refresh_title();
+    refresh_tab_chrome();
 }
 
 pub(crate) fn action_save_file() {
@@ -820,6 +961,135 @@ pub(crate) fn action_save_all() {
         );
     }
     refresh_title();
+}
+
+/// Show the Save / Don't Save / Cancel prompt when the active buffer has
+/// unsaved changes, and act on the choice.
+///
+/// Returns `true` if the close may proceed (buffer clean, user chose
+/// Don't Save, or a requested save succeeded) and `false` if it must be
+/// aborted. Mirrors `ui_gtk::confirm_discard_active` and Win32's
+/// `handle_close_active_tab_inner` gate.
+fn confirm_discard_active() -> bool {
+    // Sample under a brief borrow, dropped before the modal runs: the
+    // alert spins its own run loop that re-enters our handlers, and a
+    // live borrow at that point would make `with_state` decline.
+    let Some(Some((dirty, name))) = with_state(|st| {
+        // The **live** `SCI_GETMODIFY` bit, ORed with the cached flag —
+        // not the cached flag alone. `Tab.dirty` is only ever written by
+        // the shell's crash-recovery restore paths; nothing on this
+        // backend sets it in response to typing, because Scintilla's
+        // notifications are not wired here yet. Reading it alone made
+        // this whole gate inert: every ordinary typed edit reported
+        // clean and closed without a prompt. Same OR that
+        // `ui_gtk::confirm_discard_active` does, for the same reason.
+        let live_dirty = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0;
+        st.shell.active().map(|t| {
+            // Skip the prompt while a load is still in flight (the
+            // cached bit is a lazy-populate artifact then, not a real
+            // edit), and for an untitled buffer that has been typed into
+            // and erased back to empty. Both carried over from GTK.
+            let length = st.editor.send(codepp_scintilla_sys::SCI_GETLENGTH, 0, 0);
+            let worth_prompting = t.pending_load.is_none() && (t.path.is_some() || length > 0);
+            (
+                (live_dirty || t.dirty) && worth_prompting,
+                codepp_shell::tab_display_name(t),
+            )
+        })
+    }) else {
+        return true;
+    };
+    if !dirty {
+        return true;
+    }
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+
+    // Held across the whole prompt. A worker wake dispatched into the
+    // alert's nested run loop could otherwise `drain` and move
+    // `active_tab`, sliding a different buffer under the user's
+    // decision — the exact race DESIGN.md §7.4 records for GTK's close
+    // path. See [`DrainFreeze`]. Named without an underscore because the
+    // Save arm drops it explicitly before re-entering `action_save_file`,
+    // which runs its own modal.
+    let freeze = DrainFreeze::new();
+
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(&format!("Save changes to {name}?")));
+    alert.setInformativeText(&NSString::from_str(
+        "Your changes will be lost if you don't save them.",
+    ));
+    alert.setAlertStyle(NSAlertStyle::Warning);
+    // Button order is macOS convention — the default action first, the
+    // destructive one last — which is the reverse of the Win32 dialog's
+    // reading order but the right thing on this platform.
+    alert.addButtonWithTitle(&NSString::from_str("Save"));
+    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+    alert.addButtonWithTitle(&NSString::from_str("Don't Save"));
+
+    // `NSAlertFirstButtonReturn` is 1000; the rest count up.
+    match alert.runModal() {
+        1000 => {
+            // Save, and only proceed if it actually succeeded — a
+            // failed save that still closed the tab is precisely the
+            // data loss this prompt exists to prevent. The freeze is
+            // released first because `action_save_file` may open its own
+            // Save-As panel, which takes the freeze again; holding both
+            // would work (it is a depth count) but releasing here keeps
+            // the nesting shallow and the intent obvious.
+            drop(freeze);
+            action_save_file();
+            with_state(|st| st.shell.active().is_some_and(|t| !t.dirty)).unwrap_or(false)
+        }
+        1002 => true, // Don't Save
+        _ => false,   // Cancel, or the window closed under the alert
+    }
+}
+
+/// Close the active tab, gated on the unsaved-changes prompt.
+pub(crate) fn action_close_tab() {
+    if confirm_discard_active() {
+        // Release the closed buffer's Scintilla document. `ClosedTab`
+        // hands back the doc pointer precisely so the UI can do this —
+        // dropping the tab without `SCI_RELEASEDOCUMENT` leaks the whole
+        // buffer for the rest of the process, because the single view no
+        // longer references it and Scintilla refcounts documents.
+        let closed_doc = with_state(|st| st.shell.close_active_tab().map(|c| c.scintilla_doc));
+        if let Some(Some(doc)) = closed_doc {
+            if doc != 0 {
+                with_state(|st| {
+                    st.editor
+                        .send(codepp_scintilla_sys::SCI_RELEASEDOCUMENT, 0, doc);
+                });
+            }
+        }
+        // Closing the *last* tab must leave a fresh untitled buffer, not
+        // a tab-less placeholder. A placeholder with no backing `Tab` is
+        // the "null" state: the strip paints from `shell.tabs` and so
+        // collapses to nothing, while the view still shows the closed
+        // document — typing into it and pressing ⌘W again would discard
+        // the edits with no prompt, because there is no `Tab` for the
+        // gate above to find. `new_untitled` creates a real, tracked,
+        // saveable tab. The Cocoa equivalent of Win32's `ensure_one_tab`
+        // and GTK's same fallback. (No leak: the new doc belongs to the
+        // new `Tab` and is released when that tab is closed.)
+        let has_active = with_state(|st| st.shell.active_tab.is_some()).unwrap_or(false);
+        if !has_active {
+            with_state(|st| {
+                let (shell, mut ui) = st.split();
+                shell.new_untitled(&mut ui);
+            });
+        }
+        rebind_active_view();
+    }
+    // Unfrozen now: flush whatever a worker completed while the modal
+    // held the run loop, applied against the post-close state.
+    // **Unconditional**, including on Cancel: a wake dispatched during
+    // the prompt fired and no-op'd rather than queuing a retry, so
+    // without this flush a pending dialog for an unrelated tab could sit
+    // unpresented indefinitely.
+    drain_shell();
 }
 
 pub(crate) fn action_reload() {

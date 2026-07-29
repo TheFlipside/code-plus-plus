@@ -561,18 +561,20 @@ impl UiPlatform for CocoaUi {
 
     // --- Chrome visibility -------------------------------------------
     //
-    // m2 has a status bar and a menu bar but no tab strip and no
-    // toolbar, so those two pairs report "not hidden" and decline the
-    // toggle. Reporting `false` from `set_*` is the trait's documented
-    // "was not previously hidden", which is accurate — there is nothing
-    // to hide. They become real in m3 alongside the widgets.
+    // The tab strip and status bar are real, so each pair reports and
+    // toggles its live view; `set_*` returns the *previous* hidden state
+    // the trait documents as its result. The toolbar is not built yet
+    // (m3b), so its pair reports "not hidden" — accurate, since there is
+    // nothing to hide.
 
     fn is_tabbar_hidden(&self) -> bool {
-        false
+        self.tabs.is_hidden()
     }
 
-    fn set_tabbar_hidden(&mut self, _hidden: bool) -> bool {
-        false
+    fn set_tabbar_hidden(&mut self, hidden: bool) -> bool {
+        let was = self.tabs.is_hidden();
+        self.tabs.set_hidden(hidden);
+        was
     }
 
     fn is_toolbar_hidden(&self) -> bool {
