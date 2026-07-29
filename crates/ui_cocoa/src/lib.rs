@@ -1306,8 +1306,16 @@ fn url_to_path(url: &NSURL) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-mod activation_source_invariant {
-    //! Guards where window activation happens.
+mod source_invariants {
+    //! Source-level guards for invariants a runtime test cannot see.
+    //!
+    //! Each of these encodes a bug that actually shipped and was found
+    //! by a user rather than by the suite. They are source scans because
+    //! every one of them fails by *absence* — a call that is not made, a
+    //! pairing that is broken — and needs a real window server, a real
+    //! run loop, or a human looking at pixels to observe directly.
+    //!
+    //! ## Window activation
     //!
     //! Ordering the window front and activating the application must
     //! run from the application delegate's
@@ -1467,6 +1475,37 @@ mod activation_source_invariant {
             "`seed_horizontal_scroll` no longer enables width tracking — \
              the reset alone pins the document view to one point wide."
         );
+    }
+
+    /// The shared editor-styling helpers must all be applied.
+    ///
+    /// `apply_predefined_styles` is this backend's copy of a list every
+    /// backend runs, and omissions there are invisible in logic tests:
+    /// the feature still works, it just renders with Scintilla's
+    /// defaults instead of Code++'s palette. Missing
+    /// `configure_change_history_margin` shipped exactly that way — the
+    /// change-history strip drew as an outlined bar with a lighter fill
+    /// on macOS while Win32 and GTK drew a solid orange one, and only a
+    /// user comparing the two platforms could tell.
+    #[test]
+    fn apply_predefined_styles_runs_the_shared_helpers() {
+        let src = include_str!("platform.rs");
+        assert!(src.len() > 5_000, "source scan read too little to be real");
+        let body = fn_body(src, "apply_predefined_styles");
+        for required in [
+            "apply_line_number_margin",
+            "enable_line_number_margin",
+            "configure_change_history_margin",
+            "apply_brace_styles",
+            "apply_indent_guide_style",
+        ] {
+            assert!(
+                body.contains(required),
+                "`apply_predefined_styles` no longer calls `{required}`. \
+                 The other backends do; dropping it does not break the \
+                 feature, it just renders it differently on macOS."
+            );
+        }
     }
 
     #[test]

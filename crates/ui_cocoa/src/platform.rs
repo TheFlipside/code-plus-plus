@@ -40,6 +40,16 @@ const TAB_WIDTH_SPACES: usize = 4;
 
 /// Index of the line-number margin. Same slot the other backends use.
 const LINE_NUMBER_MARGIN: u32 = 0;
+/// Margin index for the change-history "edit indicator" strip. 4 sits to
+/// the right of the line-number margin (and a future fold margin), the
+/// same slot `ui_win32` and `ui_gtk` use so all three backends match.
+const CHANGE_HISTORY_MARGIN: u32 = 4;
+/// Pixel width of the change-history strip when populated — a thin
+/// slice, matching the other backends.
+const CHANGE_HISTORY_MARGIN_PX: i32 = 4;
+/// Change-history strip colour: Material orange 400 in Scintilla's
+/// `0x00BBGGRR` order, the same shade the active-tab indicator uses.
+const CHANGE_HISTORY_COLOR: u32 = 0x00_26_A7_FF;
 
 /// Pack an `(r, g, b)` triple into Scintilla's BGR colour word.
 const fn rgb_to_scintilla_colour((r, g, b): (u8, u8, u8)) -> u32 {
@@ -169,6 +179,26 @@ impl CocoaUi {
 pub(crate) fn apply_predefined_styles(editor: &EditorHandle) {
     codepp_editor::theme::apply_line_number_margin(editor);
     editor.enable_line_number_margin(LINE_NUMBER_MARGIN);
+    // The change-history "edit indicator" strip. Shared config, so it
+    // looks and behaves identically on all three backends;
+    // per-document *enablement* happens in `activate_tab`.
+    //
+    // Without this call the margin still appears, because
+    // `SC_CHANGE_HISTORY_MARKERS` is enabled per document — but it
+    // renders with Scintilla's *built-in* marker definitions, which draw
+    // an outlined bar with a lighter fill rather than the solid strip
+    // Win32 and GTK show. That was the visible symptom of this call
+    // being missing: same feature, different appearance, on macOS only.
+    editor.configure_change_history_margin(
+        CHANGE_HISTORY_MARGIN,
+        CHANGE_HISTORY_MARGIN_PX,
+        CHANGE_HISTORY_COLOR,
+    );
+    // Both were likewise missing here while present on the other two
+    // backends, so brace matching and indent guides rendered with
+    // Scintilla's defaults instead of Code++'s palette.
+    codepp_editor::theme::apply_brace_styles(editor);
+    codepp_editor::theme::apply_indent_guide_style(editor);
 }
 
 /// Read the whole buffer out of Scintilla as a `String`.
