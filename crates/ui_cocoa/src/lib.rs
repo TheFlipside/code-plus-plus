@@ -425,10 +425,20 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
 /// Nothing is lost while frozen: the shell's channels are unbounded, so
 /// work merely lands after the modal instead of during it. The caller
 /// flushes once on release.
-struct DrainFreeze;
+///
+/// **Not only modals.** Anything that spins a nested run loop needs
+/// this, because GCD's main-queue source is serviced in those loops too.
+/// The tab strip's drag-reorder tracking loop
+/// (`tabs::TabButton::track`) is the non-modal case: it pumps
+/// `NSEventTrackingRunLoopMode` by hand, and a worker completing
+/// mid-drag would otherwise reach `refresh_tab_chrome` → `TabStrip::sync`,
+/// which removes every control in the strip — including the button whose
+/// `mouseDown:` is still on the stack running that loop — and could pop
+/// a modal alert while the mouse button is still physically held.
+pub(crate) struct DrainFreeze;
 
 impl DrainFreeze {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         MODAL_DEPTH.with(|d| d.set(d.get() + 1));
         Self
     }
@@ -442,6 +452,47 @@ impl Drop for DrainFreeze {
     fn drop(&mut self) {
         MODAL_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
     }
+}
+
+/// Run `f` at a boundary that native code calls into.
+///
+/// **Why every AppKit and Scintilla callback needs this.** A Rust panic
+/// unwinding out of one of those entry points passes through frames that
+/// are not Rust's — `objc_msgSend`, `-[NSApplication sendEvent:]`,
+/// Scintilla's own C++ dispatch. `on_sci_notify` is declared plain
+/// `extern "C"`, where a foreign unwind is undefined behaviour outright;
+/// the `#[unsafe(method(...))]` overrides go through objc2's
+/// `extern "C-unwind"` trampoline, which defines the *edge* but says
+/// nothing about whether the AppKit frames above it survive a foreign
+/// unwind. Neither is a risk worth carrying for the sake of a backtrace.
+///
+/// The rest of the workspace already treats this as non-negotiable —
+/// `ui_win32`'s window and dialog procs, `ui_gtk`'s signal handlers and
+/// `plugin-host`'s dispatcher all wrap their native-invoked boundaries
+/// the same way (DESIGN.md §6.5 states the convention for the plugin
+/// case). `ui_cocoa` had simply never adopted it.
+///
+/// A caught panic is logged and swallowed, and the caller gets
+/// `fallback`. That is the right trade at a UI callback: the alternative
+/// is aborting the process over, say, a paint that could not compute a
+/// rectangle. It is not a licence to panic — nothing here is expected to,
+/// and the log line is deliberately at `error` so one that does is not
+/// mistaken for normal operation.
+///
+/// Note the release profile sets `panic = "abort"` (DESIGN.md §9.1), so
+/// in a shipped build the process dies before any of this runs. This
+/// earns its place in dev and test builds, which unwind by default —
+/// i.e. exactly where a developer is most likely to trip a panic and
+/// least likely to want undefined behaviour as the diagnostic.
+pub(crate) fn at_callback_boundary<R>(
+    entry: &'static str,
+    fallback: R,
+    f: impl FnOnce() -> R,
+) -> R {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| {
+        tracing::error!(entry, "panic caught at a native callback boundary");
+        fallback
+    })
 }
 
 /// Scintilla's notification callback.
@@ -493,6 +544,22 @@ impl Drop for DrainFreeze {
 /// `SCNotification*` when `message` is [`COCOA_WM_NOTIFY`], live for the
 /// duration of this synchronous call and owned by Scintilla.
 unsafe extern "C" fn on_sci_notify(_windowid: isize, message: u32, _wparam: usize, lparam: usize) {
+    // Plain `extern "C"`, so an escaping panic is undefined behaviour
+    // rather than merely unwise. See [`at_callback_boundary`].
+    at_callback_boundary("SCN_notify", (), || {
+        // SAFETY: unchanged from the enclosing signature's contract —
+        // `lparam` is the live `SCNotification` Scintilla passed.
+        unsafe { on_sci_notify_inner(message, lparam) }
+    });
+}
+
+/// The body of [`on_sci_notify`], so the panic guard wraps it whole.
+///
+/// # Safety
+///
+/// `lparam` must be a live `SCNotification*` for the duration of the
+/// call, which is what Scintilla passes for `WM_NOTIFY`.
+unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
     if message != codepp_scintilla_sys::COCOA_WM_NOTIFY || lparam == 0 {
         return;
     }
@@ -522,9 +589,9 @@ unsafe extern "C" fn on_sci_notify(_windowid: isize, message: u32, _wparam: usiz
             // Cheap guard: only touch the strip when the dirty marker
             // would actually change. Without this, every caret move
             // would rebuild every tab button.
-            let live =
-                with_state(|st| st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0)
-                    .unwrap_or(false);
+            let Some(live) = active_dirty() else {
+                return;
+            };
             if LAST_DIRTY.with(std::cell::Cell::get) != live {
                 LAST_DIRTY.with(|c| c.set(live));
                 refresh_tab_chrome();
@@ -774,6 +841,79 @@ fn refresh_title() {
     });
 }
 
+/// Whether the active buffer should paint as having unsaved changes.
+///
+/// **Two sources, not one.** `SCI_GETMODIFY` is the live editor bit and
+/// covers ordinary typing, but a buffer restored from a crash-recovery
+/// backup sits at its Scintilla save point while still having no copy on
+/// disk. `Shell` tracks those in `unsaved_restore_ids`, and without the
+/// OR below, editing one character in a restored buffer and undoing it
+/// returns the document to that seeded save point and the marker flips
+/// to clean — for a buffer whose contents exist nowhere but memory.
+///
+/// DESIGN.md §7.4 records exactly this as an open Win32 bug and notes
+/// that `ui_gtk`'s `refresh_active_dirty` is the correct one because it
+/// does this OR. The Cocoa port inherited the Win32 shape by omission;
+/// this is where it stops. No data was ever at risk on any backend —
+/// `Shell::tab_needs_backup` ORs the same id set, so the recovery backup
+/// is retained regardless — but the indicator was wrong.
+///
+/// Returns `None` when the state is unreachable (a re-entrant call), so
+/// callers can leave the cached value alone rather than treating "could
+/// not look" as "clean". That distinction is the one `ui_gtk`'s
+/// `DirtyPoll::Unavailable` exists to preserve.
+fn active_dirty() -> Option<bool> {
+    with_state(|st| {
+        let modified = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0;
+        // Read the id out before any mutable borrow: `is_unsaved_restore`
+        // takes `&self`.
+        let restored = st
+            .shell
+            .active_tab
+            .and_then(|idx| st.shell.tabs.get(idx))
+            .is_some_and(|t| st.shell.is_unsaved_restore(t.id));
+        modified || restored
+    })
+}
+
+/// Write the currently-bound document's dirty state onto the tab that
+/// owns it.
+///
+/// **Ordering is the whole contract: this must run while `active_tab`
+/// still names the tab whose document is bound.** It reads the modify
+/// bit of whatever document the single Scintilla view currently holds
+/// and attributes it to whatever tab is currently active, so running it
+/// after a switch records the *outgoing* buffer's dirtiness against the
+/// *incoming* tab. Hence the calls in `select_tab_by_id` and
+/// `close_tab_by_id` sit above the `active_tab` write, not below it.
+///
+/// Only the active tab is touched, because it is the only one whose
+/// document is bound to the view. Inactive tabs keep the value captured
+/// on their way out — which is exactly what this exists to make true.
+/// `ui_gtk` has the same function for the same reason; the Cocoa port
+/// was relying on `refresh_tab_chrome` happening to run at the right
+/// moment, which it does not on a tab switch.
+fn capture_active_dirty() {
+    let Some(dirty) = active_dirty() else {
+        // Unreachable state (a re-entrant call). Leave the cached marker
+        // alone rather than writing "clean" from a read that never
+        // happened.
+        return;
+    };
+    with_state(|st| {
+        if let Some(idx) = st.shell.active_tab {
+            if let Some(tab) = st.shell.tabs.get_mut(idx) {
+                tab.dirty = dirty;
+            }
+        }
+        // Keep the notification handler's cached edge in step, so a
+        // model-driven refresh (a tab switch, a save) does not leave
+        // `LAST_DIRTY` disagreeing with what was just painted and cause
+        // a redundant rebuild on the next caret move.
+        LAST_DIRTY.with(|c| c.set(dirty));
+    });
+}
+
 /// Resync the tab strip and the window title from the shell.
 ///
 /// Called after anything that can change the tab list or which tab is
@@ -789,19 +929,7 @@ pub(crate) fn refresh_tab_chrome() {
     // Scintilla's notifications, `on_sci_notify` also drives this on the
     // dirty *edges*; this call is what keeps the two in agreement when a
     // model event (a tab switch, a save) repaints outside that path.
-    with_state(|st| {
-        let live_dirty = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0;
-        if let Some(idx) = st.shell.active_tab {
-            if let Some(tab) = st.shell.tabs.get_mut(idx) {
-                tab.dirty = live_dirty;
-            }
-        }
-        // Keep the notification handler's cached edge in step, so a
-        // model-driven refresh (a tab switch, a save) does not leave
-        // `LAST_DIRTY` disagreeing with what was just painted and cause
-        // a redundant rebuild on the next caret move.
-        LAST_DIRTY.with(|c| c.set(live_dirty));
-    });
+    capture_active_dirty();
     with_state(|st| {
         let mtm = MainThreadMarker::new();
         if let Some(mtm) = mtm {
@@ -860,14 +988,16 @@ pub(crate) fn select_tab_by_id(id: i32) {
         return;
     };
     if with_state(|st| st.shell.active_tab == Some(idx)).unwrap_or(false) {
-        // Already active — but the click still toggled the button's own
-        // push-on/push-off state off, and nothing else would put it
-        // back, leaving the current tab painted as unselected. Rebuild
-        // the strip so the selection state is re-derived from the model
-        // rather than left to AppKit's per-button toggle.
+        // Already active. Still re-sync the strip rather than returning
+        // outright, so the painted selection is always re-derived from
+        // the model — the same "never infer selection from the control's
+        // own state" rule `ui_gtk`'s strip documents. Cheap, and it keeps
+        // one code path responsible for what the strip shows.
         refresh_tab_chrome();
         return;
     }
+    // Before the switch, never after — see [`capture_active_dirty`].
+    capture_active_dirty();
     with_state(|st| st.shell.active_tab = Some(idx));
     rebind_active_view();
 }
@@ -883,10 +1013,72 @@ pub(crate) fn close_tab_by_id(id: i32) {
     };
     let already_active = with_state(|st| st.shell.active_tab == Some(idx)).unwrap_or(false);
     if !already_active {
+        // Before the switch, never after — see [`capture_active_dirty`].
+        capture_active_dirty();
         with_state(|st| st.shell.active_tab = Some(idx));
         rebind_active_view();
     }
     action_close_tab();
+}
+
+/// Whether the tab with `id` is pinned. `false` if it has since closed.
+///
+/// Read by the tab strip before it starts drag tracking: a pinned tab is
+/// fixed in place, so the drag must not begin at all. `Shell::move_tab`
+/// would reject the move regardless — this is what stops the user
+/// dragging a tab that can never land, which is what `ui_gtk` achieves
+/// by clearing `set_tab_reorderable` on pinned pages.
+pub(crate) fn tab_is_pinned(id: i32) -> bool {
+    with_state(|st| st.shell.tabs.iter().any(|t| t.id == id && t.pinned)).unwrap_or(false)
+}
+
+/// Toggle the pin state of the tab with `id` — the tab-strip pin glyph.
+///
+/// `Shell::set_pinned` flips the flag and relocates the tab into or out
+/// of the pinned cluster (adjusting `active_tab` so the active buffer
+/// follows its tab), then the strip re-renders in the new order. A no-op
+/// if the tab has since closed.
+pub(crate) fn toggle_pin_by_id(id: i32) {
+    // The id→index lookup and the `set_pinned(idx, …)` mutation MUST stay
+    // in one `with_state` closure: splitting them across two borrows
+    // would let a tab move between them and pin the wrong buffer — the
+    // same index staleness the id-keying guards against. `set_pinned`
+    // range-checks `idx` itself.
+    with_state(|st| {
+        if let Some(idx) = st.shell.tabs.iter().position(|t| t.id == id) {
+            let want = !st.shell.tabs[idx].pinned;
+            st.shell.set_pinned(idx, want);
+        }
+    });
+    refresh_tab_chrome();
+}
+
+/// Move the tab with `id` to position `target` — the drop half of a
+/// tab-strip drag.
+///
+/// `Shell::move_tab` enforces the pinned-prefix invariant and declines a
+/// move that would break it. Either outcome ends in the same
+/// `refresh_tab_chrome`, which rebuilds the strip from the model: on
+/// success it shows the new order, and on rejection it puts the dragged
+/// button back where the model says it belongs. That is why nothing here
+/// needs to undo the drag's visual displacement.
+pub(crate) fn reorder_tab_by_id(id: i32, target: usize) {
+    // Same single-borrow discipline as `toggle_pin_by_id`: resolve the id
+    // to an index and move in one closure, so no tab can shift between
+    // the two steps.
+    with_state(|st| {
+        let Some(from) = st.shell.tabs.iter().position(|t| t.id == id) else {
+            return;
+        };
+        // The strip derives `target` from a pixel position, so it can
+        // point past the last tab when the drag overshoots the strip's
+        // right edge.
+        let to = target.min(st.shell.tabs.len().saturating_sub(1));
+        if to != from {
+            st.shell.move_tab(from, to);
+        }
+    });
+    refresh_tab_chrome();
 }
 
 /// Open a path that was dropped onto the window.
@@ -1252,12 +1444,13 @@ fn confirm_discard_active() -> bool {
     // live borrow at that point would make `with_state` decline.
     let Some(Some((dirty, name))) = with_state(|st| {
         // The **live** `SCI_GETMODIFY` bit, ORed with the cached flag —
-        // not the cached flag alone. `Tab.dirty` is only ever written by
-        // the shell's crash-recovery restore paths; nothing on this
-        // backend sets it in response to typing, because Scintilla's
-        // notifications are not wired here yet. Reading it alone made
-        // this whole gate inert: every ordinary typed edit reported
-        // clean and closed without a prompt. Same OR that
+        // not the cached flag alone. Before m3b wired Scintilla's
+        // notifications, nothing on this backend set `Tab.dirty` in
+        // response to typing at all, which made this whole gate inert:
+        // every ordinary typed edit reported clean and closed without a
+        // prompt. The OR still earns its place now that they are wired,
+        // because a notification can be missed when it arrives inside an
+        // outer `with_state` borrow (see `on_sci_notify`). Same OR
         // `ui_gtk::confirm_discard_active` does, for the same reason.
         let live_dirty = st.editor.send(codepp_scintilla_sys::SCI_GETMODIFY, 0, 0) != 0;
         st.shell.active().map(|t| {
@@ -1590,6 +1783,121 @@ mod source_invariants {
                  feature, it just renders it differently on macOS."
             );
         }
+    }
+
+    /// Every tab switch must record the outgoing buffer's dirty state
+    /// **before** it moves `active_tab`.
+    ///
+    /// Reversed, the read still succeeds — it just attributes the
+    /// outgoing document's modify bit to the incoming tab, so the wrong
+    /// tab wears the unsaved-changes marker. Nothing crashes and nothing
+    /// logs, which is why this is a scan: the failure is a wrong pixel
+    /// in a strip that is rebuilt constantly, and no assertion in a
+    /// headless test can see it.
+    #[test]
+    fn dirty_is_captured_before_the_active_tab_moves() {
+        let src = production_src();
+        for name in ["select_tab_by_id", "close_tab_by_id"] {
+            let body = fn_body(src, name);
+            let capture = body
+                .find("capture_active_dirty()")
+                .unwrap_or_else(|| panic!("{name} never captures the outgoing dirty state"));
+            let write = body
+                .find("active_tab = Some(idx)")
+                .unwrap_or_else(|| panic!("{name} no longer writes active_tab as expected"));
+            assert!(
+                capture < write,
+                "{name} moves active_tab before capturing the outgoing dirty state, \
+                 so the incoming tab inherits the outgoing buffer's marker"
+            );
+        }
+    }
+
+    /// The dirty marker must consult `Shell::is_unsaved_restore`, not
+    /// `SCI_GETMODIFY` alone.
+    ///
+    /// A buffer restored from a crash-recovery backup sits at its
+    /// Scintilla save point with no copy on disk, so the live modify bit
+    /// reads clean for a buffer whose contents exist only in memory.
+    /// DESIGN.md §7.4 records this as an open Win32 bug; the scan is
+    /// what stops the Cocoa backend drifting back into it.
+    ///
+    /// **What this does and does not catch.** It is a presence check:
+    /// mutation-verified against *deleting* the consultation, which is
+    /// the realistic regression (a future refactor simplifying the
+    /// helper down to the raw bit). It cannot see the call being made
+    /// and its result then discarded — no source scan can. A runtime
+    /// test would need a live `CocoaUiState`, i.e. a window server and a
+    /// real `Shell`, which is why the second assertion below exists
+    /// instead: keeping the number of live-modify-bit readers pinned at
+    /// two is what stops a fourth site quietly growing its own,
+    /// unrestored-aware copy of this logic.
+    #[test]
+    fn the_dirty_poll_accounts_for_restored_buffers() {
+        let body = fn_body(production_src(), "active_dirty");
+        // The call form, not the bare identifier: the body carries a
+        // comment naming `is_unsaved_restore` in prose, and matching that
+        // made the guard pass against a mutation that removed the call.
+        assert!(
+            body.contains(".is_unsaved_restore("),
+            "active_dirty no longer ORs is_unsaved_restore, so a restored \
+             buffer paints clean after an edit-then-undo"
+        );
+        // And it must be the *only* place the raw bit is turned into a
+        // marker, so there is one thing to keep correct.
+        let src = production_src();
+        // Call sites only — the pattern includes `send(` so the prose in
+        // the doc comments above does not count as one.
+        let raw = src
+            .matches("send(codepp_scintilla_sys::SCI_GETMODIFY")
+            .count();
+        assert_eq!(
+            raw, 2,
+            "expected exactly two live-modify-bit reads in lib.rs \
+             (active_dirty, and confirm_discard_active's independent close \
+             gate); found {raw}. A third caller almost certainly wants \
+             active_dirty() instead."
+        );
+    }
+
+    /// `TabButton::track` must not touch `self` after it mutates the
+    /// model.
+    ///
+    /// Its commit path resyncs the tab strip, which sends
+    /// `removeFromSuperview` to every control in it — including the
+    /// button whose `mouseDown:` is still on the stack. The superview
+    /// holds the only strong reference, and Objective-C dispatch does not
+    /// retain the receiver, so a `self.` after that point is a
+    /// use-after-free rather than a stale read. The loop therefore
+    /// decides the gesture and acts on it only after `drop(freeze)`.
+    ///
+    /// A scan because the failure is a dangling pointer inside AppKit,
+    /// reachable only from a real drag on a real window server, and
+    /// because it would most likely *not* crash in a debug build — the
+    /// freed memory is still mapped and usually still intact.
+    #[test]
+    fn the_tab_drag_loop_stops_touching_self_before_it_mutates() {
+        let src = include_str!("tabs.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        let start = src
+            .find("drop(freeze);")
+            .expect("track() no longer drops its freeze");
+        // The tail runs to the end of the function; the next item after
+        // it is the `Gesture` enum, which is the natural stop.
+        let end = src[start..]
+            .find("enum Gesture")
+            .expect("Gesture enum no longer follows track()")
+            + start;
+        let tail = &src[start..end];
+        assert!(
+            !tail.contains("self."),
+            "TabButton::track touches `self` after mutating the model, \
+             which resyncs the strip and can deallocate the receiver \
+             while its own mouseDown: is still on the stack"
+        );
     }
 
     #[test]

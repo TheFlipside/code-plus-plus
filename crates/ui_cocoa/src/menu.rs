@@ -79,18 +79,6 @@ define_class!(
             crate::action_reload();
         }
 
-        /// Select the tab whose `Tab.id` is in the sender's `tag`.
-        ///
-        /// The tag carries an **id, not an index** — see
-        /// `tabs::TabStrip::sync` for why, and DESIGN.md §7.4 for the
-        /// Win32 bug that made it a rule.
-        #[unsafe(method(codeppSelectTab:))]
-        fn select_tab(&self, sender: Option<&NSControl>) {
-            if let Some(sender) = sender {
-                crate::select_tab_by_id(sender.tag() as i32);
-            }
-        }
-
         /// Close the tab whose `Tab.id` is in the sender's `tag`.
         #[unsafe(method(codeppCloseTab:))]
         fn close_tab(&self, sender: Option<&NSControl>) {

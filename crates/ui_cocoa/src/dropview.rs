@@ -38,19 +38,28 @@ define_class!(
             // actually carries filenames, so dragging arbitrary content
             // (a colour swatch, a text selection) shows the "no" cursor
             // rather than promising something we would then ignore.
-            usize::from(!dragged_paths(sender).is_empty())
+            //
+            // `NSDragOperationNone` (0) is the right thing to fall back
+            // to if the guard fires: refusing the drop is the safe answer.
+            crate::at_callback_boundary("draggingEntered:", 0, || {
+                usize::from(!dragged_paths(sender).is_empty())
+            })
         }
 
         #[unsafe(method(performDragOperation:))]
         fn perform_drag_operation(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> Bool {
-            let paths = dragged_paths(sender);
-            if paths.is_empty() {
-                return Bool::NO;
-            }
-            for path in paths {
-                crate::open_dropped_path(path);
-            }
-            Bool::YES
+            // Falls back to `NO` — "the drop was not handled" — which
+            // is what AppKit should be told if we could not complete it.
+            crate::at_callback_boundary("performDragOperation:", Bool::NO, || {
+                let paths = dragged_paths(sender);
+                if paths.is_empty() {
+                    return Bool::NO;
+                }
+                for path in paths {
+                    crate::open_dropped_path(path);
+                }
+                Bool::YES
+            })
         }
     }
 );

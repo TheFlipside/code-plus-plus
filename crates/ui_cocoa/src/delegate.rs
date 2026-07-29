@@ -73,7 +73,9 @@ define_class!(
         /// workflow (DEVELOPMENT.md §4.5).
         #[unsafe(method(applicationDidFinishLaunching:))]
         fn did_finish_launching(&self, _notification: &NSNotification) {
-            crate::activate_main_window();
+            crate::at_callback_boundary("applicationDidFinishLaunching:", (), || {
+                crate::activate_main_window();
+            });
         }
 
         /// Persist and tear down before `exit()`.
@@ -83,15 +85,23 @@ define_class!(
         /// `exit()` and never unwinds the Rust stack.
         #[unsafe(method(applicationWillTerminate:))]
         fn will_terminate(&self, _notification: &NSNotification) {
-            // Order is load-bearing. `save_session_now` reads the caret
-            // position back out of the live Scintilla view, so it has to
-            // run while the state is still installed.
-            crate::save_session_now();
-            crate::report_perf();
+            // Each step is guarded separately rather than the three
+            // together: this is the last code to run before `exit()`, so
+            // a panic in the session save must not cost the teardown, and
+            // a panic in either must not cost the other.
+            crate::at_callback_boundary("applicationWillTerminate:save", (), || {
+                // Order is load-bearing. `save_session_now` reads the
+                // caret position back out of the live Scintilla view, so
+                // it has to run while the state is still installed.
+                crate::save_session_now();
+            });
+            crate::at_callback_boundary("applicationWillTerminate:perf", (), crate::report_perf);
             // Drop the state so `Shell` — and the worker threads its
             // channels keep alive — tear down deterministically rather
             // than being abandoned by `exit()`.
-            crate::state::uninstall();
+            crate::at_callback_boundary("applicationWillTerminate:teardown", (), || {
+                crate::state::uninstall();
+            });
         }
     }
 );
