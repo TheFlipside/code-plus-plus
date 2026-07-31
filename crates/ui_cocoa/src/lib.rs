@@ -88,6 +88,10 @@ const DEFAULT_HEIGHT: f64 = 768.0;
 pub(crate) const AUTOSAVE_INTERVAL_SECS: f64 = 7.0;
 
 thread_local! {
+    /// Last (first visible line, x offset) the editor was seen at, so
+    /// [`flash_scrollers_if_scrolled`] can tell a real scroll from a
+    /// repaint.
+    static LAST_SCROLL: std::cell::Cell<(isize, isize)> = const { std::cell::Cell::new((-1, -1)) };
     /// Last dirty state pushed into the tab strip, so a notification
     /// storm only rebuilds it when the marker actually changes. See
     /// [`on_sci_notify`].
@@ -602,7 +606,10 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
         // read, and a write only when the width actually fell below the
         // viewport. See `clamp_scroll_width_to_viewport`.
         codepp_scintilla_sys::SCN_PAINTED => {
-            with_state(|st| clamp_scroll_width_to_viewport(st));
+            with_state(|st| {
+                clamp_scroll_width_to_viewport(st);
+                flash_scrollers_if_scrolled(st);
+            });
         }
         _ => {}
     }
@@ -805,6 +812,10 @@ const SELECTION_BACK_INACTIVE: usize = 0xFF_DC_DC_DC;
 /// Give the editor the selection colours, and stop its subviews painting
 /// outside its band.
 ///
+/// Scroller behaviour is deliberately left alone here — see
+/// [`flash_scrollers_if_scrolled`] for why forcing a style does not work
+/// on this backend.
+///
 /// **The clip is not cosmetic tidiness.** `SCIScrollView` is a *flipped*
 /// view, and on macOS 26 it carries a scroll-edge-effect
 /// `NSVisualEffectView` sized 690 pt inside a 548 pt scroll view — so in
@@ -836,26 +847,54 @@ fn apply_editor_appearance() {
             SELECTION_BACK_INACTIVE as isize,
         );
         st.sci_view.setClipsToBounds(true);
-        force_persistent_scrollers(&st.sci_view);
     });
 }
 
-/// Make the editor's scrollers permanent rather than overlay.
+/// Show the editor's overlay scrollers whenever the view has scrolled.
 ///
-/// macOS defaults to overlay scrollers, which appear only during a
-/// trackpad or wheel scroll and fade out — so scrolling by keyboard, by
-/// dragging a selection, or by a plugin leaves no indication that there
-/// is more document, and the bar the user reaches for is not there. Both
-/// other backends show a permanent scrollbar, and Notepad++ does too.
+/// macOS overlay scrollers appear during a wheel or trackpad gesture and
+/// fade out; scrolling by keyboard, by dragging a selection, by Go To
+/// Line or from a plugin produces no gesture, so nothing appears and
+/// there is no indication that the document continues. `flashScrollers`
+/// is AppKit's own answer — it is what a native app calls when it
+/// scrolls its content programmatically.
 ///
-/// This overrides a system preference deliberately and only for the
-/// editor's own scroll view: a code editor's scroll position is
-/// information, not decoration, and the whole point of the bar is to be
-/// readable at a glance without touching anything.
-fn force_persistent_scrollers(sci_view: &NSView) {
-    if let Some(scroll) = editor_scroll_view(sci_view) {
-        scroll.setScrollerStyle(objc2_app_kit::NSScrollerStyle::Legacy);
-        scroll.setAutohidesScrollers(false);
+/// **Forcing `NSScrollerStyle::Legacy` instead is the obvious idea and
+/// it is wrong.** Scintilla's `SCIScrollView` overrides `tile` to shift
+/// the content view right by the line-number margin's width and shrink
+/// it by the same amount, without touching the scrollers — arithmetic
+/// that only holds when the scrollers float over the content rather than
+/// taking space from it. Under Legacy the vertical scroller ends up laid
+/// out past the scroll view's own right edge (measured: x=1063 in a
+/// 1024-wide view) and both bars vanish the moment a long line widens
+/// the document. The vendored source agrees: `ScintillaView.mm:1474`
+/// carries `//[scrollView setScrollerStyle:NSScrollerStyleLegacy];`,
+/// commented out. So this backend works with overlay scrollers rather
+/// than against them.
+///
+/// Flashing only on an actual change of scroll position, not on every
+/// paint — otherwise the bars would pulse continuously while typing.
+///
+/// The `(-1, -1)` sentinel [`LAST_SCROLL`] starts at is deliberately
+/// unreachable, so the first paint after startup always flashes. Showing
+/// the bars once as a document appears is what a native app does, and it
+/// is the one case where "only on a change" is not literally true.
+///
+/// **This leaves macOS diverging from the other two backends**, which
+/// show a permanently visible bar. Recorded in §7.4 as an accepted
+/// tradeoff rather than an oversight: the alternative fights vendored
+/// layout code that upstream itself disabled, and it broke in a worse
+/// way — both bars vanishing outright.
+fn flash_scrollers_if_scrolled(st: &crate::state::CocoaUiState) {
+    let line = st
+        .editor
+        .send(codepp_scintilla_sys::SCI_GETFIRSTVISIBLELINE, 0, 0);
+    let x = st.editor.send(codepp_scintilla_sys::SCI_GETXOFFSET, 0, 0);
+    if LAST_SCROLL.with(|c| c.replace((line, x))) == (line, x) {
+        return;
+    }
+    if let Some(scroll) = editor_scroll_view(&st.sci_view) {
+        scroll.flashScrollers();
     }
 }
 
@@ -2350,6 +2389,46 @@ mod source_invariants {
     /// reachable only from a real drag on a real window server, and
     /// because it would most likely *not* crash in a debug build — the
     /// freed memory is still mapped and usually still intact.
+    /// The editor's scrollers must stay overlay.
+    ///
+    /// Forcing `NSScrollerStyle::Legacy` is the obvious way to make a
+    /// scrollbar permanent and it shipped once: Scintilla's
+    /// `SCIScrollView::tile` shifts the content view for the line-number
+    /// margin without adjusting the scrollers, arithmetic that only holds
+    /// when they float, so under Legacy *both* bars disappeared as soon
+    /// as a long line widened the document. A scan because the failure is
+    /// a layout interaction inside vendored Objective-C++ that only
+    /// appears with a wide enough document on screen — nothing in the
+    /// suite can see it, and it took a user report to find the first
+    /// time.
+    #[test]
+    fn the_editor_never_forces_a_legacy_scroller_style() {
+        let src = production_src();
+        // The *call*, not the type name: the doc comment on
+        // `flash_scrollers_if_scrolled` names the style in prose to
+        // explain why it is wrong, and matching the bare name made this
+        // guard fail against its own explanation. Same trap the
+        // `is_unsaved_restore` scan hit.
+        assert!(
+            !src.contains("setScrollerStyle("),
+            "the editor's scroll view must keep AppKit's overlay scrollers; \
+             see flash_scrollers_if_scrolled for what a forced style breaks"
+        );
+        // And the flash must stay behind its position-change guard, or it
+        // fires on every paint and the bars pulse while typing.
+        let body = fn_body(src, "flash_scrollers_if_scrolled");
+        let guard = body
+            .find("LAST_SCROLL")
+            .expect("flash_scrollers_if_scrolled no longer consults LAST_SCROLL");
+        let flash = body
+            .find("flashScrollers()")
+            .expect("flash_scrollers_if_scrolled no longer flashes");
+        assert!(
+            guard < flash,
+            "the scroll-position check must gate the flash, not follow it"
+        );
+    }
+
     #[test]
     fn the_tab_drag_loop_stops_touching_self_before_it_mutates() {
         let src = include_str!("tabs.rs");
