@@ -505,9 +505,15 @@ These are not blockers for the phase that surfaced them, but get addressed in Ph
 
   What the attribution leaves is one dominant item and two ordinary ones. **`NSApplication::sharedApplication` costs 55–61 ms on its own**, i.e. 70–76% of the whole budget is gone before Code++ constructs anything, and putting the binary in an `.app` bundle does not change it (61–69 ms bundled — tested, because it was the obvious hypothesis). Code++'s own share is window plus chrome construction (~37 ms) and the post-build startup work of styles, session restore and view settings (~35 ms).
 
-  **That AppKit cost is a platform floor, not something Code++ provokes.** A twelve-line Objective-C program whose entire body is `[NSApplication sharedApplication]` measures **43.8 / 49.1 / 50.9 / 66.6 ms** for that one call on this machine — the same range Code++ pays. So it is not a consequence of what this backend links, builds or initialises, and there is nothing to optimise on our side of it.
+  **That AppKit cost is a platform floor, not something Code++ provokes**, and a minimal-app reference now bounds the whole thing rather than just that one call. A twelve-line Objective-C program — `NSApplication`, one 1024×768 `NSWindow`, one `NSView` filling white — measures **149.7 / 182.9 / 195.0 ms from `main()` to first paint** and settles at **13.6 MB**. Win32's *entire* cold start is 94 ms, i.e. below the macOS floor for a blank window. §8 carries the full breakdown, including the 1 036 dylibs (WebKit, JavaScriptCore, WritingToolsUI among them) an empty Cocoa window ends up holding.
 
-  That reframes the question rather than answering it. Trimming Code++'s own ~72 ms to *zero* would still leave ~160 ms, and the unavoidable floor alone eats 55–75% of the 80 ms budget. **So §8's cold-start budget is not reachable on macOS**, and the open question is no longer "what is slow" but "what should the target be". Two things to settle, and both are judgement calls rather than measurements: whether the floor is the same on Intel and on other OS versions (worth one run each, the harness above is four lines), and whether §8 should give macOS its own documented cold-start figure the way it already gives each platform its own *memory* metric — with the honest justification that a ~50 ms platform tax is not something an application can architect away. That belongs with the memory-budget decision this entry already tracks; both are "accept, or change the constraint", and neither should be decided by drift.
+  **So the two budget misses are different problems, and only one of them is ours.**
+
+  *Cold start is the platform's.* Code++'s own share is the ~40–85 ms above the floor; driving it to zero still lands at ~160 ms against an 80 ms budget. The open question is no longer "what is slow" but "what should the target be" — whether §8 should give macOS its own documented cold-start figure the way it already gives each platform its own *memory* metric, with the honest justification that a 150 ms platform tax is not something an application can architect away. Worth one run each on Intel and on an older OS version first (the harness is a dozen lines, and the WebKit/WritingTools names suggest this is recent).
+
+  *Memory is ours, and the previous conclusion here was wrong.* This entry used to say the ~73 MB looked like an AppKit-established floor because it did not move across milestones. It does not move because its dominant term is the **window's backing surfaces**, which depend on window size — and a minimal AppKit app with the same window is 13.6 MB, so ~63 MB is Code++'s. `vmmap` attributes **46.2 MB of it to IOSurface** against the minimal app's 3.3 MB: GPU-shared backing store for the window and its layer tree, not heap. The actionable lead — untested, and named as a candidate rather than a cause — is the scroll-edge-effect `NSVisualEffectView` this section already records inside macOS 26's `SCIScrollView`, since a visual-effect view forces layer backing on its subtree and each full-window surface is ~12.6 MB on this display. Worth testing before any other memory work, because if it is that, the fix is one property on one view rather than an architectural change.
+
+  It also means the cross-platform comparison was never like-for-like: on Linux those compositing buffers live in the X server, not in the editor's PSS. Whatever is decided about the target, `phys_footprint` and PSS counting different things needs to be stated in §8 rather than left implicit.
 
   Two things worth deciding alongside it rather than after: whether any of those frameworks can be kept unmapped at all (an `.app` bundle with a restrictive `Info.plist`, or avoiding whichever AppKit call pulls SwiftUI in, are the obvious things to test), and whether m1's numbers should gate m2 or simply be tracked. Recording them now is deliberate — §7.4's own post-mortem on the Linux memory drift concluded that measuring once at the end is exactly how a regression goes unnoticed, so every macOS milestone from here should re-record both figures.
 
@@ -686,7 +692,7 @@ One caveat on comparing this to the Linux row: `phys_footprint` and PSS are not 
 | `phys_footprint` | 73.0 MB | 73.0 / 73.1 / 73.2 MB | **±0.0 MB** |
 | Cold start | 107.8 / 111.6 / 112.8 ms | 119.4 / 123.9 ms | +9% |
 
-Re-measured again at **m3a** (tab strip, drag-and-drop, close gate): `phys_footprint` **72.5 / 72.6 / 72.7 MB**, cold start **118.1 / 122.5 ms**. Both flat against m2 — the third consecutive milestone where the footprint does not move, which is now the strongest single piece of evidence that the 73 MB is an AppKit-established floor rather than anything that scales with what Code++ builds.
+Re-measured again at **m3a** (tab strip, drag-and-drop, close gate): `phys_footprint` **72.5 / 72.6 / 72.7 MB**, cold start **118.1 / 122.5 ms**. Both flat against m2 — the third consecutive milestone where the footprint does not move, which was read at the time as evidence that the 73 MB is an AppKit-established floor rather than anything that scales with what Code++ builds. **That inference was wrong**, and the m4b block below has the measurement that refutes it: a minimal AppKit app with the same window is 13.6 MB. The figure is flat because it is dominated by the window's *backing surfaces*, which depend on window size — not because AppKit established it.
 
 Re-measured at **m4b** (release, one empty buffer, same machine), and this row carries a correction as well as a number:
 
@@ -727,6 +733,29 @@ Three things fall out, and only the first was suspected:
 3. **The honest figure is worse than the retracted one.** With the mark moved to `SCN_PAINTED`, cold start measures **220.5 / 225.7 / 242.1 / 250.5 ms** across four consecutive release runs. Against an 80 ms budget that is ~3×, not the ~1.9× the old mark reported.
 
 This is the third retracted conclusion in this section, and the pattern is the same each time: a plausible instrument that was never checked against what it claimed to measure. The mark now lives in `ui_cocoa`'s `SCN_PAINTED` arm alongside `painted()`, so the three platforms measure the same span.
+
+**What the 80 ms budget actually costs on this platform, and why the memory figure was misattributed for four milestones.** Prompted by the obvious follow-up question — *could a Cocoa app be written that comes close to the Win32 port?* — and answered by building the smallest possible one rather than reasoning about it. The reference is a twelve-line Objective-C program: `NSApplication`, one `NSWindow` at Code++'s own 1024×768, one `NSView` whose `drawRect:` fills white, and nothing else.
+
+| | minimal Cocoa app | Code++ (m4b) |
+| --- | --- | --- |
+| `main()` → first paint | **149.7 / 182.9 / 195.0 ms** | ~235 ms |
+| `phys_footprint` (settled) | **13.6 MB** | 76–77 MB |
+| dylibs loaded at first paint | **1 036** | — |
+
+**On cold start the answer is no, and not marginally.** An empty Cocoa window costs 150–195 ms to first paint on this machine, and Win32's *entire* cold start is 94 ms — below the macOS floor for a blank white rectangle. Code++'s own contribution is the difference, ~40–85 ms, and driving that to zero would still leave the platform floor. Instrumenting `_dyld_image_count` says where it goes: the process holds 517 images at `main`, `sharedApplication` adds **85** (AppIntents, RelevanceKit, CoreSpotlight, Contacts, ClassKit, CloudDocs, FileProvider, QuickLookThumbnailing…), and the stretch from `makeKeyAndOrderFront:` to the first `drawRect:` adds **420 more** — including **WebKit, WebCore, JavaScriptCore, libwebrtc, SafariServices, WebInspectorUI, WritingToolsUI** and the generative-assistant stack. A plain `NSView` filling one colour pulls in a browser engine and Apple Intelligence's UI layer, because on macOS 26 they sit behind the text/accessibility machinery every window initialises. Nothing in that is reachable from application code.
+
+**On memory the answer is the opposite, and it overturns what §8 has said since m1.** The same minimal app settles at **13.6 MB**, so the ~77 MB is *not* an AppKit floor — roughly 63 MB of it is Code++'s. The reason it never moved across milestones is not that AppKit set it; it is that its dominant term depends on window size, which never changed. Attributed with `vmmap`, same window, same display:
+
+| Region | minimal app | Code++ | |
+| --- | --- | --- | --- |
+| **IOSurface** | 3.3 MB | **46.2 MB** | window and layer backing store |
+| `MALLOC_SMALL` (dirty) | 4.5 MB | 11.5 MB | real heap |
+| CoreAnimation | 0.2 MB | 2.7 MB | |
+| IOAccelerator | — | 3.9 MB | |
+
+So **~60% of the macOS memory figure is GPU-shared backing store for the window and its layers**, not anything Code++ allocates — on a 2880×1864 Retina panel a full-window surface is ~12.6 MB on its own, and Code++ has eight of them against the minimal app's six much smaller ones. That also makes the cross-platform comparison unfair in a way §8 did not previously account for: on Linux the equivalent compositing buffers live in the X server, not in the editor's PSS, so the two numbers were never measuring the same thing. The leading candidate for why Code++'s surfaces are so much larger is already recorded in §7.4 — macOS 26's `SCIScrollView` carries a scroll-edge-effect `NSVisualEffectView` measured at 690 pt inside a 548 pt scroll view, and a visual-effect view forces layer backing on its subtree. Untested, and named as a candidate rather than a cause.
+
+The earlier claim that 68.5 MB of resident writable memory was unexplained is therefore **retracted**: most of it is IOSurface, which `vmmap`'s writable-region summary counts and which is not heap at all.
 
 macOS still has **no keystroke-latency row at all**, and now has two of the three hooks: `SCN_PAINTED` closes an interval and nothing yet opens one. Wiring `key_pressed` (a local `NSEvent` monitor is the obvious shape) plus `text_modified` on `SCN_MODIFIED` is what §8's macOS latency row needs.
 
