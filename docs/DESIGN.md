@@ -509,7 +509,9 @@ These are not blockers for the phase that surfaced them, but get addressed in Ph
 
   **So the two budget misses are different problems, and only one of them is ours.**
 
-  *Keystroke latency is now measured too, and is the third miss.* p99 ≈ 20 ms against 5 ms — worse than either other backend. §8 has the distributions and the two refutations that came with them (content-independence, and that a fixed typing interval was aliasing against the 60 Hz refresh — it was not). It gets better at higher input rates, so it is not queueing, and GTK meets the budget on a 60 Hz compositing session, so a vsync-locked compositor does not by itself impose it. Next step is a profiler, not another black-box run.
+  *Keystroke latency is the third miss, and unlike the other two it is now diagnosed.* p99 ≈ 20 ms against 5 ms, worse than either other backend. **Every keystroke repaints every visible line, and each line costs a fresh `CTLineCreateWithAttributedString`** — CoreText typesetting and glyph encoding, per line, per keystroke. The thread is busy for the whole interval rather than waiting for a frame (main-thread CPU equals wall time to within 0.04 ms), and latency scales with window height: p99 6.4 ms at 14 visible lines, 21.1 ms at 64. §8 has the profile, the per-phase split, and **five refuted hypotheses** — frame scheduling, the status-bar refresh, `SC_CACHE_PAGE`, `SC_PHASES_ONE`, and this backend's own `SCN_PAINTED` hooks — none of which should be re-tried.
+
+  The full-bounds repaint is not something this backend chooses: `NSWindow`'s content view is unconditionally layer-backed on modern macOS (169 of 169 views measured), and the layer redraw hands Scintilla the whole rect. **So the one real fix is to cache `CTLine` objects per (text, style) run inside Scintilla's Cocoa `SurfaceImpl`** — turning a repaint of an unchanged line from a typeset into a draw. That is a patch to the vendored tree, which §4.1 deliberately keeps unforked, so it needs a decision rather than a commit: either carry the patch (and own it across Scintilla bumps, alongside the two host-side workarounds §7.4 already records for the same backend), or accept that macOS types at ~20 ms p99 on a full-height window. Neither other backend has the problem, because neither re-typesets per paint — Win32 goes through GDI/DirectWrite and GTK through Pango, both of which cache.
 
   *Cold start is the platform's.* Code++'s own share is the ~40–85 ms above the floor; driving it to zero still lands at ~160 ms against an 80 ms budget. The open question is no longer "what is slow" but "what should the target be" — whether §8 should give macOS its own documented cold-start figure the way it already gives each platform its own *memory* metric, with the honest justification that a 150 ms platform tax is not something an application can architect away. Worth one run each on Intel and on an older OS version first (the harness is a dozen lines, and the WebKit/WritingTools names suggest this is recent).
 
@@ -790,11 +792,37 @@ Nothing is lost, because Code++ has no wide-gamut content: the lexer themes are 
 
 1. **Content-independent.** An empty buffer and a 10 000-line lexed `.rs` file are identical to within noise, so Lexilla and buffer size are not involved — the same refutation GTK's dedicated test made.
 2. **It gets *better* at twice the input rate** (p99 20.6 → 11.6 ms), which rules out queueing outright — the opposite of a backlog.
-3. **The distribution is bimodal**, roughly half the samples near 5 ms and most of the rest near 19 ms. The ~14 ms separation is close to a 60 Hz frame (16.7 ms; the panel is fixed 60 Hz, not ProMotion — `MaximumVariableRefreshRate` is 0), which is consistent with some keystrokes making the current composite and the rest waiting for the next.
+3. **The distribution is bimodal**, roughly half the samples near 5 ms and most of the rest near 19 ms.
 
-The obvious objection — that a fixed 125 ms interval is exactly 7.5 frames and would alias against the refresh, pinning every keystroke to one of two phases — was **tested and refuted**: jittering the interval across 128–156 ms, a range wider than a frame, leaves the distribution unchanged. The bimodality is real, not a sampling artefact.
+The obvious objection — that a fixed 125 ms interval is exactly 7.5 frames and would alias against the 60 Hz refresh, pinning every keystroke to one of two phases — was **tested and refuted**: jittering the interval across 128–156 ms, a range wider than a frame, leaves the distribution unchanged. The bimodality is real, not a sampling artefact.
 
-That it is frame-shaped does not excuse it, because GTK meets the budget on a 60 Hz compositing session — so a vsync-locked compositor does not by itself impose 20 ms. What differs is where the paint lands relative to the frame, and identifying that needs a profiler rather than another black-box run. Tracked in §7.4 with the other two macOS misses.
+**Profiled, and the cause is not what the shape suggested.** An earlier revision of this section read the ~14 ms separation as close to a 60 Hz frame and concluded that some keystrokes make the current composite while the rest wait for the next. **That is retracted.** Splitting the interval and measuring main-thread CPU time across it says otherwise:
+
+| | p50 | p99 |
+| --- | --- | --- |
+| key press → `SCN_MODIFIED` | **0.21 ms** | 0.45 ms |
+| `SCN_MODIFIED` → `SCN_PAINTED` | 7.99 ms | **19.91 ms** |
+| main-thread CPU *within* that window | 8.63 ms | 19.79 ms |
+
+CPU time equals wall time to within 0.04 ms in both modes, so **the thread is busy for the entire interval — it is not waiting for a frame at all**. Scintilla's handling of the keystroke itself is free (0.2 ms); every millisecond is in the paint, and it is work.
+
+`sample` names the work. The stack is `-[SCIContentView drawRect:]` → `ScintillaCocoa::Draw` → `SyncPaint` → `Editor::Paint` → `EditView::PaintText` → **`EditView::DrawLine`** → `DrawForeground` → `SurfaceImpl::DrawTextTransparent` → **`CTLineCreateWithAttributedString`**. So each paint re-runs CoreText line layout — typesetting, glyph encoding, the lot — and it does so for *many* lines rather than the one that changed.
+
+**Confirmed by varying the window height**, which is the cleanest possible test of "how many visible lines":
+
+| Window height | ≈ visible lines | p50 | p99 |
+| --- | --- | --- | --- |
+| 200 pt | 14 | 5.13 ms | **6.41 ms** |
+| 500 pt | 35 | 11.09 ms | 14.28 ms |
+| 900 pt | 64 | 10.89 ms | **21.09 ms** |
+
+Latency scales with the number of visible lines. At 14 lines it is nearly inside the budget. **Every keystroke repaints every visible line.**
+
+Four candidate causes were tested and **all four refuted**, which is worth recording so none is re-tried: the per-`SCN_MODIFIED` status-bar refresh (p99 20.1 vs 19.4 with it removed), Scintilla's `SC_CACHE_PAGE` layout cache (22.5 vs 21.9), `SC_PHASES_ONE` single-phase drawing (22.6), and this backend's own `SCN_PAINTED` hooks — the scroller-layout repair and the horizontal-width clamp (21.6 vs 21.7, with an identical fast/slow split). None of them is involved.
+
+What is left is structural, and the stack shows it: `-[NSViewBackingLayer display]` → `_NSViewDrawRect` → `drawRect:`. The window is layer-backed — measured earlier at **169 of 169 views**, which is not a choice this backend makes, since `NSWindow`'s content view has been unconditionally layer-backed since 10.14 — and the layer redraw hands Scintilla the full bounds rather than the changed line's rect. Scintilla then does what it is asked and lays out every line in it.
+
+That leaves one real fix and it is not host-side: cache `CTLine` objects per (text, style) run inside the Cocoa `SurfaceImpl`, so a repaint of an unchanged line costs a draw rather than a typeset. That means patching the vendored tree, which §4.1 deliberately keeps unforked — so it is a design decision rather than a bug fix, and it is recorded in §7.4 as one. Worth noting the other two backends do not have this problem because neither re-typesets per paint: Win32 caches through GDI/DirectWrite and GTK through Pango's own layout cache.
 
 One caveat on the method: the keystrokes are posted into the app's own event queue rather than delivered by the window server, so the arrival distribution is what `--perf` reports and not what a `--delay` flag claims — the same discipline the `xdotool` calibration note above establishes. The interval itself is unaffected: it opens when the monitor observes the event, which is at dispatch, not at post.
 

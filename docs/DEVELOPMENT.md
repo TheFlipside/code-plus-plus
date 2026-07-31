@@ -427,8 +427,10 @@ until Phase 5 m4b: it marked before `-[NSApplication run]`, which is
 before the window is ordered front and before anything paints, and its
 m1–m3a figures are retracted for that reason. macOS's figures arrived in
 Phase 5 m4b, from a local `NSEvent` monitor: p99 ≈ 20 ms, 4x the
-budget and the worst of the three, with a bimodal distribution that
-gets *better* at higher input rates.
+budget and the worst of the three. That one is profiled — every
+keystroke repaints every visible line and each costs a fresh CoreText
+layout, so latency scales with window height — and §8 lists five
+refuted causes so they are not re-tried.
 
 To reproduce the Win32 numbers on a Windows session, `SendKeys.SendWait`
 from a PowerShell harness is what those measurements used — the
