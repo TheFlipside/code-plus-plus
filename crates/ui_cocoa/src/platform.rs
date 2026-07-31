@@ -95,7 +95,7 @@ impl CocoaUi {
     /// Recomputed from scratch rather than adjusted by a delta, so it is
     /// correct however many strips are hidden and in whatever order they
     /// were toggled.
-    fn relayout_chrome(&self) {
+    pub(crate) fn relayout_chrome(&self) {
         let Some(content) = self.window.contentView() else {
             return;
         };
@@ -110,26 +110,36 @@ impl CocoaUi {
         } else {
             crate::tabs::TAB_STRIP_HEIGHT
         };
+        // Zero while the dock is closed, which is most of the time, and
+        // otherwise clamped to what this window size can give it — see
+        // `FifDock::height_for_layout`.
+        let dock_h = self
+            .fif_dock
+            .height_for_layout(size.height, tabs_h, toolbar_h);
         // Bottom-up, in Cocoa's unflipped content coordinates: status bar,
-        // editor, tab strip, toolbar. The editor absorbs what is left, and
-        // is floored at zero so a very short window cannot ask for a
-        // negative height.
-        let editor_h =
-            (size.height - crate::status::STATUS_BAR_HEIGHT - tabs_h - toolbar_h).max(0.0);
+        // results dock, editor, tab strip, toolbar. The editor absorbs
+        // what is left, and is floored at zero so a very short window
+        // cannot ask for a negative height.
+        let status_h = crate::status::STATUS_BAR_HEIGHT;
+        let editor_h = (size.height - status_h - dock_h - tabs_h - toolbar_h).max(0.0);
         self.status.container.setFrame(NSRect::new(
             NSPoint::new(0.0, 0.0),
-            NSSize::new(size.width, crate::status::STATUS_BAR_HEIGHT),
+            NSSize::new(size.width, status_h),
+        ));
+        self.fif_dock.container.setFrame(NSRect::new(
+            NSPoint::new(0.0, status_h),
+            NSSize::new(size.width, dock_h),
         ));
         self.sci_view.setFrame(NSRect::new(
-            NSPoint::new(0.0, crate::status::STATUS_BAR_HEIGHT),
+            NSPoint::new(0.0, status_h + dock_h),
             NSSize::new(size.width, editor_h),
         ));
         self.tabs.container.setFrame(NSRect::new(
-            NSPoint::new(0.0, crate::status::STATUS_BAR_HEIGHT + editor_h),
+            NSPoint::new(0.0, status_h + dock_h + editor_h),
             NSSize::new(size.width, tabs_h),
         ));
         self.toolbar.container.setFrame(NSRect::new(
-            NSPoint::new(0.0, crate::status::STATUS_BAR_HEIGHT + editor_h + tabs_h),
+            NSPoint::new(0.0, status_h + dock_h + editor_h + tabs_h),
             NSSize::new(size.width, toolbar_h),
         ));
     }

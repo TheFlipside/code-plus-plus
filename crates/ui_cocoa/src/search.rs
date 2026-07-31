@@ -22,8 +22,9 @@
 //! options live *above* an `NSTabView`, and are shared by every tab;
 //! each tab carries only its own controls. Same split `ui_gtk` uses, so
 //! the two dialogs read the same and a user's options survive switching
-//! mode. The Find-in-Files tab arrives with the results dock — it needs
-//! somewhere to put its output — so this is two tabs for now.
+//! mode. The third tab, Find in Files, adds a directory, a filter box,
+//! its own replacement field and two scope toggles; its output goes to
+//! the dock in [`crate::fif`].
 //!
 //! An `NSTabView` here does **not** conflict with the single-Scintilla-view
 //! rule that rules `NSTabView` out for the tab strip: the objection there
@@ -41,8 +42,9 @@
 use objc2::rc::Retained;
 use objc2::{sel, AnyThread, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSBackingStoreType, NSButton, NSButtonType, NSPanel, NSTabView, NSTabViewItem,
-    NSTextField, NSView, NSWindowStyleMask,
+    NSAlert, NSAlertStyle, NSBackingStoreType, NSBezelStyle, NSButton, NSButtonType,
+    NSControlStateValueOn, NSOpenPanel, NSPanel, NSTabView, NSTabViewItem, NSTextField, NSView,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 
@@ -54,17 +56,19 @@ use crate::state::with_state;
 /// Tab indices, matching `ui_win32`'s and `ui_gtk`'s order.
 const PAGE_FIND: isize = 0;
 const PAGE_REPLACE: isize = 1;
+const PAGE_FIND_IN_FILES: isize = 2;
 
 /// Panel geometry. Fixed rather than auto-laid-out: the contents are a
 /// handful of rows whose sizes never change, and springs-and-struts is
 /// what the rest of this backend uses.
 const PANEL_WIDTH: f64 = 480.0;
-/// Tall enough that the tallest tab page — Replace, which needs a field
-/// row and a button row — fits inside the `NSTabView`'s inner rect with
-/// room to spare. An earlier value left that inner rect 50 pt tall, so
-/// the field overlapped the buttons; the pages are now laid out bottom-up
-/// as well, so the two failure modes are independent.
-const PANEL_HEIGHT: f64 = 310.0;
+/// Tall enough that the tallest tab page — Find in Files, which stacks
+/// three fields, a scope row and a button row — fits inside the
+/// `NSTabView`'s inner rect with room to spare. An earlier value left
+/// that inner rect 50 pt tall, so a field overlapped the buttons; the
+/// pages are laid out bottom-up as well, so the two failure modes are
+/// independent. [`layout_tests`] pins both.
+const PANEL_HEIGHT: f64 = 380.0;
 const MARGIN: f64 = 14.0;
 const ROW_HEIGHT: f64 = 22.0;
 const LABEL_WIDTH: f64 = 92.0;
@@ -72,6 +76,8 @@ const BUTTON_WIDTH: f64 = 128.0;
 /// Height of a push button inside a tab page.
 const BUTTON_HEIGHT: f64 = 26.0;
 const GAP: f64 = 8.0;
+/// Width of the Find-in-Files "Browse…" button.
+const BROWSE_WIDTH: f64 = 86.0;
 
 /// The modeless Find/Replace panel's controls, held on the window state
 /// for the session. See the module docs.
@@ -83,6 +89,16 @@ pub struct FindReplaceDialog {
     match_case: Retained<NSButton>,
     whole_word: Retained<NSButton>,
     regex: Retained<NSButton>,
+    /// Find-in-Files tab: the directory to search.
+    fif_directory: Retained<NSTextField>,
+    /// Find-in-Files tab: whitespace-separated include globs.
+    fif_filters: Retained<NSTextField>,
+    /// Find-in-Files tab: its own replacement, separate from the Replace
+    /// tab's so switching mode cannot fire a disk rewrite with a string
+    /// the user typed for an in-buffer replace.
+    fif_replace: Retained<NSTextField>,
+    fif_subfolders: Retained<NSButton>,
+    fif_hidden: Retained<NSButton>,
     /// One-line result readout ("3 replaced", "Not found").
     status: Retained<NSTextField>,
 }
@@ -126,6 +142,11 @@ pub(crate) fn show_replace() {
     open_panel(PAGE_REPLACE);
 }
 
+/// Open the Find-in-Files tab, building the panel on first use.
+pub(crate) fn show_find_in_files() {
+    open_panel(PAGE_FIND_IN_FILES);
+}
+
 /// Show the panel on `page`, seeding the query from the selection.
 ///
 /// Seeding matches every editor's Find: whatever is selected is almost
@@ -147,6 +168,21 @@ fn open_panel(page: isize) {
         with_state(|st| st.find_replace = Some(dialog));
     }
     let selection = with_state(|st| read_selection(&st.editor)).unwrap_or_default();
+    // Seed the Find-in-Files directory with the active file's folder on
+    // first open, matching Notepad++ — only when the field is empty, so a
+    // user's own entry is never clobbered.
+    let seed_dir = if page == PAGE_FIND_IN_FILES {
+        with_state(|st| {
+            st.shell
+                .active()
+                .and_then(|t| t.path.as_ref())
+                .and_then(|p| p.parent())
+                .map(|p| p.to_string_lossy().into_owned())
+        })
+        .flatten()
+    } else {
+        None
+    };
     with_state(|st| {
         let Some(dialog) = &st.find_replace else {
             return;
@@ -154,13 +190,35 @@ fn open_panel(page: isize) {
         if let Some(seed) = seedable_query(&selection) {
             dialog.find_field.setStringValue(&NSString::from_str(seed));
         }
+        if let Some(dir) = &seed_dir {
+            // Only auto-seed a display-clean path, for the same reason
+            // [`seedable_query`] refuses a hostile selection: the field is
+            // *functional* — it becomes the search root — so it cannot be
+            // sanitized in place without corrupting the path, and a
+            // component carrying bidi or control characters would
+            // otherwise render into the field. When it is not clean, leave
+            // it for the user. Same call `ui_gtk` makes here.
+            if dialog.fif_directory.stringValue().to_string().is_empty()
+                && codepp_shell::sanitize_str_for_display(dir) == *dir
+            {
+                dialog
+                    .fif_directory
+                    .setStringValue(&NSString::from_str(dir));
+            }
+        }
         dialog.set_status("");
         dialog.tabs.selectTabViewItemAtIndex(page);
         // `makeKeyAndOrderFront:` rather than `orderFront:`: the query
         // field has to take the keystrokes that follow, and only a key
         // window's first responder does.
         dialog.panel.makeKeyAndOrderFront(None);
-        dialog.panel.makeFirstResponder(Some(&dialog.find_field));
+        // On the Find-in-Files tab with no query yet, the directory is
+        // the field the user is most likely to want — matching `ui_gtk`.
+        if page == PAGE_FIND_IN_FILES && dialog.query().is_empty() {
+            dialog.panel.makeFirstResponder(Some(&dialog.fif_directory));
+        } else {
+            dialog.panel.makeFirstResponder(Some(&dialog.find_field));
+        }
     });
 }
 
@@ -254,7 +312,7 @@ fn query_and_flags() -> Option<(String, SearchFlags)> {
 /// any borrow of ours, so the status bar would catch up a moment later
 /// anyway. Calling it removes the timing assumption rather than relying
 /// on it.
-fn refresh_chrome() {
+pub(crate) fn refresh_chrome() {
     crate::refresh_tab_chrome();
     with_state(|st| {
         let (_, ui) = st.split();
@@ -539,6 +597,7 @@ fn build_panel(mtm: MainThreadMarker) -> Option<FindReplaceDialog> {
 
     build_find_page(&tabs, &actions, mtm);
     let replace_field = build_replace_page(&tabs, &actions, mtm);
+    let fif = build_fif_page(&tabs, &actions, mtm);
     content.addSubview(&tabs);
 
     // The status line, along the bottom.
@@ -559,6 +618,11 @@ fn build_panel(mtm: MainThreadMarker) -> Option<FindReplaceDialog> {
         match_case,
         whole_word,
         regex,
+        fif_directory: fif.directory,
+        fif_filters: fif.filters,
+        fif_replace: fif.replace,
+        fif_subfolders: fif.subfolders,
+        fif_hidden: fif.hidden,
         status,
     })
 }
@@ -609,6 +673,235 @@ fn build_replace_page(
     field
 }
 
+/// The Find-in-Files tab's own controls, returned by [`build_fif_page`].
+struct FifPageWidgets {
+    directory: Retained<NSTextField>,
+    filters: Retained<NSTextField>,
+    replace: Retained<NSTextField>,
+    subfolders: Retained<NSButton>,
+    hidden: Retained<NSButton>,
+}
+
+/// The Find-in-Files tab.
+///
+/// Laid out bottom-up like the Replace page, and for the same reason:
+/// the rows cannot collide however short the page turns out to be.
+/// Reading upward from the floor: the two action buttons, the scope
+/// checkboxes, the replacement field, the filters field, and the
+/// directory row with its Browse button.
+fn build_fif_page(tabs: &NSTabView, actions: &Actions, mtm: MainThreadMarker) -> FifPageWidgets {
+    let (page, _) = tab_page("Find in Files", tabs, mtm);
+    let mut y = 0.0;
+
+    for (index, (title, action)) in [
+        ("Find All", sel!(codeppFifFindAll:)),
+        ("Replace in Files", sel!(codeppFifReplaceInFiles:)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        #[allow(clippy::cast_precision_loss)]
+        let x = index as f64 * (BUTTON_WIDTH + GAP);
+        button(&page, title, x, y, action, actions, mtm);
+    }
+    y += BUTTON_HEIGHT + GAP;
+
+    let width = page.bounds().size.width;
+    let column = (width - LABEL_WIDTH) / 2.0;
+    let subfolders = checkbox(&page, "In sub-folders", LABEL_WIDTH, y, column, mtm);
+    // On by default, matching Notepad++ and both other backends: a
+    // find-in-files that silently searched only the top directory would
+    // report far fewer hits than the user expects.
+    subfolders.setState(NSControlStateValueOn);
+    let hidden = checkbox(
+        &page,
+        "In hidden folders",
+        LABEL_WIDTH + column,
+        y,
+        column,
+        mtm,
+    );
+    y += ROW_HEIGHT + GAP;
+
+    let replace = labelled_row_in(&page, "Replace with:", y, mtm);
+    y += ROW_HEIGHT + GAP;
+
+    let filters = labelled_row_in(&page, "Filters:", y, mtm);
+    filters.setPlaceholderString(Some(&NSString::from_str(
+        "e.g. *.rs *.toml — empty for all files",
+    )));
+    y += ROW_HEIGHT + GAP;
+
+    // The directory row reserves its trailing edge for Browse.
+    let directory = labelled_row_in_reserving(&page, "Directory:", y, BROWSE_WIDTH + GAP, mtm);
+    let browse = NSButton::initWithFrame(
+        NSButton::alloc(mtm),
+        NSRect::new(
+            NSPoint::new(width - BROWSE_WIDTH, y),
+            NSSize::new(BROWSE_WIDTH, ROW_HEIGHT),
+        ),
+    );
+    browse.setTitle(&NSString::from_str("Browse…"));
+    browse.setBezelStyle(NSBezelStyle::Push);
+    // SAFETY: as in [`button`] — a compile-time `sel!` literal declared
+    // on `Actions`, whose lifetime the window state owns.
+    unsafe {
+        browse.setTarget(Some(actions));
+        browse.setAction(Some(sel!(codeppFifBrowse:)));
+    }
+    page.addSubview(&browse);
+
+    FifPageWidgets {
+        directory,
+        filters,
+        replace,
+        subfolders,
+        hidden,
+    }
+}
+
+/// Read the Find-in-Files tab into a [`crate::fif::FifInputs`], including
+/// the shared query/options and the tab's own directory/filters/scope.
+///
+/// `is_replace` decides whether the replacement is captured, so Find All
+/// sends `None` and Replace in Files sends `Some(..)`.
+fn gather_fif_inputs(is_replace: bool) -> Option<crate::fif::FifInputs> {
+    with_state(|st| {
+        st.find_replace.as_ref().map(|d| crate::fif::FifInputs {
+            query: d.query(),
+            replacement: is_replace.then(|| d.fif_replace.stringValue().to_string()),
+            match_case: d.match_case.state() != 0,
+            whole_word: d.whole_word.state() != 0,
+            regex: d.regex.state() != 0,
+            directory: d.fif_directory.stringValue().to_string(),
+            filters: d.fif_filters.stringValue().to_string(),
+            recurse: d.fif_subfolders.state() != 0,
+            hidden: d.fif_hidden.state() != 0,
+        })
+    })
+    .flatten()
+}
+
+/// Put a message on the panel's status line.
+///
+/// Sanitized, unlike [`set_status`]'s callers: `msg` can be a `FifError`
+/// display string that embeds the user's directory path, and a hostile
+/// path component would otherwise render its control / bidi characters
+/// straight into the chrome. Same policy `ui_gtk::set_fif_status` applies.
+fn set_fif_status(msg: &str) {
+    set_status(&codepp_shell::sanitize_str_for_display(msg));
+}
+
+/// Hide the panel once a job starts, so the results dock is unobstructed.
+/// Matches `ui_win32` and `ui_gtk`, both of which hide on FIF start.
+fn hide_panel() {
+    with_state(|st| {
+        if let Some(d) = &st.find_replace {
+            d.set_status("");
+            d.panel.orderOut(None);
+        }
+    });
+}
+
+/// "Find All": start a plain search over the directory.
+pub(crate) fn do_find_all() {
+    let Some(inputs) = gather_fif_inputs(false) else {
+        return;
+    };
+    match crate::fif::run_search(inputs) {
+        Ok(()) => hide_panel(),
+        Err(msg) => set_fif_status(&msg),
+    }
+}
+
+/// "Replace in Files": confirm the destructive rewrite, then start it.
+///
+/// Every input is captured *before* the confirm modal runs, so the
+/// wording the user approves cannot diverge from the parameters actually
+/// executed — the modal spins a nested run loop that would otherwise let
+/// the fields change between OK and dispatch. Mirrors both other
+/// backends.
+pub(crate) fn do_replace_in_files() {
+    let Some(inputs) = gather_fif_inputs(true) else {
+        return;
+    };
+    // Duplicates `run_search`'s own empty-input guards on purpose: an
+    // empty query or directory should not pop a destructive confirm for
+    // an operation that would then be rejected anyway.
+    if inputs.query.is_empty() {
+        set_fif_status("Enter a search term");
+        return;
+    }
+    if inputs.directory.trim().is_empty() {
+        set_fif_status("Enter a directory to search");
+        return;
+    }
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    // Sanitized: this prompt gates a destructive on-disk rewrite, and
+    // `setInformativeText:` renders control characters as real lines, so
+    // scrub the echoed query, replacement and path.
+    let detail = format!(
+        "Replace \"{}\" with \"{}\" in files under {}{}?\n\nThis rewrites matching files on disk and cannot be undone.",
+        codepp_shell::sanitize_str_for_display(&inputs.query),
+        codepp_shell::sanitize_str_for_display(inputs.replacement.as_deref().unwrap_or("")),
+        codepp_shell::sanitize_str_for_display(inputs.directory.trim()),
+        if inputs.recurse { " (and sub-folders)" } else { "" },
+    );
+    let confirmed = {
+        // The alert spins a nested run loop; freeze the drain for its
+        // span, as every other modal on this backend does.
+        let _freeze = crate::DrainFreeze::new();
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str("Replace in Files"));
+        alert.setInformativeText(&NSString::from_str(&detail));
+        alert.setAlertStyle(NSAlertStyle::Warning);
+        alert.addButtonWithTitle(&NSString::from_str("Replace"));
+        alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+        // `NSAlertFirstButtonReturn` is 1000 — "Replace".
+        alert.runModal() == 1000
+    };
+    if !confirmed {
+        return;
+    }
+    match crate::fif::run_search(inputs) {
+        Ok(()) => hide_panel(),
+        Err(msg) => set_fif_status(&msg),
+    }
+}
+
+/// Pick the search directory with an `NSOpenPanel` in folder mode and
+/// write it into the Directory field.
+pub(crate) fn browse_fif_directory() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let chosen = {
+        let _freeze = crate::DrainFreeze::new();
+        let panel = NSOpenPanel::openPanel(mtm);
+        panel.setCanChooseFiles(false);
+        panel.setCanChooseDirectories(true);
+        panel.setAllowsMultipleSelection(false);
+        panel.setTitle(Some(&NSString::from_str("Choose folder to search")));
+        // `NSModalResponseOK` is 1.
+        if panel.runModal() == 1 {
+            panel.URL().and_then(|url| crate::url_to_path(&url))
+        } else {
+            None
+        }
+    };
+    let Some(dir) = chosen else {
+        return;
+    };
+    with_state(|st| {
+        if let Some(d) = &st.find_replace {
+            d.fif_directory
+                .setStringValue(&NSString::from_str(&dir.to_string_lossy()));
+        }
+    });
+}
+
 /// Add an `NSTabViewItem` and return its content view plus that view's
 /// height, which the caller needs to lay rows out from the top.
 fn tab_page(label: &str, tabs: &NSTabView, mtm: MainThreadMarker) -> (Retained<NSView>, f64) {
@@ -655,8 +948,20 @@ fn labelled_row_in(
     y: f64,
     mtm: MainThreadMarker,
 ) -> Retained<NSTextField> {
+    labelled_row_in_reserving(page, label, y, 0.0, mtm)
+}
+
+/// A labelled row that leaves `reserve` points free at the trailing edge
+/// for a control the caller places itself — the Browse button.
+fn labelled_row_in_reserving(
+    page: &NSView,
+    label: &str,
+    y: f64,
+    reserve: f64,
+    mtm: MainThreadMarker,
+) -> Retained<NSTextField> {
     add_label(page, label, 0.0, y, mtm);
-    let width = page.bounds().size.width - LABEL_WIDTH;
+    let width = page.bounds().size.width - LABEL_WIDTH - reserve;
     let field = NSTextField::initWithFrame(
         NSTextField::alloc(mtm),
         NSRect::new(
@@ -806,6 +1111,53 @@ mod layout_tests {
             "the Replace field starts at {} but the buttons run to {}",
             field.start,
             buttons.end
+        );
+    }
+
+    /// How much of the `NSTabView`'s height its own chrome takes — the
+    /// tab row plus the page inset.
+    ///
+    /// Measured at 46 pt on macOS 26 by asking a live panel for
+    /// `contentRect` (226 pt tab view → 180 pt page) and rounded up, so
+    /// the assertion below stays conservative if a future OS version
+    /// insets a little more. Not read at runtime: the real layout asks
+    /// `contentRect` rather than guessing, exactly so it cannot drift.
+    const TAB_VIEW_CHROME_ALLOWANCE: f64 = 50.0;
+
+    /// The Find-in-Files page's five rows must fit the tab page.
+    ///
+    /// The page is the tallest of the three and the reason `PANEL_HEIGHT`
+    /// grew in m4b. The rows are laid out bottom-up so they cannot
+    /// *overlap* at any height (the test above), but they can still run
+    /// off the top of a page that is too short — which is a separate
+    /// failure and the one this pins.
+    #[test]
+    fn the_find_in_files_rows_fit_the_tab_page() {
+        use super::{LABEL_WIDTH, MARGIN, PANEL_HEIGHT, PANEL_WIDTH};
+
+        // Mirrors `build_panel`'s cursor: the query row, then the option
+        // row, then whatever is left above the status line.
+        let first_row_y = PANEL_HEIGHT - MARGIN - ROW_HEIGHT - 22.0;
+        let after_options = first_row_y - 2.0 * (ROW_HEIGHT + GAP);
+        let tabs_height = after_options - MARGIN - ROW_HEIGHT;
+        let page_height = tabs_height - TAB_VIEW_CHROME_ALLOWANCE;
+
+        // Mirrors `build_fif_page`'s cursor: buttons, scope row, then the
+        // replacement, filters and directory rows.
+        // Button row, then three `ROW_HEIGHT + GAP` steps up through the
+        // scope, replacement and filters rows, then the directory row's
+        // own height on top.
+        let stack = 3.0f64.mul_add(ROW_HEIGHT + GAP, BUTTON_HEIGHT + GAP + ROW_HEIGHT);
+        assert!(
+            stack <= page_height,
+            "the Find-in-Files rows need {stack} pt but the page offers {page_height} pt"
+        );
+
+        // And the directory row's field must leave room for Browse.
+        let field_width = PANEL_WIDTH - 2.0 * MARGIN - LABEL_WIDTH - (super::BROWSE_WIDTH + GAP);
+        assert!(
+            field_width > 0.0,
+            "the Directory field is {field_width} pt wide once Browse is reserved"
         );
     }
 }

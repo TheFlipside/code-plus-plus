@@ -43,6 +43,7 @@
 
 mod delegate;
 mod dropview;
+mod fif;
 mod menu;
 mod platform;
 mod search;
@@ -322,7 +323,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // process lifetime, so it cannot dangle.
     window.setDelegate(Some(ProtocolObject::from_ref(&*actions)));
 
-    let (status, tab_strip, toolbar) =
+    let (status, tab_strip, toolbar, fif_dock) =
         build_content(&window, content_rect, &sci_view, &actions, mtm);
 
     // --- Install the state ----------------------------------------
@@ -336,6 +337,8 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
         toolbar,
         actions: actions.clone(),
         menu,
+        fif_dock,
+        fif_job: fif::FifJob::default(),
         find_replace: None,
         shell,
     }));
@@ -647,7 +650,7 @@ fn build_content(
     sci_view: &NSView,
     actions: &Actions,
     mtm: MainThreadMarker,
-) -> (StatusBar, TabStrip, Toolbar) {
+) -> (StatusBar, TabStrip, Toolbar, fif::FifDock) {
     // Content layout, bottom-up in Cocoa's flipped-origin coordinates:
     // status bar, then the editor, then the tab strip at the top. The
     // editor is the only flexible one. Springs-and-struts rather than
@@ -661,6 +664,9 @@ fn build_content(
     let status = StatusBar::new(DEFAULT_WIDTH, mtm);
     let tab_strip = TabStrip::new(DEFAULT_WIDTH, mtm);
     let toolbar = Toolbar::new(DEFAULT_WIDTH, actions, mtm);
+    // Starts hidden and contributes no height until a search opens it,
+    // so the initial layout is the same one m3 had.
+    let fif_dock = fif::FifDock::new(DEFAULT_WIDTH, actions, mtm);
 
     let editor_height = DEFAULT_HEIGHT - STATUS_BAR_HEIGHT - TAB_STRIP_HEIGHT - TOOLBAR_HEIGHT;
     sci_view.setFrame(NSRect::new(
@@ -693,11 +699,12 @@ fn build_content(
 
     content.addSubview(sci_view);
     content.addSubview(&status.container);
+    content.addSubview(&fif_dock.container);
     content.addSubview(&tab_strip.container);
     content.addSubview(&toolbar.container);
     window.setContentView(Some(&content));
 
-    (status, tab_strip, toolbar)
+    (status, tab_strip, toolbar, fif_dock)
 }
 
 /// Order the main window front, focus the editor, and activate the app.
@@ -1095,6 +1102,9 @@ pub(crate) fn drain_shell() {
     for dialog in dialogs.unwrap_or_default() {
         present_dialog(dialog);
     }
+    // After `Shell::drain`, which is what consumes the in-open-buffer
+    // replacements before the dock's own drain can see them.
+    fif::drain_into_dock();
     refresh_tab_chrome();
 }
 
@@ -1250,6 +1260,21 @@ fn capture_active_dirty() {
 /// active — a drain, a tab switch, a close, an open. Cheap enough to
 /// call unconditionally (see `TabStrip::sync` on why it rebuilds
 /// wholesale) and never on the keystroke path.
+/// Re-lay the window's chrome bands from outside a `with_state` borrow.
+///
+/// `CocoaUi::relayout_chrome` is a method on the split value precisely
+/// because every `UiPlatform` method already holds the borrow; this is
+/// the entry point for the callers that do *not* — the window-resize
+/// delegate and the dock's own open/close. Declined re-entrantly like
+/// any other `with_state` call, which is correct: an outer caller is
+/// mid-update and will lay out when it finishes.
+pub(crate) fn relayout_chrome_bands() {
+    with_state(|st| {
+        let (_, ui) = st.split();
+        ui.relayout_chrome();
+    });
+}
+
 pub(crate) fn refresh_tab_chrome() {
     // Pull the live modified bit into the active tab before painting, so
     // the strip's dirty marker reflects reality. `Tab.dirty` is only
@@ -2271,7 +2296,24 @@ pub(crate) fn action_reload() {
 }
 
 /// Convert an `NSURL` from a panel into a filesystem path.
-fn url_to_path(url: &NSURL) -> Option<PathBuf> {
+///
+/// **Gated on the URL actually being a file URL**, for the reason
+/// `dropview::dragged_paths` documents at the drag-and-drop boundary:
+/// `-[NSURL path]` returns the *path component* of any hierarchical URL
+/// rather than nil, so `http://evil/etc/passwd` yields `/etc/passwd` and
+/// would reach `Shell::open_file` as though the user had picked a local
+/// file. `ui_gtk` rejects non-`file:` schemes at the same boundary in its
+/// `uri_to_local_path`.
+///
+/// An `NSOpenPanel`/`NSSavePanel` browsing the local filesystem is far
+/// less steerable than a pasteboard, so this is defence in depth rather
+/// than a live hole — but the guard existed on one of the two Cocoa
+/// entry points and not the other, which is exactly how the three
+/// incidents DESIGN.md §7.4 records got in.
+pub(crate) fn url_to_path(url: &NSURL) -> Option<PathBuf> {
+    if !url.isFileURL() {
+        return None;
+    }
     url.path().map(|p| PathBuf::from(p.to_string()))
 }
 

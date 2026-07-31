@@ -35,6 +35,7 @@ use codepp_shell::Shell;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSMenu, NSView, NSWindow};
 
+use crate::fif::{FifDock, FifJob};
 use crate::menu::Actions;
 use crate::status::StatusBar;
 use crate::tabs::TabStrip;
@@ -100,6 +101,14 @@ pub struct CocoaUiState {
     /// reach it. Cocoa has no "hide the menu bar" for an ordinary app
     /// the way Win32 does — see `platform.rs`'s `set_menu_hidden`.
     pub menu: Retained<NSMenu>,
+    /// The Find-in-Files results dock, along the bottom above the status
+    /// bar. Built at startup and hidden until a search produces results,
+    /// so a session that never searches pays only its construction.
+    pub fif_dock: FifDock,
+    /// Per-job Find-in-Files runtime — counters, buffered matches, the
+    /// queued jump. Separate from [`Self::fif_dock`] because that one is
+    /// `Clone` and handed out on every split; this is single-owner state.
+    pub fif_job: FifJob,
     /// The modeless Find/Replace panel, built on first use and then kept
     /// for the session — its controls are read by every search command,
     /// so they have to outlive the click that opened it. `None` until
@@ -130,6 +139,9 @@ pub struct CocoaUi {
     pub menu: Retained<NSMenu>,
     pub tabs: TabStrip,
     pub toolbar: Toolbar,
+    /// The results dock, so [`CocoaUi::relayout_chrome`] can give it its
+    /// band and take it back when it is closed.
+    pub fif_dock: FifDock,
 }
 
 impl CocoaUiState {
@@ -144,6 +156,7 @@ impl CocoaUiState {
             menu: self.menu.clone(),
             tabs: self.tabs.clone(),
             toolbar: self.toolbar.clone(),
+            fif_dock: self.fif_dock.clone(),
         };
         (&mut self.shell, ui)
     }

@@ -36,7 +36,7 @@ use objc2_app_kit::{
     NSAboutPanelOptionApplicationIcon, NSAboutPanelOptionApplicationName,
     NSAboutPanelOptionApplicationVersion, NSAboutPanelOptionCredits, NSAboutPanelOptionKey,
     NSAboutPanelOptionVersion, NSApplication, NSButton, NSControl, NSEventModifierFlags, NSImage,
-    NSMenu, NSMenuDelegate, NSMenuItem, NSWindowDelegate, NSWorkspace,
+    NSMenu, NSMenuDelegate, NSMenuItem, NSTableView, NSWindowDelegate, NSWorkspace,
 };
 use objc2_foundation::{
     MainThreadMarker, NSAttributedString, NSData, NSDictionary, NSNotification, NSObject,
@@ -74,9 +74,19 @@ define_class!(
         /// window narrows past the overflow point, not a moment after the
         /// user lets go. The strip is a few dozen small controls and is
         /// rebuilt wholesale anyway.
+        /// It also re-lays the chrome bands, which matters only once the
+        /// Find-in-Files dock is open: the dock is a fixed-height strip,
+        /// so autoresizing gives the whole vertical delta to the editor
+        /// and a window shrunk far enough would starve it while the dock
+        /// kept its old height. `relayout_chrome` re-derives every band
+        /// and re-clamps the dock, which is what `ui_win32` does from its
+        /// own `WM_SIZE`.
         #[unsafe(method(windowDidResize:))]
         fn window_did_resize(&self, _notification: &NSNotification) {
-            crate::at_callback_boundary("window:didResize", (), crate::refresh_tab_chrome);
+            crate::at_callback_boundary("window:didResize", (), || {
+                crate::relayout_chrome_bands();
+                crate::refresh_tab_chrome();
+            });
         }
     }
 
@@ -289,6 +299,61 @@ define_class!(
         #[unsafe(method(codeppReplaceAll:))]
         fn replace_all(&self, _sender: Option<&NSObject>) {
             crate::at_callback_boundary("search:replaceAll", (), crate::search::do_replace_all);
+        }
+
+        // ---- m4b: find in files ------------------------------------
+
+        #[unsafe(method(codeppShowFindInFiles:))]
+        fn show_find_in_files(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary(
+                "menu:showFindInFiles",
+                (),
+                crate::search::show_find_in_files,
+            );
+        }
+
+        #[unsafe(method(codeppFifFindAll:))]
+        fn fif_find_all(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("fif:findAll", (), crate::search::do_find_all);
+        }
+
+        #[unsafe(method(codeppFifReplaceInFiles:))]
+        fn fif_replace_in_files(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary(
+                "fif:replaceInFiles",
+                (),
+                crate::search::do_replace_in_files,
+            );
+        }
+
+        #[unsafe(method(codeppFifBrowse:))]
+        fn fif_browse(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("fif:browse", (), crate::search::browse_fif_directory);
+        }
+
+        #[unsafe(method(codeppFifCancel:))]
+        fn fif_cancel(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("fif:cancel", (), crate::fif::cancel_job);
+        }
+
+        #[unsafe(method(codeppFifClose:))]
+        fn fif_close(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("fif:close", (), crate::fif::close_dock);
+        }
+
+        /// A results row was double-clicked.
+        ///
+        /// The row index comes from the *sender* rather than from the
+        /// table's selection: `clickedRow` is what the double-click
+        /// actually hit, and it is `-1` for a click on the header or on
+        /// empty space below the last row, which the handler rejects.
+        #[unsafe(method(codeppFifRowActivated:))]
+        fn fif_row_activated(&self, sender: Option<&NSTableView>) {
+            crate::at_callback_boundary("fif:rowActivated", (), || {
+                if let Some(table) = sender {
+                    crate::fif::row_activated(table.clickedRow());
+                }
+            });
         }
 
         /// The tab strip's overflow arrows.
@@ -702,9 +767,17 @@ fn build_search_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMen
         NSEventModifierFlags::Command | NSEventModifierFlags::Option,
         Some(actions),
     );
-    // Find in Files needs somewhere to put its results, so it waits for
-    // the results dock. Greyed rather than omitted, as before.
-    add_disabled(&menu, mtm, "Find in Files…");
+    // ⇧⌘F — the chord macOS editors use for a project-wide search, and
+    // free here (⌘F is Find, ⌥⌘F is Replace).
+    add_with_modifiers(
+        &menu,
+        mtm,
+        "Find in Files…",
+        sel!(codeppShowFindInFiles:),
+        "f",
+        NSEventModifierFlags::Command | NSEventModifierFlags::Shift,
+        Some(actions),
+    );
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     // ⌘G / ⇧⌘G — the macOS convention for find-again, in place of
     // Notepad++'s F3. These repeat the *shell's* query so they work with
