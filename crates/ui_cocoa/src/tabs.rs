@@ -304,10 +304,11 @@ impl TabButton {
         let id = self.ivars().id.get();
         let mut outcome: Option<Gesture> = None;
         // SAFETY: reading the superview of a live view on the main
-        // thread. The strip's container is what added this button, and it
-        // outlives it — `sync` removes buttons from the container, never
-        // the other way round.
-        let Some(container) = (unsafe { self.superview() }) else {
+        // thread. It is the strip's **lane** — the clipped child view the
+        // tabs live in, not `TabStrip::container`, which additionally
+        // holds the overflow arrows — and it outlives this button, since
+        // `sync` removes buttons from the lane and never the reverse.
+        let Some(lane) = (unsafe { self.superview() }) else {
             return;
         };
         // A pinned tab is fixed in place. The loop below still runs —
@@ -343,7 +344,7 @@ impl TabButton {
         let me = self.retain();
 
         let app = NSApplication::sharedApplication(mtm);
-        let start = container.convertPoint_fromView(event.locationInWindow(), None);
+        let start = lane.convertPoint_fromView(event.locationInWindow(), None);
         let origin = self.frame().origin;
         let mut dragging = false;
         // The other tabs, and where each sat when the drag began.
@@ -386,7 +387,7 @@ impl TabButton {
             if kind != NSEventType::LeftMouseDragged || pinned {
                 continue;
             }
-            let here = container.convertPoint_fromView(next.locationInWindow(), None);
+            let here = lane.convertPoint_fromView(next.locationInWindow(), None);
             let dx = here.x - start.x;
             if !dragging && dx.abs() >= DRAG_THRESHOLD {
                 dragging = true;
@@ -395,7 +396,7 @@ impl TabButton {
                 // the top so an ordinary click never suppresses anything.
                 drag_guard = Some(DragGuard::new());
                 from_slot = slot_of(origin.x + TabStrip::scroll_offset());
-                peers = peer_tabs(&container, id);
+                peers = peer_tabs(&lane, id);
                 // **Raise it above the others before it starts moving.**
                 // Subview order is paint order, so a button left at its
                 // original index in the array is painted *under* every
@@ -406,7 +407,7 @@ impl TabButton {
                 // measured either side of a drag, the window's first
                 // responder stays the Scintilla content view, so the
                 // restack does not steal the caret.
-                container.addSubview_positioned_relativeTo(&me, NSWindowOrderingMode::Above, None);
+                lane.addSubview_positioned_relativeTo(&me, NSWindowOrderingMode::Above, None);
                 // Raising it is not enough on its own — see
                 // [`TabBackdrop`] for why an unselected tab is otherwise
                 // see-through for the whole gesture.
@@ -533,6 +534,24 @@ fn tab_span(count: usize) -> f64 {
     }
 }
 
+/// How much width the tabs get: the whole strip, or the whole strip
+/// less the arrows when they are needed.
+///
+/// One function rather than the same conditional at three call sites,
+/// because `sync`, `scroll_into_view` and `scroll_by_one` must agree —
+/// a lane that differed between them would clamp the offset to one
+/// bound and scroll against another.
+/// Floors at zero here rather than at each call site, so every caller
+/// gets the same guarantee: a window narrower than the arrows themselves
+/// would otherwise hand a negative width to the offset arithmetic.
+fn lane_width_for(count: usize, full_width: f64) -> f64 {
+    if tab_span(count) > full_width {
+        (full_width - ARROWS_WIDTH).max(0.0)
+    } else {
+        full_width.max(0.0)
+    }
+}
+
 /// Hold `offset` inside the range the strip can actually scroll.
 ///
 /// Pure, and tested: the upper bound is the one that goes wrong, because
@@ -655,17 +674,16 @@ fn slot_after_shift(slot: usize, from: usize, target: usize) -> usize {
     }
 }
 
-/// Every tab body in `container` except the one with `id`, paired with
-/// the slot it currently occupies.
+/// Every tab body in the strip's `lane` except the one with `id`,
+/// paired with the slot it currently occupies.
 ///
 /// Reads the slot back out of each button's frame rather than from the
 /// model: the two agree (the strip is laid out from the model), and
 /// reading the view keeps this a pure view-layer operation needing no
 /// borrow of `Shell` — which matters because it runs inside a
 /// `DrainFreeze`d tracking loop.
-fn peer_tabs(container: &NSView, id: i32) -> Vec<(Retained<NSView>, usize)> {
-    container
-        .subviews()
+fn peer_tabs(lane: &NSView, id: i32) -> Vec<(Retained<NSView>, usize)> {
+    lane.subviews()
         .iter()
         .filter(|view| view.downcast_ref::<TabButton>().is_some() && view.tag() != id as isize)
         .map(|view| {
@@ -925,7 +943,21 @@ fn draw_pin_glyph(pinned: bool, width: f64, height: f64) {
 /// window state and read on every drain, so it must stay cheap.
 #[derive(Clone)]
 pub struct TabStrip {
+    /// The whole strip: the tab lane plus, while overflowing, the
+    /// arrows.
     pub container: Retained<NSView>,
+    /// The tabs' own view, sized to the space left over after the arrows
+    /// and **clipped to it**.
+    ///
+    /// A child view rather than laying the tabs out directly in
+    /// `container`, because reserving width for the arrows is not the
+    /// same as stopping the tabs being *drawn* there. The first version
+    /// reserved a lane — which bounded how far the strip could scroll —
+    /// but AppKit does not clip subviews, so the tabs still painted
+    /// under the borderless arrows and showed through them. Clipping is
+    /// what makes the arrows sit *beside* the tabs, which is where the
+    /// other two backends put them.
+    lane: Retained<NSView>,
 }
 
 impl TabStrip {
@@ -935,7 +967,13 @@ impl TabStrip {
             NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, TAB_STRIP_HEIGHT)),
         );
         container.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
-        Self { container }
+        let lane = NSView::initWithFrame(
+            NSView::alloc(mtm),
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, TAB_STRIP_HEIGHT)),
+        );
+        lane.setClipsToBounds(true);
+        container.addSubview(&lane);
+        Self { container, lane }
     }
 
     /// Rebuild the strip from the shell's tab list.
@@ -965,9 +1003,20 @@ impl TabStrip {
             // ends. See [`DragGuard`].
             return;
         }
-        // Drop the previous generation of controls.
-        for view in self.container.subviews() {
+        // Drop the previous generation of controls — the tabs from the
+        // lane, and any arrows from the strip. The lane itself stays.
+        for view in self.lane.subviews() {
             view.removeFromSuperview();
+        }
+        for view in self.container.subviews() {
+            // Pointer identity is the right test and is sound: an
+            // Objective-C object does not relocate, and `subviews()`
+            // hands back references to the live views rather than copies,
+            // so two independently-obtained `Retained` handles to the
+            // lane compare equal by address.
+            if !std::ptr::eq(std::ptr::from_ref(&*view), std::ptr::from_ref(&*self.lane)) {
+                view.removeFromSuperview();
+            }
         }
 
         let active_id = active.and_then(|i| tabs.get(i)).map(|t| t.id);
@@ -976,13 +1025,15 @@ impl TabStrip {
         // them.
         let full_width = self.container.frame().size.width;
         let overflowing = tab_span(tabs.len()) > full_width;
-        let lane = if overflowing {
-            full_width - ARROWS_WIDTH
-        } else {
-            full_width
-        };
-        let offset = clamp_offset(SCROLL_OFFSET.with(Cell::get), tabs.len(), lane);
+        let lane_width = lane_width_for(tabs.len(), full_width);
+        let offset = clamp_offset(SCROLL_OFFSET.with(Cell::get), tabs.len(), lane_width);
         SCROLL_OFFSET.with(|c| c.set(offset));
+        // Resize the lane before filling it: it is what clips the tabs,
+        // so it has to be the right width *first*.
+        self.lane.setFrame(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(lane_width.max(0.0), TAB_STRIP_HEIGHT),
+        ));
 
         let mut x = -offset;
         for tab in tabs {
@@ -1018,19 +1069,15 @@ impl TabStrip {
             let close = make_close_button(tab.id, TAB_WIDTH - CLOSE_WIDTH, actions, mtm);
             button.addSubview(&close);
 
-            self.container.addSubview(&button);
+            self.lane.addSubview(&button);
             x += TAB_WIDTH;
         }
 
         if overflowing {
-            // Added last, so at rest they paint over anything beneath
-            // them. Note this does **not** hold during a drag: `track`
-            // raises the dragged button to the very front, so a tab
-            // dragged into the arrows' lane covers them for the duration
-            // of the gesture. Cosmetic, and it self-heals on the drop's
-            // resync — recorded rather than fixed, because restacking the
-            // arrows on every mouse-moved event is more machinery than a
-            // transient overlap is worth.
+            // Siblings of the lane, not of the tabs — so they sit
+            // *beside* the tabs rather than over them, and the lane's
+            // clipping means nothing can reach under them, a dragged tab
+            // included.
             //
             // Disabled at the extremes, so an arrow that cannot move the
             // strip says so rather than silently doing nothing.
@@ -1038,7 +1085,7 @@ impl TabStrip {
             left.setEnabled(offset > 0.5);
             self.container.addSubview(&left);
             let right = make_arrow(true, full_width - ARROW_WIDTH, actions, mtm);
-            right.setEnabled(offset < clamp_offset(f64::MAX, tabs.len(), lane) - 0.5);
+            right.setEnabled(offset < clamp_offset(f64::MAX, tabs.len(), lane_width) - 0.5);
             self.container.addSubview(&right);
         }
     }
@@ -1052,11 +1099,7 @@ impl TabStrip {
     /// it also covers a tab being closed under the scrolled region.
     pub fn scroll_into_view(&self, index: usize, count: usize) {
         let full_width = self.container.frame().size.width;
-        let lane = if tab_span(count) > full_width {
-            full_width - ARROWS_WIDTH
-        } else {
-            full_width
-        };
+        let lane = lane_width_for(count, full_width);
         let offset = SCROLL_OFFSET.with(Cell::get);
         let wanted = offset_showing(index, offset, lane);
         if (wanted - offset).abs() > 0.5 {
@@ -1067,11 +1110,7 @@ impl TabStrip {
     /// Step the strip one tab left or right — the arrow buttons.
     pub fn scroll_by_one(&self, forward: bool, count: usize) {
         let full_width = self.container.frame().size.width;
-        let lane = if tab_span(count) > full_width {
-            full_width - ARROWS_WIDTH
-        } else {
-            full_width
-        };
+        let lane = lane_width_for(count, full_width);
         let delta = if forward { TAB_WIDTH } else { -TAB_WIDTH };
         let next = clamp_offset(SCROLL_OFFSET.with(Cell::get) + delta, count, lane);
         SCROLL_OFFSET.with(|c| c.set(next));
@@ -1321,7 +1360,7 @@ mod tests {
 
 #[cfg(test)]
 mod overflow_tests {
-    use super::{clamp_offset, offset_showing, tab_span, TAB_WIDTH};
+    use super::{clamp_offset, lane_width_for, offset_showing, tab_span, ARROWS_WIDTH, TAB_WIDTH};
 
     /// Points are compared with a tolerance rather than exactly: these
     /// are layout coordinates, and an exact float comparison would be
@@ -1332,6 +1371,31 @@ mod overflow_tests {
             (have - want).abs() < 0.5,
             "expected {want} points, got {have}"
         );
+    }
+
+    #[test]
+    fn the_arrows_take_width_only_when_the_tabs_overflow() {
+        // Three tabs in a 1000pt strip: everything fits, so no arrows and
+        // the tabs get the lot.
+        assert_points(lane_width_for(3, 1000.0), 1000.0);
+        // Ten tabs in the same strip overflow, so the arrows take theirs.
+        assert_points(lane_width_for(10, 1000.0), 1000.0 - ARROWS_WIDTH);
+    }
+
+    #[test]
+    fn the_boundary_is_exactly_fits_versus_overflows() {
+        // Exactly filling the strip is *not* overflow — reserving arrow
+        // space there would push the last tab out and create the overflow
+        // it was reserving for.
+        let exact = tab_span(4);
+        assert_points(lane_width_for(4, exact), exact);
+        assert_points(lane_width_for(4, exact - 1.0), exact - 1.0 - ARROWS_WIDTH);
+    }
+
+    #[test]
+    fn a_window_narrower_than_the_arrows_floors_at_zero() {
+        assert_points(lane_width_for(10, 20.0), 0.0);
+        assert_points(lane_width_for(0, -5.0), 0.0);
     }
 
     #[test]
