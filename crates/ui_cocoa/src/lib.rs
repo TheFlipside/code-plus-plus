@@ -70,8 +70,8 @@ use objc2::runtime::ProtocolObject;
 use objc2::MainThreadOnly;
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions,
-    NSBackingStoreType, NSControlSize, NSOpenPanel, NSSavePanel, NSScreen, NSScroller,
-    NSScrollerStyle, NSView, NSWindow, NSWindowStyleMask, NSWindowTabbingMode,
+    NSBackingStoreType, NSColorSpace, NSControlSize, NSOpenPanel, NSSavePanel, NSScreen,
+    NSScroller, NSScrollerStyle, NSView, NSWindow, NSWindowStyleMask, NSWindowTabbingMode,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSURL};
 
@@ -313,6 +313,33 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // where it was. Reported as confusing, and it was: two things called
     // "tabs", one of them AppKit's and unrelated to the buffers.
     window.setTabbingMode(NSWindowTabbingMode::Disallowed);
+
+    // **Pin the window to sRGB, which halves its compositing memory.**
+    //
+    // On a wide-gamut / EDR-capable display — every recent Mac —
+    // CoreAnimation gives a window's backing surface a half-float RGBA
+    // format (`RGhA`, 8 bytes per pixel) so it can represent colours
+    // outside sRGB and beyond 1.0. Measured on this machine: three
+    // 1926×1346 `RGhA` surfaces at 20.0 MB each. Pinning the colour
+    // space drops them to `BGRA` at 4 bytes per pixel — 10.2 MB each,
+    // and `phys_footprint` from ~77 MB to ~50 MB (49.5 / 49.5 / 50.2
+    // across three release runs), a 35% saving on DESIGN.md §8's
+    // most-missed budget. It scales with window area, so a larger
+    // window saves proportionally more.
+    //
+    // **Nothing is lost, because Code++ has no wide-gamut content to
+    // lose.** Every colour it draws is a plain 8-bit RGB triple: the
+    // lexer themes in `codepp_editor::theme` are hex literals, Scintilla
+    // takes `SCI_STYLESETFORE` as packed RGB, and the toolbar icons are
+    // sRGB PNGs. Those values *are* sRGB, so rendering them through a
+    // half-float EDR pipeline cannot make them more accurate — it only
+    // makes the buffer wider.
+    //
+    // Two things that look like they would do the same and do not,
+    // both measured: `setDepthLimit(NSWindowDepthTwentyfourBitRGB)`
+    // changed nothing, and neither did `setOpaque(true)`. The format is
+    // chosen from the colour space, not from the depth limit.
+    window.setColorSpace(Some(&NSColorSpace::sRGBColorSpace()));
     // The tab strip's overflow arrows and scroll offset are only
     // recomputed by `TabStrip::sync`, which runs on tab-list events — so
     // a resize needs a hook of its own. See `Actions`'s
@@ -2537,6 +2564,39 @@ mod source_invariants {
             "`mark_first_draw` must run before the paint arm's \
              `with_state`, which is declined on a re-entrant call and \
              would silently drop the timestamp."
+        );
+    }
+
+    /// The main window must be pinned to sRGB, before it is shown.
+    ///
+    /// The pin is what keeps the window's compositing surfaces at 4
+    /// bytes per pixel instead of the half-float 8 `CoreAnimation`
+    /// otherwise picks on a wide-gamut display — worth ~27 MB, a third
+    /// of this backend's footprint (§8). Dropping the call costs that
+    /// silently: nothing fails, nothing renders differently, and the
+    /// only symptom is a number in a document nobody re-measures every
+    /// commit. That is precisely the shape of bug the cold-start mark
+    /// turned out to be, so it gets the same guard.
+    ///
+    /// Placement matters as much as presence — it has to precede
+    /// `build_content`, which is what installs the content view, since
+    /// the point is to be set before any backing store is allocated.
+    #[test]
+    fn the_window_is_pinned_to_srgb_before_it_is_shown() {
+        let src = production_src();
+        let body = fn_body(src, "run");
+        let pin = body.find("setColorSpace(").expect(
+            "the main window is no longer pinned to sRGB — its \
+             compositing surfaces double in size (see the call site)",
+        );
+        let content = body
+            .find("build_content(")
+            .expect("`run` no longer builds the content view");
+        assert!(
+            pin < content,
+            "`setColorSpace` must run before `build_content`, which \
+             installs the content view — the pin has to be in place \
+             before any backing store is allocated."
         );
     }
 
