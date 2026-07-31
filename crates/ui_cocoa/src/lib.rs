@@ -67,11 +67,12 @@ use dispatch2::DispatchQueue;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::MainThreadOnly;
+use objc2::{MainThreadOnly, Message as _};
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions,
-    NSBackingStoreType, NSColorSpace, NSControlSize, NSOpenPanel, NSSavePanel, NSScreen,
-    NSScroller, NSScrollerStyle, NSView, NSWindow, NSWindowStyleMask, NSWindowTabbingMode,
+    NSBackingStoreType, NSColorSpace, NSControlSize, NSEvent, NSEventMask, NSEventModifierFlags,
+    NSOpenPanel, NSSavePanel, NSScreen, NSScroller, NSScrollerStyle, NSView, NSWindow,
+    NSWindowStyleMask, NSWindowTabbingMode,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSURL};
 
@@ -392,6 +393,13 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // outlive it, which the binding below guarantees.
     let autosave = actions.start_autosave(mtm);
 
+    // The opening edge of the §8 keystroke interval; see the function.
+    // `None` when the state is somehow unreachable, which only costs a
+    // measurement — never a failed startup.
+    let key_probe = PERF
+        .with(|p| p.borrow().clone())
+        .and_then(|perf| install_key_probe(&sci_view, &window, &perf));
+
     // Ordering the window front and activating happens in the
     // application delegate's `applicationDidFinishLaunching:`, **not**
     // here. Doing it before `-[NSApplication run]` silently fails for a
@@ -428,7 +436,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // the menu items are the binding constraint.) Binding to a named
     // local rather than `let _ =` is what pins them: `let _ =` drops
     // immediately.
-    let _keepalive = (app_delegate, actions, autosave);
+    let _keepalive = (app_delegate, actions, autosave, key_probe);
 
     // Blocks until the user quits. Everything after this is unreachable
     // on the standard Quit path — `terminate:` calls `exit()` — which is
@@ -630,6 +638,15 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
         // frames. The refresh is idempotent, so handling both costs a
         // repeat rather than risking a stale bar.
         codepp_scintilla_sys::SCN_UPDATEUI | codepp_scintilla_sys::SCN_MODIFIED => {
+            // Promotes a pending key press to a real measurement. Only
+            // for `SCN_MODIFIED` — `SCN_UPDATEUI` fires for a caret move
+            // with no edit, and promoting there would time keys that
+            // changed no text. See `codepp_core::perf`.
+            if code == codepp_scintilla_sys::SCN_MODIFIED {
+                if let Some(p) = PERF.with(|p| p.borrow().clone()) {
+                    p.text_modified();
+                }
+            }
             with_state(|st| {
                 let (_, ui) = st.split();
                 ui.refresh_dynamic_status();
@@ -662,8 +679,8 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
             // Cold start closes here, on a **real** first paint — the
             // same span `ui_gtk` and `ui_win32` measure, so the three
             // figures in §8 are finally the same quantity. `painted()`
-            // closes a pending keystroke interval; it is a no-op until a
-            // key hook sets one, which macOS still lacks (see §8).
+            // closes any keystroke intervals waiting on this paint; see
+            // `install_key_probe`, which opens them.
             //
             // No `hwndFrom`-style filter, unlike Win32: this backend has
             // exactly one Scintilla view. That stops being true when the
@@ -761,6 +778,107 @@ fn build_content(
     window.setContentView(Some(&content));
 
     (status, tab_strip, toolbar, fif_dock)
+}
+
+/// Observe key presses so `--perf` can measure keystroke latency.
+///
+/// The opening edge of the DESIGN.md §8 interval. The other two edges
+/// already exist — `SCN_MODIFIED` promotes a press to a real
+/// measurement and `SCN_PAINTED` closes it — so this is what makes the
+/// macOS latency row measurable at all; before it, `painted()` closed
+/// intervals nothing ever opened.
+///
+/// **A local event monitor, not a subclass.** Win32 matches `WM_CHAR`
+/// in its own message pump and GTK connects `key-press-event` to the
+/// Scintilla widget. Neither shape exists here: the pump is
+/// `-[NSApplication run]`, and the view that receives keys is
+/// `SCIContentView` inside the vendored Scintilla tree, which
+/// DESIGN.md §4.1 keeps unforked. A local monitor sees every key event
+/// this process is about to dispatch, and returning the event unchanged
+/// leaves delivery exactly as it was — the same "observe, never
+/// swallow" rule `ui_gtk`'s handler documents.
+///
+/// Two filters, matching the other backends:
+///
+/// * **The editor must be the first responder.** Without it, typing in
+///   the Find panel's query field would open intervals that no editor
+///   paint ever closes; they would sit in `pending` until some unrelated
+///   repaint closed them and report the time spent in the dialog as
+///   keystroke latency. `ui_win32` documents the identical hazard for
+///   its own dialogs.
+/// * **⌘ and ⌃ chords are excluded**, being the macOS equivalents of the
+///   Ctrl chord §8 excludes: they are commands, not typed characters,
+///   and a paste's redraw is a different quantity large enough to
+///   dominate the tail. ⌥ is *not* excluded — it composes real
+///   characters (⌥e, ⌥u), exactly as `ui_gtk` reasons about `AltGr`.
+///
+/// Returns the monitor, which the caller must keep alive; dropping it
+/// unregisters the observation.
+fn install_key_probe(
+    sci_view: &NSView,
+    window: &NSWindow,
+    perf: &Rc<Perf>,
+) -> Option<Retained<objc2::runtime::AnyObject>> {
+    if !perf.enabled() {
+        return None;
+    }
+    let perf = Rc::clone(perf);
+    let sci_view = sci_view.retain();
+    let window = window.retain();
+    let handler = block2::RcBlock::new(move |event: std::ptr::NonNull<NSEvent>| {
+        // SAFETY: AppKit hands the monitor a live, autoreleased event
+        // for the duration of the call.
+        let event: &NSEvent = unsafe { event.as_ref() };
+        at_callback_boundary("perf:keyDown", (), || {
+            if event_is_typed_into_editor(event, &window, &sci_view) {
+                perf.key_pressed();
+            }
+        });
+        // Unmodified: this observes, it must never swallow.
+        std::ptr::from_ref::<NSEvent>(event).cast_mut()
+    });
+    // SAFETY: the block outlives the call — `RcBlock` is refcounted and
+    // AppKit retains the handler for the monitor's lifetime.
+    unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &handler) }
+}
+
+/// Whether a key event is a character typed into the editor, rather than
+/// a command chord or a keystroke aimed at some other view.
+fn event_is_typed_into_editor(event: &NSEvent, window: &NSWindow, sci_view: &NSView) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    if event.window(mtm).as_deref() != Some(window) {
+        return false;
+    }
+    let Some(responder) = window.firstResponder() else {
+        return false;
+    };
+    let Ok(view) = responder.downcast::<NSView>() else {
+        return false;
+    };
+    if !view.isDescendantOf(sci_view) {
+        return false;
+    }
+    modifiers_type_a_character(event.modifierFlags())
+}
+
+/// Whether a key event's modifiers describe a *typed character* rather
+/// than a command chord.
+///
+/// Split out so the decision is unit-testable without a live `NSEvent`,
+/// a window and a first responder — the interesting part is which flags
+/// are in the set, and a future edit flipping it would otherwise change
+/// what §8's latency figures mean with nothing to catch it.
+///
+/// ⌘ and ⌃ are the macOS equivalents of the Ctrl chord §8 excludes. **⌥
+/// is deliberately not excluded**, and the reason differs from GTK's:
+/// there, `Ctrl` is excluded only when `Alt` is absent, because Ctrl+Alt
+/// is `AltGr` and types real characters. macOS has no Control-based
+/// composition, so Control can be excluded outright — but Option alone
+/// composes (⌥e, ⌥u), so it must not be.
+fn modifiers_type_a_character(flags: NSEventModifierFlags) -> bool {
+    !flags.intersects(NSEventModifierFlags::Command | NSEventModifierFlags::Control)
 }
 
 /// Order the main window front, focus the editor, and activate the app.
@@ -2420,6 +2538,39 @@ mod scroller_layout_tests {
     #[test]
     fn a_window_smaller_than_its_own_chrome_floors_at_zero() {
         assert_eq!(scroller_clip_size(20.0, 10.0, 44.0, 17.0, 17.0), (0.0, 0.0));
+    }
+}
+
+#[cfg(test)]
+mod modifier_tests {
+    use super::modifiers_type_a_character as types;
+    use objc2_app_kit::NSEventModifierFlags as F;
+
+    #[test]
+    fn a_plain_key_is_a_typed_character() {
+        assert!(types(F::empty()));
+        assert!(types(F::Shift));
+        assert!(types(F::CapsLock));
+    }
+
+    /// ⌥ composes real characters (⌥e, ⌥u), so it counts — the macOS
+    /// analogue of the `AltGr` case `ui_gtk` reasons about.
+    #[test]
+    fn option_still_types_a_character() {
+        assert!(types(F::Option));
+        assert!(types(F::Option | F::Shift));
+    }
+
+    /// ⌘ and ⌃ are commands. §8 budgets a *typed character*, and a
+    /// paste's redraw is a different quantity large enough to dominate
+    /// the tail.
+    #[test]
+    fn command_and_control_are_chords() {
+        assert!(!types(F::Command));
+        assert!(!types(F::Control));
+        assert!(!types(F::Command | F::Shift));
+        // ⌥ does not rescue a chord, unlike GTK's Ctrl+Alt.
+        assert!(!types(F::Control | F::Option));
     }
 }
 

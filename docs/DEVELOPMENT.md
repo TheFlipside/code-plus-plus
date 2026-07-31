@@ -425,9 +425,10 @@ All three backends close the cold-start interval on Scintilla's
 `SCN_PAINTED`, so the figures are the same quantity. macOS did **not**
 until Phase 5 m4b: it marked before `-[NSApplication run]`, which is
 before the window is ordered front and before anything paints, and its
-m1–m3a figures are retracted for that reason. macOS has no
-keystroke-latency figures at all — `SCN_PAINTED` closes an interval
-there but nothing opens one yet.
+m1–m3a figures are retracted for that reason. macOS's figures arrived in
+Phase 5 m4b, from a local `NSEvent` monitor: p99 ≈ 20 ms, 4x the
+budget and the worst of the three, with a bimodal distribution that
+gets *better* at higher input rates.
 
 To reproduce the Win32 numbers on a Windows session, `SendKeys.SendWait`
 from a PowerShell harness is what those measurements used — the

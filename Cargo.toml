@@ -75,6 +75,12 @@ notify = "8"
 # independently of `objc2` itself, which is why the two version numbers
 # differ. All MIT.
 objc2 = "0.6"
+# Objective-C block support, from the `objc2` project and versioned with
+# it. `ui_cocoa` needs exactly one thing from it: the block that
+# `+[NSEvent addLocalMonitorForEventsMatchingMask:handler:]` takes, which
+# is how the keystroke-latency probe observes key presses without
+# subclassing `NSApplication` or the vendored Scintilla view. MIT.
+block2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
 # Grand Central Dispatch bindings, from the same maintainer as `objc2`.

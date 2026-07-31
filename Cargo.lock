@@ -275,6 +275,7 @@ dependencies = [
 name = "codepp-ui-cocoa"
 version = "0.1.0"
 dependencies = [
+ "block2",
  "codepp-core",
  "codepp-editor",
  "codepp-platform",

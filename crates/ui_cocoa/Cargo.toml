@@ -28,6 +28,7 @@ harness = false
 # alternative backends for the same `UiPlatform` trait, and exactly one
 # is linked per target (see `crates/app`'s feature/cfg pairing).
 [target.'cfg(target_os = "macos")'.dependencies]
+block2               = { workspace = true }
 codepp-core          = { workspace = true }
 codepp-editor        = { workspace = true }
 codepp-platform      = { workspace = true }
