@@ -88,6 +88,10 @@ const DEFAULT_HEIGHT: f64 = 768.0;
 pub(crate) const AUTOSAVE_INTERVAL_SECS: f64 = 7.0;
 
 thread_local! {
+    /// Viewport width the horizontal floor was last computed against, so
+    /// [`clamp_scroll_width_to_viewport`] can tell a resize from a
+    /// repaint. `-1` is unreachable, so the first paint always re-seeds.
+    static LAST_VIEWPORT_WIDTH: std::cell::Cell<isize> = const { std::cell::Cell::new(-1) };
     /// Last dirty state pushed into the tab strip, so a notification
     /// storm only rebuilds it when the marker actually changes. See
     /// [`on_sci_notify`].
@@ -771,11 +775,42 @@ fn clamp_scroll_width_to_viewport(st: &crate::state::CocoaUiState) {
     if target <= 0 {
         return;
     }
-    if st
+    let previous = LAST_VIEWPORT_WIDTH.with(|c| c.replace(target));
+    let current = st
         .editor
-        .send(codepp_scintilla_sys::SCI_GETSCROLLWIDTH, 0, 0)
-        < target
-    {
+        .send(codepp_scintilla_sys::SCI_GETSCROLLWIDTH, 0, 0);
+
+    // **When the viewport shrinks, let the floor come down with it — but
+    // only when the floor is all that is holding the width up.**
+    //
+    // This function otherwise only ever raises `scrollWidth`, which is
+    // right while the window keeps its size: the floor is what stops the
+    // blank area right of short lines being unclickable. The raised
+    // value outlives the viewport that justified it, though, so
+    // maximising and un-maximising a three-line file left the document
+    // as wide as the *old* clip and a horizontal scrollbar appeared for
+    // content that was not there.
+    //
+    // The test for "nothing but the floor" is that the width is exactly
+    // the value this function last installed. A content-derived width
+    // never matches that except by coincidence, and a coincidence is
+    // harmless: tracking re-raises it on the next paint while the long
+    // line is still on screen.
+    //
+    // **Re-seeding instead would be wrong, and was.** An earlier version
+    // reset the width to 1 so tracking could recompute — but
+    // `SCI_SETSCROLLWIDTH` also zeroes `lineWidthMaxSeen`, and tracking
+    // only re-raises during a subsequent `Paint`, so reading the width
+    // back in the same pass and clamping it to the viewport pinned it
+    // there. Measured: with a 4 000-character line on screen, resizing
+    // 1500 → 900 collapsed the document from 26 525 pt to 839 pt and it
+    // did not recover, making the rest of that line unreachable.
+    if previous > target && current == previous {
+        st.editor
+            .send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, target as usize, 0);
+        return;
+    }
+    if current < target {
         st.editor
             .send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, target as usize, 0);
     }
@@ -2394,13 +2429,27 @@ mod source_invariants {
         assert!(src.len() > 5_000, "source scan read too little to be real");
         let sets = src.matches("SCI_SETSCROLLWIDTH,").count();
         assert_eq!(
-            sets, 2,
-            "`SCI_SETSCROLLWIDTH` should be sent from exactly two places \
+            sets, 3,
+            "`SCI_SETSCROLLWIDTH` should be sent from exactly three places \
              — `seed_horizontal_scroll`, which also enables tracking, and \
-             `clamp_scroll_width_to_viewport`, which floors it at the \
-             viewport width. Found {sets}. An unpaired reset collapses \
-             the document view to one point wide and kills mouse input \
-             entirely; a missing floor makes only the text clickable."
+             the two arms of `clamp_scroll_width_to_viewport`, which raise \
+             the floor to the viewport and lower it again when the viewport \
+             shrinks. Found {sets}. An unpaired reset collapses the document \
+             view to one point wide and kills mouse input entirely; a \
+             missing floor makes only the text clickable."
+        );
+        // The count is a proxy; this is the property that actually
+        // matters. Only the seed may reset the width to 1, because that
+        // is the value that collapses the document view — and it is the
+        // one place that re-enables tracking alongside.
+        let seed_body = fn_body(src, "seed_horizontal_scroll");
+        let resets = src.matches("SCI_SETSCROLLWIDTH, 1,").count();
+        assert_eq!(
+            resets,
+            seed_body.matches("SCI_SETSCROLLWIDTH, 1,").count(),
+            "something outside `seed_horizontal_scroll` resets the scroll \
+             width to 1; only the seed may, because only it re-enables \
+             tracking in the same breath"
         );
         let clamp = fn_body(src, "clamp_scroll_width_to_viewport");
         assert!(
@@ -2578,6 +2627,42 @@ mod source_invariants {
             painted.contains("enforce_scroller_layout("),
             "the layout repair must run from the SCN_PAINTED arm, or it \
              lasts only until the first long line widens the document"
+        );
+    }
+
+    /// The horizontal floor must be allowed back down when the viewport
+    /// shrinks.
+    ///
+    /// The floor exists so the blank area right of short lines stays
+    /// clickable, and it only ever rises — which is right until the
+    /// window gets smaller, at which point the document is still as wide
+    /// as the *old* viewport and a horizontal scrollbar appears for
+    /// content that is not there. Reported after a maximise and
+    /// un-maximise on a three-line file.
+    ///
+    /// It must come down *only* when the width is exactly the floor this
+    /// function last installed. Re-seeding to let tracking recompute is
+    /// the tempting alternative and it loses a real long line's scroll
+    /// range — see the function.
+    #[test]
+    fn the_horizontal_floor_is_reseeded_when_the_viewport_changes() {
+        let body = fn_body(production_src(), "clamp_scroll_width_to_viewport");
+        let width_check = body
+            .find("LAST_VIEWPORT_WIDTH")
+            .expect("the clamp no longer notices a viewport resize");
+        assert!(
+            !body.contains("seed_horizontal_scroll("),
+            "the clamp must not re-seed: SCI_SETSCROLLWIDTH zeroes \
+             lineWidthMaxSeen and tracking only re-raises on a later paint, \
+             so reading the width back in the same pass pins it to the \
+             viewport and a long line's scroll range is lost"
+        );
+        let lower = body
+            .find("previous > target")
+            .expect("the clamp no longer lowers its floor when the viewport shrinks");
+        assert!(
+            width_check < lower,
+            "the lowering must be keyed on the remembered viewport width"
         );
     }
 
