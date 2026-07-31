@@ -68,8 +68,8 @@ use objc2::rc::Retained;
 use objc2::MainThreadOnly;
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions,
-    NSBackingStoreType, NSOpenPanel, NSSavePanel, NSScreen, NSView, NSWindow, NSWindowStyleMask,
-    NSWindowTabbingMode,
+    NSBackingStoreType, NSControlSize, NSOpenPanel, NSSavePanel, NSScreen, NSScroller,
+    NSScrollerStyle, NSView, NSWindow, NSWindowStyleMask, NSWindowTabbingMode,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSURL};
 
@@ -88,10 +88,6 @@ const DEFAULT_HEIGHT: f64 = 768.0;
 pub(crate) const AUTOSAVE_INTERVAL_SECS: f64 = 7.0;
 
 thread_local! {
-    /// Last (first visible line, x offset) the editor was seen at, so
-    /// [`flash_scrollers_if_scrolled`] can tell a real scroll from a
-    /// repaint.
-    static LAST_SCROLL: std::cell::Cell<(isize, isize)> = const { std::cell::Cell::new((-1, -1)) };
     /// Last dirty state pushed into the tab strip, so a notification
     /// storm only rebuilds it when the marker actually changes. See
     /// [`on_sci_notify`].
@@ -607,8 +603,16 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
         // viewport. See `clamp_scroll_width_to_viewport`.
         codepp_scintilla_sys::SCN_PAINTED => {
             with_state(|st| {
+                // Repair first, measure second. `clamp_scroll_width_to_viewport`
+                // reads the clip's width, and on a paint that follows a
+                // re-tile that width is the wrong, scroller-covering one —
+                // measuring first would raise the horizontal floor above the
+                // real viewport, and since that floor only ever rises it
+                // would stay there.
+                if let Some(mtm) = MainThreadMarker::new() {
+                    enforce_scroller_layout(&st.sci_view, mtm);
+                }
                 clamp_scroll_width_to_viewport(st);
-                flash_scrollers_if_scrolled(st);
             });
         }
         _ => {}
@@ -812,9 +816,8 @@ const SELECTION_BACK_INACTIVE: usize = 0xFF_DC_DC_DC;
 /// Give the editor the selection colours, and stop its subviews painting
 /// outside its band.
 ///
-/// Scroller behaviour is deliberately left alone here — see
-/// [`flash_scrollers_if_scrolled`] for why forcing a style does not work
-/// on this backend.
+/// Also forces permanently visible scrollers and repairs the layout
+/// that breaks — see [`enforce_scroller_layout`].
 ///
 /// **The clip is not cosmetic tidiness.** `SCIScrollView` is a *flipped*
 /// view, and on macOS 26 it carries a scroll-edge-effect
@@ -830,6 +833,7 @@ const SELECTION_BACK_INACTIVE: usize = 0xFF_DC_DC_DC;
 /// assumes — the editor draws inside the band it was given — rather than
 /// chasing whichever AppKit-internal subview currently overflows.
 fn apply_editor_appearance() {
+    let mtm = MainThreadMarker::new();
     with_state(|st| {
         for element in [
             codepp_scintilla_sys::SC_ELEMENT_SELECTION_BACK,
@@ -847,55 +851,154 @@ fn apply_editor_appearance() {
             SELECTION_BACK_INACTIVE as isize,
         );
         st.sci_view.setClipsToBounds(true);
+        if let Some(scroll) = editor_scroll_view(&st.sci_view) {
+            // Permanent bars, matching Win32 and GTK. The layout this
+            // then breaks is repaired below and after every paint.
+            scroll.setScrollerStyle(NSScrollerStyle::Legacy);
+            scroll.setAutohidesScrollers(false);
+        }
+        // After the style, never before: the repair is a no-op while the
+        // scrollers are still overlay.
+        if let Some(mtm) = mtm {
+            enforce_scroller_layout(&st.sci_view, mtm);
+        }
     });
 }
 
-/// Show the editor's overlay scrollers whenever the view has scrolled.
+/// Give the editor permanently visible scrollers, and repair the
+/// layout Scintilla's own `tile` gets wrong when they are.
 ///
-/// macOS overlay scrollers appear during a wheel or trackpad gesture and
-/// fade out; scrolling by keyboard, by dragging a selection, by Go To
-/// Line or from a plugin produces no gesture, so nothing appears and
-/// there is no indication that the document continues. `flashScrollers`
-/// is AppKit's own answer — it is what a native app calls when it
-/// scrolls its content programmatically.
+/// **Why this is a host-side repair rather than a style setting.**
+/// Setting `NSScrollerStyle::Legacy` alone is not enough, and shipping
+/// it alone was a bug: `SCIScrollView::tile` shifts the content view
+/// right by the line-number margin's width and shrinks it by the same,
+/// but nothing there accounts for scrollers that take space rather than
+/// float. `ScintillaCocoa::SetScrollingSize` re-assigns
+/// `hasVerticalScroller`/`hasHorizontalScroller` on every call, so the
+/// first long line to widen the document re-tiled the view and left the
+/// content view covering the scrollers — both bars gone. Measured:
+/// the clip went from 1019×531 to 1036×548 inside a 1080×548 scroll
+/// view, while the scroller frames stayed where they were.
 ///
-/// **Forcing `NSScrollerStyle::Legacy` instead is the obvious idea and
-/// it is wrong.** Scintilla's `SCIScrollView` overrides `tile` to shift
-/// the content view right by the line-number margin's width and shrink
-/// it by the same amount, without touching the scrollers — arithmetic
-/// that only holds when the scrollers float over the content rather than
-/// taking space from it. Under Legacy the vertical scroller ends up laid
-/// out past the scroll view's own right edge (measured: x=1063 in a
-/// 1024-wide view) and both bars vanish the moment a long line widens
-/// the document. The vendored source agrees: `ScintillaView.mm:1474`
-/// carries `//[scrollView setScrollerStyle:NSScrollerStyleLegacy];`,
-/// commented out. So this backend works with overlay scrollers rather
-/// than against them.
+/// The vendored `//[scrollView setScrollerStyle:NSScrollerStyleLegacy];`
+/// at `ScintillaView.mm:1474` says upstream hit this too and backed out.
+/// Code++ cannot take the other exit — leaving the scrollers on their
+/// overlay default means they are drawn only during a wheel or trackpad
+/// gesture, and Scintilla scrolls its own content, so keyboard
+/// navigation, Go To Line and plugin scrolls produce nothing at all.
+/// `flashScrollers` was tried for that and is not enough either: the
+/// bars appear for a moment and the user reported seeing nothing.
 ///
-/// Flashing only on an actual change of scroll position, not on every
-/// paint — otherwise the bars would pulse continuously while typing.
+/// So the fix is to state the geometry `tile` should have produced and
+/// re-assert it after every paint. That is the same shape as
+/// [`clamp_scroll_width_to_viewport`] — a vendored gap corrected from
+/// the host because §4.1 keeps the tree unforked — and it is idempotent,
+/// so re-running it costs one rect comparison when nothing moved.
 ///
-/// The `(-1, -1)` sentinel [`LAST_SCROLL`] starts at is deliberately
-/// unreachable, so the first paint after startup always flashes. Showing
-/// the bars once as a document appears is what a native app does, and it
-/// is the one case where "only on a change" is not literally true.
-///
-/// **This leaves macOS diverging from the other two backends**, which
-/// show a permanently visible bar. Recorded in §7.4 as an accepted
-/// tradeoff rather than an oversight: the alternative fights vendored
-/// layout code that upstream itself disabled, and it broke in a worse
-/// way — both bars vanishing outright.
-fn flash_scrollers_if_scrolled(st: &crate::state::CocoaUiState) {
-    let line = st
-        .editor
-        .send(codepp_scintilla_sys::SCI_GETFIRSTVISIBLELINE, 0, 0);
-    let x = st.editor.send(codepp_scintilla_sys::SCI_GETXOFFSET, 0, 0);
-    if LAST_SCROLL.with(|c| c.replace((line, x))) == (line, x) {
+/// Only touches the layout when the style really is Legacy: if the
+/// system is set to overlay scrollers *and* this function has not forced
+/// otherwise, the vendored arithmetic is correct as written and must be
+/// left alone.
+fn enforce_scroller_layout(sci_view: &NSView, mtm: MainThreadMarker) {
+    let Some(scroll) = editor_scroll_view(sci_view) else {
+        return;
+    };
+    if scroll.scrollerStyle() != NSScrollerStyle::Legacy {
         return;
     }
-    if let Some(scroll) = editor_scroll_view(&st.sci_view) {
-        scroll.flashScrollers();
+    let clip = scroll.contentView();
+    let bounds = scroll.bounds();
+    // The clip's x is the line-number margin's thickness, which
+    // `SCIScrollView::tile` writes and which is the one part of its
+    // arithmetic that is right. Read it back rather than recomputing:
+    // the margin width is Scintilla's to decide.
+    //
+    // It reads 0 before `tile` has ever run, which is indistinguishable
+    // from "no gutter". Harmless: the call from `apply_editor_appearance`
+    // happens before the window is on screen, and the first real
+    // `SCN_PAINTED` — which necessarily follows a tile — corrects it
+    // before anything is visible.
+    let margin = clip.frame().origin.x;
+    // The scrollers' own widths rather than
+    // `scrollerWidthForControlSize:scrollerStyle:` with an assumed
+    // control size: an accessibility setting can change that, and being
+    // a few points out would be *stable* rather than self-correcting,
+    // because the idempotency check below would settle on it happily.
+    let (width, height) = scroller_clip_size(
+        bounds.size.width,
+        bounds.size.height,
+        margin,
+        if scroll.hasVerticalScroller() {
+            scroller_thickness(scroll.verticalScroller().as_deref(), mtm, false)
+        } else {
+            0.0
+        },
+        if scroll.hasHorizontalScroller() {
+            scroller_thickness(scroll.horizontalScroller().as_deref(), mtm, true)
+        } else {
+            0.0
+        },
+    );
+    let have = clip.frame();
+    // Size only: the origin is `tile`'s to set and is the part it gets
+    // right, so correcting it too would fight Scintilla over the gutter.
+    // Compared rather than assigned unconditionally because this runs on
+    // every paint and setting a frame invalidates.
+    if (have.size.width - width).abs() > 0.5 || (have.size.height - height).abs() > 0.5 {
+        clip.setFrame(NSRect::new(
+            NSPoint::new(margin, 0.0),
+            NSSize::new(width, height),
+        ));
     }
+}
+
+/// How much of the content a scroller takes, measured from the scroller
+/// itself where there is one.
+fn scroller_thickness(
+    scroller: Option<&NSScroller>,
+    mtm: MainThreadMarker,
+    horizontal: bool,
+) -> f64 {
+    scroller.map_or_else(
+        || {
+            NSScroller::scrollerWidthForControlSize_scrollerStyle(
+                NSControlSize::Regular,
+                NSScrollerStyle::Legacy,
+                mtm,
+            )
+        },
+        |s| {
+            let size = s.frame().size;
+            if horizontal {
+                size.height
+            } else {
+                size.width
+            }
+        },
+    )
+}
+
+/// The size `SCIScrollView::tile` should have given the clip view.
+///
+/// Pure, and separated for that reason: rect arithmetic with two axes
+/// and three subtracted terms is the shape that fails by an off-by-one
+/// or a transposed axis, and those are exactly the failures a hands-on
+/// demo is worst at catching. Same reasoning as the tab strip's
+/// drop-index and shuffle helpers.
+///
+/// Floors at zero, so a window dragged smaller than its own chrome
+/// cannot ask for a negative size.
+fn scroller_clip_size(
+    view_width: f64,
+    view_height: f64,
+    margin: f64,
+    vertical_bar: f64,
+    horizontal_bar: f64,
+) -> (f64, f64) {
+    (
+        (view_width - margin - vertical_bar).max(0.0),
+        (view_height - horizontal_bar).max(0.0),
+    )
 }
 
 /// The `NSScrollView` inside a `ScintillaView`.
@@ -2085,6 +2188,56 @@ fn url_to_path(url: &NSURL) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+mod scroller_layout_tests {
+    use super::scroller_clip_size;
+
+    #[test]
+    fn each_scroller_and_the_margin_take_their_own_space() {
+        // The measured real case: a 1080x548 scroll view with a 44pt
+        // line-number gutter and both 17pt bars showing.
+        assert_eq!(
+            scroller_clip_size(1080.0, 548.0, 44.0, 17.0, 17.0),
+            (1019.0, 531.0)
+        );
+    }
+
+    #[test]
+    fn an_absent_scroller_gives_its_space_back() {
+        assert_eq!(
+            scroller_clip_size(1080.0, 548.0, 44.0, 0.0, 17.0),
+            (1036.0, 531.0)
+        );
+        assert_eq!(
+            scroller_clip_size(1080.0, 548.0, 44.0, 17.0, 0.0),
+            (1019.0, 548.0)
+        );
+    }
+
+    #[test]
+    fn a_buffer_with_no_gutter_uses_the_full_width() {
+        assert_eq!(
+            scroller_clip_size(1080.0, 548.0, 0.0, 17.0, 17.0),
+            (1063.0, 531.0)
+        );
+    }
+
+    #[test]
+    fn the_axes_are_not_swapped() {
+        // A deliberately asymmetric case: were the two subtractions
+        // transposed, this would come back (983, 611).
+        assert_eq!(
+            scroller_clip_size(1000.0, 600.0, 10.0, 7.0, 11.0),
+            (983.0, 589.0)
+        );
+    }
+
+    #[test]
+    fn a_window_smaller_than_its_own_chrome_floors_at_zero() {
+        assert_eq!(scroller_clip_size(20.0, 10.0, 44.0, 17.0, 17.0), (0.0, 0.0));
+    }
+}
+
+#[cfg(test)]
 mod source_invariants {
     //! Source-level guards for invariants a runtime test cannot see.
     //!
@@ -2389,43 +2542,42 @@ mod source_invariants {
     /// reachable only from a real drag on a real window server, and
     /// because it would most likely *not* crash in a debug build — the
     /// freed memory is still mapped and usually still intact.
-    /// The editor's scrollers must stay overlay.
+    /// Forcing a Legacy scroller style obliges us to repair Scintilla's
+    /// tiling, on every paint.
     ///
-    /// Forcing `NSScrollerStyle::Legacy` is the obvious way to make a
-    /// scrollbar permanent and it shipped once: Scintilla's
-    /// `SCIScrollView::tile` shifts the content view for the line-number
-    /// margin without adjusting the scrollers, arithmetic that only holds
-    /// when they float, so under Legacy *both* bars disappeared as soon
-    /// as a long line widened the document. A scan because the failure is
-    /// a layout interaction inside vendored Objective-C++ that only
-    /// appears with a wide enough document on screen — nothing in the
-    /// suite can see it, and it took a user report to find the first
-    /// time.
+    /// `SCIScrollView::tile` shifts the content view right by the
+    /// line-number margin's width without accounting for scrollers that
+    /// take space rather than float, and
+    /// `ScintillaCocoa::SetScrollingSize` re-tiles whenever the document
+    /// resizes — so a long line silently left the content view covering
+    /// both scrollers and they vanished. That shipped, and reverting the
+    /// style shipped too and left no bars at all.
+    ///
+    /// A scan because the failure is a layout interaction inside
+    /// vendored Objective-C++ that only appears once a document is wider
+    /// than the viewport: nothing in the suite can see it, and both
+    /// previous attempts needed a user to find them.
     #[test]
-    fn the_editor_never_forces_a_legacy_scroller_style() {
+    fn a_forced_scroller_style_comes_with_its_layout_repair() {
         let src = production_src();
-        // The *call*, not the type name: the doc comment on
-        // `flash_scrollers_if_scrolled` names the style in prose to
-        // explain why it is wrong, and matching the bare name made this
-        // guard fail against its own explanation. Same trap the
-        // `is_unsaved_restore` scan hit.
+        if !src.contains("setScrollerStyle(") {
+            // Overlay scrollers: the vendored arithmetic is correct as
+            // written and there is nothing to repair.
+            return;
+        }
         assert!(
-            !src.contains("setScrollerStyle("),
-            "the editor's scroll view must keep AppKit's overlay scrollers; \
-             see flash_scrollers_if_scrolled for what a forced style breaks"
+            src.contains("fn enforce_scroller_layout("),
+            "the scroller style is forced but the layout repair is gone; \
+             Scintilla's own tile will let the content view cover the bars"
         );
-        // And the flash must stay behind its position-change guard, or it
-        // fires on every paint and the bars pulse while typing.
-        let body = fn_body(src, "flash_scrollers_if_scrolled");
-        let guard = body
-            .find("LAST_SCROLL")
-            .expect("flash_scrollers_if_scrolled no longer consults LAST_SCROLL");
-        let flash = body
-            .find("flashScrollers()")
-            .expect("flash_scrollers_if_scrolled no longer flashes");
+        // The repair has to re-run after Scintilla re-tiles, which it
+        // does on any document resize — so a one-shot call at startup is
+        // not enough. `SCN_PAINTED` is the hook that follows those.
+        let painted = fn_body(src, "on_sci_notify_inner");
         assert!(
-            guard < flash,
-            "the scroll-position check must gate the flash, not follow it"
+            painted.contains("enforce_scroller_layout("),
+            "the layout repair must run from the SCN_PAINTED arm, or it \
+             lasts only until the first long line widens the document"
         );
     }
 
