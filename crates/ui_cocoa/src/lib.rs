@@ -373,16 +373,25 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // route mouse clicks to it. See `crate::activate_main_window` and
     // the delegate for the measurements.
 
-    // The window is on screen and the event loop is about to take over,
-    // which is the closest honest analogue of the other backends' first
-    // draw. Recorded before `run()` because `run()` does not return.
     with_state(|s| {
         let (_, ui) = s.split();
         ui.refresh_dynamic_status();
     });
-    if let Some(p) = PERF.with(|p| p.borrow().clone()) {
-        p.mark_first_draw();
-    }
+
+    // **Cold start is *not* marked here.** It used to be, on the stated
+    // grounds that "the window is on screen and the event loop is about
+    // to take over" — a claim that was false by the time it was read.
+    // Ordering the window front moved into the application delegate in
+    // m3b (see `activate_main_window`), so at this point the window has
+    // never been shown, the app has never been activated, and nothing
+    // has painted. The mark also did not measure the same span as the
+    // other two backends, which both close it on a real `SCN_PAINTED`.
+    //
+    // Measured, m4b: this point is reached at ~155–175 ms, the delegate
+    // fires at ~180–230 ms, and the first paint lands at ~225–262 ms —
+    // so the old figure under-reported the honest number by 60–95 ms.
+    // The mark now lives in `on_sci_notify`'s `SCN_PAINTED` arm, which
+    // is exactly where `ui_gtk` and `ui_win32` put theirs.
 
     // Keep the delegate, the action target and the timer alive for the
     // whole session. The reason is the *weak* references:
@@ -623,6 +632,26 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
         // read, and a write only when the width actually fell below the
         // viewport. See `clamp_scroll_width_to_viewport`.
         codepp_scintilla_sys::SCN_PAINTED => {
+            // Cold start closes here, on a **real** first paint — the
+            // same span `ui_gtk` and `ui_win32` measure, so the three
+            // figures in §8 are finally the same quantity. `painted()`
+            // closes a pending keystroke interval; it is a no-op until a
+            // key hook sets one, which macOS still lacks (see §8).
+            //
+            // No `hwndFrom`-style filter, unlike Win32: this backend has
+            // exactly one Scintilla view. That stops being true when the
+            // plugin host lets a plugin create its own, and a
+            // notification from a plugin's panel could then close the
+            // main editor's pending interval — so the filter has to
+            // arrive with `create_plugin_scintilla`.
+            //
+            // Before the layout repair below, which takes a `with_state`
+            // borrow: the mark is a plain timestamp and must not be
+            // hostage to a re-entrant decline.
+            if let Some(p) = PERF.with(|p| p.borrow().clone()) {
+                p.mark_first_draw();
+                p.painted();
+            }
             with_state(|st| {
                 // Repair first, measure second. `clamp_scroll_width_to_viewport`
                 // reads the clip's width, and on a paint that follows a
@@ -2459,6 +2488,56 @@ mod source_invariants {
                  window would never become key."
             );
         }
+    }
+
+    /// Cold start must close on a real paint, and nowhere else.
+    ///
+    /// This one is a regression guard for a bug that shipped and stood
+    /// for five milestones: `mark_first_draw` used to be called from
+    /// `run()`, before `-[NSApplication run]` — so before the window was
+    /// ordered front (which moved into the delegate in m3b), before the
+    /// app was activated, and before anything painted. Every macOS
+    /// cold-start figure §8 recorded up to m4b was therefore measuring a
+    /// different endpoint than `ui_gtk` and `ui_win32`, both of which
+    /// close on `SCN_PAINTED`, and under-reporting by 60–95 ms.
+    ///
+    /// A runtime test cannot catch this: the wrong mark produces a
+    /// perfectly plausible number, just of the wrong quantity. Nothing
+    /// fails, nothing looks odd — which is precisely why it survived so
+    /// long. Same tool, and same reasoning, as the activation guard
+    /// above.
+    #[test]
+    fn cold_start_is_marked_at_the_paint_and_not_in_run() {
+        let src = production_src();
+        assert!(src.len() > 5_000, "source scan read too little to be real");
+
+        assert!(
+            !fn_body(src, "run").contains("mark_first_draw"),
+            "`mark_first_draw` is back inside `run()`, which returns \
+             before `-[NSApplication run]` — so it would fire before the \
+             window is shown and before anything paints, measuring a \
+             different span than `ui_gtk` and `ui_win32`. It belongs in \
+             the `SCN_PAINTED` arm of `on_sci_notify_inner`."
+        );
+
+        // And in the paint arm it must precede the arm's `with_state`:
+        // that borrow is declined re-entrantly, and a mark behind it
+        // would be skipped on exactly the paints that re-enter.
+        let arm = fn_body(src, "on_sci_notify_inner");
+        let paint = arm
+            .find("SCN_PAINTED =>")
+            .expect("no SCN_PAINTED arm in on_sci_notify_inner");
+        let tail = &arm[paint..];
+        let mark = tail
+            .find("mark_first_draw()")
+            .expect("the SCN_PAINTED arm no longer marks cold start");
+        let borrow = tail.find("with_state(").unwrap_or(usize::MAX);
+        assert!(
+            mark < borrow,
+            "`mark_first_draw` must run before the paint arm's \
+             `with_state`, which is declined on a re-entrant call and \
+             would silently drop the timestamp."
+        );
     }
 
     /// Every open must go through `open_path`, which handles

@@ -419,7 +419,15 @@ Read DESIGN.md §8 before drawing conclusions. It records the measured
 figures on both backends now — GTK at p99 4.62 ms at a fast-human rate,
 inside the 5 ms budget; Win32 at p99 ≈ 7–9 ms and cold start ≈ 94 ms,
 both outside their budgets — plus the GTK tail above ~15 char/s whose
-cause is still unidentified and two retracted earlier conclusions.
+cause is still unidentified and three retracted earlier conclusions.
+
+All three backends close the cold-start interval on Scintilla's
+`SCN_PAINTED`, so the figures are the same quantity. macOS did **not**
+until Phase 5 m4b: it marked before `-[NSApplication run]`, which is
+before the window is ordered front and before anything paints, and its
+m1–m3a figures are retracted for that reason. macOS has no
+keystroke-latency figures at all — `SCN_PAINTED` closes an interval
+there but nothing opens one yet.
 
 To reproduce the Win32 numbers on a Windows session, `SendKeys.SendWait`
 from a PowerShell harness is what those measurements used — the
