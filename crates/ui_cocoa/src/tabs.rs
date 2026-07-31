@@ -79,6 +79,11 @@ const TAB_WIDTH: f64 = 150.0;
 const CLOSE_WIDTH: f64 = 18.0;
 /// Width of the pin glyph, immediately left of the close button.
 const PIN_WIDTH: f64 = 16.0;
+/// Width of one overflow arrow, and so of the pair's cell each.
+const ARROW_WIDTH: f64 = 22.0;
+/// Total width the arrow pair reserves at the strip's trailing edge
+/// while the tabs overflow.
+const ARROWS_WIDTH: f64 = 2.0 * ARROW_WIDTH;
 
 /// How far the mouse must travel before a press becomes a drag rather
 /// than a click. Below this a small hand tremor during a click would
@@ -141,6 +146,16 @@ const PIN_RGB_UNPINNED: (f64, f64, f64) = (0.5, 0.5, 0.5);
 const PIN_UNPINNED_SHRINK: f64 = 0.7;
 
 thread_local! {
+    /// How far the strip is scrolled, in points, when the tabs overflow
+    /// its width.
+    ///
+    /// A `thread_local` rather than a field on [`TabStrip`] because the
+    /// strip is `Clone` — it is handed out by `CocoaUiState::split` on
+    /// every drain — so a plain field would give each copy its own
+    /// offset. There is exactly one strip per process and every toucher
+    /// is on the main thread, which is the same reasoning [`DRAGGING`]
+    /// below is written against.
+    static SCROLL_OFFSET: Cell<f64> = const { Cell::new(0.0) };
     /// True while a tab-strip drag is in flight. See [`DragGuard`].
     ///
     /// A flag rather than the depth counter [`crate::DrainFreeze`] uses,
@@ -360,7 +375,9 @@ impl TabButton {
                 // Decide here, act after the loop. **`self` must not be
                 // touched again once the model is mutated** — see below.
                 outcome = if dragging {
-                    Some(Gesture::Reorder(drop_target_index(self.frame().origin.x)))
+                    Some(Gesture::Reorder(drop_target_index(
+                        self.frame().origin.x + TabStrip::scroll_offset(),
+                    )))
                 } else {
                     Some(Gesture::Select)
                 };
@@ -377,7 +394,7 @@ impl TabButton {
                 // gesture; see [`DragGuard`]. Taken here rather than at
                 // the top so an ordinary click never suppresses anything.
                 drag_guard = Some(DragGuard::new());
-                from_slot = slot_of(origin.x);
+                from_slot = slot_of(origin.x + TabStrip::scroll_offset());
                 peers = peer_tabs(&container, id);
                 // **Raise it above the others before it starts moving.**
                 // Subview order is paint order, so a button left at its
@@ -416,12 +433,14 @@ impl TabButton {
                 // "picked up, and the rest step aside" feel `GtkNotebook`
                 // provides for free.
                 let total = peers.len() + 1;
-                let target = drop_target_index(origin.x + dx).min(total.saturating_sub(1));
+                let target = drop_target_index(origin.x + dx + TabStrip::scroll_offset())
+                    .min(total.saturating_sub(1));
                 for (peer, slot) in &peers {
                     // A strip holds tens of tabs, not 2^53 of them, so
                     // the widening is exact in every reachable case.
                     #[allow(clippy::cast_precision_loss)]
-                    let want = slot_after_shift(*slot, from_slot, target) as f64 * TAB_WIDTH;
+                    let want = slot_after_shift(*slot, from_slot, target) as f64 * TAB_WIDTH
+                        - TabStrip::scroll_offset();
                     let at = peer.frame().origin;
                     // Only write when it actually moved: `setFrameOrigin`
                     // invalidates, and this runs per mouse-moved event.
@@ -506,6 +525,102 @@ enum Gesture {
     Reorder(usize),
 }
 
+/// Total width `count` tabs occupy.
+fn tab_span(count: usize) -> f64 {
+    #[allow(clippy::cast_precision_loss)]
+    {
+        count as f64 * TAB_WIDTH
+    }
+}
+
+/// Hold `offset` inside the range the strip can actually scroll.
+///
+/// Pure, and tested: the upper bound is the one that goes wrong, because
+/// it has to account for the arrows' lane and must floor at zero when
+/// everything fits — otherwise a strip with two tabs in a wide window
+/// could be scrolled into empty space.
+fn clamp_offset(offset: f64, count: usize, lane: f64) -> f64 {
+    let max = (tab_span(count) - lane).max(0.0);
+    offset.clamp(0.0, max)
+}
+
+/// The smallest change to `offset` that brings tab `index` fully into a
+/// `lane`-wide view.
+///
+/// Returns `offset` unchanged when the tab is already visible, so a
+/// caller can compare and skip. Brings the near edge into view rather
+/// than centring: centring moves the strip on every tab switch, which
+/// makes the other tabs feel like they slide around underneath.
+fn offset_showing(index: usize, offset: f64, lane: f64) -> f64 {
+    #[allow(clippy::cast_precision_loss)]
+    let left = index as f64 * TAB_WIDTH;
+    let right = left + TAB_WIDTH;
+    if left < offset {
+        left
+    } else if right > offset + lane {
+        right - lane
+    } else {
+        offset
+    }
+}
+
+/// One overflow arrow.
+///
+/// SF Symbols rather than a drawn glyph: they are the system's own
+/// chevrons, so they match every other overflow control on the platform
+/// and follow the appearance into dark mode. A missing symbol degrades
+/// to a text chevron rather than an empty button.
+fn make_arrow(
+    forward: bool,
+    x: f64,
+    actions: &Actions,
+    mtm: MainThreadMarker,
+) -> Retained<NSButton> {
+    let frame = NSRect::new(
+        NSPoint::new(x, 0.0),
+        NSSize::new(ARROW_WIDTH, TAB_STRIP_HEIGHT),
+    );
+    let button = NSButton::initWithFrame(NSButton::alloc(mtm), frame);
+    let symbol = if forward {
+        "chevron.right"
+    } else {
+        "chevron.left"
+    };
+    match NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str(symbol),
+        None,
+    ) {
+        Some(image) => {
+            button.setTitle(&NSString::from_str(""));
+            button.setImage(Some(&image));
+        }
+        None => {
+            button.setTitle(&NSString::from_str(if forward {
+                "\u{203a}"
+            } else {
+                "\u{2039}"
+            }));
+        }
+    }
+    button.setBordered(false);
+    button.setToolTip(Some(&NSString::from_str(if forward {
+        "Scroll tabs right"
+    } else {
+        "Scroll tabs left"
+    })));
+    // SAFETY: a compile-time `sel!` literal `Actions` implements, and a
+    // weak target the window state owns for the process lifetime.
+    unsafe {
+        button.setTarget(Some(actions));
+        button.setAction(Some(if forward {
+            sel!(codeppScrollTabsRight:)
+        } else {
+            sel!(codeppScrollTabsLeft:)
+        }));
+    }
+    button
+}
+
 /// The slot a tab currently at `origin_x` occupies.
 ///
 /// Rounds rather than truncates: at rest every button sits exactly at
@@ -553,7 +668,12 @@ fn peer_tabs(container: &NSView, id: i32) -> Vec<(Retained<NSView>, usize)> {
         .subviews()
         .iter()
         .filter(|view| view.downcast_ref::<TabButton>().is_some() && view.tag() != id as isize)
-        .map(|view| (view.clone(), slot_of(view.frame().origin.x)))
+        .map(|view| {
+            (
+                view.clone(),
+                slot_of(view.frame().origin.x + TabStrip::scroll_offset()),
+            )
+        })
         .collect()
 }
 
@@ -851,7 +971,20 @@ impl TabStrip {
         }
 
         let active_id = active.and_then(|i| tabs.get(i)).map(|t| t.id);
-        let mut x = 0.0;
+        // Reserve the trailing arrows' space *before* deciding how far the
+        // strip can scroll, so the last tab is not left permanently under
+        // them.
+        let full_width = self.container.frame().size.width;
+        let overflowing = tab_span(tabs.len()) > full_width;
+        let lane = if overflowing {
+            full_width - ARROWS_WIDTH
+        } else {
+            full_width
+        };
+        let offset = clamp_offset(SCROLL_OFFSET.with(Cell::get), tabs.len(), lane);
+        SCROLL_OFFSET.with(|c| c.set(offset));
+
+        let mut x = -offset;
         for tab in tabs {
             let selected = Some(tab.id) == active_id;
             let button = make_tab_button(tab, selected, x, mtm);
@@ -888,6 +1021,66 @@ impl TabStrip {
             self.container.addSubview(&button);
             x += TAB_WIDTH;
         }
+
+        if overflowing {
+            // Added last, so at rest they paint over anything beneath
+            // them. Note this does **not** hold during a drag: `track`
+            // raises the dragged button to the very front, so a tab
+            // dragged into the arrows' lane covers them for the duration
+            // of the gesture. Cosmetic, and it self-heals on the drop's
+            // resync — recorded rather than fixed, because restacking the
+            // arrows on every mouse-moved event is more machinery than a
+            // transient overlap is worth.
+            //
+            // Disabled at the extremes, so an arrow that cannot move the
+            // strip says so rather than silently doing nothing.
+            let left = make_arrow(false, full_width - ARROWS_WIDTH, actions, mtm);
+            left.setEnabled(offset > 0.5);
+            self.container.addSubview(&left);
+            let right = make_arrow(true, full_width - ARROW_WIDTH, actions, mtm);
+            right.setEnabled(offset < clamp_offset(f64::MAX, tabs.len(), lane) - 0.5);
+            self.container.addSubview(&right);
+        }
+    }
+
+    /// Scroll `index` fully into view, if it is not already.
+    ///
+    /// Without this the arrows solve only half the problem: switching
+    /// tabs with the Window menu, `⌘W`, or a plugin can select something
+    /// that is scrolled off, and the strip would go on showing a
+    /// selection the user cannot see. Called on every chrome refresh, so
+    /// it also covers a tab being closed under the scrolled region.
+    pub fn scroll_into_view(&self, index: usize, count: usize) {
+        let full_width = self.container.frame().size.width;
+        let lane = if tab_span(count) > full_width {
+            full_width - ARROWS_WIDTH
+        } else {
+            full_width
+        };
+        let offset = SCROLL_OFFSET.with(Cell::get);
+        let wanted = offset_showing(index, offset, lane);
+        if (wanted - offset).abs() > 0.5 {
+            SCROLL_OFFSET.with(|c| c.set(clamp_offset(wanted, count, lane)));
+        }
+    }
+
+    /// Step the strip one tab left or right — the arrow buttons.
+    pub fn scroll_by_one(&self, forward: bool, count: usize) {
+        let full_width = self.container.frame().size.width;
+        let lane = if tab_span(count) > full_width {
+            full_width - ARROWS_WIDTH
+        } else {
+            full_width
+        };
+        let delta = if forward { TAB_WIDTH } else { -TAB_WIDTH };
+        let next = clamp_offset(SCROLL_OFFSET.with(Cell::get) + delta, count, lane);
+        SCROLL_OFFSET.with(|c| c.set(next));
+    }
+
+    /// The strip's scroll offset, for translating a button's frame into
+    /// the slot space the drag arithmetic works in.
+    pub fn scroll_offset() -> f64 {
+        SCROLL_OFFSET.with(Cell::get)
     }
 
     /// Whole-strip visibility, for `NPPM_HIDETABBAR` and the View menu.
@@ -1123,5 +1316,78 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod overflow_tests {
+    use super::{clamp_offset, offset_showing, tab_span, TAB_WIDTH};
+
+    /// Points are compared with a tolerance rather than exactly: these
+    /// are layout coordinates, and an exact float comparison would be
+    /// pinning the arithmetic's rounding rather than its behaviour.
+    #[track_caller]
+    fn assert_points(have: f64, want: f64) {
+        assert!(
+            (have - want).abs() < 0.5,
+            "expected {want} points, got {have}"
+        );
+    }
+
+    #[test]
+    fn nothing_scrolls_while_everything_fits() {
+        // Three tabs in a lane wide enough for four: the strip must stay
+        // pinned at zero however hard a caller pushes it, or it could be
+        // scrolled into empty space.
+        let lane = 4.0 * TAB_WIDTH;
+        assert_points(clamp_offset(0.0, 3, lane), 0.0);
+        assert_points(clamp_offset(500.0, 3, lane), 0.0);
+        assert_points(clamp_offset(-500.0, 3, lane), 0.0);
+    }
+
+    #[test]
+    fn the_last_tab_can_reach_the_trailing_edge_but_no_further() {
+        // Ten tabs in a lane three wide: the furthest useful offset puts
+        // the tenth tab's right edge on the lane's right edge.
+        let lane = 3.0 * TAB_WIDTH;
+        let max = tab_span(10) - lane;
+        assert_points(clamp_offset(max, 10, lane), max);
+        assert_points(clamp_offset(max + 1000.0, 10, lane), max);
+        assert_points(clamp_offset(-1.0, 10, lane), 0.0);
+    }
+
+    #[test]
+    fn an_already_visible_tab_does_not_move_the_strip() {
+        // Tabs 2, 3 and 4 are on screen at this offset; asking for any of
+        // them must be a no-op, or every tab switch would jitter the
+        // strip.
+        let lane = 3.0 * TAB_WIDTH;
+        let offset = 2.0 * TAB_WIDTH;
+        for index in 2..=4 {
+            assert_points(offset_showing(index, offset, lane), offset);
+        }
+    }
+
+    #[test]
+    fn a_tab_off_the_left_scrolls_to_its_own_left_edge() {
+        let lane = 3.0 * TAB_WIDTH;
+        assert_points(offset_showing(1, 5.0 * TAB_WIDTH, lane), TAB_WIDTH);
+    }
+
+    #[test]
+    fn a_tab_off_the_right_scrolls_only_far_enough_to_show_it() {
+        // Tab 7 with a three-wide lane: its right edge is at 8 tabs, so
+        // the offset is 8 - 3 = 5. Scrolling further would push earlier
+        // tabs off for no reason.
+        let lane = 3.0 * TAB_WIDTH;
+        assert_points(offset_showing(7, 0.0, lane), 5.0 * TAB_WIDTH);
+    }
+
+    #[test]
+    fn the_first_and_last_tabs_are_both_reachable() {
+        let lane = 3.0 * TAB_WIDTH;
+        assert_points(offset_showing(0, 4.0 * TAB_WIDTH, lane), 0.0);
+        let last = offset_showing(9, 0.0, lane);
+        assert_points(clamp_offset(last, 10, lane), tab_span(10) - lane);
     }
 }

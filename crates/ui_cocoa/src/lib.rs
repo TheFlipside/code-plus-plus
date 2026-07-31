@@ -51,7 +51,7 @@ mod status;
 mod tabs;
 mod toolbar;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -65,6 +65,7 @@ use codepp_shell::{PendingDialog, SessionRestoreEntry, Shell, UiPlatform};
 use dispatch2::DispatchQueue;
 
 use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
 use objc2::MainThreadOnly;
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions,
@@ -92,6 +93,10 @@ thread_local! {
     /// [`clamp_scroll_width_to_viewport`] can tell a resize from a
     /// repaint. `-1` is unreachable, so the first paint always re-seeds.
     static LAST_VIEWPORT_WIDTH: std::cell::Cell<isize> = const { std::cell::Cell::new(-1) };
+    /// The buffer the tab strip was last scrolled to show, so an
+    /// ordinary chrome refresh does not undo the overflow arrows. See
+    /// [`refresh_tab_chrome`].
+    static LAST_SCROLLED_TO: Cell<Option<i32>> = const { Cell::new(None) };
     /// Last dirty state pushed into the tab strip, so a notification
     /// storm only rebuilds it when the marker actually changes. See
     /// [`on_sci_notify`].
@@ -307,6 +312,15 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // where it was. Reported as confusing, and it was: two things called
     // "tabs", one of them AppKit's and unrelated to the buffers.
     window.setTabbingMode(NSWindowTabbingMode::Disallowed);
+    // The tab strip's overflow arrows and scroll offset are only
+    // recomputed by `TabStrip::sync`, which runs on tab-list events — so
+    // a resize needs a hook of its own. See `Actions`'s
+    // `windowDidResize:`.
+    //
+    // SAFETY: `Actions` implements `NSWindowDelegate`, and AppKit holds
+    // the delegate weakly — the window state owns `actions` for the
+    // process lifetime, so it cannot dangle.
+    window.setDelegate(Some(ProtocolObject::from_ref(&*actions)));
 
     let (status, tab_strip, toolbar) =
         build_content(&window, content_rect, &sci_view, &actions, mtm);
@@ -1250,6 +1264,27 @@ pub(crate) fn refresh_tab_chrome() {
         let mtm = MainThreadMarker::new();
         if let Some(mtm) = mtm {
             let active = st.shell.active_tab;
+            // Before the rebuild, so the strip is laid out at the offset
+            // that shows the active tab. Without it the arrows only solve
+            // half the problem: selecting a scrolled-off tab from the
+            // Window menu, or closing one, would leave the selection
+            // somewhere the user cannot see.
+            //
+            // **Only when the active buffer actually changed.** This runs
+            // on every chrome refresh — a save, a keystroke's dirty edge,
+            // a reorder — and scrolling unconditionally made the arrows
+            // inert: each press moved the offset and the refresh that
+            // followed dragged it straight back to the active tab.
+            // Keyed on `Tab.id` rather than the index so a reorder, which
+            // changes the index without changing the buffer, does not
+            // count as a switch.
+            let active_id = active.and_then(|i| st.shell.tabs.get(i)).map(|t| t.id);
+            if active_id.is_some() && LAST_SCROLLED_TO.with(Cell::get) != active_id {
+                LAST_SCROLLED_TO.with(|c| c.set(active_id));
+                if let Some(index) = active {
+                    st.tabs.scroll_into_view(index, st.shell.tabs.len());
+                }
+            }
             // Clone the receiver out first: `sync` borrows the tab list
             // immutably while it reads, and `actions` lives on the same
             // struct.
@@ -1335,6 +1370,19 @@ pub(crate) fn close_tab_by_id(id: i32) {
         rebind_active_view();
     }
     action_close_tab();
+}
+
+/// Step the tab strip one tab left or right — the overflow arrows.
+///
+/// The strip is rebuilt from the model afterwards rather than having its
+/// buttons repositioned, which is the same total-resync approach every
+/// other change to it takes.
+pub(crate) fn scroll_tabs(forward: bool) {
+    with_state(|st| {
+        let count = st.shell.tabs.len();
+        st.tabs.scroll_by_one(forward, count);
+    });
+    refresh_tab_chrome();
 }
 
 /// Whether the tab with `id` is pinned. `false` if it has since closed.
@@ -1714,14 +1762,19 @@ pub(crate) fn action_close_all() {
 /// mostly off-screen, or restored onto a display that has since changed.
 /// Same entry `ui_gtk` carries, for the same reason.
 pub(crate) fn restore_default_window_size() {
-    with_state(|st| {
-        if st.window.isZoomed() {
-            st.window.zoom(None);
-        }
-        st.window
-            .setContentSize(NSSize::new(DEFAULT_WIDTH, DEFAULT_HEIGHT));
-        st.window.center();
-    });
+    // The window is taken *out* of the borrow before being resized.
+    // `windowDidResize:` fires synchronously from `setContentSize`, and
+    // it calls `refresh_tab_chrome`, which needs `with_state` — so
+    // resizing from inside a borrow makes that refresh a no-op and leaves
+    // the tab strip laid out for the old width, arrows and all.
+    let Some(window) = with_state(|st| st.window.clone()) else {
+        return;
+    };
+    if window.isZoomed() {
+        window.zoom(None);
+    }
+    window.setContentSize(NSSize::new(DEFAULT_WIDTH, DEFAULT_HEIGHT));
+    window.center();
 }
 
 /// Open a path that was dropped onto the window.

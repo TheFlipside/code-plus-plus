@@ -36,11 +36,11 @@ use objc2_app_kit::{
     NSAboutPanelOptionApplicationIcon, NSAboutPanelOptionApplicationName,
     NSAboutPanelOptionApplicationVersion, NSAboutPanelOptionCredits, NSAboutPanelOptionKey,
     NSAboutPanelOptionVersion, NSApplication, NSButton, NSControl, NSEventModifierFlags, NSImage,
-    NSMenu, NSMenuDelegate, NSMenuItem, NSWorkspace,
+    NSMenu, NSMenuDelegate, NSMenuItem, NSWindowDelegate, NSWorkspace,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSAttributedString, NSData, NSDictionary, NSObject, NSObjectProtocol, NSSize,
-    NSString, NSTimer, NSURL,
+    MainThreadMarker, NSAttributedString, NSData, NSDictionary, NSNotification, NSObject,
+    NSObjectProtocol, NSSize, NSString, NSTimer, NSURL,
 };
 
 use crate::AUTOSAVE_INTERVAL_SECS;
@@ -55,6 +55,30 @@ define_class!(
     pub struct Actions;
 
     unsafe impl NSObjectProtocol for Actions {}
+
+    unsafe impl NSWindowDelegate for Actions {
+        /// Re-lay the tab strip when the window changes size.
+        ///
+        /// **Nothing else does.** The strip's container is
+        /// `ViewWidthSizable` so it tracks the window for free, but the
+        /// tab buttons inside carry no autoresizing mask — they are
+        /// positioned by `TabStrip::sync`, which only runs on tab-list
+        /// events. Without this hook, narrowing a window until the tabs
+        /// overflow produced no arrows (silently reproducing the bug they
+        /// exist to fix) and widening one left the strip scrolled, with
+        /// early tabs stranded off the left edge, until some unrelated
+        /// edit or save happened to refresh the chrome.
+        ///
+        /// On every resize step rather than only at
+        /// `windowDidEndLiveResize:`: the arrows should appear as the
+        /// window narrows past the overflow point, not a moment after the
+        /// user lets go. The strip is a few dozen small controls and is
+        /// rebuilt wholesale anyway.
+        #[unsafe(method(windowDidResize:))]
+        fn window_did_resize(&self, _notification: &NSNotification) {
+            crate::at_callback_boundary("window:didResize", (), crate::refresh_tab_chrome);
+        }
+    }
 
     unsafe impl NSMenuDelegate for Actions {
         /// Regenerate a menu whose contents depend on live model state,
@@ -265,6 +289,17 @@ define_class!(
         #[unsafe(method(codeppReplaceAll:))]
         fn replace_all(&self, _sender: Option<&NSObject>) {
             crate::at_callback_boundary("search:replaceAll", (), crate::search::do_replace_all);
+        }
+
+        /// The tab strip's overflow arrows.
+        #[unsafe(method(codeppScrollTabsLeft:))]
+        fn scroll_tabs_left(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("tabs:scrollLeft", (), || crate::scroll_tabs(false));
+        }
+
+        #[unsafe(method(codeppScrollTabsRight:))]
+        fn scroll_tabs_right(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("tabs:scrollRight", (), || crate::scroll_tabs(true));
         }
 
         #[unsafe(method(codeppSetEncoding:))]
