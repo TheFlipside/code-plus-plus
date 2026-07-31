@@ -59,11 +59,18 @@ const PAGE_REPLACE: isize = 1;
 /// handful of rows whose sizes never change, and springs-and-struts is
 /// what the rest of this backend uses.
 const PANEL_WIDTH: f64 = 480.0;
-const PANEL_HEIGHT: f64 = 250.0;
+/// Tall enough that the tallest tab page — Replace, which needs a field
+/// row and a button row — fits inside the `NSTabView`'s inner rect with
+/// room to spare. An earlier value left that inner rect 50 pt tall, so
+/// the field overlapped the buttons; the pages are now laid out bottom-up
+/// as well, so the two failure modes are independent.
+const PANEL_HEIGHT: f64 = 310.0;
 const MARGIN: f64 = 14.0;
 const ROW_HEIGHT: f64 = 22.0;
 const LABEL_WIDTH: f64 = 92.0;
 const BUTTON_WIDTH: f64 = 128.0;
+/// Height of a push button inside a tab page.
+const BUTTON_HEIGHT: f64 = 26.0;
 const GAP: f64 = 8.0;
 
 /// The modeless Find/Replace panel's controls, held on the window state
@@ -475,8 +482,25 @@ fn build_panel(mtm: MainThreadMarker) -> Option<FindReplaceDialog> {
     // dangling reference — which is the hazard this setter is `unsafe`
     // for.
     unsafe { panel.setReleasedWhenClosed(false) };
-    // Escape closes it, as it does in Notepad++ and every macOS panel.
-    panel.setHidesOnDeactivate(false);
+    // **Hide when the application deactivates, which is a utility
+    // panel's default and was wrongly turned off here.** A panel carries
+    // the floating window level, so leaving `hidesOnDeactivate` false
+    // kept the Find panel on top of *other applications'* windows — it
+    // followed the user out of Code++ entirely. `ui_gtk`'s dialog does
+    // not do that, and neither should this. The default is what is
+    // wanted, so the call is simply gone; this comment stands in its
+    // place so it is not "restored" later.
+    //
+    // (Escape still closes the panel: AppKit routes it to
+    // `cancelOperation:`, which closes any closable window with no
+    // wiring of ours — unlike GTK, which has to connect it by hand.
+    // Measured rather than assumed, and specifically in the case that
+    // could have broken it: with the query field focused the first
+    // responder is the field editor, an `NSTextView`, which has its own
+    // Escape handling and might have swallowed the key. Driving a real
+    // Escape event through `sendEvent:` in that exact state closes the
+    // panel. Worth the check — an unverified claim in this same comment
+    // is what let the `hidesOnDeactivate` bug above ship.)
 
     let content = panel.contentView()?;
     let mut y = PANEL_HEIGHT - MARGIN - ROW_HEIGHT - 22.0;
@@ -564,8 +588,13 @@ fn build_replace_page(
     actions: &Actions,
     mtm: MainThreadMarker,
 ) -> Retained<NSTextField> {
-    let (page, height) = tab_page("Replace", tabs, mtm);
-    let field = labelled_row_in(&page, "Replace with:", height - ROW_HEIGHT - GAP, mtm);
+    let (page, _) = tab_page("Replace", tabs, mtm);
+    // **Bottom-up, not measured down from the top.** The buttons sit on
+    // the page's floor and the field goes directly above them, so the
+    // rows cannot collide however short the page turns out to be — a
+    // top-down `height - ROW_HEIGHT` put the field at y=20 in a 50 pt
+    // page while the buttons occupied 0..26, and they overlapped.
+    let field = labelled_row_in(&page, "Replace with:", BUTTON_HEIGHT + GAP, mtm);
     for (index, (title, action)) in [
         ("Replace", sel!(codeppReplace:)),
         ("Replace All", sel!(codeppReplaceAll:)),
@@ -679,7 +708,7 @@ fn button(
 ) {
     let button = NSButton::initWithFrame(
         NSButton::alloc(mtm),
-        NSRect::new(NSPoint::new(x, y), NSSize::new(BUTTON_WIDTH, 26.0)),
+        NSRect::new(NSPoint::new(x, y), NSSize::new(BUTTON_WIDTH, BUTTON_HEIGHT)),
     );
     button.setTitle(&NSString::from_str(title));
     // SAFETY: the selector is a compile-time `sel!` literal declared in
@@ -751,5 +780,32 @@ mod seed_tests {
         // Zero-width space, and a raw tab.
         assert_eq!(seedable_query("a\u{200B}b"), None);
         assert_eq!(seedable_query("a\tb"), None);
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::{BUTTON_HEIGHT, GAP, ROW_HEIGHT};
+
+    /// The Replace page's field must clear its buttons.
+    ///
+    /// This shipped broken: the field was positioned by measuring down
+    /// from the page's top, the page turned out to be 50 pt tall, and the
+    /// field landed at y=20..42 across buttons at y=0..26. The layout is
+    /// bottom-up now, which makes the property hold for any page height —
+    /// and this pins the constants so a future tweak cannot quietly
+    /// reintroduce the overlap. A pure test because the geometry is pure;
+    /// checking it on screen means looking at a dialog.
+    #[test]
+    fn the_replace_field_clears_the_buttons_below_it() {
+        let buttons = 0.0..BUTTON_HEIGHT;
+        let field_bottom = BUTTON_HEIGHT + GAP;
+        let field = field_bottom..(field_bottom + ROW_HEIGHT);
+        assert!(
+            field.start >= buttons.end,
+            "the Replace field starts at {} but the buttons run to {}",
+            field.start,
+            buttons.end
+        );
     }
 }

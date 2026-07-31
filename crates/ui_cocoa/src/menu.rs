@@ -1062,7 +1062,7 @@ const ABOUT_COPYRIGHT: &str =
 fn show_about(mtm: MainThreadMarker) {
     let credits = format!(
         "{ABOUT_SUMMARY}\n\n{}\n\nBuilt on Scintilla and Lexilla by Neil Hodgson and \
-         contributors.\nInspired by Notepad++ by Don Ho and contributors.\n\n{ABOUT_COPYRIGHT}",
+         contributors.\n\n{ABOUT_COPYRIGHT}",
         HELP_URLS[0].1
     );
     let credits = NSAttributedString::initWithString(

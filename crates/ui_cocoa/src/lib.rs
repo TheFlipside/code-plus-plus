@@ -69,6 +69,7 @@ use objc2::MainThreadOnly;
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions,
     NSBackingStoreType, NSOpenPanel, NSSavePanel, NSScreen, NSView, NSWindow, NSWindowStyleMask,
+    NSWindowTabbingMode,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSURL};
 
@@ -291,6 +292,18 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     unsafe { window.setReleasedWhenClosed(false) };
     window.setTitle(&NSString::from_str("Code++"));
 
+    // **Opt out of macOS's own window tabbing.** With the default
+    // (`Automatic`), AppKit injects a "Show Tab Bar" / "Show All Tabs"
+    // group into the View menu and, on request, adds a *second* tab bar
+    // above the window's content showing one native tab per window. That
+    // is a window-management feature, and Code++ is single-window by
+    // design (§10) with its own document tab strip — so those menu items
+    // offered a full-width bar that duplicated nothing useful and could
+    // never contain more than one entry, while the real tab strip stayed
+    // where it was. Reported as confusing, and it was: two things called
+    // "tabs", one of them AppKit's and unrelated to the buffers.
+    window.setTabbingMode(NSWindowTabbingMode::Disallowed);
+
     let (status, tab_strip, toolbar) =
         build_content(&window, content_rect, &sci_view, &actions, mtm);
 
@@ -313,6 +326,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
 
     // --- Startup work ---------------------------------------------
     apply_startup_styles();
+    apply_editor_appearance();
     seed_horizontal_scroll(&editor);
     restore_session(initial_path);
     // MUST run *after* `restore_session` — that is what loads
@@ -764,12 +778,97 @@ fn clamp_scroll_width_to_viewport(st: &crate::state::CocoaUiState) {
 /// margin view, the vertical scroller and any inset, so reading it is
 /// both exact and immune to those changing.
 fn text_area_width(sci_view: &NSView) -> Option<f64> {
-    for sub in sci_view.subviews() {
-        if let Ok(scroll) = sub.downcast::<objc2_app_kit::NSScrollView>() {
-            return Some(scroll.contentView().bounds().size.width);
+    editor_scroll_view(sci_view).map(|scroll| scroll.contentView().bounds().size.width)
+}
+
+/// Selection background, in Scintilla's `0xAABBGGRR` element-colour
+/// layout: opaque light grey (`#C8C8C8`).
+///
+/// **Set explicitly because the Cocoa backend picks its own, and its
+/// choice is wrong for a code editor.** `ScintillaCocoa::UpdateBaseElements`
+/// derives `Element::SelectionBack` from the system's selected-text
+/// colour — the accent blue — which is right for prose in a text field
+/// and poor over syntax-highlighted code, where it swamps the foreground
+/// colours the lexer just assigned. Win32 and GTK install no such base,
+/// so they keep Scintilla's neutral grey; this brings macOS to the same
+/// place rather than leaving one backend visibly different.
+///
+/// An explicit `SCI_SETELEMENTCOLOUR` is what it takes: the Cocoa value
+/// is installed as the element *base*, and a base is only overridden by
+/// an explicit element colour, not by the older `SCI_SETSELBACK`.
+const SELECTION_BACK: usize = 0xFF_C8_C8_C8;
+
+/// The inactive-view selection, a shade lighter so an unfocused editor
+/// reads as unfocused — the same relationship the platform defaults have.
+const SELECTION_BACK_INACTIVE: usize = 0xFF_DC_DC_DC;
+
+/// Give the editor the selection colours, and stop its subviews painting
+/// outside its band.
+///
+/// **The clip is not cosmetic tidiness.** `SCIScrollView` is a *flipped*
+/// view, and on macOS 26 it carries a scroll-edge-effect
+/// `NSVisualEffectView` sized 690 pt inside a 548 pt scroll view — so in
+/// flipped coordinates that child extends ~140 pt *below* the editor's
+/// own frame. AppKit does not clip subviews to their parent's bounds by
+/// default, so that overflow paints over the status bar. Measured, not
+/// inferred: the view dump shows the 690/548 mismatch and the horizontal
+/// scroller at y=531 of 548, which is only the bottom edge if the view is
+/// flipped.
+///
+/// Clipping the Scintilla view states the invariant the layout already
+/// assumes — the editor draws inside the band it was given — rather than
+/// chasing whichever AppKit-internal subview currently overflows.
+fn apply_editor_appearance() {
+    with_state(|st| {
+        for element in [
+            codepp_scintilla_sys::SC_ELEMENT_SELECTION_BACK,
+            codepp_scintilla_sys::SC_ELEMENT_SELECTION_ADDITIONAL_BACK,
+        ] {
+            st.editor.send(
+                codepp_scintilla_sys::SCI_SETELEMENTCOLOUR,
+                element as usize,
+                SELECTION_BACK as isize,
+            );
         }
+        st.editor.send(
+            codepp_scintilla_sys::SCI_SETELEMENTCOLOUR,
+            codepp_scintilla_sys::SC_ELEMENT_SELECTION_INACTIVE_BACK as usize,
+            SELECTION_BACK_INACTIVE as isize,
+        );
+        st.sci_view.setClipsToBounds(true);
+        force_persistent_scrollers(&st.sci_view);
+    });
+}
+
+/// Make the editor's scrollers permanent rather than overlay.
+///
+/// macOS defaults to overlay scrollers, which appear only during a
+/// trackpad or wheel scroll and fade out — so scrolling by keyboard, by
+/// dragging a selection, or by a plugin leaves no indication that there
+/// is more document, and the bar the user reaches for is not there. Both
+/// other backends show a permanent scrollbar, and Notepad++ does too.
+///
+/// This overrides a system preference deliberately and only for the
+/// editor's own scroll view: a code editor's scroll position is
+/// information, not decoration, and the whole point of the bar is to be
+/// readable at a glance without touching anything.
+fn force_persistent_scrollers(sci_view: &NSView) {
+    if let Some(scroll) = editor_scroll_view(sci_view) {
+        scroll.setScrollerStyle(objc2_app_kit::NSScrollerStyle::Legacy);
+        scroll.setAutohidesScrollers(false);
     }
-    None
+}
+
+/// The `NSScrollView` inside a `ScintillaView`.
+///
+/// Found by walking the subviews rather than by index: it is vendored
+/// code's view hierarchy, and a position is a weaker assumption than a
+/// type.
+fn editor_scroll_view(sci_view: &NSView) -> Option<Retained<objc2_app_kit::NSScrollView>> {
+    sci_view
+        .subviews()
+        .iter()
+        .find_map(|sub| sub.downcast::<objc2_app_kit::NSScrollView>().ok())
 }
 
 /// Baseline editor styling, applied once before any buffer exists.

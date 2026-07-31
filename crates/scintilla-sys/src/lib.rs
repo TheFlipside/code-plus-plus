@@ -539,6 +539,29 @@ pub const CARETSTYLE_INVISIBLE: usize = 0;
 /// scrollbar. The Document Map view hides it (0) so the miniature
 /// view is chrome-free.
 pub const SCI_SETHSCROLLBAR: u32 = 2130;
+/// `SCI_SETELEMENTCOLOUR(element, colouralpha)` — set one of
+/// Scintilla 5's named UI *elements* to an explicit colour, overriding
+/// whatever the platform layer chose as its base.
+///
+/// The distinction from the `SCI_SETSELBACK`-style setters matters here:
+/// a platform backend may install a *base* colour of its own (the Cocoa
+/// backend derives the selection from the system accent colour), and
+/// only an explicit element colour takes precedence over that.
+///
+/// `colouralpha` is `0xAABBGGRR` — alpha in the high byte, then blue,
+/// green, red. Note the byte order is the reverse of the `0xRRGGBB` hex
+/// used in the theme tables.
+pub const SCI_SETELEMENTCOLOUR: u32 = 2753;
+/// `SC_ELEMENT_SELECTION_BACK` — the background behind selected text in
+/// the focused view.
+pub const SC_ELEMENT_SELECTION_BACK: u32 = 11;
+/// `SC_ELEMENT_SELECTION_ADDITIONAL_BACK` — the same, for the extra
+/// ranges of a multiple selection.
+pub const SC_ELEMENT_SELECTION_ADDITIONAL_BACK: u32 = 13;
+/// `SC_ELEMENT_SELECTION_INACTIVE_BACK` — the same, while the view does
+/// not have focus.
+pub const SC_ELEMENT_SELECTION_INACTIVE_BACK: u32 = 17;
+
 /// `SCI_SETVSCROLLBAR(visible)` — same shape as
 /// [`SCI_SETHSCROLLBAR`] for the vertical scrollbar.
 pub const SCI_SETVSCROLLBAR: u32 = 2280;
