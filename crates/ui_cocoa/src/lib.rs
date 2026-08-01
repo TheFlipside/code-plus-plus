@@ -896,14 +896,28 @@ fn build_content(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
     );
 
-    // Parked off the right edge at its natural width rather than
-    // squashed to zero — see the note in `CocoaUi::relayout_chrome`.
+    // Both side panels are parked off their own edge at their natural
+    // width rather than squashed to zero — see the note in
+    // `CocoaUi::relayout_chrome` for why zero is not the harmless choice
+    // it looks like.
     docmap
         .container
         .setFrameOrigin(NSPoint::new(DEFAULT_WIDTH, STATUS_BAR_HEIGHT));
+    workspace.container.setFrameOrigin(NSPoint::new(
+        -workspace.container.frame().size.width,
+        STATUS_BAR_HEIGHT,
+    ));
 
+    // **Every panel built above must be added here.** A view that is
+    // never parented is not an error anyone notices: it keeps its frame,
+    // reports `isHidden == false`, hands out its subviews, and answers
+    // every question a probe thinks to ask — it simply never draws.
+    // `workspace.container` shipped missing from this list and the panel
+    // was a blank rectangle; the source scan
+    // `every_panel_is_added_to_the_content_view` exists because of it.
     content.addSubview(sci_view);
     content.addSubview(&docmap.container);
+    content.addSubview(&workspace.container);
     content.addSubview(&status.container);
     content.addSubview(&fif_dock.container);
     content.addSubview(&tab_strip.container);
@@ -3639,6 +3653,57 @@ let msg = \"found scintilla_cocoa_new() calls\";
              if launching moved, the `within_root` guards above may no longer \
              cover it"
         );
+    }
+
+    /// Every panel `build_content` builds must be parented to the content
+    /// view.
+    ///
+    /// This shipped broken: `workspace.container` was constructed, stored
+    /// on the state, laid out by `relayout_chrome` — and never added as a
+    /// subview. The panel was a blank rectangle, reported by a user.
+    ///
+    /// **Nothing else could have caught it, which is the point.** The
+    /// build succeeds; clippy sees the panel used; a diff cannot show a
+    /// line that was never written, so both reviewers passed over it. And
+    /// a detached `NSView` answers every question a probe thinks to ask —
+    /// it keeps its frame, reports `isHidden == false`, hands out its
+    /// subviews, and even lets AppKit make cell views for it. My own
+    /// verification checked all of those and cleared it. The one question
+    /// that distinguishes attached from detached is `superview()`, and
+    /// nothing asked it.
+    ///
+    /// The list is derived from the function's **return tuple** rather
+    /// than hard-coded, so a future panel is covered the moment it is
+    /// returned — a hard-coded list would need updating by exactly the
+    /// person who just forgot the `addSubview`.
+    #[test]
+    fn every_panel_is_added_to_the_content_view() {
+        let body = fn_body(production_src(), "build_content");
+        // The last tuple expression in the body is the return.
+        let start = body.rfind("\n    (").expect("no return tuple") + 6;
+        let end = body[start..].find(')').expect("unterminated tuple") + start;
+        let returned: Vec<&str> = body[start..end]
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert!(
+            returned.len() >= 5,
+            "parsed only {returned:?} from the return tuple; the scan is broken, \
+             so a clean result proves nothing"
+        );
+        for member in returned {
+            let call = format!("content.addSubview(&{member}.container)");
+            assert!(
+                body.contains(&call),
+                "`build_content` returns `{member}` but never calls `{call}` — so \
+                 that panel is built, stored and laid out, and never drawn. A \
+                 detached view still reports its frame, its subviews and \
+                 `isHidden == false`, so nothing at runtime notices."
+            );
+        }
+        // The editor is not a panel and is added by its own name.
+        assert!(body.contains("content.addSubview(sci_view)"));
     }
 
     /// Unfold All's ceilings must not be defeated by the final reveal.
