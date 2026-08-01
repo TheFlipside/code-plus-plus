@@ -1239,6 +1239,21 @@ fn enforce_scroller_layout(sci_view: &NSView, mtm: MainThreadMarker) {
                 NSSize::new(have.size.width, height),
             ));
         }
+        // **Clipped, because Scintilla paints the gutter a whole line-row
+        // at a time and AppKit does not clip a view to its own bounds by
+        // default.** Trimming the ruler leaves a partial row at the
+        // bottom, which `PaintMargin` still fills in full — reported as
+        // the gutter "spilling onto the area below", and measured from a
+        // screenshot as a 16 × 3 pt patch of margin grey stranded past
+        // the ruler's real bottom edge. Same one-liner, for the same
+        // reason, as the `setClipsToBounds` on the Scintilla view itself.
+        //
+        // Read before writing: this runs on every paint, and a setter
+        // that marks the view dirty each time would be a repaint per
+        // frame.
+        if !ruler.clipsToBounds() {
+            ruler.setClipsToBounds(true);
+        }
     }
 }
 
@@ -3209,6 +3224,24 @@ mod source_invariants {
             painted.contains("enforce_scroller_layout("),
             "the layout repair must run from the SCN_PAINTED arm, or it \
              lasts only until the first long line widens the document"
+        );
+        // Trimming the line-number ruler to the clip's height is only
+        // half of keeping it out of the scrollbar band: Scintilla paints
+        // the gutter a whole line-row at a time, so the trim leaves a
+        // partial row that `PaintMargin` fills in full, and AppKit does
+        // not clip a view to its own bounds by default. Without this the
+        // gutter draws a few points past its own frame — invisible to
+        // every instrument on this backend except a real screenshot,
+        // which is why it is guarded here rather than tested.
+        // The *call* form, not the bare identifier: the function body
+        // carries a comment naming `setClipsToBounds` in prose, and
+        // matching that made this guard pass against a mutation that
+        // deleted the call. Same trap m3c's dirty-poll guard fell into.
+        let repair = fn_body(src, "enforce_scroller_layout");
+        assert!(
+            repair.contains("ruler.setClipsToBounds("),
+            "the ruler is no longer clipped to its bounds, so the gutter's \
+             partial last row will overpaint into the scrollbar band"
         );
     }
 
