@@ -1605,6 +1605,32 @@ pub struct Shell {
     /// `save_all`). Ids are monotonic and never reused, so a closed tab's
     /// stale id is harmless and needs no cleanup.
     unsaved_restore_ids: HashSet<i32>,
+    /// Loads that were retargeted onto a tab that already existed,
+    /// rather than onto one pushed for the occasion.
+    ///
+    /// Read by [`Self::apply_failed_load`] to answer the one question it
+    /// cannot answer any other way: *did this load create the tab it is
+    /// attached to?* If it did, a failure should remove the tab. If it
+    /// merely borrowed a tab the user already had — which is what
+    /// [`Self::open_file_replacing_scratch`] does to the lone `new 1` —
+    /// a failure must hand that tab back untouched instead.
+    ///
+    /// **Recorded rather than inferred, because every property that
+    /// looked like a usable proxy turns out not to be one.**
+    /// `scintilla_doc != 0` is the obvious candidate and is wrong:
+    /// [`Self::bind_active_view`] materialises a document for *any*
+    /// active tab lacking one, with no `pending_load` gate, so an
+    /// ordinary fresh tab acquires a document the moment the user clicks
+    /// back onto it while its load is still in flight. Inferring from
+    /// that would strand such a tab in the strip as a pathless,
+    /// `untitled_seq`-less phantom after its load failed — trading the
+    /// leak this field exists to prevent for a different bug.
+    ///
+    /// Entries are removed on both outcomes, so the set holds only loads
+    /// actually in flight. A load whose result never arrives (the worker
+    /// channel closed) leaves one `u64` behind, bounded by the number of
+    /// opens in a session.
+    loads_onto_existing_tabs: HashSet<codepp_core::file::RequestId>,
     /// Per-path debounce deadlines for file-change dialogs. An
     /// entry with a future timestamp means new file-change
     /// events for that path are silently discarded until now
@@ -2026,6 +2052,7 @@ impl Shell {
             pending_fif_launch: None,
             deferred_dialogs: Vec::new(),
             unsaved_restore_ids: HashSet::new(),
+            loads_onto_existing_tabs: HashSet::new(),
             file_change_debounce: std::collections::HashMap::new(),
             styles: load_styles(),
             udl_registry,
@@ -3201,6 +3228,47 @@ impl Shell {
         Ok(())
     }
 
+    /// Whether the workspace holds exactly one tab and that tab is an
+    /// untouched File→New / startup scratch buffer.
+    ///
+    /// The model half of [`Self::open_file_replacing_scratch`]'s
+    /// decision — everything that can be answered without asking
+    /// Scintilla. Each clause rules out a buffer that would lose
+    /// something real if it were silently replaced:
+    ///
+    /// * more than one tab: the user is not looking at a bare
+    ///   workspace, so nothing here is a throwaway placeholder;
+    /// * `path` set: a real file, never a scratch;
+    /// * `pending_load` set: a load is already in flight for this tab,
+    ///   and retargeting it would strand the first load's result (the
+    ///   same hazard the `open_file` reuse path guards against);
+    /// * `dirty`: unsaved work, whatever the editor's own bit says;
+    /// * `custom_name` set: the user deliberately named this buffer
+    ///   through File→Rename, which is not nothing;
+    /// * an unsaved crash-recovery restore: its contents exist in no
+    ///   file the user could reopen.
+    ///
+    /// The last three are belt-and-braces given the caller also
+    /// establishes the document is empty with no undo history — a
+    /// dirty or restored buffer would fail that test too. They are
+    /// cheap, and each states an independent reason, so a future change
+    /// to the pristine test cannot quietly widen this.
+    fn active_is_lone_untitled_scratch(&self) -> bool {
+        if self.tabs.len() != 1 {
+            return false;
+        }
+        let Some(idx) = self.active_tab else {
+            return false;
+        };
+        self.tabs.get(idx).is_some_and(|t| {
+            t.path.is_none()
+                && t.pending_load.is_none()
+                && !t.dirty
+                && t.custom_name.is_none()
+                && !self.is_unsaved_restore(t.id)
+        })
+    }
+
     /// Request that `path` be opened. Returns the branch the shell
     /// took so the UI knows whether it needs to synchronously rebind
     /// the Scintilla view.
@@ -3218,7 +3286,49 @@ impl Shell {
     /// normal chrome refresh: `Loading` is handled by the `drain`'s
     /// `activate_tab` when the loader posts its wake, `AlreadyActive`
     /// changed nothing, and `Rejected` didn't touch any tab state.
+    ///
+    /// Leaves an untouched `new 1` scratch buffer in place. Callers
+    /// that want Notepad++'s replace-the-scratch behaviour go through
+    /// [`Self::open_file_replacing_scratch`] instead.
     pub fn open_file(&mut self, path: PathBuf) -> OpenFileOutcome {
+        self.open_file_replacing_scratch(path, false)
+    }
+
+    /// [`Self::open_file`], but allowed to consume a pristine scratch
+    /// buffer instead of opening beside it.
+    ///
+    /// Notepad++ discards the `new 1` it seeds at startup the moment
+    /// you open a real file into an otherwise-empty workspace: you end
+    /// up with one tab, not two. Reproducing that needs one fact the
+    /// shell cannot see for itself — whether the Scintilla document is
+    /// *pristine*, meaning empty **and** carrying no undo history — so
+    /// the UI measures it (`SCI_GETLENGTH == 0 && !SCI_CANUNDO &&
+    /// !SCI_CANREDO`) and passes it in as `editor_is_pristine`.
+    ///
+    /// `Tab.text` is not a substitute for that measurement: it is only
+    /// refreshed on load and on save, so for a buffer the user typed
+    /// into it holds the empty string the tab was created with. And
+    /// emptiness alone is not enough either — a buffer typed into and
+    /// erased back to nothing reads as empty and unmodified (undoing
+    /// past the save point clears Scintilla's modify bit) while still
+    /// representing work the user did. The undo history is what
+    /// distinguishes the two.
+    ///
+    /// Everything else is checked here, in
+    /// [`Self::active_is_lone_untitled_scratch`], because it is model
+    /// state and no backend should be re-deriving it.
+    ///
+    /// **Scoped to the lone-tab case**, which is what a user asking for
+    /// this describes: the `new 1` is discarded when it is the *only*
+    /// thing open. Widening it to "any pristine untitled tab, whatever
+    /// else is open" is a one-line change to the helper if that turns
+    /// out to match Notepad++ more closely, and is deliberately not
+    /// guessed at here.
+    pub fn open_file_replacing_scratch(
+        &mut self,
+        path: PathBuf,
+        editor_is_pristine: bool,
+    ) -> OpenFileOutcome {
         // De-duplicate: if the path is already open in some tab,
         // switch to that tab rather than allocating a fresh one.
         // Without this, the user can stack identical-content tabs
@@ -3306,10 +3416,19 @@ impl Shell {
         // None && untitled_seq = None`, so this branch is
         // effectively dead, but the guard stays as defense-in-depth
         // for future paths that might need an internal placeholder.
+        //
+        // `replace_scratch` is the one documented exception: the
+        // startup `new 1`, untouched, alone in the workspace, with the
+        // caller having confirmed the editor is pristine. Notepad++
+        // consumes that one rather than opening beside it. See
+        // `open_file_replacing_scratch`.
+        let replace_scratch = editor_is_pristine && self.active_is_lone_untitled_scratch();
         let target_idx = match self.active_tab {
             Some(i)
                 if self.tabs.get(i).is_some_and(|t| {
-                    t.path.is_none() && t.pending_load.is_none() && t.untitled_seq.is_none()
+                    t.path.is_none()
+                        && t.pending_load.is_none()
+                        && (t.untitled_seq.is_none() || replace_scratch)
                 }) =>
             {
                 i
@@ -3339,6 +3458,13 @@ impl Shell {
                 tab.id = id;
             }
             tab.pending_load = Some(req_id);
+            // This load borrowed a tab that already existed. If it
+            // fails, that tab must be handed back rather than removed —
+            // see `loads_onto_existing_tabs`. Recorded for *both* reuse
+            // cases, the anonymous placeholder as well as the `new 1`
+            // scratch, because the rule is about who owns the tab and
+            // not about which branch selected it.
+            self.loads_onto_existing_tabs.insert(req_id);
         } else {
             // active_tab pointed at a missing index — recover by
             // creating a new tab.
@@ -3748,8 +3874,15 @@ impl Shell {
                         stale_id = loaded.id,
                         "discarding stale load result (no matching pending tab)"
                     );
+                    self.loads_onto_existing_tabs.remove(&loaded.id);
                     return;
                 };
+                // This load is finished either way, so it is no longer
+                // one whose failure `apply_failed_load` has to reason
+                // about. Dropped on success as well as failure and on
+                // the stale-result path above, so the set only ever
+                // holds loads actually in flight.
+                self.loads_onto_existing_tabs.remove(&loaded.id);
 
                 // Begin watching the new file before pushing into
                 // the editor — if the watch fails the user still gets
@@ -3780,8 +3913,28 @@ impl Shell {
                 let Some(tab) = self.tabs.get_mut(target_idx) else {
                     return;
                 };
+                // Whether this load *gave* the tab its path, as opposed
+                // to reloading a tab that already had one. Read before
+                // the assignment below, and used to decide whether the
+                // untitled identity should be dropped.
+                let gained_a_path = tab.path.is_none();
                 tab.pending_load = None;
                 tab.path = Some(loaded.path.clone());
+                // A tab that was untitled and now has a file is no
+                // longer untitled: drop the sequence number so the strip
+                // switches from "new N" to the basename, and so a future
+                // File→New can reuse the freed value. Exactly what
+                // `save_buffer_as` does when a buffer gains a path the
+                // other way round.
+                //
+                // Gated on `gained_a_path` so a *reload* cannot clear a
+                // label the user set through File→Rename — for a titled
+                // tab the path already wins in `tab_display_name`, so
+                // clearing `custom_name` there would only destroy it.
+                if gained_a_path {
+                    tab.untitled_seq = None;
+                    tab.custom_name = None;
+                }
                 tab.encoding.clone_from(&loaded.encoding);
                 tab.eol = loaded.eol;
                 tab.byte_len = loaded.byte_len;
@@ -3868,75 +4021,147 @@ impl Shell {
                 // `target_idx` under the UI calls above.
                 self.repair_restored_pin_placement(target_idx);
             }
-            Err(err) => {
-                // A failed load on a fresh tab (one that never had a
-                // path) leaves an orphan: nonzero buffer id, but
-                // `path = None`. Plugins gate on `id != 0 ⇒ path
-                // is Some`; preserving the orphan would silently
-                // break that invariant. Find the matching tab and
-                // either remove it (fresh open) or just clear
-                // `pending_load` (reload of a tab with prior
-                // contents — keep its previous path/text).
-                let target = self
-                    .tabs
-                    .iter()
-                    .position(|t| t.pending_load == Some(err.id));
-                if let Some(idx) = target {
-                    let is_fresh = self.tabs[idx].path.is_none();
-                    if is_fresh {
-                        self.tabs.remove(idx);
-                        let was_active = self.active_tab == Some(idx);
-                        self.active_tab = match self.active_tab {
-                            Some(active_idx) if active_idx == idx => {
-                                if self.tabs.is_empty() {
-                                    None
-                                } else if active_idx >= self.tabs.len() {
-                                    Some(self.tabs.len() - 1)
-                                } else {
-                                    Some(active_idx)
-                                }
-                            }
-                            Some(active_idx) if active_idx > idx => Some(active_idx - 1),
-                            other => other,
-                        };
-                        // Removing the *active* tab hands focus to a
-                        // different buffer, so the view has to follow.
-                        // Every other place that moves `active_tab`
-                        // either binds immediately or tells the UI to
-                        // through a return value; this one fires from
-                        // inside `drain` and returns nothing, so if it
-                        // does not rebind here, nothing ever will.
-                        //
-                        // Leaving it unbound splits `Shell`'s idea of
-                        // the active tab from the document the view
-                        // actually holds — and since `get_buffer_text`
-                        // reads the bound document while the save path
-                        // takes the path from the active tab, the next
-                        // save writes one buffer's bytes over another
-                        // file.
-                        if was_active {
-                            self.bind_active_view(ui);
+            Err(err) => self.apply_failed_load(ui, &err, pending),
+        }
+    }
+
+    /// Unwind a load that failed: restore or remove the tab that was
+    /// waiting on it, surface the error, and close the plugin
+    /// notification pairing that [`Self::open_file`] opened.
+    ///
+    /// The failed half of [`Self::apply_load_result`], a separate method
+    /// rather than an inline `Err` arm so that one stays inside clippy's
+    /// `too_many_lines` gate.
+    ///
+    /// **Notification order, stated because it is observable and not
+    /// obvious:** in the case where removing the failed tab empties the
+    /// workspace, the re-seeded buffer's `NPPN_BUFFERACTIVATED` is
+    /// queued by `new_untitled` *before* this method pushes
+    /// `FileLoadFailed`. Nothing depends on that today and Notepad++
+    /// documents no ordering between the two, so it is recorded rather
+    /// than guaranteed — but a plugin auditing in-flight opens will see
+    /// the activation of the replacement buffer first, and swapping the
+    /// two would need `new_untitled` to move below the error push.
+    fn apply_failed_load<U: UiPlatform>(
+        &mut self,
+        ui: &mut U,
+        err: &codepp_core::file::LoadError,
+        pending: &mut Vec<PendingDialog>,
+    ) {
+        // Did this load create the tab it is attached to, or merely
+        // borrow one the user already had? Only the former may be
+        // removed. `open_file` records the latter in
+        // `loads_onto_existing_tabs` at the moment it retargets, and the
+        // entry is taken here so the set holds only in-flight loads.
+        //
+        // **The answer has to be recorded at retarget time; it cannot be
+        // reconstructed now.** `scintilla_doc != 0` looks like it would
+        // serve and does not: `bind_active_view` materialises a document
+        // for any active tab lacking one, with no `pending_load` gate, so
+        // an ordinary fresh tab acquires one as soon as the user clicks
+        // back onto it while its load is still running — and
+        // `load_npp_session` reaches the same state with no click at all,
+        // by restoring the recorded-active tab while its load is still in
+        // flight. Keying on the document would leave those tabs in the
+        // strip after a failure as pathless, `untitled_seq`-less
+        // phantoms.
+        //
+        // Removing a fresh tab is what keeps a failed open from leaving
+        // an orphan behind: a nonzero buffer id with `path = None`, which
+        // is the shape plugins gating on `id != 0 ⇒ path is Some` do not
+        // expect. A borrowed tab instead gets its pending marker cleared
+        // and nothing else, which for the `new 1` scratch means it is
+        // handed back exactly as it was — same id, same document, same
+        // `untitled_seq` (the Ok arm is the only place that clears it).
+        // That also keeps its document tracked: `self.tabs.remove` drops
+        // the `Tab` and its `scintilla_doc` with it, and
+        // `close_active_tab`'s `ClosedTab` is the only channel by which a
+        // document pointer ever reaches a backend's
+        // `SCI_RELEASEDOCUMENT`, so removing a bound tab leaks it.
+        //
+        // A fresh tab that *was* prematurely bound still leaks its
+        // document on this path. That predates this method and is
+        // tracked in DESIGN.md §7.4; closing it needs a release channel
+        // the `UiPlatform` trait does not currently have.
+        let borrowed_an_existing_tab = self.loads_onto_existing_tabs.remove(&err.id);
+        let target = self
+            .tabs
+            .iter()
+            .position(|t| t.pending_load == Some(err.id));
+        if let Some(idx) = target {
+            let is_fresh = !borrowed_an_existing_tab && self.tabs[idx].path.is_none();
+            if is_fresh {
+                self.tabs.remove(idx);
+                let was_active = self.active_tab == Some(idx);
+                self.active_tab = match self.active_tab {
+                    Some(active_idx) if active_idx == idx => {
+                        if self.tabs.is_empty() {
+                            None
+                        } else if active_idx >= self.tabs.len() {
+                            Some(self.tabs.len() - 1)
+                        } else {
+                            Some(active_idx)
                         }
-                    } else {
-                        // Reload failed; keep the tab's prior contents,
-                        // just drop the pending marker.
-                        self.tabs[idx].pending_load = None;
                     }
+                    Some(active_idx) if active_idx > idx => Some(active_idx - 1),
+                    other => other,
+                };
+                // Removing the *active* tab hands focus to a
+                // different buffer, so the view has to follow.
+                // Every other place that moves `active_tab`
+                // either binds immediately or tells the UI to
+                // through a return value; this one fires from
+                // inside `drain` and returns nothing, so if it
+                // does not rebind here, nothing ever will.
+                //
+                // Leaving it unbound splits `Shell`'s idea of
+                // the active tab from the document the view
+                // actually holds — and since `get_buffer_text`
+                // reads the bound document while the save path
+                // takes the path from the active tab, the next
+                // save writes one buffer's bytes over another
+                // file.
+                if was_active {
+                    self.bind_active_view(ui);
                 }
-                pending.push(PendingDialog::Error {
-                    title: "Open failed".to_string(),
-                    message: format!("{}: {}", sanitize_path_for_display(&err.path), err.error),
-                });
-                // Pair every `FileBeforeOpen` issued by `open_file`
-                // with one of `FileOpened` / `FileLoadFailed`.
-                // Plugins that audit-log file activity rely on the
-                // pairing — without `FileLoadFailed` they'd never
-                // hear back about a failed open and would track
-                // an in-flight open forever.
-                self.pending_notifications
-                    .push(Notification::FileLoadFailed);
+                // Removing the last tab would leave the
+                // workspace with none at all — a strip painted
+                // from an empty vector while the single
+                // Scintilla view still shows an editable
+                // document nothing tracks. Typing into it and
+                // closing would discard the edits with no
+                // prompt, because there is no `Tab` for the
+                // close gate to find; and the next save would
+                // take its path from an active tab that does
+                // not exist. Every backend already re-seeds on
+                // the *close* path for exactly this reason —
+                // this is the same invariant on the
+                // failed-load path, which could reach the empty
+                // state two ways: a session restoring a single
+                // file that has since been deleted, or (since
+                // `open_file_replacing_scratch` landed) an
+                // unreadable file opened over the lone `new 1`.
+                if self.tabs.is_empty() {
+                    self.new_untitled(ui);
+                }
+            } else {
+                // Reload failed; keep the tab's prior contents,
+                // just drop the pending marker.
+                self.tabs[idx].pending_load = None;
             }
         }
+        pending.push(PendingDialog::Error {
+            title: "Open failed".to_string(),
+            message: format!("{}: {}", sanitize_path_for_display(&err.path), err.error),
+        });
+        // Pair every `FileBeforeOpen` issued by `open_file`
+        // with one of `FileOpened` / `FileLoadFailed`.
+        // Plugins that audit-log file activity rely on the
+        // pairing — without `FileLoadFailed` they'd never
+        // hear back about a failed open and would track
+        // an in-flight open forever.
+        self.pending_notifications
+            .push(Notification::FileLoadFailed);
     }
 
     fn apply_file_change(&mut self, change: FileChange, pending: &mut Vec<PendingDialog>) {
@@ -8825,16 +9050,23 @@ mod tests {
             &pending[0],
             PendingDialog::Error { title, .. } if title == "Open failed"
         ));
-        // The fresh tab created for the open should be removed when
-        // the load fails — leaving it would orphan a buffer id with
-        // `path = None`, breaking the `id != 0 ⇒ path is Some`
-        // contract that well-behaved Notepad++ plugins assume.
-        assert_eq!(
-            shell.tabs.len(),
-            0,
-            "fresh tab should be removed on load failure"
+        // The fresh tab created for the open is removed when the load
+        // fails — leaving it would orphan a buffer id pointing at a
+        // half-open file. What takes its place is a plain untitled
+        // buffer: this shell started with no tabs at all (no real UI
+        // does — every backend seeds one), and removing the only tab
+        // would otherwise leave the workspace tabless, with the strip
+        // painted from an empty vector while the Scintilla view still
+        // shows an editable document nothing tracks. See the Err arm in
+        // `apply_load_result` and
+        // `a_failed_load_never_leaves_the_workspace_tabless`.
+        assert_eq!(shell.tabs.len(), 1, "expected a re-seeded untitled buffer");
+        assert!(
+            shell.tabs[0].path.is_none() && shell.tabs[0].pending_load.is_none(),
+            "the failed open's tab should be gone, not merely cleared"
         );
-        assert_eq!(shell.active_tab, None);
+        assert_eq!(shell.tabs[0].untitled_seq, Some(1));
+        assert_eq!(shell.active_tab, Some(0));
     }
 
     // -- Plugin dispatcher entry-point tests ------------------------
@@ -11075,6 +11307,300 @@ mod tests {
         assert!(shell.tabs[0].path.is_none());
         assert_eq!(shell.tabs[1].path.as_deref(), Some(path.as_path()));
         assert_eq!(shell.active_tab, Some(1));
+    }
+
+    // The five tests below poll `drain_until` with a 10-second deadline
+    // rather than the 2 seconds the rest of this module uses. Not
+    // because they are slower — they settle in ~0.15 s — but because
+    // they wait on a *worker* round trip, and one was seen to miss a
+    // 2-second deadline once on a cold cache immediately after
+    // `cargo clean`, which is exactly the state a CI runner starts in.
+    // A longer deadline costs nothing when the predicate holds, since
+    // `drain_until` returns as soon as it does.
+
+    #[test]
+    fn open_file_replacing_scratch_consumes_the_lone_untouched_new_buffer() {
+        // Notepad++'s behaviour, and what a user opening a file into a
+        // fresh window expects: the `new 1` that was seeded at startup
+        // is gone afterwards, not sitting beside the file they opened.
+        // The sibling test above pins the *opposite* for plain
+        // `open_file`, which is what session restore and the plugin
+        // dispatcher use — the difference is deliberate.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opened.txt");
+        std::fs::write(&path, "x\n").unwrap();
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let scratch_id = shell.tabs[0].id;
+
+        shell.open_file_replacing_scratch(path.clone(), true);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |u, _| u.set_text_calls.len() >= 2,
+            Duration::from_secs(10),
+        );
+
+        assert_eq!(shell.tabs.len(), 1, "the scratch buffer should be gone");
+        assert_eq!(shell.tabs[0].path.as_deref(), Some(path.as_path()));
+        assert_eq!(shell.active_tab, Some(0));
+        // Reused in place, so the buffer id is carried over rather than
+        // a fresh one allocated — plugins holding the id keep addressing
+        // the tab the user is looking at.
+        assert_eq!(shell.tabs[0].id, scratch_id);
+        // And the untitled identity is dropped, so the strip shows the
+        // basename and a later File→New gets "new 1" back rather than
+        // skipping to "new 2".
+        assert_eq!(shell.tabs[0].untitled_seq, None);
+        shell.new_untitled(&mut ui);
+        assert_eq!(shell.tabs[1].untitled_seq, Some(1));
+    }
+
+    #[test]
+    fn open_file_replacing_scratch_keeps_a_buffer_worth_keeping() {
+        // Every clause of the gate, each on its own, must be enough to
+        // spare the buffer. Table-driven because the failure mode is
+        // "one clause quietly stopped mattering", which a single
+        // combined case would not localise.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opened.txt");
+        std::fs::write(&path, "x\n").unwrap();
+
+        // (label, how the scratch is made unsuitable, editor pristine?)
+        type Spoil = fn(&mut Shell);
+        let cases: &[(&str, Spoil, bool)] = &[
+            ("editor has content or undo history", |_| {}, false),
+            (
+                "buffer is dirty",
+                |s: &mut Shell| s.tabs[0].dirty = true,
+                true,
+            ),
+            (
+                "buffer was renamed by the user",
+                |s: &mut Shell| s.tabs[0].custom_name = Some("notes".into()),
+                true,
+            ),
+            (
+                "buffer is an unsaved crash-recovery restore",
+                |s: &mut Shell| {
+                    let id = s.tabs[0].id;
+                    s.unsaved_restore_ids.insert(id);
+                },
+                true,
+            ),
+            (
+                "a second tab is open",
+                |s: &mut Shell| {
+                    let id = s.allocate_buffer_id();
+                    s.tabs.push(Tab {
+                        id,
+                        untitled_seq: Some(2),
+                        ..Tab::default()
+                    });
+                },
+                true,
+            ),
+        ];
+
+        for (label, spoil, pristine) in cases {
+            let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+            let mut shell = Shell::new(wake).unwrap();
+            let mut ui = FakeUi::default();
+            shell.new_untitled(&mut ui);
+            spoil(&mut shell);
+            let before = shell.tabs.len();
+
+            shell.open_file_replacing_scratch(path.clone(), *pristine);
+            drain_until(
+                &mut shell,
+                &mut ui,
+                // One `set_buffer_text` from `new_untitled`, a second
+                // when the load lands on whichever tab took it.
+                |u, _| u.set_text_calls.len() >= 2,
+                Duration::from_secs(10),
+            );
+
+            assert_eq!(
+                shell.tabs.len(),
+                before + 1,
+                "{label}: the scratch buffer was discarded when it should have been kept"
+            );
+            assert!(
+                shell.tabs[0].path.is_none(),
+                "{label}: the opened file landed on the scratch tab"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_open_over_the_scratch_buffer_leaks_no_document() {
+        // The reused `new 1` already has a Scintilla document, bound by
+        // `new_untitled`. Removing its tab on a failed load would drop
+        // that pointer with no `SCI_RELEASEDOCUMENT` — `ClosedTab` is
+        // the only channel by which one ever reaches a backend — and the
+        // now-empty tab list would then have `new_untitled` allocate a
+        // *second* document plus a fresh buffer id, silently
+        // invalidating any id a plugin had cached.
+        //
+        // Pinned on `activate_tab_calls` because that is where the
+        // second allocation shows up: exactly one `(_, 0, _)` request,
+        // the `0` being the "create me a document" sentinel.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("never-existed.txt");
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+        let (scratch_id, scratch_doc, scratch_seq) = {
+            let t = &shell.tabs[0];
+            (t.id, t.scintilla_doc, t.untitled_seq)
+        };
+        assert_ne!(
+            scratch_doc, 0,
+            "precondition: the scratch buffer must already own a document"
+        );
+
+        shell.open_file_replacing_scratch(missing, true);
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |_, pending| {
+                pending
+                    .iter()
+                    .any(|d| matches!(d, PendingDialog::Error { .. }))
+            },
+            Duration::from_secs(10),
+        );
+
+        let creates = ui
+            .activate_tab_calls
+            .iter()
+            .filter(|(_, doc, _)| *doc == 0)
+            .count();
+        assert_eq!(
+            creates, 1,
+            "a second document was created: the scratch buffer's original was leaked"
+        );
+        assert_eq!(shell.tabs.len(), 1);
+        let t = &shell.tabs[0];
+        assert_eq!(t.id, scratch_id, "the buffer id churned under the user");
+        assert_eq!(t.scintilla_doc, scratch_doc);
+        assert_eq!(t.untitled_seq, scratch_seq, "still `new 1`");
+        assert!(t.path.is_none() && t.pending_load.is_none());
+    }
+
+    #[test]
+    fn a_prematurely_bound_fresh_tab_is_still_removed_when_its_load_fails() {
+        // `bind_active_view` materialises a document for any active tab
+        // that lacks one, with no `pending_load` gate — so an ordinary
+        // fresh tab acquires one the moment the user clicks back onto it
+        // while its load is still running, and `load_npp_session` gets
+        // there with no click at all by restoring the recorded-active
+        // tab mid-flight.
+        //
+        // That is why "does this tab own a document" cannot stand in for
+        // "did this load create this tab". Keying the removal decision
+        // on the document would leave the tab below in the strip after
+        // its load failed, as a pathless, `untitled_seq`-less phantom —
+        // the `id != 0 ⇒ path is Some` shape plugins do not expect.
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("real.txt");
+        std::fs::write(&good, "content\n").unwrap();
+        let missing = dir.path().join("never-existed.txt");
+
+        let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+        let mut shell = Shell::new(wake).unwrap();
+        let mut ui = FakeUi::default();
+        shell.new_untitled(&mut ui);
+
+        // Two tabs, so nothing is a lone scratch and neither open can
+        // take the reuse path — both push tabs of their own.
+        shell.open_file(missing.clone());
+        shell.open_file(good.clone());
+        let doomed_idx = shell
+            .tabs
+            .iter()
+            .position(|t| t.pending_load.is_some() && t.scintilla_doc == 0)
+            .expect("the failing open pushed a fresh, unbound tab");
+
+        // The user clicks back onto the still-loading tab. This is the
+        // step that materialises its document.
+        shell.active_tab = Some(doomed_idx);
+        shell.bind_active_view(&mut ui);
+        assert_ne!(
+            shell.tabs[doomed_idx].scintilla_doc, 0,
+            "precondition: the premature rebind must have bound a document"
+        );
+        let doomed_id = shell.tabs[doomed_idx].id;
+
+        drain_until(
+            &mut shell,
+            &mut ui,
+            |_, pending| {
+                pending
+                    .iter()
+                    .any(|d| matches!(d, PendingDialog::Error { .. }))
+            },
+            Duration::from_secs(10),
+        );
+
+        assert!(
+            !shell.tabs.iter().any(|t| t.id == doomed_id),
+            "the failed open's tab survived as a phantom"
+        );
+        assert!(
+            !shell
+                .tabs
+                .iter()
+                .any(|t| t.path.is_none() && t.untitled_seq.is_none()),
+            "a pathless tab with no untitled identity was left behind"
+        );
+    }
+
+    #[test]
+    fn a_failed_load_never_leaves_the_workspace_tabless() {
+        // Two ways to reach the empty state, both real: a session
+        // restoring a single file that has since been deleted, and an
+        // unreadable file opened over the lone scratch buffer. Either
+        // way `apply_load_result`'s Err arm removes the tab it created,
+        // and a workspace with no tabs is the "null" state — the strip
+        // paints from an empty vector while the single Scintilla view
+        // still shows an editable document nothing tracks.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("never-existed.txt");
+
+        for replacing_scratch in [false, true] {
+            let wake = Arc::new(|| {}) as Arc<dyn Fn() + Send + Sync>;
+            let mut shell = Shell::new(wake).unwrap();
+            let mut ui = FakeUi::default();
+            if replacing_scratch {
+                shell.new_untitled(&mut ui);
+            }
+            shell.open_file_replacing_scratch(missing.clone(), replacing_scratch);
+            drain_until(
+                &mut shell,
+                &mut ui,
+                |_, pending| {
+                    pending
+                        .iter()
+                        .any(|d| matches!(d, PendingDialog::Error { .. }))
+                },
+                Duration::from_secs(10),
+            );
+
+            assert_eq!(
+                shell.tabs.len(),
+                1,
+                "replacing_scratch={replacing_scratch}: expected a re-seeded untitled buffer"
+            );
+            assert!(shell.tabs[0].path.is_none());
+            assert_eq!(shell.tabs[0].untitled_seq, Some(1));
+            assert_eq!(shell.active_tab, Some(0));
+        }
     }
 
     #[test]

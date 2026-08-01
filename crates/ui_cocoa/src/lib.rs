@@ -1981,6 +1981,30 @@ pub(crate) fn open_dropped_path(path: PathBuf) {
     open_path(path);
 }
 
+/// Whether the bound Scintilla document holds nothing the user could
+/// miss: no text, and no undo or redo history.
+///
+/// The editor half of `Shell::open_file_replacing_scratch`'s decision —
+/// see that method for why the shell cannot answer it. Emptiness alone
+/// is not enough: typing a character and deleting it leaves the document
+/// empty *and* unmodified, because undoing back past the save point
+/// clears Scintilla's modify bit. The undo history is what still
+/// remembers it happened, and a buffer the user has been working in must
+/// not be silently replaced by an Open.
+///
+/// **Redo is checked as well as undo, and that is not belt-and-braces —
+/// it is the only thing covering the case.** Measured by driving the
+/// app: after typing one character into the startup buffer and undoing
+/// it, Scintilla reports `SCI_GETLENGTH == 0`, `SCI_CANUNDO == 0` and
+/// `SCI_CANREDO == 1`. Every clause but the redo one says "untouched",
+/// so a check written against length and undo alone would discard a
+/// buffer the user had been working in.
+fn editor_is_pristine(editor: &codepp_editor::EditorHandle) -> bool {
+    editor.send(codepp_scintilla_sys::SCI_GETLENGTH, 0, 0) == 0
+        && editor.send(codepp_scintilla_sys::SCI_CANUNDO, 0, 0) == 0
+        && editor.send(codepp_scintilla_sys::SCI_CANREDO, 0, 0) == 0
+}
+
 /// Open `path`, rebinding the view when the shell only switched tabs.
 ///
 /// **The return value is load-bearing.** A fresh open queues an async
@@ -1998,7 +2022,10 @@ pub(crate) fn open_dropped_path(path: PathBuf) {
 /// nobody could see. `ui_gtk` has always handled this; the Cocoa port
 /// did not.
 fn open_path(path: PathBuf) {
-    let outcome = with_state(|st| st.shell.open_file(path));
+    let outcome = with_state(|st| {
+        st.shell
+            .open_file_replacing_scratch(path, editor_is_pristine(&st.editor))
+    });
     if let Some(codepp_shell::OpenFileOutcome::SwitchedToExisting(_)) = outcome {
         rebind_active_view();
     } else {
@@ -2276,7 +2303,13 @@ pub(crate) fn action_save_file() {
             &codepp_shell::sanitize_str_for_display(&e.to_string()),
         );
     }
-    refresh_title();
+    // The whole chrome, not just the title. The save clears Scintilla's
+    // save point from inside the `with_state` borrow above, so the
+    // resulting `SCN_SAVEPOINTREACHED` re-enters `on_sci_notify` while
+    // that borrow is live and is declined — leaving the tab's dirty
+    // marker showing unsaved changes for a buffer that is now on disk.
+    // Same obligation, and the same fix, as `search::refresh_chrome`.
+    refresh_tab_chrome();
 }
 
 pub(crate) fn action_save_file_as() {
@@ -2308,7 +2341,10 @@ pub(crate) fn action_save_file_as() {
             &codepp_shell::sanitize_str_for_display(&e.to_string()),
         );
     }
-    refresh_title();
+    // See `action_save_file` — the save point is cleared under a borrow,
+    // so the dirty marker will not clear itself. Save As additionally
+    // renames the tab, which the strip rebuild here picks up.
+    refresh_tab_chrome();
 }
 
 pub(crate) fn action_save_all() {
@@ -2323,7 +2359,13 @@ pub(crate) fn action_save_all() {
             &codepp_shell::sanitize_str_for_display(&e.to_string()),
         );
     }
-    refresh_title();
+    // `save_all` already clears the cached `Tab.dirty` for each tab it
+    // saves — it is authoritative precisely because its
+    // `SCN_SAVEPOINTREACHED` notifications land inside its own borrow
+    // and every backend declines them. What is still missing is the
+    // *repaint*: nothing has redrawn the strip against those cleared
+    // flags. That is what this call is for.
+    refresh_tab_chrome();
 }
 
 /// Show the Save / Don't Save / Cancel prompt when the active buffer has
@@ -2404,14 +2446,34 @@ fn confirm_discard_active() -> bool {
             // the nesting shallow and the intent obvious.
             drop(freeze);
             action_save_file();
-            with_state(|st| st.shell.active().is_some_and(|t| !t.dirty)).unwrap_or(false)
+            // Re-read the **live** state, not the cached `Tab.dirty`.
+            //
+            // The save clears Scintilla's save point from inside a
+            // `with_state` borrow (`save_current_to_disk` calls
+            // `ui.mark_saved()` while `Shell::split` holds it), so the
+            // resulting `SCN_SAVEPOINTREACHED` re-enters `on_sci_notify`
+            // with the borrow live and is declined — exactly the
+            // obligation that function's docs state. Reading the cached
+            // bit therefore saw "still dirty" for a buffer that had just
+            // reached disk, and refused the close the user had already
+            // confirmed: Save wrote the file and left the tab open.
+            //
+            // `active_dirty()` is the live modify bit ORed with
+            // `is_unsaved_restore`, which is the right pair here: a
+            // successful save also clears the restore id, so a recovered
+            // buffer closes once it has a real copy on disk and not
+            // before. `ui_gtk` re-reads `SCI_GETMODIFY` at this point for
+            // the same reason, without the restore half.
+            //
+            // `None` — the state was unreachable — deliberately aborts
+            // the close rather than assuming clean.
+            active_dirty() == Some(false)
         }
         1002 => true, // Don't Save
         _ => false,   // Cancel, or the window closed under the alert
     }
 }
 
-/// Close the active tab, gated on the unsaved-changes prompt.
 /// Close the active tab, gated on the Save / Don't Save / Cancel
 /// prompt.
 ///
@@ -2770,10 +2832,14 @@ mod source_invariants {
     fn opens_go_through_the_rebinding_helper() {
         let src = production_src();
         assert!(src.len() > 5_000, "source scan read too little to be real");
-        let calls = src.matches("shell.open_file(").count();
+        // Both entry points, so a future caller reaching for the plain
+        // `open_file` is caught as readily as one reaching for the
+        // scratch-replacing form.
+        let calls = src.matches(".open_file(").count()
+            + src.matches(".open_file_replacing_scratch(").count();
         assert_eq!(
             calls, 1,
-            "`shell.open_file(` should appear exactly once, inside \
+            "a `Shell` open call should appear exactly once, inside \
              `open_path` — every other caller must go through it so \
              `SwitchedToExisting` still rebinds the view. Found {calls}."
         );
@@ -2787,6 +2853,15 @@ mod source_invariants {
         assert!(
             open_path_body.contains("rebind_active_view"),
             "`open_path` no longer rebinds the view."
+        );
+        // And it must actually *measure* the editor rather than passing
+        // a literal. Hard-coding `false` here would silently restore the
+        // old behaviour — the startup `new 1` left stranded beside the
+        // file the user opened — with nothing failing to say so.
+        assert!(
+            open_path_body.contains("editor_is_pristine("),
+            "`open_path` no longer measures the editor, so the untouched \
+             `new 1` will not be replaced by an opened file."
         );
     }
 
