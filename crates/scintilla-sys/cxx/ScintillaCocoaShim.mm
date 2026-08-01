@@ -213,3 +213,91 @@ void scintilla_cocoa_set_notify_callback(void *view, SciNotifyFunc callback,
 }
 
 } // extern "C"
+
+// ---------------------------------------------------------------------
+// CTLine cache diagnostics.
+//
+// `cxx/QuartzTextLayout.h` replaces the vendored header to memoise
+// CoreText line layout — see its own notes, and DESIGN.md §8 for the
+// measurements that motivated it. These two entry points make the
+// memoisation *testable without measuring time*, which matters because
+// the alternative (assert a latency) would be flaky, would need a window
+// server, and would fail for reasons that have nothing to do with the
+// cache.
+// ---------------------------------------------------------------------
+
+// The Quartz headers assume Scintilla's own types are already in scope
+// — upstream's `PlatCocoa.h` includes them in this order before reaching
+// `QuartzTextLayout.h`, and including it cold fails on
+// `Scintilla::CharacterSet`. Mirrored here rather than including
+// `PlatCocoa.h` wholesale, which would drag in `SurfaceImpl` and the
+// rest of the platform layer for two diagnostic functions.
+// Scintilla's headers assume the standard library is already included
+// by the translation unit, as its own `.cxx` files do.
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "ScintillaTypes.h"
+#include "ScintillaMessages.h"
+#include "Debugging.h"
+#include "Geometry.h"
+#include "Platform.h"
+#include "DictionaryForCF.h"
+#include "QuartzTextLayout.h"
+
+extern "C" void scintilla_cocoa_ctline_cache_stats(uint64_t *hits, uint64_t *misses) {
+	const CodeppTextCache::Counters &counters = CodeppTextCache::Stats();
+	if (hits) {
+		*hits = counters.hits;
+	}
+	if (misses) {
+		*misses = counters.misses;
+	}
+}
+
+/// Build the same layout twice and report whether the second was served
+/// from the cache.
+///
+/// Returns 1 when the cache memoised, 0 when it did not, and -1 when the
+/// test could not run (no font). Self-contained on purpose: it needs no
+/// window, no run loop and no `ScintillaView`, so it runs in an ordinary
+/// `cargo test` rather than behind the display gate.
+extern "C" int scintilla_cocoa_ctline_cache_selftest(void) {
+	CTFontRef font = CTFontCreateWithName(CFSTR("Menlo"), 12.0, NULL);
+	if (!font) {
+		return -1;
+	}
+	QuartzTextStyle style;
+	// Takes ownership of the +1 reference; the style's destructor
+	// releases it.
+	style.setFontRef(font, Scintilla::CharacterSet::Ansi);
+
+	const std::string_view text = "cache probe";
+	uint64_t hits_before = 0, misses_before = 0;
+	scintilla_cocoa_ctline_cache_stats(&hits_before, &misses_before);
+	{
+		QuartzTextLayout first(text, kCFStringEncodingUTF8, &style);
+		(void)first.MeasureStringWidth();
+	}
+	uint64_t hits_mid = 0, misses_mid = 0;
+	scintilla_cocoa_ctline_cache_stats(&hits_mid, &misses_mid);
+	{
+		QuartzTextLayout second(text, kCFStringEncodingUTF8, &style);
+		(void)second.MeasureStringWidth();
+	}
+	uint64_t hits_after = 0, misses_after = 0;
+	scintilla_cocoa_ctline_cache_stats(&hits_after, &misses_after);
+
+	// The first must miss and the second must hit. Checking both edges
+	// rather than just the hit means a cache that somehow hit on a cold
+	// key would fail too.
+	const bool first_missed = misses_mid == misses_before + 1 && hits_mid == hits_before;
+	const bool second_hit = hits_after == hits_mid + 1 && misses_after == misses_mid;
+	return (first_missed && second_hit) ? 1 : 0;
+}

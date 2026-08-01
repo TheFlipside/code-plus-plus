@@ -408,6 +408,14 @@ measurements — name the target explicitly if you want both:
 keystroke-latency distribution **at exit** — so quit the window
 normally rather than killing the process, or the distribution is lost.
 
+**Delete `session.xml` before measuring memory or cold start.** Code++
+restores the previous session by design, so launching the binary and
+reading `phys_footprint` measures whatever was last open — which drifts
+upward over a working day and is not the "one empty buffer" figure
+DESIGN.md §8 budgets. Measured on macOS: 18.5 MB clean, 29.3 MB with one
+10 000-line file open, 76 MB with an accumulated five-file session. That
+mistake stood in §8 for four milestones.
+
 `--perf` reports two distributions: keystroke latency, and the **gap
 between arriving keystrokes**. Read the second before the first — a
 latency p99 means something different at 8 characters per second than
@@ -427,10 +435,12 @@ until Phase 5 m4b: it marked before `-[NSApplication run]`, which is
 before the window is ordered front and before anything paints, and its
 m1–m3a figures are retracted for that reason. macOS's figures arrived in
 Phase 5 m4b, from a local `NSEvent` monitor: p99 ≈ 20 ms, 4x the
-budget and the worst of the three. That one is profiled — every
-keystroke repaints every visible line and each costs a fresh CoreText
-layout, so latency scales with window height — and §8 lists five
-refuted causes so they are not re-tried.
+budget and the worst of the three. That one is profiled and
+partly fixed: every keystroke repaints every visible line, and a
+`CTLine` cache in `crates/scintilla-sys/cxx/QuartzTextLayout.h` took a
+third off it (p99 15.6 ms at 64 visible lines, 4.0 ms at 14). Latency
+scales with window height; §8 lists five refuted causes so they are not
+re-tried.
 
 To reproduce the Win32 numbers on a Windows session, `SendKeys.SendWait`
 from a PowerShell harness is what those measurements used — the

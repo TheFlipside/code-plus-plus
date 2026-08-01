@@ -172,6 +172,22 @@ extern "C" {
         callback: SciNotifyFunc,
         windowid: isize,
     );
+
+    /// Hits and misses of the `CTLine` cache in
+    /// `cxx/QuartzTextLayout.h`. Diagnostics only.
+    pub fn scintilla_cocoa_ctline_cache_stats(hits: *mut u64, misses: *mut u64);
+
+    /// Build the same text layout twice and report whether the second
+    /// was served from the cache: 1 if it memoised, 0 if not, -1 if the
+    /// check could not run (no font available).
+    ///
+    /// The regression test for the macOS keystroke-latency fix
+    /// (DESIGN.md §8). Deliberately *not* a latency assertion: timing
+    /// on a shared runner is flaky and would fail for reasons unrelated
+    /// to the cache, whereas "did the second identical layout hit"
+    /// is exactly the property the fix depends on and is deterministic.
+    /// Needs no window server, so it runs in an ordinary `cargo test`.
+    pub fn scintilla_cocoa_ctline_cache_selftest() -> i32;
 }
 
 /// Scintilla's Cocoa notification callback signature
@@ -10300,6 +10316,35 @@ mod gtk_ffi_smoke {
             buf.as_slice(),
             &text[..expected_len],
             "text read back from Scintilla differs from what was inserted"
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod ctline_cache_tests {
+    /// The `CTLine` cache must memoise a repeated identical layout.
+    ///
+    /// This is the regression guard for the macOS keystroke-latency fix
+    /// — see `cxx/QuartzTextLayout.h` and DESIGN.md §8. It pairs with
+    /// the fingerprint assertion in `build.rs`: that one catches a
+    /// Scintilla bump changing the file underneath us, this one catches
+    /// the memoisation itself breaking.
+    #[test]
+    fn a_repeated_layout_is_served_from_the_cache() {
+        // SAFETY: the self-test allocates and releases its own font and
+        // style, takes no arguments and touches no shared state beyond
+        // the cache it is testing.
+        let verdict = unsafe { super::scintilla_cocoa_ctline_cache_selftest() };
+        assert_ne!(
+            verdict, -1,
+            "the CTLine cache self-test could not obtain a font, so it \
+             proved nothing — investigate rather than ignoring it"
+        );
+        assert_eq!(
+            verdict, 1,
+            "the CTLine cache no longer memoises: the first layout must \
+             miss and an identical second must hit. Every visible line \
+             is re-typeset per keystroke without it (DESIGN.md §8)."
         );
     }
 }

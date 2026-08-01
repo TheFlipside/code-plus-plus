@@ -319,6 +319,84 @@ fn build_scintilla_gtk(scintilla: &Path) {
 ///
 /// No `-x objective-c++` is needed: clang infers Objective-C++ from the
 /// `.mm` extension, and `.cpp(true)` already selects the C++ driver.
+/// FNV-1a over `bytes`, with CR stripped so a line-ending change is not
+/// mistaken for a content change.
+fn fingerprint(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes.iter().copied().filter(|b| *b != b'\r') {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+/// The fingerprint of the vendored `cocoa/QuartzTextLayout.h` that
+/// `cxx/QuartzTextLayout.h` was derived from, at submodule pin
+/// rel-5-5-2.
+///
+/// Checked on every build so a Scintilla bump that touches the file
+/// fails loudly. A silent revert is the failure mode worth guarding: the
+/// replacement is a *performance* change (DESIGN.md §8 — it is the whole
+/// of the macOS keystroke-latency fix), so losing it breaks no test and
+/// changes nothing visible. The bump procedure is to diff upstream's new
+/// version against ours, port whatever changed, and update this constant.
+const VENDORED_QUARTZ_TEXT_LAYOUT_FINGERPRINT: u64 = 0x650b_9514_5370_4356;
+
+/// Copy the vendored `cocoa/` sources into `OUT_DIR` and drop Code++'s
+/// modified `QuartzTextLayout.h` over the top, returning the staged
+/// directory.
+///
+/// **Staging rather than patching the submodule**, because the submodule
+/// is a pinned checkout that `git submodule update` will happily reset:
+/// a patch applied in place would be silently lost, would leave the tree
+/// dirty in the meantime, and could not be committed to this repository
+/// at all. Copying leaves the vendored tree pristine and keeps the entire
+/// modification in one reviewable file we own.
+///
+/// Every include in the vendored `cocoa/` sources is a bare name resolved
+/// through the include path, so a staged copy compiles identically —
+/// verified by grep at the time this was written, and the reason only
+/// this directory needs staging.
+fn stage_cocoa_sources(scintilla: &Path) -> PathBuf {
+    let cocoa = scintilla.join("cocoa");
+    let staged =
+        PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo")).join("cocoa-staged");
+    std::fs::create_dir_all(&staged).expect("create the staging directory");
+
+    let replaced = "QuartzTextLayout.h";
+    let upstream = std::fs::read(cocoa.join(replaced)).expect("read the vendored header");
+    let actual = fingerprint(&upstream);
+    let expected = VENDORED_QUARTZ_TEXT_LAYOUT_FINGERPRINT;
+    assert!(
+        actual == expected,
+        "vendored cocoa/{replaced} has changed (fingerprint {actual:#x}, expected {expected:#x}).\n\
+         Code++ replaces this file with cxx/{replaced} to cache CTLine objects — see\n\
+         DESIGN.md §8. Diff upstream's new version against ours, port any change, then\n\
+         update VENDORED_QUARTZ_TEXT_LAYOUT_FINGERPRINT in this file."
+    );
+
+    for entry in std::fs::read_dir(&cocoa).expect("read the vendored cocoa directory") {
+        let path = entry.expect("read a directory entry").path();
+        let is_source = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e == "h" || e == "mm");
+        if !is_source {
+            continue;
+        }
+        let name = path.file_name().expect("a file name");
+        if name == std::ffi::OsStr::new(replaced) {
+            continue;
+        }
+        std::fs::copy(&path, staged.join(name)).expect("stage a vendored source");
+    }
+    std::fs::copy(format!("cxx/{replaced}"), staged.join(replaced))
+        .expect("stage the replacement header");
+    println!("cargo:rerun-if-changed=cxx/{replaced}");
+
+    staged
+}
+
 fn build_scintilla_cocoa(scintilla: &Path) {
     // 1. The cross-platform core, shared verbatim with Win32 and GTK.
     let mut core = cc::Build::new();
@@ -334,7 +412,10 @@ fn build_scintilla_cocoa(scintilla: &Path) {
     }
     core.compile("scintilla");
 
-    // 2. The Objective-C++ backend and our shim.
+    // 2. The Objective-C++ backend and our shim, compiled from a staged
+    // copy of the vendored sources so Code++'s `QuartzTextLayout.h` can
+    // replace upstream's. See `stage_cocoa_sources`.
+    let staged = stage_cocoa_sources(scintilla);
     let mut backend = cc::Build::new();
     backend
         .cpp(true)
@@ -354,7 +435,7 @@ fn build_scintilla_cocoa(scintilla: &Path) {
         .flag("-fobjc-arc-exceptions")
         .include(scintilla.join("include"))
         .include(scintilla.join("src"))
-        .include(scintilla.join("cocoa"));
+        .include(&staged);
     for flag in &VENDORED_WARNING_OPTOUTS {
         backend.flag_if_supported(flag);
     }
@@ -381,7 +462,7 @@ fn build_scintilla_cocoa(scintilla: &Path) {
     }
 
     for f in &["PlatCocoa", "ScintillaCocoa", "ScintillaView", "InfoBar"] {
-        backend.file(scintilla.join("cocoa").join(format!("{f}.mm")));
+        backend.file(staged.join(format!("{f}.mm")));
     }
     // Our own entry points. Compiled alongside the vendored backend
     // because it needs the identical ARC and include configuration —

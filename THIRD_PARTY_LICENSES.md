@@ -15,6 +15,8 @@ This file has two parts:
 
 Scintilla is vendored under `crates/scintilla-sys/vendor/scintilla/` and statically linked into the Code++ binary.
 
+Code++ ships **one modified Scintilla file**: `crates/scintilla-sys/cxx/QuartzTextLayout.h`, a copy of the vendored `cocoa/QuartzTextLayout.h` that memoises CoreText line layout — the macOS keystroke-latency fix recorded in `docs/DESIGN.md` §8. The vendored submodule itself is left unmodified; `crates/scintilla-sys/build.rs` overlays the copy at build time. The file retains upstream's attribution and states what was changed, which is what the licence below requires of a modified copy.
+
 > Copyright 1998-2021 by Neil Hodgson <neilh@scintilla.org>
 >
 > All Rights Reserved
