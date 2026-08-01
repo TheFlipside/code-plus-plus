@@ -61,11 +61,12 @@ use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadOnly
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBezelStyle, NSBezierPath, NSBitmapImageRep,
     NSButton, NSButtonType, NSCellImagePosition, NSColor, NSEvent, NSEventMask,
-    NSEventTrackingRunLoopMode, NSEventType, NSFont, NSImage, NSImageRep, NSLineBreakMode, NSView,
-    NSWindowOrderingMode,
+    NSEventTrackingRunLoopMode, NSEventType, NSFont, NSFontAttributeName, NSImage, NSImageRep,
+    NSLineBreakMode, NSStringDrawing, NSTextAlignment, NSView, NSWindowOrderingMode,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSData, NSDate, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
+    MainThreadMarker, NSData, NSDate, NSDictionary, NSObjectProtocol, NSPoint, NSRect, NSSize,
+    NSString,
 };
 
 use crate::menu::Actions;
@@ -104,6 +105,39 @@ const PNG_TAB_SAVE_DIRTY_2X: &[u8] = include_bytes!("../../../assets/icons/tab-s
 
 /// Logical size the tab icon occupies, at either display scale.
 const ICON_LOGICAL_PX: f64 = 16.0;
+
+/// Horizontal space inside a tab that the label may not use.
+///
+/// **The label has to be shortened by hand, because AppKit will not do
+/// it.** The pin and the close button are *subviews* of the tab body —
+/// m3c made them so, deliberately, so that they travel with the button
+/// during a drag-reorder instead of needing three frames repositioned per
+/// mouse-moved event. The body's own bounds are therefore the whole
+/// [`TAB_WIDTH`], and that is the width AppKit lays the title out in, so
+/// a name long enough to truncate runs straight under both controls:
+/// measured at a 150 pt tab, the pin sits at x=116..132 and the close at
+/// 132..150, while the title spans 0..150. The result is a name and a pin
+/// drawn on top of each other, neither legible.
+///
+/// Narrowing the *button* instead is not an option: AppKit hit-tests a
+/// subview only after the point falls inside its superview's bounds, so
+/// pushing the pin and close outside the body would leave them visible
+/// and unclickable.
+///
+/// The two control widths are exact. The rest is the bezel's own leading
+/// and trailing inset plus the gap AppKit puts between an `ImageLeft`
+/// image and the title — not published, so the value is empirical, and
+/// erring high only costs a slightly earlier ellipsis.
+const LABEL_RESERVED: f64 = PIN_WIDTH + CLOSE_WIDTH + ICON_LOGICAL_PX + 14.0;
+
+// The reserve must still leave room for a name. A compile-time check
+// rather than a test: every term is a constant, so there is nothing a
+// test could observe that the compiler cannot, and a widened pin or a
+// narrowed tab fails the build rather than a suite somebody might not
+// run. (No companion check that the reserve covers the two controls —
+// it is defined as their sum plus more, so that one would be
+// tautological.)
+const _: () = assert!(TAB_WIDTH > LABEL_RESERVED);
 
 /// The pin glyph's design canvas, matching `ui_gtk` and `ui_win32`.
 const PIN_CANVAS: f64 = 12.0;
@@ -1194,7 +1228,15 @@ fn make_tab_button(
         NSSize::new(TAB_WIDTH, TAB_STRIP_HEIGHT),
     );
     let button = TabButton::new(frame, tab.id, mtm);
-    button.setTitle(&NSString::from_str(&name));
+    let font = NSFont::systemFontOfSize(NSFont::smallSystemFontSize());
+    // Shortened against the space the pin and close leave, because AppKit
+    // lays the title out across the button's whole width and would run it
+    // under both — see [`LABEL_RESERVED`].
+    button.setTitle(&NSString::from_str(&fit_label(
+        &name,
+        TAB_WIDTH - LABEL_RESERVED,
+        |s| measure_in_font(s, &font),
+    )));
     // The full name stays reachable even when the title is truncated,
     // matching the tooltip `ui_gtk` puts on every label.
     button.setToolTip(Some(&NSString::from_str(&name)));
@@ -1203,14 +1245,20 @@ fn make_tab_button(
     // look for a tab.
     button.setBezelStyle(NSBezelStyle::AccessoryBar);
     button.setButtonType(NSButtonType::PushOnPushOff);
-    button.setFont(Some(&NSFont::systemFontOfSize(
-        NSFont::smallSystemFontSize(),
-    )));
+    button.setFont(Some(&font));
+    // Leading, not centred. The title is already sized to stop short of
+    // the pin, so centring it across the full width would push it back
+    // under the controls it was shortened to avoid.
+    button.setAlignment(NSTextAlignment::Left);
     button.setTag(tab.id as isize);
     if let Some(icon) = tab_icon(tab.dirty) {
         button.setImage(Some(&icon));
         button.setImagePosition(NSCellImagePosition::ImageLeft);
     }
+    // Belt and braces. `fit_label` has already sized the string to the
+    // space available, so this should never fire — but if a future font
+    // or metric change made the measurement optimistic by a point, an
+    // ellipsis is a far better failure than a clipped glyph.
     if let Some(cell) = button.cell() {
         cell.setLineBreakMode(NSLineBreakMode::ByTruncatingMiddle);
     }
@@ -1220,6 +1268,96 @@ fn make_tab_button(
     // `NSControlStateValueOn` is 1, `Off` is 0.
     button.setState(isize::from(selected));
     button
+}
+
+/// Shorten `name` with a middle ellipsis until it measures no wider
+/// than `max_width`.
+///
+/// Middle rather than tail, matching the `ByTruncatingMiddle` the cell
+/// used to apply and what the other two backends show: for a filename the
+/// extension is worth as much as the stem, so `verylongreport…-v3.txt`
+/// beats `verylongreportabou…`.
+///
+/// `measure` is injected rather than called directly so the policy — how
+/// many characters to drop, where the ellipsis goes, what happens at the
+/// degenerate sizes — is testable without a window server. The real
+/// caller passes a closure over `NSString`'s own text measurement, which
+/// is the only thing that can answer the question for a proportional
+/// font.
+///
+/// Returns `name` unchanged when it already fits, so the common short
+/// name costs exactly one measurement.
+///
+/// Splits on `char`, not on grapheme clusters, so a combining sequence
+/// or a ZWJ emoji can be cut mid-cluster and render as a stray mark
+/// beside the ellipsis. Cosmetic only, and deliberately not worth a
+/// segmentation dependency: it cannot reintroduce a *display hazard*,
+/// because `tab_display_name` has already substituted U+FFFD for every
+/// bidi control, C0/C1 control and zero-width character before this sees
+/// the string — there is no hostile codepoint left for a split to
+/// unbalance.
+fn fit_label(name: &str, max_width: f64, measure: impl Fn(&str) -> f64) -> String {
+    // NaN as well as the sign test, because every IEEE-754 comparison
+    // against NaN is false — so a bare `max_width <= 0.0` would wave it
+    // through, and `measure(name) <= NaN` would wave it through again,
+    // leaving the loop below to measure the whole name one character at
+    // a time before returning empty anyway. Not reachable from the one
+    // call site, which passes a constant; guarded because "unreachable"
+    // is a property of today's callers.
+    //
+    // Positive infinity deliberately is *not* rejected: it means "no
+    // limit", and the `measure(name) <= max_width` test below already
+    // gives it the right answer.
+    if max_width.is_nan() || max_width <= 0.0 {
+        return String::new();
+    }
+    if measure(name) <= max_width {
+        return name.to_string();
+    }
+    let chars: Vec<char> = name.chars().collect();
+    // Drop one character at a time from the middle. Linear in the name's
+    // length, which is bounded by the filesystem's own limit and is a few
+    // hundred at worst — and only reached for names that do not fit,
+    // which are the minority.
+    for keep in (0..chars.len()).rev() {
+        // Bias the extra character to the head: a stem is usually more
+        // distinguishing than the start of an extension.
+        let head = keep.div_ceil(2);
+        let tail = keep - head;
+        let candidate: String = chars[..head]
+            .iter()
+            .copied()
+            .chain(std::iter::once('…'))
+            .chain(chars[chars.len() - tail..].iter().copied())
+            .collect();
+        if measure(&candidate) <= max_width {
+            return candidate;
+        }
+    }
+    // Not even a bare ellipsis fits. An empty label is honest; the
+    // tooltip still carries the full name.
+    String::new()
+}
+
+/// Measure `text` as the tab strip will draw it.
+fn measure_in_font(text: &str, font: &NSFont) -> f64 {
+    let attrs = NSDictionary::from_slices(
+        // SAFETY: reading an AppKit extern static. `NSFontAttributeName`
+        // is initialised by the framework before any application code
+        // runs, and this is only ever reached from the main thread while
+        // the tab strip is being built.
+        &[unsafe { NSFontAttributeName }],
+        &[font as &objc2::runtime::AnyObject],
+    );
+    // SAFETY: `sizeWithAttributes:` is unsafe in objc2 only because the
+    // attributes dictionary is untyped — an entry whose value is not the
+    // type the key expects is undefined behaviour. This one carries a
+    // single well-formed pair, `NSFontAttributeName` → `NSFont`.
+    unsafe {
+        NSString::from_str(text)
+            .sizeWithAttributes(Some(&attrs))
+            .width
+    }
 }
 
 /// The close button for one tab.
@@ -1262,7 +1400,90 @@ fn make_close_button(
 
 #[cfg(test)]
 mod tests {
-    use super::{drop_target_index, slot_after_shift, slot_of, TAB_WIDTH};
+    use super::{drop_target_index, fit_label, slot_after_shift, slot_of, TAB_WIDTH};
+
+    /// A stand-in for text measurement: every character is 10 units
+    /// wide, the ellipsis included. Fixed-width on purpose — the policy
+    /// under test is *how many* characters to drop and where the
+    /// ellipsis lands, and a proportional font would make the expected
+    /// values depend on the system's font metrics rather than on the
+    /// code.
+    fn ten_per_char(s: &str) -> f64 {
+        f64::from(u32::try_from(s.chars().count()).expect("test strings are short")) * 10.0
+    }
+
+    #[test]
+    fn a_label_that_already_fits_is_returned_untouched() {
+        assert_eq!(fit_label("main.rs", 100.0, ten_per_char), "main.rs");
+        // Exactly filling the budget still fits — the comparison is
+        // inclusive, so a name that measures precisely the available
+        // width is not needlessly truncated.
+        assert_eq!(fit_label("main.rs", 70.0, ten_per_char), "main.rs");
+    }
+
+    #[test]
+    fn a_long_label_is_truncated_in_the_middle_and_fits() {
+        let name = "a-really-quite-long-filename.txt";
+        let out = fit_label(name, 100.0, ten_per_char);
+        assert!(
+            ten_per_char(&out) <= 100.0,
+            "{out:?} is still wider than the budget"
+        );
+        assert!(out.contains('…'), "{out:?} carries no ellipsis");
+        // The extension survives, which is the whole point of truncating
+        // the middle rather than the tail.
+        let tail: String = out
+            .chars()
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        assert_eq!(tail, ".txt", "{out:?} lost the extension");
+        assert!(out.starts_with("a-re"), "{out:?} lost the stem");
+    }
+
+    #[test]
+    fn the_head_keeps_the_odd_character() {
+        // 5 characters' worth of room: the ellipsis plus four, split
+        // head-biased 2/2 at `keep = 4`. Pinned because a tail bias
+        // would quietly favour the extension over the filename, and
+        // nothing else in the suite would notice.
+        assert_eq!(fit_label("abcdefghij", 50.0, ten_per_char), "ab…ij");
+        assert_eq!(fit_label("abcdefghij", 40.0, ten_per_char), "ab…j");
+    }
+
+    #[test]
+    fn degenerate_budgets_do_not_panic_or_overflow() {
+        // Room for the ellipsis alone.
+        assert_eq!(fit_label("abcdefghij", 10.0, ten_per_char), "…");
+        // Not even that. An empty label is honest — the tooltip still
+        // carries the full name.
+        assert_eq!(fit_label("abcdefghij", 5.0, ten_per_char), "");
+        assert_eq!(fit_label("abcdefghij", 0.0, ten_per_char), "");
+        assert_eq!(fit_label("abcdefghij", -1.0, ten_per_char), "");
+        // NaN compares false against everything, so without the explicit
+        // `is_finite` guard this would measure its way down the whole
+        // name before returning empty anyway.
+        assert_eq!(fit_label("abcdefghij", f64::NAN, ten_per_char), "");
+        // An unbounded budget means "no limit", not "nothing fits".
+        assert_eq!(
+            fit_label("abcdefghij", f64::INFINITY, ten_per_char),
+            "abcdefghij"
+        );
+        // An empty name measures zero and so always fits.
+        assert_eq!(fit_label("", 10.0, ten_per_char), "");
+    }
+
+    #[test]
+    fn multi_byte_names_are_split_on_character_boundaries() {
+        // Byte slicing would panic here. Every intermediate candidate is
+        // built from `char`s, so it cannot.
+        let out = fit_label("日本語のファイル名.txt", 60.0, ten_per_char);
+        assert!(ten_per_char(&out) <= 60.0);
+        assert!(out.contains('…'));
+    }
 
     #[test]
     fn a_tab_left_where_it_started_maps_to_its_own_slot() {

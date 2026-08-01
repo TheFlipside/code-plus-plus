@@ -99,6 +99,48 @@ thread_local! {
     /// ordinary chrome refresh does not undo the overflow arrows. See
     /// [`refresh_tab_chrome`].
     static LAST_SCROLLED_TO: Cell<Option<i32>> = const { Cell::new(None) };
+    /// The document the horizontal scroll range was last seeded for, so
+    /// the seed fires when the view comes to rest on a different buffer
+    /// and not on the bookkeeping swaps `Shell::save_all` makes. `0` is
+    /// Scintilla's "no document" value and is never a live pointer, so
+    /// the first real binding always seeds. See
+    /// [`seed_horizontal_scroll_if_document_changed`].
+    ///
+    /// **This is a raw pointer used as an identity.** A freed document
+    /// replaced by a new one at the same address would make the
+    /// comparison read "unchanged" for a buffer that had in fact been
+    /// swapped — classic ABA. What rules it out is that **an incoming
+    /// document is always allocated before the call that could free the
+    /// outgoing one**, so the address handed to a bind is never one that
+    /// same bind is about to free. `SCI_CREATEDOCUMENT` runs in
+    /// `activate_tab` ahead of the swap, and `action_close_tab`'s
+    /// `SCI_RELEASEDOCUMENT` runs while the document is still bound, so
+    /// it only drops the refcount 2→1 and never frees.
+    ///
+    /// Note this is *not* an ordering guarantee inside
+    /// `Editor::SetDocPointer` — that releases the outgoing document
+    /// **before** assigning the incoming one (`Editor.cxx:5451`), and
+    /// `Document::Release` deletes synchronously at refcount zero. An
+    /// earlier version of this comment had that backwards. The safety
+    /// comes from the caller side, not from Scintilla's ordering.
+    ///
+    /// **Keyed on the document rather than on `Tab.id`, which is the
+    /// obvious alternative and does not work.** `Shell::open_file` moves
+    /// `active_tab` at request time, before the load has produced a
+    /// document, so the id changes a step ahead of the binding. Measured
+    /// by instrumenting both: with an id key the seed fires against the
+    /// *outgoing* document while the incoming tab still reports
+    /// `scintilla_doc == 0`, and is then skipped on the refresh that
+    /// follows the real bind — so the buffer the user ends up looking at
+    /// is never seeded at all. It happens to produce the right width
+    /// when nothing repaints in between, which is what makes it a
+    /// dangerous thing to adopt on inspection.
+    ///
+    /// A future document-pooling optimisation, or an `activate_tab` that
+    /// released before allocating, would break the premise above. There
+    /// is no drop-in key to switch to if that happens — a real identity
+    /// would have to be threaded from the bind itself.
+    static LAST_SEEDED_DOC: Cell<isize> = const { Cell::new(0) };
     /// Last dirty state pushed into the tab strip, so a notification
     /// storm only rebuilds it when the marker actually changes. See
     /// [`on_sci_notify`].
@@ -706,7 +748,7 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
                 if let Some(mtm) = MainThreadMarker::new() {
                     enforce_scroller_layout(&st.sci_view, mtm);
                 }
-                clamp_scroll_width_to_viewport(st);
+                clamp_scroll_width_to_viewport(&st.editor, &st.sci_view);
             });
         }
         _ => {}
@@ -931,7 +973,7 @@ pub(crate) fn report_perf() {
 /// rather than through hit-testing, keeps working. GTK does not show
 /// this because its backend does not size a document view from
 /// `scrollWidth`.
-fn seed_horizontal_scroll(editor: &EditorHandle) {
+pub(crate) fn seed_horizontal_scroll(editor: &EditorHandle) {
     editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, 1, 0);
     editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTHTRACKING, 1, 0);
 }
@@ -959,8 +1001,8 @@ fn seed_horizontal_scroll(editor: &EditorHandle) {
 /// DESIGN.md §4.1 keeps unforked. Tracking stays on, so a genuinely long
 /// line still scrolls horizontally and the width still shrinks back when
 /// that line is deleted; this only raises the floor.
-fn clamp_scroll_width_to_viewport(st: &crate::state::CocoaUiState) {
-    let Some(visible) = text_area_width(&st.sci_view) else {
+pub(crate) fn clamp_scroll_width_to_viewport(editor: &EditorHandle, sci_view: &NSView) {
+    let Some(visible) = text_area_width(sci_view) else {
         return;
     };
     // Round down: a floor one pixel under the clip width leaves no
@@ -971,9 +1013,7 @@ fn clamp_scroll_width_to_viewport(st: &crate::state::CocoaUiState) {
         return;
     }
     let previous = LAST_VIEWPORT_WIDTH.with(|c| c.replace(target));
-    let current = st
-        .editor
-        .send(codepp_scintilla_sys::SCI_GETSCROLLWIDTH, 0, 0);
+    let current = editor.send(codepp_scintilla_sys::SCI_GETSCROLLWIDTH, 0, 0);
 
     // **When the viewport shrinks, let the floor come down with it — but
     // only when the floor is all that is holding the width up.**
@@ -1001,13 +1041,11 @@ fn clamp_scroll_width_to_viewport(st: &crate::state::CocoaUiState) {
     // 1500 → 900 collapsed the document from 26 525 pt to 839 pt and it
     // did not recover, making the rest of that line unreachable.
     if previous > target && current == previous {
-        st.editor
-            .send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, target as usize, 0);
+        editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, target as usize, 0);
         return;
     }
     if current < target {
-        st.editor
-            .send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, target as usize, 0);
+        editor.send(codepp_scintilla_sys::SCI_SETSCROLLWIDTH, target as usize, 0);
     }
 }
 
@@ -1179,6 +1217,28 @@ fn enforce_scroller_layout(sci_view: &NSView, mtm: MainThreadMarker) {
             NSPoint::new(margin, 0.0),
             NSSize::new(width, height),
         ));
+    }
+    // The line-number gutter is an `NSRulerView` (`SCIMarginView`), laid
+    // out by `NSScrollView` rather than by Scintilla, and it is given the
+    // scroll view's **full** height — so with a horizontal scroller on
+    // screen it runs 17 pt further down than the text does, and paints a
+    // line number level with the scrollbar for a line whose text is not
+    // there. Measured before the fix: ruler 690 pt tall inside a clip of
+    // 673, with the scroller occupying 673..690.
+    //
+    // Trimming it to the clip's height leaves that corner unpainted, so
+    // it shows the scroll view's own background — which is what the strip
+    // should look like beside a scrollbar. Same idempotent
+    // compare-then-set as the clip above, for the same reason: this runs
+    // on every paint.
+    if let Some(ruler) = scroll.verticalRulerView() {
+        let have = ruler.frame();
+        if (have.size.height - height).abs() > 0.5 {
+            ruler.setFrame(NSRect::new(
+                have.origin,
+                NSSize::new(have.size.width, height),
+            ));
+        }
     }
 }
 
@@ -1449,7 +1509,50 @@ pub(crate) fn relayout_chrome_bands() {
     });
 }
 
+/// Re-seed the horizontal scroll range when, and only when, the view has
+/// come to rest on a different document.
+///
+/// **`scrollWidth` belongs to the view, not to the document.** It is a
+/// tracking-mode high-water mark shared by every buffer this one
+/// Scintilla view holds, and it never shrinks on its own — so a document
+/// swapped in behind a file with long lines inherits that file's width
+/// and shows a horizontal scrollbar for content it does not have.
+/// Re-seeding drops it to 1 and lets tracking rediscover it, with the
+/// viewport floor restored in the same breath (the reset alone collapses
+/// the document view to one point wide, which on this backend costs the
+/// mouse — see `clamp_scroll_width_to_viewport`).
+///
+/// **Keyed on the bound document, and checked here rather than at the
+/// swap.** Seeding inside `UiPlatform::activate_tab` — the swap itself —
+/// looks like the tighter place for it and is wrong: `Shell::save_all`
+/// binds each titled tab in turn purely so it can read the buffer text,
+/// then rebinds the one the user was actually on. Those are bookkeeping
+/// swaps, not navigation, and seeding on them resets the horizontal
+/// scroll *position* of a buffer the user never left. Measured: with a
+/// buffer scrolled to x=1500, File → Save All returned it to 0.
+///
+/// Checking once the binding has settled avoids that without having to
+/// tell the two kinds of swap apart, because a transient swap restores
+/// the original document before this ever runs — the pointer it sees is
+/// the one it saw last, and it does nothing.
+fn seed_horizontal_scroll_if_document_changed() {
+    with_state(|st| {
+        let doc = st
+            .editor
+            .send(codepp_scintilla_sys::SCI_GETDOCPOINTER, 0, 0);
+        if LAST_SEEDED_DOC.with(|c| c.replace(doc)) == doc {
+            return;
+        }
+        seed_horizontal_scroll(&st.editor);
+        clamp_scroll_width_to_viewport(&st.editor, &st.sci_view);
+    });
+}
+
 pub(crate) fn refresh_tab_chrome() {
+    // Before anything paints: this runs after every drain, open, tab
+    // switch, close and File → New, which is exactly the set of moments
+    // the bound document can have changed.
+    seed_horizontal_scroll_if_document_changed();
     // Pull the live modified bit into the active tab before painting, so
     // the strip's dirty marker reflects reality. `Tab.dirty` is only
     // ever written by the shell's crash-recovery restore paths, so
@@ -1505,24 +1608,9 @@ pub(crate) fn rebind_active_view() {
         let (shell, mut ui) = st.split();
         shell.bind_active_view(&mut ui);
     });
-    // The single view now holds a different document. Reset the
-    // tracking-mode horizontal scroll high-water mark, which is shared
-    // across every tab bound to this view and never self-shrinks — so
-    // without this, switching from a long-line file to a short one
-    // leaves a phantom horizontal scroll. Same fix `ui_gtk` applies.
-    with_state(|st| {
-        // Tracking-mode `scrollWidth` is a high-water mark shared by
-        // every tab bound to this one view, and never self-shrinks — so
-        // without this reset, switching from a long-line file to a short
-        // one leaves a phantom horizontal scroll. Re-seeded through the
-        // helper so the *tracking* flag is re-asserted with it; the
-        // reset alone would pin the document view to one point wide.
-        seed_horizontal_scroll(&st.editor);
-        // Immediately restore the viewport floor: the reset above drops
-        // the width to 1, and without this the newly-bound document is
-        // un-clickable outside its text until the first paint lands.
-        clamp_scroll_width_to_viewport(st);
-    });
+    // The horizontal scroll range is re-seeded by `refresh_tab_chrome`
+    // below, which does it for every path rather than only this one —
+    // see `seed_horizontal_scroll_if_document_changed`.
     refresh_tab_chrome();
 }
 
@@ -1813,7 +1901,7 @@ pub(crate) fn apply_saved_view_settings() {
     with_state(|st| {
         let view = st.shell.saved_view_settings();
         apply_view_settings(&st.editor, view);
-        clamp_scroll_width_to_viewport(st);
+        clamp_scroll_width_to_viewport(&st.editor, &st.sci_view);
     });
     refresh_toolbar_toggles();
 }
@@ -2252,6 +2340,9 @@ pub(crate) fn action_new_file() {
         let (shell, mut ui) = st.split();
         shell.new_untitled(&mut ui);
     });
+    // `refresh_tab_chrome` re-seeds the horizontal scroll range, which is
+    // what stops a brand-new empty buffer inheriting the previous file's
+    // — see `seed_horizontal_scroll_if_document_changed`.
     refresh_tab_chrome();
 }
 
@@ -2911,6 +3002,37 @@ mod source_invariants {
              width to 1; only the seed may, because only it re-enables \
              tracking in the same breath"
         );
+        // The *callers* matter as much as the senders, and this is the
+        // one that bites. Seeding at the document swap — inside
+        // `UiPlatform::activate_tab` in `platform.rs` — reads like the
+        // tighter place for it and resets the horizontal scroll position
+        // of a buffer the user never left, because `Shell::save_all`
+        // binds every titled tab in turn as bookkeeping. Measured before
+        // this guard existed: a buffer scrolled to x=1500 came back to 0
+        // after File → Save All. Both helpers must therefore be reached
+        // only from `seed_horizontal_scroll_if_document_changed`, which
+        // runs once the binding has settled.
+        let platform_src = include_str!("platform.rs");
+        for helper in ["seed_horizontal_scroll(", "clamp_scroll_width_to_viewport("] {
+            assert!(
+                !platform_src.contains(helper),
+                "`platform.rs` calls `{helper}` — almost certainly from \
+                 `activate_tab`, which fires on `save_all`'s bookkeeping \
+                 swaps too and would reset the scroll position of the \
+                 buffer the user is looking at. Seed from \
+                 `seed_horizontal_scroll_if_document_changed` instead."
+            );
+        }
+        let settled = fn_body(src, "seed_horizontal_scroll_if_document_changed");
+        assert!(
+            settled.contains("seed_horizontal_scroll(")
+                && settled.contains("clamp_scroll_width_to_viewport(")
+                && settled.contains("SCI_GETDOCPOINTER"),
+            "the settled-binding seed no longer keys on the bound \
+             document, so it either seeds on every chrome refresh or not \
+             at all"
+        );
+
         let clamp = fn_body(src, "clamp_scroll_width_to_viewport");
         assert!(
             clamp.contains("SCI_SETSCROLLWIDTH,") && clamp.contains("SCI_GETSCROLLWIDTH"),
