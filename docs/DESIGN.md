@@ -524,7 +524,7 @@ One thing is recorded rather than changed: a **symlinked file** inside the root 
 
 **Two more from the same user's testing, and the second is the one that mattered.**
 
-The header put its four action buttons on the title row. `ui_gtk` was corrected to a second row beneath the title after the same report, and the Cocoa port had copied GTK's *original* layout — the panel is narrow by design, so a title and four buttons sharing a line leaves the title a few characters wide. Now two rows, with only the close button keeping the title's, where a window's close control belongs.
+The header put its four action buttons on the title row. `ui_gtk` was corrected to a second row beneath the title after the same report, and the Cocoa port had copied GTK's *original* layout — the panel is narrow by design, so a title and four buttons sharing a line leaves the title a few characters wide. Now two rows, with only the close button keeping the title's, where a window's close control belongs. A follow-up report asked for the action row to be right-aligned rather than left, so both header rows end at the same edge; it is laid out right-to-left from the trailing edge and therefore *called* in reverse visual order, which needs no button count and so has nothing to keep in sync when a fourth is added.
 
 **Then: Unfold All on this project's own directory froze the whole app for seconds.** Not the panel — the editor and every other tab, which is the worst shape a stall can take. The read phase was correctly batched and visibly counted to 3 682 folders; the *reveal* was not. Measured at 18 s of frozen main thread, because every `expandItem:` recomputes the outline view's row array and the resulting model was 59 946 rows, so the cost is quadratic in the tree.
 

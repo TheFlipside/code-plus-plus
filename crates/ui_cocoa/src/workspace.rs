@@ -635,9 +635,26 @@ fn build_header(
 ) -> Retained<NSTextField> {
     let title_y = height - HEADER_HEIGHT;
     let tools_y = height - HEADER_HEIGHT - TOOLBAR_ROW_HEIGHT;
-    // The action row fills from the left; only the close button shares
-    // the title row, where a window's close control belongs.
-    let mut x = 4.0;
+    // The action row is right-aligned under the close button, so both
+    // header rows end at the same edge rather than the actions hanging off
+    // the opposite one. Laid out right-to-left from the trailing edge and
+    // therefore *called* in reverse visual order — which is deliberate: it
+    // needs no button count, so adding a fourth extends the row leftward
+    // with nothing to keep in sync.
+    //
+    // `width` is `DEFAULT_WIDTH` at every call — every later width is
+    // reached by autoresizing, which preserves each button's distance
+    // from the trailing edge — so the leftmost button's left edge sits
+    // 71 pt in from that edge at any width, i.e. x = 49 at `MIN_WIDTH`.
+    // It goes negative below 71 pt, and `clamp_panel_width` does *not*
+    // rule that out: its early return hands back a ceiling below
+    // `MIN_WIDTH` when the window cannot spare one. Accepted rather than
+    // clamped here. The panel sits at the window's left edge, so the row
+    // slides off-window rather than over the editor, the tree and title
+    // have collapsed by then too, and a clamp would stack the buttons on
+    // top of each other — which is the worse failure, because overlapping
+    // buttons are clickable and wrong where absent ones are merely absent.
+    let mut x = width - DIVIDER_WIDTH - 2.0 - BUTTON_EDGE;
     let mut header_button = |glyph: &str, tip: &str, action, row_y: f64| {
         let button = NSButton::initWithFrame(
             NSButton::alloc(mtm),
@@ -652,7 +669,11 @@ fn build_header(
             NSFont::smallSystemFontSize(),
         )));
         button.setToolTip(Some(&NSString::from_str(tip)));
-        button.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinYMargin);
+        // `ViewMinXMargin` as well as the top pin, so the row stays against
+        // the trailing edge when the divider widens the panel.
+        button.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewMinXMargin | NSAutoresizingMaskOptions::ViewMinYMargin,
+        );
         // SAFETY: the target is a weak reference to an object the window
         // state owns for the process lifetime, and the action is a
         // compile-time `sel!` literal `Actions` implements.
@@ -661,16 +682,17 @@ fn build_header(
             button.setAction(Some(action));
         }
         container.addSubview(&button);
-        x += BUTTON_EDGE + 2.0;
+        x -= BUTTON_EDGE + 2.0;
     };
-    header_button("▸", "Fold All", sel!(codeppWorkspaceFoldAll:), tools_y);
-    header_button("▾", "Unfold All", sel!(codeppWorkspaceUnfoldAll:), tools_y);
+    // Reverse of the visual order — see the layout note above.
     header_button(
         "◎",
         "Locate Current File",
         sel!(codeppWorkspaceLocate:),
         tools_y,
     );
+    header_button("▾", "Unfold All", sel!(codeppWorkspaceUnfoldAll:), tools_y);
+    header_button("▸", "Fold All", sel!(codeppWorkspaceFoldAll:), tools_y);
 
     // The close button keeps the title row, pinned to the trailing edge.
     let close = NSButton::initWithFrame(
