@@ -35,6 +35,7 @@ use codepp_shell::Shell;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSMenu, NSView, NSWindow};
 
+use crate::docmap::DocMapPanel;
 use crate::fif::{FifDock, FifJob};
 use crate::menu::Actions;
 use crate::status::StatusBar;
@@ -109,6 +110,10 @@ pub struct CocoaUiState {
     /// queued jump. Separate from [`Self::fif_dock`] because that one is
     /// `Clone` and handed out on every split; this is single-owner state.
     pub fif_job: FifJob,
+    /// The Document Map, along the right edge of the editor band. Built
+    /// at startup — it owns the second permanent Scintilla view — and
+    /// hidden until the user opens it.
+    pub docmap: DocMapPanel,
     /// The modeless Find/Replace panel, built on first use and then kept
     /// for the session — its controls are read by every search command,
     /// so they have to outlive the click that opened it. `None` until
@@ -142,6 +147,9 @@ pub struct CocoaUi {
     /// The results dock, so [`CocoaUi::relayout_chrome`] can give it its
     /// band and take it back when it is closed.
     pub fif_dock: FifDock,
+    /// The Document Map, for the same reason: `relayout_chrome` has to
+    /// take its column out of the editor's width while it is open.
+    pub docmap: DocMapPanel,
 }
 
 impl CocoaUiState {
@@ -157,6 +165,7 @@ impl CocoaUiState {
             tabs: self.tabs.clone(),
             toolbar: self.toolbar.clone(),
             fif_dock: self.fif_dock.clone(),
+            docmap: self.docmap.clone(),
         };
         (&mut self.shell, ui)
     }

@@ -42,6 +42,7 @@
 )]
 
 mod delegate;
+mod docmap;
 mod dropview;
 mod fif;
 mod menu;
@@ -51,6 +52,7 @@ mod state;
 mod status;
 mod tabs;
 mod toolbar;
+mod window;
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -67,12 +69,12 @@ use dispatch2::DispatchQueue;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{MainThreadOnly, Message as _};
+use objc2::Message as _;
 use objc2_app_kit::{
     NSAlert, NSAlertStyle, NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions,
-    NSBackingStoreType, NSColorSpace, NSControlSize, NSEvent, NSEventMask, NSEventModifierFlags,
-    NSOpenPanel, NSSavePanel, NSScreen, NSScroller, NSScrollerStyle, NSView, NSWindow,
-    NSWindowStyleMask, NSWindowTabbingMode,
+    NSColorSpace, NSControlSize, NSEvent, NSEventMask, NSEventModifierFlags, NSOpenPanel,
+    NSSavePanel, NSScreen, NSScroller, NSScrollerStyle, NSView, NSWindow, NSWindowStyleMask,
+    NSWindowTabbingMode,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString, NSURL};
 
@@ -316,18 +318,13 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
         | NSWindowStyleMask::Miniaturizable
         | NSWindowStyleMask::Resizable;
 
-    // SAFETY: standard `NSWindow` designated initialiser; `mtm` proves
-    // the main thread, and `defer: false` asks AppKit to create the
-    // backing window-server resources now rather than on first display.
-    let window = unsafe {
-        NSWindow::initWithContentRect_styleMask_backing_defer(
-            NSWindow::alloc(mtm),
-            content_rect,
-            style,
-            NSBackingStoreType::Buffered,
-            false,
-        )
-    };
+    // An `NSWindow` *subclass*, and the subclass earns its keep: it
+    // refuses keyboard focus to the Document Map's miniature, which is
+    // bound to the same editable document as the editor and would
+    // otherwise take Tab focus and accept typing with no visible caret.
+    // See `crate::window` for the measurement.
+    let window: Retained<NSWindow> =
+        Retained::into_super(window::MainWindow::new(content_rect, style, mtm));
 
     // **Required, not optional.** A programmatically constructed
     // `NSWindow` defaults to `releasedWhenClosed == true`, which makes
@@ -393,8 +390,17 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // process lifetime, so it cannot dangle.
     window.setDelegate(Some(ProtocolObject::from_ref(&*actions)));
 
-    let (status, tab_strip, toolbar, fif_dock) =
-        build_content(&window, content_rect, &sci_view, &actions, mtm);
+    let (map_view, map_editor) = create_map_miniature()?;
+
+    let (status, tab_strip, toolbar, fif_dock, docmap) = build_content(
+        &window,
+        content_rect,
+        &sci_view,
+        map_view,
+        map_editor,
+        &actions,
+        mtm,
+    );
 
     // --- Install the state ----------------------------------------
     let st = Rc::new(RefCell::new(CocoaUiState {
@@ -409,6 +415,7 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
         menu,
         fif_dock,
         fif_job: fif::FifJob::default(),
+        docmap,
         find_replace: None,
         shell,
     }));
@@ -430,6 +437,11 @@ pub fn run(initial_path: Option<PathBuf>, perf: Perf) -> Result<(), CocoaUiError
     // only become readable once session.xml is in the shell. See the
     // function.
     apply_saved_view_settings();
+    // And the same again for the Document Map's width and open state.
+    // After `apply_saved_view_settings` rather than before only because
+    // opening the map relayouts the chrome, and doing that once at the
+    // end is one fewer frame of the editor at the wrong width.
+    docmap::apply_saved();
 
     // The auto-save timer is retained by the run loop; `actions` must
     // outlive it, which the binding below guarantees.
@@ -693,6 +705,19 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
                 let (_, ui) = st.split();
                 ui.refresh_dynamic_status();
             });
+            // The Document Map's orange box tracks the viewport, so it
+            // moves on a scroll (`SCN_UPDATEUI`) and its extent changes
+            // on an edit (`SCN_MODIFIED`). A no-op — one `Cell` read —
+            // while the map is closed, which is the common case.
+            //
+            // On a keystroke that also flips the dirty bit this
+            // recomputes twice, because `refresh_tab_chrome` below ends
+            // in `sync_to_active_tab`. Left alone deliberately: that
+            // path runs only on a dirty *edge*, and the alternative —
+            // making one of the two conditional on the other — trades a
+            // handful of direct-calls for a way to miss a refresh, which
+            // is the failure this backend keeps having to fix.
+            docmap::refresh();
             // Cheap guard: only touch the strip when the dirty marker
             // would actually change. Without this, every caret move
             // would rebuild every tab button.
@@ -724,12 +749,17 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
             // closes any keystroke intervals waiting on this paint; see
             // `install_key_probe`, which opens them.
             //
-            // No `hwndFrom`-style filter, unlike Win32: this backend has
-            // exactly one Scintilla view. That stops being true when the
-            // plugin host lets a plugin create its own, and a
-            // notification from a plugin's panel could then close the
-            // main editor's pending interval — so the filter has to
-            // arrive with `create_plugin_scintilla`.
+            // No `hwndFrom`-style filter, unlike Win32 — and since m4c
+            // that is a property of the *registration* rather than of
+            // the backend. There are two Scintilla views now (the editor
+            // and the Document Map's miniature), but only the editor has
+            // a notification callback installed, so nothing else can
+            // reach here. Registering one on the miniature would let a
+            // map repaint close the editor's pending keystroke interval
+            // and fabricate a cold-start figure; if a future milestone
+            // needs miniature notifications, the filter has to land in
+            // the same change. Same obligation for the plugin host's
+            // `create_plugin_scintilla`.
             //
             // Before the layout repair below, which takes a `with_state`
             // borrow: the mark is a plain timestamp and must not be
@@ -759,13 +789,56 @@ unsafe fn on_sci_notify_inner(message: u32, lparam: usize) {
 ///
 /// Split out of [`run`] purely for length; the layout reasoning lives in
 /// the comments below rather than at the call site.
+/// Create the Document Map's miniature: the **second** permanent
+/// Scintilla view, and the last one.
+///
+/// See `docmap`'s module docs for what it is, and the source scan in
+/// [`source_invariants`] that pins the count at two. Like the main view
+/// it is created once and never destroyed, removed or reassigned; it
+/// shares each tab's document through `SCI_SETDOCPOINTER` rather than
+/// owning any text of its own, which is what keeps the `Copy`,
+/// lifetime-free `EditorHandle` it returns sound.
+///
+/// **Deliberately no notification callback is registered for it.** That
+/// keeps `on_sci_notify` a single-view path: its `SCN_PAINTED` arm closes
+/// the cold-start mark and any pending keystroke interval, and a
+/// miniature repaint must not be able to close either.
+fn create_map_miniature() -> Result<(Retained<NSView>, EditorHandle), CocoaUiError> {
+    // SAFETY: same preconditions as the main view in `run` —
+    // `NSApplication::sharedApplication` has run and this is the main
+    // thread, both established there before this is called.
+    let ptr = unsafe { scintilla_cocoa_new() };
+    if ptr.is_null() {
+        return Err(CocoaUiError::ScintillaCreate);
+    }
+    // Adopt the +1 the shim handed out before anything that can fail, so
+    // an early return below releases it through `Drop` rather than
+    // leaking. Same discipline as the main view.
+    //
+    // SAFETY: a non-null, +1-retained `ScintillaView`, an `NSView` subclass.
+    let view: Retained<NSView> =
+        unsafe { Retained::from_raw(ptr.cast::<NSView>()) }.ok_or(CocoaUiError::ScintillaCreate)?;
+    // SAFETY: the non-null view just returned, still owned by `view`.
+    let editor =
+        unsafe { EditorHandle::from_cocoa_view(ptr) }.ok_or(CocoaUiError::DirectCallCapture)?;
+    Ok((view, editor))
+}
+
 fn build_content(
     window: &NSWindow,
     content_rect: NSRect,
     sci_view: &NSView,
+    map_view: Retained<NSView>,
+    map_editor: EditorHandle,
     actions: &Actions,
     mtm: MainThreadMarker,
-) -> (StatusBar, TabStrip, Toolbar, fif::FifDock) {
+) -> (
+    StatusBar,
+    TabStrip,
+    Toolbar,
+    fif::FifDock,
+    docmap::DocMapPanel,
+) {
     // Content layout, bottom-up in Cocoa's flipped-origin coordinates:
     // status bar, then the editor, then the tab strip at the top. The
     // editor is the only flexible one. Springs-and-struts rather than
@@ -784,6 +857,9 @@ fn build_content(
     let fif_dock = fif::FifDock::new(DEFAULT_WIDTH, actions, mtm);
 
     let editor_height = DEFAULT_HEIGHT - STATUS_BAR_HEIGHT - TAB_STRIP_HEIGHT - TOOLBAR_HEIGHT;
+    // Also hidden at first, and likewise contributes no width — so a
+    // session that never opens the map lays out exactly as before.
+    let docmap = docmap::DocMapPanel::new(map_view, map_editor, editor_height, actions, mtm);
     sci_view.setFrame(NSRect::new(
         NSPoint::new(0.0, STATUS_BAR_HEIGHT),
         NSSize::new(DEFAULT_WIDTH, editor_height),
@@ -812,14 +888,21 @@ fn build_content(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewMinYMargin,
     );
 
+    // Parked off the right edge at its natural width rather than
+    // squashed to zero — see the note in `CocoaUi::relayout_chrome`.
+    docmap
+        .container
+        .setFrameOrigin(NSPoint::new(DEFAULT_WIDTH, STATUS_BAR_HEIGHT));
+
     content.addSubview(sci_view);
+    content.addSubview(&docmap.container);
     content.addSubview(&status.container);
     content.addSubview(&fif_dock.container);
     content.addSubview(&tab_strip.container);
     content.addSubview(&toolbar.container);
     window.setContentView(Some(&content));
 
-    (status, tab_strip, toolbar, fif_dock)
+    (status, tab_strip, toolbar, fif_dock, docmap)
 }
 
 /// Observe key presses so `--perf` can measure keystroke latency.
@@ -1609,6 +1692,12 @@ pub(crate) fn refresh_tab_chrome() {
             st.tabs.sync(&st.shell.tabs, active, &actions, mtm);
         }
     });
+    // After the strip, and outside the borrow above: rebinding the
+    // miniature takes its own `with_state`. This runs after every drain,
+    // open, tab switch, close and File → New — the same set of moments
+    // the bound document can have changed, which is exactly when the map
+    // needs to be re-pointed.
+    docmap::sync_to_active_tab();
     refresh_title();
 }
 
@@ -2333,6 +2422,11 @@ fn sync_window_geometry_to_shell() {
 /// Persist the session now. Idempotent; safe to call repeatedly.
 pub(crate) fn save_session_now() {
     sync_window_geometry_to_shell();
+    // The map's own visibility and width live in `docmap`'s
+    // thread-locals, not in the shell, so they have to be pushed across
+    // before the save reads the session. Same shape as the geometry sync
+    // above and as `ui_gtk`'s `docmap::sync_to_shell`.
+    docmap::sync_to_shell();
     with_state(|st| {
         let (shell, mut ui) = st.split();
         if let Err(e) = shell.save_session(&mut ui) {
@@ -3303,6 +3397,200 @@ mod source_invariants {
             "TabButton::track touches `self` after mutating the model, \
              which resyncs the strip and can deallocate the receiver \
              while its own mouseDown: is still on the stack"
+        );
+    }
+
+    /// One line of source with its `//` comment and every string literal
+    /// removed, so a pattern quoted in a doc comment or in an assertion
+    /// message is not counted as a real call.
+    ///
+    /// `ui_gtk`'s equivalent scanner shipped without this and reported
+    /// three `scintilla_new()` calls where there was one.
+    fn code_only(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        for line in text.lines() {
+            let line = line.split("//").next().unwrap_or("");
+            let mut in_str = false;
+            let mut prev_backslash = false;
+            for c in line.chars() {
+                match c {
+                    '"' if !prev_backslash => in_str = !in_str,
+                    _ if in_str => {}
+                    _ => out.push(c),
+                }
+                prev_backslash = c == '\\' && !prev_backslash;
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Every source file in this crate, comments and string literals
+    /// removed, each cut at its own first test module.
+    fn all_production_code() -> String {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut out = String::new();
+        for entry in std::fs::read_dir(&dir)
+            .expect("ui_cocoa/src is readable")
+            .flatten()
+        {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                let cut = text.find("#[cfg(test)]").unwrap_or(text.len());
+                out.push_str(&code_only(&text[..cut]));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_scanner_ignores_comments_and_strings() {
+        let sample = "\
+let a = scintilla_cocoa_new();
+// let b = scintilla_cocoa_new();
+/// `scintilla_cocoa_new()` returned null
+let msg = \"found scintilla_cocoa_new() calls\";
+";
+        assert_eq!(
+            code_only(sample).matches("scintilla_cocoa_new()").count(),
+            1
+        );
+        // And it must not swallow real code that follows a string.
+        assert!(
+            code_only("let x = \"a\"; scintilla_cocoa_new();").contains("scintilla_cocoa_new()")
+        );
+    }
+
+    /// Exactly two permanent Scintilla views, never destroyed.
+    ///
+    /// `EditorHandle` is `Copy`, carries no lifetime, and holds raw
+    /// pointers into a view — so nothing in the type system stops a copy
+    /// outliving what it points at. This backend discharges that
+    /// obligation structurally: the main editor and the Document Map's
+    /// miniature are each created once in `run` and never finalised, and
+    /// tabs get their own buffers through `SCI_SETDOCPOINTER` rather than
+    /// through views of their own.
+    ///
+    /// DESIGN.md §7.4 names an `NSView`-per-tab design as the specific
+    /// mistake this avoids, and says in as many words that a Cocoa
+    /// backend which reaches for one view per tab inherits the problem.
+    /// A runtime test cannot observe the failure — finalising a view
+    /// faults inside vendored C++ on the next direct call rather than
+    /// failing an assertion — so the guard is a source scan, the same
+    /// tool and the same reasoning as `ui_gtk`'s.
+    #[test]
+    fn exactly_two_scintilla_views_are_ever_created() {
+        let src = all_production_code();
+        assert!(
+            src.len() > 20_000,
+            "scanned only {} bytes; the walk is broken, so a clean result proves nothing",
+            src.len()
+        );
+        let calls = src.matches("scintilla_cocoa_new()").count();
+        assert_eq!(
+            calls, 2,
+            "this backend must build exactly two permanent Scintilla views — the main \
+             editor and the Document Map miniature — found {calls}. Each is created once \
+             and shares tab documents via SCI_SETDOCPOINTER; a *per-tab* view would leave \
+             every copied `EditorHandle` dangling when a tab closes, which is the hazard \
+             this count guards. Adding a third permanent view is fine, but update this."
+        );
+        // The shim exposes no release entry point, so there is no
+        // supported way to finalise one — but removing a view from its
+        // superview drops the last strong reference and has the same
+        // effect. Nothing may do that to either view.
+        for forbidden in [
+            "sci_view.removeFromSuperview",
+            "miniature.removeFromSuperview",
+        ] {
+            assert!(
+                !src.contains(forbidden),
+                "`{forbidden}` would drop the last reference to a permanent \
+                 Scintilla view and leave its `EditorHandle` dangling"
+            );
+        }
+    }
+
+    /// The Document Map's miniature must stay unfocusable, and the guard
+    /// that keeps it so must not depend on a `with_state` borrow.
+    ///
+    /// Two properties, and both shipped broken once before this test
+    /// existed. The miniature is a second Scintilla view bound to the
+    /// *same editable document* as the editor, so focus on it means
+    /// typing into the user's buffer with no visible caret
+    /// (`CARETSTYLE_INVISIBLE`). Measured on the real app: Tab-cycling
+    /// reached it and five keystrokes moved the document length.
+    ///
+    /// The first fix routed the guard through `with_state`, which is
+    /// declined re-entrantly — and `makeFirstResponder:` *is* reachable
+    /// from inside an outer borrow. A declined guard reads as "not the
+    /// map" and **allows** the focus it exists to refuse, so it failed
+    /// open and the bug reproduced unchanged. The borrow-free version is
+    /// therefore load-bearing, not a tidy-up, and that is what the second
+    /// assertion pins.
+    ///
+    /// A source scan because the failure needs a real window server and a
+    /// real key-view loop, and because it fails by *absence* — nothing
+    /// errors, focus simply lands somewhere it should not.
+    #[test]
+    fn the_docmap_miniature_cannot_take_keyboard_focus() {
+        let win = include_str!("window.rs");
+        let win = match win.find("#[cfg(test)]") {
+            Some(i) => &win[..i],
+            None => win,
+        };
+        let body = fn_body(win, "make_first_responder");
+        assert!(
+            body.contains("docmap::owns_view("),
+            "`makeFirstResponder:` no longer consults `docmap::owns_view`, so the \
+             Document Map's miniature can take Tab focus — and typing then edits \
+             the shared document with no visible caret."
+        );
+
+        let map = include_str!("docmap.rs");
+        let map = match map.find("#[cfg(test)]") {
+            Some(i) => &map[..i],
+            None => map,
+        };
+        assert!(
+            !fn_body(map, "owns_view").contains("with_state("),
+            "`docmap::owns_view` reads the window state again. That borrow is \
+             declined re-entrantly on exactly the path this guard protects, and a \
+             declined read reads as `false` — which *allows* the focus. Keep it on \
+             the `PANEL_VIEW` thread-local."
+        );
+    }
+
+    /// The map's column must be recomputed on every layout, and a closed
+    /// panel must never be resized to zero.
+    ///
+    /// Both halves are regressions waiting to happen. Dropping the
+    /// `width_for_layout` call would leave the editor full-width with the
+    /// map painted over it; dropping the `map_w > 0.0` guard reintroduces
+    /// the bug this milestone hit — a hidden panel's width-sizable
+    /// subviews collapse with it, and autoresizing cannot restore
+    /// proportions from a zero-width superview, so reopening came back
+    /// with the header label stretched over the close button. The FIF
+    /// dock carries the same pair of guards for the same reason.
+    #[test]
+    fn the_layout_clamps_the_map_and_never_collapses_it() {
+        let src = include_str!("platform.rs");
+        let src = match src.find("#[cfg(test)]") {
+            Some(i) => &src[..i],
+            None => src,
+        };
+        let body = fn_body(src, "relayout_chrome");
+        assert!(
+            body.contains("docmap::width_for_layout("),
+            "`relayout_chrome` no longer clamps the Document Map's width against \
+             the live window, so a persisted width can starve the editor"
+        );
+        assert!(
+            body.contains("if map_w > 0.0"),
+            "`relayout_chrome` no longer guards the map's frame update. Resizing a \
+             hidden panel to zero collapses its width-sizable subviews, and they do \
+             not come back proportionally when it reopens."
         );
     }
 

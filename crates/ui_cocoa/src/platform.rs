@@ -122,6 +122,12 @@ impl CocoaUi {
         // cannot ask for a negative height.
         let status_h = crate::status::STATUS_BAR_HEIGHT;
         let editor_h = (size.height - status_h - dock_h - tabs_h - toolbar_h).max(0.0);
+        // Zero while the map is closed, and otherwise clamped to what
+        // this window width can give it — see `DocMapPanel::width_for_layout`.
+        // Unlike the bottom dock this one splits the band *horizontally*,
+        // so it comes out of the editor's width rather than its height.
+        let map_w = crate::docmap::width_for_layout(size.width);
+        let editor_w = (size.width - map_w).max(0.0);
         self.status.container.setFrame(NSRect::new(
             NSPoint::new(0.0, 0.0),
             NSSize::new(size.width, status_h),
@@ -132,8 +138,27 @@ impl CocoaUi {
         ));
         self.sci_view.setFrame(NSRect::new(
             NSPoint::new(0.0, status_h + dock_h),
-            NSSize::new(size.width, editor_h),
+            NSSize::new(editor_w, editor_h),
         ));
+        // The map shares the editor's band, pinned to the right edge. The
+        // status bar, the results dock and both top strips stay full
+        // width — the same arrangement Notepad++ and `ui_gtk` use, where
+        // the map splits only the editing area.
+        //
+        // **Only while it is open.** Giving a closed panel a zero-width
+        // frame reads as harmless — it is hidden — and is not: its
+        // subviews are width-sizable, so they collapse to zero too, and
+        // autoresizing cannot restore proportions from a zero-width
+        // superview. Measured before this guard: reopening the map came
+        // back with its header label 160 pt wide inside a 160 pt panel,
+        // running straight over the close button. A hidden view's frame
+        // is unobservable, so leaving it untouched costs nothing.
+        if map_w > 0.0 {
+            self.docmap.container.setFrame(NSRect::new(
+                NSPoint::new(editor_w, status_h + dock_h),
+                NSSize::new(map_w, editor_h),
+            ));
+        }
         self.tabs.container.setFrame(NSRect::new(
             NSPoint::new(0.0, status_h + dock_h + editor_h),
             NSSize::new(size.width, tabs_h),

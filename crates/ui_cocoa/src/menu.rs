@@ -246,6 +246,39 @@ define_class!(
             });
         }
 
+        // ---- m4c: the Document Map ---------------------------------
+
+        /// The View menu's Document Map entry. The mark is resolved in
+        /// `validateMenuItem:` from the live panel state, so this only
+        /// has to flip it.
+        #[unsafe(method(codeppToggleDocMap:))]
+        fn toggle_doc_map(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary("view:toggleDocMap", (), crate::docmap::toggle_from_menu);
+        }
+
+        /// The toolbar's Document Map toggle. `PushOnPushOff`, so AppKit
+        /// has already flipped the button by the time this fires — apply
+        /// its state rather than inverting the model, or the two land on
+        /// opposite values every other click.
+        #[unsafe(method(codeppToolbarDocMap:))]
+        fn toolbar_doc_map(&self, sender: Option<&NSButton>) {
+            crate::at_callback_boundary("toolbar:docMap", (), || {
+                if let Some(sender) = sender {
+                    crate::docmap::set_from_toolbar(sender.state() != 0);
+                }
+            });
+        }
+
+        /// The ✕ in the Document Map's own header.
+        #[unsafe(method(codeppDocMapClose:))]
+        fn doc_map_close(&self, _sender: Option<&NSObject>) {
+            crate::at_callback_boundary(
+                "docmap:close",
+                (),
+                crate::docmap::close_from_header,
+            );
+        }
+
         // ---- m4a: search -------------------------------------------
 
         #[unsafe(method(codeppShowFind:))]
@@ -468,6 +501,11 @@ fn validate(item: &NSMenuItem) -> bool {
         item.setState(isize::from(crate::view_setting_by_tag(tag)));
     } else if action == sel!(codeppSelectTabMenu:) {
         item.setState(isize::from(crate::active_tab_id() == Some(tag as i32)));
+    } else if action == sel!(codeppToggleDocMap:) {
+        // A panel rather than a persisted editor setting, so it carries
+        // no `VIEW_TOGGLES` tag and is matched on its selector. The mark
+        // still comes from live state, like every other one here.
+        item.setState(isize::from(crate::docmap::is_visible()));
     }
     true
 }
@@ -853,6 +891,20 @@ fn build_view_menu(actions: &Actions, mtm: MainThreadMarker) -> Retained<NSMenuI
         );
         entry.setTag(isize::try_from(tag).unwrap_or(0));
     }
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    // The Document Map's own check mark is resolved in
+    // `validateMenuItem:` like every other mark in this backend, but from
+    // the panel's live visibility rather than from `VIEW_TOGGLES` — it is
+    // a panel, not a persisted editor setting, so it carries no tag and
+    // is matched on its selector.
+    add(
+        &menu,
+        mtm,
+        "Document Map",
+        sel!(codeppToggleDocMap:),
+        "",
+        Some(actions),
+    );
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     add(
         &menu,

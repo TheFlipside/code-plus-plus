@@ -101,6 +101,10 @@ pub struct Toolbar {
     /// *and* EOL together, matching Win32's combined button — so it has
     /// no single tag and is handled explicitly.
     toggles: Vec<Retained<NSButton>>,
+    /// The Document Map toggle. Held separately from [`Self::toggles`]
+    /// because it tracks a *panel*, not one of the persisted View
+    /// settings that array is zipped against.
+    docmap: Retained<NSButton>,
 }
 
 impl Toolbar {
@@ -196,10 +200,14 @@ impl Toolbar {
         ));
         bar.separator();
 
-        // Group 8 — tools and panels. The workspace tree, document map,
-        // document list and function list are all m4.
+        // Group 8 — tools and panels. The workspace tree, document list
+        // and function list are still to come; the Document Map is wired.
         bar.push(icon!("define-language"), "Define your language…", None);
-        bar.disabled_toggle(icon!("document-map"), "Document Map");
+        let docmap = bar.toggle(
+            icon!("document-map"),
+            "Document Map",
+            sel!(codeppToolbarDocMap:),
+        );
         bar.disabled_toggle(icon!("document-list"), "Document List");
         bar.disabled_toggle(icon!("function-list"), "Function List");
         bar.disabled_toggle(icon!("folder-workspace"), "Folder as Workspace");
@@ -216,7 +224,23 @@ impl Toolbar {
         bar.push(icon!("run"), "Run a Macro Multiple Times…", None);
         bar.push(icon!("save-macro"), "Save Current Recorded Macro…", None);
 
-        Self { container, toggles }
+        Self {
+            container,
+            toggles,
+            docmap,
+        }
+    }
+
+    /// Repaint the Document Map toggle from the panel's real visibility.
+    ///
+    /// Separate from [`Self::refresh_toggles`] because it reads a panel
+    /// rather than a persisted View setting — but for the same reason:
+    /// the menu item and the panel's own close button can both change it,
+    /// and the button must never be the source of truth for its own
+    /// state.
+    pub fn refresh_docmap_toggle(&self) {
+        self.docmap
+            .setState(isize::from(crate::docmap::is_visible()));
     }
 
     /// Repaint the three functional toggles from the persisted View
